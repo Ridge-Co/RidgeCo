@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.6-staging-qb-clear-stale-token';
+const BUILD_VERSION = '2026-09-30.9-staging-invoice-review-guard';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -65,6 +65,10 @@ const _hubWorkerCore = {
     const url  = new URL(request.url);
     const path = url.pathname;
     env.__STAGING__ = isStaging(env, url);
+    // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
+    // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
+    // Throttled, never throws, never runs on production.
+    if (env.__STAGING__ && path !== '/health' && path !== '/version') await applyStagingQbTradeMap(env);
     // Role of the caller for this request — null for the admin secret (full access) or a
     // narrow service token; 'tenant'/'vendor'/'owner' when a PIN-issued session token was
     // used. Set inside the auth gate below. Used by the tenant-work-order-submission toggle
@@ -17933,6 +17937,32 @@ async function hubTestWriteAllowed(env, path, body) {
     if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }
     return typeof _b.value === 'string' && _b.value.length < 5000;
   }
+  // Sep 30 2026: staging QuickBooks is an Intuit SANDBOX company (see qbBase), so /qb/* writes can no longer
+  // reach real books. They still write rows in the staging sheet, so each route is limited to TEST data.
+  // setup-trades / sync-payments take no record id (sandbox-only effect). Everything not listed stays denied
+  // (pay-bills, record-paid-bill, link-vendor-bills, vendor-reconcile, backfill-*, delete-bill, ...).
+  if (path === '/qb/setup-trades' || path === '/qb/sync-payments') return true;
+  if (path === '/qb/map' || path === '/qb/create-subcustomer') {
+    const _tab = { owner: 'Owners', vendor: 'Vendors', property: 'Properties', unit: 'Units' }[String(_b.kind || '').toLowerCase()];
+    if (!_tab || !_b.id) return false;
+    return await isTestRecord(env, _tab, _b.id);
+  }
+  if (path === '/invoice-review/approve') return !!_b.wo_id && await isTestWO(env, _b.wo_id);
+  if (path === '/invoice-review/unapprove') {
+    if (!_b.id) return false;
+    const _ir2 = (await fetchTab(env, 'Invoice_Review')).find(r => String(r.ID) === String(_b.id));
+    return !!_ir2 && !!_ir2.WO_ID && await isTestWO(env, _ir2.WO_ID);
+  }
+  if (path === '/qb/vendor-in-house') return !!_b.id && await isTestRecord(env, 'Vendors', _b.id);
+  if (path === '/qb/reparent-unit') return !!_b.unit_id && await isTestRecord(env, 'Units', _b.unit_id);
+  if (['/qb/send-invoice', '/qb/undo-send', '/qb/repair-invoice', '/qb/reprice-invoice', '/qb/relabel-invoice',
+       '/qb/clear-ir-bill', '/qb/set-ir-bill'].includes(path)) {
+    const _key = _b.ir_id || _b.id;
+    if (!_key && !_b.bill_id) return false;
+    const _irs = await fetchTab(env, 'Invoice_Review');
+    const _ir = _irs.find(r => (_key && String(r.ID) === String(_key)) || (_b.bill_id && String(r.Bill_ID) === String(_b.bill_id)));
+    return !!_ir && !!_ir.WO_ID && await isTestWO(env, _ir.WO_ID);
+  }
   const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
     '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
     '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
@@ -20369,6 +20399,37 @@ const QB_TRADE_MAP = {
   'Pest Control':{ item: '40', income: '198', expense: '68' },
 };
 
+// STAGING ONLY (never runs on production): QB_TRADE_MAP above holds PRODUCTION QuickBooks ids. The sandbox
+// company has different ids, so on staging we rewrite the map in place from what /qb/setup-trades created
+// there (items by name; income account from the item; expense account = the sandbox's 'Job Expenses:Permits',
+// the closest stand-in for production's per-trade expense accounts). Per-isolate, retried at most every 5 min.
+let _stgQbTradeApplied = false, _stgQbTradeAt = 0, _stgQbTradeRunning = false;
+async function applyStagingQbTradeMap(env) {
+  if (_stgQbTradeApplied || _stgQbTradeRunning) return;
+  if (!(env.__STAGING__ ?? isStaging(env))) return;
+  if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REALM_ID) return;
+  if (Date.now() - _stgQbTradeAt < 5 * 60 * 1000) return;
+  _stgQbTradeAt = Date.now(); _stgQbTradeRunning = true;
+  try {
+    const token = await qbAccessToken(env);
+    const q = async (sql) => qbApi(env, `query?query=${encodeURIComponent(sql)}&minorversion=73`, 'GET', null, token);
+    const itemData = await q("select Id,Name,IncomeAccountRef from Item where Active=true maxresults 1000");
+    const acctData = await q("select Id,FullyQualifiedName from Account where Active=true maxresults 1000");
+    const exp = (acctData?.QueryResponse?.Account || []).find(a => a.FullyQualifiedName === 'Job Expenses:Permits');
+    const items = {}; for (const it of (itemData?.QueryResponse?.Item || [])) items[String(it.Name).toLowerCase()] = it;
+    let n = 0;
+    for (const t of QB_TRADES) {
+      const it = items[String(t.itemName || t.trade).toLowerCase()];
+      if (!it || !it.IncomeAccountRef || !QB_TRADE_MAP[t.trade]) continue;
+      QB_TRADE_MAP[t.trade] = { item: String(it.Id), income: String(it.IncomeAccountRef.value), expense: exp ? String(exp.Id) : QB_TRADE_MAP[t.trade].expense };
+      n++;
+    }
+    if (n) _stgQbTradeApplied = true;
+    console.log(`🧪 STAGING — QB trade map re-pointed at sandbox ids for ${n} trades`);
+  } catch (e) { console.log('staging QB trade map apply failed: ' + (e && e.message)); }
+  finally { _stgQbTradeRunning = false; }
+}
+
 // Extract an existing entity Id from a QBO "Duplicate Name Exists" (6240) error.
 function qbDupId(r) {
   try { const e = r?.Fault?.Error?.[0]; if (e?.code === '6240' && e?.Detail) { const m = e.Detail.match(/Id=(\d+)/); if (m) return m[1]; } } catch (x) {}
@@ -20393,7 +20454,9 @@ async function qbSetupTrades(env) {
     const itemByName = {}; for (const it of (itemData?.QueryResponse?.Item || [])) itemByName[it.Name.toLowerCase()] = it.Id;
 
     const map = {}, log = [];
-    for (const t of QB_TRADES) {
+    for (const t0 of QB_TRADES) {
+      // Production hardcodes existing income account ids for Windows/General; they don't exist in the sandbox.
+      const t = (env.__STAGING__ && t0.incomeId) ? { ...t0, incomeId: null, income: t0.trade + ' Income' } : t0;
       let incomeId = t.incomeId || null;
       if (!incomeId) {
         const found = acctByName[t.income.toLowerCase()];
