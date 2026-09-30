@@ -356,6 +356,9 @@ const _hubWorkerCore = {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
+          // Sessions minted by POST /staging/ui-test-session carry stg:1 - they are staging-only
+          // and must never authenticate anywhere else.
+          if (_session.stg && !isStaging(env, url)) return json({ error: 'Unauthorized' }, 401);
           callerRole = _session.role;
           callerSessionId = _session.id;
         }
