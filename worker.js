@@ -6459,7 +6459,7 @@ async function addonList(env, url, callerRole, callerSessionId) {
       return { index: it.index, desc: it.desc, desc_en: line.desc_en || '', photo_count: ph.length, photos: ph };
     });
     const row = {
-      child_wo_id: c.ID, addon_status: c.Addon_Status || '', status: c.Status || '', approval_stage: c.Approval_Stage || '',
+      child_wo_id: c.ID, parent_wo_id: String(c.Parent_WO_ID || ''), addon_status: c.Addon_Status || '', status: c.Status || '', approval_stage: c.Approval_Stage || '',
       withdrawn: String(c.Addon_Status || '') === 'Withdrawn', created_date: c.Created_Date || '',
       items, amount: est ? (est.Subtotal || '') : (c.Current_Estimate || ''),
       tenant_mentioned: String(c.Addon_Tenant_Mentioned || '') === 'TRUE',
