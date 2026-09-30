@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.12-approve-and-send-to-proposal';
+const BUILD_VERSION = '2026-09-30.13-vendor-additional-work';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -452,6 +452,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
         if (path === '/vendor-access-requests') return await listVendorAccessRequests(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
+        if (path === '/wo/additional-work')     return await addonList(env, url, callerRole, callerSessionId);   // vendor (own parent) + admin
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/stale-wos')              return await staleWos(env, url);
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
@@ -699,6 +700,10 @@ const _hubWorkerCore = {
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
+        if (path === '/wo/additional-work/start')    return await addonStart(env, body, callerRole, callerSessionId);
+        if (path === '/wo/additional-work/submit')   return await addonSubmit(env, body, callerRole, callerSessionId);
+        if (path === '/wo/additional-work/withdraw') return await addonWithdraw(env, body, callerRole, callerSessionId);
+        if (path === '/wo/additional-work/owner-notice') return await addonOwnerNotice(env, body);   // ADMIN-ONLY: no ROLE_SCOPES entry
         if (path === '/estimate')                 return await addEstimateVersion(env, body);
         if (path === '/estimate/approve')         return await approveEstimate(env, body);
         if (path === '/estimate/retranslate')     return await retranslateEstimate(env, body);
@@ -6027,7 +6032,7 @@ async function tenantWOSettingsSummary(env) {
 const __woClaimCache = new Map(); // signatureKey -> expiry (ms epoch)
 const WO_CLAIM_TTL_MS = 75000;
 function claimWOSignature(sig) {
-  const key = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Trade', 'Description', 'Type']
+  const key = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Trade', 'Description', 'Type', 'Parent_WO_ID']
     .map(k => String(sig[k] || '')).join('\u0001');
   const now = Date.now();
   for (const [k, exp] of __woClaimCache) if (exp <= now) __woClaimCache.delete(k); // opportunistic sweep, keeps the Map from growing forever
@@ -6080,6 +6085,7 @@ async function createWorkOrder(env, body) {
   const _woSig = {
     Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
     Trade: body.trade || '', Description: body.description || '', Type: body.type || 'manual',
+    ...(body.parent_wo_id ? { Parent_WO_ID: String(body.parent_wo_id) } : {}),   // additional-work child: type + parent are part of the signature
   };
   const _gotClaim = claimWOSignature(_woSig);
   if (!_gotClaim) {
@@ -6123,7 +6129,9 @@ async function createWorkOrder(env, body) {
     // added them to Work_Orders.
     Created_By_Vendor: body.created_by_vendor||'', Approval_Source: body.approval_source||'', Approval_Note: body.approval_note||'',
     // Recurring WOs (Sep 28 2026) — only processRecurringWorkOrders/recurPostWO send these, after ensureColumns.
-    Recurring_Template_ID: body.recurring_template_id||'', Recurring_Due: body.recurring_due||'', Owner_Notify_Override: body.owner_notify_override||''
+    Recurring_Template_ID: body.recurring_template_id||'', Recurring_Due: body.recurring_due||'', Owner_Notify_Override: body.owner_notify_override||'',
+    // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
+    Parent_WO_ID: body.parent_wo_id||''
   }[h] ?? ''));
   await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   try {
@@ -6227,6 +6235,304 @@ async function workorderSelfServe(env, body) {
   catch (e) { /* WO exists even if the self-assign step fails; Brett can assign it manually */ }
 
   return json({ success: true, id: created.id });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  VENDOR ADDITIONAL WORK (Sep 30 2026) — context/VENDOR_ADDITIONAL_WORK_BUILD_BRIEF_v1.0.md
+// ══════════════════════════════════════════════════════════════
+// A vendor on an open, NON-estimate job finds something else. It becomes a CHILD work order
+// (Type 'addon', Parent_WO_ID = the job) carrying ONE normal Estimates row, kept separate from the
+// parent's own estimate. Two phases so photos can be required server-side:
+//   1. POST /wo/additional-work/start   -> creates a DRAFT child (hidden: Voided=TRUE + Addon_Status='Draft')
+//   2. vendor uploads photos against child_wo_id (/create-upload-session + /log-attachment, addon_item=<index>)
+//   3. POST /wo/additional-work/submit  -> every item needs >=1 photo, then estimate v1 + un-hide the child
+// plus /withdraw (vendor), GET /wo/additional-work (list), POST /wo/additional-work/owner-notice (admin,
+// information-only, preview-first). Approve / Needs Info / Decline / push-to-scope are the EXISTING
+// child-keyed /estimate/* and /wo/push-to-scope routes. The parent's own Estimates / Current_Estimate /
+// Approval_Stage are never touched.
+const ADDON_WO_COLUMNS = ['Parent_WO_ID', 'Addon_Status', 'Addon_Tenant_Mentioned', 'Addon_Items_JSON', 'Addon_Amount', 'Addon_Owner_Notified_Date'];
+const ADDON_MAX_ITEMS = 20;
+const ADDON_PHOTO_TYPES = ['before', 'photo'];
+const ADDON_PARENT_BLOCKED_STATUSES = ['Cancelled', 'Canceled', 'Paid', 'Invoiced', 'Closed'];
+
+// Draft children are hidden everywhere a normal WO list reads (see getWorkOrdersList / hubBootstrap /
+// vendorWorkorders / ownerWorkorders). Belt and braces: a draft is ALSO Voided=TRUE, which every other
+// list, the vendor nudges and nearby-WOs already skip.
+function addonIsDraft(w) { return String((w && w.Addon_Status) || '') === 'Draft'; }
+function addonIsChild(w) { return !!(w && String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim()); }
+
+// Which vendor is acting. A vendor SESSION is always its own id (body.vendor_id is never trusted);
+// admin / staging test token callers act as the WO's assigned vendor.
+function addonActingVendor(callerRole, callerSessionId, wo) {
+  return callerRole === 'vendor' ? String(callerSessionId || '') : String((wo && wo.Vendor_ID) || '');
+}
+
+// PURE — validates the start body. Returns { ok, error, items, amount }.
+function addonValidateStart(body) {
+  const rawItems = body && body.items;
+  if (!Array.isArray(rawItems) || rawItems.length < 1) return { ok: false, error: 'items required (1-' + ADDON_MAX_ITEMS + ')' };
+  if (rawItems.length > ADDON_MAX_ITEMS) return { ok: false, error: 'At most ' + ADDON_MAX_ITEMS + ' items per submission' };
+  const items = [];
+  for (let i = 0; i < rawItems.length; i++) {
+    const d = String((rawItems[i] && rawItems[i].desc) == null ? '' : rawItems[i].desc).trim();
+    if (!d) return { ok: false, error: 'Item ' + (i + 1) + ' needs a description' };
+    items.push({ index: i, desc: d.slice(0, 500) });
+  }
+  const amount = Number(body && body.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: 'amount must be a number greater than 0' };
+  if (amount > 1000000) return { ok: false, error: 'amount looks too large' };
+  return { ok: true, items, amount: +amount.toFixed(2) };
+}
+
+// PURE — which item indexes still lack a photo. photoRows = this child's Attachments rows.
+function addonMissingPhotoItems(items, photoRows) {
+  const have = new Set();
+  (Array.isArray(photoRows) ? photoRows : []).forEach(a => {
+    if (!a || a.Active === 'FALSE') return;
+    if (!ADDON_PHOTO_TYPES.includes(String(a.File_Type || '').toLowerCase())) return;
+    const ix = String(a.Addon_Item == null ? '' : a.Addon_Item).trim();
+    if (ix !== '') have.add(ix);
+  });
+  return (Array.isArray(items) ? items : []).map(it => it.index).filter(ix => !have.has(String(ix)));
+}
+
+function addonParseItems(child) { try { const a = JSON.parse(child.Addon_Items_JSON || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+function addonLatestEstimate(estimates, woId) {
+  const v = (estimates || []).filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
+  return v.length ? v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b) : null;
+}
+
+// POST /wo/additional-work/start { parent_wo_id, items:[{desc}], amount, tenant_mentioned? }
+async function addonStart(env, body, callerRole, callerSessionId) {
+  const parentId = String((body && body.parent_wo_id) || '').trim();
+  if (!parentId) return json({ error: 'parent_wo_id required' }, 400);
+  const v = addonValidateStart(body);
+  if (!v.ok) return json({ error: v.error }, 400);
+  const workorders = await fetchTab(env, 'Work_Orders');
+  const parent = findWO(workorders, parentId);
+  if (!parent) return json({ error: 'Work order not found' }, 404);
+  const vendorId = addonActingVendor(callerRole, callerSessionId, parent);
+  if (!vendorId || String(parent.Vendor_ID || '') !== vendorId) return json({ error: 'This work order is not assigned to you' }, 403);
+  if (parent.Voided === 'TRUE') return json({ error: 'This work order is voided' }, 400);
+  if (ADDON_PARENT_BLOCKED_STATUSES.includes(String(parent.Status || ''))) return json({ error: 'This work order is ' + parent.Status + ' — additional work cannot be added' }, 400);
+  if (String(parent.Type || '') === 'estimate') return json({ error: 'This job is a request for an estimate — add the items to its existing estimate instead', use_estimate_editor: true }, 400);
+  if (String(parent.Type || '') === 'addon' || String(parent.Parent_WO_ID || '').trim()) return json({ error: 'Additional work cannot be added to additional work' }, 400);
+
+  await ensureColumns(env, 'Work_Orders', ADDON_WO_COLUMNS.concat(WO_VOID_COLUMNS));
+  const description = ('Additional work for ' + parentId + ': ' + v.items.map((it, i) => (i + 1) + ') ' + it.desc).join('; ')).slice(0, 1500);
+  // Never notifies anyone: no tenant texts/visibility, no owner texts, vendor assigned with notify:false.
+  const createRes = await createWorkOrder(env, {
+    property_id: parent.Property_ID || '', unit_id: parent.Unit_ID || '', trade: parent.Trade || '',
+    description, priority: parent.Priority || 'normal', type: 'addon', created_by: 'vendor:' + vendorId,
+    parent_wo_id: parentId, tenant_visible: false, tenant_notify_created: false, tenant_notify_updates: false,
+    owner_notify_override: 'off',
+  });
+  let created = null;
+  try { created = await createRes.clone().json(); } catch (e) { return createRes; }
+  if (!created || created.error) return createRes;
+  const childId = created.id;
+  if (created.duplicate) {
+    // double-tap: hand back the child that already exists
+    const existing = findWO(await fetchTab(env, 'Work_Orders'), childId);
+    const stored = existing ? addonParseItems(existing) : [];
+    return json({ success: true, duplicate: true, child_wo_id: childId, items: (stored.length ? stored : v.items).map(it => ({ index: it.index, desc: it.desc })) });
+  }
+  try { await assignVendor(env, { wo_id: childId, vendor_id: vendorId, notify: false }); } catch (e) { /* surfaced by the field check below */ }
+  await updateWOFields(env, childId, {
+    Voided: 'TRUE', Void_Reason: 'Other', Void_Reason_Detail: 'Additional-work draft (not submitted yet)',
+    Parent_WO_ID: parentId, Addon_Status: 'Draft',
+    Addon_Tenant_Mentioned: (body.tenant_mentioned === true || body.tenant_mentioned === 'TRUE') ? 'TRUE' : 'FALSE',
+    Addon_Items_JSON: JSON.stringify(v.items), Addon_Amount: v.amount.toFixed(2),
+  });
+  return json({ success: true, child_wo_id: childId, items: v.items.map(it => ({ index: it.index, desc: it.desc })) });
+}
+
+// POST /wo/additional-work/submit { child_wo_id }
+// The amount captured at /start (Work_Orders.Addon_Amount) is the source of truth.
+async function addonSubmit(env, body, callerRole, callerSessionId) {
+  const childId = String((body && body.child_wo_id) || '').trim();
+  if (!childId) return json({ error: 'child_wo_id required' }, 400);
+  const [workorders, estimates, attachments] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Estimates'), fetchTab(env, 'Attachments')]);
+  const child = findWO(workorders, childId);
+  if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
+  const vendorId = addonActingVendor(callerRole, callerSessionId, child);
+  if (!vendorId || String(child.Vendor_ID || '') !== vendorId) return json({ error: 'This work order is not assigned to you' }, 403);
+  const status = String(child.Addon_Status || '');
+  const existingEst = addonLatestEstimate(estimates, childId);
+  if (status === 'Submitted' && existingEst) {
+    return json({ success: true, already_submitted: true, child_wo_id: childId, version: parseInt(existingEst.Version) || 1, subtotal: existingEst.Subtotal || '' });
+  }
+  if (status === 'Withdrawn') return json({ error: 'This additional work was withdrawn' }, 400);
+  if (status !== 'Draft' && status !== 'Submitted') return json({ error: 'This job is not an additional-work draft' }, 400);
+
+  const items = addonParseItems(child);
+  if (!items.length) return json({ error: 'Draft has no items' }, 400);
+  const missing = addonMissingPhotoItems(items, attachments.filter(a => a.WO_ID === childId));
+  if (missing.length) return json({ error: 'Every item needs at least one photo', missing_items: missing }, 400);
+
+  // Amount: the one captured at /start (never re-taken from the submit body).
+  let amount = Number(child.Addon_Amount);
+  if (!Number.isFinite(amount) || amount <= 0) return json({ error: 'amount missing on this draft' }, 400);
+  amount = +amount.toFixed(2);
+
+  if (!existingEst) {
+    // addEstimateVersion accepts $0 lines and sums amounts, so the lump sum sits on line 1 and the rest
+    // are $0 — Subtotal === amount exactly, every item stays individually readable (and translatable).
+    const line_items = items.map((it, i) => ({ desc: it.desc, amount: i === 0 ? amount : 0, addon_item: it.index }));
+    const estRes = await addEstimateVersion(env, { wo_id: childId, vendor_id: vendorId, line_items, created_by: 'vendor', sms_kind: 'Additional work' });
+    let est = null; try { est = await estRes.clone().json(); } catch (_) {}
+    if (!est || est.error || !est.success) return estRes;
+  }
+  // Un-hide the child: it is now a normal job awaiting approval.
+  await updateWOFields(env, childId, { Voided: 'FALSE', Addon_Status: 'Submitted' });
+  const est2 = addonLatestEstimate(await fetchTab(env, 'Estimates'), childId);
+  return json({ success: true, child_wo_id: childId, version: est2 ? (parseInt(est2.Version) || 1) : 1, subtotal: est2 ? est2.Subtotal : amount.toFixed(2) });
+}
+
+// POST /wo/additional-work/withdraw { child_wo_id } — vendor, while the estimate is Pending / Needs Info.
+async function addonWithdraw(env, body, callerRole, callerSessionId) {
+  const childId = String((body && body.child_wo_id) || '').trim();
+  if (!childId) return json({ error: 'child_wo_id required' }, 400);
+  const [workorders, estimates] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Estimates')]);
+  const child = findWO(workorders, childId);
+  if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
+  const vendorId = addonActingVendor(callerRole, callerSessionId, child);
+  if (!vendorId || String(child.Vendor_ID || '') !== vendorId) return json({ error: 'This work order is not assigned to you' }, 403);
+  const status = String(child.Addon_Status || '');
+  if (status === 'Withdrawn') return json({ success: true, already_withdrawn: true, child_wo_id: childId });
+  const est = addonLatestEstimate(estimates, childId);
+  if (status === 'Submitted') {
+    const es = String((est && est.Status) || 'Pending');
+    if (!['Pending', 'Needs Info', ''].includes(es)) return json({ error: 'Too late to withdraw — this was already ' + es }, 400);
+  } else if (status !== 'Draft') return json({ error: 'This job is not additional work' }, 400);
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  const now = new Date().toISOString();
+  await updateWOFields(env, childId, {
+    Voided: 'TRUE', Void_Reason: 'Other', Void_Reason_Detail: 'Additional work withdrawn by vendor', Voided_By: 'vendor:' + vendorId, Voided_Date: now,
+    Addon_Status: 'Withdrawn',
+  });
+  if (est && est.ID) { try { await updateRow(env, 'Estimates', est.ID, { Status: 'Withdrawn' }); } catch (_) {} }
+  try { await logWOAudit(env, childId, 'vendor:' + vendorId, callerRole === 'vendor' ? 'vendor' : 'admin', 'Addon_Status', status, 'Withdrawn', 'Additional work withdrawn'); } catch (_) {}
+  return json({ success: true, child_wo_id: childId });
+}
+
+// Photo rows (customer-safe types only) grouped by item index.
+function addonPhotosByItem(attachments, childId) {
+  const out = {};
+  (attachments || []).forEach(a => {
+    if (a.WO_ID !== childId || a.Active === 'FALSE') return;
+    if (!ADDON_PHOTO_TYPES.includes(String(a.File_Type || '').toLowerCase())) return;
+    const ix = String(a.Addon_Item == null ? '' : a.Addon_Item).trim(); if (ix === '') return;
+    (out[ix] = out[ix] || []).push({ url: a.Drive_URL || '', file_name: a.File_Name || '', mime_type: a.Mime_Type || '' });
+  });
+  return out;
+}
+
+// GET /wo/additional-work?parent_wo_id= — admin, or the vendor assigned to the parent.
+async function addonList(env, url, callerRole, callerSessionId) {
+  const parentId = String(url.searchParams.get('parent_wo_id') || '').trim();
+  if (!parentId) return json({ error: 'parent_wo_id required' }, 400);
+  const [workorders, estimates, attachments] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Estimates'), fetchTab(env, 'Attachments')]);
+  const parent = findWO(workorders, parentId);
+  if (!parent) return json({ error: 'Work order not found' }, 404);
+  if (callerRole === 'vendor' && String(parent.Vendor_ID || '') !== String(callerSessionId || '')) return json({ error: 'This work order is not assigned to you' }, 403);
+  const isAdmin = callerRole !== 'vendor';
+  const children = workorders.filter(w => String(w.Parent_WO_ID || '') === parentId && String(w.Type || '') === 'addon' && !addonIsDraft(w));
+  const out = children.map(c => {
+    const est = addonLatestEstimate(estimates, c.ID);
+    const photos = addonPhotosByItem(attachments, c.ID);
+    let lines = []; try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (_) {}
+    const items = addonParseItems(c).map(it => {
+      const line = lines.find(l => l && Number(l.addon_item) === it.index) || {};
+      const ph = photos[String(it.index)] || [];
+      return { index: it.index, desc: it.desc, desc_en: line.desc_en || '', photo_count: ph.length, photos: ph };
+    });
+    const row = {
+      child_wo_id: c.ID, addon_status: c.Addon_Status || '', status: c.Status || '', approval_stage: c.Approval_Stage || '',
+      withdrawn: String(c.Addon_Status || '') === 'Withdrawn', created_date: c.Created_Date || '',
+      items, amount: est ? (est.Subtotal || '') : (c.Current_Estimate || ''),
+      tenant_mentioned: String(c.Addon_Tenant_Mentioned || '') === 'TRUE',
+      estimate: est ? { id: est.ID, version: parseInt(est.Version) || 1, status: est.Status || 'Pending' } : null,
+    };
+    if (isAdmin) { row.owner_notified = !!String(c.Addon_Owner_Notified_Date || '').trim(); row.owner_notified_date = c.Addon_Owner_Notified_Date || ''; }
+    return row;
+  }).sort((a, b) => String(a.created_date).localeCompare(String(b.created_date)));
+  return json({ parent_wo_id: parentId, additional_work: out, pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
+}
+
+// PURE — the INFORMATION-ONLY owner message. No price, no vendor bill/receipt anywhere. Photo links are
+// the per-file Drive URLs of the item photos only (types before/photo, which logAttachment shares
+// anyone-with-link) — never a WO folder, because the WO folder also holds the After + Receipts subfolder.
+function addonBuildOwnerNotice({ ownerFirst, address, parentId, itemTexts, photoUrls }) {
+  const first = String(ownerFirst || '').trim() || 'there';
+  const list = (itemTexts || []).filter(Boolean);
+  const urls = (photoUrls || []).filter(Boolean);
+  const smsUrls = urls.slice(0, 3);
+  const more = urls.length - smsUrls.length;
+  const sms = 'Hi ' + first + ', while working at ' + address + ' our vendor found something you should know about: ' + list.join('; ') + '.'
+    + (smsUrls.length ? ' Photos: ' + smsUrls.join(' ') + (more > 0 ? ' (+' + more + ' more by email)' : '') : '')
+    + ' We will follow up on next steps. Ref: ' + parentId + '.';
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html = '<p>Hi ' + esc(first) + ',</p><p>While working at <b>' + esc(address) + '</b>, our vendor found the following, which we wanted you to know about:</p><ul>'
+    + list.map(t => '<li>' + esc(t) + '</li>').join('') + '</ul>'
+    + (urls.length ? '<p>Photos:</p><ul>' + urls.map((u, i) => '<li><a href="' + esc(u) + '">Photo ' + (i + 1) + '</a></li>').join('') + '</ul>' : '')
+    + '<p>This is for your information. We will follow up on next steps. Reference: ' + esc(parentId) + '.</p>';
+  return { sms, subject: 'Something found at ' + address + ' (Ref ' + parentId + ')', html };
+}
+
+// POST /wo/additional-work/owner-notice { child_wo_id, preview?:true, resend? } — ADMIN-ONLY (no ROLE_SCOPES entry).
+async function addonOwnerNotice(env, body) {
+  const childId = String((body && body.child_wo_id) || '').trim();
+  if (!childId) return json({ error: 'child_wo_id required' }, 400);
+  const preview = !(body && body.preview === false);
+  const [workorders, estimates, attachments, properties, owners] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments', 'Properties', 'Owners']);
+  const child = findWO(workorders, childId);
+  if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
+  const status = String(child.Addon_Status || '');
+  if (status !== 'Submitted') return json({ error: 'Only a submitted additional-work item can be shared with the owner' }, 400);
+  const est = addonLatestEstimate(estimates, childId);
+  if (est && String(est.Status || '') === 'Declined') return json({ error: 'This additional work was declined — it is never shown to the owner' }, 400);
+  const parent = findWO(workorders, child.Parent_WO_ID) || child;
+  const property = properties.find(p => String(p.ID) === String(child.Property_ID)) || null;
+  const owner = property ? owners.find(o => String(o.ID) === String(property.Owner_ID)) : null;
+  if (!owner) return json({ error: 'No owner found for this property' }, 400);
+  let lines = []; try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (_) {}
+  const photos = addonPhotosByItem(attachments, childId);
+  const items = addonParseItems(child);
+  const itemTexts = items.map(it => {
+    const line = lines.find(l => l && Number(l.addon_item) === it.index) || {};
+    return englishOnly(line.desc_en || it.desc);
+  });
+  const photoUrls = []; items.forEach(it => (photos[String(it.index)] || []).forEach(p => { if (p.url) photoUrls.push(p.url); }));
+  const address = (property && property.Address) || 'your property';
+  const msg = addonBuildOwnerNotice({ ownerFirst: owner.First_Name, address, parentId: parent.ID, itemTexts, photoUrls });
+  const ownerEmail = String(owner.Email || owner.Billing_Email || '').trim();
+  const warnings = [];
+  if (!photoUrls.length) warnings.push('No photo links found for this item.');
+  if (!owner.Phone) warnings.push('Owner has no phone on file — no text will be sent.');
+  if (!ownerEmail) warnings.push('Owner has no email on file — no email will be sent.');
+  if (String(owner.Notify_Method || 'sms') === 'none') warnings.push('Owner notification method is set to none.');
+  if (String(parent.Managed_By || '') === 'Owner') warnings.push('This job is marked owner-managed.');
+  const already = String(child.Addon_Owner_Notified_Date || '').trim();
+  if (already) warnings.push('Owner was already notified on ' + already + '.');
+  const recipient = { owner_id: owner.ID, name: ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim() || owner.Company || '', phone: owner.Phone || '', email: ownerEmail };
+  if (preview) return json({ preview: true, child_wo_id: childId, parent_wo_id: parent.ID, recipient, sms: { body: msg.sms }, email: { to: ownerEmail, subject: msg.subject, html: msg.html }, photo_links: photoUrls, warnings, already_notified: !!already });
+  if (already && !body.resend) return json({ error: 'Owner was already notified on ' + already + ' — pass resend:true to send again', already_notified: true }, 409);
+
+  let smsResult = { sent: false, reason: 'no owner phone' };
+  if (owner.Phone) {
+    try { smsResult = await smsGatedSend(env, { wo_id: parent.ID, message_type: 'owner_addon_notice', recipient_type: 'owner', owner, property, message_body: msg.sms }); }
+    catch (e) { smsResult = { sent: false, reason: String((e && e.message) || e) }; }
+  }
+  let emailResult = { sent: false, reason: 'no owner email' };
+  if (ownerEmail) {
+    try { await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html }); emailResult = { sent: true }; }
+    catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; }
+  }
+  const anyOut = !!(smsResult && (smsResult.sent || smsResult.held_for_quiet_hours)) || emailResult.sent;
+  if (anyOut) { try { await updateWOFields(env, childId, { Addon_Owner_Notified_Date: new Date().toISOString() }); } catch (_) {} }
+  try { await logWOAudit(env, childId, 'admin', 'admin', 'Addon_Owner_Notified', '', anyOut ? 'sent' : 'not sent', 'Owner information notice'); } catch (_) {}
+  return json({ success: true, sms: { sent: !!(smsResult && smsResult.sent), held_for_quiet_hours: !!(smsResult && smsResult.held_for_quiet_hours), gate_snapshot: (smsResult && (smsResult.gate_snapshot || smsResult.reason)) || '' }, email: emailResult, warnings });
 }
 
 async function appendWONotes(env, body) {
@@ -6907,7 +7213,7 @@ async function getWorkOrdersList(env, url) {
   const filtered = voidedOnly ? rows.filter(r => r.Voided === 'TRUE')
     : includeVoided ? rows
     : rows.filter(r => r.Voided !== 'TRUE');
-  return json(filtered);
+  return json(filtered.filter(r => String(r.Addon_Status || '') !== 'Draft'));   // additional-work drafts are never listed
 }
 async function assignVendor(env, body) {
   const _t0 = Date.now();
@@ -7139,7 +7445,7 @@ async function vendorWorkorders(env, url) {
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
   // status a vendor should be able to page back to, it's a job that shouldn't have existed.
-  const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && String(w.Addon_Status || '') !== 'Draft' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // vendors passed through so enrichWO can tell whether THIS vendor is Brett's own
   // in-house record — that's what lets a "Brett Only" code still surface on a WO
   // that's actually assigned to him (see enrichWO's visibleLockboxes). viewingVendorId is
@@ -7200,7 +7506,7 @@ async function ownerWorkorders(env, url) {
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
-  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him. No
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below,
@@ -9463,7 +9769,7 @@ async function addEstimateVersion(env, body) {
     try {
       const c = await estimateSmsContext(env, woId, body.vendor_id);
       await sendTemplatedSms(env, { type: 'admin_estimate_new', kind: 'admin', wo_id: woId, property: c.property,
-        tokens: { Kind: nextVersion > 1 ? 'Revised estimate' : 'New estimate', WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
+        tokens: { Kind: (c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate'), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
     } catch (_) {}
   }
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
@@ -10933,7 +11239,11 @@ const NON_SHARE_FILE_TYPES = ['receipt','bill','invoice','tax_id_doc'];
 
 async function logAttachment(env, body) {
   try {
-    await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE'});
+    // Vendor Additional Work (Sep 30 2026): addon_item = the item index this photo belongs to. The row
+    // below is a FIXED object, so the column must exist first and the value must be named here.
+    const _addonItem = (body.addon_item === undefined || body.addon_item === null) ? '' : String(body.addon_item).trim();
+    if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} }
+    await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem});
     // Share the just-uploaded job media anyone-with-link so it opens in the portal without a Google
     // login. This is the resumable-upload path the vendor portal uses (createUploadSession → PUT → here).
     const ft=(body.file_type||'').toLowerCase();
@@ -16944,6 +17254,8 @@ async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 const ROLE_SCOPES = {
   vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
+    // Vendor Additional Work (Sep 30 2026): ownership of the parent / child WO is re-checked server-side in each handler.
+    '/wo/additional-work','/wo/additional-work/start','/wo/additional-work/submit','/wo/additional-work/withdraw',
     // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2-4):
     // gated per-vendor by Vendors.Can_Bill_No_WO / Can_Create_Own_WO, re-checked server-side
     // inside each handler — being in this scope list only means a vendor SESSION may call the
@@ -17137,7 +17449,7 @@ async function fetchTabs(env, tabs) {
 async function hubBootstrap(env) {
   const [properties, units, tenants, vendors, workorders, invoices, owners, keys] =
     await fetchTabs(env, ['Properties','Units','Tenants','Vendors','Work_Orders','Invoices','Owners','Keys']);
-  return json({ properties, units, tenants, vendors, workorders, invoices, owners, keys });
+  return json({ properties, units, tenants, vendors, workorders: workorders.filter(w => String(w.Addon_Status || '') !== 'Draft'), invoices, owners, keys });
 }
 
 // GET /twilio/message-status?sid=SM...,SM...  — admin-gated diagnostic. Message_Queue's
@@ -17806,6 +18118,16 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     if (!(await isTestRecord(env, 'Properties', wo.Property_ID))) return false;
     return await isTestRecord(env, 'Vendors', wo.Vendor_ID);
+  }
+  if (path === '/wo/additional-work/start') return !!(body && body.parent_wo_id) && await isTestWO(env, body.parent_wo_id);
+  if (path === '/wo/additional-work/submit' || path === '/wo/additional-work/withdraw') return !!(body && body.child_wo_id) && await isTestWO(env, body.child_wo_id);
+  if (path === '/wo/additional-work/owner-notice') {
+    // preview reads only; a real send may text/email the property's owner, so the owner must be a TEST- record too.
+    if (!(body && body.child_wo_id) || !(await isTestWO(env, body.child_wo_id))) return false;
+    if (body.preview !== false) return true;
+    const _w = findWO(await fetchTab(env, 'Work_Orders'), String(body.child_wo_id));
+    const _p = _w ? (await fetchTab(env, 'Properties')).find(x => String(x.ID) === String(_w.Property_ID)) : null;
+    return !!_p && await isTestRecord(env, 'Owners', _p.Owner_ID);
   }
   if (path === '/estimate' || path === '/estimate/approve' || path === '/estimate/needs-info' || path === '/estimate/decline' || path === '/wo/push-to-scope') {
     const wos = await fetchTab(env, 'Work_Orders');
@@ -21828,12 +22150,29 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // today's ordinary single-vendor job and behaves identically to before this existed. A row
 // that ALREADY has an invoice (haveInv true) never groups — it is returned alone, so an
 // already-sent invoice is never silently reopened or merged into.
-function qbGroupOpenRows(irRows, ir) {
+//
+// Vendor Additional Work rollup (Sep 30 2026): a row whose WO is an add-on CHILD (Type 'addon' +
+// Parent_WO_ID) groups with its PARENT job's open rows, so the approved add-on rides on the parent's
+// customer invoice. woRows (Work_Orders) is OPTIONAL: without it, or when no WO has a Parent_WO_ID,
+// rootOf() is the identity and this is exactly the original same-WO_ID rule. A parent that is already
+// invoiced contributes no rows (they carry a QB_Invoice_ID), so a late add-on then invoices on its own.
+function qbGroupOpenRows(irRows, ir, woRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+  const parentOf = {};
+  if (!haveInv && Array.isArray(woRows)) woRows.forEach(w => {
+    const p = String((w && w.Parent_WO_ID) || '').trim();
+    if (p && w.ID && String(w.Type || '') === 'addon') parentOf[String(w.ID)] = p;
+  });
+  const rootOf = id => parentOf[String(id)] || String(id);
   const groupRows = haveInv ? [ir] : irRows.filter(r =>
-    r.Active !== 'FALSE' && String(r.WO_ID) === String(ir.WO_ID) &&
+    r.Active !== 'FALSE' && rootOf(r.WO_ID) === rootOf(ir.WO_ID) &&
     !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim()));
   if (!groupRows.some(r => r.ID === ir.ID)) groupRows.push(ir);
+  // Mixed parent + child rows: the parent's own rows lead (they anchor the invoice's WO), stable otherwise.
+  if (groupRows.some(r => String(r.WO_ID) !== String(groupRows[0].WO_ID))) {
+    const rk = id => parentOf[String(id)] ? 1 : 0;
+    return groupRows.map((r, i) => ({ r, i })).sort((a, b) => (rk(a.r.WO_ID) - rk(b.r.WO_ID)) || (a.i - b.i)).map(x => x.r);
+  }
   return groupRows;
 }
 
@@ -22132,11 +22471,15 @@ async function qbReadyQueue(env, url) {
     // this one, per qbGroupOpenRows' own rule (not-yet-invoiced + same WO_ID). Computed
     // against the full irRows, not just `pending`, so a row already flagged 'partial' still
     // counts correctly toward its siblings.
+    // Additional work: an add-on child's row counts under its parent's WO (same rootOf rule as qbGroupOpenRows).
+    const _addonParentOf = {};
+    wos.forEach(w => { const p = String((w && w.Parent_WO_ID) || '').trim(); if (p && w.ID && String(w.Type || '') === 'addon') _addonParentOf[String(w.ID)] = p; });
+    const _addonRoot = id => _addonParentOf[String(id)] || String(id);
     const woOpenCounts = {};
     irRows.forEach(r => {
       if (r.Active === 'FALSE') return;
       if (r.QB_Invoice_ID && r.QB_Invoice_ID.trim()) return;
-      const k = String(r.WO_ID);
+      const k = _addonRoot(r.WO_ID);
       woOpenCounts[k] = (woOpenCounts[k] || 0) + 1;
     });
     const out = pending.map(r => {
@@ -22164,7 +22507,7 @@ async function qbReadyQueue(env, url) {
         // B-227 Phase 3: how many OTHER open bills on this WO will fold into the same
         // invoice as this one. 0 means this bill sends/invoices alone (today's ordinary case).
         combines_with: !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim())
-          ? Math.max(0, (woOpenCounts[String(r.WO_ID)] || 1) - 1) : 0,
+          ? Math.max(0, (woOpenCounts[_addonRoot(r.WO_ID)] || 1) - 1) : 0,
       };
     });
     return json(out);
@@ -22373,7 +22716,7 @@ async function qbSendInvoice(env, body) {
     // one-Invoice_Review-row-at-a-time path below. groupRows.length === 1 is the ordinary
     // single-vendor job — falls straight through to the unchanged code beneath, zero
     // behavior change for the ~95% of jobs that only ever had one vendor bill.
-    const groupRows = qbGroupOpenRows(irRows, ir);
+    const groupRows = qbGroupOpenRows(irRows, ir, wos);
     // Sep 22 2026 backstop: a receipt approved onto this invoice BEFORE the job's scope proposal
     // was signed with Ridge Co materials priced in would otherwise go out a second time here.
     // Warn in the preview (never silently change a total that was already approved).
@@ -22384,9 +22727,15 @@ async function qbSendInvoice(env, body) {
       } catch (e) { warnings.push('⚠ Could not check whether this job is on a signed proposal that already bills its materials — check before sending.'); }
     }
     if (groupRows.length > 1) {
+      // Additional-work rollup: when the group spans a parent and its add-on children, the invoice is
+      // anchored on the lead row's WO and needs every member WO's time entries. For an ordinary
+      // single-WO group both expressions below reduce to exactly the old values (wo / woTimeEntries).
+      const _groupWoIds = new Set(groupRows.map(r => String(r.WO_ID)));
+      const _ctxWo = String(groupRows[0].WO_ID) === String(ir.WO_ID) ? wo : (findWO(wos, groupRows[0].WO_ID) || wo);
+      const _ctxTimeEntries = _groupWoIds.size > 1 ? allTimeEntries.filter(e => _groupWoIds.has(String(e.WO_ID))) : woTimeEntries;
       return await qbSendCombinedInvoice(env, {
-        groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,
-        warnings, previewOnly, batch: body.batch, timeEntries: woTimeEntries,
+        groupRows, bills, vendors, wo: _ctxWo, woList: wos, owner, prop, unit, billTo, trade, tradeName,
+        warnings, previewOnly, batch: body.batch, timeEntries: _ctxTimeEntries,
         overridePendingInfo: !!body.override_pending_info,
       });
     }
@@ -22829,7 +23178,14 @@ async function qbSendCombinedInvoice(env, ctx) {
       }
 
       const _inEn = await invoiceInputsEnglish(env, billRow, timeEntries);
-      const inv = buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+      // Additional work (Sep 30 2026): a row on an add-on CHILD WO is labelled "Additional work — … — WO <parent>"
+      // and carries the parent's WO number. Any other row takes the original path unchanged.
+      const _rowWo = ctx.woList ? findWO(ctx.woList, r.WO_ID) : null;
+      const _isAddon = !!(_rowWo && String(_rowWo.Type || '') === 'addon' && String(_rowWo.Parent_WO_ID || '').trim() && String(r.WO_ID) !== String(woId));
+      const inv = _isAddon
+        ? buildInvoiceLines(Object.assign({}, r, { WO_ID: _rowWo.Parent_WO_ID }), _inEn.billRow, trade, tradeName, _rowWo, null, ownReceipts, _inEn.timeEntries)
+        : buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+      if (_isAddon) inv.lines.forEach(l => { l.Description = ('Additional work — ' + l.Description).slice(0, 4000); });
       if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
 
       const vendDisplay = vendor.Name || r.Vendor_Name || ('Vendor ' + (r.Vendor_ID || ''));
@@ -22846,7 +23202,8 @@ async function qbSendCombinedInvoice(env, ctx) {
 
     const combinedLines = rowBuilds.reduce((acc, rb) => acc.concat(rb.inv.lines), []);
     const combinedTotal = +rowBuilds.reduce((s, rb) => s + rb.custTotal, 0).toFixed(2);
-    const note = `RidgeCo IR ${groupRows.map(r => r.ID).join('+')} · WO ${woId} · Bill ${groupRows.map(r => r.Bill_ID).join('+')}`;
+    const _distinctWoIds = [...new Set(groupRows.map(r => String(r.WO_ID)))];
+    const note = `RidgeCo IR ${groupRows.map(r => r.ID).join('+')} · WO ${_distinctWoIds.join('+')} · Bill ${groupRows.map(r => r.Bill_ID).join('+')}`;
 
     const photoFolderId  = wo.Drive_Folder_ID || '';
     const photoFolderUrl = wo.Drive_Folder_URL || (photoFolderId ? ('https://drive.google.com/drive/folders/' + photoFolderId) : '');
@@ -22889,6 +23246,7 @@ async function qbSendCombinedInvoice(env, ctx) {
       return json({ preview: {
         ir_id: groupRows[0].ID, group_ids: groupRows.map(r => r.ID), wo_id: woId, trade: tradeName,
         combined: true, combined_count: groupRows.length,
+        ...(_distinctWoIds.length > 1 ? { wo_ids: _distinctWoIds } : {}),
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
                    property: qbPropertyDisplayName(prop), unit: qbUnitLabel(unit),
                    property_id: prop.ID || '', unit_id: (unit && unit.ID) || '',
@@ -23074,10 +23432,13 @@ async function qbSendCombinedInvoice(env, ctx) {
     // one clean bill and one still-partial bill stays open rather than reading Invoiced early.
     const allSent = !!invoiceId && rowBuilds.every(rb => rb.status === 'sent');
     if (allSent) {
-      try {
-        await updateWOFields(env, woId, { Status: 'Invoiced' });
-        if (invoiceDocNumber) await updateWOFields(env, woId, { QBO_Invoice_Number: invoiceDocNumber });
-      } catch (e) {}
+      // One WO for an ordinary group; parent + each add-on child when the invoice rolled them together.
+      for (const _wid of _distinctWoIds) {
+        try {
+          await updateWOFields(env, _wid, { Status: 'Invoiced' });
+          if (invoiceDocNumber) await updateWOFields(env, _wid, { QBO_Invoice_Number: invoiceDocNumber });
+        } catch (e) {}
+      }
     }
 
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_ids: rowBuilds.map(rb => rb.billId || ''),
