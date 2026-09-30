@@ -6530,6 +6530,9 @@ async function addonOwnerNotice(env, body) {
   if (!ownerEmail) warnings.push('Owner has no email on file — no email will be sent.');
   if (String(owner.Notify_Method || 'sms') === 'none') warnings.push('Owner notification method is set to none.');
   if (String(parent.Managed_By || '') === 'Owner') warnings.push('This job is marked owner-managed.');
+  let _cfg = {}; try { _cfg = await fetchConfig(env); } catch (_) {}
+  const emailGate = addonEmailGate({ cfg: _cfg, property, owner });
+  if (!emailGate.ok) warnings.push('Email will NOT be sent: ' + emailGate.reason + '.');
   const already = String(child.Addon_Owner_Notified_Date || '').trim();
   if (already) warnings.push('Owner was already notified on ' + already + '.');
   const recipient = { owner_id: owner.ID, name: ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim() || owner.Company || '', phone: owner.Phone || '', email: ownerEmail };
