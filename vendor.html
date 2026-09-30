@@ -877,14 +877,14 @@ function awSubmit() {
 }
 
 // Submitted add-ons listed under the job card.
-function loadVendorAddons(woId, idx) {
-  var wrap = document.getElementById('addon-wrap-' + idx);
-  if (!wrap) return;
-  api('GET', '/wo/additional-work?parent_wo_id=' + encodeURIComponent(woId)).then(function(res) {
-    var list = (res && res.success && res.items) || [];
-    window._addons = window._addons || {};
-    window._addons[woId] = list;
-    renderVendorAddons(woId, idx);
+// ONE call per portal load / refresh (not one per job card — that burned the Sheets read quota): the worker returns
+// every add-on of the signed-in vendor, each row carrying parent_wo_id; rows are distributed to the cards here.
+function loadVendorAddons() {
+  return api('GET', '/wo/additional-work').then(function(res) {
+    var all = (res && res.success && res.items) || [];
+    window._addons = {};
+    all.forEach(function(a) { var p = a.parent_wo_id; if (p) (window._addons[p] = window._addons[p] || []).push(a); });
+    (window._wos || []).forEach(function(wo, idx) { if (awEligible(wo)) renderVendorAddons(wo.ID, idx); });
   }).catch(function() { /* non-critical: leave empty */ });
 }
 function awStatusInfo(a) {
