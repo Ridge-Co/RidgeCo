@@ -270,10 +270,23 @@ const _hubWorkerCore = {
         // in a second, separately-maintained array that kept drifting out of sync (5+ documented
         // incidents in context/CURRENT.md where a write this token should have reached got
         // rejected here first, even though hubTestWriteAllowed would have handled it correctly).
-        const _hubTestOk = !!env.HUB_TEST_TOKEN
+        const _hubTestTokOk = !!env.HUB_TEST_TOKEN
           && _tok === env.HUB_TEST_TOKEN
           && isStaging(env, url)
           && (request.method === 'GET' || request.method === 'POST');
+        // Staging UI test window (Sep 30 2026): lets a browser session open the STAGING Hub page
+        // without typing an access code, so UI-only flows can be tested. Same power as
+        // HUB_TEST_TOKEN (reads anything on staging; writes only TEST- records via the same
+        // hubTestWriteAllowed guard below) and it is: staging-only (isStaging), off by default,
+        // and only while Config `ui_test_mode_until` is in the future (max 2h, opened only by a
+        // HUB_TEST_TOKEN/WORKER_SECRET call to POST /staging/ui-test-window). The sentinel is not
+        // a secret — it grants nothing when the window is closed, and nothing at all on production.
+        const _uiTestOk = !_hubTestTokOk
+          && _tok === UI_TEST_SENTINEL
+          && isStaging(env, url)
+          && (request.method === 'GET' || request.method === 'POST')
+          && await uiTestWindowOpen(env);
+        const _hubTestOk = _hubTestTokOk || _uiTestOk;
         if (_hubTestOk) _viaHubTestToken = true;
         // Narrow READ-ONLY token for self-test/verification of PRODUCTION read-only admin endpoints
           // (credential-access gap closed Sep 22 2026, B-012 Vendor Performance follow-up — see
