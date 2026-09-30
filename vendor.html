@@ -2836,6 +2836,18 @@ function submitVendorSched(modalId) {
   </div>
 </div>
 
+<!-- ADDITIONAL WORK MODAL ("Found something else?") — items + photos + one lump-sum amount -->
+<div class="modal-overlay" id="modal-addon" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:16px;margin:auto;box-sizing:border-box">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.06em">🔍 <span data-i18n="FOUND SOMETHING ELSE?">FOUND SOMETHING ELSE?</span></div>
+      <button onclick="closeAddonModal()" aria-label="Close" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;min-width:44px;min-height:44px">✕</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:12px" data-i18n="List each extra problem with photos and one total price. Ridge Co will review it before you do any of this work.">List each extra problem with photos and one total price. Ridge Co will review it before you do any of this work.</div>
+    <div id="addon-body"></div>
+  </div>
+</div>
+
 <script>
 var _billWOId = null;
 var _billType = 'hourly';
