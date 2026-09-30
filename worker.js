@@ -22471,11 +22471,15 @@ async function qbReadyQueue(env, url) {
     // this one, per qbGroupOpenRows' own rule (not-yet-invoiced + same WO_ID). Computed
     // against the full irRows, not just `pending`, so a row already flagged 'partial' still
     // counts correctly toward its siblings.
+    // Additional work: an add-on child's row counts under its parent's WO (same rootOf rule as qbGroupOpenRows).
+    const _addonParentOf = {};
+    wos.forEach(w => { const p = String((w && w.Parent_WO_ID) || '').trim(); if (p && w.ID && String(w.Type || '') === 'addon') _addonParentOf[String(w.ID)] = p; });
+    const _addonRoot = id => _addonParentOf[String(id)] || String(id);
     const woOpenCounts = {};
     irRows.forEach(r => {
       if (r.Active === 'FALSE') return;
       if (r.QB_Invoice_ID && r.QB_Invoice_ID.trim()) return;
-      const k = String(r.WO_ID);
+      const k = _addonRoot(r.WO_ID);
       woOpenCounts[k] = (woOpenCounts[k] || 0) + 1;
     });
     const out = pending.map(r => {
