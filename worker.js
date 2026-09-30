@@ -21949,7 +21949,7 @@ async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, 
   const form = new FormData();
   form.append('file_metadata_01', new Blob([JSON.stringify(meta)], { type: 'application/json' }), 'metadata.json');
   form.append('file_content_01', new Blob([bytes], { type: mime }), filename);
-  const res = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/upload`, {
+  const res = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${qbToken}`, Accept: 'application/json' },
     body: form,
