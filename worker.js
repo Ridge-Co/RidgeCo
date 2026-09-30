@@ -20449,7 +20449,9 @@ async function qbSetupTrades(env) {
     const itemByName = {}; for (const it of (itemData?.QueryResponse?.Item || [])) itemByName[it.Name.toLowerCase()] = it.Id;
 
     const map = {}, log = [];
-    for (const t of QB_TRADES) {
+    for (const t0 of QB_TRADES) {
+      // Production hardcodes existing income account ids for Windows/General; they don't exist in the sandbox.
+      const t = (env.__STAGING__ && t0.incomeId) ? { ...t0, incomeId: null, income: t0.trade + ' Income' } : t0;
       let incomeId = t.incomeId || null;
       if (!incomeId) {
         const found = acctByName[t.income.toLowerCase()];
