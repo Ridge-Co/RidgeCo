@@ -27,7 +27,11 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(g.includes("'estimate'") && g.includes("'addon'"), 'hidden for estimate-type WOs and for add-on children');
   ok(g.includes('Parent_WO_ID'), 'hidden for anything with a parent');
   for (const s of ["'estimate requested'", "'complete'", "'invoiced'", "'paid'", "'cancelled'", "'voided'"]) ok(g.includes(s), 'status gate includes ' + s);
-  ok(vendor.includes('if (awEligible(wo)) loadVendorAddons(wo.ID, idx);'), 'submitted add-ons are only loaded for eligible cards');
+  ok(vendor.includes('if (wos.some(awEligible)) loadVendorAddons();') && !/loadVendorAddons\(wo\.ID/.test(vendor), 'submitted add-ons are loaded ONCE per render (not per card), and only when some card is eligible');
+  const lva = grabFn(vendor, 'loadVendorAddons');
+  ok(lva.includes("'/wo/additional-work')") && !lva.includes('parent_wo_id='), 'the single call sends no parent_wo_id (worker returns the signed-in vendor\'s rows only)');
+  ok(lva.includes('a.parent_wo_id') && lva.includes('renderVendorAddons(wo.ID, idx)') && lva.includes('awEligible(wo)'), 'rows are distributed to each eligible card by parent_wo_id');
+  ok(grabFn(vendor, 'withdrawAddon').includes('loadVendorAddons();'), 'withdraw refreshes with the same single call');
 }
 // ── vendor.html: modal + flow ──
 {
