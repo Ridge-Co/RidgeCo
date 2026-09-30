@@ -22723,9 +22723,15 @@ async function qbSendInvoice(env, body) {
       } catch (e) { warnings.push('⚠ Could not check whether this job is on a signed proposal that already bills its materials — check before sending.'); }
     }
     if (groupRows.length > 1) {
+      // Additional-work rollup: when the group spans a parent and its add-on children, the invoice is
+      // anchored on the lead row's WO and needs every member WO's time entries. For an ordinary
+      // single-WO group both expressions below reduce to exactly the old values (wo / woTimeEntries).
+      const _groupWoIds = new Set(groupRows.map(r => String(r.WO_ID)));
+      const _ctxWo = String(groupRows[0].WO_ID) === String(ir.WO_ID) ? wo : (findWO(wos, groupRows[0].WO_ID) || wo);
+      const _ctxTimeEntries = _groupWoIds.size > 1 ? allTimeEntries.filter(e => _groupWoIds.has(String(e.WO_ID))) : woTimeEntries;
       return await qbSendCombinedInvoice(env, {
-        groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName,
-        warnings, previewOnly, batch: body.batch, timeEntries: woTimeEntries,
+        groupRows, bills, vendors, wo: _ctxWo, woList: wos, owner, prop, unit, billTo, trade, tradeName,
+        warnings, previewOnly, batch: body.batch, timeEntries: _ctxTimeEntries,
         overridePendingInfo: !!body.override_pending_info,
       });
     }
