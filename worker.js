@@ -17947,6 +17947,12 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!_tab || !_b.id) return false;
     return await isTestRecord(env, _tab, _b.id);
   }
+  if (path === '/invoice-review/approve') return !!_b.wo_id && await isTestWO(env, _b.wo_id);
+  if (path === '/invoice-review/unapprove') {
+    if (!_b.id) return false;
+    const _ir2 = (await fetchTab(env, 'Invoice_Review')).find(r => String(r.ID) === String(_b.id));
+    return !!_ir2 && !!_ir2.WO_ID && await isTestWO(env, _ir2.WO_ID);
+  }
   if (path === '/qb/vendor-in-house') return !!_b.id && await isTestRecord(env, 'Vendors', _b.id);
   if (path === '/qb/reparent-unit') return !!_b.unit_id && await isTestRecord(env, 'Units', _b.unit_id);
   if (['/qb/send-invoice', '/qb/undo-send', '/qb/repair-invoice', '/qb/reprice-invoice', '/qb/relabel-invoice',
