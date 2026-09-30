@@ -14744,7 +14744,7 @@ async function arRemind(env, body) {
     // Require a POSITIVE confirmation (2xx + Invoice + EmailStatus) — never report "sent" on a
     // response that merely lacks a Fault, or the audit log would claim a send that never went.
     try {
-      const rr = await fetch(`${QB_API_BASE}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(id)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
+      const rr = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(id)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
       const sres = await rr.json().catch(() => null);
       if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed (HTTP ' + rr.status + '): ' + JSON.stringify((sres && sres.Fault) || sres || '').slice(0, 150));
       const es = sres.Invoice.EmailStatus;
