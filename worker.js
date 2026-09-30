@@ -22731,7 +22731,7 @@ async function qbSendInvoice(env, body) {
     // one-Invoice_Review-row-at-a-time path below. groupRows.length === 1 is the ordinary
     // single-vendor job — falls straight through to the unchanged code beneath, zero
     // behavior change for the ~95% of jobs that only ever had one vendor bill.
-    const groupRows = qbGroupOpenRows(irRows, ir, wos);
+    const groupRows = qbGroupOpenRows(irRows, ir, wos, estRowsAll);
     // Sep 22 2026 backstop: a receipt approved onto this invoice BEFORE the job's scope proposal
     // was signed with Ridge Co materials priced in would otherwise go out a second time here.
     // Warn in the preview (never silently change a total that was already approved).
