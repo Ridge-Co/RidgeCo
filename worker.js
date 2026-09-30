@@ -6470,7 +6470,7 @@ async function addonList(env, url, callerRole, callerSessionId) {
     return row;
   }).sort((a, b) => String(a.created_date).localeCompare(String(b.created_date)));
   // success + items + per-row estimate_status are the contract vendor.html / index.html read (withdrawn rows are not listed in `items`).
-  return json({ success: true, parent_wo_id: parentId, additional_work: out, items: out.filter(r => !r.withdrawn), pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
+  return json({ success: true, parent_wo_id: parentId || null, additional_work: out, items: out.filter(r => !r.withdrawn), pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
 }
 
 // PURE — the INFORMATION-ONLY owner message. No price, no vendor bill/receipt anywhere. Photo links are
