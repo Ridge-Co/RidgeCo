@@ -22488,7 +22488,7 @@ async function qbReadyQueue(env, url) {
     // counts correctly toward its siblings.
     // Additional work: an add-on child's row counts under its parent's WO (same rootOf rule as qbGroupOpenRows).
     const _addonParentOf = {};
-    wos.forEach(w => { const p = String((w && w.Parent_WO_ID) || '').trim(); if (p && w.ID && String(w.Type || '') === 'addon') _addonParentOf[String(w.ID)] = p; });
+    wos.forEach(w => { if (addonRollsIntoParent(w, estRows)) _addonParentOf[String(w.ID)] = String(w.Parent_WO_ID).trim(); });
     const _addonRoot = id => _addonParentOf[String(id)] || String(id);
     const woOpenCounts = {};
     irRows.forEach(r => {
