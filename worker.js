@@ -6032,7 +6032,7 @@ async function tenantWOSettingsSummary(env) {
 const __woClaimCache = new Map(); // signatureKey -> expiry (ms epoch)
 const WO_CLAIM_TTL_MS = 75000;
 function claimWOSignature(sig) {
-  const key = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Trade', 'Description', 'Type']
+  const key = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Trade', 'Description', 'Type', 'Parent_WO_ID']
     .map(k => String(sig[k] || '')).join('\u0001');
   const now = Date.now();
   for (const [k, exp] of __woClaimCache) if (exp <= now) __woClaimCache.delete(k); // opportunistic sweep, keeps the Map from growing forever
