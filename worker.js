@@ -532,6 +532,7 @@ const _hubWorkerCore = {
           if (!_hubTestAllowed) return json({ error: 'HUB_TEST_TOKEN: this write does not resolve to a TEST- record, refusing', debug: _hubTestErr || undefined }, 403);
         }
         if (path === '/staging/ui-test-window') return await uiTestWindowHandler(env, url, request, body);
+        if (path === '/staging/ui-test-session') return await uiTestSessionHandler(env, url, body);
         if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
         if (path === '/admin/seed-test-receipt') return await seedTestReceipt(env, url, body);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
