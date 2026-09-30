@@ -889,7 +889,8 @@ function loadVendorAddons(woId, idx) {
 }
 function awStatusInfo(a) {
   var s = String(a.estimate_status || '').toLowerCase();
-  if (s === 'approved' || s === 'converted') return { key: 'approved', label: t('Approved - go ahead'), color: '#166534', bg: '#eaf6ee', canWithdraw: false,
+  if (s === 'converted') return { key: 'pending', label: t('Awaiting review'), color: 'var(--muted)', bg: 'var(--surface2)', canWithdraw: false, msg: '' };
+  if (s === 'approved') return { key: 'approved', label: t('Approved - go ahead'), color: '#166534', bg: '#eaf6ee', canWithdraw: false,
     msg: t('✓ Approved — you\'re cleared to go ahead with this extra work.') };
   if (s === 'needs info') return { key: 'needs', label: t('Needs info'), color: '#7a4b00', bg: '#fdf2e2', canWithdraw: true,
     msg: t('❓ Ridge Co needs a bit more information on this. Please call us, or withdraw it and send it again.') };
