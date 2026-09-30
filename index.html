@@ -9028,10 +9028,17 @@ function renderHubEstimateView(woId, estimates, holder) {
     var notVoided = !wo || wo.Voided !== 'TRUE';
     var pushToScopeBlock = '';
     if (notVoided) {
-      pushToScopeBlock = wo && wo.Scope_ID
-        ? '<div style="margin-top:8px"><button class="btn small secondary" onclick="openPushToScopeUI(\'' + woId + '\')">📋 Push estimate to Scope Proposal</button> ' +
-          '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="window.open(\'scope-creator.html?scope_id=' + esc(wo.Scope_ID) + '\',\'_blank\')">🔗 Open Scope #' + esc(wo.Scope_ID) + ' →</button></div>'
-        : '<div style="margin-top:8px"><button class="btn small secondary" onclick="openPushToScopeUI(\'' + woId + '\')">📋 Push estimate to Scope Proposal</button></div>';
+      // The standalone push button is gone for pending estimates: a proposal now starts from
+      // "Approve & send to proposal" above, so approval can never text the vendor by accident.
+      // It stays ONLY for an estimate that was already approved (no-proposal path) and is later
+      // moved into a proposal — there is no other route for that case.
+      var pushBtn = isApproved
+        ? '<button class="btn small secondary" title="Already approved, so this only moves the estimate into a Scope Proposal." onclick="openPushToScopeUI(\'' + woId + '\')">📋 Send approved estimate to Scope Proposal</button> '
+        : '';
+      var openScopeBtn = wo && wo.Scope_ID
+        ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="window.open(\'scope-creator.html?scope_id=' + esc(wo.Scope_ID) + '\',\'_blank\')">🔗 Open Scope #' + esc(wo.Scope_ID) + ' →</button>'
+        : '';
+      if (pushBtn || openScopeBtn) pushToScopeBlock = '<div style="margin-top:8px">' + pushBtn + openScopeBtn + '</div>';
     }
 
     holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
