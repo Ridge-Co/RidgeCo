@@ -6085,6 +6085,7 @@ async function createWorkOrder(env, body) {
   const _woSig = {
     Property_ID: body.property_id || '', Unit_ID: body.unit_id || '', Tenant_ID: body.tenant_id || '',
     Trade: body.trade || '', Description: body.description || '', Type: body.type || 'manual',
+    ...(body.parent_wo_id ? { Parent_WO_ID: String(body.parent_wo_id) } : {}),   // additional-work child: type + parent are part of the signature
   };
   const _gotClaim = claimWOSignature(_woSig);
   if (!_gotClaim) {
