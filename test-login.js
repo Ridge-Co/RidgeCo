@@ -156,7 +156,7 @@
       if (PORTAL_PAGES[page]) continue; // portals use PIN sessions, not the admin code
       if (el.type === 'password' || /auth.?token|admin.?(code|pw|pass)|access.?code|secret|login.?pw|\btoken\b|passcode/i.test(id)) {
         if (/\bpin\b|name/i.test(el.id || '') && el.type !== 'password') continue;
-        if (!el.value) { setVal(el, SENT); filled = true; }
+        if (!el.value || /localStorage/.test(el.value)) { setVal(el, SENT); filled = true; } // owner-setup.html ships JS text as the field value
       }
     }
     return filled;
