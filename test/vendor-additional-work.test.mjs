@@ -244,7 +244,7 @@ t('no children: results are identical to the original two-argument behaviour for
 }
 
 const sendFn = grabAsync('qbSendInvoice');
-t('qbSendInvoice passes the WO list to the grouping', /const groupRows = qbGroupOpenRows\(irRows, ir, wos\);/.test(sendFn));
+t('qbSendInvoice passes the WO list to the grouping', /const groupRows = qbGroupOpenRows\(irRows, ir, wos, estRowsAll\);/.test(sendFn));
 t('qbSendInvoice: ordinary group keeps wo / woTimeEntries exactly', /_groupWoIds\.size > 1 \? allTimeEntries\.filter/.test(sendFn) && /: woTimeEntries;/.test(sendFn));
 const comb = grabAsync('qbSendCombinedInvoice');
 t('combined: add-on child lines are relabelled "Additional work — … WO <parent>"', /'Additional work — ' \+ l\.Description/.test(comb) && /WO_ID: _rowWo\.Parent_WO_ID/.test(comb));
