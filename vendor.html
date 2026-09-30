@@ -924,7 +924,7 @@ function withdrawAddon(woId, childId, idx) {
   if (!release) return;
   api('POST', '/wo/additional-work/withdraw', { child_wo_id: childId }).then(function(res) {
     release();
-    if (res && res.success) { toast(t('Withdrawn'), 'success'); loadVendorAddons(woId, idx); }
+    if (res && res.success) { toast(t('Withdrawn'), 'success'); loadVendorAddons(); }
     else toast((res && res.error) || t('Could not withdraw'), 'error');
   }).catch(function() { release(); toast(t('Connection error — try again.'), 'error'); });
 }
