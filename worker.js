@@ -22622,6 +22622,8 @@ async function qbReadyQueue(env, url) {
         // invoice as this one. 0 means this bill sends/invoices alone (today's ordinary case).
         combines_with: !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim())
           ? Math.max(0, (woOpenCounts[_addonRoot(r.WO_ID)] || 1) - 1) : 0,
+        // Additional work that is not Approved must never read as "ready": flag it (ordinary rows get no extra keys).
+        ...(addonStandaloneBlock(wo, estRows) ? { addon_unapproved: true, addon_unapproved_reason: addonStandaloneBlock(wo, estRows), needs_individual_send: true } : {}),
       };
     });
     return json(out);
