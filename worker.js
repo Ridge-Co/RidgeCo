@@ -18119,6 +18119,16 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!(await isTestRecord(env, 'Properties', wo.Property_ID))) return false;
     return await isTestRecord(env, 'Vendors', wo.Vendor_ID);
   }
+  if (path === '/wo/additional-work/start') return !!(body && body.parent_wo_id) && await isTestWO(env, body.parent_wo_id);
+  if (path === '/wo/additional-work/submit' || path === '/wo/additional-work/withdraw') return !!(body && body.child_wo_id) && await isTestWO(env, body.child_wo_id);
+  if (path === '/wo/additional-work/owner-notice') {
+    // preview reads only; a real send may text/email the property's owner, so the owner must be a TEST- record too.
+    if (!(body && body.child_wo_id) || !(await isTestWO(env, body.child_wo_id))) return false;
+    if (body.preview !== false) return true;
+    const _w = findWO(await fetchTab(env, 'Work_Orders'), String(body.child_wo_id));
+    const _p = _w ? (await fetchTab(env, 'Properties')).find(x => String(x.ID) === String(_w.Property_ID)) : null;
+    return !!_p && await isTestRecord(env, 'Owners', _p.Owner_ID);
+  }
   if (path === '/estimate' || path === '/estimate/approve' || path === '/estimate/needs-info' || path === '/estimate/decline' || path === '/wo/push-to-scope') {
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = wos.find(w => String(w.ID) === String(body && body.wo_id));
