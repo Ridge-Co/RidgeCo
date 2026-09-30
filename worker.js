@@ -6457,7 +6457,8 @@ async function addonList(env, url, callerRole, callerSessionId) {
     if (isAdmin) { row.owner_notified = !!String(c.Addon_Owner_Notified_Date || '').trim(); row.owner_notified_date = c.Addon_Owner_Notified_Date || ''; }
     return row;
   }).sort((a, b) => String(a.created_date).localeCompare(String(b.created_date)));
-  return json({ parent_wo_id: parentId, additional_work: out, pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
+  // success + items + per-row estimate_status are the contract vendor.html / index.html read (withdrawn rows are not listed in `items`).
+  return json({ success: true, parent_wo_id: parentId, additional_work: out, items: out.filter(r => !r.withdrawn), pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
 }
 
 // PURE — the INFORMATION-ONLY owner message. No price, no vendor bill/receipt anywhere. Photo links are
