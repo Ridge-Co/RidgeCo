@@ -22827,6 +22827,14 @@ async function qbSendInvoice(env, body) {
     const billPendingInfo = String(billRow.Pending_Info || '').toUpperCase() === 'TRUE';
     if (billPendingInfo) warnings.push(`⏳ This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''} — resolve it before sending, or override deliberately.`);
 
+    // Additional work: an UNAPPROVED / declined / withdrawn / converted add-on child must not be invoiced on its
+    // own either. Preview warns; the real send is a 409 soft block unless override_addon_unapproved:true.
+    const addonBlock = addonStandaloneBlock(wo, estRowsAll);
+    if (addonBlock) warnings.push('⛔ ' + addonBlock + ' — it should not be invoiced. Resolve it, or override deliberately.');
+    if (addonBlock && !previewOnly && !body.override_addon_unapproved) {
+      return json({ ok: false, error: addonBlock + '. Resolve it, or resend with override_addon_unapproved to invoice it anyway.', addon_unapproved: true, warnings }, 409);
+    }
+
     // B-227 Phase 3: if other approved-but-not-yet-invoiced bills share this WO, combine
     // them into ONE customer invoice (still one QB Bill per vendor) instead of the old
     // one-Invoice_Review-row-at-a-time path below. groupRows.length === 1 is the ordinary
