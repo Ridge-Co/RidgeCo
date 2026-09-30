@@ -12245,7 +12245,9 @@ function renderQBCard(r, i) {
   // record has no invoice id to protect it from a duplicate, so it stays Preview & Send only,
   // same as it's always been — the checkbox is disabled and says why instead of being silently
   // absent, so it doesn't read as "select all" quietly skipping a row.
-  var checkHtml = '<label class="qb-bulk-check-wrap" style="display:'+(_qbBulkMode?'flex':'none')+';align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--muted)"'+(r.needs_individual_send?' title="No QuickBooks status on record — needs Preview & Send individually"':'')+'>' +
+  var addonWarnHtml = r.addon_unapproved
+    ? '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#8a1c14;line-height:1.5">⛔ ' + esc(r.addon_unapproved_reason || 'Additional work that is not approved') + ' — not ready to invoice. Preview &amp; Send will ask you to confirm.</div>' : '';
+  var checkHtml = addonWarnHtml + '<label class="qb-bulk-check-wrap" style="display:'+(_qbBulkMode?'flex':'none')+';align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--muted)"'+(r.needs_individual_send?' title="No QuickBooks status on record — needs Preview & Send individually"':'')+'>' +
     '<input type="checkbox" class="qb-bulk-check" data-i="'+i+'" '+(r.needs_individual_send?'disabled':'')+' onchange="qbUpdateBulkBar()"> ' +
     (r.needs_individual_send ? 'Needs individual send' : 'Select for batch') +
   '</label>';
@@ -12398,7 +12400,7 @@ function renderQBPreview(p) {
 // CAP-036 #14: overridePendingInfo (true only when re-called from the "Send anyway" button
 // below) resends with override_pending_info:true so a bill flagged "Invoiced — Pending Info"
 // can still go out deliberately — soft block, never a permanent one.
-function confirmQBSend(overridePendingInfo) {
+function confirmQBSend(overridePendingInfo, overrideAddon) {
   if (!_qbCurrent) return;
   var id = _qbCurrent;
   var btn = document.getElementById('qb-send-confirm-btn');
@@ -12406,6 +12408,7 @@ function confirmQBSend(overridePendingInfo) {
   document.getElementById('qb-send-msg').innerHTML = '';
   var payload = { id: id };
   if (overridePendingInfo) payload.override_pending_info = true;
+  if (overrideAddon) payload.override_addon_unapproved = true;
   api('POST', '/qb/send-invoice', payload).then(function(res){
     if (res.ok || res.already_sent) {
       // Combined sends (B-227 Phase 3) return bill_ids (array, one per vendor) instead of a
@@ -12432,6 +12435,12 @@ function confirmQBSend(overridePendingInfo) {
       _qbSendJustApproved = null; // it's actually in QuickBooks now — nothing left to undo
       // Hold the modal open longer when there's something to read.
       setTimeout(function(){ closeModal('modal-qb-send'); }, warnHtml ? 6000 : 1600);
+    } else if (res.addon_unapproved && !overrideAddon) {
+      // Additional work that is not Approved (declined / pending / withdrawn / sent to a proposal): soft block, deliberate override only.
+      btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
+      document.getElementById('qb-send-msg').innerHTML =
+        '<div style="color:var(--danger);font-size:12px;margin-top:6px;line-height:1.5">⛔ ' + esc(res.error || 'This additional work is not approved.') + '</div>' +
+        '<div style="margin-top:8px"><button onclick="confirmQBSend(' + (overridePendingInfo ? 'true' : 'false') + ',true)" style="background:var(--danger);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 12px;cursor:pointer">Invoice anyway</button></div>';
     } else if (res.pending_info && !overridePendingInfo) {
       // CAP-036 #14: soft block, not a dead end — the server refused because the underlying
       // bill is flagged, but Brett is the only approver here, so a deliberate way through

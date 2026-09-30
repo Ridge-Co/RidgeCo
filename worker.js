@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.16-vendor-additional-work';
+const BUILD_VERSION = '2026-09-30.17-vendor-additional-work';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -3915,6 +3915,10 @@ async function woPushToScope(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
+  if (String(wo.Type || '') === 'addon' && String(wo.Parent_WO_ID || '').trim() &&
+      (String(wo.Voided || '').toUpperCase() === 'TRUE' || ['Withdrawn', 'Draft'].includes(String(wo.Addon_Status || '')))) {
+    return json({ error: `Additional work ${woId} is ${String(wo.Addon_Status || '') === 'Draft' ? 'still a draft' : 'withdrawn or voided'} — it cannot be sent to a Scope Proposal.` }, 400);
+  }
   if (String(wo.Voided || '').toUpperCase() === 'TRUE') return json({ error: `WO ${woId} is voided — restore it first (POST /wo/unvoid) before pushing it to a Scope Proposal.` }, 409);
 
   const allEstimates = await fetchTab(env, 'Estimates');
@@ -22253,6 +22257,24 @@ function addonRollsIntoParent(w, estRows) {
   const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
   return String(latest.Status || '') === 'Approved';
 }
+// STANDALONE GUARD (Sep 30 2026): the same gate, applied to a child's OWN invoice. Returns '' for every row
+// that is not an add-on child, and for a child that passes addonRollsIntoParent; otherwise a plain-English reason.
+// qbSendInvoice refuses the real send (409) and warns in the preview; qbReadyQueue flags the row. The
+// explicit override_addon_unapproved:true still lets Brett invoice it deliberately.
+function addonStandaloneBlock(w, estRows) {
+  if (!w || String(w.Type || '') !== 'addon' || !String(w.Parent_WO_ID || '').trim()) return '';
+  if (addonRollsIntoParent(w, estRows)) return '';
+  const id = String(w.ID || '');
+  if (String(w.Voided || '').toUpperCase() === 'TRUE') return 'Additional work ' + id + ' is voided or withdrawn';
+  const st = String(w.Addon_Status || '');
+  if (st !== 'Submitted') return 'Additional work ' + id + ' is ' + (st === 'Withdrawn' ? 'withdrawn' : 'still a draft');
+  const v = (Array.isArray(estRows) ? estRows : []).filter(e => e && String(e.WO_ID) === id && e.Active !== 'FALSE');
+  if (!v.length) return 'Additional work ' + id + ' has no estimate';
+  const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  const es = String(latest.Status || '');
+  if (es === 'Converted') return 'Additional work ' + id + ' was sent to a scope proposal, which bills through its own payment milestones';
+  return 'Additional work ' + id + ' is not approved (estimate is ' + (es || 'blank') + ')';
+}
 function qbGroupOpenRows(irRows, ir, woRows, estRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
   const parentOf = {};
@@ -22604,6 +22626,8 @@ async function qbReadyQueue(env, url) {
         // invoice as this one. 0 means this bill sends/invoices alone (today's ordinary case).
         combines_with: !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim())
           ? Math.max(0, (woOpenCounts[_addonRoot(r.WO_ID)] || 1) - 1) : 0,
+        // Additional work that is not Approved must never read as "ready": flag it (ordinary rows get no extra keys).
+        ...(addonStandaloneBlock(wo, estRows) ? { addon_unapproved: true, addon_unapproved_reason: addonStandaloneBlock(wo, estRows), needs_individual_send: true } : {}),
       };
     });
     return json(out);
@@ -22806,6 +22830,14 @@ async function qbSendInvoice(env, body) {
     // real write is gated below (near CONFIRM) unless explicitly overridden.
     const billPendingInfo = String(billRow.Pending_Info || '').toUpperCase() === 'TRUE';
     if (billPendingInfo) warnings.push(`⏳ This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''} — resolve it before sending, or override deliberately.`);
+
+    // Additional work: an UNAPPROVED / declined / withdrawn / converted add-on child must not be invoiced on its
+    // own either. Preview warns; the real send is a 409 soft block unless override_addon_unapproved:true.
+    const addonBlock = addonStandaloneBlock(wo, estRowsAll);
+    if (addonBlock) warnings.push('⛔ ' + addonBlock + ' — it should not be invoiced. Resolve it, or override deliberately.');
+    if (addonBlock && !previewOnly && !body.override_addon_unapproved) {
+      return json({ ok: false, error: addonBlock + '. Resolve it, or resend with override_addon_unapproved to invoice it anyway.', addon_unapproved: true, warnings }, 409);
+    }
 
     // B-227 Phase 3: if other approved-but-not-yet-invoiced bills share this WO, combine
     // them into ONE customer invoice (still one QB Bill per vendor) instead of the old

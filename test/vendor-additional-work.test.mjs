@@ -231,11 +231,11 @@ t('no children: results are identical to the original two-argument behaviour for
 
 // qbReadyQueue's combines_with counts use the SAME gate (executed, not just grepped)
 {
-  const rq = new Function('json', 'fetchTabs', 'findWO', 'addonRollsIntoParent', grabAsync('qbReadyQueue') + '\nreturn qbReadyQueue;');
+  const rq = new Function('json', 'fetchTabs', 'findWO', 'addonRollsIntoParent', 'addonStandaloneBlock', grabAsync('qbReadyQueue') + '\nreturn qbReadyQueue;');
   const run = async (e, childOver = {}) => {
     const irRows = [{ ID: '1', WO_ID: 'WO-100', Bill_ID: 'B1', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }, { ID: '3', WO_ID: 'WO-101', Bill_ID: 'B3', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }];
     const W = [{ ID: 'WO-100', Type: 'manual' }, childWo(childOver)];
-    const fn = rq(d => ({ _d: d }), async () => [irRows, W, e], (l, id) => l.find(w => w.ID === id) || null, addonRollsIntoParent);
+    const fn = rq(d => ({ _d: d }), async () => [irRows, W, e], (l, id) => l.find(w => w.ID === id) || null, addonRollsIntoParent, () => '');
     const out = (await fn({}, { searchParams: { get: () => '' } }, false))._d;
     return out.reduce((m, r) => (m[r.id] = r.combines_with, m), {});
   };
@@ -403,6 +403,74 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
   t('addonStart creates the child with owner_notify_override off and createWorkOrder persists Owner_Notify_Override', /owner_notify_override: 'off'/.test(grabAsync('addonStart')) && /Owner_Notify_Override: body\.owner_notify_override\|\|''/.test(grabAsync('createWorkOrder')));
   const us = grabAsync('updateStatus');
   t('updateStatus: the owner Complete / On Hold text goes through shouldNotifyOwner then the gated chokepoint', /const notify = await shouldNotifyOwner\(env, wo, ownerEvent\)/.test(us) && /smsGatedSend\(env, \{ wo_id: body\.wo_id, message_type: msgType, recipient_type: 'owner'/.test(us));
+}
+
+// ── STANDALONE-INVOICE GUARD + push-to-scope guard (executed against the real functions) ─────────────
+{
+  const json = (d, s) => ({ _d: d, status: s || 200 });
+  const findWO = (l, id) => l.find(w => w.ID === id) || null;
+  const blk = new Function(grab('addonRollsIntoParent') + grab('addonStandaloneBlock') + '\nreturn addonStandaloneBlock;')();
+  const mkSend = new Function('json', 'fetchTab', 'fetchTabs', 'findWO', 'qbResolveBillTo', 'resolveTrade', 'QB_TRADE_MAP', 'qbBillToNote', 'qbGroupOpenRows', 'qbSendCombinedInvoice', 'qbSendStandaloneInvoice', 'addonStandaloneBlock', 'scopeCoveringSignatureForWO',
+    grabAsync('qbSendInvoice') + '\nreturn qbSendInvoice;');
+  const mkCall = (wos, ests) => {
+    const seen = { combined: 0, warnings: null };
+    const IR = [{ ID: 'IR1', WO_ID: 'WO-11', Bill_ID: 'B1', Active: 'TRUE', Vendor_ID: 'V1', QB_Invoice_ID: '', QB_Bill_ID: '' }, { ID: 'IR2', WO_ID: 'WO-11', Bill_ID: 'B2', Active: 'TRUE', Vendor_ID: 'V1' }];
+    const f = mkSend(json, async () => IR, async () => [wos, [{ ID: 'P1' }], [{ ID: 'O1' }], [{ ID: 'V1' }], [{ ID: 'B1' }, { ID: 'B2' }], [], [], ests],
+      findWO, () => ({}), () => ({ name: 'General', matched: true }), { General: { expense: '1' } }, () => '',
+      () => IR,   // a 2-row group => the combined path, which is stubbed and records that the gate let the request through
+      async (env, o) => { seen.combined++; seen.warnings = o.warnings; return json({ ok: true, reached: true, warnings: o.warnings }); },
+      async () => json({ ok: true, standalone: true }), blk, async () => null);
+    return { f, seen };
+  };
+  const child = (over = {}) => ({ ID: 'WO-11', Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Submitted', Voided: 'FALSE', Property_ID: 'P1', ...over });
+  const E = s => [{ WO_ID: 'WO-11', Version: '1', Status: s, Active: 'TRUE' }];
+  const cases = [
+    ['estimate Declined', child(), E('Declined')], ['estimate Needs Info', child(), E('Needs Info')], ['estimate Pending', child(), E('Pending')],
+    ['estimate Withdrawn', child(), E('Withdrawn')], ['estimate Converted', child(), E('Converted')], ['no estimate', child(), []],
+    ['child Voided', child({ Voided: 'TRUE' }), E('Approved')], ['Addon_Status Withdrawn', child({ Addon_Status: 'Withdrawn' }), E('Approved')], ['Addon_Status Draft', child({ Addon_Status: 'Draft' }), E('Approved')],
+  ];
+  for (const [label, w, e] of cases) {
+    let { f, seen } = mkCall([{ ID: 'WO-1', Type: 'manual' }, w], e);
+    let r = await f({}, { id: 'IR1' });
+    t('standalone guard [' + label + ']: real send is a 409 with addon_unapproved and never reaches the invoice path', r.status === 409 && r._d.addon_unapproved === true && /override_addon_unapproved/.test(r._d.error) && seen.combined === 0);
+    ({ f, seen } = mkCall([{ ID: 'WO-1', Type: 'manual' }, w], e));
+    r = await f({}, { id: 'IR1', preview_only: true });
+    t('standalone guard [' + label + ']: preview still works and carries the warning', r.status === 200 && seen.combined === 1 && seen.warnings.some(x => /should not be invoiced/.test(x)));
+    ({ f, seen } = mkCall([{ ID: 'WO-1', Type: 'manual' }, w], e));
+    r = await f({}, { id: 'IR1', override_addon_unapproved: true });
+    t('standalone guard [' + label + ']: override_addon_unapproved lets the send through', r.status === 200 && seen.combined === 1);
+    t('standalone guard [' + label + ']: addonStandaloneBlock names a reason', blk(w, e).length > 10);
+  }
+  { const { f, seen } = mkCall([{ ID: 'WO-1', Type: 'manual' }, child()], E('Approved')); const r = await f({}, { id: 'IR1' });
+    t('standalone guard: an APPROVED child behaves exactly as before (no block, no warning)', r.status === 200 && seen.combined === 1 && !seen.warnings.some(x => /invoiced|approved/i.test(x))); }
+  { const { f, seen } = mkCall([{ ID: 'WO-11', Type: 'manual', Property_ID: 'P1' }], []); const r = await f({}, { id: 'IR1' });
+    t('standalone guard: an ordinary non-addon WO row is unaffected', r.status === 200 && seen.combined === 1 && !seen.warnings.some(x => /Additional work|should not be invoiced/.test(x))); }
+  { const { f, seen } = mkCall([{ ID: 'WO-11', Type: 'addon', Parent_WO_ID: '', Property_ID: 'P1' }], []); const r = await f({}, { id: 'IR1' });
+    t('standalone guard: Type addon WITHOUT a parent is not treated as a child', r.status === 200 && seen.combined === 1); }
+  t('standalone guard: a late APPROVED add-on after its parent invoiced is unaffected (qbGroupOpenRows keeps it alone, gate passes)', blk(child(), E('Approved')) === '');
+
+  // qbReadyQueue flags — executed
+  const mkQ = new Function('json', 'fetchTabs', 'findWO', 'addonRollsIntoParent', 'addonStandaloneBlock', grabAsync('qbReadyQueue') + '\nreturn qbReadyQueue;');
+  const q = async (wos, ests, irs) => (await mkQ(json, async () => [irs, wos, ests], findWO, grab0('addonRollsIntoParent'), blk)({}, { searchParams: { get: () => null } }))._d;
+  const irs = [{ ID: 'IR1', WO_ID: 'WO-11', Active: 'TRUE', QB_Invoice_Status: 'pending' }, { ID: 'IR2', WO_ID: 'WO-50', Active: 'TRUE', QB_Invoice_Status: 'pending' }];
+  let rows = await q([{ ID: 'WO-1', Type: 'manual' }, child(), { ID: 'WO-50', Type: 'manual' }], E('Declined'), irs);
+  t('ready queue: a declined add-on row is flagged (not silently ready) and needs individual send', rows[0].addon_unapproved === true && /not approved/.test(rows[0].addon_unapproved_reason) && rows[0].needs_individual_send === true);
+  t('ready queue: an ordinary row gets no addon keys at all', !('addon_unapproved' in rows[1]) && !('addon_unapproved_reason' in rows[1]) && rows[1].needs_individual_send === false);
+  rows = await q([{ ID: 'WO-1', Type: 'manual' }, child(), { ID: 'WO-50', Type: 'manual' }], E('Approved'), irs);
+  t('ready queue: an Approved add-on row is unflagged', !('addon_unapproved' in rows[0]) && rows[0].needs_individual_send === false);
+  rows = await q([{ ID: 'WO-1', Type: 'manual' }, child({ Voided: 'TRUE' }), { ID: 'WO-50', Type: 'manual' }], E('Approved'), irs);
+  t('ready queue: a voided add-on row is flagged', rows[0].addon_unapproved === true);
+
+  // woPushToScope guard — executed
+  const mkPush = new Function('json', 'scopesTab', 'ensureColumns', 'fetchTab', 'findWO', grabAsync('woPushToScope') + '\nreturn woPushToScope;');
+  const push = async w => { let est = 0; const f = mkPush(json, async () => {}, async () => {}, async (env, tab) => { if (tab === 'Estimates') est++; return tab === 'Work_Orders' ? [w] : []; }, findWO); const r = await f({}, { wo_id: w.ID }); return { r, est }; };
+  for (const [label, w] of [['Voided', child({ Voided: 'TRUE' })], ['Withdrawn', child({ Addon_Status: 'Withdrawn', Voided: 'TRUE' })], ['Draft', child({ Addon_Status: 'Draft', Voided: 'TRUE' })], ['Withdrawn but un-voided', child({ Addon_Status: 'Withdrawn' })]]) {
+    const { r, est } = await push(w);
+    t('push-to-scope: add-on child [' + label + '] is rejected with a clear 400 before any estimate is read', r.status === 400 && /cannot be sent to a Scope Proposal/.test(r._d.error) && est === 0);
+  }
+  { const { r } = await push({ ID: 'WO-7', Type: 'manual', Voided: 'TRUE' }); t('push-to-scope: an ordinary voided WO keeps its original 409', r.status === 409); }
+  { const { r } = await push(child()); t('push-to-scope: a live Submitted child is NOT blocked by the new guard (falls through to the estimate rules)', r.status === 400 && /no estimates yet/.test(r._d.error)); }
+  t('approve/flag estimate reuse the batched, cached Work_Orders read (single batchGet via fetchTabs; later fetchTab hits __tabCache)', /fetchTabs\(env, \['Estimates', 'Work_Orders'\]\)/.test(grabAsync('approveEstimate')) && /fetchTabs\(env, \['Estimates', 'Work_Orders'\]\)/.test(grabAsync('flagEstimate')));
 }
 
 t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-09-30\.\d+-vendor-additional-work'/.test(src));
