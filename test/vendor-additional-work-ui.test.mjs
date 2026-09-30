@@ -27,7 +27,11 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(g.includes("'estimate'") && g.includes("'addon'"), 'hidden for estimate-type WOs and for add-on children');
   ok(g.includes('Parent_WO_ID'), 'hidden for anything with a parent');
   for (const s of ["'estimate requested'", "'complete'", "'invoiced'", "'paid'", "'cancelled'", "'voided'"]) ok(g.includes(s), 'status gate includes ' + s);
-  ok(vendor.includes('if (awEligible(wo)) loadVendorAddons(wo.ID, idx);'), 'submitted add-ons are only loaded for eligible cards');
+  ok(vendor.includes('if (wos.some(awEligible)) loadVendorAddons();') && !/loadVendorAddons\(wo\.ID/.test(vendor), 'submitted add-ons are loaded ONCE per render (not per card), and only when some card is eligible');
+  const lva = grabFn(vendor, 'loadVendorAddons');
+  ok(lva.includes("'/wo/additional-work')") && !lva.includes('parent_wo_id='), 'the single call sends no parent_wo_id (worker returns the signed-in vendor\'s rows only)');
+  ok(lva.includes('a.parent_wo_id') && lva.includes('renderVendorAddons(wo.ID, idx)') && lva.includes('awEligible(wo)'), 'rows are distributed to each eligible card by parent_wo_id');
+  ok(grabFn(vendor, 'withdrawAddon').includes('loadVendorAddons();'), 'withdraw refreshes with the same single call');
 }
 // ── vendor.html: modal + flow ──
 {
@@ -46,7 +50,7 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(grabFn(vendor, 'awUpdateSubmit').includes('btn.disabled = _aw.busy || !v.ok'), 'submit disabled until valid');
   ok(vendor.includes('accept="image/*" capture="environment"') && vendor.includes('accept="image/*" multiple'), 'camera + gallery pickers');
   ok(vendor.includes('The tenant told me about this') && vendor.includes('Total for all of this extra work') && vendor.includes('Add another item'), 'modal strings present');
-  ok(vendor.includes("'/wo/additional-work/withdraw'") && vendor.includes("'/wo/additional-work?parent_wo_id='"), 'withdraw + list endpoints used');
+  ok(vendor.includes("'/wo/additional-work/withdraw'") && vendor.includes("api('GET', '/wo/additional-work')"), 'withdraw + list endpoints used');
   ok(grabFn(vendor, 'awStatusInfo').includes('canWithdraw: true') && grabFn(vendor, 'awStatusInfo').includes("s === 'approved'"), 'status chips map approved / needs info / declined / pending; withdraw allowed only while open');
 }
 // ── vendor.html: addon_item passed ONLY when present ──

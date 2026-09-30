@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.15-vendor-additional-work';
+const BUILD_VERSION = '2026-09-30.16-vendor-additional-work';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -3944,7 +3944,7 @@ async function woPushToScope(env, body) {
   const approveFirst = !!body && (body.approve_first === true || String(body.approve_first).toUpperCase() === 'TRUE');
   let silentApprove = null;
   if (approveFirst && approved.length === 0) {
-    const open = woEstimates.filter(e => !['Approved', 'Converted', 'Declined'].includes(String(e.Status || '')));
+    const open = woEstimates.filter(e => !['Approved', 'Converted', 'Declined', 'Withdrawn'].includes(String(e.Status || '')));
     if (!open.length) return json({ error: `WO ${woId} has no open estimate to approve (every version is Declined or already Converted).` }, 400);
     silentApprove = reqEstimateId
       ? open.find(e => e.ID === reqEstimateId)
@@ -6384,7 +6384,7 @@ async function addonSubmit(env, body, callerRole, callerSessionId) {
     if (!est || est.error || !est.success) return estRes;
   }
   // Un-hide the child: it is now a normal job awaiting approval.
-  await updateWOFields(env, childId, { Voided: 'FALSE', Addon_Status: 'Submitted' });
+  await updateWOFields(env, childId, { Voided: 'FALSE', Void_Reason: '', Void_Reason_Detail: '', Addon_Status: 'Submitted' });
   const est2 = addonLatestEstimate(await fetchTab(env, 'Estimates'), childId);
   return json({ success: true, child_wo_id: childId, version: est2 ? (parseInt(est2.Version) || 1) : 1, subtotal: est2 ? est2.Subtotal : amount.toFixed(2) });
 }
@@ -6429,15 +6429,26 @@ function addonPhotosByItem(attachments, childId) {
 }
 
 // GET /wo/additional-work?parent_wo_id= — admin, or the vendor assigned to the parent.
+// Without parent_wo_id a VENDOR session gets ALL of its own submitted (non-draft, non-withdrawn) add-ons across every
+// parent in ONE call (the portal used to call this once per job card and burned the Sheets read quota). The vendor is
+// always the session vendor; nothing from the body/query is trusted. Admin still must name a parent.
 async function addonList(env, url, callerRole, callerSessionId) {
   const parentId = String(url.searchParams.get('parent_wo_id') || '').trim();
-  if (!parentId) return json({ error: 'parent_wo_id required' }, 400);
+  const allForVendor = !parentId && callerRole === 'vendor';
+  if (!parentId && !allForVendor) return json({ error: 'parent_wo_id required' }, 400);
   const [workorders, estimates, attachments] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments']);
-  const parent = findWO(workorders, parentId);
-  if (!parent) return json({ error: 'Work order not found' }, 404);
-  if (callerRole === 'vendor' && String(parent.Vendor_ID || '') !== String(callerSessionId || '')) return json({ error: 'This work order is not assigned to you' }, 403);
+  let children;
+  if (allForVendor) {
+    const me = String(callerSessionId || '');
+    if (!me) return json({ error: 'Unauthorized' }, 401);
+    children = workorders.filter(w => String(w.Vendor_ID || '') === me && String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() && !addonIsDraft(w) && String(w.Addon_Status || '') !== 'Withdrawn');
+  } else {
+    const parent = findWO(workorders, parentId);
+    if (!parent) return json({ error: 'Work order not found' }, 404);
+    if (callerRole === 'vendor' && String(parent.Vendor_ID || '') !== String(callerSessionId || '')) return json({ error: 'This work order is not assigned to you' }, 403);
+    children = workorders.filter(w => String(w.Parent_WO_ID || '') === parentId && String(w.Type || '') === 'addon' && !addonIsDraft(w));
+  }
   const isAdmin = callerRole !== 'vendor';
-  const children = workorders.filter(w => String(w.Parent_WO_ID || '') === parentId && String(w.Type || '') === 'addon' && !addonIsDraft(w));
   const out = children.map(c => {
     const est = addonLatestEstimate(estimates, c.ID);
     const photos = addonPhotosByItem(attachments, c.ID);
@@ -6448,7 +6459,7 @@ async function addonList(env, url, callerRole, callerSessionId) {
       return { index: it.index, desc: it.desc, desc_en: line.desc_en || '', photo_count: ph.length, photos: ph };
     });
     const row = {
-      child_wo_id: c.ID, addon_status: c.Addon_Status || '', status: c.Status || '', approval_stage: c.Approval_Stage || '',
+      child_wo_id: c.ID, parent_wo_id: String(c.Parent_WO_ID || ''), addon_status: c.Addon_Status || '', status: c.Status || '', approval_stage: c.Approval_Stage || '',
       withdrawn: String(c.Addon_Status || '') === 'Withdrawn', created_date: c.Created_Date || '',
       items, amount: est ? (est.Subtotal || '') : (c.Current_Estimate || ''),
       tenant_mentioned: String(c.Addon_Tenant_Mentioned || '') === 'TRUE',
@@ -6459,7 +6470,7 @@ async function addonList(env, url, callerRole, callerSessionId) {
     return row;
   }).sort((a, b) => String(a.created_date).localeCompare(String(b.created_date)));
   // success + items + per-row estimate_status are the contract vendor.html / index.html read (withdrawn rows are not listed in `items`).
-  return json({ success: true, parent_wo_id: parentId, additional_work: out, items: out.filter(r => !r.withdrawn), pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
+  return json({ success: true, parent_wo_id: parentId || null, additional_work: out, items: out.filter(r => !r.withdrawn), pending_count: out.filter(r => !r.withdrawn && r.estimate && ['Pending', ''].includes(r.estimate.status)).length });
 }
 
 // PURE — the INFORMATION-ONLY owner message. No price, no vendor bill/receipt anywhere. Photo links are
@@ -6482,6 +6493,20 @@ function addonBuildOwnerNotice({ ownerFirst, address, parentId, itemTexts, photo
   return { sms, subject: 'Something found at ' + address + ' (Ref ' + parentId + ')', html };
 }
 
+// PURE — may the owner EMAIL go out? Same gates as the SMS chokepoint (smsGateDecision kind 'owner': Global + Property + Customer
+// toggles) plus the owner's Notify_Method and Test Mode: in Test Mode SMS is redirected to Brett, but an email has no redirect, so a
+// real owner is never emailed while Test Mode is on. Returns { ok, reason }.
+function addonEmailGate({ cfg, property, owner }) {
+  const global = String((cfg && cfg.TWILIO_ENABLED) || '').toUpperCase() === 'TRUE';
+  const testMode = String((cfg && cfg.TWILIO_TEST_MODE) || '').toUpperCase() !== 'FALSE';
+  const on = v => String(v == null ? '' : v).toUpperCase() !== 'FALSE';
+  if (String((owner && owner.Notify_Method) || 'sms') === 'none') return { ok: false, reason: 'owner notification method is none' };
+  const g = smsGateDecision({ global, propertyOn: on(property && property.SMS_Enabled), ownerOn: on(owner && owner.SMS_Enabled), kind: 'owner' });
+  if (!g.sendOk) return { ok: false, reason: g.gateSnapshot };
+  if (testMode) return { ok: false, reason: 'Test Mode is on — no email to a real owner' };
+  return { ok: true, reason: '' };
+}
+
 // POST /wo/additional-work/owner-notice { child_wo_id, preview?:true, resend? } — ADMIN-ONLY (no ROLE_SCOPES entry).
 async function addonOwnerNotice(env, body) {
   const childId = String((body && body.child_wo_id) || '').trim();
@@ -6492,6 +6517,7 @@ async function addonOwnerNotice(env, body) {
   if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
   const status = String(child.Addon_Status || '');
   if (status !== 'Submitted') return json({ error: 'Only a submitted additional-work item can be shared with the owner' }, 400);
+  if (String(child.Voided || '').toUpperCase() === 'TRUE') return json({ error: 'This additional work is voided' }, 400);
   const est = addonLatestEstimate(estimates, childId);
   if (est && String(est.Status || '') === 'Declined') return json({ error: 'This additional work was declined — it is never shown to the owner' }, 400);
   const parent = findWO(workorders, child.Parent_WO_ID) || child;
@@ -6515,6 +6541,9 @@ async function addonOwnerNotice(env, body) {
   if (!ownerEmail) warnings.push('Owner has no email on file — no email will be sent.');
   if (String(owner.Notify_Method || 'sms') === 'none') warnings.push('Owner notification method is set to none.');
   if (String(parent.Managed_By || '') === 'Owner') warnings.push('This job is marked owner-managed.');
+  let _cfg = {}; try { _cfg = await fetchConfig(env); } catch (_) {}
+  const emailGate = addonEmailGate({ cfg: _cfg, property, owner });
+  if (!emailGate.ok) warnings.push('Email will NOT be sent: ' + emailGate.reason + '.');
   const already = String(child.Addon_Owner_Notified_Date || '').trim();
   if (already) warnings.push('Owner was already notified on ' + already + '.');
   const recipient = { owner_id: owner.ID, name: ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim() || owner.Company || '', phone: owner.Phone || '', email: ownerEmail };
@@ -6527,7 +6556,8 @@ async function addonOwnerNotice(env, body) {
     catch (e) { smsResult = { sent: false, reason: String((e && e.message) || e) }; }
   }
   let emailResult = { sent: false, reason: 'no owner email' };
-  if (ownerEmail) {
+  if (ownerEmail && !emailGate.ok) emailResult = { sent: false, reason: emailGate.reason };
+  else if (ownerEmail) {
     try { const _er = await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html }); emailResult = (_er && _er.sent === false) ? { sent: false, staged: !!_er.staged, reason: _er.note || 'not sent' } : { sent: true }; }
     catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; }
   }
@@ -6561,6 +6591,20 @@ const WO_VOID_COLUMNS = ['Voided', 'Void_Reason', 'Void_Reason_Detail', 'Void_Co
 // first of two colliding rows. That class of problem is what the duplicate-submission guard
 // in createWorkOrder now prevents at the source; a pre-existing collision needs a manual
 // sheet fix, same as WO-1192.
+// PURE — Submitted add-on children of parentId that are still alive (estimate Pending / Needs Info / Approved, child not voided).
+// Voiding or cancelling the parent while any exist would strand them, so those paths refuse until Brett declines/withdraws them.
+function addonLiveChildren(workorders, estimates, parentId) {
+  return (workorders || []).filter(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === String(parentId) &&
+    String(w.Addon_Status || '') === 'Submitted' && String(w.Voided || '').toUpperCase() !== 'TRUE').filter(c => {
+    const v = (estimates || []).filter(e => String(e.WO_ID) === String(c.ID) && e.Active !== 'FALSE');
+    if (!v.length) return false;
+    const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+    return ['Pending', 'Needs Info', 'Approved', ''].includes(String(latest.Status || ''));
+  }).map(c => c.ID);
+}
+function addonLiveChildrenMessage(ids, parentId, verb) {
+  return `${parentId} has additional work still open (${ids.join(', ')}). Decline or withdraw ${ids.length > 1 ? 'those' : 'that'} first, then ${verb} this work order.`;
+}
 async function woVoid(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   const reason = body.reason;
@@ -6572,6 +6616,11 @@ async function woVoid(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: 'WO not found' }, 404);
+  // Orphan guard (additional work): not for 'Combined' (combine/split keep their own behaviour — known gap).
+  if (reason !== 'Combined' && workorders.some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === String(woId))) {
+    const _live = addonLiveChildren(workorders, await fetchTab(env, 'Estimates'), woId);
+    if (_live.length) return json({ error: addonLiveChildrenMessage(_live, woId, 'void'), open_additional_work: _live }, 409);
+  }
   if (combinedInto) {
     if (combinedInto === woId) return json({ error: 'Cannot combine a work order into itself' }, 400);
     if (!findWO(workorders, combinedInto)) return json({ error: `Target work order ${combinedInto} not found` }, 404);
@@ -7313,6 +7362,11 @@ async function updateStatus(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, body.wo_id);
   if (!wo) return json({ error: 'WO not found' }, 404);
+  // Orphan guard (additional work): cancelling a parent with live add-ons would strand them.
+  if ((body.status === 'Cancelled' || body.status === 'Canceled') && workorders.some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === String(body.wo_id))) {
+    const _live = addonLiveChildren(workorders, await fetchTab(env, 'Estimates'), body.wo_id);
+    if (_live.length) return json({ error: addonLiveChildrenMessage(_live, body.wo_id, 'cancel'), open_additional_work: _live }, 409);
+  }
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
   const fields = { Status: body.status };
   if (body.notes) {
@@ -9431,10 +9485,12 @@ async function processDepositPaidSweep(env) {
 // POST /estimate/needs-info { wo_id } and POST /estimate/decline { wo_id, reason? } — admin-only.
 async function flagEstimate(env, body, kind) {
   const woId = body && body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
-  const all = await fetchTab(env, 'Estimates');
+  const [all, _woRows] = await fetchTabs(env, ['Estimates', 'Work_Orders']);
   const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
   const latest = versions.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  const _blockMsg = addonEstimateActionBlock(findWO(_woRows, woId), latest, kind);
+  if (_blockMsg) return json({ error: _blockMsg }, 400);
   const st = String(latest.Status || 'Pending');
   if (!['Pending', 'Needs Info'].includes(st)) return json({ error: `That estimate is "${st}" — only a pending estimate can be flagged ${kind === 'decline' ? 'declined' : 'needs-info'}.` }, 409);
   try { await ensureColumns(env, 'Estimates', ['Needs_Info_Date', 'Declined_Date', 'Decline_Reason']); } catch (_) {}
@@ -9573,11 +9629,25 @@ async function unapproveEstimate(env, body) {
                 warning: (latest.Vendor_ID && !vendorTold) ? 'Estimate is back on hold, but the vendor could not be texted — tell them directly.' : '' });
 }
 
+// Additional-work guard for approve / needs-info / decline: a voided, withdrawn or draft add-on child can never be
+// acted on, and (approve only) a Declined/Withdrawn latest estimate can't be approved. Returns '' (ok) or a message.
+// Normal (non-addon) work orders are never affected.
+function addonEstimateActionBlock(wo, latest, kind) {
+  if (!wo || String(wo.Type || '') !== 'addon') return '';
+  const as = String(wo.Addon_Status || '');
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE' || as === 'Withdrawn') return 'This additional work was withdrawn or voided — it cannot be ' + (kind === 'approve' ? 'approved' : 'changed') + '.';
+  if (as === 'Draft') return 'This additional work has not been submitted yet — it cannot be ' + (kind === 'approve' ? 'approved' : 'changed') + '.';
+  const st = String((latest && latest.Status) || '');
+  if (kind === 'approve' && (st === 'Declined' || st === 'Withdrawn')) return 'This additional work estimate is ' + st + ' — it cannot be approved.';
+  return '';
+}
 async function approveEstimate(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
-  const all = await fetchTab(env, 'Estimates'); const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
+  const [all, _woRows] = await fetchTabs(env, ['Estimates', 'Work_Orders']); const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
   const latest = versions.reduce((a, b) => parseInt(a.Version) > parseInt(b.Version) ? a : b);
+  const _blockMsg = addonEstimateActionBlock(findWO(_woRows, woId), latest, 'approve');
+  if (_blockMsg) return json({ error: _blockMsg }, 400);
   const data = await sheetsRequest(env, 'GET', '/values/Estimates'); const rows = data.values || [], headers = rows[0] || [];
   const idCol = headers.indexOf('ID'), statusCol = headers.indexOf('Status');
   if (idCol === -1 || statusCol === -1) return json({ error: 'Estimates tab missing ID or Status column' }, 500);
@@ -11636,6 +11706,9 @@ async function createVendorRequest(env, body) {
   return json({ success: true, sent: r.sent, held_for_quiet_hours: !!r.held_for_quiet_hours, test_mode: r.test_mode, gate_snapshot: r.gate_snapshot });
 }
 
+// PURE — true while an add-on child has not been approved (no vendor nudges yet).
+function addonNudgeHold(wo) { return !!wo && String(wo.Type || '') === 'addon' && String(wo.Approval_Stage || '') !== 'Approved'; }
+
 // Called from the periodic sweep (POST /cron/sweep, cronSweep). Handles all 3 request types
 // through one loop: satisfied-checks first (so a row that's already resolved never nudges
 // again even if it's technically "due"), then the type-specific quiet/nudge/cap logic.
@@ -11655,6 +11728,14 @@ async function processVendorNudges(env) {
     // Cancelled/Declined stop ALL open request types for this WO outright — nothing left worth
     // chasing a vendor for on a job that isn't happening (per Brett, Sep 16 2026).
     if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
+    // Additional work (Sep 30 2026): an add-on child is not a real job until Brett approves it. assignVendor(notify:false)
+    // at /start opened the status clock, so: a declined add-on (stage cleared) closes its clock, a pending / needs-info
+    // one is skipped (no nudge, nothing written) and starts nudging only once Approval_Stage is 'Approved'.
+    if (addonNudgeHold(wo)) {
+      if (String(wo.Approval_Stage || '') === '') { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_addon_declined' }); }
+      else results.push({ id: row.ID, action: 'skipped_addon_unapproved' });
+      continue;
+    }
     // status_update is answered the moment the WO reaches Complete or later — the vendor told
     // us what we needed to know, regardless of billing. If invoicing isn't done yet, hand off
     // to a fresh 'invoice' request (below) rather than going silent — that's the ask that
@@ -22158,12 +22239,25 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // customer invoice. woRows (Work_Orders) is OPTIONAL: without it, or when no WO has a Parent_WO_ID,
 // rootOf() is the identity and this is exactly the original same-WO_ID rule. A parent that is already
 // invoiced contributes no rows (they carry a QB_Invoice_ID), so a late add-on then invoices on its own.
-function qbGroupOpenRows(irRows, ir, woRows) {
+// MONEY GATE (Sep 30 2026): an add-on child's bill may fold into the PARENT's invoice only when the child
+// is Type 'addon', not Voided, Addon_Status 'Submitted' and its LATEST active estimate is exactly
+// 'Approved'. Declined / Needs Info / Pending / Withdrawn / Converted (sent to a proposal, which bills
+// through scope-proposal milestones) never fold in. estRows (Estimates) is REQUIRED for any roll-up: when it
+// is not supplied nothing rolls up (fail closed — a missing argument must never double-bill).
+function addonRollsIntoParent(w, estRows) {
+  if (!w || !w.ID || String(w.Type || '') !== 'addon' || !String(w.Parent_WO_ID || '').trim()) return false;
+  if (String(w.Voided || '').toUpperCase() === 'TRUE' || String(w.Addon_Status || '') !== 'Submitted') return false;
+  if (!Array.isArray(estRows)) return false;
+  const v = estRows.filter(e => e && String(e.WO_ID) === String(w.ID) && e.Active !== 'FALSE');
+  if (!v.length) return false;
+  const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  return String(latest.Status || '') === 'Approved';
+}
+function qbGroupOpenRows(irRows, ir, woRows, estRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
   const parentOf = {};
   if (!haveInv && Array.isArray(woRows)) woRows.forEach(w => {
-    const p = String((w && w.Parent_WO_ID) || '').trim();
-    if (p && w.ID && String(w.Type || '') === 'addon') parentOf[String(w.ID)] = p;
+    if (addonRollsIntoParent(w, estRows)) parentOf[String(w.ID)] = String(w.Parent_WO_ID).trim();
   });
   const rootOf = id => parentOf[String(id)] || String(id);
   const groupRows = haveInv ? [ir] : irRows.filter(r =>
@@ -22454,7 +22548,7 @@ async function qbReadyQueue(env, url) {
   const wantAll = url && url.searchParams.get('all') === '1';
   const woFilter = (url && url.searchParams.get('wo_id')) || '';
   try {
-    const [irRows, wos] = await fetchTabs(env, ['Invoice_Review','Work_Orders']);
+    const [irRows, wos, estRows] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Estimates']);
     // 'partial' MUST be included. qbSendInvoice stamps that status when the invoice half
     // posted to QuickBooks but the bill half did not (bad vendor ref, an Intuit hiccup,
     // Vendor_Cost missing). Nothing anywhere ever writes the status back to 'pending', so
@@ -22475,7 +22569,7 @@ async function qbReadyQueue(env, url) {
     // counts correctly toward its siblings.
     // Additional work: an add-on child's row counts under its parent's WO (same rootOf rule as qbGroupOpenRows).
     const _addonParentOf = {};
-    wos.forEach(w => { const p = String((w && w.Parent_WO_ID) || '').trim(); if (p && w.ID && String(w.Type || '') === 'addon') _addonParentOf[String(w.ID)] = p; });
+    wos.forEach(w => { if (addonRollsIntoParent(w, estRows)) _addonParentOf[String(w.ID)] = String(w.Parent_WO_ID).trim(); });
     const _addonRoot = id => _addonParentOf[String(id)] || String(id);
     const woOpenCounts = {};
     irRows.forEach(r => {
@@ -22671,8 +22765,8 @@ async function qbSendInvoice(env, body) {
       return json({ ok: true, already_sent: true, invoice_id: ir.QB_Invoice_ID, bill_id: ir.QB_Bill_ID, status: ir.QB_Invoice_Status });
     }
 
-    const [wos, props, owners, vendors, bills, units, allTimeEntries] = await fetchTabs(env, [
-      'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries',
+    const [wos, props, owners, vendors, bills, units, allTimeEntries, estRowsAll] = await fetchTabs(env, [
+      'Work_Orders','Properties','Owners','Vendors','Vendor_Bills','Units','Time_Entries','Estimates',
     ]);
     const billRowEarly = bills.find(b => String(b.ID) === String(ir.Bill_ID)) || {};
     if (String(billRowEarly.Standalone || '').toUpperCase() === 'TRUE') {
@@ -22718,7 +22812,7 @@ async function qbSendInvoice(env, body) {
     // one-Invoice_Review-row-at-a-time path below. groupRows.length === 1 is the ordinary
     // single-vendor job — falls straight through to the unchanged code beneath, zero
     // behavior change for the ~95% of jobs that only ever had one vendor bill.
-    const groupRows = qbGroupOpenRows(irRows, ir, wos);
+    const groupRows = qbGroupOpenRows(irRows, ir, wos, estRowsAll);
     // Sep 22 2026 backstop: a receipt approved onto this invoice BEFORE the job's scope proposal
     // was signed with Ridge Co materials priced in would otherwise go out a second time here.
     // Warn in the preview (never silently change a total that was already approved).
