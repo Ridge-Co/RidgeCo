@@ -9016,7 +9016,8 @@ function renderHubEstimateView(woId, estimates, holder) {
         '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
         '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
         '</label>' +
-        '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve Estimate</button> ' +
+        '<button class="btn small" style="background:var(--accent2);color:#fff" title="Approves the estimate and texts the vendor that they are clear to proceed. No proposal, no owner contact." onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve (no proposal)</button> ' +
+        '<button class="btn small" style="background:var(--accent);color:#fff" title="Approves the estimate silently and moves it into a Scope Proposal. The vendor is NOT texted until the owner signs." onclick="openPushToScopeUI(\'' + woId + '\', true)">📋 Approve &amp; send to proposal</button> ' +
         '<button class="btn small secondary" title="Texts the vendor a short request for more info. Daily reminders pause for 3 days, then resume." onclick="estimateNeedsInfoUI(\'' + woId + '\')">❓ Needs more info</button> ' +
         '<button class="btn small secondary" style="color:var(--danger)" title="Texts the vendor that you are not moving forward. Stops reminders." onclick="estimateDeclineUI(\'' + woId + '\')">✕ Decline</button>' +
         (current.Status === 'Needs Info' ? '<div style="margin-top:8px;font-size:11px;color:var(--warn)">❓ Flagged needs-more-info' + (current.Needs_Info_Date ? ' on ' + esc(String(current.Needs_Info_Date).slice(0,10)) : '') + ' — reminders resume 3 days after that if still undecided.</div>' : '') +
