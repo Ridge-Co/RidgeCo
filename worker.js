@@ -65,6 +65,10 @@ const _hubWorkerCore = {
     const url  = new URL(request.url);
     const path = url.pathname;
     env.__STAGING__ = isStaging(env, url);
+    // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
+    // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
+    // Throttled, never throws, never runs on production.
+    if (env.__STAGING__ && path !== '/health' && path !== '/version') await applyStagingQbTradeMap(env);
     // Role of the caller for this request — null for the admin secret (full access) or a
     // narrow service token; 'tenant'/'vendor'/'owner' when a PIN-issued session token was
     // used. Set inside the auth gate below. Used by the tenant-work-order-submission toggle
