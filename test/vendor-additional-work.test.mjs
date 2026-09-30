@@ -235,7 +235,7 @@ t('no children: results are identical to the original two-argument behaviour for
   const run = async (e, childOver = {}) => {
     const irRows = [{ ID: '1', WO_ID: 'WO-100', Bill_ID: 'B1', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }, { ID: '3', WO_ID: 'WO-101', Bill_ID: 'B3', Active: 'TRUE', QB_Invoice_ID: '', QB_Invoice_Status: 'pending' }];
     const W = [{ ID: 'WO-100', Type: 'manual' }, childWo(childOver)];
-    const fn = rq(d => ({ _d: d }), async () => [irRows, W, e], (l, id) => l.find(w => w.ID === id) || null, addonRollsIntoParent);
+    const fn = rq(d => ({ _d: d }), async () => [irRows, W, e], (l, id) => l.find(w => w.ID === id) || null, addonRollsIntoParent, () => '');
     const out = (await fn({}, { searchParams: { get: () => '' } }, false))._d;
     return out.reduce((m, r) => (m[r.id] = r.combines_with, m), {});
   };
