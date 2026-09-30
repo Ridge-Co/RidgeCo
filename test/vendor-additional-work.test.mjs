@@ -254,6 +254,157 @@ t('combined: parent AND children flip to Invoiced once every row is sent', /for 
 t('combined: line amounts are never altered by the relabel (only Description)', !/l\.Amount\s*=|UnitPrice\s*=/.test(comb));
 t('ready queue counts combines_with by ROOT wo', /_addonRoot\(r\.WO_ID\)/.test(grabAsync('qbReadyQueue')));
 
+
+// ── B. approve / needs-info / decline guards (executed) ─────────────────────────
+t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\]\);/.test(sendFn) && /estRowsAll/.test(sendFn));
+{
+  const blk = new Function(grab('addonEstimateActionBlock') + '\nreturn addonEstimateActionBlock;')();
+  const A = (o = {}) => ({ ID: 'WO-9', Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Submitted', Voided: 'FALSE', ...o });
+  t('guard: voided add-on cannot be approved', !!blk(A({ Voided: 'TRUE' }), { Status: 'Pending' }, 'approve'));
+  t('guard: Withdrawn add-on cannot be approved / needs-info / declined', !!blk(A({ Addon_Status: 'Withdrawn' }), { Status: 'Pending' }, 'approve') && !!blk(A({ Addon_Status: 'Withdrawn' }), { Status: 'Withdrawn' }, 'needs-info') && !!blk(A({ Addon_Status: 'Withdrawn' }), { Status: 'Pending' }, 'decline'));
+  t('guard: Draft add-on cannot be approved', !!blk(A({ Addon_Status: 'Draft' }), null, 'approve'));
+  t('guard: Declined / Withdrawn latest estimate cannot be approved', !!blk(A(), { Status: 'Declined' }, 'approve') && !!blk(A(), { Status: 'Withdrawn' }, 'approve'));
+  t('guard: a live add-on (Pending / Needs Info) is not blocked', blk(A(), { Status: 'Pending' }, 'approve') === '' && blk(A(), { Status: 'Needs Info' }, 'approve') === '' && blk(A(), { Status: 'Pending' }, 'decline') === '');
+  t('guard: normal WOs are never affected (even voided / declined)', blk({ ID: 'WO-1', Type: 'manual', Voided: 'TRUE' }, { Status: 'Declined' }, 'approve') === '' && blk(null, null, 'approve') === '');
+  const json = (d, st = 200) => ({ status: st, _d: d });
+  const stubs = (W, E) => [json, async () => [E, W], (l, id) => l.find(w => w.ID === id) || null, blk];
+  const mkApprove = new Function('json', 'fetchTabs', 'findWO', 'addonEstimateActionBlock', 'sheetsRequest', grabAsync('approveEstimate') + '\nreturn approveEstimate;');
+  const runApprove = async (W, E) => { const f = mkApprove(...stubs(W, E), async () => { throw new Error('PAST_GUARD'); }); try { const r = await f({}, { wo_id: 'WO-9' }); return { status: r.status, d: r._d }; } catch (e) { return { past: e.message === 'PAST_GUARD' }; } };
+  const E1 = st => [{ ID: 'E1', WO_ID: 'WO-9', Version: '1', Status: st, Active: 'TRUE' }];
+  let r = await runApprove([A({ Voided: 'TRUE' })], E1('Pending')); t('approveEstimate: voided add-on -> 400 with a message, nothing written', r.status === 400 && /withdrawn|voided/i.test(r.d.error));
+  r = await runApprove([A({ Addon_Status: 'Withdrawn', Voided: 'TRUE' })], E1('Withdrawn')); t('approveEstimate: withdrawn add-on -> 400', r.status === 400);
+  r = await runApprove([A({ Addon_Status: 'Draft' })], E1('Pending')); t('approveEstimate: draft add-on -> 400', r.status === 400);
+  r = await runApprove([A()], E1('Declined')); t('approveEstimate: declined add-on estimate -> 400', r.status === 400 && /Declined/.test(r.d.error));
+  r = await runApprove([A()], E1('Pending')); t('approveEstimate: a live add-on passes the guard', r.past === true);
+  r = await runApprove([{ ID: 'WO-9', Type: 'manual', Voided: 'TRUE' }], E1('Declined')); t('approveEstimate: a normal WO passes the guard exactly as before', r.past === true);
+  const mkFlag = new Function('json', 'fetchTabs', 'findWO', 'addonEstimateActionBlock', 'ensureColumns', 'updateRow', grabAsync('flagEstimate') + '\nreturn flagEstimate;');
+  const runFlag = async (W, E, kind) => { const f = mkFlag(...stubs(W, E), async () => {}, async () => { throw new Error('PAST_GUARD'); }); try { const r = await f({}, { wo_id: 'WO-9' }, kind); return { status: r.status, d: r._d }; } catch (e) { return { past: e.message === 'PAST_GUARD' }; } };
+  r = await runFlag([A({ Addon_Status: 'Withdrawn', Voided: 'TRUE' })], E1('Withdrawn'), 'needs-info'); t('needs-info on a Withdrawn add-on -> rejected (400)', r.status === 400);
+  r = await runFlag([A({ Voided: 'TRUE' })], E1('Pending'), 'needs-info'); t('needs-info on a voided add-on -> rejected (400)', r.status === 400);
+  r = await runFlag([A({ Voided: 'TRUE' })], E1('Pending'), 'decline'); t('decline on a voided add-on -> rejected (400)', r.status === 400);
+  r = await runFlag([A()], E1('Pending'), 'needs-info'); t('needs-info on a live add-on passes the guard', r.past === true);
+  r = await runFlag([A()], E1('Withdrawn'), 'decline'); t('decline on a Withdrawn estimate is still rejected by the existing status rule (409)', r.status === 409);
+  t('push-to-scope silent approve never picks a Withdrawn estimate', /\['Approved', 'Converted', 'Declined', 'Withdrawn'\]\.includes\(String\(e\.Status/.test(src));
+}
+
+// ── C. vendor nudge clock ───────────────────────────────────────────────────────
+{
+  const hold = new Function(grab('addonNudgeHold') + '\nreturn addonNudgeHold;')();
+  t('nudge hold: pending add-on (stage Estimated) is held', hold({ Type: 'addon', Approval_Stage: 'Estimated' }) === true);
+  t('nudge hold: declined add-on (stage cleared) is held', hold({ Type: 'addon', Approval_Stage: '' }) === true);
+  t('nudge hold: approved add-on still nudges', hold({ Type: 'addon', Approval_Stage: 'Approved' }) === false);
+  t('nudge hold: normal WOs are never held (any stage)', hold({ Type: 'manual', Approval_Stage: '' }) === false && hold({ Type: 'estimate', Approval_Stage: 'Estimated' }) === false);
+  // executed sweep: only the nudge decision path is exercised (stubs record what happens)
+  const sweepSrc = grabAsync('processVendorNudges');
+  const mkSweep = new Function('ensureVendorReqTab', 'fetchTab', 'fetchConfig', 'findWO', 'updateRow', 'addRow', 'addonNudgeHold', 'VENDOR_REQ_TAB', 'WO_STATUS_COMPLETE_OR_LATER', 'WO_STATUS_INVOICED_OR_LATER', 'VENDOR_NUDGE_MAX', 'VENDOR_NUDGE_REPEAT_HOURS', 'VENDOR_MANUAL_REPEAT_HOURS', 'smsGatedSend', 'sendTemplatedSms', 'notifyVendorTemplated', sweepSrc + '\nreturn processVendorNudges;');
+  const sweep = async (wo) => {
+    const rec = { updates: [], sms: 0 };
+    const rows = [{ ID: 'R1', WO_ID: wo.ID, Vendor_ID: 'V1', Request_Type: 'status_update', Status: 'open', Next_Nudge_At: '2000-01-01T00:00:00Z', Nudge_Count: '0' }];
+    const tabs = { Vendor_Requests: rows, Work_Orders: [wo], Vendors: [{ ID: 'V1', Name: 'V' }], Properties: [], Units: [] };
+    const f = mkSweep(async () => {}, async (env, tab) => tabs[tab] || [], async () => ({}), (l, id) => l.find(w => w.ID === id) || null,
+      async (env, tab, id, fields) => { rec.updates.push(fields); }, async () => {}, hold, 'Vendor_Requests', ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Closed'], ['Invoiced', 'Paid'], 5, 24, 48,
+      async () => { rec.sms++; return { sent: true }; }, async () => { rec.sms++; return { sent: true }; }, async () => { rec.sms++; return { sent: true }; });
+    let res; try { res = await f({}); } catch (e) { res = { err: String(e.message || e) }; }
+    return { rec, res };
+  };
+  const base = { ID: 'WO-9', Type: 'addon', Parent_WO_ID: 'WO-1', Status: 'Assigned', Voided: 'FALSE', Property_ID: 'P1' };
+  let x = await sweep({ ...base, Approval_Stage: 'Estimated' });
+  t('sweep: a pending add-on gets NO nudge and nothing is written', x.rec.sms === 0 && x.rec.updates.length === 0);
+  x = await sweep({ ...base, Approval_Stage: '' });
+  t('sweep: a declined add-on closes its clock and sends nothing', x.rec.sms === 0 && x.rec.updates.some(u => u.Status === 'cancelled'));
+  x = await sweep({ ...base, Approval_Stage: 'Approved' });
+  t('sweep: an approved add-on falls through to the normal nudge path', !(x.rec.updates.some(u => u.Status === 'cancelled')) && (x.rec.sms > 0 || x.rec.updates.length > 0 || x.res && x.res.err));
+  x = await sweep({ ...base, Type: 'manual', Approval_Stage: '' });
+  t('sweep: a normal WO is untouched by the hold', !(x.rec.updates.some(u => u.Status === 'cancelled')));
+  t('sweep: voided (withdrawn) add-on clock is cancelled by the existing rule', (await sweep({ ...base, Voided: 'TRUE', Approval_Stage: 'Estimated' })).rec.updates.some(u => u.Status === 'cancelled'));
+}
+
+// ── D. owner-notice email gates ──────────────────────────────────────────────────
+{
+  const gate = new Function(grab('smsGateDecision') + grab('addonEmailGate') + '\nreturn addonEmailGate;')();
+  const cfgOn = { TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' };
+  t('email gate: all gates open + live mode -> allowed', gate({ cfg: cfgOn, property: {}, owner: { Notify_Method: 'sms' } }).ok === true);
+  t('email gate: Global OFF blocks', gate({ cfg: { TWILIO_ENABLED: 'FALSE', TWILIO_TEST_MODE: 'FALSE' }, property: {}, owner: {} }).ok === false);
+  t('email gate: Test Mode blocks (no email to a real owner)', gate({ cfg: { TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'TRUE' }, property: {}, owner: {} }).ok === false);
+  t('email gate: default (no config) is blocked', gate({ cfg: {}, property: {}, owner: {} }).ok === false);
+  t('email gate: owner Notify_Method none blocks', gate({ cfg: cfgOn, property: {}, owner: { Notify_Method: 'none' } }).ok === false);
+  t('email gate: property SMS off blocks', gate({ cfg: cfgOn, property: { SMS_Enabled: 'FALSE' }, owner: {} }).ok === false);
+  t('email gate: owner (customer) SMS off blocks', gate({ cfg: cfgOn, property: {}, owner: { SMS_Enabled: 'FALSE' } }).ok === false);
+  const on = grabAsync('addonOwnerNotice');
+  t('owner-notice: email is sent only when the gate is ok, and a blocked email reports its reason', /if \(ownerEmail && !emailGate\.ok\) emailResult = \{ sent: false, reason: emailGate\.reason \}/.test(on) && /else if \(ownerEmail\) \{/.test(on));
+  t('owner-notice: preview warns when the email will not be sent', /Email will NOT be sent: /.test(on));
+  t('owner-notice: a stubbed/failed email never counts as sent', /_er\.sent === false/.test(on));
+}
+
+// ── E. submit clears the stale void fields ──────────────────────────────────────
+{ const st = draftState(); st.Work_Orders.find(w => w.ID === 'WO-9').Void_Reason = 'Other'; st.Work_Orders.find(w => w.ID === 'WO-9').Void_Reason_Detail = 'Additional-work draft (not submitted yet)';
+  st.Attachments.push({ WO_ID: 'WO-9', File_Type: 'before', Addon_Item: '0', Active: 'TRUE' }, { WO_ID: 'WO-9', File_Type: 'before', Addon_Item: '1', Active: 'TRUE' });
+  const x2 = await run('addonSubmit', st, { child_wo_id: 'WO-9' });
+  const w9 = st.Work_Orders.find(w => w.ID === 'WO-9');
+  t('submit: Void_Reason and Void_Reason_Detail are cleared with the un-void', x2.d.success && w9.Voided === 'FALSE' && w9.Void_Reason === '' && w9.Void_Reason_Detail === ''); }
+
+// ── F. one call for the whole portal (executed) ─────────────────────────────────
+{
+  const mkList = new Function('json', 'fetchTabs', 'findWO', 'addonIsDraft', 'addonParseItems', 'addonLatestEstimate', 'addonPhotosByItem', 'ADDON_PHOTO_TYPES', grabAsync('addonList') + '\nreturn addonList;');
+  const W = [
+    { ID: 'WO-1', Vendor_ID: 'V1', Type: 'manual' }, { ID: 'WO-2', Vendor_ID: 'V2', Type: 'manual' },
+    { ID: 'WO-11', Vendor_ID: 'V1', Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Submitted', Addon_Items_JSON: '[{"index":0,"desc":"a"}]', Created_Date: '2' },
+    { ID: 'WO-12', Vendor_ID: 'V1', Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Draft', Addon_Items_JSON: '[]' },
+    { ID: 'WO-13', Vendor_ID: 'V1', Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Withdrawn', Addon_Items_JSON: '[]' },
+    { ID: 'WO-21', Vendor_ID: 'V2', Type: 'addon', Parent_WO_ID: 'WO-2', Addon_Status: 'Submitted', Addon_Items_JSON: '[{"index":0,"desc":"b"}]', Created_Date: '1' },
+  ];
+  const E = [{ ID: 'E1', WO_ID: 'WO-11', Version: '1', Status: 'Approved', Subtotal: '10.00', Line_Items: '[]', Active: 'TRUE' }, { ID: 'E2', WO_ID: 'WO-21', Version: '1', Status: 'Pending', Subtotal: '5.00', Line_Items: '[]', Active: 'TRUE' }];
+  const json = d => ({ _d: d });
+  const lf = mkList(json, async () => [W, E, []], (l, id) => l.find(w => w.ID === id) || null, grab0('addonIsDraft'), grab0('addonParseItems'), grab0('addonLatestEstimate'), grab0('addonPhotosByItem'), ['before', 'photo']);
+  const q = p => ({ searchParams: { get: k => (k === 'parent_wo_id' ? p : null) } });
+  let r = (await lf({}, q(''), 'vendor', 'V1'))._d;
+  t('list (vendor, no parent): only MY submitted add-ons — no drafts, no withdrawn, never vendor 2\'s', r.success && r.items.length === 1 && r.items[0].child_wo_id === 'WO-11' && r.additional_work.length === 1);
+  t('list (vendor, no parent): each row carries parent_wo_id and estimate_status', r.items[0].parent_wo_id === 'WO-1' && r.items[0].estimate_status === 'Approved');
+  r = (await lf({}, q(''), 'vendor', 'V2'))._d;
+  t('list: vendor B cannot see vendor A\'s rows', r.items.length === 1 && r.items[0].child_wo_id === 'WO-21');
+  r = (await lf({}, q(''), 'vendor', 'V3'))._d;
+  t('list: a vendor with no add-ons gets an empty list', r.success && r.items.length === 0);
+  r = await lf({}, q(''), 'vendor', '');
+  t('list: a vendor session with no id is rejected', r._d.error === 'Unauthorized');
+  r = await lf({}, q(''), 'admin', '');
+  t('list: admin must still name a parent (400)', r._d.error === 'parent_wo_id required');
+  r = await lf({}, q('WO-1'), 'vendor', 'V2');
+  t('list: the parent_wo_id form still 403s for another vendor\'s parent', r._d.error === 'This work order is not assigned to you');
+  r = (await lf({}, q('WO-1'), 'vendor', 'V1'))._d;
+  t('list: the parent_wo_id form still works for the owning vendor (withdrawn listed in additional_work, not in items)', r.additional_work.length === 2 && r.items.length === 1);
+  r = (await lf({}, q('WO-1'), 'admin', ''))._d;
+  t('list: admin + parent form still works and includes owner_notified', r.additional_work.length === 2 && 'owner_notified' in r.additional_work[0]);
+}
+
+// ── G. orphan guard on void / cancel ────────────────────────────────────────────
+{
+  const { addonLiveChildren } = new Function(grab('addonLiveChildren') + '\nreturn { addonLiveChildren };')();
+  const kid = (id, over = {}) => ({ ID: id, Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Submitted', Voided: 'FALSE', ...over });
+  const es = (id, status) => ({ WO_ID: id, Version: '1', Status: status, Active: 'TRUE' });
+  t('orphans: Pending / Needs Info / Approved children block', addonLiveChildren([kid('A'), kid('B'), kid('C')], [es('A', 'Pending'), es('B', 'Needs Info'), es('C', 'Approved')], 'WO-1').join() === 'A,B,C');
+  t('orphans: Declined / Withdrawn / Converted children do not block', addonLiveChildren([kid('A'), kid('B'), kid('C')], [es('A', 'Declined'), es('B', 'Withdrawn'), es('C', 'Converted')], 'WO-1').length === 0);
+  t('orphans: voided / withdrawn / draft children do not block', addonLiveChildren([kid('A', { Voided: 'TRUE' }), kid('B', { Addon_Status: 'Withdrawn' }), kid('C', { Addon_Status: 'Draft' })], [es('A', 'Pending'), es('B', 'Pending'), es('C', 'Pending')], 'WO-1').length === 0);
+  t('orphans: another parent\'s children never block', addonLiveChildren([kid('A', { Parent_WO_ID: 'WO-2' })], [es('A', 'Pending')], 'WO-1').length === 0);
+  const vf = grabAsync('woVoid');
+  t('woVoid: refuses (409) while live add-ons exist, except for reason Combined, and does so BEFORE writing', /reason !== 'Combined' && workorders\.some\(w => String\(w\.Type \|\| ''\) === 'addon'/.test(vf) && /409/.test(vf) && vf.indexOf('addonLiveChildren(') < vf.indexOf('await updateWOFields(env, woId'));
+  const uf = grabAsync('updateStatus');
+  t('updateStatus: Cancelled is refused (409) while live add-ons exist, before anything is written', /body\.status === 'Cancelled'/.test(uf) && uf.indexOf('addonLiveChildren(') < uf.indexOf('await updateWOFields('));
+  t('orphans: only reads Estimates when the WO actually has add-on children (no extra read for ordinary WOs)', /workorders\.some\(w => String\(w\.Type \|\| ''\) === 'addon'[\s\S]{0,200}await fetchTab\(env, 'Estimates'\)/.test(vf) && /workorders\.some\(w => String\(w\.Type \|\| ''\) === 'addon'[\s\S]{0,260}await fetchTab\(env, 'Estimates'\)/.test(uf));
+}
+
+// ── owner notifications never fire for an add-on child ──────────────────────────
+{
+  const tiers = /const NOTIFY_TIERS=\{[^}]*\};/.exec(src)[0];
+  const defaults = /const OWNER_NOTIFY_DEFAULTS\s*=\s*\{[^}]*\};/.exec(src)[0];
+  const sn = new Function('fetchTabs', tiers + defaults + grabAsync('shouldNotifyOwner') + '\nreturn shouldNotifyOwner;')(async () => [[{ ID: 'P1', Owner_ID: 'O1' }], [{ ID: 'O1', Phone: '+15555550100', Notify_Method: 'sms', Notify_Normal: 'always', Notify_Urgent: 'always', Notify_Low: 'always' }]]);
+  let all = true; for (const ev of ['Received', 'Scheduled', 'Complete', 'On_Hold']) if (await sn({}, { Property_ID: 'P1', Priority: 'normal', Owner_Notify_Override: 'off' }, ev)) all = false;
+  t('shouldNotifyOwner: a WO created with owner_notify_override "off" (every add-on child) never notifies the owner on Complete / On Hold / Received / Scheduled', all);
+  t('shouldNotifyOwner control: the same owner DOES get Complete for an ordinary WO', (await sn({}, { Property_ID: 'P1', Priority: 'normal', Owner_Notify_Override: '' }, 'Complete')) === true);
+  t('addonStart creates the child with owner_notify_override off and createWorkOrder persists Owner_Notify_Override', /owner_notify_override: 'off'/.test(grabAsync('addonStart')) && /Owner_Notify_Override: body\.owner_notify_override\|\|''/.test(grabAsync('createWorkOrder')));
+  const us = grabAsync('updateStatus');
+  t('updateStatus: the owner Complete / On Hold text goes through shouldNotifyOwner then the gated chokepoint', /const notify = await shouldNotifyOwner\(env, wo, ownerEvent\)/.test(us) && /smsGatedSend\(env, \{ wo_id: body\.wo_id, message_type: msgType, recipient_type: 'owner'/.test(us));
+}
+
 t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-09-30\.\d+-vendor-additional-work'/.test(src));
 
 console.log(`vendor-additional-work: ${pass} passed, ${fail} failed`);
