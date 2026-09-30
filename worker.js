@@ -7445,7 +7445,7 @@ async function vendorWorkorders(env, url) {
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
   // status a vendor should be able to page back to, it's a job that shouldn't have existed.
-  const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && String(w.Addon_Status || '') !== 'Draft' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // vendors passed through so enrichWO can tell whether THIS vendor is Brett's own
   // in-house record — that's what lets a "Brett Only" code still surface on a WO
   // that's actually assigned to him (see enrichWO's visibleLockboxes). viewingVendorId is
