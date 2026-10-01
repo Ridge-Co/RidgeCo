@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-01.2-vendor-additional-work';
+const BUILD_VERSION = '2026-10-01.3-deposit-paid-who-to-pay';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -794,6 +794,7 @@ const _hubWorkerCore = {
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
+        if (path === '/scope-deposit/sweep')      return json(await processDepositPaidSweep(env)); // Who To Pay page-open trigger; same auth as /qb/sync-payments
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
         if (path === '/qb/backfill-emails')       return await qbBackfillEmails(env, body);
         if (path === '/qb/backfill-invoice-emails') return await qbBackfillInvoiceEmails(env, body);
@@ -982,7 +983,19 @@ const _hubWorkerCore = {
     // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
     // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
     // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
-    try { await qbSyncPayments(env, {}); } catch (e) { /* non-fatal: never breaks the digest run */ }
+    // Oct 1 2026 (Brett: nothing may fail silently): a failure here is logged to Ops_Telemetry, never swallowed.
+    // qbSyncPayments returns a Response (never throws on its own errors) -- inspect its JSON for ok:false/errors too.
+    try {
+      const _syncRes = await qbSyncPayments(env, {});
+      let _syncJson = null; try { _syncJson = await _syncRes.clone().json(); } catch (_) {}
+      if (_syncJson && (_syncJson.ok === false || (_syncJson.errors && _syncJson.errors.length))) {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify(_syncJson.errors || _syncJson.error || 'ok:false')).slice(0, 480) });
+      }
+    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_qb_sync_payments failed and telemetry write failed', e); } }
+    // Safety net (Oct 1 2026): the 15-minute cron may not be scheduled in production, so also run the
+    // deposit-paid sweep daily. processDepositPaidSweep logs its own errors / not-found scopes to Ops_Telemetry.
+    try { await processDepositPaidSweep(env); }
+    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduled/deposit-paid-sweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_deposit_paid_sweep failed and telemetry write failed', e); } }
   }
 };
 
@@ -9441,50 +9454,150 @@ async function processEstimateReminders(env, nowArg) {
   const r = await sendTemplatedSms(env, { type: 'admin_estimate_reminder', kind: 'admin', bypassQuietHours: true, tokens: { Count: pending.length, List: list } });
   return { count: pending.length, sent: !!(r && r.sent), gate: r && r.gate_snapshot };
 }
-// Deposit invoice for a signed scope: the legacy signature invoice, else the earliest billed milestone.
-async function scopeDepositInvoiceId(env, scopeId) {
-  const sigs = (await fetchTab(env, 'Scope_Signatures')).filter(x => x.Scope_ID === String(scopeId) && String(x.Active || '').toUpperCase() !== 'FALSE');
-  if (!sigs.length) return { sig: null, invoiceId: '' };
-  const sig = sigs[sigs.length - 1];
-  if ((sig.QB_Invoice_ID || '').trim()) return { sig, invoiceId: sig.QB_Invoice_ID.trim() };
-  let ms = []; try { ms = (await fetchTab(env, 'Payment_Milestones')).filter(m => m.Signature_ID === String(sig.ID) && m.Active !== 'FALSE' && (m.QB_Invoice_ID || '').trim()); } catch (_) {}
+// Pure: the deposit milestone of a signature = its earliest (lowest Sequence) active milestone that has a
+// QuickBooks invoice. Shared by scopeDepositInvoiceId and qbPayables so both agree on "the deposit invoice".
+function depositMilestoneForSignature(sig, milestones) {
+  if (!sig) return null;
+  const ms = (milestones || []).filter(m => m.Signature_ID === String(sig.ID) && m.Active !== 'FALSE' && (m.QB_Invoice_ID || '').trim());
   ms.sort((a, b) => (parseInt(a.Sequence) || 0) - (parseInt(b.Sequence) || 0));
-  return { sig, invoiceId: ms.length ? ms[0].QB_Invoice_ID.trim() : '' };
+  return ms[0] || null;
+}
+// Pure: deposit invoice for a scope given already-read Scope_Signatures + Payment_Milestones rows.
+// source is 'signature' (legacy Scope_Signatures.QB_Invoice_ID), 'milestone' (earliest billed milestone) or ''.
+function resolveScopeDepositInvoice(sigs, milestones, scopeId) {
+  const live = (sigs || []).filter(x => x.Scope_ID === String(scopeId) && String(x.Active || '').toUpperCase() !== 'FALSE');
+  if (!live.length) return { sig: null, invoiceId: '', source: '', milestone: null };
+  const sig = live[live.length - 1];
+  if ((sig.QB_Invoice_ID || '').trim()) return { sig, invoiceId: sig.QB_Invoice_ID.trim(), source: 'signature', milestone: null };
+  const m = depositMilestoneForSignature(sig, milestones);
+  return { sig, invoiceId: m ? m.QB_Invoice_ID.trim() : '', source: m ? 'milestone' : '', milestone: m };
+}
+// Deposit invoice for a signed scope: the legacy signature invoice, else the earliest billed milestone.
+// A Payment_Milestones read failure now THROWS (it used to be swallowed into "no invoice", which made a
+// milestone-billed deposit look un-invoiced); callers log it. `tabs` lets a loop read the tabs once.
+async function scopeDepositInvoiceId(env, scopeId, tabs) {
+  let sigs, milestones;
+  if (tabs) { sigs = tabs.sigs; milestones = tabs.milestones; }
+  else {
+    sigs = await fetchTab(env, 'Scope_Signatures');
+    try { await paymentMilestonesTab(env); } catch (_) {}
+    milestones = await fetchTab(env, 'Payment_Milestones');
+  }
+  return resolveScopeDepositInvoice(sigs, milestones, scopeId);
 }
 // Pre-approved -> Approved + the two "deposit paid" texts. The stage check makes it idempotent, so
-// the 15-minute sweep and the daily QuickBooks sync can both call it. Texts are skipped for
+// the 15-minute sweep, the daily QuickBooks sync and the Who To Pay page-open sweep can all call it.
+// Only the call that actually moves Pre-approved -> Approved sends texts. Texts are skipped for
 // signings older than the SMS cut-over so backfilled history never fires.
+const _depositTransitionInFlight = new Set();
 async function scopeDepositPaidTransition(env, scopeId, sinceISO) {
-  const scope = (await fetchTab(env, 'Scopes')).find(x => x.ID === String(scopeId));
-  if (!scope || String(scope.Approval_Stage || '') !== 'Pre-approved') return { changed: false };
-  const { sig } = await scopeDepositInvoiceId(env, scopeId);
-  await setApprovalStage(env, { woId: scope.WO_ID || '', scopeId: scope.ID, stage: 'Approved' });
-  const recent = sig && (Date.parse(sig.Signed_TS || sig.Signed_Date || '') || 0) >= (Date.parse(sinceISO) || 0);
-  if (!recent) return { changed: true, texted: false };
-  const c = await estimateSmsContext(env, scope.WO_ID || '', scope.Vendor_ID);
-  const job = scope.WO_ID ? ('work order ' + scope.WO_ID) : ('proposal #' + scope.ID);
-  await sendTemplatedSms(env, { type: 'admin_deposit_paid', kind: 'admin', wo_id: scope.WO_ID || '', property: c.property, tokens: { Job: job, Address: c.address } });
-  if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_deposit_paid', kind: 'vendor', vendor: c.vendor, wo_id: scope.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
-  return { changed: true, texted: true };
+  const key = String(scopeId);
+  if (_depositTransitionInFlight.has(key)) return { changed: false, in_flight: true };
+  _depositTransitionInFlight.add(key);
+  try {
+    const scope = (await fetchTab(env, 'Scopes')).find(x => x.ID === key);
+    if (!scope || String(scope.Approval_Stage || '') !== 'Pre-approved') return { changed: false };
+    const { sig } = await scopeDepositInvoiceId(env, scopeId);
+    const staged = await setApprovalStage(env, { woId: scope.WO_ID || '', scopeId: scope.ID, stage: 'Approved' });
+    // setApprovalStage swallows its own errors and returns false; verify the Scope row really moved so a failed
+    // write can never look like success (and never text twice on the retry).
+    const after = (await fetchTab(env, 'Scopes')).find(x => x.ID === key);
+    if (!staged || !after || String(after.Approval_Stage || '') !== 'Approved') throw new Error('Approval_Stage did not move to Approved for scope ' + key + ' (write failed)');
+    const recent = sig && (Date.parse(sig.Signed_TS || sig.Signed_Date || '') || 0) >= (Date.parse(sinceISO) || 0);
+    if (!recent) return { changed: true, texted: false };
+    const c = await estimateSmsContext(env, scope.WO_ID || '', scope.Vendor_ID);
+    const job = scope.WO_ID ? ('work order ' + scope.WO_ID) : ('proposal #' + scope.ID);
+    await sendTemplatedSms(env, { type: 'admin_deposit_paid', kind: 'admin', wo_id: scope.WO_ID || '', property: c.property, tokens: { Job: job, Address: c.address } });
+    if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_deposit_paid', kind: 'vendor', vendor: c.vendor, wo_id: scope.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
+    return { changed: true, texted: true };
+  } finally { _depositTransitionInFlight.delete(key); }
 }
-// Fast sweep (cronSweep, every 15 min): only touches QuickBooks when a Pre-approved scope exists.
-async function processDepositPaidSweep(env) {
-  const scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
-  if (!scopes.length) return { checked: 0 };
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
-  const since = cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE;
-  const token = await qbAccessToken(env);
-  const res = [];
-  for (const sc of scopes) {
-    try {
-      const { invoiceId } = await scopeDepositInvoiceId(env, sc.ID);
-      if (!invoiceId) continue;
-      const r = await qbApi(env, 'invoice/' + encodeURIComponent(invoiceId) + '?minorversion=73', 'GET', null, token);
-      const inv = r && r.Invoice; if (!inv) continue;
-      if ((Number(inv.TotalAmt) || 0) > 0 && (Number(inv.Balance) || 0) <= 0.005) res.push({ scope: sc.ID, ...(await scopeDepositPaidTransition(env, sc.ID, since)) });
-    } catch (e) { res.push({ scope: sc.ID, error: String((e && e.message) || e).slice(0, 120) }); }
+// Nothing may fail silently (Brett, Oct 1 2026): log an error to Ops_Telemetry (Success=FALSE) AND push it onto
+// `sink` so it is returned to the caller / shown in the UI. If telemetry itself fails that is added to the sink too.
+async function logAndCollectError(env, sink, jobType, endpoint, ref, e) {
+  const msg = String((e && e.message) || e).slice(0, 300);
+  const entry = { stage: jobType, ref: ref || '', error: msg };
+  sink.push(entry);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: jobType, Skill_Or_Endpoint: endpoint, Success: 'FALSE', Notes: `${ref || ''} err=${msg}`.slice(0, 500) }); }
+  catch (le) { sink.push({ stage: 'telemetry', ref: ref || '', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); }
+  return entry;
+}
+// Surfaces one sweep problem: pushes it on out.not_found / out.errors, writes Ops_Telemetry (not_found: once per
+// scope per day via a Config marker so a 15-min cron does not flood the sheet; errors: every time), and texts the
+// admin phone once per scope per day (marker deposit_sweep_alert_<kind>_<scope>). The Who To Pay banner shows
+// everything in out regardless of the markers.
+async function depositSweepSurface(env, out, cfg, kind, entry) {
+  (kind === 'not_found' ? out.not_found : out.errors).push(entry);
+  const key = 'deposit_sweep_alert_' + kind + '_' + (entry.scope || 'sweep');
+  const now = Date.now();
+  const due = alertDebounceOk(cfg, key, now, 24 * 3600000);
+  const what = entry.reason || entry.error || '';
+  let telemetryOk = true;
+  if (kind === 'error' || due) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_' + kind, Skill_Or_Endpoint: 'processDepositPaidSweep', Success: 'FALSE', Notes: `scope=${entry.scope || ''} wo=${entry.wo_id || ''} ${entry.stage ? 'stage=' + entry.stage + ' ' : ''}${what}`.slice(0, 500) }); }
+    catch (le) { telemetryOk = false; out.errors.push({ scope: entry.scope || '', stage: 'telemetry', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); }
   }
-  return { checked: scopes.length, results: res };
+  if (!due) return;
+  let smsOk = true;
+  if (cfg.admin_phone) {
+    try {
+      const r = await sendSMS(env, cfg.admin_phone, (kind === 'not_found' ? 'Deposit check: cannot find the deposit invoice for scope ' : 'Deposit check ERROR on scope ') + (entry.scope || '?') + (entry.wo_id ? ' (' + entry.wo_id + ')' : '') + ' - ' + String(what).slice(0, 120));
+      if (r && r.error) throw new Error(String(r.error));
+    } catch (se) { smsOk = false; out.errors.push({ scope: entry.scope || '', stage: 'alert_sms', error: String((se && se.message) || se).slice(0, 200) }); }
+  }
+  if (telemetryOk && smsOk) {
+    try { await setConfigKey(env, { key, value: new Date(now).toISOString() }); cfg[key] = new Date(now).toISOString(); }
+    catch (ce) { out.errors.push({ scope: entry.scope || '', stage: 'alert_marker', error: String((ce && ce.message) || ce).slice(0, 200) }); }
+  }
+}
+// Fast sweep (cronSweep every 15 min, the daily scheduled() run, qbSyncPayments, and POST /scope-deposit/sweep
+// which the Who To Pay page fires when it opens). Only touches QuickBooks when a Pre-approved scope exists.
+// Returns { ok, checked, transitioned:[{scope,wo_id,texted,invoice_id,source}], not_found:[{scope,wo_id,reason,invoice_id?}],
+// errors:[{scope?,wo_id?,stage,error}] }. NEVER throws and NEVER swallows: every failure is in `errors` AND in Ops_Telemetry.
+// not_found = a Pre-approved scope whose deposit invoice cannot be resolved (no signature / no invoice on the
+// signature or any billed milestone) or cannot be fetched from QuickBooks.
+async function processDepositPaidSweep(env) {
+  const out = { ok: true, checked: 0, transitioned: [], not_found: [], errors: [] };
+  let cfg = {};
+  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; await logAndCollectError(env, out.errors, 'deposit_sweep_config', 'processDepositPaidSweep', 'fetchConfig', e); }
+  let scopes, tabs, token;
+  try {
+    scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
+    out.checked = scopes.length;
+    if (!scopes.length) { out.ok = !out.errors.length; return out; }
+    try { await paymentMilestonesTab(env); } catch (_) {}
+    tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
+  } catch (e) {
+    await logAndCollectError(env, out.errors, 'deposit_sweep_read', 'processDepositPaidSweep', 'scopes/signatures/milestones', e);
+    out.ok = false; return out;
+  }
+  const since = cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE;
+  try { token = await qbAccessToken(env); }
+  catch (e) {
+    for (const sc of scopes) await depositSweepSurface(env, out, cfg, 'error', { scope: sc.ID, wo_id: sc.WO_ID || '', stage: 'qb_token', error: 'QuickBooks token failed: ' + String((e && e.message) || e).slice(0, 160) });
+    out.ok = false; return out;
+  }
+  for (const sc of scopes) {
+    const base = { scope: sc.ID, wo_id: sc.WO_ID || '' };
+    try {
+      const { sig, invoiceId, source } = await scopeDepositInvoiceId(env, sc.ID, tabs);
+      if (!invoiceId) {
+        await depositSweepSurface(env, out, cfg, 'not_found', Object.assign({}, base, { reason: sig ? 'no deposit invoice on the signature or any billed milestone' : 'Pre-approved but no active signature found' }));
+        continue;
+      }
+      const r = await qbApi(env, 'invoice/' + encodeURIComponent(invoiceId) + '?minorversion=73', 'GET', null, token);
+      const inv = r && r.Invoice;
+      if (!inv) { await depositSweepSurface(env, out, cfg, 'not_found', Object.assign({}, base, { invoice_id: invoiceId, reason: 'QuickBooks returned no invoice ' + invoiceId })); continue; }
+      if ((Number(inv.TotalAmt) || 0) > 0 && (Number(inv.Balance) || 0) <= 0.005) {
+        const t = await scopeDepositPaidTransition(env, sc.ID, since);
+        if (t && t.changed) out.transitioned.push(Object.assign({}, base, { texted: !!t.texted, invoice_id: invoiceId, source }));
+      }
+    } catch (e) {
+      await depositSweepSurface(env, out, cfg, 'error', Object.assign({}, base, { stage: 'scope', error: String((e && e.message) || e).slice(0, 200) }));
+    }
+  }
+  out.ok = !out.errors.length && !out.not_found.length;
+  return out;
 }
 // POST /estimate/needs-info { wo_id } and POST /estimate/decline { wo_id, reason? } — admin-only.
 async function flagEstimate(env, body, kind) {
@@ -12599,7 +12712,7 @@ async function cronSweep(env) {
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
   try { out.recurring_wos = await processRecurringWorkOrders(env); } catch (e) { out.recurring_wos = { error: String((e && e.message) || e) }; }
   try { out.estimate_reminders = await processEstimateReminders(env); } catch (e) { out.estimate_reminders = { error: String((e && e.message) || e) }; }
-  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; }
+  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'cronSweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) {} }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
   try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
   try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
@@ -18379,6 +18492,8 @@ async function hubTestWriteAllowed(env, path, body) {
   // setup-trades / sync-payments take no record id (sandbox-only effect). Everything not listed stays denied
   // (pay-bills, record-paid-bill, link-vendor-bills, vendor-reconcile, backfill-*, delete-bill, ...).
   if (path === '/qb/setup-trades' || path === '/qb/sync-payments') return true;
+  // Oct 1 2026: same class as /qb/sync-payments (sandbox QB reads + staging-sheet Approval_Stage write + stubbed staging SMS); takes no record id.
+  if (path === '/scope-deposit/sweep') return true;
   if (path === '/qb/map' || path === '/qb/create-subcustomer') {
     const _tab = { owner: 'Owners', vendor: 'Vendors', property: 'Properties', unit: 'Units' }[String(_b.kind || '').toLowerCase()];
     if (!_tab || !_b.id) return false;
@@ -19052,6 +19167,9 @@ async function qbPayables(env, url) {
     const cutoff = new Date(Date.now() - days * 86400000);
     const token = await qbAccessToken(env);
     const [irs, vendors] = await fetchTabs(env, ['Invoice_Review','Vendors']);
+    // Oct 1 2026: nothing here may fail silently -- problems are returned as `warnings` (the Who To Pay page
+    // shows them in its banner) and logged to Ops_Telemetry instead of being swallowed.
+    const warnings = [];
 
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
@@ -19083,7 +19201,7 @@ async function qbPayables(env, url) {
           const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
           const found = (r && r.QueryResponse && r.QueryResponse[entity]) || [];
           for (const row of found) map.set(String(row.Id), row);
-        } catch (e) { /* this chunk's ids fall through to null/"unknown" below, same as before */ }
+        } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_batch_fetch', '/qb/payables', `${entity} ids=${chunk.length}`, e); /* this chunk's ids still fall through to null/"unknown" below, but it is now reported */ }
       }
       return map;
     }
@@ -19175,6 +19293,11 @@ async function qbPayables(env, url) {
     // Invoice_Review-based payables that already work.
     try {
       const [sigRows, scopes] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Scopes')]);
+      // Payment_Milestones read ONCE (not per row). A milestone-billed scope (e.g. WO-1227 / Scope 8) keeps its deposit
+      // invoice on milestone 1, with Scope_Signatures.QB_Invoice_ID blank -- fall back to it so the deposit row exists.
+      let allMilestones = [];
+      try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); }
+      catch (e) { await logAndCollectError(env, warnings, 'qb_payables_milestones_read', '/qb/payables', 'Payment_Milestones', e); }
       const sigCandidates = [];
       for (const r of sigRows) {
         if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
@@ -19185,6 +19308,12 @@ async function qbPayables(env, url) {
         if ((r.QB_Invoice_ID || '').trim()) {
           sigCandidates.push({ r, sc, phase: 'deposit', invId: (r.QB_Invoice_ID || '').trim(), billId: (r.QB_Bill_ID || '').trim(),
             custTotal: deposit, vendorCost: depositVendorAmt, skipReason: r.Bill_Skip_Reason || '' });
+        } else {
+          const dm = depositMilestoneForSignature(r, allMilestones);
+          if (dm) {
+            sigCandidates.push({ r, sc, phase: 'deposit', invId: (dm.QB_Invoice_ID || '').trim(), billId: (dm.QB_Bill_ID || '').trim(), milestoneId: dm.ID,
+              custTotal: +dm.Customer_Amount || deposit, vendorCost: +dm.Vendor_Amount || depositVendorAmt, skipReason: r.Bill_Skip_Reason || '' });
+          }
         }
         if ((r.QB_Final_Invoice_ID || '').trim()) {
           sigCandidates.push({ r, sc, phase: 'final', invId: (r.QB_Final_Invoice_ID || '').trim(), billId: (r.QB_Final_Bill_ID || '').trim(),
@@ -19234,7 +19363,7 @@ async function qbPayables(env, url) {
           }
 
           rows.push({
-            ir_id: '', source: 'scope_signature', signature_id: c.r.ID, phase: c.phase,
+            ir_id: '', source: 'scope_signature', signature_id: c.r.ID, phase: c.phase, milestone_id: c.milestoneId || '',
             wo_id: c.sc.WO_ID, vendor_id: c.sc.Vendor_ID || '', vendor_name: vendor ? qbVendorDisplayName(vendor) : '',
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
@@ -19245,13 +19374,14 @@ async function qbPayables(env, url) {
           });
         }
       }
-    } catch (e) { /* additive only — never break the Invoice_Review-based rows above */ }
+    } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
     return json({
       ok: true, count: rows.length,
       owed_now: owed.length,
       owed_total: +owed.reduce((n, r) => n + (r.vendor_balance != null ? r.vendor_balance : r.vendor_cost), 0).toFixed(2),
+      warnings,
       rows,
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -19265,15 +19395,18 @@ async function qbSyncPayments(env, body) {
   const res = await qbPayables(env, url);
   const data = await res.clone().json();
   if (!data.ok) return res;
+  // Oct 1 2026: nothing may fail silently -- every problem below is logged to Ops_Telemetry and returned in
+  // `errors` (+ the payables `warnings`), which the Who To Pay page shows in its banner.
+  const syncErrors = [];
 
   try { await ensureColumns(env, 'Invoice_Review', ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked']); }
-  catch (e) { /* the report below still stands; only the stored copy is lost */ }
+  catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_ensure_columns', '/qb/sync-payments', 'Invoice_Review columns (stored copy may be stale)', e); }
 
   const now = new Date().toISOString();
   // Auto-close needs the current WO status so we never overwrite one already finished.
   const WO_DONE = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'];
   let workorders = [];
-  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { /* flip step just no-ops */ }
+  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
 
   let written = 0, failed = 0, closed = 0;
   const closedWOs = [];
@@ -19290,7 +19423,7 @@ async function qbSyncPayments(env, body) {
           Payment_Checked: now,
         });
         written++;
-      } catch (e) { failed++; }
+      } catch (e) { failed++; await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'ir=' + r.ir_id + ' wo=' + (r.wo_id || ''), e); }
     }
 
     // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
@@ -19303,7 +19436,7 @@ async function qbSyncPayments(env, body) {
           let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (_) {}
           await scopeDepositPaidTransition(env, sig.Scope_ID, cfgS.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
         }
-      } catch (e) { /* non-fatal */ }
+      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_transition', '/qb/sync-payments', 'sig=' + r.signature_id + ' wo=' + (r.wo_id || '') + (r.milestone_id ? ' milestone=' + r.milestone_id : ''), e); }
     }
     // When QuickBooks POSITIVELY reports the vendor bill paid, mark the work order Paid so it
     // drops off the active work list. Strictly === true (never on an unknown/null read), and
@@ -19324,11 +19457,17 @@ async function qbSyncPayments(env, body) {
             'Vendor bill paid in QuickBooks (' + (r.vendor_ref || ('bill ' + r.bill_id)) + ')'); } catch (e2) {}
           closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
         }
-      } catch (e) { /* non-fatal: the payable state still saved above */ }
+      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'wo=' + r.wo_id, e); /* the payable state still saved above */ }
     }
   }
+  // Same sweep the Who To Pay page-open and the cron run: covers Pre-approved scopes whose deposit invoice is on a
+  // milestone, and reports (not_found / errors) any scope whose deposit invoice cannot be resolved. Idempotent.
+  let depositSweep = null;
+  try { depositSweep = await processDepositPaidSweep(env); }
+  catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_sweep', '/qb/sync-payments', 'processDepositPaidSweep', e); }
   return json({ ok: true, checked: data.count, written, failed, closed, closed_wos: closedWOs,
-                owed_now: data.owed_now, owed_total: data.owed_total, rows: data.rows });
+                owed_now: data.owed_now, owed_total: data.owed_total, warnings: data.warnings || [], errors: syncErrors,
+                deposit_sweep: depositSweep, rows: data.rows });
 }
 
 async function qbTradeMap(env) {
