@@ -23330,7 +23330,8 @@ async function qbSendCombinedInvoice(env, ctx) {
 
     const combinedLines = rowBuilds.reduce((acc, rb) => acc.concat(rb.inv.lines), []);
     const combinedTotal = +rowBuilds.reduce((s, rb) => s + rb.custTotal, 0).toFixed(2);
-    const note = `RidgeCo IR ${groupRows.map(r => r.ID).join('+')} · WO ${woId} · Bill ${groupRows.map(r => r.Bill_ID).join('+')}`;
+    const _distinctWoIds = [...new Set(groupRows.map(r => String(r.WO_ID)))];
+    const note = `RidgeCo IR ${groupRows.map(r => r.ID).join('+')} · WO ${_distinctWoIds.join('+')} · Bill ${groupRows.map(r => r.Bill_ID).join('+')}`;
 
     const photoFolderId  = wo.Drive_Folder_ID || '';
     const photoFolderUrl = wo.Drive_Folder_URL || (photoFolderId ? ('https://drive.google.com/drive/folders/' + photoFolderId) : '');
