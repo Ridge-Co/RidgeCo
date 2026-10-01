@@ -3504,7 +3504,10 @@ async function voidAttachmentForReceipt(env, receipt_id) {
     const hit = atts.find(a => String(a.Receipt_ID || '') === String(receipt_id) && String(a.Active || '').toUpperCase() !== 'FALSE');
     if (!hit) return { voided: false, reason: 'not_found' };
     await updateRow(env, 'Attachments', hit.ID, { Active: 'FALSE' });
-    return { voided: true, attachment_id: hit.ID };
+    // Oct 1 2026: the customer-folder copy (if any) goes with it - the customer must not keep seeing a
+    // receipt that was undone / re-opened / reassigned. Surfaced in the result, never silent.
+    const folderCopy = String(hit.Folder_Copy_ID || '').trim() ? await trashReceiptFolderCopy(env, hit, atts) : null;
+    return { voided: true, attachment_id: hit.ID, ...(folderCopy ? { folder_copy: folderCopy } : {}) };
   } catch (e) {
     return { voided: false, error: String(e && e.message || e) };
   }
