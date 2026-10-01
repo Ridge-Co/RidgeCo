@@ -11237,6 +11237,21 @@ async function testDriveAccess(env) {
 // Drive's files.get directly per ID and reports what Drive itself says: found (+ whether it's
 // merely trashed, which still counts as "gone" for sharing purposes) or the real error. Never
 // writes anything — files.get is a plain read.
+// ---- PLANTED BUGS (test only, never merge) ----
+async function plantedVendorNote(request, env) {
+  const body = await request.json();                                   // BUG A: no try/catch, empty POST body 500s
+  const rows = body.rows || [];
+  const header = rows[0] || [];
+  const noteCol = header.indexOf('Vendor_Note');                       // BUG B: no -1 guard, missing header silently writes column -1
+  const woCol = 0;                                                      // BUG C: hard-coded index instead of header name
+  for (const r of rows.slice(1)) {
+    r[noteCol] = body.note;
+    console.log('saving note for vendor PIN', body.pin, 'token', env.WORKER_SECRET);   // BUG D: logs a PIN and a secret
+  }
+  const encoded = btoa(body.note);                                      // BUG E: btoa throws on non-Latin-1 text (accents, emoji)
+  await sendSMS(env, body.phone, 'Your note was saved: ' + body.note);  // BUG F: bypasses smsGatedSend (quiet hours, Test Mode, opt-out)
+  return json({ success: true, encoded });                              // BUG G: success:true with no read-back of the write
+}
 async function adminDriveFileCheck(env, body) {
   body = body || {};
   const ids = Array.isArray(body.file_ids) ? body.file_ids.filter(Boolean).slice(0, 50) : [];
