@@ -9493,6 +9493,8 @@ async function flagEstimate(env, body, kind) {
   const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
   const latest = versions.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  const _blockMsg = addonEstimateActionBlock(findWO(_woRows, woId), latest, kind);
+  if (_blockMsg) return json({ error: _blockMsg }, 400);
   const st = String(latest.Status || 'Pending');
   if (!['Pending', 'Needs Info'].includes(st)) return json({ error: `That estimate is "${st}" — only a pending estimate can be flagged ${kind === 'decline' ? 'declined' : 'needs-info'}.` }, 409);
   try { await ensureColumns(env, 'Estimates', ['Needs_Info_Date', 'Declined_Date', 'Decline_Reason']); } catch (_) {}
