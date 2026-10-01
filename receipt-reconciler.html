@@ -227,7 +227,28 @@ async function post(path, body){
   let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
   if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
   if (!r.ok && !data.error) throw new Error('HTTP '+r.status);
+  // Oct 1 2026: every Reconciler write that attaches a receipt to a WO also copies it into the WO's
+  // customer Drive folder. A failed copy never fails the receipt itself, so it is surfaced HERE (one
+  // place, covers confirm / attach-only / reassign / refund-reverse / bulk) as a sticky banner that
+  // stays until dismissed - not a toast that vanishes - so a missing customer-folder copy is never silent.
+  if (data && typeof data.folder_copy === 'string' && data.folder_copy !== 'ok') showFolderCopyWarning(data);
   return data;
+}
+function showFolderCopyWarning(res){
+  let box = document.getElementById('rc-folder-warn');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'rc-folder-warn';
+    box.setAttribute('role', 'alert');
+    box.style.cssText = 'position:sticky;top:0;z-index:50;background:#fef3c7;border:2px solid #d97706;color:#78350f;padding:10px 12px;margin:8px 0;border-radius:8px;font-size:13px';
+    const list = document.getElementById('list'); if (list && list.parentNode) list.parentNode.insertBefore(box, list); else document.body.insertBefore(box, document.body.firstChild);
+  }
+  const why = String(res.folder_copy).replace(/^failed:\s*/, '');
+  const item = document.createElement('div'); item.className = 'rc-folder-warn-item';
+  item.innerHTML = '⚠ <b>Receipt saved, but the copy into the customer work-order folder FAILED</b> ('+esc(why)+')'
+    + (res.id || res.receipt_id ? ' - receipt #'+esc(String(res.receipt_id || (res.receipt && res.receipt.ID) || res.id)) : '')
+    + '. The customer will not see this receipt on the WO until it is copied. Run the folder-copy backfill (preview first) or re-open and re-confirm it.'
+    + ' <a href="#" onclick="this.parentNode.remove();var b=document.getElementById(\'rc-folder-warn\');if(b&&!b.querySelector(\'.rc-folder-warn-item\'))b.remove();return false" style="margin-left:6px;font-weight:700">dismiss</a>';
+  box.appendChild(item);
 }
 
 function renderTabs(){
