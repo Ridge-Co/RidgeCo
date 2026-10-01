@@ -2013,7 +2013,7 @@ function showPage(name, btn) {
   // 2026-09-09 for it to auto-check on open instead, same convention as the three lines above.
   // Still costs the same QB calls loadPayables(false) always has; the "Check QuickBooks" /
   // "Check and save to the sheet" buttons remain for a manual re-run any time after that.
-  if (name === 'payables') { loadPayables(false); }
+  if (name === 'payables') { loadPayables(false); payablesDepositSweep(); }
   if (name === 'vendor-performance') { loadVendorPerformance(); }
   if (name === 'vendor-onboarding') { loadVendorOnboardingGaps(); }
   if (name === 'messaging') { loadMessagingPage(); }
