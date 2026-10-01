@@ -23386,6 +23386,7 @@ async function qbSendInvoice(env, body) {
         groupRows, bills, vendors, wo: _ctxWo, woList: wos, owner, prop, unit, billTo, trade, tradeName,
         warnings, previewOnly, batch: body.batch, timeEntries: _ctxTimeEntries,
         overridePendingInfo: !!body.override_pending_info,
+        overrideReceiptFolder: !!body.override_receipt_folder,
       });
     }
 
