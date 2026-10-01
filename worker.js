@@ -3409,7 +3409,7 @@ async function receiptReconRefundReverse(env, body) {
     added_by: 'Receipt Reconciler (refund reverse)', added_by_id: 'receipt-recon-refund-reverse', role: 'hub',
     category: 'refund', source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: true,
-  });
+  }, { folderCopy: true });
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && addJson.id) {
