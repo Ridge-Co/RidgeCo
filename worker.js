@@ -23866,6 +23866,15 @@ async function qbSendCombinedInvoice(env, ctx) {
       rowBuilds.push({ row: r, vendor, billRow, custTotal, vendorCost, inv, vendDisplay, vendorInHouse, billDoc, termDays });
     }
 
+    // Oct 1 2026: same receipts-folder guard as the single-bill path (anchored on the WO whose folder the memo links to).
+    let rfIssue = null;
+    if (_allOwnReceipts.length) {
+      try {
+        const [_atts, _rq] = await fetchTabs(env, ['Attachments', 'Receipt_Recon_Queue']);
+        rfIssue = invoiceReceiptFolderIssue(_allOwnReceipts, _atts, wo, wo && (wo.ID || woId), _rq);
+      } catch (e) { warnings.push('Could not check whether this job\'s receipt images are in the customer folder.'); }
+      if (rfIssue) warnings.push('📎 ' + rfIssue.message);
+    }
     const combinedLines = rowBuilds.reduce((acc, rb) => acc.concat(rb.inv.lines), []);
     const combinedTotal = +rowBuilds.reduce((s, rb) => s + rb.custTotal, 0).toFixed(2);
     const _distinctWoIds = [...new Set(groupRows.map(r => String(r.WO_ID)))];
