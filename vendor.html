@@ -2126,7 +2126,8 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
     card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
     card.innerHTML = '\u26a0 ' + esc(msg) + ' <span data-retry-btn style="text-decoration:underline;cursor:pointer">Retry</span>';
     var retryEl = card.querySelector('[data-retry-btn]');
-    if (retryEl) retryEl.onclick = function(ev) { ev.stopPropagation(); _activeUploads++; _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, 1); };
+    if (retryEl) retryEl.onclick = function(ev) { ev.stopPropagation(); _activeUploads++; _uploadOneFile(file, card, woId, propAddr, fileType, nextFolder || folderInfo, 1, opts); };
+    if (opts && opts.onDone) opts.onDone(false, nextFolder || folderInfo); // additional-work flow: settle the awaiting promise
   }
 
   return api('POST', '/create-upload-session', reqBody).then(function(res) {
