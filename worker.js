@@ -19363,7 +19363,7 @@ async function qbPayables(env, url) {
           }
 
           rows.push({
-            ir_id: '', source: 'scope_signature', signature_id: c.r.ID, phase: c.phase,
+            ir_id: '', source: 'scope_signature', signature_id: c.r.ID, phase: c.phase, milestone_id: c.milestoneId || '',
             wo_id: c.sc.WO_ID, vendor_id: c.sc.Vendor_ID || '', vendor_name: vendor ? qbVendorDisplayName(vendor) : '',
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
