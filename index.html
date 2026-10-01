@@ -12548,7 +12548,7 @@ function confirmQBSend(overridePendingInfo, overrideAddon, overrideReceiptFolder
       btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
       document.getElementById('qb-send-msg').innerHTML =
         '<div style="color:var(--warn);font-size:12px;margin-top:6px;line-height:1.5">⏳ ' + esc(res.error || 'This bill is flagged "Invoiced — Pending Info."') + '</div>' +
-        '<div style="margin-top:8px"><button onclick="confirmQBSend(true)" style="background:var(--danger);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 12px;cursor:pointer">Send anyway</button></div>';
+        '<div style="margin-top:8px"><button onclick="confirmQBSend(true,' + (overrideAddon ? 'true' : 'false') + ',' + (overrideReceiptFolder ? 'true' : 'false') + ')" style="background:var(--danger);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 12px;cursor:pointer">Send anyway</button></div>';
     } else {
       btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
       var errs = (res.errors&&res.errors.length) ? res.errors.join('; ') : (res.error||'Error');
