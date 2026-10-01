@@ -3057,9 +3057,11 @@ async function receiptReconConfirm(env, body) {
   // (1054 vs 1045) would otherwise post a real Receipts row against a nonexistent or wrong job
   // with no error and no way to notice at the time. This is the actual defense; the frontend's
   // own live validation against the already-loaded WO list is just fast-fail UX on top of it.
+  let woRowForCopy = null;
   if (!noWo) {
     const workorders = await fetchTab(env, 'Work_Orders');
-    if (!workorders.some(w => String(w.ID) === String(wo_id))) {
+    woRowForCopy = workorders.find(w => String(w.ID) === String(wo_id)) || null;
+    if (!woRowForCopy) {
       return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
     }
   }
