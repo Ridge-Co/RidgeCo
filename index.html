@@ -11376,6 +11376,45 @@ var PAY_STATE_GROUP = {
   'nothing to pay':       { label: 'Nothing to pay',                          collapsible: true,  openDefault: false }
 };
 
+// Who To Pay alert banner (Oct 1 2026). Fed by: the deposit-paid sweep fired on page open (POST /scope-deposit/sweep),
+// the payables read's `warnings`, and the save path's `errors` + `deposit_sweep`. Never silent: any not-found
+// deposit invoice or error is listed here with the scope / WO id and the reason.
+var _payablesAlerts = { sweep: null, sweepFailed: '', warnings: [], errors: [] };
+function renderPayablesAlerts() {
+  var host = document.getElementById('payables-alerts');
+  if (!host) return;
+  var a = _payablesAlerts, sw = a.sweep || {}, lines = [];
+  safeArray(sw.not_found).forEach(function(n) {
+    lines.push('Deposit invoice NOT FOUND for scope ' + esc(n.scope) + (n.wo_id ? ' (' + esc(n.wo_id) + ')' : '') + ': ' + esc(n.reason || 'unknown reason'));
+  });
+  safeArray(sw.errors).forEach(function(e) {
+    lines.push('Deposit check error' + (e.scope ? ' on scope ' + esc(e.scope) + (e.wo_id ? ' (' + esc(e.wo_id) + ')' : '') : '') + ': ' + esc(e.error || '') + (e.stage ? ' [' + esc(e.stage) + ']' : ''));
+  });
+  if (a.sweepFailed) lines.push('Deposit check could not run: ' + esc(a.sweepFailed));
+  safeArray(a.warnings).concat(safeArray(a.errors)).forEach(function(e) {
+    lines.push('Problem' + (e.ref ? ' (' + esc(e.ref) + ')' : '') + ': ' + esc(e.error || '') + (e.stage ? ' [' + esc(e.stage) + ']' : ''));
+  });
+  if (!lines.length) { host.innerHTML = ''; return; }
+  host.innerHTML = '<div role="alert" style="border:2px solid var(--danger);background:rgba(220,38,38,.10);color:var(--text);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.5">'
+    + '<div style="font-weight:700;color:var(--danger);margin-bottom:4px">&#9888; Needs your attention (' + lines.length + ')</div>'
+    + '<ul style="margin:0;padding-left:18px">' + lines.map(function(l) { return '<li>' + l + '</li>'; }).join('') + '</ul></div>';
+}
+// Runs in the background when Who To Pay opens: moves any Pre-approved scope whose deposit invoice is paid to Approved
+// (texting the vendor/admin once, server-side idempotent) and reports scopes whose deposit invoice can't be found.
+function payablesDepositSweep() {
+  _payablesAlerts.sweepFailed = '';
+  api('POST', '/scope-deposit/sweep', {}).then(function(r) {
+    if (!r || r.error) { _payablesAlerts.sweepFailed = (r && r.error) || 'no response'; _payablesAlerts.sweep = null; renderPayablesAlerts(); return; }
+    _payablesAlerts.sweep = r;
+    renderPayablesAlerts();
+    var moved = safeArray(r.transitioned);
+    if (moved.length) {
+      toast(moved.length + ' proposal' + (moved.length === 1 ? '' : 's') + ' moved to Approved (deposit paid): ' + moved.map(function(m) { return m.wo_id || ('scope ' + m.scope); }).join(', '), 'success');
+      loadPayables(false);
+    }
+  }).catch(function(e) { _payablesAlerts.sweepFailed = (e && e.message) || String(e); _payablesAlerts.sweep = null; renderPayablesAlerts(); });
+}
+
 function loadPayables(save) {
   _payablesLastSave = !!save;
   var el = document.getElementById('payables-body');
