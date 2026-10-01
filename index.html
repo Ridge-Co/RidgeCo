@@ -3310,6 +3310,60 @@ function checklistToText(json){
   try { var a=JSON.parse(json||'[]'); return (a||[]).map(function(i){return i.t||'';}).filter(Boolean).join('\n'); }
   catch(e){ return ''; }
 }
+// ── Checklist quick entry (Oct 1 2026) ───────────────────────
+// parseChecklistPaste is the ONE parser for pasted/typed checklist text -> string[] of item titles
+// (CRLF-safe, blank lines skipped, list markers stripped, no de-duping). Phase 1 deliberately drops
+// leading indentation; a LATER phase (subtasks / drag-reorder) should extend THIS function (e.g. to
+// return {t, depth}) rather than add a second parser.
+function parseChecklistPaste(text){
+  var MARK = /^(?:[-*](?:\s+|$)|[•–—☐☑✓✔]\s*|\d+[.)](?:\s+|$)|\[[ xX]?\]\s*)/;
+  var out = [];
+  String(text == null ? '' : text).split(/\r\n|\r|\n/).forEach(function(line){
+    var s = line.trim(), prev, n = 0;
+    do { prev = s; s = s.replace(MARK, '').trim(); n++; } while (s !== prev && s && n < 3);
+    if (s) out.push(s);
+  });
+  return out;
+}
+// Auto-grow helper for the big description boxes.
+function growDescArea(ta){ if(!ta) return; ta.style.height='auto'; ta.style.height=Math.max(160, ta.scrollHeight)+'px'; }
+// Live count + auto-height for a checklist textarea (count matches what the save path will store).
+function checklistRefresh(taId){
+  var ta = document.getElementById(taId); if(!ta) return;
+  ta.style.height='auto'; ta.style.height=Math.max(110, Math.min(ta.scrollHeight, 420))+'px';
+  var c = document.getElementById(taId+'-count');
+  if(c){ var n = ta.value.split('\n').filter(function(l){return l.trim().length;}).length; c.textContent = n ? '— '+n+(n===1?' item':' items') : ''; }
+}
+// APPEND (never replace) lines to the END of the checklist textarea. The textarea stays the single
+// source of truth, so the existing save path (checklistFromText) keeps vendor done/why progress.
+function checklistAppendLines(taId, lines){
+  var ta = document.getElementById(taId); if(!ta || !lines || !lines.length) return 0;
+  var cur = ta.value.replace(/\s+$/, '');
+  ta.value = (cur ? cur + '\n' : '') + lines.join('\n');
+  checklistRefresh(taId);
+  ta.scrollTop = ta.scrollHeight;
+  return lines.length;
+}
+function clQuickAdd(taId){
+  var inp = document.getElementById(taId+'-quick'); if(!inp) return;
+  var lines = parseChecklistPaste(inp.value);
+  inp.value = '';
+  if(lines.length){ checklistAppendLines(taId, lines); if(lines.length > 1) toast(lines.length+' items added','success'); }
+  inp.focus();
+}
+function clQuickKey(e, taId){
+  if(e.key === 'Enter' && !e.isComposing){ e.preventDefault(); clQuickAdd(taId); }
+}
+function clQuickPaste(e, taId){
+  var t = ''; try{ t = (e.clipboardData || window.clipboardData).getData('text') || ''; }catch(x){}
+  if(!/[\r\n]/.test(t.replace(/[\r\n]+$/, ''))) return;   // single line: let the browser paste normally
+  e.preventDefault();
+  var inp = e.target;
+  var lines = parseChecklistPaste(inp.value).concat(parseChecklistPaste(t));
+  inp.value = '';
+  if(lines.length){ checklistAppendLines(taId, lines); toast(lines.length+(lines.length===1?' item added':' items added'),'success'); }
+  inp.focus();
+}
 function submitNewWO() {
   var propId = document.getElementById('wo-property').value;
   var trade  = document.getElementById('wo-trade').value;
