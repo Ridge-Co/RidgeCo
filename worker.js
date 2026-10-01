@@ -22597,7 +22597,7 @@ async function qbReadyQueue(env, url) {
     irRows.forEach(r => {
       if (r.Active === 'FALSE') return;
       if (r.QB_Invoice_ID && r.QB_Invoice_ID.trim()) return;
-      const k = String(r.WO_ID);
+      const k = _addonRoot(r.WO_ID);
       woOpenCounts[k] = (woOpenCounts[k] || 0) + 1;
     });
     const out = pending.map(r => {
