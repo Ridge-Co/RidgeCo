@@ -112,5 +112,14 @@ function world() {
   const again = await w.confirm({ id: '1', no_wo: true, amount: '50.22' });
   ok(again.error === 'already confirmed' && w.sent.length === 1, 'double tap: second confirm refused, QB email sent once');
 }
+{
+  // Oct 1 2026: a re-opened row that QuickBooks already has is re-confirmed WITHOUT a second QB email.
+  const w = world();
+  const r = await w.confirm({ id: '4', wo_id: 'WO-1200', amount: '18.13' });
+  const row = w.tabs.Receipts.find(x => x.ID === r.id);
+  ok(row && row.QB_Email_Sent === 'TRUE', 're-opened row re-confirmed: new Receipts row is created already flagged QB_Email_Sent=TRUE');
+  ok(w.addOpts[0] && w.addOpts[0].qbSentCarry && /^2026-09-30/.test(w.addOpts[0].qbSentCarry.date), 'the original QB email date is carried over');
+  ok(w.sent.length === 0, 'QuickBooks is NOT emailed a second time');
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
