@@ -6620,6 +6620,11 @@ async function woVoid(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: 'WO not found' }, 404);
+  // Orphan guard (additional work): not for 'Combined' (combine/split keep their own behaviour — known gap).
+  if (reason !== 'Combined' && workorders.some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === String(woId))) {
+    const _live = addonLiveChildren(workorders, await fetchTab(env, 'Estimates'), woId);
+    if (_live.length) return json({ error: addonLiveChildrenMessage(_live, woId, 'void'), open_additional_work: _live }, 409);
+  }
   if (combinedInto) {
     if (combinedInto === woId) return json({ error: 'Cannot combine a work order into itself' }, 400);
     if (!findWO(workorders, combinedInto)) return json({ error: `Target work order ${combinedInto} not found` }, 404);
