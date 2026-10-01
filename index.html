@@ -12500,6 +12500,7 @@ function confirmQBSend(overridePendingInfo, overrideAddon, overrideReceiptFolder
   var payload = { id: id };
   if (overridePendingInfo) payload.override_pending_info = true;
   if (overrideAddon) payload.override_addon_unapproved = true;
+  if (overrideReceiptFolder) payload.override_receipt_folder = true;
   api('POST', '/qb/send-invoice', payload).then(function(res){
     if (res.ok || res.already_sent) {
       // Combined sends (B-227 Phase 3) return bill_ids (array, one per vendor) instead of a
