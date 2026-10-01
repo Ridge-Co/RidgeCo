@@ -19423,7 +19423,7 @@ async function qbSyncPayments(env, body) {
           Payment_Checked: now,
         });
         written++;
-      } catch (e) { failed++; }
+      } catch (e) { failed++; await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'ir=' + r.ir_id + ' wo=' + (r.wo_id || ''), e); }
     }
 
     // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
