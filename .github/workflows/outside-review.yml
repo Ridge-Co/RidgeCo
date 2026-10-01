@@ -26,7 +26,7 @@ jobs:
         with:
           llm_url: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
           llm_auth_token: ${{ secrets.GEMINI_REVIEW_KEY }}
-          llm_model: ${{ vars.OUTSIDE_REVIEW_MODEL || 'gemini-2.5-flash' }}
+          llm_model: ${{ vars.OUTSIDE_REVIEW_MODEL || 'gemini-3.5-flash-lite' }}
           llm_use_anthropic: 'false'
           llm_extra_body: '{}'
           ocr_version: '1.12.11'
