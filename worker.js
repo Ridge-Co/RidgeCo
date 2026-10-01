@@ -3714,6 +3714,113 @@ async function receiptReconUndo(env, body) {
   return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
 }
 
+// POST /receipt-recon/reopen { queue_id | id } - Oct 1 2026, Brett. ADMIN-ONLY (no ROLE_SCOPES
+// entry, so only WORKER_SECRET / admin session reaches it). Undo refuses a receipt that was already
+// emailed to QuickBooks ("fix it in QuickBooks directly"); Re-open is the escape hatch for exactly
+// that case - Brett needs to pull a QB-emailed receipt back into Pending to attach it to the right
+// WO (or fix its details) WITHOUT QuickBooks getting a second copy. So it is ALLOWED when
+// Receipts.QB_Email_Sent is TRUE, and refused only when the WO's customer invoice has already gone
+// out (receiptReopenGuard). On success it does what Undo does (voids the Receipts row, pulls the
+// amount out of Invoice_Review, voids the gallery attachment - and now trashes the customer-folder
+// copy) and drops the queue row to a plain Pending, PLUS records Reopened_QB_Sent / Prior_QB_Email_Date
+// / Prior_QB_Amount on the queue row. When Brett re-confirms it, receiptReconConfirm / attach-only
+// create the new Receipts row already flagged QB_Email_Sent=TRUE with that prior date, so
+// sendReceiptsToQBEmail skips it - no duplicate card-expense email to QuickBooks.
+async function receiptReconReopen(env, body) {
+  const id = body && (body.queue_id || body.id); if (!id) return json({ error: 'queue_id or id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (!['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `only a confirmed or attached-only receipt can be re-opened (this one is ${row.Status || 'pending'})` }, 409);
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund', 'Reopened_QB_Sent', 'Prior_QB_Email_Date', 'Prior_QB_Amount']);
+  const original = await findReceiptForQueueRow(env, row);
+  const woId = String((original && original.WO_ID) || row.Confirmed_WO_ID || '').trim();
+  let wo = null, irRows = [];
+  if (woId) {
+    const [wos, irs] = await fetchTabs(env, ['Work_Orders', 'Invoice_Review']);
+    wo = wos.find(w => String(w.ID) === woId) || null; irRows = irs;
+  }
+  const guard = receiptReopenGuard({ row, receipt: original, wo, irRows });
+  if (!guard.ok) return json({ error: guard.error, invoice_sent: !!guard.invoice_sent }, guard.status);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const vr = await updateRow(env, 'Receipts', original.ID, {
+    Active: 'FALSE',
+    Description: (original.Description || '') + ` [re-opened ${today} - pulled back into Receipt Reconciler${guard.carry_qb_sent ? `; already emailed to QuickBooks ${guard.prior_qb_email_date.slice(0, 10)} and will NOT be re-sent` : ''}]`,
+  });
+  if (vr && vr.status >= 400) return json({ error: `Could not void the original Receipts row (HTTP ${vr.status}) - nothing else was changed.` }, 500);
+  const invoiceUnlink = await removeReceiptFromInvoiceReview(env, { receipt_id: original.ID, amount: Number(original.Amount || row.Confirmed_Amount || 0) });
+  const attachmentVoid = await voidAttachmentForReceipt(env, original.ID);
+  const note = `Re-opened ${today} - was ${row.Status}.` + (guard.carry_qb_sent
+    ? ` The original receipt (#${original.ID}) was already emailed to QuickBooks on ${guard.prior_qb_email_date.slice(0, 10)}; re-confirming this row will NOT email it again.`
+    : ' It had not been emailed to QuickBooks yet, so the normal sweep will send it after you re-confirm.');
+  const qr = await updateRow(env, 'Receipt_Recon_Queue', id, {
+    Status: 'pending', Manual_Refund: 'FALSE',
+    Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
+    Reopened_QB_Sent: guard.carry_qb_sent ? 'TRUE' : 'FALSE',
+    Prior_QB_Email_Date: guard.prior_qb_email_date || '',
+    Prior_QB_Amount: guard.carry_qb_sent ? String(guard.prior_amount) : '',
+    Notes: note,
+  });
+  if (qr && qr.status >= 400) return json({ error: `The receipt was voided but the queue row could not be reset (HTTP ${qr.status}) - fix the row ${id} by hand.`, voided_receipt_id: original.ID }, 500);
+  return json({
+    ok: true, id, voided_receipt_id: original.ID, invoice_unlink: invoiceUnlink, attachment_void: attachmentVoid,
+    qb_email_will_not_resend: !!guard.carry_qb_sent, prior_qb_email_date: guard.prior_qb_email_date || '',
+  });
+}
+
+// POST /admin/backfill-receipt-folder-copies { apply?: true, limit?: n (default 4, max 8), exclude_ids?: [] }
+// One-time (idempotent, safe to re-run) sweep for the Oct 1 2026 customer-folder receipt copies:
+// every active Reconciler-attached Receipts row on a WO whose WO folder lacks the copy gets
+// ensureWOCustomerFolder (create if missing) + copy-or-ADOPT (an existing file titled
+// 'Receipt - <Store> <Date> - $<Amount>.<ext>' is adopted, never duplicated) + share + a recorded
+// Attachments Folder_Copy_* link. Preview by default (no writes at all - dryRun everywhere). CAPPED
+// per call: each receipt costs ~7 Drive/Sheets subrequests (~13 when it also has to create the
+// folder) against Cloudflare's per-invocation subrequest budget, so a call works through a
+// conservative subrequest budget (<= `limit` receipts) and returns `remaining` - call again until
+// remaining is 0. A receipt that fails stays pending (and is listed in `failed_ids`); pass those in
+// exclude_ids to keep moving past a persistent failure.
+async function backfillReceiptFolderCopies(env, body) {
+  const apply = !!(body && body.apply === true);
+  const limit = Math.max(1, Math.min(8, parseInt(body && body.limit) || 4));
+  const exclude = new Set((Array.isArray(body && body.exclude_ids) ? body.exclude_ids : []).map(String));
+  const [receipts, attachments, workorders, properties, queueRows] = await fetchTabs(env, ['Receipts', 'Attachments', 'Work_Orders', 'Properties', 'Receipt_Recon_Queue']);
+  const cands = receiptFolderCopyCandidates(receipts, queueRows);
+  const have = receiptIdsWithFolderCopy(attachments);
+  const pendingAll = cands.filter(r => !have.has(String(r.ID)));
+  const pending = pendingAll.filter(r => !exclude.has(String(r.ID)));
+  const woById = new Map(workorders.map(w => [String(w.ID), w]));
+  const results = [];
+  const counts = { candidates: cands.length, already_done: cands.length - pendingAll.length, pending_total: pendingAll.length, ok: 0, adopted: 0, copied: 0, failed: 0, folders_created: 0 };
+  let budget = 36, token = null, stoppedForBudget = false;
+  const ctx = { attachments, properties, dryRun: !apply };
+  for (const r of pending) {
+    if (results.length >= limit) break;
+    const wo = woById.get(String(r.WO_ID));
+    const cost = 7 + ((wo && String(wo.Drive_Folder_ID || '').trim()) ? 0 : 6);
+    if (apply && budget - cost < 0 && results.length) { stoppedForBudget = true; break; }
+    budget -= cost;
+    const base = { receipt_id: String(r.ID), wo_id: String(r.WO_ID), store: r.Store || '', date: r.Date || '', amount: r.Amount || '' };
+    if (!wo) { results.push(Object.assign(base, { status: receiptCopyFail('work order not found') })); counts.failed++; continue; }
+    if (!token) token = await getAccessToken(env);
+    const hadFolder = !!String(wo.Drive_Folder_ID || '').trim();
+    const res = await copyReceiptIntoWOFolder(env, token, r, wo, ctx);
+    const okStatus = res.status === 'ok';
+    results.push(Object.assign(base, { status: res.status, action: res.action || (res.already ? 'already_done' : res.adopted ? 'adopted' : 'copied'), title: res.title || '', file_id: res.file_id || '', folder_id: res.folder_id || '' }));
+    if (!apply) continue;
+    if (okStatus) { counts.ok++; if (res.adopted) counts.adopted++; else if (!res.already) counts.copied++; if (!hadFolder) counts.folders_created++; }
+    else counts.failed++;
+  }
+  const failedIds = results.filter(x => String(x.status).startsWith('failed')).map(x => x.receipt_id);
+  const remaining = apply ? pendingAll.length - counts.ok : pendingAll.length;
+  return json({
+    ok: true, applied: apply, ...counts, processed: results.length, remaining,
+    failed_ids: failedIds, stopped_for_budget: stoppedForBudget,
+    note: `Capped at ${limit} receipt(s) per call (and a ~36-subrequest budget) to stay inside the Worker subrequest limit - call again until remaining is 0.` + (apply ? '' : ' PREVIEW ONLY: nothing was created, copied, shared or written; pass {"apply":true} to run it.'),
+    results,
+  });
+}
+
 // GET /receipt-recon/search?q=<amount|store|description text>&date=<yyyy-mm-dd> — Brett, Sep 23
 // 2026: "let me manually check whether I already processed this receipt" (he keeps hitting cases
 // where no duplicate flag comes back but he's fairly sure he already handled one). Searches the
