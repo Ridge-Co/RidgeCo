@@ -23374,6 +23374,7 @@ async function qbSendCombinedInvoice(env, ctx) {
       return json({ preview: {
         ir_id: groupRows[0].ID, group_ids: groupRows.map(r => r.ID), wo_id: woId, trade: tradeName,
         combined: true, combined_count: groupRows.length,
+        ...(_distinctWoIds.length > 1 ? { wo_ids: _distinctWoIds } : {}),
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
                    property: qbPropertyDisplayName(prop), unit: qbUnitLabel(unit),
                    property_id: prop.ID || '', unit_id: (unit && unit.ID) || '',
