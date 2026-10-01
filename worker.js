@@ -3602,7 +3602,7 @@ async function receiptReconReassign(env, body) {
     added_by: 'Receipt Reconciler (reassign)', added_by_id: 'receipt-recon-reassign', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: original.Payment_Source,
-  });
+  }, { folderCopy: true, wo: woRowForCopy });
   const addJson = await addResp.json().catch(() => ({}));
 
   let invoiceLink = null;
