@@ -19381,6 +19381,7 @@ async function qbPayables(env, url) {
       ok: true, count: rows.length,
       owed_now: owed.length,
       owed_total: +owed.reduce((n, r) => n + (r.vendor_balance != null ? r.vendor_balance : r.vendor_cost), 0).toFixed(2),
+      warnings,
       rows,
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
