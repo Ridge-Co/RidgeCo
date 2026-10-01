@@ -4308,6 +4308,7 @@ function openEditWOModal(woId) {
   }, 30);
   document.getElementById('ewo-notes').value = wo.Notes||'';
   var ewoCl = document.getElementById('ewo-checklist'); if (ewoCl) ewoCl.value = checklistToText(wo.Checklist||'');
+  var ewoClQ = document.getElementById('ewo-checklist-quick'); if (ewoClQ) ewoClQ.value = '';
   var ewoRoom = document.getElementById('ewo-room'); if (ewoRoom) ewoRoom.value = wo.Room||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
