@@ -127,6 +127,35 @@ it without my direct intervention."* Treat that as the standing bar for anything
 shaped, not staging-specific — diagnose with the tools already in the session before naming an
 issue to Brett, and when it does need him, name the exact narrow gap, not the whole symptom.
 
+## MANDATORY, ABOVE EVERYTHING ELSE: NOTHING EVER FAILS SILENTLY (Brett, Oct 1 2026)
+
+Brett's own words: *"Failing silently is not an option, not acceptable. I don't want anything that
+I ever touch to fail silently ever again, anywhere, not just this fix — every PR, everywhere."*
+This applies to every repo, Worker, Apps Script, sheet, frontend page, automation, and integration
+(Zapier/Make/QB/Twilio/Gmail/Drive/Sheets) — no exceptions, no "non-fatal" carve-outs.
+
+For every build and every PR, no exceptions:
+1. **No swallowing catches.** `catch(e){}`, `catch(_){}`, `.catch(()=>{})`, `|| null` on a failed
+   fetch, or a result that's ignored are forbidden. Every catch must (a) log to Ops_Telemetry
+   (Success=FALSE, with record IDs) AND (b) put the failure in the function's returned result
+   (`errors`/`warnings`) so the caller and the UI can see it. Protecting the request from
+   crashing is fine; hiding the failure is not.
+2. **"Not found" is a failure.** A lookup that comes back empty when a record is expected (e.g. a
+   Pre-approved scope with no findable deposit invoice) is surfaced to Brett — telemetry + visible
+   UI banner + admin alert (rate-limited), never a quiet skip.
+3. **Writes are verified.** After a write that matters, re-read and confirm; `success:true` with an
+   unchanged cell is a failure. A downstream side effect (SMS, email, QB) never fires after a
+   failed write.
+4. **Scheduled jobs report.** Every cron/daily/trigger result is inspected (never discarded) and
+   failures are logged and alerted. A job that stops running (missing trigger) must be detectable.
+5. **The UI shows errors.** A background call that fails shows a visible "Needs your attention"
+   message; never a silent empty state.
+6. **PR gate.** Every PR description must include a "Silent-failure check" line stating what was
+   checked; `ridgeco-validate` fails any PR that adds or leaves a swallowing catch in code it touches.
+7. **Audit mandate.** A full audit of ALL existing repos, Workers, Apps Scripts, sheets and
+   automations for silent-failure risk, with fixes for every finding, is in progress — see the
+   "Silent-Failure Audit Plan" doc in the Continuous Improvement project.
+
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
 - **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a
   safe default** (rule 174, Sep 15 2026): `Payment_Source` never actually got created on the
