@@ -1,9 +1,9 @@
 # Outside code reviewer (Open Code Review + Gemini). Advisory only: posts PR comments, never blocks merge.
-# Runs on feature PRs into main (BRANCH_POLICY). Skips staging-test-only PRs and docs-only changes.
+# Runs on every code PR into main AND staging, so problems surface before staging testing.
 name: Outside Review
 on:
   pull_request:
-    branches: [main]
+    branches: [main, staging]
     types: [opened, synchronize, reopened]
     paths: ['worker.js','*.html','src/**','test/**','scripts/**']
 concurrency:
