@@ -136,7 +136,7 @@ t('a reused/retried bill keeps its already-recorded bill number instead of getti
 
 const sendFn = grabAsync('qbSendInvoice');
 t('qbSendInvoice branches to the combined path whenever the group has more than one row',
-  /const groupRows = qbGroupOpenRows\(irRows, ir\);[\s\S]*?if \(groupRows\.length > 1\) \{[\s\S]*?return await qbSendCombinedInvoice/.test(sendFn));
+  /const groupRows = qbGroupOpenRows\(irRows, ir, wos(?:, estRowsAll)?\);[\s\S]*?if \(groupRows\.length > 1\) \{[\s\S]*?return await qbSendCombinedInvoice/.test(sendFn));
 t('the single-row path is untouched when the group is just this one row — no behavior change for the ordinary job',
   sendFn.indexOf('const custTotal  = Number(ir.Customer_Total) || 0;') > sendFn.indexOf('if (groupRows.length > 1)'));
 
