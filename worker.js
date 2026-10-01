@@ -19167,6 +19167,9 @@ async function qbPayables(env, url) {
     const cutoff = new Date(Date.now() - days * 86400000);
     const token = await qbAccessToken(env);
     const [irs, vendors] = await fetchTabs(env, ['Invoice_Review','Vendors']);
+    // Oct 1 2026: nothing here may fail silently -- problems are returned as `warnings` (the Who To Pay page
+    // shows them in its banner) and logged to Ops_Telemetry instead of being swallowed.
+    const warnings = [];
 
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
