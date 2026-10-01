@@ -1345,6 +1345,7 @@ async function confirmRow(id, btn){
     } else if (res.invoice_link && res.invoice_link.reason === 'scope_check_failed') {
       extra = ' ⚠ Couldn\'t check whether this job is on a signed proposal, so it was NOT added to any invoice — check the job before billing it.';
     }
+    if (res.qb_email && res.qb_email.skipped) extra += ' QuickBooks was NOT re-emailed (already sent '+esc(String(res.qb_email.already_sent_date||'').slice(0,10))+').';
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.'+extra+'</span>';
