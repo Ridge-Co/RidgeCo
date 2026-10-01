@@ -2299,19 +2299,42 @@ async function addReceipt(env, body, opts) {
   // when there's no wo_id (a no-WO company/1864-Kerns expense has nowhere to gallery it) or no
   // file (a manual receipt entry with no image). This never touches Receipts/Invoice_Review/
   // billing — additive-only, Attachments write failure never fails the receipt add itself.
+  // Oct 1 2026 (Brett): for a Reconciler receipt (opts.folderCopy) put a shared COPY of the image in the
+  // WO's customer folder FIRST, so the gallery row below is written once already carrying it. A copy
+  // failure never fails the receipt add - but it is NEVER silent: Telemetry row + `folder_copy` in the
+  // response ('ok' | 'failed:<reason>'), which receipt-reconciler.html turns into a visible warning.
+  let folderCopy = '';
   if (wo_id && newId && (source_file_id || source_file_url)) {
+    let copyFields = {};
+    if (opts.folderCopy === true) {
+      try {
+        const gtok = await getAccessToken(env);
+        const woRow = opts.wo || (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === String(wo_id));
+        const cr = await copyReceiptIntoWOFolder(env, gtok,
+          { ID: newId, WO_ID: wo_id, Store: store || '', Date: rowDate, Amount: amt.toFixed(2), Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '' },
+          woRow, { record: false });
+        folderCopy = cr.status;
+        if (cr.status === 'ok' && cr.folder_copy_fields) copyFields = cr.folder_copy_fields;
+      } catch (e) {
+        folderCopy = receiptCopyFail(e && e.message || e);
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_folder_copy_failed', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${folderCopy}`.slice(0, 480) }); } catch (_) {}
+      }
+    }
     try {
-      await ensureColumns(env, 'Attachments', ['Receipt_ID']);
-      await addRow(env, 'Attachments', {
+      await ensureColumns(env, 'Attachments', opts.folderCopy === true ? ['Receipt_ID', 'Folder_Copy_ID', 'Folder_Copy_URL', 'Folder_Copy_Folder_ID'] : ['Receipt_ID']);
+      await addRow(env, 'Attachments', Object.assign({
         WO_ID: wo_id, File_Name: ((store || 'Receipt') + (date ? ' ' + date : '')).trim(),
         File_Type: 'receipt', Drive_File_ID: source_file_id || '', Drive_URL: source_file_url || '',
         Mime_Type: '', Receipt_ID: String(newId),
         Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
-      });
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {} }
+      }, copyFields));
+    } catch (e) {
+      if (folderCopy === 'ok') folderCopy = receiptCopyFail('image was copied to the customer folder but could not be recorded on the Attachments row');
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {}
+    }
   }
 
-  return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
+  return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource, ...(folderCopy ? { folder_copy: folderCopy } : {}) });
 }
 
 // ── RECEIPT RECONCILER (CAP-002) — deterministic matching engine, ZERO AI ──────────────────────
