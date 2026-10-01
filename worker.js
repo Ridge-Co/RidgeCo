@@ -22237,7 +22237,45 @@ function qbBillDocNumber(billRow, ir, siblingIndex) {
 // today's ordinary single-vendor job and behaves identically to before this existed. A row
 // that ALREADY has an invoice (haveInv true) never groups — it is returned alone, so an
 // already-sent invoice is never silently reopened or merged into.
-function qbGroupOpenRows(irRows, ir) {
+//
+// Vendor Additional Work rollup (Sep 30 2026): a row whose WO is an add-on CHILD (Type 'addon' +
+// Parent_WO_ID) groups with its PARENT job's open rows, so the approved add-on rides on the parent's
+// customer invoice. woRows (Work_Orders) is OPTIONAL: without it, or when no WO has a Parent_WO_ID,
+// rootOf() is the identity and this is exactly the original same-WO_ID rule. A parent that is already
+// invoiced contributes no rows (they carry a QB_Invoice_ID), so a late add-on then invoices on its own.
+// MONEY GATE (Sep 30 2026): an add-on child's bill may fold into the PARENT's invoice only when the child
+// is Type 'addon', not Voided, Addon_Status 'Submitted' and its LATEST active estimate is exactly
+// 'Approved'. Declined / Needs Info / Pending / Withdrawn / Converted (sent to a proposal, which bills
+// through scope-proposal milestones) never fold in. estRows (Estimates) is REQUIRED for any roll-up: when it
+// is not supplied nothing rolls up (fail closed — a missing argument must never double-bill).
+function addonRollsIntoParent(w, estRows) {
+  if (!w || !w.ID || String(w.Type || '') !== 'addon' || !String(w.Parent_WO_ID || '').trim()) return false;
+  if (String(w.Voided || '').toUpperCase() === 'TRUE' || String(w.Addon_Status || '') !== 'Submitted') return false;
+  if (!Array.isArray(estRows)) return false;
+  const v = estRows.filter(e => e && String(e.WO_ID) === String(w.ID) && e.Active !== 'FALSE');
+  if (!v.length) return false;
+  const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  return String(latest.Status || '') === 'Approved';
+}
+// STANDALONE GUARD (Sep 30 2026): the same gate, applied to a child's OWN invoice. Returns '' for every row
+// that is not an add-on child, and for a child that passes addonRollsIntoParent; otherwise a plain-English reason.
+// qbSendInvoice refuses the real send (409) and warns in the preview; qbReadyQueue flags the row. The
+// explicit override_addon_unapproved:true still lets Brett invoice it deliberately.
+function addonStandaloneBlock(w, estRows) {
+  if (!w || String(w.Type || '') !== 'addon' || !String(w.Parent_WO_ID || '').trim()) return '';
+  if (addonRollsIntoParent(w, estRows)) return '';
+  const id = String(w.ID || '');
+  if (String(w.Voided || '').toUpperCase() === 'TRUE') return 'Additional work ' + id + ' is voided or withdrawn';
+  const st = String(w.Addon_Status || '');
+  if (st !== 'Submitted') return 'Additional work ' + id + ' is ' + (st === 'Withdrawn' ? 'withdrawn' : 'still a draft');
+  const v = (Array.isArray(estRows) ? estRows : []).filter(e => e && String(e.WO_ID) === id && e.Active !== 'FALSE');
+  if (!v.length) return 'Additional work ' + id + ' has no estimate';
+  const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+  const es = String(latest.Status || '');
+  if (es === 'Converted') return 'Additional work ' + id + ' was sent to a scope proposal, which bills through its own payment milestones';
+  return 'Additional work ' + id + ' is not approved (estimate is ' + (es || 'blank') + ')';
+}
+function qbGroupOpenRows(irRows, ir, woRows, estRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
   const groupRows = haveInv ? [ir] : irRows.filter(r =>
     r.Active !== 'FALSE' && String(r.WO_ID) === String(ir.WO_ID) &&
