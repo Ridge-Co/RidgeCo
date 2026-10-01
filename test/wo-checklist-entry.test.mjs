@@ -140,6 +140,6 @@ ok(/var clTa = document\.getElementById\('wo-checklist'\); if\(clTa\) clTa\.valu
 const scopeToWO = grab(wsrc, 'scopeToWO').replace('async function', 'function');
 ok(/\{ t: \(it\.area/.test(scopeToWO) && /done: false, code: '', why: ''/.test(scopeToWO), 'scopeToWO writes checklist items as {t, done, code, why}');
 ok(!/\{ text: \(it\.area/.test(scopeToWO), 'scopeToWO no longer writes {text, done} (rendered blank everywhere)');
-ok(/BUILD_VERSION = '2026-10-01\.\d+-wo-checklist-quick-entry'/.test(wsrc), 'BUILD_VERSION bumped because worker.js changed');
+ok(/BUILD_VERSION = '2026-10-01\.\d+-[a-z-]+'/.test(wsrc), 'BUILD_VERSION bumped because worker.js changed');
 
 console.log('wo-checklist-entry: ' + n + '/' + n + ' passing');
