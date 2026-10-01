@@ -18745,11 +18745,14 @@ async function hubTestWriteAllowed(env, path, body) {
     // reasoning as the duplicate-audit paths above, no protected record to gate on.
     return true;
   }
-  if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo') {
+  // Oct 1 2026: preview-only backfill (no `apply`) is a pure read (dryRun everywhere), so the test token may run it;
+  // an `apply` run creates/shares real Drive files for every receipt on the sheet, so it is never reachable here.
+  if (path === '/admin/backfill-receipt-folder-copies') return !(body && body.apply === true);
+  if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo' || path === '/receipt-recon/reopen') {
     // Can void a real Receipts row for a 'confirmed' queue row — resolve it the same way
     // findReceiptForQueueRow does and require that Receipts row's own Property to be TEST-.
     const rows = await fetchTab(env, 'Receipt_Recon_Queue');
-    const row = rows.find(r => String(r.ID) === String(body && body.id));
+    const row = rows.find(r => String(r.ID) === String(body && (body.queue_id || body.id)));
     if (!row) return false;
     if (row.Status !== 'confirmed') return true; // attached_only never touches Receipts either
     const receipts = await fetchTab(env, 'Receipts');
