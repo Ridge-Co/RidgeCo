@@ -2270,12 +2270,15 @@ async function addReceipt(env, body, opts) {
   try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source']); }
   catch (e) { /* logged centrally by ensureColumns; the write below still proceeds with whatever columns exist */ }
 
+  const rowDate = date || new Date().toISOString().split('T')[0];
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
-    Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
+    Date: rowDate, Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
     Role: role||'hub', Category: category || (wo_id ? 'billable' : 'company'), Payment_Source: paymentSource,
     Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '',
-    QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
+    // Re-opened-and-re-confirmed receipt (opts.qbSentCarry): QuickBooks already has this card expense, so
+    // the new row is born QB_Email_Sent=TRUE with the ORIGINAL date and sendReceiptsToQBEmail skips it.
+    QB_Email_Sent: opts.qbSentCarry ? 'TRUE' : 'FALSE', QB_Email_Sent_Date: opts.qbSentCarry ? String(opts.qbSentCarry.date || '') : '',
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
   let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
