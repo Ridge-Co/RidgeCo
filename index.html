@@ -3210,6 +3210,8 @@ function openNewWOModal() {
   var priority = document.getElementById('wo-priority'); if(priority) priority.value='normal';
   var type = document.getElementById('wo-type'); if(type) type.value='manual';
   var ownerRef = document.getElementById('wo-owner-ref'); if(ownerRef) ownerRef.value='';
+  var clTa = document.getElementById('wo-checklist'); if(clTa) clTa.value='';
+  var clQ = document.getElementById('wo-checklist-quick'); if(clQ) clQ.value='';
   // Hide conditional sections
   document.getElementById('wo-prop-preview').style.display = 'none';
   document.getElementById('wo-unit-group').style.display = 'none';
