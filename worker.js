@@ -2235,7 +2235,10 @@ function selftestCheckReceiptFolderCopies(receipts, attachments, queueRows, work
 // otherwise. payment_source is 'company_card' (default) or 'vendor_reimburse' (the vendor
 // paid out of pocket and needs it added to what they're owed) — never silently inferred from
 // role, since Brett himself sometimes logs an entry on a vendor's behalf.
-async function addReceipt(env, body) {
+async function addReceipt(env, body, opts) {
+  // opts comes ONLY from in-code Reconciler callers, never from a request body (/receipt/add passes none):
+  // { folderCopy: true, wo: <WO row>, qbSentCarry: { date } }.
+  opts = opts || {};
   const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative } = body;
   if (!amount && amount !== 0) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
