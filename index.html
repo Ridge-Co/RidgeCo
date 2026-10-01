@@ -11399,6 +11399,11 @@ function loadPayables(save) {
       return;
     }
     _payablesRes = res;
+    // Oct 1 2026: nothing may fail silently -- warnings/errors from the read or the save are shown, never dropped.
+    _payablesAlerts.warnings = safeArray(res.warnings);
+    _payablesAlerts.errors = safeArray(res.errors);
+    if (res.deposit_sweep) _payablesAlerts.sweep = res.deposit_sweep;
+    renderPayablesAlerts();
     _payablesRows = safeArray(res.rows);
     if (!_payablesRows.length) { if (el) el.innerHTML = '<div style="color:var(--muted);font-size:12px">Nothing sent to QuickBooks in the last 90 days.</div>'; return; }
     payablesBuildFilters();
