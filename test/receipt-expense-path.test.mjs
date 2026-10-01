@@ -19,6 +19,13 @@ function extractFn(name) {
   for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
   return src.slice(start, i);
 }
+function extractSyncFn(name) {
+  const start = src.indexOf(`function ${name}(`);
+  if (start === -1) throw new Error(name + ' not found');
+  let i = src.indexOf('{', start), d = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
+  return src.slice(start, i);
+}
 const jsonResp = (o, status = 200) => ({ status, json: async () => o, clone() { return this; } });
 
 function world() {
@@ -27,6 +34,8 @@ function world() {
       { ID: '1', Status: 'pending', Total: '50.22', Vendor: 'Home Depot', Receipt_Date: '2026-09-04', PO_Reference: '1577 ingleside', Source_File_ID: 'F1', Source_File_URL: 'u1', Suggestion: JSON.stringify({ category: 'billable', action: 'suggest' }) },
       { ID: '2', Status: 'pending', Total: '18.13', Vendor: 'Home Depot', Receipt_Date: '2026-08-24', PO_Reference: '2309 ROBB ST', Source_File_ID: 'F2', Suggestion: JSON.stringify({ category: 'billable' }) },
       { ID: '3', Status: 'pending', Total: '56.04', Vendor: 'Home Depot', Receipt_Date: '2026-09-04', PO_Reference: 'bmore', Source_File_ID: 'F3', Suggestion: JSON.stringify({ category: 'company', action: 'exclude' }) },
+      // Oct 1 2026: a re-opened row that was already emailed to QuickBooks before it was re-opened.
+      { ID: '4', Status: 'pending', Total: '18.13', Vendor: 'Home Depot', Receipt_Date: '2026-08-24', PO_Reference: '', Source_File_ID: 'F4', Reopened_QB_Sent: 'TRUE', Prior_QB_Email_Date: '2026-09-30T12:00:00.000Z', Prior_QB_Amount: '18.13', Suggestion: JSON.stringify({ category: 'billable' }) },
     ],
     Receipts: [
       { ID: '900', Active: 'TRUE', QB_Email_Sent: 'FALSE', Store: 'Older', Amount: '9.99', Payment_Source: 'company_card' },  // an older unsent row — must NOT be sent by an expense tap
@@ -34,7 +43,7 @@ function world() {
     Work_Orders: [{ ID: 'WO-1200', Description: 'tub drain' }],
     Properties: [{ ID: '85', Address: '1864 Kerns School Rd, Springfield WV' }],
   };
-  const sent = [], irCalls = [], updates = [];
+  const sent = [], irCalls = [], updates = [], addOpts = [];
   let nextId = 1000;
   const deps = {
     json: (o, s) => jsonResp(o, s),
@@ -42,7 +51,7 @@ function world() {
     fetchConfig: async () => ({ qb_receipts_email: 'qb@example.com' }),
     ensureColumns: async () => {},
     updateRow: async (env, t, id, fields) => { updates.push({ t, id, fields }); const r = (tabs[t] || []).find(x => String(x.ID) === String(id)); if (r) Object.assign(r, fields); },
-    addReceipt: async (env, body) => { const id = String(nextId++); tabs.Receipts.push({ ID: id, Active: 'TRUE', QB_Email_Sent: 'FALSE', Store: body.store, Amount: String(body.amount), WO_ID: body.wo_id, Property_ID: body.property_id, Category: body.category, Payment_Source: 'company_card', Source_File_ID: body.source_file_id }); return jsonResp({ success: true, id, amount: String(body.amount) }); },
+    addReceipt: async (env, body, opts) => { addOpts.push(opts || null); const id = String(nextId++); tabs.Receipts.push({ ID: id, Active: 'TRUE', QB_Email_Sent: (opts && opts.qbSentCarry) ? 'TRUE' : 'FALSE', Store: body.store, Amount: String(body.amount), WO_ID: body.wo_id, Property_ID: body.property_id, Category: body.category, Payment_Source: 'company_card', Source_File_ID: body.source_file_id }); return jsonResp({ success: true, id, amount: String(body.amount), folder_copy: 'ok' }); },
     scopeCoveringSignatureForWO: async () => null,
     appendReceiptToInvoiceReview: async (env, a) => { irCalls.push(a); return { linked: true }; },
     _recoverReceiptSourceFile: (r) => ({ id: r.Source_File_ID || '', url: '' }),
@@ -53,12 +62,14 @@ function world() {
     _escHtml: (s) => String(s),
     setTimeout: (f) => f(),
   };
+  // Oct 1 2026: receiptReconConfirm now carries a re-opened row's "already emailed to QB" flag.
+  deps.receiptQbCarryFor = new Function(`return (${extractSyncFn('receiptQbCarryFor')});`)();
   const names = Object.keys(deps);
   const sendQB = new Function(...names, `return (${extractFn('sendReceiptsToQBEmail')});`)(...names.map(n => deps[n]));
   deps.sendReceiptsToQBEmail = sendQB;
   const names2 = Object.keys(deps);
   const confirm = new Function(...names2, `return (${extractFn('receiptReconConfirm')});`)(...names2.map(n => deps[n]));
-  return { tabs, sent, irCalls, confirm: async (b) => (await confirm({}, b)).json() };
+  return { tabs, sent, irCalls, addOpts, confirm: async (b) => (await confirm({}, b)).json() };
 }
 
 {
@@ -87,6 +98,8 @@ function world() {
   ok(row.Category === 'billable' && row.WO_ID === 'WO-1200', 'work-order confirm unchanged: billable on the WO');
   ok(w.irCalls.length === 1, 'work-order confirm still folds into the invoice');
   ok(w.sent.length === 0 && r.qb_email === null, 'work-order confirm is NOT sent to QB immediately (daily sweep, as before)');
+  ok(w.addOpts[0] && w.addOpts[0].folderCopy === true, 'work-order confirm asks addReceipt for the shared customer-folder copy (Oct 1 2026)');
+  ok(!w.addOpts[0].qbSentCarry, 'a normal (not re-opened) confirm carries no already-sent-to-QB flag');
 }
 {
   const w = world();
@@ -98,6 +111,15 @@ function world() {
   const r = await w.confirm({ id: '1', no_wo: true, amount: '50.22' });
   const again = await w.confirm({ id: '1', no_wo: true, amount: '50.22' });
   ok(again.error === 'already confirmed' && w.sent.length === 1, 'double tap: second confirm refused, QB email sent once');
+}
+{
+  // Oct 1 2026: a re-opened row that QuickBooks already has is re-confirmed WITHOUT a second QB email.
+  const w = world();
+  const r = await w.confirm({ id: '4', wo_id: 'WO-1200', amount: '18.13' });
+  const row = w.tabs.Receipts.find(x => x.ID === r.id);
+  ok(row && row.QB_Email_Sent === 'TRUE', 're-opened row re-confirmed: new Receipts row is created already flagged QB_Email_Sent=TRUE');
+  ok(w.addOpts[0] && w.addOpts[0].qbSentCarry && /^2026-09-30/.test(w.addOpts[0].qbSentCarry.date), 'the original QB email date is carried over');
+  ok(w.sent.length === 0, 'QuickBooks is NOT emailed a second time');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

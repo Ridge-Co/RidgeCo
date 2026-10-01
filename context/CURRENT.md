@@ -13,6 +13,14 @@
 
 ---
 
+# WHERE THINGS STAND — Oct 1, 2026 (receipt re-open + customer-folder receipt copies — PR #163, base `main`, NOT merged)
+
+- **PR #163** (base `main`, head `feat/receipt-reopen-and-wo-folder-copy`, verified with `get_pull_request`; awaiting Brett's merge; money-adjacent): Receipt Reconciler `↩ Re-open (already sent to QB)` (`POST /receipt-recon/reopen`, admin-only; 409 once the WO's customer invoice went out; re-confirm does NOT re-email QuickBooks) + a shared anyone-with-link COPY of every Reconciler receipt in the WO customer Drive folder (scoped exception to FEATURE_LOG rule 13, Brett's decision; vendor docs stay private) + `POST /admin/backfill-receipt-folder-copies` (preview by default, 4 per call, `remaining`) + invoice-send soft block `receipt_folder_missing` (`override_receipt_folder`) + selftest check `receipt_folder_copies`. Build `2026-10-01.3-receipt-reopen-wo-folder-copy`. FeatureLog `FL-20261001-1930-rf`.
+- **After merge:** confirm `/version`; `POST /admin/backfill-receipt-folder-copies {}` preview (receipts 94, 53, 60, 73, 74, 75, 79, 81 must say `would_adopt`); then `{"apply":true}` repeatedly until `remaining` is 0; next 7am digest shows `receipt_folder_copies` green.
+- **Not verified live:** real Drive copy/share, a real re-open of a QB-sent receipt, backfill apply, the invoice-send 409 on real data. The full test suite was not run in-session (could not clone); CI should. No independent ridgeco-validate subagent pass was possible.
+
+---
+
 # WHERE THINGS STAND — Oct 1, 2026 (vendor additional work — PR #159, base `main`, NOT merged; supersedes closed PR #156)
 
 - **PR #159** (base `main`, head `feat/vendor-additional-work-r2`, awaiting Brett's merge; money-adjacent): vendors propose extra work found on a job. Child WO (`Type=addon`, `Parent_WO_ID`) + normal pending estimate, photos required per item (server-enforced two-phase start/submit), texts Brett as "Additional work". Approved add-ons roll into the parent invoice; unapproved/declined never do (`addonRollsIntoParent`, `addonStandaloneBlock`). Owner info-only notice is preview-then-send on Brett's tap. Brief: `context/VENDOR_ADDITIONAL_WORK_BUILD_BRIEF_v1.0.md`. Tests: test/vendor-additional-work*.test.mjs (246 + 65 + 22), build `2026-10-01.2-vendor-additional-work`.

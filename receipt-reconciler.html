@@ -227,7 +227,28 @@ async function post(path, body){
   let data; try { data = JSON.parse(text); } catch(e){ throw new Error('HTTP '+r.status+': '+text.slice(0,160)); }
   if (r.status === 401) throw new Error('Unauthorized — check the admin token.');
   if (!r.ok && !data.error) throw new Error('HTTP '+r.status);
+  // Oct 1 2026: every Reconciler write that attaches a receipt to a WO also copies it into the WO's
+  // customer Drive folder. A failed copy never fails the receipt itself, so it is surfaced HERE (one
+  // place, covers confirm / attach-only / reassign / refund-reverse / bulk) as a sticky banner that
+  // stays until dismissed - not a toast that vanishes - so a missing customer-folder copy is never silent.
+  if (data && typeof data.folder_copy === 'string' && data.folder_copy !== 'ok') showFolderCopyWarning(data);
   return data;
+}
+function showFolderCopyWarning(res){
+  let box = document.getElementById('rc-folder-warn');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'rc-folder-warn';
+    box.setAttribute('role', 'alert');
+    box.style.cssText = 'position:sticky;top:0;z-index:50;background:#fef3c7;border:2px solid #d97706;color:#78350f;padding:10px 12px;margin:8px 0;border-radius:8px;font-size:13px';
+    const list = document.getElementById('list'); if (list && list.parentNode) list.parentNode.insertBefore(box, list); else document.body.insertBefore(box, document.body.firstChild);
+  }
+  const why = String(res.folder_copy).replace(/^failed:\s*/, '');
+  const item = document.createElement('div'); item.className = 'rc-folder-warn-item';
+  item.innerHTML = '⚠ <b>Receipt saved, but the copy into the customer work-order folder FAILED</b> ('+esc(why)+')'
+    + (res.id || res.receipt_id ? ' - receipt #'+esc(String(res.receipt_id || (res.receipt && res.receipt.ID) || res.id)) : '')
+    + '. The customer will not see this receipt on the WO until it is copied. Run the folder-copy backfill (preview first) or re-open and re-confirm it.'
+    + ' <a href="#" onclick="this.parentNode.remove();var b=document.getElementById(\'rc-folder-warn\');if(b&&!b.querySelector(\'.rc-folder-warn-item\'))b.remove();return false" style="margin-left:6px;font-weight:700">dismiss</a>';
+  box.appendChild(item);
 }
 
 function renderTabs(){
@@ -1269,7 +1290,10 @@ function rowCard(r){
     // row, pulls the amount back out of Invoice_Review, voids the gallery attachment, and drops
     // the row back to a plain Pending — no refund flag. Confirms before firing since it reverses
     // real money/attachments.
-    if (['confirmed','attached_only'].includes(r.Status)) html += '<button class="btn secondary small" onclick="undoConfirmation(\''+r.ID+'\', this)">↩️ Undo confirmation</button>';
+    if (['confirmed','attached_only'].includes(r.Status)) html += '<button class="btn secondary small" onclick="undoConfirmation(\''+r.ID+'\', this)">↩️ Undo confirmation</button>'
+      // Oct 1 2026: Undo refuses a receipt already emailed to QuickBooks. Re-open is the admin escape
+      // hatch for exactly that case - pulls it back to Pending WITHOUT QuickBooks getting a second copy.
+      + '<button class="btn secondary small" onclick="reopenConfirmation(\''+r.ID+'\', this)">↩ Re-open (already sent to QB)</button>';
     html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
@@ -1321,6 +1345,7 @@ async function confirmRow(id, btn){
     } else if (res.invoice_link && res.invoice_link.reason === 'scope_check_failed') {
       extra = ' ⚠ Couldn\'t check whether this job is on a signed proposal, so it was NOT added to any invoice — check the job before billing it.';
     }
+    if (res.qb_email && res.qb_email.skipped) extra += ' QuickBooks was NOT re-emailed (already sent '+esc(String(res.qb_email.already_sent_date||'').slice(0,10))+').';
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already on that WO — skipped, not double-posted.</span>'
       : '<span class="ok">✓ Posted $'+esc(res.amount||amount)+' to '+esc(wo_id)+'.'+extra+'</span>';
@@ -1530,6 +1555,24 @@ async function undoConfirmation(id, btn){
     const res = await post('/receipt-recon/undo', { id });
     if (res.error) throw new Error(res.error);
     if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Undone — back in Pending, invoice and attachment reversed.</span>';
+    finishCard(id);
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Oct 1 2026 build, Brett: a receipt that was already emailed to QuickBooks can't be Undone (QB
+// would end up with a duplicate card expense). Re-open pulls it back to Pending anyway - voids the
+// Receipts row, pulls it out of Invoice_Review, voids the attachment and the customer-folder copy -
+// and remembers it was already sent, so re-confirming it does NOT email QuickBooks a second time.
+// Server refuses (409) if the WO's customer invoice has already gone out. Admin-only.
+async function reopenConfirmation(id, btn){
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (!confirm('Re-open this receipt?\n\nIt was already emailed to QuickBooks. QuickBooks will NOT be sent it again when you re-confirm it, so if the amount changes you must fix it in QuickBooks by hand.\n\nThis reverses it out of the invoice/work order, removes the attached image and the copy in the customer folder, and drops it back into Pending. It is refused if the WO\'s customer invoice has already been sent.')) return;
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span class="info">Re-opening…</span>';
+  try {
+    const res = await post('/receipt-recon/reopen', { id });
+    if (res.error) throw new Error(res.error);
+    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Re-opened — back in Pending'+(res.qb_email_will_not_resend ? '; QuickBooks will NOT be emailed again' : '')+'.</span>';
     finishCard(id);
   } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-01.2-vendor-additional-work';
+const BUILD_VERSION = '2026-10-01.3-receipt-reopen-wo-folder-copy';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -339,7 +339,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/admin/backfill-receipt-folder-copies'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -694,6 +694,7 @@ const _hubWorkerCore = {
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
         if (path === '/admin/backfill-receipt-attachments') return await backfillReceiptAttachments(env, body);
+        if (path === '/admin/backfill-receipt-folder-copies') return await backfillReceiptFolderCopies(env, body);
         if (path === '/admin/backfill-approval-stage') return await backfillApprovalStage(env, body);
         if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
@@ -823,6 +824,7 @@ const _hubWorkerCore = {
         if (path === '/receipt-recon/mark-refund')          return await receiptReconMarkRefund(env, body);
         if (path === '/receipt-recon/mark-refund-confirmed') return await receiptReconMarkRefundConfirmed(env, body);
         if (path === '/receipt-recon/undo')                 return await receiptReconUndo(env, body);
+        if (path === '/receipt-recon/reopen')               return await receiptReconReopen(env, body);   // ADMIN-ONLY: no ROLE_SCOPES entry
         if (path === '/receipt-recon/bulk-action')       return await receiptReconBulkAction(env, body);
         if (path === '/receipt-recon/refund-candidates') return await receiptReconRefundCandidates(env, body);
         if (path === '/receipt-recon/refund-reverse')    return await receiptReconRefundReverse(env, body);
@@ -1614,7 +1616,7 @@ async function handlePhotoUploadClean(env, request) {
     const token = await getAccessToken(env);
     if (!token) return json({ error: 'Failed to get Google access token' }, 500);
     step.current = 'find_prop_folder';
-    const propFolder = await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
+    const propFolder = await driveFindOrCreatePropertyFolder(token, propsRoot, propAddr);
     if (!propFolder || !propFolder.id) return json({ error: `Could not find/create property folder "${propAddr}"`, step: step.current }, 500);
     step.current = 'find_wo_folder';
     const woLabel  = woId || `upload_${Date.now()}`;
@@ -1628,7 +1630,7 @@ async function handlePhotoUploadClean(env, request) {
       if (!internalRoot || !internalRoot.id) return json({ error: 'Could not find/create internal vendor-bills folder', step: step.current }, 500);
       woFolder = await findOrCreateFolder(token, woLabel, internalRoot.id);
     } else {
-      woFolder = await findOrCreateFolder(token, woLabel, propFolder.id);
+      woFolder = await driveFindOrCreateWOFolder(token, propFolder.id, woLabel);
     }
     if (!woFolder || !woFolder.id) return json({ error: `Could not find/create WO folder "${woLabel}"`, step: step.current }, 500);
     step.current = 'upload_file';
@@ -1652,8 +1654,7 @@ async function handlePhotoUploadClean(env, request) {
     try {
       // Only the customer-facing WO folder becomes the WO's shared Drive_Folder (photo link).
       if (!isInternal && woFolder.webViewLink) {
-        await updateWOField(env, woId, 'Drive_Folder_URL', woFolder.webViewLink);
-        await updateWOField(env, woId, 'Drive_Folder_ID',  woFolder.id);
+        await persistWOFolderFields(env, woId, woFolder);
       }
     } catch(woErr) { /* non-fatal */ }
     return json({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '' });
@@ -1869,6 +1870,361 @@ async function listReceipts(env, url) {
   } catch(e) { return json([]); }
 }
 
+// ── WO CUSTOMER-FOLDER RECEIPT COPIES (Oct 1 2026, Brett) ─────────────────────────────────────
+// Why: the customer invoice memo links to WO.Drive_Folder_URL ("View job photos"), but a receipt
+// confirmed through the Receipt Reconciler only ever lived in the internal 'Receipts and Invoices'
+// intake folder, so the customer opening that link could not see it. Fix: when a Reconciler receipt
+// is attached to a WO, a COPY of its image is placed in the WO's customer folder (created lazily,
+// exactly as handlePhotoUploadClean does) and shared anyone-with-link, titled
+// 'Receipt - <Store> <Date> - $<Amount>.<ext>'.
+//
+// SCOPED EXCEPTION TO FEATURE_LOG RULE 13 (internal cost docs are never shared) - Brett's explicit
+// decision, Oct 1 2026: "customers must be able to open the Reconciler receipt images from the WO
+// Drive folder link". Applies ONLY to receipts attached to a WO through the Reconciler (addReceipt
+// is called by an in-code Reconciler caller with opts.folderCopy:true - a vendor-supplied request
+// body can NEVER switch this on, see /receipt/add). Vendor bills / invoices / vendor-submitted
+// receipts stay private, unchanged.
+//
+// Record-keeping: additive columns on Attachments (Folder_Copy_ID / Folder_Copy_URL /
+// Folder_Copy_Folder_ID), keyed to the receipt's gallery row via Receipt_ID. The row's original
+// Drive_File_ID / Drive_URL keep pointing at the intake-folder original. "Has a copy" ==
+// an ACTIVE Attachments row with this Receipt_ID and a non-blank Folder_Copy_ID (queryable, and
+// it is what the idempotency check, the backfill, the invoice guard and the daily selftest all use).
+
+// PURE - is this Receipts row one the Reconciler wrote? Authoritative: a Receipt_Recon_Queue row
+// that is confirmed / attached-only points at it (Confirmed_Receipt_ID), or - for older rows that
+// predate Confirmed_Receipt_ID - shares its source file with such a queue row. Never trusts the
+// Receipts row's own Added_By fields (a vendor can type those into /receipt/add).
+function receiptReconQueueIndex(queueRows) {
+  const ok = new Set(['confirmed', 'attached_only', 'refund_reversed']);
+  const ids = new Set(), files = new Set();
+  for (const q of (queueRows || [])) {
+    if (!q || !ok.has(String(q.Status || ''))) continue;
+    if (q.Confirmed_Receipt_ID) ids.add(String(q.Confirmed_Receipt_ID));
+    if (q.Source_File_ID) files.add(String(q.Source_File_ID));
+  }
+  return { ids, files };
+}
+
+// PURE - active Receipts rows that SHOULD have a copy in their WO's customer folder.
+function receiptFolderCopyCandidates(receipts, queueRows) {
+  const idx = receiptReconQueueIndex(queueRows);
+  return (receipts || []).filter(r => r && String(r.Active || '').toUpperCase() !== 'FALSE'
+    && String(r.WO_ID || '').trim()
+    && (String(r.Source_File_ID || '').trim() || String(r.Source_File_URL || '').trim())
+    && (idx.ids.has(String(r.ID)) || (r.Source_File_ID && idx.files.has(String(r.Source_File_ID)))));
+}
+
+// PURE - Set of receipt ids that already have a recorded customer-folder copy.
+function receiptIdsWithFolderCopy(attachments) {
+  const s = new Set();
+  for (const a of (attachments || [])) {
+    if (a && String(a.Active || '').toUpperCase() !== 'FALSE' && a.Receipt_ID && String(a.Folder_Copy_ID || '').trim()) s.add(String(a.Receipt_ID));
+  }
+  return s;
+}
+
+// PURE - Drive file id for a receipt's source image (id column first, else parsed from the URL).
+function receiptSourceDriveId(rec) {
+  const id = String((rec && rec.Source_File_ID) || '').trim();
+  if (id) return id;
+  const m = String((rec && rec.Source_File_URL) || '').match(/\/d\/([A-Za-z0-9_-]{10,})|[?&]id=([A-Za-z0-9_-]{10,})/);
+  return m ? (m[1] || m[2]) : '';
+}
+
+const RECEIPT_COPY_MIME_EXT = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/heic': 'heic', 'image/heif': 'heif', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf' };
+// PURE - file extension for the copy: Drive's own fileExtension, else the source name's, else by mime.
+function receiptFolderCopyExt(srcName, mimeType, fileExtension) {
+  const fe = String(fileExtension || '').replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (fe) return fe;
+  const m = /\.([A-Za-z0-9]{1,5})$/.exec(String(srcName || ''));
+  if (m) return m[1].toLowerCase();
+  return RECEIPT_COPY_MIME_EXT[String(mimeType || '').toLowerCase()] || '';
+}
+
+// PURE - 'Receipt - <Store> <Date> - $<Amount>.<ext>' (a refund reads '-$12.00').
+function receiptFolderCopyTitle(rec, ext) {
+  const clean = s => String(s == null ? '' : s).replace(/[\\/\u0000-\u001f]/g, '-').replace(/\s+/g, ' ').trim();
+  const store = clean(rec && rec.Store) || 'Unknown';
+  const date = clean(String((rec && rec.Date) || '').slice(0, 10));
+  const n = Number(rec && rec.Amount) || 0;
+  const amt = (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
+  const base = `Receipt - ${[store, date].filter(Boolean).join(' ')} - ${amt}`.slice(0, 200);
+  return ext ? `${base}.${ext}` : base;
+}
+
+// PURE - quote a literal for a Drive v3 `q` expression.
+function driveQueryQuote(s) { return "'" + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; }
+
+// PURE - pick an existing file in the WO folder to ADOPT instead of copying again. Exact title
+// first; then the same title ignoring extension/punctuation/case (a hand-made copy may be .jpeg
+// vs .jpg, or "Lowes" vs "Lowe's"). Files already claimed by another receipt's gallery row are
+// never adopted, so two identical-looking receipts cannot end up sharing one file.
+function pickAdoptableCopy(files, title, claimedIds) {
+  const claimed = claimedIds instanceof Set ? claimedIds : new Set(claimedIds || []);
+  const list = (files || []).filter(f => f && f.id && !f.trashed && f.mimeType !== 'application/vnd.google-apps.folder' && !claimed.has(String(f.id)));
+  const exact = list.find(f => f.name === title);
+  if (exact) return { file: exact, via: 'exact' };
+  const stem = n => _rcNorm(String(n || '').replace(/\.[A-Za-z0-9]{1,5}$/, ''));
+  const want = stem(title);
+  const loose = list.find(f => stem(f.name) === want);
+  return loose ? { file: loose, via: 'normalized' } : null;
+}
+
+// PURE - if a different (claimed) file in the folder already has this exact title, a new copy gets
+// ' (receipt <id>)' before the extension so titles stay unique.
+function uniqueCopyTitle(title, existingNames, receiptId) {
+  const taken = new Set((existingNames || []).map(n => String(n).toLowerCase()));
+  if (!taken.has(String(title).toLowerCase())) return title;
+  const m = /^(.*?)(\.[A-Za-z0-9]{1,5})?$/.exec(title);
+  return `${m[1]} (receipt ${receiptId})${m[2] || ''}`;
+}
+
+async function driveGetFileMeta(token, fileId, fields) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=${encodeURIComponent(fields)}&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) { const e = new Error(`Drive get ${res.status}`); e.status = res.status; throw e; }
+  return await res.json();
+}
+
+// Shared Drive folder logic (extracted from handlePhotoUploadClean so the photo-upload path and the
+// receipt-copy path can never drift apart): property folder under the properties root, WO folder
+// under that - both FIND-BY-NAME before create.
+async function driveFindOrCreatePropertyFolder(token, propsRoot, propAddr) {
+  return await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
+}
+async function driveFindOrCreateWOFolder(token, propFolderId, woLabel) {
+  return await findOrCreateFolder(token, woLabel, propFolderId);
+}
+// The customer-facing WO folder is what the invoice memo links to. Sets BOTH fields (ID and URL are
+// two cells); a failure here is visible to the caller instead of swallowed.
+async function persistWOFolderFields(env, woId, folder) {
+  await updateWOFields(env, woId, { Drive_Folder_URL: folder.webViewLink || folder.url || `https://drive.google.com/drive/folders/${folder.id}`, Drive_Folder_ID: folder.id });
+}
+
+// Shared helper: make sure a WO has a customer-facing Drive folder; returns {id, url, source}.
+// Reuses the WO's own Drive_Folder_ID when it still exists (verified, not trashed); otherwise
+// find-or-creates property folder + WO folder by NAME (never a second folder for the same WO
+// label under the same parent) and writes Drive_Folder_ID / Drive_Folder_URL. Throws on failure.
+// opts.properties: pre-fetched Properties rows (batch callers). opts.persist === false: resolve only.
+// opts.dryRun: read-only - never creates a folder or writes the WO; returns source 'would_create' when
+// the folder does not exist yet (backfill preview).
+async function ensureWOCustomerFolder(env, token, wo, opts) {
+  opts = opts || {};
+  if (!wo || !wo.ID) throw new Error('work order required');
+  const curId = String(wo.Drive_Folder_ID || '').trim();
+  if (curId) {
+    let meta = null;
+    try { meta = await driveGetFileMeta(token, curId, 'id,name,trashed,webViewLink'); }
+    catch (e) { if (e && e.status !== 404) throw e; }
+    if (meta && meta.id && !meta.trashed) {
+      const url = String(wo.Drive_Folder_URL || '').trim() || meta.webViewLink || `https://drive.google.com/drive/folders/${meta.id}`;
+      if (!String(wo.Drive_Folder_URL || '').trim() && opts.persist !== false && !opts.dryRun) { await persistWOFolderFields(env, wo.ID, { id: meta.id, url }); wo.Drive_Folder_URL = url; }
+      return { id: meta.id, url, source: 'existing' };
+    }
+  }
+  const propsRoot = env.DRIVE_PROPERTIES_ROOT;
+  if (!propsRoot) throw new Error('DRIVE_PROPERTIES_ROOT not configured');
+  const props = opts.properties || await fetchTab(env, 'Properties');
+  const prop = props.find(p => String(p.ID) === String(wo.Property_ID));
+  const propAddr = String((prop && prop.Address) || wo.Property_Address || '').trim();
+  if (!propAddr) throw new Error(`no property address for WO ${wo.ID}`);
+  if (opts.dryRun) {
+    const pf = await findDriveFolder(token, propAddr, propsRoot, propsRoot);
+    const wf = pf && pf.id ? await findDriveFolder(token, String(wo.ID), pf.id) : null;
+    return wf && wf.id ? { id: wf.id, url: wf.webViewLink || `https://drive.google.com/drive/folders/${wf.id}`, source: 'existing_by_name' } : { id: '', url: '', source: 'would_create' };
+  }
+  const propFolder = await driveFindOrCreatePropertyFolder(token, propsRoot, propAddr);
+  if (!propFolder || !propFolder.id) throw new Error(`could not find/create property folder "${propAddr}"`);
+  const woFolder = await driveFindOrCreateWOFolder(token, String(wo.ID), propFolder.id);
+  if (!woFolder || !woFolder.id) throw new Error(`could not find/create WO folder "${wo.ID}"`);
+  const url = woFolder.webViewLink || `https://drive.google.com/drive/folders/${woFolder.id}`;
+  if (opts.persist !== false) { await persistWOFolderFields(env, wo.ID, { id: woFolder.id, url }); wo.Drive_Folder_ID = woFolder.id; wo.Drive_Folder_URL = url; }
+  return { id: woFolder.id, url, source: 'found_or_created' };
+}
+
+function receiptCopyFail(reason) { return 'failed:' + String(reason || 'unknown').replace(/\s+/g, ' ').slice(0, 160); }
+
+// Copy (or ADOPT an existing copy of) a Reconciler receipt's image into the WO's customer folder,
+// share it anyone-with-link, and record it on the receipt's Attachments gallery row. Idempotent:
+// a receipt that already has a recorded copy returns immediately; an existing file with the
+// matching title in the folder is adopted instead of copied again. NEVER throws and never fails the
+// caller's receipt write - returns {status:'ok'|'failed:<reason>'|'skipped:<reason>', ...} and logs a
+// Telemetry row on failure. rec: Receipts-shaped {ID, WO_ID, Store, Date, Amount, Source_File_ID,
+// Source_File_URL}. ctx.attachments / ctx.properties: optional pre-fetched tabs (batch callers); the
+// attachments array is kept up to date in place. ctx.record === false: copy + share only, the CALLER
+// writes the Folder_Copy_* fields (addReceipt does, in the one Attachments row it is writing anyway,
+// to save Sheets calls). ctx.dryRun: read-only plan (out.action) for the backfill preview.
+async function copyReceiptIntoWOFolder(env, token, rec, wo, ctx) {
+  ctx = ctx || {};
+  const out = { status: 'ok', receipt_id: String((rec && rec.ID) || ''), wo_id: String((rec && rec.WO_ID) || ''), adopted: false, already: false, file_id: '', folder_id: '', title: '' };
+  try {
+    if (!wo || !wo.ID) return Object.assign(out, { status: receiptCopyFail('work order not found') });
+    const srcId = receiptSourceDriveId(rec);
+    if (!srcId) return Object.assign(out, { status: 'skipped:no_source_file' });
+    const recording = ctx.record !== false && !ctx.dryRun;
+    if (recording && !ctx.columnsReady) { await ensureColumns(env, 'Attachments', ['Receipt_ID', 'Folder_Copy_ID', 'Folder_Copy_URL', 'Folder_Copy_Folder_ID']); ctx.columnsReady = true; }
+    const atts = ctx.attachments || (ctx.record === false ? [] : await fetchTab(env, 'Attachments'));
+    let att = atts.find(a => a && String(a.Receipt_ID || '') === String(rec.ID) && String(a.Active || '').toUpperCase() !== 'FALSE');
+    if (att && String(att.Folder_Copy_ID || '').trim()) {
+      return Object.assign(out, { already: true, file_id: String(att.Folder_Copy_ID), folder_id: String(att.Folder_Copy_Folder_ID || '') });
+    }
+    let src;
+    try { src = await driveGetFileMeta(token, srcId, 'id,name,mimeType,fileExtension,trashed'); }
+    catch (e) { return Object.assign(out, { status: receiptCopyFail(e && e.status === 404 ? 'source receipt image not found in Drive' : 'cannot read source image: ' + (e && e.message)) }); }
+    if (src.trashed) return Object.assign(out, { status: receiptCopyFail('source receipt image is in the Drive trash') });
+    const folder = await ensureWOCustomerFolder(env, token, wo, { properties: ctx.properties, dryRun: !!ctx.dryRun });
+    out.folder_id = folder.id;
+    if (folder.source === 'would_create') return Object.assign(out, { action: 'would_create_folder_and_copy' });
+    const title = receiptFolderCopyTitle(rec, receiptFolderCopyExt(src.name, src.mimeType, src.fileExtension));
+    // existing files in the folder (find-before-copy => adopt)
+    const q = `${driveQueryQuote(folder.id)} in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'`;
+    const lres = await fetch('https://www.googleapis.com/drive/v3/files?' + new URLSearchParams({ q, fields: 'files(id,name,mimeType,trashed)', pageSize: '200', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' }), { headers: { Authorization: `Bearer ${token}` } });
+    if (!lres.ok) throw new Error(`Drive list ${lres.status}`);
+    const files = ((await lres.json()).files) || [];
+    const claimed = new Set(atts.filter(a => a && a.Folder_Copy_ID && String(a.Receipt_ID || '') !== String(rec.ID) && String(a.Active || '').toUpperCase() !== 'FALSE').map(a => String(a.Folder_Copy_ID)));
+    const pick = pickAdoptableCopy(files, title, claimed);
+    if (ctx.dryRun) return Object.assign(out, { action: pick ? 'would_adopt' : 'would_copy', title: pick ? pick.file.name : title });
+    let fileId, finalTitle = title;
+    if (pick) { fileId = pick.file.id; finalTitle = pick.file.name; out.adopted = true; }
+    else {
+      finalTitle = uniqueCopyTitle(title, files.map(f => f.name), rec.ID);
+      const cres = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(srcId)}/copy?supportsAllDrives=true&fields=id,name`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: finalTitle, parents: [folder.id] }),
+      });
+      if (!cres.ok) { let m = ''; try { m = ((await cres.json()).error || {}).message || ''; } catch (_) {} throw new Error(`Drive copy ${cres.status}${m ? ': ' + m : ''}`); }
+      fileId = (await cres.json()).id;
+      if (!fileId) throw new Error('Drive copy returned no file id');
+    }
+    out.file_id = fileId; out.title = finalTitle;
+    const sh = await driveShareAnyoneVerbose(token, fileId);
+    if (!sh.ok) throw new Error(`share failed (${sh.status || '?'}): ${sh.error || 'unknown'}`);
+    out.folder_copy_fields = { Folder_Copy_ID: fileId, Folder_Copy_URL: `https://drive.google.com/file/d/${fileId}/view`, Folder_Copy_Folder_ID: folder.id };
+    if (!recording) return out;
+    const fields = { Folder_Copy_ID: fileId, Folder_Copy_URL: `https://drive.google.com/file/d/${fileId}/view`, Folder_Copy_Folder_ID: folder.id };
+    if (att) {
+      const ur = await updateRow(env, 'Attachments', att.ID, fields);
+      if (ur && ur.status >= 400) throw new Error(`could not record the copy on Attachments row ${att.ID} (HTTP ${ur.status})`);
+      Object.assign(att, fields);
+    } else {
+      const ar = await addRow(env, 'Attachments', Object.assign({
+        WO_ID: rec.WO_ID, File_Name: ((rec.Store || 'Receipt') + (rec.Date ? ' ' + rec.Date : '')).trim(), File_Type: 'receipt',
+        Drive_File_ID: rec.Source_File_ID || srcId, Drive_URL: rec.Source_File_URL || '', Mime_Type: '', Receipt_ID: String(rec.ID),
+        Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+      }, fields));
+      if (ar && ar.status >= 400) throw new Error(`could not add the Attachments row (HTTP ${ar.status})`);
+      let newAttId = ''; try { newAttId = (await ar.clone().json()).id || ''; } catch (_) {}
+      atts.push(Object.assign({ ID: newAttId, Receipt_ID: String(rec.ID), Active: 'TRUE' }, fields));
+    }
+    return out;
+  } catch (e) {
+    out.status = receiptCopyFail(e && e.message || e);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_folder_copy_failed', Skill_Or_Endpoint: '/receipt-recon', Success: 'FALSE', Notes: `receipt_id=${out.receipt_id} wo_id=${out.wo_id} err=${out.status}`.slice(0, 480) }); } catch (_) {}
+    return out;
+  }
+}
+
+// Undo side of the copy: when a receipt's gallery row is voided (undo / reassign / re-open /
+// mark-refund) the customer must stop seeing the image too - un-share and trash OUR copy (Drive
+// trash is recoverable for 30 days). Skipped when another active gallery row still points at the
+// same file. Never throws; returns {trashed, ...} so the caller's response shows a failure.
+async function trashReceiptFolderCopy(env, attRow, allAttachments) {
+  const fileId = String((attRow && attRow.Folder_Copy_ID) || '').trim();
+  if (!fileId) return { trashed: false, reason: 'no_folder_copy' };
+  const shared = (allAttachments || []).some(a => a && a.ID !== attRow.ID && String(a.Folder_Copy_ID || '') === fileId && String(a.Active || '').toUpperCase() !== 'FALSE');
+  if (shared) return { trashed: false, reason: 'still_used_by_another_receipt' };
+  try {
+    const token = await getAccessToken(env);
+    // best-effort un-share first (a trashed file can otherwise stay link-readable)
+    try { await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions/anyoneWithLink?supportsAllDrives=true`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); } catch (_) {}
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`, {
+      method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }),
+    });
+    if (!res.ok && res.status !== 404) throw new Error(`Drive trash ${res.status}`);
+    return { trashed: true, file_id: fileId };
+  } catch (e) {
+    const err = String((e && e.message) || e);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_folder_copy_trash_failed', Skill_Or_Endpoint: '/receipt-recon', Success: 'FALSE', Notes: `file_id=${fileId} err=${err}`.slice(0, 480) }); } catch (_) {}
+    return { trashed: false, error: err, file_id: fileId };
+  }
+}
+
+// PURE - Re-open guard (POST /receipt-recon/reopen). The point of Re-open is to work on a receipt
+// that Undo refuses because it was already emailed to QuickBooks (card-expense capture), so a
+// QB_Email_Sent = TRUE receipt is ALLOWED. What it refuses is a WO whose CUSTOMER INVOICE has
+// already gone out (WO.QBO_Invoice_Number, an Invoice_Review row carrying a QB_Invoice_ID, or a
+// WO already Invoiced/Paid): unwinding the receipt then would leave QuickBooks and the customer's
+// invoice out of sync. No WO (a company expense) => no invoice check.
+function receiptInvoiceSentReason(woId, wo, irRows) {
+  if (!String(woId || '').trim()) return '';
+  if (wo && String(wo.QBO_Invoice_Number || '').trim()) return `Work order ${woId} is already invoiced in QuickBooks (invoice ${String(wo.QBO_Invoice_Number).trim()})`;
+  const sentIr = (irRows || []).find(r => r && String(r.WO_ID) === String(woId) && String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Invoice_ID || '').trim());
+  if (sentIr) return `The invoice for work order ${woId} has already been sent (Invoice Review row ${sentIr.ID}, QuickBooks invoice ${String(sentIr.QB_Invoice_ID).trim()})`;
+  if (wo && ['invoiced', 'paid'].includes(String(wo.Status || '').trim().toLowerCase())) return `Work order ${woId} is already ${String(wo.Status).trim()}`;
+  return '';
+}
+function receiptReopenGuard({ row, receipt, wo, irRows }) {
+  if (!row) return { ok: false, status: 404, error: 'queue row not found' };
+  if (!['confirmed', 'attached_only'].includes(row.Status)) return { ok: false, status: 409, error: `only a confirmed or attached-only receipt can be re-opened (this one is ${row.Status || 'pending'})` };
+  if (!receipt) return { ok: false, status: 404, error: 'Could not find the original Receipts row for this confirmation - nothing was changed. Check the Receipts tab directly.' };
+  const woId = String(receipt.WO_ID || row.Confirmed_WO_ID || '').trim();
+  const inv = receiptInvoiceSentReason(woId, wo, irRows);
+  if (inv) return { ok: false, status: 409, invoice_sent: true, error: `${inv}. Re-opening here would leave QuickBooks and the customer's invoice out of sync - fix it in QuickBooks directly.` };
+  const qbSent = String(receipt.QB_Email_Sent || '').toUpperCase() === 'TRUE';
+  return { ok: true, carry_qb_sent: qbSent, prior_qb_email_date: qbSent ? String(receipt.QB_Email_Sent_Date || '') : '', prior_amount: Number(receipt.Amount) || 0, wo_id: woId };
+}
+
+// PURE - on re-confirm of a re-opened row: carry the "already emailed to QuickBooks" flag onto the
+// NEW Receipts row so sendReceiptsToQBEmail skips it (no duplicate card-expense email). Never for a
+// refund / negative amount - that is a different money event QuickBooks has not seen.
+function receiptQbCarryFor(queueRow, finalAmount) {
+  if (!queueRow || String(queueRow.Reopened_QB_Sent || '').toUpperCase() !== 'TRUE') return null;
+  if ((Number(finalAmount) || 0) <= 0) return null;
+  const prior = Number(queueRow.Prior_QB_Amount);
+  return {
+    date: String(queueRow.Prior_QB_Email_Date || '').trim() || new Date().toISOString(),
+    prior_amount: isNaN(prior) ? null : prior,
+    amount_changed: !isNaN(prior) && prior > 0 && Math.abs(prior - Math.abs(Number(finalAmount) || 0)) > 0.005,
+  };
+}
+
+// PURE - invoice-send guard. Receipts approved onto an invoice that have a scanned image but no
+// recorded customer-folder copy, or a WO with no Drive folder at all, mean the customer's "View job
+// photos" link would be missing/blank. Returns null when fine, else {no_folder, missing_ids, message}.
+// ownReceipts: the active Receipts rows on the invoice. linkedWoId: the WO whose folder the invoice
+// memo links to. Only Reconciler-attached receipts are expected to have a copy; vendor-supplied
+// receipts (private by design) are ignored.
+function invoiceReceiptFolderIssue(ownReceipts, attachments, wo, linkedWoId, queueRows) {
+  const cands = receiptFolderCopyCandidates(ownReceipts, queueRows);
+  if (!cands.length) return null;
+  const have = receiptIdsWithFolderCopy(attachments);
+  const missing = cands.filter(r => !have.has(String(r.ID)));
+  const noFolder = !(wo && (String(wo.Drive_Folder_URL || '').trim() || String(wo.Drive_Folder_ID || '').trim()));
+  const offFolder = cands.filter(r => linkedWoId && String(r.WO_ID) !== String(linkedWoId));
+  if (!missing.length && !noFolder && !offFolder.length) return null;
+  const parts = [];
+  if (noFolder) parts.push('this work order has no Drive folder, so the invoice will carry no link to its receipts');
+  if (missing.length) parts.push(`${missing.length} receipt image(s) (#${missing.map(r => r.ID).join(', #')}) have no copy in the customer folder`);
+  if (offFolder.length) parts.push(`receipt(s) #${offFolder.map(r => r.ID).join(', #')} belong to a different work order than the one whose folder this invoice links to`);
+  return { no_folder: noFolder, missing_ids: missing.map(r => String(r.ID)), off_folder_ids: offFolder.map(r => String(r.ID)),
+    message: `Customer receipts folder: ${parts.join('; ')}. Run the receipt-folder backfill (or fix the folder), or send anyway deliberately.` };
+}
+
+// PURE - daily selftest golden check: every Reconciler-confirmed receipt on a WO must have a copy in
+// that WO's customer folder.
+function selftestCheckReceiptFolderCopies(receipts, attachments, queueRows, workOrders) {
+  const woIds = new Set((workOrders || []).map(w => String(w.ID)));
+  const cands = receiptFolderCopyCandidates(receipts, queueRows).filter(r => woIds.has(String(r.WO_ID)));
+  const have = receiptIdsWithFolderCopy(attachments);
+  const missing = cands.filter(r => !have.has(String(r.ID)));
+  const ok = missing.length === 0;
+  return {
+    ok, missing_count: missing.length, checked: cands.length,
+    reason: ok ? `all ${cands.length} Reconciler receipt(s) on a work order have a copy in the customer folder`
+      : `${missing.length} of ${cands.length} Reconciler receipt(s) have no copy in the customer WO folder - e.g. receipt #${missing[0].ID} on WO ${missing[0].WO_ID}; run POST /admin/backfill-receipt-folder-copies`,
+  };
+}
+
 // Brett, Sep 2026: a receipt no longer has to be tied to a work order. A Ridge Co business
 // expense (no customer, sometimes no property either — e.g. office supplies) or a receipt
 // against one of Brett's own properties (e.g. Milam Ridge / 1864 Kerns School Rd, which has
@@ -1880,7 +2236,10 @@ async function listReceipts(env, url) {
 // otherwise. payment_source is 'company_card' (default) or 'vendor_reimburse' (the vendor
 // paid out of pocket and needs it added to what they're owed) — never silently inferred from
 // role, since Brett himself sometimes logs an entry on a vendor's behalf.
-async function addReceipt(env, body) {
+async function addReceipt(env, body, opts) {
+  // opts comes ONLY from in-code Reconciler callers, never from a request body (/receipt/add passes none):
+  // { folderCopy: true, wo: <WO row>, qbSentCarry: { date } }.
+  opts = opts || {};
   const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative } = body;
   if (!amount && amount !== 0) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
@@ -1912,12 +2271,15 @@ async function addReceipt(env, body) {
   try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source']); }
   catch (e) { /* logged centrally by ensureColumns; the write below still proceeds with whatever columns exist */ }
 
+  const rowDate = date || new Date().toISOString().split('T')[0];
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
-    Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
+    Date: rowDate, Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
     Role: role||'hub', Category: category || (wo_id ? 'billable' : 'company'), Payment_Source: paymentSource,
     Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '',
-    QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
+    // Re-opened-and-re-confirmed receipt (opts.qbSentCarry): QuickBooks already has this card expense, so
+    // the new row is born QB_Email_Sent=TRUE with the ORIGINAL date and sendReceiptsToQBEmail skips it.
+    QB_Email_Sent: opts.qbSentCarry ? 'TRUE' : 'FALSE', QB_Email_Sent_Date: opts.qbSentCarry ? String(opts.qbSentCarry.date || '') : '',
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
   let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
@@ -1938,19 +2300,42 @@ async function addReceipt(env, body) {
   // when there's no wo_id (a no-WO company/1864-Kerns expense has nowhere to gallery it) or no
   // file (a manual receipt entry with no image). This never touches Receipts/Invoice_Review/
   // billing — additive-only, Attachments write failure never fails the receipt add itself.
+  // Oct 1 2026 (Brett): for a Reconciler receipt (opts.folderCopy) put a shared COPY of the image in the
+  // WO's customer folder FIRST, so the gallery row below is written once already carrying it. A copy
+  // failure never fails the receipt add - but it is NEVER silent: Telemetry row + `folder_copy` in the
+  // response ('ok' | 'failed:<reason>'), which receipt-reconciler.html turns into a visible warning.
+  let folderCopy = '';
   if (wo_id && newId && (source_file_id || source_file_url)) {
+    let copyFields = {};
+    if (opts.folderCopy === true) {
+      try {
+        const gtok = await getAccessToken(env);
+        const woRow = opts.wo || (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === String(wo_id));
+        const cr = await copyReceiptIntoWOFolder(env, gtok,
+          { ID: newId, WO_ID: wo_id, Store: store || '', Date: rowDate, Amount: amt.toFixed(2), Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '' },
+          woRow, { record: false });
+        folderCopy = cr.status;
+        if (cr.status === 'ok' && cr.folder_copy_fields) copyFields = cr.folder_copy_fields;
+      } catch (e) {
+        folderCopy = receiptCopyFail(e && e.message || e);
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_folder_copy_failed', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${folderCopy}`.slice(0, 480) }); } catch (_) {}
+      }
+    }
     try {
-      await ensureColumns(env, 'Attachments', ['Receipt_ID']);
-      await addRow(env, 'Attachments', {
+      await ensureColumns(env, 'Attachments', opts.folderCopy === true ? ['Receipt_ID', 'Folder_Copy_ID', 'Folder_Copy_URL', 'Folder_Copy_Folder_ID'] : ['Receipt_ID']);
+      await addRow(env, 'Attachments', Object.assign({
         WO_ID: wo_id, File_Name: ((store || 'Receipt') + (date ? ' ' + date : '')).trim(),
         File_Type: 'receipt', Drive_File_ID: source_file_id || '', Drive_URL: source_file_url || '',
         Mime_Type: '', Receipt_ID: String(newId),
         Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
-      });
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {} }
+      }, copyFields));
+    } catch (e) {
+      if (folderCopy === 'ok') folderCopy = receiptCopyFail('image was copied to the customer folder but could not be recorded on the Attachments row');
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {}
+    }
   }
 
-  return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
+  return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource, ...(folderCopy ? { folder_copy: folderCopy } : {}) });
 }
 
 // ── RECEIPT RECONCILER (CAP-002) — deterministic matching engine, ZERO AI ──────────────────────
@@ -2195,7 +2580,7 @@ async function receiptSuggest(env, body) {
 // Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
 // every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
 // AI tokens; the daily sweep of an empty folder costs nothing at all.
-const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON','Confirmed_Receipt_ID','Manual_Refund'];
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON','Confirmed_Receipt_ID','Manual_Refund','Reopened_QB_Sent','Prior_QB_Email_Date','Prior_QB_Amount'];
 // "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
@@ -2673,9 +3058,11 @@ async function receiptReconConfirm(env, body) {
   // (1054 vs 1045) would otherwise post a real Receipts row against a nonexistent or wrong job
   // with no error and no way to notice at the time. This is the actual defense; the frontend's
   // own live validation against the already-loaded WO list is just fast-fail UX on top of it.
+  let woRowForCopy = null;
   if (!noWo) {
     const workorders = await fetchTab(env, 'Work_Orders');
-    if (!workorders.some(w => String(w.ID) === String(wo_id))) {
+    woRowForCopy = workorders.find(w => String(w.ID) === String(wo_id)) || null;
+    if (!woRowForCopy) {
       return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
     }
   }
@@ -2701,8 +3088,11 @@ async function receiptReconConfirm(env, body) {
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
-  });
+  }, { folderCopy: true, wo: woRowForCopy, qbSentCarry: receiptQbCarryFor(row, finalAmount) });
   const addJson = await addResp.json().catch(() => ({}));
+  // Re-opened row (POST /receipt-recon/reopen): the QuickBooks card-expense email already went out
+  // for the original receipt, so this one was born QB_Email_Sent=TRUE and the sweep will skip it.
+  const qbCarry = receiptQbCarryFor(row, finalAmount);
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
     // A signed scope proposal's WO is billed through its payment milestones — folding this
@@ -2723,14 +3113,18 @@ async function receiptReconConfirm(env, body) {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
       Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
       Confirmed_Receipt_ID: addJson.duplicate ? '' : String(addJson.id || ''),
-      Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
+      Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.'
+        : (qbCarry ? `Re-confirmed after a re-open: the original was already emailed to QuickBooks ${qbCarry.date.slice(0, 10)} - NOT re-sent.` + (qbCarry.amount_changed ? ` NOTE: amount changed from $${qbCarry.prior_amount.toFixed(2)} to $${Math.abs(Number(finalAmount) || 0).toFixed(2)} - QuickBooks still has the old amount, fix it there.` : '') : ''),
+      ...(qbCarry && !addJson.duplicate ? { Reopened_QB_Sent: 'FALSE' } : {}),
     });
   }
   // Expense receipts go to QuickBooks' receipts inbox right away rather than waiting for the
   // 7am sweep (which only takes 8 a day) — Brett is clearing a backlog and wants each one done
   // when he taps it. Work-order receipts keep going through the normal daily sweep.
   let qbEmail = null;
-  if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
+  if (qbCarry && addJson && addJson.success && !addJson.duplicate) {
+    qbEmail = { sent: false, skipped: true, already_sent_date: qbCarry.date, amount_changed: !!qbCarry.amount_changed, error: null };
+  } else if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
     try {
       const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
       const j = await r.json().catch(() => ({}));
@@ -2785,15 +3179,17 @@ async function receiptAttachOnly(env, body) {
     category: 'attached_only',
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source,
-  });
+  }, { folderCopy: true, wo, qbSentCarry: receiptQbCarryFor(row, amount) });
   const addJson = await addResp.json().catch(() => ({}));
+  const qbCarry = receiptQbCarryFor(row, amount);
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
-      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : 'Image attached only — not billed, no invoice line added.',
+      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : ('Image attached only — not billed, no invoice line added.' + (qbCarry ? ` Re-confirmed after a re-open: already emailed to QuickBooks ${qbCarry.date.slice(0, 10)} - NOT re-sent.` : '')),
+      ...(qbCarry && !addJson.duplicate ? { Reopened_QB_Sent: 'FALSE' } : {}),
     });
   }
-  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson });
+  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson, ...(qbCarry && !addJson.duplicate ? { qb_email: { sent: false, skipped: true, already_sent_date: qbCarry.date } } : {}) });
 }
 
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
@@ -3014,7 +3410,7 @@ async function receiptReconRefundReverse(env, body) {
     added_by: 'Receipt Reconciler (refund reverse)', added_by_id: 'receipt-recon-refund-reverse', role: 'hub',
     category: 'refund', source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: true,
-  });
+  }, { folderCopy: true });
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && addJson.id) {
@@ -3120,7 +3516,10 @@ async function voidAttachmentForReceipt(env, receipt_id) {
     const hit = atts.find(a => String(a.Receipt_ID || '') === String(receipt_id) && String(a.Active || '').toUpperCase() !== 'FALSE');
     if (!hit) return { voided: false, reason: 'not_found' };
     await updateRow(env, 'Attachments', hit.ID, { Active: 'FALSE' });
-    return { voided: true, attachment_id: hit.ID };
+    // Oct 1 2026: the customer-folder copy (if any) goes with it - the customer must not keep seeing a
+    // receipt that was undone / re-opened / reassigned. Surfaced in the result, never silent.
+    const folderCopy = String(hit.Folder_Copy_ID || '').trim() ? await trashReceiptFolderCopy(env, hit, atts) : null;
+    return { voided: true, attachment_id: hit.ID, ...(folderCopy ? { folder_copy: folderCopy } : {}) };
   } catch (e) {
     return { voided: false, error: String(e && e.message || e) };
   }
@@ -3163,12 +3562,14 @@ async function receiptReconReassign(env, body) {
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (row.Status !== 'confirmed') return json({ error: `only a confirmed row can be reassigned (this one is ${row.Status || 'pending'})` }, 409);
 
+  let woRowForCopy = null;
   if (wo_id) {
     const workorders = await fetchTab(env, 'Work_Orders');
     const wo = workorders.find(w => String(w.ID) === String(wo_id));
     if (!wo) {
       return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
     }
+    woRowForCopy = wo;
     if (String(wo.Property_ID) !== String(property_id)) {
       return json({ error: `Work order ${wo_id} belongs to a different property than the one you're reassigning to (Property ${wo.Property_ID}, not ${property_id}) — check the property/WO pairing.` }, 400);
     }
@@ -3193,13 +3594,16 @@ async function receiptReconReassign(env, body) {
     Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + ']',
   });
 
+  // Known gap closed (Oct 1 2026): the OLD row's gallery attachment (and its customer-folder copy) must go
+  // too, or the original receipt keeps showing in the old place after the move.
+  const oldAttachmentVoid = await voidAttachmentForReceipt(env, original.ID);
   const category = wo_id ? 'billable' : 'company';
   const addResp = await addReceipt(env, {
     wo_id, property_id, amount, description, store, date,
     added_by: 'Receipt Reconciler (reassign)', added_by_id: 'receipt-recon-reassign', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: original.Payment_Source,
-  });
+  }, { folderCopy: true, wo: woRowForCopy });
   const addJson = await addResp.json().catch(() => ({}));
 
   let invoiceLink = null;
@@ -3230,7 +3634,7 @@ async function receiptReconReassign(env, body) {
     });
   }
 
-  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, attachment_void: oldAttachmentVoid, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
 // POST /receipt-recon/mark-refund { id, refund } — manual override for a PENDING receipt the
@@ -3308,6 +3712,113 @@ async function receiptReconUndo(env, body) {
     Notes: `Undone ${new Date().toISOString().slice(0, 10)} — was ${row.Status}. Re-confirm it correctly, or use "Confirm duplicate" if it turns out to be one.`,
   });
   return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
+}
+
+// POST /receipt-recon/reopen { queue_id | id } - Oct 1 2026, Brett. ADMIN-ONLY (no ROLE_SCOPES
+// entry, so only WORKER_SECRET / admin session reaches it). Undo refuses a receipt that was already
+// emailed to QuickBooks ("fix it in QuickBooks directly"); Re-open is the escape hatch for exactly
+// that case - Brett needs to pull a QB-emailed receipt back into Pending to attach it to the right
+// WO (or fix its details) WITHOUT QuickBooks getting a second copy. So it is ALLOWED when
+// Receipts.QB_Email_Sent is TRUE, and refused only when the WO's customer invoice has already gone
+// out (receiptReopenGuard). On success it does what Undo does (voids the Receipts row, pulls the
+// amount out of Invoice_Review, voids the gallery attachment - and now trashes the customer-folder
+// copy) and drops the queue row to a plain Pending, PLUS records Reopened_QB_Sent / Prior_QB_Email_Date
+// / Prior_QB_Amount on the queue row. When Brett re-confirms it, receiptReconConfirm / attach-only
+// create the new Receipts row already flagged QB_Email_Sent=TRUE with that prior date, so
+// sendReceiptsToQBEmail skips it - no duplicate card-expense email to QuickBooks.
+async function receiptReconReopen(env, body) {
+  const id = body && (body.queue_id || body.id); if (!id) return json({ error: 'queue_id or id required' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if (!['confirmed', 'attached_only'].includes(row.Status)) return json({ error: `only a confirmed or attached-only receipt can be re-opened (this one is ${row.Status || 'pending'})` }, 409);
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund', 'Reopened_QB_Sent', 'Prior_QB_Email_Date', 'Prior_QB_Amount']);
+  const original = await findReceiptForQueueRow(env, row);
+  const woId = String((original && original.WO_ID) || row.Confirmed_WO_ID || '').trim();
+  let wo = null, irRows = [];
+  if (woId) {
+    const [wos, irs] = await fetchTabs(env, ['Work_Orders', 'Invoice_Review']);
+    wo = wos.find(w => String(w.ID) === woId) || null; irRows = irs;
+  }
+  const guard = receiptReopenGuard({ row, receipt: original, wo, irRows });
+  if (!guard.ok) return json({ error: guard.error, invoice_sent: !!guard.invoice_sent }, guard.status);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const vr = await updateRow(env, 'Receipts', original.ID, {
+    Active: 'FALSE',
+    Description: (original.Description || '') + ` [re-opened ${today} - pulled back into Receipt Reconciler${guard.carry_qb_sent ? `; already emailed to QuickBooks ${guard.prior_qb_email_date.slice(0, 10)} and will NOT be re-sent` : ''}]`,
+  });
+  if (vr && vr.status >= 400) return json({ error: `Could not void the original Receipts row (HTTP ${vr.status}) - nothing else was changed.` }, 500);
+  const invoiceUnlink = await removeReceiptFromInvoiceReview(env, { receipt_id: original.ID, amount: Number(original.Amount || row.Confirmed_Amount || 0) });
+  const attachmentVoid = await voidAttachmentForReceipt(env, original.ID);
+  const note = `Re-opened ${today} - was ${row.Status}.` + (guard.carry_qb_sent
+    ? ` The original receipt (#${original.ID}) was already emailed to QuickBooks on ${guard.prior_qb_email_date.slice(0, 10)}; re-confirming this row will NOT email it again.`
+    : ' It had not been emailed to QuickBooks yet, so the normal sweep will send it after you re-confirm.');
+  const qr = await updateRow(env, 'Receipt_Recon_Queue', id, {
+    Status: 'pending', Manual_Refund: 'FALSE',
+    Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
+    Reopened_QB_Sent: guard.carry_qb_sent ? 'TRUE' : 'FALSE',
+    Prior_QB_Email_Date: guard.prior_qb_email_date || '',
+    Prior_QB_Amount: guard.carry_qb_sent ? String(guard.prior_amount) : '',
+    Notes: note,
+  });
+  if (qr && qr.status >= 400) return json({ error: `The receipt was voided but the queue row could not be reset (HTTP ${qr.status}) - fix the row ${id} by hand.`, voided_receipt_id: original.ID }, 500);
+  return json({
+    ok: true, id, voided_receipt_id: original.ID, invoice_unlink: invoiceUnlink, attachment_void: attachmentVoid,
+    qb_email_will_not_resend: !!guard.carry_qb_sent, prior_qb_email_date: guard.prior_qb_email_date || '',
+  });
+}
+
+// POST /admin/backfill-receipt-folder-copies { apply?: true, limit?: n (default 4, max 8), exclude_ids?: [] }
+// One-time (idempotent, safe to re-run) sweep for the Oct 1 2026 customer-folder receipt copies:
+// every active Reconciler-attached Receipts row on a WO whose WO folder lacks the copy gets
+// ensureWOCustomerFolder (create if missing) + copy-or-ADOPT (an existing file titled
+// 'Receipt - <Store> <Date> - $<Amount>.<ext>' is adopted, never duplicated) + share + a recorded
+// Attachments Folder_Copy_* link. Preview by default (no writes at all - dryRun everywhere). CAPPED
+// per call: each receipt costs ~7 Drive/Sheets subrequests (~13 when it also has to create the
+// folder) against Cloudflare's per-invocation subrequest budget, so a call works through a
+// conservative subrequest budget (<= `limit` receipts) and returns `remaining` - call again until
+// remaining is 0. A receipt that fails stays pending (and is listed in `failed_ids`); pass those in
+// exclude_ids to keep moving past a persistent failure.
+async function backfillReceiptFolderCopies(env, body) {
+  const apply = !!(body && body.apply === true);
+  const limit = Math.max(1, Math.min(8, parseInt(body && body.limit) || 4));
+  const exclude = new Set((Array.isArray(body && body.exclude_ids) ? body.exclude_ids : []).map(String));
+  const [receipts, attachments, workorders, properties, queueRows] = await fetchTabs(env, ['Receipts', 'Attachments', 'Work_Orders', 'Properties', 'Receipt_Recon_Queue']);
+  const cands = receiptFolderCopyCandidates(receipts, queueRows);
+  const have = receiptIdsWithFolderCopy(attachments);
+  const pendingAll = cands.filter(r => !have.has(String(r.ID)));
+  const pending = pendingAll.filter(r => !exclude.has(String(r.ID)));
+  const woById = new Map(workorders.map(w => [String(w.ID), w]));
+  const results = [];
+  const counts = { candidates: cands.length, already_done: cands.length - pendingAll.length, pending_total: pendingAll.length, ok: 0, adopted: 0, copied: 0, failed: 0, folders_created: 0 };
+  let budget = 36, token = null, stoppedForBudget = false;
+  const ctx = { attachments, properties, dryRun: !apply };
+  for (const r of pending) {
+    if (results.length >= limit) break;
+    const wo = woById.get(String(r.WO_ID));
+    const cost = 7 + ((wo && String(wo.Drive_Folder_ID || '').trim()) ? 0 : 6);
+    if (apply && budget - cost < 0 && results.length) { stoppedForBudget = true; break; }
+    budget -= cost;
+    const base = { receipt_id: String(r.ID), wo_id: String(r.WO_ID), store: r.Store || '', date: r.Date || '', amount: r.Amount || '' };
+    if (!wo) { results.push(Object.assign(base, { status: receiptCopyFail('work order not found') })); counts.failed++; continue; }
+    if (!token) token = await getAccessToken(env);
+    const hadFolder = !!String(wo.Drive_Folder_ID || '').trim();
+    const res = await copyReceiptIntoWOFolder(env, token, r, wo, ctx);
+    const okStatus = res.status === 'ok';
+    results.push(Object.assign(base, { status: res.status, action: res.action || (res.already ? 'already_done' : res.adopted ? 'adopted' : 'copied'), title: res.title || '', file_id: res.file_id || '', folder_id: res.folder_id || '' }));
+    if (!apply) continue;
+    if (okStatus) { counts.ok++; if (res.adopted) counts.adopted++; else if (!res.already) counts.copied++; if (!hadFolder) counts.folders_created++; }
+    else counts.failed++;
+  }
+  const failedIds = results.filter(x => String(x.status).startsWith('failed')).map(x => x.receipt_id);
+  const remaining = apply ? pendingAll.length - counts.ok : pendingAll.length;
+  return json({
+    ok: true, applied: apply, ...counts, processed: results.length, remaining,
+    failed_ids: failedIds, stopped_for_budget: stoppedForBudget,
+    note: `Capped at ${limit} receipt(s) per call (and a ~36-subrequest budget) to stay inside the Worker subrequest limit - call again until remaining is 0.` + (apply ? '' : ' PREVIEW ONLY: nothing was created, copied, shared or written; pass {"apply":true} to run it.'),
+    results,
+  });
 }
 
 // GET /receipt-recon/search?q=<amount|store|description text>&date=<yyyy-mm-dd> — Brett, Sep 23
@@ -14604,6 +15115,13 @@ async function selftestRunGoldenChecks(env) {
     results.push({ name: 'vendor_bills_qb_reachable', ...selftestSummarizeVendorBillsQbReachable(sampleResults) });
   } catch (e) { results.push({ name: 'vendor_bills_qb_reachable', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
 
+  // Oct 1 2026: every Reconciler receipt on a WO must have a copy in the customer's WO folder (else the invoice's
+  // "View job photos" link silently lacks it). Fails the 7am digest until POST /admin/backfill-receipt-folder-copies clears it.
+  try {
+    const [rcs, atts, qrows, wos] = await fetchTabs(env, ['Receipts', 'Attachments', 'Receipt_Recon_Queue', 'Work_Orders']);
+    results.push({ name: 'receipt_folder_copies', ...selftestCheckReceiptFolderCopies(rcs, atts, qrows, wos) });
+  } catch (e) { results.push({ name: 'receipt_folder_copies', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
+
   return results;
 }
 
@@ -18341,11 +18859,14 @@ async function hubTestWriteAllowed(env, path, body) {
     // reasoning as the duplicate-audit paths above, no protected record to gate on.
     return true;
   }
-  if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo') {
+  // Oct 1 2026: preview-only backfill (no `apply`) is a pure read (dryRun everywhere), so the test token may run it;
+  // an `apply` run creates/shares real Drive files for every receipt on the sheet, so it is never reachable here.
+  if (path === '/admin/backfill-receipt-folder-copies') return !(body && body.apply === true);
+  if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo' || path === '/receipt-recon/reopen') {
     // Can void a real Receipts row for a 'confirmed' queue row — resolve it the same way
     // findReceiptForQueueRow does and require that Receipts row's own Property to be TEST-.
     const rows = await fetchTab(env, 'Receipt_Recon_Queue');
-    const row = rows.find(r => String(r.ID) === String(body && body.id));
+    const row = rows.find(r => String(r.ID) === String(body && (body.queue_id || body.id)));
     if (!row) return false;
     if (row.Status !== 'confirmed') return true; // attached_only never touches Receipts either
     const receipts = await fetchTab(env, 'Receipts');
@@ -22865,6 +23386,7 @@ async function qbSendInvoice(env, body) {
         groupRows, bills, vendors, wo: _ctxWo, woList: wos, owner, prop, unit, billTo, trade, tradeName,
         warnings, previewOnly, batch: body.batch, timeEntries: _ctxTimeEntries,
         overridePendingInfo: !!body.override_pending_info,
+        overrideReceiptFolder: !!body.override_receipt_folder,
       });
     }
 
@@ -22876,6 +23398,7 @@ async function qbSendInvoice(env, body) {
     // Exactly the receipts that were ticked at approval — read by id, so adding a receipt
     // to the job afterwards can't quietly change what the customer is billed.
     let ownReceipts = [];
+    let rfIssue = null;   // Oct 1 2026: receipts-folder guard (soft block, override_receipt_folder)
     const ownIds = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
     if (ownIds.length) {
       try {
@@ -22885,6 +23408,16 @@ async function qbSendInvoice(env, body) {
           warnings.push(`${ownIds.length - ownReceipts.length} approved receipt(s) are no longer on this job — the invoice total still stands, but a materials line is missing.`);
         }
       } catch (e) { warnings.push('Could not read the Receipts tab — materials you bought are not itemised on this invoice.'); }
+    }
+    // Oct 1 2026 (Brett): the customer reaches receipts through the WO Drive folder link on the invoice - never let an
+    // invoice with receipts go out while a receipt image has no copy there / the WO has no folder. Preview warns; the
+    // real send is a 409 soft block unless override_receipt_folder:true (same pattern as Pending Info).
+    if (ownReceipts.length) {
+      try {
+        const [_atts, _rq] = await fetchTabs(env, ['Attachments', 'Receipt_Recon_Queue']);
+        rfIssue = invoiceReceiptFolderIssue(ownReceipts, _atts, wo, ir.WO_ID, _rq);
+      } catch (e) { warnings.push('Could not check whether this job\'s receipt images are in the customer folder.'); }
+      if (rfIssue) warnings.push('📎 ' + rfIssue.message);
     }
 
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
@@ -23029,6 +23562,9 @@ async function qbSendInvoice(env, body) {
         error: `This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''}. Resolve it, or resend with override_pending_info to send anyway.`,
         pending_info: true, pending_info_note: billRow.Pending_Info_Note || '', warnings,
       }, 409);
+    }
+    if (rfIssue && !body.override_receipt_folder) {
+      return json({ ok: false, error: rfIssue.message, receipt_folder_missing: true, missing_receipt_ids: rfIssue.missing_ids, warnings }, 409);
     }
 
     const token = await qbAccessToken(env);
@@ -23283,6 +23819,7 @@ async function qbSendCombinedInvoice(env, ctx) {
     // per group member instead of once for the whole function.
     let ownReceiptsAll = null;
     const rowBuilds = [];
+    const _allOwnReceipts = [];   // Oct 1 2026: for the receipts-folder guard below
     for (const r of groupRows) {
       const vendor = vendors.find(v => v.ID === r.Vendor_ID) || {};
       const billRow = bills.find(b => b.ID === r.Bill_ID) || {};
@@ -23305,6 +23842,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         } catch (e) { warnings.push('Could not read the Receipts tab for bill ' + (r.Bill_ID || r.ID) + '.'); }
       }
 
+      _allOwnReceipts.push(...ownReceipts);
       const _inEn = await invoiceInputsEnglish(env, billRow, timeEntries);
       // Additional work (Sep 30 2026): a row on an add-on CHILD WO is labelled "Additional work — … — WO <parent>"
       // and carries the parent's WO number. Any other row takes the original path unchanged.
@@ -23328,6 +23866,15 @@ async function qbSendCombinedInvoice(env, ctx) {
       rowBuilds.push({ row: r, vendor, billRow, custTotal, vendorCost, inv, vendDisplay, vendorInHouse, billDoc, termDays });
     }
 
+    // Oct 1 2026: same receipts-folder guard as the single-bill path (anchored on the WO whose folder the memo links to).
+    let rfIssue = null;
+    if (_allOwnReceipts.length) {
+      try {
+        const [_atts, _rq] = await fetchTabs(env, ['Attachments', 'Receipt_Recon_Queue']);
+        rfIssue = invoiceReceiptFolderIssue(_allOwnReceipts, _atts, wo, wo && (wo.ID || woId), _rq);
+      } catch (e) { warnings.push('Could not check whether this job\'s receipt images are in the customer folder.'); }
+      if (rfIssue) warnings.push('📎 ' + rfIssue.message);
+    }
     const combinedLines = rowBuilds.reduce((acc, rb) => acc.concat(rb.inv.lines), []);
     const combinedTotal = +rowBuilds.reduce((s, rb) => s + rb.custTotal, 0).toFixed(2);
     const _distinctWoIds = [...new Set(groupRows.map(r => String(r.WO_ID)))];
@@ -23401,6 +23948,9 @@ async function qbSendCombinedInvoice(env, ctx) {
         error: `${pendingInfoRows.length} bill(s) in this group are flagged "Invoiced — Pending Info" (${pendingInfoRows.map(r => r.Bill_ID || r.ID).join(', ')}). Resolve them, or resend with override_pending_info to send anyway.`,
         pending_info: true, warnings,
       }, 409);
+    }
+    if (rfIssue && !ctx.overrideReceiptFolder) {
+      return json({ ok: false, error: rfIssue.message, receipt_folder_missing: true, missing_receipt_ids: rfIssue.missing_ids, warnings }, 409);
     }
 
     const token = await qbAccessToken(env);
