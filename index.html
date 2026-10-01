@@ -11394,8 +11394,14 @@ function renderPayablesAlerts() {
   safeArray(a.warnings).concat(safeArray(a.errors)).forEach(function(e) {
     lines.push('Problem' + (e.ref ? ' (' + esc(e.ref) + ')' : '') + ': ' + esc(e.error || '') + (e.stage ? ' [' + esc(e.stage) + ']' : ''));
   });
-  if (!lines.length) { host.innerHTML = ''; return; }
-  host.innerHTML = '<div role="alert" style="border:2px solid var(--danger);background:rgba(220,38,38,.10);color:var(--text);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.5">'
+  var waiting = safeArray(sw.awaiting_invoice).map(function(n) {
+    return 'Scope ' + esc(n.scope) + (n.wo_id ? ' (' + esc(n.wo_id) + ')' : '') + ': ' + esc(n.reason || 'awaiting deposit invoice');
+  });
+  var waitHtml = waiting.length
+    ? '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">&#8987; ' + waiting.join('<br>&#8987; ') + '</div>'
+    : '';
+  if (!lines.length) { host.innerHTML = waitHtml; return; }
+  host.innerHTML = waitHtml + '<div role="alert" style="border:2px solid var(--danger);background:rgba(220,38,38,.10);color:var(--text);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.5">'
     + '<div style="font-weight:700;color:var(--danger);margin-bottom:4px">&#9888; Needs your attention (' + lines.length + ')</div>'
     + '<ul style="margin:0;padding-left:18px">' + lines.map(function(l) { return '<li>' + l + '</li>'; }).join('') + '</ul></div>';
 }
@@ -11434,6 +11440,9 @@ function loadPayables(save) {
                 : api('GET', '/qb/payables?days=90');
   }).then(function(res) {
     if (!res || res.ok === false) {
+      // Never leave a stale banner from a previous successful load: show this failure in it instead.
+      _payablesAlerts.warnings = []; _payablesAlerts.errors = [{ stage: 'payables_read', error: (res && res.error) || 'failed' }];
+      renderPayablesAlerts();
       if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'failed') + '</div>';
       return;
     }
@@ -11448,6 +11457,8 @@ function loadPayables(save) {
     payablesBuildFilters();
     renderPayablesList();
   }).catch(function(e) {
+    _payablesAlerts.warnings = []; _payablesAlerts.errors = [{ stage: 'payables_read', error: (e && e.message) || String(e) }];
+    renderPayablesAlerts();
     if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
   });
 }
