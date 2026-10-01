@@ -76,7 +76,7 @@ t('Review Bills has a Flag/Clear affordance', /irFlagPendingInfo/.test(idx) && /
 t('flagging requires a note client-side too (defense in depth, not just server)',
   /A note is required to flag pending info/.test(idx));
 t('the QB-send modal offers a deliberate override rather than a dead end',
-  /confirmQBSend\(true\)/.test(idx) && /Send anyway/.test(idx));
+  /confirmQBSend\(true[,)]/.test(idx) && /Send anyway/.test(idx));
 t('confirmQBSend forwards override_pending_info on retry', /payload\.override_pending_info = true/.test(idx));
 
 // -- vendor.html (vendor portal) ----------------------------------------------
