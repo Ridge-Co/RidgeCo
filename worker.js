@@ -1869,6 +1869,361 @@ async function listReceipts(env, url) {
   } catch(e) { return json([]); }
 }
 
+// ── WO CUSTOMER-FOLDER RECEIPT COPIES (Oct 1 2026, Brett) ─────────────────────────────────────
+// Why: the customer invoice memo links to WO.Drive_Folder_URL ("View job photos"), but a receipt
+// confirmed through the Receipt Reconciler only ever lived in the internal 'Receipts and Invoices'
+// intake folder, so the customer opening that link could not see it. Fix: when a Reconciler receipt
+// is attached to a WO, a COPY of its image is placed in the WO's customer folder (created lazily,
+// exactly as handlePhotoUploadClean does) and shared anyone-with-link, titled
+// 'Receipt - <Store> <Date> - $<Amount>.<ext>'.
+//
+// SCOPED EXCEPTION TO FEATURE_LOG RULE 13 (internal cost docs are never shared) - Brett's explicit
+// decision, Oct 1 2026: "customers must be able to open the Reconciler receipt images from the WO
+// Drive folder link". Applies ONLY to receipts attached to a WO through the Reconciler (addReceipt
+// is called by an in-code Reconciler caller with opts.folderCopy:true - a vendor-supplied request
+// body can NEVER switch this on, see /receipt/add). Vendor bills / invoices / vendor-submitted
+// receipts stay private, unchanged.
+//
+// Record-keeping: additive columns on Attachments (Folder_Copy_ID / Folder_Copy_URL /
+// Folder_Copy_Folder_ID), keyed to the receipt's gallery row via Receipt_ID. The row's original
+// Drive_File_ID / Drive_URL keep pointing at the intake-folder original. "Has a copy" ==
+// an ACTIVE Attachments row with this Receipt_ID and a non-blank Folder_Copy_ID (queryable, and
+// it is what the idempotency check, the backfill, the invoice guard and the daily selftest all use).
+
+// PURE - is this Receipts row one the Reconciler wrote? Authoritative: a Receipt_Recon_Queue row
+// that is confirmed / attached-only points at it (Confirmed_Receipt_ID), or - for older rows that
+// predate Confirmed_Receipt_ID - shares its source file with such a queue row. Never trusts the
+// Receipts row's own Added_By fields (a vendor can type those into /receipt/add).
+function receiptReconQueueIndex(queueRows) {
+  const ok = new Set(['confirmed', 'attached_only', 'refund_reversed']);
+  const ids = new Set(), files = new Set();
+  for (const q of (queueRows || [])) {
+    if (!q || !ok.has(String(q.Status || ''))) continue;
+    if (q.Confirmed_Receipt_ID) ids.add(String(q.Confirmed_Receipt_ID));
+    if (q.Source_File_ID) files.add(String(q.Source_File_ID));
+  }
+  return { ids, files };
+}
+
+// PURE - active Receipts rows that SHOULD have a copy in their WO's customer folder.
+function receiptFolderCopyCandidates(receipts, queueRows) {
+  const idx = receiptReconQueueIndex(queueRows);
+  return (receipts || []).filter(r => r && String(r.Active || '').toUpperCase() !== 'FALSE'
+    && String(r.WO_ID || '').trim()
+    && (String(r.Source_File_ID || '').trim() || String(r.Source_File_URL || '').trim())
+    && (idx.ids.has(String(r.ID)) || (r.Source_File_ID && idx.files.has(String(r.Source_File_ID)))));
+}
+
+// PURE - Set of receipt ids that already have a recorded customer-folder copy.
+function receiptIdsWithFolderCopy(attachments) {
+  const s = new Set();
+  for (const a of (attachments || [])) {
+    if (a && String(a.Active || '').toUpperCase() !== 'FALSE' && a.Receipt_ID && String(a.Folder_Copy_ID || '').trim()) s.add(String(a.Receipt_ID));
+  }
+  return s;
+}
+
+// PURE - Drive file id for a receipt's source image (id column first, else parsed from the URL).
+function receiptSourceDriveId(rec) {
+  const id = String((rec && rec.Source_File_ID) || '').trim();
+  if (id) return id;
+  const m = String((rec && rec.Source_File_URL) || '').match(/\/d\/([A-Za-z0-9_-]{10,})|[?&]id=([A-Za-z0-9_-]{10,})/);
+  return m ? (m[1] || m[2]) : '';
+}
+
+const RECEIPT_COPY_MIME_EXT = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/heic': 'heic', 'image/heif': 'heif', 'image/webp': 'webp', 'image/gif': 'gif', 'application/pdf': 'pdf' };
+// PURE - file extension for the copy: Drive's own fileExtension, else the source name's, else by mime.
+function receiptFolderCopyExt(srcName, mimeType, fileExtension) {
+  const fe = String(fileExtension || '').replace(/^\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (fe) return fe;
+  const m = /\.([A-Za-z0-9]{1,5})$/.exec(String(srcName || ''));
+  if (m) return m[1].toLowerCase();
+  return RECEIPT_COPY_MIME_EXT[String(mimeType || '').toLowerCase()] || '';
+}
+
+// PURE - 'Receipt - <Store> <Date> - $<Amount>.<ext>' (a refund reads '-$12.00').
+function receiptFolderCopyTitle(rec, ext) {
+  const clean = s => String(s == null ? '' : s).replace(/[\\/\u0000-\u001f]/g, '-').replace(/\s+/g, ' ').trim();
+  const store = clean(rec && rec.Store) || 'Unknown';
+  const date = clean(String((rec && rec.Date) || '').slice(0, 10));
+  const n = Number(rec && rec.Amount) || 0;
+  const amt = (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
+  const base = `Receipt - ${[store, date].filter(Boolean).join(' ')} - ${amt}`.slice(0, 200);
+  return ext ? `${base}.${ext}` : base;
+}
+
+// PURE - quote a literal for a Drive v3 `q` expression.
+function driveQueryQuote(s) { return "'" + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"; }
+
+// PURE - pick an existing file in the WO folder to ADOPT instead of copying again. Exact title
+// first; then the same title ignoring extension/punctuation/case (a hand-made copy may be .jpeg
+// vs .jpg, or "Lowes" vs "Lowe's"). Files already claimed by another receipt's gallery row are
+// never adopted, so two identical-looking receipts cannot end up sharing one file.
+function pickAdoptableCopy(files, title, claimedIds) {
+  const claimed = claimedIds instanceof Set ? claimedIds : new Set(claimedIds || []);
+  const list = (files || []).filter(f => f && f.id && !f.trashed && f.mimeType !== 'application/vnd.google-apps.folder' && !claimed.has(String(f.id)));
+  const exact = list.find(f => f.name === title);
+  if (exact) return { file: exact, via: 'exact' };
+  const stem = n => _rcNorm(String(n || '').replace(/\.[A-Za-z0-9]{1,5}$/, ''));
+  const want = stem(title);
+  const loose = list.find(f => stem(f.name) === want);
+  return loose ? { file: loose, via: 'normalized' } : null;
+}
+
+// PURE - if a different (claimed) file in the folder already has this exact title, a new copy gets
+// ' (receipt <id>)' before the extension so titles stay unique.
+function uniqueCopyTitle(title, existingNames, receiptId) {
+  const taken = new Set((existingNames || []).map(n => String(n).toLowerCase()));
+  if (!taken.has(String(title).toLowerCase())) return title;
+  const m = /^(.*?)(\.[A-Za-z0-9]{1,5})?$/.exec(title);
+  return `${m[1]} (receipt ${receiptId})${m[2] || ''}`;
+}
+
+async function driveGetFileMeta(token, fileId, fields) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=${encodeURIComponent(fields)}&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) { const e = new Error(`Drive get ${res.status}`); e.status = res.status; throw e; }
+  return await res.json();
+}
+
+// Shared Drive folder logic (extracted from handlePhotoUploadClean so the photo-upload path and the
+// receipt-copy path can never drift apart): property folder under the properties root, WO folder
+// under that - both FIND-BY-NAME before create.
+async function driveFindOrCreatePropertyFolder(token, propsRoot, propAddr) {
+  return await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
+}
+async function driveFindOrCreateWOFolder(token, propFolderId, woLabel) {
+  return await findOrCreateFolder(token, woLabel, propFolderId);
+}
+// The customer-facing WO folder is what the invoice memo links to. Sets BOTH fields (ID and URL are
+// two cells); a failure here is visible to the caller instead of swallowed.
+async function persistWOFolderFields(env, woId, folder) {
+  await updateWOFields(env, woId, { Drive_Folder_URL: folder.webViewLink || folder.url || `https://drive.google.com/drive/folders/${folder.id}`, Drive_Folder_ID: folder.id });
+}
+
+// Shared helper: make sure a WO has a customer-facing Drive folder; returns {id, url, source}.
+// Reuses the WO's own Drive_Folder_ID when it still exists (verified, not trashed); otherwise
+// find-or-creates property folder + WO folder by NAME (never a second folder for the same WO
+// label under the same parent) and writes Drive_Folder_ID / Drive_Folder_URL. Throws on failure.
+// opts.properties: pre-fetched Properties rows (batch callers). opts.persist === false: resolve only.
+// opts.dryRun: read-only - never creates a folder or writes the WO; returns source 'would_create' when
+// the folder does not exist yet (backfill preview).
+async function ensureWOCustomerFolder(env, token, wo, opts) {
+  opts = opts || {};
+  if (!wo || !wo.ID) throw new Error('work order required');
+  const curId = String(wo.Drive_Folder_ID || '').trim();
+  if (curId) {
+    let meta = null;
+    try { meta = await driveGetFileMeta(token, curId, 'id,name,trashed,webViewLink'); }
+    catch (e) { if (e && e.status !== 404) throw e; }
+    if (meta && meta.id && !meta.trashed) {
+      const url = String(wo.Drive_Folder_URL || '').trim() || meta.webViewLink || `https://drive.google.com/drive/folders/${meta.id}`;
+      if (!String(wo.Drive_Folder_URL || '').trim() && opts.persist !== false && !opts.dryRun) { await persistWOFolderFields(env, wo.ID, { id: meta.id, url }); wo.Drive_Folder_URL = url; }
+      return { id: meta.id, url, source: 'existing' };
+    }
+  }
+  const propsRoot = env.DRIVE_PROPERTIES_ROOT;
+  if (!propsRoot) throw new Error('DRIVE_PROPERTIES_ROOT not configured');
+  const props = opts.properties || await fetchTab(env, 'Properties');
+  const prop = props.find(p => String(p.ID) === String(wo.Property_ID));
+  const propAddr = String((prop && prop.Address) || wo.Property_Address || '').trim();
+  if (!propAddr) throw new Error(`no property address for WO ${wo.ID}`);
+  if (opts.dryRun) {
+    const pf = await findDriveFolder(token, propAddr, propsRoot, propsRoot);
+    const wf = pf && pf.id ? await findDriveFolder(token, String(wo.ID), pf.id) : null;
+    return wf && wf.id ? { id: wf.id, url: wf.webViewLink || `https://drive.google.com/drive/folders/${wf.id}`, source: 'existing_by_name' } : { id: '', url: '', source: 'would_create' };
+  }
+  const propFolder = await driveFindOrCreatePropertyFolder(token, propsRoot, propAddr);
+  if (!propFolder || !propFolder.id) throw new Error(`could not find/create property folder "${propAddr}"`);
+  const woFolder = await driveFindOrCreateWOFolder(token, String(wo.ID), propFolder.id);
+  if (!woFolder || !woFolder.id) throw new Error(`could not find/create WO folder "${wo.ID}"`);
+  const url = woFolder.webViewLink || `https://drive.google.com/drive/folders/${woFolder.id}`;
+  if (opts.persist !== false) { await persistWOFolderFields(env, wo.ID, { id: woFolder.id, url }); wo.Drive_Folder_ID = woFolder.id; wo.Drive_Folder_URL = url; }
+  return { id: woFolder.id, url, source: 'found_or_created' };
+}
+
+function receiptCopyFail(reason) { return 'failed:' + String(reason || 'unknown').replace(/\s+/g, ' ').slice(0, 160); }
+
+// Copy (or ADOPT an existing copy of) a Reconciler receipt's image into the WO's customer folder,
+// share it anyone-with-link, and record it on the receipt's Attachments gallery row. Idempotent:
+// a receipt that already has a recorded copy returns immediately; an existing file with the
+// matching title in the folder is adopted instead of copied again. NEVER throws and never fails the
+// caller's receipt write - returns {status:'ok'|'failed:<reason>'|'skipped:<reason>', ...} and logs a
+// Telemetry row on failure. rec: Receipts-shaped {ID, WO_ID, Store, Date, Amount, Source_File_ID,
+// Source_File_URL}. ctx.attachments / ctx.properties: optional pre-fetched tabs (batch callers); the
+// attachments array is kept up to date in place. ctx.record === false: copy + share only, the CALLER
+// writes the Folder_Copy_* fields (addReceipt does, in the one Attachments row it is writing anyway,
+// to save Sheets calls). ctx.dryRun: read-only plan (out.action) for the backfill preview.
+async function copyReceiptIntoWOFolder(env, token, rec, wo, ctx) {
+  ctx = ctx || {};
+  const out = { status: 'ok', receipt_id: String((rec && rec.ID) || ''), wo_id: String((rec && rec.WO_ID) || ''), adopted: false, already: false, file_id: '', folder_id: '', title: '' };
+  try {
+    if (!wo || !wo.ID) return Object.assign(out, { status: receiptCopyFail('work order not found') });
+    const srcId = receiptSourceDriveId(rec);
+    if (!srcId) return Object.assign(out, { status: 'skipped:no_source_file' });
+    const recording = ctx.record !== false && !ctx.dryRun;
+    if (recording && !ctx.columnsReady) { await ensureColumns(env, 'Attachments', ['Receipt_ID', 'Folder_Copy_ID', 'Folder_Copy_URL', 'Folder_Copy_Folder_ID']); ctx.columnsReady = true; }
+    const atts = ctx.attachments || (ctx.record === false ? [] : await fetchTab(env, 'Attachments'));
+    let att = atts.find(a => a && String(a.Receipt_ID || '') === String(rec.ID) && String(a.Active || '').toUpperCase() !== 'FALSE');
+    if (att && String(att.Folder_Copy_ID || '').trim()) {
+      return Object.assign(out, { already: true, file_id: String(att.Folder_Copy_ID), folder_id: String(att.Folder_Copy_Folder_ID || '') });
+    }
+    let src;
+    try { src = await driveGetFileMeta(token, srcId, 'id,name,mimeType,fileExtension,trashed'); }
+    catch (e) { return Object.assign(out, { status: receiptCopyFail(e && e.status === 404 ? 'source receipt image not found in Drive' : 'cannot read source image: ' + (e && e.message)) }); }
+    if (src.trashed) return Object.assign(out, { status: receiptCopyFail('source receipt image is in the Drive trash') });
+    const folder = await ensureWOCustomerFolder(env, token, wo, { properties: ctx.properties, dryRun: !!ctx.dryRun });
+    out.folder_id = folder.id;
+    if (folder.source === 'would_create') return Object.assign(out, { action: 'would_create_folder_and_copy' });
+    const title = receiptFolderCopyTitle(rec, receiptFolderCopyExt(src.name, src.mimeType, src.fileExtension));
+    // existing files in the folder (find-before-copy => adopt)
+    const q = `${driveQueryQuote(folder.id)} in parents and trashed=false and mimeType != 'application/vnd.google-apps.folder'`;
+    const lres = await fetch('https://www.googleapis.com/drive/v3/files?' + new URLSearchParams({ q, fields: 'files(id,name,mimeType,trashed)', pageSize: '200', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true' }), { headers: { Authorization: `Bearer ${token}` } });
+    if (!lres.ok) throw new Error(`Drive list ${lres.status}`);
+    const files = ((await lres.json()).files) || [];
+    const claimed = new Set(atts.filter(a => a && a.Folder_Copy_ID && String(a.Receipt_ID || '') !== String(rec.ID) && String(a.Active || '').toUpperCase() !== 'FALSE').map(a => String(a.Folder_Copy_ID)));
+    const pick = pickAdoptableCopy(files, title, claimed);
+    if (ctx.dryRun) return Object.assign(out, { action: pick ? 'would_adopt' : 'would_copy', title: pick ? pick.file.name : title });
+    let fileId, finalTitle = title;
+    if (pick) { fileId = pick.file.id; finalTitle = pick.file.name; out.adopted = true; }
+    else {
+      finalTitle = uniqueCopyTitle(title, files.map(f => f.name), rec.ID);
+      const cres = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(srcId)}/copy?supportsAllDrives=true&fields=id,name`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: finalTitle, parents: [folder.id] }),
+      });
+      if (!cres.ok) { let m = ''; try { m = ((await cres.json()).error || {}).message || ''; } catch (_) {} throw new Error(`Drive copy ${cres.status}${m ? ': ' + m : ''}`); }
+      fileId = (await cres.json()).id;
+      if (!fileId) throw new Error('Drive copy returned no file id');
+    }
+    out.file_id = fileId; out.title = finalTitle;
+    const sh = await driveShareAnyoneVerbose(token, fileId);
+    if (!sh.ok) throw new Error(`share failed (${sh.status || '?'}): ${sh.error || 'unknown'}`);
+    out.folder_copy_fields = { Folder_Copy_ID: fileId, Folder_Copy_URL: `https://drive.google.com/file/d/${fileId}/view`, Folder_Copy_Folder_ID: folder.id };
+    if (!recording) return out;
+    const fields = { Folder_Copy_ID: fileId, Folder_Copy_URL: `https://drive.google.com/file/d/${fileId}/view`, Folder_Copy_Folder_ID: folder.id };
+    if (att) {
+      const ur = await updateRow(env, 'Attachments', att.ID, fields);
+      if (ur && ur.status >= 400) throw new Error(`could not record the copy on Attachments row ${att.ID} (HTTP ${ur.status})`);
+      Object.assign(att, fields);
+    } else {
+      const ar = await addRow(env, 'Attachments', Object.assign({
+        WO_ID: rec.WO_ID, File_Name: ((rec.Store || 'Receipt') + (rec.Date ? ' ' + rec.Date : '')).trim(), File_Type: 'receipt',
+        Drive_File_ID: rec.Source_File_ID || srcId, Drive_URL: rec.Source_File_URL || '', Mime_Type: '', Receipt_ID: String(rec.ID),
+        Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
+      }, fields));
+      if (ar && ar.status >= 400) throw new Error(`could not add the Attachments row (HTTP ${ar.status})`);
+      let newAttId = ''; try { newAttId = (await ar.clone().json()).id || ''; } catch (_) {}
+      atts.push(Object.assign({ ID: newAttId, Receipt_ID: String(rec.ID), Active: 'TRUE' }, fields));
+    }
+    return out;
+  } catch (e) {
+    out.status = receiptCopyFail(e && e.message || e);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_folder_copy_failed', Skill_Or_Endpoint: '/receipt-recon', Success: 'FALSE', Notes: `receipt_id=${out.receipt_id} wo_id=${out.wo_id} err=${out.status}`.slice(0, 480) }); } catch (_) {}
+    return out;
+  }
+}
+
+// Undo side of the copy: when a receipt's gallery row is voided (undo / reassign / re-open /
+// mark-refund) the customer must stop seeing the image too - un-share and trash OUR copy (Drive
+// trash is recoverable for 30 days). Skipped when another active gallery row still points at the
+// same file. Never throws; returns {trashed, ...} so the caller's response shows a failure.
+async function trashReceiptFolderCopy(env, attRow, allAttachments) {
+  const fileId = String((attRow && attRow.Folder_Copy_ID) || '').trim();
+  if (!fileId) return { trashed: false, reason: 'no_folder_copy' };
+  const shared = (allAttachments || []).some(a => a && a.ID !== attRow.ID && String(a.Folder_Copy_ID || '') === fileId && String(a.Active || '').toUpperCase() !== 'FALSE');
+  if (shared) return { trashed: false, reason: 'still_used_by_another_receipt' };
+  try {
+    const token = await getAccessToken(env);
+    // best-effort un-share first (a trashed file can otherwise stay link-readable)
+    try { await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions/anyoneWithLink?supportsAllDrives=true`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); } catch (_) {}
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`, {
+      method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }),
+    });
+    if (!res.ok && res.status !== 404) throw new Error(`Drive trash ${res.status}`);
+    return { trashed: true, file_id: fileId };
+  } catch (e) {
+    const err = String((e && e.message) || e);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_folder_copy_trash_failed', Skill_Or_Endpoint: '/receipt-recon', Success: 'FALSE', Notes: `file_id=${fileId} err=${err}`.slice(0, 480) }); } catch (_) {}
+    return { trashed: false, error: err, file_id: fileId };
+  }
+}
+
+// PURE - Re-open guard (POST /receipt-recon/reopen). The point of Re-open is to work on a receipt
+// that Undo refuses because it was already emailed to QuickBooks (card-expense capture), so a
+// QB_Email_Sent = TRUE receipt is ALLOWED. What it refuses is a WO whose CUSTOMER INVOICE has
+// already gone out (WO.QBO_Invoice_Number, an Invoice_Review row carrying a QB_Invoice_ID, or a
+// WO already Invoiced/Paid): unwinding the receipt then would leave QuickBooks and the customer's
+// invoice out of sync. No WO (a company expense) => no invoice check.
+function receiptInvoiceSentReason(woId, wo, irRows) {
+  if (!String(woId || '').trim()) return '';
+  if (wo && String(wo.QBO_Invoice_Number || '').trim()) return `Work order ${woId} is already invoiced in QuickBooks (invoice ${String(wo.QBO_Invoice_Number).trim()})`;
+  const sentIr = (irRows || []).find(r => r && String(r.WO_ID) === String(woId) && String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Invoice_ID || '').trim());
+  if (sentIr) return `The invoice for work order ${woId} has already been sent (Invoice Review row ${sentIr.ID}, QuickBooks invoice ${String(sentIr.QB_Invoice_ID).trim()})`;
+  if (wo && ['invoiced', 'paid'].includes(String(wo.Status || '').trim().toLowerCase())) return `Work order ${woId} is already ${String(wo.Status).trim()}`;
+  return '';
+}
+function receiptReopenGuard({ row, receipt, wo, irRows }) {
+  if (!row) return { ok: false, status: 404, error: 'queue row not found' };
+  if (!['confirmed', 'attached_only'].includes(row.Status)) return { ok: false, status: 409, error: `only a confirmed or attached-only receipt can be re-opened (this one is ${row.Status || 'pending'})` };
+  if (!receipt) return { ok: false, status: 404, error: 'Could not find the original Receipts row for this confirmation - nothing was changed. Check the Receipts tab directly.' };
+  const woId = String(receipt.WO_ID || row.Confirmed_WO_ID || '').trim();
+  const inv = receiptInvoiceSentReason(woId, wo, irRows);
+  if (inv) return { ok: false, status: 409, invoice_sent: true, error: `${inv}. Re-opening here would leave QuickBooks and the customer's invoice out of sync - fix it in QuickBooks directly.` };
+  const qbSent = String(receipt.QB_Email_Sent || '').toUpperCase() === 'TRUE';
+  return { ok: true, carry_qb_sent: qbSent, prior_qb_email_date: qbSent ? String(receipt.QB_Email_Sent_Date || '') : '', prior_amount: Number(receipt.Amount) || 0, wo_id: woId };
+}
+
+// PURE - on re-confirm of a re-opened row: carry the "already emailed to QuickBooks" flag onto the
+// NEW Receipts row so sendReceiptsToQBEmail skips it (no duplicate card-expense email). Never for a
+// refund / negative amount - that is a different money event QuickBooks has not seen.
+function receiptQbCarryFor(queueRow, finalAmount) {
+  if (!queueRow || String(queueRow.Reopened_QB_Sent || '').toUpperCase() !== 'TRUE') return null;
+  if ((Number(finalAmount) || 0) <= 0) return null;
+  const prior = Number(queueRow.Prior_QB_Amount);
+  return {
+    date: String(queueRow.Prior_QB_Email_Date || '').trim() || new Date().toISOString(),
+    prior_amount: isNaN(prior) ? null : prior,
+    amount_changed: !isNaN(prior) && prior > 0 && Math.abs(prior - Math.abs(Number(finalAmount) || 0)) > 0.005,
+  };
+}
+
+// PURE - invoice-send guard. Receipts approved onto an invoice that have a scanned image but no
+// recorded customer-folder copy, or a WO with no Drive folder at all, mean the customer's "View job
+// photos" link would be missing/blank. Returns null when fine, else {no_folder, missing_ids, message}.
+// ownReceipts: the active Receipts rows on the invoice. linkedWoId: the WO whose folder the invoice
+// memo links to. Only Reconciler-attached receipts are expected to have a copy; vendor-supplied
+// receipts (private by design) are ignored.
+function invoiceReceiptFolderIssue(ownReceipts, attachments, wo, linkedWoId, queueRows) {
+  const cands = receiptFolderCopyCandidates(ownReceipts, queueRows);
+  if (!cands.length) return null;
+  const have = receiptIdsWithFolderCopy(attachments);
+  const missing = cands.filter(r => !have.has(String(r.ID)));
+  const noFolder = !(wo && (String(wo.Drive_Folder_URL || '').trim() || String(wo.Drive_Folder_ID || '').trim()));
+  const offFolder = cands.filter(r => linkedWoId && String(r.WO_ID) !== String(linkedWoId));
+  if (!missing.length && !noFolder && !offFolder.length) return null;
+  const parts = [];
+  if (noFolder) parts.push('this work order has no Drive folder, so the invoice will carry no link to its receipts');
+  if (missing.length) parts.push(`${missing.length} receipt image(s) (#${missing.map(r => r.ID).join(', #')}) have no copy in the customer folder`);
+  if (offFolder.length) parts.push(`receipt(s) #${offFolder.map(r => r.ID).join(', #')} belong to a different work order than the one whose folder this invoice links to`);
+  return { no_folder: noFolder, missing_ids: missing.map(r => String(r.ID)), off_folder_ids: offFolder.map(r => String(r.ID)),
+    message: `Customer receipts folder: ${parts.join('; ')}. Run the receipt-folder backfill (or fix the folder), or send anyway deliberately.` };
+}
+
+// PURE - daily selftest golden check: every Reconciler-confirmed receipt on a WO must have a copy in
+// that WO's customer folder.
+function selftestCheckReceiptFolderCopies(receipts, attachments, queueRows, workOrders) {
+  const woIds = new Set((workOrders || []).map(w => String(w.ID)));
+  const cands = receiptFolderCopyCandidates(receipts, queueRows).filter(r => woIds.has(String(r.WO_ID)));
+  const have = receiptIdsWithFolderCopy(attachments);
+  const missing = cands.filter(r => !have.has(String(r.ID)));
+  const ok = missing.length === 0;
+  return {
+    ok, missing_count: missing.length, checked: cands.length,
+    reason: ok ? `all ${cands.length} Reconciler receipt(s) on a work order have a copy in the customer folder`
+      : `${missing.length} of ${cands.length} Reconciler receipt(s) have no copy in the customer WO folder - e.g. receipt #${missing[0].ID} on WO ${missing[0].WO_ID}; run POST /admin/backfill-receipt-folder-copies`,
+  };
+}
+
 // Brett, Sep 2026: a receipt no longer has to be tied to a work order. A Ridge Co business
 // expense (no customer, sometimes no property either — e.g. office supplies) or a receipt
 // against one of Brett's own properties (e.g. Milam Ridge / 1864 Kerns School Rd, which has
