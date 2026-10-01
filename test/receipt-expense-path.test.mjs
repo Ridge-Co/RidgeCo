@@ -98,6 +98,8 @@ function world() {
   ok(row.Category === 'billable' && row.WO_ID === 'WO-1200', 'work-order confirm unchanged: billable on the WO');
   ok(w.irCalls.length === 1, 'work-order confirm still folds into the invoice');
   ok(w.sent.length === 0 && r.qb_email === null, 'work-order confirm is NOT sent to QB immediately (daily sweep, as before)');
+  ok(w.addOpts[0] && w.addOpts[0].folderCopy === true, 'work-order confirm asks addReceipt for the shared customer-folder copy (Oct 1 2026)');
+  ok(!w.addOpts[0].qbSentCarry, 'a normal (not re-opened) confirm carries no already-sent-to-QB flag');
 }
 {
   const w = world();
