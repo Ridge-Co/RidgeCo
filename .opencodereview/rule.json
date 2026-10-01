@@ -1,0 +1,19 @@
+{
+  "exclude": ["context/**", "**/*.md", "package-lock.json"],
+  "rules": [
+    {
+      "path": "worker.js",
+      "merge_system_rule": true,
+      "rule": "Ridge Co Cloudflare Worker over Google Sheets. Flag ONLY real defects, with the line and a one-line fix. Check: (1) Sheet columns looked up by header via indexOf/findIndex used without a -1 guard, or by hard-coded index instead of header name; (2) a handler returning success:true without reading back the write; (3) new routes missing from ROLE_SCOPES/PUBLIC_PATHS decisions, or admin routes reachable without auth; (4) raw Config, tokens, PINs or secrets returned from any route or written to logs; (5) request.json() without a try/catch (empty POST bodies must not 500); (6) btoa()/atob() on text that can contain non-Latin-1 characters; (7) SMS/email sends that bypass the gated send helper (smsGatedSend) or ignore quiet hours/Test Mode; (8) money paths (QuickBooks, invoices, payments) where a failure is swallowed or double-sent; (9) ensureTab/ensureColumns misuse that could drop or reorder existing data. Do not comment on style."
+    },
+    {
+      "path": "*.html",
+      "merge_system_rule": true,
+      "rule": "Mobile-first portal pages (vendor/tenant/owner/admin) for a phone user. Flag ONLY real defects: field names the page sends that the Worker route does not read (or the reverse); a <label>-wrapped file input; tap targets under ~44px; stale async responses overwriting newer state (no request-id guard); secrets/PINs shown or logged; actions with no error surfacing on failed fetch. Do not comment on style."
+    },
+    {
+      "path": "test/**",
+      "rule": "Flag tests that cannot fail (assertions always true) or that assert on text that would still pass if the feature were removed."
+    }
+  ]
+}
