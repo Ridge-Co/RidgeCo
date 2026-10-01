@@ -9204,6 +9204,7 @@ function retranslateEstimateUI(woId, estimateId, btn) {
 }
 
 function refreshHubEstimateView(woId) {
+  if (typeof awOnChildChanged === 'function') awOnChildChanged(woId); // Additional-work section on the parent WO
   var holder = document.getElementById('est-view-' + woId);
   if (!holder) return;
   holder.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading estimate…</span>';
