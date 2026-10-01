@@ -1628,7 +1628,7 @@ async function handlePhotoUploadClean(env, request) {
       if (!internalRoot || !internalRoot.id) return json({ error: 'Could not find/create internal vendor-bills folder', step: step.current }, 500);
       woFolder = await findOrCreateFolder(token, woLabel, internalRoot.id);
     } else {
-      woFolder = await findOrCreateFolder(token, woLabel, propFolder.id);
+      woFolder = await driveFindOrCreateWOFolder(token, propFolder.id, woLabel);
     }
     if (!woFolder || !woFolder.id) return json({ error: `Could not find/create WO folder "${woLabel}"`, step: step.current }, 500);
     step.current = 'upload_file';
