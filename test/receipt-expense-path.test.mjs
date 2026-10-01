@@ -51,7 +51,7 @@ function world() {
     fetchConfig: async () => ({ qb_receipts_email: 'qb@example.com' }),
     ensureColumns: async () => {},
     updateRow: async (env, t, id, fields) => { updates.push({ t, id, fields }); const r = (tabs[t] || []).find(x => String(x.ID) === String(id)); if (r) Object.assign(r, fields); },
-    addReceipt: async (env, body) => { const id = String(nextId++); tabs.Receipts.push({ ID: id, Active: 'TRUE', QB_Email_Sent: 'FALSE', Store: body.store, Amount: String(body.amount), WO_ID: body.wo_id, Property_ID: body.property_id, Category: body.category, Payment_Source: 'company_card', Source_File_ID: body.source_file_id }); return jsonResp({ success: true, id, amount: String(body.amount) }); },
+    addReceipt: async (env, body, opts) => { addOpts.push(opts || null); const id = String(nextId++); tabs.Receipts.push({ ID: id, Active: 'TRUE', QB_Email_Sent: (opts && opts.qbSentCarry) ? 'TRUE' : 'FALSE', Store: body.store, Amount: String(body.amount), WO_ID: body.wo_id, Property_ID: body.property_id, Category: body.category, Payment_Source: 'company_card', Source_File_ID: body.source_file_id }); return jsonResp({ success: true, id, amount: String(body.amount), folder_copy: 'ok' }); },
     scopeCoveringSignatureForWO: async () => null,
     appendReceiptToInvoiceReview: async (env, a) => { irCalls.push(a); return { linked: true }; },
     _recoverReceiptSourceFile: (r) => ({ id: r.Source_File_ID || '', url: '' }),
