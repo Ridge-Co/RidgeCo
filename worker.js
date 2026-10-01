@@ -3121,7 +3121,9 @@ async function receiptReconConfirm(env, body) {
   // 7am sweep (which only takes 8 a day) — Brett is clearing a backlog and wants each one done
   // when he taps it. Work-order receipts keep going through the normal daily sweep.
   let qbEmail = null;
-  if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
+  if (qbCarry && addJson && addJson.success && !addJson.duplicate) {
+    qbEmail = { sent: false, skipped: true, already_sent_date: qbCarry.date, amount_changed: !!qbCarry.amount_changed, error: null };
+  } else if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
     try {
       const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
       const j = await r.json().catch(() => ({}));
