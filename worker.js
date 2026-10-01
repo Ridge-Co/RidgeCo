@@ -19201,7 +19201,7 @@ async function qbPayables(env, url) {
           const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
           const found = (r && r.QueryResponse && r.QueryResponse[entity]) || [];
           for (const row of found) map.set(String(row.Id), row);
-        } catch (e) { /* this chunk's ids fall through to null/"unknown" below, same as before */ }
+        } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_batch_fetch', '/qb/payables', `${entity} ids=${chunk.length}`, e); /* this chunk's ids still fall through to null/"unknown" below, but it is now reported */ }
       }
       return map;
     }
