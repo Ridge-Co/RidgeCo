@@ -3178,15 +3178,17 @@ async function receiptAttachOnly(env, body) {
     category: 'attached_only',
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source,
-  });
+  }, { folderCopy: true, wo, qbSentCarry: receiptQbCarryFor(row, amount) });
   const addJson = await addResp.json().catch(() => ({}));
+  const qbCarry = receiptQbCarryFor(row, amount);
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
-      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : 'Image attached only — not billed, no invoice line added.',
+      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : ('Image attached only — not billed, no invoice line added.' + (qbCarry ? ` Re-confirmed after a re-open: already emailed to QuickBooks ${qbCarry.date.slice(0, 10)} - NOT re-sent.` : '')),
+      ...(qbCarry && !addJson.duplicate ? { Reopened_QB_Sent: 'FALSE' } : {}),
     });
   }
-  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson });
+  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson, ...(qbCarry && !addJson.duplicate ? { qb_email: { sent: false, skipped: true, already_sent_date: qbCarry.date } } : {}) });
 }
 
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
