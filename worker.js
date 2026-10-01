@@ -23560,10 +23560,13 @@ async function qbSendCombinedInvoice(env, ctx) {
     // one clean bill and one still-partial bill stays open rather than reading Invoiced early.
     const allSent = !!invoiceId && rowBuilds.every(rb => rb.status === 'sent');
     if (allSent) {
-      try {
-        await updateWOFields(env, woId, { Status: 'Invoiced' });
-        if (invoiceDocNumber) await updateWOFields(env, woId, { QBO_Invoice_Number: invoiceDocNumber });
-      } catch (e) {}
+      // One WO for an ordinary group; parent + each add-on child when the invoice rolled them together.
+      for (const _wid of _distinctWoIds) {
+        try {
+          await updateWOFields(env, _wid, { Status: 'Invoiced' });
+          if (invoiceDocNumber) await updateWOFields(env, _wid, { QBO_Invoice_Number: invoiceDocNumber });
+        } catch (e) {}
+      }
     }
 
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_ids: rowBuilds.map(rb => rb.billId || ''),
