@@ -12533,6 +12533,14 @@ function confirmQBSend(overridePendingInfo, overrideAddon, overrideReceiptFolder
       document.getElementById('qb-send-msg').innerHTML =
         '<div style="color:var(--danger);font-size:12px;margin-top:6px;line-height:1.5">⛔ ' + esc(res.error || 'This additional work is not approved.') + '</div>' +
         '<div style="margin-top:8px"><button onclick="confirmQBSend(' + (overridePendingInfo ? 'true' : 'false') + ',true,' + (overrideReceiptFolder ? 'true' : 'false') + ')" style="background:var(--danger);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 12px;cursor:pointer">Invoice anyway</button></div>';
+    } else if (res.receipt_folder_missing && !overrideReceiptFolder) {
+      // Oct 1 2026: the customer reaches receipt images through the WO Drive folder link on the invoice.
+      // Soft block (same pattern as Pending Info): fix the copy (Receipt Reconciler / folder-copy backfill),
+      // or deliberately send anyway.
+      btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
+      document.getElementById('qb-send-msg').innerHTML =
+        '<div style="color:var(--warn);font-size:12px;margin-top:6px;line-height:1.5">📎 ' + esc(res.error || 'Some receipt images are not in the customer folder.') + '</div>' +
+        '<div style="margin-top:8px"><button onclick="confirmQBSend(' + (overridePendingInfo ? 'true' : 'false') + ',' + (overrideAddon ? 'true' : 'false') + ',true)" style="background:var(--danger);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px 12px;cursor:pointer">Send anyway (receipts not in folder)</button></div>';
     } else if (res.pending_info && !overridePendingInfo) {
       // CAP-036 #14: soft block, not a dead end — the server refused because the underlying
       // bill is flagged, but Brett is the only approver here, so a deliberate way through
