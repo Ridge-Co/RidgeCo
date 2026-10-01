@@ -23397,6 +23397,7 @@ async function qbSendInvoice(env, body) {
     // Exactly the receipts that were ticked at approval — read by id, so adding a receipt
     // to the job afterwards can't quietly change what the customer is billed.
     let ownReceipts = [];
+    let rfIssue = null;   // Oct 1 2026: receipts-folder guard (soft block, override_receipt_folder)
     const ownIds = String(ir.Own_Material_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
     if (ownIds.length) {
       try {
