@@ -1267,6 +1267,10 @@ function renderWOs(wos) {
           '<div class="action-title">ESTIMATE</div>' +
           '<div id="est-wrap-' + idx + '"><span style="color:var(--muted);font-size:11px">Loading…</span></div>' +
         '</div>' +
+        (awEligible(wo) ? '<div class="action-section" id="addon-section-' + idx + '">' +
+          '<button type="button" class="btn btn-sm btn-blue" style="width:100%;min-height:44px;font-size:13px" onclick="openAddonModal(\'' + wo.ID + '\')">🔍 ' + esc(t('Found something else?')) + '</button>' +
+          '<div id="addon-wrap-' + idx + '"></div>' +
+        '</div>' : '') +
         clHtml +
         '<div class="action-section">' +
           '<div class="action-title">UPDATE STATUS</div><!-- i18n:UPDATE STATUS -->' +
