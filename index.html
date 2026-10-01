@@ -856,6 +856,15 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- ADDITIONAL WORK — owner notice preview (information only, sent only on tap) -->
+<div class="modal-overlay" id="modal-aw-notice">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header"><div class="modal-title">✉ NOTIFY OWNER — PREVIEW</div><button class="modal-close" onclick="closeModal('modal-aw-notice')">✕</button></div>
+    <div id="aw-notice-body"></div>
+    <div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal('modal-aw-notice')">Cancel</button><button class="btn" id="aw-notice-send" style="min-height:44px" onclick="awNoticeSend()">Send to owner</button></div>
+  </div>
+</div>
+
 <!-- ASSIGN / REASSIGN VENDOR MODAL -->
 <div class="modal-overlay" id="modal-assign">
   <div class="modal">
