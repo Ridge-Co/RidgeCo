@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-01.3-deposit-paid-who-to-pay';
+const BUILD_VERSION = '2026-10-01.4-deposit-paid-who-to-pay';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -985,16 +985,19 @@ const _hubWorkerCore = {
     // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
     // Oct 1 2026 (Brett: nothing may fail silently): a failure here is logged to Ops_Telemetry, never swallowed.
     // qbSyncPayments returns a Response (never throws on its own errors) -- inspect its JSON for ok:false/errors too.
+    let _sweepRanInSync = false;
     try {
       const _syncRes = await qbSyncPayments(env, {});
       let _syncJson = null; try { _syncJson = await _syncRes.clone().json(); } catch (_) {}
+      _sweepRanInSync = !!(_syncJson && _syncJson.deposit_sweep);
       if (_syncJson && (_syncJson.ok === false || (_syncJson.errors && _syncJson.errors.length))) {
         await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify(_syncJson.errors || _syncJson.error || 'ok:false')).slice(0, 480) });
       }
     } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_qb_sync_payments failed and telemetry write failed', e); } }
     // Safety net (Oct 1 2026): the 15-minute cron may not be scheduled in production, so also run the
     // deposit-paid sweep daily. processDepositPaidSweep logs its own errors / not-found scopes to Ops_Telemetry.
-    try { await processDepositPaidSweep(env); }
+    // qbSyncPayments already runs the sweep (and logs its findings) -- only run it here if that did not happen, so there is no duplicate telemetry/SMS.
+    try { if (!_sweepRanInSync) await processDepositPaidSweep(env); }
     catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduled/deposit-paid-sweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_deposit_paid_sweep failed and telemetry write failed', e); } }
   }
 };
@@ -9454,23 +9457,40 @@ async function processEstimateReminders(env, nowArg) {
   const r = await sendTemplatedSms(env, { type: 'admin_estimate_reminder', kind: 'admin', bypassQuietHours: true, tokens: { Count: pending.length, List: list } });
   return { count: pending.length, sent: !!(r && r.sent), gate: r && r.gate_snapshot };
 }
-// Pure: the deposit milestone of a signature = its earliest (lowest Sequence) active milestone that has a
-// QuickBooks invoice. Shared by scopeDepositInvoiceId and qbPayables so both agree on "the deposit invoice".
-function depositMilestoneForSignature(sig, milestones) {
+// Pure: a signature's FIRST milestone = its lowest-Sequence non-inactive milestone (the deposit milestone).
+function firstMilestoneForSignature(sig, milestones) {
   if (!sig) return null;
-  const ms = (milestones || []).filter(m => m.Signature_ID === String(sig.ID) && m.Active !== 'FALSE' && (m.QB_Invoice_ID || '').trim());
+  const ms = (milestones || []).filter(m => m.Signature_ID === String(sig.ID) && String(m.Active || '').toUpperCase() !== 'FALSE');
   ms.sort((a, b) => (parseInt(a.Sequence) || 0) - (parseInt(b.Sequence) || 0));
   return ms[0] || null;
 }
+// Pure: the deposit milestone = the first milestone, and ONLY if it carries a QuickBooks invoice. If milestone 1 has
+// no invoice yet this returns null -- it never falls through to milestone 2 (that is not the deposit).
+function depositMilestoneForSignature(sig, milestones) {
+  const f = firstMilestoneForSignature(sig, milestones);
+  return f && (f.QB_Invoice_ID || '').trim() ? f : null;
+}
 // Pure: deposit invoice for a scope given already-read Scope_Signatures + Payment_Milestones rows.
-// source is 'signature' (legacy Scope_Signatures.QB_Invoice_ID), 'milestone' (earliest billed milestone) or ''.
+// source is 'signature' (legacy Scope_Signatures.QB_Invoice_ID), 'milestone' (first milestone) or ''.
+// `first` is the first milestone even when it has no invoice (used to tell "awaiting" from "billed but missing").
 function resolveScopeDepositInvoice(sigs, milestones, scopeId) {
   const live = (sigs || []).filter(x => x.Scope_ID === String(scopeId) && String(x.Active || '').toUpperCase() !== 'FALSE');
-  if (!live.length) return { sig: null, invoiceId: '', source: '', milestone: null };
+  if (!live.length) return { sig: null, invoiceId: '', source: '', milestone: null, first: null };
   const sig = live[live.length - 1];
-  if ((sig.QB_Invoice_ID || '').trim()) return { sig, invoiceId: sig.QB_Invoice_ID.trim(), source: 'signature', milestone: null };
+  const first = firstMilestoneForSignature(sig, milestones);
+  if ((sig.QB_Invoice_ID || '').trim()) return { sig, invoiceId: sig.QB_Invoice_ID.trim(), source: 'signature', milestone: null, first };
   const m = depositMilestoneForSignature(sig, milestones);
-  return { sig, invoiceId: m ? m.QB_Invoice_ID.trim() : '', source: m ? 'milestone' : '', milestone: m };
+  return { sig, invoiceId: m ? m.QB_Invoice_ID.trim() : '', source: m ? 'milestone' : '', milestone: m, first };
+}
+// Pure: a Pre-approved scope with no resolvable deposit invoice. 'alarm' = tell Brett (SMS + telemetry + red banner):
+// no signature at all, milestone 1 is Status 'billed' but has no invoice id, or the signature is 24h+ old (or its time
+// is unreadable). Otherwise it is just awaiting the normal deposit invoice (muted banner line only).
+function classifyMissingDeposit(sig, first, nowMs) {
+  if (!sig) return { alarm: true, reason: 'Pre-approved but no active signature found' };
+  if (first && String(first.Status || '').toLowerCase() === 'billed') return { alarm: true, reason: 'no deposit invoice id: milestone ' + first.ID + ' is marked billed but has no QuickBooks invoice' };
+  const signed = Date.parse(sig.Signed_TS || sig.Signed_Date || '');
+  if (!isNaN(signed) && nowMs - signed < 24 * 3600000) return { alarm: false, reason: 'awaiting deposit invoice (signed less than 24h ago)' };
+  return { alarm: true, reason: 'no deposit invoice on the signature or its first milestone' + (first ? ' (milestone ' + first.ID + ')' : ' (no milestones)') + ', 24h+ after signing' };
 }
 // Deposit invoice for a signed scope: the legacy signature invoice, else the earliest billed milestone.
 // A Payment_Milestones read failure now THROWS (it used to be swallowed into "no invoice", which made a
@@ -9489,27 +9509,56 @@ async function scopeDepositInvoiceId(env, scopeId, tabs) {
 // the 15-minute sweep, the daily QuickBooks sync and the Who To Pay page-open sweep can all call it.
 // Only the call that actually moves Pre-approved -> Approved sends texts. Texts are skipped for
 // signings older than the SMS cut-over so backfilled history never fires.
+// Claims Config `deposit_paid_text_<scopeId>` right before texting (cross-isolate guard: a second concurrent sweep
+// finds it set and does not text again). Returns { changed, texted, text_errors:[...] } -- a text that did not go
+// out (error / sent:false / gate-blocked) or a context failure is in text_errors (logged to Ops_Telemetry too), never silent.
 const _depositTransitionInFlight = new Set();
+async function claimDepositTextMarker(env, key) {
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  if (((data && data.values) || []).some(r => (r[0] || '').trim() === key && (r[1] || '').trim())) return 'already';
+  const w = await setConfigKey(env, { key, value: new Date().toISOString() });
+  if (w && w.status && w.status >= 400) throw new Error('Config write refused (HTTP ' + w.status + ')');
+  return 'claimed';
+}
 async function scopeDepositPaidTransition(env, scopeId, sinceISO) {
   const key = String(scopeId);
   if (_depositTransitionInFlight.has(key)) return { changed: false, in_flight: true };
   _depositTransitionInFlight.add(key);
+  const errs = [];
   try {
     const scope = (await fetchTab(env, 'Scopes')).find(x => x.ID === key);
     if (!scope || String(scope.Approval_Stage || '') !== 'Pre-approved') return { changed: false };
     const { sig } = await scopeDepositInvoiceId(env, scopeId);
+    // Re-read the stage immediately before the write (another sweep may have just moved it).
+    invalidateTabCache('Scopes');
+    const fresh = (await fetchTab(env, 'Scopes')).find(x => x.ID === key);
+    if (!fresh || String(fresh.Approval_Stage || '') !== 'Pre-approved') return { changed: false };
     const staged = await setApprovalStage(env, { woId: scope.WO_ID || '', scopeId: scope.ID, stage: 'Approved' });
     // setApprovalStage swallows its own errors and returns false; verify the Scope row really moved so a failed
     // write can never look like success (and never text twice on the retry).
+    invalidateTabCache('Scopes');
     const after = (await fetchTab(env, 'Scopes')).find(x => x.ID === key);
     if (!staged || !after || String(after.Approval_Stage || '') !== 'Approved') throw new Error('Approval_Stage did not move to Approved for scope ' + key + ' (write failed)');
     const recent = sig && (Date.parse(sig.Signed_TS || sig.Signed_Date || '') || 0) >= (Date.parse(sinceISO) || 0);
-    if (!recent) return { changed: true, texted: false };
-    const c = await estimateSmsContext(env, scope.WO_ID || '', scope.Vendor_ID);
+    if (!recent) return { changed: true, texted: false, text_errors: errs };
+    const ref = 'scope=' + key + ' wo=' + (scope.WO_ID || '');
+    // Claim the once-only text marker BEFORE texting. A read/write failure is surfaced; we still text once for this call.
+    try { if ((await claimDepositTextMarker(env, 'deposit_paid_text_' + key)) === 'already') return { changed: true, texted: false, already_texted: true, text_errors: errs }; }
+    catch (e) { await logAndCollectError(env, errs, 'deposit_paid_text_claim', 'scopeDepositPaidTransition', ref + ' (could not claim the once-only text marker; texting once for this call)', e); }
+    let c;
+    try { c = await estimateSmsContext(env, scope.WO_ID || '', scope.Vendor_ID); }
+    catch (e) { await logAndCollectError(env, errs, 'deposit_paid_text_context', 'scopeDepositPaidTransition', ref + ' approved but texts not sent', e); return { changed: true, texted: false, text_errors: errs }; }
     const job = scope.WO_ID ? ('work order ' + scope.WO_ID) : ('proposal #' + scope.ID);
-    await sendTemplatedSms(env, { type: 'admin_deposit_paid', kind: 'admin', wo_id: scope.WO_ID || '', property: c.property, tokens: { Job: job, Address: c.address } });
-    if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_deposit_paid', kind: 'vendor', vendor: c.vendor, wo_id: scope.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
-    return { changed: true, texted: true };
+    const smsOk = r => !!r && !r.error && (r.sent === true || r.held_for_quiet_hours === true);
+    const why = r => String((r && (r.error || r.reason)) || (r && r.gate_snapshot ? 'blocked by the SMS gate' : 'not sent'));
+    const send = async (label, o) => {
+      let r; try { r = await sendTemplatedSms(env, o); } catch (e) { r = { sent: false, error: String((e && e.message) || e) }; }
+      if (!smsOk(r)) await logAndCollectError(env, errs, 'deposit_paid_text_failed', 'scopeDepositPaidTransition', ref + ' ' + label, new Error(label + ' text not sent: ' + why(r)));
+    };
+    await send('admin_deposit_paid', { type: 'admin_deposit_paid', kind: 'admin', wo_id: scope.WO_ID || '', property: c.property, tokens: { Job: job, Address: c.address } });
+    if (c.vendor && c.vendor.Phone) await send('vendor_deposit_paid', { type: 'vendor_deposit_paid', kind: 'vendor', vendor: c.vendor, wo_id: scope.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
+    else if (scope.Vendor_ID) await logAndCollectError(env, errs, 'deposit_paid_text_failed', 'scopeDepositPaidTransition', ref + ' vendor_deposit_paid', new Error('vendor_deposit_paid text not sent: vendor ' + scope.Vendor_ID + ' not found or has no phone'));
+    return { changed: true, texted: errs.length === 0, text_errors: errs };
   } finally { _depositTransitionInFlight.delete(key); }
 }
 // Nothing may fail silently (Brett, Oct 1 2026): log an error to Ops_Telemetry (Success=FALSE) AND push it onto
@@ -9522,42 +9571,54 @@ async function logAndCollectError(env, sink, jobType, endpoint, ref, e) {
   catch (le) { sink.push({ stage: 'telemetry', ref: ref || '', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); }
   return entry;
 }
-// Surfaces one sweep problem: pushes it on out.not_found / out.errors, writes Ops_Telemetry (not_found: once per
-// scope per day via a Config marker so a 15-min cron does not flood the sheet; errors: every time), and texts the
-// admin phone once per scope per day (marker deposit_sweep_alert_<kind>_<scope>). The Who To Pay banner shows
-// everything in out regardless of the markers.
+// Surfaces one sweep problem: pushes it on out.not_found / out.errors; writes Ops_Telemetry (not_found: once per scope
+// per day via marker <key>_tel so a 15-min cron does not flood the sheet; errors: every time); and texts the admin phone
+// once per scope per day. The SMS marker (deposit_sweep_alert_<kind>_<scope>) is set ONLY when a real send happened:
+// a missing admin_phone, TWILIO_ENABLED off ({skipped}) or a send error is reported in out.errors (stage alert_sms) and
+// does not start the 24h quiet period. The Who To Pay banner shows everything in out regardless of the markers.
 async function depositSweepSurface(env, out, cfg, kind, entry) {
   (kind === 'not_found' ? out.not_found : out.errors).push(entry);
   const key = 'deposit_sweep_alert_' + kind + '_' + (entry.scope || 'sweep');
-  const now = Date.now();
-  const due = alertDebounceOk(cfg, key, now, 24 * 3600000);
+  const now = Date.now(), DAY = 24 * 3600000;
+  const telDue = kind === 'error' || alertDebounceOk(cfg, key + '_tel', now, DAY);
+  const smsDue = alertDebounceOk(cfg, key, now, DAY);
   const what = entry.reason || entry.error || '';
+  const stamp = new Date(now).toISOString();
   let telemetryOk = true;
-  if (kind === 'error' || due) {
+  if (telDue) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_' + kind, Skill_Or_Endpoint: 'processDepositPaidSweep', Success: 'FALSE', Notes: `scope=${entry.scope || ''} wo=${entry.wo_id || ''} ${entry.stage ? 'stage=' + entry.stage + ' ' : ''}${what}`.slice(0, 500) }); }
     catch (le) { telemetryOk = false; out.errors.push({ scope: entry.scope || '', stage: 'telemetry', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); }
+    if (telemetryOk && kind !== 'error') {
+      try { await setConfigKey(env, { key: key + '_tel', value: stamp }); cfg[key + '_tel'] = stamp; }
+      catch (ce) { out.errors.push({ scope: entry.scope || '', stage: 'alert_marker', error: String((ce && ce.message) || ce).slice(0, 200) }); }
+    }
   }
-  if (!due) return;
-  let smsOk = true;
-  if (cfg.admin_phone) {
-    try {
-      const r = await sendSMS(env, cfg.admin_phone, (kind === 'not_found' ? 'Deposit check: cannot find the deposit invoice for scope ' : 'Deposit check ERROR on scope ') + (entry.scope || '?') + (entry.wo_id ? ' (' + entry.wo_id + ')' : '') + ' - ' + String(what).slice(0, 120));
-      if (r && r.error) throw new Error(String(r.error));
-    } catch (se) { smsOk = false; out.errors.push({ scope: entry.scope || '', stage: 'alert_sms', error: String((se && se.message) || se).slice(0, 200) }); }
+  if (!smsDue) return;
+  let sent = false, failWhy = '';
+  try {
+    if (!cfg.admin_phone) throw new Error('Config admin_phone is not set');
+    const r = await sendSMS(env, cfg.admin_phone, (kind === 'not_found' ? 'Deposit check: cannot find the deposit invoice for scope ' : 'Deposit check ERROR on scope ') + (entry.scope || '?') + (entry.wo_id ? ' (' + entry.wo_id + ')' : '') + ' - ' + String(what).slice(0, 120));
+    if (r && r.error) throw new Error(String(r.error));
+    if (r && r.skipped) throw new Error('SMS skipped: ' + (r.reason || 'sending is disabled'));
+    sent = true;
+  } catch (se) { failWhy = String((se && se.message) || se).slice(0, 200); }
+  if (!sent) {
+    out.errors.push({ scope: entry.scope || '', wo_id: entry.wo_id || '', stage: 'alert_sms', error: 'admin alert NOT sent: ' + failWhy });
+    if (telDue) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_alert_not_sent', Skill_Or_Endpoint: 'processDepositPaidSweep', Success: 'FALSE', Notes: `scope=${entry.scope || ''} wo=${entry.wo_id || ''} ${failWhy}`.slice(0, 500) }); } catch (le) { out.errors.push({ scope: entry.scope || '', stage: 'telemetry', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); } }
+    return;
   }
-  if (telemetryOk && smsOk) {
-    try { await setConfigKey(env, { key, value: new Date(now).toISOString() }); cfg[key] = new Date(now).toISOString(); }
-    catch (ce) { out.errors.push({ scope: entry.scope || '', stage: 'alert_marker', error: String((ce && ce.message) || ce).slice(0, 200) }); }
-  }
+  try { await setConfigKey(env, { key, value: stamp }); cfg[key] = stamp; }
+  catch (ce) { out.errors.push({ scope: entry.scope || '', stage: 'alert_marker', error: String((ce && ce.message) || ce).slice(0, 200) }); }
 }
-// Fast sweep (cronSweep every 15 min, the daily scheduled() run, qbSyncPayments, and POST /scope-deposit/sweep
+// Fast sweep (cronSweep every 15 min, qbSyncPayments / the daily scheduled() run, and POST /scope-deposit/sweep
 // which the Who To Pay page fires when it opens). Only touches QuickBooks when a Pre-approved scope exists.
-// Returns { ok, checked, transitioned:[{scope,wo_id,texted,invoice_id,source}], not_found:[{scope,wo_id,reason,invoice_id?}],
-// errors:[{scope?,wo_id?,stage,error}] }. NEVER throws and NEVER swallows: every failure is in `errors` AND in Ops_Telemetry.
-// not_found = a Pre-approved scope whose deposit invoice cannot be resolved (no signature / no invoice on the
-// signature or any billed milestone) or cannot be fetched from QuickBooks.
+// Returns { ok, checked, transitioned:[{scope,wo_id,texted,text_errors?,invoice_id,source}], not_found:[{scope,wo_id,reason,invoice_id?}],
+// awaiting_invoice:[{scope,wo_id,reason}] (fresh signing, normal wait, no alert), errors:[{scope?,wo_id?,stage,error}] }.
+// NEVER throws and NEVER swallows: every failure is in `errors` AND in Ops_Telemetry.
+// not_found = a Pre-approved scope whose deposit invoice cannot be resolved for real (no signature, milestone 1 billed with
+// no invoice id, or signed 24h+ ago with none) or cannot be fetched from QuickBooks. ok is false when errors/not_found exist.
 async function processDepositPaidSweep(env) {
-  const out = { ok: true, checked: 0, transitioned: [], not_found: [], errors: [] };
+  const out = { ok: true, checked: 0, transitioned: [], not_found: [], awaiting_invoice: [], errors: [] };
   let cfg = {};
   try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; await logAndCollectError(env, out.errors, 'deposit_sweep_config', 'processDepositPaidSweep', 'fetchConfig', e); }
   let scopes, tabs, token;
@@ -9580,9 +9641,11 @@ async function processDepositPaidSweep(env) {
   for (const sc of scopes) {
     const base = { scope: sc.ID, wo_id: sc.WO_ID || '' };
     try {
-      const { sig, invoiceId, source } = await scopeDepositInvoiceId(env, sc.ID, tabs);
+      const { sig, first, invoiceId, source } = await scopeDepositInvoiceId(env, sc.ID, tabs);
       if (!invoiceId) {
-        await depositSweepSurface(env, out, cfg, 'not_found', Object.assign({}, base, { reason: sig ? 'no deposit invoice on the signature or any billed milestone' : 'Pre-approved but no active signature found' }));
+        const k = classifyMissingDeposit(sig, first, Date.now());
+        if (k.alarm) await depositSweepSurface(env, out, cfg, 'not_found', Object.assign({}, base, { reason: k.reason }));
+        else out.awaiting_invoice.push(Object.assign({}, base, { reason: k.reason }));
         continue;
       }
       const r = await qbApi(env, 'invoice/' + encodeURIComponent(invoiceId) + '?minorversion=73', 'GET', null, token);
@@ -9590,7 +9653,10 @@ async function processDepositPaidSweep(env) {
       if (!inv) { await depositSweepSurface(env, out, cfg, 'not_found', Object.assign({}, base, { invoice_id: invoiceId, reason: 'QuickBooks returned no invoice ' + invoiceId })); continue; }
       if ((Number(inv.TotalAmt) || 0) > 0 && (Number(inv.Balance) || 0) <= 0.005) {
         const t = await scopeDepositPaidTransition(env, sc.ID, since);
-        if (t && t.changed) out.transitioned.push(Object.assign({}, base, { texted: !!t.texted, invoice_id: invoiceId, source }));
+        if (t && t.changed) {
+          out.transitioned.push(Object.assign({}, base, { texted: !!t.texted, text_errors: t.text_errors || [], invoice_id: invoiceId, source }));
+          if (t.text_errors && t.text_errors.length) out.errors.push(...t.text_errors.map(e => Object.assign({ scope: sc.ID, wo_id: sc.WO_ID || '' }, e)));
+        }
       }
     } catch (e) {
       await depositSweepSurface(env, out, cfg, 'error', Object.assign({}, base, { stage: 'scope', error: String((e && e.message) || e).slice(0, 200) }));
@@ -19348,6 +19414,11 @@ async function qbPayables(env, url) {
           // booked) must never fall into the same bucket as a genuinely nothing-owed job — that
           // exact misclassification is how 1305 N Calvert St's final bill went unnoticed.
           if (!c.billId && c.skipReason && !inHouse) state = 'vendor bill missing';
+          else if (!c.billId && c.milestoneId && !inHouse && c.vendorCost > 0 && c.sc.Vendor_ID) {
+            // Milestone-billed deposit with a vendor cost but NO vendor bill and no recorded skip reason: that is a gap, not "nothing to pay".
+            state = 'vendor bill missing';
+            warnings.push({ stage: 'vendor_bill_missing', ref: 'wo=' + c.sc.WO_ID + ' milestone=' + c.milestoneId, error: 'deposit milestone has a vendor cost ($' + c.vendorCost + ') but no vendor bill was created' });
+          }
           else if (inHouse || !c.billId)             state = 'nothing to pay';
           else if (vendorPaid)                        state = 'vendor paid';
           else if (customerPaid)                      state = 'PAY THE VENDOR';
@@ -19434,7 +19505,8 @@ async function qbSyncPayments(env, body) {
         const sig = sigs.find(x => x.ID === r.signature_id);
         if (sig && sig.Scope_ID) {
           let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (_) {}
-          await scopeDepositPaidTransition(env, sig.Scope_ID, cfgS.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
+          const _tr = await scopeDepositPaidTransition(env, sig.Scope_ID, cfgS.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
+          if (_tr && _tr.text_errors && _tr.text_errors.length) syncErrors.push(..._tr.text_errors);
         }
       } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_transition', '/qb/sync-payments', 'sig=' + r.signature_id + ' wo=' + (r.wo_id || '') + (r.milestone_id ? ' milestone=' + r.milestone_id : ''), e); }
     }

@@ -106,7 +106,7 @@ function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, ir
   const fetchTab = async () => [];
   const paymentMilestonesTab = async () => {};
   const logTelemetry = async () => {};
-  const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
+  const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
   return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', src)
     (fetchTabs, fetchTab, paymentMilestonesTab, logTelemetry, qbAccessToken, qbApi, qbVendorDisplayName, vendorTermLabel, json);
 }
@@ -153,7 +153,7 @@ const qbApiPaid = async (env, path) => {
   if (path.startsWith('query?') && path.includes('from%20Purchase')) { purchaseQueried = true; return { QueryResponse: { Purchase: [] } }; }
   return {};
 };
-const srcPaid = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
+const srcPaid = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
 const qbPayablesAlreadyPaid = new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', srcPaid)
   (fetchTabsPaid, async () => [], async () => {}, async () => {}, async () => 'x', qbApiPaid, (v) => (v && v.Company) || 'Vendor', () => 'Due on receipt', (b) => b);
 const resPaid = await qbPayablesAlreadyPaid({}, new URL('http://x/?days=90'));
