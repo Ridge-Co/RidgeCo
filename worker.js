@@ -19406,7 +19406,7 @@ async function qbSyncPayments(env, body) {
   // Auto-close needs the current WO status so we never overwrite one already finished.
   const WO_DONE = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'];
   let workorders = [];
-  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { /* flip step just no-ops */ }
+  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
 
   let written = 0, failed = 0, closed = 0;
   const closedWOs = [];
