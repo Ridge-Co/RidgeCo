@@ -23949,6 +23949,9 @@ async function qbSendCombinedInvoice(env, ctx) {
         pending_info: true, warnings,
       }, 409);
     }
+    if (rfIssue && !ctx.overrideReceiptFolder) {
+      return json({ ok: false, error: rfIssue.message, receipt_folder_missing: true, missing_receipt_ids: rfIssue.missing_ids, warnings }, 409);
+    }
 
     const token = await qbAccessToken(env);
     const errors = [];
