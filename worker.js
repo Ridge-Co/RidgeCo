@@ -3087,8 +3087,11 @@ async function receiptReconConfirm(env, body) {
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
-  });
+  }, { folderCopy: true, wo: woRowForCopy, qbSentCarry: receiptQbCarryFor(row, finalAmount) });
   const addJson = await addResp.json().catch(() => ({}));
+  // Re-opened row (POST /receipt-recon/reopen): the QuickBooks card-expense email already went out
+  // for the original receipt, so this one was born QB_Email_Sent=TRUE and the sweep will skip it.
+  const qbCarry = receiptQbCarryFor(row, finalAmount);
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
     // A signed scope proposal's WO is billed through its payment milestones — folding this
