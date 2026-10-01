@@ -101,9 +101,14 @@ function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, ir
   const qbVendorDisplayName = (v) => (v && v.Company) || 'Vendor';
   const vendorTermLabel = () => 'Due on receipt';
   const json = (body) => body;
-  const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
-  return new Function('fetchTabs', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', src)
-    (fetchTabs, qbAccessToken, qbApi, qbVendorDisplayName, vendorTermLabel, json);
+  // Oct 1 2026: qbPayables' signed-proposal block now reads Scope_Signatures/Scopes/Payment_Milestones (previously a missing
+  // fetchTab here was silently swallowed) and reports problems via logAndCollectError -- stub those boundaries explicitly.
+  const fetchTab = async () => [];
+  const paymentMilestonesTab = async () => {};
+  const logTelemetry = async () => {};
+  const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
+  return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', src)
+    (fetchTabs, fetchTab, paymentMilestonesTab, logTelemetry, qbAccessToken, qbApi, qbVendorDisplayName, vendorTermLabel, json);
 }
 
 // Brett's exact WO-1025 / Alex Busey scenario: owner (customer) paid in full ($495, invoice
