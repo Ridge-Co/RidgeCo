@@ -62,6 +62,8 @@ function world() {
     _escHtml: (s) => String(s),
     setTimeout: (f) => f(),
   };
+  // Oct 1 2026: receiptReconConfirm now carries a re-opened row's "already emailed to QB" flag.
+  deps.receiptQbCarryFor = new Function(`return (${extractSyncFn('receiptQbCarryFor')});`)();
   const names = Object.keys(deps);
   const sendQB = new Function(...names, `return (${extractFn('sendReceiptsToQBEmail')});`)(...names.map(n => deps[n]));
   deps.sendReceiptsToQBEmail = sendQB;
