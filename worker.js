@@ -23819,6 +23819,7 @@ async function qbSendCombinedInvoice(env, ctx) {
     // per group member instead of once for the whole function.
     let ownReceiptsAll = null;
     const rowBuilds = [];
+    const _allOwnReceipts = [];   // Oct 1 2026: for the receipts-folder guard below
     for (const r of groupRows) {
       const vendor = vendors.find(v => v.ID === r.Vendor_ID) || {};
       const billRow = bills.find(b => b.ID === r.Bill_ID) || {};
