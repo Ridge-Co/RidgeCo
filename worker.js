@@ -9633,6 +9633,18 @@ async function unapproveEstimate(env, body) {
                 warning: (latest.Vendor_ID && !vendorTold) ? 'Estimate is back on hold, but the vendor could not be texted — tell them directly.' : '' });
 }
 
+// Additional-work guard for approve / needs-info / decline: a voided, withdrawn or draft add-on child can never be
+// acted on, and (approve only) a Declined/Withdrawn latest estimate can't be approved. Returns '' (ok) or a message.
+// Normal (non-addon) work orders are never affected.
+function addonEstimateActionBlock(wo, latest, kind) {
+  if (!wo || String(wo.Type || '') !== 'addon') return '';
+  const as = String(wo.Addon_Status || '');
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE' || as === 'Withdrawn') return 'This additional work was withdrawn or voided — it cannot be ' + (kind === 'approve' ? 'approved' : 'changed') + '.';
+  if (as === 'Draft') return 'This additional work has not been submitted yet — it cannot be ' + (kind === 'approve' ? 'approved' : 'changed') + '.';
+  const st = String((latest && latest.Status) || '');
+  if (kind === 'approve' && (st === 'Declined' || st === 'Withdrawn')) return 'This additional work estimate is ' + st + ' — it cannot be approved.';
+  return '';
+}
 async function approveEstimate(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   const all = await fetchTab(env, 'Estimates'); const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
