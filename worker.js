@@ -19457,11 +19457,17 @@ async function qbSyncPayments(env, body) {
             'Vendor bill paid in QuickBooks (' + (r.vendor_ref || ('bill ' + r.bill_id)) + ')'); } catch (e2) {}
           closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
         }
-      } catch (e) { /* non-fatal: the payable state still saved above */ }
+      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'wo=' + r.wo_id, e); /* the payable state still saved above */ }
     }
   }
+  // Same sweep the Who To Pay page-open and the cron run: covers Pre-approved scopes whose deposit invoice is on a
+  // milestone, and reports (not_found / errors) any scope whose deposit invoice cannot be resolved. Idempotent.
+  let depositSweep = null;
+  try { depositSweep = await processDepositPaidSweep(env); }
+  catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_sweep', '/qb/sync-payments', 'processDepositPaidSweep', e); }
   return json({ ok: true, checked: data.count, written, failed, closed, closed_wos: closedWOs,
-                owed_now: data.owed_now, owed_total: data.owed_total, rows: data.rows });
+                owed_now: data.owed_now, owed_total: data.owed_total, warnings: data.warnings || [], errors: syncErrors,
+                deposit_sweep: depositSweep, rows: data.rows });
 }
 
 async function qbTradeMap(env) {
