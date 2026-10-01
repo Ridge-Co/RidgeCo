@@ -34,6 +34,8 @@ function world() {
       { ID: '1', Status: 'pending', Total: '50.22', Vendor: 'Home Depot', Receipt_Date: '2026-09-04', PO_Reference: '1577 ingleside', Source_File_ID: 'F1', Source_File_URL: 'u1', Suggestion: JSON.stringify({ category: 'billable', action: 'suggest' }) },
       { ID: '2', Status: 'pending', Total: '18.13', Vendor: 'Home Depot', Receipt_Date: '2026-08-24', PO_Reference: '2309 ROBB ST', Source_File_ID: 'F2', Suggestion: JSON.stringify({ category: 'billable' }) },
       { ID: '3', Status: 'pending', Total: '56.04', Vendor: 'Home Depot', Receipt_Date: '2026-09-04', PO_Reference: 'bmore', Source_File_ID: 'F3', Suggestion: JSON.stringify({ category: 'company', action: 'exclude' }) },
+      // Oct 1 2026: a re-opened row that was already emailed to QuickBooks before it was re-opened.
+      { ID: '4', Status: 'pending', Total: '18.13', Vendor: 'Home Depot', Receipt_Date: '2026-08-24', PO_Reference: '', Source_File_ID: 'F4', Reopened_QB_Sent: 'TRUE', Prior_QB_Email_Date: '2026-09-30T12:00:00.000Z', Prior_QB_Amount: '18.13', Suggestion: JSON.stringify({ category: 'billable' }) },
     ],
     Receipts: [
       { ID: '900', Active: 'TRUE', QB_Email_Sent: 'FALSE', Store: 'Older', Amount: '9.99', Payment_Source: 'company_card' },  // an older unsent row — must NOT be sent by an expense tap
