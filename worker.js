@@ -9650,6 +9650,8 @@ async function approveEstimate(env, body) {
   const all = await fetchTab(env, 'Estimates'); const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
   const latest = versions.reduce((a, b) => parseInt(a.Version) > parseInt(b.Version) ? a : b);
+  const _blockMsg = addonEstimateActionBlock(findWO(_woRows, woId), latest, 'approve');
+  if (_blockMsg) return json({ error: _blockMsg }, 400);
   const data = await sheetsRequest(env, 'GET', '/values/Estimates'); const rows = data.values || [], headers = rows[0] || [];
   const idCol = headers.indexOf('ID'), statusCol = headers.indexOf('Status');
   if (idCol === -1 || statusCol === -1) return json({ error: 'Estimates tab missing ID or Status column' }, 500);
