@@ -694,6 +694,7 @@ const _hubWorkerCore = {
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
         if (path === '/admin/backfill-receipt-attachments') return await backfillReceiptAttachments(env, body);
+        if (path === '/admin/backfill-receipt-folder-copies') return await backfillReceiptFolderCopies(env, body);
         if (path === '/admin/backfill-approval-stage') return await backfillApprovalStage(env, body);
         if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
         if (path === '/admin/reformat-sheets')    return await adminReformatSheets(env);
