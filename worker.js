@@ -19308,6 +19308,12 @@ async function qbPayables(env, url) {
         if ((r.QB_Invoice_ID || '').trim()) {
           sigCandidates.push({ r, sc, phase: 'deposit', invId: (r.QB_Invoice_ID || '').trim(), billId: (r.QB_Bill_ID || '').trim(),
             custTotal: deposit, vendorCost: depositVendorAmt, skipReason: r.Bill_Skip_Reason || '' });
+        } else {
+          const dm = depositMilestoneForSignature(r, allMilestones);
+          if (dm) {
+            sigCandidates.push({ r, sc, phase: 'deposit', invId: (dm.QB_Invoice_ID || '').trim(), billId: (dm.QB_Bill_ID || '').trim(), milestoneId: dm.ID,
+              custTotal: +dm.Customer_Amount || deposit, vendorCost: +dm.Vendor_Amount || depositVendorAmt, skipReason: r.Bill_Skip_Reason || '' });
+          }
         }
         if ((r.QB_Final_Invoice_ID || '').trim()) {
           sigCandidates.push({ r, sc, phase: 'final', invId: (r.QB_Final_Invoice_ID || '').trim(), billId: (r.QB_Final_Bill_ID || '').trim(),
