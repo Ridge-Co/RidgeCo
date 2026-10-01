@@ -23408,6 +23408,16 @@ async function qbSendInvoice(env, body) {
         }
       } catch (e) { warnings.push('Could not read the Receipts tab — materials you bought are not itemised on this invoice.'); }
     }
+    // Oct 1 2026 (Brett): the customer reaches receipts through the WO Drive folder link on the invoice - never let an
+    // invoice with receipts go out while a receipt image has no copy there / the WO has no folder. Preview warns; the
+    // real send is a 409 soft block unless override_receipt_folder:true (same pattern as Pending Info).
+    if (ownReceipts.length) {
+      try {
+        const [_atts, _rq] = await fetchTabs(env, ['Attachments', 'Receipt_Recon_Queue']);
+        rfIssue = invoiceReceiptFolderIssue(ownReceipts, _atts, wo, ir.WO_ID, _rq);
+      } catch (e) { warnings.push('Could not check whether this job\'s receipt images are in the customer folder.'); }
+      if (rfIssue) warnings.push('📎 ' + rfIssue.message);
+    }
 
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
