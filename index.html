@@ -12491,7 +12491,7 @@ function renderQBPreview(p) {
 // CAP-036 #14: overridePendingInfo (true only when re-called from the "Send anyway" button
 // below) resends with override_pending_info:true so a bill flagged "Invoiced — Pending Info"
 // can still go out deliberately — soft block, never a permanent one.
-function confirmQBSend(overridePendingInfo, overrideAddon) {
+function confirmQBSend(overridePendingInfo, overrideAddon, overrideReceiptFolder) {
   if (!_qbCurrent) return;
   var id = _qbCurrent;
   var btn = document.getElementById('qb-send-confirm-btn');
