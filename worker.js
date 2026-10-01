@@ -794,6 +794,7 @@ const _hubWorkerCore = {
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
+        if (path === '/scope-deposit/sweep')      return json(await processDepositPaidSweep(env)); // Who To Pay page-open trigger; same auth as /qb/sync-payments
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
         if (path === '/qb/backfill-emails')       return await qbBackfillEmails(env, body);
         if (path === '/qb/backfill-invoice-emails') return await qbBackfillInvoiceEmails(env, body);
