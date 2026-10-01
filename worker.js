@@ -3112,7 +3112,9 @@ async function receiptReconConfirm(env, body) {
       Status: addJson.duplicate ? 'skipped' : 'confirmed',
       Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
       Confirmed_Receipt_ID: addJson.duplicate ? '' : String(addJson.id || ''),
-      Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
+      Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.'
+        : (qbCarry ? `Re-confirmed after a re-open: the original was already emailed to QuickBooks ${qbCarry.date.slice(0, 10)} - NOT re-sent.` + (qbCarry.amount_changed ? ` NOTE: amount changed from $${qbCarry.prior_amount.toFixed(2)} to $${Math.abs(Number(finalAmount) || 0).toFixed(2)} - QuickBooks still has the old amount, fix it there.` : '') : ''),
+      ...(qbCarry && !addJson.duplicate ? { Reopened_QB_Sent: 'FALSE' } : {}),
     });
   }
   // Expense receipts go to QuickBooks' receipts inbox right away rather than waiting for the
