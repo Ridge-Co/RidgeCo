@@ -19395,9 +19395,12 @@ async function qbSyncPayments(env, body) {
   const res = await qbPayables(env, url);
   const data = await res.clone().json();
   if (!data.ok) return res;
+  // Oct 1 2026: nothing may fail silently -- every problem below is logged to Ops_Telemetry and returned in
+  // `errors` (+ the payables `warnings`), which the Who To Pay page shows in its banner.
+  const syncErrors = [];
 
   try { await ensureColumns(env, 'Invoice_Review', ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked']); }
-  catch (e) { /* the report below still stands; only the stored copy is lost */ }
+  catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_ensure_columns', '/qb/sync-payments', 'Invoice_Review columns (stored copy may be stale)', e); }
 
   const now = new Date().toISOString();
   // Auto-close needs the current WO status so we never overwrite one already finished.
