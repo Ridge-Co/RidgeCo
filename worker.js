@@ -9647,7 +9647,7 @@ function addonEstimateActionBlock(wo, latest, kind) {
 }
 async function approveEstimate(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
-  const all = await fetchTab(env, 'Estimates'); const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
+  const [all, _woRows] = await fetchTabs(env, ['Estimates', 'Work_Orders']); const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
   const latest = versions.reduce((a, b) => parseInt(a.Version) > parseInt(b.Version) ? a : b);
   const _blockMsg = addonEstimateActionBlock(findWO(_woRows, woId), latest, 'approve');
