@@ -18492,6 +18492,8 @@ async function hubTestWriteAllowed(env, path, body) {
   // setup-trades / sync-payments take no record id (sandbox-only effect). Everything not listed stays denied
   // (pay-bills, record-paid-bill, link-vendor-bills, vendor-reconcile, backfill-*, delete-bill, ...).
   if (path === '/qb/setup-trades' || path === '/qb/sync-payments') return true;
+  // Oct 1 2026: same class as /qb/sync-payments (sandbox QB reads + staging-sheet Approval_Stage write + stubbed staging SMS); takes no record id.
+  if (path === '/scope-deposit/sweep') return true;
   if (path === '/qb/map' || path === '/qb/create-subcustomer') {
     const _tab = { owner: 'Owners', vendor: 'Vendors', property: 'Properties', unit: 'Units' }[String(_b.kind || '').toLowerCase()];
     if (!_tab || !_b.id) return false;
