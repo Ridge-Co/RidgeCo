@@ -125,6 +125,17 @@ window.addEventListener('pageshow', function(e){
   .modal-title { font-size: 1rem; color: var(--accent); letter-spacing: 0.1em; }
   .modal-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.2rem; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; flex-wrap: wrap; }
+  /* Oct 1 2026 — New WO / Edit WO / WO detail modals only (class modal-wide + modal-overlay-wide):
+     wide on desktop (was 580/640px), edge-to-edge on phones. Other modals keep .modal's 580px. */
+  .modal.modal-wide { max-width: min(1000px, 96vw); }
+  .wo-desc-area { width: 100%; box-sizing: border-box; min-height: 160px; resize: vertical; }
+  .cl-area { width: 100%; box-sizing: border-box; min-height: 110px; resize: vertical; }
+  .cl-quick { display: flex; gap: 8px; align-items: stretch; }
+  .cl-quick input { flex: 1; min-width: 0; }
+  .cl-count { font-weight: normal; color: var(--accent); }
+  .cl-hint { font-size: 11px; color: var(--muted); }
+  .wo-detail-desc { width: 100%; box-sizing: border-box; max-height: min(60vh, 520px); overflow-y: auto; }
+  @media (max-width: 600px) { .modal-overlay.modal-overlay-wide { padding: 8px; } .modal-overlay-wide > .modal { padding: 14px; --wo-modal-pad: 14px; max-width: 100%; } }
   .prop-detail { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
   .prop-name { font-size: 1rem; color: var(--accent); margin-bottom: 10px; }
   .prop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
