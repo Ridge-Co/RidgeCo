@@ -1198,7 +1198,11 @@ window.addEventListener('pageshow', function(e){
         </select>
       </div>
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
-      <div class="form-group full"><label>Description</label><textarea id="ewo-description" style="min-height:120px;resize:vertical"></textarea></div>
+      <div class="form-group full"><label>Description</label><textarea id="ewo-description" class="wo-desc-area" oninput="growDescArea(this)"></textarea></div>
+      <div class="form-group full" id="ewo-checklist-block"><label>Checklist / line items <span class="cl-count" id="ewo-checklist-count"></span> <span style="font-weight:normal;color:var(--muted)">(vendor checks each off — items the vendor already ticked stay ticked)</span></label>
+        <div class="cl-quick"><input type="text" id="ewo-checklist-quick" placeholder="Type an item, press Enter — or paste a whole list here" autocomplete="off" onkeydown="clQuickKey(event,'ewo-checklist')" onpaste="clQuickPaste(event,'ewo-checklist')"><button type="button" class="btn" onclick="clQuickAdd('ewo-checklist')">Add</button></div>
+        <textarea id="ewo-checklist" class="cl-area" oninput="checklistRefresh('ewo-checklist')" placeholder="One per line"></textarea>
+        <div class="cl-hint">One item per line. New items are added to the end; items the vendor already ticked keep their progress as long as the line text is unchanged.</div></div>
       <div class="form-group full"><label>Notes</label><textarea id="ewo-notes"></textarea></div>
       <div class="form-group full"><label>Checklist / line items <span style="font-weight:normal;color:var(--muted)">(one per line; vendor checks each off — items the vendor already ticked stay ticked)</span></label><textarea id="ewo-checklist" placeholder="One per line"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(owner's internal tracking number)</span></label><input type="text" id="ewo-owner-ref" placeholder="e.g. PM-4821"></div>
