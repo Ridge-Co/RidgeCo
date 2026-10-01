@@ -823,6 +823,7 @@ const _hubWorkerCore = {
         if (path === '/receipt-recon/mark-refund')          return await receiptReconMarkRefund(env, body);
         if (path === '/receipt-recon/mark-refund-confirmed') return await receiptReconMarkRefundConfirmed(env, body);
         if (path === '/receipt-recon/undo')                 return await receiptReconUndo(env, body);
+        if (path === '/receipt-recon/reopen')               return await receiptReconReopen(env, body);   // ADMIN-ONLY: no ROLE_SCOPES entry
         if (path === '/receipt-recon/bulk-action')       return await receiptReconBulkAction(env, body);
         if (path === '/receipt-recon/refund-candidates') return await receiptReconRefundCandidates(env, body);
         if (path === '/receipt-recon/refund-reverse')    return await receiptReconRefundReverse(env, body);
