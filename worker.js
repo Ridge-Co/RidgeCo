@@ -1614,7 +1614,7 @@ async function handlePhotoUploadClean(env, request) {
     const token = await getAccessToken(env);
     if (!token) return json({ error: 'Failed to get Google access token' }, 500);
     step.current = 'find_prop_folder';
-    const propFolder = await findOrCreateFolder(token, propAddr, propsRoot, propsRoot);
+    const propFolder = await driveFindOrCreatePropertyFolder(token, propsRoot, propAddr);
     if (!propFolder || !propFolder.id) return json({ error: `Could not find/create property folder "${propAddr}"`, step: step.current }, 500);
     step.current = 'find_wo_folder';
     const woLabel  = woId || `upload_${Date.now()}`;
