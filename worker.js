@@ -23562,6 +23562,9 @@ async function qbSendInvoice(env, body) {
         pending_info: true, pending_info_note: billRow.Pending_Info_Note || '', warnings,
       }, 409);
     }
+    if (rfIssue && !body.override_receipt_folder) {
+      return json({ ok: false, error: rfIssue.message, receipt_folder_missing: true, missing_receipt_ids: rfIssue.missing_ids, warnings }, 409);
+    }
 
     const token = await qbAccessToken(env);
     const errors = [];
