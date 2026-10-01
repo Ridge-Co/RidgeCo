@@ -19436,7 +19436,7 @@ async function qbSyncPayments(env, body) {
           let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (_) {}
           await scopeDepositPaidTransition(env, sig.Scope_ID, cfgS.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
         }
-      } catch (e) { /* non-fatal */ }
+      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_transition', '/qb/sync-payments', 'sig=' + r.signature_id + ' wo=' + (r.wo_id || '') + (r.milestone_id ? ' milestone=' + r.milestone_id : ''), e); }
     }
     // When QuickBooks POSITIVELY reports the vendor bill paid, mark the work order Paid so it
     // drops off the active work list. Strictly === true (never on an unknown/null read), and
