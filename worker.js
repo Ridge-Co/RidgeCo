@@ -3593,6 +3593,9 @@ async function receiptReconReassign(env, body) {
     Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + ']',
   });
 
+  // Known gap closed (Oct 1 2026): the OLD row's gallery attachment (and its customer-folder copy) must go
+  // too, or the original receipt keeps showing in the old place after the move.
+  const oldAttachmentVoid = await voidAttachmentForReceipt(env, original.ID);
   const category = wo_id ? 'billable' : 'company';
   const addResp = await addReceipt(env, {
     wo_id, property_id, amount, description, store, date,
