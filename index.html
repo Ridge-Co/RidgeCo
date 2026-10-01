@@ -4768,10 +4768,27 @@ function submitEditProperty(){
 }
 
 // ── Modals ───────────────────────────────────────────────────
-function openModal(id){document.getElementById(id).classList.add('open');}
+function openModal(id){document.getElementById(id).classList.add('open'); afterModalOpen(id);}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
+// Size the description / checklist boxes once the modal is actually visible (scrollHeight is 0 while hidden).
+function afterModalOpen(id){
+  var m = document.getElementById(id); if(!m) return;
+  m.querySelectorAll('.wo-desc-area').forEach(growDescArea);
+  m.querySelectorAll('.cl-area').forEach(function(t){ checklistRefresh(t.id); });
+}
+// Overlay click-to-close (Oct 1 2026 fix). A drag-select that STARTS inside a modal (e.g. in a textarea)
+// and is released on the dark overlay used to fire a click whose target was the overlay and closed the
+// modal, losing typed text. Now the overlay closes only if the press BEGAN on the overlay itself too.
+var _ovDownTarget = null;
+['pointerdown','mousedown','touchstart'].forEach(function(ev){
+  document.addEventListener(ev, function(e){ _ovDownTarget = e.target; }, {capture:true, passive:true});
+});
+function overlayShouldClose(clickTarget, overlay, downTarget){ return clickTarget === overlay && downTarget === overlay; }
 document.querySelectorAll('.modal-overlay').forEach(function(m){
-  m.addEventListener('click',function(e){if(e.target===m)m.classList.remove('open');});
+  m.addEventListener('click',function(e){
+    var down = _ovDownTarget; _ovDownTarget = null;
+    if(overlayShouldClose(e.target, m, down)) m.classList.remove('open');
+  });
 });
 
 // ── Toasts ───────────────────────────────────────────────────
