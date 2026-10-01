@@ -12336,7 +12336,9 @@ function renderQBCard(r, i) {
   // record has no invoice id to protect it from a duplicate, so it stays Preview & Send only,
   // same as it's always been — the checkbox is disabled and says why instead of being silently
   // absent, so it doesn't read as "select all" quietly skipping a row.
-  var checkHtml = '<label class="qb-bulk-check-wrap" style="display:'+(_qbBulkMode?'flex':'none')+';align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--muted)"'+(r.needs_individual_send?' title="No QuickBooks status on record — needs Preview & Send individually"':'')+'>' +
+  var addonWarnHtml = r.addon_unapproved
+    ? '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#8a1c14;line-height:1.5">⛔ ' + esc(r.addon_unapproved_reason || 'Additional work that is not approved') + ' — not ready to invoice. Preview &amp; Send will ask you to confirm.</div>' : '';
+  var checkHtml = addonWarnHtml + '<label class="qb-bulk-check-wrap" style="display:'+(_qbBulkMode?'flex':'none')+';align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--muted)"'+(r.needs_individual_send?' title="No QuickBooks status on record — needs Preview & Send individually"':'')+'>' +
     '<input type="checkbox" class="qb-bulk-check" data-i="'+i+'" '+(r.needs_individual_send?'disabled':'')+' onchange="qbUpdateBulkBar()"> ' +
     (r.needs_individual_send ? 'Needs individual send' : 'Select for batch') +
   '</label>';
