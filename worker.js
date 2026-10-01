@@ -22570,7 +22570,7 @@ async function qbReadyQueue(env, url) {
   const wantAll = url && url.searchParams.get('all') === '1';
   const woFilter = (url && url.searchParams.get('wo_id')) || '';
   try {
-    const [irRows, wos] = await fetchTabs(env, ['Invoice_Review','Work_Orders']);
+    const [irRows, wos, estRows] = await fetchTabs(env, ['Invoice_Review','Work_Orders','Estimates']);
     // 'partial' MUST be included. qbSendInvoice stamps that status when the invoice half
     // posted to QuickBooks but the bill half did not (bad vendor ref, an Intuit hiccup,
     // Vendor_Cost missing). Nothing anywhere ever writes the status back to 'pending', so
