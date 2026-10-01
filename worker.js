@@ -11710,6 +11710,9 @@ async function createVendorRequest(env, body) {
   return json({ success: true, sent: r.sent, held_for_quiet_hours: !!r.held_for_quiet_hours, test_mode: r.test_mode, gate_snapshot: r.gate_snapshot });
 }
 
+// PURE — true while an add-on child has not been approved (no vendor nudges yet).
+function addonNudgeHold(wo) { return !!wo && String(wo.Type || '') === 'addon' && String(wo.Approval_Stage || '') !== 'Approved'; }
+
 // Called from the periodic sweep (POST /cron/sweep, cronSweep). Handles all 3 request types
 // through one loop: satisfied-checks first (so a row that's already resolved never nudges
 // again even if it's technically "due"), then the type-specific quiet/nudge/cap logic.
