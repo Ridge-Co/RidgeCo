@@ -9489,7 +9489,7 @@ async function processDepositPaidSweep(env) {
 // POST /estimate/needs-info { wo_id } and POST /estimate/decline { wo_id, reason? } — admin-only.
 async function flagEstimate(env, body, kind) {
   const woId = body && body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
-  const all = await fetchTab(env, 'Estimates');
+  const [all, _woRows] = await fetchTabs(env, ['Estimates', 'Work_Orders']);
   const versions = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   if (!versions.length) return json({ error: 'No estimate found for this WO' }, 404);
   const latest = versions.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
