@@ -19293,6 +19293,11 @@ async function qbPayables(env, url) {
     // Invoice_Review-based payables that already work.
     try {
       const [sigRows, scopes] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Scopes')]);
+      // Payment_Milestones read ONCE (not per row). A milestone-billed scope (e.g. WO-1227 / Scope 8) keeps its deposit
+      // invoice on milestone 1, with Scope_Signatures.QB_Invoice_ID blank -- fall back to it so the deposit row exists.
+      let allMilestones = [];
+      try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); }
+      catch (e) { await logAndCollectError(env, warnings, 'qb_payables_milestones_read', '/qb/payables', 'Payment_Milestones', e); }
       const sigCandidates = [];
       for (const r of sigRows) {
         if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
