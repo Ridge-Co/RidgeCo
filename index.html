@@ -2639,6 +2639,8 @@ function openWODetail(woId) {
   ) : '';
   document.getElementById('detail-body').insertAdjacentHTML('beforeend', vtrSection);
   if (wo.Vendor_ID) loadVendorTaskRequestsForWO(woId);
+  // Additional work: child add-on WOs link back to their parent (own insert, not part of addBtn(...)).
+  if (wo.Parent_WO_ID) document.getElementById('detail-body').insertAdjacentHTML('afterbegin', '<div style="margin-bottom:8px"><a href="javascript:void(0)" onclick="openWODetail(\''+esc(wo.Parent_WO_ID)+'\')" style="color:var(--info);font-size:12px;font-weight:bold">↰ Part of '+esc(wo.Parent_WO_ID)+' (vendor-found additional work)</a></div>');
 
   var actions = document.getElementById('detail-actions');
   actions.innerHTML = '';
