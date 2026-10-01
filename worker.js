@@ -12711,7 +12711,7 @@ async function cronSweep(env) {
   try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
   try { out.recurring_wos = await processRecurringWorkOrders(env); } catch (e) { out.recurring_wos = { error: String((e && e.message) || e) }; }
   try { out.estimate_reminders = await processEstimateReminders(env); } catch (e) { out.estimate_reminders = { error: String((e && e.message) || e) }; }
-  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; }
+  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'cronSweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) {} }
   try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
   try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
   try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
