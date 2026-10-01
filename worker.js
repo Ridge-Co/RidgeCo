@@ -3561,12 +3561,14 @@ async function receiptReconReassign(env, body) {
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (row.Status !== 'confirmed') return json({ error: `only a confirmed row can be reassigned (this one is ${row.Status || 'pending'})` }, 409);
 
+  let woRowForCopy = null;
   if (wo_id) {
     const workorders = await fetchTab(env, 'Work_Orders');
     const wo = workorders.find(w => String(w.ID) === String(wo_id));
     if (!wo) {
       return json({ error: `No work order with ID "${wo_id}" exists — check the number and try again.` }, 400);
     }
+    woRowForCopy = wo;
     if (String(wo.Property_ID) !== String(property_id)) {
       return json({ error: `Work order ${wo_id} belongs to a different property than the one you're reassigning to (Property ${wo.Property_ID}, not ${property_id}) — check the property/WO pairing.` }, 400);
     }
