@@ -22277,8 +22277,13 @@ function addonStandaloneBlock(w, estRows) {
 }
 function qbGroupOpenRows(irRows, ir, woRows, estRows) {
   const haveInv = !!(ir.QB_Invoice_ID && ir.QB_Invoice_ID.trim());
+  const parentOf = {};
+  if (!haveInv && Array.isArray(woRows)) woRows.forEach(w => {
+    if (addonRollsIntoParent(w, estRows)) parentOf[String(w.ID)] = String(w.Parent_WO_ID).trim();
+  });
+  const rootOf = id => parentOf[String(id)] || String(id);
   const groupRows = haveInv ? [ir] : irRows.filter(r =>
-    r.Active !== 'FALSE' && String(r.WO_ID) === String(ir.WO_ID) &&
+    r.Active !== 'FALSE' && rootOf(r.WO_ID) === rootOf(ir.WO_ID) &&
     !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim()));
   if (!groupRows.some(r => r.ID === ir.ID)) groupRows.push(ir);
   return groupRows;
