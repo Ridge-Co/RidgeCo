@@ -1652,8 +1652,7 @@ async function handlePhotoUploadClean(env, request) {
     try {
       // Only the customer-facing WO folder becomes the WO's shared Drive_Folder (photo link).
       if (!isInternal && woFolder.webViewLink) {
-        await updateWOField(env, woId, 'Drive_Folder_URL', woFolder.webViewLink);
-        await updateWOField(env, woId, 'Drive_Folder_ID',  woFolder.id);
+        await persistWOFolderFields(env, woId, woFolder);
       }
     } catch(woErr) { /* non-fatal */ }
     return json({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '' });
