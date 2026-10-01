@@ -15115,6 +15115,13 @@ async function selftestRunGoldenChecks(env) {
     results.push({ name: 'vendor_bills_qb_reachable', ...selftestSummarizeVendorBillsQbReachable(sampleResults) });
   } catch (e) { results.push({ name: 'vendor_bills_qb_reachable', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
 
+  // Oct 1 2026: every Reconciler receipt on a WO must have a copy in the customer's WO folder (else the invoice's
+  // "View job photos" link silently lacks it). Fails the 7am digest until POST /admin/backfill-receipt-folder-copies clears it.
+  try {
+    const [rcs, atts, qrows, wos] = await fetchTabs(env, ['Receipts', 'Attachments', 'Receipt_Recon_Queue', 'Work_Orders']);
+    results.push({ name: 'receipt_folder_copies', ...selftestCheckReceiptFolderCopies(rcs, atts, qrows, wos) });
+  } catch (e) { results.push({ name: 'receipt_folder_copies', ok: false, reason: 'error: ' + String((e && e.message) || e) }); }
+
   return results;
 }
 
