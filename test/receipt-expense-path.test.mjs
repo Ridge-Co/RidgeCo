@@ -69,7 +69,7 @@ function world() {
   deps.sendReceiptsToQBEmail = sendQB;
   const names2 = Object.keys(deps);
   const confirm = new Function(...names2, `return (${extractFn('receiptReconConfirm')});`)(...names2.map(n => deps[n]));
-  return { tabs, sent, irCalls, confirm: async (b) => (await confirm({}, b)).json() };
+  return { tabs, sent, irCalls, addOpts, confirm: async (b) => (await confirm({}, b)).json() };
 }
 
 {
