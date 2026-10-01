@@ -23842,6 +23842,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         } catch (e) { warnings.push('Could not read the Receipts tab for bill ' + (r.Bill_ID || r.ID) + '.'); }
       }
 
+      _allOwnReceipts.push(...ownReceipts);
       const _inEn = await invoiceInputsEnglish(env, billRow, timeEntries);
       // Additional work (Sep 30 2026): a row on an add-on CHILD WO is labelled "Additional work — … — WO <parent>"
       // and carries the parent's WO number. Any other row takes the original path unchanged.
