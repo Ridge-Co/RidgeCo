@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-09-30.12-approve-and-send-to-proposal';
+const BUILD_VERSION = '2026-10-01.1-wo-checklist-quick-entry';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -3861,7 +3861,7 @@ async function scopeToWO(env, body) {
   const byArea = {}; for (const it of items) { const a = it.area || 'General'; (byArea[a] = byArea[a] || []).push(it); }
   let desc = 'REQUEST FOR ESTIMATE — Scope of Work (Scope #' + s.ID + ')\n';
   for (const a of Object.keys(byArea)) { desc += '\n' + a + ':\n'; for (const it of byArea[a]) desc += '  • ' + (it.description || '') + (it.qty ? (' (qty ' + it.qty + ')') : '') + (it.trade ? (' [' + it.trade + ']') : '') + (it.note ? (' — ' + it.note) : '') + '\n'; }
-  const checklist = JSON.stringify(items.map(it => ({ text: (it.area ? (it.area + ': ') : '') + (it.description || ''), done: false })));
+  const checklist = JSON.stringify(items.map(it => ({ t: (it.area ? (it.area + ': ') : '') + (it.description || ''), done: false, code: '', why: '' })));
   const woResp = await createWorkOrder(env, { property_id: s.Property_ID, unit_id: s.Unit_ID, room: s.Room, trade, type: 'estimate', priority: body.priority || 'normal', description: desc.trim(), notes: 'Request for estimate created from Scope #' + s.ID, checklist, created_by: body.created_by || 'scope-creator', vendor_needs_access: body.vendor_needs_access || 'auto' });
   const wj = await woResp.json().catch(() => ({}));
   const woId = wj.id; if (!woId) return json({ error: 'WO creation failed', detail: wj }, 500);

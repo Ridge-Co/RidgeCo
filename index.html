@@ -125,6 +125,17 @@ window.addEventListener('pageshow', function(e){
   .modal-title { font-size: 1rem; color: var(--accent); letter-spacing: 0.1em; }
   .modal-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.2rem; }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; flex-wrap: wrap; }
+  /* Oct 1 2026 — New WO / Edit WO / WO detail modals only (class modal-wide + modal-overlay-wide):
+     wide on desktop (was 580/640px), edge-to-edge on phones. Other modals keep .modal's 580px. */
+  .modal.modal-wide { max-width: min(1000px, 96vw); }
+  .wo-desc-area { width: 100%; box-sizing: border-box; min-height: 160px; resize: vertical; }
+  .cl-area { width: 100%; box-sizing: border-box; min-height: 110px; resize: vertical; }
+  .cl-quick { display: flex; gap: 8px; align-items: stretch; }
+  .cl-quick input { flex: 1; min-width: 0; }
+  .cl-count { font-weight: normal; color: var(--accent); }
+  .cl-hint { font-size: 11px; color: var(--muted); }
+  .wo-detail-desc { width: 100%; box-sizing: border-box; max-height: min(60vh, 520px); overflow-y: auto; }
+  @media (max-width: 600px) { .modal-overlay.modal-overlay-wide { padding: 8px; } .modal-overlay-wide > .modal { padding: 14px; --wo-modal-pad: 14px; max-width: 100%; } }
   .prop-detail { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
   .prop-name { font-size: 1rem; color: var(--accent); margin-bottom: 10px; }
   .prop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
@@ -795,8 +806,8 @@ window.addEventListener('pageshow', function(e){
 </div>
 
 <!-- NEW WORK ORDER MODAL -->
-<div class="modal-overlay" id="modal-new-wo">
-  <div class="modal">
+<div class="modal-overlay modal-overlay-wide" id="modal-new-wo">
+  <div class="modal modal-wide">
     <div class="modal-header"><div class="modal-title">NEW WORK ORDER</div><button class="modal-close" onclick="closeModal('modal-new-wo')">✕</button></div>
     <div class="form-grid">
       <div class="form-group full">
@@ -811,13 +822,16 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Trade</label><select id="wo-trade"></select></div>
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
-      <div class="form-group full"><label>Description</label><textarea id="wo-desc" placeholder="Describe the issue..."></textarea></div>
+      <div class="form-group full"><label>Description</label><textarea id="wo-desc" class="wo-desc-area" oninput="growDescArea(this)" placeholder="Describe the issue..."></textarea></div>
+      <div class="form-group full" id="wo-checklist-block"><label>Checklist / line items <span class="cl-count" id="wo-checklist-count"></span> <span style="font-weight:normal;color:var(--muted)">(optional — the vendor checks each off and must resolve every item to complete the job)</span></label>
+        <div class="cl-quick"><input type="text" id="wo-checklist-quick" placeholder="Type an item, press Enter — or paste a whole list here" autocomplete="off" onkeydown="clQuickKey(event,'wo-checklist')" onpaste="clQuickPaste(event,'wo-checklist')"><button type="button" class="btn" onclick="clQuickAdd('wo-checklist')">Add</button></div>
+        <textarea id="wo-checklist" class="cl-area" oninput="checklistRefresh('wo-checklist')" placeholder="One per line, e.g.&#10;Replace faucet cartridge&#10;Re-caulk around sink&#10;Run water & check for leaks"></textarea>
+        <div class="cl-hint">One item per line. Pasted bullets / numbers / checkboxes are cleaned up; items are added to the end, never replacing what is here.</div></div>
       <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" onchange="woVendorOptChanged()" style="width:100%"><option value="">Assign after creation</option></select></div>
       <div class="form-group" id="wo-vendor-notify-group" style="display:none"><label style="cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="wo-vendor-notify" checked style="width:auto"> Notify vendor + tenant now</label></div>
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
       <div class="form-group full"><label>Notes</label><textarea id="wo-notes" placeholder="Internal notes..."></textarea></div>
-      <div class="form-group full"><label>Checklist / line items <span style="font-weight:normal;color:var(--muted)">(optional — one item per line; the vendor checks each off and must resolve every item to complete the job)</span></label><textarea id="wo-checklist" placeholder="One per line, e.g.&#10;Replace faucet cartridge&#10;Re-caulk around sink&#10;Run water & check for leaks"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(optional — owner's internal tracking number)</span></label><input type="text" id="wo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div class="form-group full">
         <label>Vendor Access to Property <span style="font-weight:normal;color:var(--muted)">— share lockbox/entry codes with vendor?</span></label>
@@ -834,8 +848,8 @@ window.addEventListener('pageshow', function(e){
 </div>
 
 <!-- WO DETAIL MODAL -->
-<div class="modal-overlay" id="modal-wo-detail">
-  <div class="modal" style="max-width:640px">
+<div class="modal-overlay modal-overlay-wide" id="modal-wo-detail">
+  <div class="modal modal-wide">
     <div class="modal-header"><div class="modal-title" id="detail-wo-id">WO-XXXX</div><div style="display:flex;gap:8px;align-items:center"><button class="btn small secondary" id="detail-edit-btn" style="font-size:12px;padding:6px 12px">✏️ Edit</button><button class="modal-close" onclick="closeModal('modal-wo-detail')">✕</button></div></div>
     <div id="detail-body"></div>
     <div class="modal-actions" id="detail-actions"></div>
@@ -1152,8 +1166,8 @@ window.addEventListener('pageshow', function(e){
 </div>
 
 <!-- EDIT WORK ORDER MODAL -->
-<div class="modal-overlay" id="modal-edit-wo">
-  <div class="modal" style="max-width:640px">
+<div class="modal-overlay modal-overlay-wide" id="modal-edit-wo">
+  <div class="modal modal-wide">
     <div class="modal-header"><div class="modal-title">EDIT WORK ORDER — <span id="ewo-id-label"></span></div><button class="modal-close" onclick="closeModal('modal-edit-wo')">✕</button></div>
     <input type="hidden" id="ewo-id">
     <div class="form-grid">
@@ -1184,9 +1198,12 @@ window.addEventListener('pageshow', function(e){
         </select>
       </div>
       <div class="form-group"><label>Scheduled Date</label><input type="date" id="ewo-scheduled"></div>
-      <div class="form-group full"><label>Description</label><textarea id="ewo-description" style="min-height:120px;resize:vertical"></textarea></div>
+      <div class="form-group full"><label>Description</label><textarea id="ewo-description" class="wo-desc-area" oninput="growDescArea(this)"></textarea></div>
+      <div class="form-group full" id="ewo-checklist-block"><label>Checklist / line items <span class="cl-count" id="ewo-checklist-count"></span> <span style="font-weight:normal;color:var(--muted)">(vendor checks each off — items the vendor already ticked stay ticked)</span></label>
+        <div class="cl-quick"><input type="text" id="ewo-checklist-quick" placeholder="Type an item, press Enter — or paste a whole list here" autocomplete="off" onkeydown="clQuickKey(event,'ewo-checklist')" onpaste="clQuickPaste(event,'ewo-checklist')"><button type="button" class="btn" onclick="clQuickAdd('ewo-checklist')">Add</button></div>
+        <textarea id="ewo-checklist" class="cl-area" oninput="checklistRefresh('ewo-checklist')" placeholder="One per line"></textarea>
+        <div class="cl-hint">One item per line. New items are added to the end; items the vendor already ticked keep their progress as long as the line text is unchanged.</div></div>
       <div class="form-group full"><label>Notes</label><textarea id="ewo-notes"></textarea></div>
-      <div class="form-group full"><label>Checklist / line items <span style="font-weight:normal;color:var(--muted)">(one per line; vendor checks each off — items the vendor already ticked stay ticked)</span></label><textarea id="ewo-checklist" placeholder="One per line"></textarea></div>
       <div class="form-group full"><label>Owner Ref # <span style="font-weight:normal;color:var(--muted)">(owner's internal tracking number)</span></label><input type="text" id="ewo-owner-ref" placeholder="e.g. PM-4821"></div>
       <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">CONTACT OVERRIDE <span style="font-weight:normal;text-transform:none;letter-spacing:0">— overrides tenant record on this WO only. Edit the tenant record itself in the Tenants tab.</span></div></div>
       <div class="form-group"><label>Tenant on this WO</label><select id="ewo-tenant-id" style="width:100%"><option value="">— linked tenant (default) —</option></select></div>
@@ -2269,7 +2286,7 @@ function openWODetail(woId) {
   // Sticky action bar — Edit + quick status stay reachable at the top of the WO while you scroll,
   // so you never have to scroll to the bottom to edit or change status (6A).
   var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'];
-  var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:-24px -24px 14px;padding:12px 24px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+  var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:calc(-1 * var(--wo-modal-pad, 24px)) calc(-1 * var(--wo-modal-pad, 24px)) 14px;padding:12px var(--wo-modal-pad, 24px);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
     '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
     '<button class="btn small secondary" onclick="sendPhotoRequestSMS(\''+woId+'\')" title="Canned text asking the tenant for photos of the issue">📸 Request photos</button>' +
@@ -2282,7 +2299,7 @@ function openWODetail(woId) {
   document.getElementById('detail-body').innerHTML = stickyBar + propHtml +
     '<div style="margin-bottom:14px">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">DESCRIPTION</div>' +
-    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto">' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word" class="wo-detail-desc">' +
     linkify(wo.Description||'No description') +
     '</div></div>' +
     (wo.Notes ? '<div style="margin-bottom:14px">' +
@@ -3193,6 +3210,8 @@ function openNewWOModal() {
   var priority = document.getElementById('wo-priority'); if(priority) priority.value='normal';
   var type = document.getElementById('wo-type'); if(type) type.value='manual';
   var ownerRef = document.getElementById('wo-owner-ref'); if(ownerRef) ownerRef.value='';
+  var clTa = document.getElementById('wo-checklist'); if(clTa) clTa.value='';
+  var clQ = document.getElementById('wo-checklist-quick'); if(clQ) clQ.value='';
   // Hide conditional sections
   document.getElementById('wo-prop-preview').style.display = 'none';
   document.getElementById('wo-unit-group').style.display = 'none';
@@ -3292,6 +3311,60 @@ function hubChecklistHtml(wo){
 function checklistToText(json){
   try { var a=JSON.parse(json||'[]'); return (a||[]).map(function(i){return i.t||'';}).filter(Boolean).join('\n'); }
   catch(e){ return ''; }
+}
+// ── Checklist quick entry (Oct 1 2026) ───────────────────────
+// parseChecklistPaste is the ONE parser for pasted/typed checklist text -> string[] of item titles
+// (CRLF-safe, blank lines skipped, list markers stripped, no de-duping). Phase 1 deliberately drops
+// leading indentation; a LATER phase (subtasks / drag-reorder) should extend THIS function (e.g. to
+// return {t, depth}) rather than add a second parser.
+function parseChecklistPaste(text){
+  var MARK = /^(?:[-*](?:\s+|$)|[•–—☐☑✓✔]\s*|\d+[.)](?:\s+|$)|\[[ xX]?\]\s*)/;
+  var out = [];
+  String(text == null ? '' : text).split(/\r\n|\r|\n/).forEach(function(line){
+    var s = line.trim(), prev, n = 0;
+    do { prev = s; s = s.replace(MARK, '').trim(); n++; } while (s !== prev && s && n < 3);
+    if (s) out.push(s);
+  });
+  return out;
+}
+// Auto-grow helper for the big description boxes.
+function growDescArea(ta){ if(!ta) return; ta.style.height='auto'; ta.style.height=Math.max(160, ta.scrollHeight)+'px'; }
+// Live count + auto-height for a checklist textarea (count matches what the save path will store).
+function checklistRefresh(taId){
+  var ta = document.getElementById(taId); if(!ta) return;
+  ta.style.height='auto'; ta.style.height=Math.max(110, Math.min(ta.scrollHeight, 420))+'px';
+  var c = document.getElementById(taId+'-count');
+  if(c){ var n = ta.value.split('\n').filter(function(l){return l.trim().length;}).length; c.textContent = n ? '— '+n+(n===1?' item':' items') : ''; }
+}
+// APPEND (never replace) lines to the END of the checklist textarea. The textarea stays the single
+// source of truth, so the existing save path (checklistFromText) keeps vendor done/why progress.
+function checklistAppendLines(taId, lines){
+  var ta = document.getElementById(taId); if(!ta || !lines || !lines.length) return 0;
+  var cur = ta.value.replace(/\s+$/, '');
+  ta.value = (cur ? cur + '\n' : '') + lines.join('\n');
+  checklistRefresh(taId);
+  ta.scrollTop = ta.scrollHeight;
+  return lines.length;
+}
+function clQuickAdd(taId){
+  var inp = document.getElementById(taId+'-quick'); if(!inp) return;
+  var lines = parseChecklistPaste(inp.value);
+  inp.value = '';
+  if(lines.length){ checklistAppendLines(taId, lines); if(lines.length > 1) toast(lines.length+' items added','success'); }
+  inp.focus();
+}
+function clQuickKey(e, taId){
+  if(e.key === 'Enter' && !e.isComposing){ e.preventDefault(); clQuickAdd(taId); }
+}
+function clQuickPaste(e, taId){
+  var t = ''; try{ t = (e.clipboardData || window.clipboardData).getData('text') || ''; }catch(x){}
+  if(!/[\r\n]/.test(t.replace(/[\r\n]+$/, ''))) return;   // single line: let the browser paste normally
+  e.preventDefault();
+  var inp = e.target;
+  var lines = parseChecklistPaste(inp.value).concat(parseChecklistPaste(t));
+  inp.value = '';
+  if(lines.length){ checklistAppendLines(taId, lines); toast(lines.length+(lines.length===1?' item added':' items added'),'success'); }
+  inp.focus();
 }
 function submitNewWO() {
   var propId = document.getElementById('wo-property').value;
@@ -4229,12 +4302,13 @@ function openEditWOModal(woId) {
   // Force textarea to show full content regardless of CSS cache
   setTimeout(function(){
     var ta = document.getElementById('ewo-description');
-    if (ta) { ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
+    if (ta) { growDescArea(ta); }
     var tn = document.getElementById('ewo-notes');
     if (tn && tn.value) { tn.style.height='auto'; tn.style.height=Math.max(80,tn.scrollHeight)+'px'; }
   }, 30);
   document.getElementById('ewo-notes').value = wo.Notes||'';
   var ewoCl = document.getElementById('ewo-checklist'); if (ewoCl) ewoCl.value = checklistToText(wo.Checklist||'');
+  var ewoClQ = document.getElementById('ewo-checklist-quick'); if (ewoClQ) ewoClQ.value = '';
   var ewoRoom = document.getElementById('ewo-room'); if (ewoRoom) ewoRoom.value = wo.Room||'';
   document.getElementById('ewo-owner-ref').value = wo.Owner_WO_Ref||'';
   document.getElementById('ewo-contact-name').value = wo.WO_Contact_Name||'';
@@ -4694,10 +4768,27 @@ function submitEditProperty(){
 }
 
 // ── Modals ───────────────────────────────────────────────────
-function openModal(id){document.getElementById(id).classList.add('open');}
+function openModal(id){document.getElementById(id).classList.add('open'); afterModalOpen(id);}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
+// Size the description / checklist boxes once the modal is actually visible (scrollHeight is 0 while hidden).
+function afterModalOpen(id){
+  var m = document.getElementById(id); if(!m) return;
+  m.querySelectorAll('.wo-desc-area').forEach(growDescArea);
+  m.querySelectorAll('.cl-area').forEach(function(t){ checklistRefresh(t.id); });
+}
+// Overlay click-to-close (Oct 1 2026 fix). A drag-select that STARTS inside a modal (e.g. in a textarea)
+// and is released on the dark overlay used to fire a click whose target was the overlay and closed the
+// modal, losing typed text. Now the overlay closes only if the press BEGAN on the overlay itself too.
+var _ovDownTarget = null;
+['pointerdown','mousedown','touchstart'].forEach(function(ev){
+  document.addEventListener(ev, function(e){ _ovDownTarget = e.target; }, {capture:true, passive:true});
+});
+function overlayShouldClose(clickTarget, overlay, downTarget){ return clickTarget === overlay && downTarget === overlay; }
 document.querySelectorAll('.modal-overlay').forEach(function(m){
-  m.addEventListener('click',function(e){if(e.target===m)m.classList.remove('open');});
+  m.addEventListener('click',function(e){
+    var down = _ovDownTarget; _ovDownTarget = null;
+    if(overlayShouldClose(e.target, m, down)) m.classList.remove('open');
+  });
 });
 
 // ── Toasts ───────────────────────────────────────────────────
