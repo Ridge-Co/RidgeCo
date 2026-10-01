@@ -22286,6 +22286,11 @@ function qbGroupOpenRows(irRows, ir, woRows, estRows) {
     r.Active !== 'FALSE' && rootOf(r.WO_ID) === rootOf(ir.WO_ID) &&
     !(r.QB_Invoice_ID && r.QB_Invoice_ID.trim()));
   if (!groupRows.some(r => r.ID === ir.ID)) groupRows.push(ir);
+  // Mixed parent + child rows: the parent's own rows lead (they anchor the invoice's WO), stable otherwise.
+  if (groupRows.some(r => String(r.WO_ID) !== String(groupRows[0].WO_ID))) {
+    const rk = id => parentOf[String(id)] ? 1 : 0;
+    return groupRows.map((r, i) => ({ r, i })).sort((a, b) => (rk(a.r.WO_ID) - rk(b.r.WO_ID)) || (a.i - b.i)).map(x => x.r);
+  }
   return groupRows;
 }
 
