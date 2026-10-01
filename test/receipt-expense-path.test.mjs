@@ -43,7 +43,7 @@ function world() {
     Work_Orders: [{ ID: 'WO-1200', Description: 'tub drain' }],
     Properties: [{ ID: '85', Address: '1864 Kerns School Rd, Springfield WV' }],
   };
-  const sent = [], irCalls = [], updates = [];
+  const sent = [], irCalls = [], updates = [], addOpts = [];
   let nextId = 1000;
   const deps = {
     json: (o, s) => jsonResp(o, s),
