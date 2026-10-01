@@ -19374,7 +19374,7 @@ async function qbPayables(env, url) {
           });
         }
       }
-    } catch (e) { /* additive only — never break the Invoice_Review-based rows above */ }
+    } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
     return json({
