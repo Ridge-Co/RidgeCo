@@ -1559,6 +1559,24 @@ async function undoConfirmation(id, btn){
   } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// Oct 1 2026 build, Brett: a receipt that was already emailed to QuickBooks can't be Undone (QB
+// would end up with a duplicate card expense). Re-open pulls it back to Pending anyway - voids the
+// Receipts row, pulls it out of Invoice_Review, voids the attachment and the customer-folder copy -
+// and remembers it was already sent, so re-confirming it does NOT email QuickBooks a second time.
+// Server refuses (409) if the WO's customer invoice has already gone out. Admin-only.
+async function reopenConfirmation(id, btn){
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (!confirm('Re-open this receipt?\n\nIt was already emailed to QuickBooks. QuickBooks will NOT be sent it again when you re-confirm it, so if the amount changes you must fix it in QuickBooks by hand.\n\nThis reverses it out of the invoice/work order, removes the attached image and the copy in the customer folder, and drops it back into Pending. It is refused if the WO\'s customer invoice has already been sent.')) return;
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.innerHTML = '<span class="info">Re-opening…</span>';
+  try {
+    const res = await post('/receipt-recon/reopen', { id });
+    if (res.error) throw new Error(res.error);
+    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Re-opened — back in Pending'+(res.qb_email_will_not_resend ? '; QuickBooks will NOT be emailed again' : '')+'.</span>';
+    finishCard(id);
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 // 1864 Kerns School Rd (Milam Ridge, Property 85 — Brett's own STR, no owner to bill). Found by
 // address rather than a hardcoded ID so a renumbered Properties tab can't silently point this
 // button at someone else's building.
