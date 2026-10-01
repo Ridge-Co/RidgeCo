@@ -19,6 +19,13 @@ function extractFn(name) {
   for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
   return src.slice(start, i);
 }
+function extractSyncFn(name) {
+  const start = src.indexOf(`function ${name}(`);
+  if (start === -1) throw new Error(name + ' not found');
+  let i = src.indexOf('{', start), d = 0;
+  for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
+  return src.slice(start, i);
+}
 const jsonResp = (o, status = 200) => ({ status, json: async () => o, clone() { return this; } });
 
 function world() {
