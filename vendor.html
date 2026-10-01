@@ -2149,7 +2149,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
         fail('Upload failed', nextFolder);
         return nextFolder;
       }
-      api('POST', '/log-attachment', {
+      var logBody = {
         wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
         file_name: file.name, file_type: fileType || 'photo',
         mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
