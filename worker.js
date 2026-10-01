@@ -11732,6 +11732,14 @@ async function processVendorNudges(env) {
     // Cancelled/Declined stop ALL open request types for this WO outright — nothing left worth
     // chasing a vendor for on a job that isn't happening (per Brett, Sep 16 2026).
     if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
+    // Additional work (Sep 30 2026): an add-on child is not a real job until Brett approves it. assignVendor(notify:false)
+    // at /start opened the status clock, so: a declined add-on (stage cleared) closes its clock, a pending / needs-info
+    // one is skipped (no nudge, nothing written) and starts nudging only once Approval_Stage is 'Approved'.
+    if (addonNudgeHold(wo)) {
+      if (String(wo.Approval_Stage || '') === '') { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_addon_declined' }); }
+      else results.push({ id: row.ID, action: 'skipped_addon_unapproved' });
+      continue;
+    }
     // status_update is answered the moment the WO reaches Complete or later — the vendor told
     // us what we needed to know, regardless of billing. If invoicing isn't done yet, hand off
     // to a fresh 'invoice' request (below) rather than going silent — that's the ask that
