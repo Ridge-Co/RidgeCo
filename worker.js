@@ -3633,7 +3633,7 @@ async function receiptReconReassign(env, body) {
     });
   }
 
-  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, attachment_void: oldAttachmentVoid, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
 // POST /receipt-recon/mark-refund { id, refund } — manual override for a PENDING receipt the
