@@ -13,6 +13,11 @@
 
 ---
 
+## ⚡ STANDING RULE — NOTHING EVER FAILS SILENTLY (Brett, Oct 1, 2026) — see CLAUDE.md. Applies to every repo/worker/sheet/automation/PR; a repo-wide audit + fix program is in progress ("Silent-Failure Audit Plan" doc in the Continuous Improvement project).
+
+# DEPOSIT-PAID FIX — Oct 1, 2026 — PR #165, base `main`, head `fix/deposit-paid-on-who-to-pay-open`, NOT merged (money/SMS-adjacent, Brett merges)
+WO-1227/Scope 8 stayed Pre-approved after deposit invoice #1746 was paid: deposit invoice lives on Payment_Milestones, not Scope_Signatures. Fix: milestone-1 fallback; opening Who To Pay runs POST /scope-deposit/sweep in background; daily loop safety net; all catches in touched code log to Ops_Telemetry + surface in a "Needs your attention" banner; deposit-invoice-not-found always alerts. After merge: Scope 8 should flip to Approved + text Cesar on next Who To Pay open; confirm `*/15 * * * *` trigger on prod maintenance-hub. Staging PRs #162/#164 (staging-test-only).
+
 # WHERE THINGS STAND — Oct 1, 2026 (vendor additional work — PR #159, base `main`, NOT merged; supersedes closed PR #156)
 
 - **PR #159** (base `main`, head `feat/vendor-additional-work-r2`, awaiting Brett's merge; money-adjacent): vendors propose extra work found on a job. Child WO (`Type=addon`, `Parent_WO_ID`) + normal pending estimate, photos required per item (server-enforced two-phase start/submit), texts Brett as "Additional work". Approved add-ons roll into the parent invoice; unapproved/declined never do (`addonRollsIntoParent`, `addonStandaloneBlock`). Owner info-only notice is preview-then-send on Brett's tap. Brief: `context/VENDOR_ADDITIONAL_WORK_BUILD_BRIEF_v1.0.md`. Tests: test/vendor-additional-work*.test.mjs (246 + 65 + 22), build `2026-10-01.2-vendor-additional-work`.
