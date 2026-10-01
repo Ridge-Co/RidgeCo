@@ -339,7 +339,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/admin/backfill-receipt-folder-copies'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
