@@ -3915,6 +3915,10 @@ async function woPushToScope(env, body) {
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
+  if (String(wo.Type || '') === 'addon' && String(wo.Parent_WO_ID || '').trim() &&
+      (String(wo.Voided || '').toUpperCase() === 'TRUE' || ['Withdrawn', 'Draft'].includes(String(wo.Addon_Status || '')))) {
+    return json({ error: `Additional work ${woId} is ${String(wo.Addon_Status || '') === 'Draft' ? 'still a draft' : 'withdrawn or voided'} — it cannot be sent to a Scope Proposal.` }, 400);
+  }
   if (String(wo.Voided || '').toUpperCase() === 'TRUE') return json({ error: `WO ${woId} is voided — restore it first (POST /wo/unvoid) before pushing it to a Scope Proposal.` }, 409);
 
   const allEstimates = await fetchTab(env, 'Estimates');
