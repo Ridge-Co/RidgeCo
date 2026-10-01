@@ -654,6 +654,281 @@ function submitRequestPropertyAccess() {
   }).catch(function() { btn.disabled = false; btn.textContent = 'Send Request'; msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>'; });
 }
 
+// ── Additional work ("Found something else?") ────────────────────────────────
+// Vendor is on a normal (non-estimate) job and finds extra problems. They list items (each with
+// a description + at least one photo) and ONE lump-sum amount. Flow: /wo/additional-work/start
+// creates a DRAFT child job -> photos upload against the CHILD id (addon_item = item index) ->
+// /wo/additional-work/submit. child_wo_id is kept in modal state so a missing-photo rejection
+// can be fixed and re-submitted WITHOUT creating a second child.
+var _aw = null;
+function awEligible(wo) {
+  var type = String(wo.Type || '').toLowerCase();
+  if (type === 'estimate' || type === 'addon' || wo.Parent_WO_ID) return false;
+  var st = String(wo.Status || '').toLowerCase();
+  if (['estimate requested', 'complete', 'pending invoice', 'invoiced', 'paid', 'cancelled', 'canceled', 'voided', 'void'].indexOf(st) !== -1) return false;
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE') return false;
+  return true;
+}
+function awFindWO(woId) {
+  var l = window._wos || [];
+  for (var i = 0; i < l.length; i++) { if (l[i].ID === woId) return l[i]; }
+  return null;
+}
+function awParseAmount(v) {
+  var n = parseFloat(String(v == null ? '' : v).replace(/[$,\s]/g, ''));
+  return (isFinite(n) && n > 0 && n < 1000000) ? Math.round(n * 100) / 100 : 0;
+}
+function openAddonModal(woId) {
+  if (!_aw || _aw.parentId !== woId || _aw.done) {
+    _aw = { parentId: woId, items: [{ text: '', files: [] }], amount: '', tenant: false, childId: '', itemIdx: [], missing: [], busy: false, done: false };
+  }
+  awRender();
+  document.getElementById('modal-addon').style.display = 'flex';
+}
+function closeAddonModal() {
+  if (_aw && _aw.busy) { toast(t('Sending — please wait.'), 'error'); return; }
+  document.getElementById('modal-addon').style.display = 'none';
+}
+function awValid() {
+  var st = _aw, reasons = [];
+  st.items.forEach(function(it, i) {
+    if (!it.text.trim()) reasons.push(t('Item') + ' ' + (i + 1) + ': ' + t('describe it'));
+    if (!it.files.length) reasons.push(t('Item') + ' ' + (i + 1) + ': ' + t('add a photo'));
+  });
+  if (!awParseAmount(st.amount)) reasons.push(t('enter the total amount'));
+  return { ok: !reasons.length, reasons: reasons };
+}
+function awSubmitLabel() { return (_aw && _aw.childId) ? t('Try again') : t('Send to Ridge Co'); }
+function awUpdateSubmit() {
+  var btn = document.getElementById('aw-submit-btn'), hint = document.getElementById('aw-hint');
+  if (!btn || !_aw) return;
+  var v = awValid();
+  btn.disabled = _aw.busy || !v.ok;
+  btn.style.opacity = btn.disabled ? '.5' : '1';
+  if (!_aw.busy) btn.textContent = awSubmitLabel();
+  if (hint) hint.textContent = (!v.ok && !_aw.busy) ? (t('Still needed') + ': ' + v.reasons.join(' · ')) : '';
+}
+function awMsg(html) { var el = document.getElementById('aw-msg'); if (el) el.innerHTML = html || ''; }
+function awErr(text) { awMsg('<div style="color:var(--danger);font-size:12.5px;line-height:1.45">⚠ ' + esc(text) + '</div>'); }
+function awSetText(i, v) { if (_aw && _aw.items[i]) { _aw.items[i].text = v; awUpdateSubmit(); } }
+function awSetAmount(v) { if (_aw) { _aw.amount = v; awUpdateSubmit(); } }
+function awSetTenant(v) { if (_aw) _aw.tenant = !!v; }
+function awAddItem() {
+  if (!_aw || _aw.childId || _aw.busy) return;
+  _aw.items.push({ text: '', files: [] });
+  awRender();
+}
+function awRemoveItem(i) {
+  if (!_aw || _aw.childId || _aw.busy || _aw.items.length < 2) return;
+  _aw.items[i].files.forEach(function(f) { try { URL.revokeObjectURL(f.url); } catch (e) {} });
+  _aw.items.splice(i, 1);
+  awRender();
+}
+function awAddFiles(i, input) {
+  if (!_aw || !_aw.items[i] || _aw.busy) { input.value = ''; return; }
+  Array.from(input.files || []).forEach(function(file) {
+    var url = ''; try { url = URL.createObjectURL(file); } catch (e) {}
+    _aw.items[i].files.push({ file: file, url: url, done: false, card: null });
+  });
+  input.value = '';
+  _aw.missing = _aw.missing.filter(function(k) { return k !== i || !_aw.items[i].files.length; });
+  awRender();
+}
+function awRemoveFile(i, j) {
+  if (!_aw || _aw.busy) return;
+  var f = _aw.items[i].files[j];
+  if (!f) return;
+  if (f.done) { toast(t('That photo is already uploaded.'), 'error'); return; }
+  try { URL.revokeObjectURL(f.url); } catch (e) {}
+  _aw.items[i].files.splice(j, 1);
+  awRender();
+}
+function awRender() {
+  var st = _aw, body = document.getElementById('addon-body');
+  if (!st || !body) return;
+  var locked = !!st.childId;
+  var h = '';
+  st.items.forEach(function(it, i) {
+    var bad = st.missing.indexOf(i) !== -1;
+    h += '<div id="aw-item-' + i + '" style="border:2px solid ' + (bad ? 'var(--danger)' : 'var(--border)') + ';border-radius:8px;padding:10px;margin-bottom:10px;background:var(--surface2)">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">' +
+        '<span style="font-size:11px;letter-spacing:.06em;color:var(--muted);font-weight:bold">' + esc(t('ITEM')) + ' ' + (i + 1) + '</span>' +
+        ((st.items.length > 1 && !locked) ? '<button type="button" onclick="awRemoveItem(' + i + ')" style="min-height:44px;min-width:44px;background:none;border:none;color:var(--danger);font-size:12px;cursor:pointer">' + esc(t('Remove')) + '</button>' : '') +
+      '</div>' +
+      '<textarea id="aw-text-' + i + '" ' + (locked ? 'readonly ' : '') + 'oninput="awSetText(' + i + ',this.value)" placeholder="' + esc(t('What did you find?')) + '" style="width:100%;min-height:72px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:8px;border-radius:6px;box-sizing:border-box">' + esc(it.text) + '</textarea>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">' +
+      it.files.map(function(f, j) {
+        return '<div style="position:relative;width:72px;height:72px;border-radius:6px;overflow:hidden;border:1px solid ' + (f.done ? 'var(--accent2)' : 'var(--border)') + ';background:var(--surface)">' +
+          (f.url ? '<img src="' + esc(f.url) + '" alt="" style="width:100%;height:100%;object-fit:cover">' : '<span style="font-size:11px">' + esc(f.file.name.substring(0, 10)) + '</span>') +
+          (f.done ? '<span style="position:absolute;left:2px;bottom:2px;background:var(--accent2);color:#fff;font-size:10px;border-radius:3px;padding:0 3px">✓</span>' :
+            '<button type="button" aria-label="' + esc(t('Remove')) + '" onclick="awRemoveFile(' + i + ',' + j + ')" style="position:absolute;top:0;right:0;width:44px;height:44px;background:none;border:none;cursor:pointer;padding:0"><span style="position:absolute;top:3px;right:3px;width:22px;height:22px;line-height:22px;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:12px">✕</span></button>') +
+          '</div>';
+      }).join('') + '</div>' +
+      '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">' +
+        '<label style="flex:1;min-width:130px;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:var(--info);color:#fff;border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer">📷 ' + esc(t('Take photo')) +
+          '<input type="file" accept="image/*" capture="environment" style="display:none" onchange="awAddFiles(' + i + ',this)"></label>' +
+        '<label style="flex:1;min-width:130px;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer">🖼 ' + esc(t('Add from gallery')) +
+          '<input type="file" accept="image/*" multiple style="display:none" onchange="awAddFiles(' + i + ',this)"></label>' +
+      '</div>' +
+      (bad ? '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + esc(t('This item needs at least one photo.')) + '</div>' : '') +
+      '</div>';
+  });
+  if (!locked) h += '<button type="button" onclick="awAddItem()" style="width:100%;min-height:44px;background:var(--surface);border:1px dashed var(--border);color:var(--text);border-radius:6px;font-family:var(--font);font-size:13px;cursor:pointer;margin-bottom:12px">+ ' + esc(t('Add another item')) + '</button>';
+  h += '<div style="margin-bottom:10px"><label style="display:block;color:var(--muted);font-size:11px;margin-bottom:4px">' + esc(t('Total for all of this extra work')) + '</label>' +
+    '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:18px">$</span><input id="aw-amount" type="text" inputmode="decimal" ' + (locked ? 'readonly ' : '') + 'value="' + esc(st.amount) + '" oninput="awSetAmount(this.value)" placeholder="0.00" style="flex:1;min-height:44px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:16px;padding:8px;border-radius:6px;box-sizing:border-box"></div></div>' +
+    '<label style="display:flex;align-items:center;gap:10px;min-height:44px;font-size:13px;margin-bottom:10px"><input type="checkbox" ' + (locked ? 'disabled ' : '') + (st.tenant ? 'checked ' : '') + 'onchange="awSetTenant(this.checked)" style="width:22px;height:22px"> ' + esc(t('The tenant told me about this')) + '</label>' +
+    (locked ? '<div style="font-size:11.5px;color:var(--muted);margin-bottom:8px">' + esc(t('Your list is saved. Add any missing photos, then tap Try again.')) + '</div>' : '') +
+    '<div id="aw-progress" style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px"></div>' +
+    '<div id="aw-msg" style="margin-bottom:8px"></div>' +
+    '<div id="aw-hint" style="font-size:11.5px;color:var(--muted);margin-bottom:8px"></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+      '<button type="button" onclick="closeAddonModal()" style="min-height:44px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">' + esc(t('Close')) + '</button>' +
+      '<button type="button" id="aw-submit-btn" onclick="awSubmit()" style="min-height:44px;background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer"></button>' +
+    '</div>';
+  body.innerHTML = h;
+  var prog = document.getElementById('aw-progress');
+  st.items.forEach(function(it) { it.files.forEach(function(f) { if (f.card && prog) prog.appendChild(f.card); }); });
+  awUpdateSubmit();
+}
+function awMakeCard(f) {
+  var c = document.createElement('div');
+  c.style.cssText = 'display:flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:12px;color:var(--muted)';
+  c.textContent = '⏳ ' + f.file.name.substring(0, 24);
+  return c;
+}
+// Uploads every not-yet-uploaded photo, sequentially, through the shared _uploadOneFile
+// pipeline (3 attempts each). Resolves true only if every photo is on the server.
+function awUploadAll(st) {
+  var wo = awFindWO(st.parentId);
+  var propAddr = (wo && wo.property_address) || '';
+  var folder = null;
+  var chain = Promise.resolve(true);
+  st.items.forEach(function(it, i) {
+    it.files.forEach(function(f) {
+      if (f.done) return;
+      chain = chain.then(function(allOk) {
+        return new Promise(function(resolve) {
+          if (!f.card) f.card = awMakeCard(f);
+          var prog = document.getElementById('aw-progress');
+          if (prog && f.card.parentNode !== prog) prog.appendChild(f.card);
+          f.card.style.borderColor = 'var(--border)'; f.card.style.color = 'var(--muted)';
+          f.card.textContent = '⏳ ' + f.file.name.substring(0, 24);
+          _activeUploads++;
+          _uploadOneFile(f.file, f.card, st.childId, propAddr, 'before', folder, 1, {
+            addonItem: st.itemIdx[i],
+            onDone: function(ok, fld) { if (fld) folder = fld; f.done = !!ok; resolve(allOk && !!ok); }
+          });
+        });
+      });
+    });
+  });
+  return chain;
+}
+function awSubmit() {
+  var st = _aw;
+  if (!st || st.busy) return;
+  var v = awValid();
+  if (!v.ok) { awUpdateSubmit(); return; }
+  var btn = document.getElementById('aw-submit-btn');
+  var release = claimSubmit('addon:' + st.parentId, btn, t('Sending…'));
+  if (!release) return;
+  st.busy = true; st.missing = []; awMsg('');
+  var startP;
+  if (st.childId) { startP = Promise.resolve(); }
+  else {
+    startP = api('POST', '/wo/additional-work/start', {
+      parent_wo_id: st.parentId,
+      items: st.items.map(function(it) { return { desc: it.text.trim() }; }),
+      amount: awParseAmount(st.amount),
+      tenant_mentioned: !!st.tenant
+    }).then(function(res) {
+      if (!res || !res.success || !res.child_wo_id) throw new Error((res && res.error) || t('Could not start. Please try again.'));
+      st.childId = res.child_wo_id;
+      var idxs = (res.items || []).map(function(x) { return x.index; });
+      st.itemIdx = idxs.length === st.items.length ? idxs : st.items.map(function(_, k) { return k; });
+      ['aw-amount'].concat(st.items.map(function(_, k) { return 'aw-text-' + k; })).forEach(function(id) { var el = document.getElementById(id); if (el) el.readOnly = true; });
+    });
+  }
+  var finished = false;
+  startP.then(function() { return awUploadAll(st); })
+    .then(function(allOk) {
+      if (!allOk) throw new Error(t('Some photos did not upload. Check your connection and tap Try again.'));
+      return api('POST', '/wo/additional-work/submit', { child_wo_id: st.childId });
+    })
+    .then(function(res) {
+      if (res && res.success) { finished = true; return; }
+      if (res && res.missing_items && res.missing_items.length) {
+        st.missing = res.missing_items.map(function(ix) { return st.itemIdx.indexOf(ix); }).filter(function(k) { return k >= 0; });
+        throw new Error(t('Some items still need a photo. Add photos to the highlighted items, then tap Try again.'));
+      }
+      throw new Error((res && res.error) || t('Could not send. Please try again.'));
+    })
+    .catch(function(e) { awRender(); awErr(e && e.message ? e.message : t('Connection error — try again.')); })
+    .then(function() {
+      st.busy = false; release();
+      if (finished) {
+        st.done = true;
+        awRender();
+        awMsg('<div style="color:var(--accent2);font-size:13px;padding:8px;background:#eaf6ee;border-radius:6px">✓ ' + esc(t('Sent to Ridge Co for review.')) + '</div>');
+        var b = document.getElementById('aw-submit-btn'); if (b) { b.disabled = true; b.textContent = '✓ ' + t('Sent'); }
+        setTimeout(function() { document.getElementById('modal-addon').style.display = 'none'; if (typeof loadWorkOrders === 'function') loadWorkOrders(); }, 1400);
+      } else { awUpdateSubmit(); }
+    });
+}
+
+// Submitted add-ons listed under the job card.
+// ONE call per portal load / refresh (not one per job card — that burned the Sheets read quota): the worker returns
+// every add-on of the signed-in vendor, each row carrying parent_wo_id; rows are distributed to the cards here.
+function loadVendorAddons() {
+  return api('GET', '/wo/additional-work').then(function(res) {
+    var all = (res && res.success && res.items) || [];
+    window._addons = {};
+    all.forEach(function(a) { var p = a.parent_wo_id; if (p) (window._addons[p] = window._addons[p] || []).push(a); });
+    (window._wos || []).forEach(function(wo, idx) { if (awEligible(wo)) renderVendorAddons(wo.ID, idx); });
+  }).catch(function() { /* non-critical: leave empty */ });
+}
+function awStatusInfo(a) {
+  var s = String(a.estimate_status || '').toLowerCase();
+  if (s === 'converted') return { key: 'pending', label: t('Awaiting review'), color: 'var(--muted)', bg: 'var(--surface2)', canWithdraw: false, msg: '' };
+  if (s === 'approved') return { key: 'approved', label: t('Approved - go ahead'), color: '#166534', bg: '#eaf6ee', canWithdraw: false,
+    msg: t('✓ Approved — you\'re cleared to go ahead with this extra work.') };
+  if (s === 'needs info') return { key: 'needs', label: t('Needs info'), color: '#7a4b00', bg: '#fdf2e2', canWithdraw: true,
+    msg: t('❓ Ridge Co needs a bit more information on this. Please call us, or withdraw it and send it again.') };
+  if (s === 'declined') return { key: 'declined', label: t('Declined'), color: '#8a1c14', bg: '#fdecea', canWithdraw: false,
+    msg: t('Ridge Co is not moving forward with this. Thank you for sending it.') };
+  return { key: 'pending', label: t('Awaiting review'), color: 'var(--muted)', bg: 'var(--surface2)', canWithdraw: true, msg: '' };
+}
+function renderVendorAddons(woId, idx) {
+  var wrap = document.getElementById('addon-wrap-' + idx);
+  if (!wrap) return;
+  var list = (window._addons && window._addons[woId]) || [];
+  wrap.innerHTML = list.map(function(a) {
+    var si = awStatusInfo(a);
+    return '<div style="margin-top:8px;border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--surface2)">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">' +
+        '<span style="font-size:11px;color:var(--muted);font-weight:bold">' + esc(a.child_wo_id) + '</span>' +
+        '<span style="font-size:11px;font-weight:bold;padding:3px 8px;border-radius:10px;background:' + si.bg + ';color:' + si.color + ';border:1px solid ' + si.color + '">' + esc(si.label) + '</span>' +
+      '</div>' +
+      (a.items || []).map(function(it) {
+        return '<div style="font-size:12.5px;margin-top:6px;white-space:pre-wrap">• ' + esc(it.desc) + ((it.photos && it.photos.length) ? ' <span style="color:var(--muted)">(' + it.photos.length + ' 📷)</span>' : '') + '</div>';
+      }).join('') +
+      '<div style="font-weight:bold;margin-top:6px;font-size:13px">$' + parseFloat(a.amount || 0).toFixed(2) + '</div>' +
+      (si.msg ? '<div style="margin-top:6px;font-size:12px;line-height:1.45;color:' + si.color + '">' + esc(si.msg) + '</div>' : '') +
+      (si.canWithdraw ? '<button type="button" id="aw-wd-' + esc(a.child_wo_id) + '" onclick="withdrawAddon(\'' + esc(woId) + '\',\'' + esc(a.child_wo_id) + '\',' + idx + ')" style="margin-top:8px;min-height:44px;background:var(--surface);border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-family:var(--font);font-size:12.5px;padding:8px 14px;cursor:pointer">' + esc(t('Withdraw')) + '</button>' : '') +
+    '</div>';
+  }).join('');
+}
+function withdrawAddon(woId, childId, idx) {
+  if (!confirm(t('Withdraw this extra work request?'))) return;
+  var release = claimSubmit('addon-wd:' + childId, document.getElementById('aw-wd-' + childId), t('Withdrawing…'));
+  if (!release) return;
+  api('POST', '/wo/additional-work/withdraw', { child_wo_id: childId }).then(function(res) {
+    release();
+    if (res && res.success) { toast(t('Withdrawn'), 'success'); loadVendorAddons(); }
+    else toast((res && res.error) || t('Could not withdraw'), 'error');
+  }).catch(function() { release(); toast(t('Connection error — try again.'), 'error'); });
+}
+
 // ── Log a One-Off Job (self-serve WO) — §4a/§4b ─────────────────────────────
 var _ooApprovalSource = '';
 var _ooSubmitting = false;
