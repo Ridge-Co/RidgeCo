@@ -4302,7 +4302,7 @@ function openEditWOModal(woId) {
   // Force textarea to show full content regardless of CSS cache
   setTimeout(function(){
     var ta = document.getElementById('ewo-description');
-    if (ta) { ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
+    if (ta) { growDescArea(ta); }
     var tn = document.getElementById('ewo-notes');
     if (tn && tn.value) { tn.style.height='auto'; tn.style.height=Math.max(80,tn.scrollHeight)+'px'; }
   }, 30);
