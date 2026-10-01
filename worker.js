@@ -982,7 +982,19 @@ const _hubWorkerCore = {
     // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
     // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
     // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
-    try { await qbSyncPayments(env, {}); } catch (e) { /* non-fatal: never breaks the digest run */ }
+    // Oct 1 2026 (Brett: nothing may fail silently): a failure here is logged to Ops_Telemetry, never swallowed.
+    // qbSyncPayments returns a Response (never throws on its own errors) -- inspect its JSON for ok:false/errors too.
+    try {
+      const _syncRes = await qbSyncPayments(env, {});
+      let _syncJson = null; try { _syncJson = await _syncRes.clone().json(); } catch (_) {}
+      if (_syncJson && (_syncJson.ok === false || (_syncJson.errors && _syncJson.errors.length))) {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify(_syncJson.errors || _syncJson.error || 'ok:false')).slice(0, 480) });
+      }
+    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_qb_sync_payments failed and telemetry write failed', e); } }
+    // Safety net (Oct 1 2026): the 15-minute cron may not be scheduled in production, so also run the
+    // deposit-paid sweep daily. processDepositPaidSweep logs its own errors / not-found scopes to Ops_Telemetry.
+    try { await processDepositPaidSweep(env); }
+    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduled/deposit-paid-sweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_deposit_paid_sweep failed and telemetry write failed', e); } }
   }
 };
 
