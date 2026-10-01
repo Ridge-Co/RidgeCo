@@ -6595,6 +6595,20 @@ const WO_VOID_COLUMNS = ['Voided', 'Void_Reason', 'Void_Reason_Detail', 'Void_Co
 // first of two colliding rows. That class of problem is what the duplicate-submission guard
 // in createWorkOrder now prevents at the source; a pre-existing collision needs a manual
 // sheet fix, same as WO-1192.
+// PURE — Submitted add-on children of parentId that are still alive (estimate Pending / Needs Info / Approved, child not voided).
+// Voiding or cancelling the parent while any exist would strand them, so those paths refuse until Brett declines/withdraws them.
+function addonLiveChildren(workorders, estimates, parentId) {
+  return (workorders || []).filter(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === String(parentId) &&
+    String(w.Addon_Status || '') === 'Submitted' && String(w.Voided || '').toUpperCase() !== 'TRUE').filter(c => {
+    const v = (estimates || []).filter(e => String(e.WO_ID) === String(c.ID) && e.Active !== 'FALSE');
+    if (!v.length) return false;
+    const latest = v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b);
+    return ['Pending', 'Needs Info', 'Approved', ''].includes(String(latest.Status || ''));
+  }).map(c => c.ID);
+}
+function addonLiveChildrenMessage(ids, parentId, verb) {
+  return `${parentId} has additional work still open (${ids.join(', ')}). Decline or withdraw ${ids.length > 1 ? 'those' : 'that'} first, then ${verb} this work order.`;
+}
 async function woVoid(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   const reason = body.reason;
