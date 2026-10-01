@@ -1290,7 +1290,10 @@ function rowCard(r){
     // row, pulls the amount back out of Invoice_Review, voids the gallery attachment, and drops
     // the row back to a plain Pending — no refund flag. Confirms before firing since it reverses
     // real money/attachments.
-    if (['confirmed','attached_only'].includes(r.Status)) html += '<button class="btn secondary small" onclick="undoConfirmation(\''+r.ID+'\', this)">↩️ Undo confirmation</button>';
+    if (['confirmed','attached_only'].includes(r.Status)) html += '<button class="btn secondary small" onclick="undoConfirmation(\''+r.ID+'\', this)">↩️ Undo confirmation</button>'
+      // Oct 1 2026: Undo refuses a receipt already emailed to QuickBooks. Re-open is the admin escape
+      // hatch for exactly that case - pulls it back to Pending WITHOUT QuickBooks getting a second copy.
+      + '<button class="btn secondary small" onclick="reopenConfirmation(\''+r.ID+'\', this)">↩ Re-open (already sent to QB)</button>';
     html += '<span class="pill '+(r.Status==='confirmed'?'suggest':'muted')+'">'+esc(r.Status)+(r.Confirmed_WO_ID?(' → '+esc(r.Confirmed_WO_ID)):'')+(r.Duplicate_Confirmed_Date?(' · purges '+esc(purgeDateLabel(r.Duplicate_Confirmed_Date))):'')+'</span>';
   }
   html += '</div></div>';
