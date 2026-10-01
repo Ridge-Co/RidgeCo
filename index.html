@@ -2296,7 +2296,7 @@ function openWODetail(woId) {
   document.getElementById('detail-body').innerHTML = stickyBar + propHtml +
     '<div style="margin-bottom:14px">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">DESCRIPTION</div>' +
-    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow-y:auto">' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word" class="wo-detail-desc">' +
     linkify(wo.Description||'No description') +
     '</div></div>' +
     (wo.Notes ? '<div style="margin-bottom:14px">' +
