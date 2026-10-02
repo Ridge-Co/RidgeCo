@@ -11737,6 +11737,7 @@ async function queueNotification(env, woId, type, phone, message, sendAfter, ctx
   } catch(e){/* non-fatal */}
 }
 
+let __pendingNotifAt = 0; // last time GET /notifications/pending actually ran (per isolate)
 async function processPendingNotifications(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/${NOTIF_QUEUE_TAB}`); if(!data.values||data.values.length<2) return json({processed:0});
