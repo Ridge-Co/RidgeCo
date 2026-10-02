@@ -433,7 +433,13 @@ const _hubWorkerCore = {
         if (path === '/owner-workorders')       return await ownerWorkorders(env, url);
         if (path === '/owner-notifications')    return await getOwnerNotifications(env, url);
         if (path === '/owner-users')            return await getOwnerUsers(env, url);
-        if (path === '/notifications/pending')  return await processPendingNotifications(env);
+        if (path === '/notifications/pending') {
+          // The admin Hub fires this after EVERY full refresh (each save). The queue is also swept by
+          // the 15-minute cron, so running it more than once a minute only burns Sheets reads.
+          if (Date.now() - __pendingNotifAt < 60 * 1000) return json({ processed: 0, skipped: 'ran within the last 60s' });
+          __pendingNotifAt = Date.now();
+          return await processPendingNotifications(env);
+        }
         if (path === '/master-keys')            return await getSheet(env, 'Master_Keys');
         // Master_Key_Holders (Aug 24, 2026): per-VENDOR possession of a master key — "the
         // building is on a master key, and you [this vendor] have a copy" is a different fact
