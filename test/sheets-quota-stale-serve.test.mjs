@@ -109,7 +109,7 @@ const env = { SHEET_ID: 'S' };
   const lb = grab(wsrc, 'async function listVendorBills(');
   t('listVendorBills opts in only for a vendor_id call', /fetchTab\(env, 'Vendor_Bills', \{ stale: !!vendorId \}\)/.test(lb));
   const optIns = (wsrc.match(/stale: true|stale: !!vendorId/g) || []).length;
-  t('exactly the 3 intended opt-in call sites exist', optIns === 3);
+  t('exactly the 4 intended opt-in call sites exist (vendorWorkorders batched + fallback x2, listVendorBills)', optIns === 4);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
