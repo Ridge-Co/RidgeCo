@@ -17700,7 +17700,7 @@ async function sheetsRequest(env, method, path, body, readOpts) {
     }
     if (method === 'GET') {
       const cacheKey = __tabCacheKey(path);
-      if (cacheKey) __tabCache.set(cacheKey, { data, exp: Date.now() + TAB_CACHE_MS });
+      if (cacheKey) { const _t = Date.now(); __tabCache.set(cacheKey, { data, exp: _t + TAB_CACHE_MS, at: _t }); }
     } else {
       __invalidateFromWrite(path, body);
     }
