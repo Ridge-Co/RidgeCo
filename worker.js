@@ -7513,9 +7513,9 @@ async function vendorWorkorders(env, url) {
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [[workorders, properties, units, tenants, keys, vendors, masterKeys], config, masterKeyHolders] = await Promise.all([
-    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys']),
+    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys'], { stale: true }),
     fetchConfig(env),
-    fetchMasterKeyHolders(env),
+    fetchMasterKeyHolders(env, { stale: true }),
   ]);
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
