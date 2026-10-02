@@ -17595,6 +17595,14 @@ async function signRS256(input, key) {
 // zero duplicate reads globally.
 const __tabCache = new Map(); // tabName -> { data, exp }
 const TAB_CACHE_MS = 6000;
+// Last-resort fallback for READ-ONLY portal lists (opt-in via {stale:true}): when Google is
+// still refusing reads after every retry, serve the last good copy of the tab if it is at
+// most this old rather than failing the whole page. Never used by any write path.
+const TAB_STALE_MAX_MS = 15 * 60 * 1000;
+function __staleTab(tab) {
+  const h = __tabCache.get(tab);
+  return (h && (Date.now() - (h.exp - TAB_CACHE_MS)) <= TAB_STALE_MAX_MS) ? h.data : null;
+}
 function __tabCacheKey(path) {
   // Matches "/values/TabName" or "/values/TabName:append...", NEVER "/values/TabName!A1:Z9"
   // (a real range read) or "/values:batchGet"/"/values:batchUpdate" (handled by their own
