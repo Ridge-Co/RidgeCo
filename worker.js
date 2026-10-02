@@ -17601,7 +17601,35 @@ const TAB_CACHE_MS = 6000;
 const TAB_STALE_MAX_MS = 15 * 60 * 1000;
 function __staleTab(tab) {
   const h = __tabCache.get(tab);
-  return (h && (Date.now() - (h.exp - TAB_CACHE_MS)) <= TAB_STALE_MAX_MS) ? h.data : null;
+  const at = h ? (h.at !== undefined ? h.at : h.exp - TAB_CACHE_MS) : 0;
+  return (h && (Date.now() - at) <= TAB_STALE_MAX_MS) ? h.data : null;
+}
+// Background (cron) jobs run as a CHILD env flagged __CRON__ (never the shared env, so user
+// requests are unaffected). The 15-minute sweep used to fire 40+ Sheets reads in seconds (each
+// of ~8 sub-jobs re-reads Work_Orders/Vendors/Properties...), which on its own can exhaust
+// Google's 60-reads/minute quota the whole Hub shares and lock vendors out. Cron reads now
+// (a) reuse any copy of a tab read within CRON_CACHE_MS and (b) are spaced CRON_READ_GAP_MS
+// apart (<=24 reads/min), leaving most of the quota for people. Writes still invalidate.
+const CRON_CACHE_MS = 90 * 1000;
+const CRON_READ_GAP_MS = 2500;
+let __cronNextReadAt = 0;
+function __cronEnv(env) {
+  if (env && env.__CRON__) return env;
+  const c = Object.create(env);
+  c.__CRON__ = true;
+  return c;
+}
+async function __cronPace(env) {
+  if (!(env && env.__CRON__)) return;
+  const now = Date.now();
+  const slot = Math.max(now, __cronNextReadAt);
+  __cronNextReadAt = slot + CRON_READ_GAP_MS;
+  if (slot > now) await new Promise(r => setTimeout(r, slot - now));
+}
+function __cacheFresh(env, hit) {
+  if (!hit) return false;
+  if (env && env.__CRON__) { const at = hit.at !== undefined ? hit.at : hit.exp - TAB_CACHE_MS; return (Date.now() - at) < CRON_CACHE_MS; }
+  return hit.exp > Date.now();
 }
 function __tabCacheKey(path) {
   // Matches "/values/TabName" or "/values/TabName:append...", NEVER "/values/TabName!A1:Z9"
