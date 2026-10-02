@@ -19985,12 +19985,13 @@ async function qbMapEntity(env, body) {
 const COLS_OK_MS = 10 * 60 * 1000;
 const __colsOk = new Map(); // "tab|col1,col2,..." -> verifiedAtMs
 async function ensureColumns(env, tab, columns) {
+  const _memo = (typeof __colsOk !== 'undefined') ? __colsOk : null; // null when a test slices this function out of module scope
   const _ck = tab + '|' + (columns || []).join(',');
-  const _at = __colsOk.get(_ck);
+  const _at = _memo && _memo.get(_ck);
   if (_at && (Date.now() - _at) < COLS_OK_MS) return;
   try {
     const _r = await ensureColumnsInner(env, tab, columns);
-    __colsOk.set(_ck, Date.now());
+    if (_memo) _memo.set(_ck, Date.now());
     return _r;
   } catch (e) {
     // Guard against recursion: logTelemetry itself calls ensureColumns(TELEMETRY_TAB, ...) —
