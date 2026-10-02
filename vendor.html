@@ -1112,8 +1112,8 @@ function isCompleteNotInvoiced(w) {
 }
 function fetchDueWOs() {
   return Promise.all([
-    api('/vendor-workorders?vendor_id=' + session.vendor_id + '&include_closed=true'),
-    api('/vendor-bills?vendor_id=' + session.vendor_id)
+    apiList('/vendor-workorders?vendor_id=' + session.vendor_id + '&include_closed=true'),
+    apiList('/vendor-bills?vendor_id=' + session.vendor_id)
   ]).then(function(results) {
     var wos = results[0] || [], bills = results[1] || [];
     var billedWOIds = {};
