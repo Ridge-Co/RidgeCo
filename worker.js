@@ -18012,10 +18012,13 @@ async function uiTestWindowHandler(env, url, request, body) {
   return json({ ok: true, open: minutes > 0, until: until || null, max_minutes: UI_TEST_MAX_MINUTES });
 }
 
+function configFromValues(values) {
+  const config={}; (values||[]).forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
+}
 async function fetchConfig(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
-    const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
+    return configFromValues(data.values);
   } catch(e){return {};}
 }
 
