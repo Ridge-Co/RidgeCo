@@ -17669,9 +17669,10 @@ async function sheetsRequest(env, method, path, body, readOpts) {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
-      if (hit && hit.exp > Date.now()) return hit.data;
+      if (__cacheFresh(env, hit)) return hit.data;
     }
   }
+  if (method === 'GET') await __cronPace(env);
   // Reads get a much longer retry budget than writes (6 tries, ~0.5/1/2/4/8s waits = ~15s)
   // because Google's quota is per MINUTE: the old ~2s of total waiting gave up long before
   // the limit could clear. Writes keep 4 tries / 300ms base (a vendor staring at a Save button).
