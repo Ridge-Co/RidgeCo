@@ -17733,7 +17733,7 @@ async function fetchTab(env, tab, opts) {
 async function fetchTabs(env, tabs, opts) {
   if(!tabs||!tabs.length) return [];
   const now = Date.now();
-  const missing = tabs.filter(t => { const hit = __tabCache.get(t); return !(hit && hit.exp > now); });
+  const missing = tabs.filter(t => !__cacheFresh(env, __tabCache.get(t)));
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
     let data = null;
