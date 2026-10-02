@@ -17701,18 +17701,28 @@ async function fetchTab(env, tab, opts) {
 // request; only genuinely-missing tabs go over the wire, and whatever comes back
 // is cached the same way so a LATER fetchTab/getSheet call for the same tab is
 // also a cache hit. Writes still invalidate exactly like any other read path.
-async function fetchTabs(env, tabs) {
+async function fetchTabs(env, tabs, opts) {
   if(!tabs||!tabs.length) return [];
   const now = Date.now();
   const missing = tabs.filter(t => { const hit = __tabCache.get(t); return !(hit && hit.exp > now); });
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
-    const data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
-    const ranges=data.valueRanges||[];
-    missing.forEach((t,i)=>{
-      const values=(ranges[i]&&ranges[i].values)||[];
-      __tabCache.set(t, { data: { values }, exp: Date.now()+TAB_CACHE_MS });
-    });
+    let data = null;
+    try { data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`); }
+    catch (e) {
+      // Opt-in, read-only callers only: if EVERY tab we still need has a recent good copy,
+      // keep serving it (the final map below reads __tabCache regardless of expiry).
+      if (opts && opts.stale && missing.every(t => __staleTab(t))) {
+        console.warn('[stale-serve] batchGet failed, serving last good copy of ' + missing.join(',') + ': ' + (e && e.message));
+      } else { throw e; }
+    }
+    if (data) {
+      const ranges=data.valueRanges||[];
+      missing.forEach((t,i)=>{
+        const values=(ranges[i]&&ranges[i].values)||[];
+        __tabCache.set(t, { data: { values }, exp: Date.now()+TAB_CACHE_MS });
+      });
+    }
   }
   return tabs.map(t=>{
     const hit = __tabCache.get(t);
