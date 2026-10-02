@@ -17659,8 +17659,13 @@ async function sheetsRequest(env, method, path, body, opts) {
       const code=data.error.code||res.status;
       const retryable = code===429 || ((code===500||code===503) && method==='GET');
       if(retryable && attempt<MAX_ATTEMPTS){
-        await new Promise(r=>setTimeout(r, 300*Math.pow(2,attempt-1)+Math.floor(Math.random()*120)));
+        await new Promise(r=>setTimeout(r, BACKOFF_BASE_MS*Math.pow(2,attempt-1)+Math.floor(Math.random()*120)));
         continue;
+      }
+      if (method === 'GET' && opts && opts.stale) {
+        const ck = __tabCacheKey(path);
+        const s = ck && __staleTab(ck);
+        if (s) { console.warn('[stale-serve] Sheets read failed, serving last good copy of ' + ck + ': ' + (data.error.message || '')); return s; }
       }
       throw new Error(`Sheets API error on ${method} ${path}: ${data.error.message||JSON.stringify(data.error)}`);
     }
