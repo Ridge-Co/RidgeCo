@@ -7519,11 +7519,22 @@ async function vendorWorkorders(env, url) {
   const vendorId = url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [[workorders, properties, units, tenants, keys, vendors, masterKeys], config, masterKeyHolders] = await Promise.all([
-    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys'], { stale: true }),
-    fetchConfig(env),
-    fetchMasterKeyHolders(env, { stale: true }),
-  ]);
+  // ONE batchGet for everything (was 3 separate Sheets reads per call: tabs + Config + Master_Key_Holders).
+  // Config comes back as raw rows from the same cache entry; if Master_Key_Holders doesn't exist yet the
+  // batch fails with a missing-tab error and we fall back to the old three-read path (holders = []).
+  let workorders, properties, units, tenants, keys, vendors, masterKeys, masterKeyHolders, config;
+  try {
+    [workorders, properties, units, tenants, keys, vendors, masterKeys, masterKeyHolders] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys','Master_Key_Holders','Config'], { stale: true });
+    const _cfgHit = __tabCache.get('Config');
+    config = configFromValues(_cfgHit && _cfgHit.data && _cfgHit.data.values);
+  } catch (e) {
+    if (!isMissingTabError(e)) throw e;
+    [[workorders, properties, units, tenants, keys, vendors, masterKeys], config, masterKeyHolders] = await Promise.all([
+      fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys'], { stale: true }),
+      fetchConfig(env),
+      fetchMasterKeyHolders(env, { stale: true }),
+    ]);
+  }
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
