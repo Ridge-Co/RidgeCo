@@ -903,6 +903,7 @@ const _hubWorkerCore = {
     // `staging` branch override removes [triggers] entirely), so this never
     // actually fires there today — set defensively in case that ever changes.
     env.__STAGING__ = isStaging(env);
+    env = __cronEnv(env); // paced, cache-sharing Sheets reads for every background job
     const cron = event && event.cron;
     // Message-queue sweep (Sep 15 2026) — quiet-hours release, deferred notifications, and
     // vendor nudges. Uses the 5th (last available) paid-tier Cloudflare Cron Trigger slot.
