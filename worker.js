@@ -18018,7 +18018,7 @@ function configFromValues(values) {
 async function fetchConfig(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
-    return configFromValues(data.values);
+    const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
   } catch(e){return {};}
 }
 
