@@ -70,7 +70,15 @@ const ERR500 = { error: { code: 500, message: 'Backend error' } };
   let calls = 0;
   const { sheetsRequest } = makeSR(async () => { calls++; return resp(ERR429); });
   t('persistent 429 eventually throws', await okThrow(() => sheetsRequest({ SHEET_ID: 'S' }, 'GET', '/x')));
-  t('persistent 429 is bounded to 4 attempts', calls === 4);
+  t('persistent 429 on a GET is bounded to 6 attempts (reads wait out the per-minute quota)', calls === 6);
+}
+
+// writes keep the shorter 4-attempt budget
+{
+  let calls = 0;
+  const { sheetsRequest } = makeSR(async () => { calls++; return resp(ERR429); });
+  t('persistent 429 on a POST still throws', await okThrow(() => sheetsRequest({ SHEET_ID: 'S' }, 'POST', '/values/Vendor_Bills:append', { values: [] })));
+  t('persistent 429 on a POST is bounded to 4 attempts', calls === 4);
 }
 
 // a 500 on a GET is retried (idempotent read)
