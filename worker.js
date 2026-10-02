@@ -19479,8 +19479,27 @@ async function qbSyncPayments(env, body) {
   let workorders = [];
   try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
 
-  let written = 0, failed = 0, closed = 0;
+  let written = 0, failed = 0, closed = 0, unchanged = 0;
   const closedWOs = [];
+  // Oct 2 2026 ROOT-CAUSE FIX: this loop used to do updateRow() (= a full-sheet GET + a write, 2 subrequests) for EVERY
+  // payable row, then updateWOFields() + logWOAudit() per closure -- ~300+ subrequests for ~100 rows. Cloudflare caps a
+  // single invocation ("Too many subrequests"), so after the cap every later write -- including the WO -> Paid flip --
+  // failed (and was swallowed until Oct 1), which is why ~47 paid work orders were stuck on Invoiced. Now: ONE read of
+  // Invoice_Review, only rows whose stored state actually CHANGED are written, and every write is batched
+  // (one Sheets batchUpdate per ~400 cells; one for all WO closures; one audit append). Cost is O(1), not O(rows).
+  const irCols = ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked'];
+  let irHeaders = null; const irByRowId = {};
+  try {
+    const irData = await sheetsRequest(env, 'GET', '/values/Invoice_Review');
+    const irVals = (irData && irData.values) || [];
+    if (irVals.length) {
+      irHeaders = irVals[0]; const idc = idColIndex(irHeaders);
+      irVals.slice(1).forEach((row, i) => { irByRowId[String(row[idc])] = { sheetRow: i + 2, row }; });
+    }
+  } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_invoice_review', '/qb/sync-payments', 'Invoice_Review (stored payable state not refreshed)', e); }
+  const irRanges = []; let irChangedRows = 0;
+  const woToClose = new Map();   // wo_id -> { from, vendor_ref, bill_id }
+  let _sigsCache = null;
   for (const r of data.rows) {
     // Signed-Proposal rows (Sep 18 2026, see qbPayables) have no Invoice_Review row to write
     // back to — ir_id is deliberately blank for them. Nothing to persist there; QuickBooks' own
