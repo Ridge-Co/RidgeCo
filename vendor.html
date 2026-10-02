@@ -291,6 +291,29 @@ function api(path, opts) {
   return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
 }
 
+// Fetch a LIST endpoint (work orders / bills). The Worker answers {"error":"Unauthorized"}
+// (HTTP 401) when the saved login token is no longer valid, and api() above hands that object
+// back as-is. The lists then treated it as "no work orders" (Open tab) or crashed on
+// `wos.filter is not a function` (Invoiced / Needs Invoice tabs) -- vendors saw an empty
+// portal with no hint they just needed to sign in again (Oct 2 2026). Here: 401 -> sign out
+// with a clear message so a fresh PIN login mints a new token; any other non-array reply ->
+// a real, visible error (with Retry) instead of a silently empty list.
+function sessionExpired() {
+  doLogout();
+  showLoginMsg('Your session expired. Please sign in again.', 'error');
+}
+function apiList(path) {
+  return fetch(WORKER + path, { headers: { 'X-Auth-Token': SECRET } }).then(function(r) {
+    return r.json().catch(function(){ return null; }).then(function(data) {
+      if (r.status === 401) { sessionExpired(); throw new Error('Session expired - please sign in again'); }
+      if (!Array.isArray(data)) {
+        throw new Error((data && data.error) ? data.error : ('Unexpected response (HTTP ' + r.status + ')'));
+      }
+      return data;
+    });
+  });
+}
+
 // ── DOUBLE-SUBMIT GUARD ──────────────────────────────────────
 // Every "add" in this portal used to fire straight into an unguarded POST, and the Worker
 // appends unconditionally. On a phone that means one impatient double-tap = two real rows.
