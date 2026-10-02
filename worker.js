@@ -17636,7 +17636,7 @@ function __invalidateFromWrite(path, body) {
 // NEVER applied, so it is safe to retry any method (including an append). A 500/503
 // is ambiguous — the write may have landed — so those are retried ONLY for GET,
 // never for a POST/PUT that could double-write a bill or row.
-async function sheetsRequest(env, method, path, body) {
+async function sheetsRequest(env, method, path, body, opts) {
   if (method === 'GET') {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
@@ -17644,7 +17644,11 @@ async function sheetsRequest(env, method, path, body) {
       if (hit && hit.exp > Date.now()) return hit.data;
     }
   }
-  const MAX_ATTEMPTS=4;
+  // Reads get a much longer retry budget than writes (6 tries, ~0.5/1/2/4/8s waits = ~15s)
+  // because Google's quota is per MINUTE: the old ~2s of total waiting gave up long before
+  // the limit could clear. Writes keep 4 tries / 300ms base (a vendor staring at a Save button).
+  const MAX_ATTEMPTS = method === 'GET' ? 6 : 4;
+  const BACKOFF_BASE_MS = method === 'GET' ? 500 : 300;
   for(let attempt=1;;attempt++){
     const token=await getAccessToken(env);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
