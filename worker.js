@@ -19479,29 +19479,52 @@ async function qbSyncPayments(env, body) {
   let workorders = [];
   try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
 
-  let written = 0, failed = 0, closed = 0;
+  let written = 0, failed = 0, closed = 0, unchanged = 0;
   const closedWOs = [];
+  // Oct 2 2026 ROOT-CAUSE FIX: this loop used to do updateRow() (= a full-sheet GET + a write, 2 subrequests) for EVERY
+  // payable row, then updateWOFields() + logWOAudit() per closure -- ~300+ subrequests for ~100 rows. Cloudflare caps a
+  // single invocation ("Too many subrequests"), so after the cap every later write -- including the WO -> Paid flip --
+  // failed (and was swallowed until Oct 1), which is why ~47 paid work orders were stuck on Invoiced. Now: ONE read of
+  // Invoice_Review, only rows whose stored state actually CHANGED are written, and every write is batched
+  // (one Sheets batchUpdate per ~400 cells; one for all WO closures; one audit append). Cost is O(1), not O(rows).
+  const irCols = ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked'];
+  let irHeaders = null; const irByRowId = {};
+  try {
+    const irData = await sheetsRequest(env, 'GET', '/values/Invoice_Review');
+    const irVals = (irData && irData.values) || [];
+    if (irVals.length) {
+      irHeaders = irVals[0]; const idc = idColIndex(irHeaders);
+      irVals.slice(1).forEach((row, i) => { irByRowId[String(row[idc])] = { sheetRow: i + 2, row }; });
+    }
+  } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_invoice_review', '/qb/sync-payments', 'Invoice_Review (stored payable state not refreshed)', e); }
+  const irRanges = []; let irChangedRows = 0;
+  const woToClose = new Map();   // wo_id -> { from, vendor_ref, bill_id }
+  let _sigsCache = null;
   for (const r of data.rows) {
     // Signed-Proposal rows (Sep 18 2026, see qbPayables) have no Invoice_Review row to write
     // back to — ir_id is deliberately blank for them. Nothing to persist there; QuickBooks' own
     // live Balance is already the source of truth for these every time this page loads.
     if (r.source !== 'scope_signature') {
-      try {
-        await updateRow(env, 'Invoice_Review', r.ir_id, {
-          Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
-          Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
-          Payable_State: r.state,
-          Payment_Checked: now,
-        });
-        written++;
-      } catch (e) { failed++; await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'ir=' + r.ir_id + ' wo=' + (r.wo_id || ''), e); }
+      const want = {
+        Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
+        Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
+        Payable_State: r.state,
+      };
+      const hit = irHeaders && irByRowId[String(r.ir_id)];
+      if (!hit) { if (irHeaders) { failed++; syncErrors.push({ stage: 'qb_sync_write_invoice_review', ref: 'ir=' + r.ir_id + ' wo=' + (r.wo_id || ''), error: 'Invoice_Review row not found' }); } }
+      else if (['Customer_Paid', 'Vendor_Paid', 'Payable_State'].every(f => irHeaders.indexOf(f) !== -1 && String(hit.row[irHeaders.indexOf(f)] == null ? '' : hit.row[irHeaders.indexOf(f)]) === String(want[f]))) { unchanged++; }
+      else {
+        Object.assign(want, { Payment_Checked: now });
+        for (const f of irCols) { const ci = irHeaders.indexOf(f); if (ci !== -1) irRanges.push({ range: `Invoice_Review!${col(ci)}${hit.sheetRow}`, values: [[want[f]]] }); }
+        irChangedRows++;
+      }
     }
 
     // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
     // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
     if (r.source === 'scope_signature' && r.phase === 'deposit' && r.customer_paid === true && r.signature_id) {
       try {
-        const sigs = await fetchTab(env, 'Scope_Signatures');
+        const sigs = _sigsCache || (_sigsCache = await fetchTab(env, 'Scope_Signatures'));
         const sig = sigs.find(x => x.ID === r.signature_id);
         if (sig && sig.Scope_ID) {
           let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (_) {}
@@ -19520,24 +19543,43 @@ async function qbSyncPayments(env, body) {
     // vendor invoice" ask: the final vendor bill IS the completion signal now, exactly like every
     // other job's vendor bill already works — no separate Vendor Bill entry needed.
     if (r.vendor_paid === true && r.wo_id && !(r.source === 'scope_signature' && r.phase !== 'final')) {
-      try {
-        const wo = findWO(workorders, r.wo_id);
-        const cur = wo ? String(wo.Status || '') : '';
-        if (wo && !WO_DONE.includes(cur)) {
-          await updateWOFields(env, r.wo_id, { Status: 'Paid' });
-          try { await logWOAudit(env, r.wo_id, 'system-qb', 'system', 'Status', cur, 'Paid',
-            'Vendor bill paid in QuickBooks (' + (r.vendor_ref || ('bill ' + r.bill_id)) + ')'); } catch (e2) {}
-          closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
-        }
-      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'wo=' + r.wo_id, e); /* the payable state still saved above */ }
+      const wo = findWO(workorders, r.wo_id);
+      const cur = wo ? String(wo.Status || '') : '';
+      // Queued, not written here: all closures go out in ONE batch below (see the ROOT-CAUSE note above the loop).
+      if (wo && !WO_DONE.includes(cur) && !woToClose.has(String(r.wo_id))) woToClose.set(String(r.wo_id), { from: cur, vendor_ref: r.vendor_ref || '', bill_id: r.bill_id || '' });
     }
+  }
+  // ── flush 1: stored payable state (batched, changed rows only) ──
+  for (let i = 0; i < irRanges.length; i += 400) {
+    const chunk = irRanges.slice(i, i + 400);
+    try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: chunk }); written += Math.ceil(chunk.length / irCols.length); }
+    catch (e) { failed += Math.ceil(chunk.length / irCols.length); await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'batch of ' + Math.ceil(chunk.length / irCols.length) + ' Invoice_Review rows', e); }
+  }
+  // ── flush 2: WO -> Paid for every vendor bill QuickBooks positively reports paid (one read, one write, one audit append) ──
+  if (woToClose.size) {
+    try {
+      const woData = await sheetsRequest(env, 'GET', '/values/Work_Orders');
+      const woVals = (woData && woData.values) || [];
+      const woH = woVals[0] || [], woIdc = idColIndex(woH), stCi = woH.indexOf('Status');
+      if (stCi === -1) throw new Error('Work_Orders has no Status column');
+      const rowOf = {}; woVals.slice(1).forEach((row, i) => { rowOf[String(row[woIdc])] = i + 2; });
+      const wr = [], auditEntries = [], toDo = [...woToClose.entries()].filter(([id]) => rowOf[id]);
+      for (const [id, info] of toDo) {
+        wr.push({ range: `Work_Orders!${col(stCi)}${rowOf[id]}`, values: [['Paid']] });
+        auditEntries.push({ woId: id, changedBy: 'system-qb', changedByRole: 'system', field: 'Status', oldValue: info.from, newValue: 'Paid',
+          notes: 'Vendor bill paid in QuickBooks (' + (info.vendor_ref || ('bill ' + info.bill_id)) + ')' });
+      }
+      for (let i = 0; i < wr.length; i += 400) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: wr.slice(i, i + 400) });
+      for (const [id, info] of toDo) { closed++; closedWOs.push({ wo_id: id, from: info.from, vendor_ref: info.vendor_ref }); }
+      try { await logWOAuditMany(env, auditEntries); } catch (e2) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_audit', '/qb/sync-payments', 'WO_Audit for ' + auditEntries.length + ' closures (status DID change)', e2); }
+    } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'batch of ' + woToClose.size + ' work orders (none were marked Paid)', e); }
   }
   // Same sweep the Who To Pay page-open and the cron run: covers Pre-approved scopes whose deposit invoice is on a
   // milestone, and reports (not_found / errors) any scope whose deposit invoice cannot be resolved. Idempotent.
   let depositSweep = null;
   try { depositSweep = await processDepositPaidSweep(env); }
   catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_sweep', '/qb/sync-payments', 'processDepositPaidSweep', e); }
-  return json({ ok: true, checked: data.count, written, failed, closed, closed_wos: closedWOs,
+  return json({ ok: true, checked: data.count, written, unchanged, failed, closed, closed_wos: closedWOs, checked_at: now,
                 owed_now: data.owed_now, owed_total: data.owed_total, warnings: data.warnings || [], errors: syncErrors,
                 deposit_sweep: depositSweep, rows: data.rows });
 }
