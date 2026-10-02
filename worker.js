@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-01.4-deposit-paid-who-to-pay';
+const BUILD_VERSION = '2026-10-02.1-sheets-quota-resilience';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -7513,9 +7513,9 @@ async function vendorWorkorders(env, url) {
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [[workorders, properties, units, tenants, keys, vendors, masterKeys], config, masterKeyHolders] = await Promise.all([
-    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys']),
+    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys'], { stale: true }),
     fetchConfig(env),
-    fetchMasterKeyHolders(env),
+    fetchMasterKeyHolders(env, { stale: true }),
   ]);
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
@@ -8684,7 +8684,7 @@ async function editVendorBillReceipts(env, body) {
 async function listVendorBills(env, url) {
   const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '', statusFilter = url.searchParams.get('status') || '';
   try {
-    const bills = await fetchTab(env, 'Vendor_Bills');
+    const bills = await fetchTab(env, 'Vendor_Bills', { stale: !!vendorId });
     let results = bills.filter(b => b.Active !== 'FALSE');
     if (statusFilter && !woId) {
       // Admin view: Invoice Review screen — return all bills matching this status
@@ -10734,8 +10734,8 @@ async function bulkAssignMasterKey(env, body) {
 // "Don't Have It" / 'Unknown'. See getWOLockboxes/enrichWO for how this gates what a vendor
 // is told — never surfaced to a vendor who ISN'T the one holding (or about to be handed) it,
 // never surfaced to a tenant, ever (see enrichWO's opts.viewingVendorId gate).
-async function fetchMasterKeyHolders(env) {
-  try { return await fetchTab(env, 'Master_Key_Holders'); }
+async function fetchMasterKeyHolders(env, opts) {
+  try { return await fetchTab(env, 'Master_Key_Holders', opts); }
   catch (e) { if (isMissingTabError(e)) return []; throw e; }
 }
 
@@ -17595,6 +17595,14 @@ async function signRS256(input, key) {
 // zero duplicate reads globally.
 const __tabCache = new Map(); // tabName -> { data, exp }
 const TAB_CACHE_MS = 6000;
+// Last-resort fallback for READ-ONLY portal lists (opt-in via {stale:true}): when Google is
+// still refusing reads after every retry, serve the last good copy of the tab if it is at
+// most this old rather than failing the whole page. Never used by any write path.
+const TAB_STALE_MAX_MS = 15 * 60 * 1000;
+function __staleTab(tab) {
+  const h = __tabCache.get(tab);
+  return (h && (Date.now() - (h.exp - TAB_CACHE_MS)) <= TAB_STALE_MAX_MS) ? h.data : null;
+}
 function __tabCacheKey(path) {
   // Matches "/values/TabName" or "/values/TabName:append...", NEVER "/values/TabName!A1:Z9"
   // (a real range read) or "/values:batchGet"/"/values:batchUpdate" (handled by their own
@@ -17628,7 +17636,7 @@ function __invalidateFromWrite(path, body) {
 // NEVER applied, so it is safe to retry any method (including an append). A 500/503
 // is ambiguous — the write may have landed — so those are retried ONLY for GET,
 // never for a POST/PUT that could double-write a bill or row.
-async function sheetsRequest(env, method, path, body) {
+async function sheetsRequest(env, method, path, body, readOpts) {
   if (method === 'GET') {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
@@ -17636,7 +17644,11 @@ async function sheetsRequest(env, method, path, body) {
       if (hit && hit.exp > Date.now()) return hit.data;
     }
   }
-  const MAX_ATTEMPTS=4;
+  // Reads get a much longer retry budget than writes (6 tries, ~0.5/1/2/4/8s waits = ~15s)
+  // because Google's quota is per MINUTE: the old ~2s of total waiting gave up long before
+  // the limit could clear. Writes keep 4 tries / 300ms base (a vendor staring at a Save button).
+  const MAX_ATTEMPTS = method === 'GET' ? 6 : 4;
+  const BACKOFF_BASE_MS = method === 'GET' ? 500 : 300;
   for(let attempt=1;;attempt++){
     const token=await getAccessToken(env);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
@@ -17647,8 +17659,13 @@ async function sheetsRequest(env, method, path, body) {
       const code=data.error.code||res.status;
       const retryable = code===429 || ((code===500||code===503) && method==='GET');
       if(retryable && attempt<MAX_ATTEMPTS){
-        await new Promise(r=>setTimeout(r, 300*Math.pow(2,attempt-1)+Math.floor(Math.random()*120)));
+        await new Promise(r=>setTimeout(r, BACKOFF_BASE_MS*Math.pow(2,attempt-1)+Math.floor(Math.random()*120)));
         continue;
+      }
+      if (method === 'GET' && readOpts && readOpts.stale) {
+        const ck = __tabCacheKey(path);
+        const s = ck && __staleTab(ck);
+        if (s) { console.warn('[stale-serve] Sheets read failed, serving last good copy of ' + ck + ': ' + (data.error.message || '')); return s; }
       }
       throw new Error(`Sheets API error on ${method} ${path}: ${data.error.message||JSON.stringify(data.error)}`);
     }
@@ -17667,8 +17684,8 @@ async function getSheet(env, tab) {
   const [headers,...rows]=data.values; return json(rows.map(row=>{const o={};headers.forEach((h,i)=>o[h]=row[i]||'');return o;}));
 }
 
-async function fetchTab(env, tab) {
-  const data=await sheetsRequest(env,'GET',`/values/${tab}`); if(!data.values||data.values.length<2) return [];
+async function fetchTab(env, tab, opts) {
+  const data=await sheetsRequest(env,'GET',`/values/${tab}`,undefined,opts); if(!data.values||data.values.length<2) return [];
   const [headers,...rows]=data.values; return rows.map(row=>{const o={};headers.forEach((h,i)=>o[h]=row[i]||'');return o;});
 }
 
@@ -17684,18 +17701,28 @@ async function fetchTab(env, tab) {
 // request; only genuinely-missing tabs go over the wire, and whatever comes back
 // is cached the same way so a LATER fetchTab/getSheet call for the same tab is
 // also a cache hit. Writes still invalidate exactly like any other read path.
-async function fetchTabs(env, tabs) {
+async function fetchTabs(env, tabs, opts) {
   if(!tabs||!tabs.length) return [];
   const now = Date.now();
   const missing = tabs.filter(t => { const hit = __tabCache.get(t); return !(hit && hit.exp > now); });
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
-    const data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
-    const ranges=data.valueRanges||[];
-    missing.forEach((t,i)=>{
-      const values=(ranges[i]&&ranges[i].values)||[];
-      __tabCache.set(t, { data: { values }, exp: Date.now()+TAB_CACHE_MS });
-    });
+    let data = null;
+    try { data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`); }
+    catch (e) {
+      // Opt-in, read-only callers only: if EVERY tab we still need has a recent good copy,
+      // keep serving it (the final map below reads __tabCache regardless of expiry).
+      if (opts && opts.stale && missing.every(t => __staleTab(t))) {
+        console.warn('[stale-serve] batchGet failed, serving last good copy of ' + missing.join(',') + ': ' + (e && e.message));
+      } else { throw e; }
+    }
+    if (data) {
+      const ranges=data.valueRanges||[];
+      missing.forEach((t,i)=>{
+        const values=(ranges[i]&&ranges[i].values)||[];
+        __tabCache.set(t, { data: { values }, exp: Date.now()+TAB_CACHE_MS });
+      });
+    }
   }
   return tabs.map(t=>{
     const hit = __tabCache.get(t);
