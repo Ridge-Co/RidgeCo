@@ -1156,7 +1156,7 @@ function loadWOsForCurrentTab() {
   if (currentTab === 'due') return fetchDueWOs();
   if (currentTab === 'invoiced') return fetchInvoicedWOs();
   var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
-  return api('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed);
+  return apiList('/vendor-workorders?vendor_id=' + session.vendor_id + includeClosed);
 }
 
 function switchTab(tab) {
