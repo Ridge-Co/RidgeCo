@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-02.2-cron-read-throttle';
+const BUILD_VERSION = '2026-10-02.3-fewer-sheets-reads';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -433,7 +433,13 @@ const _hubWorkerCore = {
         if (path === '/owner-workorders')       return await ownerWorkorders(env, url);
         if (path === '/owner-notifications')    return await getOwnerNotifications(env, url);
         if (path === '/owner-users')            return await getOwnerUsers(env, url);
-        if (path === '/notifications/pending')  return await processPendingNotifications(env);
+        if (path === '/notifications/pending') {
+          // The admin Hub fires this after EVERY full refresh (each save). The queue is also swept by
+          // the 15-minute cron, so running it more than once a minute only burns Sheets reads.
+          if (Date.now() - __pendingNotifAt < 60 * 1000) return json({ processed: 0, skipped: 'ran within the last 60s' });
+          __pendingNotifAt = Date.now();
+          return await processPendingNotifications(env);
+        }
         if (path === '/master-keys')            return await getSheet(env, 'Master_Keys');
         // Master_Key_Holders (Aug 24, 2026): per-VENDOR possession of a master key — "the
         // building is on a master key, and you [this vendor] have a copy" is a different fact
@@ -7513,11 +7519,22 @@ async function vendorWorkorders(env, url) {
   const vendorId = url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
-  const [[workorders, properties, units, tenants, keys, vendors, masterKeys], config, masterKeyHolders] = await Promise.all([
-    fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys'], { stale: true }),
-    fetchConfig(env),
-    fetchMasterKeyHolders(env, { stale: true }),
-  ]);
+  // ONE batchGet for everything (was 3 separate Sheets reads per call: tabs + Config + Master_Key_Holders).
+  // Config comes back as raw rows from the same cache entry; if Master_Key_Holders doesn't exist yet the
+  // batch fails with a missing-tab error and we fall back to the old three-read path (holders = []).
+  let workorders, properties, units, tenants, keys, vendors, masterKeys, masterKeyHolders, config;
+  try {
+    [workorders, properties, units, tenants, keys, vendors, masterKeys, masterKeyHolders] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys','Master_Key_Holders','Config'], { stale: true });
+    const _cfgHit = __tabCache.get('Config');
+    config = configFromValues(_cfgHit && _cfgHit.data && _cfgHit.data.values);
+  } catch (e) {
+    if (!isMissingTabError(e)) throw e;
+    [[workorders, properties, units, tenants, keys, vendors, masterKeys], config, masterKeyHolders] = await Promise.all([
+      fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Master_Keys'], { stale: true }),
+      fetchConfig(env),
+      fetchMasterKeyHolders(env, { stale: true }),
+    ]);
+  }
   let tradeAccessDefaults = {};
   try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
   // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
@@ -11731,6 +11748,7 @@ async function queueNotification(env, woId, type, phone, message, sendAfter, ctx
   } catch(e){/* non-fatal */}
 }
 
+let __pendingNotifAt = 0; // last time GET /notifications/pending actually ran (per isolate)
 async function processPendingNotifications(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/${NOTIF_QUEUE_TAB}`); if(!data.values||data.values.length<2) return json({processed:0});
@@ -17994,6 +18012,9 @@ async function uiTestWindowHandler(env, url, request, body) {
   return json({ ok: true, open: minutes > 0, until: until || null, max_minutes: UI_TEST_MAX_MINUTES });
 }
 
+function configFromValues(values) {
+  const config={}; (values||[]).forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
+}
 async function fetchConfig(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
@@ -19956,9 +19977,22 @@ async function qbMapEntity(env, body) {
 // for the same tab within the review window) and, once Brett turns `digest_enabled` on, in the
 // weekly ops review he already gets. See CLAUDE.md's regression rules for the standing version
 // of this rule.
+// ensureColumns used to read the WHOLE tab on every call (150 call sites, many on plain read
+// endpoints and every write) just to confirm headers that almost never change. Once a tab has
+// been verified to have every column, remember that for 10 minutes (per isolate) and skip the
+// read -- a header can only go missing if someone deletes a column by hand, and the next
+// verification (<=10 min later) repairs it exactly as before. A failure is never memoized.
+const COLS_OK_MS = 10 * 60 * 1000;
+const __colsOk = new Map(); // "tab|col1,col2,..." -> verifiedAtMs
 async function ensureColumns(env, tab, columns) {
+  const _memo = (typeof __colsOk !== 'undefined') ? __colsOk : null; // null when a test slices this function out of module scope
+  const _ck = tab + '|' + (columns || []).join(',');
+  const _at = _memo && _memo.get(_ck);
+  if (_at && (Date.now() - _at) < COLS_OK_MS) return;
   try {
-    return await ensureColumnsInner(env, tab, columns);
+    const _r = await ensureColumnsInner(env, tab, columns);
+    if (_memo) _memo.set(_ck, Date.now());
+    return _r;
   } catch (e) {
     // Guard against recursion: logTelemetry itself calls ensureColumns(TELEMETRY_TAB, ...) —
     // if THAT specific call is what's failing, logging the failure via logTelemetry would call
