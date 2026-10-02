@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-02.1-sheets-quota-resilience';
+const BUILD_VERSION = '2026-10-02.2-cron-read-throttle';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -903,6 +903,7 @@ const _hubWorkerCore = {
     // `staging` branch override removes [triggers] entirely), so this never
     // actually fires there today — set defensively in case that ever changes.
     env.__STAGING__ = isStaging(env);
+    env = __cronEnv(env); // paced, cache-sharing Sheets reads for every background job
     const cron = event && event.cron;
     // Message-queue sweep (Sep 15 2026) — quiet-hours release, deferred notifications, and
     // vendor nudges. Uses the 5th (last available) paid-tier Cloudflare Cron Trigger slot.
@@ -12762,6 +12763,7 @@ const CRON_SWEEP_LOCK_KEY = 'Cron_Sweep_Claimed_Until';
 const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a normal sweep run; short enough to self-heal within one cycle if a run ever dies mid-flight without clearing it
 
 async function cronSweep(env) {
+  env = __cronEnv(env);
   const now = new Date();
   let cfg;
   try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
@@ -17601,7 +17603,35 @@ const TAB_CACHE_MS = 6000;
 const TAB_STALE_MAX_MS = 15 * 60 * 1000;
 function __staleTab(tab) {
   const h = __tabCache.get(tab);
-  return (h && (Date.now() - (h.exp - TAB_CACHE_MS)) <= TAB_STALE_MAX_MS) ? h.data : null;
+  const at = h ? (h.at !== undefined ? h.at : h.exp - TAB_CACHE_MS) : 0;
+  return (h && (Date.now() - at) <= TAB_STALE_MAX_MS) ? h.data : null;
+}
+// Background (cron) jobs run as a CHILD env flagged __CRON__ (never the shared env, so user
+// requests are unaffected). The 15-minute sweep used to fire 40+ Sheets reads in seconds (each
+// of ~8 sub-jobs re-reads Work_Orders/Vendors/Properties...), which on its own can exhaust
+// Google's 60-reads/minute quota the whole Hub shares and lock vendors out. Cron reads now
+// (a) reuse any copy of a tab read within CRON_CACHE_MS and (b) are spaced CRON_READ_GAP_MS
+// apart (<=24 reads/min), leaving most of the quota for people. Writes still invalidate.
+const CRON_CACHE_MS = 90 * 1000;
+const CRON_READ_GAP_MS = 2500;
+let __cronNextReadAt = 0;
+function __cronEnv(env) {
+  if (env && env.__CRON__) return env;
+  const c = Object.create(env);
+  c.__CRON__ = true;
+  return c;
+}
+async function __cronPace(env) {
+  if (!(env && env.__CRON__)) return;
+  const now = Date.now();
+  const slot = Math.max(now, __cronNextReadAt);
+  __cronNextReadAt = slot + CRON_READ_GAP_MS;
+  if (slot > now) await new Promise(r => setTimeout(r, slot - now));
+}
+function __cacheFresh(env, hit) {
+  if (!hit) return false;
+  if (env && env.__CRON__) { const at = hit.at !== undefined ? hit.at : hit.exp - TAB_CACHE_MS; return (Date.now() - at) < CRON_CACHE_MS; }
+  return hit.exp > Date.now();
 }
 function __tabCacheKey(path) {
   // Matches "/values/TabName" or "/values/TabName:append...", NEVER "/values/TabName!A1:Z9"
@@ -17641,9 +17671,10 @@ async function sheetsRequest(env, method, path, body, readOpts) {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
-      if (hit && hit.exp > Date.now()) return hit.data;
+      if (__cacheFresh(env, hit)) return hit.data;
     }
   }
+  if (method === 'GET') await __cronPace(env);
   // Reads get a much longer retry budget than writes (6 tries, ~0.5/1/2/4/8s waits = ~15s)
   // because Google's quota is per MINUTE: the old ~2s of total waiting gave up long before
   // the limit could clear. Writes keep 4 tries / 300ms base (a vendor staring at a Save button).
@@ -17671,7 +17702,7 @@ async function sheetsRequest(env, method, path, body, readOpts) {
     }
     if (method === 'GET') {
       const cacheKey = __tabCacheKey(path);
-      if (cacheKey) __tabCache.set(cacheKey, { data, exp: Date.now() + TAB_CACHE_MS });
+      if (cacheKey) { const _t = Date.now(); __tabCache.set(cacheKey, { data, exp: _t + TAB_CACHE_MS, at: _t }); }
     } else {
       __invalidateFromWrite(path, body);
     }
@@ -17704,7 +17735,7 @@ async function fetchTab(env, tab, opts) {
 async function fetchTabs(env, tabs, opts) {
   if(!tabs||!tabs.length) return [];
   const now = Date.now();
-  const missing = tabs.filter(t => { const hit = __tabCache.get(t); return !(hit && hit.exp > now); });
+  const missing = tabs.filter(t => !__cacheFresh(env, __tabCache.get(t)));
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
     let data = null;
@@ -17720,7 +17751,7 @@ async function fetchTabs(env, tabs, opts) {
       const ranges=data.valueRanges||[];
       missing.forEach((t,i)=>{
         const values=(ranges[i]&&ranges[i].values)||[];
-        __tabCache.set(t, { data: { values }, exp: Date.now()+TAB_CACHE_MS });
+        const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
       });
     }
   }
