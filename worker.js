@@ -19505,15 +19505,19 @@ async function qbSyncPayments(env, body) {
     // back to — ir_id is deliberately blank for them. Nothing to persist there; QuickBooks' own
     // live Balance is already the source of truth for these every time this page loads.
     if (r.source !== 'scope_signature') {
-      try {
-        await updateRow(env, 'Invoice_Review', r.ir_id, {
-          Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
-          Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
-          Payable_State: r.state,
-          Payment_Checked: now,
-        });
-        written++;
-      } catch (e) { failed++; await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'ir=' + r.ir_id + ' wo=' + (r.wo_id || ''), e); }
+      const want = {
+        Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
+        Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
+        Payable_State: r.state,
+      };
+      const hit = irHeaders && irByRowId[String(r.ir_id)];
+      if (!hit) { if (irHeaders) { failed++; syncErrors.push({ stage: 'qb_sync_write_invoice_review', ref: 'ir=' + r.ir_id + ' wo=' + (r.wo_id || ''), error: 'Invoice_Review row not found' }); } }
+      else if (['Customer_Paid', 'Vendor_Paid', 'Payable_State'].every(f => irHeaders.indexOf(f) !== -1 && String(hit.row[irHeaders.indexOf(f)] == null ? '' : hit.row[irHeaders.indexOf(f)]) === String(want[f]))) { unchanged++; }
+      else {
+        Object.assign(want, { Payment_Checked: now });
+        for (const f of irCols) { const ci = irHeaders.indexOf(f); if (ci !== -1) irRanges.push({ range: `Invoice_Review!${col(ci)}${hit.sheetRow}`, values: [[want[f]]] }); }
+        irChangedRows++;
+      }
     }
 
     // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
