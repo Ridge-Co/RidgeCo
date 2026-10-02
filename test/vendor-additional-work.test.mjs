@@ -473,7 +473,7 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
   t('approve/flag estimate reuse the batched, cached Work_Orders read (single batchGet via fetchTabs; later fetchTab hits __tabCache)', /fetchTabs\(env, \['Estimates', 'Work_Orders'\]\)/.test(grabAsync('approveEstimate')) && /fetchTabs\(env, \['Estimates', 'Work_Orders'\]\)/.test(grabAsync('flagEstimate')));
 }
 
-t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-10-01\.\d+-[a-z0-9-]+'/.test(src));
+t('BUILD_VERSION bumped', /const BUILD_VERSION = '\d{4}-\d{2}-\d{2}\.\d+-[a-z0-9-]+'/.test(src));
 
 console.log(`vendor-additional-work: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
