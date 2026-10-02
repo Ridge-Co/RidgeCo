@@ -17684,8 +17684,8 @@ async function getSheet(env, tab) {
   const [headers,...rows]=data.values; return json(rows.map(row=>{const o={};headers.forEach((h,i)=>o[h]=row[i]||'');return o;}));
 }
 
-async function fetchTab(env, tab) {
-  const data=await sheetsRequest(env,'GET',`/values/${tab}`); if(!data.values||data.values.length<2) return [];
+async function fetchTab(env, tab, opts) {
+  const data=await sheetsRequest(env,'GET',`/values/${tab}`,undefined,opts); if(!data.values||data.values.length<2) return [];
   const [headers,...rows]=data.values; return rows.map(row=>{const o={};headers.forEach((h,i)=>o[h]=row[i]||'');return o;});
 }
 
