@@ -19579,7 +19579,7 @@ async function qbSyncPayments(env, body) {
   let depositSweep = null;
   try { depositSweep = await processDepositPaidSweep(env); }
   catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_sweep', '/qb/sync-payments', 'processDepositPaidSweep', e); }
-  return json({ ok: true, checked: data.count, written, failed, closed, closed_wos: closedWOs,
+  return json({ ok: true, checked: data.count, written, unchanged, failed, closed, closed_wos: closedWOs, checked_at: now,
                 owed_now: data.owed_now, owed_total: data.owed_total, warnings: data.warnings || [], errors: syncErrors,
                 deposit_sweep: depositSweep, rows: data.rows });
 }
