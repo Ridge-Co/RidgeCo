@@ -17662,7 +17662,7 @@ async function sheetsRequest(env, method, path, body, readOpts) {
         await new Promise(r=>setTimeout(r, BACKOFF_BASE_MS*Math.pow(2,attempt-1)+Math.floor(Math.random()*120)));
         continue;
       }
-      if (method === 'GET' && opts && opts.stale) {
+      if (method === 'GET' && readOpts && readOpts.stale) {
         const ck = __tabCacheKey(path);
         const s = ck && __staleTab(ck);
         if (s) { console.warn('[stale-serve] Sheets read failed, serving last good copy of ' + ck + ': ' + (data.error.message || '')); return s; }
