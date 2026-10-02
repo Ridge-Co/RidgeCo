@@ -19956,9 +19956,21 @@ async function qbMapEntity(env, body) {
 // for the same tab within the review window) and, once Brett turns `digest_enabled` on, in the
 // weekly ops review he already gets. See CLAUDE.md's regression rules for the standing version
 // of this rule.
+// ensureColumns used to read the WHOLE tab on every call (150 call sites, many on plain read
+// endpoints and every write) just to confirm headers that almost never change. Once a tab has
+// been verified to have every column, remember that for 10 minutes (per isolate) and skip the
+// read -- a header can only go missing if someone deletes a column by hand, and the next
+// verification (<=10 min later) repairs it exactly as before. A failure is never memoized.
+const COLS_OK_MS = 10 * 60 * 1000;
+const __colsOk = new Map(); // "tab|col1,col2,..." -> verifiedAtMs
 async function ensureColumns(env, tab, columns) {
+  const _ck = tab + '|' + (columns || []).join(',');
+  const _at = __colsOk.get(_ck);
+  if (_at && (Date.now() - _at) < COLS_OK_MS) return;
   try {
-    return await ensureColumnsInner(env, tab, columns);
+    const _r = await ensureColumnsInner(env, tab, columns);
+    __colsOk.set(_ck, Date.now());
+    return _r;
   } catch (e) {
     // Guard against recursion: logTelemetry itself calls ensureColumns(TELEMETRY_TAB, ...) —
     // if THAT specific call is what's failing, logging the failure via logTelemetry would call
