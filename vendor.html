@@ -1180,7 +1180,8 @@ function loadWorkOrders() {
     })
     .catch(function(e) {
       console.error('[loadWorkOrders]', e);
-      list.innerHTML = '<div class="msg error">Failed to load work orders. (' + (e && e.message ? e.message : 'see console') + ')</div>';
+      list.innerHTML = '<div class="msg error">Failed to load work orders. (' + esc(e && e.message ? e.message : 'see console') + ')</div>' +
+        '<div style="text-align:center;margin-top:12px"><button class="btn" onclick="loadWorkOrders()">Retry</button></div>';
     });
 }
 
