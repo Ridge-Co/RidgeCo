@@ -19524,7 +19524,7 @@ async function qbSyncPayments(env, body) {
     // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
     if (r.source === 'scope_signature' && r.phase === 'deposit' && r.customer_paid === true && r.signature_id) {
       try {
-        const sigs = await fetchTab(env, 'Scope_Signatures');
+        const sigs = _sigsCache || (_sigsCache = await fetchTab(env, 'Scope_Signatures'));
         const sig = sigs.find(x => x.ID === r.signature_id);
         if (sig && sig.Scope_ID) {
           let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (_) {}
