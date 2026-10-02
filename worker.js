@@ -10734,8 +10734,8 @@ async function bulkAssignMasterKey(env, body) {
 // "Don't Have It" / 'Unknown'. See getWOLockboxes/enrichWO for how this gates what a vendor
 // is told — never surfaced to a vendor who ISN'T the one holding (or about to be handed) it,
 // never surfaced to a tenant, ever (see enrichWO's opts.viewingVendorId gate).
-async function fetchMasterKeyHolders(env) {
-  try { return await fetchTab(env, 'Master_Key_Holders'); }
+async function fetchMasterKeyHolders(env, opts) {
+  try { return await fetchTab(env, 'Master_Key_Holders', opts); }
   catch (e) { if (isMissingTabError(e)) return []; throw e; }
 }
 
