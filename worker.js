@@ -19543,17 +19543,36 @@ async function qbSyncPayments(env, body) {
     // vendor invoice" ask: the final vendor bill IS the completion signal now, exactly like every
     // other job's vendor bill already works — no separate Vendor Bill entry needed.
     if (r.vendor_paid === true && r.wo_id && !(r.source === 'scope_signature' && r.phase !== 'final')) {
-      try {
-        const wo = findWO(workorders, r.wo_id);
-        const cur = wo ? String(wo.Status || '') : '';
-        if (wo && !WO_DONE.includes(cur)) {
-          await updateWOFields(env, r.wo_id, { Status: 'Paid' });
-          try { await logWOAudit(env, r.wo_id, 'system-qb', 'system', 'Status', cur, 'Paid',
-            'Vendor bill paid in QuickBooks (' + (r.vendor_ref || ('bill ' + r.bill_id)) + ')'); } catch (e2) {}
-          closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
-        }
-      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'wo=' + r.wo_id, e); /* the payable state still saved above */ }
+      const wo = findWO(workorders, r.wo_id);
+      const cur = wo ? String(wo.Status || '') : '';
+      // Queued, not written here: all closures go out in ONE batch below (see the ROOT-CAUSE note above the loop).
+      if (wo && !WO_DONE.includes(cur) && !woToClose.has(String(r.wo_id))) woToClose.set(String(r.wo_id), { from: cur, vendor_ref: r.vendor_ref || '', bill_id: r.bill_id || '' });
     }
+  }
+  // ── flush 1: stored payable state (batched, changed rows only) ──
+  for (let i = 0; i < irRanges.length; i += 400) {
+    const chunk = irRanges.slice(i, i + 400);
+    try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: chunk }); written += Math.ceil(chunk.length / irCols.length); }
+    catch (e) { failed += Math.ceil(chunk.length / irCols.length); await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'batch of ' + Math.ceil(chunk.length / irCols.length) + ' Invoice_Review rows', e); }
+  }
+  // ── flush 2: WO -> Paid for every vendor bill QuickBooks positively reports paid (one read, one write, one audit append) ──
+  if (woToClose.size) {
+    try {
+      const woData = await sheetsRequest(env, 'GET', '/values/Work_Orders');
+      const woVals = (woData && woData.values) || [];
+      const woH = woVals[0] || [], woIdc = idColIndex(woH), stCi = woH.indexOf('Status');
+      if (stCi === -1) throw new Error('Work_Orders has no Status column');
+      const rowOf = {}; woVals.slice(1).forEach((row, i) => { rowOf[String(row[woIdc])] = i + 2; });
+      const wr = [], auditEntries = [], toDo = [...woToClose.entries()].filter(([id]) => rowOf[id]);
+      for (const [id, info] of toDo) {
+        wr.push({ range: `Work_Orders!${col(stCi)}${rowOf[id]}`, values: [['Paid']] });
+        auditEntries.push({ woId: id, changedBy: 'system-qb', changedByRole: 'system', field: 'Status', oldValue: info.from, newValue: 'Paid',
+          notes: 'Vendor bill paid in QuickBooks (' + (info.vendor_ref || ('bill ' + info.bill_id)) + ')' });
+      }
+      for (let i = 0; i < wr.length; i += 400) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: wr.slice(i, i + 400) });
+      for (const [id, info] of toDo) { closed++; closedWOs.push({ wo_id: id, from: info.from, vendor_ref: info.vendor_ref }); }
+      try { await logWOAuditMany(env, auditEntries); } catch (e2) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_audit', '/qb/sync-payments', 'WO_Audit for ' + auditEntries.length + ' closures (status DID change)', e2); }
+    } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'batch of ' + woToClose.size + ' work orders (none were marked Paid)', e); }
   }
   // Same sweep the Who To Pay page-open and the cron run: covers Pre-approved scopes whose deposit invoice is on a
   // milestone, and reports (not_found / errors) any scope whose deposit invoice cannot be resolved. Idempotent.
