@@ -8684,7 +8684,7 @@ async function editVendorBillReceipts(env, body) {
 async function listVendorBills(env, url) {
   const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '', statusFilter = url.searchParams.get('status') || '';
   try {
-    const bills = await fetchTab(env, 'Vendor_Bills');
+    const bills = await fetchTab(env, 'Vendor_Bills', { stale: !!vendorId });
     let results = bills.filter(b => b.Active !== 'FALSE');
     if (statusFilter && !woId) {
       // Admin view: Invoice Review screen — return all bills matching this status
