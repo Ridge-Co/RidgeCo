@@ -17749,7 +17749,7 @@ async function fetchTabs(env, tabs, opts) {
       const ranges=data.valueRanges||[];
       missing.forEach((t,i)=>{
         const values=(ranges[i]&&ranges[i].values)||[];
-        __tabCache.set(t, { data: { values }, exp: Date.now()+TAB_CACHE_MS });
+        const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
       });
     }
   }
