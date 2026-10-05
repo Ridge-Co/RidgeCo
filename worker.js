@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-02.3-fewer-sheets-reads';
+const BUILD_VERSION = '2026-10-05.1-qbo-vendor-sync';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -639,7 +639,7 @@ const _hubWorkerCore = {
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
         // VENDOR_ONBOARDING_COLS (Sep 23 2026, Phase 1) folded into the same ensureColumns call
         // every vendor add/update already makes — additive, no-op once the headers exist.
-        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; return await addRow(env, 'Vendors', body); }
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; const _addRes = await addRow(env, 'Vendors', body); try { const _nv = await _addRes.clone().json(); if (_nv && _nv.id) await autoMatchVendorToQbo(env, _nv.id, '/vendor/add'); } catch (e) { /* never blocks vendor creation */ } return _addRes; }
         if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
         if (path === '/vendor/complete-onboarding') return await vendorCompleteOnboarding(env, body);
         // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
@@ -699,6 +699,7 @@ const _hubWorkerCore = {
         if (path === '/admin/share-attachments')  return await adminShareAttachments(env, body);
         if (path === '/admin/ensure-receipts-payment-source') return await adminEnsureReceiptsPaymentSource(env);
         if (path === '/admin/backfill-scope-wo-vendor') return await backfillScopeWOVendor(env);
+        if (path === '/admin/sync-vendors-from-qbo') return await syncVendorsFromQbo(env, body);
         if (path === '/admin/backfill-receipt-attachments') return await backfillReceiptAttachments(env, body);
         if (path === '/admin/backfill-approval-stage') return await backfillApprovalStage(env, body);
         if (path === '/admin/gemini-context-update') return await adminGeminiContextUpdate(env, body);
@@ -8434,6 +8435,7 @@ async function addVendorBill(env, body) {
   } catch(e) { /* non-fatal: bill is still saved */ }
   // B-20260916-1930-k7: vendor invoice confirmation email — best-effort, soft-launched via
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
+  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { /* never blocks the bill */ }
   try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
   return res;
 }
@@ -14988,8 +14990,219 @@ const VENDOR_ONBOARDING_REQUIRED_FIELDS = ['Phone', 'Billing_Email', 'Billing_Ad
 
 function vendorOnboardingComplete(vendor) {
   vendor = vendor || {};
-  const missing = VENDOR_ONBOARDING_REQUIRED_FIELDS.filter(f => !String(vendor[f] || '').trim());
+  // A vendor already linked to a QuickBooks vendor (QBO_Vendor_ID) is a vendor Brett has been
+  // paying and 1099-ing through QuickBooks, which is the system of record for their tax ID.
+  // QuickBooks never returns the TaxIdentifier on read, so the Hub can't mirror it — requiring
+  // the vendor to retype it would block every legacy vendor (Cesar, Oct 5 2026). Everything
+  // else is still required.
+  const linked = !!String(vendor.QBO_Vendor_ID || '').trim();
+  const required = linked ? VENDOR_ONBOARDING_REQUIRED_FIELDS.filter(f => f !== 'Tax_ID') : VENDOR_ONBOARDING_REQUIRED_FIELDS;
+  const missing = required.filter(f => !String(vendor[f] || '').trim());
   return { complete: missing.length === 0, missing };
+}
+
+// ── QUICKBOOKS → HUB VENDOR SYNC (Oct 5 2026) ───────────────────────────────────────────
+// Fills BLANK Hub vendor profile fields from the vendor's existing QuickBooks record, and links
+// Hub vendors to their QuickBooks vendor. Never overwrites a Hub value, never writes to QuickBooks,
+// never creates a QuickBooks vendor. Only an EXACT name match is linked automatically; strong /
+// weak / ambiguous matches come back as suggestions for Brett (same rule as qbLookupExisting).
+
+// PURE — a QuickBooks address object to one line.
+function qbAddrToString(a) {
+  if (!a || typeof a !== 'object') return '';
+  const street = [a.Line1, a.Line2, a.Line3, a.Line4, a.Line5].map(x => String(x || '').trim()).filter(Boolean).join(', ');
+  const cityLine = [String(a.City || '').trim(), [String(a.CountrySubDivisionCode || '').trim(), String(a.PostalCode || '').trim()].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  return [street, cityLine].filter(Boolean).join(', ');
+}
+
+// PURE — Hub profile fields derivable from a raw QuickBooks Vendor object.
+function qbVendorHubFields(qv) {
+  qv = qv || {};
+  return {
+    Billing_Email: String((qv.PrimaryEmailAddr && qv.PrimaryEmailAddr.Address) || '').trim(),
+    Billing_Address: qbAddrToString(qv.BillAddr),
+    Phone: String((qv.PrimaryPhone && qv.PrimaryPhone.FreeFormNumber) || (qv.Mobile && qv.Mobile.FreeFormNumber) || '').trim(),
+  };
+}
+
+const QBO_FILLABLE_FIELDS = ['Phone', 'Billing_Email', 'Billing_Address'];
+
+// PURE — which blank Hub fields can be filled, and from where. Returns { fill, still_missing }.
+// QuickBooks wins over the Hub's own plain Email/Payment_Address fallbacks.
+function vendorQboFillPlan(hubVendor, qv) {
+  const hv = hubVendor || {};
+  const q = qbVendorHubFields(qv);
+  const fallback = { Billing_Email: String(hv.Email || '').trim(), Billing_Address: String(hv.Payment_Address || '').trim(), Phone: '' };
+  const fill = {};
+  for (const f of QBO_FILLABLE_FIELDS) {
+    if (String(hv[f] || '').trim()) continue;
+    const v = q[f] || fallback[f];
+    if (v) fill[f] = v;
+  }
+  const merged = Object.assign({}, hv, fill);
+  const still_missing = vendorOnboardingComplete(Object.assign({}, merged, { QBO_Vendor_ID: hv.QBO_Vendor_ID || (qv && qv.Id) || '' })).missing;
+  return { fill, still_missing };
+}
+
+// PURE — best QuickBooks match for a Hub vendor. Tries Name, Company, then First+Last, and
+// keeps the highest-confidence result. Returns { id, name, confidence, candidates? } or null.
+function vendorQboMatch(hubVendor, qbList) {
+  const hv = hubVendor || {};
+  const rank = { exact: 4, strong: 3, weak: 2, ambiguous: 1 };
+  const names = [hv.Name, hv.Company, ((hv.First_Name || '') + ' ' + (hv.Last_Name || '')).trim()].map(s => String(s || '').trim()).filter(Boolean);
+  const email = hv.Billing_Email || hv.Email || '';
+  let best = null;
+  for (const n of new Set(names)) {
+    const m = qbMatchEntity(qbList, n, email);
+    if (m && (!best || (rank[m.confidence] || 0) > (rank[best.confidence] || 0))) best = m;
+  }
+  return best;
+}
+
+// Every active QuickBooks vendor with the FULL record (qbListEntities only selects a few
+// fields and a single page). Paginated 1000 at a time.
+async function qbVendorFullList(env, token) {
+  const out = [];
+  for (let start = 1; start < 20001; start += 1000) {
+    const q = encodeURIComponent(`select * from Vendor where Active = true startposition ${start} maxresults 1000`);
+    const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+    const fault = qbFault(data);
+    if (fault) throw new Error(fault);
+    const rows = (data && data.QueryResponse && data.QueryResponse.Vendor) || [];
+    for (const r of rows) {
+      out.push({
+        id: String(r.Id), name: r.DisplayName || r.CompanyName || '', company: r.CompanyName || '',
+        email: (r.PrimaryEmailAddr && r.PrimaryEmailAddr.Address) || '', active: r.Active !== false, raw: r,
+      });
+    }
+    if (rows.length < 1000) break;
+  }
+  return out.filter(r => r.name);
+}
+
+async function _landed(res) {
+  try { return res && res.status === 200 && !!(await res.clone().json()).success; } catch (e) { return false; }
+}
+
+// POST /admin/sync-vendors-from-qbo { apply?: bool, vendor_id?: string }
+// Preview by default. apply:true writes. Admin-only (in no ROLE_SCOPES).
+async function syncVendorsFromQbo(env, body) {
+  body = body || {};
+  const apply = body.apply === true;
+  const only = String(body.vendor_id || '').trim();
+  try {
+    if (!env.QB_REALM_ID) return json({ success: false, error: 'QuickBooks is not connected (no QB_REALM_ID).' }, 400);
+    const token = await qbAccessToken(env);
+    const [qbList, hubVendors] = await Promise.all([qbVendorFullList(env, token), fetchTab(env, 'Vendors')]);
+    const byId = new Map(qbList.map(q => [q.id, q]));
+    const assigned = new Set(hubVendors.filter(v => String(v.QBO_Vendor_ID || '').trim() && v.Active !== 'FALSE').map(v => String(v.QBO_Vendor_ID).trim()));
+    const cols = apply ? ['QBO_Vendor_ID', ...QBO_FILLABLE_FIELDS] : [];
+    if (apply) await ensureColumns(env, 'Vendors', cols);
+    const results = [];
+    for (const hv of hubVendors) {
+      const id = String(hv.ID || '').trim();
+      if (!id || (only && id !== only)) continue;
+      if (hv.Active === 'FALSE') continue;
+      if (String(hv.In_House || '').toUpperCase() === 'TRUE') continue;
+      const r = { vendor_id: id, name: qbVendorDisplayName(hv), qbo_id: '', link: 'none', filled: {}, still_missing: [], applied: false };
+      try {
+        let qv = null;
+        const stored = String(hv.QBO_Vendor_ID || '').trim();
+        if (stored) {
+          qv = byId.get(stored) || null;
+          r.qbo_id = stored;
+          r.link = qv ? 'existing' : 'existing_not_found_active';
+        } else {
+          const m = vendorQboMatch(hv, qbList);
+          if (m && m.confidence === 'exact') {
+            const dupe = assigned.has(String(m.id));
+            const clash = dupe ? true : await qbMappingClash(env, 'vendor', id, m.id);
+            if (clash) { r.link = 'clash'; r.suggestion = { id: m.id, name: m.name }; }
+            else { qv = byId.get(String(m.id)) || null; r.qbo_id = String(m.id); r.link = 'exact'; assigned.add(String(m.id)); }
+          } else if (m) {
+            r.link = m.confidence;
+            r.suggestion = { id: m.id, name: m.name };
+            if (m.candidates) r.candidates = m.candidates;
+          }
+        }
+        const plan = vendorQboFillPlan(hv, qv ? qv.raw : null);
+        r.filled = plan.fill;
+        r.still_missing = vendorOnboardingComplete(Object.assign({}, hv, plan.fill, { QBO_Vendor_ID: r.qbo_id || hv.QBO_Vendor_ID || '' })).missing;
+        if (apply) {
+          const write = Object.assign({}, plan.fill);
+          if (r.link === 'exact') write.QBO_Vendor_ID = r.qbo_id;
+          if (Object.keys(write).length) {
+            const res = await updateRow(env, 'Vendors', id, write);
+            if (!(await _landed(res))) throw new Error('sheet write did not land');
+            r.applied = true;
+          }
+        }
+      } catch (e) {
+        r.error = String((e && e.message) || e);
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: '/admin/sync-vendors-from-qbo', Success: 'FALSE', Notes: ('vendor '+id+': '+r.error).slice(0,480) }); } catch (e2) {}
+      }
+      results.push(r);
+    }
+    const count = f => results.filter(f).length;
+    return json({
+      success: true, mode: apply ? 'apply' : 'preview',
+      summary: {
+        vendors: results.length, qbo_vendors_read: qbList.length,
+        linked_exact: count(r => r.link === 'exact'), already_linked: count(r => r.link === 'existing'),
+        suggestions: count(r => ['strong', 'weak', 'ambiguous', 'clash'].includes(r.link)),
+        no_match: count(r => r.link === 'none'),
+        with_fills: count(r => Object.keys(r.filled).length > 0),
+        ready_to_bill: count(r => !r.error && r.still_missing.length === 0),
+        still_incomplete: count(r => !r.error && r.still_missing.length > 0),
+        errors: count(r => !!r.error), applied: count(r => r.applied),
+      },
+      vendors: results,
+    });
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: '/admin/sync-vendors-from-qbo', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0,480) }); } catch (e2) {}
+    return json({ success: false, error: String((e && e.message) || e) }, 500);
+  }
+}
+
+// Called when a vendor or vendor bill is created: if the vendor already exists in QuickBooks
+// under the same name, link it and fill blank profile fields so legacy vendors don't have to
+// re-enter what QuickBooks already holds. NEVER throws and never blocks the caller; failures
+// are logged to Ops_Telemetry. Exact name matches only; creates nothing in QuickBooks.
+async function autoMatchVendorToQbo(env, vendorId, source) {
+  const id = String(vendorId == null ? '' : vendorId).trim();
+  try {
+    if (!id || !env.QB_REALM_ID) return;
+    const hv = (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === id);
+    if (!hv || String(hv.In_House || '').toUpperCase() === 'TRUE') return;
+    const linked = String(hv.QBO_Vendor_ID || '').trim();
+    if (linked && vendorOnboardingComplete(hv).complete) return;
+    const token = await qbAccessToken(env);
+    let qboId = linked;
+    if (!qboId) {
+      const names = [...new Set([hv.Name, hv.Company].map(s => String(s || '').trim()).filter(Boolean))];
+      for (const n of names) {
+        const found = await qbLookupExisting(env, 'vendor', n, hv.Billing_Email || hv.Email || '', token);
+        if (found) { qboId = String(found); break; }
+      }
+      if (!qboId) return;
+      if (await qbMappingClash(env, 'vendor', id, qboId)) {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: source, Success: 'FALSE', Notes: `vendor ${id}: QuickBooks vendor #${qboId} already linked to another Hub vendor`.slice(0,480) });
+        return;
+      }
+    }
+    const qr = await qbApi(env, `vendor/${encodeURIComponent(qboId)}?minorversion=73`, 'GET', null, token);
+    const fault = qbFault(qr);
+    if (fault) throw new Error(fault);
+    const plan = vendorQboFillPlan(hv, qr && qr.Vendor);
+    const write = Object.assign({}, plan.fill);
+    if (!linked) write.QBO_Vendor_ID = qboId;
+    if (!Object.keys(write).length) return;
+    await ensureColumns(env, 'Vendors', Object.keys(write));
+    const res = await updateRow(env, 'Vendors', id, write);
+    if (!(await _landed(res))) throw new Error('sheet write did not land');
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: source, Success: 'FALSE', Notes: `vendor ${id}: ${String((e && e.message) || e)}`.slice(0,480) }); } catch (e2) {}
+  }
 }
 
 // PURE — the subset of QuickBooks Vendor fields the required-now onboarding inputs map to.
@@ -18398,6 +18611,10 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
+  }
+  if (path === '/admin/sync-vendors-from-qbo') {
+    // Single-vendor runs on a TEST- vendor only; a bulk run would touch real vendors.
+    return !!(body && body.vendor_id) && await isTestRecord(env, 'Vendors', body.vendor_id);
   }
   if (path === '/owner/pin-suggest') return true; // proposes PINs, writes nothing
   if (path === '/owner/set-pins') {

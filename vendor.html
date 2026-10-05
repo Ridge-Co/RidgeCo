@@ -520,7 +520,7 @@ function closeStandaloneBillModal() {
   document.getElementById('modal-standalone-bill').style.display = 'none';
   _sbSubmitting = false;
   var btn = document.getElementById('sb-submit-btn');
-  if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
+  if (btn) { btn.disabled = false; btn.textContent = t('SUBMIT INVOICE'); }
 }
 function setStandaloneBillTo(mode) {
   _sbBillTo = mode;
@@ -632,11 +632,11 @@ function submitStandaloneBill() {
       btn.textContent = '✓ SUBMITTED';
       setTimeout(function() { closeStandaloneBillModal(); }, 1600);
     } else {
-      _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+      _sbSubmitting = false; btn.disabled = false; btn.textContent = t('SUBMIT INVOICE');
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error submitting') + '</div>';
     }
   }).catch(function(e) {
-    _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+    _sbSubmitting = false; btn.disabled = false; btn.textContent = t('SUBMIT INVOICE');
     msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>';
   });
 }
@@ -1302,7 +1302,7 @@ function renderWOs(wos) {
           '<textarea id="notes-' + idx + '" placeholder="Add notes (optional)…"></textarea>' +
           '<div class="btn-row">' +
             '<button class="btn btn-sm btn-green" onclick="submitStatus(\'' + wo.ID + '\',' + idx + ')">SAVE STATUS</button>' +
-            '<button class="btn btn-sm" id="bill-btn-' + idx + '" style="background:var(--accent2);color:#fff" onclick="openBillModal(\'' + wo.ID + '\')">💰 Submit Invoice</button>' +
+            '<button class="btn btn-sm" id="bill-btn-' + idx + '" style="background:var(--accent2);color:#fff" onclick="openBillModal(\'' + wo.ID + '\')">' + t('💰 Submit Invoice') + '</button>' +
           '</div>' +
           '<div id="action-msg-' + idx + '"></div>' +
           '<div id="bill-summary-' + idx + '" style="margin-top:8px"></div>' +
@@ -1599,15 +1599,15 @@ function renderVendorReceipts(woId, idx, receipts) {
   wrap.innerHTML =
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-        '<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">🧾 RECEIPTS / MATERIALS</span>' +
+        '<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">🧾 ' + t('PURCHASE RECEIPTS (MATERIALS)') + '</span>' +
         (total > 0 ? '<span style="font-weight:bold;color:var(--accent2)">$'+total.toFixed(2)+'</span>' : '') +
       '</div>' +
-      (rows || '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">No receipts yet.</div>') +
+      (rows || '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">' + t('No purchase receipts yet.') + '</div>') +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">' +
         '<input type="number" step="0.01" id="vr-amt-'+idx+'" placeholder="Amount $" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
         '<input type="date" id="vr-date-'+idx+'" value="'+today+'" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
         '<input type="text" id="vr-store-'+idx+'" placeholder="Store / supplier" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
-        '<button class="btn btn-sm btn-green" id="vr-add-'+idx+'" onclick="submitVendorReceipt(\''+woId+'\','+idx+')">Add</button>' +
+        '<button class="btn btn-sm btn-green" id="vr-add-'+idx+'" onclick="submitVendorReceipt(\''+woId+'\','+idx+')">'+t('Add')+'</button>' +
       '</div>' +
       '<textarea id="vr-desc-'+idx+'" rows="2" placeholder="Description: what was purchased" style="width:100%;margin-top:6px;resize:vertical;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:6px;border-radius:4px;font-family:var(--font);font-size:11px"></textarea>' +
       // Same upload pipeline as the WO photo section's RECEIPT button (portalUploadFiles) —
@@ -1674,7 +1674,7 @@ function submitVendorReceipt(woId, idx) {
       });
       // Say so when the server recognised this as a re-submit, rather than reporting a
       // plain success for a write that deliberately did not happen.
-      toast(res.duplicate ? 'Already added — no duplicate created' : 'Receipt added', 'success');
+      toast(res.duplicate ? t('Already added — no duplicate created') : t('Purchase receipt added'), 'success');
       loadVendorReceipts(woId, idx);
     }
     else if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
@@ -1685,7 +1685,7 @@ function submitVendorReceipt(woId, idx) {
 }
 
 function deleteVendorReceipt(id, woId, idx) {
-  if (!confirm('Delete this receipt?')) return;
+  if (!confirm(t('Delete this purchase receipt?'))) return;
   api('/receipt/delete', { method:'POST', body: { id: id } }).then(function() { loadVendorReceipts(woId, idx); });
 }
 
@@ -1700,7 +1700,7 @@ function loadVendorBillSummary(woId, idx) {
     if (!Array.isArray(bills) || !bills.length) {
       wrap.innerHTML = '';
       if (badge) badge.innerHTML = '';
-      if (btn) btn.textContent = '💰 Submit Invoice';
+      if (btn) btn.textContent = t('💰 Submit Invoice');
       window._vendorBillCache = window._vendorBillCache || {};
       delete window._vendorBillCache[woId];
       return;
@@ -1712,9 +1712,9 @@ function loadVendorBillSummary(woId, idx) {
     if (badge) {
       var subDate = latestBill.Submitted_At ? new Date(latestBill.Submitted_At) : (latestBill.Created_Date ? new Date(latestBill.Created_Date) : null);
       var subDateStr = subDate && !isNaN(subDate.getTime()) ? subDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-      badge.innerHTML = '<div style="display:inline-block;margin-top:4px;background:var(--accent2);color:#fff;font-size:10px;font-weight:bold;letter-spacing:.04em;padding:2px 8px;border-radius:10px">✓ INVOICE SUBMITTED' + (subDateStr ? ' ' + subDateStr : '') + ' — $' + parseFloat(latestBill.Total||0).toFixed(2) + '</div>';
+      badge.innerHTML = '<div style="display:inline-block;margin-top:4px;background:var(--accent2);color:#fff;font-size:10px;font-weight:bold;letter-spacing:.04em;padding:2px 8px;border-radius:10px">✓ ' + t('INVOICE SUBMITTED') + (subDateStr ? ' ' + subDateStr : '') + ' — $' + parseFloat(latestBill.Total||0).toFixed(2) + '</div>';
     }
-    if (btn) btn.textContent = '✏️ Update invoice';
+    if (btn) btn.textContent = t('✏️ Update invoice');
     window._vendorBillCache = window._vendorBillCache || {};
     window._vendorBillCache[woId] = latestBill;
     var html = bills.map(function(bill) {
@@ -1741,7 +1741,7 @@ function loadVendorBillSummary(woId, idx) {
         var payBadge = onAccount
           ? '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">💳 CARD</span>'
           : '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;margin-left:4px">💵 REIMBURSE</span>';
-        return '<div>🧾 ' + esc(r.desc||'Receipt') + ': $' + parseFloat(r.amount||0).toFixed(2) + payBadge + (viewHref ? ' <a href="'+esc(viewHref)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
+        return '<div>🧾 ' + esc(r.desc||t('Purchase receipt')) + ': $' + parseFloat(r.amount||0).toFixed(2) + payBadge + (viewHref ? ' <a href="'+esc(viewHref)+'" target="_blank" style="color:var(--info);font-size:10px">View</a>' : '') + '</div>';
       }).join('');
       var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--muted)';
       // CAP-036 #14: "Invoiced — Pending Info" — for the vendor's benefit, so they know
@@ -1756,7 +1756,7 @@ function loadVendorBillSummary(woId, idx) {
         : '';
       return pendingInfoHtml + '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-          '<div style="font-size:10px;letter-spacing:.08em;color:var(--accent2);font-weight:bold">💰 BILL SUBMITTED</div>' +
+          '<div style="font-size:10px;letter-spacing:.08em;color:var(--accent2);font-weight:bold">💰 ' + t('INVOICE SUBMITTED') + '</div>' +
           '<div style="font-size:18px;font-weight:bold;color:var(--accent2)">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
         '</div>' +
         '<div style="font-size:11px;color:var(--muted);line-height:1.8">' +
@@ -2269,7 +2269,7 @@ function loadPortalAttachments(woId, opts) {
       byType[t].push(f);
     });
     var TYPE_ORDER = ['before','after','report','receipt','other'];
-    var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:'Receipt', other:'File' };
+    var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:t('Purchase receipt'), other:'File' };
     var combined = []; // built once per load, in TYPE_ORDER, for the lightbox to swipe across
     TYPE_ORDER.forEach(function(type) {
       (byType[type] || []).forEach(function(f) {
@@ -2423,7 +2423,7 @@ function buildPhotoSection(woId, propAddr, opts) {
     before:  { label: 'BEFORE',  icon: '📷', color: 'var(--warn)',     accept: 'image/*,video/*', cap: '' },
     after:   { label: 'AFTER',   icon: '\u2705',    color: 'var(--accent2)', accept: 'image/*,video/*', cap: '' },
     report:  { label: 'REPORT ISSUE', icon: '\u26a0\ufe0f', color: 'var(--danger)', accept: 'image/*,video/*', cap: '' },
-    receipt: { label: 'RECEIPT', icon: '🧾', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
+    receipt: { label: t('PURCHASE RECEIPT'), icon: '🧾', color: 'var(--muted)',    accept: 'image/*,application/pdf', cap: '' },
   };
 
   var uploadBtns = '';
@@ -2613,7 +2613,9 @@ function submitMyInfo() {
 // in the same tap (brief section 3c) rather than making the vendor tap Bill twice.
 var _ciWOId = null, _ciVendorName = null, _ciTaxDocUrl = '';
 
+var _ciMissing = null;
 function openCompleteInfoModal(woId, vendorName, missing, values) {
+  _ciMissing = Array.isArray(missing) && missing.length ? missing : null;
   _ciWOId = woId; _ciVendorName = vendorName; _ciTaxDocUrl = '';
   values = values || {};
   var phone = (session && session.vendor_phone) || '';
@@ -2679,8 +2681,13 @@ function submitCompleteInfo() {
   var billingAddress = document.getElementById('ci-billing-address').value.trim();
   var taxId = document.getElementById('ci-tax-id').value.trim();
   var msgEl = document.getElementById('ciMsg');
-  if (!phone || !billingEmail || !billingAddress || !taxId) {
-    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + t('Phone, billing email, billing address, and tax ID are all required.') + '</div>';
+  // Only the fields the server reported missing are required (a vendor already linked to
+  // QuickBooks is not asked for a Tax ID). No list reported => require all four, as before.
+  var need = _ciMissing || ['Phone', 'Billing_Email', 'Billing_Address', 'Tax_ID'];
+  var have = { Phone: phone, Billing_Email: billingEmail, Billing_Address: billingAddress, Tax_ID: taxId };
+  var blank = need.filter(function(f) { return !have[f]; });
+  if (blank.length) {
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + t(_ciMissing ? 'Please fill in the missing information.' : 'Phone, billing email, billing address, and tax ID are all required.') + '</div>';
     return;
   }
   var release = claimSubmit('complete-onboarding', document.getElementById('ciBtn'), t('Saving…'));
@@ -2877,7 +2884,7 @@ function submitVendorSched(modalId) {
 <div class="modal-overlay" id="modal-vendor-bill" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">💰 SUBMIT BILL — <span id="bill-wo-id-label"></span></div>
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em"><span data-i18n="💰 SUBMIT INVOICE —">💰 SUBMIT INVOICE —</span> <span id="bill-wo-id-label"></span></div>
       <button onclick="closeBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
     </div>
 
@@ -2931,8 +2938,7 @@ function submitVendorSched(modalId) {
         </label>
       </div>
       <div id="bill-truck-section" style="display:none">
-        <div style="background:#fff3cd;color:#6b5200;font-size:11px;padding:8px 10px;border-radius:6px;margin-bottom:8px;line-height:1.4">
-          ⚠ Only for materials from <b>your own</b> truck/stock that you don't have a receipt for — this gets added to what you're owed, it does <b>not</b> replace logging a real purchase. If you bought something at a store, log it below as a Receipt instead (with the receipt) — don't put it here just to skip a step.
+        <div data-i18n="⚠ Only for materials from your own truck/stock that you don't have a purchase receipt for — this gets added to what you're owed, it does not replace logging a real purchase. If you bought something at a store, add it below as a purchase receipt (with the receipt photo) — don't put it here just to skip a step." style="background:#fff3cd;color:#6b5200;font-size:11px;padding:8px 10px;border-radius:6px;margin-bottom:8px;line-height:1.4">⚠ Only for materials from your own truck/stock that you don't have a purchase receipt for — this gets added to what you're owed, it does not replace logging a real purchase. If you bought something at a store, add it below as a purchase receipt (with the receipt photo) — don't put it here just to skip a step.
         </div>
         <input type="text" id="bill-truck-desc" placeholder="e.g. 2 caulk tubes, electrical tape, wire nuts" style="width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:8px;border-radius:6px;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:8px">
@@ -2946,8 +2952,8 @@ function submitVendorSched(modalId) {
     <!-- RECEIPTS -->
     <div style="background:var(--surface2);border-radius:6px;padding:12px;margin-bottom:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase">RECEIPTS & PURCHASES</div>
-        <button onclick="addReceiptRow()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-family:var(--font);font-size:11px;cursor:pointer">+ Add</button>
+        <div style="color:var(--muted);font-size:10px;letter-spacing:.08em;text-transform:uppercase" data-i18n="PURCHASE RECEIPTS (MATERIALS)">PURCHASE RECEIPTS (MATERIALS)</div>
+        <button onclick="addReceiptRow()" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-family:var(--font);font-size:11px;cursor:pointer" data-i18n="+ Add">+ Add</button>
       </div>
       <div data-i18n="Materials you bought for this job only. This is not your invoice — enter your invoice amount above." style="color:var(--muted);font-size:11px;margin-bottom:8px;line-height:1.4">Materials you bought for this job only. This is not your invoice — enter your invoice amount above.</div>
       <div id="bill-receipts-list" style="display:flex;flex-direction:column;gap:8px"></div>
@@ -3019,7 +3025,7 @@ function submitVendorSched(modalId) {
     <div id="bill-flow-panel" style="display:none"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button onclick="closeBillModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
-      <button id="bill-submit-btn" onclick="submitVendorBill()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
+      <button id="bill-submit-btn" data-i18n="SUBMIT INVOICE" onclick="submitVendorBill()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT INVOICE</button>
     </div>
   </div>
 </div>
@@ -3030,7 +3036,7 @@ function submitVendorSched(modalId) {
 <div class="modal-overlay" id="modal-standalone-bill" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;align-items:flex-start;justify-content:center;padding:12px;overflow-y:auto">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:480px;padding:20px;margin:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🧾 SUBMIT AN INVOICE</div>
+      <div style="color:var(--accent);font-size:.95rem;font-weight:bold;letter-spacing:.08em">🧾 <span data-i18n="SUBMIT AN INVOICE">SUBMIT AN INVOICE</span></div>
       <button onclick="closeStandaloneBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
     </div>
     <div style="background:var(--surface2);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11.5px;color:var(--muted);line-height:1.5">
@@ -3070,7 +3076,7 @@ function submitVendorSched(modalId) {
     <div id="sb-msg" style="margin-bottom:10px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button onclick="closeStandaloneBillModal()" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:10px 16px;border-radius:6px;cursor:pointer">Cancel</button>
-      <button id="sb-submit-btn" onclick="submitStandaloneBill()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT BILL</button>
+      <button id="sb-submit-btn" data-i18n="SUBMIT INVOICE" onclick="submitStandaloneBill()" style="background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:13px;font-weight:bold;padding:10px 20px;cursor:pointer">SUBMIT INVOICE</button>
     </div>
   </div>
 </div>
@@ -3258,7 +3264,7 @@ function closeBillModal() {
   _billSubmitting = false;
   _billWOId = null;
   var btn = document.getElementById('bill-submit-btn');
-  if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
+  if (btn) { btn.disabled = false; btn.textContent = t('SUBMIT INVOICE'); }
   cancelBillReviewFlow();
 }
 
@@ -3316,7 +3322,7 @@ function addReceiptRow() {
     '</div>' +
     '<div style="display:flex;align-items:center;gap:8px">' +
     '<button type="button" id="r-photo-lbl-' + n + '" onclick="document.getElementById(\'r-photo-input-' + n + '\').click()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;min-height:36px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--muted);display:flex;align-items:center;gap:6px">' +
-    '📷 Upload Receipt</button>' +
+    '📷 ' + t('Upload purchase receipt') + '</button>' +
     '<input type="file" id="r-photo-input-' + n + '" accept="image/*,application/pdf" onchange="uploadReceiptPhoto(' + n + ',this)" style="display:none">' +
     '<span id="r-photo-status-' + n + '" style="font-size:11px;color:var(--muted)"></span>' +
     '</div>' +
@@ -3821,7 +3827,7 @@ async function doActualBillSubmit() {
       setTimeout(function(){ closeBillModal(); loadWorkOrders(); }, 2000);
     } else {
       _billSubmitting = false;
-      btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+      btn.disabled = false; btn.textContent = t('SUBMIT INVOICE');
       if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '✓ Confirm & Submit'; }
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + (res.error||'Error submitting') + '</div>';
     }
@@ -3829,7 +3835,7 @@ async function doActualBillSubmit() {
     // A dropped connection AFTER the append committed looks identical to a failure from
     // here, so the vendor's natural move is to tap again. Say so plainly rather than just
     // "Connection error" — and the Worker now de-dupes an identical bill either way.
-    _billSubmitting=false; btn.disabled=false; btn.textContent='SUBMIT BILL';
+    _billSubmitting=false; btn.disabled=false; btn.textContent=t('SUBMIT INVOICE');
     if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '✓ Confirm & Submit'; }
     msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">⚠ Connection error — the bill may still have saved. Close this and check "Bill submitted" on the job before sending it again.</div>';
   });
@@ -3841,9 +3847,29 @@ async function doActualBillSubmit() {
 var LANG = 'en';
 
 var ES = {
+  // Invoice vs. purchase receipt (Oct 5 2026). FACTURA = what the vendor sends Ridge Co to get paid
+  // for their work. RECIBO DE COMPRA = the store ticket for materials bought for the job. Never use
+  // bare "recibo" for either: a vendor who reads "recibo" as "invoice" submits the store ticket as their bill.
+  'INVOICED':'FACTURADO',
+  'SUBMIT INVOICE':'ENVIAR FACTURA',
+  '💰 SUBMIT INVOICE —':'💰 ENVIAR FACTURA —',
+  '✓ INVOICE SUBMITTED':'✓ FACTURA ENVIADA',
+  'INVOICE SUBMITTED':'FACTURA ENVIADA',
+  '✏️ Update invoice':'✏️ Actualizar factura',
+  'PURCHASE RECEIPTS (MATERIALS)':'RECIBOS DE COMPRA (MATERIALES)',
+  'No purchase receipts yet.':'Aún no hay recibos de compra.',
+  'Purchase receipt':'Recibo de compra',
+  'PURCHASE RECEIPT':'RECIBO DE COMPRA',
+  'Upload purchase receipt':'Subir recibo de compra',
+  'Purchase receipt added':'Recibo de compra agregado',
+  'Delete this purchase receipt?':'¿Eliminar este recibo de compra?',
+  'Already added — no duplicate created':'Ya agregado — no se creó un duplicado',
+  'Add':'Agregar',
+  '⚠ Only for materials from your own truck/stock that you don\'t have a purchase receipt for — this gets added to what you\'re owed, it does not replace logging a real purchase. If you bought something at a store, add it below as a purchase receipt (with the receipt photo) — don\'t put it here just to skip a step.':'⚠ Solo para materiales de su propio camión/inventario de los que no tiene recibo de compra — esto se suma a lo que se le debe y no reemplaza registrar una compra real. Si compró algo en una tienda, agréguelo abajo como recibo de compra (con la foto del recibo) — no lo ponga aquí para ahorrar un paso.',
+  'Please fill in the missing information.':'Por favor complete la información que falta.',
   'OPEN JOBS':'TRABAJOS ABIERTOS',
   'ALL JOBS':'TODOS LOS TRABAJOS',
-  'NEEDS INVOICE':'NECESITA FACTURA',
+  'NEEDS INVOICE':'FALTA FACTURA',
   'VENDOR PORTAL':'PORTAL DE CONTRATISTAS',
   'FIRST NAME':'NOMBRE',
   'YOUR NAME':'SU NOMBRE',
@@ -3861,7 +3887,7 @@ var ES = {
   'No work orders assigned.':'No tiene órdenes de trabajo asignadas.',
   'New':'Nuevo','Assigned':'Asignado','Accepted':'Aceptado',
   'In Progress':'En Progreso','On Hold':'En Espera','Complete':'Completado',
-  'Pending Invoice':'Factura Pendiente','Invoiced':'Facturado',
+  'Pending Invoice':'Falta factura','Invoiced':'Facturado',
   'Paid':'Pagado','Declined':'Rechazado','Cancelled':'Cancelado',
   'Urgent':'Urgente','High':'Alto','Normal':'Normal','Low':'Bajo',
   'ACCESS KEYS':'LLAVES DE ACCESO',
@@ -3878,7 +3904,7 @@ var ES = {
   'SAVE STATUS':'GUARDAR ESTADO',
   'MATERIALS NEEDED':'MATERIALES NECESARIOS',
   'SUBMIT BILL':'ENVIAR FACTURA',
-  '💰 Submit Invoice':'💰 Enviar Factura',
+  '💰 Submit Invoice':'💰 Enviar factura (cobro por su trabajo)',
   'By the Hour':'Por Hora',
   'Flat Price':'Precio Fijo',
   'LABOR':'MANO DE OBRA',
@@ -3889,14 +3915,14 @@ var ES = {
   'TRUCK STOCK USED':'MATERIALES DEL CAMIÓN',
   'Used truck stock':'Usé materiales del camión',
   'estimated value':'valor estimado',
-  'RECEIPTS & PURCHASES':'RECIBOS Y COMPRAS',
-  'This is your invoice amount for the job. Do not enter it again below as a receipt.':'Este es el monto de su factura por el trabajo. No lo ingrese de nuevo abajo como un recibo.',
-  'Materials you bought for this job only. This is not your invoice — enter your invoice amount above.':'Solo materiales que usted compró para este trabajo. Esto no es su factura — ingrese el monto de su factura arriba.',
+  'RECEIPTS & PURCHASES':'RECIBOS DE COMPRA (MATERIALES)',
+  'This is your invoice amount for the job. Do not enter it again below as a receipt.':'Este es el monto de su factura por el trabajo. No lo ingrese de nuevo abajo como recibo de compra.',
+  'Materials you bought for this job only. This is not your invoice — enter your invoice amount above.':'Solo materiales que usted compró en tiendas para este trabajo (recibos de compra). Esto no es su factura — ingrese el monto de su factura arriba.',
   'This adds up to more than expected for this job.':'Esto suma más de lo esperado para este trabajo.',
-  'One of your receipts ($':'Uno de sus recibos ($',
-  ') is close to your own invoice amount. If that receipt is really your invoice entered again, remove it above — receipts are only for materials you bought.':'está cerca del monto de su propia factura. Si ese recibo es en realidad su factura ingresada de nuevo, quítelo arriba — los recibos son solo para materiales que usted compró.',
+  'One of your receipts ($':'Uno de sus recibos de compra ($',
+  ') is close to your own invoice amount. If that receipt is really your invoice entered again, remove it above — receipts are only for materials you bought.':'está cerca del monto de su propia factura. Si ese recibo de compra es en realidad su factura ingresada de nuevo, quítelo arriba — los recibos de compra son solo para materiales que usted compró en tiendas.',
   'This total is more than the approved amount for this job ($':'Este total es mayor que el monto aprobado para este trabajo ($',
-  'Double-check your receipts':'Revise sus recibos de nuevo',
+  'Double-check your receipts':'Revise sus recibos de compra',
   '← Let me check':'← Déjeme revisar',
   'Yes, this is correct':'Sí, esto es correcto',
   '+ Add':'+ Agregar',
@@ -3905,14 +3931,14 @@ var ES = {
   'Cancel':'Cancelar',
   'Enter at least one billable item.':'Ingrese al menos un artículo facturable.',
   // Vendor Onboarding Phase 1 (Sep 23 2026) — Complete Your Info modal
-  'COMPLETE YOUR INFO TO BILL':'COMPLETE SU INFORMACIÓN PARA FACTURAR',
-  'Ridge Co needs this on file before it can pay a bill. Fill it in once — it only takes a minute.':'Ridge Co necesita esta información antes de poder pagarle una factura. Complétela una vez — solo toma un minuto.',
+  'COMPLETE YOUR INFO TO BILL':'COMPLETE SU INFORMACIÓN PARA ENVIAR FACTURAS',
+  'Ridge Co needs this on file before it can pay a bill. Fill it in once — it only takes a minute.':'Ridge Co necesita esta información para poder pagarle sus facturas. Complétela una sola vez — solo toma un minuto.',
   'Phone':'Teléfono',
   'Billing Email':'Correo de Facturación',
   'Billing Address':'Dirección de Facturación',
   'Tax ID (EIN or SSN)':'Número de Identificación Fiscal (EIN o SSN)',
   'Tax ID document (optional — photo or PDF of your W-9/SS-4)':'Documento de identificación fiscal (opcional — foto o PDF de su W-9/SS-4)',
-  'SAVE & CONTINUE TO BILL':'GUARDAR Y CONTINUAR A LA FACTURA',
+  'SAVE & CONTINUE TO BILL':'GUARDAR Y CONTINUAR CON LA FACTURA',
   'Uploading…':'Subiendo…',
   'Upload failed — you can still save without it.':'Error al subir — puede guardar sin el documento.',
   'Phone, billing email, billing address, and tax ID are all required.':'Se requieren teléfono, correo de facturación, dirección de facturación y número de identificación fiscal.',
