@@ -2681,8 +2681,13 @@ function submitCompleteInfo() {
   var billingAddress = document.getElementById('ci-billing-address').value.trim();
   var taxId = document.getElementById('ci-tax-id').value.trim();
   var msgEl = document.getElementById('ciMsg');
-  if (!phone || !billingEmail || !billingAddress || !taxId) {
-    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + t('Phone, billing email, billing address, and tax ID are all required.') + '</div>';
+  // Only the fields the server reported missing are required (a vendor already linked to
+  // QuickBooks is not asked for a Tax ID). No list reported => require all four, as before.
+  var need = _ciMissing || ['Phone', 'Billing_Email', 'Billing_Address', 'Tax_ID'];
+  var have = { Phone: phone, Billing_Email: billingEmail, Billing_Address: billingAddress, Tax_ID: taxId };
+  var blank = need.filter(function(f) { return !have[f]; });
+  if (blank.length) {
+    msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + t(_ciMissing ? 'Please fill in the missing information.' : 'Phone, billing email, billing address, and tax ID are all required.') + '</div>';
     return;
   }
   var release = claimSubmit('complete-onboarding', document.getElementById('ciBtn'), t('Saving…'));
