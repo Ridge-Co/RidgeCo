@@ -1756,7 +1756,7 @@ function loadVendorBillSummary(woId, idx) {
         : '';
       return pendingInfoHtml + '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:6px">' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-          '<div style="font-size:10px;letter-spacing:.08em;color:var(--accent2);font-weight:bold">💰 BILL SUBMITTED</div>' +
+          '<div style="font-size:10px;letter-spacing:.08em;color:var(--accent2);font-weight:bold">💰 ' + t('INVOICE SUBMITTED') + '</div>' +
           '<div style="font-size:18px;font-weight:bold;color:var(--accent2)">$' + parseFloat(bill.Total||0).toFixed(2) + '</div>' +
         '</div>' +
         '<div style="font-size:11px;color:var(--muted);line-height:1.8">' +
