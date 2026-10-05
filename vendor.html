@@ -1674,7 +1674,7 @@ function submitVendorReceipt(woId, idx) {
       });
       // Say so when the server recognised this as a re-submit, rather than reporting a
       // plain success for a write that deliberately did not happen.
-      toast(res.duplicate ? 'Already added — no duplicate created' : 'Receipt added', 'success');
+      toast(res.duplicate ? t('Already added — no duplicate created') : t('Purchase receipt added'), 'success');
       loadVendorReceipts(woId, idx);
     }
     else if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
