@@ -3847,6 +3847,26 @@ async function doActualBillSubmit() {
 var LANG = 'en';
 
 var ES = {
+  // Invoice vs. purchase receipt (Oct 5 2026). FACTURA = what the vendor sends Ridge Co to get paid
+  // for their work. RECIBO DE COMPRA = the store ticket for materials bought for the job. Never use
+  // bare "recibo" for either: a vendor who reads "recibo" as "invoice" submits the store ticket as their bill.
+  'INVOICED':'FACTURADO',
+  'SUBMIT INVOICE':'ENVIAR FACTURA',
+  '💰 SUBMIT INVOICE —':'💰 ENVIAR FACTURA —',
+  '✓ INVOICE SUBMITTED':'✓ FACTURA ENVIADA',
+  'INVOICE SUBMITTED':'FACTURA ENVIADA',
+  '✏️ Update invoice':'✏️ Actualizar factura',
+  'PURCHASE RECEIPTS (MATERIALS)':'RECIBOS DE COMPRA (MATERIALES)',
+  'No purchase receipts yet.':'Aún no hay recibos de compra.',
+  'Purchase receipt':'Recibo de compra',
+  'PURCHASE RECEIPT':'RECIBO DE COMPRA',
+  'Upload purchase receipt':'Subir recibo de compra',
+  'Purchase receipt added':'Recibo de compra agregado',
+  'Delete this purchase receipt?':'¿Eliminar este recibo de compra?',
+  'Already added — no duplicate created':'Ya agregado — no se creó un duplicado',
+  'Add':'Agregar',
+  '⚠ Only for materials from your own truck/stock that you don\'t have a purchase receipt for — this gets added to what you\'re owed, it does not replace logging a real purchase. If you bought something at a store, add it below as a purchase receipt (with the receipt photo) — don\'t put it here just to skip a step.':'⚠ Solo para materiales de su propio camión/inventario de los que no tiene recibo de compra — esto se suma a lo que se le debe y no reemplaza registrar una compra real. Si compró algo en una tienda, agréguelo abajo como recibo de compra (con la foto del recibo) — no lo ponga aquí para ahorrar un paso.',
+  'Please fill in the missing information.':'Por favor complete la información que falta.',
   'OPEN JOBS':'TRABAJOS ABIERTOS',
   'ALL JOBS':'TODOS LOS TRABAJOS',
   'NEEDS INVOICE':'NECESITA FACTURA',
