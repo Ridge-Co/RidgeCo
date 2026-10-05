@@ -3175,7 +3175,9 @@ function openBillModal(woId, vendorName) {
   var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
   if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
   api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
-    if (res && res.complete) { _openBillModalReal(woId, vendorName); }
+    // An error reply (e.g. Google Sheets quota 500) has no `complete` flag. That is NOT "info
+    // missing" — fail open so a backend hiccup never shows vendors an empty Complete-Info form.
+    if (!res || res.error || typeof res.complete !== 'boolean' || res.complete) { _openBillModalReal(woId, vendorName); }
     else { openCompleteInfoModal(woId, vendorName, (res && res.missing) || [], (res && res.values) || {}); }
   }).catch(function() {
     // A network hiccup checking the gate must never block billing outright — fail open, same
