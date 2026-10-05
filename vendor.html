@@ -3827,7 +3827,7 @@ async function doActualBillSubmit() {
       setTimeout(function(){ closeBillModal(); loadWorkOrders(); }, 2000);
     } else {
       _billSubmitting = false;
-      btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+      btn.disabled = false; btn.textContent = t('SUBMIT INVOICE');
       if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '✓ Confirm & Submit'; }
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + (res.error||'Error submitting') + '</div>';
     }
