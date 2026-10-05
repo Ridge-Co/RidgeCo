@@ -639,7 +639,7 @@ const _hubWorkerCore = {
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
         // VENDOR_ONBOARDING_COLS (Sep 23 2026, Phase 1) folded into the same ensureColumns call
         // every vendor add/update already makes — additive, no-op once the headers exist.
-        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; return await addRow(env, 'Vendors', body); }
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; const _addRes = await addRow(env, 'Vendors', body); try { const _nv = await _addRes.clone().json(); if (_nv && _nv.id) await autoMatchVendorToQbo(env, _nv.id, '/vendor/add'); } catch (e) { /* never blocks vendor creation */ } return _addRes; }
         if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
         if (path === '/vendor/complete-onboarding') return await vendorCompleteOnboarding(env, body);
         // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
