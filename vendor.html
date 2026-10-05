@@ -520,7 +520,7 @@ function closeStandaloneBillModal() {
   document.getElementById('modal-standalone-bill').style.display = 'none';
   _sbSubmitting = false;
   var btn = document.getElementById('sb-submit-btn');
-  if (btn) { btn.disabled = false; btn.textContent = 'SUBMIT BILL'; }
+  if (btn) { btn.disabled = false; btn.textContent = t('SUBMIT INVOICE'); }
 }
 function setStandaloneBillTo(mode) {
   _sbBillTo = mode;
