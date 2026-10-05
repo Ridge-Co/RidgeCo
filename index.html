@@ -10705,6 +10705,36 @@ function irBuildFilters() {
       '<div id="ir-count" style="color:var(--muted);font-size:11px;margin-top:8px"></div>' +
     '</div>' +
     '<div id="ir-nomatch" style="display:none;color:var(--muted);font-size:13px;padding:20px 0;text-align:center">No bills match these filters. <a onclick="irClearFilters()" style="color:var(--accent);cursor:pointer;text-decoration:underline">Clear filters</a></div>';
+  Object.keys(_irPrev).forEach(function(id) {
+    var e = document.getElementById(id); if (!e) return;
+    e.value = _irPrev[id];
+    if (e.value !== _irPrev[id]) e.value = '';      // that option no longer exists in the queue
+  });
+}
+
+// Sort choices for the bill queue. "Customer" on this screen = the owner (and property) the job is for.
+var _IR_SORTS = [
+  ['owner_az', 'Owner / customer A→Z'], ['owner_za', 'Owner / customer Z→A'],
+  ['vendor_az', 'Vendor A→Z'], ['vendor_za', 'Vendor Z→A'],
+  ['prop_az', 'Property A→Z'],
+  ['amt_desc', 'Amount high→low'], ['amt_asc', 'Amount low→high'],
+  ['date_old', 'Submitted oldest first'], ['date_new', 'Submitted newest first']
+];
+
+function irSortCompare(mode) {
+  var S = function(x) { return String(x || ''); };
+  var txt = function(get) { return function(a, b) { return S(get(a)).localeCompare(S(get(b)), undefined, { sensitivity: 'base', numeric: true }); }; };
+  var T = function(r) { return Date.parse(r.b.Created_Date || '') || 0; };
+  var N = function(r) { return parseFloat(r.b.Total) || 0; };
+  var owner = txt(function(r) { return r.c.ownerName; }), vendor = txt(function(r) { return r.c.vendor; });
+  var by = {
+    owner_az: owner, owner_za: function(a, b) { return owner(b, a); },
+    vendor_az: vendor, vendor_za: function(a, b) { return vendor(b, a); },
+    prop_az: txt(function(r) { return r.c.propAddr; }),
+    amt_desc: function(a, b) { return N(b) - N(a); }, amt_asc: function(a, b) { return N(a) - N(b); },
+    date_old: function(a, b) { return T(a) - T(b); }, date_new: function(a, b) { return T(b) - T(a); }
+  }[mode];
+  return function(a, b) { return (by ? by(a, b) : 0) || (a.i - b.i); };   // ties + "default" keep the queue order
 }
 
 function irApplyFilters() {
