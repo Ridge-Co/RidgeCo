@@ -11374,10 +11374,19 @@ function irSelectAllVisible(checked) {
   irUpdateBulkBar();
 }
 
+// A checked card that a filter has since hidden is NOT approved (and not counted) — you only approve what you can see.
+function irCheckedVisible() {
+  return Array.prototype.slice.call(document.querySelectorAll('.ir-bulk-check:checked')).filter(function(cb) {
+    var card = document.getElementById('ir-card-' + cb.getAttribute('data-i'));
+    return card && card.style.display !== 'none';
+  });
+}
+
 function irUpdateBulkBar() {
   var bar = document.getElementById('ir-bulk-bar');
   if (!bar) return;
-  var checks = Array.prototype.slice.call(document.querySelectorAll('.ir-bulk-check:checked'));
+  var checks = irCheckedVisible();
+  var hiddenChecked = document.querySelectorAll('.ir-bulk-check:checked').length - checks.length;
   var total = 0;
   checks.forEach(function(cb) {
     var i = cb.getAttribute('data-i');
