@@ -10683,6 +10683,13 @@ function irBuildFilters() {
   function optsPair(list, allLabel) { return '<option value="">' + allLabel + '</option>' + list.map(function(o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join(''); }
   function optsType(list) { return '<option value="">All types</option>' + list.map(function(v) { return '<option value="' + esc(v) + '">' + esc(irTypeLabel(v)) + '</option>'; }).join(''); }
 
+  // Keep whatever was selected across a rebuild (approve/flag/clear reloads the queue).
+  var _irPrev = {};
+  ['ir-q', 'ir-f-vendor', 'ir-f-prop', 'ir-f-owner', 'ir-f-type', 'ir-f-trade', 'ir-sort'].forEach(function(id) {
+    var e = document.getElementById(id); if (e) _irPrev[id] = e.value;
+  });
+  var sortOpts = '<option value="">Sort: default (pending-info first)</option>' + _IR_SORTS.map(function(o) { return '<option value="' + o[0] + '">' + esc(o[1]) + '</option>'; }).join('');
+
   host.innerHTML =
     '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">' +
       '<input id="ir-q" type="text" placeholder="Search vendor, WO#, address, owner, description…" oninput="irApplyFilters()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px;box-sizing:border-box">' +
