@@ -2269,7 +2269,7 @@ function loadPortalAttachments(woId, opts) {
       byType[t].push(f);
     });
     var TYPE_ORDER = ['before','after','report','receipt','other'];
-    var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:'Receipt', other:'File' };
+    var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:t('Purchase receipt'), other:'File' };
     var combined = []; // built once per load, in TYPE_ORDER, for the lightbox to swipe across
     TYPE_ORDER.forEach(function(type) {
       (byType[type] || []).forEach(function(f) {
