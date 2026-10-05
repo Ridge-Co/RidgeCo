@@ -11394,7 +11394,8 @@ function irUpdateBulkBar() {
     total += parseFloat((el || {}).value || 0);
   });
   var countEl = document.getElementById('ir-bulk-count');
-  if (countEl) countEl.textContent = checks.length + ' selected' + (checks.length ? ' — $' + total.toFixed(2) + ' total' : '');
+  if (countEl) countEl.textContent = checks.length + ' selected' + (checks.length ? ' — $' + total.toFixed(2) + ' total' : '') +
+    (hiddenChecked > 0 ? ' (' + hiddenChecked + ' more hidden by filters — not included)' : '');
   var btn = document.getElementById('ir-bulk-approve-btn');
   if (btn) btn.disabled = !checks.length;
 }
