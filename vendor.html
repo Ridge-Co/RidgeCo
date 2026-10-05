@@ -636,7 +636,7 @@ function submitStandaloneBill() {
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error submitting') + '</div>';
     }
   }).catch(function(e) {
-    _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+    _sbSubmitting = false; btn.disabled = false; btn.textContent = t('SUBMIT INVOICE');
     msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ Connection error — try again.</div>';
   });
 }
