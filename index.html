@@ -10212,7 +10212,7 @@ function stRow(inv, kind, i, n) {
       '<input type="checkbox" class="st-bulk-check" data-i="'+i+'" '+(canCheck?'':'disabled')+' onchange="stUpdateBulkBar()">' +
     '</label>';
   }
-  return '<div id="st-row-'+(typeof i==='number'?i:'x')+'" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">'+
+  return '<div id="st-'+(typeof i==='number'?'row-'+i:'sent-'+n)+'" data-st-row="1" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">'+
     checkHtml +
     '<div style="min-width:0;flex:1"><div style="font-weight:600;font-size:13px">'+esc(inv.customer)+'</div>'+
     '<div style="color:var(--muted);font-size:11px">'+meta.join(' · ')+' · <a href="'+qbInvoiceLink(inv.id)+'" target="_blank" rel="noopener" style="color:var(--info)">open in QB</a></div></div>'+
