@@ -10257,25 +10257,193 @@ function renderSendTrack(res) {
   var html = '<div style="margin-bottom:12px">'+chips+'</div>';
 
   _stSendable = [];
+  _stAll = [];
+  _stEnrichError = String(res.enrich_error || '');
+  function reg(inv, kind, rowId) { _stAll.push({ inv: inv, kind: kind, rowId: rowId, pos: _stAll.length }); }
+  var secHdr = 'font-size:11px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase';
+
   var notSent = res.not_sent || [];
-  html += '<div style="font-size:11px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;margin:6px 0 4px">Not sent — '+notSent.length+'</div>';
-  html += notSent.length
-    ? notSent.map(function(inv){ var i=_stSendable.length; _stSendable.push({inv:inv,kind:'not_sent'}); return stRow(inv,'not_sent',i); }).join('')
-    : '<div style="color:var(--muted);font-size:12px;padding:6px 0">Nothing sitting — every invoice has been sent. ✓</div>';
+  html += '<div style="'+secHdr+';margin:6px 0 4px">Not sent — <span id="st-cnt-not_sent">'+notSent.length+'</span></div>';
+  html += '<div id="st-sec-not_sent">' + (notSent.length
+    ? notSent.map(function(inv){ var i=_stSendable.length; _stSendable.push({inv:inv,kind:'not_sent'}); reg(inv,'not_sent','st-row-'+i); return stRow(inv,'not_sent',i); }).join('')
+    : '<div style="color:var(--muted);font-size:12px;padding:6px 0">Nothing sitting — every invoice has been sent. ✓</div>') + '</div>';
 
   var od = res.overdue || [];
   if (od.length) {
-    html += '<div style="font-size:11px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase;margin:16px 0 4px">Overdue — '+od.length+' (send a reminder)</div>';
-    html += od.map(function(inv){ var i=_stSendable.length; _stSendable.push({inv:inv,kind:'overdue'}); return stRow(inv,'overdue',i); }).join('');
+    html += '<div style="'+secHdr+';margin:16px 0 4px">Overdue — <span id="st-cnt-overdue">'+od.length+'</span> (send a reminder)</div>';
+    html += '<div id="st-sec-overdue">' + od.map(function(inv){ var i=_stSendable.length; _stSendable.push({inv:inv,kind:'overdue'}); reg(inv,'overdue','st-row-'+i); return stRow(inv,'overdue',i); }).join('') + '</div>';
   }
 
   var st = res.sent || [];
   if (st.length) {
-    html += '<details style="margin-top:14px"><summary style="cursor:pointer;font-size:11px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase">Sent · awaiting payment — '+st.length+'</summary><div style="margin-top:6px">';
-    html += st.map(function(i){ return stRow(i,'sent'); }).join('');
+    html += '<details id="st-sent-details" style="margin-top:14px"><summary style="cursor:pointer;'+secHdr+'">Sent · awaiting payment — <span id="st-cnt-sent">'+st.length+'</span></summary><div id="st-sec-sent" style="margin-top:6px">';
+    html += st.map(function(inv, n){ reg(inv,'sent','st-sent-'+n); return stRow(inv,'sent',undefined,n); }).join('');
     html += '</div></details>';
   }
+  html += '<div id="st-nomatch" style="display:none;color:var(--muted);font-size:13px;padding:20px 0;text-align:center">No invoices match these filters. <a onclick="stClearFilters()" style="color:var(--accent);cursor:pointer;text-decoration:underline">Clear filters</a></div>';
   el.innerHTML = html;
+  stBuildFilters();
+  stApplyFilters();
+}
+
+// ── Send & Track filtering + sorting ─────────────────────────────────────────
+// Same mechanism as Review Bills (irBuildFilters / irApplyFilters / irClearFilters): free-text search
+// + Vendor / Property / Owner dropdowns + a Clear button + a "Showing X of Y" line. Filtering HIDES
+// non-matching rows (display:none) rather than re-rendering, so every row keeps its index into
+// _stSendable and its checkbox state. Two additions Review Bills doesn't need: Status and Customer
+// dropdowns (this board lists QuickBooks invoices, so the customer is the headline) and a Sort
+// dropdown (rows are reordered in the DOM, never re-rendered). Vendor / property / owner come from
+// the Hub via /ar/invoices (arHubContextIndex). Settings survive a Refresh / after-send reload.
+var _stAll = [];            // every rendered row {inv,kind,rowId,pos} — incl. the collapsed "sent" rows
+var _stEnrichError = '';
+var _stFilterState = { q:'', vendor:'', prop:'', owner:'', status:'', cust:'', sort:'' };
+var _ST_STATUS_LABEL = { not_sent:'Not sent', overdue:'Overdue', sent:'Sent · awaiting payment' };
+var _ST_SORTS = [['', 'Sort: default'], ['cust_az', 'Customer A→Z'], ['cust_za', 'Customer Z→A'], ['amt_desc', 'Amount high→low'], ['amt_asc', 'Amount low→high'], ['date_old', 'Oldest first'], ['date_new', 'Newest first'], ['overdue', 'Most overdue']];
+
+function stBuildFilters() {
+  var host = document.getElementById('st-filters');
+  if (!host) return;
+  if (!_stAll.length) { host.innerHTML = ''; return; }
+  var invs = _stAll.map(function(r) { return r.inv; });
+  var vendors = [], vseen = {}, anyNoVendor = false;
+  var props = [], pseen = {}, owners = [], oseen = {}, custs = [], cseen = {};
+  invs.forEach(function(inv) {
+    var vs = inv.vendors || [];
+    if (!vs.length) anyNoVendor = true;
+    vs.forEach(function(v) { if (v && !vseen[v]) { vseen[v] = 1; vendors.push(v); } });
+    var pid = String(inv.property_id || '');
+    if (pid && !pseen[pid]) { pseen[pid] = 1; props.push({ id: pid, label: inv.property_address || ('Property ' + pid) }); }
+    var oid = String(inv.owner_id || '');
+    if (oid && !oseen[oid]) { oseen[oid] = 1; owners.push({ id: oid, label: inv.owner_name || ('Owner ' + oid) }); }
+    if (inv.customer && !cseen[inv.customer]) { cseen[inv.customer] = 1; custs.push(inv.customer); }
+  });
+  vendors.sort(function(a, b) { return a.localeCompare(b); });
+  custs.sort(function(a, b) { return a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }); });
+  props.sort(function(a, b) { return a.label.localeCompare(b.label); });
+  owners.sort(function(a, b) { return a.label.localeCompare(b.label); });
+  var statuses = ['not_sent', 'overdue', 'sent'].filter(function(k) { return _stAll.some(function(r) { return r.kind === k; }); });
+
+  var ss = 'flex:1;min-width:130px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:7px 8px;border-radius:6px;cursor:pointer';
+  function opts(list, allLabel) { return '<option value="">' + allLabel + '</option>' + list.map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join(''); }
+  function optsPair(list, allLabel) { return '<option value="">' + allLabel + '</option>' + list.map(function(o) { return '<option value="' + esc(o.id) + '">' + esc(o.label) + '</option>'; }).join(''); }
+  var hubSelects = _stEnrichError ? '' :
+    '<select id="st-f-vendor" onchange="stApplyFilters()" style="' + ss + '"><option value="">All vendors</option>' +
+      vendors.map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('') +
+      (anyNoVendor ? '<option value="__none__">(No linked vendor)</option>' : '') + '</select>' +
+    '<select id="st-f-prop" onchange="stApplyFilters()" style="' + ss + '">' + optsPair(props, 'All properties') + '</select>' +
+    '<select id="st-f-owner" onchange="stApplyFilters()" style="' + ss + '">' + optsPair(owners, 'All owners') + '</select>';
+  var note = _stEnrichError
+    ? '<div style="color:var(--warn,#b45309);font-size:12px;margin-bottom:8px">⚠ Vendor / property / owner filters are unavailable right now (the Hub lookup failed: ' + esc(_stEnrichError) + '). Search, customer, status and sort still work — try Refresh.</div>'
+    : '';
+
+  host.innerHTML =
+    '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">' + note +
+      '<input id="st-q" type="text" placeholder="Search customer, invoice #, vendor, WO#, address, owner…" oninput="stApplyFilters()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px;box-sizing:border-box">' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' + hubSelects +
+        '<select id="st-f-cust" onchange="stApplyFilters()" style="' + ss + '">' + opts(custs, 'All customers') + '</select>' +
+        '<select id="st-f-status" onchange="stApplyFilters()" style="' + ss + '"><option value="">All statuses</option>' +
+          statuses.map(function(k) { return '<option value="' + k + '">' + esc(_ST_STATUS_LABEL[k]) + '</option>'; }).join('') + '</select>' +
+        '<select id="st-sort" onchange="stApplyFilters()" style="' + ss + '">' +
+          _ST_SORTS.map(function(o) { return '<option value="' + o[0] + '">' + esc(o[1]) + '</option>'; }).join('') + '</select>' +
+        '<button onclick="stClearFilters()" class="btn small secondary" style="font-size:11px;padding:7px 12px;white-space:nowrap">Clear</button>' +
+      '</div>' +
+      '<div id="st-count" style="color:var(--muted);font-size:11px;margin-top:8px"></div>' +
+    '</div>';
+
+  // Put back what was selected before this render (Refresh / after a send), only where the option still exists.
+  var map = { 'st-q': 'q', 'st-f-vendor': 'vendor', 'st-f-prop': 'prop', 'st-f-owner': 'owner', 'st-f-cust': 'cust', 'st-f-status': 'status', 'st-sort': 'sort' };
+  Object.keys(map).forEach(function(id) {
+    var e = document.getElementById(id); if (!e) return;
+    e.value = _stFilterState[map[id]] || '';
+    if (e.tagName === 'SELECT' && e.value !== (_stFilterState[map[id]] || '')) _stFilterState[map[id]] = '';
+  });
+}
+
+function stReadFilters() {
+  function val(id) { var e = document.getElementById(id); return e ? (e.value || '') : ''; }
+  _stFilterState = {
+    q: val('st-q').toLowerCase().trim(), vendor: val('st-f-vendor'), prop: val('st-f-prop'),
+    owner: val('st-f-owner'), cust: val('st-f-cust'), status: val('st-f-status'), sort: val('st-sort')
+  };
+  return _stFilterState;
+}
+
+function stRowMatches(inv, kind, f) {
+  if (f.status && kind !== f.status) return false;
+  if (f.cust && inv.customer !== f.cust) return false;
+  if (f.vendor) {
+    var vs = inv.vendors || [];
+    if (f.vendor === '__none__' ? vs.length > 0 : vs.indexOf(f.vendor) === -1) return false;
+  }
+  if (f.prop && String(inv.property_id || '') !== f.prop) return false;
+  if (f.owner && String(inv.owner_id || '') !== f.owner) return false;
+  if (f.q) {
+    var hay = [inv.customer, inv.doc, (inv.vendors || []).join(' '), inv.property_address, inv.owner_name,
+               (inv.wo_ids || []).join(' '), inv.email].join(' ').toLowerCase();
+    if (hay.indexOf(f.q) === -1) return false;
+  }
+  return true;
+}
+
+function stSortCompare(mode) {
+  var T = function(r) { return Date.parse(r.inv.txn_date || '') || 0; };
+  var cust = function(a, b) { return String(a.inv.customer || '').localeCompare(String(b.inv.customer || ''), undefined, { sensitivity: 'base', numeric: true }); };
+  var by = {
+    cust_az:  cust,
+    cust_za:  function(a, b) { return cust(b, a); },
+    amt_desc: function(a, b) { return (Number(b.inv.total) || 0) - (Number(a.inv.total) || 0); },
+    amt_asc:  function(a, b) { return (Number(a.inv.total) || 0) - (Number(b.inv.total) || 0); },
+    date_old: function(a, b) { return T(a) - T(b); },
+    date_new: function(a, b) { return T(b) - T(a); },
+    overdue:  function(a, b) { return (Number(b.inv.days_overdue) || 0) - (Number(a.inv.days_overdue) || 0); }
+  }[mode];
+  return function(a, b) { return (by ? by(a, b) : 0) || (a.pos - b.pos); };   // ties (and "default") keep the server order
+}
+
+function stApplyFilters() {
+  if (!_stAll.length) return;
+  var f = stReadFilters();
+  var active = !!(f.q || f.vendor || f.prop || f.owner || f.cust || f.status);
+  var shownBy = { not_sent: 0, overdue: 0, sent: 0 }, totalBy = { not_sent: 0, overdue: 0, sent: 0 };
+  _stAll.forEach(function(r) {
+    totalBy[r.kind]++;
+    r.ok = stRowMatches(r.inv, r.kind, f);
+    var row = document.getElementById(r.rowId);
+    if (row) row.style.display = r.ok ? '' : 'none';
+    if (r.ok) shownBy[r.kind]++;
+  });
+  // Sort: move the existing row elements (keeps indexes + checkbox state); never re-render.
+  ['not_sent', 'overdue', 'sent'].forEach(function(k) {
+    var sec = document.getElementById('st-sec-' + k);
+    if (sec) _stAll.filter(function(r) { return r.kind === k; }).sort(stSortCompare(f.sort)).forEach(function(r) {
+      var row = document.getElementById(r.rowId); if (row) sec.appendChild(row);
+    });
+    var cnt = document.getElementById('st-cnt-' + k);
+    if (cnt) cnt.textContent = shownBy[k] === totalBy[k] ? String(totalBy[k]) : (shownBy[k] + ' of ' + totalBy[k]);
+  });
+  var det = document.getElementById('st-sent-details');
+  if (det && active && shownBy.sent > 0) det.open = true;          // a filter that matches sent invoices should show them
+  var shown = shownBy.not_sent + shownBy.overdue + shownBy.sent;
+  var countEl = document.getElementById('st-count');
+  if (countEl) countEl.textContent = 'Showing ' + shown + ' of ' + _stAll.length + ' invoice' + (_stAll.length === 1 ? '' : 's');
+  var nm = document.getElementById('st-nomatch');
+  if (nm) nm.style.display = shown ? 'none' : 'block';
+  stUpdateBulkBar();                                                // hidden rows must never count toward a send
+}
+
+function stClearFilters() {
+  ['st-q', 'st-f-vendor', 'st-f-prop', 'st-f-owner', 'st-f-cust', 'st-f-status', 'st-sort'].forEach(function(id) {
+    var e = document.getElementById(id); if (e) e.value = '';
+  });
+  stApplyFilters();
+}
+
+// A checked row that a filter has since hidden is NOT sent (and not counted) — you only ever email what you can see.
+function stCheckedVisible() {
+  return Array.prototype.slice.call(document.querySelectorAll('.st-bulk-check:checked')).filter(function(cb) {
+    var row = document.getElementById('st-row-' + cb.getAttribute('data-i'));
+    return row && row.style.display !== 'none';
+  });
 }
 
 // ── Send & Track bulk-select ─────────────────────────────────────────────
