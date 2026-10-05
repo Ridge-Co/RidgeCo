@@ -664,7 +664,15 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="loadVendorOnboardingGaps()">↻ Refresh</button>
+      <button class="btn small" id="vo-sync-preview-btn" onclick="syncVendorsFromQbo(false)">🔍 Preview sync from QuickBooks</button>
+      <button class="btn small" id="vo-sync-apply-btn" onclick="syncVendorsFromQbo(true)" style="display:none">✅ Apply sync</button>
     </div>
+    <div style="color:var(--muted);font-size:11px;margin-bottom:8px;max-width:780px">
+      Sync reads each vendor already in QuickBooks and fills this vendor's <b>blank</b> phone / billing email /
+      billing address from it, and links exact name matches. It never overwrites anything already here and never
+      changes QuickBooks. Close-but-not-exact names are listed as suggestions for you to link by hand.
+    </div>
+    <div id="vendor-onboarding-sync-result" style="margin-bottom:10px"></div>
     <div id="vendor-onboarding-summary" style="color:var(--muted);font-size:11.5px;margin-bottom:10px"></div>
     <div id="vendor-onboarding-body"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
@@ -3946,6 +3954,47 @@ function loadVendorOnboardingGaps() {
     renderVendorOnboardingTable();
   }).catch(function(e) {
     if (el) el.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
+  });
+}
+
+// QuickBooks -> Hub vendor sync (Oct 5 2026). Preview first; Apply only appears after a clean preview.
+function syncVendorsFromQbo(apply) {
+  var out = document.getElementById('vendor-onboarding-sync-result');
+  var pb = document.getElementById('vo-sync-preview-btn'), ab = document.getElementById('vo-sync-apply-btn');
+  if (apply && !confirm('Write the previewed changes to the Hub vendor profiles? Blank fields only; nothing is overwritten and QuickBooks is not changed.')) return;
+  if (pb) pb.disabled = true; if (ab) ab.disabled = true;
+  if (out) out.innerHTML = '<div class="loading"><span class="spinner"></span>' + (apply ? 'Applying…' : 'Reading QuickBooks…') + '</div>';
+  api('POST', '/admin/sync-vendors-from-qbo', { apply: !!apply }, 120000).then(function(res) {
+    if (pb) pb.disabled = false; if (ab) ab.disabled = false;
+    if (!res || res.success !== true) {
+      if (ab) ab.style.display = 'none';
+      if (out) out.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Sync failed') + '</div>';
+      return;
+    }
+    var sm = res.summary || {};
+    var rows = safeArray(res.vendors);
+    var label = function(r) {
+      var f = Object.keys(r.filled || {});
+      var link = r.link === 'exact' ? 'linked to QB #' + r.qbo_id : r.link === 'existing' ? 'already linked (QB #' + r.qbo_id + ')' :
+        r.link === 'existing_not_found_active' ? '⚠ linked QB #' + r.qbo_id + ' not found as an active QuickBooks vendor' :
+        r.link === 'clash' ? '⚠ exact match QB #' + (r.suggestion && r.suggestion.id) + ' is already linked to another vendor' :
+        r.suggestion ? 'suggest: ' + esc(r.suggestion.name) + ' (QB #' + esc(r.suggestion.id) + ', ' + r.link + ') — not linked' : 'no QuickBooks match';
+      return link + (f.length ? ' · ' + (apply ? 'filled ' : 'would fill ') + f.join(', ') : '') +
+        (r.still_missing && r.still_missing.length ? ' · <span style="color:var(--warn)">still missing: ' + r.still_missing.join(', ') + '</span>' : ' · <span style="color:var(--accent2)">ready to bill</span>') +
+        (r.error ? ' · <span style="color:var(--danger)">ERROR: ' + esc(r.error) + '</span>' : '');
+    };
+    var html = '<div style="font-size:12px;margin-bottom:6px"><b>' + (apply ? 'Applied' : 'Preview') + ':</b> ' + sm.vendors + ' vendors · ' + sm.qbo_vendors_read + ' QuickBooks vendors read · ' +
+      sm.linked_exact + ' newly linked · ' + sm.already_linked + ' already linked · ' + sm.suggestions + ' suggestions · ' + sm.no_match + ' no match · ' +
+      sm.with_fills + ' with fields to fill · ' + sm.ready_to_bill + ' ready to bill · ' + sm.still_incomplete + ' still incomplete' +
+      (sm.errors ? ' · <span style="color:var(--danger)">' + sm.errors + ' errors</span>' : '') + (apply ? ' · ' + sm.applied + ' written' : '') + '</div>';
+    html += '<div style="font-size:11.5px;line-height:1.7;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:8px">' +
+      rows.map(function(r) { return '<div><b>' + esc(r.name) + '</b> — ' + label(r) + '</div>'; }).join('') + '</div>';
+    if (out) out.innerHTML = html;
+    if (ab) ab.style.display = (!apply && !sm.errors) ? '' : 'none';
+    if (apply) { toast(sm.errors ? 'Sync finished with ' + sm.errors + ' error(s) — see list' : 'Vendors synced from QuickBooks', sm.errors ? 'error' : 'success'); loadVendorOnboardingGaps(); }
+  }).catch(function(e) {
+    if (pb) pb.disabled = false; if (ab) ab.disabled = false;
+    if (out) out.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc(e.message) + '</div>';
   });
 }
 
