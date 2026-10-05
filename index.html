@@ -10699,6 +10699,7 @@ function irBuildFilters() {
         '<select id="ir-f-owner" onchange="irApplyFilters()" style="' + ss + '">' + optsPair(owners, 'All owners') + '</select>' +
         '<select id="ir-f-type" onchange="irApplyFilters()" style="' + ss + '">' + optsType(types) + '</select>' +
         '<select id="ir-f-trade" onchange="irApplyFilters()" style="' + ss + '">' + opts(trades, 'All trades') + '</select>' +
+        '<select id="ir-sort" onchange="irApplyFilters()" style="' + ss + '">' + sortOpts + '</select>' +
         '<button onclick="irClearFilters()" class="btn small secondary" style="font-size:11px;padding:7px 12px;white-space:nowrap">Clear</button>' +
       '</div>' +
       '<div id="ir-count" style="color:var(--muted);font-size:11px;margin-top:8px"></div>' +
