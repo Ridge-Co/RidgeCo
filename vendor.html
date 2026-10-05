@@ -1602,7 +1602,7 @@ function renderVendorReceipts(woId, idx, receipts) {
         '<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">🧾 ' + t('PURCHASE RECEIPTS (MATERIALS)') + '</span>' +
         (total > 0 ? '<span style="font-weight:bold;color:var(--accent2)">$'+total.toFixed(2)+'</span>' : '') +
       '</div>' +
-      (rows || '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">No receipts yet.</div>') +
+      (rows || '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">' + t('No purchase receipts yet.') + '</div>') +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px">' +
         '<input type="number" step="0.01" id="vr-amt-'+idx+'" placeholder="Amount $" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
         '<input type="date" id="vr-date-'+idx+'" value="'+today+'" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:5px;border-radius:4px;font-family:var(--font);font-size:11px">' +
