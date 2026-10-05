@@ -1599,7 +1599,7 @@ function renderVendorReceipts(woId, idx, receipts) {
   wrap.innerHTML =
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
-        '<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">🧾 RECEIPTS / MATERIALS</span>' +
+        '<span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">🧾 ' + t('PURCHASE RECEIPTS (MATERIALS)') + '</span>' +
         (total > 0 ? '<span style="font-weight:bold;color:var(--accent2)">$'+total.toFixed(2)+'</span>' : '') +
       '</div>' +
       (rows || '<div style="color:var(--muted);font-size:11px;margin-bottom:6px">No receipts yet.</div>') +
