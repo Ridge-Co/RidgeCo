@@ -632,7 +632,7 @@ function submitStandaloneBill() {
       btn.textContent = '✓ SUBMITTED';
       setTimeout(function() { closeStandaloneBillModal(); }, 1600);
     } else {
-      _sbSubmitting = false; btn.disabled = false; btn.textContent = 'SUBMIT BILL';
+      _sbSubmitting = false; btn.disabled = false; btn.textContent = t('SUBMIT INVOICE');
       msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">⚠ ' + esc((res && res.error) || 'Error submitting') + '</div>';
     }
   }).catch(function(e) {
