@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-05.1-qbo-vendor-sync';
+const BUILD_VERSION = '2026-10-05.2-send-track-filters';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -15514,6 +15514,59 @@ function classifyArInvoice(inv, now) {
   return row;
 }
 
+// PURE — Send & Track enrichment (Oct 5 2026: Brett wants the invoice board filterable by vendor /
+// property / owner, the same way Review Bills is). A QuickBooks invoice only carries a customer; the
+// vendor, property and owner live in the Hub. Joins, per QB invoice id:
+//   Invoice_Review (QB_Invoice_ID -> Bill_ID, WO_ID) -> Vendor_Bills.Vendor_Name / Work_Orders
+//   Payment_Milestones + Scope_Signatures (QB_Invoice_ID / QB_Final_Invoice_ID) -> Scopes (Vendor_ID, Property_ID, WO_ID)
+//   Work_Orders.Property_ID / Scopes.Property_ID -> Properties -> Owners
+// A combined invoice (several bills on one QB invoice) lists EVERY vendor. An invoice with no Hub
+// link returns empty fields — the board shows it under "No linked vendor", it is never dropped.
+// Owner label uses the same formula as the Review Bills filter (irBillContext) so both lists match.
+function arHubContextIndex(t) {
+  t = t || {};
+  const act = r => r && r.Active !== 'FALSE';
+  const by = (rows) => { const m = new Map(); (rows || []).forEach(r => { if (r && r.ID !== undefined) m.set(String(r.ID), r); }); return m; };
+  const bills = by(t.bills), wos = by(t.wos), props = by(t.props), owners = by(t.owners), vendors = by(t.vendors), scopes = by(t.scopes);
+  const ownerLabel = o => o ? (((o.First_Name || '') + (o.Last_Name ? ' ' + o.Last_Name : '') + (o.Company ? ' / ' + o.Company : '')).trim() || o.Name || ('Owner ' + o.ID)) : '';
+  const idx = new Map();
+  const slot = id => { id = String(id == null ? '' : id).trim(); if (!id) return null; if (!idx.has(id)) idx.set(id, { vendors: new Set(), wo_ids: new Set(), prop_ids: new Set() }); return idx.get(id); };
+  const addWO = (s, woId) => {
+    woId = String(woId == null ? '' : woId).trim(); if (!woId) return;
+    s.wo_ids.add(woId);
+    const wo = wos.get(woId); if (wo && wo.Property_ID) s.prop_ids.add(String(wo.Property_ID));
+  };
+  for (const ir of (t.irs || [])) {
+    if (!act(ir)) continue;
+    const s = slot(ir.QB_Invoice_ID); if (!s) continue;
+    const b = bills.get(String(ir.Bill_ID));
+    const vn = String((b && b.Vendor_Name) || '').trim(); if (vn) s.vendors.add(vn);
+    addWO(s, ir.WO_ID || (b && b.WO_ID));
+  }
+  const scopeSlot = (invId, scopeId) => {
+    const s = slot(invId); if (!s) return;
+    const sc = scopes.get(String(scopeId)); if (!sc) return;
+    const v = vendors.get(String(sc.Vendor_ID));
+    const vn = String((v && (v.Name || v.Company)) || '').trim(); if (vn) s.vendors.add(vn);
+    if (sc.Property_ID) s.prop_ids.add(String(sc.Property_ID));
+    addWO(s, sc.WO_ID);
+  };
+  for (const m of (t.milestones || [])) if (act(m)) scopeSlot(m.QB_Invoice_ID, m.Scope_ID);
+  for (const g of (t.sigs || [])) if (act(g)) { scopeSlot(g.QB_Invoice_ID, g.Scope_ID); scopeSlot(g.QB_Final_Invoice_ID, g.Scope_ID); }
+  return function lookup(invId) {
+    const s = idx.get(String(invId == null ? '' : invId));
+    if (!s) return { vendors: [], wo_ids: [], property_id: '', property_address: '', owner_id: '', owner_name: '' };
+    const pid = Array.from(s.prop_ids)[0] || '';          // a combined invoice is one customer; first property is enough
+    const p = props.get(pid);
+    const o = p ? owners.get(String(p.Owner_ID)) : null;
+    return {
+      vendors: Array.from(s.vendors).sort(), wo_ids: Array.from(s.wo_ids),
+      property_id: pid, property_address: p ? String(p.Address || '') : '',
+      owner_id: o ? String(o.ID) : '', owner_name: ownerLabel(o),
+    };
+  };
+}
+
 async function arInvoices(env, url) {
   const token = await qbAccessToken(env);
   // SELECT * (not enumerated columns): BillEmail is a complex field that can fault when named
@@ -15538,11 +15591,26 @@ async function arInvoices(env, url) {
   not_sent.sort((a, b) => Date.parse(a.txn_date || 0) - Date.parse(b.txn_date || 0));
   overdue.sort((a, b) => b.days_overdue - a.days_overdue);
   sent.sort((a, b) => Date.parse(a.txn_date || 0) - Date.parse(b.txn_date || 0));
+  // Oct 5 2026: attach vendor / property / owner (from the Hub) to every row the board shows, so the
+  // board can filter like Review Bills. Read-only. If the Hub join fails the invoices still load
+  // (the QuickBooks data is the point) but the failure is NOT silent: it is returned as
+  // enrich_error (the board shows a visible note) and logged to Ops_Telemetry.
+  let enrichError = '';
+  try {
+    const [irs, bills, wos, props, owners, vendors, scopes, milestones, sigs] = await fetchTabs(env,
+      ['Invoice_Review', 'Vendor_Bills', 'Work_Orders', 'Properties', 'Owners', 'Vendors', 'Scopes', 'Payment_Milestones', 'Scope_Signatures'], { stale: true });
+    const lookup = arHubContextIndex({ irs, bills, wos, props, owners, vendors, scopes, milestones, sigs });
+    for (const row of not_sent.concat(overdue, sent)) Object.assign(row, lookup(row.id));
+  } catch (e) {
+    enrichError = String((e && e.message) || e).slice(0, 200);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ar-invoices-enrich', Skill_Or_Endpoint: '/ar/invoices', Success: 'FALSE', Notes: enrichError }); } catch (_) { /* telemetry is best-effort; enrich_error below is the visible signal */ }
+  }
   return json({
     ok: true, as_of: new Date(now).toISOString().slice(0, 10),
     counts: { not_sent: not_sent.length, sent: sent.length, overdue: overdue.length, paid: paid.length },
     not_sent, sent, overdue,
     paid: paid.slice(0, 50),
+    enrich_error: enrichError,
   });
 }
 
