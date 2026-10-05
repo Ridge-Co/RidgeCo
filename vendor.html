@@ -3835,7 +3835,7 @@ async function doActualBillSubmit() {
     // A dropped connection AFTER the append committed looks identical to a failure from
     // here, so the vendor's natural move is to tap again. Say so plainly rather than just
     // "Connection error" — and the Worker now de-dupes an identical bill either way.
-    _billSubmitting=false; btn.disabled=false; btn.textContent='SUBMIT BILL';
+    _billSubmitting=false; btn.disabled=false; btn.textContent=t('SUBMIT INVOICE');
     if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '✓ Confirm & Submit'; }
     msgEl.innerHTML='<div style="color:var(--danger);font-size:12px">⚠ Connection error — the bill may still have saved. Close this and check "Bill submitted" on the job before sending it again.</div>';
   });
