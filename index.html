@@ -10765,14 +10765,20 @@ function irApplyFilters() {
     if (card) card.style.display = ok ? '' : 'none';
     if (ok) shown++;
   });
+  // Sort: move the existing card elements (indexes + billing panels + checkbox state stay intact); never re-render.
+  var listEl = document.getElementById('ir-list');
+  if (listEl) recs.sort(irSortCompare(fsort)).forEach(function(r) {
+    var card = document.getElementById('ir-card-' + r.i); if (card) listEl.appendChild(card);
+  });
   var countEl = document.getElementById('ir-count');
   if (countEl) countEl.textContent = 'Showing ' + shown + ' of ' + _irBills.length + ' bill' + (_irBills.length === 1 ? '' : 's');
   var nm = document.getElementById('ir-nomatch');
   if (nm) nm.style.display = shown ? 'none' : 'block';
+  if (typeof irUpdateBulkBar === 'function') irUpdateBulkBar();   // hidden cards must never count toward a bulk approve
 }
 
 function irClearFilters() {
-  ['ir-q', 'ir-f-vendor', 'ir-f-prop', 'ir-f-owner', 'ir-f-type', 'ir-f-trade'].forEach(function(id) {
+  ['ir-q', 'ir-f-vendor', 'ir-f-prop', 'ir-f-owner', 'ir-f-type', 'ir-f-trade', 'ir-sort'].forEach(function(id) {
     var e = document.getElementById(id); if (e) e.value = '';
   });
   irApplyFilters();
