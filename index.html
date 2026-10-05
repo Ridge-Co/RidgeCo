@@ -10162,6 +10162,7 @@ function loadSendTrack() {
   var bar = document.getElementById('st-bulk-bar');
   if (bar) bar.style.display = 'none';
   el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading invoices…</div>';
+  var _stFh = document.getElementById('st-filters'); if (_stFh) _stFh.innerHTML = '';
   api('GET','/ar/invoices').then(function(res){
     if (!res || !res.ok) { el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:16px 0">Could not load invoices from QuickBooks'+(res&&res.error?': '+esc(res.error):'')+'. Try Refresh.</div>'; return; }
     renderSendTrack(res);
