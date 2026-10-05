@@ -240,10 +240,15 @@ var WORKER = (function(){
   var PROD = 'https://maintenance-hub.brett-2f8.workers.dev';
   var STAGING = 'https://maintenance-hub-staging.brett-2f8.workers.dev';
   try {
+    // Oct 5 2026: the staging choice now lives in sessionStorage (this tab only, gone when the tab
+    // closes). It used to persist in localStorage, so one staging test left a real browser pointed
+    // at the blank test Sheet and a vendor saw an empty "Complete your info" form. Retire any
+    // leftover persistent flag, so a vendor/tenant browser can never be stuck on staging.
     var qs = new URLSearchParams(location.search);
-    if (qs.get('api') === 'staging') localStorage.setItem('mh_api_staging', '1');
-    else if (qs.get('api') === 'prod') localStorage.removeItem('mh_api_staging');
-    return localStorage.getItem('mh_api_staging') === '1' ? STAGING : PROD;
+    try { localStorage.removeItem('mh_api_staging'); } catch (e2) {}
+    if (qs.get('api') === 'staging') sessionStorage.setItem('mh_api_staging', '1');
+    else if (qs.get('api') === 'prod') sessionStorage.removeItem('mh_api_staging');
+    return sessionStorage.getItem('mh_api_staging') === '1' ? STAGING : PROD;
   } catch (e) { return PROD; }
 })();
 if (WORKER.indexOf('staging') !== -1) {
