@@ -1929,7 +1929,7 @@ function setStatus(woId, idx, status) {
   var btns = document.querySelectorAll('#detail-' + idx + ' .status-btn');
   btns.forEach(function(b) {
     b.classList.remove('current');
-    if (b.textContent === status) b.classList.add('current');
+    if (b.textContent === status || b.textContent === esT(status)) b.classList.add('current');   // esT: the button text may already be Spanish
   });
 }
 
