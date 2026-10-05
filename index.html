@@ -10306,14 +10306,16 @@ function stSelectAllVisible(checked) {
 function stUpdateBulkBar() {
   var bar = document.getElementById('st-bulk-bar');
   if (!bar) return;
-  var checks = Array.prototype.slice.call(document.querySelectorAll('.st-bulk-check:checked'));
+  var checks = stCheckedVisible();
+  var hiddenChecked = document.querySelectorAll('.st-bulk-check:checked').length - checks.length;
   var total = 0;
   checks.forEach(function(cb) {
     var rec = _stSendable[+cb.getAttribute('data-i')];
     if (rec) total += Number(rec.inv.total) || 0;
   });
   var countEl = document.getElementById('st-bulk-count');
-  if (countEl) countEl.textContent = checks.length + ' selected' + (checks.length ? ' — $' + total.toFixed(2) + ' total' : '');
+  if (countEl) countEl.textContent = checks.length + ' selected' + (checks.length ? ' — $' + total.toFixed(2) + ' total' : '') +
+    (hiddenChecked > 0 ? ' (' + hiddenChecked + ' more hidden by filters — not included)' : '');
   var btn = document.getElementById('st-bulk-send-btn');
   if (btn) btn.disabled = !checks.length;
 }
