@@ -15538,11 +15538,26 @@ async function arInvoices(env, url) {
   not_sent.sort((a, b) => Date.parse(a.txn_date || 0) - Date.parse(b.txn_date || 0));
   overdue.sort((a, b) => b.days_overdue - a.days_overdue);
   sent.sort((a, b) => Date.parse(a.txn_date || 0) - Date.parse(b.txn_date || 0));
+  // Oct 5 2026: attach vendor / property / owner (from the Hub) to every row the board shows, so the
+  // board can filter like Review Bills. Read-only. If the Hub join fails the invoices still load
+  // (the QuickBooks data is the point) but the failure is NOT silent: it is returned as
+  // enrich_error (the board shows a visible note) and logged to Ops_Telemetry.
+  let enrichError = '';
+  try {
+    const [irs, bills, wos, props, owners, vendors, scopes, milestones, sigs] = await fetchTabs(env,
+      ['Invoice_Review', 'Vendor_Bills', 'Work_Orders', 'Properties', 'Owners', 'Vendors', 'Scopes', 'Payment_Milestones', 'Scope_Signatures'], { stale: true });
+    const lookup = arHubContextIndex({ irs, bills, wos, props, owners, vendors, scopes, milestones, sigs });
+    for (const row of not_sent.concat(overdue, sent)) Object.assign(row, lookup(row.id));
+  } catch (e) {
+    enrichError = String((e && e.message) || e).slice(0, 200);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ar-invoices-enrich', Skill_Or_Endpoint: '/ar/invoices', Success: 'FALSE', Notes: enrichError }); } catch (_) { /* telemetry is best-effort; enrich_error below is the visible signal */ }
+  }
   return json({
     ok: true, as_of: new Date(now).toISOString().slice(0, 10),
     counts: { not_sent: not_sent.length, sent: sent.length, overdue: overdue.length, paid: paid.length },
     not_sent, sent, overdue,
     paid: paid.slice(0, 50),
+    enrich_error: enrichError,
   });
 }
 
