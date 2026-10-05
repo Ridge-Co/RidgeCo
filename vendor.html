@@ -4028,7 +4028,10 @@ function applyTranslations() {
     el.textContent = t(el.getAttribute('data-i18n'));
   });
   document.title = 'Ridge Co — Portal de Contratistas';
+  esTranslateTree(document.body);   // vendor-i18n.js: translate everything already on screen…
+  esStartObserver();                // …and everything rendered from now on (cards, modals, toasts)
 }
+
 </script>
 <!-- Shared "is the vendor mid-task right now" check (Sep 19 2026) -- used by both the
      B-093 version-poller below and the new work-order background-refresh poller further
