@@ -1685,7 +1685,7 @@ function submitVendorReceipt(woId, idx) {
 }
 
 function deleteVendorReceipt(id, woId, idx) {
-  if (!confirm('Delete this receipt?')) return;
+  if (!confirm(t('Delete this purchase receipt?'))) return;
   api('/receipt/delete', { method:'POST', body: { id: id } }).then(function() { loadVendorReceipts(woId, idx); });
 }
 
