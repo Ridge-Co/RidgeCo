@@ -1712,7 +1712,7 @@ function loadVendorBillSummary(woId, idx) {
     if (badge) {
       var subDate = latestBill.Submitted_At ? new Date(latestBill.Submitted_At) : (latestBill.Created_Date ? new Date(latestBill.Created_Date) : null);
       var subDateStr = subDate && !isNaN(subDate.getTime()) ? subDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
-      badge.innerHTML = '<div style="display:inline-block;margin-top:4px;background:var(--accent2);color:#fff;font-size:10px;font-weight:bold;letter-spacing:.04em;padding:2px 8px;border-radius:10px">✓ INVOICE SUBMITTED' + (subDateStr ? ' ' + subDateStr : '') + ' — $' + parseFloat(latestBill.Total||0).toFixed(2) + '</div>';
+      badge.innerHTML = '<div style="display:inline-block;margin-top:4px;background:var(--accent2);color:#fff;font-size:10px;font-weight:bold;letter-spacing:.04em;padding:2px 8px;border-radius:10px">✓ ' + t('INVOICE SUBMITTED') + (subDateStr ? ' ' + subDateStr : '') + ' — $' + parseFloat(latestBill.Total||0).toFixed(2) + '</div>';
     }
     if (btn) btn.textContent = '✏️ Update invoice';
     window._vendorBillCache = window._vendorBillCache || {};
