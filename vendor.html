@@ -3322,7 +3322,7 @@ function addReceiptRow() {
     '</div>' +
     '<div style="display:flex;align-items:center;gap:8px">' +
     '<button type="button" id="r-photo-lbl-' + n + '" onclick="document.getElementById(\'r-photo-input-' + n + '\').click()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;min-height:36px;cursor:pointer;font-size:12px;font-family:inherit;color:var(--muted);display:flex;align-items:center;gap:6px">' +
-    '📷 Upload Receipt</button>' +
+    '📷 ' + t('Upload purchase receipt') + '</button>' +
     '<input type="file" id="r-photo-input-' + n + '" accept="image/*,application/pdf" onchange="uploadReceiptPhoto(' + n + ',this)" style="display:none">' +
     '<span id="r-photo-status-' + n + '" style="font-size:11px;color:var(--muted)"></span>' +
     '</div>' +
