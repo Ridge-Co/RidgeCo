@@ -2613,7 +2613,9 @@ function submitMyInfo() {
 // in the same tap (brief section 3c) rather than making the vendor tap Bill twice.
 var _ciWOId = null, _ciVendorName = null, _ciTaxDocUrl = '';
 
+var _ciMissing = null;
 function openCompleteInfoModal(woId, vendorName, missing, values) {
+  _ciMissing = Array.isArray(missing) && missing.length ? missing : null;
   _ciWOId = woId; _ciVendorName = vendorName; _ciTaxDocUrl = '';
   values = values || {};
   var phone = (session && session.vendor_phone) || '';
