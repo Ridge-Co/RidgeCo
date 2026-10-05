@@ -8435,6 +8435,7 @@ async function addVendorBill(env, body) {
   } catch(e) { /* non-fatal: bill is still saved */ }
   // B-20260916-1930-k7: vendor invoice confirmation email — best-effort, soft-launched via
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
+  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { /* never blocks the bill */ }
   try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
   return res;
 }
