@@ -10321,7 +10321,7 @@ function stUpdateBulkBar() {
 }
 
 function stBulkSend() {
-  var checks = Array.prototype.slice.call(document.querySelectorAll('.st-bulk-check:checked'));
+  var checks = stCheckedVisible();
   if (!checks.length) return;
   var recs = checks.map(function(cb) { return _stSendable[+cb.getAttribute('data-i')]; }).filter(Boolean);
   var ids = recs.map(function(r) { return r.inv.id; });
