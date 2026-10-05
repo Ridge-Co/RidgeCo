@@ -10745,9 +10745,11 @@ function irApplyFilters() {
   var fo = (document.getElementById('ir-f-owner') || {}).value || '';
   var ft = (document.getElementById('ir-f-type') || {}).value || '';
   var ftr = (document.getElementById('ir-f-trade') || {}).value || '';
-  var shown = 0;
+  var fsort = (document.getElementById('ir-sort') || {}).value || '';
+  var shown = 0, recs = [];
   _irBills.forEach(function(b, i) {
     var c = irBillContext(b);
+    recs.push({ b: b, c: c, i: i });
     var ok = true;
     if (fv && c.vendor !== fv) ok = false;
     if (ok && fp && c.propId !== fp) ok = false;
