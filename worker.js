@@ -4009,10 +4009,16 @@ async function woPushToScope(env, body) {
 
   // ---- Resolve target scope: reuse Work_Orders.Scope_ID if already set, else preview a new one.
   const scopes = await fetchTab(env, 'Scopes');
-  let targetScope = null, willCreate = false;
+  let targetScope = null, willCreate = false, staleScopeLink = '';
   if (wo.Scope_ID) {
     targetScope = scopes.find(x => x.ID === String(wo.Scope_ID));
     if (!targetScope) return json({ error: `WO ${woId}'s Scope_ID (${wo.Scope_ID}) does not match any real Scope — fix the link by hand before pushing.` }, 409);
+    // Oct 5 2026 (POST /scope/return-to-wo hardening): a link to a scope that was ARCHIVED (returned to the WO,
+    // Status 'returned-to-wo', or any Active=FALSE scope) is stale — never append into it. Treat the WO as
+    // unlinked so this push creates a FRESH scope (no duplicated line items); the new Scope_ID replaces the stale one.
+    if (String(targetScope.Status || '') === 'returned-to-wo' || String(targetScope.Active || '').toUpperCase() === 'FALSE') {
+      staleScopeLink = String(targetScope.ID); targetScope = null; willCreate = true;
+    }
   } else {
     willCreate = true;
   }
