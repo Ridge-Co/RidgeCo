@@ -868,6 +868,8 @@ const _hubWorkerCore = {
         // Admin-only (zero ROLE_SCOPES entries, reachable only via WORKER_SECRET) — see
         // woPushToScope's own header comment above for the full design.
         if (path === '/wo/push-to-scope')         return await woPushToScope(env, body);
+        // Admin-only reverse of the above (Oct 5 2026) — see scopeReturnToWO's header comment.
+        if (path === '/scope/return-to-wo')       return await scopeReturnToWO(env, body);
         if (path === '/scope/estimate')           return await scopeEstimate(env, body);
         if (path === '/scope/proposal')           return await scopeProposal(env, body);
         if (path === '/scope/payment-schedule')   return await scopeSetPaymentSchedule(env, body);
