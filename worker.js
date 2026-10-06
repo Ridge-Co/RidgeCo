@@ -4030,7 +4030,7 @@ async function woPushToScope(env, body) {
   const preview = {
     success: true, applied: false, wo_id: woId, estimate_id: estimate.ID, estimate_version: estimate.Version,
     target: willCreate
-      ? { will_create: true, property_id: wo.Property_ID, unit_id: wo.Unit_ID || '' }
+      ? { will_create: true, property_id: wo.Property_ID, unit_id: wo.Unit_ID || '', stale_scope_link: staleScopeLink }
       : { will_create: false, scope_id: targetScope.ID, title: targetScope.Title || '', existing_item_count: existingItems.length },
     mapped_items: mappedItems,
     estimate_subtotal: +(+estimate.Subtotal || 0).toFixed(2),
