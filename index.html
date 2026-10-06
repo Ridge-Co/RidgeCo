@@ -9373,6 +9373,60 @@ function estimateDeclineUI(woId) {
   }).catch(function(e) { toast(e.message, 'error'); });
 }
 
+// ── Return a pushed Scope Proposal to its work order (Oct 5 2026, POST /scope/return-to-wo) ─────
+// Preview first (apply:false) — the server lists exactly what will change, or the reasons it is refused
+// (signed / billed / not linked). Then ONE confirm with an UNCHECKED "Also text the vendor" box, then apply.
+// The vendor text is separate from the return: if it does not go out the return still stands and we say so.
+var _rtw = null; // { woId, scopeId, sending }
+function rtwClose() { closeModal('modal-return-to-wo'); _rtw = null; }
+function openReturnToWOUI(woId, scopeId) {
+  if (!scopeId) { toast('No Scope Proposal is linked to this work order', 'error'); return; }
+  api('POST', '/scope/return-to-wo', { scope_id: String(scopeId), apply: false }).then(function(res) {
+    var body = document.getElementById('rtw-body'), btn = document.getElementById('rtw-confirm');
+    if (!res || (!res.success && !(res.blockers && res.blockers.length) && !res.already_returned)) { toast('Could not check the proposal: ' + ((res && res.error) || 'unknown error'), 'error'); return; }
+    _rtw = { woId: woId, scopeId: String(scopeId), sending: false };
+    if (res.already_returned || (res.blockers && res.blockers.length)) {
+      var why = res.already_returned ? [res.error] : res.blockers;
+      body.innerHTML = '<div style="font-weight:bold;margin-bottom:8px;color:var(--danger)">Scope #' + esc(scopeId) + ' can\'t be returned to the work order:</div>' +
+        '<ul style="margin:0 0 6px 18px;padding:0;font-size:13px">' + why.map(function(w) { return '<li style="margin-bottom:4px">' + esc(w) + '</li>'; }).join('') + '</ul>';
+      btn.style.display = 'none';
+      openModal('modal-return-to-wo'); return;
+    }
+    var will = (res.will || []).map(function(w) { return '<li style="margin-bottom:4px">' + esc(w) + '</li>'; }).join('');
+    var warn = (res.warnings || []).map(function(w) { return '<div style="font-size:12px;color:var(--warn);margin-top:6px">⚠ ' + esc(w) + '</div>'; }).join('');
+    body.innerHTML = '<div style="font-weight:bold;margin-bottom:8px">Send Scope #' + esc(scopeId) + ' back to ' + esc(res.wo_id || woId) + '?</div>' +
+      '<ul style="margin:0 0 8px 18px;padding:0;font-size:13px">' + will + '</ul>' + warn +
+      '<label style="display:flex;align-items:center;gap:10px;margin-top:12px;min-height:44px;font-size:13px;cursor:pointer;border:1px solid var(--border);border-radius:6px;padding:6px 10px">' +
+      '<input type="checkbox" id="rtw-info" style="width:22px;height:22px"> Also text the vendor asking for more info</label>' +
+      '<div style="font-size:11px;color:var(--muted);margin-top:6px">Unchecked: the estimate just goes back to Pending and the vendor hears nothing.</div>';
+    btn.style.display = ''; btn.disabled = false; btn.textContent = '↩ Return to work order';
+    openModal('modal-return-to-wo');
+  }).catch(function(e) { toast('Could not check the proposal: ' + (e && e.message ? e.message : 'network error'), 'error'); });
+}
+function rtwConfirm() {
+  if (!_rtw || _rtw.sending) return;
+  _rtw.sending = true;
+  var woId = _rtw.woId, scopeId = _rtw.scopeId;
+  var cb = document.getElementById('rtw-info'), ask = !!(cb && cb.checked);
+  var btn = document.getElementById('rtw-confirm'); btn.disabled = true; btn.textContent = 'Returning…';
+  function reenable() { if (_rtw) _rtw.sending = false; btn.disabled = false; btn.textContent = '↩ Return to work order'; }
+  api('POST', '/scope/return-to-wo', { scope_id: scopeId, apply: true, request_info: ask }).then(function(res) {
+    if (!res || !res.success) { reenable(); toast((res && res.error) || 'Could not return the proposal', 'error'); return; }
+    var vt = res.vendor_text || {};
+    var msg = '✅ Scope #' + scopeId + ' returned to ' + (res.wo_id || woId);
+    if (ask) msg += vt.sent ? ' — vendor texted' : (vt.held ? ' — vendor text held until morning (quiet hours)' : ' — vendor NOT texted (' + (vt.status || vt.error || 'no reason given') + ')');
+    var bad = (ask && !vt.sent && !vt.held) || (res.warnings && res.warnings.length);
+    toast(msg, bad ? 'error' : 'success');
+    (res.warnings || []).forEach(function(w) { toast('⚠ ' + w, 'error'); });
+    rtwClose();
+    var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+    if (wo) wo.Scope_ID = '';
+    delete _estimateCache[woId];
+    Promise.resolve(loadAll()).then(function() { openWODetail(woId); refreshHubEstimateView(woId); })
+      .catch(function(e) { toast('Returned, but the work order list did not refresh: ' + (e && e.message ? e.message : 'error') + ' — reload the page', 'error'); });
+  }).catch(function(e) { reenable(); toast('Return failed: ' + (e && e.message ? e.message : 'network error'), 'error'); });
+}
+
 // Approve flow — hub-only action. Vendors have no approve button in their portal.
 function approveEstimateUI(woId) {
   var depositEl = document.getElementById('est-deposit-' + woId);
