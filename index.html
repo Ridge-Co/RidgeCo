@@ -9226,7 +9226,10 @@ function renderHubEstimateView(woId, estimates, holder) {
       var openScopeBtn = wo && wo.Scope_ID
         ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="window.open(\'scope-creator.html?scope_id=' + esc(wo.Scope_ID) + '\',\'_blank\')">🔗 Open Scope #' + esc(wo.Scope_ID) + ' →</button>'
         : '';
-      if (pushBtn || openScopeBtn) pushToScopeBlock = '<div style="margin-top:8px">' + pushBtn + openScopeBtn + '</div>';
+      var returnBtn = (isConverted && (convScopeId || (wo && wo.Scope_ID)))
+        ? '<button class="btn small secondary" style="min-height:44px;margin:0" title="Cancels the proposal (kept for history) and puts the estimate back on this work order — the work is not cancelled or declined." onclick="openReturnToWOUI(\'' + woId + '\', \'' + esc(convScopeId || String(wo.Scope_ID)) + '\')">↩ Return to work order</button>'
+        : '';
+      if (pushBtn || openScopeBtn || returnBtn) pushToScopeBlock = '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">' + pushBtn + openScopeBtn + returnBtn + '</div>';
     }
 
     holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
