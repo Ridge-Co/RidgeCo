@@ -9190,7 +9190,12 @@ function renderHubEstimateView(woId, estimates, holder) {
         'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) + (e.Change_Reason_EN ? ' (English: ' + esc(e.Change_Reason_EN) + ')' : '') : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
-    var approvalBlock = isApproved
+    var approvalBlock = isConverted
+      ? '<div style="margin-top:10px;background:#eef3fb;border:1px solid var(--accent);border-radius:6px;padding:10px">' +
+        '<div style="color:var(--accent);font-weight:bold;font-size:12px">📋 Sent to Scope Proposal #' + esc(convScopeId || (safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); }) || {}).Scope_ID || '?') + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:4px">Approve, Needs more info and Decline are off while the estimate lives in the proposal. To ask the vendor for more info or revise the estimate here, return it to the work order — the proposal is archived and the work itself is not cancelled or declined.</div>' +
+        '</div>'
+      : isApproved
       ? '<div style="margin-top:10px;background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
         '<span style="color:var(--accent2);font-weight:bold;font-size:11px">✓ APPROVED</span>' +
         (current.Approved_By ? '<span style="color:var(--muted);font-size:10px;margin-left:6px">by ' + esc(current.Approved_By) + (current.Approval_Note ? ' — ' + esc(current.Approval_Note) : '') + '</span>' : '') +
