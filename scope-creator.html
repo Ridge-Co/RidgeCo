@@ -611,6 +611,7 @@ function renderEditor(){
   var s=state.current;
   document.getElementById('ed-title').textContent='Scope #'+s.ID+' · '+(s.Title||'Untitled');
   document.getElementById('ed-status-pill').innerHTML=statusPill(s.Status);
+  renderReturnBtn();
   document.getElementById('ed-loc').textContent = propLabelFull(s.Property_ID) + (s.Unit_ID?(' · Unit '+unitLabel(s.Unit_ID)):'') + (s.Room?(' · '+s.Room):'');
   document.getElementById('raw-input').textContent = (s.Raw_Input||'').trim() || '—';
   renderItems();
