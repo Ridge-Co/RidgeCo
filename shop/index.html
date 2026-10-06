@@ -402,10 +402,10 @@ function orderToken(sig){
   if (!saved) saved = state.tokenMem || null;
   if (saved && saved.h === h) return saved.t;
   var rec = {t:newToken(), h:h}; state.tokenMem = rec;
-  try { sessionStorage.setItem('mr_order_token', JSON.stringify(rec)); } catch(e){ /* memory copy is enough */ }
+  try { sessionStorage.setItem('mr_order_token', JSON.stringify(rec)); } catch(e){ console.warn('sessionStorage unavailable', e); }
   return rec.t;
 }
-function resetToken(){ state.tokenMem = null; try { sessionStorage.removeItem('mr_order_token'); } catch(e){ /* nothing stored */ } }
+function resetToken(){ state.tokenMem = null; try { sessionStorage.removeItem('mr_order_token'); } catch(e){ console.warn('sessionStorage unavailable', e); } }
 
 $('orderForm').addEventListener('submit', function(ev){
   ev.preventDefault();
@@ -514,15 +514,15 @@ function renderDone(s){
   box.appendChild(pay);
   if (state.shop && state.shop.pickupNote) box.appendChild(h('p',{text:state.shop.pickupNote}));
   box.appendChild(h('p',{class:'fine',text:'A copy of your order was saved with ' + (state.shop && state.shop.name || 'Milam Ridge') + '. Questions? Text ' + phone() + '.'}));
-  box.appendChild(h('button',{type:'button',class:'btn alt',text:'Start a new order',onclick:function(){ try { sessionStorage.removeItem('mr_last_order'); } catch(e){ /* ok */ } go('items'); }}));
+  box.appendChild(h('button',{type:'button',class:'btn alt',text:'Start a new order',onclick:function(){ try { sessionStorage.removeItem('mr_last_order'); } catch(e){ console.warn('sessionStorage unavailable', e); } go('items'); }}));
 }
 
 /* ---------- boot ---------- */
 loadShop().then(function(){
-  var raw = null; try { raw = sessionStorage.getItem('mr_last_order'); } catch(e){ /* storage blocked */ }
+  var raw = null; try { raw = sessionStorage.getItem('mr_last_order'); } catch(e){ console.warn('sessionStorage unavailable', e); }
   if (!raw) return;
   try { var s = JSON.parse(raw); if (s && s.orderId && Date.now() - s.ts < 6*3600*1000 && state.shop){ renderDone(s); go('done'); } }
-  catch(e){ console.warn('bad saved order', e); try { sessionStorage.removeItem('mr_last_order'); } catch(_){} }
+  catch(e){ console.warn('bad saved order', e); try { sessionStorage.removeItem('mr_last_order'); } catch(e){ console.warn('sessionStorage unavailable', e); } }
 });
 })();
 </script>
