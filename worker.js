@@ -10075,6 +10075,11 @@ async function approveEstimate(env, body) {
   const latest = versions.reduce((a, b) => parseInt(a.Version) > parseInt(b.Version) ? a : b);
   const _blockMsg = addonEstimateActionBlock(findWO(_woRows, woId), latest, 'approve');
   if (_blockMsg) return json({ error: _blockMsg }, 400);
+  // Oct 5 2026: an estimate already pushed into a Scope Proposal can never be flipped back to Approved
+  // (and later double-pushed). To rework it, send the proposal back first (POST /scope/return-to-wo).
+  if (String(latest.Status || '') === 'Converted') {
+    return json({ error: `This estimate was already sent to Scope Proposal #${latest.Converted_Scope_ID || '?'} — it can't be approved again here. Return the proposal to the work order first (Return to work order), then approve it.`, converted_scope_id: latest.Converted_Scope_ID || '' }, 409);
+  }
   const data = await sheetsRequest(env, 'GET', '/values/Estimates'); const rows = data.values || [], headers = rows[0] || [];
   const idCol = headers.indexOf('ID'), statusCol = headers.indexOf('Status');
   if (idCol === -1 || statusCol === -1) return json({ error: 'Estimates tab missing ID or Status column' }, 500);
