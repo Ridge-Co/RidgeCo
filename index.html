@@ -875,6 +875,15 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- RETURN A PUSHED SCOPE PROPOSAL TO ITS WORK ORDER (Oct 5 2026, POST /scope/return-to-wo) -->
+<div class="modal-overlay" id="modal-return-to-wo">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header"><div class="modal-title">↩ RETURN TO WORK ORDER</div><button class="modal-close" onclick="rtwClose()">✕</button></div>
+    <div id="rtw-body"></div>
+    <div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="rtwClose()">Cancel</button><button class="btn" id="rtw-confirm" style="min-height:44px" onclick="rtwConfirm()">↩ Return to work order</button></div>
+  </div>
+</div>
+
 <!-- ASSIGN / REASSIGN VENDOR MODAL -->
 <div class="modal-overlay" id="modal-assign">
   <div class="modal">
