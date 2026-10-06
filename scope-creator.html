@@ -177,8 +177,9 @@
   <div class="section">
     <div class="section-title">
       <span id="ed-title">Scope</span> <button class="btn small secondary" onclick="editTitle()" title="Edit title">✎</button>
-      <span><span id="ed-status-pill"></span> <button class="btn small secondary" onclick="showList()">← All scopes</button></span>
+      <span><span id="ed-status-pill"></span> <button class="btn small secondary hide" id="ed-return-btn" style="min-height:44px" title="Cancels this proposal (kept for history) and puts the estimate back on the work order — the work itself is not cancelled or declined." onclick="openReturnToWO()">↩ Return to work order</button> <button class="btn small secondary" onclick="showList()">← All scopes</button></span>
     </div>
+    <div id="rtw-panel" class="hide" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface2);"></div>
     <div class="m info" id="ed-loc" style="font-size:11px;"></div>
   </div>
 
