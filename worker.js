@@ -18994,6 +18994,20 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/scope/return-to-wo') {
+    // Archives a Scope and rewrites its WO + estimate rows (preview or apply); request_info:true additionally
+    // texts the WO's vendor, so that vendor must be a TEST- record too. Scope -> Property (TEST-) is the anchor.
+    const _scopes = await fetchTab(env, 'Scopes');
+    const _sc = _scopes.find(x => String(x.ID) === String(body && body.scope_id));
+    if (!_sc) return false;
+    if (!(await isTestRecord(env, 'Properties', _sc.Property_ID))) return false;
+    if (body && (body.request_info === true || String(body.request_info).toUpperCase() === 'TRUE')) {
+      const _wo = findWO(await fetchTab(env, 'Work_Orders'), String(_sc.WO_ID || ''));
+      if (!_wo) return false;
+      return await isTestRecord(env, 'Vendors', _wo.Vendor_ID);
+    }
+    return true;
+  }
   if (path === '/scope/payment-schedule') {
     const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
     if (!_sc) return false;
