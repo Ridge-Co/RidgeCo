@@ -9170,6 +9170,10 @@ function renderHubEstimateView(woId, estimates, holder) {
 
     var current = estimates[estimates.length - 1];
     var isApproved = current.Status === 'Approved';
+    // Oct 5 2026: once the estimate lives in a Scope Proposal (Status 'Converted') the Approve / Needs more
+    // info / Decline buttons are off — the only way to rework it from here is "Return to work order".
+    var isConverted = current.Status === 'Converted';
+    var convScopeId = isConverted ? String(current.Converted_Scope_ID || '') : '';
     // Vendor text is shown exactly as written; when the worker stored an English copy (desc_en /
     // Change_Reason_EN — Sep 28 2026) it is shown beneath, only when it differs.
     var rows = current.Line_Items.map(function(li) {
