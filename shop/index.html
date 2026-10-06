@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3b2414">
+<meta name="robots" content="noindex">
+<title>Milam Ridge — Barrels, Planters &amp; Spheres</title>
+<meta name="description" content="Order whiskey barrels, barrel planters and barrel spheres at Milam Ridge.">
+<style>
+:root{
+  --cream:#f6efe3; --paper:#fffaf2; --oak:#7a4a21; --deep:#3b2414; --forest:#2f4a34;
+  --amber:#c47f2a; --line:#e2d6c1; --muted:#6f6253; --bad:#a3271b; --badbg:#fdeceb; --ok:#2f6b3a;
+  --r:14px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--cream);color:var(--deep);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(88px + env(safe-area-inset-bottom))}
+h1,h2,h3{font-family:Georgia,"Times New Roman",serif;margin:0;letter-spacing:.2px}
+.wrap{max-width:560px;margin:0 auto;padding:0 16px}
+header{background:var(--deep);color:var(--cream);padding:22px 0 20px;border-bottom:4px solid var(--amber)}
+header .brand{font:700 13px/1 system-ui,sans-serif;letter-spacing:.22em;text-transform:uppercase;color:var(--amber)}
+header h1{font-size:34px;line-height:1.1;margin:8px 0 6px}
+header p{margin:0;color:#e9dcc6;font-size:15px}
+.banner{margin:16px 0 0;padding:12px 14px;border-radius:var(--r);background:var(--badbg);color:var(--bad);border:1px solid #efc1bc;font-weight:600}
+.banner.info{background:#fff4de;color:#6a4a10;border-color:#ecd19a}
+.banner button{margin-left:8px}
+.step-title{font-size:22px;margin:22px 0 10px}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:0 0 16px;box-shadow:0 1px 0 rgba(59,36,20,.04)}
+.gallery{position:relative;background:#e8dcc6}
+.track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.track::-webkit-scrollbar{display:none}
+.slide{flex:0 0 100%;scroll-snap-align:center;aspect-ratio:4/5;max-height:62vh;background:#e8dcc6;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px}
+.slide img{width:100%;height:100%;object-fit:cover;display:block}
+.dots{position:absolute;left:0;right:0;bottom:10px;display:flex;justify-content:center;gap:6px;pointer-events:none}
+.dots i{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.55);box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+.dots i.on{background:#fff}
+.nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,250,242,.9);color:var(--deep);font-size:22px;cursor:pointer;display:none}
+.nav.prev{left:8px}.nav.next{right:8px}
+@media (hover:hover){.nav{display:block}}
+.body{padding:14px 16px 16px}
+.row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.card h3{font-size:21px}
+.price{font:700 22px Georgia,serif;color:var(--oak);white-space:nowrap}
+.desc{margin:4px 0 0;color:var(--muted);font-size:15px}
+.stock{font-size:14px;font-weight:600;margin-top:8px;color:var(--ok)}
+.stock.low{color:#9a5b00}.stock.out{color:var(--bad)}
+.qtyrow{display:flex;align-items:center;justify-content:space-between;margin-top:12px;gap:12px}
+.qtylabel{font-weight:600}
+.stepper{display:flex;align-items:center;border:2px solid var(--oak);border-radius:999px;overflow:hidden;background:#fff}
+.stepper button{width:52px;height:48px;border:0;background:transparent;font-size:26px;color:var(--oak);cursor:pointer}
+.stepper button:disabled{color:#bbb;cursor:not-allowed}
+.stepper output{min-width:42px;text-align:center;font:700 20px system-ui}
+button,input,select{font:inherit}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+.btn{display:block;width:100%;min-height:52px;border:0;border-radius:var(--r);background:var(--forest);color:#fff;font-weight:700;font-size:17px;cursor:pointer;padding:12px 16px;text-align:center;text-decoration:none}
+.btn:disabled{background:#9aa89c;cursor:wait}
+.btn.alt{background:transparent;color:var(--oak);border:2px solid var(--oak)}
+.btn.link{background:none;color:var(--oak);text-decoration:underline;min-height:44px;width:auto;display:inline-block;padding:8px}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--deep);color:#fff;padding:12px 16px calc(12px + env(safe-area-inset-bottom));box-shadow:0 -4px 16px rgba(0,0,0,.25);z-index:5}
+.bar .in{max-width:560px;margin:0 auto;display:flex;align-items:center;gap:14px}
+.bar .sum{flex:1;font-weight:600;line-height:1.2}
+.bar .sum small{display:block;font-weight:400;color:#d9c9ac}
+.bar .btn{width:auto;min-width:150px;background:var(--amber);color:var(--deep)}
+.hidden{display:none!important}
+form{margin:0}
+fieldset{border:0;margin:0 0 6px;padding:0}
+legend{font:700 19px Georgia,serif;padding:0;margin:18px 0 10px}
+.field{margin:0 0 12px}
+.field label{display:block;font-weight:600;font-size:15px;margin-bottom:5px}
+.field .opt{font-weight:400;color:var(--muted)}
+.field input,.field select{width:100%;min-height:50px;border:2px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;color:var(--deep);font-size:17px}
+.field input[aria-invalid=true],.field select[aria-invalid=true]{border-color:var(--bad);background:#fffafa}
+.err{color:var(--bad);font-size:14px;font-weight:600;margin-top:5px;min-height:0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid2.cityrow{grid-template-columns:1.4fr .8fr}
+@media (max-width:359px){.grid2,.grid2.cityrow{grid-template-columns:1fr}}
+.summary{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+.summary .line{display:flex;justify-content:space-between;gap:10px;padding:4px 0}
+.summary .tot{border-top:1px solid var(--line);margin-top:6px;padding-top:8px;font-weight:800;font-size:18px}
+.methods{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.method{position:relative}
+.method input{position:absolute;opacity:0;inset:0;width:100%;height:100%;cursor:pointer;margin:0}
+.method span{display:flex;align-items:center;justify-content:center;min-height:56px;border:2px solid var(--line);border-radius:12px;background:#fff;font-weight:700}
+.method input:checked + span{border-color:var(--forest);background:#eaf3ea;box-shadow:inset 0 0 0 1px var(--forest)}
+.method input:focus-visible + span{outline:3px solid var(--amber);outline-offset:2px}
+.check{display:flex;gap:12px;align-items:flex-start;margin:14px 0}
+.check input{width:24px;height:24px;margin:2px 0 0;flex:none;accent-color:var(--forest)}
+.fine{color:var(--muted);font-size:14px}
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.formerr{margin:12px 0}
+.done h2{font-size:28px;margin:18px 0 6px}
+.done .ok{width:56px;height:56px;border-radius:50%;background:var(--forest);color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin-top:20px}
+.paybox{background:var(--paper);border:2px solid var(--forest);border-radius:var(--r);padding:16px;margin:14px 0}
+.paybox .big{font:800 30px Georgia,serif;color:var(--forest)}
+.paybox code{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:18px;word-break:break-all}
+.paybox .btn{margin-top:12px}
+.spin{display:inline-block;width:18px;height:18px;border:3px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;vertical-align:-3px;margin-right:8px}
+@keyframes s{to{transform:rotate(360deg)}}
+footer{color:var(--muted);font-size:13px;text-align:center;padding:22px 16px}
+footer a{color:var(--oak)}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2s}.track{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="brand" id="brandKicker">Welcome to</div>
+  <h1 id="shopName">Milam Ridge</h1>
+  <p id="tagline">Whiskey barrels, planters &amp; spheres</p>
+</div></header>
+
+<main class="wrap" id="main">
+  <div id="banner" class="banner hidden" role="alert"></div>
+
+  <!-- STEP 1: choose -->
+  <section id="stepItems" aria-labelledby="t1">
+    <h2 class="step-title" id="t1">Choose your items</h2>
+    <div id="loading" class="fine">Loading…</div>
+    <div id="products"></div>
+  </section>
+
+  <!-- STEP 2: details -->
+  <section id="stepDetails" class="hidden" aria-labelledby="t2">
+    <h2 class="step-title" id="t2">Your details</h2>
+    <div class="summary" id="summary" aria-live="polite"></div>
+    <p style="margin:8px 0 0"><button type="button" class="btn link" id="backBtn">← Change items</button></p>
+
+    <form id="orderForm" novalidate autocomplete="on">
+      <fieldset>
+        <legend>Your name</legend>
+        <div class="grid2">
+          <div class="field"><label for="firstName">First name</label>
+            <input id="firstName" name="firstName" autocomplete="given-name" autocapitalize="words" required>
+            <div class="err" id="err-firstName"></div></div>
+          <div class="field"><label for="lastName">Last name</label>
+            <input id="lastName" name="lastName" autocomplete="family-name" autocapitalize="words" required>
+            <div class="err" id="err-lastName"></div></div>
+        </div>
+        <div class="field"><label for="email">Email</label>
+          <input id="email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" required>
+          <div class="err" id="err-email"></div></div>
+        <div class="field"><label for="phone">Phone</label>
+          <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="304-555-0123" required>
+          <div class="err" id="err-phone"></div></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Billing address</legend>
+        <div class="field"><label for="address1">Street address</label>
+          <input id="address1" name="address1" autocomplete="address-line1" required>
+          <div class="err" id="err-address1"></div></div>
+        <div class="field"><label for="address2">Apt / unit <span class="opt">(optional)</span></label>
+          <input id="address2" name="address2" autocomplete="address-line2">
+          <div class="err" id="err-address2"></div></div>
+        <div class="grid2 cityrow">
+          <div class="field"><label for="city">City</label>
+            <input id="city" name="city" autocomplete="address-level2" required>
+            <div class="err" id="err-city"></div></div>
+          <div class="field"><label for="state">State</label>
+            <select id="state" name="state" autocomplete="address-level1" required><option value="">—</option></select>
+            <div class="err" id="err-state"></div></div>
+        </div>
+        <div class="field"><label for="zip">ZIP code</label>
+          <input id="zip" name="zip" inputmode="numeric" autocomplete="postal-code" maxlength="10" required>
+          <div class="err" id="err-zip"></div></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>How will you pay?</legend>
+        <div class="methods" id="methods" role="radiogroup" aria-label="Payment method"></div>
+        <div class="err" id="err-method"></div>
+        <p class="fine" style="margin:8px 0 0">No payment is taken on this page. After you place your order, you’ll send payment with the app you pick.</p>
+      </fieldset>
+
+      <label class="check"><input type="checkbox" id="optin"><span>Send me occasional news and offers from <span id="optName">Milam Ridge</span> <span class="fine">(optional)</span></span></label>
+      <div class="hp" aria-hidden="true"><label>Leave this empty <input id="website" name="website" tabindex="-1" autocomplete="off"></label></div>
+
+      <div id="formErr" class="banner formerr hidden" role="alert"></div>
+      <button class="btn" type="submit" id="submitBtn">Place order</button>
+    </form>
+  </section>
+
+  <!-- STEP 3: done -->
+  <section id="stepDone" class="done hidden" aria-live="polite"></section>
+</main>
+
+<div class="bar hidden" id="bar"><div class="in">
+  <div class="sum"><span id="barCount">0 items</span><small id="barTotal">$0</small></div>
+  <button class="btn" id="continueBtn" type="button">Continue</button>
+</div></div>
+
+<footer id="foot">Questions? Text <a id="footPhone" href="sms:4102592314">410-259-2314</a></footer>
+
+<script>
+(function(){
+'use strict';
+var API = 'https://barrel-co.brett-2f8.workers.dev';
+var FALLBACK_PHONE = '410-259-2314';
+var STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ');
+var money = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'});
+var $ = function(id){ return document.getElementById(id); };
+var state = { shop:null, methods:[], products:[], cart:{}, method:'', submitting:false };
+var source = '';
+try { source = (new URLSearchParams(location.search).get('src')||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,30); } catch(e){ console.warn('src param', e); }
+
+function h(tag, attrs){
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function(k){
+    if (k === 'text') el.textContent = attrs[k];
+    else if (k === 'class') el.className = attrs[k];
+    else if (k.slice(0,2) === 'on') el.addEventListener(k.slice(2), attrs[k]);
+    else el.setAttribute(k, attrs[k]);
+  });
+  for (var i=2;i<arguments.length;i++){ var c=arguments[i]; if (c) el.appendChild(typeof c==='string'?document.createTextNode(c):c); }
+  return el;
+}
+function show(el, on){ el.classList.toggle('hidden', !on); }
+function phone(){ return (state.shop && state.shop.contactPhone) || FALLBACK_PHONE; }
+function smsHref(p){ return 'sms:' + String(p).replace(/\D/g,''); }
+
+function banner(msg, kind, retry){
+  var b = $('banner'); b.textContent = '';
+  if (!msg){ show(b,false); return; }
+  b.className = 'banner' + (kind==='info' ? ' info' : '');
+  b.appendChild(document.createTextNode(msg));
+  if (retry) b.appendChild(h('button',{type:'button',class:'btn link',text:'Try again',onclick:retry}));
+  show(b,true);
+}
+
+/* ---------- load shop ---------- */
+function loadShop(){
+  $('loading').textContent = 'Loading…'; show($('loading'), true);
+  return fetch(API + '/public/shop', {cache:'no-store'}).then(function(r){
+    return r.json().catch(function(){ throw new Error('bad response'); }).then(function(d){
+      if (!r.ok || !d.ok) throw new Error(d && d.detail || ('HTTP ' + r.status));
+      return d;
+    });
+  }).then(function(d){
+    state.shop = d.shop; state.methods = d.methods || []; state.products = d.products || [];
+    Object.keys(state.cart).forEach(function(id){
+      var p = byId(id); if (!p || p.available < 1) delete state.cart[id]; else if (state.cart[id] > p.available) state.cart[id] = p.available;
+    });
+    applyShop(); renderProducts(); renderMethods(); updateBar();
+    banner(null); show($('loading'), false);
+    if (!d.shop.open) banner('Ordering is paused right now. Please check back soon, or text ' + phone() + '.', 'info');
+    else if (!state.methods.length) banner('Payment options are not set up yet. Please text ' + phone() + ' to order.', 'info');
+  }).catch(function(e){
+    console.error('loadShop failed', e);
+    show($('loading'), false);
+    banner('We couldn’t load the shop (' + e.message + '). Please try again, or text ' + FALLBACK_PHONE + '.', 'err', loadShop);
+  });
+}
+function byId(id){ for (var i=0;i<state.products.length;i++) if (state.products[i].id===id) return state.products[i]; return null; }
+function applyShop(){
+  var n = state.shop.name || 'Milam Ridge';
+  $('shopName').textContent = n; $('optName').textContent = n;
+  $('tagline').textContent = state.shop.tagline || '';
+  document.title = n + ' — Barrels, Planters & Spheres';
+  var p = phone(); var a = $('footPhone'); a.textContent = p; a.href = smsHref(p);
+}
+
+/* ---------- products ---------- */
+function photoUrl(p){ try { return new URL(p, location.href).href; } catch(e){ console.warn('bad photo', p); return ''; } }
+function renderProducts(){
+  var box = $('products'); box.textContent = '';
+  if (!state.products.length){ box.appendChild(h('p',{class:'fine',text:'Nothing is listed right now.'})); return; }
+  state.products.forEach(function(p){ box.appendChild(card(p)); });
+  state.products.forEach(refreshCard);
+}
+function card(p){
+  var track = h('div',{class:'track',tabindex:'0','aria-label':p.name + ' photos'});
+  var photos = (p.photos||[]).map(photoUrl).filter(Boolean);
+  if (!photos.length) track.appendChild(h('div',{class:'slide',text:'Photo coming soon'}));
+  photos.forEach(function(u, i){
+    var img = h('img',{src:u,alt:p.name + (photos.length>1 ? ' — photo ' + (i+1) + ' of ' + photos.length : ''),loading:i?'lazy':'eager',decoding:'async'});
+    img.addEventListener('error', function(){ console.warn('photo failed to load', u); var s = img.parentNode; s.textContent = 'Photo unavailable'; });
+    track.appendChild(h('div',{class:'slide'}, img));
+  });
+  var dots = h('div',{class:'dots','aria-hidden':'true'});
+  if (photos.length > 1) photos.forEach(function(_, i){ dots.appendChild(h('i',{class: i? '' : 'on'})); });
+  track.addEventListener('scroll', function(){
+    var i = Math.round(track.scrollLeft / track.clientWidth);
+    Array.prototype.forEach.call(dots.children, function(d, k){ d.classList.toggle('on', k===i); });
+  }, {passive:true});
+  var g = h('div',{class:'gallery'}, track, dots);
+  if (photos.length > 1){
+    g.appendChild(h('button',{type:'button',class:'nav prev','aria-label':'Previous photo',text:'‹',onclick:function(){ track.scrollBy({left:-track.clientWidth,behavior:'smooth'}); }}));
+    g.appendChild(h('button',{type:'button',class:'nav next','aria-label':'Next photo',text:'›',onclick:function(){ track.scrollBy({left:track.clientWidth,behavior:'smooth'}); }}));
+  }
+  var el = h('article',{class:'card','data-id':p.id}, g,
+    h('div',{class:'body'},
+      h('div',{class:'row'}, h('h3',{text:p.name}), h('div',{class:'price',text: p.price===null ? '—' : money.format(p.price)})),
+      p.description ? h('p',{class:'desc',text:p.description}) : null,
+      h('div',{class:'stock','data-role':'stock'}),
+      h('div',{class:'qtyrow'},
+        h('span',{class:'qtylabel',text:'Quantity'}),
+        h('div',{class:'stepper'},
+          h('button',{type:'button','data-role':'minus','aria-label':'Fewer ' + p.name,text:'−'}),
+          h('output',{'data-role':'qty','aria-live':'polite',text:'0'}),
+          h('button',{type:'button','data-role':'plus','aria-label':'More ' + p.name,text:'+'})))));
+  el.querySelector('[data-role=minus]').addEventListener('click', function(){ setQty(p.id, (state.cart[p.id]||0) - 1); });
+  el.querySelector('[data-role=plus]').addEventListener('click', function(){ setQty(p.id, (state.cart[p.id]||0) + 1); });
+  return el;
+}
+function refreshCard(p){
+  var el = document.querySelector('.card[data-id="' + CSS.escape(p.id) + '"]'); if (!el) return;
+  var q = state.cart[p.id] || 0, open = state.shop && state.shop.open;
+  el.querySelector('[data-role=qty]').textContent = q;
+  el.querySelector('[data-role=minus]').disabled = q < 1;
+  el.querySelector('[data-role=plus]').disabled = !open || q >= p.available;
+  var s = el.querySelector('[data-role=stock]');
+  s.className = 'stock' + (p.available < 1 ? ' out' : p.available <= 2 ? ' low' : '');
+  s.textContent = p.available < 1 ? (p.unavailableReason ? 'Currently unavailable' : 'Sold out') : p.available <= 2 ? 'Only ' + p.available + ' left' : p.available + ' available';
+}
+function setQty(id, q){
+  var p = byId(id); if (!p) return;
+  q = Math.max(0, Math.min(p.available, q));
+  if (q) state.cart[id] = q; else delete state.cart[id];
+  refreshCard(p); updateBar();
+}
+function cartLines(){
+  return state.products.filter(function(p){ return state.cart[p.id]; }).map(function(p){
+    return {p:p, qty:state.cart[p.id], total: Math.round(p.price*state.cart[p.id]*100)/100};
+  });
+}
+function cartTotal(){ return Math.round(cartLines().reduce(function(s,l){ return s + l.total; },0)*100)/100; }
+function updateBar(){
+  var lines = cartLines(), n = lines.reduce(function(s,l){ return s+l.qty; },0);
+  $('barCount').textContent = n + (n===1 ? ' item' : ' items');
+  $('barTotal').textContent = money.format(cartTotal());
+  show($('bar'), n > 0 && !$('stepItems').classList.contains('hidden'));
+}
+
+/* ---------- step switching ---------- */
+function go(step){
+  show($('stepItems'), step==='items'); show($('stepDetails'), step==='details'); show($('stepDone'), step==='done');
+  updateBar(); window.scrollTo(0,0);
+}
+$('continueBtn').addEventListener('click', function(){
+  if (!cartLines().length) return;
+  renderSummary(); go('details');
+});
+$('backBtn').addEventListener('click', function(){ banner(null); go('items'); });
+function renderSummary(){
+  var box = $('summary'); box.textContent = '';
+  cartLines().forEach(function(l){
+    box.appendChild(h('div',{class:'line'}, h('span',{text:l.qty + ' × ' + l.p.name}), h('span',{text:money.format(l.total)})));
+  });
+  box.appendChild(h('div',{class:'line tot'}, h('span',{text:'Total'}), h('span',{text:money.format(cartTotal())})));
+  $('submitBtn').textContent = 'Place order · ' + money.format(cartTotal());
+}
+
+/* ---------- form ---------- */
+(function(){ var sel = $('state'); STATES.forEach(function(s){ sel.appendChild(h('option',{value:s,text:s})); }); })();
+function renderMethods(){
+  var box = $('methods'); box.textContent = '';
+  state.methods.forEach(function(m){
+    var inp = h('input',{type:'radio',name:'method',value:m.id,'aria-label':m.label});
+    inp.checked = state.method === m.id;
+    inp.addEventListener('change', function(){ state.method = m.id; setErr('method',''); });
+    box.appendChild(h('label',{class:'method'}, inp, h('span',{text:m.label})));
+  });
+}
+function setErr(field, msg){
+  var e = $('err-' + field); if (e) e.textContent = msg || '';
+  var inp = $(field); if (inp) { if (msg) inp.setAttribute('aria-invalid','true'); else inp.removeAttribute('aria-invalid'); }
+}
+function clearErrs(){ ['firstName','lastName','email','phone','address1','address2','city','state','zip','method'].forEach(function(f){ setErr(f,''); }); show($('formErr'), false); }
+function formErr(msg, retry){
+  var b = $('formErr'); b.textContent = ''; b.appendChild(document.createTextNode(msg));
+  if (retry) b.appendChild(h('button',{type:'button',class:'btn link',text:'Try again',onclick:retry}));
+  b.classList.remove('info'); show(b,true); b.scrollIntoView({block:'center'});
+}
+function val(id){ return $(id).value.replace(/\s+/g,' ').trim(); }
+function validate(){
+  clearErrs(); var first = null;
+  function bad(f, m){ setErr(f, m); if (!first) first = f; }
+  if (!val('firstName')) bad('firstName','Please enter your first name.');
+  if (!val('lastName')) bad('lastName','Please enter your last name.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(val('email'))) bad('email','Please enter a valid email address.');
+  var d = val('phone').replace(/\D/g,''); if (d.length===11 && d[0]==='1') d = d.slice(1);
+  if (d.length !== 10) bad('phone','Please enter a 10-digit phone number.');
+  if (!val('address1')) bad('address1','Please enter your billing address.');
+  if (!val('city')) bad('city','Please enter your city.');
+  if (!$('state').value) bad('state','Please choose your state.');
+  if (!/^\d{5}(-\d{4})?$/.test(val('zip'))) bad('zip','Please enter a 5-digit ZIP code.');
+  if (!state.method) bad('method','Please choose how you will pay.');
+  if (first){ var el = $(first) || $('methods'); el.scrollIntoView({block:'center'}); if (el.focus && first!=='method') el.focus(); }
+  return !first;
+}
+function newToken(){
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){ console.warn('randomUUID', e); }
+  var a = new Uint8Array(16); crypto.getRandomValues(a);
+  return Array.prototype.map.call(a, function(b){ return ('0'+b.toString(16)).slice(-2); }).join('');
+}
+function hashStr(str){ var h = 5381; for (var i=0;i<str.length;i++) h = ((h<<5)+h+str.charCodeAt(i))|0; return String(h); }
+// One token per distinct order payload: a retry of the SAME order reuses it (server de-dupes),
+// but changing the cart/details/method starts a fresh order.
+function orderToken(sig){
+  var h = hashStr(sig), saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem('mr_order_token') || 'null'); } catch(e){ saved = state.tokenMem || null; }
+  if (!saved) saved = state.tokenMem || null;
+  if (saved && saved.h === h) return saved.t;
+  var rec = {t:newToken(), h:h}; state.tokenMem = rec;
+  try { sessionStorage.setItem('mr_order_token', JSON.stringify(rec)); } catch(e){ /* memory copy is enough */ }
+  return rec.t;
+}
+function resetToken(){ state.tokenMem = null; try { sessionStorage.removeItem('mr_order_token'); } catch(e){ /* nothing stored */ } }
+
+$('orderForm').addEventListener('submit', function(ev){
+  ev.preventDefault();
+  if (state.submitting) return;
+  if (!cartLines().length){ go('items'); return; }
+  if (!validate()) return;
+  submit();
+});
+function submit(){
+  state.submitting = true; var btn = $('submitBtn'); btn.disabled = true; btn.textContent = ''; btn.appendChild(h('span',{class:'spin'})); btn.appendChild(document.createTextNode('Placing order…'));
+  show($('formErr'), false);
+  var lines = cartLines(), total = cartTotal(), method = state.method;
+  var payload = {
+    source: source, method: method, marketingOptIn: $('optin').checked, website: $('website').value, expectedTotal: total,
+    items: lines.map(function(l){ return {id:l.p.id, qty:l.qty}; }),
+    customer: { firstName:val('firstName'), lastName:val('lastName'), email:val('email'), phone:val('phone'),
+      address1:val('address1'), address2:val('address2'), city:val('city'), state:$('state').value, zip:val('zip') }
+  };
+  payload.orderToken = orderToken(JSON.stringify(payload));
+  var ctl = new AbortController(); var timer = setTimeout(function(){ ctl.abort(); }, 40000);
+  fetch(API + '/public/order', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:ctl.signal})
+  .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ return {status:r.status, d:d}; }); })
+  .then(function(res){
+    var d = res.d;
+    if (res.status === 200 && d.ok){ return success(d, lines, total, method); }
+    if (res.status === 400 && d.error === 'blocked'){ return formErr(d.message || 'Something looked off. Please reload and try again.'); }
+    if (res.status === 400 && d.field){
+      if (d.field === 'items' || d.field === 'form') return formErr(d.message || 'Something was off with your order. Please go back and check your items.');
+      setErr(d.field, d.message); var el = $(d.field); if (el){ el.scrollIntoView({block:'center'}); el.focus && el.focus(); }
+      return formErr(d.message || 'Please check the highlighted field.');
+    }
+    if (res.status === 409 && d.error === 'stock'){
+      var names = (d.items||[]).map(function(i){ return i.name + (i.available ? ' (only ' + i.available + ' left)' : ' (sold out)'); }).join(', ');
+      return loadShop().then(function(){ go('items'); banner('Sorry — someone just grabbed some: ' + names + '. We updated your cart; please check it and continue.', 'info'); });
+    }
+    if (res.status === 409 && d.error === 'price_changed'){
+      return loadShop().then(function(){ go('items'); banner('Prices were just updated, so we refreshed your cart. Please review the new total and continue.', 'info'); });
+    }
+    if (res.status === 409 && d.error === 'closed'){ return loadShop().then(function(){ go('items'); }); }
+    if (res.status === 429){ return formErr('We’re getting a lot of orders right now. Please text ' + phone() + ' to order.'); }
+    console.error('order failed', res);
+    formErr('We couldn’t place your order — nothing was charged. Please try again, or text ' + phone() + '.', submit);
+  })
+  .catch(function(e){
+    console.error('order request failed', e);
+    formErr(e && e.name==='AbortError' ? 'That took too long. Your order may or may not have gone through — please tap Try again (it will not double-order), or text ' + phone() + '.'
+      : 'We couldn’t reach the shop — check your connection and try again (it will not double-order), or text ' + phone() + '.', submit);
+  })
+  .then(function(){ clearTimeout(timer); state.submitting = false; var b = $('submitBtn'); b.disabled = false; renderSummary(); });
+}
+
+/* ---------- confirmation ---------- */
+function methodInfo(id){ for (var i=0;i<state.methods.length;i++) if (state.methods[i].id===id) return state.methods[i]; return null; }
+function payLink(m, total, orderId){
+  var amt = total.toFixed(2), hnd = String(m.handle).replace(/^[@$]/,'');
+  if (m.id==='venmo') return 'https://venmo.com/' + encodeURIComponent(hnd) + '?txn=pay&amount=' + amt + '&note=' + encodeURIComponent((state.shop.name||'Milam Ridge') + ' ' + orderId);
+  if (m.id==='cashapp') return 'https://cash.app/$' + encodeURIComponent(hnd) + '/' + amt;
+  if (m.id==='paypal') return 'https://paypal.me/' + encodeURIComponent(hnd) + '/' + amt;
+  return '';
+}
+function success(d, lines, total, methodId){
+  var srvLines = (d.lines && d.lines.length) ? d.lines.map(function(l){ return {n:l.name,q:l.qty,t:l.total}; }) : lines.map(function(l){ return {n:l.p.name,q:l.qty,t:l.total}; });
+  var snap = {orderId:d.orderId, total:d.total, methodId:methodId, lines:srvLines, ts:Date.now()};
+  try { sessionStorage.setItem('mr_last_order', JSON.stringify(snap)); } catch(e){ console.warn('could not save confirmation', e); }
+  state.cart = {}; state.products.forEach(refreshCard); resetToken();
+  $('orderForm').reset(); state.method = ''; renderMethods();
+  renderDone(snap); go('done');
+}
+function copyBtn(text, label){
+  var b = h('button',{type:'button',class:'btn alt',text:'Copy ' + label});
+  b.addEventListener('click', function(){
+    var ok = function(){ b.textContent = 'Copied ✓'; };
+    var fail = function(){ b.textContent = 'Couldn’t copy — press and hold the text above'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fail); else fail();
+  });
+  return b;
+}
+function renderDone(s){
+  var box = $('stepDone'); box.textContent = '';
+  var m = methodInfo(s.methodId);
+  box.appendChild(h('div',{class:'ok','aria-hidden':'true',text:'✓'}));
+  box.appendChild(h('h2',{text:'Order placed!'}));
+  box.appendChild(h('p',{text:'Your order number is ' + s.orderId + '. Screenshot this page so you have it.'}));
+  var sum = h('div',{class:'summary'});
+  s.lines.forEach(function(l){ sum.appendChild(h('div',{class:'line'}, h('span',{text:l.q + ' × ' + l.n}), h('span',{text:money.format(l.t)}))); });
+  sum.appendChild(h('div',{class:'line tot'}, h('span',{text:'Total'}), h('span',{text:money.format(s.total)})));
+  box.appendChild(sum);
+  var pay = h('div',{class:'paybox'});
+  if (m){
+    pay.appendChild(h('div',{class:'fine',text:'Last step — send payment with ' + m.label}));
+    pay.appendChild(h('div',{class:'big',text:money.format(s.total)}));
+    var link = payLink(m, s.total, s.orderId);
+    if (link){
+      pay.appendChild(h('p',{class:'fine',text:'Paying ' + (m.id==='cashapp' ? '$' : '@') + String(m.handle).replace(/^[@$]/,'') + '. Please put ' + s.orderId + ' in the note.'}));
+      pay.appendChild(h('a',{class:'btn',href:link,target:'_blank',rel:'noopener',text:'Open ' + m.label + ' to pay'}));
+      pay.appendChild(copyBtn(s.orderId, 'order number'));
+    } else {
+      pay.appendChild(h('p',{class:'fine',text:'Open your bank’s Zelle and send to:'}));
+      pay.appendChild(h('code',{text:m.handle}));
+      pay.appendChild(h('p',{class:'fine',text:'Please put ' + s.orderId + ' in the memo.'}));
+      pay.appendChild(copyBtn(m.handle, 'Zelle number'));
+    }
+  } else {
+    pay.appendChild(h('p',{text:'Please text ' + phone() + ' to arrange payment for order ' + s.orderId + '.'}));
+  }
+  box.appendChild(pay);
+  if (state.shop && state.shop.pickupNote) box.appendChild(h('p',{text:state.shop.pickupNote}));
+  box.appendChild(h('p',{class:'fine',text:'A copy of your order was saved with ' + (state.shop && state.shop.name || 'Milam Ridge') + '. Questions? Text ' + phone() + '.'}));
+  box.appendChild(h('button',{type:'button',class:'btn alt',text:'Start a new order',onclick:function(){ try { sessionStorage.removeItem('mr_last_order'); } catch(e){ /* ok */ } go('items'); }}));
+}
+
+/* ---------- boot ---------- */
+loadShop().then(function(){
+  var raw = null; try { raw = sessionStorage.getItem('mr_last_order'); } catch(e){ /* storage blocked */ }
+  if (!raw) return;
+  try { var s = JSON.parse(raw); if (s && s.orderId && Date.now() - s.ts < 6*3600*1000 && state.shop){ renderDone(s); go('done'); } }
+  catch(e){ console.warn('bad saved order', e); try { sessionStorage.removeItem('mr_last_order'); } catch(_){} }
+});
+})();
+</script>
+</body>
+</html>

@@ -1954,3 +1954,6 @@ Human-gate required: no — link-only change, no write path, no money/PII/auth s
 - **Delivered as a branch + pull request into `main` — not committed to main directly, and not merged.** Per the task's own explicit constraint, no live call was made against the deployed Worker or live Google Sheet/QuickBooks data at any point in this build.
 
 Human-gate required: yes — this PR is unreviewed and unmerged, awaiting Brett. Nothing in this build touched live data or a live deploy.
+
+**202. Milam Ridge cabin shop (Oct 6 2026; RidgeCo `shop/`, BarrelCo `worker.js` + StockShift `index.html`).** Public QR-sign order page + `GET /public/shop` / `POST /public/order` on the BarrelCo Worker; Sheet tabs `Shop_Products` / `Shop_Settings` / `Shop_Orders` (auto-created); stock shared with StockShift via `Inventory` location `cabin_wv`. Rules: server-side price/stock only; idempotent order token; oversold detected at decrement time → Status OVERSOLD + 409; once an order row is written nothing after it may return a failure (warnings + Debug instead); forged-origin/bot noise is logged to the Worker log, not the Sheet; `isTest` is only first=TEST & last=ORDER; BarrelCo `deleteRow` previously hard-coded sheetId 0 (fixed). See `context/CABIN_SHOP_BUILD_BRIEF_v1.0.md`. Human-gate required: yes — two unmerged PRs awaiting Brett.
+
