@@ -479,8 +479,8 @@ async function handleDeepLink(){
 // but not yet invoiced can never get buried there; it stays in 'ready-to-bill', which is never
 // collapsed in loadScopes() below.
 function statusPill(s){
-  var map={draft:'draft',approved:'approved','wo-created':'wocreated',estimated:'estimated',proposed:'proposed',signed:'signed',invoiced:'inprogress','ready-to-bill':'readytobill','fully-invoiced':'completed'};
-  var labels={invoiced:'in-progress','ready-to-bill':'ready to bill','fully-invoiced':'completed'};
+  var map={draft:'draft',approved:'approved','wo-created':'wocreated',estimated:'estimated',proposed:'proposed',signed:'signed',invoiced:'inprogress','ready-to-bill':'readytobill','fully-invoiced':'completed','returned-to-wo':'draft'};
+  var labels={invoiced:'in-progress','ready-to-bill':'ready to bill','fully-invoiced':'completed','returned-to-wo':'Returned to WO'};
   var cls=map[s]||'draft';
   return '<span class="pill '+cls+'">'+esc(labels[s]||s||'draft')+'</span>';
 }
