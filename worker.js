@@ -4100,6 +4100,222 @@ async function woPushToScope(env, body) {
   });
 }
 
+// ── Return a pushed Scope Proposal to its Work Order (Oct 5 2026, POST /scope/return-to-wo) ─────────
+// Brett (scope #9 / WO-1222): "proposals has no way to send the proposal back to the work order, ie
+// cancel the proposal but not cancel or decline the work, ie reset it so it can be worked on further
+// but in the work order. I sent an estimate to proposal but realized it was missing info." This is the
+// REVERSE of woPushToScope, above. ADMIN-ONLY (zero ROLE_SCOPES entries, same as /wo/push-to-scope).
+// {scope_id, apply?: false, request_info?: false} — PREVIEW-FIRST: apply defaults false and returns exactly
+// what would change (or the blockers). Brett's locked decisions (Oct 5 2026):
+//   • request_info is an UNCHECKED-by-default option: false => the estimate goes back to Pending and the
+//     vendor hears nothing; true => the estimate becomes 'Needs Info' and the vendor is texted through the
+//     SAME gated template path flagEstimate uses (vendor_estimate_needs_info).
+//   • The Scope is ARCHIVED, never deleted: Status 'returned-to-wo', Active FALSE, Approval_Stage '', WO_ID
+//     cleared; Line_Items / Source_Refs / Proposal_Text stay for history. Work_Orders.Scope_ID is cleared so
+//     the NEXT push creates a fresh scope (woPushToScope also treats a stale link to an archived scope as unlinked).
+//   • Refused (409, plain-English reasons) unless the proposal is unsigned and unbilled: any live
+//     Scope_Signatures / Payment_Milestones row, a signed/invoiced/ready-to-bill/fully-invoiced Status, an
+//     Approval_Stage of Pre-approved/Approved, a blank WO_ID, or an already-returned/inactive scope.
+//   • The WO's Status and vendor never change. Its Approval_Stage goes back to 'Estimated'.
+// Write order is estimates -> WO -> scope (the scope's returned state is the idempotency marker, so it is
+// written LAST); everything is re-read and verified, and any failure rolls the earlier writes back. The vendor
+// text only fires AFTER the verified writes, and an SMS failure never undoes the return — it is reported in
+// the response (vendor_text) and logged to Ops_Telemetry (Job_Type scope_return_to_wo). Nothing here fails silently.
+const SCOPE_RETURN_BLOCKED_STATUSES = ['signed', 'invoiced', 'ready-to-bill', 'fully-invoiced'];
+const SCOPE_RETURN_BLOCKED_STAGES = ['Pre-approved', 'Approved'];
+// PURE — plain-English reasons a proposal cannot be sent back to its work order ([] = it can).
+function scopeReturnBlockers(scope, sigs, milestones, convertedEstimates) {
+  const out = [];
+  const id = String((scope && scope.ID) || '');
+  const status = String((scope && scope.Status) || '').toLowerCase();
+  const stage = String((scope && scope.Approval_Stage) || '');
+  const live = r => String((r && r.Active) || '').toUpperCase() !== 'FALSE';
+  if (!String((scope && scope.WO_ID) || '').trim()) out.push('This proposal is not linked to a work order, so there is nothing to send it back to.');
+  if (SCOPE_RETURN_BLOCKED_STATUSES.includes(status)) out.push(status === 'signed'
+    ? 'The owner has already signed this proposal, so it can no longer be sent back to the work order.'
+    : `This proposal is already billed (status "${status}"), so it can no longer be sent back to the work order.`);
+  if (SCOPE_RETURN_BLOCKED_STAGES.includes(stage)) out.push(`This proposal's approval stage is "${stage}" (the owner has already approved it), so it can no longer be sent back to the work order.`);
+  const liveSigs = (sigs || []).filter(r => String(r.Scope_ID) === id && live(r));
+  if (liveSigs.length) out.push(`A signature is on file for this proposal (${liveSigs.length} record${liveSigs.length === 1 ? '' : 's'}), so it can no longer be sent back to the work order.`);
+  const liveMs = (milestones || []).filter(r => String(r.Scope_ID) === id && live(r));
+  if (liveMs.length) out.push(`Billing milestones already exist for this proposal (${liveMs.length}), so it can no longer be sent back to the work order.`);
+  if (!(convertedEstimates || []).length) out.push('No work order estimate is linked to this proposal (nothing was pushed into it from an estimate), so there is no estimate to send back.');
+  return out;
+}
+// A write helper that updateRow/updateWOFields-style callers can use: a 4xx Response is a failure, never a pass.
+async function scopeReturnCheck(resp, label) {
+  if (resp && typeof resp.status === 'number' && resp.status >= 400) {
+    let detail = '';
+    try { const d = await resp.clone().json(); detail = (d && d.error) ? ': ' + d.error : ''; } catch (e) { detail = ' (unreadable response body: ' + String((e && e.message) || e) + ')'; }
+    throw new Error(`${label} write failed (HTTP ${resp.status}${detail})`);
+  }
+  return resp;
+}
+async function scopeReturnToWO(env, body) {
+  const scopeId = String((body && (body.scope_id || body.id)) || '').trim();
+  if (!scopeId) return json({ error: 'scope_id required' }, 400);
+  const apply = !!body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
+  const requestInfo = !!body && (body.request_info === true || String(body.request_info).toUpperCase() === 'TRUE');
+  const by = String((body && body.returned_by) || 'admin').slice(0, 60);
+
+  await scopesTab(env); await scopeSigTab(env); await paymentMilestonesTab(env);
+  const [scopes, workorders, estimates, sigs, milestones] = await Promise.all([
+    fetchTab(env, 'Scopes'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Estimates'), fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Payment_Milestones'),
+  ]);
+  const scope = scopes.find(r => String(r.ID) === scopeId);
+  if (!scope) return json({ error: `No Scope Proposal #${scopeId} found` }, 404);
+  // Idempotent: a second call on an already-returned (or otherwise archived) scope is a clear 409, never a second write.
+  if (String(scope.Status || '') === 'returned-to-wo' || String(scope.Active || '').toUpperCase() === 'FALSE') {
+    return json({ success: false, applied: false, already_returned: true, scope_id: scopeId, error: `Scope Proposal #${scopeId} was already returned to its work order (or archived) — nothing more to do.` }, 409);
+  }
+  const woId = String(scope.WO_ID || '').trim();
+  const wo = woId ? findWO(workorders, woId) : null;
+  const converted = estimates.filter(e => String(e.Converted_Scope_ID || '') === scopeId && String(e.Active || '').toUpperCase() !== 'FALSE');
+  const blockers = scopeReturnBlockers(scope, sigs, milestones, converted);
+  if (woId && !wo) blockers.push(`Work order ${woId} (the one linked to this proposal) was not found.`);
+  if (blockers.length) {
+    return json({ success: false, applied: false, blocked: true, scope_id: scopeId, wo_id: woId, blockers, error: blockers.join(' ') }, 409);
+  }
+  const latest = converted.reduce((a, b) => (parseInt(a.Version) || 0) >= (parseInt(b.Version) || 0) ? a : b);
+  const targetStatus = requestInfo ? 'Needs Info' : 'Pending';
+  const estStatusAfter = e => (e.ID === latest.ID ? targetStatus : 'Pending');
+  const proposalWasGenerated = !!(String(scope.Proposal_Text || '').trim() || (String(scope.Proposal_Items_JSON || '').trim() && String(scope.Proposal_Items_JSON).trim() !== '[]'));
+  const proposalWasSent = !!(String(scope.Sent_Date || '').trim() || (parseInt(scope.Send_Count || '0', 10) || 0) > 0);
+  const bumpLink = proposalWasGenerated || proposalWasSent;
+  const woUrl = 'index.html?wo=' + encodeURIComponent(woId);
+  const warnings = [];
+  if (proposalWasSent) warnings.push('The proposal link was already emailed to the owner — it will stop working once the proposal is returned.');
+  if (String(scope.Status || '') === 'wo-created') warnings.push('This scope was created before the work order existed (Scope to WO). Returning it archives it — its items stay in the archived scope for history.');
+  const will = [
+    `Scope Proposal #${scopeId} is archived (kept for history) and disappears from the proposals list.`,
+    ...(bumpLink ? ['The proposal link stops working.'] : []),
+    `${converted.length === 1 ? 'Estimate v' + latest.Version : converted.length + ' estimate versions'} on ${woId} go${converted.length === 1 ? 'es' : ''} back to ${requestInfo ? '"Needs Info" (latest)' : 'Pending'}.`,
+    `${woId} goes back to "Estimated" and is unlinked from the proposal — its status and vendor do not change.`,
+    requestInfo ? 'The vendor is texted asking for more info (through the normal SMS rules).' : 'The vendor is NOT texted.',
+    'The next "send to proposal" creates a fresh proposal from the revised estimate.',
+  ];
+  const plan = {
+    scope_id: scopeId, wo_id: woId, wo_url: woUrl, request_info: requestInfo,
+    scope: { id: scopeId, title: scope.Title || '', status: scope.Status || '', approval_stage: scope.Approval_Stage || '', item_count: scopeParseItems(scope).length, proposal_generated: proposalWasGenerated, proposal_sent: proposalWasSent },
+    estimates: converted.map(e => ({ id: e.ID, version: e.Version, status_now: e.Status || '', status_after: estStatusAfter(e) })),
+    will, warnings, blockers: [],
+  };
+  if (!apply) return json(Object.assign({ success: true, applied: false }, plan));
+
+  // ---- APPLY ----
+  const now = new Date().toISOString();
+  const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const attribution = `[${ts} — ${by} (admin)]`;
+  const undo = []; // LIFO: restores each earlier write if a later step or the verification fails
+  const pick = (row, fields) => { const o = {}; fields.forEach(f => { o[f] = String((row && row[f]) == null ? '' : row[f]); }); return o; };
+  const EST_FIELDS = ['Status', 'Converted_Scope_ID', 'Converted_Date', 'Approved_By', 'Approved_Date', 'Approval_Note', 'Needs_Info_Date'];
+  const WO_FIELDS = ['Scope_ID', 'Approval_Stage', 'Estimate_Revised', 'Notes'];
+  const expectScope = { Status: 'returned-to-wo', Active: 'FALSE', Approval_Stage: '', WO_ID: '' };
+  try {
+    await ensureColumns(env, 'Estimates', ['Converted_Scope_ID', 'Converted_Date', 'Needs_Info_Date', 'Approved_By', 'Approved_Date', 'Approval_Note']);
+    await ensureColumns(env, 'Work_Orders', ['Scope_ID', 'Approval_Stage', 'Estimate_Revised']);
+    await ensureColumns(env, 'Scopes', ['Approval_Stage', 'Link_Rev']);
+
+    // 1. Estimates back to the work order (Pending, or Needs Info on the latest when the vendor is being asked).
+    for (const e of converted) {
+      const before = pick(e, EST_FIELDS);
+      const after = { Status: estStatusAfter(e), Converted_Scope_ID: '', Converted_Date: '', Approved_By: '', Approved_Date: '', Approval_Note: '', Needs_Info_Date: (e.ID === latest.ID && requestInfo) ? now : '' };
+      undo.push({ label: `Estimate ${e.ID}`, run: () => updateRow(env, 'Estimates', e.ID, before) });
+      await scopeReturnCheck(await updateRow(env, 'Estimates', e.ID, after), `Estimate ${e.ID}`);
+    }
+
+    // 2. Work order: unlink the scope, back to Estimated, timestamped note. Status and vendor are never touched.
+    const woBefore = pick(wo, WO_FIELDS);
+    const noteLine = `${attribution} Scope Proposal #${scopeId} was returned to this work order${requestInfo ? ' and the vendor was asked for more info' : ''}.`;
+    const woFields = { Notes: String(wo.Notes || '') ? String(wo.Notes) + '\n' + noteLine : noteLine };
+    if (String(wo.Scope_ID || '') === scopeId) woFields.Scope_ID = '';
+    undo.push({ label: `Work order ${woId}`, run: () => updateWOFields(env, woId, woBefore) });
+    await updateWOFields(env, woId, woFields);
+    const stageOk = await setApprovalStage(env, { woId, stage: 'Estimated' });
+    if (!stageOk) throw new Error(`Work order ${woId} approval-stage write failed`);
+
+    // 3. Scope archived LAST (this is the idempotency marker).
+    const scopeFields = Object.assign({}, expectScope, {
+      Updated_Date: now,
+      Notes: (String(scope.Notes || '') ? String(scope.Notes) + '\n' : '') + `${attribution} Returned to ${woId} (stage was "${scope.Approval_Stage || ''}"). Estimate(s) ${converted.map(e => 'v' + e.Version).join(', ')} sent back to the work order.`,
+    });
+    if (bumpLink) scopeFields.Link_Rev = String((parseInt(scope.Link_Rev || '0', 10) || 0) + 1);
+    const scopeBefore = pick(scope, Object.keys(scopeFields));
+    undo.push({ label: `Scope ${scopeId}`, run: () => updateRow(env, 'Scopes', scopeId, scopeBefore) });
+    await scopeReturnCheck(await updateRow(env, 'Scopes', scopeId, scopeFields), `Scope ${scopeId}`);
+
+    // 4. Verify by re-reading — success:true with an unchanged cell is a failure.
+    const [s2, e2, w2] = await Promise.all([fetchTab(env, 'Scopes'), fetchTab(env, 'Estimates'), fetchTab(env, 'Work_Orders')]);
+    const problems = [];
+    const s2row = s2.find(r => String(r.ID) === scopeId);
+    if (!s2row) problems.push(`Scope ${scopeId} not found after the write`);
+    else Object.keys(expectScope).forEach(k => { if (String(s2row[k] || '') !== expectScope[k]) problems.push(`Scope ${scopeId} ${k} is "${s2row[k] || ''}", expected "${expectScope[k]}"`); });
+    for (const e of converted) {
+      const r = e2.find(x => String(x.ID) === String(e.ID));
+      if (!r) { problems.push(`Estimate ${e.ID} not found after the write`); continue; }
+      if (String(r.Status || '') !== estStatusAfter(e)) problems.push(`Estimate ${e.ID} Status is "${r.Status || ''}", expected "${estStatusAfter(e)}"`);
+      if (String(r.Converted_Scope_ID || '') !== '') problems.push(`Estimate ${e.ID} still points at Scope ${r.Converted_Scope_ID}`);
+    }
+    const w2row = findWO(w2, woId);
+    if (!w2row) problems.push(`Work order ${woId} not found after the write`);
+    else {
+      if (String(w2row.Scope_ID || '') === scopeId) problems.push(`Work order ${woId} is still linked to Scope ${scopeId}`);
+      if (String(w2row.Approval_Stage || '') !== 'Estimated') problems.push(`Work order ${woId} Approval_Stage is "${w2row.Approval_Stage || ''}", expected "Estimated"`);
+    }
+    if (problems.length) throw new Error('Verification failed — ' + problems.join('; '));
+  } catch (e) {
+    const rollbackErrors = [];
+    for (const u of undo.reverse()) {
+      try { await scopeReturnCheck(await u.run(), u.label + ' rollback'); }
+      catch (re) { rollbackErrors.push(`${u.label}: ${String((re && re.message) || re)}`); }
+    }
+    const msg = String((e && e.message) || e);
+    let telemetryError = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_return_to_wo', Skill_Or_Endpoint: '/scope/return-to-wo', Success: 'FALSE', Notes: `scope=${scopeId} wo=${woId} err=${msg.slice(0, 160)} rollback=${rollbackErrors.length ? 'INCOMPLETE ' + rollbackErrors.join(' | ').slice(0, 160) : 'ok'}` }); }
+    catch (te) { telemetryError = String((te && te.message) || te); }
+    return json({
+      success: false, applied: true, scope_id: scopeId, wo_id: woId, rolled_back: rollbackErrors.length === 0, rollback_errors: rollbackErrors, telemetry_error: telemetryError,
+      error: `Could not return Scope Proposal #${scopeId} to ${woId}: ${msg}.` + (rollbackErrors.length ? ` Rolling back ALSO failed (${rollbackErrors.join('; ')}) — check ${woId}, Scope ${scopeId} and their estimate rows by hand.` : ' Everything was put back the way it was; retrying is safe.'),
+    }, 500);
+  }
+
+  // 5. Audit trail (logWOAuditMany never throws — it is best-effort by design).
+  await logWOAuditMany(env, [
+    { woId, changedBy: by, changedByRole: 'admin', field: 'Scope_ID', oldValue: scopeId, newValue: '', notes: `Scope Proposal #${scopeId} returned to the work order${requestInfo ? ' (vendor asked for more info)' : ''}` },
+    { woId, changedBy: by, changedByRole: 'admin', field: 'Approval_Stage', oldValue: String(wo.Approval_Stage || ''), newValue: 'Estimated', notes: 'Scope returned to WO' },
+  ]);
+
+  // 6. Vendor text — only after the writes are verified; its failure never undoes the return, but is reported + logged.
+  const vendorText = { requested: requestInfo, sent: false };
+  if (requestInfo) {
+    try {
+      const r = await notifyVendorTemplated(env, 'vendor_estimate_needs_info', woId, latest.Vendor_ID || wo.Vendor_ID);
+      vendorText.sent = !!(r && r.sent);
+      // Quiet hours (7pm-9am ET) queue the text for the morning — that is a held send, not a failure.
+      vendorText.held = !!(r && r.held_for_quiet_hours);
+      if (vendorText.held && r.send_after) vendorText.send_after = r.send_after;
+      vendorText.status = r ? (r.sent ? 'sent' : (vendorText.held ? 'held for quiet hours — will send in the morning' : (r.gate_snapshot || r.reason || r.error || 'not sent'))) : 'not sent';
+      if (r && r.error) vendorText.error = String(r.error);
+    } catch (e) {
+      vendorText.sent = false; vendorText.error = String((e && e.message) || e); vendorText.status = 'error';
+    }
+    if (!vendorText.sent && !vendorText.held) {
+      warnings.push(`The proposal was returned, but the vendor was NOT texted (${vendorText.error || vendorText.status}). Tell them directly or use "Needs more info" on the work order.`);
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_return_to_wo', Skill_Or_Endpoint: '/scope/return-to-wo', Success: 'FALSE', Notes: `vendor text not sent scope=${scopeId} wo=${woId} reason=${String(vendorText.error || vendorText.status).slice(0, 160)}` }); }
+      catch (te) { warnings.push('Could not log the failed vendor text to telemetry: ' + String((te && te.message) || te)); }
+    }
+  }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_return_to_wo', Skill_Or_Endpoint: '/scope/return-to-wo', Success: 'TRUE', Notes: `scope=${scopeId} wo=${woId} estimates=${converted.map(e => e.ID).join(',')} request_info=${requestInfo} vendor_text=${requestInfo ? (vendorText.sent ? 'sent' : (vendorText.held ? 'held' : 'not sent')) : 'none'}` }); }
+  catch (te) { warnings.push('Could not write the telemetry log row: ' + String((te && te.message) || te)); }
+
+  return json({
+    success: true, applied: true, scope_id: scopeId, wo_id: woId, wo_url: woUrl,
+    estimate_ids: converted.map(e => e.ID), estimates_returned_to: targetStatus, link_rev_bumped: bumpLink,
+    vendor_text: vendorText, warnings,
+    message: `Scope Proposal #${scopeId} was returned to ${woId} (archived, kept for history).`,
+  });
+}
+
 // POST /scope/estimate — record the vendor's estimate number(s) + amount onto the scope
 // (editable afterward, since a vendor may propose a different solution or drop an item).
 async function scopeEstimate(env, body) {
