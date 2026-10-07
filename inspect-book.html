@@ -64,15 +64,42 @@ function bookInit(){
     $('h-title').textContent='Book an inspection';
     $('h-sub').textContent=r.customer+' · Ridge Co';
     var ex=(r.example_durations||[]).map(function(d){return d.units+' unit'+(d.units>1?'s':'')+' ≈ '+fmtDur(d.minutes);}).join(' · ');
-    setMain('<div class="card"><b>Where and how big?</b>'
-      +(r.open_block_count? '' : banner('warn','No time slots are open right now. Brett opens blocks of time — check back or ask him.'))
+    setMain('<div id="mine"></div><div class="card"><b>Where and how big?</b>'
+      +(r.open_block_count? openDays(r.open_days) : banner('warn','No time slots are open right now. Brett opens blocks of time — check back or ask him.'))
       +'<label>Property address</label><input id="f-addr" placeholder="123 N Main St, Baltimore, MD 21201" autocomplete="street-address">'
       +'<div class="row2"><div><label>Total units</label><input id="f-units" type="number" min="1" max="60" inputmode="numeric" placeholder="e.g. 2"></div>'
       +'<div><label>Buildings</label><input id="f-bldg" type="number" min="1" inputmode="numeric" placeholder="1"></div></div>'
       +'<div class="est hide" id="f-est"></div><p class="muted" style="margin-bottom:0">Typical length: '+esc(ex)+'. The length is figured from units and buildings, and drive time from Brett’s other stops is included automatically.</p>'
       +'<button class="btn" id="f-go" onclick="findTimes()">Find available times</button></div><div id="results"></div>');
     ['f-units','f-bldg'].forEach(function(id){$(id).addEventListener('input',updEst);});
+    loadMine();
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
+}
+// Add-to-calendar buttons for a confirmed booking: Google link + a .ics file that Apple/Outlook/phones open.
+function calButtons(token,googleUrl){
+  return (googleUrl?'<a class="btn" style="display:block;text-align:center;text-decoration:none" href="'+esc(googleUrl)+'" target="_blank" rel="noopener">Add to Google Calendar</a>':'')
+    +'<a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="'+esc(WORKER+'/insp-book/ics?t='+encodeURIComponent(token))+'">Download calendar file (Apple / Outlook)</a>';
+}
+// "Your upcoming bookings" on the main link, so a bookmarked link can check status, add to calendar and cancel.
+function loadMine(){
+  call('GET','/insp-book/mine?k='+encodeURIComponent(K)).then(function(r){
+    var el=$('mine'); if(!el) return;
+    if(!r.ok){ el.innerHTML=banner('warn','Could not load your bookings: '+(r.message||'please try again shortly.')); return; }
+    if(!r.bookings.length){ el.innerHTML=''; return; }
+    el.innerHTML='<div class="card"><b>Your upcoming bookings</b>'+r.bookings.map(function(b){
+      var ok=b.status==='approved';
+      return '<div class="day"><div><b>'+esc(b.when)+'</b></div><div class="muted">'+esc(b.address)+' · '+(ok?'Confirmed':'Waiting for Brett’s approval')+'</div>'
+        +(ok?calButtons(b.manage_token,b.google_cal_url):'')
+        +'<button class="btn bad" data-t="'+esc(b.manage_token)+'" onclick="cancelOne(this)">Cancel this booking</button></div>';
+    }).join('')+'</div>';
+  }).catch(function(e){ var el=$('mine'); if(el) el.innerHTML=banner('warn','Could not load your bookings ('+e.message+').'); });
+}
+function cancelOne(btn){
+  if(!confirm('Cancel this inspection booking?')) return;
+  btn.disabled=true;
+  call('POST','/insp-book/cancel',{t:btn.getAttribute('data-t')}).then(function(r){
+    if(r.ok){ loadMine(); } else { btn.disabled=false; alert(r.message||'Could not cancel.'); }
+  }).catch(function(e){ btn.disabled=false; alert('Could not reach the server: '+e.message); });
 }
 function updEst(){
   var u=+$('f-units').value, b=+$('f-bldg').value||1, el=$('f-est');
@@ -94,6 +121,10 @@ function findTimes(){
     renderSlots(r);
   }).catch(function(e){ btn.disabled=false; btn.textContent='Find available times'; res.innerHTML=netFail(e); });
 }
+function openDays(list){
+  if(!list||!list.length) return '';
+  return '<div class="banner good" style="margin-top:10px"><b>Open days and booking deadlines</b><br>'+list.map(function(d){return esc(dayLabel(d.date))+' · '+esc(d.from)+'–'+esc(d.to)+' · <b>book by '+esc(d.closes_label)+'</b>';}).join('<br>')+'<br><span class="muted">Times for a day disappear after its deadline.</span></div>';
+}
 function dayLabel(iso){var d=new Date(iso+'T12:00:00Z');return d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',timeZone:'UTC'});}
 function renderSlots(r){
   var res=$('results'), h='<div class="card"><b>'+esc(r.address)+'</b><div class="muted">'+r.units+' unit'+(r.units>1?'s':'')+' · '+fmtDur(r.duration_min)+' inspection · times are Eastern</div>';
@@ -105,7 +136,8 @@ function renderSlots(r){
   var byDay={},order=[];
   r.slots.forEach(function(s,i){ if(!byDay[s.date]){byDay[s.date]=[];order.push(s.date);} byDay[s.date].push(i); });
   order.forEach(function(d){
-    h+='<div class="day"><h3>'+esc(dayLabel(d))+'</h3><div class="chips">'+byDay[d].map(function(i){return '<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(r.slots[i].label.split('–')[0])+'</div>';}).join('')+'</div></div>';
+    var cl=r.slots[byDay[d][0]].closes_label;
+    h+='<div class="day"><h3>'+esc(dayLabel(d))+'</h3>'+(cl?'<div class="muted" style="margin:-2px 0 6px">Book by '+esc(cl)+'</div>':'')+'<div class="chips">'+byDay[d].map(function(i){return '<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(r.slots[i].label.split('–')[0])+'</div>';}).join('')+'</div></div>';
   });
   h+='</div><div id="contact"></div>';
   res.innerHTML=h;
@@ -148,6 +180,7 @@ function manageInit(){
     var b=r.booking, msg={pending:'Waiting for Brett’s approval — the time is held for you.',approved:'Confirmed.',declined:'Brett couldn’t take this time. '+(b.decision_note||''),cancelled:'This booking was cancelled.'}[b.status]||b.status;
     var kind=b.status==='approved'?'good':(b.status==='pending'?'warn':'err');
     setMain('<div class="card">'+banner(kind,msg)+'<dl><dt>Property</dt><dd>'+esc(b.address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Units</dt><dd>'+esc(b.units)+' in '+esc(b.buildings)+' building(s) · '+fmtDur(b.duration_min)+'</dd></dl>'
+      +(b.status==='approved'?calButtons(M,b.google_cal_url):'')
       +((b.status==='pending'||b.status==='approved')?'<button class="btn bad" onclick="cancelMine()">Cancel this booking</button>':'')
       +(b.status==='declined'||b.status==='cancelled'?'<p class="muted">Ask Brett for a current booking link to pick another time.</p>':'')+'</div>');
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });

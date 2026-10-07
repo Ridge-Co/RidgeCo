@@ -15,6 +15,9 @@
 
 ## ⚡ STANDING RULE — NOTHING EVER FAILS SILENTLY (Brett, Oct 1, 2026) — see CLAUDE.md. Applies to every repo/worker/sheet/automation/PR; a repo-wide audit + fix program is in progress ("Silent-Failure Audit Plan" doc in the Continuous Improvement project).
 
+# INSPECTION BOOKING: KEY PICKUP + BOOKING CUTOFF — Oct 7, 2026 — Ridge-Co/RidgeCo PR #185, base `main`, head `feat/insp-key-pickup-expiry`, NOT merged (Brett merges; staging test PR #184 already merged to staging)
+Follow-up to PR #183 (live on prod). Customer key-office address + pickup minutes (Josiah: 400 W Franklin St, 30 min) block the lead-in before the day's first inspection; each open block closes to booking 48h before start by default (per-block hours or exact time). Verified on staging E2E. After merge: inspect.html → set key pickup for Josiah, add blocks (any block starting within 48h is already closed unless hours = 0 or an exact close time is set), then "Get link". Details: `context/INSPECTION_BOOKING_BUILD_BRIEF_v1.0.md`, FEATURE_LOG FL-20261007-1700-ikp.
+
 # INSPECTION BOOKING (Calendly-style) — Oct 7, 2026 — Ridge-Co/RidgeCo PR #183, base `main`, head `feat/inspection-booking`, NOT merged (Brett merges; staging test PRs #181/#182 already merged to staging)
 Partner booking page `inspect-book.html?k=…`, calendar-aware slots, drive-time buffers, approval flow, admin Approvals/Open-blocks tabs in `inspect.html`. Tested end-to-end on staging. Real Calendar/Maps/SMS need Brett's one-time setup (Calendar API, share calendar with the service account, Routes API, `admin_phone`) — then run inspect.html → Open blocks → "Check + test write". Full brief: `context/INSPECTION_BOOKING_BUILD_BRIEF_v1.0.md`. Silent-failure check: calendar read failure aborts availability; notify outcomes logged per booking.
 

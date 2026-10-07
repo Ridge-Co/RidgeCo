@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-07.2-insp-booking';
+const BUILD_VERSION = '2026-10-07.4-insp-calendar-mine';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -137,7 +137,7 @@ const _hubWorkerCore = {
       '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit',
       // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
       // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
-      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide'];
+      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -518,6 +518,8 @@ const _hubWorkerCore = {
         if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
         if (path === '/insp-book/info')         return await inspBookInfo(env, url);
         if (path === '/insp-book/status')       return await inspBookStatus(env, url);
+        if (path === '/insp-book/mine')         return await inspBookMine(env, url);
+        if (path === '/insp-book/ics')          return await inspBookIcs(env, url);
         if (path === '/insp-book/approval')     return await inspApprovalInfo(env, url);
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
@@ -908,6 +910,7 @@ const _hubWorkerCore = {
         if (path === '/insp/booking/decide')       return await inspBookingAdminDecide(env, body);
         if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
+        if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
         if (path === '/insp-book/request')         return await inspBookRequest(env, body);
         if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
@@ -18701,7 +18704,7 @@ async function hubTestWriteAllowed(env, path, body) {
   // Inspection booking (Oct 7 2026): the token may only create/touch inspection rows that hang off a
   // TEST- customer (Insp_Customers.Name starts with TEST-). Open blocks and bookings carry Customer_ID.
   if (path === '/insp/customer/add') return String((body && body.Name) || '').startsWith('TEST-');
-  if (path === '/insp/customer/book-link') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
+  if (path === '/insp/customer/book-link' || path === '/insp/customer/key-pickup') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
@@ -24781,14 +24784,14 @@ async function trashInvoice(env, body) {
 // no outreach/SMS/booking-link yet, that's Phase 2. Tabs self-provision on first
 // write, exact same pattern as Trash Service (ensureTrashTabs) just above.
 // ─────────────────────────────────────────────────────────────────────────────
-const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token'];
+const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min'];
 const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
 const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
-const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date'];
-const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active'];
+const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By'];
+const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
   Insp_Properties: INSP_PROPERTY_HEADERS,
@@ -25565,6 +25568,7 @@ const INSP_DEFAULT_BUFFER_MIN = 30; // buffer around a calendar event we cannot 
 const INSP_PARK_MIN = 5;           // parking + walk to the door, added to every drive leg
 const INSP_DRIVE_FACTOR = 1.25;    // Routes returns free-flow time; pad it for real traffic
 const INSP_MAX_UNITS = 60;
+const INSP_DEFAULT_BOOK_BY_HOURS = 48; // a block stops accepting bookings this long before it starts (Config INSP_DEFAULT_BOOK_BY_HOURS, or per block)
 const INSP_ACTIVE_BOOKING = ['pending', 'approved'];
 
 function inspErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
@@ -25643,22 +25647,47 @@ function inspEstimateDriveMin(lat1, lng1, lat2, lng2) {
 }
 function inspPadDriveMin(seconds) { return Math.ceil(seconds / 60 * INSP_DRIVE_FACTOR) + INSP_PARK_MIN; }
 
+// When does a block stop accepting bookings? Book_By (an exact Eastern date/time) wins; otherwise
+// Book_By_Hours before the block starts (blank = the default, normally 48h). Anything unreadable
+// returns NaN, which the caller treats as CLOSED (fail closed, and the admin list flags it).
+function inspBlockExpiryMs(b, defaultHours) {
+  const bs = inspEtWallToMs(b.Date, b.Start_Time);
+  if (!Number.isFinite(bs)) return NaN;
+  const abs = String(b.Book_By == null ? '' : b.Book_By).trim();
+  if (abs) {
+    const m = abs.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}:\d{2})/);
+    return m ? inspEtWallToMs(m[1], m[2]) : NaN;
+  }
+  const hrs = String(b.Book_By_Hours == null ? '' : b.Book_By_Hours).trim();
+  const h = hrs === '' ? (defaultHours == null ? INSP_DEFAULT_BOOK_BY_HOURS : +defaultHours) : +hrs;
+  if (!Number.isFinite(h) || h < 0) return NaN;
+  return bs - h * 3600000;
+}
 // Which start times fit? blocks: Insp_Open_Blocks rows. busy: [{startMs,endMs,key}]. driveMap:
 // {key:{from,to}} minutes (from = that stop -> candidate, to = candidate -> that stop); a stop
 // with no entry gets the flat default buffer on both sides.
+// o.key (optional) = { min, driveMap }: the first inspection of each day needs `min` minutes just
+// before it (picking up keys at the office), inside the block, clear of anything on the calendar
+// (driveMap here = drive minutes between each calendar stop and the key office). o.keyFirstByDate
+// = { 'YYYY-MM-DD': startMs } of the earliest ACTIVE booking that day; a slot at/after it needs no pickup.
+// Blocks whose booking cutoff has passed offer nothing (o.bookByHours = default cutoff).
 function inspComputeSlots(o) {
   const dur = o.durationMin * 60000, step = (o.stepMin || INSP_STEP_MIN) * 60000;
   const earliest = o.nowMs + (o.minNoticeMin == null ? INSP_MIN_NOTICE_MIN : o.minNoticeMin) * 60000;
   const latest = o.nowMs + (o.horizonDays || INSP_HORIZON_DAYS) * 86400000;
   const dflt = o.defaultBufferMin == null ? INSP_DEFAULT_BUFFER_MIN : o.defaultBufferMin;
   const busy = o.busy || [], dm = o.driveMap || {};
-  const seen = new Set(), out = [];
+  const key = o.key && o.key.min > 0 ? o.key : null, kdm = (key && key.driveMap) || {}, firstBy = o.keyFirstByDate || {};
+  const seen = new Map(), out = [];
   for (const b of (o.blocks || [])) {
     if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
     const bs = inspEtWallToMs(b.Date, b.Start_Time), be = inspEtWallToMs(b.Date, b.End_Time);
     if (!Number.isFinite(bs) || !Number.isFinite(be) || be <= bs) continue;
+    const exp = inspBlockExpiryMs(b, o.bookByHours);
+    if (!Number.isFinite(exp) || o.nowMs >= exp) continue;
     for (let s = bs; s + dur <= be; s += step) {
-      if (s < earliest || s > latest || seen.has(s)) continue;
+      if (s < earliest || s > latest) continue;
+      if (seen.has(s)) { const prev = seen.get(s); if (exp > prev.expiresMs) prev.expiresMs = exp; continue; }
       const e = s + dur;
       if (inspBlackoutsCover(o.blackouts, s, e)) continue;
       let ok = true;
@@ -25668,7 +25697,24 @@ function inspComputeSlots(o) {
         if (s < x.endMs + from * 60000 && e + to * 60000 > x.startMs) { ok = false; break; }
       }
       if (!ok) continue;
-      seen.add(s); out.push({ startMs: s, endMs: e });
+      let keyStartMs = null;
+      if (key) {
+        const first = firstBy[inspEtDate(s)];
+        if (!(first != null && first <= s)) {
+          const ks = s - key.min * 60000;
+          if (ks < bs) continue;                         // the pickup has to fit inside the block too
+          if (inspBlackoutsCover(o.blackouts, ks, s)) continue;
+          let kok = true;
+          for (const x of busy) {
+            const from = kdm[x.key] && kdm[x.key].from != null ? kdm[x.key].from : dflt;
+            if (ks < x.endMs + from * 60000 && s > x.startMs) { kok = false; break; }
+          }
+          if (!kok) continue;
+          keyStartMs = ks;
+        }
+      }
+      const slot = { startMs: s, endMs: e, expiresMs: exp, keyStartMs };
+      seen.set(s, slot); out.push(slot);
     }
   }
   return out.sort((a, b) => a.startMs - b.startMs);
@@ -25694,7 +25740,7 @@ function inspEventsToBusy(items) {
   for (const ev of (items || [])) {
     if (!ev || ev.status === 'cancelled' || ev.transparency === 'transparent') continue;
     if ((ev.attendees || []).some(a => a.self && a.responseStatus === 'declined')) continue;
-    if (ev.extendedProperties && ev.extendedProperties.private && ev.extendedProperties.private.ridgecoInspBooking) continue;
+    if (ev.extendedProperties && ev.extendedProperties.private && (ev.extendedProperties.private.ridgecoInspBooking || ev.extendedProperties.private.ridgecoInspKey)) continue;
     let s, e;
     if (ev.start && ev.start.dateTime) { s = Date.parse(ev.start.dateTime); e = Date.parse((ev.end && ev.end.dateTime) || ev.start.dateTime); }
     else if (ev.start && ev.start.date) { s = inspEtWallToMs(ev.start.date, '00:00'); e = inspEtWallToMs((ev.end && ev.end.date) || ev.start.date, '00:00'); if (!(e > s)) e = s + 86400000; }
@@ -25761,6 +25807,7 @@ function inspBookingEventBody(b, pending, approveUrl) {
     `Booked by: ${b.Contact_Name || '?'} ${b.Contact_Phone || ''} ${b.Contact_Email || ''}`.trim(),
     b.Notes ? `Notes: ${b.Notes}` : '',
     (b.Drive_Before_Min || b.Drive_After_Min) ? `Drive: ${b.Drive_Before_Min || '-'} min from previous stop / ${b.Drive_After_Min || '-'} min to next (${b.Drive_Source})` : '',
+    b.Key_Pickup ? `KEY PICKUP first: ${b.Key_Pickup}` : '',
     pending && approveUrl ? `APPROVE / DECLINE: ${approveUrl}` : '',
     `Booking #${b.ID} (Ridge Co inspection booking)`,
   ].filter(Boolean);
@@ -25867,7 +25914,7 @@ async function inspCustomerByToken(env, k) {
 }
 function inspPublicBooking(b) {
   return { id: b.ID, status: b.Status, address: b.Formatted_Address || b.Address, units: +b.Units, buildings: +b.Buildings, duration_min: +b.Duration_Min,
-    start_iso: b.Start_ISO, end_iso: b.End_ISO, when: inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), contact_name: b.Contact_Name, decision_note: b.Decision_Note || '' };
+    start_iso: b.Start_ISO, end_iso: b.End_ISO, when: inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), contact_name: b.Contact_Name, decision_note: b.Decision_Note || '', google_cal_url: b.Status === 'approved' ? inspGoogleCalUrl(b) : '' };
 }
 function inspCleanInput(body) {
   const address = String((body && body.address) || '').trim().slice(0, 200);
@@ -25879,6 +25926,8 @@ function inspCleanInput(body) {
   return { address, units, buildings };
 }
 
+function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
+function inspDefaultBookByHours(cfg) { const h = parseFloat(cfg && cfg.INSP_DEFAULT_BOOK_BY_HOURS); return Number.isFinite(h) && h >= 0 ? h : INSP_DEFAULT_BOOK_BY_HOURS; }
 // Everything a slot answer depends on, read fresh. Calendar/booking read failures THROW.
 async function inspAvailability(env, customer, input) {
   const warnings = [];
@@ -25917,10 +25966,28 @@ async function inspAvailability(env, customer, input) {
   if (unplaced) warnings.push(`${unplaced} calendar item(s) have no usable location; a flat ${INSP_DEFAULT_BUFFER_MIN}-minute buffer was used around them.`);
   const drive = await inspDriveMap(env, geo, anchors.slice(0, 40));
   warnings.push(...drive.warnings);
-  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map });
-  return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length };
+  // Key pickup before the first inspection of the day (customer-level setting). A bad office address is a
+  // CONFIG error: fail loudly rather than quietly offering slots with no time to fetch the keys.
+  const keyMin = inspKeyMin(customer);
+  let key = null, keyFirstByDate = {};
+  if (keyMin > 0) {
+    let kgeo = null;
+    try { kgeo = await inspGeocode(env, customer.Key_Address); } catch (e) { await inspAlert(env, 'key_address', 'Key pickup address lookup failed: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+    if (!kgeo) { await inspAlert(env, 'key_address', 'Key pickup address not found: ' + customer.Key_Address); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+    const kdrive = await inspDriveMap(env, kgeo, anchors.slice(0, 40));
+    warnings.push(...kdrive.warnings);
+    key = { min: keyMin, driveMap: kdrive.map, geo: kgeo };
+    for (const b of bookings) {
+      if (String(b.Customer_ID) !== String(customer.ID) || !INSP_ACTIVE_BOOKING.includes(b.Status) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
+      const st = Date.parse(b.Start_ISO); if (!Number.isFinite(st)) continue;
+      const d = inspEtDate(st); if (keyFirstByDate[d] == null || st < keyFirstByDate[d]) keyFirstByDate[d] = st;
+    }
+  }
+  const bookByHours = inspDefaultBookByHours(cfg);
+  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map, key, keyFirstByDate, bookByHours });
+  return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length, key, bookByHours };
 }
-function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs) }; }
+function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs), closes_iso: Number.isFinite(s.expiresMs) ? new Date(s.expiresMs).toISOString() : '', closes_label: Number.isFinite(s.expiresMs) ? inspFmtEt(s.expiresMs) : '' }; }
 function inspHandleErr(e) {
   if (e && e.code) return json({ ok: false, error: e.code, message: e.message }, e.status || 500);
   return json({ ok: false, error: 'internal', message: 'Something went wrong. Brett has been notified.' }, 500);
@@ -25932,8 +25999,14 @@ async function inspBookInfo(env, url) {
   if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid. Please ask Brett for a current one.' }, 404);
   let blocks = []; try { blocks = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ ok: false, error: 'sheet_unavailable', message: 'Scheduling is temporarily unavailable.' }, 503); }
   const today = inspEtDate(Date.now());
-  const open = blocks.filter(b => String(b.Active || '').toUpperCase() !== 'FALSE' && b.Date >= today && (!b.Customer_ID || String(b.Customer_ID) === String(c.ID)));
-  return json({ ok: true, customer: c.Name, open_block_count: open.length, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
+  let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for book info:', e && e.message); }
+  const now = Date.now();
+  const mine = blocks.filter(b => String(b.Active || '').toUpperCase() !== 'FALSE' && b.Date >= today && (!b.Customer_ID || String(b.Customer_ID) === String(c.ID)));
+  const open_days = mine.map(b => ({ b, exp: inspBlockExpiryMs(b, dh) })).filter(x => Number.isFinite(x.exp) && now < x.exp)
+    .sort((x, y) => (x.b.Date + x.b.Start_Time).localeCompare(y.b.Date + y.b.Start_Time))
+    .map(x => ({ date: x.b.Date, from: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.Start_Time)), to: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.End_Time)), closes_iso: new Date(x.exp).toISOString(), closes_label: inspFmtEt(x.exp) }));
+  const open = open_days;
+  return json({ ok: true, customer: c.Name, open_block_count: open.length, open_days, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
 }
 async function inspBookSlots(env, body) {
   try {
@@ -25969,6 +26042,7 @@ async function inspBookRequest(env, body) {
     }
     const adj = inspAdjacentDrive(a.busy, a.driveMap, slot.startMs, slot.endMs);
     const nowIso = new Date().toISOString();
+    const keyNote = slot.keyStartMs ? `${inspFmtEtTime(slot.keyStartMs)}–${inspFmtEtTime(slot.startMs)} at ${c.Key_Address}` : '';
     const manage = inspRandToken(18);
     const rec = {
       Customer_ID: c.ID, Manage_Token: manage, Status: 'pending', Address: input.address, Formatted_Address: a.geo.formatted, Lat: a.geo.lat, Lng: a.geo.lng,
@@ -25976,7 +26050,7 @@ async function inspBookRequest(env, body) {
       Start_ISO: new Date(slot.startMs).toISOString(), End_ISO: new Date(slot.endMs).toISOString(),
       Drive_Before_Min: adj.before ? adj.before.min : '', Drive_After_Min: adj.after ? adj.after.min : '', Drive_Source: a.driveSource,
       Contact_Name: contactName, Contact_Phone: contactPhone, Contact_Email: contactEmail, Notes: String(body.notes || '').trim().slice(0, 500),
-      Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE',
+      Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote,
     };
     // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
     let ev;
@@ -25995,9 +26069,13 @@ async function inspBookRequest(env, body) {
     const notify = [];
     try { if (!inspCalStaged(env, a.cfg)) await inspCalFetch(env, a.cfg, 'PATCH', '/events/' + encodeURIComponent(ev.id), inspBookingEventBody(rec, true, approveUrl)); }
     catch (e) { notify.push('calendar_event_update_failed: ' + e.message); await inspAlert(env, 'calendar_patch', 'Booking #' + id + ' saved but its calendar entry could not be updated: ' + e.message); }
+    // 3b) Keep the day's single "Key pickup" block on the calendar in step with the earliest booking.
+    notify.push(...await inspReconcileKeyPickup(env, a.cfg, c, rec.Date));
     // 4) Tell Brett.
-    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}. Approve/decline: ${approveUrl}`;
+    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
+    // 4b) Tell the partner their request landed, with the link that lets them check status or cancel later.
+    notify.push(...await inspNotifyPartner(env, rec, 'requested'));
     await updateRow(env, 'Insp_Bookings', id, { Notify_Log: notify.join(' | ').slice(0, 900) });
     return json({ ok: true, booking_id: id, manage_token: manage, status: 'pending', address: a.geo.formatted, when: inspFmtEt(slot.startMs) + '–' + inspFmtEtTime(slot.endMs), duration_min: a.durationMin,
       manage_url: inspBookUrl('m=' + encodeURIComponent(manage)), message: 'Requested! Brett has been notified and the time is held on his calendar. You will get a confirmation when he approves.' });
@@ -26009,25 +26087,149 @@ async function inspBookRequest(env, body) {
   }
 }
 
+// Keeps exactly ONE "Key pickup" event on Brett's calendar per customer per day: the `Key_Pickup_Min` minutes
+// right before that day's earliest active booking. Called after a booking is created, declined or cancelled.
+// Never throws; every problem is returned as a log line AND alerted (a missing pickup block is a real problem).
+async function inspReconcileKeyPickup(env, cfg, customer, dateStr, override) {
+  const log = [];
+  try {
+    const keyMin = inspKeyMin(customer);
+    if (!(keyMin > 0)) return log;
+    if (inspCalStaged(env, cfg)) { log.push('key_pickup: staged'); return log; }
+    const rows = await fetchTab(env, 'Insp_Bookings');
+    let first = null;
+    for (const b of rows) {
+      if (String(b.Customer_ID) !== String(customer.ID) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
+      const st = override && String(override.id) === String(b.ID) ? override.status : b.Status;
+      if (!INSP_ACTIVE_BOOKING.includes(st)) continue;
+      const t = Date.parse(b.Start_ISO); if (!Number.isFinite(t) || inspEtDate(t) !== dateStr) continue;
+      if (first == null || t < first) first = t;
+    }
+    const tag = customer.ID + '_' + dateStr, day0 = inspEtWallToMs(dateStr, '00:00');
+    const q = `/events?singleEvents=true&maxResults=50&privateExtendedProperty=${encodeURIComponent('ridgecoInspKey=' + tag)}&timeMin=${encodeURIComponent(new Date(day0 - 3600000).toISOString())}&timeMax=${encodeURIComponent(new Date(day0 + 27 * 3600000).toISOString())}&fields=items(id,start,end)`;
+    const existing = (await inspCalFetch(env, cfg, 'GET', q)).items || [];
+    const ps = first == null ? null : first - keyMin * 60000;
+    let kept = false;
+    for (const ev of existing) {
+      const es = Date.parse(ev.start && ev.start.dateTime), ee = Date.parse(ev.end && ev.end.dateTime);
+      if (!kept && ps != null && es === ps && ee === first) { kept = true; continue; }
+      try { await inspCalFetch(env, cfg, 'DELETE', '/events/' + encodeURIComponent(ev.id)); }
+      catch (e) { if (e.httpStatus !== 404 && e.httpStatus !== 410) throw e; }
+    }
+    if (ps != null && !kept) {
+      await inspCalFetch(env, cfg, 'POST', '/events', {
+        summary: 'Key pickup — ' + customer.Key_Address, location: customer.Key_Address,
+        description: `Pick up keys before the first inspection of the day (${customer.Name}). Ridge Co inspection booking.`,
+        start: { dateTime: new Date(ps).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(first).toISOString(), timeZone: INSP_TZ },
+        status: 'confirmed', transparency: 'opaque', extendedProperties: { private: { ridgecoInspKey: tag } },
+      });
+      log.push('key_pickup: ' + inspFmtEtTime(ps) + '–' + inspFmtEtTime(first));
+      // The pickup moved (e.g. an earlier booking arrived or the first one was cancelled): make sure it is not on top of something.
+      const clash = inspEventsToBusy((await inspCalListEvents(env, cfg, ps, first)).items).filter(x => x.startMs < first && x.endMs > ps);
+      if (clash.length) { const m = `Key pickup ${inspFmtEt(ps)}–${inspFmtEtTime(first)} overlaps "${clash[0].title}" on your calendar.`; log.push('key_pickup_CONFLICT: ' + clash[0].title); await inspAlert(env, 'key_pickup_conflict', m); }
+    } else if (ps == null && existing.length) log.push('key_pickup: removed');
+  } catch (e) {
+    log.push('key_pickup_FAILED: ' + e.message);
+    await inspAlert(env, 'key_pickup', `Could not update the key-pickup block on your calendar for ${dateStr}: ${e.message}`);
+  }
+  return log;
+}
+
 async function inspNotifyBrett(env, cfg, subject, text, link, rec) {
   const log = [];
   try { if (!cfg.admin_phone) log.push('sms: no admin_phone configured'); else { const r = await sendSMS(env, cfg.admin_phone, text.slice(0, 320)); log.push(r && r.skipped ? 'sms: skipped (' + r.reason + ')' : (r && r.error ? 'sms: FAILED ' + r.error : 'sms: ok')); } } catch (e) { log.push('sms: FAILED ' + e.message); }
   try {
-    const html = `<p><b>${String(rec.Contact_Name || '').replace(/</g, '&lt;')}</b> requested an inspection.</p><p>${String(rec.Formatted_Address || rec.Address).replace(/</g, '&lt;')}<br>${rec.Units} unit(s) / ${rec.Buildings} building(s) · ${rec.Duration_Min} min<br>${inspFmtEt(Date.parse(rec.Start_ISO))}–${inspFmtEtTime(Date.parse(rec.End_ISO))}</p><p>Drive: ${rec.Drive_Before_Min || '–'} min from previous stop, ${rec.Drive_After_Min || '–'} min to next (${rec.Drive_Source}).</p><p><a href="${link}">Approve or decline</a></p>`;
+    const html = `<p><b>${String(rec.Contact_Name || '').replace(/</g, '&lt;')}</b> requested an inspection.</p><p>${String(rec.Formatted_Address || rec.Address).replace(/</g, '&lt;')}<br>${rec.Units} unit(s) / ${rec.Buildings} building(s) · ${rec.Duration_Min} min<br>${inspFmtEt(Date.parse(rec.Start_ISO))}–${inspFmtEtTime(Date.parse(rec.End_ISO))}</p>${rec.Key_Pickup ? '<p><b>Key pickup first:</b> ' + String(rec.Key_Pickup).replace(/</g, '&lt;') + '</p>' : ''}<p>Drive: ${rec.Drive_Before_Min || '–'} min from previous stop, ${rec.Drive_After_Min || '–'} min to next (${rec.Drive_Source}).</p><p><a href="${link}">Approve or decline</a></p>`;
     const r = await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject, html });
     log.push(r && r.staged ? 'email: staged' : 'email: ok');
   } catch (e) { log.push('email: FAILED ' + e.message); }
   if (log.every(l => /FAILED|no admin_phone|skipped/.test(l)) && !log.some(l => /staged/.test(l))) await inspAlert(env, 'notify_brett', 'Brett could not be notified of booking: ' + log.join('; '));
   return log;
 }
-async function inspNotifyPartner(env, b, kind) {
+// ── Calendar entries for the partner (Oct 7 2026) ──────────────────────────────────────────
+// Google won't let this service account invite outside guests onto Brett's calendar event, so the partner gets their
+// OWN entry: an .ics invite attached to the approval email (a CANCEL .ics if an approved booking is later cancelled),
+// plus an "Add to calendar" download/Google link on their manage page. Same UID each time, so updates replace the entry.
+function inspIcsEsc(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/;/g, '\\;').replace(/,/g, '\\,'); }
+function inspIcsStamp(ms) { return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
+function inspIcsFold(line) { const out = []; let s = String(line); while (s.length > 72) { out.push(s.slice(0, 72)); s = ' ' + s.slice(72); } out.push(s); return out.join('\r\n'); }
+function inspSenderAddr(env) { return (env && env.GMAIL_SENDER) || 'ridgecomaintenance@gmail.com'; }
+// method: PUBLISH (download link), REQUEST (email invite, needs o.organizer + o.attendee) or CANCEL (removes it again).
+function inspIcs(b, method, o) {
+  o = o || {};
+  const addr = b.Formatted_Address || b.Address, cancel = method === 'CANCEL';
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ridge Co//Inspection Booking//EN', 'CALSCALE:GREGORIAN', 'METHOD:' + method, 'BEGIN:VEVENT',
+    'UID:insp-' + b.ID + '@ridgeco', 'DTSTAMP:' + inspIcsStamp(Date.now()), 'SEQUENCE:' + (cancel ? 1 : 0),
+    'DTSTART:' + inspIcsStamp(Date.parse(b.Start_ISO)), 'DTEND:' + inspIcsStamp(Date.parse(b.End_ISO)),
+    'SUMMARY:' + inspIcsEsc((cancel ? 'CANCELLED: ' : '') + 'Inspection: ' + addr), 'LOCATION:' + inspIcsEsc(addr),
+    'DESCRIPTION:' + inspIcsEsc('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token))),
+    'STATUS:' + (cancel ? 'CANCELLED' : 'CONFIRMED'), 'TRANSP:OPAQUE'];
+  if (method !== 'PUBLISH') {
+    L.push('ORGANIZER;CN=Ridge Co:mailto:' + o.organizer);
+    if (o.attendee) L.push('ATTENDEE;CN="' + String(b.Contact_Name || 'Guest').replace(/["\r\n]/g, '') + '";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:' + o.attendee);
+  }
+  L.push('END:VEVENT', 'END:VCALENDAR');
+  return L.map(inspIcsFold).join('\r\n') + '\r\n';
+}
+function inspGoogleCalUrl(b) {
+  const addr = b.Formatted_Address || b.Address;
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent('Inspection: ' + addr) + '&dates=' + inspIcsStamp(Date.parse(b.Start_ISO)) + '/' + inspIcsStamp(Date.parse(b.End_ISO))
+    + '&location=' + encodeURIComponent(addr) + '&details=' + encodeURIComponent('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token)));
+}
+function inspB64Wrapped(s) { const t = _utf8B64url(s).replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (_utf8B64url(s).length % 4)) % 4); return t.replace(/(.{76})/g, '$1\r\n'); }
+// PURE — the whole raw RFC 5322 message: html + inline text/calendar (so Gmail/Outlook/Apple show an event card) + the .ics as a file.
+function inspBuildInviteMime(o) {
+  const bd = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2), alt = bd + '_alt';
+  return [`From: Ridge Co <${o.from}>`, `To: ${o.to}`, `Subject: =?UTF-8?B?${inspB64Wrapped(o.subject || '').replace(/\r\n/g, '')}?=`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${bd}"`, '',
+    `--${bd}`, `Content-Type: multipart/alternative; boundary="${alt}"`, '',
+    `--${alt}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.html || ''),
+    `--${alt}`, `Content-Type: text/calendar; charset="UTF-8"; method=${o.method}`, 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.ics),
+    `--${alt}--`, '',
+    `--${bd}`, `Content-Type: application/ics; name="invite.ics"`, 'Content-Disposition: attachment; filename="invite.ics"', 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.ics),
+    `--${bd}--`, ''].join('\r\n');
+}
+async function inspSendPartnerEmail(env, { to, subject, html, ics, method }) {
+  if (!ics) return await gmailSendEmail(env, { to, subject, html });
+  // Staging never sends real mail (same policy as gmailSendEmail); the MIME builder is covered by unit tests.
+  if (env.__STAGING__ ?? isStaging(env)) { const r = await gmailSendEmail(env, { to, subject, html }); return Object.assign({}, r, { ics_attached: false, ics_staged: true }); }
+  const accessToken = await gmailAccessToken(env);
+  const raw = inspBuildInviteMime({ from: inspSenderAddr(env), to, subject, html, ics, method });
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(raw) }) });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id, ics_attached: true };
+}
+function inspPartnerEmailHtml(b, kind, text, manageUrl, hasIcs) {
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const btn = (u, label) => `<p><a href="${esc(u)}" style="display:inline-block;padding:10px 16px;background:#1d4ed8;color:#fff;border-radius:6px;text-decoration:none">${esc(label)}</a></p>`;
+  const bare = text.replace(manageUrl, '').replace(/\s*(Details\/cancel|Check status or cancel|Please pick another time):\s*$/, '');
+  if (kind === 'requested') return `<p>${esc(bare)}</p><p>Brett approves each request. The time is held for you until then, and you will get a confirmation.</p>` + btn(manageUrl, 'View status or cancel');
+  if (kind === 'approved') return `<p>${esc(bare)}</p>` + (hasIcs ? '<p>A calendar invitation is attached. Open it to add this to your calendar.</p>' : '') + btn(inspGoogleCalUrl(b), 'Add to Google Calendar') + btn(manageUrl, 'View details or cancel');
+  if (kind === 'declined') return `<p>${esc(bare)}</p>` + btn(manageUrl, 'View details');
+  return `<p>${esc(bare)}</p>` + (hasIcs ? '<p>A calendar cancellation is attached so it comes off your calendar.</p>' : '');
+}
+async function inspNotifyPartner(env, b, kind, prevStatus) {
   const log = [], when = inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), addr = b.Formatted_Address || b.Address;
   const manageUrl = inspBookUrl('m=' + encodeURIComponent(b.Manage_Token));
-  const text = kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details/cancel: ${manageUrl}`
+  const text = kind === 'requested' ? `Request received: inspection at ${addr}, ${when}. Waiting for Brett's approval. Check status or cancel: ${manageUrl}`
+    : kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details, add to calendar, cancel: ${manageUrl}`
     : kind === 'declined' ? `Brett couldn't take the inspection at ${addr} on ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''} Please pick another time: ${manageUrl}`
     : `Cancelled: inspection at ${addr}, ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''}`;
   if (b.Contact_Phone) { try { const r = await sendSMS(env, b.Contact_Phone, text); log.push(r && r.skipped ? 'partner sms: skipped (' + r.reason + ')' : (r && r.error ? 'partner sms: FAILED ' + r.error : 'partner sms: ok')); } catch (e) { log.push('partner sms: FAILED ' + e.message); } }
-  if (b.Contact_Email) { try { const r = await gmailSendEmail(env, { to: b.Contact_Email, subject: (kind === 'approved' ? 'Inspection confirmed: ' : kind === 'declined' ? 'Inspection time not available: ' : 'Inspection cancelled: ') + addr, html: `<p>${text.replace(/</g, '&lt;')}</p>` }); log.push(r && r.staged ? 'partner email: staged' : 'partner email: ok'); } catch (e) { log.push('partner email: FAILED ' + e.message); } }
+  if (b.Contact_Email) {
+    const subject = (kind === 'requested' ? 'Inspection request received: ' : kind === 'approved' ? 'Inspection confirmed: ' : kind === 'declined' ? 'Inspection time not available: ' : 'Inspection cancelled: ') + addr;
+    // Calendar entry: an invite when approved; a cancellation only if the partner could already have been sent the invite.
+    const icsMethod = kind === 'approved' ? 'REQUEST' : (kind === 'cancelled' && prevStatus === 'approved' ? 'CANCEL' : '');
+    const plain = () => gmailSendEmail(env, { to: b.Contact_Email, subject, html: inspPartnerEmailHtml(b, kind, text, manageUrl, false) });
+    try {
+      let r;
+      if (icsMethod) {
+        try { r = await inspSendPartnerEmail(env, { to: b.Contact_Email, subject, method: icsMethod, html: inspPartnerEmailHtml(b, kind, text, manageUrl, true), ics: inspIcs(b, icsMethod, { organizer: inspSenderAddr(env), attendee: b.Contact_Email }) }); }
+        catch (e) { log.push('partner email invite FAILED (' + e.message + ') — sending without the calendar file'); r = await plain(); }
+      } else r = await plain();
+      log.push(r && r.staged ? 'partner email: staged' : 'partner email: ok' + (r && r.ics_attached ? ' (+calendar file)' : ''));
+    } catch (e) { log.push('partner email: FAILED ' + e.message); }
+  }
   if (log.some(l => /FAILED/.test(l))) await inspAlert(env, 'notify_partner', `Booking #${b.ID} ${kind}, but the partner message failed: ` + log.join('; '));
   return log;
 }
@@ -26040,6 +26242,26 @@ async function inspBookStatus(env, url) {
   const b = await inspBookingByManage(env, url.searchParams.get('t'));
   if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
   return json({ ok: true, booking: inspPublicBooking(b) });
+}
+// "My bookings" for the main booking link: that customer's upcoming pending/approved bookings, each with the token the
+// page needs to cancel it. Anyone holding the customer link can already book and (via this list) cancel for that customer.
+async function inspBookMine(env, url) {
+  const c = await inspCustomerByToken(env, url.searchParams.get('k'));
+  if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid. Please ask Brett for a current one.' }, 404);
+  let rows = [];
+  try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ ok: false, error: 'sheet_unavailable', message: 'Your bookings are temporarily unavailable. Please try again shortly.' }, 503); }
+  const now = Date.now();
+  const bookings = rows.filter(r => String(r.Customer_ID) === String(c.ID) && String(r.Active || '').toUpperCase() !== 'FALSE' && INSP_ACTIVE_BOOKING.includes(r.Status) && Date.parse(r.End_ISO) > now)
+    .sort((a, b) => String(a.Start_ISO).localeCompare(String(b.Start_ISO)))
+    .map(r => Object.assign(inspPublicBooking(r), { manage_token: r.Manage_Token, manage_url: inspBookUrl('m=' + encodeURIComponent(r.Manage_Token)) }));
+  return json({ ok: true, bookings });
+}
+// Calendar file for ONE approved booking (token = the booking's Manage_Token). Opens "Add to calendar" on phones and desktops.
+async function inspBookIcs(env, url) {
+  const b = await inspBookingByManage(env, url.searchParams.get('t'));
+  if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+  if (b.Status !== 'approved') return json({ ok: false, error: 'not_approved', message: 'Add to calendar is available once Brett approves this booking.' }, 409);
+  return new Response(inspIcs(b, 'PUBLISH'), { status: 200, headers: { ...CORS, 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `attachment; filename="inspection-${b.ID}.ics"`, 'Cache-Control': 'no-store' } });
 }
 async function inspBookCancel(env, body) {
   try {
@@ -26084,7 +26306,7 @@ async function inspBookingDecide(env, id, decision, note, via) {
 // Status transition + calendar + notifications. Calendar failure leaves the status UNCHANGED and reports it.
 async function inspFinishBooking(env, b, newStatus, note, via) {
   const cfg = await fetchConfig(env), staged = inspCalStaged(env, cfg);
-  const evId = b.Calendar_Event_ID;
+  const evId = b.Calendar_Event_ID, prevStatus = b.Status;
   try {
     if (newStatus === 'approved') {
       if (!staged && evId) await inspCalFetch(env, cfg, 'PATCH', '/events/' + encodeURIComponent(evId), inspBookingEventBody(b, false, ''));
@@ -26108,7 +26330,11 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
   }
   Object.assign(b, upd);
   const kind = newStatus === 'approved' ? 'approved' : (newStatus === 'declined' ? 'declined' : 'cancelled');
-  const log = await inspNotifyPartner(env, b, kind);
+  const log = await inspNotifyPartner(env, b, kind, prevStatus);
+  if (newStatus !== 'approved') {
+    let cust = null; try { cust = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID)); } catch (e) { log.push('key_pickup_FAILED: ' + e.message); await inspAlert(env, 'key_pickup', 'Could not read customers to update the key-pickup block: ' + e.message); }
+    if (cust) log.push(...await inspReconcileKeyPickup(env, cfg, cust, inspEtDate(Date.parse(b.Start_ISO)), { id: b.ID, status: newStatus }));
+  }
   if (kind === 'cancelled' && via === 'partner') log.push(...await inspNotifyBrett(env, cfg, 'Inspection cancelled: ' + (b.Formatted_Address || b.Address), `Cancelled by partner: ${b.Formatted_Address || b.Address}, ${inspFmtEt(Date.parse(b.Start_ISO))}.`, inspBookUrl(''), b));
   try { await updateRow(env, 'Insp_Bookings', b.ID, { Notify_Log: ((b.Notify_Log ? b.Notify_Log + ' | ' : '') + kind + ': ' + log.join('; ')).slice(0, 900) }); } catch (e) { console.error('insp: Notify_Log write failed for booking', b.ID, e && e.message); log.push('notify_log_write_failed'); }
   return { status: 200, body: { ok: true, status: newStatus, notify: log, booking: inspAdminBooking(b) } };
@@ -26117,7 +26343,12 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
 // ── Admin (secret-gated) endpoints ─────────────────────────────────────────────────────────
 async function inspOpenBlocksList(env) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
-  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)));
+  let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for block list:', e && e.message); }
+  const now = Date.now();
+  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)).map(r => {
+    const exp = inspBlockExpiryMs(r, dh);
+    return Object.assign({}, r, { Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: !Number.isFinite(exp) || now >= exp });
+  }));
 }
 async function inspOpenBlockAdd(env, body) {
   const dates = Array.isArray(body && body.dates) && body.dates.length ? body.dates : (body && body.Date ? [body.Date] : []);
@@ -26128,13 +26359,27 @@ async function inspOpenBlockAdd(env, body) {
   const today = inspEtDate(Date.now());
   for (const d of dates) if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || String(d) < today) return json({ error: 'Bad or past date: ' + d }, 400);
   const hh = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-  await ensureInspTabs(env);
-  let n = 0;
-  for (const d of dates) {
-    const r = await addRow(env, 'Insp_Open_Blocks', { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today });
-    const j = await r.json(); if (!j || !j.success) return json({ error: 'Failed saving ' + d, saved: n }, 500); n++;
+  // Cutoff: blank hours = the default (48h). An exact Book_By ("YYYY-MM-DDTHH:MM", Eastern) wins over hours.
+  const hoursRaw = body.Book_By_Hours == null ? '' : String(body.Book_By_Hours).trim();
+  if (hoursRaw !== '' && !(Number.isFinite(+hoursRaw) && +hoursRaw >= 0 && +hoursRaw <= 24 * 60)) return json({ error: 'Book_By_Hours must be a number of hours (0 or more), or blank for the default' }, 400);
+  const bookBy = String(body.Book_By || '').trim();
+  if (bookBy) {
+    if (!/^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}$/.test(bookBy)) return json({ error: 'Book_By must look like 2026-10-11T09:00 (Eastern)' }, 400);
+    if (dates.length > 1) return json({ error: 'An exact close time only makes sense for one date at a time — use hours-before-start for several dates' }, 400);
+    const bt = inspEtWallToMs(bookBy.slice(0, 10), bookBy.slice(11));
+    if (!Number.isFinite(bt)) return json({ error: 'Book_By is not a valid date/time' }, 400);
   }
-  return json({ success: true, count: n });
+  await ensureInspTabs(env);
+  const cfg = await fetchConfig(env), dh = inspDefaultBookByHours(cfg), now = Date.now();
+  let n = 0; const alreadyClosed = [], closes = {};
+  for (const d of dates) {
+    const row = { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today, Book_By_Hours: hoursRaw, Book_By: bookBy };
+    const r = await addRow(env, 'Insp_Open_Blocks', row);
+    const j = await r.json(); if (!j || !j.success) return json({ error: 'Failed saving ' + d, saved: n }, 500); n++;
+    const exp = inspBlockExpiryMs(row, dh); closes[d] = Number.isFinite(exp) ? inspFmtEt(exp) : '';
+    if (!Number.isFinite(exp) || now >= exp) alreadyClosed.push(d);
+  }
+  return json({ success: true, count: n, closes, already_closed: alreadyClosed, default_hours: dh });
 }
 async function inspBookingsList(env, url) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read bookings: ' + e.message }, 500); }
@@ -26152,6 +26397,28 @@ async function inspBookingAdminCancel(env, body) {
     if (!INSP_ACTIVE_BOOKING.includes(b.Status)) return json({ ok: false, error: 'not_active', message: 'Already ' + b.Status }, 409);
     const r = await inspFinishBooking(env, b, 'cancelled', String((body && body.note) || 'Cancelled by Brett').slice(0, 300), 'admin');
     return json(r.body, r.status);
+  } catch (e) { return inspHandleErr(e); }
+}
+// Key pickup settings for a customer: where the keys are and how long the stop takes. 0 minutes = off.
+// The address is looked up RIGHT NOW so a typo is caught here, not when a partner is trying to book.
+async function inspCustomerKeyPickup(env, body) {
+  try {
+    if (!body || !body.customer_id) return json({ error: 'customer_id required' }, 400);
+    const mins = Math.floor(+(body.minutes == null ? 0 : body.minutes)), addr = String(body.address || '').trim().slice(0, 200);
+    if (!Number.isFinite(mins) || mins < 0 || mins > 180) return json({ error: 'Minutes must be between 0 and 180 (0 turns key pickup off)' }, 400);
+    if (mins > 0 && addr.length < 6) return json({ error: 'Enter the full address of the office where the keys are' }, 400);
+    await ensureInspTabs(env);
+    const c = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(body.customer_id));
+    if (!c) return json({ error: 'Customer not found' }, 404);
+    let found = '';
+    if (mins > 0) {
+      const g = await inspGeocode(env, addr);
+      if (!g) return json({ error: "Couldn't find that address on the map — include city and ZIP" }, 400);
+      found = g.formatted;
+    }
+    const r = await updateRow(env, 'Insp_Customers', c.ID, { Key_Address: mins > 0 ? addr : '', Key_Pickup_Min: mins > 0 ? String(mins) : '' });
+    const j = await r.json(); if (!j || !j.success) return json({ error: 'Could not save the key pickup setting' }, 500);
+    return json({ success: true, minutes: mins, address: mins > 0 ? addr : '', map_found: found });
   } catch (e) { return inspHandleErr(e); }
 }
 async function inspBookLinkEnsure(env, body) {
