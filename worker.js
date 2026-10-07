@@ -26041,7 +26041,7 @@ async function inspBookRequest(env, body) {
       Start_ISO: new Date(slot.startMs).toISOString(), End_ISO: new Date(slot.endMs).toISOString(),
       Drive_Before_Min: adj.before ? adj.before.min : '', Drive_After_Min: adj.after ? adj.after.min : '', Drive_Source: a.driveSource,
       Contact_Name: contactName, Contact_Phone: contactPhone, Contact_Email: contactEmail, Notes: String(body.notes || '').trim().slice(0, 500),
-      Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE',
+      Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote,
     };
     // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
     let ev;
