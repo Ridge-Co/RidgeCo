@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-07.3-insp-key-expiry';
+const BUILD_VERSION = '2026-10-07.4-insp-calendar-mine';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -137,7 +137,7 @@ const _hubWorkerCore = {
       '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit',
       // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
       // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
-      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide'];
+      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -518,6 +518,8 @@ const _hubWorkerCore = {
         if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
         if (path === '/insp-book/info')         return await inspBookInfo(env, url);
         if (path === '/insp-book/status')       return await inspBookStatus(env, url);
+        if (path === '/insp-book/mine')         return await inspBookMine(env, url);
+        if (path === '/insp-book/ics')          return await inspBookIcs(env, url);
         if (path === '/insp-book/approval')     return await inspApprovalInfo(env, url);
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
@@ -25912,7 +25914,7 @@ async function inspCustomerByToken(env, k) {
 }
 function inspPublicBooking(b) {
   return { id: b.ID, status: b.Status, address: b.Formatted_Address || b.Address, units: +b.Units, buildings: +b.Buildings, duration_min: +b.Duration_Min,
-    start_iso: b.Start_ISO, end_iso: b.End_ISO, when: inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), contact_name: b.Contact_Name, decision_note: b.Decision_Note || '' };
+    start_iso: b.Start_ISO, end_iso: b.End_ISO, when: inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), contact_name: b.Contact_Name, decision_note: b.Decision_Note || '', google_cal_url: b.Status === 'approved' ? inspGoogleCalUrl(b) : '' };
 }
 function inspCleanInput(body) {
   const address = String((body && body.address) || '').trim().slice(0, 200);
@@ -26072,6 +26074,8 @@ async function inspBookRequest(env, body) {
     // 4) Tell Brett.
     const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
+    // 4b) Tell the partner their request landed, with the link that lets them check status or cancel later.
+    notify.push(...await inspNotifyPartner(env, rec, 'requested'));
     await updateRow(env, 'Insp_Bookings', id, { Notify_Log: notify.join(' | ').slice(0, 900) });
     return json({ ok: true, booking_id: id, manage_token: manage, status: 'pending', address: a.geo.formatted, when: inspFmtEt(slot.startMs) + '–' + inspFmtEtTime(slot.endMs), duration_min: a.durationMin,
       manage_url: inspBookUrl('m=' + encodeURIComponent(manage)), message: 'Requested! Brett has been notified and the time is held on his calendar. You will get a confirmation when he approves.' });
@@ -26142,14 +26146,90 @@ async function inspNotifyBrett(env, cfg, subject, text, link, rec) {
   if (log.every(l => /FAILED|no admin_phone|skipped/.test(l)) && !log.some(l => /staged/.test(l))) await inspAlert(env, 'notify_brett', 'Brett could not be notified of booking: ' + log.join('; '));
   return log;
 }
-async function inspNotifyPartner(env, b, kind) {
+// ── Calendar entries for the partner (Oct 7 2026) ──────────────────────────────────────────
+// Google won't let this service account invite outside guests onto Brett's calendar event, so the partner gets their
+// OWN entry: an .ics invite attached to the approval email (a CANCEL .ics if an approved booking is later cancelled),
+// plus an "Add to calendar" download/Google link on their manage page. Same UID each time, so updates replace the entry.
+function inspIcsEsc(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/;/g, '\\;').replace(/,/g, '\\,'); }
+function inspIcsStamp(ms) { return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
+function inspIcsFold(line) { const out = []; let s = String(line); while (s.length > 72) { out.push(s.slice(0, 72)); s = ' ' + s.slice(72); } out.push(s); return out.join('\r\n'); }
+function inspSenderAddr(env) { return (env && env.GMAIL_SENDER) || 'ridgecomaintenance@gmail.com'; }
+// method: PUBLISH (download link), REQUEST (email invite, needs o.organizer + o.attendee) or CANCEL (removes it again).
+function inspIcs(b, method, o) {
+  o = o || {};
+  const addr = b.Formatted_Address || b.Address, cancel = method === 'CANCEL';
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ridge Co//Inspection Booking//EN', 'CALSCALE:GREGORIAN', 'METHOD:' + method, 'BEGIN:VEVENT',
+    'UID:insp-' + b.ID + '@ridgeco', 'DTSTAMP:' + inspIcsStamp(Date.now()), 'SEQUENCE:' + (cancel ? 1 : 0),
+    'DTSTART:' + inspIcsStamp(Date.parse(b.Start_ISO)), 'DTEND:' + inspIcsStamp(Date.parse(b.End_ISO)),
+    'SUMMARY:' + inspIcsEsc((cancel ? 'CANCELLED: ' : '') + 'Inspection: ' + addr), 'LOCATION:' + inspIcsEsc(addr),
+    'DESCRIPTION:' + inspIcsEsc('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token))),
+    'STATUS:' + (cancel ? 'CANCELLED' : 'CONFIRMED'), 'TRANSP:OPAQUE'];
+  if (method !== 'PUBLISH') {
+    L.push('ORGANIZER;CN=Ridge Co:mailto:' + o.organizer);
+    if (o.attendee) L.push('ATTENDEE;CN="' + String(b.Contact_Name || 'Guest').replace(/["\r\n]/g, '') + '";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:' + o.attendee);
+  }
+  L.push('END:VEVENT', 'END:VCALENDAR');
+  return L.map(inspIcsFold).join('\r\n') + '\r\n';
+}
+function inspGoogleCalUrl(b) {
+  const addr = b.Formatted_Address || b.Address;
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent('Inspection: ' + addr) + '&dates=' + inspIcsStamp(Date.parse(b.Start_ISO)) + '/' + inspIcsStamp(Date.parse(b.End_ISO))
+    + '&location=' + encodeURIComponent(addr) + '&details=' + encodeURIComponent('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token)));
+}
+function inspB64Wrapped(s) { const t = _utf8B64url(s).replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (_utf8B64url(s).length % 4)) % 4); return t.replace(/(.{76})/g, '$1\r\n'); }
+// PURE — the whole raw RFC 5322 message: html + inline text/calendar (so Gmail/Outlook/Apple show an event card) + the .ics as a file.
+function inspBuildInviteMime(o) {
+  const bd = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2), alt = bd + '_alt';
+  return [`From: Ridge Co <${o.from}>`, `To: ${o.to}`, `Subject: =?UTF-8?B?${inspB64Wrapped(o.subject || '').replace(/\r\n/g, '')}?=`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${bd}"`, '',
+    `--${bd}`, `Content-Type: multipart/alternative; boundary="${alt}"`, '',
+    `--${alt}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.html || ''),
+    `--${alt}`, `Content-Type: text/calendar; charset="UTF-8"; method=${o.method}`, 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.ics),
+    `--${alt}--`, '',
+    `--${bd}`, `Content-Type: application/ics; name="invite.ics"`, 'Content-Disposition: attachment; filename="invite.ics"', 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.ics),
+    `--${bd}--`, ''].join('\r\n');
+}
+async function inspSendPartnerEmail(env, { to, subject, html, ics, method }) {
+  if (!ics) return await gmailSendEmail(env, { to, subject, html });
+  // Staging never sends real mail (same policy as gmailSendEmail); the MIME builder is covered by unit tests.
+  if (env.__STAGING__ ?? isStaging(env)) { const r = await gmailSendEmail(env, { to, subject, html }); return Object.assign({}, r, { ics_attached: false, ics_staged: true }); }
+  const accessToken = await gmailAccessToken(env);
+  const raw = inspBuildInviteMime({ from: inspSenderAddr(env), to, subject, html, ics, method });
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(raw) }) });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id, ics_attached: true };
+}
+function inspPartnerEmailHtml(b, kind, text, manageUrl, hasIcs) {
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const btn = (u, label) => `<p><a href="${esc(u)}" style="display:inline-block;padding:10px 16px;background:#1d4ed8;color:#fff;border-radius:6px;text-decoration:none">${esc(label)}</a></p>`;
+  const bare = text.replace(manageUrl, '').replace(/\s*(Details\/cancel|Check status or cancel|Please pick another time):\s*$/, '');
+  if (kind === 'requested') return `<p>${esc(bare)}</p><p>Brett approves each request. The time is held for you until then, and you will get a confirmation.</p>` + btn(manageUrl, 'View status or cancel');
+  if (kind === 'approved') return `<p>${esc(bare)}</p>` + (hasIcs ? '<p>A calendar invitation is attached. Open it to add this to your calendar.</p>' : '') + btn(inspGoogleCalUrl(b), 'Add to Google Calendar') + btn(manageUrl, 'View details or cancel');
+  if (kind === 'declined') return `<p>${esc(bare)}</p>` + btn(manageUrl, 'View details');
+  return `<p>${esc(bare)}</p>` + (hasIcs ? '<p>A calendar cancellation is attached so it comes off your calendar.</p>' : '');
+}
+async function inspNotifyPartner(env, b, kind, prevStatus) {
   const log = [], when = inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), addr = b.Formatted_Address || b.Address;
   const manageUrl = inspBookUrl('m=' + encodeURIComponent(b.Manage_Token));
-  const text = kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details/cancel: ${manageUrl}`
+  const text = kind === 'requested' ? `Request received: inspection at ${addr}, ${when}. Waiting for Brett's approval. Check status or cancel: ${manageUrl}`
+    : kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details, add to calendar, cancel: ${manageUrl}`
     : kind === 'declined' ? `Brett couldn't take the inspection at ${addr} on ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''} Please pick another time: ${manageUrl}`
     : `Cancelled: inspection at ${addr}, ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''}`;
   if (b.Contact_Phone) { try { const r = await sendSMS(env, b.Contact_Phone, text); log.push(r && r.skipped ? 'partner sms: skipped (' + r.reason + ')' : (r && r.error ? 'partner sms: FAILED ' + r.error : 'partner sms: ok')); } catch (e) { log.push('partner sms: FAILED ' + e.message); } }
-  if (b.Contact_Email) { try { const r = await gmailSendEmail(env, { to: b.Contact_Email, subject: (kind === 'approved' ? 'Inspection confirmed: ' : kind === 'declined' ? 'Inspection time not available: ' : 'Inspection cancelled: ') + addr, html: `<p>${text.replace(/</g, '&lt;')}</p>` }); log.push(r && r.staged ? 'partner email: staged' : 'partner email: ok'); } catch (e) { log.push('partner email: FAILED ' + e.message); } }
+  if (b.Contact_Email) {
+    const subject = (kind === 'requested' ? 'Inspection request received: ' : kind === 'approved' ? 'Inspection confirmed: ' : kind === 'declined' ? 'Inspection time not available: ' : 'Inspection cancelled: ') + addr;
+    // Calendar entry: an invite when approved; a cancellation only if the partner could already have been sent the invite.
+    const icsMethod = kind === 'approved' ? 'REQUEST' : (kind === 'cancelled' && prevStatus === 'approved' ? 'CANCEL' : '');
+    const plain = () => gmailSendEmail(env, { to: b.Contact_Email, subject, html: inspPartnerEmailHtml(b, kind, text, manageUrl, false) });
+    try {
+      let r;
+      if (icsMethod) {
+        try { r = await inspSendPartnerEmail(env, { to: b.Contact_Email, subject, method: icsMethod, html: inspPartnerEmailHtml(b, kind, text, manageUrl, true), ics: inspIcs(b, icsMethod, { organizer: inspSenderAddr(env), attendee: b.Contact_Email }) }); }
+        catch (e) { log.push('partner email invite FAILED (' + e.message + ') — sending without the calendar file'); r = await plain(); }
+      } else r = await plain();
+      log.push(r && r.staged ? 'partner email: staged' : 'partner email: ok' + (r && r.ics_attached ? ' (+calendar file)' : ''));
+    } catch (e) { log.push('partner email: FAILED ' + e.message); }
+  }
   if (log.some(l => /FAILED/.test(l))) await inspAlert(env, 'notify_partner', `Booking #${b.ID} ${kind}, but the partner message failed: ` + log.join('; '));
   return log;
 }
@@ -26162,6 +26242,26 @@ async function inspBookStatus(env, url) {
   const b = await inspBookingByManage(env, url.searchParams.get('t'));
   if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
   return json({ ok: true, booking: inspPublicBooking(b) });
+}
+// "My bookings" for the main booking link: that customer's upcoming pending/approved bookings, each with the token the
+// page needs to cancel it. Anyone holding the customer link can already book and (via this list) cancel for that customer.
+async function inspBookMine(env, url) {
+  const c = await inspCustomerByToken(env, url.searchParams.get('k'));
+  if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid. Please ask Brett for a current one.' }, 404);
+  let rows = [];
+  try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ ok: false, error: 'sheet_unavailable', message: 'Your bookings are temporarily unavailable. Please try again shortly.' }, 503); }
+  const now = Date.now();
+  const bookings = rows.filter(r => String(r.Customer_ID) === String(c.ID) && String(r.Active || '').toUpperCase() !== 'FALSE' && INSP_ACTIVE_BOOKING.includes(r.Status) && Date.parse(r.End_ISO) > now)
+    .sort((a, b) => String(a.Start_ISO).localeCompare(String(b.Start_ISO)))
+    .map(r => Object.assign(inspPublicBooking(r), { manage_token: r.Manage_Token, manage_url: inspBookUrl('m=' + encodeURIComponent(r.Manage_Token)) }));
+  return json({ ok: true, bookings });
+}
+// Calendar file for ONE approved booking (token = the booking's Manage_Token). Opens "Add to calendar" on phones and desktops.
+async function inspBookIcs(env, url) {
+  const b = await inspBookingByManage(env, url.searchParams.get('t'));
+  if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+  if (b.Status !== 'approved') return json({ ok: false, error: 'not_approved', message: 'Add to calendar is available once Brett approves this booking.' }, 409);
+  return new Response(inspIcs(b, 'PUBLISH'), { status: 200, headers: { ...CORS, 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `attachment; filename="inspection-${b.ID}.ics"`, 'Cache-Control': 'no-store' } });
 }
 async function inspBookCancel(env, body) {
   try {
@@ -26206,7 +26306,7 @@ async function inspBookingDecide(env, id, decision, note, via) {
 // Status transition + calendar + notifications. Calendar failure leaves the status UNCHANGED and reports it.
 async function inspFinishBooking(env, b, newStatus, note, via) {
   const cfg = await fetchConfig(env), staged = inspCalStaged(env, cfg);
-  const evId = b.Calendar_Event_ID;
+  const evId = b.Calendar_Event_ID, prevStatus = b.Status;
   try {
     if (newStatus === 'approved') {
       if (!staged && evId) await inspCalFetch(env, cfg, 'PATCH', '/events/' + encodeURIComponent(evId), inspBookingEventBody(b, false, ''));
@@ -26230,7 +26330,7 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
   }
   Object.assign(b, upd);
   const kind = newStatus === 'approved' ? 'approved' : (newStatus === 'declined' ? 'declined' : 'cancelled');
-  const log = await inspNotifyPartner(env, b, kind);
+  const log = await inspNotifyPartner(env, b, kind, prevStatus);
   if (newStatus !== 'approved') {
     let cust = null; try { cust = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID)); } catch (e) { log.push('key_pickup_FAILED: ' + e.message); await inspAlert(env, 'key_pickup', 'Could not read customers to update the key-pickup block: ' + e.message); }
     if (cust) log.push(...await inspReconcileKeyPickup(env, cfg, cust, inspEtDate(Date.parse(b.Start_ISO)), { id: b.ID, status: newStatus }));
