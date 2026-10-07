@@ -26074,6 +26074,8 @@ async function inspBookRequest(env, body) {
     // 4) Tell Brett.
     const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
+    // 4b) Tell the partner their request landed, with the link that lets them check status or cancel later.
+    notify.push(...await inspNotifyPartner(env, rec, 'requested'));
     await updateRow(env, 'Insp_Bookings', id, { Notify_Log: notify.join(' | ').slice(0, 900) });
     return json({ ok: true, booking_id: id, manage_token: manage, status: 'pending', address: a.geo.formatted, when: inspFmtEt(slot.startMs) + '–' + inspFmtEtTime(slot.endMs), duration_min: a.durationMin,
       manage_url: inspBookUrl('m=' + encodeURIComponent(manage)), message: 'Requested! Brett has been notified and the time is held on his calendar. You will get a confirmation when he approves.' });
