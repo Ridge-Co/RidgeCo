@@ -204,7 +204,7 @@ function approveInit(){
       +(!done&&conf.length?banner('err','Heads up — this time now overlaps: '+conf.map(function(c){return c.title+' ('+c.when+')';}).join('; ')+'. Decline it, or approve anyway.'):'')
       +(!done&&r.conflicts_error?banner('warn',r.conflicts_error):'')+'<dl><dt>Property</dt><dd>'+esc(b.Formatted_Address||b.Address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Size</dt><dd>'+esc(b.Units)+' unit(s) / '+esc(b.Buildings)+' building(s) · '+esc(b.Duration_Min)+' min</dd>'+drive
       +'<dt>Contact</dt><dd>'+esc(b.Contact_Name)+' '+esc(b.Contact_Phone)+' '+esc(b.Contact_Email)+'</dd>'+(b.Notes?'<dt>Notes</dt><dd>'+esc(b.Notes)+'</dd>':'')+'</dl>'
-      +(done?'':'<div id="a-err"></div><label>Optional note to the partner</label><input id="a-note"><button class="btn ok" onclick="decide(\'approve\',this)">Approve</button><button class="btn bad" onclick="decide(\'decline\',this)">Decline</button>')+'</div>');
+      +(done?'':'<div id="a-err"></div><label>Optional note to the partner</label><input id="a-note"><button class="btn ok" onclick="decide(\'approve\',this,'+(conf.length?'true':'false')+')">'+(conf.length?'Approve anyway':'Approve')+'</button><button class="btn bad" onclick="decide(\'decline\',this)">Decline</button>')+'</div>');
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
 }
 function decide(d,btn){
