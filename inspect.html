@@ -324,6 +324,17 @@
         </div>
       </div>
       <div class="card">
+        <b>2b. Key pickup before the first inspection (optional)</b>
+        <p class="muted" style="margin:6px 0 0">If you collect keys from the partner's office, this reserves that time on your calendar just before the <b>first</b> inspection each day (it moves automatically if an earlier one is booked or the first is cancelled). Inspections after the first need no pickup. The pickup must fit inside your open block, so a 10:00 block with a 30-minute pickup first offers 10:30. Set minutes to 0 to turn it off.</p>
+        <label class="fld">Customer</label>
+        <select id="kp-customer" onchange="kpFill()"></select>
+        <label class="fld">Office address where the keys are</label>
+        <input id="kp-addr" placeholder="400 W Franklin St, Baltimore, MD 21201">
+        <label class="fld">Minutes to reserve for the pickup</label>
+        <input id="kp-min" type="number" min="0" max="180" step="5" placeholder="30">
+        <button class="btn primary" style="width:100%;margin-top:12px" onclick="kpSave(this)">Save key pickup</button>
+      </div>
+      <div class="card">
         <b>3. Check the connections</b>
         <p class="muted" style="margin:6px 0 0"><b>Check</b> only reads your calendar. <b>Check + test write</b> also creates one 1-minute placeholder event 3 days out and deletes it right away, to prove bookings can land on your calendar.</p>
         <div class="two-col" style="margin-top:10px"><div><button class="btn" style="width:100%" onclick="calTest(false,this)">Check</button></div><div><button class="btn primary" style="width:100%" onclick="calTest(true,this)">Check + test write</button></div></div>
