@@ -25737,7 +25737,7 @@ function inspEventsToBusy(items) {
   for (const ev of (items || [])) {
     if (!ev || ev.status === 'cancelled' || ev.transparency === 'transparent') continue;
     if ((ev.attendees || []).some(a => a.self && a.responseStatus === 'declined')) continue;
-    if (ev.extendedProperties && ev.extendedProperties.private && ev.extendedProperties.private.ridgecoInspBooking) continue;
+    if (ev.extendedProperties && ev.extendedProperties.private && (ev.extendedProperties.private.ridgecoInspBooking || ev.extendedProperties.private.ridgecoInspKey)) continue;
     let s, e;
     if (ev.start && ev.start.dateTime) { s = Date.parse(ev.start.dateTime); e = Date.parse((ev.end && ev.end.dateTime) || ev.start.dateTime); }
     else if (ev.start && ev.start.date) { s = inspEtWallToMs(ev.start.date, '00:00'); e = inspEtWallToMs((ev.end && ev.end.date) || ev.start.date, '00:00'); if (!(e > s)) e = s + 86400000; }
