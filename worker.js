@@ -26144,7 +26144,69 @@ async function inspNotifyBrett(env, cfg, subject, text, link, rec) {
   if (log.every(l => /FAILED|no admin_phone|skipped/.test(l)) && !log.some(l => /staged/.test(l))) await inspAlert(env, 'notify_brett', 'Brett could not be notified of booking: ' + log.join('; '));
   return log;
 }
-async function inspNotifyPartner(env, b, kind) {
+// ── Calendar entries for the partner (Oct 7 2026) ──────────────────────────────────────────
+// Google won't let this service account invite outside guests onto Brett's calendar event, so the partner gets their
+// OWN entry: an .ics invite attached to the approval email (a CANCEL .ics if an approved booking is later cancelled),
+// plus an "Add to calendar" download/Google link on their manage page. Same UID each time, so updates replace the entry.
+function inspIcsEsc(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/;/g, '\\;').replace(/,/g, '\\,'); }
+function inspIcsStamp(ms) { return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
+function inspIcsFold(line) { const out = []; let s = String(line); while (s.length > 72) { out.push(s.slice(0, 72)); s = ' ' + s.slice(72); } out.push(s); return out.join('\r\n'); }
+function inspSenderAddr(env) { return (env && env.GMAIL_SENDER) || 'ridgecomaintenance@gmail.com'; }
+// method: PUBLISH (download link), REQUEST (email invite, needs o.organizer + o.attendee) or CANCEL (removes it again).
+function inspIcs(b, method, o) {
+  o = o || {};
+  const addr = b.Formatted_Address || b.Address, cancel = method === 'CANCEL';
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ridge Co//Inspection Booking//EN', 'CALSCALE:GREGORIAN', 'METHOD:' + method, 'BEGIN:VEVENT',
+    'UID:insp-' + b.ID + '@ridgeco', 'DTSTAMP:' + inspIcsStamp(Date.now()), 'SEQUENCE:' + (cancel ? 1 : 0),
+    'DTSTART:' + inspIcsStamp(Date.parse(b.Start_ISO)), 'DTEND:' + inspIcsStamp(Date.parse(b.End_ISO)),
+    'SUMMARY:' + inspIcsEsc((cancel ? 'CANCELLED: ' : '') + 'Inspection: ' + addr), 'LOCATION:' + inspIcsEsc(addr),
+    'DESCRIPTION:' + inspIcsEsc('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token))),
+    'STATUS:' + (cancel ? 'CANCELLED' : 'CONFIRMED'), 'TRANSP:OPAQUE'];
+  if (method !== 'PUBLISH') {
+    L.push('ORGANIZER;CN=Ridge Co:mailto:' + o.organizer);
+    if (o.attendee) L.push('ATTENDEE;CN="' + String(b.Contact_Name || 'Guest').replace(/["\r\n]/g, '') + '";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=FALSE:mailto:' + o.attendee);
+  }
+  L.push('END:VEVENT', 'END:VCALENDAR');
+  return L.map(inspIcsFold).join('\r\n') + '\r\n';
+}
+function inspGoogleCalUrl(b) {
+  const addr = b.Formatted_Address || b.Address;
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent('Inspection: ' + addr) + '&dates=' + inspIcsStamp(Date.parse(b.Start_ISO)) + '/' + inspIcsStamp(Date.parse(b.End_ISO))
+    + '&location=' + encodeURIComponent(addr) + '&details=' + encodeURIComponent('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token)));
+}
+function inspB64Wrapped(s) { const t = _utf8B64url(s).replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (_utf8B64url(s).length % 4)) % 4); return t.replace(/(.{76})/g, '$1\r\n'); }
+// PURE — the whole raw RFC 5322 message: html + inline text/calendar (so Gmail/Outlook/Apple show an event card) + the .ics as a file.
+function inspBuildInviteMime(o) {
+  const bd = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2), alt = bd + '_alt';
+  return [`From: Ridge Co <${o.from}>`, `To: ${o.to}`, `Subject: =?UTF-8?B?${inspB64Wrapped(o.subject || '').replace(/\r\n/g, '')}?=`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${bd}"`, '',
+    `--${bd}`, `Content-Type: multipart/alternative; boundary="${alt}"`, '',
+    `--${alt}`, 'Content-Type: text/html; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.html || ''),
+    `--${alt}`, `Content-Type: text/calendar; charset="UTF-8"; method=${o.method}`, 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.ics),
+    `--${alt}--`, '',
+    `--${bd}`, `Content-Type: application/ics; name="invite.ics"`, 'Content-Disposition: attachment; filename="invite.ics"', 'Content-Transfer-Encoding: base64', '', inspB64Wrapped(o.ics),
+    `--${bd}--`, ''].join('\r\n');
+}
+async function inspSendPartnerEmail(env, { to, subject, html, ics, method }) {
+  if (!ics) return await gmailSendEmail(env, { to, subject, html });
+  // Staging never sends real mail (same policy as gmailSendEmail); the MIME builder is covered by unit tests.
+  if (env.__STAGING__ ?? isStaging(env)) { const r = await gmailSendEmail(env, { to, subject, html }); return Object.assign({}, r, { ics_attached: false, ics_staged: true }); }
+  const accessToken = await gmailAccessToken(env);
+  const raw = inspBuildInviteMime({ from: inspSenderAddr(env), to, subject, html, ics, method });
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(raw) }) });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id, ics_attached: true };
+}
+function inspPartnerEmailHtml(b, kind, text, manageUrl, hasIcs) {
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const btn = (u, label) => `<p><a href="${esc(u)}" style="display:inline-block;padding:10px 16px;background:#1d4ed8;color:#fff;border-radius:6px;text-decoration:none">${esc(label)}</a></p>`;
+  const bare = text.replace(manageUrl, '').replace(/\s*(Details\/cancel|Check status or cancel|Please pick another time):\s*$/, '');
+  if (kind === 'requested') return `<p>${esc(bare)}</p><p>Brett approves each request. The time is held for you until then, and you will get a confirmation.</p>` + btn(manageUrl, 'View status or cancel');
+  if (kind === 'approved') return `<p>${esc(bare)}</p>` + (hasIcs ? '<p>A calendar invitation is attached. Open it to add this to your calendar.</p>' : '') + btn(inspGoogleCalUrl(b), 'Add to Google Calendar') + btn(manageUrl, 'View details or cancel');
+  if (kind === 'declined') return `<p>${esc(bare)}</p>` + btn(manageUrl, 'View details');
+  return `<p>${esc(bare)}</p>` + (hasIcs ? '<p>A calendar cancellation is attached so it comes off your calendar.</p>' : '');
+}
+async function inspNotifyPartner(env, b, kind, prevStatus) {
   const log = [], when = inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), addr = b.Formatted_Address || b.Address;
   const manageUrl = inspBookUrl('m=' + encodeURIComponent(b.Manage_Token));
   const text = kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details/cancel: ${manageUrl}`
