@@ -26397,7 +26397,7 @@ async function inspOpenBlocksList(env) {
   let strSt = null, strErr = ''; try { const st = await inspStrStatus(env, await fetchConfig(env), {}); if (st.enabled) strSt = st; } catch (e) { strErr = e.message; console.error('insp: cleaning guard unavailable for block list:', e && e.message); }
   return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)).map(r => {
     const exp = inspBlockExpiryMs(r, dh);
-    return Object.assign({}, r, { Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: !Number.isFinite(exp) || now >= exp });
+    return Object.assign({}, r, { Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: !Number.isFinite(exp) || now >= exp, Str_Closed: !!(strSt && strSt.closed.includes(r.Date)), Str_Text: strSt && strSt.closed.includes(r.Date) ? (inspStrDayInfo(strSt, r.Date) || {}).text || '' : '', Str_Error: strErr });
   }));
 }
 async function inspOpenBlockAdd(env, body) {
