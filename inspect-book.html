@@ -180,6 +180,7 @@ function manageInit(){
     var b=r.booking, msg={pending:'Waiting for Brett’s approval — the time is held for you.',approved:'Confirmed.',declined:'Brett couldn’t take this time. '+(b.decision_note||''),cancelled:'This booking was cancelled.'}[b.status]||b.status;
     var kind=b.status==='approved'?'good':(b.status==='pending'?'warn':'err');
     setMain('<div class="card">'+banner(kind,msg)+'<dl><dt>Property</dt><dd>'+esc(b.address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Units</dt><dd>'+esc(b.units)+' in '+esc(b.buildings)+' building(s) · '+fmtDur(b.duration_min)+'</dd></dl>'
+      +(b.status==='approved'?calButtons(M,b.google_cal_url):'')
       +((b.status==='pending'||b.status==='approved')?'<button class="btn bad" onclick="cancelMine()">Cancel this booking</button>':'')
       +(b.status==='declined'||b.status==='cancelled'?'<p class="muted">Ask Brett for a current booking link to pick another time.</p>':'')+'</div>');
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
