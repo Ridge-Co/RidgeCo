@@ -65,7 +65,7 @@ function bookInit(){
     $('h-sub').textContent=r.customer+' · Ridge Co';
     var ex=(r.example_durations||[]).map(function(d){return d.units+' unit'+(d.units>1?'s':'')+' ≈ '+fmtDur(d.minutes);}).join(' · ');
     setMain('<div class="card"><b>Where and how big?</b>'
-      +(r.open_block_count? '' : banner('warn','No time slots are open right now. Brett opens blocks of time — check back or ask him.'))
+      +(r.open_block_count? openDays(r.open_days) : banner('warn','No time slots are open right now. Brett opens blocks of time — check back or ask him.'))
       +'<label>Property address</label><input id="f-addr" placeholder="123 N Main St, Baltimore, MD 21201" autocomplete="street-address">'
       +'<div class="row2"><div><label>Total units</label><input id="f-units" type="number" min="1" max="60" inputmode="numeric" placeholder="e.g. 2"></div>'
       +'<div><label>Buildings</label><input id="f-bldg" type="number" min="1" inputmode="numeric" placeholder="1"></div></div>'
@@ -94,6 +94,10 @@ function findTimes(){
     renderSlots(r);
   }).catch(function(e){ btn.disabled=false; btn.textContent='Find available times'; res.innerHTML=netFail(e); });
 }
+function openDays(list){
+  if(!list||!list.length) return '';
+  return '<div class="banner good" style="margin-top:10px"><b>Open days and booking deadlines</b><br>'+list.map(function(d){return esc(dayLabel(d.date))+' · '+esc(d.from)+'–'+esc(d.to)+' · <b>book by '+esc(d.closes_label)+'</b>';}).join('<br>')+'<br><span class="muted">Times for a day disappear after its deadline.</span></div>';
+}
 function dayLabel(iso){var d=new Date(iso+'T12:00:00Z');return d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',timeZone:'UTC'});}
 function renderSlots(r){
   var res=$('results'), h='<div class="card"><b>'+esc(r.address)+'</b><div class="muted">'+r.units+' unit'+(r.units>1?'s':'')+' · '+fmtDur(r.duration_min)+' inspection · times are Eastern</div>';
@@ -105,7 +109,8 @@ function renderSlots(r){
   var byDay={},order=[];
   r.slots.forEach(function(s,i){ if(!byDay[s.date]){byDay[s.date]=[];order.push(s.date);} byDay[s.date].push(i); });
   order.forEach(function(d){
-    h+='<div class="day"><h3>'+esc(dayLabel(d))+'</h3><div class="chips">'+byDay[d].map(function(i){return '<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(r.slots[i].label.split('–')[0])+'</div>';}).join('')+'</div></div>';
+    var cl=r.slots[byDay[d][0]].closes_label;
+    h+='<div class="day"><h3>'+esc(dayLabel(d))+'</h3>'+(cl?'<div class="muted" style="margin:-2px 0 6px">Book by '+esc(cl)+'</div>':'')+'<div class="chips">'+byDay[d].map(function(i){return '<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(r.slots[i].label.split('–')[0])+'</div>';}).join('')+'</div></div>';
   });
   h+='</div><div id="contact"></div>';
   res.innerHTML=h;

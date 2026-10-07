@@ -10,9 +10,9 @@ function grab(name, kind = 'function') {
   for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } }
   return src.slice(i, j + 1);
 }
-const consts = ['INSP_TZ', 'INSP_STEP_MIN', 'INSP_HORIZON_DAYS', 'INSP_MIN_NOTICE_MIN', 'INSP_DEFAULT_BUFFER_MIN', 'INSP_PARK_MIN', 'INSP_DRIVE_FACTOR'].map(n => grab(n, 'const')).join('\n');
-const fns = ['nyOffsetMinutes', 'inspDurationMin', 'inspParseHHMM', 'inspEtWallToMs', 'inspEtDate', 'inspEtMinutes', 'inspEtDow', 'inspBlackoutsCover', 'inspEstimateDriveMin', 'inspPadDriveMin', 'inspComputeSlots', 'inspAdjacentDrive', 'inspEventsToBusy'].map(n => grab(n)).join('\n');
-const E = new Function(consts + '\n' + fns + '\nreturn { inspDurationMin, inspParseHHMM, inspEtWallToMs, inspEtDate, inspEtMinutes, inspEtDow, inspBlackoutsCover, inspEstimateDriveMin, inspPadDriveMin, inspComputeSlots, inspAdjacentDrive, inspEventsToBusy };')();
+const consts = ['INSP_TZ', 'INSP_STEP_MIN', 'INSP_HORIZON_DAYS', 'INSP_MIN_NOTICE_MIN', 'INSP_DEFAULT_BUFFER_MIN', 'INSP_PARK_MIN', 'INSP_DRIVE_FACTOR', 'INSP_DEFAULT_BOOK_BY_HOURS'].map(n => grab(n, 'const')).join('\n');
+const fns = ['nyOffsetMinutes', 'inspDurationMin', 'inspParseHHMM', 'inspEtWallToMs', 'inspEtDate', 'inspEtMinutes', 'inspEtDow', 'inspBlockExpiryMs', 'inspBlackoutsCover', 'inspEstimateDriveMin', 'inspPadDriveMin', 'inspComputeSlots', 'inspAdjacentDrive', 'inspEventsToBusy'].map(n => grab(n)).join('\n');
+const E = new Function(consts + '\n' + fns + '\nreturn { inspBlockExpiryMs, inspDurationMin, inspParseHHMM, inspEtWallToMs, inspEtDate, inspEtMinutes, inspEtDow, inspBlackoutsCover, inspEstimateDriveMin, inspPadDriveMin, inspComputeSlots, inspAdjacentDrive, inspEventsToBusy };')();
 
 let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? 'got ' + JSON.stringify(got) : ''); } };
@@ -109,6 +109,48 @@ t('events->busy keeps only real busy events (dentist + all-day)', bz.length === 
 t('events->busy carries location', bz[0].location === '1 Main St');
 t('all-day event spans the ET day', bz[1].endMs - bz[1].startMs === 86400000);
 
+// ── booking cutoff (expiry) ──
+const EXP = (b, h) => E.inspBlockExpiryMs(b, h);
+t('default cutoff = 48h before block start', EXP({ Date: '2026-10-13', Start_Time: '10:00' }) === at('2026-10-11', '10:00'));
+t('hours field overrides the default', EXP({ Date: '2026-10-13', Start_Time: '10:00', Book_By_Hours: '24' }) === at('2026-10-12', '10:00'));
+t('hours 0 = open until the block starts', EXP({ Date: '2026-10-13', Start_Time: '10:00', Book_By_Hours: '0' }) === at('2026-10-13', '10:00'));
+t('exact Book_By wins over hours', EXP({ Date: '2026-10-13', Start_Time: '10:00', Book_By_Hours: '24', Book_By: '2026-10-09T17:30' }) === at('2026-10-09', '17:30'));
+t('config default hours are honoured', EXP({ Date: '2026-10-13', Start_Time: '10:00' }, 72) === at('2026-10-10', '10:00'));
+t('garbage cutoff fails closed (NaN)', Number.isNaN(EXP({ Date: '2026-10-13', Start_Time: '10:00', Book_By: 'soon' })) && Number.isNaN(EXP({ Date: '2026-10-13', Start_Time: '10:00', Book_By_Hours: '-5' })) && Number.isNaN(EXP({ Date: '2026-10-13', Start_Time: '10:00', Book_By_Hours: 'abc' })));
+const wk = [{ Date: '2026-10-13', Start_Time: '10:00', End_Time: '14:00', Active: 'TRUE' }];
+t('before the cutoff: slots offered, each carries its expiry', (() => { const r = E.inspComputeSlots({ blocks: wk, busy: [], blackouts: [], durationMin: 75, nowMs: at('2026-10-10', '12:00') }); return r.length > 0 && r.every(x => x.expiresMs === at('2026-10-11', '10:00')); })());
+t('after the 48h cutoff: nothing offered', E.inspComputeSlots({ blocks: wk, busy: [], blackouts: [], durationMin: 75, nowMs: at('2026-10-11', '10:01') }).length === 0);
+t('exactly at the cutoff: closed', E.inspComputeSlots({ blocks: wk, busy: [], blackouts: [], durationMin: 75, nowMs: at('2026-10-11', '10:00') }).length === 0);
+t('block with its own later cutoff stays open', E.inspComputeSlots({ blocks: [{ ...wk[0], Book_By_Hours: '0' }], busy: [], blackouts: [], durationMin: 75, nowMs: at('2026-10-12', '12:00') }).length > 0);
+t('unreadable cutoff hides the block', E.inspComputeSlots({ blocks: [{ ...wk[0], Book_By: 'nope' }], busy: [], blackouts: [], durationMin: 75, nowMs: NOW }).length === 0);
+t('overlapping blocks keep the LATER cutoff on a shared slot', (() => { const r = E.inspComputeSlots({ blocks: [wk[0], { ...wk[0], Book_By_Hours: '0' }], busy: [], blackouts: [], durationMin: 75, nowMs: at('2026-10-10', '12:00') }); return r.length > 0 && r.every(x => x.expiresMs === at('2026-10-13', '10:00')); })());
+
+// ── key pickup before the first inspection of the day ──
+const kb = [{ Date: '2026-10-14', Start_Time: '10:00', End_Time: '16:00', Active: 'TRUE', Book_By_Hours: '0' }];
+const kBase = { blocks: kb, busy: [], blackouts: [], durationMin: 75, nowMs: NOW, key: { min: 30, driveMap: {} }, keyFirstByDate: {} };
+let ks = E.inspComputeSlots(kBase);
+t('key: block opens 10:00 -> first inspection is 10:30, pickup 10:00', ks[0].startMs === at('2026-10-14', '10:30') && ks[0].keyStartMs === at('2026-10-14', '10:00'), ks[0] && new Date(ks[0].startMs).toISOString());
+t('key: nothing starts before 10:30', ks.every(x => x.startMs >= at('2026-10-14', '10:30')));
+t('key: with no key config the first slot is the block start', E.inspComputeSlots({ ...kBase, key: null })[0].startMs === at('2026-10-14', '10:00'));
+// first booking at 11:00 (11:00-12:15) already exists -> later slots need no pickup, earlier ones still can't fit
+const first11 = { [ '2026-10-14' ]: at('2026-10-14', '11:00') };
+const b11 = [{ startMs: at('2026-10-14', '11:00'), endMs: at('2026-10-14', '12:15'), key: 'b1' }];
+ks = E.inspComputeSlots({ ...kBase, busy: b11, driveMap: { b1: { from: 10, to: 10 } }, keyFirstByDate: first11 });
+t('key: slot after the first booking needs no pickup', ks.length > 0 && ks.filter(x => x.startMs >= at('2026-10-14', '12:25')).every(x => x.keyStartMs === null));
+t('key: nothing fits before an 11:00 first booking (pickup + 75 min cannot)', ks.every(x => x.startMs >= at('2026-10-14', '12:25')), ks.map(x => new Date(x.startMs).toISOString()).slice(0, 3));
+// first booking at 14:00; a booking that would become the new first needs its own pickup
+const b14 = [{ startMs: at('2026-10-14', '14:00'), endMs: at('2026-10-14', '15:15'), key: 'b2' }];
+ks = E.inspComputeSlots({ ...kBase, busy: b14, driveMap: { b2: { from: 10, to: 10 } }, keyFirstByDate: { '2026-10-14': at('2026-10-14', '14:00') } });
+const early = ks.find(x => x.startMs === at('2026-10-14', '12:15'));
+t('key: slot earlier than the current first booking carries a pickup right before it', early && early.keyStartMs === at('2026-10-14', '11:45'), early);
+t('key: 10:30-11:45 (before a 14:00 first booking) is still bookable, with pickup 10:00', (() => { const x = ks.find(y => y.startMs === at('2026-10-14', '10:30')); return x && x.keyStartMs === at('2026-10-14', '10:00'); })());
+t('key: slot after the 14:00 booking has no pickup', ks.filter(x => x.startMs >= at('2026-10-14', '15:25')).every(x => x.keyStartMs === null));
+// a calendar event 10:00-10:30 blocks the pickup window -> first slot moves later
+ks = E.inspComputeSlots({ ...kBase, busy: [{ startMs: at('2026-10-14', '10:00'), endMs: at('2026-10-14', '10:30'), key: 'e1' }], driveMap: { e1: { from: 5, to: 5 } }, key: { min: 30, driveMap: { e1: { from: 10, to: 10 } } } });
+t('key: your own calendar event before the first slot pushes it out (pickup needs 10m drive after it)', ks[0].startMs >= at('2026-10-14', '11:10'), new Date(ks[0].startMs).toISOString());
+t('key: pickup honours blackouts', E.inspComputeSlots({ ...kBase, blackouts: [{ Type: 'date', Date: '2026-10-14', Start_Time: '10:00', End_Time: '10:40', Active: 'TRUE' }] }).every(x => x.startMs >= at('2026-10-14', '10:45')));
+t('key: another day is independent', (() => { const r = E.inspComputeSlots({ ...kBase, blocks: [...kb, { Date: '2026-10-15', Start_Time: '09:00', End_Time: '12:00', Active: 'TRUE', Book_By_Hours: '0' }], keyFirstByDate: first11 }); const d15 = r.filter(x => E.inspEtDate(x.startMs) === '2026-10-15'); return d15[0].startMs === at('2026-10-15', '09:30') && d15[0].keyStartMs === at('2026-10-15', '09:00'); })());
+
 // ── drive padding / estimate ──
 t('pad: 600s drive = ceil(10*1.25)+5 = 18', E.inspPadDriveMin(600) === 18, E.inspPadDriveMin(600));
 t('estimate has a 10 minute floor', E.inspEstimateDriveMin(39.3, -76.6, 39.3, -76.6) === 10);
@@ -120,7 +162,10 @@ t('public paths registered', has(/'\/insp-book\/info','\/insp-book\/slots','\/in
 t('router has every public route', ['info', 'status', 'approval'].every(p => has(new RegExp("path === '/insp-book/" + p + "'"))) && ['slots', 'request', 'cancel', 'decide'].every(p => has(new RegExp("path === '/insp-book/" + p + "'"))));
 t('INSP_TABS includes the new tabs', has(/Insp_Open_Blocks: INSP_OPEN_BLOCK_HEADERS,\s*\n\s*Insp_Bookings: INSP_BOOKING_HEADERS/));
 t('header consts are defined BEFORE INSP_TABS (no TDZ crash at load)', src.indexOf('const INSP_OPEN_BLOCK_HEADERS') < src.indexOf('const INSP_TABS ='));
-t('customers carry Book_Token', has(/INSP_CUSTOMER_HEADERS = \[[^\]]*'Book_Token'\]/));
+t('customers carry Book_Token + key pickup fields', has(/INSP_CUSTOMER_HEADERS = \[[^\]]*'Book_Token'[^\]]*'Key_Address','Key_Pickup_Min'\]/));
+t('blocks carry the cutoff fields; bookings carry Key_Pickup', has(/INSP_OPEN_BLOCK_HEADERS = \[[^\]]*'Book_By_Hours','Book_By'\]/) && has(/INSP_BOOKING_HEADERS = \[[^\]]*'Key_Pickup'\]/));
+t('key-pickup admin route is registered and test-guarded', has(/path === '\/insp\/customer\/key-pickup'\)\s+return await inspCustomerKeyPickup/) && has(/path === '\/insp\/customer\/key-pickup'\) return await isTestRecord/));
+t('our key-pickup calendar events never count as busy', has(/private\.ridgecoInspBooking \|\| ev\.extendedProperties\.private\.ridgecoInspKey/));
 t('calendar read failure aborts availability (no silent empty list)', has(/calendar_unavailable', 'Scheduling is temporarily unavailable/));
 t('test-token guard covers insp admin writes', has(/path === '\/insp\/open-block\/add'\) return !!\(body && body\.Customer_ID/));
 t('BUILD_VERSION bumped', has(/BUILD_VERSION = '\d{4}-\d{2}-\d{2}\.\d+-[a-z0-9-]+'/));

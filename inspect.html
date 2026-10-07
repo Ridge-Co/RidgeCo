@@ -301,6 +301,11 @@
         </div>
         <label class="fld">Note (optional)</label>
         <input id="ob-note" placeholder="e.g. AMS inspections week of Oct 13">
+        <label class="fld">Stop taking bookings this many hours before the block starts</label>
+        <input id="ob-hours" type="number" min="0" step="1" placeholder="48 (leave blank for the default)">
+        <label class="fld">…or close at an exact time (one date only; overrides the hours)</label>
+        <input id="ob-closeat" type="datetime-local">
+        <p class="muted" style="margin:6px 0 0">Partners see this deadline next to each day. After it, those times disappear — nothing can be booked last-minute.</p>
         <button class="btn primary" style="width:100%;margin-top:12px" onclick="obSave(this)">Open this block</button>
       </div>
       <div class="card">
@@ -317,6 +322,17 @@
           <input id="bl-url" readonly onclick="this.select()">
           <button class="btn go" style="width:100%;margin-top:8px" onclick="blCopy()">Copy link</button>
         </div>
+      </div>
+      <div class="card">
+        <b>2b. Key pickup before the first inspection (optional)</b>
+        <p class="muted" style="margin:6px 0 0">If you collect keys from the partner's office, this reserves that time on your calendar just before the <b>first</b> inspection each day (it moves automatically if an earlier one is booked or the first is cancelled). Inspections after the first need no pickup. The pickup must fit inside your open block, so a 10:00 block with a 30-minute pickup first offers 10:30. Set minutes to 0 to turn it off.</p>
+        <label class="fld">Customer</label>
+        <select id="kp-customer" onchange="kpFill()"></select>
+        <label class="fld">Office address where the keys are</label>
+        <input id="kp-addr" placeholder="400 W Franklin St, Baltimore, MD 21201">
+        <label class="fld">Minutes to reserve for the pickup</label>
+        <input id="kp-min" type="number" min="0" max="180" step="5" placeholder="30">
+        <button class="btn primary" style="width:100%;margin-top:12px" onclick="kpSave(this)">Save key pickup</button>
       </div>
       <div class="card">
         <b>3. Check the connections</b>
@@ -948,11 +964,24 @@ function cancelBooking(id,btn){
   }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
 }
 function fillCustomerSelects(){
-  ['ob-customer','bl-customer'].forEach(function(id){
+  ['ob-customer','bl-customer','kp-customer'].forEach(function(id){
     var el=document.getElementById(id); var keep=el.value;
     el.innerHTML=(id==='ob-customer'?'<option value="">Any customer</option>':'<option value="">— pick a customer —</option>')+customers.map(function(c){ return '<option value="'+esc(c.ID)+'">'+esc(c.Name)+'</option>'; }).join('');
     if(keep) el.value=keep;
   });
+}
+function kpFill(){
+  var id=document.getElementById('kp-customer').value, c=customers.find(function(x){return x.ID===id;})||{};
+  document.getElementById('kp-addr').value=c.Key_Address||''; document.getElementById('kp-min').value=c.Key_Pickup_Min||'';
+}
+function kpSave(btn){
+  var id=document.getElementById('kp-customer').value; if(!id){ toast('Pick a customer'); return; }
+  var mins=document.getElementById('kp-min').value.trim(), addr=document.getElementById('kp-addr').value.trim();
+  btn.disabled=true; btn.textContent='Checking address…';
+  api('POST','/insp/customer/key-pickup',{customer_id:id,minutes:mins===''?0:+mins,address:addr}).then(function(r){
+    btn.disabled=false; btn.textContent='Save key pickup';
+    if(r&&r.success){ toast(r.minutes?('Saved. Map found: '+r.map_found):'Key pickup turned off'); loadCustomers().then(kpFill); } else alert((r&&(r.message||r.error))||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save key pickup'; alert('Error: '+e.message); });
 }
 function obAddDate(){
   var v=document.getElementById('ob-date').value; if(!v){ toast('Pick a date'); return; }
@@ -963,11 +992,14 @@ function renderObChips(){
 }
 function obSave(btn){
   if(!obDates.length){ toast('Add at least one date'); return; }
-  var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Note:document.getElementById('ob-note').value.trim() };
+  var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Note:document.getElementById('ob-note').value.trim(), Book_By_Hours:document.getElementById('ob-hours').value.trim(), Book_By:document.getElementById('ob-closeat').value };
   btn.disabled=true; btn.textContent='Saving…';
   api('POST','/insp/open-block/add',body).then(function(r){
     btn.disabled=false; btn.textContent='Open this block';
-    if(r&&r.success){ toast(r.count+' block(s) opened'); obDates=[]; renderObChips(); loadBlocks(); } else alert((r&&r.error)||'Could not save');
+    if(r&&r.success){
+      toast(r.count+' block(s) opened'); obDates=[]; renderObChips(); loadBlocks();
+      if(r.already_closed&&r.already_closed.length) alert('Heads up: the booking deadline for '+r.already_closed.join(', ')+' has ALREADY passed, so partners cannot book those yet. To open them anyway, set the hours to 0 (or an exact close time later than now).');
+    } else alert((r&&r.error)||'Could not save');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Open this block'; alert('Error: '+e.message); });
 }
 function loadBlocks(){
@@ -977,7 +1009,7 @@ function loadBlocks(){
     var up=list.filter(function(b){return b.Date>=today;});
     document.getElementById('ob-list').innerHTML = up.length ? up.map(function(b){
       var c=customers.find(function(x){return x.ID===b.Customer_ID;});
-      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div></div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
+      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div></div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
     }).join('') : '<p class="muted">No open blocks. Partners will see no times until you add one.</p>';
   }).catch(function(e){ document.getElementById('ob-list').innerHTML='<div class="banner">Could not load open blocks: '+esc(e.message)+'</div>'; });
 }
