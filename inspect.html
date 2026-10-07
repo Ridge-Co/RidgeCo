@@ -996,7 +996,10 @@ function obSave(btn){
   btn.disabled=true; btn.textContent='Saving…';
   api('POST','/insp/open-block/add',body).then(function(r){
     btn.disabled=false; btn.textContent='Open this block';
-    if(r&&r.success){ toast(r.count+' block(s) opened'); obDates=[]; renderObChips(); loadBlocks(); } else alert((r&&r.error)||'Could not save');
+    if(r&&r.success){
+      toast(r.count+' block(s) opened'); obDates=[]; renderObChips(); loadBlocks();
+      if(r.already_closed&&r.already_closed.length) alert('Heads up: the booking deadline for '+r.already_closed.join(', ')+' has ALREADY passed, so partners cannot book those yet. To open them anyway, set the hours to 0 (or an exact close time later than now).');
+    } else alert((r&&r.error)||'Could not save');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Open this block'; alert('Error: '+e.message); });
 }
 function loadBlocks(){
