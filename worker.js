@@ -950,6 +950,8 @@ const _hubWorkerCore = {
     // function, so having both fire is harmless, just occasionally redundant work).
     if (cron === '*/15 * * * *') {
       try { await cronSweep(env); } catch (e) { /* non-fatal — next run tries again */ }
+      // STR cleaning-coverage guard for inspection booking: no-op until configured; alerts Brett on its own failures.
+      try { await inspStrGuardTick(env); } catch (e) { console.error('insp: cleaning guard tick failed:', e && e.message); try { await inspAlert(env, 'str_guard_tick', String(e && e.message)); } catch (e2) { console.error('insp: could not alert about guard tick failure:', e2 && e2.message); } }
       return;
     }
     // Optimizer Reviewer (B-129). Reads the last 7 days of Ops_Telemetry, computes metrics,
