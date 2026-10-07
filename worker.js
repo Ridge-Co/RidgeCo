@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-07.1-insp-booking';
+const BUILD_VERSION = '2026-10-07.2-insp-booking';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -25776,6 +25776,11 @@ function inspBookingEventBody(b, pending, approveUrl) {
 // ── Geocode + drive time ───────────────────────────────────────────────────────────────────
 const __inspGeoCache = new Map();
 async function inspGeocode(env, address) {
+  // Staging-only, loudly labeled test stub: addresses starting with "TEST" skip the Maps call so the
+  // rest of the flow can be exercised when the staging Maps key is unusable. Never active on production.
+  if ((env.__STAGING__ ?? isStaging(env)) && /^\s*TEST/i.test(String(address))) {
+    return { lat: 39.2904, lng: -76.6122, formatted: String(address).trim() + ' [staging test stub]', partial: false };
+  }
   if (!env.GOOGLE_MAPS_KEY) throw inspErr('maps_not_configured', 'GOOGLE_MAPS_KEY is not set on this Worker', 500);
   const key = String(address).trim().toLowerCase();
   if (__inspGeoCache.has(key)) return __inspGeoCache.get(key);
