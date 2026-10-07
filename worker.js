@@ -26297,6 +26297,8 @@ async function inspApprovalInfo(env, url) {
   if (b.Status === 'pending') {
     try { conflicts = await inspFindConflicts(env, await fetchConfig(env), Date.parse(b.Start_ISO), Date.parse(b.End_ISO), { eventId: b.Calendar_Event_ID, bookingId: b.ID }); }
     catch (e) { conflicts_error = 'Could not check your calendar for conflicts: ' + e.message; console.error('insp: approval conflict check failed:', e && e.message); }
+    try { const nc = await inspStrBookingConflict(env, await fetchConfig(env), b, true); if (nc) conflicts.push(nc); }
+    catch (e) { conflicts_error = (conflicts_error ? conflicts_error + ' ' : '') + 'Could not check cleaning coverage: ' + e.message; console.error('insp: approval cleaning check failed:', e && e.message); }
   }
   return json({ ok: true, booking: inspAdminBooking(b), conflicts, conflicts_error });
 }
