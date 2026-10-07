@@ -15,6 +15,9 @@
 
 ## ⚡ STANDING RULE — NOTHING EVER FAILS SILENTLY (Brett, Oct 1, 2026) — see CLAUDE.md. Applies to every repo/worker/sheet/automation/PR; a repo-wide audit + fix program is in progress ("Silent-Failure Audit Plan" doc in the Continuous Improvement project).
 
+# INSPECTION BOOKING: STR CLEANING-COVERAGE GUARD — Oct 7, 2026 — Ridge-Co/RidgeCo, head `feat/insp-str-cleaning-guard`, base `main`, NOT merged (Brett merges; staging test PR #189 already merged to staging)
+A cabin checkout with no non-Brett cleaner (checkout day → next arrival day) closes that whole day to inspection booking, warns Brett when he opens a block and when a booking/approval lands on such a day, and texts/emails him once per change (*/15 cron). Dormant until Brett sets the bookings feed + cleaning calendar in admin card "2c" (the cleaning calendar must be shared with the service account; the Uplisting iCal link is read directly). Details: `context/INSPECTION_BOOKING_BUILD_BRIEF_v1.0.md` ("STR cleaning-coverage guard"), FEATURE_LOG FL-20261007-1930-strg.
+
 # INSPECTION BOOKING: CALENDAR CONFLICT GUARD — Oct 7, 2026 — Ridge-Co/RidgeCo PR #188, base `main`, head `feat/insp-conflict-guard`, NOT merged (Brett merges; staging test PR #187 already merged to staging)
 Re-checks Brett's calendar after a partner's hold is written (conflict → hold removed, partner told "just taken") and again on approve (red banner + "Approve anyway"). #185 (key pickup, cutoff, partner calendar invite, My bookings) is merged and live. Details: `context/INSPECTION_BOOKING_BUILD_BRIEF_v1.0.md`, FEATURE_LOG FL-20261007-1800-icg.
 
