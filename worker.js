@@ -26284,7 +26284,7 @@ async function inspBookingDecide(env, id, decision, note, via) {
 // Status transition + calendar + notifications. Calendar failure leaves the status UNCHANGED and reports it.
 async function inspFinishBooking(env, b, newStatus, note, via) {
   const cfg = await fetchConfig(env), staged = inspCalStaged(env, cfg);
-  const evId = b.Calendar_Event_ID;
+  const evId = b.Calendar_Event_ID, prevStatus = b.Status;
   try {
     if (newStatus === 'approved') {
       if (!staged && evId) await inspCalFetch(env, cfg, 'PATCH', '/events/' + encodeURIComponent(evId), inspBookingEventBody(b, false, ''));
