@@ -25644,22 +25644,47 @@ function inspEstimateDriveMin(lat1, lng1, lat2, lng2) {
 }
 function inspPadDriveMin(seconds) { return Math.ceil(seconds / 60 * INSP_DRIVE_FACTOR) + INSP_PARK_MIN; }
 
+// When does a block stop accepting bookings? Book_By (an exact Eastern date/time) wins; otherwise
+// Book_By_Hours before the block starts (blank = the default, normally 48h). Anything unreadable
+// returns NaN, which the caller treats as CLOSED (fail closed, and the admin list flags it).
+function inspBlockExpiryMs(b, defaultHours) {
+  const bs = inspEtWallToMs(b.Date, b.Start_Time);
+  if (!Number.isFinite(bs)) return NaN;
+  const abs = String(b.Book_By == null ? '' : b.Book_By).trim();
+  if (abs) {
+    const m = abs.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}:\d{2})/);
+    return m ? inspEtWallToMs(m[1], m[2]) : NaN;
+  }
+  const hrs = String(b.Book_By_Hours == null ? '' : b.Book_By_Hours).trim();
+  const h = hrs === '' ? (defaultHours == null ? INSP_DEFAULT_BOOK_BY_HOURS : +defaultHours) : +hrs;
+  if (!Number.isFinite(h) || h < 0) return NaN;
+  return bs - h * 3600000;
+}
 // Which start times fit? blocks: Insp_Open_Blocks rows. busy: [{startMs,endMs,key}]. driveMap:
 // {key:{from,to}} minutes (from = that stop -> candidate, to = candidate -> that stop); a stop
 // with no entry gets the flat default buffer on both sides.
+// o.key (optional) = { min, driveMap }: the first inspection of each day needs `min` minutes just
+// before it (picking up keys at the office), inside the block, clear of anything on the calendar
+// (driveMap here = drive minutes between each calendar stop and the key office). o.keyFirstByDate
+// = { 'YYYY-MM-DD': startMs } of the earliest ACTIVE booking that day; a slot at/after it needs no pickup.
+// Blocks whose booking cutoff has passed offer nothing (o.bookByHours = default cutoff).
 function inspComputeSlots(o) {
   const dur = o.durationMin * 60000, step = (o.stepMin || INSP_STEP_MIN) * 60000;
   const earliest = o.nowMs + (o.minNoticeMin == null ? INSP_MIN_NOTICE_MIN : o.minNoticeMin) * 60000;
   const latest = o.nowMs + (o.horizonDays || INSP_HORIZON_DAYS) * 86400000;
   const dflt = o.defaultBufferMin == null ? INSP_DEFAULT_BUFFER_MIN : o.defaultBufferMin;
   const busy = o.busy || [], dm = o.driveMap || {};
-  const seen = new Set(), out = [];
+  const key = o.key && o.key.min > 0 ? o.key : null, kdm = (key && key.driveMap) || {}, firstBy = o.keyFirstByDate || {};
+  const seen = new Map(), out = [];
   for (const b of (o.blocks || [])) {
     if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
     const bs = inspEtWallToMs(b.Date, b.Start_Time), be = inspEtWallToMs(b.Date, b.End_Time);
     if (!Number.isFinite(bs) || !Number.isFinite(be) || be <= bs) continue;
+    const exp = inspBlockExpiryMs(b, o.bookByHours);
+    if (!Number.isFinite(exp) || o.nowMs >= exp) continue;
     for (let s = bs; s + dur <= be; s += step) {
-      if (s < earliest || s > latest || seen.has(s)) continue;
+      if (s < earliest || s > latest) continue;
+      if (seen.has(s)) { const prev = seen.get(s); if (exp > prev.expiresMs) prev.expiresMs = exp; continue; }
       const e = s + dur;
       if (inspBlackoutsCover(o.blackouts, s, e)) continue;
       let ok = true;
@@ -25669,7 +25694,24 @@ function inspComputeSlots(o) {
         if (s < x.endMs + from * 60000 && e + to * 60000 > x.startMs) { ok = false; break; }
       }
       if (!ok) continue;
-      seen.add(s); out.push({ startMs: s, endMs: e });
+      let keyStartMs = null;
+      if (key) {
+        const first = firstBy[inspEtDate(s)];
+        if (!(first != null && first <= s)) {
+          const ks = s - key.min * 60000;
+          if (ks < bs) continue;                         // the pickup has to fit inside the block too
+          if (inspBlackoutsCover(o.blackouts, ks, s)) continue;
+          let kok = true;
+          for (const x of busy) {
+            const from = kdm[x.key] && kdm[x.key].from != null ? kdm[x.key].from : dflt;
+            if (ks < x.endMs + from * 60000 && s > x.startMs) { kok = false; break; }
+          }
+          if (!kok) continue;
+          keyStartMs = ks;
+        }
+      }
+      const slot = { startMs: s, endMs: e, expiresMs: exp, keyStartMs };
+      seen.set(s, slot); out.push(slot);
     }
   }
   return out.sort((a, b) => a.startMs - b.startMs);
