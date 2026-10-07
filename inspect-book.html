@@ -207,9 +207,9 @@ function approveInit(){
       +(done?'':'<div id="a-err"></div><label>Optional note to the partner</label><input id="a-note"><button class="btn ok" onclick="decide(\'approve\',this,'+(conf.length?'true':'false')+')">'+(conf.length?'Approve anyway':'Approve')+'</button><button class="btn bad" onclick="decide(\'decline\',this)">Decline</button>')+'</div>');
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
 }
-function decide(d,btn){
+function decide(d,btn,ov){
   btn.disabled=true;
-  call('POST','/insp-book/decide',{a:A,decision:d,note:($('a-note')||{}).value||''}).then(function(r){
+  call('POST','/insp-book/decide',{a:A,decision:d,note:($('a-note')||{}).value||'',override:ov===true}).then(function(r){
     if(r.ok){
       var warn=(r.notify||[]).filter(function(x){return /FAILED/.test(x);});
       setMain('<div class="card">'+banner('good',d==='approve'?'Approved. It’s solid on your calendar and the partner was notified.':'Declined. The hold was removed from your calendar and the partner was notified.')+(warn.length?banner('warn','A notification failed: '+warn.join('; ')):'')+'</div>');
