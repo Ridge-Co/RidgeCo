@@ -25705,4 +25705,142 @@ function inspEventsToBusy(items) {
   return out;
 }
 
-//@@INSP_BOOKING_PART2@@
+// ── Google Calendar (service account; calendar shared with the SA, scope=calendar) ─────────
+let __calToken = { key: '', token: '', exp: 0 };
+async function getCalendarAccessToken(env) {
+  const now = Math.floor(Date.now() / 1000), cacheKey = env.GOOGLE_SA_EMAIL || '';
+  if (__calToken.token && __calToken.key === cacheKey && __calToken.exp > now + 60) return __calToken.token;
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64url(JSON.stringify({ iss: env.GOOGLE_SA_EMAIL, scope: 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now }));
+  const sigInput = `${header}.${claim}`, key = await importPrivateKey(env.GOOGLE_SA_KEY);
+  const jwt = `${sigInput}.${await signRS256(sigInput, key)}`;
+  const resp = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}` });
+  const data = await resp.json();
+  if (!data.access_token) throw inspErr('calendar_auth', 'Google Calendar auth failed: ' + JSON.stringify(data).slice(0, 300), 503);
+  __calToken = { key: cacheKey, token: data.access_token, exp: now + 3600 };
+  return data.access_token;
+}
+function inspCalStaged(env, cfg) { return (env.__STAGING__ ?? isStaging(env)) && String(cfg.INSP_CALENDAR_STAGING_MODE || '').toUpperCase() !== 'LIVE'; }
+async function inspCalendarId(env, cfg) { return (cfg && cfg.INSP_CALENDAR_ID) || 'brett@bmoremanagement.com'; }
+// Turns a Calendar API failure into a code + a plain-English fix Brett can act on.
+function inspClassifyCalError(status, text) {
+  const t = String(text || '');
+  if (status === 404) return inspErr('calendar_not_shared', 'The calendar was not found. Share it with the service account (see /insp/calendar-test) or set Config INSP_CALENDAR_ID.', 503);
+  if (status === 403 && /accessNotConfigured|has not been used in project|is disabled/i.test(t)) return inspErr('calendar_api_disabled', 'The Google Calendar API is not enabled in the Google Cloud project yet.', 503);
+  if (status === 403) return inspErr('calendar_no_write_permission', 'The service account can see the calendar but is not allowed to change it. Share it with "Make changes to events".', 503);
+  if (status === 401) return inspErr('calendar_auth', 'Google rejected the calendar credentials (401).', 503);
+  return inspErr('calendar_error', `Google Calendar returned ${status}: ${t.slice(0, 200)}`, 503);
+}
+async function inspCalFetch(env, cfg, method, pathAndQuery, body) {
+  const token = await getCalendarAccessToken(env);
+  const calId = encodeURIComponent(await inspCalendarId(env, cfg));
+  const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${calId}${pathAndQuery}`, {
+    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
+  });
+  if (resp.status === 204) return {};
+  const text = await resp.text();
+  if (!resp.ok) { const err = inspClassifyCalError(resp.status, text); err.httpStatus = resp.status; throw err; }
+  try { return JSON.parse(text); } catch (e) { throw inspErr('calendar_error', 'Google Calendar returned unreadable JSON', 503); }
+}
+async function inspCalListEvents(env, cfg, fromMs, toMs) {
+  if (inspCalStaged(env, cfg)) return { items: [], staged: true };
+  const items = []; let pageToken = '';
+  for (let i = 0; i < 6; i++) {
+    const q = `/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin=${encodeURIComponent(new Date(fromMs).toISOString())}&timeMax=${encodeURIComponent(new Date(toMs).toISOString())}&fields=nextPageToken,items(id,status,summary,location,start,end,transparency,attendees(self,responseStatus),extendedProperties(private))` + (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '');
+    const d = await inspCalFetch(env, cfg, 'GET', q);
+    items.push(...(d.items || []));
+    if (!d.nextPageToken) return { items };
+    pageToken = d.nextPageToken;
+  }
+  throw inspErr('calendar_error', 'Calendar has more than ~1500 events in the booking window — refusing to guess availability.', 503);
+}
+function inspBookingEventBody(b, pending, approveUrl) {
+  const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO);
+  const lines = [
+    `${b.Units} unit(s) in ${b.Buildings} building(s) — ${b.Duration_Min} min`,
+    `Booked by: ${b.Contact_Name || '?'} ${b.Contact_Phone || ''} ${b.Contact_Email || ''}`.trim(),
+    b.Notes ? `Notes: ${b.Notes}` : '',
+    (b.Drive_Before_Min || b.Drive_After_Min) ? `Drive: ${b.Drive_Before_Min || '-'} min from previous stop / ${b.Drive_After_Min || '-'} min to next (${b.Drive_Source})` : '',
+    pending && approveUrl ? `APPROVE / DECLINE: ${approveUrl}` : '',
+    `Booking #${b.ID} (Ridge Co inspection booking)`,
+  ].filter(Boolean);
+  return {
+    summary: `${pending ? 'PENDING · ' : ''}Inspection — ${b.Formatted_Address || b.Address} (${b.Units}u)`,
+    location: b.Formatted_Address || b.Address, description: lines.join('\n'),
+    start: { dateTime: new Date(s).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(e).toISOString(), timeZone: INSP_TZ },
+    status: pending ? 'tentative' : 'confirmed', transparency: 'opaque',
+    extendedProperties: { private: { ridgecoInspBooking: String(b.ID || 'new') } },
+  };
+}
+
+// ── Geocode + drive time ───────────────────────────────────────────────────────────────────
+const __inspGeoCache = new Map();
+async function inspGeocode(env, address) {
+  if (!env.GOOGLE_MAPS_KEY) throw inspErr('maps_not_configured', 'GOOGLE_MAPS_KEY is not set on this Worker', 500);
+  const key = String(address).trim().toLowerCase();
+  if (__inspGeoCache.has(key)) return __inspGeoCache.get(key);
+  const r = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&components=country:US&key=${env.GOOGLE_MAPS_KEY}`);
+  const d = await r.json();
+  if (d.status === 'ZERO_RESULTS') return null;
+  if (d.status !== 'OK') throw inspErr('geocode_failed', `Geocoding failed: ${d.status} ${d.error_message || ''}`.trim(), 502);
+  const g = d.results[0], out = { lat: g.geometry.location.lat, lng: g.geometry.location.lng, formatted: g.formatted_address, partial: !!g.partial_match };
+  if (__inspGeoCache.size > 300) __inspGeoCache.clear();
+  __inspGeoCache.set(key, out);
+  return out;
+}
+async function inspRouteMatrix(env, origins, destinations) {
+  const wp = p => ({ waypoint: { location: { latLng: { latitude: p.lat, longitude: p.lng } } } });
+  const r = await fetch('https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': env.GOOGLE_MAPS_KEY, 'X-Goog-FieldMask': 'originIndex,destinationIndex,duration,condition,status' },
+    body: JSON.stringify({ origins: origins.map(wp), destinations: destinations.map(wp), travelMode: 'DRIVE', routingPreference: 'TRAFFIC_UNAWARE' }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw inspErr('routes_failed', `Routes API ${r.status}: ${text.slice(0, 240)}`, 502);
+  let arr; try { arr = JSON.parse(text); } catch (e) { throw inspErr('routes_failed', 'Routes API returned unreadable JSON', 502); }
+  if (!Array.isArray(arr)) throw inspErr('routes_failed', 'Routes API returned an unexpected shape', 502);
+  return arr;
+}
+// Drive minutes between the candidate property and each located stop, both directions.
+// Routes API first; on ANY failure fall back to a haversine estimate and say so.
+async function inspDriveMap(env, cand, anchors) {
+  const out = { map: {}, source: 'none', warnings: [] };
+  if (!anchors.length) return out;
+  const est = (a, from) => from ? inspEstimateDriveMin(a.lat, a.lng, cand.lat, cand.lng) : inspEstimateDriveMin(cand.lat, cand.lng, a.lat, a.lng);
+  let routes = null;
+  try {
+    const [fromRows, toRows] = await Promise.all([inspRouteMatrix(env, anchors, [cand]), inspRouteMatrix(env, [cand], anchors)]);
+    routes = { from: {}, to: {} };
+    for (const el of fromRows) if (el.condition === 'ROUTE_EXISTS' && el.duration) routes.from[el.originIndex || 0] = parseInt(String(el.duration), 10);
+    for (const el of toRows) if (el.condition === 'ROUTE_EXISTS' && el.duration) routes.to[el.destinationIndex || 0] = parseInt(String(el.duration), 10);
+  } catch (e) {
+    out.warnings.push('Drive times are ESTIMATED (straight-line), not looked up: ' + e.message);
+    await inspAlert(env, 'routes_failed', 'Booking drive-time lookup fell back to estimates: ' + e.message); // inspAlert never throws
+  }
+  let estimated = 0, looked = 0;
+  anchors.forEach((a, i) => {
+    const f = routes && routes.from[i] != null ? inspPadDriveMin(routes.from[i]) : null;
+    const t = routes && routes.to[i] != null ? inspPadDriveMin(routes.to[i]) : null;
+    if (f != null) looked++; else estimated++;
+    if (t != null) looked++; else estimated++;
+    out.map[a.key] = { from: f != null ? f : est(a, true), to: t != null ? t : est(a, false) };
+  });
+  out.source = estimated === 0 ? 'routes' : (looked === 0 ? 'estimate' : 'mixed');
+  if (routes && estimated) out.warnings.push(`${estimated} drive leg(s) had no route and were estimated.`);
+  return out;
+}
+
+// ── Alerts (throttled; failures here must still be visible somewhere) ─────────────────────
+const __inspAlertAt = {};
+async function inspAlert(env, kind, message) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('insp alert: telemetry write failed:', te && te.message, '| original:', kind, message); }
+  const now = Date.now();
+  if (__inspAlertAt[kind] && now - __inspAlertAt[kind] < 30 * 60000) return;
+  __inspAlertAt[kind] = now;
+  const cfg = await fetchConfig(env);
+  const text = `Inspection booking problem (${kind}): ${message}`;
+  try { if (cfg.admin_phone) await sendSMS(env, cfg.admin_phone, text.slice(0, 300)); } catch (se) { console.error('insp alert: SMS failed:', se && se.message, '| original:', text); }
+  try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); }
+}
+
+//@@INSP_BOOKING_PART3@@
