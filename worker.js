@@ -26394,6 +26394,7 @@ async function inspOpenBlocksList(env) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
   let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for block list:', e && e.message); }
   const now = Date.now();
+  let strSt = null, strErr = ''; try { const st = await inspStrStatus(env, await fetchConfig(env), {}); if (st.enabled) strSt = st; } catch (e) { strErr = e.message; console.error('insp: cleaning guard unavailable for block list:', e && e.message); }
   return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)).map(r => {
     const exp = inspBlockExpiryMs(r, dh);
     return Object.assign({}, r, { Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: !Number.isFinite(exp) || now >= exp });
