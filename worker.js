@@ -26252,13 +26252,27 @@ async function inspOpenBlockAdd(env, body) {
   const today = inspEtDate(Date.now());
   for (const d of dates) if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || String(d) < today) return json({ error: 'Bad or past date: ' + d }, 400);
   const hh = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-  await ensureInspTabs(env);
-  let n = 0;
-  for (const d of dates) {
-    const r = await addRow(env, 'Insp_Open_Blocks', { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today });
-    const j = await r.json(); if (!j || !j.success) return json({ error: 'Failed saving ' + d, saved: n }, 500); n++;
+  // Cutoff: blank hours = the default (48h). An exact Book_By ("YYYY-MM-DDTHH:MM", Eastern) wins over hours.
+  const hoursRaw = body.Book_By_Hours == null ? '' : String(body.Book_By_Hours).trim();
+  if (hoursRaw !== '' && !(Number.isFinite(+hoursRaw) && +hoursRaw >= 0 && +hoursRaw <= 24 * 60)) return json({ error: 'Book_By_Hours must be a number of hours (0 or more), or blank for the default' }, 400);
+  const bookBy = String(body.Book_By || '').trim();
+  if (bookBy) {
+    if (!/^\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}$/.test(bookBy)) return json({ error: 'Book_By must look like 2026-10-11T09:00 (Eastern)' }, 400);
+    if (dates.length > 1) return json({ error: 'An exact close time only makes sense for one date at a time — use hours-before-start for several dates' }, 400);
+    const bt = inspEtWallToMs(bookBy.slice(0, 10), bookBy.slice(11));
+    if (!Number.isFinite(bt)) return json({ error: 'Book_By is not a valid date/time' }, 400);
   }
-  return json({ success: true, count: n });
+  await ensureInspTabs(env);
+  const cfg = await fetchConfig(env), dh = inspDefaultBookByHours(cfg), now = Date.now();
+  let n = 0; const alreadyClosed = [], closes = {};
+  for (const d of dates) {
+    const row = { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today, Book_By_Hours: hoursRaw, Book_By: bookBy };
+    const r = await addRow(env, 'Insp_Open_Blocks', row);
+    const j = await r.json(); if (!j || !j.success) return json({ error: 'Failed saving ' + d, saved: n }, 500); n++;
+    const exp = inspBlockExpiryMs(row, dh); closes[d] = Number.isFinite(exp) ? inspFmtEt(exp) : '';
+    if (!Number.isFinite(exp) || now >= exp) alreadyClosed.push(d);
+  }
+  return json({ success: true, count: n, closes, already_closed: alreadyClosed, default_hours: dh });
 }
 async function inspBookingsList(env, url) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read bookings: ' + e.message }, 500); }
