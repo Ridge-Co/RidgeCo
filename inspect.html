@@ -992,7 +992,7 @@ function renderObChips(){
 }
 function obSave(btn){
   if(!obDates.length){ toast('Add at least one date'); return; }
-  var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Note:document.getElementById('ob-note').value.trim() };
+  var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Note:document.getElementById('ob-note').value.trim(), Book_By_Hours:document.getElementById('ob-hours').value.trim(), Book_By:document.getElementById('ob-closeat').value };
   btn.disabled=true; btn.textContent='Saving…';
   api('POST','/insp/open-block/add',body).then(function(r){
     btn.disabled=false; btn.textContent='Open this block';
