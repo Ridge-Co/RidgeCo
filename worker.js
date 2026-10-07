@@ -518,6 +518,8 @@ const _hubWorkerCore = {
         if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
         if (path === '/insp-book/info')         return await inspBookInfo(env, url);
         if (path === '/insp-book/status')       return await inspBookStatus(env, url);
+        if (path === '/insp-book/mine')         return await inspBookMine(env, url);
+        if (path === '/insp-book/ics')          return await inspBookIcs(env, url);
         if (path === '/insp-book/approval')     return await inspApprovalInfo(env, url);
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
