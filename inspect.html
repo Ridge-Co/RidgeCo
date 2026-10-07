@@ -335,6 +335,17 @@
         <button class="btn primary" style="width:100%;margin-top:12px" onclick="kpSave(this)">Save key pickup</button>
       </div>
       <div class="card">
+        <b>2c. Cabin cleaning protection</b>
+        <p class="muted" style="margin:6px 0 0">If a guest checks out of the cabin and no cleaner (other than you) is on the cleaning calendar, that whole day is <b>closed to inspection booking</b> and you get a text/email. It reopens by itself once a cleaner is scheduled. A cleaning on the checkout day or any day up to the next guest's arrival counts. This only <i>reads</i> your calendars.</p>
+        <div id="sg-state" style="margin-top:8px"><p class="muted">Loading…</p></div>
+        <label class="fld">Bookings feed link(s) (Uplisting/Airbnb iCal link, or a Google calendar id — one per line)</label>
+        <textarea id="sg-sources" rows="2" placeholder="Leave blank to keep what is saved"></textarea>
+        <label class="fld">Cleaning &amp; turnover calendar id (shared with the service account)</label>
+        <input id="sg-clean" placeholder="c_a60e5e1a2653b05d5402530f07ea77b6fe48fb7da9e196cdd0f03c673f82174b@group.calendar.google.com">
+        <div class="two-col" style="margin-top:10px"><div><button class="btn primary" style="width:100%" onclick="sgSave(this)">Save + check</button></div><div><button class="btn" style="width:100%" onclick="sgLoad()">Check again</button></div></div>
+        <div id="sg-out" style="margin-top:10px"></div>
+      </div>
+      <div class="card">
         <b>3. Check the connections</b>
         <p class="muted" style="margin:6px 0 0"><b>Check</b> only reads your calendar. <b>Check + test write</b> also creates one 1-minute placeholder event 3 days out and deletes it right away, to prove bookings can land on your calendar.</p>
         <div class="two-col" style="margin-top:10px"><div><button class="btn" style="width:100%" onclick="calTest(false,this)">Check</button></div><div><button class="btn primary" style="width:100%" onclick="calTest(true,this)">Check + test write</button></div></div>
