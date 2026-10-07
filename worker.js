@@ -26060,8 +26060,10 @@ async function inspBookRequest(env, body) {
     const notify = [];
     try { if (!inspCalStaged(env, a.cfg)) await inspCalFetch(env, a.cfg, 'PATCH', '/events/' + encodeURIComponent(ev.id), inspBookingEventBody(rec, true, approveUrl)); }
     catch (e) { notify.push('calendar_event_update_failed: ' + e.message); await inspAlert(env, 'calendar_patch', 'Booking #' + id + ' saved but its calendar entry could not be updated: ' + e.message); }
+    // 3b) Keep the day's single "Key pickup" block on the calendar in step with the earliest booking.
+    notify.push(...await inspReconcileKeyPickup(env, a.cfg, c, rec.Date));
     // 4) Tell Brett.
-    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}. Approve/decline: ${approveUrl}`;
+    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
     await updateRow(env, 'Insp_Bookings', id, { Notify_Log: notify.join(' | ').slice(0, 900) });
     return json({ ok: true, booking_id: id, manage_token: manage, status: 'pending', address: a.geo.formatted, when: inspFmtEt(slot.startMs) + '–' + inspFmtEtTime(slot.endMs), duration_min: a.durationMin,
