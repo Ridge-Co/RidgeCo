@@ -26284,7 +26284,7 @@ async function inspApprovalDecide(env, body) {
   try {
     const id = await inspVerifyApproveToken(env, body && body.a);
     if (!id) return json({ ok: false, error: 'invalid_link', message: 'This approval link is not valid.' }, 404);
-    return await inspBookingDecide(env, id, body.decision, body.note, 'link');
+    return await inspBookingDecide(env, id, body.decision, body.note, 'link', body.override === true);
   } catch (e) { return inspHandleErr(e); }
 }
 function inspAdminBooking(b) {
