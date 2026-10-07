@@ -26076,6 +26076,54 @@ async function inspBookRequest(env, body) {
   }
 }
 
+// Keeps exactly ONE "Key pickup" event on Brett's calendar per customer per day: the `Key_Pickup_Min` minutes
+// right before that day's earliest active booking. Called after a booking is created, declined or cancelled.
+// Never throws; every problem is returned as a log line AND alerted (a missing pickup block is a real problem).
+async function inspReconcileKeyPickup(env, cfg, customer, dateStr, override) {
+  const log = [];
+  try {
+    const keyMin = inspKeyMin(customer);
+    if (!(keyMin > 0)) return log;
+    if (inspCalStaged(env, cfg)) { log.push('key_pickup: staged'); return log; }
+    const rows = await fetchTab(env, 'Insp_Bookings');
+    let first = null;
+    for (const b of rows) {
+      if (String(b.Customer_ID) !== String(customer.ID) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
+      const st = override && String(override.id) === String(b.ID) ? override.status : b.Status;
+      if (!INSP_ACTIVE_BOOKING.includes(st)) continue;
+      const t = Date.parse(b.Start_ISO); if (!Number.isFinite(t) || inspEtDate(t) !== dateStr) continue;
+      if (first == null || t < first) first = t;
+    }
+    const tag = customer.ID + '_' + dateStr, day0 = inspEtWallToMs(dateStr, '00:00');
+    const q = `/events?singleEvents=true&maxResults=50&privateExtendedProperty=${encodeURIComponent('ridgecoInspKey=' + tag)}&timeMin=${encodeURIComponent(new Date(day0 - 3600000).toISOString())}&timeMax=${encodeURIComponent(new Date(day0 + 27 * 3600000).toISOString())}&fields=items(id,start,end)`;
+    const existing = (await inspCalFetch(env, cfg, 'GET', q)).items || [];
+    const ps = first == null ? null : first - keyMin * 60000;
+    let kept = false;
+    for (const ev of existing) {
+      const es = Date.parse(ev.start && ev.start.dateTime), ee = Date.parse(ev.end && ev.end.dateTime);
+      if (!kept && ps != null && es === ps && ee === first) { kept = true; continue; }
+      try { await inspCalFetch(env, cfg, 'DELETE', '/events/' + encodeURIComponent(ev.id)); }
+      catch (e) { if (e.httpStatus !== 404 && e.httpStatus !== 410) throw e; }
+    }
+    if (ps != null && !kept) {
+      await inspCalFetch(env, cfg, 'POST', '/events', {
+        summary: 'Key pickup — ' + customer.Key_Address, location: customer.Key_Address,
+        description: `Pick up keys before the first inspection of the day (${customer.Name}). Ridge Co inspection booking.`,
+        start: { dateTime: new Date(ps).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(first).toISOString(), timeZone: INSP_TZ },
+        status: 'confirmed', transparency: 'opaque', extendedProperties: { private: { ridgecoInspKey: tag } },
+      });
+      log.push('key_pickup: ' + inspFmtEtTime(ps) + '–' + inspFmtEtTime(first));
+      // The pickup moved (e.g. an earlier booking arrived or the first one was cancelled): make sure it is not on top of something.
+      const clash = inspEventsToBusy((await inspCalListEvents(env, cfg, ps, first)).items).filter(x => x.startMs < first && x.endMs > ps);
+      if (clash.length) { const m = `Key pickup ${inspFmtEt(ps)}–${inspFmtEtTime(first)} overlaps "${clash[0].title}" on your calendar.`; log.push('key_pickup_CONFLICT: ' + clash[0].title); await inspAlert(env, 'key_pickup_conflict', m); }
+    } else if (ps == null && existing.length) log.push('key_pickup: removed');
+  } catch (e) {
+    log.push('key_pickup_FAILED: ' + e.message);
+    await inspAlert(env, 'key_pickup', `Could not update the key-pickup block on your calendar for ${dateStr}: ${e.message}`);
+  }
+  return log;
+}
+
 async function inspNotifyBrett(env, cfg, subject, text, link, rec) {
   const log = [];
   try { if (!cfg.admin_phone) log.push('sms: no admin_phone configured'); else { const r = await sendSMS(env, cfg.admin_phone, text.slice(0, 320)); log.push(r && r.skipped ? 'sms: skipped (' + r.reason + ')' : (r && r.error ? 'sms: FAILED ' + r.error : 'sms: ok')); } } catch (e) { log.push('sms: FAILED ' + e.message); }
