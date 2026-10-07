@@ -134,7 +134,10 @@ const _hubWorkerCore = {
       '/vendor-setup/contact-extract','/vendor-setup/submit',
       // Owner self-serve onboarding (Sep 26 2026): public at the gate, but every handler requires a valid single-use
       // invite token minted by Brett (Owner_Invites tab) — see the OWNER SELF-SERVE ONBOARDING block.
-      '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit'];
+      '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit',
+      // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
+      // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
+      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
