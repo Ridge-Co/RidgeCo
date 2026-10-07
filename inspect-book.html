@@ -197,7 +197,7 @@ function approveInit(){
   $('h-title').textContent='Inspection request'; $('h-sub').textContent='For Brett';
   call('GET','/insp-book/approval?a='+encodeURIComponent(A)).then(function(r){
     if(!r.ok){ setMain('<div class="card">'+banner('err',r.message||'Invalid link.')+'</div>'); return; }
-    var b=r.booking;
+    var b=r.booking, conf=r.conflicts||[];
     var drive=(b.Drive_Before_Min||b.Drive_After_Min)?'<dt>Drive</dt><dd>'+esc(b.Drive_Before_Min||'–')+' min from previous stop · '+esc(b.Drive_After_Min||'–')+' min to next'+(b.Drive_Source&&b.Drive_Source!=='routes'?' ('+esc(b.Drive_Source)+' — not a real lookup)':'')+'</dd>':'';
     var done=b.Status!=='pending';
     setMain('<div class="card">'+(done?banner('warn','Already '+b.Status+'.'):'')+'<dl><dt>Property</dt><dd>'+esc(b.Formatted_Address||b.Address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Size</dt><dd>'+esc(b.Units)+' unit(s) / '+esc(b.Buildings)+' building(s) · '+esc(b.Duration_Min)+' min</dd>'+drive
