@@ -72,7 +72,34 @@ function bookInit(){
       +'<div class="est hide" id="f-est"></div><p class="muted" style="margin-bottom:0">Typical length: '+esc(ex)+'. The length is figured from units and buildings, and drive time from Brett’s other stops is included automatically.</p>'
       +'<button class="btn" id="f-go" onclick="findTimes()">Find available times</button></div><div id="results"></div>');
     ['f-units','f-bldg'].forEach(function(id){$(id).addEventListener('input',updEst);});
+    loadMine();
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
+}
+// Add-to-calendar buttons for a confirmed booking: Google link + a .ics file that Apple/Outlook/phones open.
+function calButtons(token,googleUrl){
+  return (googleUrl?'<a class="btn" style="display:block;text-align:center;text-decoration:none" href="'+esc(googleUrl)+'" target="_blank" rel="noopener">Add to Google Calendar</a>':'')
+    +'<a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="'+esc(WORKER+'/insp-book/ics?t='+encodeURIComponent(token))+'">Download calendar file (Apple / Outlook)</a>';
+}
+// "Your upcoming bookings" on the main link, so a bookmarked link can check status, add to calendar and cancel.
+function loadMine(){
+  call('GET','/insp-book/mine?k='+encodeURIComponent(K)).then(function(r){
+    var el=$('mine'); if(!el) return;
+    if(!r.ok){ el.innerHTML=banner('warn','Could not load your bookings: '+(r.message||'please try again shortly.')); return; }
+    if(!r.bookings.length){ el.innerHTML=''; return; }
+    el.innerHTML='<div class="card"><b>Your upcoming bookings</b>'+r.bookings.map(function(b){
+      var ok=b.status==='approved';
+      return '<div class="day"><div><b>'+esc(b.when)+'</b></div><div class="muted">'+esc(b.address)+' · '+(ok?'Confirmed':'Waiting for Brett’s approval')+'</div>'
+        +(ok?calButtons(b.manage_token,b.google_cal_url):'')
+        +'<button class="btn bad" data-t="'+esc(b.manage_token)+'" onclick="cancelOne(this)">Cancel this booking</button></div>';
+    }).join('')+'</div>';
+  }).catch(function(e){ var el=$('mine'); if(el) el.innerHTML=banner('warn','Could not load your bookings ('+e.message+').'); });
+}
+function cancelOne(btn){
+  if(!confirm('Cancel this inspection booking?')) return;
+  btn.disabled=true;
+  call('POST','/insp-book/cancel',{t:btn.getAttribute('data-t')}).then(function(r){
+    if(r.ok){ loadMine(); } else { btn.disabled=false; alert(r.message||'Could not cancel.'); }
+  }).catch(function(e){ btn.disabled=false; alert('Could not reach the server: '+e.message); });
 }
 function updEst(){
   var u=+$('f-units').value, b=+$('f-bldg').value||1, el=$('f-est');
