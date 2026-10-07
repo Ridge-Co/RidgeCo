@@ -26033,6 +26033,7 @@ async function inspBookRequest(env, body) {
     }
     const adj = inspAdjacentDrive(a.busy, a.driveMap, slot.startMs, slot.endMs);
     const nowIso = new Date().toISOString();
+    const keyNote = slot.keyStartMs ? `${inspFmtEtTime(slot.keyStartMs)}–${inspFmtEtTime(slot.startMs)} at ${c.Key_Address}` : '';
     const manage = inspRandToken(18);
     const rec = {
       Customer_ID: c.ID, Manage_Token: manage, Status: 'pending', Address: input.address, Formatted_Address: a.geo.formatted, Lat: a.geo.lat, Lng: a.geo.lng,
