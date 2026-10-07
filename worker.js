@@ -25984,7 +25984,7 @@ async function inspAvailability(env, customer, input) {
   const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map, key, keyFirstByDate, bookByHours });
   return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length, key, bookByHours };
 }
-function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs) }; }
+function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs), closes_iso: Number.isFinite(s.expiresMs) ? new Date(s.expiresMs).toISOString() : '', closes_label: Number.isFinite(s.expiresMs) ? inspFmtEt(s.expiresMs) : '' }; }
 function inspHandleErr(e) {
   if (e && e.code) return json({ ok: false, error: e.code, message: e.message }, e.status || 500);
   return json({ ok: false, error: 'internal', message: 'Something went wrong. Brett has been notified.' }, 500);
