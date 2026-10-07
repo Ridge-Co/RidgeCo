@@ -54,6 +54,13 @@ Calendar calls are stubbed on staging unless Config `INSP_CALENDAR_STAGING_MODE=
 - Main link (`?k=`) now lists that customer's upcoming pending/approved bookings with Cancel (`GET /insp-book/mine?k=`). Anyone holding the customer link can see/cancel that customer's bookings (single-customer link by design).
 - Staging never sends real invite mail (stubbed like all staging Gmail); the MIME is unit-tested. First real-Gmail check = Brett books with his own email on prod.
 
+## Calendar conflict guard (added Oct 7, PR #188, BUILD_VERSION 2026-10-07.5-insp-conflict-guard)
+- Availability is read LIVE from the calendar on every slots request (no cache), and re-checked at request time; a time Brett adds later simply disappears the next time the partner searches. A results screen left open is only a snapshot.
+- Race window (Brett adds an event in the second between the availability read and the hold being written): after the hold is written the calendar is re-read (`inspFindConflicts`). Overlap → the hold is deleted and the partner gets 409 `slot_taken` with fresh slots; a verify-read failure cancels the hold + alerts.
+- Approve re-checks live too: overlap → 409 `conflict` naming the other item; approval page shows a red banner + "Approve anyway"; admin tab confirms (`override:true`). A failed check blocks approval with an alert.
+- Only hard time overlap counts (no drive buffer; free/declined/cancelled events and key-pickup blocks ignored). Titles of Brett's events are Brett-only.
+- Staging stubs the calendar, so these paths are unit-tested (`inspConflictsFrom`) and need one real check on prod: create a pending booking, put an event over it, open the approval link → red banner.
+
 ## Known gaps / follow-ups
 - No reminder or auto-expiry for pending bookings (`Reminded_At` column reserved; would use the */15 cron).
 - Only one calendar read per availability request (no caching).
