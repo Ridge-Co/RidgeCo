@@ -26428,7 +26428,11 @@ async function inspOpenBlockAdd(env, body) {
     const exp = inspBlockExpiryMs(row, dh); closes[d] = Number.isFinite(exp) ? inspFmtEt(exp) : '';
     if (!Number.isFinite(exp) || now >= exp) alreadyClosed.push(d);
   }
-  return json({ success: true, count: n, closes, already_closed: alreadyClosed, default_hours: dh });
+  // Cleaning-coverage heads-up: days in this block whose STR checkout has no cleaner are CLOSED to booking until one is scheduled.
+  let strWarnings = [], strError = '';
+  try { const st = await inspStrStatus(env, cfg, { fresh: true }); if (st.enabled) strWarnings = dates.filter(d => st.closed.includes(d)).map(d => inspStrDayInfo(st, d)).filter(Boolean); }
+  catch (e) { strError = e.message; await inspAlert(env, e.code || 'str_guard_unavailable', 'Opened a block but could not check cleaning coverage: ' + e.message); }
+  return json({ success: true, count: n, closes, already_closed: alreadyClosed, default_hours: dh, str_warnings: strWarnings, str_error: strError });
 }
 async function inspBookingsList(env, url) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read bookings: ' + e.message }, 500); }
