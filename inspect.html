@@ -964,7 +964,7 @@ function cancelBooking(id,btn){
   }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
 }
 function fillCustomerSelects(){
-  ['ob-customer','bl-customer'].forEach(function(id){
+  ['ob-customer','bl-customer','kp-customer'].forEach(function(id){
     var el=document.getElementById(id); var keep=el.value;
     el.innerHTML=(id==='ob-customer'?'<option value="">Any customer</option>':'<option value="">— pick a customer —</option>')+customers.map(function(c){ return '<option value="'+esc(c.ID)+'">'+esc(c.Name)+'</option>'; }).join('');
     if(keep) el.value=keep;
