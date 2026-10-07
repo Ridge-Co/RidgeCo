@@ -46,6 +46,14 @@ Calendar calls are stubbed on staging unless Config `INSP_CALENDAR_STAGING_MODE=
 - `Insp_Open_Blocks.Book_By_Hours` (blank = Config `INSP_DEFAULT_BOOK_BY_HOURS`, default 48; 0 = open until the start) and `Book_By` (exact Eastern `YYYY-MM-DDTHH:MM`, single date; wins over hours). Unparseable → block treated as closed (fails closed).
 - Closed blocks produce no slots. Partners see `open_days` with "book by …" on `/insp-book/info`, per-day on inspect-book.html, and `closes_label` per slot. Admin list returns `Closes_At/Closes_Label/Is_Closed`; adding a block that is already closed returns `already_closed` and the UI warns (set hours to 0 or an exact close time).
 
+## Partner calendar entry + My bookings (added Oct 7, PR #185, BUILD_VERSION 2026-10-07.4-insp-calendar-mine)
+- Brett's own calendar: tentative event on request, confirmed on approve, removed on decline/cancel (unchanged). Google will not let the service account invite outside guests, so the partner gets their OWN entry:
+  - Approval email carries an `.ics` (METHOD:REQUEST, inline `text/calendar` part + `invite.ics` attachment; organizer = the Gmail sender); cancelling an APPROVED booking sends a METHOD:CANCEL (same UID `insp-<ID>@ridgeco`, SEQUENCE 1). Pending→declined sends no calendar file. If the invite email fails it falls back to the plain email and logs `partner email invite FAILED …`.
+  - Manage page (`?m=`) and the "Your upcoming bookings" list show "Add to Google Calendar" + a downloadable `.ics` (`GET /insp-book/ics?t=<Manage_Token>`, approved bookings only).
+- Partner is now messaged (SMS + email) when the request lands (`Notify_Log`: `partner …` lines), with the manage link.
+- Main link (`?k=`) now lists that customer's upcoming pending/approved bookings with Cancel (`GET /insp-book/mine?k=`). Anyone holding the customer link can see/cancel that customer's bookings (single-customer link by design).
+- Staging never sends real invite mail (stubbed like all staging Gmail); the MIME is unit-tested. First real-Gmail check = Brett books with his own email on prod.
+
 ## Known gaps / follow-ups
 - No reminder or auto-expiry for pending bookings (`Reminded_At` column reserved; would use the */15 cron).
 - Only one calendar read per availability request (no caching).
