@@ -137,7 +137,7 @@ const _hubWorkerCore = {
       '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit',
       // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
       // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
-      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide'];
+      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
