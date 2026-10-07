@@ -26243,6 +26243,26 @@ async function inspBookStatus(env, url) {
   if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
   return json({ ok: true, booking: inspPublicBooking(b) });
 }
+// "My bookings" for the main booking link: that customer's upcoming pending/approved bookings, each with the token the
+// page needs to cancel it. Anyone holding the customer link can already book and (via this list) cancel for that customer.
+async function inspBookMine(env, url) {
+  const c = await inspCustomerByToken(env, url.searchParams.get('k'));
+  if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid. Please ask Brett for a current one.' }, 404);
+  let rows = [];
+  try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ ok: false, error: 'sheet_unavailable', message: 'Your bookings are temporarily unavailable. Please try again shortly.' }, 503); }
+  const now = Date.now();
+  const bookings = rows.filter(r => String(r.Customer_ID) === String(c.ID) && String(r.Active || '').toUpperCase() !== 'FALSE' && INSP_ACTIVE_BOOKING.includes(r.Status) && Date.parse(r.End_ISO) > now)
+    .sort((a, b) => String(a.Start_ISO).localeCompare(String(b.Start_ISO)))
+    .map(r => Object.assign(inspPublicBooking(r), { manage_token: r.Manage_Token, manage_url: inspBookUrl('m=' + encodeURIComponent(r.Manage_Token)) }));
+  return json({ ok: true, bookings });
+}
+// Calendar file for ONE approved booking (token = the booking's Manage_Token). Opens "Add to calendar" on phones and desktops.
+async function inspBookIcs(env, url) {
+  const b = await inspBookingByManage(env, url.searchParams.get('t'));
+  if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+  if (b.Status !== 'approved') return json({ ok: false, error: 'not_approved', message: 'Add to calendar is available once Brett approves this booking.' }, 409);
+  return new Response(inspIcs(b, 'PUBLISH'), { status: 200, headers: { ...CORS, 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': `attachment; filename="inspection-${b.ID}.ics"`, 'Cache-Control': 'no-store' } });
+}
 async function inspBookCancel(env, body) {
   try {
     const b = await inspBookingByManage(env, body && body.t);
