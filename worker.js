@@ -908,6 +908,7 @@ const _hubWorkerCore = {
         if (path === '/insp/booking/decide')       return await inspBookingAdminDecide(env, body);
         if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
+        if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
         if (path === '/insp-book/request')         return await inspBookRequest(env, body);
         if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
