@@ -25923,6 +25923,8 @@ function inspCleanInput(body) {
   return { address, units, buildings };
 }
 
+function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
+function inspDefaultBookByHours(cfg) { const h = parseFloat(cfg && cfg.INSP_DEFAULT_BOOK_BY_HOURS); return Number.isFinite(h) && h >= 0 ? h : INSP_DEFAULT_BOOK_BY_HOURS; }
 // Everything a slot answer depends on, read fresh. Calendar/booking read failures THROW.
 async function inspAvailability(env, customer, input) {
   const warnings = [];
