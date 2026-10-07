@@ -158,7 +158,7 @@ t('estimate grows with distance', E.inspEstimateDriveMin(39.3, -76.6, 39.4, -76.
 
 // ── wiring (source checks) ──
 const has = re => re.test(src);
-t('public paths registered', has(/'\/insp-book\/info','\/insp-book\/slots','\/insp-book\/request','\/insp-book\/status','\/insp-book\/cancel','\/insp-book\/approval','\/insp-book\/decide'/));
+t('public paths registered', has(/'\/insp-book\/info','\/insp-book\/slots','\/insp-book\/request','\/insp-book\/status','\/insp-book\/cancel','\/insp-book\/approval','\/insp-book\/decide','\/insp-book\/mine','\/insp-book\/ics'/));
 t('router has every public route', ['info', 'status', 'approval'].every(p => has(new RegExp("path === '/insp-book/" + p + "'"))) && ['slots', 'request', 'cancel', 'decide'].every(p => has(new RegExp("path === '/insp-book/" + p + "'"))));
 t('INSP_TABS includes the new tabs', has(/Insp_Open_Blocks: INSP_OPEN_BLOCK_HEADERS,\s*\n\s*Insp_Bookings: INSP_BOOKING_HEADERS/));
 t('header consts are defined BEFORE INSP_TABS (no TDZ crash at load)', src.indexOf('const INSP_OPEN_BLOCK_HEADERS') < src.indexOf('const INSP_TABS ='));
