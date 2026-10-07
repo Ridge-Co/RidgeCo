@@ -26059,6 +26059,17 @@ async function inspBookRequest(env, body) {
       else ev = await inspCalFetch(env, a.cfg, 'POST', '/events', inspBookingEventBody(Object.assign({ ID: 'new' }, rec), true, ''));
     } catch (e) { await inspAlert(env, e.code || 'calendar_write', 'Could not write the booking to your calendar: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
     createdEventId = ev.id; rec.Calendar_Event_ID = ev.id;
+    // 1b) Write-then-verify: re-read the calendar AFTER our hold exists. If Brett (or another partner) landed something on this
+    // exact time in the instant since the availability read above, take our hold back off and tell the partner — never double-book.
+    let racers;
+    try { racers = await inspFindConflicts(env, a.cfg, slot.startMs, slot.endMs, { eventId: ev.id }); }
+    catch (e) { await inspAlert(env, e.code || 'calendar_error', 'Could not verify your calendar after placing a booking hold, so it was cancelled: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+    if (racers.length) {
+      if (!inspCalStaged(env, a.cfg)) { try { await inspCalFetch(env, a.cfg, 'DELETE', '/events/' + encodeURIComponent(ev.id)); createdEventId = ''; } catch (e2) { await inspAlert(env, 'calendar_orphan', 'A booking hold (' + ev.id + ') hit a conflict but could not be removed: ' + e2.message); } } else createdEventId = '';
+      console.log('insp: booking race caught, slot taken between check and hold:', JSON.stringify(racers.map(r => r.kind)));
+      let fresh = []; try { fresh = (await inspAvailability(env, c, input)).slots.slice(0, 600).map(inspSlotOut); } catch (e3) { console.error('insp: fresh slots after race failed:', e3 && e3.message); }
+      return json({ ok: false, error: 'slot_taken', message: 'Sorry — that time was just taken. Please pick another.', slots: fresh }, 409);
+    }
     // 2) Then the Sheet row. If that fails, take the event back off the calendar (and say so).
     const addRes = await addRow(env, 'Insp_Bookings', rec);
     const added = await addRes.json();
