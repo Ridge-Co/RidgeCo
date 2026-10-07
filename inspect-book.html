@@ -109,7 +109,8 @@ function renderSlots(r){
   var byDay={},order=[];
   r.slots.forEach(function(s,i){ if(!byDay[s.date]){byDay[s.date]=[];order.push(s.date);} byDay[s.date].push(i); });
   order.forEach(function(d){
-    h+='<div class="day"><h3>'+esc(dayLabel(d))+'</h3><div class="chips">'+byDay[d].map(function(i){return '<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(r.slots[i].label.split('–')[0])+'</div>';}).join('')+'</div></div>';
+    var cl=r.slots[byDay[d][0]].closes_label;
+    h+='<div class="day"><h3>'+esc(dayLabel(d))+'</h3>'+(cl?'<div class="muted" style="margin:-2px 0 6px">Book by '+esc(cl)+'</div>':'')+'<div class="chips">'+byDay[d].map(function(i){return '<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(r.slots[i].label.split('–')[0])+'</div>';}).join('')+'</div></div>';
   });
   h+='</div><div id="contact"></div>';
   res.innerHTML=h;
