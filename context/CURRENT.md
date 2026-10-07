@@ -15,6 +15,9 @@
 
 ## ⚡ STANDING RULE — NOTHING EVER FAILS SILENTLY (Brett, Oct 1, 2026) — see CLAUDE.md. Applies to every repo/worker/sheet/automation/PR; a repo-wide audit + fix program is in progress ("Silent-Failure Audit Plan" doc in the Continuous Improvement project).
 
+# INSPECTION BOOKING (Calendly-style) — Oct 7, 2026 — Ridge-Co/RidgeCo PR #183, base `main`, head `feat/inspection-booking`, NOT merged (Brett merges; staging test PRs #181/#182 already merged to staging)
+Partner booking page `inspect-book.html?k=…`, calendar-aware slots, drive-time buffers, approval flow, admin Approvals/Open-blocks tabs in `inspect.html`. Tested end-to-end on staging. Real Calendar/Maps/SMS need Brett's one-time setup (Calendar API, share calendar with the service account, Routes API, `admin_phone`) — then run inspect.html → Open blocks → "Check + test write". Full brief: `context/INSPECTION_BOOKING_BUILD_BRIEF_v1.0.md`. Silent-failure check: calendar read failure aborts availability; notify outcomes logged per booking.
+
 # MILAM RIDGE CABIN SHOP — Oct 6, 2026 — Ridge-Co/RidgeCo branch `feat/milam-ridge-shop` (page) + brett332/BarrelCo branch `feat/cabin-shop-worker` (API + StockShift), both PRs to `main`, NOT merged (customer PII + money-adjacent, Brett merges; see get_pull_request for numbers)
 QR-sign order page at `ridge-co.github.io/RidgeCo/shop/`: 3 products (barrel $95 / planter $65 / sphere $60), qty, name/email/phone/billing address, pay-method pick (Venmo/Cash App/PayPal/Zelle deep links), linked to StockShift inventory (`cabin_wv`). Full design, Sheet tabs, limits and follow-ups: `context/CABIN_SHOP_BUILD_BRIEF_v1.0.md`. Merge order: BarrelCo PR first (Worker auto-deploys), then RidgeCo PR (Pages), then place a TEST ORDER (first name TEST, last name ORDER) before printing the sign. Silent-failure check: all shop Sheets calls status-checked + logged; verified by 35 Worker tests incl. injected failures.
 
