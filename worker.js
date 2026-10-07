@@ -26413,7 +26413,7 @@ async function inspBookingsList(env, url) {
   return json(rows.map(inspAdminBooking).sort((a, b) => String(b.Start_ISO).localeCompare(String(a.Start_ISO))));
 }
 async function inspBookingAdminDecide(env, body) {
-  try { return await inspBookingDecide(env, body && body.id, body && body.decision, body && body.note, 'admin'); } catch (e) { return inspHandleErr(e); }
+  try { return await inspBookingDecide(env, body && body.id, body && body.decision, body && body.note, 'admin', !!(body && body.override === true)); } catch (e) { return inspHandleErr(e); }
 }
 async function inspBookingAdminCancel(env, body) {
   try {
