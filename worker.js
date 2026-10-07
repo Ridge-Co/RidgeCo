@@ -18698,6 +18698,15 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
+  // Inspection booking (Oct 7 2026): the token may only create/touch inspection rows that hang off a
+  // TEST- customer (Insp_Customers.Name starts with TEST-). Open blocks and bookings carry Customer_ID.
+  if (path === '/insp/customer/add') return String((body && body.Name) || '').startsWith('TEST-');
+  if (path === '/insp/customer/book-link') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
+  if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
+  if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
+    const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
+  }
   if (path === '/admin/sync-vendors-from-qbo') {
     // Single-vendor runs on a TEST- vendor only; a bulk run would touch real vendors.
     return !!(body && body.vendor_id) && await isTestRecord(env, 'Vendors', body.vendor_id);
