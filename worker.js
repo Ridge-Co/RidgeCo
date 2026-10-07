@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-07.4-insp-calendar-mine';
+const BUILD_VERSION = '2026-10-07.5-insp-conflict-guard';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -26059,6 +26059,17 @@ async function inspBookRequest(env, body) {
       else ev = await inspCalFetch(env, a.cfg, 'POST', '/events', inspBookingEventBody(Object.assign({ ID: 'new' }, rec), true, ''));
     } catch (e) { await inspAlert(env, e.code || 'calendar_write', 'Could not write the booking to your calendar: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
     createdEventId = ev.id; rec.Calendar_Event_ID = ev.id;
+    // 1b) Write-then-verify: re-read the calendar AFTER our hold exists. If Brett (or another partner) landed something on this
+    // exact time in the instant since the availability read above, take our hold back off and tell the partner — never double-book.
+    let racers;
+    try { racers = await inspFindConflicts(env, a.cfg, slot.startMs, slot.endMs, { eventId: ev.id }); }
+    catch (e) { await inspAlert(env, e.code || 'calendar_error', 'Could not verify your calendar after placing a booking hold, so it was cancelled: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+    if (racers.length) {
+      if (!inspCalStaged(env, a.cfg)) { try { await inspCalFetch(env, a.cfg, 'DELETE', '/events/' + encodeURIComponent(ev.id)); createdEventId = ''; } catch (e2) { await inspAlert(env, 'calendar_orphan', 'A booking hold (' + ev.id + ') hit a conflict but could not be removed: ' + e2.message); } } else createdEventId = '';
+      console.log('insp: booking race caught, slot taken between check and hold:', JSON.stringify(racers.map(r => r.kind)));
+      let fresh = []; try { fresh = (await inspAvailability(env, c, input)).slots.slice(0, 600).map(inspSlotOut); } catch (e3) { console.error('insp: fresh slots after race failed:', e3 && e3.message); }
+      return json({ ok: false, error: 'slot_taken', message: 'Sorry — that time was just taken. Please pick another.', slots: fresh }, 409);
+    }
     // 2) Then the Sheet row. If that fails, take the event back off the calendar (and say so).
     const addRes = await addRow(env, 'Insp_Bookings', rec);
     const added = await addRes.json();
@@ -26278,13 +26289,19 @@ async function inspApprovalInfo(env, url) {
   if (!id) return json({ ok: false, error: 'invalid_link', message: 'This approval link is not valid.' }, 404);
   const rows = await fetchTab(env, 'Insp_Bookings'), b = rows.find(r => r.ID === id);
   if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
-  return json({ ok: true, booking: inspAdminBooking(b) });
+  // Live overlap check so the approval page can warn BEFORE Brett taps Approve (titles are Brett-only; this page is his tokenized link).
+  let conflicts = [], conflicts_error = '';
+  if (b.Status === 'pending') {
+    try { conflicts = await inspFindConflicts(env, await fetchConfig(env), Date.parse(b.Start_ISO), Date.parse(b.End_ISO), { eventId: b.Calendar_Event_ID, bookingId: b.ID }); }
+    catch (e) { conflicts_error = 'Could not check your calendar for conflicts: ' + e.message; console.error('insp: approval conflict check failed:', e && e.message); }
+  }
+  return json({ ok: true, booking: inspAdminBooking(b), conflicts, conflicts_error });
 }
 async function inspApprovalDecide(env, body) {
   try {
     const id = await inspVerifyApproveToken(env, body && body.a);
     if (!id) return json({ ok: false, error: 'invalid_link', message: 'This approval link is not valid.' }, 404);
-    return await inspBookingDecide(env, id, body.decision, body.note, 'link');
+    return await inspBookingDecide(env, id, body.decision, body.note, 'link', body.override === true);
   } catch (e) { return inspHandleErr(e); }
 }
 function inspAdminBooking(b) {
@@ -26294,11 +26311,36 @@ function inspAdminBooking(b) {
 }
 
 // ── Decisions (shared by the link and the admin tab) ───────────────────────────────────────
-async function inspBookingDecide(env, id, decision, note, via) {
+// Hard time overlaps (no drive buffer — only real double-booking) between [startMs, endMs) and everything else on the calendar:
+// Brett's own events and OTHER bookings' holds. Our own hold (`own.eventId` / `own.bookingId`) and key-pickup blocks never count.
+// PURE: `items` are Google Calendar events. Titles are for Brett only — never show them to a partner.
+function inspConflictsFrom(items, startMs, endMs, own) {
+  own = own || {}; const out = [], add = (x, kind) => { if (Number.isFinite(x.startMs) && Number.isFinite(x.endMs) && x.startMs < endMs && x.endMs > startMs) out.push({ kind, title: x.title, when: inspFmtEt(x.startMs) + '–' + inspFmtEtTime(x.endMs) }); };
+  for (const ev of (items || [])) {
+    const p = ev && ev.extendedProperties && ev.extendedProperties.private;
+    if (!ev || ev.status === 'cancelled' || (p && p.ridgecoInspKey)) continue;
+    if (p && p.ridgecoInspBooking) {
+      if (ev.id === own.eventId || (own.bookingId && String(p.ridgecoInspBooking) === String(own.bookingId))) continue;
+      add({ startMs: Date.parse(ev.start && ev.start.dateTime), endMs: Date.parse(ev.end && ev.end.dateTime), title: 'Another inspection booking' }, 'booking');
+    } else for (const x of inspEventsToBusy([ev])) add(x, 'event');
+  }
+  return out;
+}
+async function inspFindConflicts(env, cfg, startMs, endMs, own) {
+  return inspConflictsFrom((await inspCalListEvents(env, cfg, startMs, endMs)).items, startMs, endMs, own);
+}
+async function inspBookingDecide(env, id, decision, note, via, override) {
   if (decision !== 'approve' && decision !== 'decline') return json({ ok: false, error: 'bad_decision', message: 'decision must be approve or decline' }, 400);
   const rows = await fetchTab(env, 'Insp_Bookings'), b = rows.find(r => r.ID === String(id));
   if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
   if (b.Status !== 'pending') return json({ ok: false, error: 'not_pending', message: 'This booking is already ' + b.Status + '.', booking: inspAdminBooking(b) }, 409);
+  // Approving re-checks the calendar LIVE: if something else landed on this time since the request, say so instead of silently double-booking.
+  if (decision === 'approve' && !override) {
+    let conf;
+    try { conf = await inspFindConflicts(env, await fetchConfig(env), Date.parse(b.Start_ISO), Date.parse(b.End_ISO), { eventId: b.Calendar_Event_ID, bookingId: b.ID }); }
+    catch (e) { await inspAlert(env, e.code || 'calendar_error', `Booking #${b.ID}: could not re-check your calendar before approving: ${e.message}`); return json({ ok: false, error: 'calendar_failed', message: 'Could not check your calendar for conflicts, so nothing was changed: ' + e.message }, 502); }
+    if (conf.length) return json({ ok: false, error: 'conflict', message: 'This time now overlaps: ' + conf.map(c => `${c.title} (${c.when})`).join('; ') + '. Decline it, or approve anyway.', conflicts: conf }, 409);
+  }
   const n = String(note || '').trim().slice(0, 300);
   const r = await inspFinishBooking(env, b, decision === 'approve' ? 'approved' : 'declined', n, via);
   return json(r.body, r.status);
@@ -26388,7 +26430,7 @@ async function inspBookingsList(env, url) {
   return json(rows.map(inspAdminBooking).sort((a, b) => String(b.Start_ISO).localeCompare(String(a.Start_ISO))));
 }
 async function inspBookingAdminDecide(env, body) {
-  try { return await inspBookingDecide(env, body && body.id, body && body.decision, body && body.note, 'admin'); } catch (e) { return inspHandleErr(e); }
+  try { return await inspBookingDecide(env, body && body.id, body && body.decision, body && body.note, 'admin', !!(body && body.override === true)); } catch (e) { return inspHandleErr(e); }
 }
 async function inspBookingAdminCancel(env, body) {
   try {

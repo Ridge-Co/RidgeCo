@@ -943,12 +943,17 @@ function bookingCard(b,pending){
     +'<div class="muted">'+esc(b.Contact_Name||'')+(b.Contact_Phone?' · '+esc(b.Contact_Phone):'')+(b.Contact_Email?' · '+esc(b.Contact_Email):'')+'</div>'
     +(b.Notes?'<div class="muted">Note: '+esc(b.Notes)+'</div>':'')+drive+warn+btns+'</div>';
 }
-function decideBooking(id,decision,btn){
+function decideBooking(id,decision,btn,override){
   var note='';
   if(decision==='decline'){ note=prompt('Optional note to the partner (why / what works instead):','')||''; }
-  else if(!confirm('Approve this booking? It turns solid on your calendar and the partner is texted/emailed a confirmation.')) return;
+  else if(!override&&!confirm('Approve this booking? It turns solid on your calendar and the partner is texted/emailed a confirmation.')) return;
   btn.disabled=true;
-  api('POST','/insp/booking/decide',{id:id,decision:decision,note:note}).then(function(r){
+  api('POST','/insp/booking/decide',{id:id,decision:decision,note:note,override:override===true}).then(function(r){
+    if(r&&r.error==='conflict'){
+      btn.disabled=false;
+      if(confirm(r.message+'\n\nApprove anyway? (Cancel = leave it pending so you can decline it.)')) return decideBooking(id,decision,btn,true);
+      return;
+    }
     if(r&&r.ok){ toast(decision==='approve'?'Approved — partner notified':'Declined — partner notified'); if(r.notify&&r.notify.some(function(x){return /FAILED/.test(x);})) alert('Saved, but a notification failed:\n'+r.notify.join('\n')); }
     else { alert((r&&r.message)||(r&&r.error)||'Could not save — nothing was changed.'); }
     loadBookings();

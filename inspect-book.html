@@ -197,21 +197,24 @@ function approveInit(){
   $('h-title').textContent='Inspection request'; $('h-sub').textContent='For Brett';
   call('GET','/insp-book/approval?a='+encodeURIComponent(A)).then(function(r){
     if(!r.ok){ setMain('<div class="card">'+banner('err',r.message||'Invalid link.')+'</div>'); return; }
-    var b=r.booking;
+    var b=r.booking, conf=r.conflicts||[];
     var drive=(b.Drive_Before_Min||b.Drive_After_Min)?'<dt>Drive</dt><dd>'+esc(b.Drive_Before_Min||'–')+' min from previous stop · '+esc(b.Drive_After_Min||'–')+' min to next'+(b.Drive_Source&&b.Drive_Source!=='routes'?' ('+esc(b.Drive_Source)+' — not a real lookup)':'')+'</dd>':'';
     var done=b.Status!=='pending';
-    setMain('<div class="card">'+(done?banner('warn','Already '+b.Status+'.'):'')+'<dl><dt>Property</dt><dd>'+esc(b.Formatted_Address||b.Address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Size</dt><dd>'+esc(b.Units)+' unit(s) / '+esc(b.Buildings)+' building(s) · '+esc(b.Duration_Min)+' min</dd>'+drive
+    setMain('<div class="card">'+(done?banner('warn','Already '+b.Status+'.'):'')
+      +(!done&&conf.length?banner('err','Heads up — this time now overlaps: '+conf.map(function(c){return c.title+' ('+c.when+')';}).join('; ')+'. Decline it, or approve anyway.'):'')
+      +(!done&&r.conflicts_error?banner('warn',r.conflicts_error):'')+'<dl><dt>Property</dt><dd>'+esc(b.Formatted_Address||b.Address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Size</dt><dd>'+esc(b.Units)+' unit(s) / '+esc(b.Buildings)+' building(s) · '+esc(b.Duration_Min)+' min</dd>'+drive
       +'<dt>Contact</dt><dd>'+esc(b.Contact_Name)+' '+esc(b.Contact_Phone)+' '+esc(b.Contact_Email)+'</dd>'+(b.Notes?'<dt>Notes</dt><dd>'+esc(b.Notes)+'</dd>':'')+'</dl>'
-      +(done?'':'<div id="a-err"></div><label>Optional note to the partner</label><input id="a-note"><button class="btn ok" onclick="decide(\'approve\',this)">Approve</button><button class="btn bad" onclick="decide(\'decline\',this)">Decline</button>')+'</div>');
+      +(done?'':'<div id="a-err"></div><label>Optional note to the partner</label><input id="a-note"><button class="btn ok" onclick="decide(\'approve\',this,'+(conf.length?'true':'false')+')">'+(conf.length?'Approve anyway':'Approve')+'</button><button class="btn bad" onclick="decide(\'decline\',this)">Decline</button>')+'</div>');
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
 }
-function decide(d,btn){
+function decide(d,btn,ov){
   btn.disabled=true;
-  call('POST','/insp-book/decide',{a:A,decision:d,note:($('a-note')||{}).value||''}).then(function(r){
+  call('POST','/insp-book/decide',{a:A,decision:d,note:($('a-note')||{}).value||'',override:ov===true}).then(function(r){
     if(r.ok){
       var warn=(r.notify||[]).filter(function(x){return /FAILED/.test(x);});
       setMain('<div class="card">'+banner('good',d==='approve'?'Approved. It’s solid on your calendar and the partner was notified.':'Declined. The hold was removed from your calendar and the partner was notified.')+(warn.length?banner('warn','A notification failed: '+warn.join('; ')):'')+'</div>');
-    } else { btn.disabled=false; $('a-err').innerHTML=banner('err',r.message||'Could not save — nothing was changed.'); }
+    } else if(r.error==='conflict'){ approveInit(); }
+    else { btn.disabled=false; $('a-err').innerHTML=banner('err',r.message||'Could not save — nothing was changed.'); }
   }).catch(function(e){ btn.disabled=false; $('a-err').innerHTML=netFail(e); });
 }
 
