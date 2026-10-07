@@ -26209,7 +26209,8 @@ function inspPartnerEmailHtml(b, kind, text, manageUrl, hasIcs) {
 async function inspNotifyPartner(env, b, kind, prevStatus) {
   const log = [], when = inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), addr = b.Formatted_Address || b.Address;
   const manageUrl = inspBookUrl('m=' + encodeURIComponent(b.Manage_Token));
-  const text = kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details/cancel: ${manageUrl}`
+  const text = kind === 'requested' ? `Request received: inspection at ${addr}, ${when}. Waiting for Brett's approval. Check status or cancel: ${manageUrl}`
+    : kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details, add to calendar, cancel: ${manageUrl}`
     : kind === 'declined' ? `Brett couldn't take the inspection at ${addr} on ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''} Please pick another time: ${manageUrl}`
     : `Cancelled: inspection at ${addr}, ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''}`;
   if (b.Contact_Phone) { try { const r = await sendSMS(env, b.Contact_Phone, text); log.push(r && r.skipped ? 'partner sms: skipped (' + r.reason + ')' : (r && r.error ? 'partner sms: FAILED ' + r.error : 'partner sms: ok')); } catch (e) { log.push('partner sms: FAILED ' + e.message); } }
