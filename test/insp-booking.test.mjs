@@ -171,5 +171,41 @@ t('test-token guard covers insp admin writes', has(/path === '\/insp\/open-block
 t('BUILD_VERSION bumped', has(/BUILD_VERSION = '\d{4}-\d{2}-\d{2}\.\d+-[a-z0-9-]+'/));
 t('no bare request.json in new block', !/INSPECTION BOOKING[\s\S]*await request\.json\(\)/.test(src));
 
+// ── partner calendar entries (ICS), invite MIME, My bookings ──
+const CAL = new Function(grab('PORTAL_BASE', 'const') + '\n' + ['_utf8B64url', 'inspBookUrl', 'inspIcsEsc', 'inspIcsStamp', 'inspIcsFold', 'inspIcs', 'inspGoogleCalUrl', 'inspB64Wrapped', 'inspBuildInviteMime'].map(n => grab(n)).join('\n') + '\nreturn { inspIcs, inspGoogleCalUrl, inspBuildInviteMime, inspIcsEsc, inspIcsStamp };')();
+const bk = { ID: '7', Manage_Token: 'tok_abc-123', Formatted_Address: '100 Main St, Baltimore, MD 21202, USA', Start_ISO: '2026-10-13T16:00:00.000Z', End_ISO: '2026-10-13T16:40:00.000Z', Contact_Name: 'Josiah, "J" Smith' };
+const icsP = CAL.inspIcs(bk, 'PUBLISH'), icsR = CAL.inspIcs(bk, 'REQUEST', { organizer: 'ridgecomaintenance@gmail.com', attendee: 'j@x.com' }), icsC = CAL.inspIcs(bk, 'CANCEL', { organizer: 'ridgecomaintenance@gmail.com', attendee: 'j@x.com' });
+t('ics: CRLF lines, begins/ends correctly', icsP.startsWith('BEGIN:VCALENDAR\r\n') && icsP.endsWith('END:VCALENDAR\r\n') && !/[^\r]\n/.test(icsP));
+t('ics: start/end in UTC', /DTSTART:20261013T160000Z\r\n/.test(icsP) && /DTEND:20261013T164000Z\r\n/.test(icsP));
+t('ics: stable UID across invite and cancel (so the cancel removes the same entry)', /UID:insp-7@ridgeco/.test(icsR) && /UID:insp-7@ridgeco/.test(icsC));
+t('ics: cancel has higher SEQUENCE and CANCELLED status', /SEQUENCE:0/.test(icsR) && /SEQUENCE:1/.test(icsC) && /STATUS:CANCELLED/.test(icsC) && /METHOD:CANCEL/.test(icsC) && /STATUS:CONFIRMED/.test(icsR));
+t('ics: download version has no organizer/attendee, email version does', !/ORGANIZER|ATTENDEE/.test(icsP) && /ORGANIZER;CN=Ridge Co:mailto:ridgecomaintenance@gmail.com/.test(icsR) && /ATTENDEE;CN="Josiah, J Smith"[^\r]*mailto:j@x.com/.test(icsR.replace(/\r\n /g, '')));
+t('ics: address commas escaped, location present', /LOCATION:100 Main St\\, Baltimore\\, MD 21202\\, USA/.test(icsP.replace(/\r\n /g, '')));
+t('ics: no line longer than 75 chars', icsR.split('\r\n').every(l => l.length <= 75));
+t('ics: description carries the manage link', icsP.replace(/\r\n /g, '').includes('m=tok_abc-123'));
+t('google calendar url has dates + encoded text', (u => u.startsWith('https://calendar.google.com/calendar/render?action=TEMPLATE') && u.includes('dates=20261013T160000Z/20261013T164000Z') && u.includes('text=Inspection%3A%20100%20Main%20St'))(CAL.inspGoogleCalUrl(bk)));
+const mime = CAL.inspBuildInviteMime({ from: 'ridgecomaintenance@gmail.com', to: 'j@x.com', subject: 'Inspection confirmed: 100 Main St — café', html: '<p>Confirmed ✓</p>', ics: icsR, method: 'REQUEST' });
+const dec = b64 => Buffer.from(b64.replace(/\r\n/g, ''), 'base64').toString('utf8');
+const calPart = mime.split('Content-Type: text/calendar; charset="UTF-8"; method=REQUEST\r\nContent-Transfer-Encoding: base64\r\n\r\n')[1].split('\r\n--')[0];
+const filePart = mime.split('Content-Disposition: attachment; filename="invite.ics"\r\nContent-Transfer-Encoding: base64\r\n\r\n')[1].split('\r\n--')[0];
+const htmlPart = mime.split('Content-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n')[1].split('\r\n--')[0];
+t('mime: inline calendar part decodes back to the ics (method=REQUEST)', dec(calPart) === icsR);
+t('mime: attached invite.ics decodes to the same ics', dec(filePart) === icsR);
+t('mime: html part decodes (non-ASCII survives)', dec(htmlPart) === '<p>Confirmed ✓</p>');
+t('mime: subject is an encoded-word that decodes with non-ASCII intact', dec(/Subject: =\?UTF-8\?B\?([^?]*)\?=/.exec(mime)[1]) === 'Inspection confirmed: 100 Main St — café');
+t('mime: multipart boundaries balanced', (m => { const ids = [...mime.matchAll(/boundary="([^"]+)"/g)].map(x => x[1]); return ids.length === 2 && ids.every(id => mime.includes('--' + id + '--')); })());
+t('mime: no bare LF', !/[^\r]\n/.test(mime));
+t('partner notify: requested kind + invite on approve + cancel only after approved', has(/kind === 'requested' \? `Request received/) && has(/icsMethod = kind === 'approved' \? 'REQUEST' : \(kind === 'cancelled' && prevStatus === 'approved' \? 'CANCEL' : ''\)/));
+t('partner is told when the request lands (before Notify_Log write)', has(/inspNotifyPartner\(env, rec, 'requested'\)/));
+t('ics-send failure falls back to the plain email and still logs', has(/partner email invite FAILED \(' \+ e\.message \+ '\) — sending without the calendar file/));
+t('staging never sends real invite mail', /async function inspSendPartnerEmail[\s\S]{0,400}isStaging\(env\)\) \{ const r = await gmailSendEmail/.test(src));
+t('mine + ics are routed GETs and token-checked', has(/path === '\/insp-book\/mine'\)\s+return await inspBookMine/) && has(/path === '\/insp-book\/ics'\)\s+return await inspBookIcs/) && /async function inspBookMine[\s\S]{0,300}inspCustomerByToken/.test(src) && /async function inspBookIcs[\s\S]{0,300}inspBookingByManage/.test(src));
+t('ics download only for approved bookings', /async function inspBookIcs[\s\S]{0,500}b\.Status !== 'approved'\) return json\(\{ ok: false, error: 'not_approved'/.test(src));
+t('mine lists only that customer\'s active upcoming bookings', /async function inspBookMine[\s\S]{0,900}String\(r\.Customer_ID\) === String\(c\.ID\)[\s\S]{0,200}INSP_ACTIVE_BOOKING\.includes\(r\.Status\)[\s\S]{0,120}Date\.parse\(r\.End_ISO\) > now/.test(src));
+t('finish-booking remembers the previous status for the cancel invite', has(/prevStatus = b\.Status/) && has(/inspNotifyPartner\(env, b, kind, prevStatus\)/));
+const html = fs.readFileSync('inspect-book.html', 'utf8');
+t('page: My bookings loads on the main link and can cancel + add to calendar', html.includes("/insp-book/mine?k=") && html.includes('function cancelOne') && html.includes('function calButtons') && html.includes("/insp-book/ics?t="));
+t('page: manage view shows add-to-calendar only when approved', html.includes("b.status==='approved'?calButtons(M,b.google_cal_url)"));
+
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
