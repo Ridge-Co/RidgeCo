@@ -26308,7 +26308,7 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
   }
   Object.assign(b, upd);
   const kind = newStatus === 'approved' ? 'approved' : (newStatus === 'declined' ? 'declined' : 'cancelled');
-  const log = await inspNotifyPartner(env, b, kind);
+  const log = await inspNotifyPartner(env, b, kind, prevStatus);
   if (newStatus !== 'approved') {
     let cust = null; try { cust = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID)); } catch (e) { log.push('key_pickup_FAILED: ' + e.message); await inspAlert(env, 'key_pickup', 'Could not read customers to update the key-pickup block: ' + e.message); }
     if (cust) log.push(...await inspReconcileKeyPickup(env, cfg, cust, inspEtDate(Date.parse(b.Start_ISO)), { id: b.ID, status: newStatus }));
