@@ -36,6 +36,16 @@ Calendar calls are stubbed on staging unless Config `INSP_CALENDAR_STAGING_MODE=
 ## Tests
 `test/insp-booking.test.mjs` (62 assertions: duration, ET/DST, blackouts, slot engine with drive buffers, events→busy, wiring). Staging E2E run Oct 7 (see PR #183).
 
+## Key pickup (added Oct 7, PR #185)
+- Per customer: `Insp_Customers.Key_Address` + `Key_Pickup_Min` (set in inspect.html → "2b. Key pickup"; endpoint `/insp/customer/key-pickup`; address geocoded at save; 0 minutes = off). Josiah / AMS CRE: 400 W Franklin St, Baltimore, MD 21201, 30 min.
+- Rule: any slot earlier than that customer's earliest ACTIVE booking that day needs a virtual pickup interval [start − min, start] that fits in the open block, avoids blackouts and calendar busy time (drive time office → neighbouring stop). So a 10:00 block offers 10:30 first. Book 12:00 first → pickup 11:30–12:00, 10:30–11:00 still bookable. Book 11:00 → it becomes first, pickup 10:30–11:00, 10:30 slot disappears.
+- Calendar: one reconciled event per customer per day tagged `extendedProperties.private.ridgecoInspKey = <customerId>_<date>` (`inspReconcileKeyPickup`); re-planned after request, approve, decline, cancel; excluded from busy computation. Results logged in `Notify_Log` (`key_pickup: …`); failure/conflict → `inspAlert`. `Insp_Bookings.Key_Pickup` records the planned window at booking time (history, not live).
+- Assumption: the 30 minutes includes travel from the office to the first property.
+
+## Booking cutoff (added Oct 7, PR #185)
+- `Insp_Open_Blocks.Book_By_Hours` (blank = Config `INSP_DEFAULT_BOOK_BY_HOURS`, default 48; 0 = open until the start) and `Book_By` (exact Eastern `YYYY-MM-DDTHH:MM`, single date; wins over hours). Unparseable → block treated as closed (fails closed).
+- Closed blocks produce no slots. Partners see `open_days` with "book by …" on `/insp-book/info`, per-day on inspect-book.html, and `closes_label` per slot. Admin list returns `Closes_At/Closes_Label/Is_Closed`; adding a block that is already closed returns `already_closed` and the UI warns (set hours to 0 or an exact close time).
+
 ## Known gaps / follow-ups
 - No reminder or auto-expiry for pending bookings (`Reminded_At` column reserved; would use the */15 cron).
 - Only one calendar read per availability request (no caching).
