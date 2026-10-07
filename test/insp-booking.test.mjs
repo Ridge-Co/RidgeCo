@@ -11,7 +11,7 @@ function grab(name, kind = 'function') {
   return src.slice(i, j + 1);
 }
 const consts = ['INSP_TZ', 'INSP_STEP_MIN', 'INSP_HORIZON_DAYS', 'INSP_MIN_NOTICE_MIN', 'INSP_DEFAULT_BUFFER_MIN', 'INSP_PARK_MIN', 'INSP_DRIVE_FACTOR', 'INSP_DEFAULT_BOOK_BY_HOURS'].map(n => grab(n, 'const')).join('\n');
-const fns = ['nyOffsetMinutes', 'inspDurationMin', 'inspParseHHMM', 'inspEtWallToMs', 'inspEtDate', 'inspEtMinutes', 'inspEtDow', 'inspBlackoutsCover', 'inspEstimateDriveMin', 'inspPadDriveMin', 'inspComputeSlots', 'inspAdjacentDrive', 'inspEventsToBusy'].map(n => grab(n)).join('\n');
+const fns = ['nyOffsetMinutes', 'inspDurationMin', 'inspParseHHMM', 'inspEtWallToMs', 'inspEtDate', 'inspEtMinutes', 'inspEtDow', 'inspBlockExpiryMs', 'inspBlackoutsCover', 'inspEstimateDriveMin', 'inspPadDriveMin', 'inspComputeSlots', 'inspAdjacentDrive', 'inspEventsToBusy'].map(n => grab(n)).join('\n');
 const E = new Function(consts + '\n' + fns + '\nreturn { inspDurationMin, inspParseHHMM, inspEtWallToMs, inspEtDate, inspEtMinutes, inspEtDow, inspBlackoutsCover, inspEstimateDriveMin, inspPadDriveMin, inspComputeSlots, inspAdjacentDrive, inspEventsToBusy };')();
 
 let pass = 0, fail = 0;
