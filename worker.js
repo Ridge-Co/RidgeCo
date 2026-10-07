@@ -903,6 +903,15 @@ const _hubWorkerCore = {
         if (path === '/insp/blackout/add')         return await inspBlackoutAdd(env, body);
         if (path === '/insp/blackout/update')      return await updateRow(env, 'Insp_Blackouts', body.id, body.fields);
         if (path === '/insp/bulk-import')          return await inspBulkImport(env, body);
+        if (path === '/insp/open-block/add')       return await inspOpenBlockAdd(env, body);
+        if (path === '/insp/open-block/update')    return await updateRow(env, 'Insp_Open_Blocks', body.id, body.fields);
+        if (path === '/insp/booking/decide')       return await inspBookingAdminDecide(env, body);
+        if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
+        if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
+        if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
+        if (path === '/insp-book/request')         return await inspBookRequest(env, body);
+        if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
+        if (path === '/insp-book/decide')          return await inspApprovalDecide(env, body);
         if (path === '/bulk-import')               return await hubBulkImport(env, body);
       }
       return json({ error: 'Not found' }, 404);
