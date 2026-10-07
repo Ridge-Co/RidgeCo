@@ -24781,7 +24781,7 @@ async function trashInvoice(env, body) {
 // no outreach/SMS/booking-link yet, that's Phase 2. Tabs self-provision on first
 // write, exact same pattern as Trash Service (ensureTrashTabs) just above.
 // ─────────────────────────────────────────────────────────────────────────────
-const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token'];
+const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min'];
 const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
 const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
