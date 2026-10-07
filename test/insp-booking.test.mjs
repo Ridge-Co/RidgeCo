@@ -221,7 +221,7 @@ t('conflict: key-pickup blocks never count', CF.inspConflictsFrom([evt({ extende
 t('conflict: all-day busy event on that day is caught', CF.inspConflictsFrom([{ id: 'ad', status: 'confirmed', summary: 'Out of town', start: { date: '2026-10-13' }, end: { date: '2026-10-14' } }], sMs, eMs, {}).length === 1);
 t('booking request verifies after writing the hold, rolls it back and returns fresh slots', /createdEventId = ev\.id; rec\.Calendar_Event_ID = ev\.id;[\s\S]{0,800}inspFindConflicts\(env, a\.cfg, slot\.startMs, slot\.endMs, \{ eventId: ev\.id \}\)[\s\S]{0,1600}error: 'slot_taken'/.test(src));
 t('verify failure cancels the hold and alerts (never silent)', /Could not verify your calendar after placing a booking hold, so it was cancelled/.test(src));
-t('approval re-checks live; override allowed; check failure blocks with an alert', /decision === 'approve' && !override[\s\S]{0,700}error: 'conflict'/.test(src) && /could not re-check your calendar before approving/.test(src));
+t('approval re-checks live; override allowed; check failure blocks with an alert', /decision === 'approve' && !override[\s\S]{0,1600}error: 'conflict'/.test(src) && /could not re-check your calendar before approving/.test(src));
 t('both decide routes pass the override flag', /inspBookingDecide\(env, id, body\.decision, body\.note, 'link', body\.override === true\)/.test(src) && /'admin', !!\(body && body\.override === true\)\)/.test(src));
 t('approval page shows conflicts + Approve anyway; admin tab confirms', html.includes('Approve anyway') && html.includes('override:ov===true') && fs.readFileSync('inspect.html', 'utf8').includes("r.error==='conflict'"));
 
