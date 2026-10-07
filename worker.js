@@ -25938,6 +25938,7 @@ async function inspAvailability(env, customer, input) {
   if (geo.partial) warnings.push('Address was only a partial match — confirm it looks right: ' + geo.formatted);
   const durationMin = inspDurationMin(input.units, input.buildings);
   const nowMs = Date.now(), cfg = await fetchConfig(env);
+  const closedDates = await inspStrClosedOrThrow(env, cfg, input.freshGuard);
   let blocks = [], blackouts = [], bookings = [];
   try {
     [blocks, blackouts, bookings] = await Promise.all([fetchTab(env, 'Insp_Open_Blocks'), fetchTab(env, 'Insp_Blackouts'), fetchTab(env, 'Insp_Bookings')]);
