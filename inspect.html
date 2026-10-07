@@ -1047,6 +1047,33 @@ function blCopy(){
   if(navigator.clipboard){ navigator.clipboard.writeText(el.value).then(function(){ toast('Link copied'); }).catch(function(){ document.execCommand('copy'); toast('Link copied'); }); }
   else { document.execCommand('copy'); toast('Link copied'); }
 }
+
+// ── Cabin cleaning protection (2c) ───────────────────────────
+function sgRender(r){
+  var st=document.getElementById('sg-state'), out=document.getElementById('sg-out');
+  if(!r){ st.innerHTML='<div class="banner">No answer</div>'; return; }
+  var line;
+  if(!r.configured) line='<div class="banner">Not set up yet — missing: <b>'+esc((r.missing||[]).join(' and '))+'</b>. Until then nothing is closed.</div>';
+  else if(!r.on) line='<div class="banner">Switched OFF in Config (STR_GUARD_ENABLED=FALSE).</div>';
+  else if(r.ok===false) line='<div class="banner"><b>Cannot read your calendars:</b> '+esc(r.message||r.error)+'<br>While this is broken, inspection booking is paused (so nothing gets booked blind) and you were texted.</div>';
+  else line='<div class="banner" style="background:var(--ok-bg,#e8f5e9)">✅ Working — checked just now. '+((r.closed||[]).length?('<b>'+r.closed.length+' checkout day(s) have no cleaner and are closed.</b>'):'Every upcoming checkout has a cleaner.')+'</div>';
+  st.innerHTML=line+'<div class="muted" style="margin-top:6px">Bookings: '+esc((r.sources_masked||[]).join(', ')||'—')+'<br>Cleaning calendar: '+esc(r.cleaning_cal||'—')+'</div>';
+  out.innerHTML=(r.checkouts&&r.checkouts.length)?r.checkouts.map(function(c){
+    return '<div class="prop-card"><b>'+(c.covered?'✅ ':'⛔ ')+esc(c.date)+'</b> checkout'+(c.guests?' · '+esc(c.guests):'')+'<div class="muted">'+(c.covered?'Cleaner: '+esc(c.covered_by.join(', ')):(c.reason==='brett'?'Only "Brett cleaning" scheduled — day CLOSED':'No cleaner scheduled — day CLOSED'))+(c.next_arrival?' · next guest '+esc(c.next_arrival):'')+'</div></div>';
+  }).join(''):'';
+}
+function sgLoad(){ return api('GET','/insp/str-guard/status').then(sgRender).catch(function(e){ document.getElementById('sg-state').innerHTML='<div class="banner">Error: '+esc(e.message)+'</div>'; }); }
+function sgSave(btn){
+  var src=document.getElementById('sg-sources').value.trim(), cc=document.getElementById('sg-clean').value.trim();
+  if(!src&&!cc){ toast('Nothing new to save'); return; }
+  btn.disabled=true; btn.textContent='Saving + reading…';
+  api('POST','/insp/str-guard/config',{sources:src,cleaning_cal:cc,enabled:true}).then(function(r){
+    btn.disabled=false; btn.textContent='Save + check';
+    if(r&&(r.error==='bad_sources'||r.error==='bad_cleaning_cal'||r.error==='save_failed')){ alert(r.message); return; }
+    document.getElementById('sg-sources').value=''; document.getElementById('sg-clean').value='';
+    sgRender(r); toast('Saved');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save + check'; alert('Error: '+e.message); });
+}
 function calTest(write,btn){
   var out=document.getElementById('cal-out'); out.innerHTML='<p class="muted">Checking…</p>'; btn.disabled=true;
   api('GET','/insp/calendar-test'+(write?'?write=1':'')).then(function(r){
