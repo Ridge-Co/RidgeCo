@@ -26342,7 +26342,9 @@ async function inspBookingDecide(env, id, decision, note, via, override) {
     let conf;
     try { conf = await inspFindConflicts(env, await fetchConfig(env), Date.parse(b.Start_ISO), Date.parse(b.End_ISO), { eventId: b.Calendar_Event_ID, bookingId: b.ID }); }
     catch (e) { await inspAlert(env, e.code || 'calendar_error', `Booking #${b.ID}: could not re-check your calendar before approving: ${e.message}`); return json({ ok: false, error: 'calendar_failed', message: 'Could not check your calendar for conflicts, so nothing was changed: ' + e.message }, 502); }
-    if (conf.length) return json({ ok: false, error: 'conflict', message: 'This time now overlaps: ' + conf.map(c => `${c.title} (${c.when})`).join('; ') + '. Decline it, or approve anyway.', conflicts: conf }, 409);
+    try { const nc = await inspStrBookingConflict(env, await fetchConfig(env), b, true); if (nc) conf.push(nc); }
+    catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', `Booking #${b.ID}: could not check cleaning coverage before approving: ${e.message}`); }
+    if (conf.length) return json({ ok: false, error: 'conflict', message: 'This booking now conflicts: ' + conf.map(c => `${c.title} (${c.when})`).join('; ') + '. Decline it, or approve anyway.', conflicts: conf }, 409);
   }
   const n = String(note || '').trim().slice(0, 300);
   const r = await inspFinishBooking(env, b, decision === 'approve' ? 'approved' : 'declined', n, via);
