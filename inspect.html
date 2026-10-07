@@ -390,6 +390,8 @@ function switchTab(name){
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){ b.classList.toggle('active', b.getAttribute('data-tab')===name); });
   Array.prototype.forEach.call(document.querySelectorAll('.page'),function(p){ p.classList.remove('active'); });
   document.getElementById('page-'+name).classList.add('active');
+  if(name==='approvals') loadBookings();
+  if(name==='blocks'){ fillCustomerSelects(); loadBlocks(); }
 }
 
 // ── Customers ────────────────────────────────────────────────
