@@ -25963,8 +25963,26 @@ async function inspAvailability(env, customer, input) {
   if (unplaced) warnings.push(`${unplaced} calendar item(s) have no usable location; a flat ${INSP_DEFAULT_BUFFER_MIN}-minute buffer was used around them.`);
   const drive = await inspDriveMap(env, geo, anchors.slice(0, 40));
   warnings.push(...drive.warnings);
-  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map });
-  return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length };
+  // Key pickup before the first inspection of the day (customer-level setting). A bad office address is a
+  // CONFIG error: fail loudly rather than quietly offering slots with no time to fetch the keys.
+  const keyMin = inspKeyMin(customer);
+  let key = null, keyFirstByDate = {};
+  if (keyMin > 0) {
+    let kgeo = null;
+    try { kgeo = await inspGeocode(env, customer.Key_Address); } catch (e) { await inspAlert(env, 'key_address', 'Key pickup address lookup failed: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+    if (!kgeo) { await inspAlert(env, 'key_address', 'Key pickup address not found: ' + customer.Key_Address); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+    const kdrive = await inspDriveMap(env, kgeo, anchors.slice(0, 40));
+    warnings.push(...kdrive.warnings);
+    key = { min: keyMin, driveMap: kdrive.map, geo: kgeo };
+    for (const b of bookings) {
+      if (String(b.Customer_ID) !== String(customer.ID) || !INSP_ACTIVE_BOOKING.includes(b.Status) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
+      const st = Date.parse(b.Start_ISO); if (!Number.isFinite(st)) continue;
+      const d = inspEtDate(st); if (keyFirstByDate[d] == null || st < keyFirstByDate[d]) keyFirstByDate[d] = st;
+    }
+  }
+  const bookByHours = inspDefaultBookByHours(cfg);
+  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map, key, keyFirstByDate, bookByHours });
+  return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length, key, bookByHours };
 }
 function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs) }; }
 function inspHandleErr(e) {
