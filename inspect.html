@@ -16,7 +16,8 @@
   header h1{font-size:18px;margin:0}
   header .ver{font-size:11px;color:var(--muted)}
   .tabs{position:sticky;top:49px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;z-index:9}
-  .tabs button{flex:1;padding:12px 4px;border:none;background:none;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
+  .tabs{overflow-x:auto}
+  .tabs button{flex:1 0 auto;white-space:nowrap;padding:12px 10px;border:none;background:none;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
   .tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
   main{padding:14px 14px 60px;max-width:640px;margin:0 auto}
   .page{display:none} .page.active{display:block}
