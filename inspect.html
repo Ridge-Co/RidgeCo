@@ -335,6 +335,17 @@
         <button class="btn primary" style="width:100%;margin-top:12px" onclick="kpSave(this)">Save key pickup</button>
       </div>
       <div class="card">
+        <b>2c. Cabin cleaning protection</b>
+        <p class="muted" style="margin:6px 0 0">If a guest checks out of the cabin and no cleaner (other than you) is on the cleaning calendar, that whole day is <b>closed to inspection booking</b> and you get a text/email. It reopens by itself once a cleaner is scheduled. A cleaning on the checkout day or any day up to the next guest's arrival counts. This only <i>reads</i> your calendars.</p>
+        <div id="sg-state" style="margin-top:8px"><p class="muted">Loading…</p></div>
+        <label class="fld">Bookings feed link(s) (Uplisting/Airbnb iCal link, or a Google calendar id — one per line)</label>
+        <textarea id="sg-sources" rows="2" placeholder="Leave blank to keep what is saved"></textarea>
+        <label class="fld">Cleaning &amp; turnover calendar id (shared with the service account)</label>
+        <input id="sg-clean" placeholder="c_a60e5e1a2653b05d5402530f07ea77b6fe48fb7da9e196cdd0f03c673f82174b@group.calendar.google.com">
+        <div class="two-col" style="margin-top:10px"><div><button class="btn primary" style="width:100%" onclick="sgSave(this)">Save + check</button></div><div><button class="btn" style="width:100%" onclick="sgLoad()">Check again</button></div></div>
+        <div id="sg-out" style="margin-top:10px"></div>
+      </div>
+      <div class="card">
         <b>3. Check the connections</b>
         <p class="muted" style="margin:6px 0 0"><b>Check</b> only reads your calendar. <b>Check + test write</b> also creates one 1-minute placeholder event 3 days out and deletes it right away, to prove bookings can land on your calendar.</p>
         <div class="two-col" style="margin-top:10px"><div><button class="btn" style="width:100%" onclick="calTest(false,this)">Check</button></div><div><button class="btn primary" style="width:100%" onclick="calTest(true,this)">Check + test write</button></div></div>
@@ -452,7 +463,7 @@ function enterApp(){
   document.getElementById('app').classList.remove('hide');
   api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
   populateAnnualPicker();
-  loadCustomers().then(function(){ fillCustomerSelects(); loadBlocks(); }); loadAvailability(); loadBookings();
+  loadCustomers().then(function(){ fillCustomerSelects(); loadBlocks(); }); loadAvailability(); loadBookings(); sgLoad();
 }
 
 // ── Tabs ─────────────────────────────────────────────────────
@@ -997,12 +1008,23 @@ function renderObChips(){
 }
 function obSave(btn){
   if(!obDates.length){ toast('Add at least one date'); return; }
+  btn.disabled=true; btn.textContent='Checking cleaning…';
+  api('GET','/insp/str-guard/status?dates='+encodeURIComponent(obDates.join(','))).then(function(g){
+    btn.disabled=false; btn.textContent='Open this block';
+    var bad=((g&&g.days)||[]).filter(function(d){return d.closed;});
+    if(g&&g.enabled&&g.ok===false){ if(!confirm('I could not read your cleaning/booking calendars right now ('+(g.message||g.error)+'), so I cannot check for cleaner gaps. Open the block anyway? (Partners will be paused until the calendars can be read.)')) return; }
+    else if(bad.length){ if(!confirm('NO CLEANER for the cabin checkout on:\n\n'+bad.map(function(d){return '• '+d.date+' — '+(d.info?d.info.text:'');}).join('\n')+'\n\nThose days will stay CLOSED to booking (and open automatically once a cleaner is on the cleaning calendar). Open the block anyway?')) return; }
+    obSaveGo(btn);
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Open this block'; if(confirm('Could not check cleaning coverage ('+e.message+'). Open the block anyway?')) obSaveGo(btn); });
+}
+function obSaveGo(btn){
   var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Note:document.getElementById('ob-note').value.trim(), Book_By_Hours:document.getElementById('ob-hours').value.trim(), Book_By:document.getElementById('ob-closeat').value };
   btn.disabled=true; btn.textContent='Saving…';
   api('POST','/insp/open-block/add',body).then(function(r){
     btn.disabled=false; btn.textContent='Open this block';
     if(r&&r.success){
       toast(r.count+' block(s) opened'); obDates=[]; renderObChips(); loadBlocks();
+      if(r.str_warnings&&r.str_warnings.length) alert('Heads up — closed until a cleaner is scheduled:\n'+r.str_warnings.map(function(w){return '• '+w.date;}).join('\n'));
       if(r.already_closed&&r.already_closed.length) alert('Heads up: the booking deadline for '+r.already_closed.join(', ')+' has ALREADY passed, so partners cannot book those yet. To open them anyway, set the hours to 0 (or an exact close time later than now).');
     } else alert((r&&r.error)||'Could not save');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Open this block'; alert('Error: '+e.message); });
@@ -1014,7 +1036,7 @@ function loadBlocks(){
     var up=list.filter(function(b){return b.Date>=today;});
     document.getElementById('ob-list').innerHTML = up.length ? up.map(function(b){
       var c=customers.find(function(x){return x.ID===b.Customer_ID;});
-      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div></div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
+      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div>'+(b.Str_Closed?'<div class="muted" style="color:var(--danger)"><b>⛔ Closed — no cleaner for the cabin checkout.</b> '+esc(b.Str_Text||'')+'</div>':'')+'</div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
     }).join('') : '<p class="muted">No open blocks. Partners will see no times until you add one.</p>';
   }).catch(function(e){ document.getElementById('ob-list').innerHTML='<div class="banner">Could not load open blocks: '+esc(e.message)+'</div>'; });
 }
@@ -1035,6 +1057,33 @@ function blCopy(){
   var el=document.getElementById('bl-url'); el.select();
   if(navigator.clipboard){ navigator.clipboard.writeText(el.value).then(function(){ toast('Link copied'); }).catch(function(){ document.execCommand('copy'); toast('Link copied'); }); }
   else { document.execCommand('copy'); toast('Link copied'); }
+}
+
+// ── Cabin cleaning protection (2c) ───────────────────────────
+function sgRender(r){
+  var st=document.getElementById('sg-state'), out=document.getElementById('sg-out');
+  if(!r){ st.innerHTML='<div class="banner">No answer</div>'; return; }
+  var line;
+  if(!r.configured) line='<div class="banner">Not set up yet — missing: <b>'+esc((r.missing||[]).join(' and '))+'</b>. Until then nothing is closed.</div>';
+  else if(!r.on) line='<div class="banner">Switched OFF in Config (STR_GUARD_ENABLED=FALSE).</div>';
+  else if(r.ok===false) line='<div class="banner"><b>Cannot read your calendars:</b> '+esc(r.message||r.error)+'<br>While this is broken, inspection booking is paused (so nothing gets booked blind) and you were texted.</div>';
+  else line='<div class="banner" style="background:var(--ok-bg,#e8f5e9)">✅ Working — checked just now. '+((r.closed||[]).length?('<b>'+r.closed.length+' checkout day(s) have no cleaner and are closed.</b>'):'Every upcoming checkout has a cleaner.')+'</div>';
+  st.innerHTML=line+'<div class="muted" style="margin-top:6px">Bookings: '+esc((r.sources_masked||[]).join(', ')||'—')+'<br>Cleaning calendar: '+esc(r.cleaning_cal||'—')+'</div>';
+  out.innerHTML=(r.checkouts&&r.checkouts.length)?r.checkouts.map(function(c){
+    return '<div class="prop-card"><b>'+(c.covered?'✅ ':'⛔ ')+esc(c.date)+'</b> checkout'+(c.guests?' · '+esc(c.guests):'')+'<div class="muted">'+(c.covered?'Cleaner: '+esc(c.covered_by.join(', ')):(c.reason==='brett'?'Only "Brett cleaning" scheduled — day CLOSED':'No cleaner scheduled — day CLOSED'))+(c.next_arrival?' · next guest '+esc(c.next_arrival):'')+'</div></div>';
+  }).join(''):'';
+}
+function sgLoad(){ return api('GET','/insp/str-guard/status').then(sgRender).catch(function(e){ document.getElementById('sg-state').innerHTML='<div class="banner">Error: '+esc(e.message)+'</div>'; }); }
+function sgSave(btn){
+  var src=document.getElementById('sg-sources').value.trim(), cc=document.getElementById('sg-clean').value.trim();
+  if(!src&&!cc){ toast('Nothing new to save'); return; }
+  btn.disabled=true; btn.textContent='Saving + reading…';
+  api('POST','/insp/str-guard/config',{sources:src,cleaning_cal:cc,enabled:true}).then(function(r){
+    btn.disabled=false; btn.textContent='Save + check';
+    if(r&&(r.error==='bad_sources'||r.error==='bad_cleaning_cal'||r.error==='save_failed')){ alert(r.message); return; }
+    document.getElementById('sg-sources').value=''; document.getElementById('sg-clean').value='';
+    sgRender(r); toast('Saved');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save + check'; alert('Error: '+e.message); });
 }
 function calTest(write,btn){
   var out=document.getElementById('cal-out'); out.innerHTML='<p class="muted">Checking…</p>'; btn.disabled=true;

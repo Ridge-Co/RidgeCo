@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-07.5-insp-conflict-guard';
+const BUILD_VERSION = '2026-10-07.6-insp-str-cleaning-guard';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -516,6 +516,7 @@ const _hubWorkerCore = {
         if (path === '/insp/open-blocks')       return await inspOpenBlocksList(env);
         if (path === '/insp/bookings')          return await inspBookingsList(env, url);
         if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
+        if (path === '/insp/str-guard/status')  return await inspStrGuardStatusRoute(env, url);
         if (path === '/insp-book/info')         return await inspBookInfo(env, url);
         if (path === '/insp-book/status')       return await inspBookStatus(env, url);
         if (path === '/insp-book/mine')         return await inspBookMine(env, url);
@@ -911,6 +912,8 @@ const _hubWorkerCore = {
         if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
+        if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
+        if (path === '/insp/str-guard/run')        { try { return json(Object.assign({ ok: true }, await inspStrGuardTick(env, { dry: !!(body && body.dry) }))); } catch (e) { return inspHandleErr(e); } }
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
         if (path === '/insp-book/request')         return await inspBookRequest(env, body);
         if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
@@ -947,6 +950,8 @@ const _hubWorkerCore = {
     // function, so having both fire is harmless, just occasionally redundant work).
     if (cron === '*/15 * * * *') {
       try { await cronSweep(env); } catch (e) { /* non-fatal — next run tries again */ }
+      // STR cleaning-coverage guard for inspection booking: no-op until configured; alerts Brett on its own failures.
+      try { await inspStrGuardTick(env); } catch (e) { console.error('insp: cleaning guard tick failed:', e && e.message); try { await inspAlert(env, 'str_guard_tick', String(e && e.message)); } catch (e2) { console.error('insp: could not alert about guard tick failure:', e2 && e2.message); } }
       return;
     }
     // Optimizer Reviewer (B-129). Reads the last 7 days of Ops_Telemetry, computes metrics,
@@ -18706,6 +18711,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/insp/customer/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/insp/customer/book-link' || path === '/insp/customer/key-pickup') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
+  if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
@@ -18943,7 +18949,7 @@ async function hubTestWriteAllowed(env, path, body) {
     // Clear-only: the staging Config sheet can hold a stale token copied from another environment, and the
     // Config value outranks the env secret in qbAccessToken. Empty string only - never writes a token.
     if (_k === 'QB_REFRESH_TOKEN') return _b.value === '';
-    if (!['pricing_config', 'Access_Trade_Defaults', 'US_HOLIDAYS'].includes(_k)) return false;
+    if (!['pricing_config', 'Access_Trade_Defaults', 'US_HOLIDAYS', 'STR_GUARD_FIXTURE', 'STR_GUARD_NOTIFIED'].includes(_k)) return false;
     if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }
     return typeof _b.value === 'string' && _b.value.length < 5000;
   }
@@ -25681,6 +25687,7 @@ function inspComputeSlots(o) {
   const seen = new Map(), out = [];
   for (const b of (o.blocks || [])) {
     if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    if (o.closedDates && o.closedDates.has(b.Date)) continue; // STR checkout with no cleaner: whole day closed
     const bs = inspEtWallToMs(b.Date, b.Start_Time), be = inspEtWallToMs(b.Date, b.End_Time);
     if (!Number.isFinite(bs) || !Number.isFinite(be) || be <= bs) continue;
     const exp = inspBlockExpiryMs(b, o.bookByHours);
@@ -25895,6 +25902,269 @@ async function inspAlert(env, kind, message) {
   try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); }
 }
 
+// ── STR cleaning-coverage guard (Oct 7 2026) ──────────────────────────────────────────────
+// Brett's short-term rental needs a turnover clean after every checkout and before the next guest arrives. When no cleaner
+// is on the cleaning calendar he has to drive out and clean himself (6 hours round trip = the whole day), so a checkout with
+// no non-Brett cleaner CLOSES that whole day to inspection booking. Reads two things, never writes to either:
+//   • the bookings feed(s): an iCal URL (Uplisting/Airbnb — Google can't share those, so the Worker reads them directly)
+//     or a Google calendar id shared with the service account. An event's END date is the checkout day (11 AM).
+//   • the cleaning/turnover calendar: an event on a day whose title says "<name> Cleaning" = covered. "Brett Cleaning", "N/A",
+//     "Available", "Not Available" or nothing = NOT covered.
+// A cleaning counts if it falls from the checkout day through the day the next guest arrives (arrival-day cleans are fine).
+// Dormant until Config STR_GUARD_BOOKING_SOURCES + STR_GUARD_CLEANING_CAL are set (admin card "2c").
+function inspAddDays(d, n) { const t = Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) + n * 86400000; return new Date(t).toISOString().slice(0, 10); }
+function inspIcsTime(val, params) {
+  const v = String(val || '').trim();
+  if (/VALUE=DATE(;|$)/i.test(String(params || '')) || /^\d{8}$/.test(v)) return /^\d{8}$/.test(v) ? { date: `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` } : null;
+  const m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z?)$/);
+  if (!m) return null;
+  if (m[7]) return { ms: Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)) };
+  return { ms: inspEtWallToMs(`${m[1]}-${m[2]}-${m[3]}`, `${m[4]}:${m[5]}`) }; // floating/TZID time: treated as Eastern
+}
+function inspParseIcs(text) {
+  const lines = String(text || '').replace(/\r?\n[ \t]/g, '').split(/\r?\n/);
+  const out = []; let cur = null;
+  for (const ln of lines) {
+    if (ln === 'BEGIN:VEVENT') { cur = {}; continue; }
+    if (ln === 'END:VEVENT') { if (cur) out.push(cur); cur = null; continue; }
+    if (!cur) continue;
+    const pm = ln.match(/^([^:;]+)(?:;([^:]*))?:(.*)$/); if (!pm) continue;
+    const name = pm[1].toUpperCase(), params = pm[2] || '', val = pm[3];
+    if (name === 'SUMMARY') cur.summary = val.replace(/\\n/gi, ' ').replace(/\\([,;])/g, '$1').replace(/\\\\/g, '\\');
+    else if (name === 'STATUS') cur.status = val.trim().toUpperCase();
+    else if (name === 'DTSTART') cur.start = inspIcsTime(val, params);
+    else if (name === 'DTEND') cur.end = inspIcsTime(val, params);
+    else if (name === 'RRULE') cur.recurring = true;
+  }
+  return out;
+}
+function inspStrFromApi(it) {
+  const t = x => x && (x.date ? { date: x.date } : (x.dateTime ? { ms: Date.parse(x.dateTime) } : null));
+  return { summary: it.summary || '', status: String(it.status || '').toUpperCase(), start: t(it.start), end: t(it.end) };
+}
+function inspStrEvDay(t) { return t ? (t.date || (Number.isFinite(t.ms) ? inspEtDate(t.ms) : '')) : ''; }
+// Days an event covers (all-day end is exclusive; a timed event counts the day it ends on). Capped at 31 days.
+function inspStrEventDays(ev) {
+  const s = inspStrEvDay(ev.start); if (!s) return [];
+  let last = s;
+  if (ev.end) { const e = inspStrEvDay(ev.end); if (e) last = ev.end.date ? inspAddDays(e, -1) : e; if (last < s) last = s; }
+  const out = []; for (let d = s, i = 0; d <= last && i < 31; d = inspAddDays(d, 1), i++) out.push(d);
+  return out;
+}
+// '' (ignore) | 'cleaner' (a real cleaner is booked) | 'brett' (Brett himself — counts as NOT covered)
+function inspStrCleaningKind(title) {
+  const t = String(title || '').toLowerCase();
+  if (!/clean/.test(t)) return '';
+  if (/n\/a|not available|unavailable|cancel/.test(t)) return '';
+  if (/\bbrett\b/.test(t)) return 'brett';
+  return 'cleaner';
+}
+// Bookings-feed events -> stays. The END date is the checkout day.
+function inspStrStays(events) {
+  const out = [];
+  for (const ev of (events || [])) {
+    if (!ev || ev.status === 'CANCELLED' || !ev.start || !ev.end) continue;
+    const s = inspStrEvDay(ev.start), e = inspStrEvDay(ev.end);
+    if (!s || !e || e <= s) continue;
+    out.push({ start: s, end: e, guest: String(ev.summary || '').trim() });
+  }
+  return out;
+}
+// Pure core. stays = [{start,end,guest}], cleanEvents = normalized events. Returns every checkout from `today` to `maxDate`.
+function inspStrCompute(stays, cleanEvents, today, maxDate) {
+  const clean = new Map(), brett = new Set();
+  for (const ev of (cleanEvents || [])) {
+    if (ev && ev.status === 'CANCELLED') continue;
+    const k = inspStrCleaningKind(ev && ev.summary); if (!k) continue;
+    const who = String(ev.summary).replace(/clean(ing|er|ers)?/ig, '').replace(/\s+/g, ' ').trim() || 'cleaner';
+    for (const d of inspStrEventDays(ev)) { if (k === 'brett') brett.add(d); else { if (!clean.has(d)) clean.set(d, []); if (!clean.get(d).includes(who)) clean.get(d).push(who); } }
+  }
+  const starts = (stays || []).map(s => s.start).sort(), byOut = new Map();
+  for (const s of (stays || [])) { if (s.end < today || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
+  const checkouts = [];
+  for (const [date, list] of [...byOut.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const next = starts.find(d => d >= date) || null, limit = next || inspAddDays(date, 14);
+    const coveredBy = [], brettHit = [];
+    for (let d = date, i = 0; d <= limit && i < 40; d = inspAddDays(d, 1), i++) { if (clean.has(d)) coveredBy.push(...clean.get(d).map(w => w + ' (' + d + ')')); if (brett.has(d)) brettHit.push(d); }
+    const covered = coveredBy.length > 0;
+    checkouts.push({ date, guests: [...new Set(list.map(x => x.guest).filter(Boolean))].join(', '), next_arrival: next, window_end: limit, covered, covered_by: coveredBy, reason: covered ? '' : (brettHit.length ? 'brett' : 'none') });
+  }
+  return { checkouts, closed: checkouts.filter(c => !c.covered).map(c => c.date) };
+}
+function inspStrDayText(c, label) {
+  if (!c) return '';
+  const span = c.next_arrival ? (c.next_arrival === c.date ? 'the same day' : 'between ' + c.date + ' and the next guest on ' + c.next_arrival) : 'in the 2 weeks after';
+  return `${label || 'The cabin'} checkout ${c.date} 11 AM${c.guests ? ' (' + c.guests + ')' : ''}: ` + (c.covered ? 'cleaner ' + c.covered_by.join(', ') : (c.reason === 'brett' ? 'only "Brett cleaning" is scheduled' : 'NO cleaner on the cleaning calendar') + ' ' + span);
+}
+function inspStrConfig(env, cfg) {
+  const staged = !!(env.__STAGING__ ?? isStaging(env));
+  let fixture = null; if (staged && cfg && cfg.STR_GUARD_FIXTURE) { try { fixture = JSON.parse(cfg.STR_GUARD_FIXTURE); } catch (e) { console.error('insp: STR_GUARD_FIXTURE is not valid JSON:', e && e.message); } }
+  const sources = String((cfg && cfg.STR_GUARD_BOOKING_SOURCES) || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  const cleaningCal = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim();
+  const on = String((cfg && cfg.STR_GUARD_ENABLED) || 'TRUE').toUpperCase() !== 'FALSE';
+  const missing = []; if (!sources.length) missing.push('bookings feed'); if (!cleaningCal) missing.push('cleaning calendar');
+  return { fixture, sources, cleaningCal, on, missing, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
+}
+function inspStrMask(src) { return /^https?:\/\//i.test(src) ? src.replace(/^(https?:\/\/[^/]+\/).*$/i, '$1…(link hidden)') : src; }
+async function inspStrReadIcs(env, src, fromDay, toDay) {
+  if (!/^https:\/\//i.test(src)) throw inspErr('str_guard_unavailable', 'Bookings feed must be an https:// iCal link: ' + inspStrMask(src), 503);
+  let r;
+  try { r = await fetch(src, { headers: { Accept: 'text/calendar, text/plain, */*' } }); } catch (e) { throw inspErr('str_guard_unavailable', 'Could not reach the bookings feed (' + inspStrMask(src) + '): ' + e.message, 503); }
+  if (!r.ok) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) answered ${r.status}.`, 503);
+  const text = await r.text();
+  if (!/BEGIN:VCALENDAR/.test(text)) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) did not return a calendar.`, 503);
+  const evs = inspParseIcs(text);
+  return evs.filter(e => { const en = inspStrEvDay(e.end); return !en || (en >= fromDay && inspStrEvDay(e.start) <= toDay); });
+}
+async function inspStrReadGoogle(env, cfg, calId, fromDay, toDay) {
+  if (inspCalStaged(env, cfg)) return [];
+  const token = await getCalendarAccessToken(env), items = []; let pageToken = '';
+  const tMin = inspEtWallToMs(inspAddDays(fromDay, -1), '00:00'), tMax = inspEtWallToMs(inspAddDays(toDay, 2), '00:00');
+  for (let i = 0; i < 6; i++) {
+    const q = `?singleEvents=true&maxResults=250&timeMin=${encodeURIComponent(new Date(tMin).toISOString())}&timeMax=${encodeURIComponent(new Date(tMax).toISOString())}&fields=nextPageToken,items(status,summary,start,end)` + (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '');
+    const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events${q}`, { headers: { Authorization: `Bearer ${token}` } });
+    const text = await resp.text();
+    if (!resp.ok) { const err = inspClassifyCalError(resp.status, text); err.message = `Calendar ${calId}: ` + err.message + (resp.status === 404 ? ' (share it with the service account: See all event details)' : ''); throw err; }
+    let d; try { d = JSON.parse(text); } catch (e) { throw inspErr('calendar_error', 'Google Calendar returned unreadable JSON for ' + calId, 503); }
+    items.push(...(d.items || []).map(inspStrFromApi));
+    if (!d.nextPageToken) return items;
+    pageToken = d.nextPageToken;
+  }
+  throw inspErr('calendar_error', `Calendar ${calId} has too many events to read safely.`, 503);
+}
+let __inspStrCache = { key: '', at: 0, status: null };
+// Everything the guard knows, read live (60-second memo). Throws a coded error when a feed/calendar can't be read.
+async function inspStrStatus(env, cfg, opts) {
+  const sc = inspStrConfig(env, cfg);
+  if (!sc.enabled) return { enabled: false, configured: !sc.missing.length, missing: sc.missing, checkouts: [], closed: [], label: sc.label };
+  const cacheKey = JSON.stringify([sc.sources, sc.cleaningCal, sc.fixture]), now = Date.now();
+  if (!(opts && opts.fresh) && __inspStrCache.key === cacheKey && now - __inspStrCache.at < 60000 && __inspStrCache.status) return __inspStrCache.status;
+  const today = inspEtDate(now), maxDate = inspAddDays(today, INSP_HORIZON_DAYS + 14), fromDay = inspAddDays(today, -1), toDay = inspAddDays(maxDate, 20);
+  let stayEvents = [], cleanEvents = [];
+  if (sc.fixture) {
+    stayEvents = (sc.fixture.stays || []).map(s => ({ summary: s.guest || 'Guest', start: { date: s.start }, end: { date: s.end } }));
+    cleanEvents = (sc.fixture.cleaning || []).map(c => ({ summary: c.title, start: { date: c.date }, end: { date: inspAddDays(c.date, 1) } }));
+  } else {
+    for (const src of sc.sources) {
+      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, fromDay, toDay));
+      else stayEvents.push(...(await inspStrReadGoogle(env, cfg, src, fromDay, toDay)));
+    }
+    cleanEvents = await inspStrReadGoogle(env, cfg, sc.cleaningCal, fromDay, toDay);
+  }
+  const stays = inspStrStays(stayEvents), calc = inspStrCompute(stays, cleanEvents, today, maxDate);
+  const status = { enabled: true, configured: true, missing: [], label: sc.label, checked_at: new Date(now).toISOString(), stays: stays.length, checkouts: calc.checkouts, closed: calc.closed };
+  __inspStrCache = { key: cacheKey, at: now, status };
+  return status;
+}
+async function inspStrClosedOrThrow(env, cfg, fresh) {
+  try { return new Set((await inspStrStatus(env, cfg, { fresh: !!fresh })).closed); }
+  catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', 'Cleaning-coverage check failed, so inspection booking is paused until it can be read: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+}
+function inspStrDayInfo(st, date) {
+  const c = (st.checkouts || []).find(x => x.date === date); if (!c) return null;
+  return Object.assign({}, c, { text: inspStrDayText(c, st.label) });
+}
+// Approval-time check for one booking: returns a conflict-shaped item when its day has an uncovered checkout.
+async function inspStrBookingConflict(env, cfg, b, fresh) {
+  const st = await inspStrStatus(env, cfg, { fresh: !!fresh });
+  if (!st.enabled) return null;
+  const date = inspEtDate(Date.parse(b.Start_ISO)), info = st.closed.includes(date) ? inspStrDayInfo(st, date) : null;
+  return info ? { kind: 'no_cleaner', title: 'NO CLEANER scheduled — ' + info.text, when: date } : null;
+}
+async function inspStrGuardStatusRoute(env, url) {
+  try {
+    const cfg = await fetchConfig(env), sc = inspStrConfig(env, cfg);
+    const base = { configured: !sc.missing.length, missing: sc.missing, on: sc.on, sources_masked: sc.sources.map(inspStrMask), cleaning_cal: sc.cleaningCal, label: sc.label };
+    if (!sc.enabled) return json(Object.assign({ ok: true, enabled: false }, base));
+    let st; try { st = await inspStrStatus(env, cfg, { fresh: true }); } catch (e) { return json(Object.assign({ ok: false, enabled: true, error: e.code || 'str_guard_unavailable', message: e.message }, base)); }
+    const dates = String(url.searchParams.get('dates') || '').split(',').map(s => s.trim()).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    const days = dates.map(d => { const i = inspStrDayInfo(st, d); return { date: d, closed: st.closed.includes(d), info: i }; });
+    return json(Object.assign({ ok: true, enabled: true, checked_at: st.checked_at, stays: st.stays, closed: st.closed, checkouts: st.checkouts.slice(0, 40).map(c => Object.assign({}, c, { text: inspStrDayText(c, st.label) })), days }, base));
+  } catch (e) { return inspHandleErr(e); }
+}
+async function inspStrGuardConfigSave(env, body) {
+  try {
+    body = body || {};
+    const sets = {};
+    if (body.sources != null && String(body.sources).trim() !== '') {
+      const toks = String(body.sources).split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+      for (const t of toks) if (!(/^https:\/\/\S+$/i.test(t) || /^[^\s@]+@[^\s@]+$/.test(t))) return json({ ok: false, error: 'bad_sources', message: 'Each bookings source must be an https:// iCal link or a Google calendar id (looks like xxxx@group.calendar.google.com). Problem: ' + inspStrMask(t) }, 400);
+      sets.STR_GUARD_BOOKING_SOURCES = toks.join('\n');
+    }
+    if (body.cleaning_cal != null && String(body.cleaning_cal).trim() !== '') {
+      const c = String(body.cleaning_cal).trim();
+      if (!/^[^\s@]+@[^\s@]+$/.test(c)) return json({ ok: false, error: 'bad_cleaning_cal', message: 'The cleaning calendar id looks like xxxx@group.calendar.google.com.' }, 400);
+      sets.STR_GUARD_CLEANING_CAL = c;
+    }
+    if (body.enabled != null) sets.STR_GUARD_ENABLED = body.enabled === false || String(body.enabled).toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE';
+    if (body.label != null && String(body.label).trim()) sets.STR_GUARD_PROPERTY_LABEL = String(body.label).trim().slice(0, 40);
+    for (const [k, v] of Object.entries(sets)) { const r = await setConfigKey(env, { key: k, value: v }); const j = await r.json(); if (!j || !j.success) return json({ ok: false, error: 'save_failed', message: 'Could not save ' + k }, 500); }
+    __inspStrCache = { key: '', at: 0, status: null };
+    return await inspStrGuardStatusRoute(env, new URL('https://x/insp/str-guard/status'));
+  } catch (e) { return inspHandleErr(e); }
+}
+// Brett-only alert: text + email, never throws; returns { ok, log }.
+async function inspSendBrettText(env, cfg, subject, smsText, htmlLines, link) {
+  const log = []; let ok = false;
+  try { if (!cfg.admin_phone) log.push('sms: no admin_phone configured'); else { const r = await sendSMS(env, cfg.admin_phone, smsText.slice(0, 320)); if (r && r.error) log.push('sms: FAILED ' + r.error); else if (r && r.skipped) { log.push('sms: skipped (' + r.reason + ')'); } else { log.push('sms: ok'); ok = true; } } } catch (e) { log.push('sms: FAILED ' + e.message); }
+  try {
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const r = await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject, html: htmlLines.map(l => `<p>${esc(l)}</p>`).join('') + (link ? `<p><a href="${link}">Open inspection admin</a></p>` : '') });
+    log.push(r && r.staged ? 'email: staged' : 'email: ok'); ok = true;
+  } catch (e) { log.push('email: FAILED ' + e.message); }
+  return { ok, log };
+}
+// Every 15 minutes (and on demand with dry=1): find open blocks / bookings that sit on an uncovered-checkout day and tell Brett
+// ONCE per change (and again if a booking gets inside 24h / 72h). Also tells him when a day gets covered and reopens.
+async function inspStrGuardTick(env, opts) {
+  const dry = !!(opts && opts.dry), cfg = await fetchConfig(env), sc = inspStrConfig(env, cfg);
+  if (!sc.enabled) return { enabled: false };
+  let st; try { st = await inspStrStatus(env, cfg, { fresh: true }); } catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', 'Cleaning-coverage check could not run: ' + e.message); return { enabled: true, error: e.message }; }
+  const closed = new Set(st.closed), now = Date.now(), today = inspEtDate(now), dh = inspDefaultBookByHours(cfg);
+  let blocks = [], bookings = [], customers = [];
+  try { [blocks, bookings, customers] = await Promise.all([fetchTab(env, 'Insp_Open_Blocks'), fetchTab(env, 'Insp_Bookings'), fetchTab(env, 'Insp_Customers')]); }
+  catch (e) { if (isMissingTabError(e)) return { enabled: true, items: [] }; await inspAlert(env, 'str_guard_sheet', 'Cleaning-coverage check could not read the sheet: ' + e.message); return { enabled: true, error: e.message }; }
+  const cname = id => ((customers.find(c => String(c.ID) === String(id)) || {}).Name) || 'a partner';
+  const items = {}; // key -> { sig, line, kind }
+  for (const b of bookings) {
+    if (!INSP_ACTIVE_BOOKING.includes(b.Status) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    const s = Date.parse(b.Start_ISO); if (!Number.isFinite(s)) continue;
+    const d = inspEtDate(s); if (d < today || !closed.has(d)) continue;
+    const hrs = (s - now) / 3600000, bucket = hrs < 24 ? 'u1' : (hrs < 72 ? 'u2' : 'u3'), key = 'A:' + d;
+    const line = `${b.Status === 'approved' ? 'APPROVED' : 'PENDING'} inspection #${b.ID} (${cname(b.Customer_ID)}, ${b.Formatted_Address || b.Address}, ${inspFmtEt(s)}) is on a day with no cleaner. ${inspStrDayText(inspStrDayInfo(st, d), st.label)}`;
+    if (!items[key]) items[key] = { kind: 'A', date: d, ids: [], lines: [], bucket };
+    items[key].ids.push(b.ID); items[key].lines.push(line); if (bucket < items[key].bucket) items[key].bucket = bucket;
+  }
+  for (const bl of blocks) {
+    if (String(bl.Active || '').toUpperCase() === 'FALSE' || bl.Date < today || !closed.has(bl.Date)) continue;
+    const exp = inspBlockExpiryMs(bl, dh); if (!Number.isFinite(exp) || now >= exp) continue;
+    const key = 'B:' + bl.Date;
+    if (!items[key]) items[key] = { kind: 'B', date: bl.Date, ids: [], lines: [], bucket: '' };
+    items[key].ids.push(bl.ID); items[key].lines.push(`${bl.Date} ${bl.Start_Time}–${bl.End_Time} (${bl.Customer_ID ? cname(bl.Customer_ID) : 'any customer'}) is CLOSED to booking until a cleaner is scheduled. ${inspStrDayText(inspStrDayInfo(st, bl.Date), st.label)}`);
+  }
+  for (const it of Object.values(items)) it.sig = it.ids.slice().sort().join(',') + '|' + it.bucket;
+  let prev = {}; try { prev = JSON.parse(cfg.STR_GUARD_NOTIFIED || '{}') || {}; } catch (e) { console.error('insp: STR_GUARD_NOTIFIED unreadable, treating as empty:', e && e.message); }
+  const fresh = Object.entries(items).filter(([k, it]) => prev[k] !== it.sig);
+  const resolved = Object.keys(prev).filter(k => !items[k] && k.slice(2) >= inspAddDays(today, -1));
+  const out = { enabled: true, items: Object.fromEntries(Object.entries(items).map(([k, it]) => [k, { sig: it.sig, lines: it.lines }])), new: fresh.map(f => f[0]), resolved };
+  if (dry || (!fresh.length && !resolved.length)) {
+    if (!dry && !fresh.length && !resolved.length) { const keep = {}; for (const k of Object.keys(items)) keep[k] = items[k].sig; if (JSON.stringify(keep) !== JSON.stringify(prev)) { try { await setConfigKey(env, { key: 'STR_GUARD_NOTIFIED', value: JSON.stringify(keep) }); } catch (e) { console.error('insp: could not prune STR_GUARD_NOTIFIED:', e && e.message); } } }
+    return out;
+  }
+  const nA = fresh.filter(([k]) => k[0] === 'A').length, nB = fresh.filter(([k]) => k[0] === 'B').length;
+  const lines = [];
+  for (const [, it] of fresh) lines.push(...it.lines);
+  for (const k of resolved) lines.push(`Good news: ${k.slice(2)} now has a cleaner scheduled${k[0] === 'A' ? ' — the inspection no longer conflicts.' : ' — that day is open for booking again.'}`);
+  const head = nA ? `⚠ INSPECTION vs NO CLEANER: ${nA} day(s) have an inspection booked but no cleaner for the ${st.label} checkout. Get a cleaner on the cleaning calendar or cancel the inspection.` : (nB ? `${st.label}: ${nB} open inspection day(s) closed — no cleaner for the checkout.` : `${st.label}: cleaning coverage updated.`);
+  const sms = head + ' ' + fresh.map(f => f[1].date).filter((d, i, a) => a.indexOf(d) === i).join(', ') + (resolved.length ? ' · reopened: ' + resolved.map(k => k.slice(2)).join(', ') : '');
+  const res = await inspSendBrettText(env, cfg, (nA ? '⚠ Inspection booked with no cleaner' : 'Inspection day closed — no cleaner') + ' (' + st.label + ')', sms, [head, ...lines], inspBookUrl('').replace('inspect-book.html', 'inspect.html'));
+  out.notify = res.log;
+  if (!res.ok) { await inspAlert(env, 'str_guard_notify', 'Could not tell Brett about a cleaning-coverage problem: ' + res.log.join('; ')); return out; }
+  const keep = {}; for (const k of Object.keys(items)) keep[k] = items[k].sig;
+  try { await setConfigKey(env, { key: 'STR_GUARD_NOTIFIED', value: JSON.stringify(keep) }); } catch (e) { await inspAlert(env, 'str_guard_state', 'Alert sent but could not remember it (you may get it again): ' + e.message); }
+  return out;
+}
+
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
 let __inspTabsReady = false;
 async function inspEnsureTabsOnce(env) { if (!__inspTabsReady) { await ensureInspTabs(env); __inspTabsReady = true; } }
@@ -25937,6 +26207,7 @@ async function inspAvailability(env, customer, input) {
   if (geo.partial) warnings.push('Address was only a partial match — confirm it looks right: ' + geo.formatted);
   const durationMin = inspDurationMin(input.units, input.buildings);
   const nowMs = Date.now(), cfg = await fetchConfig(env);
+  const closedDates = await inspStrClosedOrThrow(env, cfg, input.freshGuard);
   let blocks = [], blackouts = [], bookings = [];
   try {
     [blocks, blackouts, bookings] = await Promise.all([fetchTab(env, 'Insp_Open_Blocks'), fetchTab(env, 'Insp_Blackouts'), fetchTab(env, 'Insp_Bookings')]);
@@ -25984,7 +26255,7 @@ async function inspAvailability(env, customer, input) {
     }
   }
   const bookByHours = inspDefaultBookByHours(cfg);
-  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map, key, keyFirstByDate, bookByHours });
+  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map, key, keyFirstByDate, bookByHours, closedDates });
   return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length, key, bookByHours };
 }
 function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs), closes_iso: Number.isFinite(s.expiresMs) ? new Date(s.expiresMs).toISOString() : '', closes_label: Number.isFinite(s.expiresMs) ? inspFmtEt(s.expiresMs) : '' }; }
@@ -26005,8 +26276,9 @@ async function inspBookInfo(env, url) {
   const open_days = mine.map(b => ({ b, exp: inspBlockExpiryMs(b, dh) })).filter(x => Number.isFinite(x.exp) && now < x.exp)
     .sort((x, y) => (x.b.Date + x.b.Start_Time).localeCompare(y.b.Date + y.b.Start_Time))
     .map(x => ({ date: x.b.Date, from: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.Start_Time)), to: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.End_Time)), closes_iso: new Date(x.exp).toISOString(), closes_label: inspFmtEt(x.exp) }));
-  const open = open_days;
-  return json({ ok: true, customer: c.Name, open_block_count: open.length, open_days, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
+  let open = open_days;
+  try { const closed = await inspStrClosedOrThrow(env, await fetchConfig(env), false); open = open_days.filter(d => !closed.has(d.date)); } catch (e) { console.error('insp: cleaning guard unavailable for open-days list (slots will report it):', e && e.message); }
+  return json({ ok: true, customer: c.Name, open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
 }
 async function inspBookSlots(env, body) {
   try {
@@ -26024,7 +26296,7 @@ async function inspBookRequest(env, body) {
   try {
     const c = await inspCustomerByToken(env, body && body.k);
     if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid.' }, 404);
-    const input = inspCleanInput(body);
+    const input = inspCleanInput(body); input.freshGuard = true; // cleaning-coverage is re-read live for a real booking
     const contactName = String(body.contact_name || '').trim().slice(0, 80);
     const contactPhone = body.contact_phone ? normalizePhone(String(body.contact_phone).slice(0, 30)) : '';
     const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
@@ -26294,6 +26566,8 @@ async function inspApprovalInfo(env, url) {
   if (b.Status === 'pending') {
     try { conflicts = await inspFindConflicts(env, await fetchConfig(env), Date.parse(b.Start_ISO), Date.parse(b.End_ISO), { eventId: b.Calendar_Event_ID, bookingId: b.ID }); }
     catch (e) { conflicts_error = 'Could not check your calendar for conflicts: ' + e.message; console.error('insp: approval conflict check failed:', e && e.message); }
+    try { const nc = await inspStrBookingConflict(env, await fetchConfig(env), b, true); if (nc) conflicts.push(nc); }
+    catch (e) { conflicts_error = (conflicts_error ? conflicts_error + ' ' : '') + 'Could not check cleaning coverage: ' + e.message; console.error('insp: approval cleaning check failed:', e && e.message); }
   }
   return json({ ok: true, booking: inspAdminBooking(b), conflicts, conflicts_error });
 }
@@ -26339,7 +26613,9 @@ async function inspBookingDecide(env, id, decision, note, via, override) {
     let conf;
     try { conf = await inspFindConflicts(env, await fetchConfig(env), Date.parse(b.Start_ISO), Date.parse(b.End_ISO), { eventId: b.Calendar_Event_ID, bookingId: b.ID }); }
     catch (e) { await inspAlert(env, e.code || 'calendar_error', `Booking #${b.ID}: could not re-check your calendar before approving: ${e.message}`); return json({ ok: false, error: 'calendar_failed', message: 'Could not check your calendar for conflicts, so nothing was changed: ' + e.message }, 502); }
-    if (conf.length) return json({ ok: false, error: 'conflict', message: 'This time now overlaps: ' + conf.map(c => `${c.title} (${c.when})`).join('; ') + '. Decline it, or approve anyway.', conflicts: conf }, 409);
+    try { const nc = await inspStrBookingConflict(env, await fetchConfig(env), b, true); if (nc) conf.push(nc); }
+    catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', `Booking #${b.ID}: could not check cleaning coverage before approving: ${e.message}`); }
+    if (conf.length) return json({ ok: false, error: 'conflict', message: 'This booking now conflicts: ' + conf.map(c => `${c.title} (${c.when})`).join('; ') + '. Decline it, or approve anyway.', conflicts: conf }, 409);
   }
   const n = String(note || '').trim().slice(0, 300);
   const r = await inspFinishBooking(env, b, decision === 'approve' ? 'approved' : 'declined', n, via);
@@ -26387,9 +26663,10 @@ async function inspOpenBlocksList(env) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
   let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for block list:', e && e.message); }
   const now = Date.now();
+  let strSt = null, strErr = ''; try { const st = await inspStrStatus(env, await fetchConfig(env), {}); if (st.enabled) strSt = st; } catch (e) { strErr = e.message; console.error('insp: cleaning guard unavailable for block list:', e && e.message); }
   return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)).map(r => {
     const exp = inspBlockExpiryMs(r, dh);
-    return Object.assign({}, r, { Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: !Number.isFinite(exp) || now >= exp });
+    return Object.assign({}, r, { Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: !Number.isFinite(exp) || now >= exp, Str_Closed: !!(strSt && strSt.closed.includes(r.Date)), Str_Text: strSt && strSt.closed.includes(r.Date) ? (inspStrDayInfo(strSt, r.Date) || {}).text || '' : '', Str_Error: strErr });
   }));
 }
 async function inspOpenBlockAdd(env, body) {
@@ -26421,7 +26698,11 @@ async function inspOpenBlockAdd(env, body) {
     const exp = inspBlockExpiryMs(row, dh); closes[d] = Number.isFinite(exp) ? inspFmtEt(exp) : '';
     if (!Number.isFinite(exp) || now >= exp) alreadyClosed.push(d);
   }
-  return json({ success: true, count: n, closes, already_closed: alreadyClosed, default_hours: dh });
+  // Cleaning-coverage heads-up: days in this block whose STR checkout has no cleaner are CLOSED to booking until one is scheduled.
+  let strWarnings = [], strError = '';
+  try { const st = await inspStrStatus(env, cfg, { fresh: true }); if (st.enabled) strWarnings = dates.filter(d => st.closed.includes(d)).map(d => inspStrDayInfo(st, d)).filter(Boolean); }
+  catch (e) { strError = e.message; await inspAlert(env, e.code || 'str_guard_unavailable', 'Opened a block but could not check cleaning coverage: ' + e.message); }
+  return json({ success: true, count: n, closes, already_closed: alreadyClosed, default_hours: dh, str_warnings: strWarnings, str_error: strError });
 }
 async function inspBookingsList(env, url) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read bookings: ' + e.message }, 500); }
