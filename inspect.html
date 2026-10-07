@@ -970,6 +970,19 @@ function fillCustomerSelects(){
     if(keep) el.value=keep;
   });
 }
+function kpFill(){
+  var id=document.getElementById('kp-customer').value, c=customers.find(function(x){return x.ID===id;})||{};
+  document.getElementById('kp-addr').value=c.Key_Address||''; document.getElementById('kp-min').value=c.Key_Pickup_Min||'';
+}
+function kpSave(btn){
+  var id=document.getElementById('kp-customer').value; if(!id){ toast('Pick a customer'); return; }
+  var mins=document.getElementById('kp-min').value.trim(), addr=document.getElementById('kp-addr').value.trim();
+  btn.disabled=true; btn.textContent='Checking address…';
+  api('POST','/insp/customer/key-pickup',{customer_id:id,minutes:mins===''?0:+mins,address:addr}).then(function(r){
+    btn.disabled=false; btn.textContent='Save key pickup';
+    if(r&&r.success){ toast(r.minutes?('Saved. Map found: '+r.map_found):'Key pickup turned off'); loadCustomers().then(kpFill); } else alert((r&&(r.message||r.error))||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Save key pickup'; alert('Error: '+e.message); });
+}
 function obAddDate(){
   var v=document.getElementById('ob-date').value; if(!v){ toast('Pick a date'); return; }
   if(obDates.indexOf(v)<0) obDates.push(v); obDates.sort(); renderObChips(); document.getElementById('ob-date').value='';
