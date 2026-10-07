@@ -25541,4 +25541,168 @@ function vendorPortalLink(woId) {
   return `https://ridge-co.github.io/RidgeCo/vendor.html?wo=${encodeURIComponent(woId)}`;
 }
 
-//@@INSP_BOOKING_BLOCK_PLACEHOLDER@@
+// ─────────────────────────────────────────────────────────────────────────────
+// INSPECTION BOOKING (B-226 Phase 2, Oct 7 2026) — Calendly-style partner booking.
+// A third-party management company (AMS CRE etc.) opens a private link, enters an address +
+// unit count, and gets back ONLY the start times that fit inside the "open blocks" Brett adds,
+// minus (a) everything already on Brett's Google Calendar, (b) other bookings, (c) blackouts,
+// and (d) real DRIVE TIME to/from the neighbouring stops. Picking a time creates a PENDING
+// booking + a tentative event on Brett's calendar and texts/emails Brett; Brett approves or
+// declines (tokenized link or the Approvals tab); the partner is told either way.
+// Design + decisions: context/INSPECTION_BOOKING_BUILD_BRIEF_v1.0.md.
+//
+// "Nothing may fail silently": every external dependency here (calendar read, calendar write,
+// geocode, Routes, SMS, email) either (1) aborts the request with a specific error AND alerts
+// Brett (calendar read/write — a wrong answer there means a double-booking), or (2) degrades
+// with an explicit `warnings` entry the partner/Brett can see (Routes -> haversine estimate,
+// notification channel down). Never an empty result that looks like "no availability".
+// ─────────────────────────────────────────────────────────────────────────────
+const INSP_TZ = 'America/New_York';
+const INSP_STEP_MIN = 15;          // start times are offered on a 15-minute grid
+const INSP_HORIZON_DAYS = 60;      // never offer anything further out than this
+const INSP_MIN_NOTICE_MIN = 120;   // nothing starting in the next 2h
+const INSP_DEFAULT_BUFFER_MIN = 30; // buffer around a calendar event we cannot place on a map
+const INSP_PARK_MIN = 5;           // parking + walk to the door, added to every drive leg
+const INSP_DRIVE_FACTOR = 1.25;    // Routes returns free-flow time; pad it for real traffic
+const INSP_MAX_UNITS = 60;
+const INSP_ACTIVE_BOOKING = ['pending', 'approved'];
+
+function inspErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
+
+// ── Pure engine (unit-tested in test/insp-booking.test.mjs) ────────────────────────────────
+// Duration. Brett's rule of thumb: 30 min per unit + ~20 min for the building itself, so a
+// 3-unit building is ~2h. Economy of scale: the building-level walk-through is shorter when
+// the building is small (a duplex or single-family home has far less common area than a
+// 12-unit walk-up), so per-building overhead drops to 15 min for ~2-unit buildings and 10 min
+// for single units. 1u=40, 2u=75, 3u=110, 4u=140 ... rounded up to 5 min, floor of 30.
+function inspDurationMin(units, buildings) {
+  const u = Math.max(1, Math.floor(+units || 0));
+  const b = Math.max(1, Math.min(u, Math.floor(+buildings || 1)));
+  const avg = u / b;
+  const overhead = avg >= 3 ? 20 : (avg >= 2 ? 15 : 10);
+  const raw = 30 * u + overhead * b;
+  return Math.max(30, Math.ceil(raw / 5) * 5);
+}
+// "9:30", "09:30", "9:30 AM", "1:15 pm", "13:15" -> minutes after midnight, or NaN.
+function inspParseHHMM(s) {
+  const m = /^\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])?\s*$/.exec(String(s == null ? '' : s));
+  if (!m) return NaN;
+  let h = +m[1]; const mi = +m[2];
+  if (m[3]) { const pm = /p/i.test(m[3]); if (h < 1 || h > 12) return NaN; h = (h % 12) + (pm ? 12 : 0); }
+  if (h > 24 || mi > 59 || (h === 24 && mi > 0)) return NaN;
+  return h * 60 + mi;
+}
+// Eastern wall-clock (date 'YYYY-MM-DD' + 'HH:MM') -> real epoch ms. DST-safe: derives the
+// offset from the instant itself and re-derives once if the guess landed across a transition.
+function inspEtWallToMs(dateStr, hhmm) {
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || '').slice(0, 10));
+  const mins = typeof hhmm === 'number' ? hhmm : inspParseHHMM(hhmm);
+  if (!dm || !Number.isFinite(mins)) return NaN;
+  const guess = Date.UTC(+dm[1], +dm[2] - 1, +dm[3], 0, 0, 0) + mins * 60000;
+  let off = nyOffsetMinutes(new Date(guess));
+  let ms = guess - off * 60000;
+  const off2 = nyOffsetMinutes(new Date(ms));
+  if (off2 !== off) ms = guess - off2 * 60000;
+  return ms;
+}
+function inspEtDate(ms) { return new Date(ms).toLocaleDateString('en-CA', { timeZone: INSP_TZ }); }
+function inspEtMinutes(ms) {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: INSP_TZ, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(ms));
+  return parseInt(p.find(x => x.type === 'hour').value, 10) * 60 + parseInt(p.find(x => x.type === 'minute').value, 10);
+}
+function inspEtDow(dateStr) { return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(String(dateStr).slice(0, 10) + 'T12:00:00Z').getUTCDay()]; }
+function inspFmtEt(ms) { return new Date(ms).toLocaleString('en-US', { timeZone: INSP_TZ, weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+function inspFmtEtTime(ms) { return new Date(ms).toLocaleTimeString('en-US', { timeZone: INSP_TZ, hour: 'numeric', minute: '2-digit' }); }
+
+// Does any active blackout (date / date-range / weekly / annual, optionally time-windowed) touch [startMs,endMs)?
+function inspBlackoutsCover(blackouts, startMs, endMs) {
+  const d = inspEtDate(startMs), dow = inspEtDow(d), md = d.slice(5);
+  const sMin = inspEtMinutes(startMs);
+  const eMin = inspEtDate(endMs - 1) === d ? inspEtMinutes(endMs - 1) + 1 : 24 * 60;
+  for (const b of (blackouts || [])) {
+    if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    let hit = false;
+    if (b.Type === 'date') { const a = String(b.Date || '').slice(0, 10), z = String(b.Date_End || b.Date || '').slice(0, 10); hit = !!a && d >= a && d <= z; }
+    else if (b.Type === 'weekly') hit = b.Day_Of_Week === dow;
+    else if (b.Type === 'annual') hit = b.Month_Day === md;
+    if (!hit) continue;
+    if (!b.Start_Time) return true; // all day
+    const w0 = inspParseHHMM(b.Start_Time); const w1raw = b.End_Time ? inspParseHHMM(b.End_Time) : 24 * 60;
+    if (!Number.isFinite(w0)) return true; // unreadable window: fail closed (block the day) rather than offer a bad slot
+    const w1 = Number.isFinite(w1raw) ? w1raw : 24 * 60;
+    if (sMin < w1 && eMin > w0) return true;
+  }
+  return false;
+}
+// Haversine fallback when the Routes API is unavailable — flagged to the caller, never silent.
+function inspEstimateDriveMin(lat1, lng1, lat2, lng2) {
+  const R = 6371, r = Math.PI / 180, dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLng / 2) ** 2;
+  const km = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.max(10, Math.ceil(km * 1.3 / 35 * 60) + INSP_PARK_MIN);
+}
+function inspPadDriveMin(seconds) { return Math.ceil(seconds / 60 * INSP_DRIVE_FACTOR) + INSP_PARK_MIN; }
+
+// Which start times fit? blocks: Insp_Open_Blocks rows. busy: [{startMs,endMs,key}]. driveMap:
+// {key:{from,to}} minutes (from = that stop -> candidate, to = candidate -> that stop); a stop
+// with no entry gets the flat default buffer on both sides.
+function inspComputeSlots(o) {
+  const dur = o.durationMin * 60000, step = (o.stepMin || INSP_STEP_MIN) * 60000;
+  const earliest = o.nowMs + (o.minNoticeMin == null ? INSP_MIN_NOTICE_MIN : o.minNoticeMin) * 60000;
+  const latest = o.nowMs + (o.horizonDays || INSP_HORIZON_DAYS) * 86400000;
+  const dflt = o.defaultBufferMin == null ? INSP_DEFAULT_BUFFER_MIN : o.defaultBufferMin;
+  const busy = o.busy || [], dm = o.driveMap || {};
+  const seen = new Set(), out = [];
+  for (const b of (o.blocks || [])) {
+    if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    const bs = inspEtWallToMs(b.Date, b.Start_Time), be = inspEtWallToMs(b.Date, b.End_Time);
+    if (!Number.isFinite(bs) || !Number.isFinite(be) || be <= bs) continue;
+    for (let s = bs; s + dur <= be; s += step) {
+      if (s < earliest || s > latest || seen.has(s)) continue;
+      const e = s + dur;
+      if (inspBlackoutsCover(o.blackouts, s, e)) continue;
+      let ok = true;
+      for (const x of busy) {
+        const d = dm[x.key] || {};
+        const from = d.from != null ? d.from : dflt, to = d.to != null ? d.to : dflt;
+        if (s < x.endMs + from * 60000 && e + to * 60000 > x.startMs) { ok = false; break; }
+      }
+      if (!ok) continue;
+      seen.add(s); out.push({ startMs: s, endMs: e });
+    }
+  }
+  return out.sort((a, b) => a.startMs - b.startMs);
+}
+// The stops immediately before/after a chosen slot and the drive minutes to each (for Brett's approval card).
+function inspAdjacentDrive(busy, driveMap, s, e, dflt) {
+  dflt = dflt == null ? INSP_DEFAULT_BUFFER_MIN : dflt;
+  let prev = null, next = null;
+  for (const x of (busy || [])) {
+    if (x.endMs <= s && (!prev || x.endMs > prev.endMs)) prev = x;
+    if (x.startMs >= e && (!next || x.startMs < next.startMs)) next = x;
+  }
+  const dm = driveMap || {};
+  return {
+    before: prev ? { key: prev.key, title: prev.title || '', min: (dm[prev.key] && dm[prev.key].from != null) ? dm[prev.key].from : dflt } : null,
+    after: next ? { key: next.key, title: next.title || '', min: (dm[next.key] && dm[next.key].to != null) ? dm[next.key].to : dflt } : null,
+  };
+}
+// Google Calendar events.list items -> busy intervals. Skips: cancelled, "free" (transparent),
+// declined-by-me, and events this feature created itself (they are represented by Insp_Bookings).
+function inspEventsToBusy(items) {
+  const out = [];
+  for (const ev of (items || [])) {
+    if (!ev || ev.status === 'cancelled' || ev.transparency === 'transparent') continue;
+    if ((ev.attendees || []).some(a => a.self && a.responseStatus === 'declined')) continue;
+    if (ev.extendedProperties && ev.extendedProperties.private && ev.extendedProperties.private.ridgecoInspBooking) continue;
+    let s, e;
+    if (ev.start && ev.start.dateTime) { s = Date.parse(ev.start.dateTime); e = Date.parse((ev.end && ev.end.dateTime) || ev.start.dateTime); }
+    else if (ev.start && ev.start.date) { s = inspEtWallToMs(ev.start.date, '00:00'); e = inspEtWallToMs((ev.end && ev.end.date) || ev.start.date, '00:00'); if (!(e > s)) e = s + 86400000; }
+    else continue;
+    if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+    out.push({ startMs: s, endMs: Math.max(e, s + 60000), key: 'e' + ev.id, location: ev.location || '', title: ev.summary || '(busy)' });
+  }
+  return out;
+}
+
+//@@INSP_BOOKING_PART2@@
