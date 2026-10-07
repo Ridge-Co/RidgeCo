@@ -912,6 +912,8 @@ const _hubWorkerCore = {
         if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
+        if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
+        if (path === '/insp/str-guard/run')        { try { return json(Object.assign({ ok: true }, await inspStrGuardTick(env, { dry: !!(body && body.dry) }))); } catch (e) { return inspHandleErr(e); } }
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
         if (path === '/insp-book/request')         return await inspBookRequest(env, body);
         if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
