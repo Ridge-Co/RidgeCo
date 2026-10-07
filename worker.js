@@ -25843,4 +25843,165 @@ async function inspAlert(env, kind, message) {
   try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); }
 }
 
-//@@INSP_BOOKING_PART3@@
+// ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
+let __inspTabsReady = false;
+async function inspEnsureTabsOnce(env) { if (!__inspTabsReady) { await ensureInspTabs(env); __inspTabsReady = true; } }
+function inspRandToken(bytes) { const a = new Uint8Array(bytes || 18); crypto.getRandomValues(a); return _b64urlBytes(a); }
+async function inspApproveToken(env, id) { return `${id}.${(await _hmac('insp-approve:' + id, env.WORKER_SECRET)).slice(0, 32)}`; }
+async function inspVerifyApproveToken(env, tok) {
+  const s = String(tok || ''), parts = s.split('.'); if (parts.length !== 2 || !parts[0]) return null;
+  const id = parts[0]; const expect = await inspApproveToken(env, id);
+  if (expect.length !== s.length) return null; let d = 0; for (let k = 0; k < s.length; k++) d |= s.charCodeAt(k) ^ expect.charCodeAt(k);
+  return d === 0 ? id : null;
+}
+function inspBookUrl(qs) { return `${PORTAL_BASE}/inspect-book.html?${qs}`; }
+async function inspCustomerByToken(env, k) {
+  if (!k || String(k).length < 16) return null;
+  const rows = await fetchTab(env, 'Insp_Customers');
+  return rows.find(r => r.Book_Token && r.Book_Token === String(k) && String(r.Active || '').toUpperCase() !== 'FALSE') || null;
+}
+function inspPublicBooking(b) {
+  return { id: b.ID, status: b.Status, address: b.Formatted_Address || b.Address, units: +b.Units, buildings: +b.Buildings, duration_min: +b.Duration_Min,
+    start_iso: b.Start_ISO, end_iso: b.End_ISO, when: inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), contact_name: b.Contact_Name, decision_note: b.Decision_Note || '' };
+}
+function inspCleanInput(body) {
+  const address = String((body && body.address) || '').trim().slice(0, 200);
+  const units = Math.floor(+(body && body.units));
+  const buildings = body && body.buildings ? Math.floor(+body.buildings) : 1;
+  if (address.length < 6) throw inspErr('bad_address', 'Please enter the full street address.', 400);
+  if (!Number.isFinite(units) || units < 1 || units > INSP_MAX_UNITS) throw inspErr('bad_units', `Number of units must be between 1 and ${INSP_MAX_UNITS}.`, 400);
+  if (!Number.isFinite(buildings) || buildings < 1 || buildings > units) throw inspErr('bad_buildings', 'Number of buildings must be between 1 and the number of units.', 400);
+  return { address, units, buildings };
+}
+
+// Everything a slot answer depends on, read fresh. Calendar/booking read failures THROW.
+async function inspAvailability(env, customer, input) {
+  const warnings = [];
+  try { await inspEnsureTabsOnce(env); } catch (e) { await inspAlert(env, 'sheet_tabs', e.message); throw inspErr('sheet_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified.', 503); }
+  const geo = await inspGeocode(env, input.address);
+  if (!geo) throw inspErr('address_not_found', "We couldn't find that address. Please check it and include the city and ZIP.", 400);
+  if (geo.partial) warnings.push('Address was only a partial match — confirm it looks right: ' + geo.formatted);
+  const durationMin = inspDurationMin(input.units, input.buildings);
+  const nowMs = Date.now(), cfg = await fetchConfig(env);
+  let blocks = [], blackouts = [], bookings = [];
+  try {
+    [blocks, blackouts, bookings] = await Promise.all([fetchTab(env, 'Insp_Open_Blocks'), fetchTab(env, 'Insp_Blackouts'), fetchTab(env, 'Insp_Bookings')]);
+  } catch (e) { throw inspErr('sheet_unavailable', 'Scheduling data could not be read: ' + e.message, 503); }
+  blocks = blocks.filter(b => String(b.Active || '').toUpperCase() !== 'FALSE' && (!b.Customer_ID || String(b.Customer_ID) === String(customer.ID)));
+  const horizonMs = nowMs + INSP_HORIZON_DAYS * 86400000;
+  const winLo = nowMs - 3600000;
+  let calItems;
+  try { calItems = (await inspCalListEvents(env, cfg, winLo, horizonMs)).items; }
+  catch (e) { await inspAlert(env, e.code || 'calendar_error', e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+  const busy = inspEventsToBusy(calItems);
+  for (const b of bookings) {
+    if (!INSP_ACTIVE_BOOKING.includes(b.Status) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO); if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+    busy.push({ startMs: s, endMs: e, key: 'b' + b.ID, title: b.Formatted_Address || b.Address, lat: parseFloat(b.Lat), lng: parseFloat(b.Lng) });
+  }
+  // Only stops near an open block matter for drive math (saves geocodes + matrix elements).
+  const blockWins = blocks.map(b => [inspEtWallToMs(b.Date, b.Start_Time) - 6 * 3600000, inspEtWallToMs(b.Date, b.End_Time) + 6 * 3600000]).filter(w => Number.isFinite(w[0]) && Number.isFinite(w[1]));
+  const relevant = busy.filter(x => blockWins.some(w => x.endMs > w[0] && x.startMs < w[1]));
+  const anchors = []; let unplaced = 0;
+  for (const x of relevant) {
+    if (!(Number.isFinite(x.lat) && Number.isFinite(x.lng)) && x.location) {
+      try { const g = await inspGeocode(env, x.location); if (g) { x.lat = g.lat; x.lng = g.lng; } } catch (e) { console.error('insp: could not geocode calendar location:', e && e.message); /* counted in `unplaced` and surfaced as a warning */ }
+    }
+    if (Number.isFinite(x.lat) && Number.isFinite(x.lng)) anchors.push({ key: x.key, lat: x.lat, lng: x.lng }); else unplaced++;
+  }
+  if (unplaced) warnings.push(`${unplaced} calendar item(s) have no usable location; a flat ${INSP_DEFAULT_BUFFER_MIN}-minute buffer was used around them.`);
+  const drive = await inspDriveMap(env, geo, anchors.slice(0, 40));
+  warnings.push(...drive.warnings);
+  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map });
+  return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length };
+}
+function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs) }; }
+function inspHandleErr(e) {
+  if (e && e.code) return json({ ok: false, error: e.code, message: e.message }, e.status || 500);
+  return json({ ok: false, error: 'internal', message: 'Something went wrong. Brett has been notified.' }, 500);
+}
+
+// ── Public (booking-link) endpoints ────────────────────────────────────────────────────────
+async function inspBookInfo(env, url) {
+  const c = await inspCustomerByToken(env, url.searchParams.get('k'));
+  if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid. Please ask Brett for a current one.' }, 404);
+  let blocks = []; try { blocks = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ ok: false, error: 'sheet_unavailable', message: 'Scheduling is temporarily unavailable.' }, 503); }
+  const today = inspEtDate(Date.now());
+  const open = blocks.filter(b => String(b.Active || '').toUpperCase() !== 'FALSE' && b.Date >= today && (!b.Customer_ID || String(b.Customer_ID) === String(c.ID)));
+  return json({ ok: true, customer: c.Name, open_block_count: open.length, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
+}
+async function inspBookSlots(env, body) {
+  try {
+    const c = await inspCustomerByToken(env, body && body.k);
+    if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid.' }, 404);
+    const input = inspCleanInput(body);
+    const a = await inspAvailability(env, c, input);
+    const slots = a.slots.slice(0, 600).map(inspSlotOut);
+    return json({ ok: true, address: a.geo.formatted, duration_min: a.durationMin, units: input.units, buildings: input.buildings, slots, warnings: a.warnings.filter(w => /partial match/.test(w)), no_blocks: a.blocksCount === 0 });
+  } catch (e) { if (!(e && e.code)) await inspAlert(env, 'slots_internal', String(e && e.message)); return inspHandleErr(e); }
+}
+async function inspBookRequest(env, body) {
+  let createdEventId = '';
+  const cfgForCleanup = { v: null };
+  try {
+    const c = await inspCustomerByToken(env, body && body.k);
+    if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid.' }, 404);
+    const input = inspCleanInput(body);
+    const contactName = String(body.contact_name || '').trim().slice(0, 80);
+    const contactPhone = body.contact_phone ? normalizePhone(String(body.contact_phone).slice(0, 30)) : '';
+    const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
+    if (!contactName) throw inspErr('bad_contact', 'Please enter your name.', 400);
+    if (!contactPhone && !contactEmail) throw inspErr('bad_contact', 'Please enter a phone number or email so you get the confirmation.', 400);
+    if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw inspErr('bad_contact', 'That email address does not look right.', 400);
+    const startMs = Date.parse(body.start_iso);
+    if (!Number.isFinite(startMs)) throw inspErr('bad_slot', 'Please pick a time.', 400);
+    const a = await inspAvailability(env, c, input);
+    cfgForCleanup.v = a.cfg;
+    const slot = a.slots.find(s => s.startMs === startMs);
+    if (!slot) {
+      const fresh = a.slots.slice(0, 600).map(inspSlotOut);
+      return json({ ok: false, error: 'slot_taken', message: 'Sorry — that time was just taken or is no longer available. Please pick another.', slots: fresh }, 409);
+    }
+    const adj = inspAdjacentDrive(a.busy, a.driveMap, slot.startMs, slot.endMs);
+    const nowIso = new Date().toISOString();
+    const manage = inspRandToken(18);
+    const rec = {
+      Customer_ID: c.ID, Manage_Token: manage, Status: 'pending', Address: input.address, Formatted_Address: a.geo.formatted, Lat: a.geo.lat, Lng: a.geo.lng,
+      Buildings: input.buildings, Units: input.units, Duration_Min: a.durationMin, Date: inspEtDate(slot.startMs), Start_Time: inspFmtEtTime(slot.startMs),
+      Start_ISO: new Date(slot.startMs).toISOString(), End_ISO: new Date(slot.endMs).toISOString(),
+      Drive_Before_Min: adj.before ? adj.before.min : '', Drive_After_Min: adj.after ? adj.after.min : '', Drive_Source: a.driveSource,
+      Contact_Name: contactName, Contact_Phone: contactPhone, Contact_Email: contactEmail, Notes: String(body.notes || '').trim().slice(0, 500),
+      Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE',
+    };
+    // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
+    let ev;
+    try {
+      if (inspCalStaged(env, a.cfg)) ev = { id: 'staged-' + inspRandToken(6) };
+      else ev = await inspCalFetch(env, a.cfg, 'POST', '/events', inspBookingEventBody(Object.assign({ ID: 'new' }, rec), true, ''));
+    } catch (e) { await inspAlert(env, e.code || 'calendar_write', 'Could not write the booking to your calendar: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+    createdEventId = ev.id; rec.Calendar_Event_ID = ev.id;
+    // 2) Then the Sheet row. If that fails, take the event back off the calendar (and say so).
+    const addRes = await addRow(env, 'Insp_Bookings', rec);
+    const added = await addRes.json();
+    if (!added || !added.success) throw inspErr('booking_save_failed', 'Could not save the booking. Please try again.', 500);
+    const id = added.id; rec.ID = id;
+    const approveUrl = inspBookUrl('a=' + encodeURIComponent(await inspApproveToken(env, id)));
+    // 3) Put the approve link + booking id into the calendar event (best effort but never silent).
+    const notify = [];
+    try { if (!inspCalStaged(env, a.cfg)) await inspCalFetch(env, a.cfg, 'PATCH', '/events/' + encodeURIComponent(ev.id), inspBookingEventBody(rec, true, approveUrl)); }
+    catch (e) { notify.push('calendar_event_update_failed: ' + e.message); await inspAlert(env, 'calendar_patch', 'Booking #' + id + ' saved but its calendar entry could not be updated: ' + e.message); }
+    // 4) Tell Brett.
+    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}. Approve/decline: ${approveUrl}`;
+    notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
+    await updateRow(env, 'Insp_Bookings', id, { Notify_Log: notify.join(' | ').slice(0, 900) });
+    return json({ ok: true, booking_id: id, manage_token: manage, status: 'pending', address: a.geo.formatted, when: inspFmtEt(slot.startMs) + '–' + inspFmtEtTime(slot.endMs), duration_min: a.durationMin,
+      manage_url: inspBookUrl('m=' + encodeURIComponent(manage)), message: 'Requested! Brett has been notified and the time is held on his calendar. You will get a confirmation when he approves.' });
+  } catch (e) {
+    // Roll the calendar hold back if we created it but could not finish the booking.
+    if (createdEventId && !String(createdEventId).startsWith('staged-')) { try { await inspCalFetch(env, cfgForCleanup.v || {}, 'DELETE', '/events/' + encodeURIComponent(createdEventId)); } catch (e2) { await inspAlert(env, 'calendar_orphan', 'A calendar hold (' + createdEventId + ') could not be removed after a failed booking: ' + e2.message); } }
+    if (!(e && e.code)) await inspAlert(env, 'request_internal', String(e && e.message));
+    return inspHandleErr(e);
+  }
+}
+
+//@@INSP_BOOKING_PART4@@
