@@ -26004,4 +26004,194 @@ async function inspBookRequest(env, body) {
   }
 }
 
-//@@INSP_BOOKING_PART4@@
+async function inspNotifyBrett(env, cfg, subject, text, link, rec) {
+  const log = [];
+  try { if (!cfg.admin_phone) log.push('sms: no admin_phone configured'); else { const r = await sendSMS(env, cfg.admin_phone, text.slice(0, 320)); log.push(r && r.skipped ? 'sms: skipped (' + r.reason + ')' : (r && r.error ? 'sms: FAILED ' + r.error : 'sms: ok')); } } catch (e) { log.push('sms: FAILED ' + e.message); }
+  try {
+    const html = `<p><b>${String(rec.Contact_Name || '').replace(/</g, '&lt;')}</b> requested an inspection.</p><p>${String(rec.Formatted_Address || rec.Address).replace(/</g, '&lt;')}<br>${rec.Units} unit(s) / ${rec.Buildings} building(s) · ${rec.Duration_Min} min<br>${inspFmtEt(Date.parse(rec.Start_ISO))}–${inspFmtEtTime(Date.parse(rec.End_ISO))}</p><p>Drive: ${rec.Drive_Before_Min || '–'} min from previous stop, ${rec.Drive_After_Min || '–'} min to next (${rec.Drive_Source}).</p><p><a href="${link}">Approve or decline</a></p>`;
+    const r = await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject, html });
+    log.push(r && r.staged ? 'email: staged' : 'email: ok');
+  } catch (e) { log.push('email: FAILED ' + e.message); }
+  if (log.every(l => /FAILED|no admin_phone|skipped/.test(l)) && !log.some(l => /staged/.test(l))) await inspAlert(env, 'notify_brett', 'Brett could not be notified of booking: ' + log.join('; '));
+  return log;
+}
+async function inspNotifyPartner(env, b, kind) {
+  const log = [], when = inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), addr = b.Formatted_Address || b.Address;
+  const manageUrl = inspBookUrl('m=' + encodeURIComponent(b.Manage_Token));
+  const text = kind === 'approved' ? `Confirmed: inspection at ${addr}, ${when}. Details/cancel: ${manageUrl}`
+    : kind === 'declined' ? `Brett couldn't take the inspection at ${addr} on ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''} Please pick another time: ${manageUrl}`
+    : `Cancelled: inspection at ${addr}, ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''}`;
+  if (b.Contact_Phone) { try { const r = await sendSMS(env, b.Contact_Phone, text); log.push(r && r.skipped ? 'partner sms: skipped (' + r.reason + ')' : (r && r.error ? 'partner sms: FAILED ' + r.error : 'partner sms: ok')); } catch (e) { log.push('partner sms: FAILED ' + e.message); } }
+  if (b.Contact_Email) { try { const r = await gmailSendEmail(env, { to: b.Contact_Email, subject: (kind === 'approved' ? 'Inspection confirmed: ' : kind === 'declined' ? 'Inspection time not available: ' : 'Inspection cancelled: ') + addr, html: `<p>${text.replace(/</g, '&lt;')}</p>` }); log.push(r && r.staged ? 'partner email: staged' : 'partner email: ok'); } catch (e) { log.push('partner email: FAILED ' + e.message); } }
+  if (log.some(l => /FAILED/.test(l))) await inspAlert(env, 'notify_partner', `Booking #${b.ID} ${kind}, but the partner message failed: ` + log.join('; '));
+  return log;
+}
+async function inspBookingByManage(env, t) {
+  if (!t || String(t).length < 16) return null;
+  const rows = await fetchTab(env, 'Insp_Bookings');
+  return rows.find(r => r.Manage_Token === String(t)) || null;
+}
+async function inspBookStatus(env, url) {
+  const b = await inspBookingByManage(env, url.searchParams.get('t'));
+  if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+  return json({ ok: true, booking: inspPublicBooking(b) });
+}
+async function inspBookCancel(env, body) {
+  try {
+    const b = await inspBookingByManage(env, body && body.t);
+    if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+    if (!INSP_ACTIVE_BOOKING.includes(b.Status)) return json({ ok: false, error: 'not_active', message: 'This booking is already ' + b.Status + '.' }, 409);
+    const r = await inspFinishBooking(env, b, 'cancelled', 'Cancelled by ' + (b.Contact_Name || 'partner'), 'partner');
+    return json(r.body, r.status);
+  } catch (e) { return inspHandleErr(e); }
+}
+// Public approve page data + decision (tokenized link texted/emailed to Brett).
+async function inspApprovalInfo(env, url) {
+  const id = await inspVerifyApproveToken(env, url.searchParams.get('a'));
+  if (!id) return json({ ok: false, error: 'invalid_link', message: 'This approval link is not valid.' }, 404);
+  const rows = await fetchTab(env, 'Insp_Bookings'), b = rows.find(r => r.ID === id);
+  if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+  return json({ ok: true, booking: inspAdminBooking(b) });
+}
+async function inspApprovalDecide(env, body) {
+  try {
+    const id = await inspVerifyApproveToken(env, body && body.a);
+    if (!id) return json({ ok: false, error: 'invalid_link', message: 'This approval link is not valid.' }, 404);
+    return await inspBookingDecide(env, id, body.decision, body.note, 'link');
+  } catch (e) { return inspHandleErr(e); }
+}
+function inspAdminBooking(b) {
+  const o = Object.assign({}, b); delete o.Manage_Token;
+  o.when = b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)) : '';
+  return o;
+}
+
+// ── Decisions (shared by the link and the admin tab) ───────────────────────────────────────
+async function inspBookingDecide(env, id, decision, note, via) {
+  if (decision !== 'approve' && decision !== 'decline') return json({ ok: false, error: 'bad_decision', message: 'decision must be approve or decline' }, 400);
+  const rows = await fetchTab(env, 'Insp_Bookings'), b = rows.find(r => r.ID === String(id));
+  if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+  if (b.Status !== 'pending') return json({ ok: false, error: 'not_pending', message: 'This booking is already ' + b.Status + '.', booking: inspAdminBooking(b) }, 409);
+  const n = String(note || '').trim().slice(0, 300);
+  const r = await inspFinishBooking(env, b, decision === 'approve' ? 'approved' : 'declined', n, via);
+  return json(r.body, r.status);
+}
+// Status transition + calendar + notifications. Calendar failure leaves the status UNCHANGED and reports it.
+async function inspFinishBooking(env, b, newStatus, note, via) {
+  const cfg = await fetchConfig(env), staged = inspCalStaged(env, cfg);
+  const evId = b.Calendar_Event_ID;
+  try {
+    if (newStatus === 'approved') {
+      if (!staged && evId) await inspCalFetch(env, cfg, 'PATCH', '/events/' + encodeURIComponent(evId), inspBookingEventBody(b, false, ''));
+      else if (!staged) { const ev = await inspCalFetch(env, cfg, 'POST', '/events', inspBookingEventBody(b, false, '')); b.Calendar_Event_ID = ev.id; }
+    } else if (evId && !staged) {
+      try { await inspCalFetch(env, cfg, 'DELETE', '/events/' + encodeURIComponent(evId)); }
+      catch (e) { if (e.httpStatus !== 404 && e.httpStatus !== 410) throw e; }
+    }
+  } catch (e) {
+    await inspAlert(env, e.code || 'calendar_write', `Booking #${b.ID}: calendar update failed, status NOT changed: ${e.message}`);
+    return { status: 502, body: { ok: false, error: 'calendar_failed', message: 'Could not update your calendar, so nothing was changed: ' + e.message } };
+  }
+  const upd = { Status: newStatus, Decision_Note: note || '', Decided_At: new Date().toISOString() };
+  if (newStatus !== 'approved') upd.Calendar_Event_ID = '';
+  else if (b.Calendar_Event_ID !== evId) upd.Calendar_Event_ID = b.Calendar_Event_ID;
+  const ur = await updateRow(env, 'Insp_Bookings', b.ID, upd);
+  const uj = await ur.json();
+  if (!uj || !uj.success) {
+    await inspAlert(env, 'booking_status_write', `Booking #${b.ID} calendar was updated but the status write failed: ${JSON.stringify(uj).slice(0, 200)}`);
+    return { status: 500, body: { ok: false, error: 'status_write_failed', message: 'The calendar changed but saving the status failed. Brett has been alerted.' } };
+  }
+  Object.assign(b, upd);
+  const kind = newStatus === 'approved' ? 'approved' : (newStatus === 'declined' ? 'declined' : 'cancelled');
+  const log = await inspNotifyPartner(env, b, kind);
+  if (kind === 'cancelled' && via === 'partner') log.push(...await inspNotifyBrett(env, cfg, 'Inspection cancelled: ' + (b.Formatted_Address || b.Address), `Cancelled by partner: ${b.Formatted_Address || b.Address}, ${inspFmtEt(Date.parse(b.Start_ISO))}.`, inspBookUrl(''), b));
+  try { await updateRow(env, 'Insp_Bookings', b.ID, { Notify_Log: ((b.Notify_Log ? b.Notify_Log + ' | ' : '') + kind + ': ' + log.join('; ')).slice(0, 900) }); } catch (e) { console.error('insp: Notify_Log write failed for booking', b.ID, e && e.message); log.push('notify_log_write_failed'); }
+  return { status: 200, body: { ok: true, status: newStatus, notify: log, booking: inspAdminBooking(b) } };
+}
+
+// ── Admin (secret-gated) endpoints ─────────────────────────────────────────────────────────
+async function inspOpenBlocksList(env) {
+  let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
+  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)));
+}
+async function inspOpenBlockAdd(env, body) {
+  const dates = Array.isArray(body && body.dates) && body.dates.length ? body.dates : (body && body.Date ? [body.Date] : []);
+  if (!dates.length) return json({ error: 'At least one date required' }, 400);
+  if (dates.length > 60) return json({ error: 'Max 60 dates at once' }, 400);
+  const s = inspParseHHMM(body.Start_Time), e = inspParseHHMM(body.End_Time);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return json({ error: 'Start_Time and End_Time (HH:MM, end after start) required' }, 400);
+  const today = inspEtDate(Date.now());
+  for (const d of dates) if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || String(d) < today) return json({ error: 'Bad or past date: ' + d }, 400);
+  const hh = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+  await ensureInspTabs(env);
+  let n = 0;
+  for (const d of dates) {
+    const r = await addRow(env, 'Insp_Open_Blocks', { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today });
+    const j = await r.json(); if (!j || !j.success) return json({ error: 'Failed saving ' + d, saved: n }, 500); n++;
+  }
+  return json({ success: true, count: n });
+}
+async function inspBookingsList(env, url) {
+  let rows = []; try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read bookings: ' + e.message }, 500); }
+  const st = url.searchParams.get('status');
+  rows = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (!st || r.Status === st));
+  return json(rows.map(inspAdminBooking).sort((a, b) => String(b.Start_ISO).localeCompare(String(a.Start_ISO))));
+}
+async function inspBookingAdminDecide(env, body) {
+  try { return await inspBookingDecide(env, body && body.id, body && body.decision, body && body.note, 'admin'); } catch (e) { return inspHandleErr(e); }
+}
+async function inspBookingAdminCancel(env, body) {
+  try {
+    const rows = await fetchTab(env, 'Insp_Bookings'), b = rows.find(r => r.ID === String(body && body.id));
+    if (!b) return json({ ok: false, error: 'not_found' }, 404);
+    if (!INSP_ACTIVE_BOOKING.includes(b.Status)) return json({ ok: false, error: 'not_active', message: 'Already ' + b.Status }, 409);
+    const r = await inspFinishBooking(env, b, 'cancelled', String((body && body.note) || 'Cancelled by Brett').slice(0, 300), 'admin');
+    return json(r.body, r.status);
+  } catch (e) { return inspHandleErr(e); }
+}
+async function inspBookLinkEnsure(env, body) {
+  if (!body || !body.customer_id) return json({ error: 'customer_id required' }, 400);
+  await ensureInspTabs(env);
+  const rows = await fetchTab(env, 'Insp_Customers'), c = rows.find(r => r.ID === String(body.customer_id));
+  if (!c) return json({ error: 'Customer not found' }, 404);
+  let tok = c.Book_Token;
+  if (!tok || body.rotate) { tok = inspRandToken(18); const r = await updateRow(env, 'Insp_Customers', c.ID, { Book_Token: tok }); const j = await r.json(); if (!j || !j.success) return json({ error: 'Could not save the link' }, 500); }
+  return json({ success: true, rotated: !!body.rotate, url: inspBookUrl('k=' + encodeURIComponent(tok)) });
+}
+// Explains exactly what is missing, in order. write=1 also creates + deletes a 1-minute test
+// event so we KNOW writes work (the only way to prove "make changes" permission).
+async function inspCalendarTest(env, url) {
+  const cfg = await fetchConfig(env), steps = [], calId = await inspCalendarId(env, cfg);
+  const add = (name, ok, detail, fix) => steps.push({ step: name, ok, detail: detail || '', fix: fix || '' });
+  add('Calendar to use', true, calId + (cfg.INSP_CALENDAR_ID ? ' (Config INSP_CALENDAR_ID)' : ' (default)'));
+  if (inspCalStaged(env, cfg)) { add('Staging', true, 'Calendar calls are stubbed on staging (Config INSP_CALENDAR_STAGING_MODE=LIVE to test for real).'); }
+  else {
+    try { await getCalendarAccessToken(env); add('Google sign-in (service account)', true, env.GOOGLE_SA_EMAIL); }
+    catch (e) { add('Google sign-in (service account)', false, e.message, 'Check GOOGLE_SA_EMAIL / GOOGLE_SA_KEY on the Worker.'); }
+    if (steps[steps.length - 1].ok) {
+      try { const d = await inspCalListEvents(env, cfg, Date.now(), Date.now() + 14 * 86400000); add('Read your calendar', true, d.items.length + ' event(s) in the next 14 days'); }
+      catch (e) {
+        const fixes = { calendar_api_disabled: 'Enable "Google Calendar API" in Google Cloud project maintenance-hub-498819 (APIs & Services > Library > Google Calendar API > Enable).',
+          calendar_not_shared: `In Google Calendar > Settings for your calendar > Share with specific people > add ${env.GOOGLE_SA_EMAIL} with "Make changes to events". If your main calendar is under a different address, set Config INSP_CALENDAR_ID to it.` };
+        add('Read your calendar', false, `${e.code}: ${e.message}`, fixes[e.code] || '');
+      }
+      if (url.searchParams.get('write') === '1' && steps[steps.length - 1].ok) {
+        try {
+          const t0 = Date.now() + 3 * 86400000;
+          const ev = await inspCalFetch(env, cfg, 'POST', '/events', { summary: 'Ridge Co calendar test (safe to ignore — deleting now)', start: { dateTime: new Date(t0).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(t0 + 60000).toISOString(), timeZone: INSP_TZ }, transparency: 'transparent', extendedProperties: { private: { ridgecoInspBooking: 'test' } } });
+          await inspCalFetch(env, cfg, 'DELETE', '/events/' + encodeURIComponent(ev.id));
+          add('Create + delete a test event', true, 'Wrote and removed one 1-minute event.');
+        } catch (e) { add('Create + delete a test event', false, `${e.code}: ${e.message}`, 'Share the calendar with the service account using "Make changes to events".'); }
+      }
+    }
+  }
+  try {
+    const g = await inspGeocode(env, '1111 East 43rd Street, Baltimore, MD'); add('Address lookup (Geocoding)', !!g, g ? g.formatted : 'no result');
+    if (g) {
+      try { const m = await inspRouteMatrix(env, [g], [{ lat: g.lat + 0.02, lng: g.lng + 0.02 }]); const el = m[0]; add('Drive time lookup (Routes API)', !!(el && el.condition === 'ROUTE_EXISTS'), el ? `${Math.round(parseInt(el.duration, 10) / 60)} min test drive` : 'empty response'); }
+      catch (e) { add('Drive time lookup (Routes API)', false, e.message, 'Enable "Routes API" for the Google Maps key in Google Cloud (APIs & Services > Library). Until then drive times fall back to a flagged estimate.'); }
+    }
+  } catch (e) { add('Address lookup (Geocoding)', false, e.message, 'Check GOOGLE_MAPS_KEY.'); }
+  add('Notify Brett by text', !!cfg.admin_phone, cfg.admin_phone ? 'Config admin_phone set (sends only while Config TWILIO_ENABLED=TRUE)' : 'Config admin_phone missing', 'Add Config key admin_phone.');
+  return json({ ok: steps.every(s => s.ok), steps });
+}
