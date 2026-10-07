@@ -271,6 +271,60 @@
       </div>
     </div>
 
+
+    <!-- ── APPROVALS (partner booking requests) ── -->
+    <div class="page" id="page-approvals">
+      <div id="appr-error" class="banner hide"></div>
+      <div class="card">
+        <div class="row"><b>Waiting for your OK</b><button class="btn sm" onclick="loadBookings()">Refresh</button></div>
+        <div id="appr-pending" style="margin-top:10px"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <b>Upcoming &amp; recent</b>
+        <div id="appr-other" style="margin-top:10px"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
+
+    <!-- ── OPEN BLOCKS + BOOKING LINK ── -->
+    <div class="page" id="page-blocks">
+      <div class="card">
+        <b>1. Open a block of time</b>
+        <p class="muted" style="margin:6px 0 0">Partners can only book inside these windows, and never on top of anything already on your calendar. Times are Eastern.</p>
+        <label class="fld">Customer</label>
+        <select id="ob-customer"></select>
+        <label class="fld">Dates</label>
+        <div class="two-col"><div><input type="date" id="ob-date"></div><div><button class="btn" style="width:100%" onclick="obAddDate()">Add date</button></div></div>
+        <div class="chip-row" id="ob-chips"></div>
+        <div class="two-col">
+          <div><label class="fld">From</label><input type="time" id="ob-start" value="09:00"></div>
+          <div><label class="fld">To</label><input type="time" id="ob-end" value="17:00"></div>
+        </div>
+        <label class="fld">Note (optional)</label>
+        <input id="ob-note" placeholder="e.g. AMS inspections week of Oct 13">
+        <button class="btn primary" style="width:100%;margin-top:12px" onclick="obSave(this)">Open this block</button>
+      </div>
+      <div class="card">
+        <b>Open blocks</b>
+        <div id="ob-list" style="margin-top:10px"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <b>2. Booking link for a customer</b>
+        <p class="muted" style="margin:6px 0 0">Anyone with the link can see your open times, so send it only to the partner. "New link" kills the old one.</p>
+        <label class="fld">Customer</label>
+        <select id="bl-customer"></select>
+        <div class="two-col" style="margin-top:10px"><div><button class="btn primary" style="width:100%" onclick="blGet(false,this)">Get link</button></div><div><button class="btn" style="width:100%" onclick="blGet(true,this)">New link</button></div></div>
+        <div id="bl-out" class="hide" style="margin-top:10px">
+          <input id="bl-url" readonly onclick="this.select()">
+          <button class="btn go" style="width:100%;margin-top:8px" onclick="blCopy()">Copy link</button>
+        </div>
+      </div>
+      <div class="card">
+        <b>3. Check the connections</b>
+        <p class="muted" style="margin:6px 0 0"><b>Check</b> only reads your calendar. <b>Check + test write</b> also creates one 1-minute placeholder event 3 days out and deletes it right away, to prove bookings can land on your calendar.</p>
+        <div class="two-col" style="margin-top:10px"><div><button class="btn" style="width:100%" onclick="calTest(false,this)">Check</button></div><div><button class="btn primary" style="width:100%" onclick="calTest(true,this)">Check + test write</button></div></div>
+        <div id="cal-out" style="margin-top:10px"></div>
+      </div>
+    </div>
   </main>
 </div>
 
