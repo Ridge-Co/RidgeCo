@@ -25681,6 +25681,7 @@ function inspComputeSlots(o) {
   const seen = new Map(), out = [];
   for (const b of (o.blocks || [])) {
     if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    if (o.closedDates && o.closedDates.has(b.Date)) continue; // STR checkout with no cleaner: whole day closed
     const bs = inspEtWallToMs(b.Date, b.Start_Time), be = inspEtWallToMs(b.Date, b.End_Time);
     if (!Number.isFinite(bs) || !Number.isFinite(be) || be <= bs) continue;
     const exp = inspBlockExpiryMs(b, o.bookByHours);
