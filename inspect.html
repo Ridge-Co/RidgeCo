@@ -382,7 +382,7 @@ function enterApp(){
   document.getElementById('app').classList.remove('hide');
   api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
   populateAnnualPicker();
-  loadCustomers(); loadAvailability();
+  loadCustomers().then(function(){ fillCustomerSelects(); loadBlocks(); }); loadAvailability(); loadBookings();
 }
 
 // ── Tabs ─────────────────────────────────────────────────────
