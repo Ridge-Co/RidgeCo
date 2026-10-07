@@ -513,6 +513,12 @@ const _hubWorkerCore = {
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
+        if (path === '/insp/open-blocks')       return await inspOpenBlocksList(env);
+        if (path === '/insp/bookings')          return await inspBookingsList(env, url);
+        if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
+        if (path === '/insp-book/info')         return await inspBookInfo(env, url);
+        if (path === '/insp-book/status')       return await inspBookStatus(env, url);
+        if (path === '/insp-book/approval')     return await inspApprovalInfo(env, url);
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
       if (request.method === 'POST') {
