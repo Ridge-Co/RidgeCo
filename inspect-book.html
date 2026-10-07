@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Book an Inspection — Ridge Co</title>
+<style>
+  :root{--bg:#f4f5f7;--surface:#fff;--border:#dfe3e8;--text:#1c2430;--muted:#6b7684;--accent:#1d4ed8;--ok:#1a7f4b;--danger:#c0392b;--warn:#7a5b12;--chip:#eef2f7}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.4}
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px}
+  header h1{font-size:18px;margin:0} header .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  main{max-width:560px;margin:0 auto;padding:14px 14px 60px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  label{display:block;margin:12px 0 4px;font-size:13px;font-weight:600;color:var(--muted)}
+  input,textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;font-family:inherit;background:var(--surface);color:var(--text)}
+  .row2{display:flex;gap:10px}.row2>div{flex:1}
+  .btn{width:100%;margin-top:14px;padding:13px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+  .btn.ok{background:var(--ok)} .btn.ghost{background:var(--surface);color:var(--text);border:1px solid var(--border)} .btn.bad{background:var(--surface);color:var(--danger);border:1px solid var(--danger)}
+  .btn:disabled{opacity:.55}
+  .muted{color:var(--muted);font-size:13px}
+  .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+  .banner.err{background:#fdecea;border:1px solid #f3b9b3;color:#8a1f14}
+  .banner.warn{background:#fdf3e0;border:1px solid #f0d9a8;color:var(--warn)}
+  .banner.good{background:#e7f6ec;border:1px solid #b7e0c5;color:#14532d}
+  .day{margin-top:14px} .day h3{margin:0 0 6px;font-size:15px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--chip);font-size:14px;font-weight:600;cursor:pointer}
+  .chip.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .hide{display:none}
+  .est{font-size:14px;color:var(--text);background:var(--chip);border-radius:8px;padding:8px 10px;margin-top:10px}
+  dl{margin:0} dt{font-size:12px;color:var(--muted);margin-top:8px} dd{margin:0;font-size:16px}
+</style>
+</head>
+<body>
+<header><h1 id="h-title">Book an inspection</h1><div class="sub" id="h-sub">Ridge Co Property Management</div></header>
+<main id="main"><div class="card"><p class="muted">Loading…</p></div></main>
+<script>
+var Q=new URLSearchParams(location.search);
+// ?api= may only point at the staging Worker (used for pre-merge testing); anything else is ignored.
+var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(Q.get('api')||'')?Q.get('api'):'https://maintenance-hub.brett-2f8.workers.dev';
+var K=Q.get('k')||'', M=Q.get('m')||'', A=Q.get('a')||'';
+var state={address:'',units:'',buildings:'',slots:[],picked:null,duration:0,formatted:''};
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function $(id){return document.getElementById(id);}
+function call(method,path,body){
+  var o={method:method,headers:{'Content-Type':'application/json'}}; if(body) o.body=JSON.stringify(body);
+  return fetch(WORKER+path,o).then(function(r){return r.json().catch(function(){return {ok:false,error:'bad_response',message:'The server sent an unreadable answer (HTTP '+r.status+').'};}).then(function(j){j._http=r.status;return j;});});
+}
+function setMain(h){$('main').innerHTML=h;}
+function banner(kind,msg){return '<div class="banner '+kind+'">'+esc(msg)+'</div>';}
+function netFail(e){return banner('err','Could not reach the scheduling server ('+e.message+'). Please check your connection and try again.');}
+
+// Mirrors the Worker's inspDurationMin so the page can preview the length (the server is authoritative).
+function durMin(u,b){u=Math.max(1,Math.floor(+u||0));b=Math.max(1,Math.min(u,Math.floor(+b||1)));var avg=u/b,oh=avg>=3?20:(avg>=2?15:10);return Math.max(30,Math.ceil((30*u+oh*b)/5)*5);}
+function fmtDur(m){var h=Math.floor(m/60),r=m%60;return (h?h+' hr ':'')+(r?r+' min':'').trim();}
+
+// ── Partner booking ─────────────────────────────────────────
+function bookInit(){
+  call('GET','/insp-book/info?k='+encodeURIComponent(K)).then(function(r){
+    if(!r.ok){ setMain('<div class="card">'+banner('err',r.message||'This booking link is not valid. Please ask Brett for a current one.')+'</div>'); return; }
+    $('h-title').textContent='Book an inspection';
+    $('h-sub').textContent=r.customer+' · Ridge Co';
+    var ex=(r.example_durations||[]).map(function(d){return d.units+' unit'+(d.units>1?'s':'')+' ≈ '+fmtDur(d.minutes);}).join(' · ');
+    setMain('<div class="card"><b>Where and how big?</b>'
+      +(r.open_block_count? '' : banner('warn','No time slots are open right now. Brett opens blocks of time — check back or ask him.'))
+      +'<label>Property address</label><input id="f-addr" placeholder="123 N Main St, Baltimore, MD 21201" autocomplete="street-address">'
+      +'<div class="row2"><div><label>Total units</label><input id="f-units" type="number" min="1" max="60" inputmode="numeric" placeholder="e.g. 2"></div>'
+      +'<div><label>Buildings</label><input id="f-bldg" type="number" min="1" inputmode="numeric" placeholder="1"></div></div>'
+      +'<div class="est hide" id="f-est"></div><p class="muted" style="margin-bottom:0">Typical length: '+esc(ex)+'. The length is figured from units and buildings, and drive time from Brett’s other stops is included automatically.</p>'
+      +'<button class="btn" id="f-go" onclick="findTimes()">Find available times</button></div><div id="results"></div>');
+    ['f-units','f-bldg'].forEach(function(id){$(id).addEventListener('input',updEst);});
+  }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
+}
+function updEst(){
+  var u=+$('f-units').value, b=+$('f-bldg').value||1, el=$('f-est');
+  if(u>=1){ if(b>u){b=u;} el.textContent='Estimated inspection length: '+fmtDur(durMin(u,b)); el.classList.remove('hide'); } else el.classList.add('hide');
+}
+function findTimes(){
+  var addr=$('f-addr').value.trim(), u=Math.floor(+$('f-units').value), b=Math.floor(+$('f-bldg').value)||1;
+  var res=$('results');
+  if(addr.length<6){res.innerHTML=banner('err','Please enter the full street address.');return;}
+  if(!(u>=1)){res.innerHTML=banner('err','Please enter the number of units.');return;}
+  if(b>u){res.innerHTML=banner('err','Buildings can’t be more than units.');return;}
+  state.address=addr;state.units=u;state.buildings=b;state.picked=null;
+  var btn=$('f-go'); btn.disabled=true; btn.textContent='Checking Brett’s calendar and drive times…';
+  res.innerHTML='';
+  call('POST','/insp-book/slots',{k:K,address:addr,units:u,buildings:b}).then(function(r){
+    btn.disabled=false; btn.textContent='Find available times';
+    if(!r.ok){ res.innerHTML=banner('err',r.message||'Something went wrong.'); return; }
+    state.slots=r.slots; state.duration=r.duration_min; state.formatted=r.address;
+    renderSlots(r);
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Find available times'; res.innerHTML=netFail(e); });
+}
+function dayLabel(iso){var d=new Date(iso+'T12:00:00Z');return d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',timeZone:'UTC'});}
+function renderSlots(r){
+  var res=$('results'), h='<div class="card"><b>'+esc(r.address)+'</b><div class="muted">'+r.units+' unit'+(r.units>1?'s':'')+' · '+fmtDur(r.duration_min)+' inspection · times are Eastern</div>';
+  (r.warnings||[]).forEach(function(w){h+=banner('warn',w);});
+  if(!r.slots.length){
+    h+=banner('warn', r.no_blocks ? 'Brett has no open blocks of time right now.' : 'Nothing fits a '+fmtDur(r.duration_min)+' inspection in the open blocks (considering drive time from his other stops). Try again later or ask Brett to open more time.')+'</div>';
+    res.innerHTML=h; return;
+  }
+  var byDay={},order=[];
+  r.slots.forEach(function(s,i){ if(!byDay[s.date]){byDay[s.date]=[];order.push(s.date);} byDay[s.date].push(i); });
+  order.forEach(function(d){
+    h+='<div class="day"><h3>'+esc(dayLabel(d))+'</h3><div class="chips">'+byDay[d].map(function(i){return '<div class="chip" data-i="'+i+'" onclick="pick('+i+')">'+esc(r.slots[i].label.split('–')[0])+'</div>';}).join('')+'</div></div>';
+  });
+  h+='</div><div id="contact"></div>';
+  res.innerHTML=h;
+}
+function pick(i){
+  state.picked=i;
+  Array.prototype.forEach.call(document.querySelectorAll('.chip'),function(c){c.classList.toggle('sel',+c.getAttribute('data-i')===i);});
+  var s=state.slots[i];
+  $('contact').innerHTML='<div class="card"><b>'+esc(dayLabel(s.date))+' · '+esc(s.label)+'</b><div class="muted">'+esc(state.formatted)+'</div>'
+    +'<label>Your name</label><input id="c-name" autocomplete="name">'
+    +'<div class="row2"><div><label>Phone</label><input id="c-phone" type="tel" autocomplete="tel"></div><div><label>Email</label><input id="c-email" type="email" autocomplete="email"></div></div>'
+    +'<label>Notes for Brett (access, tenant contact, etc.)</label><textarea id="c-notes" rows="3"></textarea>'
+    +'<div id="c-err"></div><button class="btn ok" id="c-go" onclick="requestSlot()">Request this time</button>'
+    +'<p class="muted">Brett approves each booking. The time is held on his calendar right away and you’ll get a confirmation by text/email.</p></div>';
+  $('contact').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function requestSlot(){
+  var s=state.slots[state.picked], err=$('c-err'), btn=$('c-go');
+  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
+  btn.disabled=true; btn.textContent='Requesting…'; err.innerHTML='';
+  call('POST','/insp-book/request',body).then(function(r){
+    if(r.ok){
+      try{localStorage.setItem('insp_last_manage',r.manage_url);}catch(e){}
+      setMain('<div class="card">'+banner('good',r.message)+'<dl><dt>Property</dt><dd>'+esc(r.address)+'</dd><dt>When</dt><dd>'+esc(r.when)+'</dd><dt>Length</dt><dd>'+fmtDur(r.duration_min)+'</dd><dt>Status</dt><dd>Waiting for Brett’s approval</dd></dl>'
+        +'<p class="muted">Bookmark this link to check status or cancel:</p><input readonly value="'+esc(r.manage_url)+'" onclick="this.select()"><a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="'+esc(r.manage_url)+'">Open booking</a>'
+        +'<a class="btn" style="display:block;text-align:center;text-decoration:none" href="?k='+encodeURIComponent(K)+'">Book another</a></div>');
+      return;
+    }
+    btn.disabled=false; btn.textContent='Request this time';
+    err.innerHTML=banner('err',r.message||'Could not book.');
+    if(r.error==='slot_taken'&&r.slots){ state.slots=r.slots; state.picked=null; renderSlots({address:state.formatted,units:state.units,duration_min:state.duration,slots:r.slots,warnings:[]}); $('results').insertAdjacentHTML('afterbegin',banner('warn',r.message)); }
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Request this time'; err.innerHTML=netFail(e); });
+}
+
+// ── Partner: manage a booking ───────────────────────────────
+function manageInit(){
+  $('h-title').textContent='Your inspection booking';
+  call('GET','/insp-book/status?t='+encodeURIComponent(M)).then(function(r){
+    if(!r.ok){ setMain('<div class="card">'+banner('err',r.message||'Booking not found.')+'</div>'); return; }
+    var b=r.booking, msg={pending:'Waiting for Brett’s approval — the time is held for you.',approved:'Confirmed.',declined:'Brett couldn’t take this time. '+(b.decision_note||''),cancelled:'This booking was cancelled.'}[b.status]||b.status;
+    var kind=b.status==='approved'?'good':(b.status==='pending'?'warn':'err');
+    setMain('<div class="card">'+banner(kind,msg)+'<dl><dt>Property</dt><dd>'+esc(b.address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Units</dt><dd>'+esc(b.units)+' in '+esc(b.buildings)+' building(s) · '+fmtDur(b.duration_min)+'</dd></dl>'
+      +((b.status==='pending'||b.status==='approved')?'<button class="btn bad" onclick="cancelMine()">Cancel this booking</button>':'')
+      +(b.status==='declined'||b.status==='cancelled'?'<p class="muted">Ask Brett for a current booking link to pick another time.</p>':'')+'</div>');
+  }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
+}
+function cancelMine(){
+  if(!confirm('Cancel this inspection booking?')) return;
+  call('POST','/insp-book/cancel',{t:M}).then(function(r){
+    if(r.ok){ manageInit(); } else alert(r.message||'Could not cancel.');
+  }).catch(function(e){ alert('Could not reach the server: '+e.message); });
+}
+
+// ── Brett: approve / decline from the texted link ───────────
+function approveInit(){
+  $('h-title').textContent='Inspection request'; $('h-sub').textContent='For Brett';
+  call('GET','/insp-book/approval?a='+encodeURIComponent(A)).then(function(r){
+    if(!r.ok){ setMain('<div class="card">'+banner('err',r.message||'Invalid link.')+'</div>'); return; }
+    var b=r.booking;
+    var drive=(b.Drive_Before_Min||b.Drive_After_Min)?'<dt>Drive</dt><dd>'+esc(b.Drive_Before_Min||'–')+' min from previous stop · '+esc(b.Drive_After_Min||'–')+' min to next'+(b.Drive_Source&&b.Drive_Source!=='routes'?' ('+esc(b.Drive_Source)+' — not a real lookup)':'')+'</dd>':'';
+    var done=b.Status!=='pending';
+    setMain('<div class="card">'+(done?banner('warn','Already '+b.Status+'.'):'')+'<dl><dt>Property</dt><dd>'+esc(b.Formatted_Address||b.Address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Size</dt><dd>'+esc(b.Units)+' unit(s) / '+esc(b.Buildings)+' building(s) · '+esc(b.Duration_Min)+' min</dd>'+drive
+      +'<dt>Contact</dt><dd>'+esc(b.Contact_Name)+' '+esc(b.Contact_Phone)+' '+esc(b.Contact_Email)+'</dd>'+(b.Notes?'<dt>Notes</dt><dd>'+esc(b.Notes)+'</dd>':'')+'</dl>'
+      +(done?'':'<div id="a-err"></div><label>Optional note to the partner</label><input id="a-note"><button class="btn ok" onclick="decide(\'approve\',this)">Approve</button><button class="btn bad" onclick="decide(\'decline\',this)">Decline</button>')+'</div>');
+  }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
+}
+function decide(d,btn){
+  btn.disabled=true;
+  call('POST','/insp-book/decide',{a:A,decision:d,note:($('a-note')||{}).value||''}).then(function(r){
+    if(r.ok){
+      var warn=(r.notify||[]).filter(function(x){return /FAILED/.test(x);});
+      setMain('<div class="card">'+banner('good',d==='approve'?'Approved. It’s solid on your calendar and the partner was notified.':'Declined. The hold was removed from your calendar and the partner was notified.')+(warn.length?banner('warn','A notification failed: '+warn.join('; ')):'')+'</div>');
+    } else { btn.disabled=false; $('a-err').innerHTML=banner('err',r.message||'Could not save — nothing was changed.'); }
+  }).catch(function(e){ btn.disabled=false; $('a-err').innerHTML=netFail(e); });
+}
+
+if(A) approveInit(); else if(M) manageInit(); else if(K) bookInit();
+else setMain('<div class="card">'+banner('err','This page needs a booking link. Please ask Brett for yours.')+'</div>');
+</script>
+</body>
+</html>

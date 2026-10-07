@@ -16,7 +16,8 @@
   header h1{font-size:18px;margin:0}
   header .ver{font-size:11px;color:var(--muted)}
   .tabs{position:sticky;top:49px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;z-index:9}
-  .tabs button{flex:1;padding:12px 4px;border:none;background:none;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
+  .tabs{overflow-x:auto}
+  .tabs button{flex:1 0 auto;white-space:nowrap;padding:12px 10px;border:none;background:none;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent}
   .tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
   main{padding:14px 14px 60px;max-width:640px;margin:0 auto}
   .page{display:none} .page.active{display:block}
@@ -119,6 +120,8 @@
     <button class="active" data-tab="customers" onclick="switchTab('customers')">Customers</button>
     <button data-tab="props" onclick="switchTab('props')">Properties &amp; Units</button>
     <button data-tab="avail" onclick="switchTab('avail')">Availability</button>
+    <button data-tab="approvals" onclick="switchTab('approvals')">Approvals <span class="pill due hide" id="appr-badge">0</span></button>
+    <button data-tab="blocks" onclick="switchTab('blocks')">Open blocks</button>
   </div>
   <main>
 
@@ -268,6 +271,60 @@
       </div>
     </div>
 
+
+    <!-- ── APPROVALS (partner booking requests) ── -->
+    <div class="page" id="page-approvals">
+      <div id="appr-error" class="banner hide"></div>
+      <div class="card">
+        <div class="row"><b>Waiting for your OK</b><button class="btn sm" onclick="loadBookings()">Refresh</button></div>
+        <div id="appr-pending" style="margin-top:10px"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <b>Upcoming &amp; recent</b>
+        <div id="appr-other" style="margin-top:10px"><p class="muted">Loading…</p></div>
+      </div>
+    </div>
+
+    <!-- ── OPEN BLOCKS + BOOKING LINK ── -->
+    <div class="page" id="page-blocks">
+      <div class="card">
+        <b>1. Open a block of time</b>
+        <p class="muted" style="margin:6px 0 0">Partners can only book inside these windows, and never on top of anything already on your calendar. Times are Eastern.</p>
+        <label class="fld">Customer</label>
+        <select id="ob-customer"></select>
+        <label class="fld">Dates</label>
+        <div class="two-col"><div><input type="date" id="ob-date"></div><div><button class="btn" style="width:100%" onclick="obAddDate()">Add date</button></div></div>
+        <div class="chip-row" id="ob-chips"></div>
+        <div class="two-col">
+          <div><label class="fld">From</label><input type="time" id="ob-start" value="09:00"></div>
+          <div><label class="fld">To</label><input type="time" id="ob-end" value="17:00"></div>
+        </div>
+        <label class="fld">Note (optional)</label>
+        <input id="ob-note" placeholder="e.g. AMS inspections week of Oct 13">
+        <button class="btn primary" style="width:100%;margin-top:12px" onclick="obSave(this)">Open this block</button>
+      </div>
+      <div class="card">
+        <b>Open blocks</b>
+        <div id="ob-list" style="margin-top:10px"><p class="muted">Loading…</p></div>
+      </div>
+      <div class="card">
+        <b>2. Booking link for a customer</b>
+        <p class="muted" style="margin:6px 0 0">Anyone with the link can see your open times, so send it only to the partner. "New link" kills the old one.</p>
+        <label class="fld">Customer</label>
+        <select id="bl-customer"></select>
+        <div class="two-col" style="margin-top:10px"><div><button class="btn primary" style="width:100%" onclick="blGet(false,this)">Get link</button></div><div><button class="btn" style="width:100%" onclick="blGet(true,this)">New link</button></div></div>
+        <div id="bl-out" class="hide" style="margin-top:10px">
+          <input id="bl-url" readonly onclick="this.select()">
+          <button class="btn go" style="width:100%;margin-top:8px" onclick="blCopy()">Copy link</button>
+        </div>
+      </div>
+      <div class="card">
+        <b>3. Check the connections</b>
+        <p class="muted" style="margin:6px 0 0"><b>Check</b> only reads your calendar. <b>Check + test write</b> also creates one 1-minute placeholder event 3 days out and deletes it right away, to prove bookings can land on your calendar.</p>
+        <div class="two-col" style="margin-top:10px"><div><button class="btn" style="width:100%" onclick="calTest(false,this)">Check</button></div><div><button class="btn primary" style="width:100%" onclick="calTest(true,this)">Check + test write</button></div></div>
+        <div id="cal-out" style="margin-top:10px"></div>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -379,7 +436,7 @@ function enterApp(){
   document.getElementById('app').classList.remove('hide');
   api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
   populateAnnualPicker();
-  loadCustomers(); loadAvailability();
+  loadCustomers().then(function(){ fillCustomerSelects(); loadBlocks(); }); loadAvailability(); loadBookings();
 }
 
 // ── Tabs ─────────────────────────────────────────────────────
@@ -387,6 +444,8 @@ function switchTab(name){
   Array.prototype.forEach.call(document.querySelectorAll('.tabs button'),function(b){ b.classList.toggle('active', b.getAttribute('data-tab')===name); });
   Array.prototype.forEach.call(document.querySelectorAll('.page'),function(p){ p.classList.remove('active'); });
   document.getElementById('page-'+name).classList.add('active');
+  if(name==='approvals') loadBookings();
+  if(name==='blocks'){ fillCustomerSelects(); loadBlocks(); }
 }
 
 // ── Customers ────────────────────────────────────────────────
@@ -840,6 +899,115 @@ function confirmBulkImport(btn){
     }).catch(function(e){ btn.disabled=false; toast('Error: '+e.message); });
   }
   next();
+}
+
+// ── Inspection booking (Oct 7 2026) ─────────────────────────
+var obDates=[];
+function loadBookings(){
+  var err=document.getElementById('appr-error');
+  return api('GET','/insp/bookings').then(function(list){
+    if(!Array.isArray(list)){ throw new Error((list&&list.error)||'Could not load bookings'); }
+    err.classList.add('hide');
+    var pend=list.filter(function(b){return b.Status==='pending';}).sort(function(a,b){return String(a.Start_ISO).localeCompare(String(b.Start_ISO));});
+    var rest=list.filter(function(b){return b.Status!=='pending';});
+    var badge=document.getElementById('appr-badge'); badge.textContent=pend.length; badge.classList.toggle('hide',!pend.length);
+    document.getElementById('appr-pending').innerHTML = pend.length ? pend.map(function(b){ return bookingCard(b,true); }).join('') : '<p class="muted">Nothing waiting.</p>';
+    document.getElementById('appr-other').innerHTML = rest.length ? rest.slice(0,40).map(function(b){ return bookingCard(b,false); }).join('') : '<p class="muted">No bookings yet.</p>';
+  }).catch(function(e){ err.textContent='Could not load bookings: '+e.message; err.classList.remove('hide'); });
+}
+function bookingCard(b,pending){
+  var cls = b.Status==='approved'?'ok':(b.Status==='pending'?'due':'');
+  var drive='';
+  if(b.Drive_Before_Min||b.Drive_After_Min){ drive='<div class="muted">Drive: '+esc(b.Drive_Before_Min||'–')+' min from previous stop · '+esc(b.Drive_After_Min||'–')+' min to next'+(b.Drive_Source&&b.Drive_Source!=='routes'?' <b>('+esc(b.Drive_Source)+' — not a real lookup)</b>':'')+'</div>'; }
+  var warn = /FAILED/.test(b.Notify_Log||'') ? '<div class="banner" style="margin:8px 0 0">A notification failed: '+esc(b.Notify_Log)+'</div>' : '';
+  var btns = pending ? '<div class="two-col" style="margin-top:10px"><div><button class="btn go" style="width:100%" onclick="decideBooking(\''+b.ID+'\',\'approve\',this)">Approve</button></div><div><button class="btn" style="width:100%;color:var(--danger)" onclick="decideBooking(\''+b.ID+'\',\'decline\',this)">Decline</button></div></div>'
+    : ((b.Status==='approved')?'<div style="margin-top:8px"><button class="btn sm" onclick="cancelBooking(\''+b.ID+'\',this)">Cancel booking</button></div>':'');
+  return '<div class="prop-card"><div class="row"><b>'+esc(b.Formatted_Address||b.Address)+'</b><span class="pill '+cls+'">'+esc(b.Status)+'</span></div>'
+    +'<div>'+esc(b.when)+' · '+esc(b.Units)+' unit'+(+b.Units===1?'':'s')+' / '+esc(b.Buildings)+' bldg · '+esc(b.Duration_Min)+' min</div>'
+    +'<div class="muted">'+esc(b.Contact_Name||'')+(b.Contact_Phone?' · '+esc(b.Contact_Phone):'')+(b.Contact_Email?' · '+esc(b.Contact_Email):'')+'</div>'
+    +(b.Notes?'<div class="muted">Note: '+esc(b.Notes)+'</div>':'')+drive+warn+btns+'</div>';
+}
+function decideBooking(id,decision,btn){
+  var note='';
+  if(decision==='decline'){ note=prompt('Optional note to the partner (why / what works instead):','')||''; }
+  else if(!confirm('Approve this booking? It turns solid on your calendar and the partner is texted/emailed a confirmation.')) return;
+  btn.disabled=true;
+  api('POST','/insp/booking/decide',{id:id,decision:decision,note:note}).then(function(r){
+    if(r&&r.ok){ toast(decision==='approve'?'Approved — partner notified':'Declined — partner notified'); if(r.notify&&r.notify.some(function(x){return /FAILED/.test(x);})) alert('Saved, but a notification failed:\n'+r.notify.join('\n')); }
+    else { alert((r&&r.message)||(r&&r.error)||'Could not save — nothing was changed.'); }
+    loadBookings();
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+}
+function cancelBooking(id,btn){
+  var note=prompt('Cancel this booking. Optional note to the partner:','');
+  if(note===null) return;
+  btn.disabled=true;
+  api('POST','/insp/booking/cancel',{id:id,note:note}).then(function(r){
+    if(r&&r.ok) toast('Cancelled — partner notified'); else alert((r&&r.message)||(r&&r.error)||'Could not cancel — nothing was changed.');
+    loadBookings();
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+}
+function fillCustomerSelects(){
+  ['ob-customer','bl-customer'].forEach(function(id){
+    var el=document.getElementById(id); var keep=el.value;
+    el.innerHTML=(id==='ob-customer'?'<option value="">Any customer</option>':'<option value="">— pick a customer —</option>')+customers.map(function(c){ return '<option value="'+esc(c.ID)+'">'+esc(c.Name)+'</option>'; }).join('');
+    if(keep) el.value=keep;
+  });
+}
+function obAddDate(){
+  var v=document.getElementById('ob-date').value; if(!v){ toast('Pick a date'); return; }
+  if(obDates.indexOf(v)<0) obDates.push(v); obDates.sort(); renderObChips(); document.getElementById('ob-date').value='';
+}
+function renderObChips(){
+  document.getElementById('ob-chips').innerHTML=obDates.map(function(d,i){ return '<span class="chip">'+esc(d)+' <span class="x" onclick="obDates.splice('+i+',1);renderObChips()">×</span></span>'; }).join('');
+}
+function obSave(btn){
+  if(!obDates.length){ toast('Add at least one date'); return; }
+  var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Note:document.getElementById('ob-note').value.trim() };
+  btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/open-block/add',body).then(function(r){
+    btn.disabled=false; btn.textContent='Open this block';
+    if(r&&r.success){ toast(r.count+' block(s) opened'); obDates=[]; renderObChips(); loadBlocks(); } else alert((r&&r.error)||'Could not save');
+  }).catch(function(e){ btn.disabled=false; btn.textContent='Open this block'; alert('Error: '+e.message); });
+}
+function loadBlocks(){
+  return api('GET','/insp/open-blocks').then(function(list){
+    if(!Array.isArray(list)) throw new Error((list&&list.error)||'Could not load blocks');
+    var today=new Date().toISOString().slice(0,10);
+    var up=list.filter(function(b){return b.Date>=today;});
+    document.getElementById('ob-list').innerHTML = up.length ? up.map(function(b){
+      var c=customers.find(function(x){return x.ID===b.Customer_ID;});
+      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div></div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
+    }).join('') : '<p class="muted">No open blocks. Partners will see no times until you add one.</p>';
+  }).catch(function(e){ document.getElementById('ob-list').innerHTML='<div class="banner">Could not load open blocks: '+esc(e.message)+'</div>'; });
+}
+function obRemove(id){
+  if(!confirm('Close this block? Pending bookings inside it are NOT cancelled — decline them in Approvals.')) return;
+  api('POST','/insp/open-block/update',{id:id,fields:{Active:'FALSE'}}).then(function(r){ if(r&&r.success){ toast('Closed'); loadBlocks(); } else alert((r&&r.error)||'Could not close'); }).catch(function(e){ alert('Error: '+e.message); });
+}
+function blGet(rotate,btn){
+  var id=document.getElementById('bl-customer').value; if(!id){ toast('Pick a customer'); return; }
+  if(rotate && !confirm('Make a NEW link? The old link stops working immediately for anyone who has it.')) return;
+  btn.disabled=true;
+  api('POST','/insp/customer/book-link',{customer_id:id,rotate:!!rotate}).then(function(r){
+    btn.disabled=false;
+    if(r&&r.url){ document.getElementById('bl-out').classList.remove('hide'); document.getElementById('bl-url').value=r.url; loadCustomers(); } else alert((r&&r.error)||'Could not make the link');
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+}
+function blCopy(){
+  var el=document.getElementById('bl-url'); el.select();
+  if(navigator.clipboard){ navigator.clipboard.writeText(el.value).then(function(){ toast('Link copied'); }).catch(function(){ document.execCommand('copy'); toast('Link copied'); }); }
+  else { document.execCommand('copy'); toast('Link copied'); }
+}
+function calTest(write,btn){
+  var out=document.getElementById('cal-out'); out.innerHTML='<p class="muted">Checking…</p>'; btn.disabled=true;
+  api('GET','/insp/calendar-test'+(write?'?write=1':'')).then(function(r){
+    btn.disabled=false;
+    if(!r||!r.steps){ out.innerHTML='<div class="banner">'+esc((r&&r.error)||'No answer')+'</div>'; return; }
+    out.innerHTML=r.steps.map(function(s){
+      return '<div class="prop-card"><b>'+(s.ok?'✅ ':'❌ ')+esc(s.step)+'</b><div class="muted">'+esc(s.detail)+'</div>'+(s.fix?'<div class="banner" style="margin:6px 0 0"><b>To fix:</b> '+esc(s.fix)+'</div>':'')+'</div>';
+    }).join('')+'<p><b>'+(r.ok?'All good.':'Not ready yet — fix the red items, then check again.')+'</b></p>';
+  }).catch(function(e){ btn.disabled=false; out.innerHTML='<div class="banner">Error: '+esc(e.message)+'</div>'; });
 }
 </script>
 </body>
