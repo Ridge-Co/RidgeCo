@@ -25914,7 +25914,7 @@ async function inspCustomerByToken(env, k) {
 }
 function inspPublicBooking(b) {
   return { id: b.ID, status: b.Status, address: b.Formatted_Address || b.Address, units: +b.Units, buildings: +b.Buildings, duration_min: +b.Duration_Min,
-    start_iso: b.Start_ISO, end_iso: b.End_ISO, when: inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), contact_name: b.Contact_Name, decision_note: b.Decision_Note || '' };
+    start_iso: b.Start_ISO, end_iso: b.End_ISO, when: inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)), contact_name: b.Contact_Name, decision_note: b.Decision_Note || '', google_cal_url: b.Status === 'approved' ? inspGoogleCalUrl(b) : '' };
 }
 function inspCleanInput(body) {
   const address = String((body && body.address) || '').trim().slice(0, 200);
