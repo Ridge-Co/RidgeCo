@@ -26289,7 +26289,13 @@ async function inspApprovalInfo(env, url) {
   if (!id) return json({ ok: false, error: 'invalid_link', message: 'This approval link is not valid.' }, 404);
   const rows = await fetchTab(env, 'Insp_Bookings'), b = rows.find(r => r.ID === id);
   if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
-  return json({ ok: true, booking: inspAdminBooking(b) });
+  // Live overlap check so the approval page can warn BEFORE Brett taps Approve (titles are Brett-only; this page is his tokenized link).
+  let conflicts = [], conflicts_error = '';
+  if (b.Status === 'pending') {
+    try { conflicts = await inspFindConflicts(env, await fetchConfig(env), Date.parse(b.Start_ISO), Date.parse(b.End_ISO), { eventId: b.Calendar_Event_ID, bookingId: b.ID }); }
+    catch (e) { conflicts_error = 'Could not check your calendar for conflicts: ' + e.message; console.error('insp: approval conflict check failed:', e && e.message); }
+  }
+  return json({ ok: true, booking: inspAdminBooking(b), conflicts, conflicts_error });
 }
 async function inspApprovalDecide(env, body) {
   try {
