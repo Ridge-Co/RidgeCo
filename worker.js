@@ -26214,7 +26214,20 @@ async function inspNotifyPartner(env, b, kind, prevStatus) {
     : kind === 'declined' ? `Brett couldn't take the inspection at ${addr} on ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''} Please pick another time: ${manageUrl}`
     : `Cancelled: inspection at ${addr}, ${when}.${b.Decision_Note ? ' Note: ' + b.Decision_Note : ''}`;
   if (b.Contact_Phone) { try { const r = await sendSMS(env, b.Contact_Phone, text); log.push(r && r.skipped ? 'partner sms: skipped (' + r.reason + ')' : (r && r.error ? 'partner sms: FAILED ' + r.error : 'partner sms: ok')); } catch (e) { log.push('partner sms: FAILED ' + e.message); } }
-  if (b.Contact_Email) { try { const r = await gmailSendEmail(env, { to: b.Contact_Email, subject: (kind === 'approved' ? 'Inspection confirmed: ' : kind === 'declined' ? 'Inspection time not available: ' : 'Inspection cancelled: ') + addr, html: `<p>${text.replace(/</g, '&lt;')}</p>` }); log.push(r && r.staged ? 'partner email: staged' : 'partner email: ok'); } catch (e) { log.push('partner email: FAILED ' + e.message); } }
+  if (b.Contact_Email) {
+    const subject = (kind === 'requested' ? 'Inspection request received: ' : kind === 'approved' ? 'Inspection confirmed: ' : kind === 'declined' ? 'Inspection time not available: ' : 'Inspection cancelled: ') + addr;
+    // Calendar entry: an invite when approved; a cancellation only if the partner could already have been sent the invite.
+    const icsMethod = kind === 'approved' ? 'REQUEST' : (kind === 'cancelled' && prevStatus === 'approved' ? 'CANCEL' : '');
+    const plain = () => gmailSendEmail(env, { to: b.Contact_Email, subject, html: inspPartnerEmailHtml(b, kind, text, manageUrl, false) });
+    try {
+      let r;
+      if (icsMethod) {
+        try { r = await inspSendPartnerEmail(env, { to: b.Contact_Email, subject, method: icsMethod, html: inspPartnerEmailHtml(b, kind, text, manageUrl, true), ics: inspIcs(b, icsMethod, { organizer: inspSenderAddr(env), attendee: b.Contact_Email }) }); }
+        catch (e) { log.push('partner email invite FAILED (' + e.message + ') — sending without the calendar file'); r = await plain(); }
+      } else r = await plain();
+      log.push(r && r.staged ? 'partner email: staged' : 'partner email: ok' + (r && r.ics_attached ? ' (+calendar file)' : ''));
+    } catch (e) { log.push('partner email: FAILED ' + e.message); }
+  }
   if (log.some(l => /FAILED/.test(l))) await inspAlert(env, 'notify_partner', `Booking #${b.ID} ${kind}, but the partner message failed: ` + log.join('; '));
   return log;
 }
