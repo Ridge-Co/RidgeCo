@@ -301,6 +301,11 @@
         </div>
         <label class="fld">Note (optional)</label>
         <input id="ob-note" placeholder="e.g. AMS inspections week of Oct 13">
+        <label class="fld">Stop taking bookings this many hours before the block starts</label>
+        <input id="ob-hours" type="number" min="0" step="1" placeholder="48 (leave blank for the default)">
+        <label class="fld">…or close at an exact time (one date only; overrides the hours)</label>
+        <input id="ob-closeat" type="datetime-local">
+        <p class="muted" style="margin:6px 0 0">Partners see this deadline next to each day. After it, those times disappear — nothing can be booked last-minute.</p>
         <button class="btn primary" style="width:100%;margin-top:12px" onclick="obSave(this)">Open this block</button>
       </div>
       <div class="card">
