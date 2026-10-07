@@ -25804,6 +25804,7 @@ function inspBookingEventBody(b, pending, approveUrl) {
     `Booked by: ${b.Contact_Name || '?'} ${b.Contact_Phone || ''} ${b.Contact_Email || ''}`.trim(),
     b.Notes ? `Notes: ${b.Notes}` : '',
     (b.Drive_Before_Min || b.Drive_After_Min) ? `Drive: ${b.Drive_Before_Min || '-'} min from previous stop / ${b.Drive_After_Min || '-'} min to next (${b.Drive_Source})` : '',
+    b.Key_Pickup ? `KEY PICKUP first: ${b.Key_Pickup}` : '',
     pending && approveUrl ? `APPROVE / DECLINE: ${approveUrl}` : '',
     `Booking #${b.ID} (Ridge Co inspection booking)`,
   ].filter(Boolean);
