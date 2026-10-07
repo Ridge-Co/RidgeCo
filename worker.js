@@ -18702,7 +18702,7 @@ async function hubTestWriteAllowed(env, path, body) {
   // Inspection booking (Oct 7 2026): the token may only create/touch inspection rows that hang off a
   // TEST- customer (Insp_Customers.Name starts with TEST-). Open blocks and bookings carry Customer_ID.
   if (path === '/insp/customer/add') return String((body && body.Name) || '').startsWith('TEST-');
-  if (path === '/insp/customer/book-link') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
+  if (path === '/insp/customer/book-link' || path === '/insp/customer/key-pickup') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
