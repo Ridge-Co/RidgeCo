@@ -25540,3 +25540,5 @@ function woJobLabel(wo) {
 function vendorPortalLink(woId) {
   return `https://ridge-co.github.io/RidgeCo/vendor.html?wo=${encodeURIComponent(woId)}`;
 }
+
+//@@INSP_BOOKING_BLOCK_PLACEHOLDER@@
