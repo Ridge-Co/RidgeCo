@@ -207,5 +207,23 @@ const html = fs.readFileSync('inspect-book.html', 'utf8');
 t('page: My bookings loads on the main link and can cancel + add to calendar', html.includes("/insp-book/mine?k=") && html.includes('function cancelOne') && html.includes('function calButtons') && html.includes("/insp-book/ics?t="));
 t('page: manage view shows add-to-calendar only when approved', html.includes("b.status==='approved'?calButtons(M,b.google_cal_url)"));
 
+// ── conflict guard (write-then-verify at booking, live re-check at approval) ──
+const CF = new Function(['INSP_TZ'].map(n => grab(n, 'const')).join('\n') + '\n' + ['nyOffsetMinutes', 'inspParseHHMM', 'inspEtWallToMs', 'inspFmtEt', 'inspFmtEtTime', 'inspEventsToBusy', 'inspConflictsFrom'].map(n => grab(n)).join('\n') + '\nreturn { inspConflictsFrom };')();
+const S = '2026-10-13T16:00:00.000Z', Eend = '2026-10-13T16:40:00.000Z', sMs = Date.parse(S), eMs = Date.parse(Eend);
+const evt = (o) => ({ id: 'x', status: 'confirmed', summary: 'Dentist', start: { dateTime: '2026-10-13T16:30:00.000Z' }, end: { dateTime: '2026-10-13T17:00:00.000Z' }, ...o });
+t('conflict: own hold is ignored (by event id)', CF.inspConflictsFrom([evt({ id: 'mine', extendedProperties: { private: { ridgecoInspBooking: 'new' } }, start: { dateTime: S }, end: { dateTime: Eend } })], sMs, eMs, { eventId: 'mine' }).length === 0);
+t('conflict: own booking is ignored (by booking id) when approving', CF.inspConflictsFrom([evt({ id: 'h', extendedProperties: { private: { ridgecoInspBooking: '4' } }, start: { dateTime: S }, end: { dateTime: Eend } })], sMs, eMs, { bookingId: '4' }).length === 0);
+t('conflict: Brett\'s own event overlapping is caught with its title', (r => r.length === 1 && r[0].kind === 'event' && r[0].title === 'Dentist')(CF.inspConflictsFrom([evt({})], sMs, eMs, { eventId: 'mine' })));
+t('conflict: another partner\'s hold overlapping is caught (title hidden)', (r => r.length === 1 && r[0].kind === 'booking' && r[0].title === 'Another inspection booking')(CF.inspConflictsFrom([evt({ id: 'other', summary: 'PENDING: Secret address', extendedProperties: { private: { ridgecoInspBooking: '9' } } })], sMs, eMs, { eventId: 'mine' })));
+t('conflict: back-to-back (touching) is NOT a conflict', CF.inspConflictsFrom([evt({ start: { dateTime: Eend }, end: { dateTime: '2026-10-13T17:00:00.000Z' } }), evt({ id: 'y', start: { dateTime: '2026-10-13T15:00:00.000Z' }, end: { dateTime: S } })], sMs, eMs, {}).length === 0);
+t('conflict: cancelled, declined and free ("show as available") events are not conflicts', CF.inspConflictsFrom([evt({ status: 'cancelled' }), evt({ id: 'a', transparency: 'transparent' }), evt({ id: 'b', attendees: [{ self: true, responseStatus: 'declined' }] })], sMs, eMs, {}).length === 0);
+t('conflict: key-pickup blocks never count', CF.inspConflictsFrom([evt({ extendedProperties: { private: { ridgecoInspKey: '2_2026-10-13' } } })], sMs, eMs, {}).length === 0);
+t('conflict: all-day busy event on that day is caught', CF.inspConflictsFrom([{ id: 'ad', status: 'confirmed', summary: 'Out of town', start: { date: '2026-10-13' }, end: { date: '2026-10-14' } }], sMs, eMs, {}).length === 1);
+t('booking request verifies after writing the hold, rolls it back and returns fresh slots', /createdEventId = ev\.id; rec\.Calendar_Event_ID = ev\.id;[\s\S]{0,800}inspFindConflicts\(env, a\.cfg, slot\.startMs, slot\.endMs, \{ eventId: ev\.id \}\)[\s\S]{0,1600}error: 'slot_taken'/.test(src));
+t('verify failure cancels the hold and alerts (never silent)', /Could not verify your calendar after placing a booking hold, so it was cancelled/.test(src));
+t('approval re-checks live; override allowed; check failure blocks with an alert', /decision === 'approve' && !override[\s\S]{0,700}error: 'conflict'/.test(src) && /could not re-check your calendar before approving/.test(src));
+t('both decide routes pass the override flag', /inspBookingDecide\(env, id, body\.decision, body\.note, 'link', body\.override === true\)/.test(src) && /'admin', !!\(body && body\.override === true\)\)/.test(src));
+t('approval page shows conflicts + Approve anyway; admin tab confirms', html.includes('Approve anyway') && html.includes('override:ov===true') && fs.readFileSync('inspect.html', 'utf8').includes("r.error==='conflict'"));
+
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
