@@ -26298,6 +26298,28 @@ async function inspBookingAdminCancel(env, body) {
     return json(r.body, r.status);
   } catch (e) { return inspHandleErr(e); }
 }
+// Key pickup settings for a customer: where the keys are and how long the stop takes. 0 minutes = off.
+// The address is looked up RIGHT NOW so a typo is caught here, not when a partner is trying to book.
+async function inspCustomerKeyPickup(env, body) {
+  try {
+    if (!body || !body.customer_id) return json({ error: 'customer_id required' }, 400);
+    const mins = Math.floor(+(body.minutes == null ? 0 : body.minutes)), addr = String(body.address || '').trim().slice(0, 200);
+    if (!Number.isFinite(mins) || mins < 0 || mins > 180) return json({ error: 'Minutes must be between 0 and 180 (0 turns key pickup off)' }, 400);
+    if (mins > 0 && addr.length < 6) return json({ error: 'Enter the full address of the office where the keys are' }, 400);
+    await ensureInspTabs(env);
+    const c = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(body.customer_id));
+    if (!c) return json({ error: 'Customer not found' }, 404);
+    let found = '';
+    if (mins > 0) {
+      const g = await inspGeocode(env, addr);
+      if (!g) return json({ error: "Couldn't find that address on the map — include city and ZIP" }, 400);
+      found = g.formatted;
+    }
+    const r = await updateRow(env, 'Insp_Customers', c.ID, { Key_Address: mins > 0 ? addr : '', Key_Pickup_Min: mins > 0 ? String(mins) : '' });
+    const j = await r.json(); if (!j || !j.success) return json({ error: 'Could not save the key pickup setting' }, 500);
+    return json({ success: true, minutes: mins, address: mins > 0 ? addr : '', map_found: found });
+  } catch (e) { return inspHandleErr(e); }
+}
 async function inspBookLinkEnsure(env, body) {
   if (!body || !body.customer_id) return json({ error: 'customer_id required' }, 400);
   await ensureInspTabs(env);
