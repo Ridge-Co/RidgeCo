@@ -221,9 +221,50 @@ t('conflict: key-pickup blocks never count', CF.inspConflictsFrom([evt({ extende
 t('conflict: all-day busy event on that day is caught', CF.inspConflictsFrom([{ id: 'ad', status: 'confirmed', summary: 'Out of town', start: { date: '2026-10-13' }, end: { date: '2026-10-14' } }], sMs, eMs, {}).length === 1);
 t('booking request verifies after writing the hold, rolls it back and returns fresh slots', /createdEventId = ev\.id; rec\.Calendar_Event_ID = ev\.id;[\s\S]{0,800}inspFindConflicts\(env, a\.cfg, slot\.startMs, slot\.endMs, \{ eventId: ev\.id \}\)[\s\S]{0,1600}error: 'slot_taken'/.test(src));
 t('verify failure cancels the hold and alerts (never silent)', /Could not verify your calendar after placing a booking hold, so it was cancelled/.test(src));
-t('approval re-checks live; override allowed; check failure blocks with an alert', /decision === 'approve' && !override[\s\S]{0,700}error: 'conflict'/.test(src) && /could not re-check your calendar before approving/.test(src));
+t('approval re-checks live; override allowed; check failure blocks with an alert', /decision === 'approve' && !override[\s\S]{0,1600}error: 'conflict'/.test(src) && /could not re-check your calendar before approving/.test(src));
 t('both decide routes pass the override flag', /inspBookingDecide\(env, id, body\.decision, body\.note, 'link', body\.override === true\)/.test(src) && /'admin', !!\(body && body\.override === true\)\)/.test(src));
 t('approval page shows conflicts + Approve anyway; admin tab confirms', html.includes('Approve anyway') && html.includes('override:ov===true') && fs.readFileSync('inspect.html', 'utf8').includes("r.error==='conflict'"));
+
+// ── STR cleaning-coverage guard ──
+const SG = new Function(['INSP_TZ'].map(n => grab(n, 'const')).join('\n') + '\n' + ['nyOffsetMinutes', 'inspParseHHMM', 'inspEtWallToMs', 'inspEtDate', 'inspAddDays', 'inspIcsTime', 'inspParseIcs', 'inspStrFromApi', 'inspStrEvDay', 'inspStrEventDays', 'inspStrCleaningKind', 'inspStrStays', 'inspStrCompute', 'inspStrDayText'].map(n => grab(n)).join('\n') + '\nreturn { inspParseIcs, inspStrCleaningKind, inspStrStays, inspStrCompute, inspStrDayText, inspStrEventDays, inspAddDays, inspStrFromApi };')();
+t('cleaning titles: "Gina Cleaning" / "Kayla Cleaning" / "Rachel cleaning" are covered', ['Gina Cleaning', 'Kayla Cleaning', 'rachel cleaning', 'Gina - Cleaning 11am'].every(x => SG.inspStrCleaningKind(x) === 'cleaner'));
+t('cleaning titles: "Brett cleaning" is NOT covered (Brett must go)', SG.inspStrCleaningKind('Brett Cleaning') === 'brett' && SG.inspStrCleaningKind('brett cleaning') === 'brett');
+t('cleaning titles: availability markers never count', ['Gina Available', 'Gina Not Available', 'Kayla N/A', 'Michele AM Only N/A 2+', 'Gina cleaning cancelled'].every(x => SG.inspStrCleaningKind(x) === ''));
+const SG_ICS = ['BEGIN:VCALENDAR', 'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20261009', 'DTEND;VALUE=DATE:20261011', 'SUMMARY:Reserved', 'END:VEVENT', 'BEGIN:VEVENT', 'DTSTART;TZID=America/New_York:20261011T160000', 'DTEND:20261013T150000Z', 'SUMMARY:Ali Reza\\, D.', 'END:VEVENT', 'BEGIN:VEVENT', 'DTSTART;VALUE=DATE:20261023', 'DTEND;VALUE=DATE:20261025', 'STATUS:CANCELLED', 'SUMMARY:Old', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+const sgEv = SG.inspParseIcs(SG_ICS);
+t('ics: parses all-day, timed, escaped commas and cancelled', sgEv.length === 3 && sgEv[0].start.date === '2026-10-09' && sgEv[0].end.date === '2026-10-11' && sgEv[1].summary === 'Ali Reza, D.' && sgEv[2].status === 'CANCELLED');
+const stays = SG.inspStrStays(sgEv);
+t('stays: cancelled dropped; END date is the checkout day (timed 15:00Z = 11 AM ET -> same ET date)', stays.length === 2 && stays[0].end === '2026-10-11' && stays[1].end === '2026-10-13' && stays[1].start === '2026-10-11', stays);
+const API = (summary, start, end) => SG.inspStrFromApi({ summary, status: 'confirmed', start: { date: start }, end: { date: end } });
+const real = [{ start: '2026-10-07', end: '2026-10-09', guest: 'Allissa' }, { start: '2026-10-09', end: '2026-10-11', guest: 'Addison' }, { start: '2026-10-11', end: '2026-10-13', guest: 'Ali Reza' }, { start: '2026-10-16', end: '2026-10-18', guest: 'Jillian' }, { start: '2026-10-18', end: '2026-10-20', guest: 'Chase' }];
+const cleaning = [API('Gina Cleaning', '2026-10-09', '2026-10-10'), API('Gina Cleaning', '2026-10-11', '2026-10-12'), API('Gina Available', '2026-10-12', '2026-10-13'), API('Kayla N/A', '2026-10-13', '2026-10-14'), API('Kayla Cleaning', '2026-10-18', '2026-10-19'), API('Gina Not Available', '2026-10-18', '2026-10-19'), API('Gina Cleaning', '2026-10-20', '2026-10-21')];
+const R = SG.inspStrCompute(real, cleaning, '2026-10-08', '2026-11-30');
+const by = d => R.checkouts.find(c => c.date === d);
+t('compute: Oct 9 covered by Gina same-day (back-to-back arrival that day)', by('2026-10-09').covered && by('2026-10-09').next_arrival === '2026-10-09', by('2026-10-09'));
+t('compute: Oct 11 covered (Gina Cleaning), Oct 13 uncovered (only "Kayla N/A")', by('2026-10-11').covered && !by('2026-10-13').covered && by('2026-10-13').reason === 'none');
+t('compute: Oct 18 covered by Kayla Cleaning even though Gina is Not Available', by('2026-10-18').covered && by('2026-10-18').covered_by.length === 1);
+t('compute: Oct 20 covered by Gina (no later arrival -> 14-day window)', by('2026-10-20').covered);
+t('compute: closed list is exactly the uncovered checkout dates', JSON.stringify(R.closed) === JSON.stringify(['2026-10-13']), R.closed);
+const R2 = SG.inspStrCompute([{ start: '2026-10-11', end: '2026-10-13', guest: 'A' }, { start: '2026-10-15', end: '2026-10-17', guest: 'B' }], [API('Rachel Cleaning', '2026-10-15', '2026-10-16')], '2026-10-08', '2026-11-30');
+t('compute: cleaning on the next guest\'s ARRIVAL day counts (Brett: "that is fine")', R2.checkouts[0].covered && R2.checkouts[0].window_end === '2026-10-15', R2.checkouts[0]);
+const R3 = SG.inspStrCompute([{ start: '2026-10-11', end: '2026-10-13', guest: 'A' }, { start: '2026-10-15', end: '2026-10-17', guest: 'B' }], [API('Rachel Cleaning', '2026-10-16', '2026-10-17'), API('Rachel Cleaning', '2026-10-10', '2026-10-11')], '2026-10-08', '2026-11-30');
+t('compute: cleaning AFTER the next arrival or BEFORE the checkout does not count', !R3.checkouts[0].covered);
+const R4 = SG.inspStrCompute([{ start: '2026-10-11', end: '2026-10-13', guest: 'A' }], [API('Brett Cleaning', '2026-10-13', '2026-10-14')], '2026-10-08', '2026-11-30');
+t('compute: "Brett Cleaning" alone = uncovered with reason brett', !R4.checkouts[0].covered && R4.checkouts[0].reason === 'brett' && /only "Brett cleaning"/.test(SG.inspStrDayText(R4.checkouts[0], 'Cabin')));
+const R5 = SG.inspStrCompute([{ start: '2026-10-11', end: '2026-10-13', guest: 'A' }], [API('Brett Cleaning', '2026-10-13', '2026-10-14'), API('Gina Cleaning', '2026-10-13', '2026-10-14')], '2026-10-08', '2026-11-30');
+t('compute: Brett + a real cleaner the same day = covered', R5.checkouts[0].covered);
+const R6 = SG.inspStrCompute([{ start: '2026-10-01', end: '2026-10-03', guest: 'old' }], [], '2026-10-08', '2026-11-30');
+t('compute: past checkouts are ignored', R6.checkouts.length === 0 && R6.closed.length === 0);
+t('multi-day all-day cleaning spans days (end exclusive)', JSON.stringify(SG.inspStrEventDays(API('Gina Cleaning', '2026-10-13', '2026-10-15'))) === JSON.stringify(['2026-10-13', '2026-10-14']));
+// wiring
+t('slot engine skips closed days; availability reads the guard fresh for real bookings', has(/o\.closedDates && o\.closedDates\.has\(b\.Date\)\) continue/) && has(/inspStrClosedOrThrow\(env, cfg, input\.freshGuard\)/) && has(/input\.freshGuard = true/));
+t('guard read failure pauses booking + alerts (never silently offers days)', /async function inspStrClosedOrThrow[\s\S]{0,500}inspAlert[\s\S]{0,300}calendar_unavailable/.test(src));
+t('approve + approval page include the no-cleaner conflict', has(/inspStrBookingConflict\(env, await fetchConfig\(env\), b, true\); if \(nc\) conf\.push\(nc\)/) && has(/if \(nc\) conflicts\.push\(nc\)/));
+t('open-block add returns str_warnings; block list marks closed days', has(/str_warnings: strWarnings/) && has(/Str_Closed:/));
+t('cron */15 runs the guard tick and alerts on its failure', /cron === '\*\/15 \* \* \* \*'[\s\S]{0,900}inspStrGuardTick\(env\)[\s\S]{0,300}inspAlert\(env, 'str_guard_tick'/.test(src));
+t('tick: notifies once per change, re-alerts as a booking nears (24h/72h), reports reopened days, retries if notify failed', has(/bucket = hrs < 24 \? 'u1'/) && has(/Good news: /) && /if \(!res\.ok\) \{ await inspAlert\(env, 'str_guard_notify'/.test(src));
+t('config save only touches the STR_GUARD keys and validates input', has(/sets\.STR_GUARD_BOOKING_SOURCES/) && has(/error: 'bad_sources'/) && has(/error: 'bad_cleaning_cal'/));
+t('admin page: 2c card, pre-save cleaner check, closed badge', fs.readFileSync('inspect.html', 'utf8').includes('2c. Cabin cleaning protection') && fs.readFileSync('inspect.html', 'utf8').includes('/insp/str-guard/status?dates=') && fs.readFileSync('inspect.html', 'utf8').includes('Closed — no cleaner'));
 
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
