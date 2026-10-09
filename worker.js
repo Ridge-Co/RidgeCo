@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-07.6-insp-str-cleaning-guard';
+const BUILD_VERSION = '2026-10-08.1-insp-uplisting-probe';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -517,6 +517,7 @@ const _hubWorkerCore = {
         if (path === '/insp/bookings')          return await inspBookingsList(env, url);
         if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
         if (path === '/insp/str-guard/status')  return await inspStrGuardStatusRoute(env, url);
+        if (path === '/insp/str-guard/uplisting-probe') { try { return await inspUplProbe(env); } catch (e) { return inspHandleErr(e); } }
         if (path === '/insp-book/info')         return await inspBookInfo(env, url);
         if (path === '/insp-book/status')       return await inspBookStatus(env, url);
         if (path === '/insp-book/mine')         return await inspBookMine(env, url);
@@ -26081,6 +26082,81 @@ async function inspStrGuardStatusRoute(env, url) {
     const days = dates.map(d => { const i = inspStrDayInfo(st, d); return { date: d, closed: st.closed.includes(d), info: i }; });
     return json(Object.assign({ ok: true, enabled: true, checked_at: st.checked_at, stays: st.stays, closed: st.closed, checkouts: st.checkouts.slice(0, 40).map(c => Object.assign({}, c, { text: inspStrDayText(c, st.label) })), days }, base));
   } catch (e) { return inspHandleErr(e); }
+}
+// ── Uplisting API probe (admin-only, GET-only) ──
+// Uplisting's public docs do not publish a "list bookings" response, so before building the bookings reader this reports status codes plus a
+// PII-masked shape for a fixed set of read-only paths. Never echoes the key; never accepts a caller-supplied URL; never sends anything but GET.
+const INSP_UPL_BASE = 'https://connect.uplisting.io';
+function inspUplMask(v, inGuest) {
+  if (typeof v === 'string') {
+    if (inGuest) return '[guest]';
+    return v.replace(/[^\s@"]+@[^\s@"]+\.[^\s@"]+/g, '[email]').replace(/\+?\d[\d\s().-]{8,}\d/g, m => (/^\d{4}-\d{2}-\d{2}/.test(m) ? m : '[phone]'));
+  }
+  if (Array.isArray(v)) return v.slice(0, 2).map(x => inspUplMask(x, inGuest));
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v)) {
+      if (/^(first_name|last_name|email|phone|phone_number|street|street_address|address|address_1|address_2|postal_code|zip|zip_code|latitude|longitude|lat|lng|lon|description|notes)$/i.test(k)) { o[k] = '[redacted]'; continue; }
+      o[k] = inspUplMask(v[k], inGuest || /guest|contact|customer/i.test(k));
+    }
+    return o;
+  }
+  return v;
+}
+// Basic <base64(key)> — the key alone, no "user:" prefix (Uplisting's documented format). UTF-8-safe encoder (no raw btoa).
+function inspUplBasic(key) { const b = _utf8B64url(key).replace(/-/g, '+').replace(/_/g, '/'); return 'Basic ' + b + '='.repeat((4 - (b.length % 4)) % 4); }
+function inspUplShape(v, depth) {
+  depth = depth || 0;
+  if (depth > 6) return '…';
+  if (Array.isArray(v)) return v.length ? [inspUplShape(v[0], depth + 1)] : [];
+  if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v)) o[k] = inspUplShape(v[k], depth + 1); return o; }
+  if (v === null) return 'null';
+  if (typeof v === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(v) ? 'date' : /^\d{4}-\d{2}-\d{2}T/.test(v) ? 'datetime' : 'string';
+  return typeof v;
+}
+async function inspUplProbe(env) {
+  const names = Object.keys(env || {}).filter(k => /uplist/i.test(k));
+  const keyName = env.UPLISTING_API_KEY ? 'UPLISTING_API_KEY' : (names.find(k => typeof env[k] === 'string' && /key|token|secret/i.test(k)) || '');
+  if (!keyName) return json({ ok: false, error: 'no_key', message: 'No Uplisting API key on this Worker. Add a secret named UPLISTING_API_KEY.', env_names_like_uplisting: names });
+  const key = String(env[keyName]).trim(), auth = inspUplBasic(key);
+  const iso = ms => new Date(ms).toISOString().slice(0, 10), now = Date.now();
+  const from = iso(now - 14 * 86400000), until = iso(now + 75 * 86400000), calls = [];
+  const clean = s => String(s == null ? '' : s).split(key).join('[key]');
+  const hit = async (label, path) => {
+    const rec = { label, path, status: 0 }, t0 = Date.now(), ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 8000);
+    let body = null;
+    try {
+      const r = await fetch(INSP_UPL_BASE + path, { method: 'GET', headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' }, signal: ctl.signal });
+      rec.status = r.status; rec.content_type = r.headers.get('content-type') || '';
+      const text = await r.text(); rec.bytes = text.length;
+      try { body = JSON.parse(text); } catch (e) { rec.text_head = clean(inspUplMask(text.slice(0, 200))); }
+      if (body !== null) {
+        const arr = Array.isArray(body) ? body : (body && Array.isArray(body.data) ? body.data : null);
+        if (arr) rec.count = arr.length;
+        rec.shape = inspUplShape(body);
+        rec.sample = clean(JSON.stringify(inspUplMask(body))).slice(0, 2400);
+      }
+    } catch (e) { rec.error = clean(e && e.message); }
+    clearTimeout(timer); rec.ms = Date.now() - t0; calls.push(rec);
+    await new Promise(res => setTimeout(res, 300));
+    return body;
+  };
+  await hit('users_me', '/users/me');
+  const props = await hit('properties', '/properties');
+  const plist = props ? (Array.isArray(props) ? props : (Array.isArray(props.data) ? props.data : [])) : [];
+  const properties = plist.slice(0, 20).map(p => ({ id: p && p.id, name: p && ((p.attributes && p.attributes.name) || p.name), nickname: p && ((p.attributes && p.attributes.nickname) || p.nickname) }));
+  await hit('bookings_range', `/bookings?check_in_from=${from}&check_in_to=${until}`);
+  await hit('bookings_plain', '/bookings');
+  await hit('v2_bookings_range', `/v2/bookings?check_in_from=${from}&check_in_to=${until}`);
+  const pid = properties[0] && properties[0].id;
+  if (pid != null) {
+    const id = encodeURIComponent(String(pid));
+    await hit('bookings_by_property', `/bookings?property_id=${id}&check_in_from=${from}&check_in_to=${until}`);
+    await hit('property_bookings', `/properties/${id}/bookings`);
+    await hit('property_calendar', `/properties/${id}/calendar?from=${from}&to=${until}`);
+    await hit('property_calendar_plain', `/properties/${id}/calendar`);
+  }
+  return json({ ok: true, key_source: keyName, key_len: key.length, window: { from, until }, properties, calls });
 }
 async function inspStrGuardConfigSave(env, body) {
   try {
