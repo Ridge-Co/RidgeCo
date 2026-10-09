@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-08.1-insp-uplisting-probe';
+const BUILD_VERSION = '2026-10-08.2-str-guard-source-sanity';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -26000,11 +26000,15 @@ function inspStrDayText(c, label) {
 function inspStrConfig(env, cfg) {
   const staged = !!(env.__STAGING__ ?? isStaging(env));
   let fixture = null; if (staged && cfg && cfg.STR_GUARD_FIXTURE) { try { fixture = JSON.parse(cfg.STR_GUARD_FIXTURE); } catch (e) { console.error('insp: STR_GUARD_FIXTURE is not valid JSON:', e && e.message); } }
-  const sources = String((cfg && cfg.STR_GUARD_BOOKING_SOURCES) || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  const rawSources = String((cfg && cfg.STR_GUARD_BOOKING_SOURCES) || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
   const cleaningCal = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim();
+  // The cleaning calendar can never be the bookings feed: its "Gina Cleaning" / "Kayla N/A" entries would be read as guest stays and close
+  // days that are really open (Oct 8 2026: both fields held the same id and Josiah's open days vanished). Such a source is ignored and reported.
+  const sources = rawSources.filter(x => !(cleaningCal && x.toLowerCase() === cleaningCal.toLowerCase()));
+  const problems = []; if (sources.length < rawSources.length) problems.push('The bookings feed is set to the cleaning calendar. It must be your guest bookings (Uplisting), not the cleaning calendar, so the guard is OFF until that is fixed.');
   const on = String((cfg && cfg.STR_GUARD_ENABLED) || 'TRUE').toUpperCase() !== 'FALSE';
   const missing = []; if (!sources.length) missing.push('bookings feed'); if (!cleaningCal) missing.push('cleaning calendar');
-  return { fixture, sources, cleaningCal, on, missing, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
+  return { fixture, sources, cleaningCal, on, missing, problems, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
 }
 function inspStrMask(src) { return /^https?:\/\//i.test(src) ? src.replace(/^(https?:\/\/[^/]+\/).*$/i, '$1…(link hidden)') : src; }
 async function inspStrReadIcs(env, src, fromDay, toDay) {
@@ -26075,7 +26079,7 @@ async function inspStrBookingConflict(env, cfg, b, fresh) {
 async function inspStrGuardStatusRoute(env, url) {
   try {
     const cfg = await fetchConfig(env), sc = inspStrConfig(env, cfg);
-    const base = { configured: !sc.missing.length, missing: sc.missing, on: sc.on, sources_masked: sc.sources.map(inspStrMask), cleaning_cal: sc.cleaningCal, label: sc.label };
+    const base = { configured: !sc.missing.length, missing: sc.missing, problems: sc.problems, on: sc.on, sources_masked: sc.sources.map(inspStrMask), cleaning_cal: sc.cleaningCal, label: sc.label };
     if (!sc.enabled) return json(Object.assign({ ok: true, enabled: false }, base));
     let st; try { st = await inspStrStatus(env, cfg, { fresh: true }); } catch (e) { return json(Object.assign({ ok: false, enabled: true, error: e.code || 'str_guard_unavailable', message: e.message }, base)); }
     const dates = String(url.searchParams.get('dates') || '').split(',').map(s => s.trim()).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
@@ -26166,6 +26170,12 @@ async function inspStrGuardConfigSave(env, body) {
       const toks = String(body.sources).split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
       for (const t of toks) if (!(/^https:\/\/\S+$/i.test(t) || /^[^\s@]+@[^\s@]+$/.test(t))) return json({ ok: false, error: 'bad_sources', message: 'Each bookings source must be an https:// iCal link or a Google calendar id (looks like xxxx@group.calendar.google.com). Problem: ' + inspStrMask(t) }, 400);
       sets.STR_GUARD_BOOKING_SOURCES = toks.join('\n');
+    }
+    { // never let the cleaning calendar double as the bookings feed (checked against the new OR the already-saved value of the other field)
+      const curCfg = await fetchConfig(env);
+      const effClean = String((body.cleaning_cal != null && String(body.cleaning_cal).trim() !== '') ? body.cleaning_cal : (curCfg.STR_GUARD_CLEANING_CAL || '')).trim().toLowerCase();
+      const effSrc = (sets.STR_GUARD_BOOKING_SOURCES != null ? sets.STR_GUARD_BOOKING_SOURCES : String(curCfg.STR_GUARD_BOOKING_SOURCES || '')).split(/[\s,]+/).filter(Boolean);
+      if (effClean && effSrc.some(x => x.toLowerCase() === effClean) && (sets.STR_GUARD_BOOKING_SOURCES != null || (body.cleaning_cal != null && String(body.cleaning_cal).trim() !== ''))) return json({ ok: false, error: 'bookings_is_cleaning_cal', message: 'The bookings feed and the cleaning calendar are the same. The bookings feed must be your guest bookings (the Uplisting calendar), not the cleaning calendar. Nothing was saved.' }, 400);
     }
     if (body.cleaning_cal != null && String(body.cleaning_cal).trim() !== '') {
       const c = String(body.cleaning_cal).trim();

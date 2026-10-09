@@ -277,5 +277,16 @@ t('probe: GET-only, fixed base URL, no caller-supplied URL, never returns the ke
 t('probe: route wired (admin /insp/ GET, not on the public allow-list)', has(/path === '\/insp\/str-guard\/uplisting-probe'\) \{ try \{ return await inspUplProbe\(env\)/) && !/'\/insp\/str-guard\/uplisting-probe'/.test(src.slice(src.indexOf("'/insp-book/info','/insp-book/slots'") - 400, src.indexOf("'/insp-book/info','/insp-book/slots'") + 400)));
 t('probe: missing key is reported (no_key), not a crash', /error: 'no_key'/.test(uplSrc));
 
+// ── Source sanity (Oct 8): the cleaning calendar can never be the bookings feed ──
+const SC = new Function(grab('isStaging') + '\n' + grab('inspStrConfig') + '\nreturn { inspStrConfig };')();
+const scCal = 'c_abc@group.calendar.google.com';
+const scBad = SC.inspStrConfig({ __STAGING__: false }, { STR_GUARD_BOOKING_SOURCES: scCal.toUpperCase(), STR_GUARD_CLEANING_CAL: scCal, STR_GUARD_ENABLED: 'TRUE' });
+t('sanity: same id in both fields = guard OFF, bookings feed missing, problem explained', !scBad.enabled && scBad.missing.includes('bookings feed') && scBad.problems.length === 1 && /cleaning calendar/.test(scBad.problems[0]), scBad);
+const scOk = SC.inspStrConfig({ __STAGING__: false }, { STR_GUARD_BOOKING_SOURCES: 'https://x.example/cal.ics ' + scCal, STR_GUARD_CLEANING_CAL: scCal });
+t('sanity: a real feed + the cleaning calendar = on, cleaning cal dropped from the feeds', scOk.enabled && scOk.sources.length === 1 && scOk.sources[0].startsWith('https://') && scOk.problems.length === 1);
+const scFine = SC.inspStrConfig({ __STAGING__: false }, { STR_GUARD_BOOKING_SOURCES: 'https://x.example/cal.ics', STR_GUARD_CLEANING_CAL: scCal });
+t('sanity: normal config has no problems', scFine.enabled && scFine.problems.length === 0);
+t('sanity: save refuses the cleaning calendar as the bookings feed; status reports problems; card has OFF/ON switch', has(/error: 'bookings_is_cleaning_cal'/) && has(/problems: sc\.problems/) && fs.readFileSync('inspect.html', 'utf8').includes('sgSwitch(false,this)') && fs.readFileSync('inspect.html', 'utf8').includes("r.error==='bookings_is_cleaning_cal'"));
+
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
