@@ -1228,7 +1228,7 @@ function loadPortalAttachments(woId, opts) {
         el.appendChild(a);
       });
     });
-  }).catch(function(){});
+  }).catch(function(){ attachmentsFailed(woId); });
 }
 
 // Build a full categorized photo section for a WO
