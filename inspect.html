@@ -1064,7 +1064,7 @@ function sgRender(r){
   var st=document.getElementById('sg-state'), out=document.getElementById('sg-out');
   if(!r){ st.innerHTML='<div class="banner">No answer</div>'; return; }
   var line;
-  if(!r.configured) line='<div class="banner">Not set up yet — missing: <b>'+esc((r.missing||[]).join(' and '))+'</b>. Until then nothing is closed.</div>';
+  if(!r.configured) line='<div class="banner">Not set up yet — missing: <b>'+esc((r.missing||[]).join(' and '))+'</b>. Until then nothing is closed.'+((r.problems&&r.problems.length)?'<br><b>⚠ '+esc(r.problems.join(' '))+'</b>':'')+'</div>';
   else if(!r.on) line='<div class="banner">Switched OFF in Config (STR_GUARD_ENABLED=FALSE).</div>';
   else if(r.ok===false) line='<div class="banner"><b>Cannot read your calendars:</b> '+esc(r.message||r.error)+'<br>While this is broken, inspection booking is paused (so nothing gets booked blind) and you were texted.</div>';
   else line='<div class="banner" style="background:var(--ok-bg,#e8f5e9)">✅ Working — checked just now. '+((r.closed||[]).length?('<b>'+r.closed.length+' checkout day(s) have no cleaner and are closed.</b>'):'Every upcoming checkout has a cleaner.')+'</div>';
