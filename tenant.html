@@ -781,8 +781,13 @@ function submitFeedback() {
     if (res.success) {
       document.getElementById('feedbackMsg').innerHTML = '<div class="msg success">✓ Sent — thank you!</div>';
       setTimeout(function(){ closeModal('modalFeedback'); }, 1500);
+    } else {
+      document.getElementById('feedbackMsg').innerHTML = '<div class="msg error">' + esc((res && res.error) || "Couldn't send your feedback. Please try again.") + '</div>';
     }
-  }).catch(function(){ document.getElementById('feedbackBtn').disabled=false; });
+  }).catch(function(){
+    document.getElementById('feedbackBtn').disabled=false;
+    document.getElementById('feedbackMsg').innerHTML = '<div class="msg error">Connection error — your feedback was not sent. Please try again.</div>';
+  });
 }
 
 // ── Utils ─────────────────────────────────────────────────────
