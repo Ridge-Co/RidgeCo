@@ -1047,6 +1047,9 @@ function loadNotifyPrefs() {
   if (_notifyPrefsLoaded) return;
   api('/owner-notifications?owner_id=' + session.owner_id)
     .then(function(prefs) {
+      // A failed load used to fill the form with DEFAULTS and mark it loaded, so Save would have
+      // overwritten the owner's real preferences. Only apply a real reply; otherwise say so and stay unloaded.
+      if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs) || prefs.error || prefs.http_status) { notifyPrefsLoadFailed(); return; }
       document.getElementById('nMethod').value  = prefs.method  || 'sms';
       document.getElementById('nUrgent').value  = prefs.urgent  || 'always';
       document.getElementById('nNormal').value  = prefs.normal  || 'key';
