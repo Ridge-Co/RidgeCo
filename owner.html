@@ -440,7 +440,21 @@ function api(path, opts) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
-  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+  // #94 (Oct 9 2026): same hardening as tenant.html. READS get a 30s timeout (a dead connection used
+  // to leave "Loading…" forever); writes are never aborted client-side (a timed-out write may have
+  // succeeded, and aborting it invites a duplicate). Error bodies get http_status so callers can tell
+  // an expired session (401/403) from a plain failure. Success bodies are returned exactly as before.
+  var isRead = !opts.method || String(opts.method).toUpperCase() === 'GET';
+  var ctrl = (isRead && typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 30000) : null;
+  if (ctrl && !opts.signal) opts.signal = ctrl.signal;
+  return fetch(WORKER + path, opts).then(function(r){
+    return r.json().then(function(j){
+      if (!r.ok && j && typeof j === 'object' && !Array.isArray(j)) j.http_status = r.status;
+      return j;
+    });
+  }).then(function(j){ if (timer) clearTimeout(timer); return j; },
+          function(e){ if (timer) clearTimeout(timer); throw e; });
 }
 
 function sortPropsNumeric(props) {
