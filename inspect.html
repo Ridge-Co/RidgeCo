@@ -3,7 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Inspection Scheduler — Ridge Co</title>
 <style>
   :root{
@@ -54,6 +54,12 @@
   .prop-card:first-child{border-top:none}
   .two-col{display:flex;gap:8px}
   .two-col>div{flex:1}
+</style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
+@media (hover:none) and (pointer:coarse){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
 </style>
 </head>
 <body>

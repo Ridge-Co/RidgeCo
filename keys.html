@@ -3,7 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Key Registry</title>
 <style>
   :root{--bg:#eceef1;--surface:#ffffff;--surface2:#f3f5f8;--border:#dce0e6;--text:#1b1f24;--muted:#66707c;--accent:#1d4ed8;--accent2:#166534;--danger:#b42318;--warn:#fbbf24;--info:#1d4ed8;--radius:8px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
@@ -79,6 +79,12 @@
   .toast-msg.success{border-left:3px solid var(--accent2);}
   .toast-msg.error{border-left:3px solid var(--danger);}
   .toast-msg.info{border-left:3px solid var(--info);}
+</style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
+@media (hover:none) and (pointer:coarse){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
 </style>
 </head>
 <body>

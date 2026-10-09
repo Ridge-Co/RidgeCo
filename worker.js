@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-08.3-insp-last-start-packing';
+const BUILD_VERSION = '2026-10-09.1-small-fixes-batch';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -13550,6 +13550,10 @@ const MODEL_REGISTRY = {
   HARD:   { provider: 'anthropic', model: 'claude-opus-4-8',    keyEnv: 'ANTHROPIC_API_KEY',  costPer1kIn: 0.015,   costPer1kOut: 0.075 },
 };
 
+// #89: minimum length (chars, ~4 chars/token) before a cache_control marker is worth adding.
+// Anthropic's minimum cacheable prefix is ~1024 tokens on Sonnet/Opus; 4096 chars is that, rounded.
+const ROUTE_AI_CACHE_MIN_CHARS = 4096;
+
 // job.type → default tier. Starting policy per the brief; tune from Ops_Telemetry
 // (Human_Corrected column is the strongest "this job is mis-tiered" signal).
 const JOB_ROUTES = {
@@ -13596,7 +13600,16 @@ async function routeAI(env, job) {
 
   const ms = Date.now() - t0;
   const reg = MODEL_REGISTRY[tier];
-  const estCost = ((attempt.tokens_in || 0) / 1000 * (reg.costPer1kIn || 0)) + ((attempt.tokens_out || 0) / 1000 * (reg.costPer1kOut || 0));
+  // #89: Anthropic bills cache READS at 0.1x input and cache WRITES at 1.25x input; tokens_in
+  // already includes both, so split them out of the full-price portion. Gemini's cached tokens are
+  // left at full price here (a conservative over-estimate — its discount varies by model).
+  const cacheRead = attempt.cache_read || 0, cacheWrite = attempt.cache_write || 0;
+  const isClaudeTier = reg.provider === 'anthropic';
+  const fullPriceIn = Math.max(0, (attempt.tokens_in || 0) - (isClaudeTier ? cacheRead + cacheWrite : 0));
+  const estCost = (fullPriceIn / 1000 * (reg.costPer1kIn || 0))
+    + (isClaudeTier ? (cacheRead / 1000 * (reg.costPer1kIn || 0) * 0.1) + (cacheWrite / 1000 * (reg.costPer1kIn || 0) * 1.25) : 0)
+    + ((attempt.tokens_out || 0) / 1000 * (reg.costPer1kOut || 0));
+  const cacheNote = (cacheRead || cacheWrite) ? ` cache_read=${cacheRead} cache_write=${cacheWrite}` : '';
 
   // 3. Telemetry — best-effort, never breaks the caller's job (same discipline
   //    as every other logTelemetry call site in this file).
@@ -13606,12 +13619,12 @@ async function routeAI(env, job) {
       Tier_Requested: tier, Model_Used: reg.model, Escalated: escalated ? 'TRUE' : 'FALSE',
       Tokens_In: attempt.tokens_in || 0, Tokens_Out: attempt.tokens_out || 0,
       Est_Cost: estCost.toFixed(6), Latency_ms: ms, Success: attempt.error ? 'FALSE' : 'TRUE',
-      Notes: attempt.error ? String(attempt.error).slice(0, 200) : (escalated ? `escalated_from_cheap: ${cheapFailReason}` : (pinned ? 'pinned' : '')),
+      Notes: (attempt.error ? String(attempt.error).slice(0, 200) : (escalated ? `escalated_from_cheap: ${cheapFailReason}` : (pinned ? 'pinned' : ''))) + cacheNote,
     });
   } catch (_) { /* telemetry best-effort — never fail the caller's job over a logging miss */ }
 
   if (attempt.error) throw new Error(`routeAI failed at tier ${tier}: ${attempt.error}`);
-  return { result: attempt.text, model_used: reg.model, tier_used: tier, escalated, tokens_in: attempt.tokens_in, tokens_out: attempt.tokens_out, ms };
+  return { result: attempt.text, model_used: reg.model, tier_used: tier, escalated, tokens_in: attempt.tokens_in, tokens_out: attempt.tokens_out, cache_read: cacheRead, cache_write: cacheWrite, ms };
 }
 
 async function routeAICall(env, tier, job) {
@@ -13637,8 +13650,13 @@ function routeAIValid(attempt, job) {
 async function callGemini(env, model, job) {
   if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
-  const parts = [{ text: job.prompt || '' }];
+  // Ops_Build_Queue #89 (Oct 9 2026): Gemini 2.5+/3.x do IMPLICIT prefix caching automatically — the
+  // only thing the caller controls is putting the stable text FIRST. So cachePrefix goes ahead of the
+  // per-call prompt and `system` goes in systemInstruction (also a stable prefix). No explicit
+  // cachedContents API (that needs a created cache object + TTL management; not worth it at our volume).
+  const parts = [{ text: (job.cachePrefix ? String(job.cachePrefix) + '\n\n' : '') + (job.prompt || '') }];
   const body = { contents: [{ parts }] };
+  if (job.system) body.systemInstruction = { parts: [{ text: String(job.system) }] };
   if (job.schema) body.generationConfig = { responseMimeType: 'application/json' };
   const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await resp.json();
@@ -13646,7 +13664,7 @@ async function callGemini(env, model, job) {
   const text = (data.candidates && data.candidates[0] && data.candidates[0].content &&
                 data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text || '').trim();
   const usage = data.usageMetadata || {};
-  return { text, tokens_in: usage.promptTokenCount || 0, tokens_out: usage.candidatesTokenCount || 0 };
+  return { text, tokens_in: usage.promptTokenCount || 0, tokens_out: usage.candidatesTokenCount || 0, cache_read: usage.cachedContentTokenCount || 0, cache_write: 0 };
 }
 
 // Provider adapter — Claude (REASON/HARD tiers). Mirrors the existing scopeClaude/
@@ -13654,17 +13672,38 @@ async function callGemini(env, model, job) {
 // not reinvented, per the brief). Normalizes to { text, tokens_in, tokens_out }.
 async function callClaude(env, model, job) {
   if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
-  const content = job.media ? [job.media, { type: 'text', text: job.prompt || '' }] : (job.prompt || '');
+  // Ops_Build_Queue #89 (Oct 9 2026) — PROMPT CACHING, opt-in per job. A job may pass:
+  //   job.system      stable instructions  -> Anthropic `system` (cache breakpoint when large enough)
+  //   job.cachePrefix stable reference text (price list, vendor roster, rubric) -> FIRST user block,
+  //                   cache breakpoint on it, then media, then the per-call job.prompt
+  // Jobs that pass neither build the exact request they always have (media-then-text, or a bare
+  // string) — zero behavior change for every existing call site. Anthropic only caches a prefix
+  // >= ~1024 tokens (Sonnet/Opus); below that the marker is harmless but pointless, so we skip it
+  // under ROUTE_AI_CACHE_MIN_CHARS. Order matters for a hit: static text must come BEFORE media.
+  const cacheable = (s) => !!s && String(s).length >= ROUTE_AI_CACHE_MIN_CHARS;
+  let content;
+  if (job.cachePrefix) {
+    content = [cacheable(job.cachePrefix) ? { type: 'text', text: String(job.cachePrefix), cache_control: { type: 'ephemeral' } } : { type: 'text', text: String(job.cachePrefix) }];
+    if (job.media) content.push(job.media);
+    if (job.prompt) content.push({ type: 'text', text: job.prompt }); // Anthropic rejects an empty text block
+  } else {
+    content = job.media ? [job.media, { type: 'text', text: job.prompt || '' }] : (job.prompt || '');
+  }
+  const reqBody = { model, max_tokens: job.maxTokens || 1200, messages: [{ role: 'user', content }] };
+  if (job.system) reqBody.system = cacheable(job.system) ? [{ type: 'text', text: String(job.system), cache_control: { type: 'ephemeral' } }] : String(job.system);
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: job.maxTokens || 1200, messages: [{ role: 'user', content }] }),
+    body: JSON.stringify(reqBody),
   });
   const data = await resp.json();
   if (!resp.ok) throw new Error(data && data.error && data.error.message || `Claude ${resp.status}`);
   const text = (data.content && data.content[0] && data.content[0].text || '').trim();
   const usage = data.usage || {};
-  return { text, tokens_in: usage.input_tokens || 0, tokens_out: usage.output_tokens || 0 };
+  // Anthropic's usage.input_tokens EXCLUDES cached tokens, so total prompt tokens = input + cache
+  // read + cache creation. For an uncached call the two extras are 0 and this equals the old value.
+  const cacheRead = usage.cache_read_input_tokens || 0, cacheWrite = usage.cache_creation_input_tokens || 0;
+  return { text, tokens_in: (usage.input_tokens || 0) + cacheRead + cacheWrite, tokens_out: usage.output_tokens || 0, cache_read: cacheRead, cache_write: cacheWrite };
 }
 
 // GET /model-registry — read-only, no PII/money, safe to expose for the Command

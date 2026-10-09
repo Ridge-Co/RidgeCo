@@ -112,6 +112,12 @@
     a{color:#000;text-decoration:none}
   }
 </style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
+@media (hover:none) and (pointer:coarse){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
+</style>
 </head>
 <body>
 

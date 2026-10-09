@@ -3,7 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Billing Information</title>
 <style>
 :root{
@@ -47,6 +47,12 @@ input:focus,select:focus{outline:none;border-color:var(--accent);}
 .field-status .dot.empty{background:var(--border);}
 .saved-indicator{color:var(--accent2);font-size:11px;margin-left:8px;opacity:0;transition:opacity .5s;}
 .saved-indicator.show{opacity:1;}
+</style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
+@media (hover:none) and (pointer:coarse){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
 </style>
 </head>
 <body>

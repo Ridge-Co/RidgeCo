@@ -3,7 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Owner Portal</title>
 <style>
 :root{
@@ -164,6 +164,12 @@ textarea{resize:vertical;min-height:70px;}
   .main{padding:12px;}
   .wo-desc-preview{max-width:180px;}
   .dv{max-width:170px;}
+}
+</style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
+@media (hover:none) and (pointer:coarse){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
 }
 </style>
 </head>
@@ -434,7 +440,21 @@ function api(path, opts) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
-  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+  // #94 (Oct 9 2026): same hardening as tenant.html. READS get a 30s timeout (a dead connection used
+  // to leave "Loading…" forever); writes are never aborted client-side (a timed-out write may have
+  // succeeded, and aborting it invites a duplicate). Error bodies get http_status so callers can tell
+  // an expired session (401/403) from a plain failure. Success bodies are returned exactly as before.
+  var isRead = !opts.method || String(opts.method).toUpperCase() === 'GET';
+  var ctrl = (isRead && typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 30000) : null;
+  if (ctrl && !opts.signal) opts.signal = ctrl.signal;
+  return fetch(WORKER + path, opts).then(function(r){
+    return r.json().then(function(j){
+      if (!r.ok && j && typeof j === 'object' && !Array.isArray(j)) j.http_status = r.status;
+      return j;
+    });
+  }).then(function(j){ if (timer) clearTimeout(timer); return j; },
+          function(e){ if (timer) clearTimeout(timer); throw e; });
 }
 
 function sortPropsNumeric(props) {
@@ -516,12 +536,24 @@ function showLoginMsg(msg, type) {
 // ── Dashboard load ────────────────────────────────────────────
 
 function loadDashboard() {
+  // Ops_Build_Queue #94 (Oct 9 2026): a non-array response used to be coerced to "no properties /
+  // no work orders", which made a failed fetch look identical to an empty account. It's now an
+  // error state with a retry button.
+  var listEl = document.getElementById('woList');
+  if (listEl) listEl.innerHTML = '<div class="spinner-msg" role="status">Loading…</div>';
   Promise.all([
     api('/owner-properties?owner_id=' + session.owner_id),
     api('/owner-workorders?owner_id=' + session.owner_id + '&include_closed=true'),
   ]).then(function(results) {
-    ownerProps = sortPropsNumeric(Array.isArray(results[0]) ? results[0] : []);
-    allWOs = Array.isArray(results[1]) ? results[1] : [];
+    for (var ri = 0; ri < results.length; ri++) {
+      if (!Array.isArray(results[ri])) {
+        var loadErr = new Error((results[ri] && results[ri].error) || 'The server sent back something unexpected');
+        loadErr.http_status = results[ri] && results[ri].http_status;
+        throw loadErr;
+      }
+    }
+    ownerProps = sortPropsNumeric(results[0]);
+    allWOs = results[1];
 
     // Stats
     var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
@@ -540,10 +572,16 @@ function loadDashboard() {
     renderWOs();
   }).catch(function(e) {
     console.error('[loadDashboard]', e);
-    document.getElementById('woList').innerHTML =
-      '<div class="msg error" style="padding:16px">Failed to load data: ' +
-      (e && e.message ? e.message : 'Connection error — check console') +
-      '. Try refreshing the page.</div>';
+    ['statOpen','statUrgent','statProps'].forEach(function(id){ var s = document.getElementById(id); if (s) s.textContent = '—'; });
+    var expired = !!e && (e.http_status === 401 || e.http_status === 403 || /unauthor|forbidden|invalid token|expired/i.test(String(e.message || '')));
+    var timedOut = !!e && e.name === 'AbortError';
+    document.getElementById('woList').innerHTML = expired
+      ? '<div class="msg error" style="padding:16px;text-align:center" role="alert">Your session has expired. Please sign in again.' +
+        '<div style="margin-top:12px"><button type="button" class="btn btn-sm" onclick="doLogout()">SIGN IN AGAIN</button></div></div>'
+      : '<div class="msg error" style="padding:16px;text-align:center" role="alert">' +
+        "We couldn't load your properties and work orders: " +
+        esc(timedOut ? 'the connection timed out' : (e && e.message ? e.message : 'connection error')) + '.' +
+        '<div style="margin-top:12px"><button type="button" class="btn btn-sm" onclick="loadDashboard()">TRY AGAIN</button></div></div>';
   });
 }
 
@@ -638,11 +676,15 @@ function loadWODetail(idx, woId) {
   activeWOId = woId;
 
   // Load audit trail
+  // #94 (Oct 9 2026): a failed history fetch used to render as "no history". The job details still
+  // show (they come from the list we already have), but a notice says the history didn't load.
+  var historyNotice = '<div class="msg error" style="margin-bottom:10px" role="alert">Activity history could not be loaded. The job details below are still current. Close and reopen this job to try again.</div>';
   api('/wo-audit?wo_id=' + woId).then(function(audit) {
-    detail.innerHTML = buildWODetail(wo, Array.isArray(audit) ? audit : []);
+    var ok = Array.isArray(audit);
+    detail.innerHTML = (ok ? '' : historyNotice) + buildWODetail(wo, ok ? audit : []);
     loadPortalAttachments(wo.ID);
   }).catch(function() {
-    detail.innerHTML = buildWODetail(wo, []);
+    detail.innerHTML = historyNotice + buildWODetail(wo, []);
     loadPortalAttachments(wo.ID);
   });
 }
@@ -1005,15 +1047,22 @@ function loadNotifyPrefs() {
   if (_notifyPrefsLoaded) return;
   api('/owner-notifications?owner_id=' + session.owner_id)
     .then(function(prefs) {
+      // A failed load used to fill the form with DEFAULTS and mark it loaded, so Save would have
+      // overwritten the owner's real preferences. Only apply a real reply; otherwise say so and stay unloaded.
+      if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs) || prefs.error || prefs.http_status) { notifyPrefsLoadFailed(); return; }
       document.getElementById('nMethod').value  = prefs.method  || 'sms';
       document.getElementById('nUrgent').value  = prefs.urgent  || 'always';
       document.getElementById('nNormal').value  = prefs.normal  || 'key';
       document.getElementById('nLow').value     = prefs.low     || 'completion';
       _notifyPrefsLoaded = true;
-    }).catch(function(){});
+    }).catch(function(){ notifyPrefsLoadFailed(); });
+}
+function notifyPrefsLoadFailed() {
+  document.getElementById('notifyPrefsMsg').innerHTML = '<div class="msg error" style="margin-bottom:8px">Couldn\'t load your saved preferences. Leave this tab and open it again to retry before saving.</div>';
 }
 function saveNotifyPrefs() {
   var msgEl = document.getElementById('notifyPrefsMsg');
+  if (!_notifyPrefsLoaded) { notifyPrefsLoadFailed(); return; }   // never save defaults over unseen real preferences
   var prefs = {
     owner_id: session.owner_id,
     method: document.getElementById('nMethod').value,
@@ -1029,6 +1078,8 @@ function saveNotifyPrefs() {
       } else {
         msgEl.innerHTML = '<div class="msg error" style="margin-bottom:8px">Error saving: ' + (res.error||'unknown') + '</div>';
       }
+    }).catch(function(){
+      msgEl.innerHTML = '<div class="msg error" style="margin-bottom:8px">Couldn\'t save — check your connection and try again.</div>';
     });
 }
 
@@ -1093,19 +1144,21 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
         card.textContent = '\u26a0 Upload failed';
         return nextFolder;
       }
-      api('POST', '/log-attachment', {
+      // The file is in Drive, but if logging it to the job fails it will never show up on the job: say so.
+      return api('POST', '/log-attachment', {
         wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
         file_name: file.name, file_type: fileType || 'photo',
         mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
-      }).catch(function(){});
-
+      }).then(function(lr){ return !!(lr && !lr.error); }, function(){ return false; }).then(function(logged){
       var isVideo = file.type.startsWith('video/');
       var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
                  fileType === 'receipt' ? '🧾' : fileType === 'report' ? '\u26a0\ufe0f' :
                  isVideo ? '🎥' : '📷';
       card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
       card.innerHTML = icon + ' <a href="' + esc(fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,16)) + '</a>';
+      if (!logged) { card.style.borderColor = 'var(--danger)'; card.innerHTML += ' <span style="color:var(--danger)">⚠ not saved to the job — try again</span>'; }
       return nextFolder;
+      });
     })
     .catch(function(e) {
       card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
@@ -1152,10 +1205,18 @@ function ownerFileUrl(woId, fileId) {
 }
 
 // Load and display attachments grouped by type
+// A failed photo-list fetch must not read as "None yet" (that says there are no photos).
+function attachmentsFailed(woId) {
+  ['before','after','report','receipt','other'].forEach(function(type) {
+    var el = document.getElementById('uploads-' + type + '-' + woId);
+    var ph = el && el.querySelector('.upload-ph');
+    if (ph) ph.textContent = "Couldn't load photos";
+  });
+}
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
-    if (!Array.isArray(items)) return;
+    if (!Array.isArray(items)) { attachmentsFailed(woId); return; }
     var byType = {};
     items.filter(function(f){ return f.Active !== 'FALSE'; }).forEach(function(f) {
       var t = (f.File_Type || 'other').toLowerCase();
@@ -1178,7 +1239,7 @@ function loadPortalAttachments(woId, opts) {
         el.appendChild(a);
       });
     });
-  }).catch(function(){});
+  }).catch(function(){ attachmentsFailed(woId); });
 }
 
 // Build a full categorized photo section for a WO

@@ -46,6 +46,12 @@
   .jc-foot{font-size:11px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;}
   .jc-foot a{color:var(--info);text-decoration:none;font-weight:bold;}
 </style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
+@media (hover:none) and (pointer:coarse){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
+</style>
 </head>
 <body>
 <!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
