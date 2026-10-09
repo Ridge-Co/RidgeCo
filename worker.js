@@ -26171,6 +26171,12 @@ async function inspStrGuardConfigSave(env, body) {
       for (const t of toks) if (!(/^https:\/\/\S+$/i.test(t) || /^[^\s@]+@[^\s@]+$/.test(t))) return json({ ok: false, error: 'bad_sources', message: 'Each bookings source must be an https:// iCal link or a Google calendar id (looks like xxxx@group.calendar.google.com). Problem: ' + inspStrMask(t) }, 400);
       sets.STR_GUARD_BOOKING_SOURCES = toks.join('\n');
     }
+    { // never let the cleaning calendar double as the bookings feed (checked against the new OR the already-saved value of the other field)
+      const curCfg = await fetchConfig(env);
+      const effClean = String((body.cleaning_cal != null && String(body.cleaning_cal).trim() !== '') ? body.cleaning_cal : (curCfg.STR_GUARD_CLEANING_CAL || '')).trim().toLowerCase();
+      const effSrc = (sets.STR_GUARD_BOOKING_SOURCES != null ? sets.STR_GUARD_BOOKING_SOURCES : String(curCfg.STR_GUARD_BOOKING_SOURCES || '')).split(/[\s,]+/).filter(Boolean);
+      if (effClean && effSrc.some(x => x.toLowerCase() === effClean) && (sets.STR_GUARD_BOOKING_SOURCES != null || (body.cleaning_cal != null && String(body.cleaning_cal).trim() !== ''))) return json({ ok: false, error: 'bookings_is_cleaning_cal', message: 'The bookings feed and the cleaning calendar are the same. The bookings feed must be your guest bookings (the Uplisting calendar), not the cleaning calendar. Nothing was saved.' }, 400);
+    }
     if (body.cleaning_cal != null && String(body.cleaning_cal).trim() !== '') {
       const c = String(body.cleaning_cal).trim();
       if (!/^[^\s@]+@[^\s@]+$/.test(c)) return json({ ok: false, error: 'bad_cleaning_cal', message: 'The cleaning calendar id looks like xxxx@group.calendar.google.com.' }, 400);
