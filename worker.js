@@ -13685,7 +13685,7 @@ async function callClaude(env, model, job) {
   if (job.cachePrefix) {
     content = [cacheable(job.cachePrefix) ? { type: 'text', text: String(job.cachePrefix), cache_control: { type: 'ephemeral' } } : { type: 'text', text: String(job.cachePrefix) }];
     if (job.media) content.push(job.media);
-    content.push({ type: 'text', text: job.prompt || '' });
+    if (job.prompt) content.push({ type: 'text', text: job.prompt }); // Anthropic rejects an empty text block
   } else {
     content = job.media ? [job.media, { type: 'text', text: job.prompt || '' }] : (job.prompt || '');
   }
