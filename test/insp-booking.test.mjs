@@ -266,5 +266,16 @@ t('tick: notifies once per change, re-alerts as a booking nears (24h/72h), repor
 t('config save only touches the STR_GUARD keys and validates input', has(/sets\.STR_GUARD_BOOKING_SOURCES/) && has(/error: 'bad_sources'/) && has(/error: 'bad_cleaning_cal'/));
 t('admin page: 2c card, pre-save cleaner check, closed badge', fs.readFileSync('inspect.html', 'utf8').includes('2c. Cabin cleaning protection') && fs.readFileSync('inspect.html', 'utf8').includes('/insp/str-guard/status?dates=') && fs.readFileSync('inspect.html', 'utf8').includes('Closed — no cleaner'));
 
+// ── Uplisting probe (Oct 8): read-only, masked, never echoes the key ──
+const UPL = new Function(grab('INSP_UPL_BASE', 'const') + '\n' + ['_utf8B64url', 'inspUplBasic', 'inspUplMask', 'inspUplShape'].map(n => grab(n)).join('\n') + '\nreturn { inspUplBasic, inspUplMask, inspUplShape };')();
+t('probe auth: Basic base64 of the key alone, padded like standard base64', ['ab19f218-a24e-4000-8000-000000000000', 'k', 'ab', 'abc'].every(k => UPL.inspUplBasic(k) === 'Basic ' + Buffer.from(k).toString('base64')));
+const uplMasked = UPL.inspUplMask({ data: [{ id: '1', attributes: { check_in: '2026-10-11', check_out: '2026-10-13', status: 'confirmed', note: 'call +1 (410) 555-0123 or a@b.com' }, guest: { first_name: 'Ann', last_name: 'Lee', email: 'ann@x.com', phone: '4105550123', nickname: 'AL' } }, { id: '2' }, { id: '3' }] });
+t('probe mask: keeps dates/status, drops guest + contact details, trims arrays to 2', uplMasked.data.length === 2 && uplMasked.data[0].attributes.check_out === '2026-10-13' && uplMasked.data[0].attributes.status === 'confirmed' && !/Ann|Lee|ann@|a@b\.com|555/.test(JSON.stringify(uplMasked)), JSON.stringify(uplMasked));
+t('probe shape: reports field names/types (date vs string), not values', JSON.stringify(UPL.inspUplShape({ data: [{ id: '1', attributes: { check_out: '2026-10-13', n: 2, ok: true } }] })) === JSON.stringify({ data: [{ id: 'string', attributes: { check_out: 'date', n: 'number', ok: 'boolean' } }] }));
+const uplSrc = grab('inspUplProbe');
+t('probe: GET-only, fixed base URL, no caller-supplied URL, never returns the key', /method: 'GET'/.test(uplSrc) && !/method: '(POST|PUT|PATCH|DELETE)'/.test(uplSrc) && !/searchParams|url\./.test(uplSrc) && /split\(key\)\.join\('\[key\]'\)/.test(uplSrc) && !/key: key|auth_header|Authorization: auth\b[\s\S]*json\(/.test(uplSrc.split('return json({ ok: true')[1] || ''));
+t('probe: route wired (admin /insp/ GET, not on the public allow-list)', has(/path === '\/insp\/str-guard\/uplisting-probe'\) \{ try \{ return await inspUplProbe\(env\)/) && !/'\/insp\/str-guard\/uplisting-probe'/.test(src.slice(src.indexOf("'/insp-book/info','/insp-book/slots'") - 400, src.indexOf("'/insp-book/info','/insp-book/slots'") + 400)));
+t('probe: missing key is reported (no_key), not a crash', /error: 'no_key'/.test(uplSrc));
+
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
