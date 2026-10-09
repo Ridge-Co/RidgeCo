@@ -25732,6 +25732,21 @@ function inspComputeSlots(o) {
           keyStartMs = ks;
         }
       }
+      if (pack != null) {
+        const placed = x => Number.isFinite(x.lat) && Number.isFinite(x.lng);
+        if (busy.some(x => placed(x) && x.endMs > bs && x.startMs < winEnd)) {
+          const eff = keyStartMs != null ? keyStartMs : s, pdm = keyStartMs != null ? kdm : dm;
+          let prev = null, next = null;
+          for (const x of busy) {
+            if (!placed(x)) continue;
+            if (x.endMs <= eff && (!prev || x.endMs > prev.endMs)) prev = x;
+            if (x.startMs >= e && (!next || x.startMs < next.startMs)) next = x;
+          }
+          const idleB = prev ? eff - (prev.endMs + ((pdm[prev.key] && pdm[prev.key].from != null) ? pdm[prev.key].from : dflt) * 60000) : Infinity;
+          const idleA = next ? next.startMs - (e + ((dm[next.key] && dm[next.key].to != null) ? dm[next.key].to : dflt) * 60000) : Infinity;
+          if (Math.min(idleB, idleA) > pack) continue;
+        }
+      }
       const slot = { startMs: s, endMs: e, expiresMs: exp, keyStartMs };
       seen.set(s, slot); out.push(slot);
     }
