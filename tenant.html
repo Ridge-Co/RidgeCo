@@ -712,19 +712,22 @@ function submitNote() {
       document.getElementById('noteMsg').innerHTML = '<div class="msg error">' + esc(res.error||'Error') + '</div>';
       return;
     }
+    var failedUploads = 0;
     var uploadNext = function(i) {
       if (i >= filesToUpload.length) {
+        if (failedUploads) {
+          // The note itself saved (its text says photos are attached). Keep Send disabled so a second tap
+          // cannot post the note twice, and say exactly what did not upload.
+          document.getElementById('noteMsg').innerHTML = '<div class="msg error">Your message was sent, but ' + failedUploads + ' of ' + filesToUpload.length + ' photo' + (filesToUpload.length===1?'':'s') + ' did not upload. Close this window, then add ' + (failedUploads===1?'it':'them') + ' under REPORT ISSUE on the job.</div>';
+          loadWOs();
+          return;
+        }
         document.getElementById('noteBtn').disabled = false;
         document.getElementById('noteMsg').innerHTML = '<div class="msg success">✓ Sent to your property manager.</div>';
         setTimeout(function(){ closeModal('modalNote'); loadWOs(); }, 1500);
         return;
       }
-      var fd = new FormData();
-      fd.append('file', filesToUpload[i]);
-      fd.append('wo_id', woId);
-      fd.append('file_type', 'report');
-      fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
-        .then(function(){ uploadNext(i + 1); }).catch(function(){ uploadNext(i + 1); });
+      uploadTenantPhoto(filesToUpload[i], woId, 'report').then(function(ok){ if (!ok) failedUploads++; uploadNext(i + 1); });
     };
     uploadNext(0);
   }).catch(function(){ document.getElementById('noteBtn').disabled = false; document.getElementById('noteMsg').innerHTML = '<div class="msg error">Connection error.</div>'; });
