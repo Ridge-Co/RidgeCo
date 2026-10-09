@@ -26791,6 +26791,10 @@ async function inspOpenBlockAdd(env, body) {
   if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return json({ error: 'Start_Time and End_Time (HH:MM, end after start) required' }, 400);
   const today = inspEtDate(Date.now());
   for (const d of dates) if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || String(d) < today) return json({ error: 'Bad or past date: ' + d }, 400);
+  // Optional latest START (HH:MM): the last inspection may start then and run past End_Time. Blank = End_Time is a finish-by time.
+  const lsRaw = body.Last_Start == null ? '' : String(body.Last_Start).trim();
+  const lsMin = lsRaw === '' ? null : inspParseHHMM(lsRaw);
+  if (lsRaw !== '' && (!Number.isFinite(lsMin) || lsMin < s)) return json({ error: 'Last_Start must be a time (HH:MM) at or after the start time, or blank' }, 400);
   const hh = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
   // Cutoff: blank hours = the default (48h). An exact Book_By ("YYYY-MM-DDTHH:MM", Eastern) wins over hours.
   const hoursRaw = body.Book_By_Hours == null ? '' : String(body.Book_By_Hours).trim();
