@@ -25691,6 +25691,7 @@ function inspComputeSlots(o) {
   const dflt = o.defaultBufferMin == null ? INSP_DEFAULT_BUFFER_MIN : o.defaultBufferMin;
   const busy = o.busy || [], dm = o.driveMap || {};
   const key = o.key && o.key.min > 0 ? o.key : null, kdm = (key && key.driveMap) || {}, firstBy = o.keyFirstByDate || {};
+  const pack = o.packSlackMin != null && Number.isFinite(+o.packSlackMin) && +o.packSlackMin >= 0 ? +o.packSlackMin * 60000 : null;
   const seen = new Map(), out = [];
   for (const b of (o.blocks || [])) {
     if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
