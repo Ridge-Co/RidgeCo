@@ -554,10 +554,12 @@ function loadDashboard() {
     renderWOs();
   }).catch(function(e) {
     console.error('[loadDashboard]', e);
+    ['statOpen','statUrgent','statProps'].forEach(function(id){ var s = document.getElementById(id); if (s) s.textContent = '—'; });
     document.getElementById('woList').innerHTML =
-      '<div class="msg error" style="padding:16px">Failed to load data: ' +
-      (e && e.message ? e.message : 'Connection error — check console') +
-      '. Try refreshing the page.</div>';
+      '<div class="msg error" style="padding:16px;text-align:center" role="alert">' +
+      "We couldn't load your properties and work orders: " +
+      esc(e && e.message ? e.message : 'connection error') + '.' +
+      '<div style="margin-top:12px"><button type="button" class="btn btn-sm" onclick="loadDashboard()">TRY AGAIN</button></div></div>';
   });
 }
 
