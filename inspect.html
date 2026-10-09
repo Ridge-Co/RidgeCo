@@ -1040,7 +1040,7 @@ function loadBlocks(){
     var up=list.filter(function(b){return b.Date>=today;});
     document.getElementById('ob-list').innerHTML = up.length ? up.map(function(b){
       var c=customers.find(function(x){return x.ID===b.Customer_ID;});
-      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div>'+(b.Str_Closed?'<div class="muted" style="color:var(--danger)"><b>⛔ Closed — no cleaner for the cabin checkout.</b> '+esc(b.Str_Text||'')+'</div>':'')+'</div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
+      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+(b.Last_Start?(' <span class="muted">(last start '+esc(b.Last_Start)+')</span>'):'')+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div>'+(b.Str_Closed?'<div class="muted" style="color:var(--danger)"><b>⛔ Closed — no cleaner for the cabin checkout.</b> '+esc(b.Str_Text||'')+'</div>':'')+'</div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
     }).join('') : '<p class="muted">No open blocks. Partners will see no times until you add one.</p>';
   }).catch(function(e){ document.getElementById('ob-list').innerHTML='<div class="banner">Could not load open blocks: '+esc(e.message)+'</div>'; });
 }
