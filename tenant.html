@@ -784,18 +784,20 @@ function submitNewRequest() {
       return;
     }
     var woId = res.id;
+    var failedUploads = 0, totalUploads = srFiles.length;
     var uploadNext = function(i) {
       if (i >= srFiles.length) {
+        loadWOs();
+        if (failedUploads) {
+          // The request itself was created. Keep Submit disabled so it cannot be filed twice.
+          msgEl.innerHTML = '<div class="msg error">Your request was submitted, but ' + failedUploads + ' of ' + totalUploads + ' photo' + (totalUploads===1?'':'s') + ' did not upload. Close this window, open your new request, and add ' + (failedUploads===1?'it':'them') + ' under REPORT ISSUE.</div>';
+          return;
+        }
         document.getElementById('srSubmitBtn').disabled = false;
         closeModal('modalSubmitRequest');
-        loadWOs();
         return;
       }
-      var fd = new FormData();
-      fd.append('file', srFiles[i]);
-      fd.append('wo_id', woId);
-      fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
-        .then(function(){ uploadNext(i + 1); }).catch(function(){ uploadNext(i + 1); });
+      uploadTenantPhoto(srFiles[i], woId).then(function(ok){ if (!ok) failedUploads++; uploadNext(i + 1); });
     };
     uploadNext(0);
   }).catch(function(){ document.getElementById('srSubmitBtn').disabled = false; msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
