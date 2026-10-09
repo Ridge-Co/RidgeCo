@@ -1055,10 +1055,14 @@ function loadNotifyPrefs() {
       document.getElementById('nNormal').value  = prefs.normal  || 'key';
       document.getElementById('nLow').value     = prefs.low     || 'completion';
       _notifyPrefsLoaded = true;
-    }).catch(function(){});
+    }).catch(function(){ notifyPrefsLoadFailed(); });
+}
+function notifyPrefsLoadFailed() {
+  document.getElementById('notifyPrefsMsg').innerHTML = '<div class="msg error" style="margin-bottom:8px">Couldn\'t load your saved preferences. Leave this tab and open it again to retry before saving.</div>';
 }
 function saveNotifyPrefs() {
   var msgEl = document.getElementById('notifyPrefsMsg');
+  if (!_notifyPrefsLoaded) { notifyPrefsLoadFailed(); return; }   // never save defaults over unseen real preferences
   var prefs = {
     owner_id: session.owner_id,
     method: document.getElementById('nMethod').value,
