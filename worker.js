@@ -25575,6 +25575,7 @@ const INSP_DEFAULT_BUFFER_MIN = 30; // buffer around a calendar event we cannot 
 const INSP_PARK_MIN = 5;           // parking + walk to the door, added to every drive leg
 const INSP_DRIVE_FACTOR = 1.25;    // Routes returns free-flow time; pad it for real traffic
 const INSP_MAX_UNITS = 60;
+const INSP_PACK_SLACK_MIN = 30;     // back-to-back routing: once a day has a placed stop, offered starts must sit within this many idle minutes (beyond drive time) of a neighbouring stop (Config INSP_PACK_SLACK_MIN; OFF disables)
 const INSP_DEFAULT_BOOK_BY_HOURS = 48; // a block stops accepting bookings this long before it starts (Config INSP_DEFAULT_BOOK_BY_HOURS, or per block)
 const INSP_ACTIVE_BOOKING = ['pending', 'approved'];
 
