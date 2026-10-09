@@ -573,11 +573,15 @@ function loadDashboard() {
   }).catch(function(e) {
     console.error('[loadDashboard]', e);
     ['statOpen','statUrgent','statProps'].forEach(function(id){ var s = document.getElementById(id); if (s) s.textContent = '—'; });
-    document.getElementById('woList').innerHTML =
-      '<div class="msg error" style="padding:16px;text-align:center" role="alert">' +
-      "We couldn't load your properties and work orders: " +
-      esc(e && e.message ? e.message : 'connection error') + '.' +
-      '<div style="margin-top:12px"><button type="button" class="btn btn-sm" onclick="loadDashboard()">TRY AGAIN</button></div></div>';
+    var expired = !!e && (e.http_status === 401 || e.http_status === 403 || /unauthor|forbidden|invalid token|expired/i.test(String(e.message || '')));
+    var timedOut = !!e && e.name === 'AbortError';
+    document.getElementById('woList').innerHTML = expired
+      ? '<div class="msg error" style="padding:16px;text-align:center" role="alert">Your session has expired. Please sign in again.' +
+        '<div style="margin-top:12px"><button type="button" class="btn btn-sm" onclick="doLogout()">SIGN IN AGAIN</button></div></div>'
+      : '<div class="msg error" style="padding:16px;text-align:center" role="alert">' +
+        "We couldn't load your properties and work orders: " +
+        esc(timedOut ? 'the connection timed out' : (e && e.message ? e.message : 'connection error')) + '.' +
+        '<div style="margin-top:12px"><button type="button" class="btn btn-sm" onclick="loadDashboard()">TRY AGAIN</button></div></div>';
   });
 }
 
