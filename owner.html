@@ -1078,6 +1078,8 @@ function saveNotifyPrefs() {
       } else {
         msgEl.innerHTML = '<div class="msg error" style="margin-bottom:8px">Error saving: ' + (res.error||'unknown') + '</div>';
       }
+    }).catch(function(){
+      msgEl.innerHTML = '<div class="msg error" style="margin-bottom:8px">Couldn\'t save — check your connection and try again.</div>';
     });
 }
 
