@@ -539,6 +539,11 @@ function toggleCard(idx) {
   var card = document.getElementById('tc-' + idx);
   document.querySelectorAll('.wo-card').forEach(function(c){ c.classList.remove('expanded'); });
   card.classList.toggle('expanded');
+  // Photos for this job load the first time it is opened (they used to never load: "None yet" always).
+  if (card.classList.contains('expanded') && !card.getAttribute('data-att-loaded')) {
+    var w = (window._renderedWOs || [])[idx];
+    if (w && w.ID) { card.setAttribute('data-att-loaded', '1'); loadPortalAttachments(w.ID); }
+  }
 }
 
 function buildDetail(wo, idx) {
