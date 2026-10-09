@@ -1080,7 +1080,7 @@ function sgSave(btn){
   btn.disabled=true; btn.textContent='Saving + reading…';
   api('POST','/insp/str-guard/config',{sources:src,cleaning_cal:cc,enabled:true}).then(function(r){
     btn.disabled=false; btn.textContent='Save + check';
-    if(r&&(r.error==='bad_sources'||r.error==='bad_cleaning_cal'||r.error==='save_failed')){ alert(r.message); return; }
+    if(r&&(r.error==='bad_sources'||r.error==='bad_cleaning_cal'||r.error==='save_failed'||r.error==='bookings_is_cleaning_cal')){ alert(r.message); return; }
     document.getElementById('sg-sources').value=''; document.getElementById('sg-clean').value='';
     sgRender(r); toast('Saved');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Save + check'; alert('Error: '+e.message); });
