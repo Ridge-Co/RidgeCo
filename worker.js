@@ -25738,7 +25738,6 @@ function inspComputeSlots(o) {
           const eff = keyStartMs != null ? keyStartMs : s, pdm = keyStartMs != null ? kdm : dm;
           let prev = null, next = null;
           for (const x of busy) {
-            if (!placed(x)) continue;
             if (x.endMs <= eff && (!prev || x.endMs > prev.endMs)) prev = x;
             if (x.startMs >= e && (!next || x.startMs < next.startMs)) next = x;
           }
