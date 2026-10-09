@@ -288,7 +288,7 @@ const scFine = SC.inspStrConfig({ __STAGING__: false }, { STR_GUARD_BOOKING_SOUR
 t('sanity: normal config has no problems', scFine.enabled && scFine.problems.length === 0);
 t('sanity: save refuses the cleaning calendar as the bookings feed; status reports problems; card has OFF/ON switch', has(/error: 'bookings_is_cleaning_cal'/) && has(/problems: sc\.problems/) && fs.readFileSync('inspect.html', 'utf8').includes('sgSwitch(false,this)') && fs.readFileSync('inspect.html', 'utf8').includes("r.error==='bookings_is_cleaning_cal'"));
 
-// ── latest start + back-to-back packing (Oct 8 2026) ──
+// ── latest start + back-to-back packing (Oct 8-9 2026) ──
 const D = '2026-10-14', m = hm => at(D, hm);
 const lsBlk = [{ ...blk[0], Last_Start: '14:00' }];
 const lsBase = { ...base, blocks: lsBlk };
