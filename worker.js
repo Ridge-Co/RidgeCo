@@ -13550,6 +13550,10 @@ const MODEL_REGISTRY = {
   HARD:   { provider: 'anthropic', model: 'claude-opus-4-8',    keyEnv: 'ANTHROPIC_API_KEY',  costPer1kIn: 0.015,   costPer1kOut: 0.075 },
 };
 
+// #89: minimum length (chars, ~4 chars/token) before a cache_control marker is worth adding.
+// Anthropic's minimum cacheable prefix is ~1024 tokens on Sonnet/Opus; 4096 chars is that, rounded.
+const ROUTE_AI_CACHE_MIN_CHARS = 4096;
+
 // job.type → default tier. Starting policy per the brief; tune from Ops_Telemetry
 // (Human_Corrected column is the strongest "this job is mis-tiered" signal).
 const JOB_ROUTES = {
