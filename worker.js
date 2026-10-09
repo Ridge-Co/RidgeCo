@@ -26079,7 +26079,7 @@ async function inspStrBookingConflict(env, cfg, b, fresh) {
 async function inspStrGuardStatusRoute(env, url) {
   try {
     const cfg = await fetchConfig(env), sc = inspStrConfig(env, cfg);
-    const base = { configured: !sc.missing.length, missing: sc.missing, on: sc.on, sources_masked: sc.sources.map(inspStrMask), cleaning_cal: sc.cleaningCal, label: sc.label };
+    const base = { configured: !sc.missing.length, missing: sc.missing, problems: sc.problems, on: sc.on, sources_masked: sc.sources.map(inspStrMask), cleaning_cal: sc.cleaningCal, label: sc.label };
     if (!sc.enabled) return json(Object.assign({ ok: true, enabled: false }, base));
     let st; try { st = await inspStrStatus(env, cfg, { fresh: true }); } catch (e) { return json(Object.assign({ ok: false, enabled: true, error: e.code || 'str_guard_unavailable', message: e.message }, base)); }
     const dates = String(url.searchParams.get('dates') || '').split(',').map(s => s.trim()).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
