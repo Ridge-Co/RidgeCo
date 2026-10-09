@@ -25683,7 +25683,8 @@ function inspBlockExpiryMs(b, defaultHours) {
 // last inspection START at that time and run as long as it needs; an unreadable Last_Start offers nothing (fail closed).
 // o.packSlackMin (minutes, null = off): back-to-back routing. Once a day's window holds a stop with a known place (a booking, or a
 // calendar event with a location), a start is only offered if it sits within that many idle minutes (beyond drive time) of the stop just
-// before or just after it. A day with no placed stop in its window is unrestricted (the first booking can go anywhere).
+// before or just after it (an event with no known place counts as that neighbour too, at the flat default drive time, so it never strands a day).
+// A day with no placed stop in its window is unrestricted (the first booking can go anywhere).
 function inspComputeSlots(o) {
   const dur = o.durationMin * 60000, step = (o.stepMin || INSP_STEP_MIN) * 60000;
   const earliest = o.nowMs + (o.minNoticeMin == null ? INSP_MIN_NOTICE_MIN : o.minNoticeMin) * 60000;
