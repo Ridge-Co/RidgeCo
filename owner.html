@@ -1135,12 +1135,12 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
         card.textContent = '\u26a0 Upload failed';
         return nextFolder;
       }
-      api('POST', '/log-attachment', {
+      // The file is in Drive, but if logging it to the job fails it will never show up on the job: say so.
+      return api('POST', '/log-attachment', {
         wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
         file_name: file.name, file_type: fileType || 'photo',
         mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
-      }).catch(function(){});
-
+      }).then(function(lr){ return !!(lr && !lr.error); }, function(){ return false; }).then(function(logged){
       var isVideo = file.type.startsWith('video/');
       var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
                  fileType === 'receipt' ? '🧾' : fileType === 'report' ? '\u26a0\ufe0f' :
