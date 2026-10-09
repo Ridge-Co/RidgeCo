@@ -26000,11 +26000,15 @@ function inspStrDayText(c, label) {
 function inspStrConfig(env, cfg) {
   const staged = !!(env.__STAGING__ ?? isStaging(env));
   let fixture = null; if (staged && cfg && cfg.STR_GUARD_FIXTURE) { try { fixture = JSON.parse(cfg.STR_GUARD_FIXTURE); } catch (e) { console.error('insp: STR_GUARD_FIXTURE is not valid JSON:', e && e.message); } }
-  const sources = String((cfg && cfg.STR_GUARD_BOOKING_SOURCES) || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+  const rawSources = String((cfg && cfg.STR_GUARD_BOOKING_SOURCES) || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
   const cleaningCal = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim();
+  // The cleaning calendar can never be the bookings feed: its "Gina Cleaning" / "Kayla N/A" entries would be read as guest stays and close
+  // days that are really open (Oct 8 2026: both fields held the same id and Josiah's open days vanished). Such a source is ignored and reported.
+  const sources = rawSources.filter(x => !(cleaningCal && x.toLowerCase() === cleaningCal.toLowerCase()));
+  const problems = []; if (sources.length < rawSources.length) problems.push('The bookings feed is set to the cleaning calendar. It must be your guest bookings (Uplisting), not the cleaning calendar, so the guard is OFF until that is fixed.');
   const on = String((cfg && cfg.STR_GUARD_ENABLED) || 'TRUE').toUpperCase() !== 'FALSE';
   const missing = []; if (!sources.length) missing.push('bookings feed'); if (!cleaningCal) missing.push('cleaning calendar');
-  return { fixture, sources, cleaningCal, on, missing, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
+  return { fixture, sources, cleaningCal, on, missing, problems, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
 }
 function inspStrMask(src) { return /^https?:\/\//i.test(src) ? src.replace(/^(https?:\/\/[^/]+\/).*$/i, '$1…(link hidden)') : src; }
 async function inspStrReadIcs(env, src, fromDay, toDay) {
