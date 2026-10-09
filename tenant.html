@@ -685,6 +685,17 @@ function renderNotePreview() {
 }
 function noteRemoveFile(i) { noteFiles.splice(i, 1); renderNotePreview(); }
 
+// Upload one tenant photo to the Worker. Resolves true only when the Worker confirms it saved; never rejects.
+function uploadTenantPhoto(file, woId, fileType) {
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('wo_id', woId);
+  if (fileType) fd.append('file_type', fileType);
+  return fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
+    .then(function(r){ return r.json().then(function(j){ return !!(r.ok && j && j.success); }, function(){ return false; }); })
+    .catch(function(){ return false; });
+}
+
 function submitNote() {
   var text = document.getElementById('noteText').value.trim();
   if (!text) return;
