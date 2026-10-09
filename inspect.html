@@ -1086,6 +1086,11 @@ function sgSave(btn){
     sgRender(r); toast('Saved');
   }).catch(function(e){ btn.disabled=false; btn.textContent='Save + check'; alert('Error: '+e.message); });
 }
+function sgSwitch(on,btn){
+  if(!on&&!confirm('Switch the cabin guard OFF? No days will be closed and no cleaning alerts will be sent until you switch it back ON.')) return;
+  btn.disabled=true;
+  api('POST','/insp/str-guard/config',{enabled:on}).then(function(r){ btn.disabled=false; sgRender(r); toast(on?'Guard ON':'Guard OFF'); }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+}
 function calTest(write,btn){
   var out=document.getElementById('cal-out'); out.innerHTML='<p class="muted">Checking…</p>'; btn.disabled=true;
   api('GET','/insp/calendar-test'+(write?'?write=1':'')).then(function(r){
