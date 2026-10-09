@@ -288,5 +288,42 @@ const scFine = SC.inspStrConfig({ __STAGING__: false }, { STR_GUARD_BOOKING_SOUR
 t('sanity: normal config has no problems', scFine.enabled && scFine.problems.length === 0);
 t('sanity: save refuses the cleaning calendar as the bookings feed; status reports problems; card has OFF/ON switch', has(/error: 'bookings_is_cleaning_cal'/) && has(/problems: sc\.problems/) && fs.readFileSync('inspect.html', 'utf8').includes('sgSwitch(false,this)') && fs.readFileSync('inspect.html', 'utf8').includes("r.error==='bookings_is_cleaning_cal'"));
 
+// ── latest start + back-to-back packing (Oct 8 2026) ──
+const D = '2026-10-14', m = hm => at(D, hm);
+const lsBlk = [{ ...blk[0], Last_Start: '14:00' }];
+const lsBase = { ...base, blocks: lsBlk };
+let ls = E.inspComputeSlots(lsBase);
+t('latest start: last inspection may START at 2:00 PM', ls[ls.length - 1].startMs === m('14:00'));
+t('latest start: 2:15 PM is not offered', !ls.some(x => x.startMs === m('14:15')));
+t('latest start: the 2 PM inspection runs past the old end (no cap on finish)', ls[ls.length - 1].endMs === m('15:15'));
+t('latest start: first slot is still the block start', ls[0].startMs === m('10:00'));
+const legacyLast = E.inspComputeSlots({ ...base, blocks: [{ ...blk[0], Last_Start: '' }] });
+t('blank Last_Start = legacy behavior (must finish by End_Time)', legacyLast[legacyLast.length - 1].endMs === m('14:00'));
+t('unreadable Last_Start offers nothing (fails closed)', E.inspComputeSlots({ ...base, blocks: [{ ...blk[0], Last_Start: 'soon' }] }).length === 0);
+t('Last_Start before the block start offers nothing', E.inspComputeSlots({ ...base, blocks: [{ ...blk[0], Last_Start: '09:00' }] }).length === 0);
+t('Last_Start still respects blackouts at the end', E.inspComputeSlots({ ...lsBase, blackouts: [{ Type: 'weekly', Day_Of_Week: 'Wed', Start_Time: '14:30', End_Time: '', Active: 'TRUE' }] }).every(x => x.endMs <= m('14:30')));
+t('window end helper: Last_Start wins, else End_Time', E.inspBlockWindowEndMs(lsBlk[0]) === m('14:00') && E.inspBlockWindowEndMs({ ...blk[0] }) === m('14:00') && E.inspBlockWindowEndMs({ ...blk[0], Last_Start: '13:00' }) === m('13:00'));
+
+const placedAt2 = [{ startMs: m('14:00'), endMs: m('15:15'), key: 'b9', title: 'Booked', lat: 39.3, lng: -76.6 }];
+const dm20 = { b9: { from: 20, to: 20 } };
+const pk = { ...lsBase, busy: placedAt2, driveMap: dm20, packSlackMin: 30 };
+const pkSlots = E.inspComputeSlots(pk);
+t('packing: 10:30 is NOT offered when a 2 PM stop is 20 min away and slack is 30', !pkSlots.some(x => x.startMs === m('10:30')));
+t('packing: the slots hugging the 2 PM stop are offered (12:00, 12:15)', pkSlots.some(x => x.startMs === m('12:00')) && pkSlots.some(x => x.startMs === m('12:15')));
+t('packing: nothing offered that leaves >30 min idle before the 2 PM stop', pkSlots.every(x => m('14:00') - (x.endMs + 20 * 60000) <= 30 * 60000));
+t('packing: nothing offered that overlaps the booked stop plus drive', pkSlots.every(x => x.endMs + 20 * 60000 <= m('14:00')));
+t('packing off (null): 10:30 comes back', E.inspComputeSlots({ ...pk, packSlackMin: null }).some(x => x.startMs === m('10:30')));
+t('packing: bigger slack widens the offer', E.inspComputeSlots({ ...pk, packSlackMin: 120 }).some(x => x.startMs === m('10:30')));
+t('packing: an empty day is unrestricted', E.inspComputeSlots({ ...lsBase, packSlackMin: 30 }).length === ls.length);
+t('packing: a located stop on another day does not restrict this day', E.inspComputeSlots({ ...lsBase, packSlackMin: 30, busy: [{ startMs: at('2026-10-15', '14:00'), endMs: at('2026-10-15', '15:00'), key: 'b8', lat: 39.3, lng: -76.6 }] }).length === ls.length);
+t('packing: an event with no known place does NOT anchor the day (still blocks its own time)', (() => { const r = E.inspComputeSlots({ ...lsBase, packSlackMin: 30, busy: [{ startMs: m('14:00'), endMs: m('15:00'), key: 'e7', title: 'Dentist' }] }); return r.some(x => x.startMs === m('10:30')) && r.every(x => x.endMs + 30 * 60000 <= m('14:00')); })());
+t('packing: Brett’s own located calendar event anchors the day like a booking', (() => { const r = E.inspComputeSlots({ ...lsBase, packSlackMin: 30, driveMap: { e1: { from: 20, to: 20 } }, busy: [{ startMs: m('14:00'), endMs: m('15:00'), key: 'e1', title: 'Walkthrough', lat: 39.3, lng: -76.6 }] }); return !r.some(x => x.startMs === m('10:30')) && r.some(x => x.startMs === m('12:00')); })());
+t('packing: slots AFTER a booked stop also hug it', (() => { const r = E.inspComputeSlots({ ...base, packSlackMin: 30, driveMap: { b9: { from: 20, to: 20 } }, busy: [{ startMs: m('10:00'), endMs: m('11:00'), key: 'b9', lat: 39.3, lng: -76.6 }] }); return r.some(x => x.startMs === m('11:30')) && !r.some(x => x.startMs === m('12:30')); })());
+t('packing: with the key pickup, the first inspection of the day still hugs the later stop', (() => { const r = E.inspComputeSlots({ ...pk, key: { min: 30, driveMap: {} } }); return r.length > 0 && r.every(x => x.keyStartMs != null) && !r.some(x => x.startMs === m('11:00')) && r.some(x => x.startMs === m('12:15')); })());
+t('pack slack config: default 30, number, OFF', E.inspPackSlackMin({}) === 30 && E.inspPackSlackMin({ INSP_PACK_SLACK_MIN: '45' }) === 45 && E.inspPackSlackMin({ INSP_PACK_SLACK_MIN: 'off' }) === null && E.inspPackSlackMin({ INSP_PACK_SLACK_MIN: 'junk' }) === 30);
+t('worker wiring: availability passes packSlackMin; add validates + stores Last_Start; info exposes last_start', has(/packSlackMin: inspPackSlackMin\(cfg\)/) && has(/Last_Start must be a time/) && has(/last_start: !!String/) && has(/'Last_Start'/));
+t('admin page has the Latest start input and sends it', fs.readFileSync('inspect.html', 'utf8').includes('id="ob-last"') && fs.readFileSync('inspect.html', 'utf8').includes('Last_Start:document.getElementById(\'ob-last\')'));
+
+
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
