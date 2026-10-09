@@ -384,17 +384,61 @@ function showLoginMsg(msg, type) {
 }
 
 // ── Work Orders ───────────────────────────────────────────────
+// Ops_Build_Queue #94 (Oct 9 2026): three distinct states — loading, error (with retry), and a real
+// empty state (see renderWOs). Before this, a failed or non-array response silently became "no work
+// orders" and a dead connection left "Loading…" on screen forever.
+var _loadWOsSeq = 0;
 function loadWOs() {
+  if (!session) return;
+  var seq = ++_loadWOsSeq;
+  var list = document.getElementById('woList');
+  list.innerHTML = '<div class="spinner-msg" role="status">Loading your work orders…</div>';
   api('/tenant-workorders?tenant_id=' + session.tenant_id + '&include_closed=true')
     .then(function(data) {
-      allWOs = Array.isArray(data) ? data : [];
+      if (seq !== _loadWOsSeq || !session) return; // a newer load (or a logout) superseded this one
+      if (!Array.isArray(data)) {
+        var err = new Error((data && data.error) || 'The server sent back something unexpected.');
+        err.http_status = data && data.http_status;
+        throw err;
+      }
+      allWOs = data;
       var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
       var done = allWOs.filter(function(w){ return ['Complete','Invoiced','Paid'].includes(w.Status); });
       document.getElementById('statOpen').textContent = open.length;
       document.getElementById('statDone').textContent = done.length;
       renderWOs();
       applyDeepLink();
+    })
+    .catch(function(err) {
+      if (seq !== _loadWOsSeq || !session) return;
+      showWOLoadError(err);
     });
+}
+
+function showWOLoadError(err) {
+  try { console.error('[tenant loadWOs]', err); } catch (e) {}
+  var so = document.getElementById('statOpen'), sd = document.getElementById('statDone');
+  if (so) so.textContent = '—';
+  if (sd) sd.textContent = '—';
+  var status = err && err.http_status;
+  var expired = status === 401 || status === 403 || /unauthor|forbidden|invalid token|expired/i.test(String((err && err.message) || ''));
+  var timedOut = err && err.name === 'AbortError';
+  var title = expired ? 'Your session has expired.' : "We couldn't load your work orders.";
+  var msg = expired ? 'Please sign in again to see your requests.'
+    : timedOut ? 'The connection timed out. Check your signal and try again. Your requests are safe — nothing was lost.'
+    : 'Check your connection and try again. Your requests are safe — nothing was lost.';
+  var buttons = expired
+    ? '<button type="button" class="btn" onclick="doLogout()">SIGN IN AGAIN</button>'
+    : '<button type="button" class="btn" onclick="loadWOs()">TRY AGAIN</button>';
+  document.getElementById('woList').innerHTML =
+    '<div class="load-error" role="alert"><div class="load-error-title">' + esc(title) + '</div>' +
+    '<div class="load-error-msg">' + esc(msg) + '</div>' + buttons + '</div>';
+}
+
+function clearWOFilters() {
+  document.getElementById('fStatus').value = 'all';
+  document.getElementById('fSearch').value = '';
+  renderWOs();
 }
 
 // Deep-link support (Sep 16 2026): a completed-job text can link straight to ?wo=WO-1234 so the
