@@ -13600,7 +13600,16 @@ async function routeAI(env, job) {
 
   const ms = Date.now() - t0;
   const reg = MODEL_REGISTRY[tier];
-  const estCost = ((attempt.tokens_in || 0) / 1000 * (reg.costPer1kIn || 0)) + ((attempt.tokens_out || 0) / 1000 * (reg.costPer1kOut || 0));
+  // #89: Anthropic bills cache READS at 0.1x input and cache WRITES at 1.25x input; tokens_in
+  // already includes both, so split them out of the full-price portion. Gemini's cached tokens are
+  // left at full price here (a conservative over-estimate — its discount varies by model).
+  const cacheRead = attempt.cache_read || 0, cacheWrite = attempt.cache_write || 0;
+  const isClaudeTier = reg.provider === 'anthropic';
+  const fullPriceIn = Math.max(0, (attempt.tokens_in || 0) - (isClaudeTier ? cacheRead + cacheWrite : 0));
+  const estCost = (fullPriceIn / 1000 * (reg.costPer1kIn || 0))
+    + (isClaudeTier ? (cacheRead / 1000 * (reg.costPer1kIn || 0) * 0.1) + (cacheWrite / 1000 * (reg.costPer1kIn || 0) * 1.25) : 0)
+    + ((attempt.tokens_out || 0) / 1000 * (reg.costPer1kOut || 0));
+  const cacheNote = (cacheRead || cacheWrite) ? ` cache_read=${cacheRead} cache_write=${cacheWrite}` : '';
 
   // 3. Telemetry — best-effort, never breaks the caller's job (same discipline
   //    as every other logTelemetry call site in this file).
