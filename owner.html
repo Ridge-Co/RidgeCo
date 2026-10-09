@@ -654,11 +654,15 @@ function loadWODetail(idx, woId) {
   activeWOId = woId;
 
   // Load audit trail
+  // #94 (Oct 9 2026): a failed history fetch used to render as "no history". The job details still
+  // show (they come from the list we already have), but a notice says the history didn't load.
+  var historyNotice = '<div class="msg error" style="margin-bottom:10px" role="alert">Activity history could not be loaded. The job details below are still current. Close and reopen this job to try again.</div>';
   api('/wo-audit?wo_id=' + woId).then(function(audit) {
-    detail.innerHTML = buildWODetail(wo, Array.isArray(audit) ? audit : []);
+    var ok = Array.isArray(audit);
+    detail.innerHTML = (ok ? '' : historyNotice) + buildWODetail(wo, ok ? audit : []);
     loadPortalAttachments(wo.ID);
   }).catch(function() {
-    detail.innerHTML = buildWODetail(wo, []);
+    detail.innerHTML = historyNotice + buildWODetail(wo, []);
     loadPortalAttachments(wo.ID);
   });
 }
