@@ -664,6 +664,7 @@ function openNote(woId) {
   activeNoteWOId = woId;
   document.getElementById('noteText').value = '';
   document.getElementById('noteMsg').innerHTML = '';
+  document.getElementById('noteBtn').disabled = false;
   document.getElementById('noteFiles').value = '';
   document.getElementById('notePreview').innerHTML = '';
   noteFiles = [];
