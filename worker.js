@@ -13651,7 +13651,7 @@ async function callGemini(env, model, job) {
   const text = (data.candidates && data.candidates[0] && data.candidates[0].content &&
                 data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text || '').trim();
   const usage = data.usageMetadata || {};
-  return { text, tokens_in: usage.promptTokenCount || 0, tokens_out: usage.candidatesTokenCount || 0 };
+  return { text, tokens_in: usage.promptTokenCount || 0, tokens_out: usage.candidatesTokenCount || 0, cache_read: usage.cachedContentTokenCount || 0, cache_write: 0 };
 }
 
 // Provider adapter — Claude (REASON/HARD tiers). Mirrors the existing scopeClaude/
