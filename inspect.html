@@ -299,6 +299,9 @@
           <div><label class="fld">From</label><input type="time" id="ob-start" value="09:00"></div>
           <div><label class="fld">To</label><input type="time" id="ob-end" value="17:00"></div>
         </div>
+        <label class="fld">Latest start (optional)</label>
+        <input type="time" id="ob-last">
+        <p class="muted" style="margin:6px 0 0">If set, the last inspection may START at this time even if it runs past “To”. Leave blank and the whole inspection must finish by “To”.</p>
         <label class="fld">Note (optional)</label>
         <input id="ob-note" placeholder="e.g. AMS inspections week of Oct 13">
         <label class="fld">Stop taking bookings this many hours before the block starts</label>
