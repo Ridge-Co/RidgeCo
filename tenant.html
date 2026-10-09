@@ -291,6 +291,16 @@ var STATUS_LABELS = {
 };
 
 function api(path, opts) {
+  // Accept hub-style calls too: api('GET'|'POST', path, body). The photo code below (attachments list,
+  // create-upload-session, log-attachment) was written that way; without this every one of those calls
+  // went to "…workers.devPOST" and failed silently, so REPORT ISSUE photos never uploaded and existing
+  // photos never loaded (found Oct 9 2026). Same shim owner.html and vendor.html already have.
+  if (path === 'GET' || path === 'POST') {
+    var method = path, realPath = opts, hubBody = arguments[2];
+    path = realPath;
+    opts = { method: method };
+    if (hubBody !== undefined) opts.body = hubBody;   // objects are serialised below
+  }
   opts = opts || {};
   opts.headers = opts.headers || {};
   opts.headers['X-Auth-Token'] = SECRET;
