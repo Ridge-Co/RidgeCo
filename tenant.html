@@ -301,7 +301,10 @@ function api(path, opts) {
   // Ops_Build_Queue #94 (Oct 9 2026): never hang forever on a dead connection (was a permanent
   // silent "Loading…"), and tag error bodies with the HTTP status so callers can tell an expired
   // session (401/403) from a plain failure. Success bodies are returned exactly as before.
-  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  // READS ONLY: a write that times out client-side may still have succeeded on the server, and
+  // aborting it would show "Connection error" and invite a duplicate resubmit (WO / note).
+  var isRead = !opts.method || String(opts.method).toUpperCase() === 'GET';
+  var ctrl = (isRead && typeof AbortController !== 'undefined') ? new AbortController() : null;
   var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 30000) : null;
   if (ctrl && !opts.signal) opts.signal = ctrl.signal;
   return fetch(WORKER + path, opts).then(function(r){
