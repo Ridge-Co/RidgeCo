@@ -123,7 +123,7 @@ function findTimes(){
 }
 function openDays(list){
   if(!list||!list.length) return '';
-  return '<div class="banner good" style="margin-top:10px"><b>Open days and booking deadlines</b><br>'+list.map(function(d){return esc(dayLabel(d.date))+' · '+esc(d.from)+'–'+esc(d.to)+' · <b>book by '+esc(d.closes_label)+'</b>';}).join('<br>')+'<br><span class="muted">Times for a day disappear after its deadline.</span></div>';
+  return '<div class="banner good" style="margin-top:10px"><b>Open days and booking deadlines</b><br>'+list.map(function(d){return esc(dayLabel(d.date))+' · '+(d.last_start?('start times '+esc(d.from)+' to '+esc(d.to)):(esc(d.from)+'–'+esc(d.to)))+' · <b>book by '+esc(d.closes_label)+'</b>';}).join('<br>')+'<br><span class="muted">Times for a day disappear after its deadline.</span></div>';
 }
 function dayLabel(iso){var d=new Date(iso+'T12:00:00Z');return d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',timeZone:'UTC'});}
 function renderSlots(r){
