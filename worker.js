@@ -26339,7 +26339,7 @@ async function inspAvailability(env, customer, input) {
     busy.push({ startMs: s, endMs: e, key: 'b' + b.ID, title: b.Formatted_Address || b.Address, lat: parseFloat(b.Lat), lng: parseFloat(b.Lng) });
   }
   // Only stops near an open block matter for drive math (saves geocodes + matrix elements).
-  const blockWins = blocks.map(b => [inspEtWallToMs(b.Date, b.Start_Time) - 6 * 3600000, inspEtWallToMs(b.Date, b.End_Time) + 6 * 3600000]).filter(w => Number.isFinite(w[0]) && Number.isFinite(w[1]));
+  const blockWins = blocks.map(b => [inspEtWallToMs(b.Date, b.Start_Time) - 6 * 3600000, inspBlockWindowEndMs(b) + durationMin * 60000 + 6 * 3600000]).filter(w => Number.isFinite(w[0]) && Number.isFinite(w[1]));
   const relevant = busy.filter(x => blockWins.some(w => x.endMs > w[0] && x.startMs < w[1]));
   const anchors = []; let unplaced = 0;
   for (const x of relevant) {
