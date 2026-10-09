@@ -25700,7 +25700,11 @@ function inspComputeSlots(o) {
     if (!Number.isFinite(bs) || !Number.isFinite(be) || be <= bs) continue;
     const exp = inspBlockExpiryMs(b, o.bookByHours);
     if (!Number.isFinite(exp) || o.nowMs >= exp) continue;
-    for (let s = bs; s + dur <= be; s += step) {
+    const lsRaw = String(b.Last_Start == null ? '' : b.Last_Start).trim();
+    let ls = null;
+    if (lsRaw) { ls = inspEtWallToMs(b.Date, lsRaw); if (!Number.isFinite(ls) || ls < bs) continue; }
+    const hiStart = ls != null ? ls : be - dur, winEnd = (ls != null ? ls : be) + dur;
+    for (let s = bs; s <= hiStart; s += step) {
       if (s < earliest || s > latest) continue;
       if (seen.has(s)) { const prev = seen.get(s); if (exp > prev.expiresMs) prev.expiresMs = exp; continue; }
       const e = s + dur;
