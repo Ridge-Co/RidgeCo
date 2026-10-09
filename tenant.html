@@ -747,6 +747,7 @@ function openSubmitRequest() {
   document.getElementById('srFiles').value = '';
   document.getElementById('srPreview').innerHTML = '';
   document.getElementById('srMsg').innerHTML = '';
+  document.getElementById('srSubmitBtn').disabled = false;
   srFiles = [];
   openModal('modalSubmitRequest');
 }
