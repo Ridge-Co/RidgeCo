@@ -522,12 +522,20 @@ function showLoginMsg(msg, type) {
 // ── Dashboard load ────────────────────────────────────────────
 
 function loadDashboard() {
+  // Ops_Build_Queue #94 (Oct 9 2026): a non-array response used to be coerced to "no properties /
+  // no work orders", which made a failed fetch look identical to an empty account. It's now an
+  // error state with a retry button.
+  var listEl = document.getElementById('woList');
+  if (listEl) listEl.innerHTML = '<div class="spinner-msg" role="status">Loading…</div>';
   Promise.all([
     api('/owner-properties?owner_id=' + session.owner_id),
     api('/owner-workorders?owner_id=' + session.owner_id + '&include_closed=true'),
   ]).then(function(results) {
-    ownerProps = sortPropsNumeric(Array.isArray(results[0]) ? results[0] : []);
-    allWOs = Array.isArray(results[1]) ? results[1] : [];
+    for (var ri = 0; ri < results.length; ri++) {
+      if (!Array.isArray(results[ri])) throw new Error((results[ri] && results[ri].error) || 'The server sent back something unexpected');
+    }
+    ownerProps = sortPropsNumeric(results[0]);
+    allWOs = results[1];
 
     // Stats
     var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
