@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-08.2-str-guard-source-sanity';
+const BUILD_VERSION = '2026-10-08.3-insp-last-start-packing';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -24797,7 +24797,7 @@ const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
-const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By'];
+const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start'];
 const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
@@ -25575,6 +25575,7 @@ const INSP_DEFAULT_BUFFER_MIN = 30; // buffer around a calendar event we cannot 
 const INSP_PARK_MIN = 5;           // parking + walk to the door, added to every drive leg
 const INSP_DRIVE_FACTOR = 1.25;    // Routes returns free-flow time; pad it for real traffic
 const INSP_MAX_UNITS = 60;
+const INSP_PACK_SLACK_MIN = 30;     // back-to-back routing: once a day has a placed stop, offered starts must sit within this many idle minutes (beyond drive time) of a neighbouring stop (Config INSP_PACK_SLACK_MIN; OFF disables)
 const INSP_DEFAULT_BOOK_BY_HOURS = 48; // a block stops accepting bookings this long before it starts (Config INSP_DEFAULT_BOOK_BY_HOURS, or per block)
 const INSP_ACTIVE_BOOKING = ['pending', 'approved'];
 
@@ -25678,6 +25679,12 @@ function inspBlockExpiryMs(b, defaultHours) {
 // (driveMap here = drive minutes between each calendar stop and the key office). o.keyFirstByDate
 // = { 'YYYY-MM-DD': startMs } of the earliest ACTIVE booking that day; a slot at/after it needs no pickup.
 // Blocks whose booking cutoff has passed offer nothing (o.bookByHours = default cutoff).
+// Block window: normally an inspection must FINISH by End_Time. A block with Last_Start (HH:MM) instead lets the
+// last inspection START at that time and run as long as it needs; an unreadable Last_Start offers nothing (fail closed).
+// o.packSlackMin (minutes, null = off): back-to-back routing. Once a day's window holds a stop with a known place (a booking, or a
+// calendar event with a location), a start is only offered if it sits within that many idle minutes (beyond drive time) of the stop just
+// before or just after it (an event with no known place counts as that neighbour too, at the flat default drive time, so it never strands a day).
+// A day with no placed stop in its window is unrestricted (the first booking can go anywhere).
 function inspComputeSlots(o) {
   const dur = o.durationMin * 60000, step = (o.stepMin || INSP_STEP_MIN) * 60000;
   const earliest = o.nowMs + (o.minNoticeMin == null ? INSP_MIN_NOTICE_MIN : o.minNoticeMin) * 60000;
@@ -25685,6 +25692,7 @@ function inspComputeSlots(o) {
   const dflt = o.defaultBufferMin == null ? INSP_DEFAULT_BUFFER_MIN : o.defaultBufferMin;
   const busy = o.busy || [], dm = o.driveMap || {};
   const key = o.key && o.key.min > 0 ? o.key : null, kdm = (key && key.driveMap) || {}, firstBy = o.keyFirstByDate || {};
+  const pack = o.packSlackMin != null && Number.isFinite(+o.packSlackMin) && +o.packSlackMin >= 0 ? +o.packSlackMin * 60000 : null;
   const seen = new Map(), out = [];
   for (const b of (o.blocks || [])) {
     if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
@@ -25693,7 +25701,11 @@ function inspComputeSlots(o) {
     if (!Number.isFinite(bs) || !Number.isFinite(be) || be <= bs) continue;
     const exp = inspBlockExpiryMs(b, o.bookByHours);
     if (!Number.isFinite(exp) || o.nowMs >= exp) continue;
-    for (let s = bs; s + dur <= be; s += step) {
+    const lsRaw = String(b.Last_Start == null ? '' : b.Last_Start).trim();
+    let ls = null;
+    if (lsRaw) { ls = inspEtWallToMs(b.Date, lsRaw); if (!Number.isFinite(ls) || ls < bs) continue; }
+    const hiStart = ls != null ? ls : be - dur, winEnd = (ls != null ? ls : be) + dur;
+    for (let s = bs; s <= hiStart; s += step) {
       if (s < earliest || s > latest) continue;
       if (seen.has(s)) { const prev = seen.get(s); if (exp > prev.expiresMs) prev.expiresMs = exp; continue; }
       const e = s + dur;
@@ -25719,6 +25731,20 @@ function inspComputeSlots(o) {
           }
           if (!kok) continue;
           keyStartMs = ks;
+        }
+      }
+      if (pack != null) {
+        const placed = x => Number.isFinite(x.lat) && Number.isFinite(x.lng);
+        if (busy.some(x => placed(x) && x.endMs > bs && x.startMs < winEnd)) {
+          const eff = keyStartMs != null ? keyStartMs : s, pdm = keyStartMs != null ? kdm : dm;
+          let prev = null, next = null;
+          for (const x of busy) {
+            if (x.endMs <= eff && (!prev || x.endMs > prev.endMs)) prev = x;
+            if (x.startMs >= e && (!next || x.startMs < next.startMs)) next = x;
+          }
+          const idleB = prev ? eff - (prev.endMs + ((pdm[prev.key] && pdm[prev.key].from != null) ? pdm[prev.key].from : dflt) * 60000) : Infinity;
+          const idleA = next ? next.startMs - (e + ((dm[next.key] && dm[next.key].to != null) ? dm[next.key].to : dflt) * 60000) : Infinity;
+          if (Math.min(idleB, idleA) > pack) continue;
         }
       }
       const slot = { startMs: s, endMs: e, expiresMs: exp, keyStartMs };
@@ -26283,6 +26309,8 @@ function inspCleanInput(body) {
 }
 
 function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
+function inspPackSlackMin(cfg) { const raw = String((cfg && cfg.INSP_PACK_SLACK_MIN) == null ? '' : cfg.INSP_PACK_SLACK_MIN).trim(); if (/^off$/i.test(raw)) return null; const n = parseFloat(raw); return Number.isFinite(n) && n >= 0 ? n : INSP_PACK_SLACK_MIN; }
+function inspBlockWindowEndMs(b) { const l = String(b.Last_Start == null ? '' : b.Last_Start).trim(); const ls = l ? inspEtWallToMs(b.Date, l) : NaN; return Number.isFinite(ls) ? ls : inspEtWallToMs(b.Date, b.End_Time); }
 function inspDefaultBookByHours(cfg) { const h = parseFloat(cfg && cfg.INSP_DEFAULT_BOOK_BY_HOURS); return Number.isFinite(h) && h >= 0 ? h : INSP_DEFAULT_BOOK_BY_HOURS; }
 // Everything a slot answer depends on, read fresh. Calendar/booking read failures THROW.
 async function inspAvailability(env, customer, input) {
@@ -26311,7 +26339,7 @@ async function inspAvailability(env, customer, input) {
     busy.push({ startMs: s, endMs: e, key: 'b' + b.ID, title: b.Formatted_Address || b.Address, lat: parseFloat(b.Lat), lng: parseFloat(b.Lng) });
   }
   // Only stops near an open block matter for drive math (saves geocodes + matrix elements).
-  const blockWins = blocks.map(b => [inspEtWallToMs(b.Date, b.Start_Time) - 6 * 3600000, inspEtWallToMs(b.Date, b.End_Time) + 6 * 3600000]).filter(w => Number.isFinite(w[0]) && Number.isFinite(w[1]));
+  const blockWins = blocks.map(b => [inspEtWallToMs(b.Date, b.Start_Time) - 6 * 3600000, inspBlockWindowEndMs(b) + durationMin * 60000 + 6 * 3600000]).filter(w => Number.isFinite(w[0]) && Number.isFinite(w[1]));
   const relevant = busy.filter(x => blockWins.some(w => x.endMs > w[0] && x.startMs < w[1]));
   const anchors = []; let unplaced = 0;
   for (const x of relevant) {
@@ -26341,7 +26369,7 @@ async function inspAvailability(env, customer, input) {
     }
   }
   const bookByHours = inspDefaultBookByHours(cfg);
-  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map, key, keyFirstByDate, bookByHours, closedDates });
+  const slots = inspComputeSlots({ blocks, busy: relevant, blackouts, durationMin, nowMs, driveMap: drive.map, key, keyFirstByDate, bookByHours, closedDates, packSlackMin: inspPackSlackMin(cfg) });
   return { geo, durationMin, slots, busy: relevant, driveMap: drive.map, driveSource: drive.source, warnings, cfg, blocksCount: blocks.length, key, bookByHours };
 }
 function inspSlotOut(s) { return { start_iso: new Date(s.startMs).toISOString(), end_iso: new Date(s.endMs).toISOString(), date: inspEtDate(s.startMs), label: inspFmtEtTime(s.startMs) + '–' + inspFmtEtTime(s.endMs), closes_iso: Number.isFinite(s.expiresMs) ? new Date(s.expiresMs).toISOString() : '', closes_label: Number.isFinite(s.expiresMs) ? inspFmtEt(s.expiresMs) : '' }; }
@@ -26361,7 +26389,7 @@ async function inspBookInfo(env, url) {
   const mine = blocks.filter(b => String(b.Active || '').toUpperCase() !== 'FALSE' && b.Date >= today && (!b.Customer_ID || String(b.Customer_ID) === String(c.ID)));
   const open_days = mine.map(b => ({ b, exp: inspBlockExpiryMs(b, dh) })).filter(x => Number.isFinite(x.exp) && now < x.exp)
     .sort((x, y) => (x.b.Date + x.b.Start_Time).localeCompare(y.b.Date + y.b.Start_Time))
-    .map(x => ({ date: x.b.Date, from: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.Start_Time)), to: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.End_Time)), closes_iso: new Date(x.exp).toISOString(), closes_label: inspFmtEt(x.exp) }));
+    .map(x => ({ date: x.b.Date, from: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.Start_Time)), to: inspFmtEtTime(inspBlockWindowEndMs(x.b)), last_start: !!String(x.b.Last_Start || '').trim(), closes_iso: new Date(x.exp).toISOString(), closes_label: inspFmtEt(x.exp) }));
   let open = open_days;
   try { const closed = await inspStrClosedOrThrow(env, await fetchConfig(env), false); open = open_days.filter(d => !closed.has(d.date)); } catch (e) { console.error('insp: cleaning guard unavailable for open-days list (slots will report it):', e && e.message); }
   return json({ ok: true, customer: c.Name, open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
@@ -26763,6 +26791,10 @@ async function inspOpenBlockAdd(env, body) {
   if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return json({ error: 'Start_Time and End_Time (HH:MM, end after start) required' }, 400);
   const today = inspEtDate(Date.now());
   for (const d of dates) if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d)) || String(d) < today) return json({ error: 'Bad or past date: ' + d }, 400);
+  // Optional latest START (HH:MM): the last inspection may start then and run past End_Time. Blank = End_Time is a finish-by time.
+  const lsRaw = body.Last_Start == null ? '' : String(body.Last_Start).trim();
+  const lsMin = lsRaw === '' ? null : inspParseHHMM(lsRaw);
+  if (lsRaw !== '' && (!Number.isFinite(lsMin) || lsMin < s)) return json({ error: 'Last_Start must be a time (HH:MM) at or after the start time, or blank' }, 400);
   const hh = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
   // Cutoff: blank hours = the default (48h). An exact Book_By ("YYYY-MM-DDTHH:MM", Eastern) wins over hours.
   const hoursRaw = body.Book_By_Hours == null ? '' : String(body.Book_By_Hours).trim();
@@ -26778,7 +26810,7 @@ async function inspOpenBlockAdd(env, body) {
   const cfg = await fetchConfig(env), dh = inspDefaultBookByHours(cfg), now = Date.now();
   let n = 0; const alreadyClosed = [], closes = {};
   for (const d of dates) {
-    const row = { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today, Book_By_Hours: hoursRaw, Book_By: bookBy };
+    const row = { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today, Book_By_Hours: hoursRaw, Book_By: bookBy, Last_Start: lsMin == null ? '' : hh(lsMin) };
     const r = await addRow(env, 'Insp_Open_Blocks', row);
     const j = await r.json(); if (!j || !j.success) return json({ error: 'Failed saving ' + d, saved: n }, 500); n++;
     const exp = inspBlockExpiryMs(row, dh); closes[d] = Number.isFinite(exp) ? inspFmtEt(exp) : '';
