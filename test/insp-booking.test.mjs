@@ -163,7 +163,7 @@ t('router has every public route', ['info', 'status', 'approval'].every(p => has
 t('INSP_TABS includes the new tabs', has(/Insp_Open_Blocks: INSP_OPEN_BLOCK_HEADERS,\s*\n\s*Insp_Bookings: INSP_BOOKING_HEADERS/));
 t('header consts are defined BEFORE INSP_TABS (no TDZ crash at load)', src.indexOf('const INSP_OPEN_BLOCK_HEADERS') < src.indexOf('const INSP_TABS ='));
 t('customers carry Book_Token + key pickup fields', has(/INSP_CUSTOMER_HEADERS = \[[^\]]*'Book_Token'[^\]]*'Key_Address','Key_Pickup_Min'\]/));
-t('blocks carry the cutoff fields; bookings carry Key_Pickup', has(/INSP_OPEN_BLOCK_HEADERS = \[[^\]]*'Book_By_Hours','Book_By'\]/) && has(/INSP_BOOKING_HEADERS = \[[^\]]*'Key_Pickup'\]/));
+t('blocks carry the cutoff fields; bookings carry Key_Pickup', has(/INSP_OPEN_BLOCK_HEADERS = \[[^\]]*'Book_By_Hours','Book_By','Last_Start'\]/) && has(/INSP_BOOKING_HEADERS = \[[^\]]*'Key_Pickup'\]/));
 t('key-pickup admin route is registered and test-guarded', has(/path === '\/insp\/customer\/key-pickup'\)\s+return await inspCustomerKeyPickup/) && has(/path === '\/insp\/customer\/key-pickup'\) return await isTestRecord/));
 t('our key-pickup calendar events never count as busy', has(/private\.ridgecoInspBooking \|\| ev\.extendedProperties\.private\.ridgecoInspKey/));
 t('calendar read failure aborts availability (no silent empty list)', has(/calendar_unavailable', 'Scheduling is temporarily unavailable/));
