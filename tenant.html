@@ -917,10 +917,20 @@ function portalUploadFiles(input, woId, propAddr, fileType, containerId) {
 }
 
 // Load and display attachments grouped by type
+// A failed photo-list fetch must not read as "None yet" (that says there are no photos).
+function attachmentsFailed(woId) {
+  ['before','after','report','receipt','other'].forEach(function(type) {
+    var el = document.getElementById('uploads-' + type + '-' + woId);
+    var ph = el && el.querySelector('.upload-ph');
+    if (ph) ph.textContent = "Couldn't load photos";
+  });
+  var card = document.querySelector('.wo-card.expanded');
+  if (card) card.removeAttribute('data-att-loaded');   // reopening the job tries again
+}
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
-    if (!Array.isArray(items)) return;
+    if (!Array.isArray(items)) { attachmentsFailed(woId); return; }
     var byType = {};
     items.filter(function(f){ return f.Active !== 'FALSE'; }).forEach(function(f) {
       var t = (f.File_Type || 'other').toLowerCase();
