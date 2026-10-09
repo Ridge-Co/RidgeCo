@@ -412,7 +412,7 @@ function loadWOs() {
       applyDeepLink();
     })
     .catch(function(err) {
-      if (seq !== _loadWOsSeq || !session) return;
+      if (seq !== window._loadWOsSeq || !session) return;
       showWOLoadError(err);
     });
 }
