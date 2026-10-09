@@ -387,10 +387,12 @@ function showLoginMsg(msg, type) {
 // Ops_Build_Queue #94 (Oct 9 2026): three distinct states — loading, error (with retry), and a real
 // empty state (see renderWOs). Before this, a failed or non-array response silently became "no work
 // orders" and a dead connection left "Loading…" on screen forever.
-var _loadWOsSeq = 0;
+// NOTE: the counter lives on window and is NOT initialised with `var x = 0` here — restoreTenantSession()
+// above runs loadWOs() at parse time, and a later `var _loadWOsSeq = 0;` statement would reset it and
+// make that first response look stale (found by the Oct 9 UI test: list stuck on "Loading…").
 function loadWOs() {
   if (!session) return;
-  var seq = ++_loadWOsSeq;
+  var seq = (window._loadWOsSeq = (window._loadWOsSeq || 0) + 1);
   var list = document.getElementById('woList');
   list.innerHTML = '<div class="spinner-msg" role="status">Loading your work orders…</div>';
   api('/tenant-workorders?tenant_id=' + session.tenant_id + '&include_closed=true')
