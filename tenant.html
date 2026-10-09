@@ -397,7 +397,9 @@ function loadWOs() {
   if (!session) return;
   var seq = (window._loadWOsSeq = (window._loadWOsSeq || 0) + 1);
   var list = document.getElementById('woList');
-  list.innerHTML = '<div class="spinner-msg" role="status">Loading your work orders…</div>';
+  // Spinner only on a first load or a retry from the error box — a background refresh (after sending
+  // a note / new request) keeps the current list on screen until fresh data replaces it.
+  if (!allWOs.length || list.querySelector('.load-error')) list.innerHTML = '<div class="spinner-msg" role="status">Loading your work orders…</div>';
   api('/tenant-workorders?tenant_id=' + session.tenant_id + '&include_closed=true')
     .then(function(data) {
       if (seq !== window._loadWOsSeq || !session) return; // a newer load (or a logout) superseded this one
