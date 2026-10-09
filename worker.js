@@ -26810,7 +26810,7 @@ async function inspOpenBlockAdd(env, body) {
   const cfg = await fetchConfig(env), dh = inspDefaultBookByHours(cfg), now = Date.now();
   let n = 0; const alreadyClosed = [], closes = {};
   for (const d of dates) {
-    const row = { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today, Book_By_Hours: hoursRaw, Book_By: bookBy };
+    const row = { Customer_ID: body.Customer_ID ? String(body.Customer_ID) : '', Date: String(d), Start_Time: hh(s), End_Time: hh(e), Note: String(body.Note || '').slice(0, 200), Active: 'TRUE', Created_Date: today, Book_By_Hours: hoursRaw, Book_By: bookBy, Last_Start: lsMin == null ? '' : hh(lsMin) };
     const r = await addRow(env, 'Insp_Open_Blocks', row);
     const j = await r.json(); if (!j || !j.success) return json({ error: 'Failed saving ' + d, saved: n }, 500); n++;
     const exp = inspBlockExpiryMs(row, dh); closes[d] = Number.isFinite(exp) ? inspFmtEt(exp) : '';
