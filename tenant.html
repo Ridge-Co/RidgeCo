@@ -477,7 +477,20 @@ function renderWOs() {
   });
 
   var list = document.getElementById('woList');
-  if (!wos.length) { list.innerHTML = '<div class="empty">No work orders to show.</div>'; return; }
+  if (!wos.length) {
+    if (!allWOs.length) {
+      list.innerHTML = '<div class="empty"><div class="empty-title">Nothing here yet</div>' +
+        'Maintenance requests for your home will show up here.' +
+        (session && session.can_submit_wo ? '<div><button type="button" class="btn btn-outline" onclick="openSubmitRequest()">+ SUBMIT A REQUEST</button></div>' : '') +
+        '</div>';
+    } else {
+      list.innerHTML = '<div class="empty"><div class="empty-title">No matches</div>' +
+        'None of your work orders match the current filter or search.' +
+        '<div><button type="button" class="btn btn-outline" onclick="clearWOFilters()">SHOW ALL WORK ORDERS</button></div></div>';
+    }
+    window._renderedWOs = [];
+    return;
+  }
 
   list.innerHTML = wos.map(function(wo, idx) {
     var pri = (wo.Priority||'normal').toLowerCase();
