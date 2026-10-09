@@ -1147,7 +1147,9 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
                  isVideo ? '🎥' : '📷';
       card.style.borderColor = 'var(--accent2)'; card.style.color = 'var(--text)';
       card.innerHTML = icon + ' <a href="' + esc(fileData.webViewLink||'#') + '" target="_blank" style="color:var(--info);text-decoration:none">' + esc(file.name.substring(0,16)) + '</a>';
+      if (!logged) { card.style.borderColor = 'var(--danger)'; card.innerHTML += ' <span style="color:var(--danger)">⚠ not saved to the job — try again</span>'; }
       return nextFolder;
+      });
     })
     .catch(function(e) {
       card.style.borderColor = 'var(--danger)'; card.style.color = 'var(--danger)';
