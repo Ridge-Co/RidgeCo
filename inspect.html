@@ -299,6 +299,9 @@
           <div><label class="fld">From</label><input type="time" id="ob-start" value="09:00"></div>
           <div><label class="fld">To</label><input type="time" id="ob-end" value="17:00"></div>
         </div>
+        <label class="fld">Latest start (optional)</label>
+        <input type="time" id="ob-last">
+        <p class="muted" style="margin:6px 0 0">If set, the last inspection may START at this time even if it runs past “To”. Leave blank and the whole inspection must finish by “To”.</p>
         <label class="fld">Note (optional)</label>
         <input id="ob-note" placeholder="e.g. AMS inspections week of Oct 13">
         <label class="fld">Stop taking bookings this many hours before the block starts</label>
@@ -1019,7 +1022,7 @@ function obSave(btn){
   }).catch(function(e){ btn.disabled=false; btn.textContent='Open this block'; if(confirm('Could not check cleaning coverage ('+e.message+'). Open the block anyway?')) obSaveGo(btn); });
 }
 function obSaveGo(btn){
-  var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Note:document.getElementById('ob-note').value.trim(), Book_By_Hours:document.getElementById('ob-hours').value.trim(), Book_By:document.getElementById('ob-closeat').value };
+  var body={ Customer_ID:document.getElementById('ob-customer').value, dates:obDates, Start_Time:document.getElementById('ob-start').value, End_Time:document.getElementById('ob-end').value, Last_Start:document.getElementById('ob-last').value, Note:document.getElementById('ob-note').value.trim(), Book_By_Hours:document.getElementById('ob-hours').value.trim(), Book_By:document.getElementById('ob-closeat').value };
   btn.disabled=true; btn.textContent='Saving…';
   api('POST','/insp/open-block/add',body).then(function(r){
     btn.disabled=false; btn.textContent='Open this block';
@@ -1037,7 +1040,7 @@ function loadBlocks(){
     var up=list.filter(function(b){return b.Date>=today;});
     document.getElementById('ob-list').innerHTML = up.length ? up.map(function(b){
       var c=customers.find(function(x){return x.ID===b.Customer_ID;});
-      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div>'+(b.Str_Closed?'<div class="muted" style="color:var(--danger)"><b>⛔ Closed — no cleaner for the cabin checkout.</b> '+esc(b.Str_Text||'')+'</div>':'')+'</div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
+      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+(b.Last_Start?(' <span class="muted">(last start '+esc(b.Last_Start)+')</span>'):'')+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div>'+(b.Str_Closed?'<div class="muted" style="color:var(--danger)"><b>⛔ Closed — no cleaner for the cabin checkout.</b> '+esc(b.Str_Text||'')+'</div>':'')+'</div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
     }).join('') : '<p class="muted">No open blocks. Partners will see no times until you add one.</p>';
   }).catch(function(e){ document.getElementById('ob-list').innerHTML='<div class="banner">Could not load open blocks: '+esc(e.message)+'</div>'; });
 }
