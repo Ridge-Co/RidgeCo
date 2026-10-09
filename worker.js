@@ -13637,8 +13637,13 @@ function routeAIValid(attempt, job) {
 async function callGemini(env, model, job) {
   if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`;
-  const parts = [{ text: job.prompt || '' }];
+  // Ops_Build_Queue #89 (Oct 9 2026): Gemini 2.5+/3.x do IMPLICIT prefix caching automatically — the
+  // only thing the caller controls is putting the stable text FIRST. So cachePrefix goes ahead of the
+  // per-call prompt and `system` goes in systemInstruction (also a stable prefix). No explicit
+  // cachedContents API (that needs a created cache object + TTL management; not worth it at our volume).
+  const parts = [{ text: (job.cachePrefix ? String(job.cachePrefix) + '\n\n' : '') + (job.prompt || '') }];
   const body = { contents: [{ parts }] };
+  if (job.system) body.systemInstruction = { parts: [{ text: String(job.system) }] };
   if (job.schema) body.generationConfig = { responseMimeType: 'application/json' };
   const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await resp.json();
