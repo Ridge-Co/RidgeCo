@@ -546,7 +546,11 @@ function loadDashboard() {
     api('/owner-workorders?owner_id=' + session.owner_id + '&include_closed=true'),
   ]).then(function(results) {
     for (var ri = 0; ri < results.length; ri++) {
-      if (!Array.isArray(results[ri])) throw new Error((results[ri] && results[ri].error) || 'The server sent back something unexpected');
+      if (!Array.isArray(results[ri])) {
+        var loadErr = new Error((results[ri] && results[ri].error) || 'The server sent back something unexpected');
+        loadErr.http_status = results[ri] && results[ri].http_status;
+        throw loadErr;
+      }
     }
     ownerProps = sortPropsNumeric(results[0]);
     allWOs = results[1];
