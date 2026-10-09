@@ -3,7 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Tenant Portal</title>
 <style>
 :root{
@@ -106,6 +106,13 @@ textarea{resize:vertical;min-height:70px;}
 /* Empty */
 .empty{text-align:center;color:var(--muted);padding:40px 16px;font-size:13px;}
 .spinner-msg{text-align:center;color:var(--muted);padding:24px;font-size:12px;}
+/* Ops_Build_Queue #94 (Oct 9 2026): distinct error state so a failed load never looks like "no data" */
+.load-error{text-align:center;padding:28px 16px;border:1px solid var(--danger);background:#fdecea;border-radius:8px;color:var(--danger);}
+.load-error-title{font-size:14px;font-weight:bold;margin-bottom:6px;}
+.load-error-msg{font-size:12px;line-height:1.5;margin-bottom:14px;opacity:.9;}
+.load-error .btn{margin:0 4px;}
+.empty-title{font-size:14px;font-weight:bold;color:var(--text);margin-bottom:6px;}
+.empty .btn{margin-top:14px;}
 
 /* Feedback */
 .feedback-btn{position:fixed;bottom:20px;right:16px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:7px 14px;font-size:11px;cursor:pointer;font-family:var(--font);z-index:50;}
@@ -117,6 +124,12 @@ textarea{resize:vertical;min-height:70px;}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:100%;max-width:420px;padding:20px;}
 .modal-title{color:var(--accent);font-size:.9rem;letter-spacing:.08em;margin-bottom:12px;}
 .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;}
+</style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch/narrow screens or Android/iOS zoom the page on focus. Desktop density unchanged. */
+@media (hover:none) and (pointer:coarse), (max-width:820px){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
 </style>
 </head>
 <body>
@@ -285,7 +298,19 @@ function api(path, opts) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
-  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+  // Ops_Build_Queue #94 (Oct 9 2026): never hang forever on a dead connection (was a permanent
+  // silent "Loading…"), and tag error bodies with the HTTP status so callers can tell an expired
+  // session (401/403) from a plain failure. Success bodies are returned exactly as before.
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 30000) : null;
+  if (ctrl && !opts.signal) opts.signal = ctrl.signal;
+  return fetch(WORKER + path, opts).then(function(r){
+    return r.json().then(function(j){
+      if (!r.ok && j && typeof j === 'object' && !Array.isArray(j)) j.http_status = r.status;
+      return j;
+    });
+  }).then(function(j){ if (timer) clearTimeout(timer); return j; },
+          function(e){ if (timer) clearTimeout(timer); throw e; });
 }
 
 // ── Login ────────────────────────────────────────────────────
@@ -359,17 +384,63 @@ function showLoginMsg(msg, type) {
 }
 
 // ── Work Orders ───────────────────────────────────────────────
+// Ops_Build_Queue #94 (Oct 9 2026): three distinct states — loading, error (with retry), and a real
+// empty state (see renderWOs). Before this, a failed or non-array response silently became "no work
+// orders" and a dead connection left "Loading…" on screen forever.
+// NOTE: the counter lives on window and is NOT initialised with `var x = 0` here — restoreTenantSession()
+// above runs loadWOs() at parse time, and a later `var _loadWOsSeq = 0;` statement would reset it and
+// make that first response look stale (found by the Oct 9 UI test: list stuck on "Loading…").
 function loadWOs() {
+  if (!session) return;
+  var seq = (window._loadWOsSeq = (window._loadWOsSeq || 0) + 1);
+  var list = document.getElementById('woList');
+  list.innerHTML = '<div class="spinner-msg" role="status">Loading your work orders…</div>';
   api('/tenant-workorders?tenant_id=' + session.tenant_id + '&include_closed=true')
     .then(function(data) {
-      allWOs = Array.isArray(data) ? data : [];
+      if (seq !== window._loadWOsSeq || !session) return; // a newer load (or a logout) superseded this one
+      if (!Array.isArray(data)) {
+        var err = new Error((data && data.error) || 'The server sent back something unexpected.');
+        err.http_status = data && data.http_status;
+        throw err;
+      }
+      allWOs = data;
       var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
       var done = allWOs.filter(function(w){ return ['Complete','Invoiced','Paid'].includes(w.Status); });
       document.getElementById('statOpen').textContent = open.length;
       document.getElementById('statDone').textContent = done.length;
       renderWOs();
       applyDeepLink();
+    })
+    .catch(function(err) {
+      if (seq !== window._loadWOsSeq || !session) return;
+      showWOLoadError(err);
     });
+}
+
+function showWOLoadError(err) {
+  try { console.error('[tenant loadWOs]', err); } catch (e) {}
+  var so = document.getElementById('statOpen'), sd = document.getElementById('statDone');
+  if (so) so.textContent = '—';
+  if (sd) sd.textContent = '—';
+  var status = err && err.http_status;
+  var expired = status === 401 || status === 403 || /unauthor|forbidden|invalid token|expired/i.test(String((err && err.message) || ''));
+  var timedOut = err && err.name === 'AbortError';
+  var title = expired ? 'Your session has expired.' : "We couldn't load your work orders.";
+  var msg = expired ? 'Please sign in again to see your requests.'
+    : timedOut ? 'The connection timed out. Check your signal and try again. Your requests are safe — nothing was lost.'
+    : 'Check your connection and try again. Your requests are safe — nothing was lost.';
+  var buttons = expired
+    ? '<button type="button" class="btn" onclick="doLogout()">SIGN IN AGAIN</button>'
+    : '<button type="button" class="btn" onclick="loadWOs()">TRY AGAIN</button>';
+  document.getElementById('woList').innerHTML =
+    '<div class="load-error" role="alert"><div class="load-error-title">' + esc(title) + '</div>' +
+    '<div class="load-error-msg">' + esc(msg) + '</div>' + buttons + '</div>';
+}
+
+function clearWOFilters() {
+  document.getElementById('fStatus').value = 'all';
+  document.getElementById('fSearch').value = '';
+  renderWOs();
 }
 
 // Deep-link support (Sep 16 2026): a completed-job text can link straight to ?wo=WO-1234 so the
@@ -408,7 +479,20 @@ function renderWOs() {
   });
 
   var list = document.getElementById('woList');
-  if (!wos.length) { list.innerHTML = '<div class="empty">No work orders to show.</div>'; return; }
+  if (!wos.length) {
+    if (!allWOs.length) {
+      list.innerHTML = '<div class="empty"><div class="empty-title">Nothing here yet</div>' +
+        'Maintenance requests for your home will show up here.' +
+        (session && session.can_submit_wo ? '<div><button type="button" class="btn btn-outline" onclick="openSubmitRequest()">+ SUBMIT A REQUEST</button></div>' : '') +
+        '</div>';
+    } else {
+      list.innerHTML = '<div class="empty"><div class="empty-title">No matches</div>' +
+        'None of your work orders match the current filter or search.' +
+        '<div><button type="button" class="btn btn-outline" onclick="clearWOFilters()">SHOW ALL WORK ORDERS</button></div></div>';
+    }
+    window._renderedWOs = [];
+    return;
+  }
 
   list.innerHTML = wos.map(function(wo, idx) {
     var pri = (wo.Priority||'normal').toLowerCase();
@@ -699,8 +783,13 @@ function submitFeedback() {
     if (res.success) {
       document.getElementById('feedbackMsg').innerHTML = '<div class="msg success">✓ Sent — thank you!</div>';
       setTimeout(function(){ closeModal('modalFeedback'); }, 1500);
+    } else {
+      document.getElementById('feedbackMsg').innerHTML = '<div class="msg error">' + esc((res && res.error) || "Couldn't send your feedback. Please try again.") + '</div>';
     }
-  }).catch(function(){ document.getElementById('feedbackBtn').disabled=false; });
+  }).catch(function(){
+    document.getElementById('feedbackBtn').disabled=false;
+    document.getElementById('feedbackMsg').innerHTML = '<div class="msg error">Connection error — your feedback was not sent. Please try again.</div>';
+  });
 }
 
 // ── Utils ─────────────────────────────────────────────────────

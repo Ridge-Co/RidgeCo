@@ -76,6 +76,12 @@
   a.link{color:var(--info);text-decoration:none;font-weight:bold;}
   .drivefile{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:5px;font-size:11px;background:var(--surface2);}
 </style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch/narrow screens or Android/iOS zoom the page on focus. Desktop density unchanged. */
+@media (hover:none) and (pointer:coarse), (max-width:820px){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
+</style>
 </head>
 <body>
 <!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->

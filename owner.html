@@ -3,7 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Owner Portal</title>
 <style>
 :root{
@@ -164,6 +164,12 @@ textarea{resize:vertical;min-height:70px;}
   .main{padding:12px;}
   .wo-desc-preview{max-width:180px;}
   .dv{max-width:170px;}
+}
+</style>
+<style id="mobile-input-font">
+/* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch/narrow screens or Android/iOS zoom the page on focus. Desktop density unchanged. */
+@media (hover:none) and (pointer:coarse), (max-width:820px){
+  input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
 }
 </style>
 </head>
@@ -516,12 +522,20 @@ function showLoginMsg(msg, type) {
 // ── Dashboard load ────────────────────────────────────────────
 
 function loadDashboard() {
+  // Ops_Build_Queue #94 (Oct 9 2026): a non-array response used to be coerced to "no properties /
+  // no work orders", which made a failed fetch look identical to an empty account. It's now an
+  // error state with a retry button.
+  var listEl = document.getElementById('woList');
+  if (listEl) listEl.innerHTML = '<div class="spinner-msg" role="status">Loading…</div>';
   Promise.all([
     api('/owner-properties?owner_id=' + session.owner_id),
     api('/owner-workorders?owner_id=' + session.owner_id + '&include_closed=true'),
   ]).then(function(results) {
-    ownerProps = sortPropsNumeric(Array.isArray(results[0]) ? results[0] : []);
-    allWOs = Array.isArray(results[1]) ? results[1] : [];
+    for (var ri = 0; ri < results.length; ri++) {
+      if (!Array.isArray(results[ri])) throw new Error((results[ri] && results[ri].error) || 'The server sent back something unexpected');
+    }
+    ownerProps = sortPropsNumeric(results[0]);
+    allWOs = results[1];
 
     // Stats
     var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
@@ -540,10 +554,12 @@ function loadDashboard() {
     renderWOs();
   }).catch(function(e) {
     console.error('[loadDashboard]', e);
+    ['statOpen','statUrgent','statProps'].forEach(function(id){ var s = document.getElementById(id); if (s) s.textContent = '—'; });
     document.getElementById('woList').innerHTML =
-      '<div class="msg error" style="padding:16px">Failed to load data: ' +
-      (e && e.message ? e.message : 'Connection error — check console') +
-      '. Try refreshing the page.</div>';
+      '<div class="msg error" style="padding:16px;text-align:center" role="alert">' +
+      "We couldn't load your properties and work orders: " +
+      esc(e && e.message ? e.message : 'connection error') + '.' +
+      '<div style="margin-top:12px"><button type="button" class="btn btn-sm" onclick="loadDashboard()">TRY AGAIN</button></div></div>';
   });
 }
 
@@ -638,11 +654,15 @@ function loadWODetail(idx, woId) {
   activeWOId = woId;
 
   // Load audit trail
+  // #94 (Oct 9 2026): a failed history fetch used to render as "no history". The job details still
+  // show (they come from the list we already have), but a notice says the history didn't load.
+  var historyNotice = '<div class="msg error" style="margin-bottom:10px" role="alert">Activity history could not be loaded. The job details below are still current. Close and reopen this job to try again.</div>';
   api('/wo-audit?wo_id=' + woId).then(function(audit) {
-    detail.innerHTML = buildWODetail(wo, Array.isArray(audit) ? audit : []);
+    var ok = Array.isArray(audit);
+    detail.innerHTML = (ok ? '' : historyNotice) + buildWODetail(wo, ok ? audit : []);
     loadPortalAttachments(wo.ID);
   }).catch(function() {
-    detail.innerHTML = buildWODetail(wo, []);
+    detail.innerHTML = historyNotice + buildWODetail(wo, []);
     loadPortalAttachments(wo.ID);
   });
 }
