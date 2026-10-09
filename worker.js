@@ -26309,6 +26309,8 @@ function inspCleanInput(body) {
 }
 
 function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
+function inspPackSlackMin(cfg) { const raw = String((cfg && cfg.INSP_PACK_SLACK_MIN) == null ? '' : cfg.INSP_PACK_SLACK_MIN).trim(); if (/^off$/i.test(raw)) return null; const n = parseFloat(raw); return Number.isFinite(n) && n >= 0 ? n : INSP_PACK_SLACK_MIN; }
+function inspBlockWindowEndMs(b) { const l = String(b.Last_Start == null ? '' : b.Last_Start).trim(); const ls = l ? inspEtWallToMs(b.Date, l) : NaN; return Number.isFinite(ls) ? ls : inspEtWallToMs(b.Date, b.End_Time); }
 function inspDefaultBookByHours(cfg) { const h = parseFloat(cfg && cfg.INSP_DEFAULT_BOOK_BY_HOURS); return Number.isFinite(h) && h >= 0 ? h : INSP_DEFAULT_BOOK_BY_HOURS; }
 // Everything a slot answer depends on, read fresh. Calendar/booking read failures THROW.
 async function inspAvailability(env, customer, input) {
