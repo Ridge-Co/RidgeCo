@@ -13624,7 +13624,7 @@ async function routeAI(env, job) {
   } catch (_) { /* telemetry best-effort — never fail the caller's job over a logging miss */ }
 
   if (attempt.error) throw new Error(`routeAI failed at tier ${tier}: ${attempt.error}`);
-  return { result: attempt.text, model_used: reg.model, tier_used: tier, escalated, tokens_in: attempt.tokens_in, tokens_out: attempt.tokens_out, ms };
+  return { result: attempt.text, model_used: reg.model, tier_used: tier, escalated, tokens_in: attempt.tokens_in, tokens_out: attempt.tokens_out, cache_read: cacheRead, cache_write: cacheWrite, ms };
 }
 
 async function routeAICall(env, tier, job) {
