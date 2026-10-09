@@ -298,7 +298,19 @@ function api(path, opts) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(opts.body);
   }
-  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+  // Ops_Build_Queue #94 (Oct 9 2026): never hang forever on a dead connection (was a permanent
+  // silent "Loading…"), and tag error bodies with the HTTP status so callers can tell an expired
+  // session (401/403) from a plain failure. Success bodies are returned exactly as before.
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 30000) : null;
+  if (ctrl && !opts.signal) opts.signal = ctrl.signal;
+  return fetch(WORKER + path, opts).then(function(r){
+    return r.json().then(function(j){
+      if (!r.ok && j && typeof j === 'object' && !Array.isArray(j)) j.http_status = r.status;
+      return j;
+    });
+  }).then(function(j){ if (timer) clearTimeout(timer); return j; },
+          function(e){ if (timer) clearTimeout(timer); throw e; });
 }
 
 // ── Login ────────────────────────────────────────────────────
