@@ -2449,6 +2449,7 @@ function openWODetail(woId) {
         '<button onclick="voidVendorBill(\''+bill.ID+'\',\''+woId+'\')" style="background:var(--surface);color:var(--danger);border:1px solid var(--danger);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer">✕ Void</button>' +
         '</div>' +
         '<div id="bill-receipts-edit-'+bill.ID+'"></div>' +
+        '<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">' + (bill.Vendor_ID ? bcHostHtml('bc-bill-'+bill.ID, woId, bill.Vendor_ID, bill.Vendor_Name) : '') + '</div>' +
       '</div>';
     }).join('');
     var db = document.getElementById('detail-body');
@@ -10613,6 +10614,7 @@ function loadInvoiceReview() {
       return;
     }
     el.innerHTML = _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
+    _irBills.forEach(function(b, i) { if (b.WO_ID && b.Vendor_ID) bcInit('bc-ir-' + i); });
     // Card indexes are reused across renders, so clear panel state first — otherwise
     // 'ir0' could still be holding the bill or IR row from a previous load.
     _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _invMode = {}; _invPass5 = {}; _invMat = {}; _invMatPicked = {}; _invMatSeen = {}; _invMatGen = {}; _invMatBilled = {}; _invMatMulti = {}; _invMatUnknown = {}; _qbAllPromise = null;
@@ -11074,6 +11076,9 @@ function renderIRCard(b, i) {
 
     // Vendor already has a deposit paid on this WO — say so before the number gets typed.
     depositHtml +
+
+    // Back-charge: Brett did work that was in this vendor's estimate — comes off their bill.
+    '<div style="margin-bottom:12px">' + (b.WO_ID && b.Vendor_ID ? bcHostHtml('bc-ir-'+i, b.WO_ID, b.Vendor_ID, b.Vendor_Name) : '') + '</div>' +
 
     // What the job actually was — joined from Work_Orders
     jobHtml +
@@ -12768,6 +12773,12 @@ function renderQBBillBlock(bill, vendor) {
       '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">The full invoice is income. Your hours are shown separately as your time, not subtracted as a cost.</div></div>' :
      bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
       '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc((vendor && vendor.display) || 'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(bill.total)||0).toFixed(2) + '</span></div>') +
+    ((bill && !bill.skipped && safeArray(bill.backcharges).length)
+      ? '<div style="font-size:11px;margin-top:4px;color:var(--muted)">' + safeArray(bill.backcharges).map(function(x){
+          return '<div style="display:flex;justify-content:space-between"><span>− ' + esc(x.description) + (x.hours ? ' (' + x.hours + ' hr × $' + x.rate + '/hr)' : '') + '</span><span>−$' + (parseFloat(x.applied)||0).toFixed(2) + '</span></div>' +
+                 (x.unapplied > 0 ? '<div style="color:var(--warn)">⚠ $' + x.unapplied.toFixed(2) + ' of this could not be deducted (bill would go below $0)</div>' : '');
+        }).join('') + '<div style="color:var(--muted);margin-top:2px">Shown as separate negative line(s) on the vendor bill; the customer invoice is unchanged.</div></div>'
+      : '') +
     ((bill && bill.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + bill.attach_receipts + ' receipt(s) attach to this bill (not shown to customer)</div>' : '') +
   '</div>';
 }
@@ -14960,6 +14971,179 @@ function voidVendorBill(billId, woId) {
 // directly). Review Bills links back here rather than duplicating the editor — see renderIRCard.
 // ══════════════════════════════════════════════════════════════
 window._billReceiptsEdit = window._billReceiptsEdit || {};
+
+// ── Vendor back-charges (Oct 11 2026) ─────────────────────────────────────────
+// Work Ridge Co/Brett did that was in the vendor's estimate/invoice. Becomes a visible NEGATIVE line on
+// the vendor's QuickBooks bill (floored at $0). Admin-only, vendor never told, customer never sees it.
+// One panel per host element (hostId) so the same code serves the WO bill card and the Review Bills card.
+window._bc = window._bc || {};
+var BC_BTN = 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:var(--font);font-size:12px;padding:6px 14px;cursor:pointer';
+var BC_INP = 'background:var(--surface);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:7px;border-radius:5px;width:100%;box-sizing:border-box';
+
+function bcHostHtml(hostId, woId, vendorId, vendorName) {
+  window._bc[hostId] = window._bc[hostId] || { woId: woId, vendorId: vendorId, vendorName: vendorName || '', open: false };
+  return '<button onclick="bcToggle(\'' + hostId + '\')" style="' + BC_BTN + '">💸 Charge vendor</button>' +
+         '<div id="' + hostId + '-sum" style="font-size:11.5px;color:var(--warn);margin-top:6px"></div>' +
+         '<div id="' + hostId + '"></div>';
+}
+
+function bcMoney(n) { return '$' + (parseFloat(n) || 0).toFixed(2); }
+
+function bcLoad(hostId) {
+  var s = window._bc[hostId]; if (!s) return Promise.resolve();
+  s.loading = true; s.err = '';
+  return Promise.all([
+    api('GET', '/backcharges?wo_id=' + encodeURIComponent(s.woId)),
+    api('GET', '/time-entries?wo_id=' + encodeURIComponent(s.woId))
+  ]).then(function(r) {
+    s.loading = false;
+    if (!r[0] || r[0].error) { s.err = 'Could not load back-charges: ' + ((r[0] && r[0].error) || 'no response'); return; }
+    s.data = r[0];
+    if (!Array.isArray(r[1])) { s.err = 'Could not load your time entries: ' + ((r[1] && r[1].error) || 'unexpected response'); s.time = []; return; }
+    s.time = r[1].filter(function(e) {
+      return e.Active !== 'FALSE' && String(e.Role || '').toLowerCase() === 'hub' && String(e.Billable).toUpperCase() !== 'FALSE' && !e.Billed_Bill_ID;
+    });
+  }).catch(function(e) { s.loading = false; s.err = 'Could not load back-charges: ' + e.message; });
+}
+
+function bcPending(s) {
+  return safeArray(s.data && s.data.backcharges).filter(function(b) { return String(b.Vendor_ID) === String(s.vendorId) && b.Status === 'pending'; });
+}
+
+function bcSummary(hostId) {
+  var s = window._bc[hostId]; var el = document.getElementById(hostId + '-sum'); if (!s || !el) return;
+  var p = s.data ? bcPending(s) : [];
+  var tot = p.reduce(function(a, b) { return a + (parseFloat(b.Amount) || 0); }, 0);
+  el.textContent = p.length ? ('💸 ' + bcMoney(tot) + ' back-charge pending — comes off this vendor\'s bill (never shown to the customer)') : '';
+}
+
+function bcInit(hostId) { // loads just the pending summary without opening the panel
+  var s = window._bc[hostId]; if (!s) return;
+  bcLoad(hostId).then(function() { bcSummary(hostId); });
+}
+
+function bcToggle(hostId) {
+  var s = window._bc[hostId]; if (!s) return;
+  s.open = !s.open;
+  if (!s.open) { var h = document.getElementById(hostId); if (h) h.innerHTML = ''; return; }
+  s.picked = {}; s.msg = ''; s.confirm = null;
+  bcRender(hostId);
+  bcLoad(hostId).then(function() { bcRender(hostId); bcSummary(hostId); });
+}
+
+function bcRender(hostId) {
+  var s = window._bc[hostId]; var host = document.getElementById(hostId); if (!s || !host || !s.open) return;
+  if (s.loading && !s.data) { host.innerHTML = '<div style="margin-top:10px;color:var(--muted);font-size:12px">Loading…</div>'; return; }
+  var mine = safeArray(s.data && s.data.backcharges).filter(function(b) { return String(b.Vendor_ID) === String(s.vendorId); });
+  var rate = (s.data && s.data.default_rate) || 85;
+  var desc = (s.data && s.data.default_description) || 'Work completed by Brett, included in estimate';
+  var list = mine.map(function(b) {
+    var badge = b.Status === 'applied' ? '<span style="color:var(--accent2)">on QB bill ' + esc(b.QB_Bill_Number || b.QB_Bill_ID || '') + '</span>'
+              : b.Status === 'void' ? '<span style="color:var(--muted)">voided</span>' : '<span style="color:var(--warn)">pending</span>';
+    var unap = parseFloat(b.Unapplied_Amount) > 0 ? '<div style="color:var(--warn);font-size:11px">' + bcMoney(b.Unapplied_Amount) + ' could not be deducted (bill hit $0)</div>' : '';
+    var btns = b.Status === 'pending'
+      ? '<button onclick="bcApplyPreview(\'' + hostId + '\',\'' + esc(b.ID) + '\')" style="' + BC_BTN + ';padding:4px 10px;font-size:11px">Edit QB bill now</button> ' +
+        '<button onclick="bcVoid(\'' + hostId + '\',\'' + esc(b.ID) + '\')" style="' + BC_BTN + ';padding:4px 10px;font-size:11px;color:var(--danger);border-color:var(--danger)">Void</button>' : '';
+    return '<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">' +
+      '<div style="display:flex;justify-content:space-between;gap:8px"><span>−' + bcMoney(b.Amount) + ' · ' + esc(b.Hours || '') + ' hr × $' + esc(b.Rate || '') + '</span>' + badge + '</div>' +
+      '<div style="color:var(--muted)">' + esc(b.Description || '') + '</div>' + unap +
+      (b.Status === 'pending' ? '<div style="margin-top:4px">' + btns + '</div>' : '') + '</div>';
+  }).join('');
+  var times = safeArray(s.time).map(function(e) {
+    var mins = parseFloat(e.Duration_Minutes) || 0;
+    return '<label style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 0"><input type="checkbox" ' + (s.picked[e.ID] ? 'checked ' : '') +
+      'onchange="bcPick(\'' + hostId + '\',\'' + esc(e.ID) + '\',this.checked)"> ' + esc((e.Date || e.Created_Date || '').split('T')[0]) + ' · ' + (mins / 60).toFixed(2) + ' hr' + (e.Notes ? ' · ' + esc(e.Notes) : '') + '</label>';
+  }).join('') || '<div style="color:var(--muted);font-size:12px">No unbilled time logged by you on this job — enter hours below.</div>';
+  var conf = s.confirm
+    ? '<div style="margin-top:10px;background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px;font-size:12px;line-height:1.6">' +
+      '<b>Edit QuickBooks bill ' + esc(s.confirm.qb_bill_number || s.confirm.qb_bill_id) + '?</b><br>' +
+      'Adds one negative line of −' + bcMoney(s.confirm.deduction) + '. Bill goes ' + bcMoney(s.confirm.current_total) + ' → <b>' + bcMoney(s.confirm.new_total) + '</b>.' +
+      (s.confirm.unapplied > 0 ? '<br>⚠ ' + bcMoney(s.confirm.unapplied) + ' can\'t come off (bill would go below $0).' : '') +
+      '<div style="display:flex;gap:8px;margin-top:8px"><button onclick="bcApplyConfirm(\'' + hostId + '\')" style="flex:2;background:var(--accent2);color:#fff;border:none;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px;cursor:pointer">Confirm — edit QB bill</button>' +
+      '<button onclick="bcCancelConfirm(\'' + hostId + '\')" style="flex:1;' + BC_BTN + '">Not now</button></div></div>' : '';
+  host.innerHTML =
+    '<div style="margin-top:10px;background:var(--surface);border:1px dashed var(--accent2);border-radius:8px;padding:12px">' +
+      '<div style="color:var(--accent2);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:bold;margin-bottom:6px">💸 Back-charge — ' + esc(s.vendorName || 'vendor') + '</div>' +
+      '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">Comes off this vendor\'s payable as a visible negative line on their QuickBooks bill. Customer never sees it.</div>' +
+      (s.err ? '<div style="color:var(--danger);font-size:12px;margin-bottom:8px">⚠ ' + esc(s.err) + '</div>' : '') +
+      list + conf +
+      '<div style="margin-top:10px;font-size:11px;color:var(--muted)">Your time on this job (tick what you covered):</div>' + times +
+      '<div style="display:flex;gap:8px;margin-top:8px"><div style="flex:1"><div style="font-size:10.5px;color:var(--muted)">Hours</div><input id="' + hostId + '-hrs" type="number" min="0" step="0.25" value="' + bcPickedHours(s) + '" style="' + BC_INP + '"></div>' +
+      '<div style="flex:1"><div style="font-size:10.5px;color:var(--muted)">Rate $/hr</div><input id="' + hostId + '-rate" type="number" min="0" step="1" value="' + rate + '" style="' + BC_INP + '"></div>' +
+      '<div style="flex:1"><div style="font-size:10.5px;color:var(--muted)">Or flat $</div><input id="' + hostId + '-amt" type="number" min="0" step="0.01" placeholder="optional" style="' + BC_INP + '"></div></div>' +
+      '<div style="margin-top:8px"><div style="font-size:10.5px;color:var(--muted)">Line text on the vendor\'s bill</div><input id="' + hostId + '-desc" type="text" value="' + esc(desc) + '" style="' + BC_INP + '"></div>' +
+      '<div style="margin-top:8px"><div style="font-size:10.5px;color:var(--muted)">Private note (only you see this)</div><input id="' + hostId + '-note" type="text" style="' + BC_INP + '"></div>' +
+      '<div style="display:flex;gap:8px;margin-top:10px"><button onclick="bcToggle(\'' + hostId + '\')" style="flex:1;' + BC_BTN + '">Close</button>' +
+      '<button id="' + hostId + '-save" onclick="bcSave(\'' + hostId + '\')" style="flex:2;background:var(--accent2);border:none;color:#fff;border-radius:6px;font-family:var(--font);font-size:12px;font-weight:bold;padding:8px;cursor:pointer">Add back-charge</button></div>' +
+      '<div style="font-size:11.5px;margin-top:8px;line-height:1.5">' + (s.msg || '') + '</div>' +
+    '</div>';
+}
+
+function bcPickedHours(s) {
+  var m = 0; safeArray(s.time).forEach(function(e) { if (s.picked && s.picked[e.ID]) m += parseFloat(e.Duration_Minutes) || 0; });
+  return m > 0 ? (Math.round(m / 60 * 100) / 100) : '';
+}
+function bcPick(hostId, id, on) {
+  var s = window._bc[hostId]; if (!s) return;
+  if (on) s.picked[id] = true; else delete s.picked[id];
+  var h = document.getElementById(hostId + '-hrs'); if (h) h.value = bcPickedHours(s);
+}
+
+function bcSave(hostId) {
+  var s = window._bc[hostId]; if (!s) return;
+  var v = function(x) { var el = document.getElementById(hostId + '-' + x); return el ? el.value : ''; };
+  var body = { wo_id: s.woId, vendor_id: s.vendorId, hours: v('hrs'), rate: v('rate'), amount: v('amt'), description: v('desc'), private_note: v('note'),
+               time_entry_ids: Object.keys(s.picked || {}), created_by: 'Brett' };
+  var btn = document.getElementById(hostId + '-save'); if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  api('POST', '/backcharge/add', body).then(function(res) {
+    if (!res || res.error || !res.success) { s.msg = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'Not recorded — no response') + '</span>'; bcRender(hostId); return; }
+    var warn = safeArray(res.warnings).length ? '<br><span style="color:var(--warn)">⚠ ' + safeArray(res.warnings).map(esc).join('<br>⚠ ') + '</span>' : '';
+    toast('Back-charge of ' + bcMoney(res.amount) + ' recorded', 'success');
+    s.picked = {};
+    var after = function() {
+      if (res.bill_state === 'in_qb' && safeArray(res.qb_bills).length) {
+        s.msg = '<span style="color:var(--accent2)">✓ Recorded ' + bcMoney(res.amount) + '.</span> This vendor\'s bill is already in QuickBooks — checking the edit…' + warn;
+        bcRender(hostId); bcApplyPreview(hostId, res.id);
+      } else {
+        s.msg = '<span style="color:var(--accent2)">✓ Recorded ' + bcMoney(res.amount) + '.</span> It comes off automatically when this vendor\'s bill is sent to QuickBooks.' + warn;
+        bcRender(hostId);
+      }
+      bcSummary(hostId);
+    };
+    bcLoad(hostId).then(after);
+  }).catch(function(e) { s.msg = '<span style="color:var(--danger)">⚠ Not recorded: ' + esc(e.message) + '</span>'; bcRender(hostId); });
+}
+
+function bcVoid(hostId, id) {
+  var s = window._bc[hostId]; if (!s) return;
+  if (!confirm('Void this back-charge? Your time goes back to billable and the vendor is no longer charged.')) return;
+  api('POST', '/backcharge/void', { id: id }).then(function(res) {
+    if (!res || res.error || !res.success) { s.msg = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'Not voided') + '</span>'; bcRender(hostId); return; }
+    toast('Back-charge voided', 'success');
+    s.msg = safeArray(res.warnings).length ? '<span style="color:var(--warn)">⚠ ' + safeArray(res.warnings).map(esc).join('<br>⚠ ') + '</span>' : '';
+    return bcLoad(hostId).then(function() { bcRender(hostId); bcSummary(hostId); });
+  }).catch(function(e) { s.msg = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; bcRender(hostId); });
+}
+
+function bcApplyPreview(hostId, id) {
+  var s = window._bc[hostId]; if (!s) return;
+  s.confirmId = id; s.msg = 'Checking the QuickBooks bill…'; bcRender(hostId);
+  api('POST', '/backcharge/apply-to-qb', { id: id, preview_only: true }, 30000).then(function(res) {
+    if (!res || !res.ok) { s.confirm = null; s.msg = '<span style="color:var(--warn)">⚠ ' + esc((res && res.error) || 'Could not preview') + '</span>'; bcRender(hostId); return; }
+    s.confirm = res.preview; s.msg = ''; bcRender(hostId);
+  }).catch(function(e) { s.confirm = null; s.msg = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; bcRender(hostId); });
+}
+function bcCancelConfirm(hostId) { var s = window._bc[hostId]; if (!s) return; s.confirm = null; s.msg = 'Left pending — it will still come off the bill when it is next sent, or use “Edit QB bill now”.'; bcRender(hostId); }
+function bcApplyConfirm(hostId) {
+  var s = window._bc[hostId]; if (!s || !s.confirm) return;
+  var pv = s.confirm; s.msg = 'Editing the QuickBooks bill…'; s.confirm = null; bcRender(hostId);
+  api('POST', '/backcharge/apply-to-qb', { id: pv.backcharge_id, qb_bill_id: pv.qb_bill_id }, 45000).then(function(res) {
+    if (!res || !res.ok) { s.msg = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'QuickBooks was not changed') + '</span>'; bcRender(hostId); return; }
+    toast('QuickBooks bill now ' + bcMoney(res.new_total), 'success');
+    s.msg = '<span style="color:var(--accent2)">✓ QuickBooks bill ' + esc(res.qb_bill_number || res.qb_bill_id) + ' is now ' + bcMoney(res.new_total) + '.</span>';
+    return bcLoad(hostId).then(function() { bcRender(hostId); bcSummary(hostId); });
+  }).catch(function(e) { s.msg = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + ' — check the bill in QuickBooks before retrying.</span>'; bcRender(hostId); });
+}
 
 function openEditReceiptsPanel(billId, woId) {
   var bill = (window._billCache || {})[billId];
