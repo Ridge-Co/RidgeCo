@@ -346,7 +346,11 @@ async function seedPending(db, q, amount) {
   t('combined send pre-flights before any invoice is created', /!previewOnly && rowBuilds\.some\(rb => rb\.bcReadFailed\)/.test(wsrc));
   t('combined send de-dupes claimed back-charges across rows', /_bcClaimed/.test(wsrc));
   t('routes are admin-only (no role scope lists them)', !/ROLE_SCOPES[\s\S]{0,4000}\/backcharge/.test(wsrc.slice(wsrc.indexOf('const ROLE_SCOPES'), wsrc.indexOf('const ROLE_SCOPES') + 6000)));
-  t('hub test token can only write back-charges on TEST- WOs', /path === '\/backcharge\/add'\) return !!\(body && body\.wo_id\) && await isTestWO/.test(wsrc));
+  const gate = grab(wsrc, 'async function hubTestWriteAllowed(');
+  t('hub test token gate for back-charges lives INSIDE hubTestWriteAllowed (TEST- WOs only)', /path === '\/backcharge\/add'\) return !!\(body && body\.wo_id\) && await isTestWO/.test(gate) && /'\/backcharge\/void'/.test(gate) && /'\/backcharge\/apply-to-qb'/.test(gate));
+  const router = wsrc.slice(wsrc.indexOf("if (path === '/backcharge/add')           return await backchargeAdd"), wsrc.indexOf("if (path === '/backcharge/add')           return await backchargeAdd") + 400);
+  t('router dispatches the three POST routes to handlers (not to a boolean gate)', /return await backchargeVoid/.test(router) && /return await backchargeApplyToQb/.test(router));
+  t('no stray isTestWO gate in the router', (wsrc.match(/if \(path === '\/backcharge\/add'\)/g) || []).length === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
