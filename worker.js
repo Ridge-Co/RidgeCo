@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-09.1-small-fixes-batch';
+const BUILD_VERSION = '2026-10-11.2-vendor-backcharge';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -388,6 +388,7 @@ const _hubWorkerCore = {
         if (path === '/workorders')             return await getWorkOrdersList(env, url);
         if (path === '/wo-tenants')             return await listWOTenants(env, url);
         if (path === '/time-entries')           return await listTimeEntries(env, url);
+        if (path === '/backcharges')            return await backchargeList(env, url);          // Oct 11 2026 — admin-only
         if (path === '/receipts')               return await listReceipts(env, url);
         if (path === '/receipts-billed')        return await listBilledReceipts(env, url);
         if (path === '/invoices')               return await getSheet(env, 'Invoices');
@@ -732,6 +733,9 @@ const _hubWorkerCore = {
         if (path === '/estimate/decline')         return await estimateDecline(env, body);
         if (path === '/wo/deposit-approve')       return await depositApprove(env, body);
         if (path === '/wo/deposit-clear')         return await depositClear(env, body);
+        if (path === '/backcharge/add')           return await backchargeAdd(env, body);          // Oct 11 2026 — admin-only (not in any ROLE_SCOPES list)
+        if (path === '/backcharge/void')          return await backchargeVoid(env, body);
+        if (path === '/backcharge/apply-to-qb')   return await backchargeApplyToQb(env, body);
         if (path === '/geocode-property')         return await geocodeProperty(env, body);
         if (path === '/save-property-clusters')   return await savePropertyClusters(env, body);
         if (path === '/import-key-registry')      return await importKeyRegistry(env, body);
@@ -10017,6 +10021,327 @@ async function depositClear(env, body) {
   return json({ success: true, wo_id: woId, qb_note: qbNote });
 }
 
+// ══════════════════════════════════════════════════════════════
+//  VENDOR BACK-CHARGES (Oct 11 2026)
+// ══════════════════════════════════════════════════════════════
+// Brett: a vendor estimated 10 items and did 9, so he did the last one himself (or dropped off
+// materials, or went back on a Sunday). His time has to come OFF that vendor's bill — as a
+// visible NEGATIVE line on the QuickBooks vendor bill ("invoiced $1,000, Ridge Co completed part
+// of it, net $900"), not a silently reduced total — while the vendor's own invoice entry, the
+// customer's invoice and the estimate are all untouched, and nothing the vendor can read lectures
+// them about how to avoid it.
+//
+// One row per back-charge in Vendor_Backcharges. ADMIN-ONLY: ROLE_SCOPES never lists these paths,
+// so vendor / owner / tenant sessions cannot reach them (isPathAllowedForRole is default-deny).
+// Lifecycle: pending → applied (the negative line is on the QuickBooks bill) | void.
+//   • qbSendInvoice / qbSendCombinedInvoice fold every PENDING row for the same WO + vendor into
+//     the bill they create (preview shows it first).
+//   • POST /backcharge/apply-to-qb does the same for a bill that already exists in QuickBooks and
+//     is still completely unpaid (preview-first; money write, so Brett's own tap confirms it).
+// The payable is floored at $0: whatever cannot fit stays on the row as Unapplied_Amount and is
+// shown to Brett — never dropped.
+//
+// Brett's own time that becomes a back-charge is taken out of the CUSTOMER's billable time
+// (Time_Entries.Billable → FALSE). Review Bills pre-ticks his logged time, so without this the
+// customer would be charged for the same hours the vendor is also being charged for.
+const BACKCHARGE_TAB = 'Vendor_Backcharges';
+const BACKCHARGE_HEADERS = ['ID','WO_ID','Vendor_ID','Vendor_Name','Hours','Rate','Amount','Description','Private_Note','Time_Entry_IDs','Status','Applied_Amount','Unapplied_Amount','QB_Bill_ID','QB_Bill_Number','Created_By','Created_Date','Applied_Date','Voided_Date','Active'];
+const DEFAULT_BACKCHARGE_RATE = 85;
+const DEFAULT_BACKCHARGE_DESC = 'Work completed by Brett, included in estimate';
+let _backchargeTabReady = false;
+
+async function backchargeTab(env) {
+  if (_backchargeTabReady) return;
+  await ensureTab(env, BACKCHARGE_TAB, BACKCHARGE_HEADERS);
+  await ensureColumns(env, BACKCHARGE_TAB, BACKCHARGE_HEADERS);
+  _backchargeTabReady = true;
+}
+
+function backchargeRound(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+// The text the VENDOR reads on the negative bill line. Never includes Private_Note.
+function backchargeLineDescription(b) {
+  const hrs = Number(b && b.Hours) || 0, rate = Number(b && b.Rate) || 0;
+  const amt = backchargeRound(b && b.Amount);
+  const base = String((b && b.Description) || '').trim() || DEFAULT_BACKCHARGE_DESC;
+  const calc = (hrs > 0 && rate > 0 && Math.abs(backchargeRound(hrs * rate) - amt) < 0.01) ? ` (${hrs} hr × $${rate.toFixed(2)}/hr)` : '';
+  return ('Back-charge — ' + base + calc).slice(0, 4000);
+}
+
+// PURE. Sizes the negative bill lines for one vendor bill. `positiveTotal` is what the bill would
+// otherwise post at; `backcharges` are the PENDING rows, oldest first. The bill is floored at $0:
+// a back-charge that does not fit is split, and the remainder is reported as `unapplied`.
+function planBackchargeLines(positiveTotal, backcharges, expenseAccount) {
+  const start = backchargeRound(Math.max(0, Number(positiveTotal) || 0));
+  let room = start, appliedTotal = 0, unappliedTotal = 0;
+  const items = [], lines = [];
+  for (const b of (Array.isArray(backcharges) ? backcharges : [])) {
+    const want = backchargeRound(b && b.Amount);
+    if (!(want > 0)) continue;
+    const take = backchargeRound(Math.min(want, room));
+    const rest = backchargeRound(want - take);
+    room = backchargeRound(room - take);
+    appliedTotal = backchargeRound(appliedTotal + take);
+    unappliedTotal = backchargeRound(unappliedTotal + rest);
+    items.push({ id: String(b.ID), amount: want, applied: take, unapplied: rest,
+                 description: String(b.Description || DEFAULT_BACKCHARGE_DESC), hours: Number(b.Hours) || 0, rate: Number(b.Rate) || 0 });
+    if (take > 0) {
+      lines.push({ DetailType: 'AccountBasedExpenseLineDetail', Amount: -take,
+                   Description: backchargeLineDescription(Object.assign({}, b, { Amount: take })),
+                   AccountBasedExpenseLineDetail: { AccountRef: { value: expenseAccount } } });
+    }
+  }
+  return { lines, items, appliedTotal, unappliedTotal, netTotal: backchargeRound(start - appliedTotal) };
+}
+
+// Pending back-charges for one WO + vendor, oldest first. THROWS on a read failure — callers decide
+// (a real send must refuse rather than pay the vendor in full by mistake).
+async function backchargeRowsFor(env, woId, vendorId, claimed) {
+  await backchargeTab(env);
+  const rows = await fetchTab(env, BACKCHARGE_TAB);
+  return rows.filter(r => r.Active !== 'FALSE' && String(r.Status || '') === 'pending' &&
+      String(r.WO_ID) === String(woId) && String(r.Vendor_ID) === String(vendorId) &&
+      !(claimed && claimed.has(String(r.ID))))
+    .sort((a, b) => Number(a.ID) - Number(b.ID));
+}
+
+// Where this vendor's bill for the WO stands: not billed yet / approved but not in QuickBooks /
+// already a QuickBooks bill (candidates listed — a WO can carry more than one bill per vendor).
+function backchargeBillState(irRows, woId, vendorId) {
+  const mine = (irRows || []).filter(r => r.Active !== 'FALSE' && String(r.WO_ID) === String(woId) && String(r.Vendor_ID) === String(vendorId));
+  const inQb = mine.filter(r => String(r.QB_Bill_ID || '').trim());
+  return {
+    state: inQb.length ? 'in_qb' : (mine.length ? 'in_review' : 'not_billed_yet'),
+    qb_bills: inQb.map(r => ({ ir_id: r.ID, bill_id: String(r.QB_Bill_ID).trim(), bill_number: r.QB_Bill_Number || '' })),
+  };
+}
+
+// Marks back-charges applied AFTER their negative line is on a QuickBooks bill. Every failure is
+// returned (and logged to Ops_Telemetry) — never swallowed — and each write is read back.
+async function backchargeMarkApplied(env, items, bill) {
+  const failures = [];
+  const toMark = (items || []).filter(it => it.applied > 0);
+  if (!toMark.length) return failures;
+  const today = new Date().toISOString().split('T')[0];
+  const failedIds = new Set();
+  try { await backchargeTab(env); }
+  catch (e) { await logAndCollectError(env, failures, 'backcharge_mark_applied', '/backcharge', 'tab', e); return failures; }
+  for (const it of toMark) {
+    try {
+      const res = await updateRow(env, BACKCHARGE_TAB, it.id, {
+        Status: 'applied', Applied_Amount: it.applied.toFixed(2), Unapplied_Amount: it.unapplied.toFixed(2),
+        QB_Bill_ID: String(bill.id || ''), QB_Bill_Number: String(bill.number || ''), Applied_Date: today });
+      const j = await res.clone().json();
+      if (!j || !j.success || j.message) throw new Error((j && (j.error || j.message)) || 'the update did not apply');
+    } catch (e) { failedIds.add(String(it.id)); await logAndCollectError(env, failures, 'backcharge_mark_applied', '/backcharge', 'backcharge ' + it.id, e); }
+  }
+  try {
+    const rows = await fetchTab(env, BACKCHARGE_TAB);
+    for (const it of toMark) {
+      if (failedIds.has(String(it.id))) continue;
+      const r = rows.find(x => String(x.ID) === String(it.id));
+      if (!r || r.Status !== 'applied') await logAndCollectError(env, failures, 'backcharge_mark_applied', '/backcharge', 'backcharge ' + it.id, new Error('read-back shows it is NOT marked applied'));
+    }
+  } catch (e) { await logAndCollectError(env, failures, 'backcharge_mark_applied', '/backcharge', 'read-back', e); }
+  return failures;
+}
+function backchargeFailureText(failures) { return (failures || []).map(f => (f.ref ? f.ref + ': ' : '') + f.error).join('; '); }
+
+// GET /backcharges?wo_id=  (admin)
+async function backchargeList(env, url) {
+  const woId = url.searchParams.get('wo_id') || '';
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  try {
+    await backchargeTab(env);
+    const rows = (await fetchTab(env, BACKCHARGE_TAB)).filter(r => r.Active !== 'FALSE' && String(r.WO_ID) === String(woId));
+    return json({ backcharges: rows, default_rate: DEFAULT_BACKCHARGE_RATE, default_description: DEFAULT_BACKCHARGE_DESC });
+  } catch (e) { return json({ error: 'Could not read back-charges: ' + (e.message || e) }, 500); }
+}
+
+// POST /backcharge/add { wo_id, vendor_id?, hours?, rate?, amount?, description?, private_note?, time_entry_ids?, created_by? }
+async function backchargeAdd(env, body) {
+  body = body || {};
+  const woId = String(body.wo_id || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  await backchargeTab(env);
+  const [wos, vendors, timeRows, billRows, irRows, existing] = await fetchTabs(env, ['Work_Orders', 'Vendors', 'Time_Entries', 'Vendor_Bills', 'Invoice_Review', BACKCHARGE_TAB]);
+  const wo = findWO(wos, woId);
+  if (!wo) return json({ error: `No work order ${woId} found` }, 404);
+  const vendorId = String(body.vendor_id || wo.Vendor_ID || '').trim();
+  if (!vendorId) return json({ error: 'No vendor on this work order and none passed — vendor_id required' }, 400);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: `Vendor ${vendorId} not found` }, 404);
+  if (String(vendor.In_House || '').toUpperCase() === 'TRUE') {
+    return json({ error: `${vendor.Name || 'This vendor'} is marked in-house — there is no vendor bill to deduct from.` }, 400);
+  }
+
+  // Brett's own logged time that this back-charge covers. Validated server-side: it must be an
+  // active hub entry on THIS work order, not already inside a live vendor bill, not already on
+  // another back-charge.
+  const ids = (Array.isArray(body.time_entry_ids) ? body.time_entry_ids : []).map(x => String(x).trim()).filter(Boolean);
+  const liveBills = new Set(billRows.filter(b => b.Active !== 'FALSE').map(b => String(b.ID)));
+  const taken = new Set();
+  existing.filter(r => r.Active !== 'FALSE' && r.Status !== 'void').forEach(r => String(r.Time_Entry_IDs || '').split(',').map(x => x.trim()).filter(Boolean).forEach(x => taken.add(x)));
+  let entryMinutes = 0;
+  for (const id of ids) {
+    const e = timeRows.find(r => String(r.ID) === id);
+    if (!e || String(e.WO_ID) !== woId || e.Active === 'FALSE') return json({ error: `Time entry ${id} is not an active entry on ${woId}` }, 400);
+    if (String(e.Role || '').toLowerCase() !== 'hub') return json({ error: `Time entry ${id} is not your own time` }, 400);
+    if (taken.has(id)) return json({ error: `Time entry ${id} is already on another back-charge` }, 409);
+    const eb = String(e.Bill_ID || '').trim();
+    if (eb && liveBills.has(eb)) return json({ error: `Time entry ${id} is already inside vendor bill #${eb} — it can't also be back-charged` }, 409);
+    entryMinutes += parseFloat(e.Duration_Minutes) || 0;
+  }
+
+  const rate = Number(body.rate) > 0 ? Number(body.rate) : DEFAULT_BACKCHARGE_RATE;
+  let hours = (body.hours !== undefined && body.hours !== null && body.hours !== '') ? Number(body.hours) : (entryMinutes > 0 ? entryMinutes / 60 : 0);
+  if (!Number.isFinite(hours) || hours < 0) return json({ error: 'hours must be a number' }, 400);
+  hours = Math.round(hours * 100) / 100;
+  const hasAmount = body.amount !== undefined && body.amount !== null && body.amount !== '';
+  const amount = backchargeRound(hasAmount ? Number(body.amount) : hours * rate);
+  if (!Number.isFinite(amount) || amount <= 0) return json({ error: 'Enter hours (or an amount) — a back-charge has to be more than $0.' }, 400);
+  if (amount > 50000) return json({ error: 'That amount looks wrong (over $50,000) — nothing was recorded.' }, 400);
+  const description = (String(body.description || '').trim() || DEFAULT_BACKCHARGE_DESC).slice(0, 500);
+  const privateNote = String(body.private_note || '').trim().slice(0, 1000);
+
+  const sig = { WO_ID: woId, Vendor_ID: vendorId, Amount: amount.toFixed(2), Description: description, Status: 'pending' };
+  const dupe = await findRecentDuplicate(env, BACKCHARGE_TAB, sig, 30);
+  if (dupe) return json({ success: true, duplicate: true, id: String(dupe.ID), amount: amount.toFixed(2) });
+
+  const addRes = await addRow(env, BACKCHARGE_TAB, {
+    WO_ID: woId, Vendor_ID: vendorId, Vendor_Name: vendor.Name || vendor.Company || '', Hours: hours ? String(hours) : '', Rate: String(rate),
+    Amount: amount.toFixed(2), Description: description, Private_Note: privateNote, Time_Entry_IDs: ids.join(','),
+    Status: 'pending', Applied_Amount: '', Unapplied_Amount: '', QB_Bill_ID: '', QB_Bill_Number: '',
+    Created_By: String(body.created_by || 'brett'), Created_Date: new Date().toISOString(), Active: 'TRUE',
+  });
+  let newId = '';
+  try {
+    const parsed = await addRes.clone().json();
+    if (parsed && parsed.error) return json({ error: 'Back-charge was NOT recorded: ' + parsed.error }, 500);
+    newId = String((parsed && parsed.id) || '');
+  } catch (e) { return json({ error: 'Back-charge may not have been recorded (unreadable response): ' + e.message }, 500); }
+  if (!newId) return json({ error: 'Back-charge was NOT recorded (no id came back).' }, 500);
+
+  // Read it back — success:true with an unchanged sheet is a failure.
+  const warnings = [];
+  const back = (await fetchTab(env, BACKCHARGE_TAB)).find(r => String(r.ID) === newId);
+  if (!back || backchargeRound(back.Amount) !== amount) {
+    return json({ error: `Back-charge ${newId} did not read back correctly from the sheet — check the ${BACKCHARGE_TAB} tab before relying on it.` }, 500);
+  }
+
+  // Take Brett's own time off the customer's billable time (reversible via /backcharge/void).
+  const failures = [];
+  for (const id of ids) {
+    try {
+      const res = await updateRow(env, 'Time_Entries', id, { Billable: 'FALSE' });
+      const j = await res.clone().json();
+      if (!j || !j.success || j.message) throw new Error((j && (j.error || j.message)) || 'the update did not apply');
+    } catch (e) { await logAndCollectError(env, failures, 'backcharge_time_exclude', '/backcharge/add', `time entry ${id}`, e); }
+  }
+  if (ids.length) {
+    try {
+      const after = await fetchTab(env, 'Time_Entries');
+      for (const id of ids) {
+        const r = after.find(x => String(x.ID) === id);
+        if (!r || String(r.Billable).toUpperCase() !== 'FALSE') warnings.push(`⚠ Time entry ${id} is still marked billable — untick it on the Review Bills screen, or the customer is charged for hours the vendor is also being charged for.`);
+      }
+    } catch (e) { await logAndCollectError(env, failures, 'backcharge_time_exclude', '/backcharge/add', 'read-back', e); }
+  }
+  if (failures.length) warnings.push('⚠ Could not take your logged time off the customer invoice (' + backchargeFailureText(failures) + ') — untick it on Review Bills so the customer is not charged twice.');
+
+  const bs = backchargeBillState(irRows, woId, vendorId);
+  return json({ success: true, id: newId, amount: amount.toFixed(2), hours, rate, status: 'pending', description,
+                bill_state: bs.state, qb_bills: bs.qb_bills, warnings });
+}
+
+// POST /backcharge/void { id, reason? } — only while still pending (not yet on a QuickBooks bill).
+async function backchargeVoid(env, body) {
+  const id = String((body && body.id) || '').trim();
+  if (!id) return json({ error: 'id required' }, 400);
+  await backchargeTab(env);
+  const row = (await fetchTab(env, BACKCHARGE_TAB)).find(r => String(r.ID) === id && r.Active !== 'FALSE');
+  if (!row) return json({ error: 'Back-charge not found' }, 404);
+  if (row.Status === 'applied') {
+    return json({ error: `This back-charge is already a line on QuickBooks bill ${row.QB_Bill_Number || row.QB_Bill_ID}. Edit that bill in QuickBooks to remove the line — the Hub does not reverse it.`, applied: true }, 409);
+  }
+  const warnings = [], failures = [];
+  const entryIds = String(row.Time_Entry_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
+  for (const eid of entryIds) {
+    try {
+      const res = await updateRow(env, 'Time_Entries', eid, { Billable: 'TRUE' });
+      const j = await res.clone().json();
+      if (!j || !j.success || j.message) throw new Error((j && (j.error || j.message)) || 'the update did not apply');
+    } catch (e) { await logAndCollectError(env, failures, 'backcharge_time_restore', '/backcharge/void', `time entry ${eid}`, e); }
+  }
+  if (failures.length) warnings.push('⚠ Could not make your logged time billable again (' + backchargeFailureText(failures) + ') — tick it back on manually in Time Entries.');
+  const reason = String((body && body.reason) || '').trim();
+  const res = await updateRow(env, BACKCHARGE_TAB, id, {
+    Status: 'void', Active: 'FALSE', Voided_Date: new Date().toISOString().split('T')[0],
+    Private_Note: ((row.Private_Note ? row.Private_Note + ' | ' : '') + 'Voided' + (reason ? ': ' + reason : '')).slice(0, 1000),
+  });
+  const j = await res.clone().json();
+  if (!j || !j.success || j.message) return json({ error: 'The back-charge was NOT voided: ' + ((j && (j.error || j.message)) || 'update did not apply'), warnings }, 500);
+  const back = (await fetchTab(env, BACKCHARGE_TAB)).find(r => String(r.ID) === id);
+  if (back && back.Active !== 'FALSE') return json({ error: 'The back-charge still reads as active after voiding — check the sheet.', warnings }, 500);
+  return json({ success: true, id, warnings });
+}
+
+// POST /backcharge/apply-to-qb { id, qb_bill_id?, preview_only? } (admin)
+// Adds this back-charge to a vendor bill that is ALREADY in QuickBooks, as a negative line on the
+// same expense account as the bill's own line. Only a bill with NOTHING paid against it (Balance
+// == TotalAmt) is edited. Preview-first; AUTONOMY_GUARDRAILS Rung 3 — Brett's own tap confirms.
+async function backchargeApplyToQb(env, body) {
+  try {
+    const id = String((body && body.id) || '').trim();
+    if (!id) return json({ ok: false, error: 'id required' }, 400);
+    await backchargeTab(env);
+    const [bcRows, irRows] = await fetchTabs(env, [BACKCHARGE_TAB, 'Invoice_Review']);
+    const row = bcRows.find(r => String(r.ID) === id && r.Active !== 'FALSE');
+    if (!row) return json({ ok: false, error: 'Back-charge not found' }, 404);
+    if (row.Status !== 'pending') return json({ ok: false, error: `This back-charge is already ${row.Status}${row.QB_Bill_ID ? ' (QuickBooks bill ' + (row.QB_Bill_Number || row.QB_Bill_ID) + ')' : ''}.` }, 409);
+
+    const bs = backchargeBillState(irRows, row.WO_ID, row.Vendor_ID);
+    if (!bs.qb_bills.length) return json({ ok: false, error: 'This vendor has no bill in QuickBooks for this work order yet. Nothing to edit — the back-charge will be applied automatically when that bill is sent to QuickBooks.' }, 400);
+    let target = null;
+    if (body.qb_bill_id) target = bs.qb_bills.find(b => String(b.bill_id) === String(body.qb_bill_id));
+    else if (bs.qb_bills.length === 1) target = bs.qb_bills[0];
+    if (!target) return json({ ok: false, error: 'More than one QuickBooks bill exists for this vendor on this work order — say which one to edit.', candidates: bs.qb_bills }, 409);
+
+    const token = await qbAccessToken(env);
+    const got = await qbApi(env, `bill/${encodeURIComponent(target.bill_id)}?minorversion=73`, 'GET', null, token);
+    const bill = got && got.Bill;
+    if (!bill) return json({ ok: false, error: qbFault(got) || 'Could not read that bill from QuickBooks.' }, 502);
+    const curTotal = Number(bill.TotalAmt) || 0;
+    const curBalance = bill.Balance != null ? Number(bill.Balance) : curTotal;
+    if (Math.abs(curBalance - curTotal) > 0.005) {
+      return json({ ok: false, error: `QuickBooks bill ${bill.DocNumber || bill.Id} already has a payment applied (balance $${curBalance.toFixed(2)} of $${curTotal.toFixed(2)}). The Hub only edits completely unpaid bills — the back-charge stays pending so it keeps showing.` }, 409);
+    }
+    const expenseLine = (bill.Line || []).find(l => l.DetailType === 'AccountBasedExpenseLineDetail');
+    const acct = expenseLine && expenseLine.AccountBasedExpenseLineDetail && expenseLine.AccountBasedExpenseLineDetail.AccountRef && expenseLine.AccountBasedExpenseLineDetail.AccountRef.value;
+    if (!acct) return json({ ok: false, error: 'Could not find an expense account on the bill\'s existing line to match.' }, 500);
+
+    const plan = planBackchargeLines(curTotal, [row], acct);
+    if (!plan.lines.length) return json({ ok: false, error: `QuickBooks bill ${bill.DocNumber || bill.Id} is already $0 — there is nothing left to deduct from.` }, 409);
+    const newTotal = backchargeRound(curTotal - plan.appliedTotal);
+    const preview = { backcharge_id: row.ID, qb_bill_id: String(bill.Id), qb_bill_number: bill.DocNumber || '', current_total: curTotal,
+                      deduction: plan.appliedTotal, new_total: newTotal, unapplied: plan.unappliedTotal, line_description: plan.lines[0].Description };
+    if (body.preview_only) return json({ ok: true, preview });
+
+    const patch = { Id: bill.Id, SyncToken: bill.SyncToken, sparse: true, VendorRef: bill.VendorRef, Line: [...(bill.Line || []), plan.lines[0]] };
+    const upd = await qbApi(env, 'bill?minorversion=73', 'POST', patch, token);
+    const updated = upd && upd.Bill;
+    if (!updated) return json({ ok: false, error: 'QuickBooks did not accept the change: ' + (qbFault(upd) || 'unknown error') + '. Nothing was recorded.' }, 502);
+    if (Math.abs(Number(updated.TotalAmt) - newTotal) > 0.005) {
+      return json({ ok: false, error: `QuickBooks bill ${updated.DocNumber || updated.Id} now totals $${Number(updated.TotalAmt).toFixed(2)}, not the expected $${newTotal.toFixed(2)} — check it in QuickBooks. The back-charge was NOT marked applied.` }, 502);
+    }
+    const failures = await backchargeMarkApplied(env, plan.items, { id: String(updated.Id), number: updated.DocNumber || '' });
+    if (failures.length) {
+      return json({ ok: false, error: `The line IS on QuickBooks bill ${updated.DocNumber || updated.Id} (now $${newTotal.toFixed(2)}), but the Hub could not mark the back-charge applied (${backchargeFailureText(failures)}). Do NOT apply it again.`, qb_bill_id: String(updated.Id) }, 500);
+    }
+    return json({ ok: true, qb_bill_id: String(updated.Id), qb_bill_number: updated.DocNumber || '', new_total: newTotal, deduction: plan.appliedTotal, unapplied: plan.unappliedTotal });
+  } catch (e) { return json({ ok: false, error: e.message || String(e) }, 500); }
+}
+
 async function addEstimateVersion(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   if (!Array.isArray(body.line_items) || !body.line_items.length) return json({ error: 'line_items required' }, 400);
@@ -18825,6 +19150,13 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!(await isTestRecord(env, 'Properties', wo.Property_ID))) return false;
     return await isTestRecord(env, 'Vendors', wo.Vendor_ID);
   }
+  // Vendor back-charges (Oct 11 2026): every write keys off a WO (add) or a Vendor_Backcharges row (void /
+  // apply-to-qb) that hangs off a WO — the token may only touch back-charges on TEST- Property WOs.
+  if (path === '/backcharge/add') return !!(body && body.wo_id) && await isTestWO(env, body.wo_id);
+  if (path === '/backcharge/void' || path === '/backcharge/apply-to-qb') {
+    const _bc = (await fetchTab(env, BACKCHARGE_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    return !!_bc && await isTestWO(env, _bc.WO_ID);
+  }
   if (path === '/wo/additional-work/start') return !!(body && body.parent_wo_id) && await isTestWO(env, body.parent_wo_id);
   if (path === '/wo/additional-work/submit' || path === '/wo/additional-work/withdraw') return !!(body && body.child_wo_id) && await isTestWO(env, body.child_wo_id);
   if (path === '/wo/additional-work/owner-notice') {
@@ -23653,6 +23985,17 @@ async function qbSendInvoice(env, body) {
         } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
       }
 
+      // Back-charges (Oct 11 2026): PENDING rows for this WO + vendor go on the bill as negative lines.
+      // READ-ONLY here. A read failure is a loud warning in the preview, and the real send refuses.
+      let previewBc = { items: [], appliedTotal: 0, unappliedTotal: 0 };
+      if (!previewInHouse && vendorCost > 0 && vendor.ID) {
+        try {
+          previewBc = planBackchargeLines(vendorCost - previewLoanDeduction, await backchargeRowsFor(env, ir.WO_ID, vendor.ID), trade.expense);
+          if (previewBc.appliedTotal > 0) warnings.push(`Back-charge: $${previewBc.appliedTotal.toFixed(2)} will come off ${vendDisplay}'s bill as a negative line (net $${(vendorCost - previewLoanDeduction - previewBc.appliedTotal).toFixed(2)}).`);
+          if (previewBc.unappliedTotal > 0) warnings.push(`⚠ $${previewBc.unappliedTotal.toFixed(2)} of back-charges won't fit — the bill is floored at $0. The rest stays on the back-charge as "not recovered".`);
+        } catch (e) { warnings.push('⚠ Could not read this vendor\'s back-charges (' + (e.message || 'error') + ') — this preview may be missing a deduction, and a real send will refuse until it reads cleanly.'); }
+      }
+
       return json({ preview: {
         ir_id: ir.ID, wo_id: ir.WO_ID, trade: tradeName,
         bill_to: { level: billTo.level, qb_id: billTo.qb_id, display: billTo.display,
@@ -23668,7 +24011,8 @@ async function qbSendInvoice(env, body) {
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '',
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
-        bill:     { total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
+        bill:     { total: +(vendorCost - previewLoanDeduction - previewBc.appliedTotal).toFixed(2), account: trade.expense,
+                    backcharges: previewBc.items, backcharge_total: previewBc.appliedTotal, backcharge_unapplied: previewBc.unappliedTotal,
                     terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
@@ -23745,6 +24089,14 @@ async function qbSendInvoice(env, body) {
     } else {
       try { customerId = await qbFindOrCreateCustomer(env, owner, custDisplay, token); }
       catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
+    }
+
+    // Back-charges pre-flight (Oct 11 2026): if this vendor's bill is still to be created, make sure the
+    // back-charges can be READ before the customer invoice goes out, so a read failure never leaves an invoice
+    // in QuickBooks with no vendor bill. (The bill step below re-reads and refuses again if it fails then.)
+    if (!haveBill && vendorCost > 0 && vendor && vendor.ID && String(vendor.In_House || '').toUpperCase() !== 'TRUE') {
+      try { await backchargeRowsFor(env, ir.WO_ID, vendor.ID); }
+      catch (e) { return json({ ok: false, error: `Back-charges could not be read (${e.message || 'error'}) — nothing was sent to QuickBooks, so ${vendDisplay} is not paid in full by mistake. Retry.`, warnings }); }
     }
 
     if (!haveInv) {
@@ -23838,17 +24190,29 @@ async function qbSendInvoice(env, body) {
             billPayload.Line[0].Description = (billPayload.Line[0].Description + ` (Loan repayment: $${loanAdj.deduction.toFixed(2)})`).slice(0, 4000);
           }
         } catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
+        // Back-charges (Oct 11 2026): PENDING rows for this WO + vendor become NEGATIVE lines on this bill,
+        // sized AFTER the loan deduction so the floor is the real remaining amount. If they can't be read the
+        // bill is NOT sent — posting the full amount would quietly overpay the vendor.
+        let bcPlan = { lines: [], items: [], appliedTotal: 0, unappliedTotal: 0 }, bcReadFailed = false;
+        try {
+          bcPlan = planBackchargeLines(vendorCost, await backchargeRowsFor(env, ir.WO_ID, vendor.ID), trade.expense);
+          if (bcPlan.lines.length) billPayload.Line.push(...bcPlan.lines);
+          if (bcPlan.unappliedTotal > 0) warnings.push(`⚠ $${bcPlan.unappliedTotal.toFixed(2)} of back-charges did not fit — the bill is floored at $0. It stays on the back-charge as "not recovered".`);
+        } catch (e) {
+          bcReadFailed = true;
+          errors.push(`Back-charges could not be read (${e.message || 'error'}) — the vendor bill was NOT sent so ${vendDisplay} is not paid in full by mistake. Nothing was changed; retry.`);
+        }
         billPayload.VendorRef = { value: vendorId };
         // Terms, so the bill reads "Due on receipt" rather than showing a blank term
         // alongside a same-day due date.
         const dueTermId = await qbTermForDays(env, token, termDays);
         if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
         else warnings.push(`QuickBooks has no "${vendorTermLabel(vendor)}" term, so the bill carries the right due date but a blank Terms field. Add that term in QuickBooks and it will be used from then on.`);
-        let r = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
+        let r = bcReadFailed ? null : await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (r && r.Bill && r.Bill.Id) || '';
         // A rejected bill number should not cost you the bill. Drop it and retry once,
         // rather than failing the whole send over a reference field.
-        if (!billId && billPayload.DocNumber && qbIsDocNumberFault(r)) {
+        if (!billId && !bcReadFailed && billPayload.DocNumber && qbIsDocNumberFault(r)) {
           // Only retry on a fault QuickBooks clearly attributes to the bill number. Those
           // are rejected before anything is written, so a second attempt is safe. Any
           // other failure — or a response we can't read as a fault at all — might mean the
@@ -23859,13 +24223,18 @@ async function qbSendInvoice(env, body) {
           billId = (r && r.Bill && r.Bill.Id) || '';
         }
         if (!billId) {
-          errors.push('Bill: ' + (qbFault(r) || 'unknown error'));
+          if (!bcReadFailed) errors.push('Bill: ' + (qbFault(r) || 'unknown error'));   // (bcReadFailed already reported its own error above)
           // Bill never posted — undo the in-memory reduction so a later retry (once the real
           // problem is fixed) sizes the bill against the UN-deducted amount and this same
           // loan adjustment gets computed (and recorded) fresh next time, not skipped.
           if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
         } else {
           billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (bcPlan.appliedTotal > 0) {
+            const bcFail = await backchargeMarkApplied(env, bcPlan.items, { id: billId, number: billDocAssigned });
+            if (bcFail.length) warnings.push(`⚠ The bill posted with a $${bcPlan.appliedTotal.toFixed(2)} back-charge line, but the Hub could not mark the back-charge applied (${backchargeFailureText(bcFail)}). Do NOT apply it again — fix the Vendor_Backcharges row by hand.`);
+            else warnings.push(`Back-charge: $${bcPlan.appliedTotal.toFixed(2)} deducted from ${vendDisplay}'s bill as a negative line.`);
+          }
           if (loanAdj.deduction > 0) {
             try {
               const newBalance = await recordVendorLoanDeduction(env, {
@@ -23992,6 +24361,23 @@ async function qbSendCombinedInvoice(env, ctx) {
       rowBuilds.push({ row: r, vendor, billRow, custTotal, vendorCost, inv, vendDisplay, vendorInHouse, billDoc, termDays });
     }
 
+    // Back-charges (Oct 11 2026), planned ONCE per row for preview and confirm alike. `claimed` stops two rows
+    // for the same WO + vendor from each taking the same pending back-charge. A read failure is carried on the
+    // row: preview warns loudly, and the real send refuses to post that row's bill (see below).
+    const _bcClaimed = new Set();
+    let _bcReadError = null;
+    for (const rb of rowBuilds) {
+      rb.bcPlan = { lines: [], items: [], appliedTotal: 0, unappliedTotal: 0 };
+      if (rb.vendorInHouse || !(rb.vendorCost > 0) || !(rb.vendor && rb.vendor.ID)) continue;
+      try {
+        rb.bcPlan = planBackchargeLines(rb.vendorCost, await backchargeRowsFor(env, rb.row.WO_ID, rb.vendor.ID, _bcClaimed), trade.expense);
+        rb.bcPlan.items.forEach(it => { if (it.applied > 0) _bcClaimed.add(String(it.id)); });
+        if (rb.bcPlan.appliedTotal > 0) warnings.push(`Back-charge: $${rb.bcPlan.appliedTotal.toFixed(2)} will come off ${rb.vendDisplay}'s bill as a negative line (net $${rb.bcPlan.netTotal.toFixed(2)}).`);
+        if (rb.bcPlan.unappliedTotal > 0) warnings.push(`⚠ $${rb.bcPlan.unappliedTotal.toFixed(2)} of ${rb.vendDisplay}'s back-charges won't fit — the bill is floored at $0. The rest stays on the back-charge as "not recovered".`);
+      } catch (e) { rb.bcReadFailed = true; _bcReadError = _bcReadError || e; }
+    }
+    if (_bcReadError) warnings.push('⚠ Could not read back-charges (' + (_bcReadError.message || 'error') + ') — previewed vendor bills may be missing a deduction, and a real send will not post those bills until it reads cleanly.');
+
     const combinedLines = rowBuilds.reduce((acc, rb) => acc.concat(rb.inv.lines), []);
     const combinedTotal = +rowBuilds.reduce((s, rb) => s + rb.custTotal, 0).toFixed(2);
     const _distinctWoIds = [...new Set(groupRows.map(r => String(r.WO_ID)))];
@@ -24026,7 +24412,8 @@ async function qbSendCombinedInvoice(env, ctx) {
           billsPreview.push({
             bill_id: rb.row.Bill_ID,
             vendor: { display: rb.vendDisplay, existing_id: rb.vendor.QBO_Vendor_ID || '', vendor_id: rb.vendor.ID || '', suggest: vendSuggestRow },
-            total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
+            total: +(rb.vendorCost - ((rb.bcPlan && rb.bcPlan.appliedTotal) || 0)).toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
+            backcharges: (rb.bcPlan && rb.bcPlan.items) || [], backcharge_total: (rb.bcPlan && rb.bcPlan.appliedTotal) || 0,
             doc_number: rb.billDoc.number, doc_from: rb.billDoc.source,
             skipped: rb.vendorCost <= 0 || rb.vendorInHouse, in_house: rb.vendorInHouse,
           });
@@ -24056,6 +24443,11 @@ async function qbSendCombinedInvoice(env, ctx) {
     // ---- CONFIRM (writes to QuickBooks) ----
     if (!owner) return json({ ok: false, error: 'No owner on this property — cannot create a QB customer.', warnings });
     if (combinedTotal <= 0) return json({ ok: false, error: 'Combined Customer_Total is 0 — nothing to invoice.', warnings });
+    // Back-charges pre-flight (Oct 11 2026): a real send never goes out if any vendor's back-charges are unreadable —
+    // checked here, before the customer invoice is created, so nothing is left half-sent.
+    if (!previewOnly && rowBuilds.some(rb => rb.bcReadFailed)) {
+      return json({ ok: false, error: `Back-charges could not be read (${(_bcReadError && _bcReadError.message) || 'error'}) — nothing was sent to QuickBooks, so no vendor is paid in full by mistake. Retry.`, warnings });
+    }
     // CAP-036 #14: same soft block as the single-bill path — any flagged row in the group
     // stops the real write unless explicitly overridden.
     const pendingInfoRows = groupRows.filter(r => String(r.Pending_Info || '').toUpperCase() === 'TRUE');
@@ -24180,6 +24572,11 @@ async function qbSendCombinedInvoice(env, ctx) {
           };
           if (rb.billDoc.number) billPayload.DocNumber = rb.billDoc.number;
           if (rb.billDoc.overlong) warnings.push(`Vendor invoice number "${rb.billDoc.overlong}" is too long for QuickBooks, so bill ${rb.row.Bill_ID} is numbered ${rb.billDoc.number} instead.`);
+          if (rb.bcReadFailed) {
+            // Back-charges unreadable: posting the full amount would quietly overpay the vendor. Nothing was written.
+            errors.push(`Bill (${rb.vendDisplay}): back-charges could not be read, so this vendor bill was NOT posted. Nothing was changed for it — retry.`);
+          } else {
+          if (rb.bcPlan && rb.bcPlan.lines.length) billPayload.Line.push(...rb.bcPlan.lines);
           const dueTermId = await qbTermForDays(env, token, rb.termDays);
           if (dueTermId) billPayload.SalesTermRef = { value: dueTermId };
           else warnings.push(`QuickBooks has no "${vendorTermLabel(rb.vendor)}" term for bill ${rb.row.Bill_ID} — due date is right, Terms field is blank.`);
@@ -24192,7 +24589,15 @@ async function qbSendCombinedInvoice(env, ctx) {
             billId = (br && br.Bill && br.Bill.Id) || '';
           }
           if (!billId) errors.push('Bill (' + rb.vendDisplay + '): ' + (qbFault(br) || 'unknown error'));
-          else rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+          else {
+            rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+            if (rb.bcPlan && rb.bcPlan.appliedTotal > 0) {
+              const bcFail = await backchargeMarkApplied(env, rb.bcPlan.items, { id: billId, number: rb.billDocAssigned });
+              if (bcFail.length) warnings.push(`⚠ ${rb.vendDisplay}'s bill posted with a $${rb.bcPlan.appliedTotal.toFixed(2)} back-charge line, but the Hub could not mark it applied (${backchargeFailureText(bcFail)}). Do NOT apply it again — fix the Vendor_Backcharges row by hand.`);
+              else warnings.push(`Back-charge: $${rb.bcPlan.appliedTotal.toFixed(2)} deducted from ${rb.vendDisplay}'s bill as a negative line.`);
+            }
+          }
+          }
         }
       } else if (rb.vendorInHouse && rb.vendorCost > 0) {
         warnings.push(`No vendor bill created — ${rb.vendDisplay} is marked in-house, so there's no payable.`);
