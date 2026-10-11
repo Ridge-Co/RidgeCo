@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-11.1-vendor-backcharge';
+const BUILD_VERSION = '2026-10-11.2-vendor-backcharge';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -721,14 +721,7 @@ const _hubWorkerCore = {
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
-        // Vendor back-charges (Oct 11 2026): every write keys off a WO (add) or a Vendor_Backcharges row (void /
-  // apply-to-qb) that hangs off a WO — the token may only touch back-charges on TEST- Property WOs.
-  if (path === '/backcharge/add') return !!(body && body.wo_id) && await isTestWO(env, body.wo_id);
-  if (path === '/backcharge/void' || path === '/backcharge/apply-to-qb') {
-    const _bc = (await fetchTab(env, BACKCHARGE_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
-    return !!_bc && await isTestWO(env, _bc.WO_ID);
-  }
-  if (path === '/wo/additional-work/start')    return await addonStart(env, body, callerRole, callerSessionId);
+        if (path === '/wo/additional-work/start')    return await addonStart(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/submit')   return await addonSubmit(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/withdraw') return await addonWithdraw(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/owner-notice') return await addonOwnerNotice(env, body);   // ADMIN-ONLY: no ROLE_SCOPES entry
@@ -19156,6 +19149,13 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     if (!(await isTestRecord(env, 'Properties', wo.Property_ID))) return false;
     return await isTestRecord(env, 'Vendors', wo.Vendor_ID);
+  }
+  // Vendor back-charges (Oct 11 2026): every write keys off a WO (add) or a Vendor_Backcharges row (void /
+  // apply-to-qb) that hangs off a WO — the token may only touch back-charges on TEST- Property WOs.
+  if (path === '/backcharge/add') return !!(body && body.wo_id) && await isTestWO(env, body.wo_id);
+  if (path === '/backcharge/void' || path === '/backcharge/apply-to-qb') {
+    const _bc = (await fetchTab(env, BACKCHARGE_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    return !!_bc && await isTestWO(env, _bc.WO_ID);
   }
   if (path === '/wo/additional-work/start') return !!(body && body.parent_wo_id) && await isTestWO(env, body.parent_wo_id);
   if (path === '/wo/additional-work/submit' || path === '/wo/additional-work/withdraw') return !!(body && body.child_wo_id) && await isTestWO(env, body.child_wo_id);
