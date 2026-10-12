@@ -6306,10 +6306,11 @@ function intakeBetween(t, startRe, endRe) {
 function intakeParseContacts(raw) {
   let s = String(raw || '').trim();
   if (!s || /^--+$/.test(s)) return [];
-  s = s.replace(/([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|\d{4})\s+(?=[A-Z][a-z])/g, '$1 * ');
+  s = s.slice(0, 3000);
+  s = s.replace(/([A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,4}|\d{4})\s+(?=[A-Z][a-z])/g, '$1 * ');
   // Plain-text (getPlainBody) layout has no '*' separators: split after a role word, and between back-to-back phones / phone→email.
   s = s.replace(/(,\s*(?:Tenant|Owner|Resident|Occupant|Other|Manager))\s+(?=\S)/g, '$1 * ');
-  s = s.replace(/(\d{4})\s+(?=\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}|[A-Za-z0-9._%+-]+@)/g, '$1 * ');
+  s = s.replace(/(\d{4})\s+(?=\(?\d{3}\)?[\s.-]{0,3}\d{3}[\s.-]{0,3}\d{4}|[A-Za-z0-9._%+-]{1,64}@)/g, '$1 * ');
   const ROLE = /^(.+?),\s*(Tenant|Owner|Resident|Occupant|Other|Manager)$/;
   const out = []; let cur = null;
   const start = (name, role) => { cur = { name, role, phones: [], emails: [] }; out.push(cur); };
