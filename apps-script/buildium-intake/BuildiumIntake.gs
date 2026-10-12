@@ -71,7 +71,7 @@ function processBuildiumEmails() {
     var p = props_();
     var token = p.getProperty('INTAKE_TOKEN');
     var cutoff = Number(p.getProperty('CUTOFF_MS') || 0);
-    if (!token || !cutoff) { alert_('Buildium intake is not set up', 'Run setup() once in the Apps Script project "Buildium Intake".'); return; }
+    if (!token || !cutoff) { alertThrottled_('notsetup', 'Buildium intake is not set up', 'Run setup() once in the Apps Script project "Buildium Intake".'); return; }
     var done = JSON.parse(p.getProperty('DONE_IDS') || '[]');
     var fails = JSON.parse(p.getProperty('FAILS') || '{}');
     var since = Math.floor(Math.max(cutoff, Date.now() - LOOKBACK_MS) / 1000);
