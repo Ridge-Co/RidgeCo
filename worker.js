@@ -6688,8 +6688,12 @@ async function intakeEmail(env, body, retryRow) {
     let rowId;
     if (retryRow) {
       rowId = String(retryRow.ID);
-      const u = await updateRow(env, INTAKE_TAB, rowId, { Status: 'Created', Reason: '', WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms, Processed_At: new Date().toISOString() });
+      const u = await updateRow(env, INTAKE_TAB, rowId, { Kind: 'detail', Status: 'Created', Reason: filled ? 'filled in notice stub ' + woId : '', WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms, Pair_ID: stub ? String(stub.cand.ID) : '', Processed_At: new Date().toISOString() });
       if (u.status !== 200) throw new Error('Intake_Queue retry row update failed');
+      if (stub) {
+        const pu = await updateRow(env, INTAKE_TAB, String(stub.cand.ID), { Pair_ID: rowId });
+        if (pu.status !== 200) throw new Error('could not mark notice row ' + stub.cand.ID + ' as paired with ' + rowId);
+      }
     } else {
       const pairNotice = stub ? stub.cand : (existingWO ? (queue.find(q => q.Kind === 'notice' && q.Status === 'Created' && String(q.WO_ID) === String(woId) && !String(q.Pair_ID || '')) || null) : null);
       rowId = await intakeAppendRow(env, { ...baseRow, Status: 'Created', Reason: filled ? 'filled in notice stub ' + woId + (stubDescOk ? '' : ' (description was edited by hand - details added to Notes)') : (repaired ? 'recovered existing WO' : ''), WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms, Pair_ID: pairNotice ? String(pairNotice.ID) : '' });
