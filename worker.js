@@ -6558,7 +6558,9 @@ async function intakeEmail(env, body, retryRow) {
     // read-back: the WO must really be there with our ref, and our provenance columns must have landed
     stage = 'verify';
     const wosAfter = (await sheetsRequest(env, 'GET', '/values/Work_Orders')).values || [];
-    const hdr = wosAfter[0] || [], iId = hdr.indexOf('ID'), iRef = hdr.indexOf('Owner_WO_Ref'), iSrc = hdr.indexOf('Source');
+    const hdr = wosAfter[0] || [], hc = n => hdr.indexOf(n);
+    const iId = hc('ID'), iRef = hc('Owner_WO_Ref'), iSrc = hc('Source');
+    if (iId < 0 || iRef < 0) throw new Error('verify failed: Work_Orders is missing its ID or Owner_WO_Ref column');
     const row = wosAfter.slice(1).find(r => String(r[iId]) === String(woId));
     if (!row || String(row[iRef] || '').trim() !== refTag) throw new Error(`verify failed: ${woId} not found with Owner_WO_Ref "${refTag}" after create`);
     if (!repaired && iSrc >= 0 && String(row[iSrc] || '') !== 'Buildium email') throw new Error(`verify failed: ${woId} Source column did not save`);
