@@ -6400,6 +6400,10 @@ function intakeResolveUnit(property, unitRaw, units) {
   const pu = (units || []).filter(u => String(u.Property_ID) === String(property.ID) && String(u.Active || '').toUpperCase() !== 'FALSE');
   const multi = pu.length > 1 || (String(property.Type || '').toLowerCase() === 'multi' && parseInt(property.Unit_Count || '1', 10) > 1);
   if (!multi) {
+    // Buildium tags houses "- 1". Anything else (apt 2, rear...) on a single-unit property is a mismatch: park, don't guess.
+    const w = String(unitRaw || '') ? qbNormAddress(unitRaw).replace(/^(?:apt|unit) /, '') : '';
+    const sole = pu.length === 1 ? qbNormAddress(pu[0].Unit_Label).replace(/^(?:apt|unit) /, '') : '';
+    if (w && w !== '1' && w !== sole) return { ok: false, reason: 'unit_no_match', detail: 'email unit "' + unitRaw + '" but this is a single-unit property' + (sole ? ' (unit "' + pu[0].Unit_Label + '")' : '') };
     return { ok: true, unit_id: pu.length === 1 ? String(pu[0].ID) : '', unit_label: pu.length === 1 ? String(pu[0].Unit_Label || '') : '' };
   }
   const labels = pu.map(u => u.Unit_Label).join(', ');
