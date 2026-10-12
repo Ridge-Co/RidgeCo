@@ -6505,6 +6505,12 @@ async function intakeTelemetry(env, t0, ok, notes) {
   catch (_) { return false; }
 }
 
+// The sender must be the ACTUAL address (bare, or the last <...> of "Name <addr>") on managebuilding.com.
+// A display name like "donotreply@managebuilding.com" <x@evil.io> must not pass.
+function intakeSenderOk(from) {
+  return /(?:^|<)\s*[^<>\s@]{1,64}@(?:[a-z0-9-]{1,63}\.){0,4}managebuilding\.com\s*>?\s*$/.test(String(from || '').toLowerCase().slice(0, 300));
+}
+
 // POST /intake/email  (INTAKE_TOKEN / WORKER_SECRET)  and  retryRow (POST /intake/retry) share this.
 async function intakeEmail(env, body, retryRow) {
   const t0 = Date.now();
