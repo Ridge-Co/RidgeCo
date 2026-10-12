@@ -6598,7 +6598,8 @@ async function intakeEmail(env, body, retryRow) {
     return json({ success: true, created: true, wo_id: woId, ref_key: refKey, property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, repaired, telemetry_ok: telemetryOk });
   } catch (e) {
     const msg = String((e && e.message) || e);
-    await intakeTelemetry(env, t0, false, `error at ${stage}: ${msg}`);
+    const telOk = await intakeTelemetry(env, t0, false, `error at ${stage}: ${msg}`);
+    let alertFailed = telOk ? '' : 'telemetry row not written';
     // One alert SMS + one Error row per message (the poller retries every minute; don't spam).
     try {
       await intakeEnsureTab(env);
