@@ -6713,7 +6713,7 @@ async function intakeRetry(env, body) {
   await intakeEnsureTab(env);
   const row = (await fetchTab(env, INTAKE_TAB)).find(q => String(q.ID) === String(body && body.id));
   if (!row) return json({ error: 'Intake_Queue row not found: ' + (body && body.id) }, 404);
-  if (row.Status === 'Created') return json({ error: 'row ' + row.ID + ' already Created as ' + row.WO_ID }, 409);
+  if (row.Status === 'Created' || row.Status === 'Covered') return json({ error: 'row ' + row.ID + ' already ' + row.Status + ' as ' + row.WO_ID }, 409);
   if (!row.Raw_Body) return json({ error: 'row has no stored email body' }, 422);
   return await intakeEmail(env, { subject: row.Subject, body: row.Raw_Body, message_id: row.Message_ID, received_at: row.Received_At, property_id: body.property_id, unit_id: body.unit_id }, row);
 }
