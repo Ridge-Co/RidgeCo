@@ -13055,7 +13055,7 @@ async function runDoorWatchdogPass(env, opts) {
   let fr;
   try { fr = await fetchDoorHealth(io.fetch || fetch, { timeoutMs: opts.timeoutMs, retryDelayMs: opts.retryDelayMs }); }
   catch (e) { fr = { error: 'watchdog fetch wrapper threw', attempts: 0 }; fail('fetch_wrapper', e); }
-  res.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts || 0, error: fr.error ? scrubPhones(fr.error).slice(0, 200) : null };
+  res.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts || 0, error: fr.error ? scrubPhones(fr.error).slice(0, 200) : null, snippet: fr.snippet || null };
 
   // 2. state (read Config directly: fetchConfig swallows errors, which would hide an unreadable store)
   let cfg = null, stateRaw = '';
