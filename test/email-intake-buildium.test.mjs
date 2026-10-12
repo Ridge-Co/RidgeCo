@@ -11,7 +11,7 @@ function grab(name, kind = 'function') {
   for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } }
   return src.slice(i, j + 1) + (kind === 'const' ? ';' : '');
 }
-const { intakeSenderOk, intakeFlatten, parseBuildiumEmail, intakeParseContacts, intakeNormLocation, intakeMatchProperty, intakeResolveUnit, intakeMatchTenant } = new Function(
+const { intakeSenderOk, intakeFlatten, parseBuildiumEmail, parseBuildiumNotice, intakePairCandidates, intakeParseContacts, intakeNormLocation, intakeMatchProperty, intakeResolveUnit, intakeMatchTenant } = new Function(
   grab('QB_ADDR_WORDS', 'const') + '\n' + grab('intakeSenderOk') + '\n' + grab('INTAKE_MAX_BODY', 'const') + '\n' + grab('qbNormAddress') + '\n' + grab('intakeFlatten') + '\n' + grab('intakeBetween') + '\n' +
   grab('intakeParseContacts') + '\n' + grab('parseBuildiumEmail') + '\n' + grab('intakeNormLocation') + '\n' + grab('intakeMatchProperty') + '\n' +
   grab('intakeResolveUnit') + '\n' + grab('intakeMatchTenant') +
