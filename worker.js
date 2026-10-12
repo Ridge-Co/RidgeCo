@@ -6361,7 +6361,7 @@ function parseBuildiumEmail(subject, rawText) {
 // Buildium location -> {norm, tokens}. Strips ", MD 21206" so what is left is
 // "<street address> [- <unit>] [<city>]" in qbNormAddress's folded form (Avenue->ave, North->n ...).
 function intakeNormLocation(addrRaw) {
-  let s = String(addrRaw || '').replace(/\s+/g, ' ').trim();
+  let s = String(addrRaw || '').slice(0, 200).replace(/\s+/g, ' ').trim();
   s = s.replace(/#\s*([A-Za-z0-9]+)/g, ' apt $1 ');   // "#2F" => "apt 2f"
   s = s.replace(/[,\s]+[A-Za-z]{2}\s*\d{5}(?:-\d{4})?\s*$/, '').replace(/[,\s]+\d{5}(?:-\d{4})?\s*$/, '').replace(/,\s*[A-Za-z]{2}\s*$/, '');
   return qbNormAddress(s);
