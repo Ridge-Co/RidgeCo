@@ -402,6 +402,7 @@ const _hubWorkerCore = {
         if (path === '/vendors')                return await getSheet(env, 'Vendors');
         if (path === '/workorders')             return await getWorkOrdersList(env, url);
         if (path === '/wo-tenants')             return await listWOTenants(env, url);
+        if (path === '/intake-queue')           return await intakeQueueList(env);
         if (path === '/time-entries')           return await listTimeEntries(env, url);
         if (path === '/backcharges')            return await backchargeList(env, url);          // Oct 11 2026 — admin-only
         if (path === '/receipts')               return await listReceipts(env, url);
