@@ -19886,6 +19886,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/intake/email') {
     const _mid = String((body && body.message_id) || '');
     if (!_mid.startsWith('TEST-')) return { ok: false, debug: 'intake-guard: message_id must start with TEST-' };
+    if (/^\s*New work order\s*:/i.test(String(body.subject || ''))) return await intakeNoticeTestGuard(env, String(body.subject || ''), String(body.body || body.text || ''));
     const _a = await intakeAnalyze(env, String(body.subject || ''), String(body.body || body.text || ''), null);
     if (_a.status !== 'ok') return { ok: true };
     const _okProp = String((_a.property && _a.property.Access_Notes) || '').startsWith('TEST-');
