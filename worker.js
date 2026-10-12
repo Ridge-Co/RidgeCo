@@ -232,6 +232,12 @@ const _hubWorkerCore = {
         const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
           && _tok === env.CRON_SWEEP_TOKEN
           && request.method === 'POST' && path === '/cron/sweep';
+        // Narrow WRITE token for the server-to-server "text Brett" alert push (Oct 12 2026): accepted
+        // ONLY for POST /admin-notify (alertPushTokenOk: POST + that exact path + non-blank secret +
+        // non-empty matching header, constant-time compare). The recipient is always Config
+        // admin_phone, capped at ADMIN_NOTIFY_DAILY_CAP sends/day — see the ADMIN-NOTIFY block near
+        // sendSMS. Fully inert (fail closed) unless env.ALERT_PUSH_TOKEN is set to a non-blank value.
+        const _alertPushOk = alertPushTokenOk(env.ALERT_PUSH_TOKEN, _tok, request.method, path);
         // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
         // a Cowork session run real read+write+read-back checks against
         // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
