@@ -6670,6 +6670,12 @@ async function intakeEmail(env, body, retryRow) {
     const row = wosAfter.slice(1).find(r => String(r[iId]) === String(woId));
     if (!row || String(row[iRef] || '').trim() !== refTag) throw new Error(`verify failed: ${woId} not found with Owner_WO_Ref "${refTag}" after create`);
     if (filled && stub.newDesc && (iDesc < 0 || String(row[iDesc] || '') !== stub.newDesc)) throw new Error(`verify failed: ${woId} description did not save when filling in the notice stub`);
+    if (filled) {
+      const iNotes = hc('Notes'), iCn = hc('WO_Contact_Name'), iTen = hc('Tenant_ID');
+      if (iNotes < 0 || !String(row[iNotes] || '').includes('WO #' + refKey)) throw new Error(`verify failed: ${woId} Notes did not save when filling in the notice stub`);
+      if (stub.fields && stub.fields.WO_Contact_Name && (iCn < 0 || String(row[iCn] || '') !== stub.fields.WO_Contact_Name)) throw new Error(`verify failed: ${woId} contact name did not save when filling in the notice stub`);
+      if (stub.fields && stub.fields.Tenant_ID && (iTen < 0 || String(row[iTen] || '') !== String(stub.fields.Tenant_ID))) throw new Error(`verify failed: ${woId} tenant did not save when filling in the notice stub`);
+    }
     if (!repaired && !filled && (iSrc < 0 || iMid < 0 || String(row[iSrc] || '') !== 'Buildium email' || String(row[iMid] || '') !== msgId)) throw new Error(`verify failed: ${woId} Source / Intake_Message_ID columns did not save`);
 
     stage = 'notify';
