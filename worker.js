@@ -19897,6 +19897,7 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!_q || !String(_q.Message_ID || '').startsWith('TEST-')) return { ok: false, debug: 'intake-guard: retry row is not a TEST- message' };
     if (body.unit_id && !body.property_id) return { ok: false, debug: 'intake-guard: unit_id override requires a TEST property_id' };
     if (body.property_id) return { ok: await isTestRecord(env, 'Properties', body.property_id) };
+    if (/^\s*New work order\s*:/i.test(String(_q.Subject || ''))) return await intakeNoticeTestGuard(env, String(_q.Subject || ''), String(_q.Raw_Body || ''));
     const _a = await intakeAnalyze(env, String(_q.Subject || ''), String(_q.Raw_Body || ''), null);
     return { ok: _a.status !== 'ok' || String((_a.property && _a.property.Access_Notes) || '').startsWith('TEST-') };
   }
