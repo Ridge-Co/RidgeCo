@@ -15,7 +15,7 @@ const { intakeSenderOk, intakeFlatten, parseBuildiumEmail, intakeParseContacts, 
   grab('QB_ADDR_WORDS', 'const') + '\n' + grab('intakeSenderOk') + '\n' + grab('INTAKE_MAX_BODY', 'const') + '\n' + grab('qbNormAddress') + '\n' + grab('intakeFlatten') + '\n' + grab('intakeBetween') + '\n' +
   grab('intakeParseContacts') + '\n' + grab('parseBuildiumEmail') + '\n' + grab('intakeNormLocation') + '\n' + grab('intakeMatchProperty') + '\n' +
   grab('intakeResolveUnit') + '\n' + grab('intakeMatchTenant') +
-  '\nreturn { intakeFlatten, parseBuildiumEmail, intakeParseContacts, intakeNormLocation, intakeMatchProperty, intakeResolveUnit, intakeMatchTenant };'
+  '\nreturn { intakeSenderOk, intakeFlatten, parseBuildiumEmail, intakeParseContacts, intakeNormLocation, intakeMatchProperty, intakeResolveUnit, intakeMatchTenant };'
 )();
 
 let pass = 0, fail = 0;
