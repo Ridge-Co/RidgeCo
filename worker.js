@@ -375,7 +375,7 @@ const _hubWorkerCore = {
           // and the gh-broker Worker (Brett only — no session can set a Cloudflare secret).
           const HUB_PROD_QB_RO_PATHS = ['/qb/find-bills', '/qb/vendor-reconcile'];
           const _qbRoOk = !!env.HUB_PROD_QB_RO_TOKEN && _tok === env.HUB_PROD_QB_RO_TOKEN && request.method === 'POST' && HUB_PROD_QB_RO_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
