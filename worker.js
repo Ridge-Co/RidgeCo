@@ -19170,6 +19170,25 @@ async function hubTestWriteAllowed(env, path, body) {
     }
     return { ok: true, debug: _debug };
   }
+  // Buildium email intake (B-103, Oct 12 2026): staging-only token. A real WO may only be created
+  // when the email resolves to a TEST- property (Access_Notes marker, same as /workorder), the
+  // message id is itself TEST-prefixed, and parked outcomes (which write only Intake_Queue + an
+  // admin alert) are allowed so the parking paths are testable.
+  if (path === '/intake/email') {
+    const _mid = String((body && body.message_id) || '');
+    if (!_mid.startsWith('TEST-')) return { ok: false, debug: 'intake-guard: message_id must start with TEST-' };
+    const _a = await intakeAnalyze(env, String(body.subject || ''), String(body.body || body.text || ''), null);
+    if (_a.status !== 'ok') return { ok: true };
+    const _okProp = String((_a.property && _a.property.Access_Notes) || '').startsWith('TEST-');
+    return { ok: _okProp, debug: _okProp ? undefined : 'intake-guard: email resolves to a non-TEST property ' + (_a.property && _a.property.ID) };
+  }
+  if (path === '/intake/retry') {
+    const _q = (await fetchTab(env, INTAKE_TAB).catch(() => [])).find(r => String(r.ID) === String(body && body.id));
+    if (!_q || !String(_q.Message_ID || '').startsWith('TEST-')) return { ok: false, debug: 'intake-guard: retry row is not a TEST- message' };
+    if (body.property_id) return { ok: await isTestRecord(env, 'Properties', body.property_id) };
+    const _a = await intakeAnalyze(env, String(_q.Subject || ''), String(_q.Raw_Body || ''), null);
+    return { ok: _a.status !== 'ok' || String((_a.property && _a.property.Access_Notes) || '').startsWith('TEST-') };
+  }
   if (path === '/assign') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
