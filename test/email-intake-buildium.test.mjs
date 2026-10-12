@@ -201,7 +201,7 @@ t('different street does not match', intakeMatchProperty('525 South Catherine St
 const Q = (o) => ({ Status: 'Created', Property_ID: '42', Unit_ID: '7', Pair_ID: '', Received_At: '2026-10-12T18:14:52.000Z', ...o });
 const near = '2026-10-12T18:14:56.000Z';
 eq('detail finds its unclaimed notice', intakePairCandidates([Q({ ID: '1', Kind: 'notice' })], 'notice', '42', '7', near).map(x => x.ID), ['1']);
-eq('notice finds its unclaimed detail', intakePairCandidates([Q({ ID: '2', Kind: 'detail', Ref_Key: '967927-1' })], 'detail', '42', near).map(x => x.ID), ['2']);
+eq('notice finds its unclaimed detail', intakePairCandidates([Q({ ID: '2', Kind: 'detail', Ref_Key: '967927-1' })], 'detail', '42', '7', near).map(x => x.ID), ['2']);
 eq('legacy detail row (no Kind column yet) still counts as a detail', intakePairCandidates([Q({ ID: '3', Ref_Key: '949124-1' })], 'detail', '42', near).map(x => x.ID), ['3']);
 eq('already-claimed row is skipped', intakePairCandidates([Q({ ID: '4', Kind: 'notice', Pair_ID: '9' })], 'notice', '42', near), []);
 eq('other property is skipped', intakePairCandidates([Q({ ID: '5', Kind: 'notice', Property_ID: '18' })], 'notice', '42', near), []);
