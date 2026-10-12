@@ -2,7 +2,21 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Last checkpoint: Sep 26, 2026 (~18:20 ET) — BrettOS Tasks Manager quick-link shipped (PR #76 → staging, PR #77 → main)
+## Last checkpoint: Oct 12, 2026 (~3 PM ET) — Buildium link-only notice intake built + staging-verified (PR #221 → main, awaiting Brett)
+
+**What happened:** The 525 S Catherine job came as Buildium's link-only notice (no number/description; behind
+Buildium 2FA), so the PR #215 importer ignored it. Built notice handling (stub WO + immediate admin SMS with the
+Buildium link; detailed email fills the stub; detail-first → Covered; park-never-guess). Adversarial review fixes
+applied and re-verified on staging (build 2026-10-12.5). Brett's rule: no browser/login automation for Buildium; he
+wants to be notified so he can go or assign, not copy/paste. FEATURE_LOG rule 205.
+
+**Next step:** Brett merges PR #221 → then deploy `BuildiumIntake.gs` v1.1 into his Apps Script (Chrome) and confirm the
+Catherine notice (2:14 PM ET) imports as a stub WO + SMS. Pending his yes: create the Catherine WO in prod now from his
+screenshot (Buildium #967927-1 "Leak", property 42) instead. Draft (don't send) a text to Amanda asking Phoenix to
+assign rather than request. Phase 2: Buildium close-out reminders. Cleanups: stray Apps Script projects; rotate
+HUB_TEST_TOKEN if the Cloudflare page was shared.
+
+## Previous checkpoint: Sep 26, 2026 (~18:20 ET) — BrettOS Tasks Manager quick-link shipped (PR #76 → staging, PR #77 → main)
 
 **What happened:** Session's main work was on the separate `brett332/BrettOS` Apps Script project
 (Google Tasks ↔ BrettOS Tasks Sheet sync) — multi-list auto-categorization, a learned-rule review
