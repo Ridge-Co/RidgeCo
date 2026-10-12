@@ -173,6 +173,10 @@ const jres = (obj, status) => new Response(typeof obj === 'string' ? obj : JSON.
   const t0 = Date.now();
   const r6 = await W.fetchDoorHealth(() => new Promise(() => {}), { timeoutMs: 60, retryDelayMs: 1 });
   t('hung fetch -> timeout error (does not hang the cron)', r6.error && r6.timeout === true && r6.attempts === 2 && Date.now() - t0 < 2000);
+  const r8 = await W.fetchDoorHealth(async () => jres('error code: 1042', 404), { timeoutMs: 200 });
+  t('non-healthy reply keeps a short body excerpt for diagnosis', r8.status === 404 && r8.snippet === 'error code: 1042');
+  const r9 = await W.fetchDoorHealth(async () => jres(good()), { timeoutMs: 200 });
+  t('healthy reply carries no snippet', r9.snippet === undefined);
   const r7 = await W.fetchDoorHealth(async () => { throw new Error('dns'); }, { timeoutMs: 200, retryDelayMs: 1 });
   t('throwing fetch -> error result, never throws', r7.error === 'dns' && r7.attempts === 2);
 }
