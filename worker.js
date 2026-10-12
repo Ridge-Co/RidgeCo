@@ -625,6 +625,8 @@ const _hubWorkerCore = {
           }
           return await callWithFailureAlert(env, 'wo_create', '/workorder', () => createWorkOrder(env, body));
         }
+        if (path === '/intake/email')             return await intakeEmail(env, body);
+        if (path === '/intake/retry')             return await intakeRetry(env, body);
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
