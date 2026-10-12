@@ -6707,6 +6707,133 @@ async function intakeEmail(env, body, retryRow) {
   }
 }
 
+// The link-only notice. Creates a STUB work order on the matching property (so it exists in the Hub and
+// can be assigned) and texts Brett with the Buildium link; a later detailed email for the same job fills the
+// stub in. If the detailed email for this job ALREADY created a WO, the notice just claims it (no twin, no 2nd text).
+async function intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow) {
+  let stage = 'analyze';
+  try {
+    const parsed = parseBuildiumNotice(subject, text);
+    const a = { parsed, status: 'parked', reason: 'parse_failed', detail: parsed.errors.join('; ') };
+    if (text.length > INTAKE_MAX_BODY) { a.parsed = { ok: false, errors: ['email body too large'] }; a.detail = 'email body too large (' + text.length + ' chars)'; }
+    else if (parsed.ok) {
+      const [properties, units] = await fetchTabs(env, ['Properties', 'Units']);
+      let property, unitRaw = '', bad = null;
+      if (retryRow && body.property_id) {
+        property = properties.find(x => String(x.ID) === String(body.property_id));
+        if (!property) bad = { reason: 'override_property_not_found', detail: 'property_id ' + body.property_id };
+      } else {
+        const m = intakeMatchProperty(parsed.address_raw, properties);
+        if (m.matches.length === 0) bad = { reason: 'no_property_match', detail: 'no active property matches "' + parsed.address_raw + '" (normalized: ' + m.norm + ')' };
+        else if (m.matches.length > 1) bad = { reason: 'ambiguous_property', detail: m.matches.map(x => x.property.ID + ' ' + x.property.Address).join(' | ') };
+        else { property = m.matches[0].property; unitRaw = m.matches[0].unit_raw; }
+      }
+      if (bad) { a.reason = bad.reason; a.detail = bad.detail; }
+      else {
+        a.property = property;
+        if (retryRow && body.unit_id) {
+          const u = units.find(x => String(x.ID) === String(body.unit_id) && String(x.Property_ID) === String(property.ID));
+          if (!u) { a.reason = 'override_unit_not_found'; a.detail = 'unit_id ' + body.unit_id + ' is not on property ' + property.ID; }
+          else { a.unit_id = String(u.ID); a.unit_label = String(u.Unit_Label || ''); a.status = 'ok'; }
+        } else {
+          const ur = intakeResolveUnit(property, unitRaw, units);
+          if (!ur.ok) { a.reason = ur.reason; a.detail = ur.detail; }
+          else { a.unit_id = ur.unit_id; a.unit_label = ur.unit_label; a.status = 'ok'; }
+        }
+      }
+    }
+    const safeParsed = { ...(a.parsed || {}), link: a.parsed && a.parsed.link ? '(present)' : '' };   // the link carries a login token: never stored in Parsed_JSON / dry-run output
+    if (dry) return json({ success: true, dry_run: true, kind: 'notice', status: a.status, reason: a.reason, detail: a.detail, parsed: safeParsed, link_found: !!(a.parsed && a.parsed.link), property_id: a.property ? a.property.ID : '', property_address: a.property ? a.property.Address : '', unit_id: a.unit_id || '', unit_label: a.unit_label || '' });
+
+    stage = 'dedupe';
+    await intakeEnsureTab(env);
+    const queue = await fetchTab(env, INTAKE_TAB);
+    if (!retryRow) {
+      const prior = queue.find(q => ['Created', 'Parked', 'Covered'].includes(q.Status) && q.Message_ID === msgId);
+      if (prior) return json({ success: true, duplicate: true, kind: 'notice', status: prior.Status, wo_id: prior.WO_ID || '' });
+    }
+    const receivedAt = String(body.received_at || new Date().toISOString());
+    const p = a.parsed || {};
+    const baseRow = { Kind: 'notice', Received_At: receivedAt, Source: 'Buildium', Ref_Key: '', Message_ID: msgId, Subject: subject.slice(0, 200), Address_Raw: p.address_raw || '', Title: 'Buildium notice (details pending)', Parsed_JSON: JSON.stringify(safeParsed).slice(0, 45000), Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() };
+    const save = async (fields) => {
+      if (retryRow) { const u = await updateRow(env, INTAKE_TAB, String(retryRow.ID), { Kind: 'notice', ...fields }); if (u.status !== 200) throw new Error('Intake_Queue retry row update failed'); return String(retryRow.ID); }
+      return await intakeAppendRow(env, { ...baseRow, ...fields });
+    };
+
+    // ── parked ──
+    if (a.status !== 'ok') {
+      stage = 'park';
+      const reasonTxt = INTAKE_REASON_TEXT[a.reason] || a.reason;
+      const rowId = await save({ Status: 'Parked', Reason: a.reason + ': ' + a.detail.slice(0, 300), SMS_Status: 'pending' });
+      const sms = await intakeSmsAdmin(env, `⚠️ New Buildium work order from ${p.org || 'Buildium'} @ ${p.address_raw || '?'} NOT created in the Hub (${reasonTxt}). Parked in Intake_Queue row ${rowId}.` + (p.link ? ' Open it in Buildium: ' + p.link : ''), '', null);
+      const upd = await updateRow(env, INTAKE_TAB, rowId, { SMS_Status: sms, Processed_At: new Date().toISOString() });
+      const telemetryOk = await intakeTelemetry(env, t0, false, `parked notice ${a.reason}; sms=${sms}`);
+      return json({ success: true, kind: 'notice', parked: true, reason: a.reason, detail: a.detail, queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, telemetry_ok: telemetryOk, queue_updated: upd.status === 200 });
+    }
+
+    // ── the detailed email for this same job already made a WO: claim it, no twin, no second text ──
+    stage = 'pair';
+    const det = intakePairCandidates(queue, 'detail', a.property.ID, receivedAt)[0];
+    if (det) {
+      const rowId = await save({ Status: 'Covered', Reason: 'detailed email already created ' + det.WO_ID, WO_ID: det.WO_ID, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', Pair_ID: String(det.ID), SMS_Status: 'not needed (detail email texted)' });
+      const pu = await updateRow(env, INTAKE_TAB, String(det.ID), { Pair_ID: rowId });
+      if (pu.status !== 200) throw new Error('could not mark detail row ' + det.ID + ' as paired with notice row ' + rowId);
+      const telemetryOk = await intakeTelemetry(env, t0, true, `notice covered by ${det.WO_ID}`);
+      return json({ success: true, kind: 'notice', covered: true, wo_id: det.WO_ID, queue_id: rowId, sms_sent: true, telemetry_ok: telemetryOk });
+    }
+
+    // ── create the stub WO ──
+    stage = 'create';
+    await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
+    // A previous run may have created the stub and died before writing its queue row: reuse it instead of making a twin.
+    const prev = (await fetchTab(env, 'Work_Orders')).find(w => String(w.Intake_Message_ID || '') === msgId);
+    let woId, recovered = false;
+    if (prev) { woId = prev.ID; recovered = true; }
+    else {
+      const woBody = {
+        property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: '', type: 'manual', trade: '', priority: 'normal',
+        description: INTAKE_STUB_DESC + ' [notice ' + msgId.slice(-6) + ']',
+        owner_wo_ref: INTAKE_STUB_REF, wo_contact_name: '', wo_contact_phone: '', tenant_notify_created: false, tenant_notify_updates: false,
+        created_by: 'buildium-email', notes: INTAKE_STUB_NOTE + '\nBuildium location: ' + p.address_raw,
+      };
+      const cr = await createWorkOrder(env, woBody);
+      const cj = await cr.json();
+      if (cr.status !== 200 || !cj || cj.success !== true || !cj.id) throw new Error('createWorkOrder failed: ' + JSON.stringify(cj).slice(0, 200));
+      woId = cj.id;
+      if (cj.duplicate) throw new Error(`createWorkOrder returned duplicate ${woId} for a notice - a WO with an identical signature was created within 60s`);
+      await updateWOFields(env, woId, { Source: 'Buildium notice', Intake_Message_ID: msgId });
+    }
+    stage = 'verify';
+    const wosAfter = (await sheetsRequest(env, 'GET', '/values/Work_Orders')).values || [];
+    const hdr = wosAfter[0] || [], hc = n => hdr.indexOf(n);
+    const iId = hc('ID'), iSrc = hc('Source'), iMid = hc('Intake_Message_ID'), iRef = hc('Owner_WO_Ref');
+    const row = iId < 0 ? null : wosAfter.slice(1).find(r => String(r[iId]) === String(woId));
+    if (!row || iSrc < 0 || iMid < 0 || iRef < 0 || String(row[iSrc] || '') !== 'Buildium notice' || String(row[iMid] || '') !== msgId || String(row[iRef] || '') !== INTAKE_STUB_REF) throw new Error(`verify failed: stub ${woId} / its Source, Intake_Message_ID and Owner_WO_Ref did not save`);
+
+    stage = 'notify';
+    const addr = a.property.Address + (a.unit_label ? ' ' + formatUnitLabel(a.unit_label) : '');
+    const linkOk = p.link && p.link.length <= 700;
+    const sms = await intakeSmsAdmin(env, `📥 New Buildium work order from ${p.org || 'Buildium'} @ ${addr}. Hub WO ${woId} ${recovered ? 'recovered' : 'created'}, but the details are behind the Buildium login` + (linkOk ? ': ' + p.link : ' - open the Buildium email.'), woId, a.property);
+    stage = 'queue-row';
+    const rowId = await save({ Status: 'Created', Reason: [recovered ? 'recovered existing stub' : '', p.link ? '' : 'no Buildium link found in the email'].filter(Boolean).join('; '), WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms });
+    const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `notice stub ${woId}; sms=${sms}`);
+    return json({ success: true, kind: 'notice', created: true, stub: true, wo_id: woId, property_id: a.property.ID, unit_id: a.unit_id || '', queue_id: rowId, link_found: !!p.link, sms_sent: sms === 'sent', sms_status: sms, telemetry_ok: telemetryOk });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    const telOk = await intakeTelemetry(env, t0, false, `error at ${stage} (notice): ${msg}`);
+    let alertFailed = telOk ? '' : 'telemetry row not written';
+    try {
+      await intakeEnsureTab(env);
+      const prior = (await fetchTab(env, INTAKE_TAB)).filter(q => q.Message_ID === msgId && q.Status === 'Error');
+      if (!prior.length && !dry) {
+        const sms = await intakeSmsAdmin(env, `🔴 Buildium notice intake error (${stage}): ${msg}`.slice(0, 300), '', null);
+        await intakeAppendRow(env, { Kind: 'notice', Received_At: String(body.received_at || ''), Source: 'Buildium', Message_ID: msgId, Subject: subject.slice(0, 200), Status: 'Error', Reason: `${stage}: ${msg}`.slice(0, 400), SMS_Status: sms, Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() });
+      }
+    } catch (e2) { alertFailed = (alertFailed ? alertFailed + '; ' : '') + 'could not write Error row / alert SMS: ' + String((e2 && e2.message) || e2).slice(0, 200); }
+    return json({ success: false, error: msg, stage, alert_failed: alertFailed }, 500);
+  }
+}
+
 // POST /intake/retry {id, property_id?, unit_id?}  (admin) - re-run a Parked / Error row from its stored
 // raw email, optionally forcing the property/unit (Brett's manual "it's this one").
 async function intakeRetry(env, body) {
