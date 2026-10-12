@@ -6727,9 +6727,9 @@ async function intakeEmail(env, body, retryRow) {
 async function intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow) {
   let stage = 'analyze';
   try {
-    const parsed = parseBuildiumNotice(subject, text);
+    const parsed = parseBuildiumNotice(subject, text);   // rejects an oversized body itself, before any regex runs
     const a = { parsed, status: 'parked', reason: 'parse_failed', detail: parsed.errors.join('; ') };
-    if (text.length > INTAKE_MAX_BODY) { a.parsed = { ok: false, errors: ['email body too large'] }; a.detail = 'email body too large (' + text.length + ' chars)'; }
+    if (text.length > INTAKE_MAX_BODY) a.detail = 'email body too large (' + text.length + ' chars)';
     else if (parsed.ok) {
       const [properties, units] = await fetchTabs(env, ['Properties', 'Units']);
       let property, unitRaw = '', bad = null;
