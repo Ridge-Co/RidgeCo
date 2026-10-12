@@ -6379,14 +6379,16 @@ function intakeMatchProperty(addrRaw, properties) {
     if (!P) continue;
     if (E !== P && !E.startsWith(P + ' ')) continue;
     let rest = E.slice(P.length).trim();
-    const cityWords = new Set(qbNormAddress(p.City).split(' ').concat(['baltimore', 'md']).filter(Boolean));
+    // Only THIS property's own city (or Baltimore when none is on file) may trail the street address.
+    const cityBase = qbNormAddress(p.City).split(' ').filter(Boolean);
+    const cityWords = new Set(cityBase.concat(['md', 'maryland'], cityBase.length ? [] : ['baltimore']));
     let unit = '';
     const um = /^(?:-|apt|ste|bldg|fl)(?:\s+([a-z0-9]+))?(?=\s|$)/.exec(rest);
     if (um) {
       if (um[1] && !cityWords.has(um[1])) { unit = um[1]; rest = rest.slice(um[0].length).trim(); }
       else { rest = rest.slice(um[0].length).trim(); }
     }
-    if (rest && !/^[a-z]+(?: [a-z]+){0,2}$/.test(rest)) continue;   // leftover must be just city words
+    if (rest && !rest.split(' ').every(w => cityWords.has(w))) continue;   // leftover must be ONLY this property's city/state words ("Rear", "Annex", another city => park)
     matches.push({ property: p, unit_raw: unit });
   }
   return { matches, norm: E };
