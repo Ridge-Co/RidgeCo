@@ -52,6 +52,10 @@ t('plain-body layout parses ok', bp.ok);
 eq('plain: address', bp.address_raw, '5425 Belle Vista Avenue Baltimore, MD 21206');
 eq('plain: entry_notes', bp.entry_notes, 'Pets on Property: Yes');
 eq('plain: contact phones', (bp.contacts[0] || {}).phones, ['(410) 556-7166', '(443) 810-0081']);
+eq('plain: contact name', (bp.contacts[0] || {}).name, 'Renita Howell');
+eq('plain: contact role', (bp.contacts[0] || {}).role, 'Tenant');
+eq('plain: contact email', (bp.contacts[0] || {}).emails, ['Nitababe1501@gmail.com']);
+eq('plain: two contacts split', intakeParseContacts('Jo Smith, Tenant (410) 111-2222 jo@x.com Bob Jones, Owner (410) 333-4444').map(x => x.name), ['Jo Smith', 'Bob Jones']);
 
 // no-contact / empty entry notes email
 const g = parseBuildiumEmail('Phoenix Estate Rentals, LLC: Work order 909656', INGLESIDE_NONUM);
