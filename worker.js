@@ -6562,7 +6562,7 @@ async function intakeEmail(env, body, retryRow) {
   if (!retryRow && !intakeSenderOk(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
   const isNotice = /^\s*New work order\s*:/i.test(subject);
   if (isNotice) return await intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow);
-  if (!/Work order\s+#?\d+/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a work-order email' });
+  if (!/Work order\s+#?\d+/i.test(subject) || /^\s*New work order/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a work-order email' });
   let stage = 'analyze';
   try {
     const a = text.length > INTAKE_MAX_BODY
