@@ -164,9 +164,9 @@ function send_(m, token, dry) {
   if (code !== 200 || !j || j.success !== true) return { ok: false, raw: 'HTTP ' + code + ' ' + raw };
   var attention = false, text = '';
   if (j.parked) { attention = true; text = 'The Hub did NOT create a work order for this one (' + j.reason + ': ' + j.detail + '). It is parked in the Hub Intake_Queue tab (row ' + j.queue_id + ').' + (j.queue_updated === false ? ' (The Hub could not update the queue row after texting you.)' : '') + (j.telemetry_ok === false ? ' (The Hub could not write its log row.)' : ''); }
-  else if ((j.created || j.filled_stub) && j.sms_sent === false) { attention = true; text = 'Work order ' + j.wo_id + ' WAS created or updated, but the text message to you did not go out (' + j.sms_status + ').'; }
+  else if ((j.created || j.filled_stub || j.covered) && j.sms_sent === false) { attention = true; text = 'Work order ' + j.wo_id + ' WAS created or updated, but the text message to you did not go out (' + j.sms_status + ').'; }
   else if (j.created && j.stub && j.link_found === false) { attention = true; text = 'Stub work order ' + j.wo_id + ' was created and you were texted, but no Buildium link was found in the email, so the text had no link. Open the Buildium email.'; }
-  else if ((j.created || j.covered) && j.telemetry_ok === false) { attention = true; text = 'Work order ' + j.wo_id + ' was created and you were texted, but the Hub could not write its log row.'; }
+  else if ((j.created || j.filled_stub || j.covered) && j.telemetry_ok === false) { attention = true; text = 'Work order ' + j.wo_id + ' was created and you were texted, but the Hub could not write its log row.'; }
   return { ok: true, attention: attention, attentionText: text, raw: raw, json: j };
 }
 

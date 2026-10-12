@@ -198,18 +198,36 @@ t('multi-unit property + notice (no unit) is refused, not guessed', intakeResolv
 t('different street does not match', intakeMatchProperty('525 South Catherine Street Annex', CATH).matches.length === 0);
 
 // ── pairing: a notice and its detailed email claim each other 1:1 ──
-const Q = (o) => ({ Status: 'Created', Property_ID: '42', Pair_ID: '', Received_At: '2026-10-12T18:14:52.000Z', ...o });
+const Q = (o) => ({ Status: 'Created', Property_ID: '42', Unit_ID: '7', Pair_ID: '', Received_At: '2026-10-12T18:14:52.000Z', ...o });
 const near = '2026-10-12T18:14:56.000Z';
-eq('detail finds its unclaimed notice', intakePairCandidates([Q({ ID: '1', Kind: 'notice' })], 'notice', '42', near).map(x => x.ID), ['1']);
-eq('notice finds its unclaimed detail', intakePairCandidates([Q({ ID: '2', Kind: 'detail', Ref_Key: '967927-1' })], 'detail', '42', near).map(x => x.ID), ['2']);
-eq('legacy detail row (no Kind column yet) still counts as a detail', intakePairCandidates([Q({ ID: '3', Ref_Key: '949124-1' })], 'detail', '42', near).map(x => x.ID), ['3']);
-eq('already-claimed row is skipped', intakePairCandidates([Q({ ID: '4', Kind: 'notice', Pair_ID: '9' })], 'notice', '42', near), []);
-eq('other property is skipped', intakePairCandidates([Q({ ID: '5', Kind: 'notice', Property_ID: '18' })], 'notice', '42', near), []);
-eq('outside the 20-minute window is skipped', intakePairCandidates([Q({ ID: '6', Kind: 'notice' })], 'notice', '42', '2026-10-12T18:40:00.000Z'), []);
-eq('a notice never pairs with another notice', intakePairCandidates([Q({ ID: '7', Kind: 'notice' })], 'detail', '42', near), []);
-eq('Parked / Error rows are never claimed', intakePairCandidates([Q({ ID: '8', Kind: 'notice', Status: 'Parked' }), Q({ ID: '9', Kind: 'notice', Status: 'Error' })], 'notice', '42', near), []);
-eq('oldest unclaimed is offered first (two jobs same minute)', intakePairCandidates([Q({ ID: '11', Kind: 'notice', Received_At: '2026-10-12T18:14:58.000Z' }), Q({ ID: '10', Kind: 'notice', Received_At: '2026-10-12T18:14:52.000Z' })], 'notice', '42', near).map(x => x.ID), ['10', '11']);
-eq('unparseable Received_At never pairs (visible duplicate beats a wrong merge)', intakePairCandidates([Q({ ID: '12', Kind: 'notice', Received_At: 'garbage' })], 'notice', '42', near), []);
+eq('detail finds its unclaimed notice', intakePairCandidates([Q({ ID: '1', Kind: 'notice' })], 'notice', '42', '7', near).map(x => x.ID), ['1']);
+eq('notice finds its unclaimed detail', intakePairCandidates([Q({ ID: '2', Kind: 'detail', Ref_Key: '967927-1' })], 'detail', '42', '7', near).map(x => x.ID), ['2']);
+eq('legacy detail row (no Kind column yet) still counts as a detail', intakePairCandidates([Q({ ID: '3', Ref_Key: '949124-1' })], 'detail', '42', '7', near).map(x => x.ID), ['3']);
+eq('already-claimed row is skipped', intakePairCandidates([Q({ ID: '4', Kind: 'notice', Pair_ID: '9' })], 'notice', '42', '7', near), []);
+eq('other property is skipped', intakePairCandidates([Q({ ID: '5', Kind: 'notice', Property_ID: '18' })], 'notice', '42', '7', near), []);
+eq('outside the 3-minute window is skipped', intakePairCandidates([Q({ ID: '6', Kind: 'notice' })], 'notice', '42', '7', '2026-10-12T18:40:00.000Z'), []);
+eq('a notice never pairs with another notice', intakePairCandidates([Q({ ID: '7', Kind: 'notice' })], 'detail', '42', '7', near), []);
+eq('Parked / Error rows are never claimed', intakePairCandidates([Q({ ID: '8', Kind: 'notice', Status: 'Parked' }), Q({ ID: '9', Kind: 'notice', Status: 'Error' })], 'notice', '42', '7', near), []);
+eq('oldest unclaimed is offered first (two jobs same minute)', intakePairCandidates([Q({ ID: '11', Kind: 'notice', Received_At: '2026-10-12T18:14:58.000Z' }), Q({ ID: '10', Kind: 'notice', Received_At: '2026-10-12T18:14:52.000Z' })], 'notice', '42', '7', near).map(x => x.ID), ['10', '11']);
+eq('unparseable Received_At never pairs (visible duplicate beats a wrong merge)', intakePairCandidates([Q({ ID: '12', Kind: 'notice', Received_At: 'garbage' })], 'notice', '42', '7', near), []);
+
+eq('4 minutes apart is outside the window', intakePairCandidates([Q({ ID: '13', Kind: 'notice' })], 'notice', '42', '7', '2026-10-12T18:19:00.000Z'), []);
+eq('a different unit never pairs', intakePairCandidates([Q({ ID: '14', Kind: 'notice', Unit_ID: '8' })], 'notice', '42', '7', near), []);
+eq('a row another row already points at is taken', intakePairCandidates([Q({ ID: '15', Kind: 'notice' }), Q({ ID: '16', Kind: 'detail', Pair_ID: '15', Ref_Key: 'x' })], 'notice', '42', '7', near), []);
+
+// ── hardening: request id, redacted bodies, size limits ──
+const GUID = '12bdb3ae-633a-4374-977c-753bcf70f13b';
+const nr = parseBuildiumNotice('New work order: 525 South Catherine Street', 'x https://mark91.managebuilding.com/vendor/requests/' + GUID + '?token=SECRET123 y');
+eq('request id is the link GUID', nr.request_id, GUID);
+t('link is kept for the SMS', nr.link.includes('token=SECRET123'));
+const nred = parseBuildiumNotice('New work order: 525 South Catherine Street', 'x https://mark91.managebuilding.com/vendor/requests/' + GUID + '?[redacted] y');
+eq('a redacted stored body yields no link', nred.link, '');
+eq('...but still the request id', nred.request_id, GUID);
+const bigN = parseBuildiumNotice('New work order: 525 South Catherine Street', 'a'.repeat(70000));
+t('oversized body is rejected without parsing', !bigN.ok && bigN.errors.join().includes('too large'));
+const tReDoS = Date.now();
+parseBuildiumNotice('New work order: ' + 'x'.repeat(5000), 'You have a new work order from ' + 'a for '.repeat(9000));
+t('hostile repeated "for" body parses fast (no ReDoS)', Date.now() - tReDoS < 1500);
 
 console.log(`email-intake-buildium: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
