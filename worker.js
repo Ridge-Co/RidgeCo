@@ -6384,8 +6384,9 @@ function parseBuildiumNotice(subject, rawText) {
   out.address_raw = ((sm && sm[1]) ? sm[1] : (bm ? bm[2] : '')).trim().slice(0, 200);
   if (!out.address_raw) out.errors.push('no address in the notice subject or body');
   // Only a managebuilding.com vendor-request link is ever kept (it goes into a text to Brett).
-  const lm = /https?:\/\/[A-Za-z0-9.-]{1,80}\.managebuilding\.com\/vendor\/requests\/[A-Za-z0-9-]{8,64}\?[^\s"'<>)\]]{0,600}/i.exec(raw.replace(/&amp;/g, '&'));
-  out.link = lm ? lm[0] : '';
+  const lm = /https?:\/\/[A-Za-z0-9.-]{1,80}\.managebuilding\.com\/vendor\/requests\/([A-Za-z0-9-]{8,64})\?[^\s"'<>)\]]{0,600}/i.exec(raw.replace(/&amp;/g, '&'));
+  out.request_id = lm ? lm[1] : '';   // the request GUID is the non-secret half of the link: it dedupes a re-sent notice
+  out.link = lm && !/^\S*\?\[redacted/i.test(lm[0]) ? lm[0] : '';   // a stored (redacted) body has no usable link
   out.ok = out.errors.length === 0;
   return out;
 }
