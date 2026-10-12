@@ -12998,7 +12998,9 @@ async function doorWdAttempt(fetchImpl, timeoutMs) {
     const text = await resp.text();
     let parsed, bad = false;
     try { parsed = JSON.parse(text); } catch (e) { bad = true; }
-    return { status, json: bad ? undefined : parsed, bad_json: bad };
+    // keep a short body excerpt for diagnosis (telemetry / status only, never the SMS) when the reply is not healthy JSON
+    const snippet = (bad || status !== 200) ? String(text).replace(/\s+/g, ' ').slice(0, 160) : undefined;
+    return { status, json: bad ? undefined : parsed, bad_json: bad, snippet };
   })();
   work.catch((e) => { console.error('door-watchdog: health attempt rejected:', e && e.message); });
   try { return await Promise.race([work, timeoutP]); }
