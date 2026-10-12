@@ -19206,6 +19206,7 @@ async function isTestRecord(env, tab, id) {
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
+  if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
   if (['/admin/receipt-duplicate-audit/build-index', '/admin/receipt-duplicate-audit/scan', '/admin/receipt-duplicate-audit/mark'].includes(path)) {
     // These only ever write to two brand-new, isolated, non-PII cache/audit tabs
