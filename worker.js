@@ -13180,7 +13180,7 @@ async function doorWatchdogStatus(env) {
   out.healthy = ev.healthy; out.reason_key = ev.key; out.reasons = ev.reasons;
   out.would_send = ev.healthy ? null : doorWdComposeAlert(ev.reasons);
   out.would_do = doorWdDecide(ev, st, nowMs);
-  out.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts, error: fr.error || null };
+  out.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts, error: fr.error || null, snippet: fr.snippet || null };
   out.state = doorWdPrune(st, nowMs);
   if (out.errors.length) out.ok = false;
   return json(out, out.ok ? 200 : 500);
