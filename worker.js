@@ -6375,10 +6375,11 @@ function parseBuildiumEmail(subject, rawText) {
 // link. Buildium sends this notice INSTEAD of the detailed email when the customer "requests" the job.
 function parseBuildiumNotice(subject, rawText) {
   const out = { ok: false, errors: [] };
-  const raw = String(rawText == null ? '' : rawText).slice(0, INTAKE_MAX_BODY);
+  if (String(rawText == null ? '' : rawText).length > INTAKE_MAX_BODY) { out.errors.push('email body too large'); out.link = ''; return out; }   // never run the regexes over an oversized body
+  const raw = String(rawText == null ? '' : rawText);
   const t = intakeFlatten(raw);
-  const sm = /^\s*New work order\s*:\s*(.+?)\s*$/i.exec(String(subject || ''));
-  const bm = /You have a new work order from\s+(.+?)\s+for\s+(.+?)\.\s*(?:Review|$)/i.exec(t);
+  const sm = /^\s*New work order\s*:\s*(.{1,200}?)\s*$/i.exec(String(subject || '').slice(0, 300));
+  const bm = /You have a new work order from\s+(.{1,120}?)\s+for\s+(.{1,200}?)\.\s*(?:Review|$)/i.exec(t);
   out.org = bm ? bm[1].trim().slice(0, 120) : '';
   out.address_raw = ((sm && sm[1]) ? sm[1] : (bm ? bm[2] : '')).trim().slice(0, 200);
   if (!out.address_raw) out.errors.push('no address in the notice subject or body');
