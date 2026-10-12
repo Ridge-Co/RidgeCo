@@ -109,14 +109,23 @@ function processBuildiumEmails() {
     if (done.length > KEEP_IDS) done = done.slice(done.length - KEEP_IDS);
     p.setProperty('DONE_IDS', JSON.stringify(done));
     p.setProperty('FAILS', JSON.stringify(fails));
+  } catch (e) {
+    // Never die quietly: an exception here (Gmail quota, label error, ...) would otherwise just skip this minute.
+    alertThrottled_('exception', 'Buildium intake script error', 'processBuildiumEmails threw: ' + e + (e && e.stack ? '\n' + e.stack : '') + '\n\nIt will retry next minute. If you keep getting this, tell Claude.');
   } finally {
     lock.releaseLock();
   }
 }
 
+// The REAL sender address must be on managebuilding.com (bare, or the last <...> of "Name <addr>").
+// A display name such as "donotreply@managebuilding.com" <x@evil.io> must not pass.
+function senderOk_(from) {
+  return /(?:^|<)\s*[^<>\s@]{1,64}@(?:[a-z0-9-]{1,63}\.){0,4}managebuilding\.com\s*>?\s*$/i.test(String(from || '').slice(0, 300));
+}
+
 function eligible_(m, cutoff) {
   if (m.getDate().getTime() < cutoff) return false;
-  if (!/managebuilding\.com/i.test(m.getFrom())) return false;
+  if (!senderOk_(m.getFrom())) return false;
   var s = m.getSubject();
   return /Work order\s+#?\d+\s*$/i.test(s) && !/^\s*New work order/i.test(s);
 }
