@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-11.2-vendor-backcharge';
+const BUILD_VERSION = '2026-10-12.1-admin-notify';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -232,6 +232,12 @@ const _hubWorkerCore = {
         const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
           && _tok === env.CRON_SWEEP_TOKEN
           && request.method === 'POST' && path === '/cron/sweep';
+        // Narrow WRITE token for the server-to-server "text Brett" alert push (Oct 12 2026): accepted
+        // ONLY for POST /admin-notify (alertPushTokenOk: POST + that exact path + non-blank secret +
+        // non-empty matching header, constant-time compare). The recipient is always Config
+        // admin_phone, capped at ADMIN_NOTIFY_DAILY_CAP sends/day — see the ADMIN-NOTIFY block near
+        // sendSMS. Fully inert (fail closed) unless env.ALERT_PUSH_TOKEN is set to a non-blank value.
+        const _alertPushOk = alertPushTokenOk(env.ALERT_PUSH_TOKEN, _tok, request.method, path);
         // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
         // a Cowork session run real read+write+read-back checks against
         // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
@@ -359,7 +365,7 @@ const _hubWorkerCore = {
           // and the gh-broker Worker (Brett only — no session can set a Cloudflare secret).
           const HUB_PROD_QB_RO_PATHS = ['/qb/find-bills', '/qb/vendor-reconcile'];
           const _qbRoOk = !!env.HUB_PROD_QB_RO_TOKEN && _tok === env.HUB_PROD_QB_RO_TOKEN && request.method === 'POST' && HUB_PROD_QB_RO_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -625,6 +631,7 @@ const _hubWorkerCore = {
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
         if (path === '/message/send-custom')      return await sendCustomMessage(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
+        if (path === '/admin-notify')              return await adminNotify(env, body);
         if (path === '/vendor-request/create')     return await createVendorRequest(env, body);
         if (path === '/vendor-task-request/create')       return await createVendorTaskRequest(env, body);
         if (path === '/vendor-task-request/mark-done')    return await markVendorTaskDone(env, body, callerRole, callerSessionId);
@@ -12633,6 +12640,117 @@ async function sendSMS(env, to, message) {
   return sendSMSRaw(env, to, message);
 }
 
+// ── POST /admin-notify (Oct 12 2026) — narrow server-to-server "text Brett" endpoint ─────────────
+// Lets an external automation (str-automation) push ONE alert SMS to Brett. Designed to be
+// un-abusable even if its token leaks:
+//   • Auth: header X-Auth-Token must equal the NEW narrow secret env.ALERT_PUSH_TOKEN, accepted
+//     ONLY for POST /admin-notify (alertPushTokenOk, wired into the auth cascade above). Unset or
+//     blank secret => the token path is closed entirely (fail closed); an empty header never matches.
+//   • Recipient is ALWAYS Config `admin_phone` — nothing in the request body can set or override
+//     it (the body is only read for `text` and `source`).
+//   • Per-day cap: ADMIN_NOTIFY_DAILY_CAP sends/day (UTC date) tracked in ONE Config row
+//     (`admin_notify_daily_count` = "YYYY-MM-DD:N"). The slot is RESERVED (written + re-read to
+//     verify) BEFORE the SMS goes out, so a Config write failure fails closed — no unmetered send.
+//     Attempts count whether or not Twilio is enabled. Concurrent calls can overshoot by a few at
+//     most (read-modify-write on a sheet cell, same as every other Config marker here).
+//   • Honest result: {ok:true,sent:true} ONLY when a real send happened (Twilio message sid, or
+//     the staging stub with staged:true); {ok:true,sent:false,skipped:true,reason} when sendSMS
+//     skipped (TWILIO_ENABLED not TRUE); anything else is non-200 {ok:false,error}. Every outcome is
+//     logged to Ops_Telemetry (Job_Type admin_notify) — never the token, phone number or message
+//     text (length only); a telemetry-write failure is surfaced as telemetry_error in the response.
+const ADMIN_NOTIFY_MAX_TEXT = 1500;
+const ADMIN_NOTIFY_MAX_SOURCE = 40;
+const ADMIN_NOTIFY_DAILY_CAP = 30;
+const ADMIN_NOTIFY_COUNT_KEY = 'admin_notify_daily_count';
+
+// Pure: is this request authorised by the narrow ALERT_PUSH_TOKEN? Constant-time compare; false
+// for an unset/blank secret, an empty header, any method but POST, or any path but /admin-notify.
+function alertPushTokenOk(secret, tok, method, path) {
+  if (typeof secret !== 'string' || !secret.trim()) return false;
+  if (typeof tok !== 'string' || !tok) return false;
+  if (method !== 'POST' || path !== '/admin-notify') return false;
+  if (tok.length !== secret.length) return false;
+  let diff = 0;
+  for (let i = 0; i < secret.length; i++) diff |= tok.charCodeAt(i) ^ secret.charCodeAt(i);
+  return diff === 0;
+}
+
+// Pure: validate + normalise the JSON body. Only `text` and `source` are ever read.
+function validateAdminNotifyBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'JSON object body required: {text, source?}' };
+  if (typeof body.text !== 'string') return { ok: false, error: 'text (string) required' };
+  const text = body.text.trim();
+  if (!text) return { ok: false, error: 'text must not be empty' };
+  if (text.length > ADMIN_NOTIFY_MAX_TEXT) return { ok: false, error: `text too long (${text.length} > ${ADMIN_NOTIFY_MAX_TEXT} chars)` };
+  let source = '';
+  if (body.source !== undefined && body.source !== null) {
+    if (typeof body.source !== 'string') return { ok: false, error: 'source must be a string' };
+    source = body.source.trim();
+    if (source.length > ADMIN_NOTIFY_MAX_SOURCE) return { ok: false, error: `source too long (${source.length} > ${ADMIN_NOTIFY_MAX_SOURCE} chars)` };
+    source = source.replace(/[\u0000-\u001f\u007f]/g, ' ');
+  }
+  return { ok: true, text, source };
+}
+
+// Pure: parse the "YYYY-MM-DD:N" cap row => how many sends already counted for `today`.
+function adminNotifyCountToday(raw, today) {
+  const m = /^(\d{4}-\d{2}-\d{2}):(\d+)$/.exec(String(raw || '').trim());
+  return (m && m[1] === today) ? parseInt(m[2], 10) : 0;
+}
+
+// Pure: strip anything phone-number-shaped from an error string before it is logged or returned.
+function scrubPhones(s) {
+  return String(s == null ? '' : s).replace(/\+?\d[\d\s().-]{6,}\d/g, '[number]');
+}
+
+async function adminNotify(env, body) {
+  const t0 = Date.now();
+  let telemetryError = null;
+  const tel = async (ok, notes) => {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'admin_notify', Skill_Or_Endpoint: '/admin-notify', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 500) }); }
+    catch (e) { telemetryError = scrubPhones((e && e.message) || e).slice(0, 200); console.error('admin-notify: Ops_Telemetry write failed:', telemetryError); }
+  };
+  const done = async (status, ok, payload, notes) => {
+    await tel(ok, notes);
+    const out = Object.assign({}, payload);
+    if (telemetryError) out.telemetry_error = telemetryError;
+    return json(out, status);
+  };
+
+  const v = validateAdminNotifyBody(body);
+  if (!v.ok) return done(400, false, { ok: false, error: v.error }, `rejected 400: ${v.error} source=${(body && typeof body.source === 'string') ? body.source.trim().slice(0, 40) : ''}`);
+  const meta = `source=${v.source || '-'} len=${v.text.length}`;
+
+  // Config (admin_phone + cap row). Read directly (not fetchConfig, which swallows errors) so an
+  // unreadable Config is reported as such rather than masquerading as "admin_phone missing".
+  let cfg;
+  try { const data = await sheetsRequest(env, 'GET', '/values/Config'); cfg = configFromValues(data && data.values); }
+  catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(500, false, { ok: false, error: 'could not read Config: ' + m }, `FAILED config_read ${meta}: ${m}`); }
+  const phone = String(cfg.admin_phone || '').trim();
+  if (!phone) return done(500, false, { ok: false, error: 'Config admin_phone is not set' }, `FAILED admin_phone_missing ${meta}`);
+
+  // Reserve a daily slot BEFORE sending; verify the write landed; fail closed on any problem.
+  const today = new Date().toISOString().slice(0, 10);
+  const used = adminNotifyCountToday(cfg[ADMIN_NOTIFY_COUNT_KEY], today);
+  if (used >= ADMIN_NOTIFY_DAILY_CAP) return done(429, false, { ok: false, error: `daily cap reached (${ADMIN_NOTIFY_DAILY_CAP}/day)` }, `FAILED daily_cap_reached ${used}/${ADMIN_NOTIFY_DAILY_CAP} ${meta}`);
+  const want = `${today}:${used + 1}`;
+  try {
+    const wr = await setConfigKey(env, { key: ADMIN_NOTIFY_COUNT_KEY, value: want });
+    if (!wr || wr.status !== 200) throw new Error('Config write returned HTTP ' + (wr && wr.status));
+    const back = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values);
+    if (String(back[ADMIN_NOTIFY_COUNT_KEY] || '').trim() !== want) throw new Error('cap counter did not persist (read-back mismatch)');
+  } catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(500, false, { ok: false, error: 'could not record daily cap counter, NOT sent: ' + m }, `FAILED cap_write ${meta}: ${m}`); }
+
+  let r;
+  try { r = await sendSMS(env, phone, v.text); }
+  catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(502, false, { ok: false, error: 'SMS send threw: ' + m }, `FAILED send_threw ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}: ${m}`); }
+  if (r && r.skipped) return done(200, true, { ok: true, sent: false, skipped: true, reason: String(r.reason || 'sending is disabled') }, `skipped (${scrubPhones(r.reason)}) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
+  if (r && r.staged) return done(200, true, { ok: true, sent: true, staged: true, note: 'staging stub - logged only, no real SMS' }, `sent (STAGING stub) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
+  if (r && r.sid && !r.error && !r.code) return done(200, true, { ok: true, sent: true, sid: r.sid }, `sent ${meta} sid=${r.sid} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
+  const why = scrubPhones((r && (r.error || r.message)) || 'unexpected Twilio response (no message sid)').slice(0, 200);
+  return done(502, false, { ok: false, error: 'SMS not sent: ' + why + ((r && r.code) ? ' (twilio code ' + r.code + ')' : '') }, `FAILED sms ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}: ${why}`);
+}
+
 // ── Gated tenant/vendor messaging (TWILIO_SMS_BUILD_BRIEF_v1.0) ──────────────
 // Message_Queue: every message that WOULD be sent gets a row here first, unconditionally —
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
@@ -18635,6 +18753,8 @@ async function health(env, url) {
   // false, the GitHub Actions sweep (cron-sweep.yml) has nothing to authenticate with, so
   // quiet-hours-held messages and deferred appointment reminders will sit unsent until it's set.
   out.cron_sweep = { token_set: !!(env && env.CRON_SWEEP_TOKEN) };
+  // ALERT_PUSH_TOKEN presence (Oct 12 2026) — POST /admin-notify rejects everything while this is false.
+  out.alert_push = { token_set: !!(env && typeof env.ALERT_PUSH_TOKEN === 'string' && env.ALERT_PUSH_TOKEN.trim()) };
   // Start Build / Routines-fire config presence (Sep 19 2026) — same never-expose-values
   // pattern. If either is false, POST /ops-queue/start-build fails clean with
   // 'routine_not_configured' instead of trying to fire; this is expected until Brett finishes
@@ -19010,6 +19130,7 @@ async function isTestRecord(env, tab, id) {
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
+  if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
   if (['/admin/receipt-duplicate-audit/build-index', '/admin/receipt-duplicate-audit/scan', '/admin/receipt-duplicate-audit/mark'].includes(path)) {
     // These only ever write to two brand-new, isolated, non-PII cache/audit tabs
     // (QB_Invoice_Line_Cache, Receipt_Duplicate_Audit) and never touch a real
