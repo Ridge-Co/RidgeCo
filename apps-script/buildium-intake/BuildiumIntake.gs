@@ -84,7 +84,7 @@ function processBuildiumEmails() {
         if (done.indexOf(m.getId()) >= 0) continue;
         if (!eligible_(m, cutoff)) {
           // A Buildium email we don't recognise (format change, "updated"/"cancelled" notice...): tell Brett ONCE instead of ignoring it.
-          if (m.getDate().getTime() >= cutoff && /managebuilding\.com/i.test(m.getFrom()) && !/^\s*New work order/i.test(m.getSubject())) {
+          if (m.getDate().getTime() >= cutoff && senderOk_(m.getFrom()) && !/^\s*New work order/i.test(m.getSubject())) {
             done.push(m.getId());
             alert_('Buildium email not imported (unrecognised format)', 'Subject: ' + m.getSubject() + '\nReceived: ' + m.getDate() + '\n\nThe importer only handles "<Org>: Work order <number>" emails. If this is a new work order, tell Claude so the format can be added.');
             threads[ti].addLabel(label_(LABEL_ATTN));
