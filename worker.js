@@ -6285,6 +6285,7 @@ async function createWorkOrder(env, body) {
 const INTAKE_TAB = 'Intake_Queue';
 const INTAKE_COLS = ['ID','Received_At','Source','Ref_Key','Message_ID','Subject','Status','Reason','WO_ID','Property_ID','Unit_ID','Address_Raw','Title','SMS_Status','Parsed_JSON','Raw_Body','Processed_At'];
 let _intakeTabReady = false;
+const INTAKE_MAX_BODY = 60000;   // a real Buildium email is ~3-8KB; anything bigger is parked, never run through the parsers
 
 // Plain-body / HTML / markdown-table renderings of the same email all flatten to one line of
 // single-spaced text so the field regexes below don't care how Gmail laid it out.
