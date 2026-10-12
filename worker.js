@@ -6511,11 +6511,14 @@ async function intakeEmail(env, body, retryRow) {
   const subject = String(body.subject || ''), text = String(body.body || body.text || ''), msgId = String(body.message_id || '').trim();
   const from = String(body.from || '').toLowerCase(), dry = body.dry_run === true;
   if (!msgId) return json({ error: 'message_id required' }, 400);
-  if (!retryRow && !/managebuilding\.com/.test(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
+  if (!retryRow && !/@(?:[a-z0-9-]+\.)*managebuilding\.com\b/.test(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
   if (!/Work order\s+#?\d+/i.test(subject) || /^\s*New work order/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a detailed work-order email' });
   let stage = 'analyze';
   try {
-    const a = await intakeAnalyze(env, subject, text, retryRow ? { property_id: body.property_id, unit_id: body.unit_id } : null);
+    // An oversized body is never run through the parsers: it is parked (loud SMS + row), not retried forever.
+    const a = text.length > INTAKE_MAX_BODY
+      ? { parsed: { ok: false, errors: ['email body too large (' + text.length + ' chars, max ' + INTAKE_MAX_BODY + ')'] }, status: 'parked', reason: 'parse_failed', detail: 'email body too large (' + text.length + ' chars)' }
+      : await intakeAnalyze(env, subject, text, retryRow ? { property_id: body.property_id, unit_id: body.unit_id } : null);
     const p = a.parsed || {};
     const refKey = p.ref_key || '';
     if (dry) return json({ success: true, dry_run: true, status: a.status, reason: a.reason, detail: a.detail, parsed: p, property_id: a.property ? a.property.ID : '', property_address: a.property ? a.property.Address : '', unit_id: a.unit_id || '', unit_label: a.unit_label || '', tenant_id: a.tenant_id || '' });
