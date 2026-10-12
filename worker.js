@@ -18428,6 +18428,8 @@ async function health(env, url) {
   // false, the GitHub Actions sweep (cron-sweep.yml) has nothing to authenticate with, so
   // quiet-hours-held messages and deferred appointment reminders will sit unsent until it's set.
   out.cron_sweep = { token_set: !!(env && env.CRON_SWEEP_TOKEN) };
+  // ALERT_PUSH_TOKEN presence (Oct 12 2026) — POST /admin-notify rejects everything while this is false.
+  out.alert_push = { token_set: !!(env && typeof env.ALERT_PUSH_TOKEN === 'string' && env.ALERT_PUSH_TOKEN.trim()) };
   // Start Build / Routines-fire config presence (Sep 19 2026) — same never-expose-values
   // pattern. If either is false, POST /ops-queue/start-build fails clean with
   // 'routine_not_configured' instead of trying to fire; this is expected until Brett finishes
