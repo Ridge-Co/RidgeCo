@@ -6400,6 +6400,121 @@ function intakeMatchProperty(addrRaw, properties) {
     if (rest && !rest.split(' ').every(w => cityWords.has(w))) continue;   // leftover must be ONLY this property's city/state words ("Rear", "Annex", another city => park)
     matches.push({ property: p, unit_raw: unit });
   }
+  return { matches, norm: E };
+}
+
+// Pick the Unit row. SFH / single-unit property: the sole unit, whatever the email says (Buildium
+// appends "- 1" to houses). Multi-unit: the email's unit must match exactly one Unit_Label.
+function intakeResolveUnit(property, unitRaw, units) {
+  const pu = (units || []).filter(u => String(u.Property_ID) === String(property.ID) && String(u.Active || '').toUpperCase() !== 'FALSE');
+  const multi = pu.length > 1 || (String(property.Type || '').toLowerCase() === 'multi' && parseInt(property.Unit_Count || '1', 10) > 1);
+  if (!multi) {
+    // Buildium tags houses "- 1". Anything else (apt 2, rear...) on a single-unit property is a mismatch: park, don't guess.
+    const w = String(unitRaw || '') ? qbNormAddress(unitRaw).replace(/^(?:apt|unit) /, '') : '';
+    const sole = pu.length === 1 ? qbNormAddress(pu[0].Unit_Label).replace(/^(?:apt|unit) /, '') : '';
+    if (w && w !== '1' && w !== sole) return { ok: false, reason: 'unit_no_match', detail: 'email unit "' + unitRaw + '" but this is a single-unit property' + (sole ? ' (unit "' + pu[0].Unit_Label + '")' : '') };
+    return { ok: true, unit_id: pu.length === 1 ? String(pu[0].ID) : '', unit_label: pu.length === 1 ? String(pu[0].Unit_Label || '') : '' };
+  }
+  const labels = pu.map(u => u.Unit_Label).join(', ');
+  if (!pu.length) return { ok: false, reason: 'no_unit_records', detail: 'multi-unit property has no Units rows' };
+  if (!unitRaw) return { ok: false, reason: 'unit_required', detail: 'multi-unit property (' + labels + ') but the email names no unit' };
+  const want = qbNormAddress(unitRaw).replace(/^apt /, '');
+  const m = pu.filter(u => qbNormAddress(u.Unit_Label).replace(/^apt /, '') === want);
+  if (m.length === 1) return { ok: true, unit_id: String(m[0].ID), unit_label: String(m[0].Unit_Label || '') };
+  return { ok: false, reason: m.length ? 'unit_ambiguous' : 'unit_no_match', detail: 'email unit "' + unitRaw + '" vs ' + labels };
+}
+
+// Existing active tenant of that unit (or of the property when unit-less) whose phone or email
+// matches a Buildium contact. Exactly one match -> its ID; otherwise '' (contact stays on the WO).
+function intakeMatchTenant(contacts, tenants, propertyId, unitId) {
+  const last10 = s => String(s || '').replace(/\D/g, '').slice(-10);
+  const phones = new Set(), emails = new Set();
+  for (const c of contacts || []) { c.phones.forEach(p => phones.add(last10(p))); c.emails.forEach(e => emails.add(e.toLowerCase())); }
+  const pool = (tenants || []).filter(t => String(t.Active || '').toUpperCase() !== 'FALSE' &&
+    (unitId ? String(t.Unit_ID) === String(unitId) : String(t.Property_ID) === String(propertyId)));
+  const hit = pool.filter(t => (last10(t.Phone) && phones.has(last10(t.Phone))) || (t.Email && emails.has(String(t.Email).trim().toLowerCase())));
+  return hit.length === 1 ? String(hit[0].ID) : '';
+}
+
+// Reads only. Shared by the real handler, dry_run and the HUB_TEST_TOKEN guard.
+async function intakeAnalyze(env, subject, text, override) {
+  const parsed = parseBuildiumEmail(subject, text);
+  const res = { parsed, status: 'parked', reason: '', detail: '' };
+  if (!parsed.ok) { res.reason = 'parse_failed'; res.detail = parsed.errors.join('; '); return res; }
+  const [properties, units, tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+  let property, unitRaw = '';
+  if (override && override.property_id) {
+    property = properties.find(p => String(p.ID) === String(override.property_id));
+    if (!property) { res.reason = 'override_property_not_found'; res.detail = 'property_id ' + override.property_id; return res; }
+    unitRaw = '';
+  } else {
+    const m = intakeMatchProperty(parsed.address_raw, properties);
+    if (m.matches.length === 0) { res.reason = 'no_property_match'; res.detail = 'no active property matches "' + parsed.address_raw + '" (normalized: ' + m.norm + ')'; return res; }
+    if (m.matches.length > 1) { res.reason = 'ambiguous_property'; res.detail = m.matches.map(x => x.property.ID + ' ' + x.property.Address).join(' | '); return res; }
+    property = m.matches[0].property; unitRaw = m.matches[0].unit_raw;
+  }
+  res.property = property;
+  if (override && override.unit_id) {
+    const u = units.find(x => String(x.ID) === String(override.unit_id) && String(x.Property_ID) === String(property.ID));
+    if (!u) { res.reason = 'override_unit_not_found'; res.detail = 'unit_id ' + override.unit_id + ' is not on property ' + property.ID; return res; }
+    res.unit_id = String(u.ID); res.unit_label = String(u.Unit_Label || '');
+  } else {
+    const ur = intakeResolveUnit(property, unitRaw, units);
+    if (!ur.ok) { res.reason = ur.reason; res.detail = ur.detail; return res; }
+    res.unit_id = ur.unit_id; res.unit_label = ur.unit_label;
+  }
+  res.tenant_id = intakeMatchTenant(parsed.contacts, tenants, property.ID, res.unit_id);
+  res.status = 'ok';
+  return res;
+}
+
+const INTAKE_REASON_TEXT = {
+  parse_failed: "couldn't read the email", no_property_match: 'no matching property', ambiguous_property: 'more than one matching property',
+  unit_required: 'multi-unit building, no unit in email', unit_no_match: "unit doesn't match", unit_ambiguous: 'unit matches more than one',
+  no_unit_records: 'multi-unit property has no units on file', override_property_not_found: 'property not found', override_unit_not_found: 'unit not found',
+};
+
+async function intakeEnsureTab(env) {
+  if (!_intakeTabReady) { await ensureTab(env, INTAKE_TAB, INTAKE_COLS); _intakeTabReady = true; }
+  await ensureColumns(env, INTAKE_TAB, INTAKE_COLS);
+}
+
+async function intakeAppendRow(env, row) {
+  await intakeEnsureTab(env);
+  const res = await addRow(env, INTAKE_TAB, row);
+  let j = null; try { j = await res.clone().json(); } catch (_) {}
+  if (!res || res.status !== 200 || !j || j.success !== true || !j.id) throw new Error('Intake_Queue row did not land: ' + (j && j.error ? j.error : (res && res.status)));
+  const back = (await fetchTab(env, INTAKE_TAB)).find(q => String(q.ID) === String(j.id));
+  if (!back || String(back.Message_ID || '') !== String(row.Message_ID || '')) throw new Error('Intake_Queue row ' + j.id + ' did not read back after write');
+  return String(j.id);
+}
+
+async function intakeSmsAdmin(env, message, woId, property) {
+  try {
+    const cfg = await fetchConfig(env);
+    if (!cfg.admin_phone) return 'FAILED: Config admin_phone not set';
+    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_alert', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, property: property || null, message_body: message, bypassQuietHours: true });
+    if (r && r.sent) return 'sent';
+    if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
+  } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
+}
+
+async function intakeTelemetry(env, t0, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'intake_email', Skill_Or_Endpoint: '/intake/email', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 480) }); return true; }
+  catch (_) { return false; }
+}
+
+// POST /intake/email  (INTAKE_TOKEN / WORKER_SECRET)  and  retryRow (POST /intake/retry) share this.
+async function intakeEmail(env, body, retryRow) {
+  const t0 = Date.now();
+  const subject = String(body.subject || ''), text = String(body.body || body.text || ''), msgId = String(body.message_id || '').trim();
+  const from = String(body.from || '').toLowerCase(), dry = body.dry_run === true;
+  if (!msgId) return json({ error: 'message_id required' }, 400);
+  if (!retryRow && !/@(?:[a-z0-9-]+\.)*managebuilding\.com\b/.test(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
+  if (!/Work order\s+#?\d+/i.test(subject) || /^\s*New work order/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a detailed work-order email' });
+  let stage = 'analyze';
+  try {
 // POST /workorder/self-serve { vendor_id, property_id, trade?, description, approval_source,
 //   approval_note? }
 // "Log a One-Off Job" (Sep 24 2026 build brief §4b) — a thin wrapper around createWorkOrder
