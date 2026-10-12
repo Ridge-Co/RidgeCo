@@ -19017,6 +19017,7 @@ async function isTestRecord(env, tab, id) {
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
+  if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
   if (['/admin/receipt-duplicate-audit/build-index', '/admin/receipt-duplicate-audit/scan', '/admin/receipt-duplicate-audit/mark'].includes(path)) {
     // These only ever write to two brand-new, isolated, non-PII cache/audit tabs
     // (QB_Invoice_Line_Cache, Receipt_Duplicate_Audit) and never touch a real
