@@ -174,5 +174,16 @@ function dryRunLatest() {
 function label_(name) { return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name); }
 function alert_(subject, body) {
   try { MailApp.sendEmail(NOTIFY_EMAIL, '[Hub intake] ' + subject, body); }
-  catch (e) { Logger.log('ALERT EMAIL FAILED: ' + e + ' | ' + subject + ' | ' + body); }
+  catch (e) {
+    Logger.log('ALERT EMAIL FAILED: ' + e + ' | ' + subject + ' | ' + body);
+    // Last resort: a failing run shows up as an error in Apps Script's Executions list / trigger-failure emails.
+    throw new Error('Hub intake alert could not be emailed: ' + subject);
+  }
+}
+// At most one email per key per hour (so a stuck condition cannot flood the mailbox).
+function alertThrottled_(key, subject, body) {
+  var p = props_(), k = 'LAST_ALERT_' + key, last = Number(p.getProperty(k) || 0);
+  if (Date.now() - last < 3600 * 1000) return;
+  p.setProperty(k, String(Date.now()));
+  alert_(subject, body);
 }
