@@ -6835,7 +6835,7 @@ async function intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow) 
     stage = 'notify';
     const addr = a.property.Address + (a.unit_label ? ' ' + formatUnitLabel(a.unit_label) : '');
     const linkOk = p.link && p.link.length <= 700;
-    const sms = await intakeSmsAdmin(env, `📥 New Buildium work order from ${p.org || 'Buildium'} @ ${addr}. Hub WO ${woId} ${recovered ? 'recovered' : 'created'}, but the details are behind the Buildium login` + (linkOk ? ': ' + p.link : ' - open the Buildium email.'), woId, a.property);
+    const sms = await intakeSmsAdmin(env, `📥 New Buildium work order from ${p.org || 'Buildium'} @ ${addr}. Hub WO ${woId} ${recovered ? 'recovered' : 'created'}, but the details are behind the Buildium login` + (linkOk ? ': ' + p.link : ' - open the Buildium email.'), '', a.property);   // no wo_id: the tokenised link must not land in WO_Audit
     stage = 'queue-row';
     const rowId = await save({ Status: 'Created', Reason: [recovered ? 'recovered existing stub' : '', p.link ? '' : 'no Buildium link found in the email'].filter(Boolean).join('; '), WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms });
     const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `notice stub ${woId}; sms=${sms}`);
