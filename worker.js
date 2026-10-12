@@ -6260,6 +6260,146 @@ async function createWorkOrder(env, body) {
   return json({ success: true, id: woId });
 }
 
+// ── Buildium email → Work Order intake (B-103, Oct 12 2026) ──────────────────────────────────
+// Phoenix Estate Rentals (and any future customer on Buildium) posts a work order to Brett as a
+// vendor; Buildium emails brett@ from donotreply@managebuilding.com. Two emails arrive per post:
+//   1. "New work order: <address>"  — link-only notice. IGNORED (the Apps Script never sends it).
+//   2. "<Org>: Work order <n>"      — the DETAILED email (title, address, description, tenant
+//                                     contact, entry notes). This is the one we turn into a WO.
+// The Apps Script poller (apps-script/buildium-intake/) forwards (1-minute trigger) each detailed email
+// here: POST /intake/email {subject, body, from, message_id, received_at}. Auth: narrow INTAKE_TOKEN,
+// accepted ONLY for that one path. Behavior (Brett, Oct 12 2026):
+//   - create the WO automatically; admin SMS immediately (bypassQuietHours - no waiting until 9am)
+//   - one WO per Buildium ref, ever (dedupe on Work_Orders.Owner_WO_Ref + Intake_Queue.Ref_Key)
+//   - unit optional (SFH), but multi-unit buildings are supported: a multi-unit property with no
+//     / unknown unit in the email is PARKED, never guessed
+//   - anything we can't place with certainty (no/ambiguous property, unit problem, parse failure)
+//     is PARKED in Intake_Queue + SMS, never turned into a junk WO and never dropped silently
+//   - no tenant SMS is sent for intake WOs (tenant_notify_* FALSE); Brett switches them on per WO
+// NOTHING FAILS SILENTLY: every outcome writes Ops_Telemetry + an Intake_Queue row, an error returns
+// 500 (the poller keeps retrying + emails Brett), and an SMS that did not go out is recorded and
+// returned as sms_sent:false (the poller emails Brett on that too).
+const INTAKE_TAB = 'Intake_Queue';
+const INTAKE_COLS = ['ID','Received_At','Source','Ref_Key','Message_ID','Subject','Status','Reason','WO_ID','Property_ID','Unit_ID','Address_Raw','Title','SMS_Status','Parsed_JSON','Raw_Body','Processed_At'];
+let _intakeTabReady = false;
+const INTAKE_MAX_BODY = 60000;   // a real Buildium email is ~3-8KB; anything bigger is parked, never run through the parsers
+
+// Plain-body / HTML / markdown-table renderings of the same email all flatten to one line of
+// single-spaced text so the field regexes below don't care how Gmail laid it out.
+function intakeFlatten(s) {
+  return String(s == null ? '' : s).slice(0, INTAKE_MAX_BODY)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]{0,500}>/g, ' ')
+    .replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+    .replace(/&lt;|&gt;/g, ' ').replace(/&amp;/g, '&')   // never turn entities back into < > (would re-create tags)
+    .replace(/\[\]\([^)]{0,500}\)/g, ' ')
+    .replace(/[| ]/g, ' ')
+    .replace(/-{3,}/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function intakeBetween(t, startRe, endRe) {
+  const s = startRe.exec(t);
+  if (!s) return null;
+  const rest = t.slice(s.index + s[0].length);
+  // pad with a leading space so an end marker that sits right at the start of `rest` (an empty
+  // field, e.g. "Entry notes" immediately followed by "Entry contacts") still terminates it
+  const e = endRe ? endRe.exec(' ' + rest) : null;
+  return (e ? rest.slice(0, Math.max(0, e.index - 1)) : rest).trim();
+}
+
+// "Renita Howell, Tenant * (410) 556-7166 * (443) 810-0081 * a@b.com" -> [{name, role, phones[], emails[]}]
+// A second contact follows the first one's last email/phone with only a space, so a '*' is inserted there.
+function intakeParseContacts(raw) {
+  let s = String(raw || '').trim();
+  if (!s || /^--+$/.test(s)) return [];
+  s = s.slice(0, 3000);
+  s = s.replace(/([A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,4}|\d{4})\s+(?=[A-Z][a-z])/g, '$1 * ');
+  // Plain-text (getPlainBody) layout has no '*' separators: split after a role word, and between back-to-back phones / phone→email.
+  s = s.replace(/(,\s*(?:Tenant|Owner|Resident|Occupant|Other|Manager))\s+(?=\S)/g, '$1 * ');
+  s = s.replace(/(\d{4})\s+(?=\(?\d{3}\)?[\s.-]{0,3}\d{3}[\s.-]{0,3}\d{4}|[A-Za-z0-9._%+-]{1,64}@)/g, '$1 * ');
+  const ROLE = /^(.+?),\s*(Tenant|Owner|Resident|Occupant|Other|Manager)$/;
+  const out = []; let cur = null;
+  const start = (name, role) => { cur = { name, role, phones: [], emails: [] }; out.push(cur); };
+  for (const tok0 of s.split('*')) {
+    const tok = tok0.trim(); if (!tok) continue;
+    const rm = ROLE.exec(tok);
+    if (rm) { start(rm[1].trim(), rm[2]); continue; }
+    const emails = tok.match(/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,4}/g) || [];
+    const phones = (tok.match(/\(?\d{3}\)?[\s.-]{0,3}\d{3}[\s.-]{0,3}\d{4}/g) || []).map(x => x.trim());
+    if (emails.length || phones.length) { if (!cur) start('', ''); cur.emails.push(...emails); cur.phones.push(...phones); continue; }
+    start(tok, '');
+  }
+  return out.filter(c => c.name || c.phones.length || c.emails.length).slice(0, 5).map(c => ({ ...c, name: c.name.slice(0, 80), phones: c.phones.slice(0, 4), emails: c.emails.slice(0, 4) }));
+}
+
+function parseBuildiumEmail(subject, rawText) {
+  const t = intakeFlatten(rawText);
+  const out = { ok: false, errors: [] };
+  const subjM = /Work order\s+#?(\d+)/i.exec(String(subject || ''));
+  const refM = /Work order\s+#(\d+)(?:-(\d+))?\s*:\s*/i.exec(t);
+  if (!refM) { out.errors.push('no "Work order #<n>:" header found in body'); return out; }
+  out.ref = refM[1]; out.seq = refM[2] || '1';
+  if (subjM && subjM[1] !== out.ref) out.errors.push('subject WO number ' + subjM[1] + ' != body WO number ' + out.ref);
+  out.ref_key = out.ref + '-' + out.seq;
+  const afterRef = t.slice(refM.index + refM[0].length);
+  const jdIdx = afterRef.search(/\sJob description\s/i);
+  const secIdx = afterRef.search(/\s(?:Contact and scheduling information|Entry details|Parts and labor details|Vendor information)\s/i);
+  const headEnd = jdIdx >= 0 ? jdIdx : (secIdx >= 0 ? secIdx : afterRef.length);
+  const head = afterRef.slice(0, headEnd);
+  const locIdx = head.lastIndexOf(' Location ');
+  if (locIdx < 0) { out.errors.push('no "Location" found'); out.title = head.trim(); return out; }
+  out.title = head.slice(0, locIdx).trim().slice(0, 200);
+  out.address_raw = head.slice(locIdx + ' Location '.length).trim().slice(0, 200);
+  out.description = jdIdx >= 0
+    ? (intakeBetween(afterRef.slice(jdIdx), /^\sJob description\s+/i, /\s(?:Contact and scheduling information|Entry details|Parts and labor details|Vendor information)\s/i) || '')
+    : '';
+  out.description = out.description.slice(0, 1500);
+  out.entry_details = (intakeBetween(t, /Entry details\s+/i, /\s+Entry notes\b/i) || '').slice(0, 300);
+  out.entry_notes = (intakeBetween(t, /Entry notes\s*/i, /\s+Entry contacts\b/i) || '').slice(0, 1000);
+  out.contacts = intakeParseContacts(intakeBetween(t, /Entry contacts\s*/i, /\s+(?:Parts and labor details|Vendor information)\b/i) || '');
+  const orgM = /Work order from\s+(.+?)\s+\d{1,2}\/\d{1,2}\/\d{4}/i.exec(t) || /^(.*?):\s*Work order/i.exec(String(subject || ''));
+  out.org = orgM ? orgM[1].trim() : '';
+  if (!out.title) out.errors.push('empty title');
+  if (!out.address_raw) out.errors.push('empty location');
+  out.ok = out.errors.length === 0;
+  return out;
+}
+
+// Buildium location -> {norm, tokens}. Strips ", MD 21206" so what is left is
+// "<street address> [- <unit>] [<city>]" in qbNormAddress's folded form (Avenue->ave, North->n ...).
+function intakeNormLocation(addrRaw) {
+  let s = String(addrRaw || '').slice(0, 200).replace(/\s+/g, ' ').trim();
+  s = s.replace(/#\s*([A-Za-z0-9]+)/g, ' apt $1 ');   // "#2F" => "apt 2f"
+  s = s.replace(/[,\s]+[A-Za-z]{2}\s*\d{5}(?:-\d{4})?\s*$/, '').replace(/[,\s]+\d{5}(?:-\d{4})?\s*$/, '').replace(/,\s*[A-Za-z]{2}\s*$/, '');
+  return qbNormAddress(s);
+}
+
+// Active properties whose address is a prefix of the Buildium location and whose leftover is only
+// an optional unit marker ("- 1", "apt 3", bare "-") and/or a city. Returns {matches:[{property, unit_raw}]}.
+function intakeMatchProperty(addrRaw, properties) {
+  const E = intakeNormLocation(addrRaw);
+  const matches = [];
+  if (!E) return { matches, norm: E };
+  for (const p of properties) {
+    if (String(p.Active || '').toUpperCase() === 'FALSE') continue;
+    const P = qbNormAddress(p.Address);
+    if (!P) continue;
+    if (E !== P && !E.startsWith(P + ' ')) continue;
+    let rest = E.slice(P.length).trim();
+    // Only THIS property's own city (or Baltimore when none is on file) may trail the street address.
+    const cityBase = qbNormAddress(p.City).split(' ').filter(Boolean);
+    const cityWords = new Set(cityBase.concat(['md', 'maryland'], cityBase.length ? [] : ['baltimore']));
+    let unit = '';
+    const um = /^(?:-|apt|ste|bldg|fl)(?:\s+([a-z0-9]+))?(?=\s|$)/.exec(rest);
+    if (um) {
+      if (um[1] && !cityWords.has(um[1])) { unit = um[1]; rest = rest.slice(um[0].length).trim(); }
+      else { rest = rest.slice(um[0].length).trim(); }
+    }
+    if (rest && !rest.split(' ').every(w => cityWords.has(w))) continue;   // leftover must be ONLY this property's city/state words ("Rear", "Annex", another city => park)
+    matches.push({ property: p, unit_raw: unit });
+  }
 // POST /workorder/self-serve { vendor_id, property_id, trade?, description, approval_source,
 //   approval_note? }
 // "Log a One-Off Job" (Sep 24 2026 build brief §4b) — a thin wrapper around createWorkOrder
