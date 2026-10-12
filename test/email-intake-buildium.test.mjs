@@ -149,6 +149,14 @@ eq('inactive tenant never matches', intakeMatchTenant([{ phones: ['4435551111'],
 eq('tenant of another unit never matches', intakeMatchTenant([{ phones: ['4105567166'], emails: [] }], tenants, '70', '603'), '');
 eq('no contacts => none', intakeMatchTenant([], tenants, '18', '501'), '');
 
+// ── sender check (display-name spoofing) ──
+t('sender: bare address ok', intakeSenderOk('donotreply@managebuilding.com'));
+t('sender: Name <addr> ok', intakeSenderOk('Phoenix Estate Rentals <donotreply@managebuilding.com>'));
+t('sender: subdomain ok', intakeSenderOk('"X" <bounce@mail.managebuilding.com>'));
+t('sender: display-name spoof rejected', !intakeSenderOk('"donotreply@managebuilding.com" <x@evil.io>'));
+t('sender: lookalike domains rejected', !intakeSenderOk('x@managebuilding.com.evil.io') && !intakeSenderOk('x@notmanagebuilding.com'));
+t('sender: empty rejected', !intakeSenderOk('') && !intakeSenderOk(undefined));
+eq('multi + "Unit 2" label matches email "2"', intakeResolveUnit({ ID: '5', Type: 'multi', Unit_Count: '2' }, '2', [{ ID: '1', Property_ID: '5', Unit_Label: 'Unit 2' }, { ID: '2', Property_ID: '5', Unit_Label: 'Unit 3' }]).unit_id, '1');
 
 // ── hostile input: bounded time, no tag re-creation, caps ──
 const timeIt = f => { const t0 = Date.now(); f(); return Date.now() - t0; };
