@@ -6551,7 +6551,7 @@ async function intakeEmail(env, body, retryRow) {
       else { rowId = await intakeAppendRow(env, { ...baseRow, Status: 'Parked', Reason: a.reason + ': ' + a.detail.slice(0, 300), SMS_Status: 'pending' }); }
       const sms = await intakeSmsAdmin(env, `⚠️ Buildium WO ${refKey ? '#' + refKey : '(unreadable)'} from ${p.org || 'Buildium'} NOT created (${reasonTxt}): ${p.title || subject} @ ${p.address_raw || '?'}. Parked in Intake_Queue row ${rowId}.`.slice(0, 480), '', null);
       const upd = await updateRow(env, INTAKE_TAB, rowId, { SMS_Status: sms, Processed_At: new Date().toISOString() });
-      const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `parked ${refKey} ${a.reason}; sms=${sms}`);
+      const telemetryOk = await intakeTelemetry(env, t0, false, `parked ${refKey} ${a.reason}; sms=${sms}`);
       return json({ success: true, parked: true, reason: a.reason, detail: a.detail, queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, telemetry_ok: telemetryOk, queue_updated: upd.status === 200 });
     }
 
