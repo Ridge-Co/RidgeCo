@@ -972,7 +972,8 @@ const _hubWorkerCore = {
     // which stays in place as a redundant second path — both call the same idempotent
     // function, so having both fire is harmless, just occasionally redundant work).
     if (cron === '*/15 * * * *') {
-      try { await cronSweep(env); } catch (e) { /* non-fatal — next run tries again */ }
+      await doorWatchdogCron(env); // door-code watchdog FIRST (never throws; see its block)
+      await cronSweepLogged(env);  // failures logged to Ops_Telemetry, no longer swallowed
       // STR cleaning-coverage guard for inspection booking: no-op until configured; alerts Brett on its own failures.
       try { await inspStrGuardTick(env); } catch (e) { console.error('insp: cleaning guard tick failed:', e && e.message); try { await inspAlert(env, 'str_guard_tick', String(e && e.message)); } catch (e2) { console.error('insp: could not alert about guard tick failure:', e2 && e2.message); } }
       return;
