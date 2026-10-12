@@ -6318,12 +6318,12 @@ function intakeParseContacts(raw) {
     const tok = tok0.trim(); if (!tok) continue;
     const rm = ROLE.exec(tok);
     if (rm) { start(rm[1].trim(), rm[2]); continue; }
-    const emails = tok.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g) || [];
-    const phones = (tok.match(/\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}/g) || []).map(x => x.trim());
+    const emails = tok.match(/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,4}/g) || [];
+    const phones = (tok.match(/\(?\d{3}\)?[\s.-]{0,3}\d{3}[\s.-]{0,3}\d{4}/g) || []).map(x => x.trim());
     if (emails.length || phones.length) { if (!cur) start('', ''); cur.emails.push(...emails); cur.phones.push(...phones); continue; }
     start(tok, '');
   }
-  return out.filter(c => c.name || c.phones.length || c.emails.length);
+  return out.filter(c => c.name || c.phones.length || c.emails.length).slice(0, 5).map(c => ({ ...c, name: c.name.slice(0, 80), phones: c.phones.slice(0, 4), emails: c.emails.slice(0, 4) }));
 }
 
 function parseBuildiumEmail(subject, rawText) {
