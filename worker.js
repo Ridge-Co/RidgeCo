@@ -12640,6 +12640,117 @@ async function sendSMS(env, to, message) {
   return sendSMSRaw(env, to, message);
 }
 
+// ── POST /admin-notify (Oct 12 2026) — narrow server-to-server "text Brett" endpoint ─────────────
+// Lets an external automation (str-automation) push ONE alert SMS to Brett. Designed to be
+// un-abusable even if its token leaks:
+//   • Auth: header X-Auth-Token must equal the NEW narrow secret env.ALERT_PUSH_TOKEN, accepted
+//     ONLY for POST /admin-notify (alertPushTokenOk, wired into the auth cascade above). Unset or
+//     blank secret => the token path is closed entirely (fail closed); an empty header never matches.
+//   • Recipient is ALWAYS Config `admin_phone` — nothing in the request body can set or override
+//     it (the body is only read for `text` and `source`).
+//   • Per-day cap: ADMIN_NOTIFY_DAILY_CAP sends/day (UTC date) tracked in ONE Config row
+//     (`admin_notify_daily_count` = "YYYY-MM-DD:N"). The slot is RESERVED (written + re-read to
+//     verify) BEFORE the SMS goes out, so a Config write failure fails closed — no unmetered send.
+//     Attempts count whether or not Twilio is enabled. Concurrent calls can overshoot by a few at
+//     most (read-modify-write on a sheet cell, same as every other Config marker here).
+//   • Honest result: {ok:true,sent:true} ONLY when a real send happened (Twilio message sid, or
+//     the staging stub with staged:true); {ok:true,sent:false,skipped:true,reason} when sendSMS
+//     skipped (TWILIO_ENABLED not TRUE); anything else is non-200 {ok:false,error}. Every outcome is
+//     logged to Ops_Telemetry (Job_Type admin_notify) — never the token, phone number or message
+//     text (length only); a telemetry-write failure is surfaced as telemetry_error in the response.
+const ADMIN_NOTIFY_MAX_TEXT = 1500;
+const ADMIN_NOTIFY_MAX_SOURCE = 40;
+const ADMIN_NOTIFY_DAILY_CAP = 30;
+const ADMIN_NOTIFY_COUNT_KEY = 'admin_notify_daily_count';
+
+// Pure: is this request authorised by the narrow ALERT_PUSH_TOKEN? Constant-time compare; false
+// for an unset/blank secret, an empty header, any method but POST, or any path but /admin-notify.
+function alertPushTokenOk(secret, tok, method, path) {
+  if (typeof secret !== 'string' || !secret.trim()) return false;
+  if (typeof tok !== 'string' || !tok) return false;
+  if (method !== 'POST' || path !== '/admin-notify') return false;
+  if (tok.length !== secret.length) return false;
+  let diff = 0;
+  for (let i = 0; i < secret.length; i++) diff |= tok.charCodeAt(i) ^ secret.charCodeAt(i);
+  return diff === 0;
+}
+
+// Pure: validate + normalise the JSON body. Only `text` and `source` are ever read.
+function validateAdminNotifyBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'JSON object body required: {text, source?}' };
+  if (typeof body.text !== 'string') return { ok: false, error: 'text (string) required' };
+  const text = body.text.trim();
+  if (!text) return { ok: false, error: 'text must not be empty' };
+  if (text.length > ADMIN_NOTIFY_MAX_TEXT) return { ok: false, error: `text too long (${text.length} > ${ADMIN_NOTIFY_MAX_TEXT} chars)` };
+  let source = '';
+  if (body.source !== undefined && body.source !== null) {
+    if (typeof body.source !== 'string') return { ok: false, error: 'source must be a string' };
+    source = body.source.trim();
+    if (source.length > ADMIN_NOTIFY_MAX_SOURCE) return { ok: false, error: `source too long (${source.length} > ${ADMIN_NOTIFY_MAX_SOURCE} chars)` };
+    source = source.replace(/[\u0000-\u001f\u007f]/g, ' ');
+  }
+  return { ok: true, text, source };
+}
+
+// Pure: parse the "YYYY-MM-DD:N" cap row => how many sends already counted for `today`.
+function adminNotifyCountToday(raw, today) {
+  const m = /^(\d{4}-\d{2}-\d{2}):(\d+)$/.exec(String(raw || '').trim());
+  return (m && m[1] === today) ? parseInt(m[2], 10) : 0;
+}
+
+// Pure: strip anything phone-number-shaped from an error string before it is logged or returned.
+function scrubPhones(s) {
+  return String(s == null ? '' : s).replace(/\+?\d[\d\s().-]{6,}\d/g, '[number]');
+}
+
+async function adminNotify(env, body) {
+  const t0 = Date.now();
+  let telemetryError = null;
+  const tel = async (ok, notes) => {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'admin_notify', Skill_Or_Endpoint: '/admin-notify', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 500) }); }
+    catch (e) { telemetryError = scrubPhones((e && e.message) || e).slice(0, 200); console.error('admin-notify: Ops_Telemetry write failed:', telemetryError); }
+  };
+  const done = async (status, ok, payload, notes) => {
+    await tel(ok, notes);
+    const out = Object.assign({}, payload);
+    if (telemetryError) out.telemetry_error = telemetryError;
+    return json(out, status);
+  };
+
+  const v = validateAdminNotifyBody(body);
+  if (!v.ok) return done(400, false, { ok: false, error: v.error }, `rejected 400: ${v.error} source=${(body && typeof body.source === 'string') ? body.source.trim().slice(0, 40) : ''}`);
+  const meta = `source=${v.source || '-'} len=${v.text.length}`;
+
+  // Config (admin_phone + cap row). Read directly (not fetchConfig, which swallows errors) so an
+  // unreadable Config is reported as such rather than masquerading as "admin_phone missing".
+  let cfg;
+  try { const data = await sheetsRequest(env, 'GET', '/values/Config'); cfg = configFromValues(data && data.values); }
+  catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(500, false, { ok: false, error: 'could not read Config: ' + m }, `FAILED config_read ${meta}: ${m}`); }
+  const phone = String(cfg.admin_phone || '').trim();
+  if (!phone) return done(500, false, { ok: false, error: 'Config admin_phone is not set' }, `FAILED admin_phone_missing ${meta}`);
+
+  // Reserve a daily slot BEFORE sending; verify the write landed; fail closed on any problem.
+  const today = new Date().toISOString().slice(0, 10);
+  const used = adminNotifyCountToday(cfg[ADMIN_NOTIFY_COUNT_KEY], today);
+  if (used >= ADMIN_NOTIFY_DAILY_CAP) return done(429, false, { ok: false, error: `daily cap reached (${ADMIN_NOTIFY_DAILY_CAP}/day)` }, `FAILED daily_cap_reached ${used}/${ADMIN_NOTIFY_DAILY_CAP} ${meta}`);
+  const want = `${today}:${used + 1}`;
+  try {
+    const wr = await setConfigKey(env, { key: ADMIN_NOTIFY_COUNT_KEY, value: want });
+    if (!wr || wr.status !== 200) throw new Error('Config write returned HTTP ' + (wr && wr.status));
+    const back = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values);
+    if (String(back[ADMIN_NOTIFY_COUNT_KEY] || '').trim() !== want) throw new Error('cap counter did not persist (read-back mismatch)');
+  } catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(500, false, { ok: false, error: 'could not record daily cap counter, NOT sent: ' + m }, `FAILED cap_write ${meta}: ${m}`); }
+
+  let r;
+  try { r = await sendSMS(env, phone, v.text); }
+  catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(502, false, { ok: false, error: 'SMS send threw: ' + m }, `FAILED send_threw ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}: ${m}`); }
+  if (r && r.skipped) return done(200, true, { ok: true, sent: false, skipped: true, reason: String(r.reason || 'sending is disabled') }, `skipped (${scrubPhones(r.reason)}) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
+  if (r && r.staged) return done(200, true, { ok: true, sent: true, staged: true, note: 'staging stub - logged only, no real SMS' }, `sent (STAGING stub) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
+  if (r && r.sid && !r.error && !r.code) return done(200, true, { ok: true, sent: true, sid: r.sid }, `sent ${meta} sid=${r.sid} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
+  const why = scrubPhones((r && (r.error || r.message)) || 'unexpected Twilio response (no message sid)').slice(0, 200);
+  return done(502, false, { ok: false, error: 'SMS not sent: ' + why + ((r && r.code) ? ' (twilio code ' + r.code + ')' : '') }, `FAILED sms ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}: ${why}`);
+}
+
 // ── Gated tenant/vendor messaging (TWILIO_SMS_BUILD_BRIEF_v1.0) ──────────────
 // Message_Queue: every message that WOULD be sent gets a row here first, unconditionally —
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
