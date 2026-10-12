@@ -6402,8 +6402,9 @@ function intakeNear(a, b) { const x = Date.parse(a), y = Date.parse(b); return i
 // Unclaimed Created queue rows of one kind ('notice' | 'detail') on one property, received within the pairing window, oldest first.
 // A notice and a detailed email for the SAME job arrive seconds apart; each claims at most one of the other kind (1:1), so two
 // separate jobs on one property never collapse into one and a lone notice is never swallowed.
-function intakePairCandidates(queue, kind, propertyId, receivedAt) {
-  return (queue || []).filter(q => q.Status === 'Created' && String(q.Property_ID) === String(propertyId) && !String(q.Pair_ID || '') &&
+function intakePairCandidates(queue, kind, propertyId, unitId, receivedAt) {
+  const claimed = new Set((queue || []).map(q => String(q.Pair_ID || '')).filter(Boolean));   // a row somebody else already points at is taken, whichever side wrote the link
+  return (queue || []).filter(q => q.Status === 'Created' && String(q.Property_ID) === String(propertyId) && String(q.Unit_ID || '') === String(unitId || '') && !String(q.Pair_ID || '') && !claimed.has(String(q.ID)) &&
     (kind === 'notice' ? q.Kind === 'notice' : (q.Kind === 'detail' || (!q.Kind && q.Ref_Key))) && intakeNear(q.Received_At, receivedAt))
     .sort((x, y) => Date.parse(x.Received_At) - Date.parse(y.Received_At));
 }
