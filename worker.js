@@ -6671,7 +6671,9 @@ async function intakeEmail(env, body, retryRow) {
     stage = 'notify';
     const addr = a.property.Address + (a.unit_label ? ' ' + formatUnitLabel(a.unit_label) : '');
     const who = (p.contacts[0] && p.contacts[0].name) ? ` Contact: ${p.contacts[0].name}${p.contacts[0].phones[0] ? ' ' + p.contacts[0].phones[0] : ''}.` : '';
-    const sms = await intakeSmsAdmin(env, `📥 New WO ${woId} from ${p.org || 'Buildium'} (#${refKey}): ${p.title} @ ${addr}.${who}${repaired ? ' (recovered after an interrupted run)' : ''}`.slice(0, 480), woId, a.property);
+    const sms = await intakeSmsAdmin(env, (filled
+      ? `✅ Details arrived for WO ${woId} from ${p.org || 'Buildium'} (#${refKey}): ${p.title} @ ${addr}.${who}`
+      : `📥 New WO ${woId} from ${p.org || 'Buildium'} (#${refKey}): ${p.title} @ ${addr}.${who}${repaired ? ' (recovered after an interrupted run)' : ''}`).slice(0, 480), woId, a.property);
     stage = 'queue-row';
     let rowId;
     if (retryRow) {
