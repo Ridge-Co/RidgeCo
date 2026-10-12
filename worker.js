@@ -6575,16 +6575,23 @@ async function intakeEmail(env, body, retryRow) {
     const refTag = 'Buildium #' + refKey;
     const queue = await fetchTab(env, INTAKE_TAB);
     if (!retryRow) {
-      const prior = queue.find(q => (q.Status === 'Created' || q.Status === 'Parked') && ((refKey && q.Ref_Key === refKey) || q.Message_ID === msgId));
+      const prior = queue.find(q => (q.Status === 'Created' || q.Status === 'Parked' || q.Status === 'Covered') && ((refKey && q.Ref_Key === refKey) || q.Message_ID === msgId));
       if (prior) return json({ success: true, duplicate: true, ref_key: refKey, status: prior.Status, wo_id: prior.WO_ID || '' });
     }
-    let existingWO = null;
+    let existingWO = null, stub = null;
+    const receivedAt = String(body.received_at || new Date().toISOString());
     if (refKey && a.status === 'ok') {
       const wos = await fetchTab(env, 'Work_Orders');
       existingWO = wos.find(w => String(w.Owner_WO_Ref || '').trim() === refTag) || null;
+      // A link-only notice for this same job may already have created a stub WO (no number / description yet): fill THAT in instead of making a twin.
+      if (!existingWO && !retryRow) {
+        for (const cand of intakePairCandidates(queue, 'notice', a.property.ID, receivedAt)) {
+          const wo = wos.find(w => String(w.ID) === String(cand.WO_ID));
+          if (wo && !INTAKE_WO_DEAD.test(String(wo.Status || ''))) { stub = { cand, wo }; break; }
+        }
+      }
     }
-    const receivedAt = String(body.received_at || new Date().toISOString());
-    const baseRow = { Received_At: receivedAt, Source: 'Buildium', Ref_Key: refKey, Message_ID: msgId, Subject: subject.slice(0, 200), Address_Raw: p.address_raw || '', Title: (p.title || '').slice(0, 200), Parsed_JSON: JSON.stringify(p).slice(0, 45000), Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() };
+    const baseRow = { Kind: 'detail', Received_At: receivedAt, Source: 'Buildium', Ref_Key: refKey, Message_ID: msgId, Subject: subject.slice(0, 200), Address_Raw: p.address_raw || '', Title: (p.title || '').slice(0, 200), Parsed_JSON: JSON.stringify(p).slice(0, 45000), Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() };
 
     // ── parked ──
     if (a.status !== 'ok') {
