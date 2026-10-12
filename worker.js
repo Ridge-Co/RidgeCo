@@ -6665,7 +6665,8 @@ async function intakeEmail(env, body, retryRow) {
     if (iId < 0 || iRef < 0) throw new Error('verify failed: Work_Orders is missing its ID or Owner_WO_Ref column');
     const row = wosAfter.slice(1).find(r => String(r[iId]) === String(woId));
     if (!row || String(row[iRef] || '').trim() !== refTag) throw new Error(`verify failed: ${woId} not found with Owner_WO_Ref "${refTag}" after create`);
-    if (!repaired && (iSrc < 0 || iMid < 0 || String(row[iSrc] || '') !== 'Buildium email' || String(row[iMid] || '') !== msgId)) throw new Error(`verify failed: ${woId} Source / Intake_Message_ID columns did not save`);
+    if (filled && stub.newDesc && (iDesc < 0 || String(row[iDesc] || '') !== stub.newDesc)) throw new Error(`verify failed: ${woId} description did not save when filling in the notice stub`);
+    if (!repaired && !filled && (iSrc < 0 || iMid < 0 || String(row[iSrc] || '') !== 'Buildium email' || String(row[iMid] || '') !== msgId)) throw new Error(`verify failed: ${woId} Source / Intake_Message_ID columns did not save`);
 
     stage = 'notify';
     const addr = a.property.Address + (a.unit_label ? ' ' + formatUnitLabel(a.unit_label) : '');
