@@ -12865,7 +12865,10 @@ const DOOR_WD_ABSENT_GRACE_MS = 24 * 3600000;
 const DOOR_WD_STATE_KEY = 'door_watchdog_state';
 const DOOR_WD_JOB = 'door_watchdog';
 const DOOR_WD_MAX_LIST = 6;
-let __doorWdMem = null; // per-isolate fallback copy of the state when the Config row cannot be read/written
+// Per-isolate fallback copy of the state when the Config row cannot be read/written. BEST-EFFORT ONLY:
+// a new isolate starts empty, so while Config stays unreadable a repeat alert is possible (it errs toward
+// texting again, never toward silence). The read/write failure itself is logged to Ops_Telemetry each time.
+let __doorWdMem = null;
 
 // Pure: a key name taken from the (untrusted) health JSON, made safe for an SMS / state key.
 function doorWdName(v) {
