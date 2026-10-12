@@ -7,6 +7,11 @@
 name = "maintenance-hub-staging"
 main = "worker.js"
 compatibility_date = "2026-06-08"
+# Required so this Worker can fetch() the str-automation Worker (same account/workers.dev subdomain) for the
+# door-code watchdog: without it Cloudflare answers error 1042 (HTTP 404) to any Worker-to-Worker fetch on the
+# same zone. Only changes how same-zone fetches are routed (over the public internet); every other outbound
+# call (Google, QuickBooks, Twilio, Anthropic ...) is already public and unaffected.
+compatibility_flags = ["global_fetch_strictly_public"]
 keep_vars = true
 workers_dev = true
 
