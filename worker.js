@@ -12853,6 +12853,10 @@ async function adminNotify(env, body) {
 //     state write, SMS, email, telemetry), GET /watchdog/door-system (read-only live status) and the
 //     STAGING-ONLY POST /watchdog/door-system/test that runs one real pass with an injected health
 //     payload / simulated failure and returns the SMS text it would send (SMS is the staging stub).
+// NOTE (found in staging, Oct 12 2026): a plain fetch() from one Worker to another Worker on the SAME Cloudflare
+// zone/account workers.dev subdomain fails with Cloudflare error 1042 (returned as an HTTP 404 page) unless the
+// `global_fetch_strictly_public` compatibility flag is set - wrangler.toml now sets it. Without it this watchdog
+// would see a permanent http_404 and cry wolf.
 const DOOR_WD_URL = 'https://str-automation.brett-2f8.workers.dev/health';
 const DOOR_WD_TIMEOUT_MS = 8000;
 const DOOR_WD_STALE_MS = 75 * 60000;
