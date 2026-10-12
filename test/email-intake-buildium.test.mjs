@@ -198,7 +198,7 @@ t('multi-unit property + notice (no unit) is refused, not guessed', intakeResolv
 t('different street does not match', intakeMatchProperty('525 South Catherine Street Annex', CATH).matches.length === 0);
 
 // ── pairing: a notice and its detailed email claim each other 1:1 ──
-const Q = (o) => ({ Status: 'Created', Property_ID: '42', Pair_ID: '', Received_At: '2026-10-12T18:14:52.000Z', ...o });
+const Q = (o) => ({ Status: 'Created', Property_ID: '42', Unit_ID: '7', Pair_ID: '', Received_At: '2026-10-12T18:14:52.000Z', ...o });
 const near = '2026-10-12T18:14:56.000Z';
 eq('detail finds its unclaimed notice', intakePairCandidates([Q({ ID: '1', Kind: 'notice' })], 'notice', '42', near).map(x => x.ID), ['1']);
 eq('notice finds its unclaimed detail', intakePairCandidates([Q({ ID: '2', Kind: 'detail', Ref_Key: '967927-1' })], 'detail', '42', near).map(x => x.ID), ['2']);
