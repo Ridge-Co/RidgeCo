@@ -6636,6 +6636,7 @@ async function intakeEmail(env, body, retryRow) {
       if (!String(stub.wo.Tenant_ID || '') && a.tenant_id) f.Tenant_ID = a.tenant_id;
       await updateWOFields(env, woId, f);
       if (descIsStub) stub.newDesc = newDesc;
+      stub.fields = f;
     }
     else {
       await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
