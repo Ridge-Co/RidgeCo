@@ -12853,6 +12853,10 @@ async function adminNotify(env, body) {
 //     state write, SMS, email, telemetry), GET /watchdog/door-system (read-only live status) and the
 //     STAGING-ONLY POST /watchdog/door-system/test that runs one real pass with an injected health
 //     payload / simulated failure and returns the SMS text it would send (SMS is the staging stub).
+// NOTE (found in staging, Oct 12 2026): a plain fetch() from one Worker to another Worker on the SAME Cloudflare
+// zone/account workers.dev subdomain fails with Cloudflare error 1042 (returned as an HTTP 404 page) unless the
+// `global_fetch_strictly_public` compatibility flag is set - wrangler.toml now sets it. Without it this watchdog
+// would see a permanent http_404 and cry wolf.
 const DOOR_WD_URL = 'https://str-automation.brett-2f8.workers.dev/health';
 const DOOR_WD_TIMEOUT_MS = 8000;
 const DOOR_WD_STALE_MS = 75 * 60000;
@@ -12998,7 +13002,9 @@ async function doorWdAttempt(fetchImpl, timeoutMs) {
     const text = await resp.text();
     let parsed, bad = false;
     try { parsed = JSON.parse(text); } catch (e) { bad = true; }
-    return { status, json: bad ? undefined : parsed, bad_json: bad };
+    // keep a short body excerpt for diagnosis (telemetry / status only, never the SMS) when the reply is not healthy JSON
+    const snippet = (bad || status !== 200) ? String(text).replace(/\s+/g, ' ').slice(0, 160) : undefined;
+    return { status, json: bad ? undefined : parsed, bad_json: bad, snippet };
   })();
   work.catch((e) => { console.error('door-watchdog: health attempt rejected:', e && e.message); });
   try { return await Promise.race([work, timeoutP]); }
@@ -13053,7 +13059,7 @@ async function runDoorWatchdogPass(env, opts) {
   let fr;
   try { fr = await fetchDoorHealth(io.fetch || fetch, { timeoutMs: opts.timeoutMs, retryDelayMs: opts.retryDelayMs }); }
   catch (e) { fr = { error: 'watchdog fetch wrapper threw', attempts: 0 }; fail('fetch_wrapper', e); }
-  res.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts || 0, error: fr.error ? scrubPhones(fr.error).slice(0, 200) : null };
+  res.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts || 0, error: fr.error ? scrubPhones(fr.error).slice(0, 200) : null, snippet: fr.snippet || null };
 
   // 2. state (read Config directly: fetchConfig swallows errors, which would hide an unreadable store)
   let cfg = null, stateRaw = '';
@@ -13111,7 +13117,7 @@ async function runDoorWatchdogPass(env, opts) {
       fail('delivery', 'neither SMS nor email delivered the ' + decision + '; it will be retried next pass');
       await tel(false, 'delivery_failed_' + decision, 'key=' + ev.key + ' - no channel delivered; retrying next pass');
     } else if (decision === 'alert') {
-      await tel(false, 'problem_alerted', 'key=' + ev.key + ' via=' + (smsOk ? 'sms' : 'email'));
+      await tel(false, 'problem_alerted', 'key=' + ev.key + ' via=' + (smsOk ? 'sms' : 'email') + (res.fetch && res.fetch.snippet ? ' body=' + res.fetch.snippet : '') + (res.fetch && res.fetch.error ? ' err=' + res.fetch.error : ''));
     } else {
       await tel(true, 'recovered', 'door-code system healthy again via=' + (smsOk ? 'sms' : 'email'));
     }
@@ -13178,7 +13184,7 @@ async function doorWatchdogStatus(env) {
   out.healthy = ev.healthy; out.reason_key = ev.key; out.reasons = ev.reasons;
   out.would_send = ev.healthy ? null : doorWdComposeAlert(ev.reasons);
   out.would_do = doorWdDecide(ev, st, nowMs);
-  out.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts, error: fr.error || null };
+  out.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts, error: fr.error || null, snippet: fr.snippet || null };
   out.state = doorWdPrune(st, nowMs);
   if (out.errors.length) out.ok = false;
   return json(out, out.ok ? 200 : 500);

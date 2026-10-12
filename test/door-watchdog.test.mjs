@@ -173,6 +173,10 @@ const jres = (obj, status) => new Response(typeof obj === 'string' ? obj : JSON.
   const t0 = Date.now();
   const r6 = await W.fetchDoorHealth(() => new Promise(() => {}), { timeoutMs: 60, retryDelayMs: 1 });
   t('hung fetch -> timeout error (does not hang the cron)', r6.error && r6.timeout === true && r6.attempts === 2 && Date.now() - t0 < 2000);
+  const r8 = await W.fetchDoorHealth(async () => jres('error code: 1042', 404), { timeoutMs: 200 });
+  t('non-healthy reply keeps a short body excerpt for diagnosis', r8.status === 404 && r8.snippet === 'error code: 1042');
+  const r9 = await W.fetchDoorHealth(async () => jres(good()), { timeoutMs: 200 });
+  t('healthy reply carries no snippet', r9.snippet === undefined);
   const r7 = await W.fetchDoorHealth(async () => { throw new Error('dns'); }, { timeoutMs: 200, retryDelayMs: 1 });
   t('throwing fetch -> error result, never throws', r7.error === 'dns' && r7.attempts === 2);
 }
@@ -404,6 +408,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   const cronFn = block.slice(block.indexOf('async function doorWatchdogCron('), block.indexOf('// GET /watchdog/door-system - read-only'));
   t('cron wrapper: own try/catch, logs telemetry AND alerts, never rethrows', /try \{\s*const wd = await runDoorWatchdogPass\(env\)/.test(cronFn) && /Job_Type: DOOR_WD_JOB/.test(cronFn) && /alertAdminOnFailure\(env, 'door_watchdog'/.test(cronFn) && !/throw /.test(cronFn));
   const toml = fs.readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
+  t('same-account Worker fetch enabled (global_fetch_strictly_public) - otherwise Cloudflare answers error 1042/404', /compatibility_flags = \["global_fetch_strictly_public"\]/.test(toml));
   t('no new cron trigger added (account quota is full)', /crons = \["0 11 \* \* \*", "30 12 \* \* 1", "0 12 \* \* 3", "0 13 \* \* 1", "\*\/15 \* \* \* \*"\]/.test(toml));
   const testFn = block.slice(block.indexOf('async function doorWatchdogTest('));
   t('test hook is staging-only (first statement)', /^async function doorWatchdogTest\(env, url, body\) \{\s*if \(!isStaging\(env, url\)\) return json\(\{ error: 'Not found' \}, 404\);/.test(testFn));
