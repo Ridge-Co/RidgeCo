@@ -6763,12 +6763,15 @@ async function intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow) 
     await intakeEnsureTab(env);
     const queue = await fetchTab(env, INTAKE_TAB);
     if (!retryRow) {
-      const prior = queue.find(q => ['Created', 'Parked', 'Covered'].includes(q.Status) && q.Message_ID === msgId);
+      const reqKey = a.parsed && a.parsed.request_id ? 'req:' + a.parsed.request_id : '';   // the same request re-sent as a new email must not make a second WO
+      const prior = queue.find(q => ['Created', 'Parked', 'Covered'].includes(q.Status) && (q.Message_ID === msgId || (reqKey && q.Ref_Key === reqKey)));
       if (prior) return json({ success: true, duplicate: true, kind: 'notice', status: prior.Status, wo_id: prior.WO_ID || '' });
     }
     const receivedAt = String(body.received_at || new Date().toISOString());
     const p = a.parsed || {};
-    const baseRow = { Kind: 'notice', Received_At: receivedAt, Source: 'Buildium', Ref_Key: '', Message_ID: msgId, Subject: subject.slice(0, 200), Address_Raw: p.address_raw || '', Title: 'Buildium notice (details pending)', Parsed_JSON: JSON.stringify(safeParsed).slice(0, 45000), Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() };
+    // The stored copy of the email never keeps the login token of the Buildium link.
+    const storedBody = text.slice(0, 45000).replace(/(\/vendor\/requests\/[A-Za-z0-9-]{8,64})\?[^\s"'<>)\]]*/gi, '$1?[redacted]').replace(/token=[^\s"'<>&)\]]+/gi, 'token=[redacted]');
+    const baseRow = { Kind: 'notice', Received_At: receivedAt, Source: 'Buildium', Ref_Key: p.request_id ? 'req:' + p.request_id : '', Message_ID: msgId, Subject: subject.slice(0, 200), Address_Raw: p.address_raw || '', Title: 'Buildium notice (details pending)', Parsed_JSON: JSON.stringify(safeParsed).slice(0, 45000), Raw_Body: storedBody, Processed_At: new Date().toISOString() };
     const save = async (fields) => {
       if (retryRow) { const u = await updateRow(env, INTAKE_TAB, String(retryRow.ID), { Kind: 'notice', ...fields }); if (u.status !== 200) throw new Error('Intake_Queue retry row update failed'); return String(retryRow.ID); }
       return await intakeAppendRow(env, { ...baseRow, ...fields });
