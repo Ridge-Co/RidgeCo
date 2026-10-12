@@ -6394,7 +6394,7 @@ function parseBuildiumNotice(subject, rawText) {
 const INTAKE_STUB_DESC = 'Buildium work order request - the number and description are behind the Buildium login (use the Buildium link in the text / email). Fills in automatically if the detailed email arrives.';
 const INTAKE_STUB_NOTE = 'Source: Buildium notice (link-only email: no number or description yet)';
 const INTAKE_STUB_REF = 'Buildium (number pending)';
-const INTAKE_PAIR_WINDOW_MS = 20 * 60 * 1000;
+const INTAKE_PAIR_WINDOW_MS = 3 * 60 * 1000;   // a notice and its detailed email are sent seconds apart
 const INTAKE_WO_DEAD = /^(?:cancel|void|closed|paid|complete|invoiced|declined)/i;
 
 function intakeNear(a, b) { const x = Date.parse(a), y = Date.parse(b); return isFinite(x) && isFinite(y) && Math.abs(x - y) <= INTAKE_PAIR_WINDOW_MS; }
