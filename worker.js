@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-12.2-buildium-email-intake';
+const BUILD_VERSION = '2026-10-12.3-door-watchdog';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -393,6 +393,7 @@ const _hubWorkerCore = {
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
         if (path === '/properties')             return await getSheet(env, 'Properties');
@@ -583,6 +584,7 @@ const _hubWorkerCore = {
         }
         if (path === '/staging/ui-test-window') return await uiTestWindowHandler(env, url, request, body);
         if (path === '/staging/ui-test-session') return await uiTestSessionHandler(env, url, body);
+        if (path === '/watchdog/door-system/test') return await doorWatchdogTest(env, url, body);
         if (path === '/admin/seed-test-fixtures') return await seedTestFixtures(env, url);
         if (path === '/admin/seed-test-receipt') return await seedTestReceipt(env, url, body);
         // Scope-proposal e-sign (Aug 19) wants the signer's IP/device on the signature row —
@@ -970,7 +972,8 @@ const _hubWorkerCore = {
     // which stays in place as a redundant second path — both call the same idempotent
     // function, so having both fire is harmless, just occasionally redundant work).
     if (cron === '*/15 * * * *') {
-      try { await cronSweep(env); } catch (e) { /* non-fatal — next run tries again */ }
+      await doorWatchdogCron(env); // door-code watchdog FIRST (never throws; see its block)
+      await cronSweepLogged(env);  // failures logged to Ops_Telemetry, no longer swallowed
       // STR cleaning-coverage guard for inspection booking: no-op until configured; alerts Brett on its own failures.
       try { await inspStrGuardTick(env); } catch (e) { console.error('insp: cleaning guard tick failed:', e && e.message); try { await inspAlert(env, 'str_guard_tick', String(e && e.message)); } catch (e2) { console.error('insp: could not alert about guard tick failure:', e2 && e2.message); } }
       return;
@@ -12825,6 +12828,414 @@ async function adminNotify(env, body) {
   return done(502, false, { ok: false, error: 'SMS not sent: ' + why + ((r && r.code) ? ' (twilio code ' + r.code + ')' : '') }, `FAILED sms ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}: ${why}`);
 }
 
+// ── Door-code system watchdog (Oct 12 2026) ──────────────────────────────────────────────────────────
+// An independent check, run from the Hub's EXISTING */15 cron (no new trigger), that GETs the public
+// /health of the str-automation Worker (guest door codes + alerts) and texts Brett when it looks broken:
+// fetch throws/times out (8s) / non-200 / non-JSON; ok !== true; any secrets_set value not true;
+// last_tick null/invalid/older than 75 min (normally refreshes every ~25-30 min); problems[] non-empty.
+//   * A MISSING last_tick key means "not deployed yet" and is tolerated for 24h (tracked in state as
+//     absent_since), after which it becomes its own problem - so the check can never stay silently off.
+//   * Missing `problems` is [].
+//   * Dedupe: at most ONE text per distinct reason-set per 6h, plus ONE "RECOVERED" text when a
+//     previously alerted problem clears. State = ONE Config row (`door_watchdog_state`, small JSON:
+//     {active, sent:{<reason-key>:<ISO>}, absent_since}) written + read back to verify, the same
+//     Config-row pattern as admin_notify_daily_count / failure_alert_last_sent_*. No new tab/binding.
+//   * Fail-loud (Brett, non-negotiable): every failure path (health fetch itself, Config/state read,
+//     corrupt state, state write, SMS, email fallback, telemetry write, an unexpected throw) is logged
+//     (console + Ops_Telemetry Job_Type `door_watchdog`, Success=FALSE) and returned in `errors`. If the
+//     SMS cannot be delivered (Twilio off/failing, admin_phone missing) an email goes to the same
+//     address inspAlert uses; if NEITHER channel delivers the alert is NOT marked sent, so the next
+//     15-min pass retries it. If the state store is unavailable a per-isolate in-memory copy limits
+//     repeats until it recovers. The scheduled() caller wraps the whole pass so it can never break
+//     the other jobs.
+//   * Testable without waiting for cron: pure evaluateDoorHealth / doorWdDecide / doorWdNextState /
+//     doorWdComposeAlert (unit tests), runDoorWatchdogPass with injectable io (fetch, Config read,
+//     state write, SMS, email, telemetry), GET /watchdog/door-system (read-only live status) and the
+//     STAGING-ONLY POST /watchdog/door-system/test that runs one real pass with an injected health
+//     payload / simulated failure and returns the SMS text it would send (SMS is the staging stub).
+const DOOR_WD_URL = 'https://str-automation.brett-2f8.workers.dev/health';
+const DOOR_WD_TIMEOUT_MS = 8000;
+const DOOR_WD_STALE_MS = 75 * 60000;
+const DOOR_WD_DEDUPE_MS = 6 * 3600000;
+const DOOR_WD_ABSENT_GRACE_MS = 24 * 3600000;
+const DOOR_WD_STATE_KEY = 'door_watchdog_state';
+const DOOR_WD_JOB = 'door_watchdog';
+const DOOR_WD_MAX_LIST = 6;
+let __doorWdMem = null; // per-isolate fallback copy of the state when the Config row cannot be read/written
+
+// Pure: a key name taken from the (untrusted) health JSON, made safe for an SMS / state key.
+function doorWdName(v) {
+  const s = String(v == null ? '' : v);
+  return /^[A-Za-z0-9_.:-]{1,48}$/.test(s) ? s : '(invalid)';
+}
+function doorWdList(arr) {
+  const a = arr.slice(0, DOOR_WD_MAX_LIST).join(', ');
+  return arr.length > DOOR_WD_MAX_LIST ? a + ' +' + (arr.length - DOOR_WD_MAX_LIST) + ' more' : a;
+}
+function doorWdAge(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  return m < 120 ? m + 'm' : Math.round(m / 60) + 'h';
+}
+
+// Pure. `fr` is the fetch result: {error, timeout} | {status, json, bad_json}. Returns
+// {healthy, reasons:[{code,text}], key, lastTickAbsent}. `key` is the sorted, joined reason codes: it
+// identifies the reason-SET for dedupe and never contains volatile data (ages, error text).
+function evaluateDoorHealth(fr, nowMs, opts) {
+  opts = opts || {};
+  const reasons = [];
+  const add = (code, text) => reasons.push({ code, text });
+  let lastTickAbsent = false;
+  const finish = () => {
+    const seen = new Set();
+    const uniq = reasons.filter(r => !seen.has(r.code) && seen.add(r.code));
+    return { healthy: uniq.length === 0, reasons: uniq, key: uniq.map(r => r.code).sort().join('|'), lastTickAbsent };
+  };
+  if (!fr || typeof fr !== 'object') { add('unreachable', 'health check returned nothing'); return finish(); }
+  if (fr.error) { add('unreachable', fr.timeout ? 'health check timed out' : 'health check unreachable'); return finish(); }
+  if (fr.status !== 200) {
+    const st = Number.isInteger(fr.status) ? String(fr.status) : 'unknown';
+    add('http_' + st, 'health returned HTTP ' + st);
+    return finish();
+  }
+  if (fr.bad_json || !fr.json || typeof fr.json !== 'object' || Array.isArray(fr.json)) { add('bad_json', 'health response is not valid JSON'); return finish(); }
+  const j = fr.json;
+  if (j.ok !== true) add('not_ok', 'health reports ok is not true');
+
+  const s = j.secrets_set;
+  if (!s || typeof s !== 'object' || Array.isArray(s)) add('secrets_field', 'secrets_set missing from health');
+  else Object.keys(s).filter(k => s[k] !== true).sort().forEach(k => add('secret:' + doorWdName(k), 'secret ' + doorWdName(k) + ' not set'));
+
+  if (!Object.prototype.hasOwnProperty.call(j, 'last_tick')) {
+    lastTickAbsent = true; // "not deployed yet" - tolerated only for DOOR_WD_ABSENT_GRACE_MS (tracked by the caller)
+    if (opts.absentSinceMs != null && isFinite(opts.absentSinceMs) && nowMs - opts.absentSinceMs > DOOR_WD_ABSENT_GRACE_MS) {
+      add('tick_field_missing', 'health has no last_tick field (tick check never went live)');
+    }
+  } else if (j.last_tick === null) {
+    add('tick_null', 'no tick recorded (last_tick null)');
+  } else {
+    const t = typeof j.last_tick === 'string' ? Date.parse(j.last_tick) : NaN;
+    if (!isFinite(t)) add('tick_invalid', 'last_tick is not a valid time');
+    else if (nowMs - t > DOOR_WD_STALE_MS) add('tick_stale', 'last tick ' + doorWdAge(nowMs - t) + ' ago (expected under 75m)');
+  }
+
+  if (j.problems != null) {
+    if (!Array.isArray(j.problems)) add('problems_field', 'problems field malformed');
+    else Array.from(new Set(j.problems.map(p => doorWdName(p && typeof p === 'object' ? p.key : p)))).sort().forEach(k => add('problem:' + k, 'problem ' + k));
+  }
+  return finish();
+}
+
+// Pure: the exact SMS text. Reasons are summarised short; secrets and problems are grouped.
+function doorWdComposeAlert(reasons) {
+  const parts = [], secrets = [], probs = [];
+  for (const r of reasons) {
+    if (r.code.startsWith('secret:')) secrets.push(r.code.slice(7));
+    else if (r.code.startsWith('problem:')) probs.push(r.code.slice(8));
+    else parts.push(r.text);
+  }
+  if (secrets.length) parts.push('secrets not set: ' + doorWdList(secrets));
+  if (probs.length) parts.push('problems: ' + doorWdList(probs));
+  return 'ALERT: door-code system (str-automation): ' + parts.join('; ').slice(0, 240) + '. Guests may not get codes or alerts. Health: ' + DOOR_WD_URL;
+}
+function doorWdComposeRecovered() {
+  return 'RECOVERED: door-code system (str-automation) is healthy again. Health: ' + DOOR_WD_URL;
+}
+
+// Pure: parse the stored state cell. Never throws; `corrupt` is true when a non-empty cell is unusable
+// (the caller reports that loudly and carries on with a clean state).
+function doorWdParseState(raw) {
+  const clean = { active: false, sent: {}, absent_since: null };
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { state: clean, corrupt: false };
+  let o;
+  try { o = JSON.parse(s); } catch (e) { return { state: clean, corrupt: true }; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return { state: clean, corrupt: true };
+  const sent = {};
+  if (o.sent && typeof o.sent === 'object' && !Array.isArray(o.sent)) {
+    for (const k of Object.keys(o.sent)) if (typeof o.sent[k] === 'string' && isFinite(Date.parse(o.sent[k]))) sent[k] = o.sent[k];
+  }
+  const abs = typeof o.absent_since === 'string' && isFinite(Date.parse(o.absent_since)) ? o.absent_since : null;
+  return { state: { active: o.active === true, sent, absent_since: abs }, corrupt: false };
+}
+function doorWdPrune(state, nowMs) {
+  const sent = {};
+  for (const k of Object.keys(state.sent || {})) {
+    const t = Date.parse(state.sent[k]);
+    if (isFinite(t) && nowMs - t < DOOR_WD_DEDUPE_MS) sent[k] = state.sent[k];
+  }
+  return { active: !!state.active, sent, absent_since: state.absent_since || null };
+}
+
+// Pure: what to do this pass. 'alert' | 'suppressed' (same reason-set already texted <6h ago) |
+// 'recovered' (healthy now but an alert was delivered earlier) | 'none'.
+function doorWdDecide(ev, state, nowMs) {
+  const st = doorWdPrune(state, nowMs);
+  if (!ev.healthy) {
+    const last = Date.parse(st.sent[ev.key]);
+    return (isFinite(last) && nowMs - last < DOOR_WD_DEDUPE_MS) ? 'suppressed' : 'alert';
+  }
+  return st.active ? 'recovered' : 'none';
+}
+
+// Pure: the state to persist after this pass. An alert/recovery only counts once it was DELIVERED.
+function doorWdNextState(state, ev, decision, delivered, nowMs) {
+  const st = doorWdPrune(state, nowMs);
+  const iso = new Date(nowMs).toISOString();
+  if (decision === 'alert' && delivered) { st.active = true; st.sent[ev.key] = iso; }
+  if (decision === 'recovered' && delivered) { st.active = false; st.sent = {}; }
+  st.absent_since = ev.lastTickAbsent ? (state.absent_since || iso) : null;
+  return st;
+}
+
+// One attempt at the health GET. Never throws: {error, timeout} or {status, json, bad_json}.
+async function doorWdAttempt(fetchImpl, timeoutMs) {
+  const ctl = new AbortController();
+  let timer;
+  const timeoutP = new Promise((_, rej) => { timer = setTimeout(() => { try { ctl.abort(); } catch (e) { console.error('door-watchdog: abort failed:', e && e.message); } rej(Object.assign(new Error('timeout after ' + timeoutMs + 'ms'), { timeout: true })); }, timeoutMs); });
+  const work = (async () => {
+    const resp = await fetchImpl(DOOR_WD_URL, { signal: ctl.signal, headers: { Accept: 'application/json' } });
+    const status = resp.status;
+    const text = await resp.text();
+    let parsed, bad = false;
+    try { parsed = JSON.parse(text); } catch (e) { bad = true; }
+    return { status, json: bad ? undefined : parsed, bad_json: bad };
+  })();
+  work.catch((e) => { console.error('door-watchdog: health attempt rejected:', e && e.message); });
+  try { return await Promise.race([work, timeoutP]); }
+  catch (e) { return { error: String((e && e.message) || e).slice(0, 200), timeout: !!(e && e.timeout) }; }
+  finally { clearTimeout(timer); }
+}
+// Up to 2 attempts (a transient network error / 5xx is retried once) so a single blip does not text Brett.
+async function fetchDoorHealth(fetchImpl, o) {
+  o = o || {};
+  const timeoutMs = o.timeoutMs || DOOR_WD_TIMEOUT_MS;
+  let last = null, attempts = 0;
+  for (let i = 0; i < 2; i++) {
+    attempts++;
+    last = await doorWdAttempt(fetchImpl, timeoutMs);
+    const transient = !!last.error || (typeof last.status === 'number' && last.status >= 500);
+    if (!transient) break;
+    if (i === 0) await new Promise(r => setTimeout(r, o.retryDelayMs == null ? 1500 : o.retryDelayMs));
+  }
+  last.attempts = attempts;
+  return last;
+}
+
+async function doorWdReadConfig(env) {
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  return configFromValues(data && data.values);
+}
+// Write the state cell and READ IT BACK (a write that returned 200 but did not land is a failure).
+async function doorWdWriteState(env, value) {
+  const wr = await setConfigKey(env, { key: DOOR_WD_STATE_KEY, value });
+  if (!wr || wr.status !== 200) throw new Error('Config write returned HTTP ' + (wr && wr.status));
+  const back = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values);
+  if (String(back[DOOR_WD_STATE_KEY] || '').trim() !== String(value || '').trim()) throw new Error('state did not persist (read-back mismatch)');
+}
+
+// One watchdog pass. `opts`: {nowMs, test, timeoutMs, retryDelayMs, io:{fetch, readConfig, writeState,
+// sendSms(phone,text), sendEmail({to,subject,html}), logTelemetry(env,rec)}}. Never throws for an expected
+// failure: everything is logged + returned in `errors` (res.ok=false). No phone number is ever returned.
+async function runDoorWatchdogPass(env, opts) {
+  opts = opts || {};
+  const io = opts.io || {};
+  const t0 = Date.now();
+  const nowMs = opts.nowMs != null ? opts.nowMs : Date.now();
+  const res = { ok: true, action: 'none', healthy: null, reason_key: '', reasons: [], sms_text: null, delivered: null, delivery: { sms: null, email: null }, fetch: null, state_before: null, state_after: null, state_saved: null, errors: [] };
+  const fail = (stage, e) => { const m = scrubPhones((e && e.message) || e).slice(0, 200); res.ok = false; res.errors.push(stage + ': ' + m); console.error('door-watchdog:', stage, m); return m; };
+  const tel = async (success, stage, notes) => {
+    try {
+      await (io.logTelemetry || logTelemetry)(env, { Source: 'worker', Job_Type: DOOR_WD_JOB, Skill_Or_Endpoint: opts.test ? 'test/door-watchdog' : 'scheduled/door-watchdog', Success: success ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: ((opts.test ? '[test] ' : '') + stage + ': ' + notes).slice(0, 480) });
+    } catch (e) { fail('telemetry_write(' + stage + ')', e); }
+  };
+
+  // 1. health
+  let fr;
+  try { fr = await fetchDoorHealth(io.fetch || fetch, { timeoutMs: opts.timeoutMs, retryDelayMs: opts.retryDelayMs }); }
+  catch (e) { fr = { error: 'watchdog fetch wrapper threw', attempts: 0 }; fail('fetch_wrapper', e); }
+  res.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts || 0, error: fr.error ? scrubPhones(fr.error).slice(0, 200) : null };
+
+  // 2. state (read Config directly: fetchConfig swallows errors, which would hide an unreadable store)
+  let cfg = null, stateRaw = '';
+  try { cfg = await (io.readConfig ? io.readConfig() : doorWdReadConfig(env)); stateRaw = cfg[DOOR_WD_STATE_KEY] || ''; }
+  catch (e) { const m = fail('state_read', e); await tel(false, 'state_read', m + ' (using in-memory state if any)'); }
+  let parsed = doorWdParseState(stateRaw);
+  if (parsed.corrupt) { fail('state_corrupt', 'stored door_watchdog_state is not valid JSON; starting clean'); await tel(false, 'state_corrupt', 'stored state unparseable; reset to clean'); }
+  let state = parsed.state;
+  if (__doorWdMem && (cfg === null || __doorWdMem.dirty)) state = __doorWdMem.state; // store unreadable, or our last write to it failed
+  res.state_before = doorWdPrune(state, nowMs);
+
+  // 3. decide
+  const absentMs = state.absent_since ? Date.parse(state.absent_since) : null;
+  const ev = evaluateDoorHealth(fr, nowMs, { absentSinceMs: absentMs });
+  const decision = doorWdDecide(ev, state, nowMs);
+  res.healthy = ev.healthy; res.reason_key = ev.key; res.reasons = ev.reasons; res.action = decision;
+
+  // 4. deliver
+  let delivered = null;
+  if (decision === 'alert' || decision === 'recovered') {
+    const text = decision === 'alert' ? doorWdComposeAlert(ev.reasons) : doorWdComposeRecovered();
+    res.sms_text = text;
+    const phone = cfg ? String(cfg.admin_phone || '').trim() : '';
+    let smsOk = false, smsOutcome = 'failed', smsDetail = '';
+    if (!cfg) smsDetail = 'Config unreadable, admin_phone unknown';
+    else if (!phone) smsDetail = 'Config admin_phone not set';
+    else {
+      try {
+        const r = await (io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text));
+        if (r && r.skipped) smsDetail = 'skipped: ' + scrubPhones(r.reason || 'sending disabled');
+        else if (r && r.staged) { smsOk = true; smsOutcome = 'staged'; }
+        else if (r && r.sid && !r.error && !r.code) { smsOk = true; smsOutcome = 'sent'; }
+        else smsDetail = scrubPhones((r && (r.error || r.message)) || 'unexpected response (no message sid)').slice(0, 200);
+      } catch (e) { smsDetail = 'threw: ' + scrubPhones((e && e.message) || e).slice(0, 200); }
+    }
+    res.delivery.sms = { ok: smsOk, outcome: smsOutcome, detail: smsDetail || null };
+    let emailOk = false;
+    if (!smsOk) {
+      fail('sms', smsDetail);
+      await tel(false, 'sms_' + decision, smsDetail);
+      const to = (cfg && cfg.INSP_NOTIFY_EMAIL) || 'brett@bmoremanagement.com'; // same fallback address inspAlert uses
+      const subject = decision === 'alert' ? 'ALERT: door-code system (str-automation)' : 'RECOVERED: door-code system (str-automation)';
+      const html = '<p>' + String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</p><p>(Sent by email because the text message could not be delivered: ' + String(smsDetail).replace(/&/g, '&amp;').replace(/</g, '&lt;') + ')</p>';
+      let emailDetail = '';
+      try {
+        const r = await (io.sendEmail ? io.sendEmail({ to, subject, html }) : gmailSendEmail(env, { to, subject, html }));
+        if (r && (r.sent || r.staged)) { emailOk = true; res.delivery.email = { ok: true, outcome: r.staged ? 'staged' : 'sent', detail: null }; }
+        else emailDetail = scrubPhones((r && (r.error || r.message)) || 'unexpected response (not sent)').slice(0, 200);
+      } catch (e) { emailDetail = 'threw: ' + scrubPhones((e && e.message) || e).slice(0, 200); }
+      if (!emailOk) { res.delivery.email = { ok: false, outcome: 'failed', detail: emailDetail }; fail('email_fallback', emailDetail); await tel(false, 'email_fallback_' + decision, emailDetail); }
+    }
+    delivered = smsOk || emailOk;
+    res.delivered = delivered;
+    if (!delivered) {
+      fail('delivery', 'neither SMS nor email delivered the ' + decision + '; it will be retried next pass');
+      await tel(false, 'delivery_failed_' + decision, 'key=' + ev.key + ' - no channel delivered; retrying next pass');
+    } else if (decision === 'alert') {
+      await tel(false, 'problem_alerted', 'key=' + ev.key + ' via=' + (smsOk ? 'sms' : 'email'));
+    } else {
+      await tel(true, 'recovered', 'door-code system healthy again via=' + (smsOk ? 'sms' : 'email'));
+    }
+  }
+
+  // 5. persist state if it changed (verified write)
+  const next = doorWdNextState(state, ev, decision, delivered === true, nowMs);
+  res.state_after = next;
+  const baseline = { active: !!state.active, sent: state.sent || {}, absent_since: state.absent_since || null };
+  if (JSON.stringify(next) !== JSON.stringify(baseline) || parsed.corrupt || (__doorWdMem && __doorWdMem.dirty)) {
+    try {
+      await (io.writeState ? io.writeState(JSON.stringify(next)) : doorWdWriteState(env, JSON.stringify(next)));
+      res.state_saved = true;
+      __doorWdMem = { state: next, dirty: false };
+    } catch (e) {
+      res.state_saved = false;
+      __doorWdMem = { state: next, dirty: true };
+      const m = fail('state_write', e);
+      await tel(false, 'state_write', m + ' (dedupe/recovery state not persisted; in-memory copy used until it recovers)');
+    }
+  }
+  return res;
+}
+
+// The scheduled() entry points for the watchdog + the (formerly swallowed) sweep. Both NEVER throw, so
+// neither can break the other jobs in scheduled(). Every failure inside runDoorWatchdogPass is already
+// logged + alerted there; the catch here is for a genuinely unexpected throw.
+async function doorWatchdogCron(env) {
+  try {
+    const wd = await runDoorWatchdogPass(env);
+    if (!wd.ok) console.error('door-watchdog: pass finished with errors:', JSON.stringify(wd.errors));
+    return wd;
+  } catch (e) {
+    const m = String((e && e.message) || e).slice(0, 300);
+    console.error('door-watchdog: pass threw:', m);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: DOOR_WD_JOB, Skill_Or_Endpoint: 'scheduled/door-watchdog', Success: 'FALSE', Notes: ('unexpected throw: ' + m).slice(0, 480) }); } catch (e2) { console.error('door-watchdog: telemetry write failed after throw:', e2 && e2.message); }
+    try { await alertAdminOnFailure(env, 'door_watchdog', m); } catch (e3) { console.error('door-watchdog: admin alert failed after throw:', e3 && e3.message); }
+    return { ok: false, errors: ['pass threw: ' + m] };
+  }
+}
+// Oct 12 2026 (nothing may fail silently): cronSweep's failure used to be swallowed in scheduled().
+async function cronSweepLogged(env) {
+  try { await cronSweep(env); }
+  catch (e) {
+    const m = String((e && e.message) || e).slice(0, 300);
+    console.error('cronSweep failed:', m);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'cron_sweep', Skill_Or_Endpoint: 'scheduled/cron-sweep', Success: 'FALSE', Notes: ('cronSweep threw: ' + m).slice(0, 480) }); } catch (e2) { console.error('cronSweep failure telemetry write failed:', e2 && e2.message); }
+  }
+}
+
+// GET /watchdog/door-system - read-only: live health evaluation + stored state. Sends nothing, writes nothing.
+async function doorWatchdogStatus(env) {
+  const nowMs = Date.now();
+  const out = { ok: true, errors: [], url: DOOR_WD_URL };
+  const fr = await fetchDoorHealth(fetch, {});
+  let st = { active: false, sent: {}, absent_since: null };
+  try {
+    const cfg = await doorWdReadConfig(env);
+    const p = doorWdParseState(cfg[DOOR_WD_STATE_KEY]);
+    st = p.state;
+    if (p.corrupt) out.errors.push('stored door_watchdog_state is not valid JSON');
+  } catch (e) { out.errors.push('could not read state: ' + scrubPhones((e && e.message) || e).slice(0, 200)); }
+  const ev = evaluateDoorHealth(fr, nowMs, { absentSinceMs: st.absent_since ? Date.parse(st.absent_since) : null });
+  out.healthy = ev.healthy; out.reason_key = ev.key; out.reasons = ev.reasons;
+  out.would_send = ev.healthy ? null : doorWdComposeAlert(ev.reasons);
+  out.would_do = doorWdDecide(ev, st, nowMs);
+  out.fetch = { status: fr.status == null ? null : fr.status, attempts: fr.attempts, error: fr.error || null };
+  out.state = doorWdPrune(st, nowMs);
+  if (out.errors.length) out.ok = false;
+  return json(out, out.ok ? 200 : 500);
+}
+
+// POST /watchdog/door-system/test - STAGING ONLY (404 elsewhere); reachable with HUB_TEST_TOKEN / an open
+// ui-test window / WORKER_SECRET. Runs ONE real pass (same code as the cron) with injected inputs and
+// returns what it did, including the exact SMS text. SMS defaults to the staging stub (sendSMSRaw only logs
+// on staging) so the Twilio kill-switch does not hide the text; sim.sms='gated' goes through the real sendSMS
+// gate. The only things it writes are the one door_watchdog_state Config row and Ops_Telemetry rows tagged [test].
+// body: {reset, seed_state, corrupt_state, now(ISO), health(obj), sim_fetch:{throw,hang,status,body,fail_first},
+//        timeout_ms, sim:{sms:'stub'|'gated'|'fail'|'throw', email:'fail', state_read_fail, state_write_fail,
+//        telemetry_fail, no_admin_phone}}
+async function doorWatchdogTest(env, url, body) {
+  if (!isStaging(env, url)) return json({ error: 'Not found' }, 404);
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const sim = b.sim && typeof b.sim === 'object' ? b.sim : {};
+  try {
+    if (b.reset) { await doorWdWriteState(env, ''); __doorWdMem = null; }
+    if (b.seed_state && typeof b.seed_state === 'object') await doorWdWriteState(env, JSON.stringify(b.seed_state));
+    if (b.corrupt_state) await doorWdWriteState(env, '{not json');
+  } catch (e) { return json({ ok: false, error: 'test setup failed: ' + scrubPhones((e && e.message) || e).slice(0, 200) }, 500); }
+  let nowMs = Date.now();
+  if (b.now !== undefined) { nowMs = Date.parse(b.now); if (!isFinite(nowMs)) return json({ ok: false, error: 'now must be an ISO time' }, 400); }
+  const io = {};
+  if (b.health !== undefined) io.fetch = async () => new Response(JSON.stringify(b.health), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  if (b.sim_fetch && typeof b.sim_fetch === 'object') {
+    const f = b.sim_fetch; let calls = 0;
+    const fallback = io.fetch;
+    io.fetch = async (u, init) => {
+      calls++;
+      if (f.fail_first && calls <= Number(f.fail_first)) throw new Error('simulated network failure');
+      if (f.throw) throw new Error(String(f.throw));
+      if (f.hang) return new Promise(() => {});
+      if (f.status === undefined && f.body === undefined && fallback) return fallback(u, init);
+      return new Response(f.body === undefined ? '' : (typeof f.body === 'string' ? f.body : JSON.stringify(f.body)), { status: f.status || 200 });
+    };
+  }
+  if (sim.state_read_fail || sim.no_admin_phone) {
+    io.readConfig = async () => {
+      if (sim.state_read_fail) throw new Error('simulated Config read failure');
+      const c = await doorWdReadConfig(env); c.admin_phone = ''; return c;
+    };
+  }
+  if (sim.state_write_fail) io.writeState = async () => { throw new Error('simulated Config write failure'); };
+  if (sim.telemetry_fail) io.logTelemetry = async () => { throw new Error('simulated Ops_Telemetry failure'); };
+  const smsMode = String(sim.sms || 'stub');
+  if (smsMode === 'gated') io.sendSms = (phone, text) => sendSMS(env, phone, text);
+  else if (smsMode === 'fail') io.sendSms = async () => ({ error: 'simulated Twilio failure' });
+  else if (smsMode === 'throw') io.sendSms = async () => { throw new Error('simulated SMS exception'); };
+  else io.sendSms = async (phone, text) => { const r = await sendSMSRaw(env, phone, text); return r && r.staged ? { staged: true } : r; };
+  if (sim.email === 'fail') io.sendEmail = async () => { throw new Error('simulated email failure'); };
+  const res = await runDoorWatchdogPass(env, { nowMs, test: true, timeoutMs: Number(b.timeout_ms) > 0 ? Number(b.timeout_ms) : undefined, retryDelayMs: b.sim_fetch ? 50 : undefined, io });
+  res.build_version = BUILD_VERSION;
+  return json(res);
+}
+
 // ── Gated tenant/vendor messaging (TWILIO_SMS_BUILD_BRIEF_v1.0) ──────────────
 // Message_Queue: every message that WOULD be sent gets a row here first, unconditionally —
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
@@ -19204,6 +19615,7 @@ async function isTestRecord(env, tab, id) {
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
+  if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
   if (['/admin/receipt-duplicate-audit/build-index', '/admin/receipt-duplicate-audit/scan', '/admin/receipt-duplicate-audit/mark'].includes(path)) {
     // These only ever write to two brand-new, isolated, non-PII cache/audit tabs
