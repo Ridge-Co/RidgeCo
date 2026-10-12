@@ -19847,6 +19847,18 @@ async function isTestRecord(env, tab, id) {
 // The record-level half of the HUB_TEST_TOKEN guard (the path/method half lives in the auth
 // gate as HUB_TEST_WRITE_PATHS). Deny-by-default: any path not explicitly handled here returns
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
+// Test-token guard for a link-only notice: a notice that resolves to exactly one property may only proceed when that
+// property is a TEST- fixture (it would create a stub WO there). No match / ambiguous => the notice just parks (queue row + alert only).
+async function intakeNoticeTestGuard(env, subject, text) {
+  const n = parseBuildiumNotice(subject, text);
+  if (!n.ok) return { ok: true };
+  const props = await fetchTab(env, 'Properties');
+  const m = intakeMatchProperty(n.address_raw, props);
+  if (m.matches.length !== 1) return { ok: true };
+  const okProp = String(m.matches[0].property.Access_Notes || '').startsWith('TEST-');
+  return { ok: okProp, debug: okProp ? undefined : 'intake-guard: notice resolves to a non-TEST property ' + m.matches[0].property.ID };
+}
+
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
