@@ -6353,13 +6353,13 @@ function parseBuildiumEmail(subject, rawText) {
   const head = afterRef.slice(0, headEnd);
   const locIdx = head.lastIndexOf(' Location ');
   if (locIdx < 0) { out.errors.push('no "Location" found'); out.title = head.trim(); return out; }
-  out.title = head.slice(0, locIdx).trim();
-  out.address_raw = head.slice(locIdx + ' Location '.length).trim();
-  out.description = jdIdx >= 0
+  out.title = head.slice(0, locIdx).trim().slice(0, 200);
+  out.address_raw = head.slice(locIdx + ' Location '.length).trim().slice(0, 200);
+  out.description = (jdIdx >= 0
     ? (intakeBetween(afterRef.slice(jdIdx), /^\sJob description\s+/i, /\s(?:Contact and scheduling information|Entry details|Parts and labor details|Vendor information)\s/i) || '')
-    : '';
-  out.entry_details = intakeBetween(t, /Entry details\s+/i, /\s+Entry notes\b/i) || '';
-  out.entry_notes = intakeBetween(t, /Entry notes\s*/i, /\s+Entry contacts\b/i) || '';
+    : '').slice(0, 1500);
+  out.entry_details = (intakeBetween(t, /Entry details\s+/i, /\s+Entry notes\b/i) || '').slice(0, 300);
+  out.entry_notes = (intakeBetween(t, /Entry notes\s*/i, /\s+Entry contacts\b/i) || '').slice(0, 1000);
   out.contacts = intakeParseContacts(intakeBetween(t, /Entry contacts\s*/i, /\s+(?:Parts and labor details|Vendor information)\b/i) || '');
   const orgM = /Work order from\s+(.+?)\s+\d{1,2}\/\d{1,2}\/\d{4}/i.exec(t) || /^(.*?):\s*Work order/i.exec(String(subject || ''));
   out.org = orgM ? orgM[1].trim() : '';
