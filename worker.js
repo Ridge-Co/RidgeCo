@@ -6619,8 +6619,8 @@ async function intakeEmail(env, body, retryRow) {
         const sms = await intakeSmsAdmin(env, `🔴 Buildium email intake error (${stage}): ${msg}`.slice(0, 300), '', null);
         await intakeAppendRow(env, { Received_At: String(body.received_at || ''), Source: 'Buildium', Message_ID: msgId, Subject: subject.slice(0, 200), Status: 'Error', Reason: `${stage}: ${msg}`.slice(0, 400), SMS_Status: sms, Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() });
       }
-    } catch (_) {}
-    return json({ success: false, error: msg, stage }, 500);
+    } catch (e2) { alertFailed = (alertFailed ? alertFailed + '; ' : '') + 'could not write Error row / alert SMS: ' + String((e2 && e2.message) || e2).slice(0, 200); }
+    return json({ success: false, error: msg, stage, alert_failed: alertFailed }, 500);
   }
 }
 
