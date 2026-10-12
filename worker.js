@@ -6370,6 +6370,42 @@ function parseBuildiumEmail(subject, rawText) {
   return out;
 }
 
+// The link-only "New work order: <address>" notice. It carries NO number, title, description or contacts
+// (all of that sits behind Buildium's login) - only the organisation, the address and a login-protected
+// link. Buildium sends this notice INSTEAD of the detailed email when the customer "requests" the job.
+function parseBuildiumNotice(subject, rawText) {
+  const out = { ok: false, errors: [] };
+  const raw = String(rawText == null ? '' : rawText).slice(0, INTAKE_MAX_BODY);
+  const t = intakeFlatten(raw);
+  const sm = /^\s*New work order\s*:\s*(.+?)\s*$/i.exec(String(subject || ''));
+  const bm = /You have a new work order from\s+(.+?)\s+for\s+(.+?)\.\s*(?:Review|$)/i.exec(t);
+  out.org = bm ? bm[1].trim().slice(0, 120) : '';
+  out.address_raw = ((sm && sm[1]) ? sm[1] : (bm ? bm[2] : '')).trim().slice(0, 200);
+  if (!out.address_raw) out.errors.push('no address in the notice subject or body');
+  // Only a managebuilding.com vendor-request link is ever kept (it goes into a text to Brett).
+  const lm = /https?:\/\/[A-Za-z0-9.-]{1,80}\.managebuilding\.com\/vendor\/requests\/[A-Za-z0-9-]{8,64}\?[^\s"'<>)\]]{0,600}/i.exec(raw.replace(/&amp;/g, '&'));
+  out.link = lm ? lm[0] : '';
+  out.ok = out.errors.length === 0;
+  return out;
+}
+
+const INTAKE_STUB_DESC = 'Buildium work order request - the number and description are behind the Buildium login (use the Buildium link in the text / email). Fills in automatically if the detailed email arrives.';
+const INTAKE_STUB_NOTE = 'Source: Buildium notice (link-only email: no number or description yet)';
+const INTAKE_STUB_REF = 'Buildium (number pending)';
+const INTAKE_PAIR_WINDOW_MS = 20 * 60 * 1000;
+const INTAKE_WO_DEAD = /^(?:cancel|void|closed|paid|complete|invoiced|declined)/i;
+
+function intakeNear(a, b) { const x = Date.parse(a), y = Date.parse(b); return isFinite(x) && isFinite(y) && Math.abs(x - y) <= INTAKE_PAIR_WINDOW_MS; }
+
+// Unclaimed Created queue rows of one kind ('notice' | 'detail') on one property, received within the pairing window, oldest first.
+// A notice and a detailed email for the SAME job arrive seconds apart; each claims at most one of the other kind (1:1), so two
+// separate jobs on one property never collapse into one and a lone notice is never swallowed.
+function intakePairCandidates(queue, kind, propertyId, receivedAt) {
+  return (queue || []).filter(q => q.Status === 'Created' && String(q.Property_ID) === String(propertyId) && !String(q.Pair_ID || '') &&
+    (kind === 'notice' ? q.Kind === 'notice' : (q.Kind === 'detail' || (!q.Kind && q.Ref_Key))) && intakeNear(q.Received_At, receivedAt))
+    .sort((x, y) => Date.parse(x.Received_At) - Date.parse(y.Received_At));
+}
+
 // Buildium location -> {norm, tokens}. Strips ", MD 21206" so what is left is
 // "<street address> [- <unit>] [<city>]" in qbNormAddress's folded form (Avenue->ave, North->n ...).
 function intakeNormLocation(addrRaw) {
