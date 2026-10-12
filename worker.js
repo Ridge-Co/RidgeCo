@@ -631,6 +631,7 @@ const _hubWorkerCore = {
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
         if (path === '/message/send-custom')      return await sendCustomMessage(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
+        if (path === '/admin-notify')              return await adminNotify(env, body);
         if (path === '/vendor-request/create')     return await createVendorRequest(env, body);
         if (path === '/vendor-task-request/create')       return await createVendorTaskRequest(env, body);
         if (path === '/vendor-task-request/mark-done')    return await markVendorTaskDone(env, body, callerRole, callerSessionId);
