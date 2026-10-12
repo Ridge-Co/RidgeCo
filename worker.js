@@ -6587,10 +6587,10 @@ async function intakeEmail(env, body, retryRow) {
       const wos = await fetchTab(env, 'Work_Orders');
       existingWO = wos.find(w => String(w.Owner_WO_Ref || '').trim() === refTag) || null;
       // A link-only notice for this same job may already have created a stub WO (no number / description yet): fill THAT in instead of making a twin.
-      if (!existingWO && !retryRow) {
-        for (const cand of intakePairCandidates(queue, 'notice', a.property.ID, receivedAt)) {
+      if (!existingWO) {
+        for (const cand of intakePairCandidates(queue, 'notice', a.property.ID, a.unit_id || '', receivedAt)) {
           const wo = wos.find(w => String(w.ID) === String(cand.WO_ID));
-          if (wo && !INTAKE_WO_DEAD.test(String(wo.Status || ''))) { stub = { cand, wo }; break; }
+          if (wo && !INTAKE_WO_DEAD.test(String(wo.Status || '')) && String(wo.Owner_WO_Ref || '').trim() === INTAKE_STUB_REF) { stub = { cand, wo }; break; }
         }
       }
     }
