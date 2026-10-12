@@ -6263,6 +6263,368 @@ async function createWorkOrder(env, body) {
   return json({ success: true, id: woId });
 }
 
+// ── Buildium email → Work Order intake (B-103, Oct 12 2026) ──────────────────────────────────
+// Phoenix Estate Rentals (and any future customer on Buildium) posts a work order to Brett as a
+// vendor; Buildium emails brett@ from donotreply@managebuilding.com. Two emails arrive per post:
+//   1. "New work order: <address>"  — link-only notice. IGNORED (the Apps Script never sends it).
+//   2. "<Org>: Work order <n>"      — the DETAILED email (title, address, description, tenant
+//                                     contact, entry notes). This is the one we turn into a WO.
+// The Apps Script poller (apps-script/buildium-intake/) forwards (1-minute trigger) each detailed email
+// here: POST /intake/email {subject, body, from, message_id, received_at}. Auth: narrow INTAKE_TOKEN,
+// accepted ONLY for that one path. Behavior (Brett, Oct 12 2026):
+//   - create the WO automatically; admin SMS immediately (bypassQuietHours - no waiting until 9am)
+//   - one WO per Buildium ref, ever (dedupe on Work_Orders.Owner_WO_Ref + Intake_Queue.Ref_Key)
+//   - unit optional (SFH), but multi-unit buildings are supported: a multi-unit property with no
+//     / unknown unit in the email is PARKED, never guessed
+//   - anything we can't place with certainty (no/ambiguous property, unit problem, parse failure)
+//     is PARKED in Intake_Queue + SMS, never turned into a junk WO and never dropped silently
+//   - no tenant SMS is sent for intake WOs (tenant_notify_* FALSE); Brett switches them on per WO
+// NOTHING FAILS SILENTLY: every outcome writes Ops_Telemetry + an Intake_Queue row, an error returns
+// 500 (the poller keeps retrying + emails Brett), and an SMS that did not go out is recorded and
+// returned as sms_sent:false (the poller emails Brett on that too).
+const INTAKE_TAB = 'Intake_Queue';
+const INTAKE_COLS = ['ID','Received_At','Source','Ref_Key','Message_ID','Subject','Status','Reason','WO_ID','Property_ID','Unit_ID','Address_Raw','Title','SMS_Status','Parsed_JSON','Raw_Body','Processed_At'];
+let _intakeTabReady = false;
+
+// Plain-body / HTML / markdown-table renderings of the same email all flatten to one line of
+// single-spaced text so the field regexes below don't care how Gmail laid it out.
+function intakeFlatten(s) {
+  return String(s == null ? '' : s)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/\[\]\([^)]*\)/g, ' ')
+    .replace(/[| ]/g, ' ')
+    .replace(/-{3,}/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function intakeBetween(t, startRe, endRe) {
+  const s = startRe.exec(t);
+  if (!s) return null;
+  const rest = t.slice(s.index + s[0].length);
+  // pad with a leading space so an end marker that sits right at the start of `rest` (an empty
+  // field, e.g. "Entry notes" immediately followed by "Entry contacts") still terminates it
+  const e = endRe ? endRe.exec(' ' + rest) : null;
+  return (e ? rest.slice(0, Math.max(0, e.index - 1)) : rest).trim();
+}
+
+// "Renita Howell, Tenant * (410) 556-7166 * (443) 810-0081 * a@b.com" -> [{name, role, phones[], emails[]}]
+// A second contact follows the first one's last email/phone with only a space, so a '*' is inserted there.
+function intakeParseContacts(raw) {
+  let s = String(raw || '').trim();
+  if (!s || /^--+$/.test(s)) return [];
+  s = s.replace(/([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|\d{4})\s+(?=[A-Z][a-z])/g, '$1 * ');
+  const ROLE = /^(.+?),\s*(Tenant|Owner|Resident|Occupant|Other|Manager)$/;
+  const out = []; let cur = null;
+  const start = (name, role) => { cur = { name, role, phones: [], emails: [] }; out.push(cur); };
+  for (const tok0 of s.split('*')) {
+    const tok = tok0.trim(); if (!tok) continue;
+    const rm = ROLE.exec(tok);
+    if (rm) { start(rm[1].trim(), rm[2]); continue; }
+    const emails = tok.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g) || [];
+    const phones = (tok.match(/\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}/g) || []).map(x => x.trim());
+    if (emails.length || phones.length) { if (!cur) start('', ''); cur.emails.push(...emails); cur.phones.push(...phones); continue; }
+    start(tok, '');
+  }
+  return out.filter(c => c.name || c.phones.length || c.emails.length);
+}
+
+function parseBuildiumEmail(subject, rawText) {
+  const t = intakeFlatten(rawText);
+  const out = { ok: false, errors: [] };
+  const subjM = /Work order\s+#?(\d+)/i.exec(String(subject || ''));
+  const refM = /Work order\s+#(\d+)(?:-(\d+))?\s*:\s*/i.exec(t);
+  if (!refM) { out.errors.push('no "Work order #<n>:" header found in body'); return out; }
+  out.ref = refM[1]; out.seq = refM[2] || '1';
+  if (subjM && subjM[1] !== out.ref) out.errors.push('subject WO number ' + subjM[1] + ' != body WO number ' + out.ref);
+  out.ref_key = out.ref + '-' + out.seq;
+  const afterRef = t.slice(refM.index + refM[0].length);
+  const jdIdx = afterRef.search(/\sJob description\s/i);
+  const secIdx = afterRef.search(/\s(?:Contact and scheduling information|Entry details|Parts and labor details|Vendor information)\s/i);
+  const headEnd = jdIdx >= 0 ? jdIdx : (secIdx >= 0 ? secIdx : afterRef.length);
+  const head = afterRef.slice(0, headEnd);
+  const locIdx = head.lastIndexOf(' Location ');
+  if (locIdx < 0) { out.errors.push('no "Location" found'); out.title = head.trim(); return out; }
+  out.title = head.slice(0, locIdx).trim();
+  out.address_raw = head.slice(locIdx + ' Location '.length).trim();
+  out.description = jdIdx >= 0
+    ? (intakeBetween(afterRef.slice(jdIdx), /^\sJob description\s+/i, /\s(?:Contact and scheduling information|Entry details|Parts and labor details|Vendor information)\s/i) || '')
+    : '';
+  out.entry_details = intakeBetween(t, /Entry details\s+/i, /\s+Entry notes\b/i) || '';
+  out.entry_notes = intakeBetween(t, /Entry notes\s*/i, /\s+Entry contacts\b/i) || '';
+  out.contacts = intakeParseContacts(intakeBetween(t, /Entry contacts\s*/i, /\s+(?:Parts and labor details|Vendor information)\b/i) || '');
+  const orgM = /Work order from\s+(.+?)\s+\d{1,2}\/\d{1,2}\/\d{4}/i.exec(t) || /^(.*?):\s*Work order/i.exec(String(subject || ''));
+  out.org = orgM ? orgM[1].trim() : '';
+  if (!out.title) out.errors.push('empty title');
+  if (!out.address_raw) out.errors.push('empty location');
+  out.ok = out.errors.length === 0;
+  return out;
+}
+
+// Buildium location -> {norm, tokens}. Strips ", MD 21206" so what is left is
+// "<street address> [- <unit>] [<city>]" in qbNormAddress's folded form (Avenue->ave, North->n ...).
+function intakeNormLocation(addrRaw) {
+  let s = String(addrRaw || '').replace(/\s+/g, ' ').trim();
+  s = s.replace(/#\s*([A-Za-z0-9]+)/g, ' apt $1 ');   // "#2F" => "apt 2f"
+  s = s.replace(/[,\s]+[A-Za-z]{2}\s*\d{5}(?:-\d{4})?\s*$/, '').replace(/[,\s]+\d{5}(?:-\d{4})?\s*$/, '').replace(/,\s*[A-Za-z]{2}\s*$/, '');
+  return qbNormAddress(s);
+}
+
+// Active properties whose address is a prefix of the Buildium location and whose leftover is only
+// an optional unit marker ("- 1", "apt 3", bare "-") and/or a city. Returns {matches:[{property, unit_raw}]}.
+function intakeMatchProperty(addrRaw, properties) {
+  const E = intakeNormLocation(addrRaw);
+  const matches = [];
+  if (!E) return { matches, norm: E };
+  for (const p of properties) {
+    if (String(p.Active || '').toUpperCase() === 'FALSE') continue;
+    const P = qbNormAddress(p.Address);
+    if (!P) continue;
+    if (E !== P && !E.startsWith(P + ' ')) continue;
+    let rest = E.slice(P.length).trim();
+    const cityWords = new Set(qbNormAddress(p.City).split(' ').concat(['baltimore', 'md']).filter(Boolean));
+    let unit = '';
+    const um = /^(?:-|apt|ste|bldg|fl)(?:\s+([a-z0-9]+))?(?=\s|$)/.exec(rest);
+    if (um) {
+      if (um[1] && !cityWords.has(um[1])) { unit = um[1]; rest = rest.slice(um[0].length).trim(); }
+      else { rest = rest.slice(um[0].length).trim(); }
+    }
+    if (rest && !/^[a-z]+(?: [a-z]+){0,2}$/.test(rest)) continue;   // leftover must be just city words
+    matches.push({ property: p, unit_raw: unit });
+  }
+  return { matches, norm: E };
+}
+
+// Pick the Unit row. SFH / single-unit property: the sole unit, whatever the email says (Buildium
+// appends "- 1" to houses). Multi-unit: the email's unit must match exactly one Unit_Label.
+function intakeResolveUnit(property, unitRaw, units) {
+  const pu = (units || []).filter(u => String(u.Property_ID) === String(property.ID) && String(u.Active || '').toUpperCase() !== 'FALSE');
+  const multi = pu.length > 1 || (String(property.Type || '').toLowerCase() === 'multi' && parseInt(property.Unit_Count || '1', 10) > 1);
+  if (!multi) {
+    return { ok: true, unit_id: pu.length === 1 ? String(pu[0].ID) : '', unit_label: pu.length === 1 ? String(pu[0].Unit_Label || '') : '' };
+  }
+  const labels = pu.map(u => u.Unit_Label).join(', ');
+  if (!pu.length) return { ok: false, reason: 'no_unit_records', detail: 'multi-unit property has no Units rows' };
+  if (!unitRaw) return { ok: false, reason: 'unit_required', detail: 'multi-unit property (' + labels + ') but the email names no unit' };
+  const want = qbNormAddress(unitRaw).replace(/^apt /, '');
+  const m = pu.filter(u => qbNormAddress(u.Unit_Label).replace(/^apt /, '') === want);
+  if (m.length === 1) return { ok: true, unit_id: String(m[0].ID), unit_label: String(m[0].Unit_Label || '') };
+  return { ok: false, reason: m.length ? 'unit_ambiguous' : 'unit_no_match', detail: 'email unit "' + unitRaw + '" vs ' + labels };
+}
+
+// Existing active tenant of that unit (or of the property when unit-less) whose phone or email
+// matches a Buildium contact. Exactly one match -> its ID; otherwise '' (contact stays on the WO).
+function intakeMatchTenant(contacts, tenants, propertyId, unitId) {
+  const last10 = s => String(s || '').replace(/\D/g, '').slice(-10);
+  const phones = new Set(), emails = new Set();
+  for (const c of contacts || []) { c.phones.forEach(p => phones.add(last10(p))); c.emails.forEach(e => emails.add(e.toLowerCase())); }
+  const pool = (tenants || []).filter(t => String(t.Active || '').toUpperCase() !== 'FALSE' &&
+    (unitId ? String(t.Unit_ID) === String(unitId) : String(t.Property_ID) === String(propertyId)));
+  const hit = pool.filter(t => (last10(t.Phone) && phones.has(last10(t.Phone))) || (t.Email && emails.has(String(t.Email).trim().toLowerCase())));
+  return hit.length === 1 ? String(hit[0].ID) : '';
+}
+
+// Reads only. Shared by the real handler, dry_run and the HUB_TEST_TOKEN guard.
+async function intakeAnalyze(env, subject, text, override) {
+  const parsed = parseBuildiumEmail(subject, text);
+  const res = { parsed, status: 'parked', reason: '', detail: '' };
+  if (!parsed.ok) { res.reason = 'parse_failed'; res.detail = parsed.errors.join('; '); return res; }
+  const [properties, units, tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+  let property, unitRaw = '';
+  if (override && override.property_id) {
+    property = properties.find(p => String(p.ID) === String(override.property_id));
+    if (!property) { res.reason = 'override_property_not_found'; res.detail = 'property_id ' + override.property_id; return res; }
+    unitRaw = '';
+  } else {
+    const m = intakeMatchProperty(parsed.address_raw, properties);
+    if (m.matches.length === 0) { res.reason = 'no_property_match'; res.detail = 'no active property matches "' + parsed.address_raw + '" (normalized: ' + m.norm + ')'; return res; }
+    if (m.matches.length > 1) { res.reason = 'ambiguous_property'; res.detail = m.matches.map(x => x.property.ID + ' ' + x.property.Address).join(' | '); return res; }
+    property = m.matches[0].property; unitRaw = m.matches[0].unit_raw;
+  }
+  res.property = property;
+  if (override && override.unit_id) {
+    const u = units.find(x => String(x.ID) === String(override.unit_id) && String(x.Property_ID) === String(property.ID));
+    if (!u) { res.reason = 'override_unit_not_found'; res.detail = 'unit_id ' + override.unit_id + ' is not on property ' + property.ID; return res; }
+    res.unit_id = String(u.ID); res.unit_label = String(u.Unit_Label || '');
+  } else {
+    const ur = intakeResolveUnit(property, unitRaw, units);
+    if (!ur.ok) { res.reason = ur.reason; res.detail = ur.detail; return res; }
+    res.unit_id = ur.unit_id; res.unit_label = ur.unit_label;
+  }
+  res.tenant_id = intakeMatchTenant(parsed.contacts, tenants, property.ID, res.unit_id);
+  res.status = 'ok';
+  return res;
+}
+
+const INTAKE_REASON_TEXT = {
+  parse_failed: "couldn't read the email", no_property_match: 'no matching property', ambiguous_property: 'more than one matching property',
+  unit_required: 'multi-unit building, no unit in email', unit_no_match: "unit doesn't match", unit_ambiguous: 'unit matches more than one',
+  no_unit_records: 'multi-unit property has no units on file', override_property_not_found: 'property not found', override_unit_not_found: 'unit not found',
+};
+
+async function intakeEnsureTab(env) {
+  if (!_intakeTabReady) { await ensureTab(env, INTAKE_TAB, INTAKE_COLS); _intakeTabReady = true; }
+  await ensureColumns(env, INTAKE_TAB, INTAKE_COLS);
+}
+
+async function intakeAppendRow(env, row) {
+  await intakeEnsureTab(env);
+  const res = await addRow(env, INTAKE_TAB, row);
+  let j = null; try { j = await res.clone().json(); } catch (_) {}
+  if (!res || res.status !== 200 || !j || j.success !== true || !j.id) throw new Error('Intake_Queue row did not land: ' + (j && j.error ? j.error : (res && res.status)));
+  return String(j.id);
+}
+
+async function intakeSmsAdmin(env, message, woId, property) {
+  try {
+    const cfg = await fetchConfig(env);
+    if (!cfg.admin_phone) return 'FAILED: Config admin_phone not set';
+    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_alert', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, property: property || null, message_body: message, bypassQuietHours: true });
+    if (r && r.sent) return 'sent';
+    if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
+  } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
+}
+
+async function intakeTelemetry(env, t0, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'intake_email', Skill_Or_Endpoint: '/intake/email', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 480) }); return true; }
+  catch (_) { return false; }
+}
+
+// POST /intake/email  (INTAKE_TOKEN / WORKER_SECRET)  and  retryRow (POST /intake/retry) share this.
+async function intakeEmail(env, body, retryRow) {
+  const t0 = Date.now();
+  const subject = String(body.subject || ''), text = String(body.body || body.text || ''), msgId = String(body.message_id || '').trim();
+  const from = String(body.from || '').toLowerCase(), dry = body.dry_run === true;
+  if (!msgId) return json({ error: 'message_id required' }, 400);
+  if (!retryRow && !/managebuilding\.com/.test(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
+  if (!/Work order\s+#?\d+/i.test(subject) || /^\s*New work order/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a detailed work-order email' });
+  let stage = 'analyze';
+  try {
+    const a = await intakeAnalyze(env, subject, text, retryRow ? { property_id: body.property_id, unit_id: body.unit_id } : null);
+    const p = a.parsed || {};
+    const refKey = p.ref_key || '';
+    if (dry) return json({ success: true, dry_run: true, status: a.status, reason: a.reason, detail: a.detail, parsed: p, property_id: a.property ? a.property.ID : '', property_address: a.property ? a.property.Address : '', unit_id: a.unit_id || '', unit_label: a.unit_label || '', tenant_id: a.tenant_id || '' });
+
+    // ── dedupe: one outcome per Buildium ref ──
+    stage = 'dedupe';
+    await intakeEnsureTab(env);
+    const refTag = 'Buildium #' + refKey;
+    const queue = await fetchTab(env, INTAKE_TAB);
+    if (!retryRow) {
+      const prior = queue.find(q => (q.Status === 'Created' || q.Status === 'Parked') && ((refKey && q.Ref_Key === refKey) || q.Message_ID === msgId));
+      if (prior) return json({ success: true, duplicate: true, ref_key: refKey, status: prior.Status, wo_id: prior.WO_ID || '' });
+    }
+    let existingWO = null;
+    if (refKey && a.status === 'ok') {
+      const wos = await fetchTab(env, 'Work_Orders');
+      existingWO = wos.find(w => String(w.Owner_WO_Ref || '').trim() === refTag) || null;
+    }
+    const receivedAt = String(body.received_at || new Date().toISOString());
+    const baseRow = { Received_At: receivedAt, Source: 'Buildium', Ref_Key: refKey, Message_ID: msgId, Subject: subject.slice(0, 200), Address_Raw: p.address_raw || '', Title: (p.title || '').slice(0, 200), Parsed_JSON: JSON.stringify(p).slice(0, 45000), Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() };
+
+    // ── parked ──
+    if (a.status !== 'ok') {
+      stage = 'park';
+      const reasonTxt = INTAKE_REASON_TEXT[a.reason] || a.reason;
+      let rowId;
+      if (retryRow) { rowId = String(retryRow.ID); }
+      else { rowId = await intakeAppendRow(env, { ...baseRow, Status: 'Parked', Reason: a.reason + ': ' + a.detail.slice(0, 300), SMS_Status: 'pending' }); }
+      const sms = await intakeSmsAdmin(env, `⚠️ Buildium WO ${refKey ? '#' + refKey : '(unreadable)'} from ${p.org || 'Buildium'} NOT created (${reasonTxt}): ${p.title || subject} @ ${p.address_raw || '?'}. Parked in Intake_Queue row ${rowId}.`.slice(0, 480), '', null);
+      const upd = await updateRow(env, INTAKE_TAB, rowId, { SMS_Status: sms, Processed_At: new Date().toISOString() });
+      const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `parked ${refKey} ${a.reason}; sms=${sms}`);
+      return json({ success: true, parked: true, reason: a.reason, detail: a.detail, queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, telemetry_ok: telemetryOk, queue_updated: upd.status === 200 });
+    }
+
+    // ── create (or repair a WO that exists without its queue row) ──
+    stage = 'create';
+    let woId, repaired = false;
+    if (existingWO) { woId = existingWO.ID; repaired = true; }
+    else {
+      await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
+      const c0 = p.contacts[0] || {};
+      const contactLine = p.contacts.map(c => [c.name && (c.name + (c.role ? ' (' + c.role + ')' : '')), c.phones.join(', '), c.emails.join(', ')].filter(Boolean).join(' ')).join(' | ');
+      const notes = [
+        `Source: Buildium email - ${p.org || 'Buildium'} - WO #${refKey}`,
+        p.entry_details || p.entry_notes ? `Entry: ${[p.entry_details, p.entry_notes].filter(Boolean).join(' | ')}` : '',
+        contactLine ? `Contact (from Buildium): ${contactLine}` : '',
+        `Buildium location: ${p.address_raw}`,
+      ].filter(Boolean).join('\n');
+      const woBody = {
+        property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', type: 'manual', trade: '', priority: 'normal',
+        description: (p.title + (p.description ? ' - ' + p.description : '')).slice(0, 1500),
+        owner_wo_ref: refTag, wo_contact_name: c0.name || '', wo_contact_phone: c0.phones && c0.phones[0] ? normalizePhone(c0.phones[0]) : '',
+        tenant_notify_created: false, tenant_notify_updates: false, created_by: 'buildium-email', notes,
+      };
+      const cr = await createWorkOrder(env, woBody);
+      const cj = await cr.json();
+      if (cr.status !== 200 || !cj || cj.success !== true || !cj.id) throw new Error('createWorkOrder failed: ' + JSON.stringify(cj).slice(0, 200));
+      woId = cj.id;
+      if (cj.duplicate) throw new Error(`createWorkOrder returned duplicate ${woId} for ${refKey} - a different WO with an identical signature was created within 60s`);
+      await updateWOFields(env, woId, { Source: 'Buildium email', Intake_Message_ID: msgId });
+    }
+    // read-back: the WO must really be there with our ref, and our provenance columns must have landed
+    stage = 'verify';
+    const wosAfter = (await sheetsRequest(env, 'GET', '/values/Work_Orders')).values || [];
+    const hdr = wosAfter[0] || [], hc = n => hdr.indexOf(n);
+    const iId = hc('ID'), iRef = hc('Owner_WO_Ref'), iSrc = hc('Source');
+    if (iId < 0 || iRef < 0) throw new Error('verify failed: Work_Orders is missing its ID or Owner_WO_Ref column');
+    const row = wosAfter.slice(1).find(r => String(r[iId]) === String(woId));
+    if (!row || String(row[iRef] || '').trim() !== refTag) throw new Error(`verify failed: ${woId} not found with Owner_WO_Ref "${refTag}" after create`);
+    if (!repaired && iSrc >= 0 && String(row[iSrc] || '') !== 'Buildium email') throw new Error(`verify failed: ${woId} Source column did not save`);
+
+    stage = 'notify';
+    const addr = a.property.Address + (a.unit_label ? ' ' + formatUnitLabel(a.unit_label) : '');
+    const who = (p.contacts[0] && p.contacts[0].name) ? ` Contact: ${p.contacts[0].name}${p.contacts[0].phones[0] ? ' ' + p.contacts[0].phones[0] : ''}.` : '';
+    const sms = await intakeSmsAdmin(env, `📥 New WO ${woId} from ${p.org || 'Buildium'} (#${refKey}): ${p.title} @ ${addr}.${who}${repaired ? ' (recovered after an interrupted run)' : ''}`.slice(0, 480), woId, a.property);
+    stage = 'queue-row';
+    let rowId;
+    if (retryRow) {
+      rowId = String(retryRow.ID);
+      const u = await updateRow(env, INTAKE_TAB, rowId, { Status: 'Created', Reason: '', WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms, Processed_At: new Date().toISOString() });
+      if (u.status !== 200) throw new Error('Intake_Queue retry row update failed');
+    } else {
+      rowId = await intakeAppendRow(env, { ...baseRow, Status: 'Created', Reason: repaired ? 'recovered existing WO' : '', WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms });
+    }
+    const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `created ${woId} from ${refKey}; sms=${sms}${repaired ? '; repaired' : ''}`);
+    return json({ success: true, created: true, wo_id: woId, ref_key: refKey, property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, repaired, telemetry_ok: telemetryOk });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    await intakeTelemetry(env, t0, false, `error at ${stage}: ${msg}`);
+    // One alert SMS + one Error row per message (the poller retries every minute; don't spam).
+    try {
+      await intakeEnsureTab(env);
+      const prior = (await fetchTab(env, INTAKE_TAB)).filter(q => q.Message_ID === msgId && q.Status === 'Error');
+      if (!prior.length && !dry) {
+        const sms = await intakeSmsAdmin(env, `🔴 Buildium email intake error (${stage}): ${msg}`.slice(0, 300), '', null);
+        await intakeAppendRow(env, { Received_At: String(body.received_at || ''), Source: 'Buildium', Message_ID: msgId, Subject: subject.slice(0, 200), Status: 'Error', Reason: `${stage}: ${msg}`.slice(0, 400), SMS_Status: sms, Raw_Body: text.slice(0, 45000), Processed_At: new Date().toISOString() });
+      }
+    } catch (_) {}
+    return json({ success: false, error: msg, stage }, 500);
+  }
+}
+
+// POST /intake/retry {id, property_id?, unit_id?}  (admin) - re-run a Parked / Error row from its stored
+// raw email, optionally forcing the property/unit (Brett's manual "it's this one").
+async function intakeRetry(env, body) {
+  await intakeEnsureTab(env);
+  const row = (await fetchTab(env, INTAKE_TAB)).find(q => String(q.ID) === String(body && body.id));
+  if (!row) return json({ error: 'Intake_Queue row not found: ' + (body && body.id) }, 404);
+  if (row.Status === 'Created') return json({ error: 'row ' + row.ID + ' already Created as ' + row.WO_ID }, 409);
+  if (!row.Raw_Body) return json({ error: 'row has no stored email body' }, 422);
+  return await intakeEmail(env, { subject: row.Subject, body: row.Raw_Body, message_id: row.Message_ID, received_at: row.Received_At, property_id: body.property_id, unit_id: body.unit_id }, row);
+}
+
+// GET /intake-queue - newest first, without the (large) raw bodies.
+async function intakeQueueList(env) {
+  await intakeEnsureTab(env);
+  const rows = (await fetchTab(env, INTAKE_TAB)).map(({ Raw_Body, ...rest }) => rest).reverse();
+  return json(rows);
+}
+
 // POST /workorder/self-serve { vendor_id, property_id, trade?, description, approval_source,
 //   approval_note? }
 // "Log a One-Off Job" (Sep 24 2026 build brief §4b) — a thin wrapper around createWorkOrder
