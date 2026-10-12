@@ -6418,8 +6418,8 @@ function intakeResolveUnit(property, unitRaw, units) {
   const labels = pu.map(u => u.Unit_Label).join(', ');
   if (!pu.length) return { ok: false, reason: 'no_unit_records', detail: 'multi-unit property has no Units rows' };
   if (!unitRaw) return { ok: false, reason: 'unit_required', detail: 'multi-unit property (' + labels + ') but the email names no unit' };
-  const want = qbNormAddress(unitRaw).replace(/^apt /, '');
-  const m = pu.filter(u => qbNormAddress(u.Unit_Label).replace(/^apt /, '') === want);
+  const want = qbNormAddress(unitRaw).replace(/^(?:apt|unit) /, '');
+  const m = pu.filter(u => qbNormAddress(u.Unit_Label).replace(/^(?:apt|unit) /, '') === want);
   if (m.length === 1) return { ok: true, unit_id: String(m[0].ID), unit_label: String(m[0].Unit_Label || '') };
   return { ok: false, reason: m.length ? 'unit_ambiguous' : 'unit_no_match', detail: 'email unit "' + unitRaw + '" vs ' + labels };
 }
