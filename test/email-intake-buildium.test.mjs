@@ -208,7 +208,7 @@ eq('other property is skipped', intakePairCandidates([Q({ ID: '5', Kind: 'notice
 eq('outside the 3-minute window is skipped', intakePairCandidates([Q({ ID: '6', Kind: 'notice' })], 'notice', '42', '7', '2026-10-12T18:40:00.000Z'), []);
 eq('a notice never pairs with another notice', intakePairCandidates([Q({ ID: '7', Kind: 'notice' })], 'detail', '42', '7', near), []);
 eq('Parked / Error rows are never claimed', intakePairCandidates([Q({ ID: '8', Kind: 'notice', Status: 'Parked' }), Q({ ID: '9', Kind: 'notice', Status: 'Error' })], 'notice', '42', '7', near), []);
-eq('oldest unclaimed is offered first (two jobs same minute)', intakePairCandidates([Q({ ID: '11', Kind: 'notice', Received_At: '2026-10-12T18:14:58.000Z' }), Q({ ID: '10', Kind: 'notice', Received_At: '2026-10-12T18:14:52.000Z' })], 'notice', '42', near).map(x => x.ID), ['10', '11']);
+eq('oldest unclaimed is offered first (two jobs same minute)', intakePairCandidates([Q({ ID: '11', Kind: 'notice', Received_At: '2026-10-12T18:14:58.000Z' }), Q({ ID: '10', Kind: 'notice', Received_At: '2026-10-12T18:14:52.000Z' })], 'notice', '42', '7', near).map(x => x.ID), ['10', '11']);
 eq('unparseable Received_At never pairs (visible duplicate beats a wrong merge)', intakePairCandidates([Q({ ID: '12', Kind: 'notice', Received_At: 'garbage' })], 'notice', '42', near), []);
 
 console.log(`email-intake-buildium: ${pass} passed, ${fail} failed`);
