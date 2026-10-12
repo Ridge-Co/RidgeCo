@@ -6689,7 +6689,7 @@ async function intakeEmail(env, body, retryRow) {
       }
     }
     const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `created ${woId} from ${refKey}; sms=${sms}${repaired ? '; repaired' : ''}`);
-    return json({ success: true, created: true, wo_id: woId, ref_key: refKey, property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, repaired, telemetry_ok: telemetryOk });
+    return json({ success: true, created: !filled, filled_stub: filled, wo_id: woId, ref_key: refKey, property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, repaired, telemetry_ok: telemetryOk });
   } catch (e) {
     const msg = String((e && e.message) || e);
     const telOk = await intakeTelemetry(env, t0, false, `error at ${stage}: ${msg}`);
