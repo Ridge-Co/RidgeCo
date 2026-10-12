@@ -6681,7 +6681,12 @@ async function intakeEmail(env, body, retryRow) {
       const u = await updateRow(env, INTAKE_TAB, rowId, { Status: 'Created', Reason: '', WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms, Processed_At: new Date().toISOString() });
       if (u.status !== 200) throw new Error('Intake_Queue retry row update failed');
     } else {
-      rowId = await intakeAppendRow(env, { ...baseRow, Status: 'Created', Reason: repaired ? 'recovered existing WO' : '', WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms });
+      const pairNotice = stub ? stub.cand : (existingWO ? (queue.find(q => q.Kind === 'notice' && q.Status === 'Created' && String(q.WO_ID) === String(woId) && !String(q.Pair_ID || '')) || null) : null);
+      rowId = await intakeAppendRow(env, { ...baseRow, Status: 'Created', Reason: filled ? 'filled in notice stub ' + woId + (stubDescOk ? '' : ' (description was edited by hand - details added to Notes)') : (repaired ? 'recovered existing WO' : ''), WO_ID: woId, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', SMS_Status: sms, Pair_ID: pairNotice ? String(pairNotice.ID) : '' });
+      if (pairNotice) {
+        const pu = await updateRow(env, INTAKE_TAB, String(pairNotice.ID), { Pair_ID: rowId });
+        if (pu.status !== 200) throw new Error('could not mark notice row ' + pairNotice.ID + ' as paired with ' + rowId + ' (a later email could pair with it again)');
+      }
     }
     const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `created ${woId} from ${refKey}; sms=${sms}${repaired ? '; repaired' : ''}`);
     return json({ success: true, created: true, wo_id: woId, ref_key: refKey, property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, repaired, telemetry_ok: telemetryOk });
