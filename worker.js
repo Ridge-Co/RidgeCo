@@ -6557,7 +6557,9 @@ async function intakeEmail(env, body, retryRow) {
   const from = String(body.from || '').toLowerCase(), dry = body.dry_run === true;
   if (!msgId) return json({ error: 'message_id required' }, 400);
   if (!retryRow && !intakeSenderOk(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
-  if (!/Work order\s+#?\d+/i.test(subject) || /^\s*New work order/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a detailed work-order email' });
+  const isNotice = /^\s*New work order\s*:/i.test(subject);
+  if (isNotice) return await intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow);
+  if (!/Work order\s+#?\d+/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a work-order email' });
   let stage = 'analyze';
   try {
     const a = text.length > INTAKE_MAX_BODY
