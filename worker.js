@@ -6418,8 +6418,8 @@ function intakeResolveUnit(property, unitRaw, units) {
   const labels = pu.map(u => u.Unit_Label).join(', ');
   if (!pu.length) return { ok: false, reason: 'no_unit_records', detail: 'multi-unit property has no Units rows' };
   if (!unitRaw) return { ok: false, reason: 'unit_required', detail: 'multi-unit property (' + labels + ') but the email names no unit' };
-  const want = qbNormAddress(unitRaw).replace(/^apt /, '');
-  const m = pu.filter(u => qbNormAddress(u.Unit_Label).replace(/^apt /, '') === want);
+  const want = qbNormAddress(unitRaw).replace(/^(?:apt|unit) /, '');
+  const m = pu.filter(u => qbNormAddress(u.Unit_Label).replace(/^(?:apt|unit) /, '') === want);
   if (m.length === 1) return { ok: true, unit_id: String(m[0].ID), unit_label: String(m[0].Unit_Label || '') };
   return { ok: false, reason: m.length ? 'unit_ambiguous' : 'unit_no_match', detail: 'email unit "' + unitRaw + '" vs ' + labels };
 }
@@ -6505,13 +6505,19 @@ async function intakeTelemetry(env, t0, ok, notes) {
   catch (_) { return false; }
 }
 
+// The sender must be the ACTUAL address (bare, or the last <...> of "Name <addr>") on managebuilding.com.
+// A display name like "donotreply@managebuilding.com" <x@evil.io> must not pass.
+function intakeSenderOk(from) {
+  return /(?:^|<)\s*[^<>\s@]{1,64}@(?:[a-z0-9-]{1,63}\.){0,4}managebuilding\.com\s*>?\s*$/.test(String(from || '').toLowerCase().slice(0, 300));
+}
+
 // POST /intake/email  (INTAKE_TOKEN / WORKER_SECRET)  and  retryRow (POST /intake/retry) share this.
 async function intakeEmail(env, body, retryRow) {
   const t0 = Date.now();
   const subject = String(body.subject || ''), text = String(body.body || body.text || ''), msgId = String(body.message_id || '').trim();
   const from = String(body.from || '').toLowerCase(), dry = body.dry_run === true;
   if (!msgId) return json({ error: 'message_id required' }, 400);
-  if (!retryRow && !/@(?:[a-z0-9-]+\.)*managebuilding\.com\b/.test(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
+  if (!retryRow && !intakeSenderOk(from)) return json({ error: 'sender must be managebuilding.com' }, 400);
   if (!/Work order\s+#?\d+/i.test(subject) || /^\s*New work order/i.test(subject)) return json({ success: true, ignored: true, reason: 'not a detailed work-order email' });
   let stage = 'analyze';
   try {
