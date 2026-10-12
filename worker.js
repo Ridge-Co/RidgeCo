@@ -6788,22 +6788,27 @@ async function intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow) 
       return json({ success: true, kind: 'notice', parked: true, reason: a.reason, detail: a.detail, queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, telemetry_ok: telemetryOk, queue_updated: upd.status === 200 });
     }
 
-    // ── the detailed email for this same job already made a WO: claim it, no twin, no second text ──
+    // A previous run may have created the stub and died before writing its queue row: that orphan is recovered, never swallowed or duplicated.
     stage = 'pair';
-    const det = intakePairCandidates(queue, 'detail', a.property.ID, receivedAt)[0];
+    const prev = (await fetchTab(env, 'Work_Orders')).find(w => String(w.Intake_Message_ID || '') === msgId);
+
+    // ── the detailed email for this same job already made a WO: claim it, no twin ──
+    const det = prev ? null : intakePairCandidates(queue, 'detail', a.property.ID, a.unit_id || '', receivedAt)[0];
     if (det) {
-      const rowId = await save({ Status: 'Covered', Reason: 'detailed email already created ' + det.WO_ID, WO_ID: det.WO_ID, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', Pair_ID: String(det.ID), SMS_Status: 'not needed (detail email texted)' });
+      const addrC = a.property.Address + (a.unit_label ? ' ' + formatUnitLabel(a.unit_label) : '');
+      const linkC = p.link && p.link.length <= 700 ? ' If this is a DIFFERENT job, open it in Buildium: ' + p.link : '';
+      const rowId = await save({ Status: 'Covered', Reason: 'detailed email already created ' + det.WO_ID, WO_ID: det.WO_ID, Property_ID: a.property.ID, Unit_ID: a.unit_id || '', Pair_ID: String(det.ID), SMS_Status: 'pending' });
       const pu = await updateRow(env, INTAKE_TAB, String(det.ID), { Pair_ID: rowId });
       if (pu.status !== 200) throw new Error('could not mark detail row ' + det.ID + ' as paired with notice row ' + rowId);
-      const telemetryOk = await intakeTelemetry(env, t0, true, `notice covered by ${det.WO_ID}`);
-      return json({ success: true, kind: 'notice', covered: true, wo_id: det.WO_ID, queue_id: rowId, sms_sent: true, telemetry_ok: telemetryOk });
+      const sms = await intakeSmsAdmin(env, `ℹ️ Buildium notice for ${addrC} matched to WO ${det.WO_ID} (details already texted).` + linkC, '', a.property);   // no wo_id: the tokenised link must not land in WO_Audit
+      const su = await updateRow(env, INTAKE_TAB, rowId, { SMS_Status: sms });
+      const telemetryOk = await intakeTelemetry(env, t0, sms === 'sent', `notice covered by ${det.WO_ID}; sms=${sms}`);
+      return json({ success: true, kind: 'notice', covered: true, wo_id: det.WO_ID, queue_id: rowId, sms_sent: sms === 'sent', sms_status: sms, telemetry_ok: telemetryOk, queue_updated: su.status === 200 });
     }
 
     // ── create the stub WO ──
     stage = 'create';
     await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
-    // A previous run may have created the stub and died before writing its queue row: reuse it instead of making a twin.
-    const prev = (await fetchTab(env, 'Work_Orders')).find(w => String(w.Intake_Message_ID || '') === msgId);
     let woId, recovered = false;
     if (prev) { woId = prev.ID; recovered = true; }
     else {
