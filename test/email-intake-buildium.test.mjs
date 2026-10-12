@@ -203,7 +203,7 @@ const near = '2026-10-12T18:14:56.000Z';
 eq('detail finds its unclaimed notice', intakePairCandidates([Q({ ID: '1', Kind: 'notice' })], 'notice', '42', '7', near).map(x => x.ID), ['1']);
 eq('notice finds its unclaimed detail', intakePairCandidates([Q({ ID: '2', Kind: 'detail', Ref_Key: '967927-1' })], 'detail', '42', '7', near).map(x => x.ID), ['2']);
 eq('legacy detail row (no Kind column yet) still counts as a detail', intakePairCandidates([Q({ ID: '3', Ref_Key: '949124-1' })], 'detail', '42', '7', near).map(x => x.ID), ['3']);
-eq('already-claimed row is skipped', intakePairCandidates([Q({ ID: '4', Kind: 'notice', Pair_ID: '9' })], 'notice', '42', near), []);
+eq('already-claimed row is skipped', intakePairCandidates([Q({ ID: '4', Kind: 'notice', Pair_ID: '9' })], 'notice', '42', '7', near), []);
 eq('other property is skipped', intakePairCandidates([Q({ ID: '5', Kind: 'notice', Property_ID: '18' })], 'notice', '42', near), []);
 eq('outside the 20-minute window is skipped', intakePairCandidates([Q({ ID: '6', Kind: 'notice' })], 'notice', '42', '2026-10-12T18:40:00.000Z'), []);
 eq('a notice never pairs with another notice', intakePairCandidates([Q({ ID: '7', Kind: 'notice' })], 'detail', '42', near), []);
