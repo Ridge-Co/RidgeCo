@@ -232,6 +232,15 @@ const _hubWorkerCore = {
         const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
           && _tok === env.CRON_SWEEP_TOKEN
           && request.method === 'POST' && path === '/cron/sweep';
+        // Narrow WRITE token for the Buildium email poller (B-103, Oct 12 2026): the Apps Script in
+        // brett@'s mailbox POSTs each Buildium work-order email to /intake/email. Accepted ONLY for
+        // that one path. The handler itself creates a Work Order only after parsing + matching the
+        // email to a real property, and parks everything uncertain, so a leaked token can at worst
+        // inject a parked/created WO - it can read nothing and reach nothing else. Fully inert
+        // unless env.INTAKE_TOKEN is set, so deploying this changes nothing until the secret exists.
+        const _intakeOk = !!env.INTAKE_TOKEN
+          && _tok === env.INTAKE_TOKEN
+          && request.method === 'POST' && path === '/intake/email';
         // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
         // a Cowork session run real read+write+read-back checks against
         // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
