@@ -6626,9 +6626,10 @@ async function intakeRetry(env, body) {
 
 // GET /intake-queue - newest first, without the (large) raw bodies.
 async function intakeQueueList(env) {
-  await intakeEnsureTab(env);
-  const rows = (await fetchTab(env, INTAKE_TAB)).map(({ Raw_Body, ...rest }) => rest).reverse();
-  return json(rows);
+  let all;
+  try { all = await fetchTab(env, INTAKE_TAB); }
+  catch (e) { if (isMissingTabError(e)) return json([]); throw e; }   // GET never creates the tab
+  return json(all.map(({ Raw_Body, Parsed_JSON, ...rest }) => rest).reverse());
 }
 
 // POST /workorder/self-serve { vendor_id, property_id, trade?, description, approval_source,
