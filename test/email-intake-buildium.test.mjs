@@ -14,8 +14,8 @@ function grab(name, kind = 'function') {
 const { intakeSenderOk, intakeFlatten, parseBuildiumEmail, parseBuildiumNotice, intakePairCandidates, intakeParseContacts, intakeNormLocation, intakeMatchProperty, intakeResolveUnit, intakeMatchTenant } = new Function(
   grab('QB_ADDR_WORDS', 'const') + '\n' + grab('intakeSenderOk') + '\n' + grab('INTAKE_MAX_BODY', 'const') + '\n' + grab('qbNormAddress') + '\n' + grab('intakeFlatten') + '\n' + grab('intakeBetween') + '\n' +
   grab('intakeParseContacts') + '\n' + grab('parseBuildiumEmail') + '\n' + grab('intakeNormLocation') + '\n' + grab('intakeMatchProperty') + '\n' +
-  grab('intakeResolveUnit') + '\n' + grab('intakeMatchTenant') +
-  '\nreturn { intakeSenderOk, intakeFlatten, parseBuildiumEmail, intakeParseContacts, intakeNormLocation, intakeMatchProperty, intakeResolveUnit, intakeMatchTenant };'
+  grab('intakeResolveUnit') + '\n' + grab('intakeMatchTenant') + '\n' + grab('parseBuildiumNotice') + '\n' + src.match(/const INTAKE_PAIR_WINDOW_MS = [^;]+;/)[0] + '\n' + grab('intakeNear') + '\n' + grab('intakePairCandidates') +
+  '\nreturn { intakeSenderOk, intakeFlatten, parseBuildiumEmail, parseBuildiumNotice, intakePairCandidates, intakeParseContacts, intakeNormLocation, intakeMatchProperty, intakeResolveUnit, intakeMatchTenant };'
 )();
 
 let pass = 0, fail = 0;
