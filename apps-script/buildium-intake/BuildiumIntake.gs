@@ -1,12 +1,15 @@
 /**
- * BUILDIUM EMAIL → HUB WORK ORDERS  (v1.0, Oct 12 2026 — backlog B-103)
+ * BUILDIUM EMAIL → HUB WORK ORDERS  (v1.1, Oct 12 2026 — backlog B-103)
  * ---------------------------------------------------------------------------------------------
  * When a customer on Buildium (Phoenix Estate Rentals, LLC today) posts a work order to you,
- * Buildium emails brett@ twice from donotreply@managebuilding.com:
- *     1. "New work order: <address>"                  ← link-only notice. This script IGNORES it.
- *     2. "Phoenix Estate Rentals, LLC: Work order N"  ← the detailed email. THIS is the one used.
- * Every minute this script finds new detailed emails and hands each one to the Hub
- * (POST /intake/email). The Hub reads it, matches the property/unit, creates the Work Order, and
+ * Buildium emails brett@ from donotreply@managebuilding.com, in one or both of two forms:
+ *     1. "New work order: <address>"                  ← link-only notice (no number/description: those
+ *                                                        are behind Buildium's login). The Hub makes a STUB
+ *                                                        work order and texts you the Buildium link.
+ *     2. "Phoenix Estate Rentals, LLC: Work order N"  ← the detailed email. Full work order. If a stub already
+ *                                                        exists for the same job it is filled in, not duplicated.
+ * Every minute this script finds new emails of either form and hands each one to the Hub
+ * (POST /intake/email). The Hub matches the property/unit, creates the Work Order, and
  * texts you straight away (any hour). If it can't place the job with certainty it does NOT create
  * a junk work order; it parks it in the Hub's Intake_Queue tab and texts you instead.
  *
@@ -37,7 +40,7 @@ var WORKER_URL    = 'https://maintenance-hub.brett-2f8.workers.dev';
 var NOTIFY_EMAIL  = 'brett@bmoremanagement.com';
 var LABEL_DONE    = 'Buildium/Sent to Hub';
 var LABEL_ATTN    = 'Buildium/Needs Attention';
-var SEARCH_BASE   = 'from:donotreply@managebuilding.com subject:"Work order" -subject:"New work order"';
+var SEARCH_BASE   = 'from:donotreply@managebuilding.com subject:"Work order"';   // matches both the detailed email and the "New work order:" notice
 var MAX_PER_RUN   = 10;
 var LOOKBACK_MS   = 14 * 24 * 3600 * 1000;
 var KEEP_IDS      = 300;
@@ -84,9 +87,9 @@ function processBuildiumEmails() {
         if (done.indexOf(m.getId()) >= 0) continue;
         if (!eligible_(m, cutoff)) {
           // A Buildium email we don't recognise (format change, "updated"/"cancelled" notice...): tell Brett ONCE instead of ignoring it.
-          if (m.getDate().getTime() >= cutoff && senderOk_(m.getFrom()) && !/^\s*New work order/i.test(m.getSubject())) {
+          if (m.getDate().getTime() >= cutoff && senderOk_(m.getFrom())) {
             done.push(m.getId());
-            alert_('Buildium email not imported (unrecognised format)', 'Subject: ' + m.getSubject() + '\nReceived: ' + m.getDate() + '\n\nThe importer only handles "<Org>: Work order <number>" emails. If this is a new work order, tell Claude so the format can be added.');
+            alert_('Buildium email not imported (unrecognised format)', 'Subject: ' + m.getSubject() + '\nReceived: ' + m.getDate() + '\n\nThe importer only handles "<Org>: Work order <number>" and "New work order: <address>" emails. If this is a new work order, tell Claude so the format can be added.');
             threads[ti].addLabel(label_(LABEL_ATTN));
           }
           continue;
@@ -127,12 +130,26 @@ function eligible_(m, cutoff) {
   if (m.getDate().getTime() < cutoff) return false;
   if (!senderOk_(m.getFrom())) return false;
   var s = m.getSubject();
-  return /Work order\s+#?\d+\s*$/i.test(s) && !/^\s*New work order/i.test(s);
+  return isDetail_(s) || isNotice_(s);
+}
+function isDetail_(s) { return /Work order\s+#?\d+\s*$/i.test(s) && !/^\s*New work order/i.test(s); }
+function isNotice_(s) { return /^\s*New work order\s*:\s*\S/i.test(s); }
+
+// The notice's "View work order details" button is a login-protected managebuilding.com link that the plain-text
+// body can drop. Pull it from the HTML and append it so the Hub can put it in the text to Brett.
+function noticeLink_(m) {
+  try {
+    var html = String(m.getBody() || '').replace(/&amp;/g, '&');
+    var x = /https?:\/\/[A-Za-z0-9.-]{1,80}\.managebuilding\.com\/vendor\/requests\/[A-Za-z0-9-]{8,64}\?[^\s"'<>)\]]{0,600}/i.exec(html);
+    return x ? x[0] : '';
+  } catch (e) { return ''; }
 }
 
 function send_(m, token, dry) {
+  var body = m.getPlainBody();
+  if (isNotice_(m.getSubject())) body += '\nBUILDIUM_LINK: ' + noticeLink_(m);
   var payload = {
-    subject: m.getSubject(), body: m.getPlainBody(), from: m.getFrom(),
+    subject: m.getSubject(), body: body, from: m.getFrom(),
     message_id: (dry ? 'DRYRUN-' : '') + m.getId(), received_at: m.getDate().toISOString(), dry_run: !!dry
   };
   var resp;
@@ -147,8 +164,9 @@ function send_(m, token, dry) {
   if (code !== 200 || !j || j.success !== true) return { ok: false, raw: 'HTTP ' + code + ' ' + raw };
   var attention = false, text = '';
   if (j.parked) { attention = true; text = 'The Hub did NOT create a work order for this one (' + j.reason + ': ' + j.detail + '). It is parked in the Hub Intake_Queue tab (row ' + j.queue_id + ').' + (j.queue_updated === false ? ' (The Hub could not update the queue row after texting you.)' : '') + (j.telemetry_ok === false ? ' (The Hub could not write its log row.)' : ''); }
-  else if (j.created && j.sms_sent === false) { attention = true; text = 'Work order ' + j.wo_id + ' WAS created, but the text message to you did not go out (' + j.sms_status + ').'; }
-  else if (j.created && j.telemetry_ok === false) { attention = true; text = 'Work order ' + j.wo_id + ' was created and you were texted, but the Hub could not write its log row.'; }
+  else if ((j.created || j.filled_stub) && j.sms_sent === false) { attention = true; text = 'Work order ' + j.wo_id + ' WAS created or updated, but the text message to you did not go out (' + j.sms_status + ').'; }
+  else if (j.created && j.stub && j.link_found === false) { attention = true; text = 'Stub work order ' + j.wo_id + ' was created and you were texted, but no Buildium link was found in the email, so the text had no link. Open the Buildium email.'; }
+  else if ((j.created || j.covered) && j.telemetry_ok === false) { attention = true; text = 'Work order ' + j.wo_id + ' was created and you were texted, but the Hub could not write its log row.'; }
   return { ok: true, attention: attention, attentionText: text, raw: raw, json: j };
 }
 
@@ -159,7 +177,7 @@ function dryRunLatest() {
   for (var i = 0; i < threads.length; i++) {
     var msgs = threads[i].getMessages();
     for (var k = msgs.length - 1; k >= 0; k--) {
-      if (/Work order\s+#?\d+\s*$/i.test(msgs[k].getSubject())) {
+      if (isDetail_(msgs[k].getSubject()) || isNotice_(msgs[k].getSubject())) {
         var r = send_(msgs[k], token, true);
         Logger.log('Email: ' + msgs[k].getSubject() + ' (' + msgs[k].getDate() + ')');
         Logger.log('Hub says: ' + (r.ok ? JSON.stringify(r.json) : 'FAILED ' + r.raw));
@@ -167,7 +185,7 @@ function dryRunLatest() {
       }
     }
   }
-  Logger.log('No "Work order" email found to test with.');
+  Logger.log('No Buildium work-order email found to test with.');
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────────────────────
