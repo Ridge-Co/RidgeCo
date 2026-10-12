@@ -6283,7 +6283,7 @@ async function createWorkOrder(env, body) {
 // 500 (the poller keeps retrying + emails Brett), and an SMS that did not go out is recorded and
 // returned as sms_sent:false (the poller emails Brett on that too).
 const INTAKE_TAB = 'Intake_Queue';
-const INTAKE_COLS = ['ID','Received_At','Source','Ref_Key','Message_ID','Subject','Status','Reason','WO_ID','Property_ID','Unit_ID','Address_Raw','Title','SMS_Status','Parsed_JSON','Raw_Body','Processed_At'];
+const INTAKE_COLS = ['ID','Received_At','Source','Ref_Key','Message_ID','Subject','Status','Reason','WO_ID','Property_ID','Unit_ID','Address_Raw','Title','SMS_Status','Parsed_JSON','Raw_Body','Processed_At','Kind','Pair_ID'];
 let _intakeTabReady = false;
 const INTAKE_MAX_BODY = 60000;   // a real Buildium email is ~3-8KB; anything bigger is parked, never run through the parsers
 
