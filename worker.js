@@ -6608,8 +6608,32 @@ async function intakeEmail(env, body, retryRow) {
 
     // ── create (or repair a WO that exists without its queue row) ──
     stage = 'create';
-    let woId, repaired = false;
+    let woId, repaired = false, filled = false, stubDescOk = true;
     if (existingWO) { woId = existingWO.ID; repaired = true; }
+    else if (stub) {
+      woId = stub.wo.ID; filled = true;
+      const c0 = p.contacts[0] || {};
+      const contactLine = p.contacts.map(c => [c.name && (c.name + (c.role ? ' (' + c.role + ')' : '')), c.phones.join(', '), c.emails.join(', ')].filter(Boolean).join(' ')).join(' | ');
+      const detailNotes = [
+        `Source: Buildium email - ${p.org || 'Buildium'} - WO #${refKey}`,
+        p.entry_details || p.entry_notes ? `Entry: ${[p.entry_details, p.entry_notes].filter(Boolean).join(' | ')}` : '',
+        contactLine ? `Contact (from Buildium): ${contactLine}` : '',
+        `Buildium location: ${p.address_raw}`,
+      ].filter(Boolean).join('\n');
+      const newDesc = (p.title + (p.description ? ' - ' + p.description : '')).slice(0, 1500);
+      const descIsStub = String(stub.wo.Description || '').startsWith(INTAKE_STUB_DESC);
+      const notesIsStub = String(stub.wo.Notes || '').startsWith(INTAKE_STUB_NOTE);
+      stubDescOk = descIsStub;
+      const f = { Owner_WO_Ref: refTag, Source: 'Buildium email',
+        Notes: notesIsStub ? detailNotes : (String(stub.wo.Notes || '') + '\n' + detailNotes).slice(0, 4000) };
+      if (descIsStub) f.Description = newDesc;                         // Brett already typed his own description? Then leave it alone
+      else f.Notes = (f.Notes + '\nBuildium details: ' + newDesc).slice(0, 4000);
+      if (!String(stub.wo.WO_Contact_Name || '') && c0.name) f.WO_Contact_Name = c0.name;
+      if (!String(stub.wo.WO_Contact_Phone || '') && c0.phones && c0.phones[0]) f.WO_Contact_Phone = normalizePhone(c0.phones[0]);
+      if (!String(stub.wo.Tenant_ID || '') && a.tenant_id) f.Tenant_ID = a.tenant_id;
+      await updateWOFields(env, woId, f);
+      if (descIsStub) stub.newDesc = newDesc;
+    }
     else {
       await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
       const c0 = p.contacts[0] || {};
