@@ -393,6 +393,7 @@ const _hubWorkerCore = {
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
         if (path === '/properties')             return await getSheet(env, 'Properties');
