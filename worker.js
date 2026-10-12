@@ -6757,7 +6757,7 @@ async function intakeNotice(env, body, subject, text, msgId, dry, t0, retryRow) 
       }
     }
     const safeParsed = { ...(a.parsed || {}), link: a.parsed && a.parsed.link ? '(present)' : '' };   // the link carries a login token: never stored in Parsed_JSON / dry-run output
-    if (dry) return json({ success: true, dry_run: true, kind: 'notice', status: a.status, reason: a.reason, detail: a.detail, parsed: safeParsed, link_found: !!(a.parsed && a.parsed.link), property_id: a.property ? a.property.ID : '', property_address: a.property ? a.property.Address : '', unit_id: a.unit_id || '', unit_label: a.unit_label || '' });
+    if (dry) return json({ success: true, dry_run: true, kind: 'notice', status: a.status, reason: a.status === 'ok' ? '' : a.reason, detail: a.status === 'ok' ? '' : a.detail, parsed: safeParsed, link_found: !!(a.parsed && a.parsed.link), property_id: a.property ? a.property.ID : '', property_address: a.property ? a.property.Address : '', unit_id: a.unit_id || '', unit_label: a.unit_label || '' });
 
     stage = 'dedupe';
     await intakeEnsureTab(env);
