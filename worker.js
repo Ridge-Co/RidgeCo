@@ -6586,11 +6586,11 @@ async function intakeEmail(env, body, retryRow) {
     stage = 'verify';
     const wosAfter = (await sheetsRequest(env, 'GET', '/values/Work_Orders')).values || [];
     const hdr = wosAfter[0] || [], hc = n => hdr.indexOf(n);
-    const iId = hc('ID'), iRef = hc('Owner_WO_Ref'), iSrc = hc('Source');
+    const iId = hc('ID'), iRef = hc('Owner_WO_Ref'), iSrc = hc('Source'), iMid = hc('Intake_Message_ID');
     if (iId < 0 || iRef < 0) throw new Error('verify failed: Work_Orders is missing its ID or Owner_WO_Ref column');
     const row = wosAfter.slice(1).find(r => String(r[iId]) === String(woId));
     if (!row || String(row[iRef] || '').trim() !== refTag) throw new Error(`verify failed: ${woId} not found with Owner_WO_Ref "${refTag}" after create`);
-    if (!repaired && iSrc >= 0 && String(row[iSrc] || '') !== 'Buildium email') throw new Error(`verify failed: ${woId} Source column did not save`);
+    if (!repaired && (iSrc < 0 || iMid < 0 || String(row[iSrc] || '') !== 'Buildium email' || String(row[iMid] || '') !== msgId)) throw new Error(`verify failed: ${woId} Source / Intake_Message_ID columns did not save`);
 
     stage = 'notify';
     const addr = a.property.Address + (a.unit_label ? ' ' + formatUnitLabel(a.unit_label) : '');
