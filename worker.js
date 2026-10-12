@@ -6290,12 +6290,12 @@ const INTAKE_MAX_BODY = 60000;   // a real Buildium email is ~3-8KB; anything bi
 // Plain-body / HTML / markdown-table renderings of the same email all flatten to one line of
 // single-spaced text so the field regexes below don't care how Gmail laid it out.
 function intakeFlatten(s) {
-  return String(s == null ? '' : s)
+  return String(s == null ? '' : s).slice(0, INTAKE_MAX_BODY)
     .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+    .replace(/<[^>]{0,500}>/g, ' ')
     .replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-    .replace(/\[\]\([^)]*\)/g, ' ')
+    .replace(/&lt;|&gt;/g, ' ').replace(/&amp;/g, '&')   // never turn entities back into < > (would re-create tags)
+    .replace(/\[\]\([^)]{0,500}\)/g, ' ')
     .replace(/[| ]/g, ' ')
     .replace(/-{3,}/g, ' ')
     .replace(/\s+/g, ' ')
