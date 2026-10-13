@@ -15317,7 +15317,7 @@ async function opsQueueStartBuild(env, body) {
   const originalStatus = {};
   const statusCol = headers.indexOf('Status');
   const heldNoteCol = headers.indexOf('Held_Note');
-  const bsCol = headers.indexOf('Build_State'), buCol = headers.indexOf('Build_Updated');
+  const bsCol = headers.indexOf('Build_State'), buCol = headers.indexOf('Build_Updated'), prCol = headers.indexOf('PR_Number');
   const buildUpdates = [];
   for (const row of eligible) {
     originalStatus[row.ID] = row.Status;
