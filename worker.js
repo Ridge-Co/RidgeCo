@@ -14071,6 +14071,62 @@ async function schedRunNext(env, ctx, opts) {
     }
   } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
 
+  const jobEnv = __cronEnv(env);
+  const t0 = Date.now();
+  const work = (async () => {
+    let jobRes;
+    try { jobRes = await job.run(jobEnv, { now }); }
+    catch (e) { jobRes = { ok: false, errors: [{ step: 'job', error: schedErrText(e) }], threw: true }; }
+    if (!jobRes || typeof jobRes !== 'object') jobRes = { ok: false, errors: [{ step: 'job', error: 'job returned no result' }] };
+    const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
+    const jobOk = jobRes.ok !== false && errors.length === 0;
+    const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
+    const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
+    if (errors.length) out.errors = errors;
+    if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
+    if (!jobOk) {
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
+      catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
+      try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
+      catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
+    }
+    // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
+    let landed = false, stateErr = null, finalState = null;
+    for (let attempt = 0; attempt < 2 && !landed; attempt++) {
+      try {
+        const r2 = await schedReadConfigRows(env, true);
+        const p2 = schedParseState(schedCell(r2, SCHED_STATE_KEY));
+        if (p2.error) { stateErr = p2.error; break; }
+        const cur = p2.state;
+        const rec = Object.assign({}, cur.jobs[job.name] || {});
+        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? 'ok' : 'failed';
+        rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
+        if (jobOk) rec.last_ok = rec.last_end;
+        if (job.kind !== 'interval') {
+          const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
+          const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
+          if (jobOk || finalFail) {
+            rec.last_key = etDay; rec.attempts = null;
+            rec.last_failed_final = finalFail ? etDay : null;
+          } else {
+            const a = rec.attempts && rec.attempts.key === etDay ? rec.attempts.n : 0;
+            rec.attempts = { key: etDay, n: a + 1 };
+          }
+        }
+        cur.jobs[job.name] = rec;
+        if (cur.claim_id === myId) { cur.claim_id = ''; cur.claim_until = ''; cur.claim_job = ''; }
+        const w2 = await schedWriteVerified(env, cur, r2, sleep, 0);
+        landed = w2.landed; finalState = cur;
+        if (!landed) stateErr = 'the end-of-run state write did not land (another writer overwrote Scheduler_State)';
+      } catch (e) { stateErr = schedErrText(e); }
+    }
+    if (!landed) {
+      out.ok = false; out.state_error = stateErr;
+      out.error = (out.error ? out.error + ' | ' : '') + 'STATE NOT RECORDED: ' + stateErr;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Notes: ('could not record the result of this run in Scheduler_State (the job may run again early): ' + stateErr).slice(0, 480) }); }
+      catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: state write failed and telemetry write failed:', stateErr, out.telemetry_error); }
+    } else if (finalState) {
+      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only }).map(d => d.name);
 //@@SCHED_NEXT@@
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
