@@ -697,6 +697,20 @@ store.setCfg('admin_phone', '+15555550100');
   t('GET /cron/run -> 401 (Scheduler_Token only authorises POST there)', getRun.status === 401);
 }
 {
+  // PREFLIGHT: POST /cron/run {dry_run:true} lists what the next real tick WOULD do (counts only), with no side effects
+  const H = { 'X-Auth-Token': SCHED_TOKEN };
+  const ago = (h) => new Date(Date.now() + skew - h * 3600000).toISOString();
+  const future = new Date(Date.now() + skew + 5 * 3600000).toISOString();
+  store.tabs.set('Message_Queue', [['ID', 'Status', 'Send_After', 'Recipient_Type', 'Message_Body', 'Recipient_Phone'],
+    ['1', 'pending', ago(2), 'tenant', 'hello', '+15550000001'], ['2', 'pending', ago(240), 'vendor', 'old one', '+15550000002'],
+    ['3', 'pending', future, 'tenant', 'not yet', '+15550000003'], ['4', 'sent', ago(5), 'tenant', 'done', '+15550000004']]);
+  store.tabs.set('Notification_Queue', [['ID', 'WO_ID', 'Type', 'Phone', 'Message', 'Send_After', 'Sent', 'Created_At'],
+    ['1', 'WO-1', 'x', '+15550000001', 'reminder', ago(30), 'FALSE', ago(31)], ['2', 'WO-2', 'x', '+15550000002', 'already', ago(30), 'TRUE', ago(31)], ['3', 'WO-3', 'x', '+15550000003', 'later', future, 'FALSE', ago(1)]]);
+  store.tabs.set('Vendor_Requests', [['ID', 'WO_ID', 'Vendor_ID', 'Request_Type', 'Status', 'Next_Nudge_At'],
+    ['1', 'WO-1', 'V1', 'photos', 'open', ago(3)], ['2', 'WO-2', 'V1', 'invoice', 'open', future], ['3', 'WO-3', 'V1', 'photos', 'satisfied', ago(3)]]);
+//@@PF_T_NEXT@@
+}
+{
   // the hub-test (staging) token may only dry-run / run the two safe jobs - exercise the REAL hubTestWriteAllowed (a TDZ bug here shipped once: `_b` is declared further down the function)
   const fstart = wsrc.indexOf('async function hubTestWriteAllowed('), fend = wsrc.indexOf('\nasync function ', fstart + 10);
   const real = new Function('SCHED_STAGING_SAFE_JOBS', wsrc.slice(fstart, fend) + '\nreturn hubTestWriteAllowed;')(['door_watchdog', 'insp_guard']);
