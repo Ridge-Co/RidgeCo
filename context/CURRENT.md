@@ -15,6 +15,16 @@
 
 ## ⚡ STANDING RULE — NOTHING EVER FAILS SILENTLY (Brett, Oct 1, 2026) — see CLAUDE.md. Applies to every repo/worker/sheet/automation/PR; a repo-wide audit + fix program is in progress ("Silent-Failure Audit Plan" doc in the Continuous Improvement project).
 
+# OPS QUEUE UPGRADE (dedupe, Brett's change note, snooze, two-way build sync) — Oct 13, 2026 — Ridge-Co/RidgeCo PR #236, base `main`, head `feat/queue-upgrade-oct13`, NOT merged (Brett merges)
+
+## 🟡 Built, not yet live-verified on prod: Ops queue upgrade — BUILD_VERSION `2026-10-13.3-queue-upgrade`
+Fixes the duplicate ideas Brett saw on the Proposals page: Scout submissions and approvals are now fuzzy de-duped (same = skipped/promoted in place, overlap = shown with `Dup_Of`), items already shipped are flagged against FEATURE_LOG (`Shipped_Match`), Brett can attach a free-text change note to any item (injected into the build brief as "BRETT'S CHANGE"), "Not now" snoozes an item (default 10 days; returns only after a Scout re-check or a 4-day grace), and `POST /ops-queue/sync` ties each item to its PR (merged → live + done; closed unmerged → flagged, never auto-abandoned). `proposals.html` rewritten around those states. New `Ops_Build_Queue` columns are added additively. FEATURE_LOG `[FL-20261013-1130-qu]`. Tests: `test/ops-queue-upgrade.test.mjs` (101).
+**Verification status:** staging-verified at `.2` on `TEST-` rows only; the `.3` review fixes are unit-tested only (staging was reset to another build mid-session) — re-verify on staging or prod after merge.
+**Open items:**
+- (a) 🟡 One-time PROD cluster merge of the ~117 live queue rows → ~50 NOT yet applied. Plan is in the Continuous Improvement project doc. Waits for this deploy + Brett's go.
+- (b) 🟡 Tasks-sheet Scout lens + Scout prompt update (`rechecks`, `skipped_duplicates`) — pending.
+- (c) 🟡 Register an `ops_queue_sync` DAILY job in the Hub scheduler (Apps Script) once PR #229 merges — NO cron. The Proposals page looks PRs up in the browser and passes them to the sync (GitHub rate-limits the Worker's shared address).
+
 # BUILDIUM EMAIL → WORK ORDER INTAKE (B-103) — Oct 12, 2026 — Ridge-Co/RidgeCo PR #215, base `main`, head `feat/buildium-email-intake-r2`, NOT merged (Brett merges); staging test PRs #213/#214 merged, build `2026-10-12.2-buildium-email-intake` confirmed live on staging
 Phoenix Estate Rentals (Buildium) work-order emails now become Hub Work Orders automatically, with an immediate admin SMS (bypasses quiet hours). Apps Script poller → `POST /intake/email` (narrow `INTAKE_TOKEN`) → parse → strict property/unit match → `createWorkOrder` → read-back → SMS → `Intake_Queue` row + telemetry. Uncertain cases park (no junk WO) and text Brett. FEATURE_LOG rule 204. Tests 83/83, tripwires 8/8, live staging loop green, adversarial review no blockers (sender-spoof + script-exception findings fixed).
 **Brett-only after merge:** paste `apps-script/buildium-intake/BuildiumIntake.gs` + `appsscript.json` at script.google.com → run `setup()` → copy INTAKE_TOKEN → add Cloudflare Secret `INTAKE_TOKEN` on `maintenance-hub` → (optional) `dryRunLatest` → ask Phoenix to post a work order. Older unread Phoenix emails (e.g. WO #949124-1) are NOT backfilled.

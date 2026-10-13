@@ -55,6 +55,19 @@
   .tokbar input{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;margin:6px 0}
   .tokbar button{width:100%;border:none;border-radius:9px;padding:11px;font-weight:700;background:var(--blue);color:#fff}
   a.back{color:var(--blue);font-size:12.5px;text-decoration:none;font-weight:700}
+  #toast .banner{margin:8px 0}
+  .banner.ok{background:var(--greenbg);color:var(--green);border-color:#bfe3cc}
+  .sumrow{display:flex;gap:8px;margin:8px 0}
+  .sumb{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 4px;text-align:center;text-decoration:none;color:var(--ink);box-shadow:var(--shadow)}
+  .sumb b{display:block;font-size:20px;line-height:1.1}.sumb span{font-size:11px;color:var(--muted);font-weight:700}
+  textarea.note{width:100%;margin-top:8px;border:1px solid var(--line);border-radius:9px;padding:9px;font:inherit;font-size:14px;resize:vertical;background:#fbfcfd}
+  textarea.note.saved{border-color:var(--green);background:var(--greenbg)} textarea.note.bad{border-color:var(--red)}
+  .flag{font-size:12.5px;font-weight:700;margin:6px 0 0;padding:7px 9px;border-radius:9px}
+  .flag.red{background:var(--redbg);color:var(--red)}.flag.amber{background:var(--amberbg);color:var(--amber)}.flag.blue{background:var(--bluebg);color:var(--blue)}
+  .mini.ok{background:var(--green);color:#fff;border-color:var(--green)}
+  select.risk,input.days{border:1px solid var(--line);border-radius:9px;padding:7px 8px;font-size:13px;background:#fff}
+  input.days{width:64px}
+  details.card>summary{cursor:pointer;list-style:none}details.card>summary::-webkit-details-marker{display:none}
 </style>
 <style id="mobile-input-font">
 /* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
@@ -112,8 +125,10 @@
 <div class="wrap">
   <header><div class="title">🧭 Optimizer Proposals <small id="asof"></small></div>
     <a class="back" href="command-center.html">← Command Center</a></header>
+  <div id="toast"></div>
+  <div id="summary"></div>
   <div class="card"><b>🔎 Find an item</b>
-    <div class="sub">Search by its # ID (e.g. 14) or title — this covers every status, including items already done or dropped.</div>
+    <div class="sub">Search by its # ID (e.g. 14) or title — covers every status, including done, dropped and snoozed items.</div>
     <input id="qsearch" oninput="searchQueue(this.value)" placeholder="# ID or title…" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;margin-top:6px;box-sizing:border-box">
     <div id="qsearchResults"></div>
   </div>
@@ -134,176 +149,327 @@ const _p=new URLSearchParams(location.search);
 const STAGING=_p.has('staging');
 const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';
+const REPO_URL='https://github.com/Ridge-Co/RidgeCo';
+const REVIEW_CAP=25, DEFAULT_SNOOZE=10, RECHECK_GRACE_DAYS=4, STALLED_HOURS=24;
 let TOKEN=''; try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
-let PROPOSALS=[], REVIEW_TS='';
+let PROPOSALS=[], REVIEW_TS='', SHOW_ALL_REVIEW=false, SYNCED=false;
 function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function jsq(s){return JSON.stringify(String(s==null?'':s));}
 async function getJSON(path){const r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}});const t=await r.text();let d=null;try{d=JSON.parse(t)}catch(e){}if(!r.ok)throw new Error(path+' → HTTP '+r.status+' '+((d&&d.error)||t.slice(0,80)));if(d&&d.error)throw new Error(d.error);return d;}
+async function postJSON(path,body){const r=await fetch(WORKER+path,{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify(body)});const d=await r.json().catch(function(){return null;});if(!r.ok||!d||d.error||(d.success!==true&&d.ok!==true))throw new Error((d&&d.error)||('HTTP '+r.status));return d;}
+function toast(msg,kind){const el=document.getElementById('toast');if(!el)return;el.innerHTML=msg?'<div class="banner'+(kind==='ok'?' ok':'')+'">'+msg+' <button class="mini" style="float:right;padding:3px 8px" onclick="toast(\'\')">✕</button></div>':'';}
 function chip(tag){const t=(tag||'').toUpperCase();if(t.indexOf('QUICK')>=0)return '<span class="chip quick">QUICK WIN</span>';if(t.indexOf('FIX')>=0)return '<span class="chip fix">FIXES EXISTING</span>';if(t.indexOf('BIG')>=0)return '<span class="chip big">BIG GAIN</span>';return t?'<span class="chip eff">'+h(t)+'</span>':'';}
+function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
 
+// ── duplicate matching (same algorithm as the Worker's queueSimilarity) ──────────────────────
+const STOP=new Set(['the','and','for','with','from','that','this','into','via','per','new','add','build','show','make','use','using','when','not','all','any','every','each','are','was','were','been','will','can','should','would','could','item','items','page','view','flow','tool','auto','automatic','automatically','system','feature']);
+function toks(t){const o=new Set();String(t==null?'':t).toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).forEach(function(w){if(w.length<3||STOP.has(w))return;let s=w;if(s.length>5&&/ing$/.test(s))s=s.slice(0,-3);else if(s.length>4&&/ed$/.test(s))s=s.slice(0,-2);else if(s.length>4&&/ies$/.test(s))s=s.slice(0,-3)+'y';else if(s.length>3&&/s$/.test(s)&&!/ss$/.test(s))s=s.slice(0,-1);if(s.length>=3)o.add(s);});return o;}
+function dice(a,b){if(!a.size||!b.size)return 0;let i=0;a.forEach(function(t){if(b.has(t))i++;});return 2*i/(a.size+b.size);}
+function overlapsQueue(it,rows){const ta=toks(it.title),fa=toks([it.title,it.problem,it.action].join(' '));for(let k=0;k<rows.length;k++){const r=rows[k];if(dice(ta,toks(r.Title))>=0.6||dice(fa,toks([r.Title,r.Problem,r.First_Step].join(' ')))>=0.30)return r;}return null;}
+
+// ── row classification ──────────────────────────────────────────────────────────────────────
+function st(x){return String(x.Status||'').toLowerCase();}
+function ms(v){const t=Date.parse(String(v||''));return Number.isFinite(t)?t:NaN;}
+function daysLeft(x){return Math.ceil((ms(x.Snooze_Until)-Date.now())/86400000);}
+let REVIEW_ANYWAY={}; try{REVIEW_ANYWAY=JSON.parse(localStorage.getItem('prop_review_anyway')||'{}')||{};}catch(e){}
+function classify(allQ){
+  const out={review:[],built:[],snoozed:[],ready:[],flight:[],live:[],byId:{}};
+  allQ.forEach(function(x){
+    out.byId[String(x.ID)]=x;
+    const s=st(x), bs=String(x.Build_State||'');
+    if(s==='proposed'){
+      const sn=ms(x.Snooze_Until), now=Date.now();
+      let waiting=false, back=false;
+      if(Number.isFinite(sn)&&sn>now){ out.snoozed.push(x); return; }
+      if(Number.isFinite(sn)&&sn<=now){            // snooze expired → only resurface after the Scout re-checked it vs builds since
+        const v=String(x.Scout_Verdict||'').toLowerCase();
+        const graceOver=(now-sn)>RECHECK_GRACE_DAYS*86400000;
+        if(v==='covered'&&!REVIEW_ANYWAY[x.ID]){ x.__why=x.Scout_Note||'Scout says builds shipped since cover this'; out.built.push(x); return; }
+        if(v==='keep'||v==='update'||graceOver){ back=true; x.__back=v?('back from snooze · Scout re-checked: '+v):'back from snooze · not re-checked yet'; }
+        else waiting=true;
+      }
+      if(waiting){ x.__wait=true; out.snoozed.push(x); return; }
+      if(String(x.Shipped_Match||'').trim() && !REVIEW_ANYWAY[x.ID]){ x.__why=x.Shipped_Match; out.built.push(x); return; }
+      out.review.push(x); return;
+    }
+    if(s==='greenlit'||s==='prepared'||s==='held'){ out.ready.push(x); return; }
+    if(s==='building'||(s==='done'&&(bs==='pr_open'||bs==='pr_closed'||bs==='building'||bs==='held'))){ out.flight.push(x); return; }
+    if(s==='done'){
+      const t=ms(x.Build_Updated)||ms(x.Timestamp); if(Number.isFinite(t)&&Date.now()-t<14*86400000) out.live.push(x);
+    }
+  });
+  out.review.sort(function(a,b){const ra=parseFloat(a.Rank),rb=parseFloat(b.Rank);const na=Number.isFinite(ra)?ra:999,nb=Number.isFinite(rb)?rb:999;return na-nb||(+b.ID)-(+a.ID);});
+  out.live.sort(function(a,b){return (ms(b.Build_Updated)||0)-(ms(a.Build_Updated)||0);});
+  return out;
+}
+
+// ── load / render ───────────────────────────────────────────────────────────────────────────
 async function load(){
   if(!TOKEN){ document.getElementById('body').innerHTML='<div class="tokbar"><b>Connect</b><div class="sub">Paste your Hub access code (mh_auth) to load proposals.</div><input id="tok" type="password" placeholder="access code"><button onclick="saveTok()">Connect</button></div>'; return; }
   let rev=null,q=null;
-  try{ rev=await getJSON('/ops-review-log?limit=1'); }catch(e){ document.getElementById('body').innerHTML='<div class="card"><b>Couldn’t load</b><div class="sub">'+h(e.message)+'</div></div>'; return; }
-  try{ q=await getJSON('/ops-queue?all=1'); }catch(e){ q=null; }
+  try{ rev=await getJSON('/ops-review-log?limit=1'); }catch(e){ rev=null; toast('Couldn’t load this week’s review — '+h(e.message)); }
+  try{ q=await getJSON('/ops-queue?all=1'); }catch(e){ q=null; document.getElementById('body').innerHTML='<div class="card"><b>Couldn’t load the queue</b><div class="sub">'+h(e.message)+'</div><div class="ctrls"><button class="mini" onclick="load()">Try again</button></div></div>'; return; }
   render(rev,q);
+  maybeSync(q);
 }
+// Two-way sync: when in-flight builds exist, ask the Worker to check their PRs on GitHub once per page load.
+async function maybeSync(q){
+  if(SYNCED)return; const rows=(q&&q.queue)||[];
+  const need=rows.some(function(x){const s=st(x),bs=String(x.Build_State||'');return s==='building'||(s==='done'&&(bs==='pr_open'||bs==='building'));});
+  if(!need)return; SYNCED=true;
+  try{
+    // GitHub blocks the Hub's shared server address, so look the PRs up from this browser and hand them over.
+    let prs=[]; try{ const ac=new AbortController(); const tm=setTimeout(function(){ac.abort();},6000); const g=await fetch('https://api.github.com/repos/Ridge-Co/RidgeCo/pulls?state=all&sort=updated&direction=desc&per_page=100',{headers:{'Accept':'application/vnd.github+json'},signal:ac.signal}); clearTimeout(tm); if(g.ok) prs=(await g.json()).map(function(p){return {number:p.number,state:p.state,merged_at:p.merged_at,title:p.title,body:(String(p.body||'').match(/ops[ -]?queue\s+(?:item\s+)?#?\d+/ig)||[]).join(' ')};}); }catch(e){ prs=[]; }
+    const r=await fetch(WORKER+'/ops-queue/sync',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({prs:prs})});
+    const d=await r.json().catch(function(){return null;});
+    if(!d) throw new Error('HTTP '+r.status);
+    if(d.errors&&d.errors.length) toast('Couldn’t check GitHub for '+d.errors.length+' build(s) ('+h(d.errors[0].error)+') — their status below may be out of date.');
+    else if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+    if(d.changed&&d.changed.length) load();
+  }catch(e){
+    toast('Couldn’t check GitHub for build status: '+h(e.message)+' — build states below may be out of date.');
+  }
+}
+
+function summaryBar(c){
+  const b=function(n,label,anchor){return '<a class="sumb" href="#'+anchor+'"><b>'+n+'</b><span>'+label+'</span></a>';};
+  document.getElementById('summary').innerHTML='<div class="sumrow">'+b(c.review.length,'to review','sec-review')+b(c.ready.length,'ready to build','sec-ready')+b(c.flight.length,'in flight','sec-flight')+b(c.snoozed.length,'snoozed','sec-snoozed')+'</div>';
+}
+
+function noteBox(x){
+  return '<textarea class="note" rows="2" placeholder="✎ Your change (optional) — e.g. “don’t show monthly spend”" onblur="saveNote(this)">'+h(x.Brett_Note||'')+'</textarea>';
+}
+function buildStateLine(x){
+  const s=st(x), bs=String(x.Build_State||''), pr=String(x.PR_Number||'').trim();
+  const prLink=pr?'<a href="'+REPO_URL+'/pull/'+h(pr)+'" target="_blank" style="color:var(--blue);font-weight:800">PR #'+h(pr)+'</a>':'';
+  const age=ms(x.Build_Updated); const hrs=Number.isFinite(age)?Math.floor((Date.now()-age)/3600000):null;
+  if(bs==='pr_closed') return '<div class="flag red">⚠ '+prLink+' was closed WITHOUT merging — the work didn’t ship. Rebuild it, or abandon it.</div>';
+  if(bs==='pr_open'||(s==='done'&&bs==='')) return '<div class="flag blue">🔀 Built — '+(prLink||'PR not found yet')+' is waiting for your merge'+(hrs!==null&&hrs>=24*7?' ('+Math.floor(hrs/24)+' days)':'')+'.</div>';
+  if(s==='building') return '<div class="flag amber">🔨 Building'+(prLink?' — '+prLink+' open':' — no PR reported yet')+(hrs!==null&&hrs>=STALLED_HOURS?' · ⏰ no update in '+hrs+'h, may be stuck':'')+'.</div>';
+  return '';
+}
+
+function reviewCard(x,i){
+  const requiresSpend=String(x.Requires_Spend||'').toUpperCase()==='TRUE';
+  const spendChip=requiresSpend?'<span class="chip fix">💰 '+h(x.Spend_Note||'costs something')+'</span>':'';
+  let badges=(x.Lens?'<span class="chip eff">'+h(x.Lens)+'</span>':'')+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+spendChip;
+  if(x.__back) badges+='<span class="chip quick">⏰ '+h(x.__back)+'</span>';
+  let overlap='';
+  if(x.Dup_Of){ const o=(window.__c&&window.__c.byId[String(x.Dup_Of)]); overlap='<div class="flag amber">⚠ May overlap #'+h(x.Dup_Of)+(o?' “'+h(o.Title)+'” ('+h(st(o))+')':'')+' — check before approving.</div>'; }
+  return '<div class="qcard" data-id="'+h(x.ID)+'" id="rv'+i+'">'
+    +'<div class="prow"><span class="rank">#'+h(x.ID)+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
+    +'<div class="prow" style="margin-top:4px">'+badges+'</div>'
+    +overlap
+    +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
+    +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
+    +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
+    +(requiresSpend&&x.Workaround?'<div class="pimp">Cheaper workaround: '+h(x.Workaround)+'</div>':'')
+    +noteBox(x)
+    +'<div class="ctrls" style="margin-top:8px;align-items:center">'
+    +'<select class="risk" title="SAFE = the Start Build button may build it automatically. GATED = it needs a session you supervise.">'
+    +'<option value="SAFE">Auto-build (SAFE)</option><option value="GATED" selected>I’ll supervise (GATED)</option></select>'
+    +'<button class="mini ok" onclick="act(this,\'approve\')">✓ Approve</button>'
+    +'<button class="mini" onclick="act(this,\'drop\')">✕ Drop</button>'
+    +'</div>'
+    +'<div class="ctrls" style="margin-top:2px;align-items:center">'
+    +'<button class="mini" onclick="act(this,\'snooze\')">💤 Not now — snooze</button>'
+    +'<input class="days" type="number" min="1" max="365" value="'+DEFAULT_SNOOZE+'" aria-label="snooze days"><span class="sub">days</span>'
+    +'</div></div>';
+}
+
 function render(rev,q){
   const row=(rev&&rev.rows&&rev.rows[0])||null;
   let items=[];
   if(row&&row.Proposal_JSON){ try{ items=JSON.parse(row.Proposal_JSON)||[]; }catch(e){ items=[]; } }
   PROPOSALS=items; REVIEW_TS=(row&&row.Timestamp)||'';
-  document.getElementById('asof').textContent=REVIEW_TS?('· '+REVIEW_TS.slice(0,10)):'';
-  let html='';
-  if(!row){ html='<div class="card"><b>No review yet</b><div class="sub">Run a review from the Command Center first.</div></div>'; document.getElementById('body').innerHTML=html; return; }
-  html+='<div class="card"><h2>This week’s review</h2><div class="sub">'+h(row.Total_Jobs||'0')+' jobs · success '+pct(row.Success_Rate)+' · escalation '+pct(row.Escalation_Rate)+(row.Stuck_Patterns?' · ⚠ '+h(row.Stuck_Patterns):'')+'</div></div>';
-  const totJobs=parseInt(row.Total_Jobs||'0')||0;
-  if(totJobs<20) html+='<div class="banner">⚠ Directional only — thin data ('+totJobs+' telemetry rows; a confident review wants 20+). Treat these as hypotheses to sanity-check, not conclusions.</div>';
-  // Build queue (ALL statuses via ?all=1) → dedup map so a proposal already queued/built isn't re-offered.
+  document.getElementById('asof').textContent=REVIEW_TS?('· review '+REVIEW_TS.slice(0,10)):'';
   const allQ=(q&&q.queue)||[];
-  const isInactive=s=>{s=(s||'').toLowerCase();return s==='done'||s==='dropped';};
-  const activeQ=allQ.filter(x=>!isInactive(x.Status));
-  window.__queue=activeQ;
   window.__allQ=allQ;
-  const normT=t=>(t==null?'':(''+t)).toLowerCase().replace(/\s+/g,' ').trim();
-  const qStatusByTitle={}; allQ.forEach(x=>{const k=normT(x.Title); if(k&&!qStatusByTitle[k]) qStatusByTitle[k]=(x.Status||'greenlit').toLowerCase();});
-  let dupCount=0;
-  if(items.length){
-    // Count how many are still selectable BEFORE deciding whether to render the bulk
-    // controls — a title already queued/built gets no checkbox at all (see below), so
-    // Top3/Top5/All/Clear have nothing to act on once every item's been actioned. Showing
-    // those buttons anyway just looks broken; show a plain status note instead.
-    const selectableCount=items.filter(it=>{
-      const d=qStatusByTitle[normT(it.title)];
-      return !(d==='done'||d==='greenlit'||d==='building');
-    }).length;
-    if(selectableCount>0){
-      html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
-    }
-    items.forEach((it,i)=>{
-      const dup=qStatusByTitle[normT(it.title)];
-      if(dup==='done'||dup==='greenlit'||dup==='building'){
-        dupCount++;
-        const lbl=(dup==='done')?'<span class="chip big">✅ already built</span>':'<span class="chip quick">⏳ in build queue</span>';
-        html+='<div class="pcard" style="opacity:.62" id="pc'+i+'">'
-          +'<div class="pbody"><div class="prow"><span class="rank">#'+(it.rank||i+1)+'</span><span class="ptitle">'+h(it.title||'')+'</span></div>'
-          +'<div class="prow" style="margin-top:4px">'+lbl+chip(it.tag)+'</div>'
-          +'<div class="pimp">Not offered for approval — already '+((dup==='done')?'built and shipped':'in the build queue')+'.</div>'
-          +'</div></div>';
-        return;
-      }
-      const droppedNote=(dup==='dropped')?' <span class="chip eff">✕ previously dropped</span>':'';
+  const c=classify(allQ); window.__c=c;
+  window.__queue=c.ready;           // index space for copyOne / Start Build checkboxes
+  summaryBar(c);
+  let html='';
+
+  // 1 ─ NEEDS YOUR REVIEW ─────────────────────────────────────────────────────────────────────
+  html+='<div class="card" id="sec-review"><h2 style="margin:0">Needs your review ('+c.review.length+')</h2>'
+    +'<div class="sub" style="margin:4px 0 0">Duplicates are merged and anything already built, snoozed or declined is hidden. For each item you can type a <b>change</b> (it travels with the item into the build), then <b>Approve</b> (sends it to “ready to build”), <b>Snooze</b> (hides it for a while — the Optimizer still sees it and re-checks it against what’s been built since), or <b>Drop</b>.</div></div>';
+  if(!c.review.length) html+='<div class="card sub">✓ Nothing waiting for your review.</div>';
+  const shown=SHOW_ALL_REVIEW?c.review:c.review.slice(0,REVIEW_CAP);
+  shown.forEach(function(x,i){ html+=reviewCard(x,i); });
+  if(c.review.length>shown.length) html+='<div class="ctrls"><button class="mini" onclick="SHOW_ALL_REVIEW=true;load()">Show the other '+(c.review.length-shown.length)+'</button></div>';
+
+  // 1b ─ PROBABLY ALREADY BUILT ───────────────────────────────────────────────────────────────
+  if(c.built.length){
+    html+='<details class="card" id="sec-built"><summary><b>Probably already built ('+c.built.length+')</b> <span class="sub">— hidden from review</span></summary>'
+      +'<div class="sub" style="margin:6px 0">The Optimizer flagged these as already shipped (or covered by builds since you snoozed them). Drop them, or bring one back to review.</div>'
+      +'<div class="ctrls"><button class="mini" onclick="dropAllBuilt(this)">✕ Drop all '+c.built.length+' as already built</button></div>';
+    c.built.forEach(function(x){
+      html+='<div class="q" data-id="'+h(x.ID)+'" style="flex-direction:column;gap:4px"><div><span class="rank">#'+h(x.ID)+'</span> <b>'+h(x.Title||'')+'</b></div>'
+        +'<div class="pimp">'+h(x.__why||'')+'</div>'
+        +'<div class="ctrls"><button class="mini" onclick="act(this,\'dropbuilt\')">✕ Drop</button><button class="mini" onclick="reviewAnyway(this)">Review it anyway</button></div></div>';
+    });
+    html+='</details>';
+  }
+
+  // 2 ─ READY TO BUILD (greenlit) ─────────────────────────────────────────────────────────────
+  html+='<div class="card" id="sec-ready"><div class="prow" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Ready to build ('+c.ready.length+')</h2>'+(c.ready.length?'<button class="mini" onclick="copyAll()">📋 Copy all</button>':'')+'</div>'
+    +'<div class="sub" style="margin:4px 0 0">Check one or more <b>SAFE</b> items (🔒 = GATED, needs your own session) and tap <b>Start Build</b> below to fire one live build session. It reports back here: building → built (PR waiting for your merge) → live. You can still edit your change on a card before building.</div></div><div id="buildResult"></div>';
+  if(!c.ready.length) html+='<div class="card sub">Nothing approved and waiting.</div>';
+  c.ready.forEach(function(x,qi){
+    const s=st(x), rc=(x.Risk_Class||'GATED').toUpperCase(), isSafe=rc==='SAFE';
+    const eligible=isSafe&&(s==='greenlit'||s==='prepared'||s==='held');
+    const hasBrief=!!(x.Build_Brief&&String(x.Build_Brief).trim());
+    const stCls=(s==='held')?'held':(s==='prepared')?'prepared':'';
+    const left=eligible?'<input type="checkbox" class="qsel" data-qi="'+qi+'" onchange="syncBuildSel()">':'<span title="GATED — needs your own session, not auto-buildable" style="font-size:18px;line-height:1;margin-top:2px">🔒</span>';
+    html+='<div class="qcard'+(eligible?'':' locked')+'" id="qc'+qi+'" data-id="'+h(x.ID)+'" style="display:flex;gap:10px;align-items:flex-start">'+left
+      +'<div style="flex:1;min-width:0">'
+      +'<div class="prow"><span class="rank">#'+h(x.ID)+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
+      +'<div class="prow" style="margin-top:4px"><span class="qs'+(stCls?' '+stCls:'')+'">'+h(s)+'</span><span class="chip '+(isSafe?'safe':'gated')+'">'+(isSafe?'SAFE':'GATED')+'</span>'+(hasBrief?'<span class="chip eff">📋 brief ready</span>':'')+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+'</div>'
+      +((s==='held'&&x.Held_Note)?'<div class="flag red">⚠ '+h(x.Held_Note)+'</div>':'')
+      +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
+      +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
+      +noteBox(x)
+      +'<div class="ctrls" style="margin-top:8px"><button class="mini" onclick="copyOne('+qi+')">📋 Copy build brief</button>'
+      +'<button class="mini" onclick="act(this,\'back\')" title="Send it back to the review list">↩ Back to review</button>'
+      +'<button class="mini" onclick="act(this,\'drop\')">✕ Drop</button></div>'
+      +'</div></div>';
+  });
+
+  // 3 ─ IN FLIGHT ─────────────────────────────────────────────────────────────────────────────
+  html+='<div class="card" id="sec-flight"><h2 style="margin:0">In flight ('+c.flight.length+')</h2><div class="sub" style="margin:4px 0 0">Approved items being built or waiting for your merge. This updates by itself: when a PR merges the item moves to “Recently live”; if a PR is closed without merging it is flagged here for you to decide.</div></div>';
+  if(!c.flight.length) html+='<div class="card sub">Nothing in flight.</div>';
+  c.flight.forEach(function(x){
+    const bs=String(x.Build_State||'');
+    let btns='';
+    if(bs==='pr_closed') btns='<button class="mini ok" onclick="act(this,\'rebuild\')">🔁 Rebuild it</button><button class="mini" onclick="act(this,\'abandon\')">🗑 Abandon</button>';
+    else if(st(x)==='building') btns='<button class="mini" onclick="act(this,\'rebuild\')" title="Put it back in the ready list">↩ Back to ready</button><button class="mini" onclick="act(this,\'markdone\')">✓ Mark done</button>';
+    else btns='<button class="mini" onclick="act(this,\'markdone\')" title="Mark it live without waiting for the sync">✓ It’s live</button>';
+    html+='<div class="qcard" data-id="'+h(x.ID)+'"><div class="prow"><span class="rank">#'+h(x.ID)+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
+      +buildStateLine(x)
+      +(x.Brett_Note?'<div class="pimp">✎ Your change: '+h(x.Brett_Note)+'</div>':'')
+      +'<div class="ctrls" style="margin-top:8px">'+btns+'</div></div>';
+  });
+
+  // 4 ─ SNOOZED / RECENTLY LIVE (collapsed) ───────────────────────────────────────────────────
+  html+='<details class="card" id="sec-snoozed"><summary><b>Snoozed ('+c.snoozed.length+')</b> <span class="sub">— hidden until they’re due</span></summary>';
+  if(!c.snoozed.length) html+='<div class="sub" style="margin-top:6px">Nothing snoozed.</div>';
+  c.snoozed.sort(function(a,b){return ms(a.Snooze_Until)-ms(b.Snooze_Until);}).forEach(function(x){
+    const dl=daysLeft(x);
+    html+='<div class="q" data-id="'+h(x.ID)+'" style="flex-direction:column;gap:4px"><div><span class="rank">#'+h(x.ID)+'</span> <b>'+h(x.Title||'')+'</b></div>'
+      +'<div class="pimp">'+(x.__wait?'Snooze is up — waiting for the Optimizer to re-check it against recent builds':(dl>0?'Comes back in '+dl+' day'+(dl>1?'s':''):'Due today'))+'</div>'
+      +'<div class="ctrls"><button class="mini" onclick="act(this,\'wake\')">⏰ Bring back now</button></div></div>';
+  });
+  html+='</details>';
+  html+='<details class="card" id="sec-live"><summary><b>Recently live ('+c.live.length+')</b> <span class="sub">— last 14 days</span></summary>';
+  if(!c.live.length) html+='<div class="sub" style="margin-top:6px">Nothing finished in the last 14 days.</div>';
+  c.live.slice(0,12).forEach(function(x){ html+='<div class="q"><span class="rank">#'+h(x.ID)+'</span><span>'+h(x.Title||'')+(x.PR_Number?' · <a href="'+REPO_URL+'/pull/'+h(x.PR_Number)+'" target="_blank" style="color:var(--blue)">PR #'+h(x.PR_Number)+'</a>':'')+'</span></div>'; });
+  html+='</details>';
+
+  // 5 ─ THIS WEEK'S OPTIMIZER REVIEW (telemetry findings, checkbox flow) ─────────────────────────
+  if(row){
+    const open=items.filter(function(it){return !overlapsQueue(it,allQ);});
+    const covered=items.length-open.length;
+    window.__reviewOpen=open;
+    html+='<details class="card" id="sec-week"'+(open.length?' open':'')+'><summary><b>This week’s Optimizer review ('+open.length+' new)</b> <span class="sub">· '+h(row.Total_Jobs||'0')+' jobs · success '+pct(row.Success_Rate)+' · escalation '+pct(row.Escalation_Rate)+'</span></summary>';
+    const totJobs=parseInt(row.Total_Jobs||'0')||0;
+    if(totJobs<20) html+='<div class="banner">⚠ Directional only — thin data ('+totJobs+' telemetry rows; a confident review wants 20+). Treat these as hypotheses.</div>';
+    if(row.Stuck_Patterns) html+='<div class="sub">⚠ '+h(row.Stuck_Patterns)+'</div>';
+    if(!items.length) html+='<div class="sub" style="white-space:pre-wrap;color:var(--ink);margin-top:6px">'+h(row.Proposal||'(none)')+'</div>';
+    if(open.length) html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
+    open.forEach(function(it,i){
       html+='<label class="pcard" id="pc'+i+'"><input type="checkbox" data-i="'+i+'" onchange="syncSel()">'
         +'<div class="pbody"><div class="prow"><span class="rank">#'+(it.rank||i+1)+'</span><span class="ptitle">'+h(it.title||'')+'</span></div>'
-        +'<div class="prow" style="margin-top:4px">'+chip(it.tag)+(it.effort?'<span class="chip eff">'+h(it.effort)+' effort</span>':'')+droppedNote+'</div>'
-        +(it.problem?'<div class="pprob">'+h(it.problem)+'</div>':'')
-        +(it.action?'<div class="pact">→ '+h(it.action)+'</div>':'')
-        +(it.impact?'<div class="pimp">Impact: '+h(it.impact)+'</div>':'')
+        +'<div class="prow" style="margin-top:4px">'+chip(it.tag)+(it.effort?'<span class="chip eff">'+h(it.effort)+' effort</span>':'')+'</div>'
+        +(it.problem?'<div class="pprob">'+h(it.problem)+'</div>':'')+(it.action?'<div class="pact">→ '+h(it.action)+'</div>':'')+(it.impact?'<div class="pimp">Impact: '+h(it.impact)+'</div>':'')
         +'</div></label>';
     });
-    if(dupCount && selectableCount>0) html+='<div class="sub" style="margin:2px 2px 6px">'+dupCount+' proposal'+(dupCount>1?'s':'')+' already queued or built — dimmed, not selectable.</div>';
-    if(selectableCount===0) html+='<div class="sub" style="margin:2px 2px 6px">✓ Every proposal from this review is already queued or built — nothing left to approve here.</div>';
-    document.getElementById('bar').style.display='block';
-  } else {
-    // older review or parse fallback — show the full text
-    html+='<div class="card"><h2>Proposal</h2><div class="sub" style="white-space:pre-wrap;color:var(--ink);font-size:13.5px">'+h(row.Proposal||'(none)')+'</div><div class="sub" style="margin-top:8px">This review isn’t in the selectable format yet — run a fresh review from the Command Center to get checkboxes.</div></div>';
-  }
-  // Proposed — Scout & Reuse-Radar findings awaiting Brett's review (Sep 20 2026). Split out of
-  // activeQ BEFORE the greenlit build queue below, so a 'proposed' row shows here — with its own
-  // Approve/Drop actions — never mixed into the greenlit lifecycle list.
-  const proposedQ=activeQ.filter(x=>(x.Status||'').toLowerCase()==='proposed');
-  window.__proposedQueue=proposedQ;
-  if(proposedQ.length){
-    html+='<div class="card"><h2 style="margin:0">Proposed — from Scout &amp; Reuse-Radar (needs your review) ('+proposedQ.length+')</h2>'
-      +'<div class="sub" style="margin:4px 0 0">System-generated findings, not yet approved. <b>Approve → Greenlit</b> queues it for build like any other proposal; <b>Drop</b> declines it.</div></div>';
-    proposedQ.forEach((x,pi)=>{
-      const lensChip=x.Lens?'<span class="chip eff">'+h(x.Lens)+'</span>':'';
-      const requiresSpend=String(x.Requires_Spend||'').toUpperCase()==='TRUE';
-      const spendChip=requiresSpend?'<span class="chip fix">💰 '+h(x.Spend_Note||'costs something')+'</span>':'';
-      html+='<div class="qcard" id="pq'+pi+'" style="display:flex;gap:10px;align-items:flex-start">'
-        +'<span style="font-size:18px;line-height:1;margin-top:2px">🆕</span>'
-        +'<div style="flex:1;min-width:0">'
-        +'<div class="prow"><span class="rank">#'+h(x.ID||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-        +'<div class="prow" style="margin-top:4px">'+lensChip+chip(x.Tag)+(x.Rank?'<span class="chip eff">rank '+h(x.Rank)+'</span>':'')+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+spendChip+'</div>'
-        +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
-        +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
-        +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
-        +(requiresSpend&&x.Workaround?'<div class="pimp">Workaround: '+h(x.Workaround)+'</div>':'')
-        +'<div class="ctrls" style="margin-top:9px">'
-        +'<button class="mini" onclick="approveProposed('+pi+')">✓ Approve → Greenlit</button>'
-        +'<button class="mini" onclick="dropProposed('+pi+')">✕ Drop</button>'
-        +'</div></div></div>';
-    });
-  }
-  // Greenlit build queue — full detail, copyable brief, status control. Active items only
-  // (done/dropped/proposed filtered — proposed rows render in their own lane above).
-  const queue=activeQ.filter(x=>(x.Status||'').toLowerCase()!=='proposed');
-  if(queue.length){
-    html+='<div class="card"><div class="prow" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Greenlit — build queue ('+queue.length+')</h2><button class="mini" onclick="copyAll()">📋 Copy all</button></div>'
-      +'<div class="sub" style="margin:4px 0 0">Check one or more <b>SAFE</b> items (🔒 = GATED, needs your own session) and tap <b>Start Build</b> below to fire one live build session for the whole batch — it reports each item back here as building/done/held on its own. Or tap <b>Copy build brief</b> to paste into a session yourself.</div></div>'
-      +'<div id="buildResult"></div>';
-    queue.forEach((x,qi)=>{
-      const st=(x.Status||'greenlit').toLowerCase();
-      const rc=(x.Risk_Class||'GATED').toUpperCase();
-      const isSafe=rc==='SAFE';
-      const eligible=isSafe && (st==='greenlit'||st==='prepared'||st==='held');
-      const hasBrief=!!(x.Build_Brief&&String(x.Build_Brief).trim());
-      const riskChip='<span class="chip '+(isSafe?'safe':'gated')+'">'+(isSafe?'SAFE':'GATED')+'</span>';
-      const briefChip=hasBrief?'<span class="chip eff">📋 brief ready</span>':'<span class="chip eff" style="opacity:.6">no brief yet</span>';
-      const stCls=(st==='building')?'building':(st==='held')?'held':(st==='prepared')?'prepared':'';
-      const stChip='<span class="qs'+(stCls?' '+stCls:'')+'">'+h(st)+'</span>';
-      const heldNote=(st==='held'&&x.Held_Note)?'<div class="pimp" style="color:var(--red);font-weight:700">⚠ '+h(x.Held_Note)+'</div>':'';
-      const leftCtrl=eligible
-        ?'<input type="checkbox" class="qsel" data-qi="'+qi+'" onchange="syncBuildSel()">'
-        :'<span title="'+(isSafe?'Already in progress':'GATED — needs your own session, not auto-buildable')+'" style="font-size:18px;line-height:1;margin-top:2px">'+(isSafe?'⏳':'🔒')+'</span>';
-      html+='<div class="qcard'+(eligible?'':' locked')+'" id="qc'+qi+'" style="display:flex;gap:10px;align-items:flex-start">'
-        +leftCtrl
-        +'<div style="flex:1;min-width:0">'
-        +'<div class="prow"><span class="rank">#'+h(x.ID||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-        +'<div class="prow" style="margin-top:4px">'+stChip+riskChip+briefChip+chip(x.Tag)+(x.Rank?'<span class="chip eff">rank '+h(x.Rank)+'</span>':'')+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+'</div>'
-        +heldNote
-        +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
-        +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
-        +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
-        +'<div class="ctrls" style="margin-top:9px">'
-        +'<button class="mini" onclick="copyOne('+qi+')">📋 Copy build brief</button>'
-        +(st!=='building'?'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'building\')">▶ Building</button>':'')
-        +'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'done\')">✓ Done</button>'
-        +'<button class="mini" onclick="setStatus('+h(jsq(x.ID))+',\'dropped\')">✕ Drop</button>'
-        +'</div></div></div>';
-    });
-  }
+    if(covered) html+='<div class="sub" style="margin-top:6px">'+covered+' finding'+(covered>1?'s':'')+' from this review match items already in the queue, so they’re not shown again.</div>';
+    if(items.length&&!open.length) html+='<div class="sub" style="margin-top:6px">✓ Everything from this review is already in the queue.</div>';
+    html+='</details>';
+  } else html+='<div class="card sub">No weekly review yet — run one from the Command Center.</div>';
+
   document.getElementById('body').innerHTML=html;
-  syncSel();
-  syncBuildSel();
+  syncSel(); syncBuildSel();
 }
+
+// ── actions ─────────────────────────────────────────────────────────────────────────────────
+const armed={};
+async function act(btn,what){
+  const card=btn.closest('[data-id]'); if(!card)return; const id=card.getAttribute('data-id');
+  const note=card.querySelector('textarea.note');
+  const key=what+id;
+  if((what==='drop'||what==='abandon')&&!armed[key]){ armed[key]=1; const old=btn.textContent; btn.textContent='Tap again to confirm'; setTimeout(function(){armed[key]=0;btn.textContent=old;},4000); return; }
+  btn.disabled=true;
+  try{
+    if(what==='approve'){
+      const risk=(card.querySelector('select.risk')||{}).value==='SAFE'?'SAFE':'GATED';
+      const body={id:id,status:'greenlit',risk_class:risk}; if(note&&note.value.trim()!==String((window.__c.byId[id]||{}).Brett_Note||'').trim()) body.note=note.value.trim(); 
+      await postJSON('/ops-queue-update',body);
+    } else if(what==='snooze'){
+      const days=Math.round(parseFloat((card.querySelector('input.days')||{}).value));
+      if(!(days>=1&&days<=365)){ toast('Enter a snooze of 1–365 days.'); btn.disabled=false; return; }
+      const body={id:id,snooze_days:days}; if(note&&note.value.trim()) body.note=note.value.trim();
+      await postJSON('/ops-queue-update',body);
+    } else if(what==='drop'||what==='dropbuilt'){
+      await postJSON('/ops-queue-update',{id:id,status:'dropped',reason:what==='dropbuilt'?'already built (per Optimizer flag)':'declined at review'});
+    } else if(what==='abandon'){
+      await postJSON('/ops-queue-update',{id:id,status:'dropped',build_state:'abandoned',reason:'abandoned after its PR was closed without merging'});
+    } else if(what==='rebuild'){
+      await postJSON('/ops-queue-update',{id:id,status:'greenlit',build_state:''});
+    } else if(what==='back'){
+      await postJSON('/ops-queue-update',{id:id,status:'proposed'});
+    } else if(what==='markdone'){
+      await postJSON('/ops-queue-update',{id:id,status:'done',build_state:'live'});
+    } else if(what==='wake'){
+      await postJSON('/ops-queue-update',{id:id,snooze_days:0});
+    }
+    load();
+  }catch(e){ btn.disabled=false; toast('That didn’t save — '+h(e&&e.message||e)); }
+}
+async function saveNote(el){
+  const card=el.closest('[data-id]'); if(!card)return; const id=card.getAttribute('data-id');
+  const was=String(((window.__c&&window.__c.byId[id])||{}).Brett_Note||'');
+  if(el.value.trim()===was.trim())return;
+  try{ await postJSON('/ops-queue-update',{id:id,note:el.value.trim()}); if(window.__c&&window.__c.byId[id])window.__c.byId[id].Brett_Note=el.value.trim(); el.classList.add('saved'); setTimeout(function(){el.classList.remove('saved');},1500); }
+  catch(e){ el.classList.add('bad'); toast('Your change wasn’t saved — '+h(e&&e.message||e)); }
+}
+function reviewAnyway(btn){ const id=btn.closest('[data-id]').getAttribute('data-id'); REVIEW_ANYWAY[id]=1; try{localStorage.setItem('prop_review_anyway',JSON.stringify(REVIEW_ANYWAY));}catch(e){} load(); }
+async function dropAllBuilt(btn){
+  const list=(window.__c&&window.__c.built)||[]; if(!list.length)return;
+  if(!btn.getAttribute('data-armed')){ const old=btn.textContent; btn.setAttribute('data-armed','1'); btn.textContent='Tap again to drop all '+list.length+' (still searchable later)'; setTimeout(function(){ btn.removeAttribute('data-armed'); btn.textContent=old; },4000); return; }
+  let fail=0;
+  for(const x of list){ try{ await postJSON('/ops-queue-update',{id:x.ID,status:'dropped',reason:'already built (per Optimizer flag)'}); }catch(e){ fail++; } }
+  if(fail) toast(fail+' of '+list.length+' didn’t save — try again.');
+  load();
+}
+
 function searchQueue(q){
   q=(q||'').trim().toLowerCase();
-  const box=document.getElementById('qsearchResults');
-  if(!box)return;
+  const box=document.getElementById('qsearchResults'); if(!box)return;
   if(!q){ box.innerHTML=''; return; }
   const all=window.__allQ||[];
-  const hits=all.filter(x=>String(x.ID||'').toLowerCase()===q || String(x.Title||'').toLowerCase().indexOf(q)>=0).slice(0,15);
+  const hits=all.filter(function(x){return String(x.ID||'').toLowerCase()===q||String(x.Title||'').toLowerCase().indexOf(q)>=0;}).slice(0,15);
   if(!hits.length){ box.innerHTML='<div class="sub" style="margin-top:6px">No matches for “'+h(q)+'”.</div>'; return; }
   box.innerHTML=hits.map(function(x){
-    const st=(x.Status||'greenlit').toLowerCase();
-    const stCls=(st==='building')?'building':(st==='held')?'held':(st==='dropped')?'held':(st==='prepared')?'prepared':'';
-    const stStyle=(st==='dropped')?'background:var(--redbg);color:var(--red)':(st==='done')?'background:var(--greenbg);color:var(--green)':'';
-    const stChip='<span class="qs'+(stCls?' '+stCls:'')+'" style="'+stStyle+'">'+h(st)+'</span>';
+    const s=st(x), stCls=(s==='building')?'building':(s==='held'||s==='dropped')?'held':(s==='prepared')?'prepared':'';
+    const stStyle=(s==='dropped')?'background:var(--redbg);color:var(--red)':(s==='done')?'background:var(--greenbg);color:var(--green)':'';
     return '<div class="qcard" style="padding:10px;margin:8px 0">'
       +'<div class="prow"><span class="rank">#'+h(x.ID||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-      +'<div class="prow" style="margin-top:4px">'+stChip+(x.Rank?'<span class="chip eff">rank '+h(x.Rank)+'</span>':'')+chip(x.Tag)+'</div>'
+      +'<div class="prow" style="margin-top:4px"><span class="qs'+(stCls?' '+stCls:'')+'" style="'+stStyle+'">'+h(s)+'</span>'+(x.Build_State?'<span class="chip eff">'+h(x.Build_State)+'</span>':'')+(x.PR_Number?'<a class="chip eff" href="'+REPO_URL+'/pull/'+h(x.PR_Number)+'" target="_blank">PR #'+h(x.PR_Number)+'</a>':'')+(isNaN(ms(x.Snooze_Until))?'':'<span class="chip eff">snoozed to '+h(String(x.Snooze_Until).slice(0,10))+'</span>')+chip(x.Tag)+'</div>'
       +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
-      +(x.Drop_Reason?'<div class="pimp">Drop reason: '+h(x.Drop_Reason)+'</div>':'')
+      +(x.Brett_Note?'<div class="pimp">✎ Your change: '+h(x.Brett_Note)+'</div>':'')
+      +(x.Drop_Reason?'<div class="pimp">Reason: '+h(x.Drop_Reason)+'</div>':'')
       +(x.Superseded_By?'<div class="pimp">Superseded by #'+h(x.Superseded_By)+'</div>':'')
       +'</div>';
   }).join('');
 }
-function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
-function pick(n){document.querySelectorAll('#body input[type=checkbox]:not(.qsel)').forEach(cb=>{const i=+cb.getAttribute('data-i');cb.checked=(n>=99)?true:(n===0?false:(PROPOSALS[i]&&(PROPOSALS[i].rank||i+1)<=n));});syncSel();}
-function syncSel(){let n=0;document.querySelectorAll('#body input[type=checkbox]:not(.qsel)').forEach(cb=>{const card=document.getElementById('pc'+cb.getAttribute('data-i'));if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const g=document.getElementById('go');g.disabled=!n;g.style.display=n?'block':'none';g.textContent=n?('Approve '+n+' → queue for build'):'Approve selected';updateBar();}
-function syncBuildSel(){let n=0;document.querySelectorAll('#body input.qsel').forEach(cb=>{const qi=+cb.getAttribute('data-qi');const card=document.getElementById('qc'+qi);if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const bg=document.getElementById('buildGo');bg.disabled=!n;bg.style.display=n?'block':'none';bg.textContent=n?('🚀 Start Build ('+n+')'):'Start Build';updateBar();}
+
+// ── weekly-review checkboxes (approve via /ops-approve — now promotes in place, never clones) ──
+function pick(n){document.querySelectorAll('#sec-week input[type=checkbox]').forEach(function(cb){const i=+cb.getAttribute('data-i');const it=(window.__reviewOpen||[])[i];cb.checked=(n>=99)?true:(n===0?false:(it&&(it.rank||i+1)<=n));});syncSel();}
+function syncSel(){let n=0;document.querySelectorAll('#sec-week input[type=checkbox]').forEach(function(cb){const card=document.getElementById('pc'+cb.getAttribute('data-i'));if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const g=document.getElementById('go');g.disabled=!n;g.style.display=n?'block':'none';g.textContent=n?('Approve '+n+' → ready to build'):'Approve selected';updateBar();}
+function syncBuildSel(){let n=0;document.querySelectorAll('#body input.qsel').forEach(function(cb){const qi=+cb.getAttribute('data-qi');const card=document.getElementById('qc'+qi);if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const bg=document.getElementById('buildGo');bg.disabled=!n;bg.style.display=n?'block':'none';bg.textContent=n?('🚀 Start Build ('+n+')'):'Start Build';updateBar();}
 function updateBar(){const g=document.getElementById('go'),bg=document.getElementById('buildGo');const show=(g&&g.style.display==='block')||(bg&&bg.style.display==='block');document.getElementById('bar').style.display=show?'block':'none';}
-function selectedQueueIds(){const out=[];document.querySelectorAll('#body input.qsel:checked').forEach(cb=>{const x=(window.__queue||[])[+cb.getAttribute('data-qi')];if(x&&x.ID)out.push(x.ID);});return out;}
+function selectedQueueIds(){const out=[];document.querySelectorAll('#body input.qsel:checked').forEach(function(cb){const x=(window.__queue||[])[+cb.getAttribute('data-qi')];if(x&&x.ID)out.push(x.ID);});return out;}
 async function startBuild(){
   const ids=selectedQueueIds(); if(!ids.length)return;
   const bg=document.getElementById('buildGo'); bg.disabled=true; bg.textContent='Starting…';
@@ -317,7 +483,7 @@ async function startBuild(){
       bg.disabled=false; bg.textContent='Start Build';
       return;
     }
-    let msg='<div class="banner" style="background:var(--greenbg);color:var(--green);border-color:#bfe3cc">✓ Fired '+d.fired_ids.length+' item(s).';
+    let msg='<div class="banner ok">✓ Fired '+d.fired_ids.length+' item(s). They now show under “In flight”.';
     if(d.session_url) msg+=' <a href="'+h(d.session_url)+'" target="_blank" style="color:var(--green);font-weight:800">▶ Watch build session</a>';
     if(d.skipped&&d.skipped.length) msg+='<br>Skipped: '+d.skipped.map(function(s){return h(s.id)+' ('+h(s.reason)+')';}).join(', ');
     msg+='</div>';
@@ -328,75 +494,35 @@ async function startBuild(){
     bg.disabled=false; bg.textContent='Start Build';
   }
 }
-function selected(){const out=[];document.querySelectorAll('#body input[type=checkbox]:checked').forEach(cb=>{const it=PROPOSALS[+cb.getAttribute('data-i')];if(it)out.push(it);});return out;}
+function selected(){const out=[];document.querySelectorAll('#sec-week input[type=checkbox]:checked').forEach(function(cb){const it=(window.__reviewOpen||[])[+cb.getAttribute('data-i')];if(it)out.push(it);});return out;}
 async function approveSel(){
   const items=selected(); if(!items.length)return;
   const g=document.getElementById('go'); g.disabled=true; g.textContent='Queueing…';
   try{
-    const r=await fetch(WORKER+'/ops-approve',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({items,review_ts:REVIEW_TS})});
-    const d=await r.json(); if(!r.ok||!d||d.ok!==true) throw new Error((d&&d.error)||('HTTP '+r.status));
-    g.textContent='✓ Queued '+d.queued;
+    const d=await postJSON('/ops-approve',{items:items,review_ts:REVIEW_TS});
+    g.textContent='✓ Queued '+d.queued+(d.promoted?' · '+d.promoted+' promoted':'')+(d.already?' · '+d.already+' already there':'');
     setTimeout(load,700);
   }catch(e){ g.disabled=false; g.textContent='Failed — '+(e&&e.message||e); }
 }
 function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
 
-// ── Greenlit → build bridge ──────────────────────────────────────────────
-// Headless Claude can't read the authed queue (no worker secret). So the item comes to
-// Claude instead: this renders a clean build brief you copy and paste into a session.
-function jsq(s){return JSON.stringify(String(s==null?'':s));}
+// ── copyable brief (includes Your change) ───────────────────────────────────────────────────
 function brief(x){
   return '## '+(x.Title||'(untitled)')+'\n'
     +'- Rank: #'+(x.Rank||'')+(x.Tag?'  ·  '+x.Tag:'')+(x.Effort?'  ·  '+x.Effort+' effort':'')+'\n'
     +(x.Problem?'- Problem: '+x.Problem+'\n':'')
     +(x.First_Step?'- First step: '+x.First_Step+'\n':'')
     +(x.Impact?'- Impact: '+x.Impact+'\n':'')
+    +(x.Brett_Note?'- BRETT\'S CHANGE (overrides the above): '+x.Brett_Note+'\n':'')
     +(x.Review_TS?'- From review: '+String(x.Review_TS).slice(0,10)+'\n':'')
     +'- Queue ID: '+(x.ID||'')+'\n';
 }
 function copyOne(qi){const x=(window.__queue||[])[qi];if(!x)return;openModal('Build brief — '+(x.Title||''),brief(x),'Paste this into a Claude session to build it.');}
-function copyAll(){const qs=window.__queue||[];if(!qs.length)return;const text='# BrettOS — greenlit build queue ('+qs.length+' items)\n\n'+qs.map(brief).join('\n');openModal('All greenlit ('+qs.length+')',text,'Paste into a Claude session — this is the full build backlog.');}
+function copyAll(){const qs=window.__queue||[];if(!qs.length)return;const text='# BrettOS — ready-to-build queue ('+qs.length+' items)\n\nStanding rule: owner-facing views never show what owners spend with Brett; estimate/approval screens still show amounts.\n\n'+qs.map(brief).join('\n');openModal('All ready ('+qs.length+')',text,'Paste into a Claude session — this is the full build backlog.');}
 function openModal(title,text,msg){document.getElementById('mtitle').textContent=title;document.getElementById('mtext').value=text;document.getElementById('mmsg').textContent=msg||'';document.getElementById('modal').style.display='block';tryCopy(text);}
 function closeModal(){document.getElementById('modal').style.display='none';}
 function tryCopy(text){try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){var m=document.getElementById('mmsg');if(m)m.textContent='✓ Copied to clipboard. (Or select the text below to copy manually.)';},function(){});}}catch(e){}}
 function copyFromModal(){const t=document.getElementById('mtext');t.focus();t.select();try{document.execCommand('copy')}catch(e){}tryCopy(t.value);document.getElementById('mmsg').textContent='✓ Copied (or long-press the text → Copy).';}
-// ── Proposed → Greenlit / Drop (Scout & Reuse-Radar review lane, Sep 20 2026) ───────────────
-// A 'proposed' row is a system-generated candidate — Brett hasn't approved it yet. Approving it
-// sets Risk_Class in the same step (opsQueueUpdate defaults to GATED unless he explicitly types
-// SAFE), same fail-closed convention as everywhere else this queue reads Risk_Class.
-async function approveProposed(pi){
-  const x=(window.__proposedQueue||[])[pi]; if(!x)return;
-  const pick=prompt('Risk class for this item — type SAFE or leave as GATED:','GATED');
-  if(pick===null)return; // cancelled
-  const risk=(String(pick||'').trim().toUpperCase()==='SAFE')?'SAFE':'GATED';
-  try{
-    const r=await fetch(WORKER+'/ops-queue-update',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({id:x.ID,status:'greenlit',risk_class:risk})});
-    const d=await r.json().catch(function(){return null;});
-    if(!r.ok||!d||(d.success!==true&&d.ok!==true)) throw new Error((d&&d.error)||('HTTP '+r.status));
-    load();
-  }catch(e){ alert('Approve failed — '+(e&&e.message||e)); }
-}
-async function dropProposed(pi){
-  const x=(window.__proposedQueue||[])[pi]; if(!x)return;
-  const reason=prompt('One-line reason (optional):','declined at proposed stage');
-  if(reason===null)return; // cancelled
-  try{
-    const r=await fetch(WORKER+'/ops-queue-update',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({id:x.ID,status:'dropped',reason:(reason||'declined at proposed stage')})});
-    const d=await r.json().catch(function(){return null;});
-    if(!r.ok||!d||(d.success!==true&&d.ok!==true)) throw new Error((d&&d.error)||('HTTP '+r.status));
-    load();
-  }catch(e){ alert('Drop failed — '+(e&&e.message||e)); }
-}
-// Lifecycle: greenlit → building → done | dropped. Keeps the queue live (done/dropped drop off).
-async function setStatus(id,status){
-  if(status==='dropped'&&!confirm('Drop this item from the build queue?'))return;
-  try{
-    const r=await fetch(WORKER+'/ops-queue-update',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({id:id,status:status})});
-    const d=await r.json().catch(function(){return null;});
-    if(!r.ok||!d||(d.success!==true&&d.ok!==true)) throw new Error((d&&d.error)||('HTTP '+r.status));
-    load();
-  }catch(e){ alert('Update failed — '+(e&&e.message||e)); }
-}
 load();
 </script>
 <!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner).
