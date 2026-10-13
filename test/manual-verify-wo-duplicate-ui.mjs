@@ -24,7 +24,7 @@ const VENDORS = [
 const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', members: [
   { id: 'WO-1238', is_original: true, status: 'Assigned', vendor_name: 'Alex Busey', voided: false, latest_estimate: { version: 2, subtotal: '1800.00', status: 'Pending' } },
   { id: 'WO-1250', is_original: false, status: cancelled ? 'Cancelled' : 'Assigned', vendor_name: 'Cesar Diaz', voided: false },
-  { id: 'WO-1251', is_original: false, status: 'New', vendor_name: '', voided: false } ] });
+  { id: 'WO-1251', is_original: false, status: 'New', vendor_name: '', voided: false, is_winner: !!cancelled, tenant_visible: !!cancelled } ] });
 
 (async () => {
   const browser = await chromium.launch();
