@@ -27,7 +27,7 @@ workers_dev = true
 # leaves the previously attached Cron Triggers in place, whereas an empty array removes them all. worker.js's
 # scheduled() is a loud no-op that alerts if Cloudflare ever fires it anyway.
 [triggers]
-crons = ["0 11 * * *", "30 12 * * 1", "0 12 * * 3", "0 13 * * 1", "*/15 * * * *"]
+crons = []
 
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
