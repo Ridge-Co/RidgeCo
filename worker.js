@@ -13543,8 +13543,8 @@ async function processQuietHoursQueue(env) {
 //    optional admin SMS, then re-throws so the outer handler's existing 500-response behavior
 //    to the caller is completely unchanged — this only adds observability, never changes what
 //    a failing request returns.
-// 2. checkDeadManSwitch runs every cronSweep pass (piggybacking the existing ~15-min cadence,
-//    no new Cloudflare Cron Trigger slot needed) and alerts if NO telemetry row of any
+// 2. checkDeadManSwitch runs in the scheduler's `sweep_checks` job (~every 15 min, Apps Script clock - NO cron)
+//    and alerts if NO telemetry row of any
 //    Job_Type has been logged in the last 24h. Known, honest limitation (not hidden): a
 //    self-check that runs *inside* this Worker can't detect the Worker being totally down —
 //    if nothing is running, this can't run either. It DOES catch a real, common failure class
