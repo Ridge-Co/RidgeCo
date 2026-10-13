@@ -82,7 +82,9 @@ const viewStubs = {
 }
 
 // ---- signing: ticked vs declined ----
-async function sign(selections) {
+const SF = new Function(grab('scopeComputeMilestoneAmounts') + '\n' + grab('scopeScheduleAddonProblem') + '\nreturn { scopeComputeMilestoneAmounts, scopeScheduleAddonProblem };')();
+const tel2 = [];
+async function sign(selections, schedule) {
   const added = []; let signedRow = null; const mil = [];
   const stubs = {
     scopeProposalLinkAuth: async () => ({ s: { ID: '5', Property_ID: '1', WO_ID: '', Vendor_ID: '3', Proposal_Items_JSON: JSON.stringify(stored), Line_Items: JSON.stringify(items) } }),
