@@ -963,27 +963,6 @@ const _hubWorkerCore = {
     const r = await schedUnexpectedCloudflareCron(env, event);
     throw new Error(r.error); // also shows as a failed run in Cloudflare's Cron Events
   }
-    // Receipt RECONCILER sweep (CAP-002 phase 2) — separate pipeline, separate folder: polls the
-    // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
-    // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
-    // read + queue only — nothing bills until Brett taps Confirm in the Hub.
-    // Capped at 5 new files here (vs 8 for the Hub's Scan button): this cron invocation shares one
-    // Cloudflare subrequest budget with every other sweep in it, and an email backfill can drop
-    // dozens of files into the folder at once (Receipt Mail → Hub, Sep 22 2026).
-    try { await receiptReconScan(env, { max: 5 }); } catch (e) { /* non-fatal */ }
-    // Backfill Items_Summary for any Receipt_Recon_Queue rows still missing it (Sep 10 2026) —
-    // catches receipts scanned before this field existed, or a rare failed AI call. Cheap and
-    // bounded; no-op once caught up.
-    try { await backfillItemsSummary(env, {}); } catch (e) { /* non-fatal */ }
-    // Confirmed-duplicate retention sweep (Aug 23) — soft-deletes Receipt_Recon_Queue rows
-    // Brett explicitly confirmed as duplicates more than 180 days ago. Runs daily alongside the
-    // scan above; a normal day with nothing past the window does one harmless read.
-    try { await purgeConfirmedDuplicateReceipts(env); } catch (e) { /* non-fatal */ }
-    // Forward any not-yet-emailed receipts to Brett's QuickBooks receipts-capture inbox (Sep
-    // 2026) — bounded per run (default 8, max 10 — Cloudflare's per-invocation subrequest
-    // budget, hit live at 25) since a large backlog is worked down over several days' cron
-    // sweeps rather than all in one Worker invocation. No-op once caught up.
-    try { await sendReceiptsToQBEmail(env, {}); } catch (e) { /* non-fatal */ }
     // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
     // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
     // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
