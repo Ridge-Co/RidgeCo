@@ -319,7 +319,7 @@ function scheduleAmounts(schedule, subtotal){
 }
 function scheduleLineHtml(m){
   var when = m.trigger==='upfront' ? ' (due now)' : m.trigger==='completion' ? ' (due at completion)' : '';
-  return '<div class="total-line'+(m.trigger==='upfront'?' deposit':'')+'"><span>'+esc(m.label)+' ('+m.percent+'%)'+when+'</span><span>'+money(m.customer_amount)+'</span></div>';
+  return '<div class="total-line'+(m.trigger==='upfront'?' deposit':'')+'"><span>'+esc(m.label)+(m.calc_mode==='flat'?'':' ('+m.percent+'%)')+when+'</span><span>'+money(m.customer_amount)+'</span></div>';
 }
 function currentTotals(){
   var subtotal = 0;
