@@ -13619,8 +13619,8 @@ async function checkDeadManSwitch(env) {
 
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
 // independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
-// `schedule:` (now removed, see that file — it's manual/workflow_dispatch-only going forward)
-// and the Cloudflare Cron Trigger in scheduled() below. Both called cronSweep() on the
+// `schedule:` and the Cloudflare Cron Trigger in scheduled(). (Oct 12 2026: BOTH are now gone - cron-sweep.yml is deleted,
+// the Cloudflare cron is removed, and the Apps Script scheduler is the only clock; cronSweep below is manual-only.) Both called cronSweep() on the
 // assumption it was idempotent to fire twice. It wasn't: processVendorNudges (and the other two
 // sub-sweeps) read a row as "due," act on it, and only mark it done AFTERWARD — no claim step.
 // Real result: a vendor (Eddie Smith, WO-1195) got the same invoice-nudge SMS twice, 2.5 hours
