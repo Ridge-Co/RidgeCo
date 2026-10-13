@@ -5899,6 +5899,7 @@ async function addTimeEntry(env, body) {
   const { wo_id, entered_by, entered_by_id, role, entry_type, start_datetime, end_datetime, duration_minutes_raw, notes, invoice_description, billable, hourly_rate } = body;
   if (!wo_id) return json({ error: 'wo_id required' }, 400);
   if (!role)  return json({ error: 'role required (hub or vendor)' }, 400);
+  { const _blk = await bidGroupWriteBlock(env, wo_id, 'time entries', 'horas', '/time-entry/add'); if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409); }
   let durationMinutes = 0;
   if (start_datetime && end_datetime) { durationMinutes = roundUpTo15((new Date(end_datetime) - new Date(start_datetime)) / 60000); }
   else if (duration_minutes_raw) { durationMinutes = roundUpTo15(parseFloat(duration_minutes_raw) || 0); }
