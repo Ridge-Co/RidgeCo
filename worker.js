@@ -434,6 +434,7 @@ const _hubWorkerCore = {
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
+        if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
         // tenant-by-pin payload are cached in the client's mh_tenant_sess at login and never
