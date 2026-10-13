@@ -375,7 +375,14 @@ const _hubWorkerCore = {
           // and the gh-broker Worker (Brett only — no session can set a Cloudflare secret).
           const HUB_PROD_QB_RO_PATHS = ['/qb/find-bills', '/qb/vendor-reconcile'];
           const _qbRoOk = !!env.HUB_PROD_QB_RO_TOKEN && _tok === env.HUB_PROD_QB_RO_TOKEN && request.method === 'POST' && HUB_PROD_QB_RO_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
+          // Scheduler token (Oct 12 2026): the Apps Script scheduler's own Config `Scheduler_Token`, accepted ONLY for
+          // POST /cron/run and GET /cron/status (schedTokenOk: constant-time, fail-closed on a blank/short/missing value).
+          // Config is read only when the request is one of those two routes. A failed Config read is a loud 503,
+          // never a quiet "Unauthorized".
+          const _schedAuth = _hubTestOk ? { ok: false } : await schedAuthCheck(env, _tok, request.method, path);
+          if (_schedAuth.error) return json({ error: 'scheduler auth unavailable: could not read the Config sheet (' + _schedAuth.error + ')' }, 503);
+          const _schedOk = _schedAuth.ok;
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
