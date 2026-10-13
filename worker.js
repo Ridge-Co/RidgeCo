@@ -4882,6 +4882,17 @@ async function scopeProposalSign(env, body, ip, ua) {
   rcMaterialsCost = +rcMaterialsCost.toFixed(2); rcMaterialsPrice = +rcMaterialsPrice.toFixed(2);
   subtotal = +subtotal.toFixed(2); vendorCostTotal = +vendorCostTotal.toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2); // legacy column, kept for any old dashboard summing it — not used for new billing
+  if (items.some(it => it.optional)) {
+    // A schedule that can't absorb the signed total (all rows flat, or fixed $ exceed the total) must
+    // never be signed — refuse BEFORE any write, tell Brett (telemetry), show the customer a plain message.
+    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s), await scopeMaxUpfrontPct(env));
+    const addonProblem = scopeScheduleAddonProblem(sv.schedule || scopeDefaultPaymentSchedule(), subtotal);
+    if (addonProblem) {
+      let telemetryError = '';
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_sign_schedule_mismatch', Skill_Or_Endpoint: '/scope-proposal/sign', Success: 'FALSE', Notes: `scope=${s.ID} subtotal=${subtotal} problem=${addonProblem}`.slice(0, 480) }); } catch (e) { telemetryError = String(e && e.message || e); }
+      return json({ error: 'schedule_unavailable', message: 'This proposal can\'t be signed online right now. Please contact Ridge Co and we\'ll send you a corrected copy.', ...(telemetryError ? { telemetry_error: telemetryError } : {}) }, 409);
+    }
+  }
   const now = new Date();
   if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
     try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
