@@ -8259,6 +8259,33 @@ async function woBidGroupCancel(env, body) {
       return json(result, 200);
     }
     if (!targets.length) result.warnings.push('Nothing to cancel — every targeted member was skipped, kept or already cancelled.');
+    // Winner first: if it cannot be made visible, STOP before cancelling anything (no half-done shotgun).
+    if (winnerWO && !result.winner.is_original) {
+      try {
+        await ensureColumns(env, 'Work_Orders', WO_BID_WINNER_COLUMNS);
+        const fresh = findWO(await bidFreshWOs(env), winnerWO.ID);
+        if (!fresh) throw new Error('the row could not be found');
+        const want = {};
+        if (String(fresh.Tenant_Visible == null ? '' : fresh.Tenant_Visible).trim().toUpperCase() !== 'TRUE') want.Tenant_Visible = 'TRUE';
+        if (String(fresh.Bid_Winner || '').trim().toUpperCase() !== 'TRUE') want.Bid_Winner = 'TRUE';
+        if (Object.keys(want).length) {
+          await bidWriteWOFields(env, winnerWO.ID, want);
+          result.winner.became_tenant_visible = 'Tenant_Visible' in want;
+          const now = new Date().toISOString(), aud = [];
+          if (want.Tenant_Visible) aud.push({ WO_ID: winnerWO.ID, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Tenant_Visible', Old_Value: String(fresh.Tenant_Visible == null ? '' : fresh.Tenant_Visible), New_Value: 'TRUE', Timestamp: now, Notes: `Kept as the winner of bid group ${gid}; now visible to the tenant (no text message sent)` });
+          if (want.Bid_Winner) aud.push({ WO_ID: winnerWO.ID, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Winner', Old_Value: String(fresh.Bid_Winner || ''), New_Value: 'TRUE', Timestamp: now, Notes: `Chosen to keep in bid group ${gid}` });
+          try { await bidAppendRows(env, 'WO_Audit', aud); }
+          catch (ae) { await bidStepFailed(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', `The WO_Audit rows for the winner ${winnerWO.ID} were not written`, ae, winnerWO.ID); }
+        }
+        // A previous winner in this group (Brett changed his mind) loses the marker; it is about to be cancelled.
+        for (const prev of members.filter(m => m.ID !== winnerWO.ID && String(m.Bid_Winner || '').trim().toUpperCase() === 'TRUE')) {
+          try { await bidWriteWOFields(env, prev.ID, { Bid_Winner: '' }); }
+          catch (pe) { await bidStepFailed(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', `Could not clear the old winner marker on ${prev.ID}`, pe, prev.ID); }
+        }
+      } catch (e) {
+        return await fail(500, `${winnerWO.ID} could not be made visible to the tenant (${String((e && e.message) || e)}), so NOTHING was cancelled. Try again.`);
+      }
+    }
     for (const row of targets) {
       try {
         const res = await updateStatus(env, { wo_id: row.wo_id, status: 'Cancelled', updated_by: changedBy, updated_by_role: 'admin' });
