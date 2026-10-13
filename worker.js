@@ -14509,7 +14509,7 @@ function schedParseState(raw) {
   const s = String(raw == null ? '' : raw).trim();
   if (!s) return { state: { v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} } };
   let st;
-  try { st = JSON.parse(s); } catch (e) { return { error: 'Scheduler_State in Config is not valid JSON (' + String(e.message).slice(0, 80) + '). Delete that Config row to reset it - every job will then run once as a first run.' }; }
+  try { st = JSON.parse(s); } catch (e) { return { error: 'Scheduler_State in Config is not valid JSON (' + String(e.message).slice(0, 80) + '). Delete that Config row to reset it - the next tick is then a first run: the 15-minute jobs run at once, and daily/weekly jobs whose time already passed today are marked done (seeded) so nothing is sent twice.' }; }
   if (!st || typeof st !== 'object' || Array.isArray(st)) return { error: 'Scheduler_State in Config is not a JSON object. Delete that Config row to reset it.' };
   if (!st.jobs || typeof st.jobs !== 'object') st.jobs = {};
   return { state: st };
@@ -14596,6 +14596,23 @@ function schedDueJobs(state, now, jobs, opts) {
   }
   return out;
 }
+// FIRST-EVER TICK ONLY (Scheduler_State cell blank/absent): mark every daily/weekly job whose slot has ALREADY PASSED today
+// (ET) as done for today, so the first tick cannot re-send a digest / weekly review / AR report that the old Cloudflare
+// crons (or a person) already ran this morning. Mutates `state`; returns the seeded names. No last_ok is forged: the entry
+// carries last_status 'seeded' + last_seeded:true so /cron/status can tell it from a real run. Interval jobs are never
+// seeded (they run at once). Jobs added to the registry LATER (state exists, no entry) are not seeded: they keep catch-up.
+function schedSeedFirstRun(state, nowDate, jobs) {
+  const et = schedEtParts(nowDate), seeded = [];
+  for (const job of (jobs || SCHED_JOBS)) {
+    if (job.kind === 'interval') continue;
+    if (job.kind === 'weekly' && et.dow !== job.dow) continue;
+    if (et.minutes < schedAtMinutes(job.at)) continue;
+    state.jobs[job.name] = Object.assign({}, state.jobs[job.name], { last_key: et.date, last_status: 'seeded', last_seeded: true, seeded_at: nowDate.toISOString() });
+    seeded.push(job.name);
+  }
+  if (seeded.length) state.seeded = { at: nowDate.toISOString(), jobs: seeded.slice() };
+  return seeded;
+}
 function schedExpected(job) {
   if (job.kind === 'interval') return `every ${job.every_min}+ min`;
   if (job.kind === 'daily') return `daily after ${job.at} ET`;
@@ -14606,7 +14623,7 @@ function schedStatus(state, now, jobs) {
   const nowDate = now instanceof Date ? now : new Date(now);
   const nowMs = +nowDate, et = schedEtParts(nowDate);
   const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
-  const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), jobs: {}, overdue: [] };
+  const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), seeded: (state && state.seeded) || null, jobs: {}, overdue: [] };
   for (const job of (jobs || SCHED_JOBS)) {
     const js = (state && state.jobs && state.jobs[job.name]) || {};
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
@@ -14625,7 +14642,7 @@ function schedStatus(state, now, jobs) {
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
     }
-    out.jobs[job.name] = { expected: schedExpected(job), last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, overdue, overdue_reason: overdue ? reason : '' };
+    out.jobs[job.name] = { expected: schedExpected(job), last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
     if (overdue) out.overdue.push(job.name);
   }
   return out;
@@ -14784,6 +14801,101 @@ async function schedRunArReport(env) {
 }
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
+// ── PREFLIGHT (dry run only): plain-English, COUNTS ONLY, strictly read-only (GETs; no claim, no state write, no SMS). ──
+const SCHED_PF_WHAT = {
+  door_watchdog: 'checks the door-code system (str-automation /health); texts Brett only if it is unhealthy',
+  sweep: 'texts any quiet-hours-held messages that are now due, sends due queued reminders, and sends due vendor nudges',
+  sweep_work: 'posts due recurring work orders, sends the once-a-day estimate reminder, and moves paid-deposit scopes forward',
+  sweep_checks: 'runs the daily self-test (once a day) and the dead-man check (alerts if no telemetry for 24h)',
+  insp_guard: 'checks inspection bookings against the STR calendar (does nothing until the inspection module is configured)',
+  daily_digest: 'builds the morning digest and texts it to the admin phone',
+  daily_receipts: 'scans the receipt inbox',
+  daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
+  daily_turnover: 'releases turnover work orders due today',
+  daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
+  review_mon: 'runs the Monday weekly review and delivers it',
+  review_wed: 'runs the Wednesday weekly review (logged only)',
+  ar_report_mon: 'builds and delivers the Monday AR aging report',
+};
+async function schedPfTab(env, tab) {
+  try { return await fetchTab(env, tab); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }
+}
+function schedAgeSummary(isoList, nowMs) {
+  const by_age = { under_1h: 0, h1_to_24: 0, d1_to_7: 0, over_7d: 0, unknown: 0 };
+  let oldest = null;
+  for (const iso of isoList) {
+    const ts = Date.parse(iso || '');
+    if (isNaN(ts)) { by_age.unknown++; continue; }
+    const h = (nowMs - ts) / 3600000;
+    if (h < 1) by_age.under_1h++; else if (h < 24) by_age.h1_to_24++; else if (h < 168) by_age.d1_to_7++; else by_age.over_7d++;
+    if (oldest === null || h > oldest) oldest = h;
+  }
+  return { by_age, oldest_days: oldest === null ? null : Math.round(oldest / 2.4) / 10 };
+}
+async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
+  const nowMs = +now;
+  const out = { ok: true, read_only: true, note: 'Counts only. Nothing was sent, claimed or written by this dry run.', errors: [], will_not_run_today_seeded: (seeded || []).slice(), jobs: {} };
+  const cfg = {};
+  for (const r of (cfgRows || [])) { const k = String((r && r[0]) || '').trim(); if (k) cfg[k] = String((r && r[1]) || ''); }
+  const fail = (where, e) => { const m = schedErrText(e); out.ok = false; out.errors.push({ where, error: m }); return { error: m }; };
+  for (const name of dueNames) {
+    const entry = { would: SCHED_PF_WHAT[name] || '' };
+    const sub = async (key, fn) => { try { entry[key] = await fn(); } catch (e) { entry[key] = fail(name + '.' + key, e); } };
+    if (name === 'sweep') {
+      entry.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+      entry.twilio_test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+      await sub('quiet_hours_held_due', async () => {
+        const rows = (await schedPfTab(env, MSG_QUEUE_TAB)).filter(r => r.Status === 'pending' && r.Send_After && Date.parse(r.Send_After) <= nowMs);
+        const by_type = {}; for (const r of rows) by_type[r.Recipient_Type || '?'] = (by_type[r.Recipient_Type || '?'] || 0) + 1;
+        return Object.assign({ count: rows.length, by_recipient_type: by_type }, schedAgeSummary(rows.map(r => r.Send_After), nowMs));
+      });
+      await sub('queued_notifications_due', async () => {
+        const rows = (await schedPfTab(env, NOTIF_QUEUE_TAB)).filter(r => r.Sent !== 'TRUE' && r.Phone && r.Message && (!r.Send_After || Date.parse(r.Send_After) <= nowMs));
+        return Object.assign({ count: rows.length }, schedAgeSummary(rows.map(r => r.Send_After || r.Created_At), nowMs));
+      });
+      await sub('vendor_nudges_due', async () => {
+        const rows = (await schedPfTab(env, VENDOR_REQ_TAB)).filter(r => r.Status === 'open' && r.Next_Nudge_At && Date.parse(r.Next_Nudge_At) <= nowMs);
+        const by_type = {}; for (const r of rows) by_type[r.Request_Type || '?'] = (by_type[r.Request_Type || '?'] || 0) + 1;
+        return { count: rows.length, by_request_type: by_type };
+      });
+    } else if (name === 'sweep_work') {
+      const h = etHour(now);
+      await sub('estimate_reminder', async () => {
+        if (h < 8 || h >= 18) return { would_send: false, reason: 'outside the 8am-6pm ET window' };
+        if (cfg.estimate_reminder_last_date === etDateString(now)) return { would_send: false, reason: 'already sent today' };
+        const [ests, wos] = await Promise.all([schedPfTab(env, 'Estimates'), schedPfTab(env, 'Work_Orders')]);
+        const n = estimatesAwaitingDecision(ests, wos, now, cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE).length;
+        return { would_send: n > 0, estimates_awaiting_decision: n };
+      });
+      await sub('recurring_wos', async () => {
+        if (h < RECUR_POST_START_HOUR_ET || h >= QUIET_HOURS_START_ET) return { would_post: 0, reason: 'outside the 8:00am-7:00pm ET posting window' };
+        const tpls = (await schedPfTab(env, 'WO_Templates')).filter(x => x.Active !== 'FALSE' && recurIsTrue(x.Recurrence_Enabled));
+        if (!tpls.length) return { active_templates: 0, would_post: 0 };
+        const wos = await schedPfTab(env, 'Work_Orders'), today = recurEtDateISO(now);
+        let would = 0; const notes = [];
+        for (const tpl of tpls) {
+          const due = recurLatestDue(tpl, today); if (!due) continue;
+          let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (e) { skips = {}; notes.push('template ' + tpl.ID + ' has unreadable Last_Skips (' + schedErrText(e) + ')'); }
+          for (const tg of recurTargets(tpl)) {
+            const mine = wos.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === tg.p && (w.Unit_ID || '') === tg.u);
+            if (mine.some(w => w.Recurring_Due === due)) continue;
+            const key = recurTargetKey(tg); if (skips[key] && skips[key] >= due) continue;
+            if (mine.find(recurWOIsOpen)) continue;
+            would++;
+          }
+        }
+        return Object.assign({ active_templates: tpls.length, would_post: would }, notes.length ? { notes } : {});
+      });
+      await sub('deposit_paid', async () => ({ pre_approved_scopes: (await schedPfTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved').length }));
+    } else if (name === 'daily_digest') {
+      entry.admin_phone_set = !!String(cfg.admin_phone || '').trim();
+    }
+    out.jobs[name] = entry;
+  }
+  return out;
+}
+
 function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 // Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
 async function schedRunNext(env, ctx, opts) {
@@ -14812,10 +14924,19 @@ async function schedRunNext(env, ctx, opts) {
   if (parsed.error) return await infraFail(parsed.error);
   let st = parsed.state;
   const t = nowMs(), now = new Date(t), nowISO = now.toISOString();
+  // First-ever tick (blank/absent Scheduler_State): seed daily/weekly jobs whose slot already passed today so nothing is re-sent.
+  const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
+  const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
+  if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
   const dueNow = schedDueJobs(st, now, jobs, { only });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
 
-  if (opts.dry) return { status: 200, body: Object.assign({}, base, { dry: true, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) }) };
+  // DRY RUN / PREFLIGHT: no claim, no state write, no SMS, no job code. Lists what is due and (counts only) what it would do.
+  if (opts.dry) {
+    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) });
+    if (opts.preflight !== false) body.preflight = await schedPreflight(env, force ? only.slice() : dueNow.map(d => d.name), rows, now, seeded);
+    return { status: 200, body };
+  }
 
   const claimedUntil = Date.parse(st.claim_until || '');
   if (!isNaN(claimedUntil) && claimedUntil > t) {
@@ -14873,6 +14994,7 @@ async function schedRunNext(env, ctx, opts) {
         if (p2.error) { stateErr = p2.error; break; }
         const cur = p2.state;
         const rec = Object.assign({}, cur.jobs[job.name] || {});
+        delete rec.last_seeded; delete rec.seeded_at;   // a real run replaces the first-run seed marker
         rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? 'ok' : 'failed';
         rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
         if (jobOk) rec.last_ok = rec.last_end;
@@ -14919,7 +15041,7 @@ async function schedRunNext(env, ctx, opts) {
 async function schedRunHandler(env, ctx, body) {
   body = body || {};
   const only = Array.isArray(body.only) ? body.only : (typeof body.only === 'string' && body.only ? [body.only] : []);
-  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true });
+  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true || body.dry_run === true });
   return json(r.body, r.status);
 }
 async function schedStatusHandler(env) {
@@ -20920,7 +21042,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
-  if (path === '/cron/run') { const _sb = body || {}; return !_sb.force && (_sb.dry === true || (typeof _sb.only === 'string' && SCHED_STAGING_SAFE_JOBS.includes(_sb.only))); }   // NB: `_b` (declared further down) is in its TDZ here - use `body`
+  if (path === '/cron/run') { const _sb = body || {}; return !_sb.force && (_sb.dry === true || _sb.dry_run === true || (typeof _sb.only === 'string' && SCHED_STAGING_SAFE_JOBS.includes(_sb.only))); }   // NB: `_b` (declared further down) is in its TDZ here - use `body`
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);

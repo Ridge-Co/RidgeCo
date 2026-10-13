@@ -89,6 +89,12 @@ function load(store, over) {
     receiptScan: async () => ({ ok: true }), receiptReconScan: async () => ({ ok: true }),
     backfillItemsSummary: async () => ({ ok: true, updated: 0, failed: 0 }), purgeConfirmedDuplicateReceipts: async () => ({ ok: true }),
     sendReceiptsToQBEmail: async () => ({ ok: true, sent: 0, failed: [] }), releaseTurnoverByDate: async () => ({}),
+    fetchTab: async () => [], isMissingTabError: () => false, MSG_QUEUE_TAB: 'Message_Queue', NOTIF_QUEUE_TAB: 'Notification_Queue', VENDOR_REQ_TAB: 'Vendor_Requests',
+    etHour: (d) => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(d)) % 24,
+    etDateString: (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d),
+    estimatesAwaitingDecision: () => [], ESTIMATE_SMS_DEFAULT_SINCE: '2026-09-29T00:00:00.000Z', RECUR_POST_START_HOUR_ET: 8, QUIET_HOURS_START_ET: 19,
+    recurIsTrue: (v) => String(v).toUpperCase() === 'TRUE', recurEtDateISO: (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d),
+    recurLatestDue: () => null, recurTargets: () => [], recurTargetKey: (x) => x.p + '|' + (x.u || ''), recurWOIsOpen: () => false,
     qbSyncPayments: async () => ({ ok: true }), runWeeklyReview: async () => ({ ok: true, logged: true, delivery: null }), runWeeklyArReport: async () => ({ delivered: false }),
   };
   Object.assign(stubs, over.stubs || {});
@@ -98,6 +104,8 @@ function load(store, over) {
 }
 const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
 const P = load(makeStore());
+// A store that already holds a Scheduler_State (i.e. NOT the first-ever tick), so first-run seeding does not apply.
+const primeState = (store) => { store.tabs.get('Config').push(['Scheduler_State', JSON.stringify(S0())]); return store; };
 
 // registry shape
 {
@@ -278,7 +286,7 @@ const stateOf = (store) => JSON.parse(store.cfg().Scheduler_State);
 }
 // 2c once-per-key for a daily job, even called repeatedly (a second Apps Script project would look like this)
 {
-  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T12:00:00Z')), log = [];   // 08:00 ET
+  const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T12:00:00Z')), log = [];   // 08:00 ET
   const jobs = mkJobs(log, [['d', 'daily', {}]]);
   for (let i = 0; i < 6; i++) { await L.schedRunNext({}, null, fast(c, { jobs })); c.v += 20 * 60000; }
   t('daily job ran once across six ticks the same ET day', log.length === 1, log);
@@ -388,7 +396,7 @@ for (const N of [2, 5, 8]) {
 }
 // 2l daily retry / no_retry / retry:false semantics
 {
-  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+  const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
   let fails = 2;
   const jobs = mkJobs(log, [['d', 'daily', { run: async () => { log.push('d'); return fails-- > 0 ? { ok: false, errors: [{ step: 's', error: 'transient' }] } : { ok: true, errors: [] }; } }]]);
   const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
@@ -404,7 +412,7 @@ for (const N of [2, 5, 8]) {
   t('and is then never run again that day', (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === null && log.length === 3);
 }
 {
-  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+  const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
   const jobs = mkJobs(log, [
     ['noretry', 'daily', { retry: false, run: async () => { log.push('noretry'); return { ok: false, errors: [{ step: 'send', error: 'smtp 500' }] }; } }],
     ['after_send', 'daily', { run: async () => { log.push('after_send'); return { ok: false, errors: [{ step: 'send', error: 'half sent' }], no_retry: true }; } }],
@@ -468,6 +476,128 @@ for (const N of [2, 5, 8]) {
   t('insp_guard: a returned {error} is a failure', (await insp2.SCHED_JOBS.find(j => j.name === 'insp_guard').run({})).ok === false);
   const wr = load(makeStore(), { stubs: { runWeeklyReview: async () => ({ ok: true, logged: false, logged_error: 'tab missing', delivery: null }) } });
   t('weekly review: history row not saved is a failure', (await wr.SCHED_JOBS.find(j => j.name === 'review_mon').run({})).ok === false);
+}
+
+// 2o FIRST-EVER TICK: no duplicates. With a blank Scheduler_State, daily/weekly jobs whose slot already passed today (ET) are
+// SEEDED as done (the old crons / a person already ran them), 15-minute jobs run at once, and later slots run normally.
+const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync'];
+const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard'];
+// Drain one "tick" the way the Apps Script does: call until more=false. Returns { ran, first } (first = the first response).
+const drain = async (L, c, extra) => {
+  const ran = []; let first = null;
+  for (let i = 0; i < 30; i++) {
+    const r = await L.schedRunNext({}, null, fast(c, extra || {}));
+    if (!first) first = r;
+    if (r.body.ran) ran.push(r.body.ran);
+    if (!r.body.more) break;
+  }
+  return { ran, first };
+};
+{
+  // Monday 21:00 ET (Oct 13 01:00Z): the old crons ran this morning
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
+  const a = await drain(L, c);
+  t('first tick Mon 21:00 ET runs ONLY the five 15-minute jobs', a.ran.join() === INTERVAL5.join(), a.ran);
+  t('first tick reports first_run + seeded:[the 5 dailies and the two Monday weeklies]', a.first.body.first_run === true && a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'ar_report_mon'].join(), a.first.body);
+  const s = stateOf(store);
+  t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
+  t('review_wed (Wednesday job) is not seeded on a Monday', !s.jobs.review_wed);
+  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 7 && !!s.seeded.at);
+  const st = L.schedStatus(s, new Date(c.v), L.SCHED_JOBS);
+  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 7 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
+  c.v += 20 * 60000;
+  const b = await drain(L, c);
+  t('second tick does NOT reseed (no seeded / first_run fields) and the dailies stay quiet', b.first.body.seeded === undefined && b.first.body.first_run === undefined && b.ran.every(n => INTERVAL5.includes(n)), b);
+  c.v = Date.parse('2026-10-13T11:00:00Z');   // Tue 07:00 EDT
+  const d = await drain(L, c);
+  t('next morning 07:00 ET the five dailies run (once), the Monday jobs do not', DAILY5.every(n => d.ran.includes(n)) && !d.ran.includes('review_mon') && !d.ran.includes('ar_report_mon'), d.ran);
+  t('...and the seed marker is replaced by a real run', stateOf(store).jobs.daily_digest.last_seeded === undefined && stateOf(store).jobs.daily_digest.last_status === 'ok' && !!stateOf(store).jobs.daily_digest.last_ok);
+  c.v = Date.parse('2026-10-14T12:00:00Z');   // Wed 08:00 EDT
+  t('Wednesday 08:00 ET review_wed runs', (await drain(L, c)).ran.includes('review_wed'));
+  c.v = Date.parse('2026-10-19T12:29:00Z');   // next Mon 08:29
+  t('next Monday 08:29 ET review_mon does not run yet', !(await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-10-19T12:30:00Z');
+  t('next Monday 08:30 ET review_mon runs', (await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-10-19T13:00:00Z');
+  t('next Monday 09:00 ET ar_report_mon runs', (await drain(L, c)).ran.includes('ar_report_mon'));
+}
+{
+  // Monday 06:00 ET (10:00Z): nothing has passed yet -> nothing seeded, everything runs at its slot
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T10:00:00Z'));
+  const a = await drain(L, c);
+  t('first tick Mon 06:00 ET seeds nothing (seeded is an empty list) and runs the five interval jobs', a.first.body.first_run === true && a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join() && !stateOf(store).seeded, a.first.body);
+  c.v = Date.parse('2026-10-12T10:59:00Z');
+  t('06:59 ET: dailies still not due', !(await drain(L, c)).ran.some(n => DAILY5.includes(n)));
+  c.v = Date.parse('2026-10-12T11:00:00Z');
+  const d = await drain(L, c);
+  t('07:00 ET: all five dailies run', DAILY5.every(n => d.ran.includes(n)), d.ran);
+  c.v = Date.parse('2026-10-12T12:30:00Z');
+  t('08:30 ET: review_mon runs', (await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-10-12T13:00:00Z');
+  t('09:00 ET: ar_report_mon runs', (await drain(L, c)).ran.includes('ar_report_mon'));
+}
+{
+  // mid-morning first tick (Mon 08:45 ET): dailies + review_mon seeded, ar_report_mon (09:00) still to come
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T12:45:00Z'));
+  const a = await drain(L, c);
+  t('first tick Mon 08:45 ET: seeds the dailies + review_mon but NOT ar_report_mon', a.first.body.seeded.join() === [...DAILY5, 'review_mon'].join(), a.first.body.seeded);
+  c.v = Date.parse('2026-10-12T13:00:00Z');
+  const b = await drain(L, c);
+  t('...and ar_report_mon then runs at 09:00 ET while the seeded ones stay quiet', b.ran.includes('ar_report_mon') && !b.ran.includes('review_mon') && !b.ran.some(n => DAILY5.includes(n)), b.ran);
+}
+{
+  // DST: fall-back day, Monday Nov 2 2026 is EST (UTC-5): 13:29Z = 08:29 EST
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-11-02T13:29:00Z'));
+  const a = await drain(L, c);
+  t('DST (EST): first tick 08:29 EST seeds the dailies only (review_mon is 08:30 EST)', a.first.body.seeded.join() === DAILY5.join() && a.ran.join() === INTERVAL5.join(), a.first.body.seeded);
+  c.v = Date.parse('2026-11-02T13:30:00Z');
+  t('DST (EST): review_mon runs at 13:30Z = 08:30 EST', (await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-11-02T14:00:00Z');
+  t('DST (EST): ar_report_mon runs at 14:00Z = 09:00 EST', (await drain(L, c)).ran.includes('ar_report_mon'));
+}
+{
+  // DST: spring-forward day, Sunday Mar 8 2026 is EDT after 2am (UTC-4): 10:59Z = 06:59 EDT, 11:00Z = 07:00 EDT
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-03-08T10:59:00Z'));
+  const a = await drain(L, c);
+  t('DST (spring-forward day): first tick 06:59 EDT seeds nothing', a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join());
+  c.v = Date.parse('2026-03-08T11:00:00Z');
+  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 5);
+  const store2 = makeStore(), L2 = load(store2);
+  t('DST (spring-forward day): a first tick at 07:30 EDT seeds the five dailies', (await drain(L2, clock(Date.parse('2026-03-08T11:30:00Z')))).first.body.seeded.join() === DAILY5.join());
+}
+{
+  // a Scheduler_State row that exists but is blank is ALSO a first run
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
+  store.tabs.get('Config').push(['Scheduler_State', '   ']);
+  const a = await drain(L, c);
+  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 7);
+}
+{
+  // jobs added to the registry LATER keep catch-up: existing state, no entry for the new job -> it runs
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T19:00:00Z')), log = [];   // 15:00 ET
+  const st0 = S0(); st0.jobs.old_job = { last_key: '2026-10-12', last_status: 'ok', last_ok: '2026-10-12T11:00:00.000Z' };
+  store.tabs.get('Config').push(['Scheduler_State', JSON.stringify(st0)]);
+  const jobs = mkJobs(log, [['old_job', 'daily'], ['new_job', 'daily']]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('a newly added daily job whose slot passed catches up on existing state (not seeded)', r.body.ran === 'new_job' && r.body.seeded === undefined && r.body.first_run === undefined && log.join() === 'new_job', r.body);
+  t('...while the job that already ran today stays quiet', (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === null && log.length === 1);
+}
+{
+  // dry run on a blank state: reports first_run + would_seed, writes NOTHING, claims NOTHING
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
+  const r = await L.schedRunNext({}, null, fast(c, { dry: true }));
+  t('dry run on blank state: first_run true, would_seed lists the seven, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 7 && r.body.due.join() === INTERVAL5.join(), r.body);
+  t('dry run wrote nothing (no POST, no Scheduler_State) and a real tick afterwards is still a first run', !store.calls.some(x => x.startsWith('POST')) && !store.cfg().Scheduler_State && (await L.schedRunNext({}, null, fast(c, {}))).body.first_run === true);
+}
+{
+  // concurrent first ticks: still exactly one run of each interval job, no daily job runs
+  const store = makeStore(); store.latency = () => Math.floor(Math.random() * 4);
+  const L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z')), log = [];
+  const jobs = [...INTERVAL5.map(n => ({ name: n, kind: 'interval', every_min: 14, run: async () => { log.push(n); return { ok: true, errors: [] }; } })),
+    ...DAILY5.map(n => ({ name: n, kind: 'daily', at: '07:00', run: async () => { log.push(n); return { ok: true, errors: [] }; } }))];
+  const caller = async () => { for (let i = 0; i < 80 && log.length < INTERVAL5.length; i++) { await L.schedRunNext({}, null, { now: c.now, sleep: tick, verifyDelayMs: 30, budgetMs: 5000, jobs }); await tick(2); } };
+  await Promise.all([caller(), caller(), caller()]);
+  t('three simultaneous first-tick callers: each interval job ran once, no daily job ran (seeded)', INTERVAL5.every(n => log.filter(x => x === n).length === 1) && !log.some(n => DAILY5.includes(n)), log);
 }
 
 // ───────────────────────────── 3. the REAL worker.js over a fake Google ─────────────────────────────
@@ -567,11 +697,43 @@ store.setCfg('admin_phone', '+15555550100');
   t('GET /cron/run -> 401 (Scheduler_Token only authorises POST there)', getRun.status === 401);
 }
 {
+  // PREFLIGHT: POST /cron/run {dry_run:true} lists what the next real tick WOULD do (counts only), with no side effects
+  const H = { 'X-Auth-Token': SCHED_TOKEN };
+  const ago = (h) => new Date(Date.now() + skew - h * 3600000).toISOString();
+  const future = new Date(Date.now() + skew + 5 * 3600000).toISOString();
+  store.tabs.set('Message_Queue', [['ID', 'Status', 'Send_After', 'Recipient_Type', 'Message_Body', 'Recipient_Phone'],
+    ['1', 'pending', ago(2), 'tenant', 'hello', '+15550000001'], ['2', 'pending', ago(240), 'vendor', 'old one', '+15550000002'],
+    ['3', 'pending', future, 'tenant', 'not yet', '+15550000003'], ['4', 'sent', ago(5), 'tenant', 'done', '+15550000004']]);
+  store.tabs.set('Notification_Queue', [['ID', 'WO_ID', 'Type', 'Phone', 'Message', 'Send_After', 'Sent', 'Created_At'],
+    ['1', 'WO-1', 'x', '+15550000001', 'reminder', ago(30), 'FALSE', ago(31)], ['2', 'WO-2', 'x', '+15550000002', 'already', ago(30), 'TRUE', ago(31)], ['3', 'WO-3', 'x', '+15550000003', 'later', future, 'FALSE', ago(1)]]);
+  store.tabs.set('Vendor_Requests', [['ID', 'WO_ID', 'Vendor_ID', 'Request_Type', 'Status', 'Next_Nudge_At'],
+    ['1', 'WO-1', 'V1', 'photos', 'open', ago(3)], ['2', 'WO-2', 'V1', 'invoice', 'open', future], ['3', 'WO-3', 'V1', 'photos', 'satisfied', ago(3)]]);
+  store.setCfg('TWILIO_ENABLED', 'TRUE'); store.setCfg('TWILIO_TEST_MODE', 'FALSE');
+  const before = { state: store.cfg().Scheduler_State, mq: JSON.stringify(store.tabs.get('Message_Queue')), posts: store.calls.filter(x => x.startsWith('POST')).length, outbound: outbound.length };
+  const r = await call('POST', '/cron/run', H, { dry_run: true });
+  const pf = r.json && r.json.preflight;
+  t('preflight: dry_run:true is accepted with the Scheduler_Token and returns a preflight block', r.status === 200 && r.json.dry === true && pf && pf.ok === true && pf.read_only === true, r);
+  const qh = pf && pf.jobs.sweep && pf.jobs.sweep.quiet_hours_held_due;
+  t('preflight: held quiet-hours rows due = 2 (the future and the already-sent rows are not counted), with age buckets and oldest age', qh && qh.count === 2 && qh.by_recipient_type.tenant === 1 && qh.by_recipient_type.vendor === 1 && qh.by_age.h1_to_24 === 1 && qh.by_age.over_7d === 1 && qh.oldest_days >= 9.9 && qh.oldest_days <= 10.1, qh);
+  t('preflight: queued notifications due = 1, vendor nudges due = 1 (photos)', pf.jobs.sweep.queued_notifications_due.count === 1 && pf.jobs.sweep.vendor_nudges_due.count === 1 && pf.jobs.sweep.vendor_nudges_due.by_request_type.photos === 1, pf.jobs.sweep);
+  t('preflight: states whether Twilio is on and whether test mode is on (no secrets)', pf.jobs.sweep.twilio_enabled === true && pf.jobs.sweep.twilio_test_mode === false);
+  t('preflight: sweep_work reports the estimate reminder, recurring WOs and deposit sweep counts; every job has a plain-English "would"', pf.jobs.sweep_work && 'estimate_reminder' in pf.jobs.sweep_work && 'recurring_wos' in pf.jobs.sweep_work && pf.jobs.sweep_work.deposit_paid.pre_approved_scopes === 0 && Object.values(pf.jobs).every(j => typeof j.would === 'string' && j.would.length > 10), pf.jobs.sweep_work);
+  t('preflight: names the jobs that were seeded and will not run today (empty here: not a first run)', Array.isArray(pf.will_not_run_today_seeded));
+  t('preflight: ZERO side effects - no Sheets write, no state change, no queue row touched, no outbound SMS/HTTP', store.calls.filter(x => x.startsWith('POST')).length === before.posts && store.cfg().Scheduler_State === before.state && JSON.stringify(store.tabs.get('Message_Queue')) === before.mq && outbound.length === before.outbound, { posts: store.calls.filter(x => x.startsWith('POST')).length - before.posts, outbound: outbound.length - before.outbound });
+  const legacy = await call('POST', '/cron/run', H, { dry: true });
+  t('preflight: the older {dry:true} form returns the same preflight', legacy.status === 200 && legacy.json.preflight && legacy.json.preflight.jobs.sweep.quiet_hours_held_due.count === 2);
+  store.failWhen = (m, p) => m === 'GET' && p === '/values/Vendor_Requests';
+  const bad = await call('POST', '/cron/run', H, { dry_run: true });
+  t('preflight: a failing read is reported loudly in preflight.errors (ok:false), the other counts still come back', bad.status === 200 && bad.json.preflight.ok === false && bad.json.preflight.errors.some(e => /Vendor_Requests|vendor_nudges_due/.test(e.where + e.error)) && bad.json.preflight.jobs.sweep.quiet_hours_held_due.count === 2, bad.json.preflight && bad.json.preflight.errors);
+  store.failWhen = null;
+  store.tabs.delete('Message_Queue'); store.tabs.delete('Notification_Queue'); store.tabs.delete('Vendor_Requests');
+}
+{
   // the hub-test (staging) token may only dry-run / run the two safe jobs - exercise the REAL hubTestWriteAllowed (a TDZ bug here shipped once: `_b` is declared further down the function)
   const fstart = wsrc.indexOf('async function hubTestWriteAllowed('), fend = wsrc.indexOf('\nasync function ', fstart + 10);
   const real = new Function('SCHED_STAGING_SAFE_JOBS', wsrc.slice(fstart, fend) + '\nreturn hubTestWriteAllowed;')(['door_watchdog', 'insp_guard']);
   const check = (body) => real({}, '/cron/run', body);
-  t('hub-test guard: dry run allowed', (await check({ dry: true })) === true);
+  t('hub-test guard: dry run allowed (dry and dry_run)', (await check({ dry: true })) === true && (await check({ dry_run: true })) === true && (await check({ dry_run: 'true' })) === false && (await check({ dry_run: true, force: true })) === false);
   t('hub-test guard: insp_guard / door_watchdog allowed', (await check({ only: 'insp_guard' })) === true && (await check({ only: 'door_watchdog' })) === true);
   t('hub-test guard: a bare run (all due jobs), the sweeps, force and arrays are refused', (await check({})) === false && (await check(undefined)) === false && (await check({ only: 'sweep' })) === false && (await check({ only: 'insp_guard', force: true })) === false && (await check({ only: ['insp_guard'] })) === false && (await check({ dry: 'true' })) === false);
 }
