@@ -58,6 +58,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14
 .vmat{flex-basis:100%;font-size:12px;color:var(--muted);padding-left:26px;margin-top:-2px;}
 .vopt.locked .vmat{padding-left:0;}
 .item-mat-row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin-top:4px;}
+.addon-hd{color:var(--accent2);font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.06em;margin:18px 0 4px;padding-top:14px;border-top:2px dashed var(--border);}
+.addon-sub{color:var(--muted);font-size:12.5px;margin-bottom:6px;}
+.item.addon{background:#f4faf6;border:1px solid #cfe6d6;border-radius:8px;padding:12px 14px;margin-top:10px;}
+.item.addon:last-child{padding-bottom:12px;}
+.vopt.addon-pick:has(input:checked){border-color:var(--accent2);background:#eaf6ee;}
+.addon-tag{display:inline-block;font-size:10.5px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;color:#fff;background:var(--accent2);border-radius:10px;padding:1px 8px;margin-bottom:6px;}
+.addon-off{color:var(--muted);font-size:13px;}
 .totals{margin-top:4px;}
 .total-line{display:flex;justify-content:space-between;font-size:14px;padding:6px 0;}
 .total-line.grand{font-size:16px;font-weight:bold;border-top:1px solid var(--border);margin-top:6px;padding-top:10px;}
@@ -224,6 +231,27 @@ function itemHtml(it, locked, signedSelections){
   var selKey = locked ? (signedSelections && signedSelections[it.id]) : it.selected_key;
   var multi = it.variants && it.variants.length > 1;
   var body = '';
+  if (it.optional) {
+    // Optional add-on (Oct 13 2026): NOT in the base total. The customer ticks it to add it; the price
+    // shown is what it ADDS. Signed pages show whether it was added.
+    var ov = it.variants || [];
+    if (locked) {
+      var chosen = ov.find(function(v){ return v.key === selKey; });
+      body = chosen
+        ? '<div class="vopt locked selected"><span class="vlabel">&#10003; Added to your job' + (multi && chosen.label ? ' &mdash; ' + esc(chosen.label) : '') + '</span><span class="vprice">+' + money(chosen.price) + '</span>' + matLineHtml(chosen) + '</div>'
+        : '<div class="addon-off">Not added to this job</div>';
+    } else if (!multi) {
+      var only1 = ov[0];
+      body = '<label class="vopt addon-pick"><input type="checkbox" name="addon-' + esc(it.id) + '" value="' + esc(only1 ? only1.key : '') + '" onchange="recalc()"><span class="vlabel">Add this to my job</span><span class="vprice">+' + money(only1 ? only1.price : 0) + '</span>' + matLineHtml(only1) + '</label>';
+    } else {
+      body = '<div class="variant-group"><label class="vopt addon-pick"><input type="radio" name="item-' + esc(it.id) + '" value="" checked onchange="recalc()"><span class="vlabel">No thanks &mdash; not adding this</span><span class="vprice">$0.00</span></label>' + ov.map(function(v){
+        return '<label class="vopt addon-pick"><input type="radio" name="item-' + esc(it.id) + '" value="' + esc(v.key) + '" onchange="recalc()"><span class="vlabel">' + esc(v.label || v.key) + '</span><span class="vprice">+' + money(v.price) + '</span>' + matLineHtml(v) + '</label>';
+      }).join('') + '</div>';
+    }
+    return '<div class="item addon"><span class="addon-tag">Optional add-on</span>' +
+      (it.area ? '<div class="item-area">' + esc(it.area) + '</div>' : '') +
+      '<div class="item-desc">' + esc(it.description) + '</div>' + body + '</div>';
+  }
   if (multi) {
     body = '<div class="variant-group">' + it.variants.map(function(v){
       var checked = v.key === selKey;
@@ -253,15 +281,28 @@ function itemHtml(it, locked, signedSelections){
     '</div>';
 }
 
+// The variant key the customer currently has chosen for an item, or null when it is NOT part of
+// their job (an optional add-on left unticked / "No thanks"). Base items always resolve to a key.
+function chosenKey(it){
+  if (it.optional) {
+    if (it.variants && it.variants.length > 1) {
+      var r = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
+      return (r && r.value) ? r.value : null;
+    }
+    var c = document.querySelector('input[name="addon-' + CSS.escape(it.id) + '"]');
+    return (c && c.checked) ? c.value : null;
+  }
+  if (it.variants && it.variants.length > 1) {
+    var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
+    return checked ? checked.value : it.selected_key;
+  }
+  return (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
+}
 function buildSelections(){
   var sel = {};
   (DATA.items || []).forEach(function(it){
-    if (it.variants && it.variants.length > 1) {
-      var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
-      sel[it.id] = checked ? checked.value : it.selected_key;
-    } else {
-      sel[it.id] = (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
-    }
+    var k = chosenKey(it);
+    if (k !== null) sel[it.id] = k;   // declined add-ons are simply absent — the server treats absent as declined
   });
   return sel;
 }
@@ -282,13 +323,8 @@ function scheduleLineHtml(m){
 function currentTotals(){
   var subtotal = 0;
   (DATA.items || []).forEach(function(it){
-    var key;
-    if (it.variants && it.variants.length > 1) {
-      var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
-      key = checked ? checked.value : it.selected_key;
-    } else {
-      key = (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
-    }
+    var key = chosenKey(it);
+    if (key === null) return;
     var v = (it.variants || []).find(function(x){ return x.key === key; }) || (it.variants || [])[0];
     if (v) subtotal += (+v.price || 0);
   });
@@ -388,7 +424,15 @@ function render(d){
     renderLegacyText(d);
     return;
   }
-  var itemsHtml = items.map(function(it){ return itemHtml(it, locked, locked ? d.signed.selections : null); }).join('');
+  var sigSel = locked ? d.signed.selections : null;
+  var baseHtml = items.filter(function(it){ return !it.optional; }).map(function(it){ return itemHtml(it, locked, sigSel); }).join('');
+  var addonItems = items.filter(function(it){ return it.optional; });
+  var itemsHtml = baseHtml;
+  if (addonItems.length) {
+    itemsHtml += '<div class="addon-hd">Optional add-ons</div>'
+      + '<div class="addon-sub">' + (locked ? 'What you chose to add to your job.' : 'Not included in the total unless you tick them &mdash; the total and payment schedule below update as you choose.') + '</div>'
+      + addonItems.map(function(it){ return itemHtml(it, locked, sigSel); }).join('');
+  }
   var subtotal = locked ? d.signed.subtotal : d.subtotal;
   var schedule = locked ? (d.signed.schedule || []) : (d.schedule || []);
   // Signed milestone rows carry customer_amount already computed at sign time; the live (unsigned)

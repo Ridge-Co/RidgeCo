@@ -50,6 +50,19 @@
   .li .fields input{width:100%;}
   .li .fields label{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .li .del{grid-column:2;justify-self:end;}
+  .li.addon{border-color:#166534;background:#f0f8f2;}
+  .li .li-badge{grid-column:1/-1;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;}
+  .li .li-badge .tag{font-weight:bold;color:#fff;background:#166534;border-radius:10px;padding:1px 9px;letter-spacing:.04em;text-transform:uppercase;font-size:10px;}
+  .li .li-badge .tag.base{background:#475569;}
+  .vbtns{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;}
+  .vbtn-help{font-size:10px;color:var(--muted);margin:1px 0 4px;}
+  #cust-preview{margin-top:12px;border:1px solid var(--border);border-radius:var(--radius);background:#fff;padding:12px;font-size:13px;}
+  #cust-preview h4{margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);}
+  #cust-preview .pv-item{padding:6px 0;border-bottom:1px solid var(--border);}
+  #cust-preview .pv-opt{display:flex;justify-content:space-between;gap:8px;padding:2px 0 2px 14px;}
+  #cust-preview .pv-addon{background:#f0f8f2;border:1px dashed #166534;border-radius:6px;padding:8px;margin-top:6px;}
+  #cust-preview .pv-scn{margin-top:8px;padding:8px;background:#f5f7fa;border-radius:6px;}
+  #cust-preview .pv-row{display:flex;justify-content:space-between;gap:8px;}
   .variants{background:#fff;border:1px dashed var(--border);border-radius:var(--radius);padding:8px;margin-top:4px;}
   .variants>label{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;}
   .vrow{display:flex;gap:6px;margin-bottom:5px;align-items:center;flex-wrap:wrap;}
@@ -262,7 +275,7 @@
   <!-- 7. PROPOSAL -->
   <div class="section" id="sec-proposal">
     <div class="section-title">7 · Payment schedule &amp; customer proposal</div>
-    <div class="sub" style="margin-bottom:6px;">Set this before generating the proposal — the schedule below is what gets printed into the payment terms and signed.</div>
+    <div class="sub" style="margin-bottom:6px;">Set this before generating the proposal — the schedule below is what gets printed into the payment terms and signed. Change any % and the other milestones rebalance automatically so the total stays 100% (type a different number in them if you want another split).</div>
     <div class="row" style="gap:6px;flex-wrap:wrap;">
       <button class="btn small" onclick="applySchedulePreset('third')">1/3 (default)</button>
       <button class="btn small secondary" onclick="applySchedulePreset('quarter')">1/4</button>
@@ -290,6 +303,7 @@
     <button class="btn" style="margin-top:10px;" onclick="genProposal()">📄 Generate proposal from scope + pricing</button>
     <div class="sub" style="margin-top:4px;">⚠ Generating recomputes pricing from the items above and overwrites the text below — if you've hand-edited it (e.g. a custom combined/standalone breakdown), edit the text box directly instead of regenerating.</div>
     <div id="prop-status" class="status"></div>
+    <div id="cust-preview" class="hide"></div>
     <div id="proposal-out" class="hide" style="margin-top:10px;">
       <textarea class="doc" id="proposal-text" style="width:100%;min-height:260px;font-family:inherit;font-size:12.5px;line-height:1.5;padding:12px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box;"></textarea>
       <div class="row" style="margin-top:8px;">
@@ -346,7 +360,10 @@ function removeScheduleRow(i){ scheduleState.milestones.splice(i,1); renderSched
 // customer-facing dollar amount for this milestone (vendor proration stays percent-based).
 function updateScheduleField(i,field,val){
   var m = scheduleState.milestones[i];
-  if(field==='percent') m.percent = parseFloat(val)||0;
+  if(field==='percent'){
+    m.percent = parseFloat(val)||0;
+    rebalanceSchedule(i);
+  }
   else if(field==='vendor_paid') m.vendor_paid = !!val;
   else if(field==='flat_customer_amount'){ var n=parseFloat(val); m.flat_customer_amount = isFinite(n)&&n>=0 ? n : null; }
   else if(field==='calc_mode'){
@@ -358,11 +375,33 @@ function updateScheduleField(i,field,val){
   else m[field] = val;
   renderScheduleTotal();
 }
+// Auto-rebalance (Oct 13 2026, Brett: "when I change the payment schedule, the other milestones did not
+// recalculate"): after editing one milestone's %, the OTHER milestones share what is left of 100%,
+// in proportion to what they had (equal shares if they were all 0). The row you typed is never touched.
+// Updates the other rows' boxes in place so the field you are typing in keeps focus.
+function rebalanceSchedule(editedIdx){
+  var ms=scheduleState.milestones;
+  var others=[]; ms.forEach(function(m,j){ if(j!==editedIdx) others.push(j); });
+  if(!others.length) return;
+  var remaining=Math.max(0, 100-(+ms[editedIdx].percent||0));
+  var sumOthers=others.reduce(function(s,j){ return s+(+ms[j].percent||0); },0);
+  var running=0;
+  others.forEach(function(j,k){
+    var v;
+    if(k===others.length-1) v=Math.round((remaining-running)*100)/100;           // last other row absorbs rounding
+    else v=Math.round((sumOthers>0 ? remaining*(+ms[j].percent||0)/sumOthers : remaining/others.length)*100)/100;
+    if(v<0) v=0;
+    ms[j].percent=v; running+=v;
+  });
+  var host=document.getElementById('schedule-rows');
+  var boxes=(host&&host.querySelectorAll)?host.querySelectorAll('input[data-pct]'):[];
+  for(var b=0;b<boxes.length;b++){ if(b!==editedIdx && ms[b]) boxes[b].value=ms[b].percent; }
+}
 function renderSchedule(){
   var html = scheduleState.milestones.map(function(m,i){
     return '<div class="row" style="gap:6px;margin:4px 0;align-items:center;">'
       +'<input value="'+esc(m.label)+'" oninput="updateScheduleField('+i+',\'label\',this.value)" placeholder="Label" style="flex:2;min-width:60px;">'
-      +'<input type="number" step="0.01" min="0" max="100" value="'+m.percent+'" oninput="updateScheduleField('+i+',\'percent\',this.value)" style="width:64px;">'
+      +'<input type="number" data-pct="1" step="0.01" min="0" max="100" value="'+m.percent+'" oninput="updateScheduleField('+i+',\'percent\',this.value)" style="width:64px;">'
       +'<span style="font-size:11px;color:var(--muted);">%</span>'
       +'<select onchange="updateScheduleField('+i+',\'trigger\',this.value)" style="flex:1;min-width:110px;">'
         +'<option value="upfront"'+(m.trigger==='upfront'?' selected':'')+'>Upfront</option>'
@@ -632,6 +671,8 @@ function renderEditor(){
   // proposal
   if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').value=s.Proposal_Text; }
   else { document.getElementById('proposal-out').classList.add('hide'); document.getElementById('proposal-text').value=''; }
+  try{ var pvItems=JSON.parse(s.Proposal_Items_JSON||'[]'); renderCustomerPreview(pvItems, scheduleState.milestones); }
+  catch(e){ document.getElementById('cust-preview').classList.add('hide'); setStatus('prop-status','⚠ Could not read the saved proposal options for the preview ('+e.message+'). Tap Generate proposal to rebuild it.','err'); }
   ownerGateEditMode=false;
   gateSections();
   loadScopePhotos();
@@ -840,11 +881,19 @@ function variantsBlock(it){
       matInputsHtml(v)+
     '</div>';
   }).join('');
-  return '<div class="variants"><label>Pricing — vendor cost per option (private; never shown to the customer)</label>'+
+  var addon = !!it.optional;
+  return '<div class="variants"><label>'+(addon?'Add-on pricing — vendor cost for JUST this add-on (private; never shown to the customer)':'Pricing — vendor cost per option (private; never shown to the customer)')+'</label>'+
     '<div class="variant-rows">'+rows+'</div>'+
     '<div style="font-size:9px;color:var(--muted);margin-top:2px;">Leave "Override final price" blank to auto-calculate from vendor cost + standard markup. Set it to lock the exact customer price/invoice amount for that option instead — vendor cost still tracks correctly either way. When the option has Ridge Co materials, the override covers the vendor/labor part only; materials are priced on top (step 7).</div>'+
     '<div style="font-size:9px;color:#166534;margin-top:2px;">Green = "RC materials": materials <b>Ridge Co buys</b>, not the vendor. Never on the vendor bill. Owner sees description + price only. Vendor cost can be blank for a materials-only item.</div>'+
-    '<button type="button" class="btn small secondary" onclick="addVariant(this)">+ Add alternate option (e.g. Repair vs Replace)</button></div>';
+    (addon
+      ? '<div class="vbtn-help">The customer sees this add-on as "+$X" — priced as part of the whole job, so it is the difference the add-on makes to the total.</div>'
+      : '<div class="vbtns">'+
+          '<button type="button" class="btn small secondary" onclick="addVariant(this)">+ Different way to do this job (customer picks ONE)</button>'+
+          '<button type="button" class="btn small" onclick="addAddon(this)">+ Optional add-on (on top of this job)</button>'+
+        '</div>'+
+        '<div class="vbtn-help"><b>Different way</b> = Repair vs Replace: the customer chooses one, and the price swaps. <b>Optional add-on</b> = extra work on top of the job (e.g. silvercoat): the customer can tick it, and its price is added.</div>')+
+    '</div>';
 }
 // Ridge Co–supplied materials inputs for one option (Sep 22 2026).
 function matInputsHtml(v){
@@ -859,9 +908,12 @@ function renderItems(){
   var wrap=document.getElementById('items-wrap');
   if(!items.length){ wrap.innerHTML='<div class="empty">No items yet. Organize your notes above, or “+ Add item”.</div>'; return; }
   wrap.innerHTML=items.map(function(it){
-    return '<div class="li" data-id="'+esc(it.id)+'">'+
+    return '<div class="li'+(it.optional?' addon':'')+'" data-id="'+esc(it.id)+'" data-optional="'+(it.optional?'1':'0')+'">'+
       '<input type="checkbox" class="li-sel">'+
       '<div class="fields">'+
+        '<div class="full li-badge">'+(it.optional
+          ? '<span class="tag">Optional add-on</span><span>Customer ticks this to ADD it on top of the base job. Not in the base total.</span><button type="button" class="btn small secondary" onclick="toggleOptional(this)">Make it part of the base job instead</button>'
+          : '<span class="tag base">Base job</span><span>Included in the price the customer approves.</span><button type="button" class="btn small secondary" onclick="toggleOptional(this)">Make this an optional add-on</button>')+'</div>'+
         '<div><label>Area</label><input class="f-area" value="'+esc(it.area)+'"></div>'+
         '<div><label>Trade</label><input class="f-trade" value="'+esc(it.trade)+'"></div>'+
         '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
@@ -910,16 +962,42 @@ function collectItems(){
       variants.push(vv);
     });
     if(!variants.length) variants=[{key:'v1',label:'',vendor_cost:0,price_override:null}];
-    out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key });
+    out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key, optional:el.dataset.optional==='1' });
   });
   return out;
 }
 function addItem(){ var items=collectItems(); var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0); items.push({ id:'li'+(maxn+1), area:'', trade:'', qty:'', description:'', note:'', variants:[{key:'v1',label:'',vendor_cost:0,price_override:null}], selected_key:'v1' }); state.current.line_items=items; renderItems(); }
+// Optional add-on (Oct 13 2026, Brett): a NEW line item flagged optional, inserted right under the job
+// it goes with. The customer ticks it on the proposal; it is priced as the difference it makes to the whole job.
+function addAddon(btn){
+  var after=btn.closest('.li').dataset.id;
+  var items=collectItems();
+  var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0);
+  var parent=items.filter(function(it){ return it.id===after; })[0]||{};
+  var add={ id:'li'+(maxn+1), area:parent.area||'', trade:parent.trade||'', qty:'', description:'', note:'', variants:[{key:'v1',label:'',vendor_cost:0,price_override:null}], selected_key:'v1', optional:true };
+  var idx=items.findIndex(function(it){ return it.id===after; });
+  items.splice(idx+1,0,add);
+  state.current.line_items=items; renderItems();
+  var el=document.querySelector('#items-wrap .li[data-id="'+add.id+'"] .f-desc'); if(el){ el.placeholder='What is the add-on? (e.g. Silvercoat the whole roof)'; el.focus(); el.scrollIntoView({block:'center'}); }
+  setStatus('items-status','Add-on created under that job — describe it, enter its vendor cost, then Save edits.','info');
+}
+// Switch an existing item between base job and optional add-on. An add-on is a single fixed price, so
+// converting an item that has several pick-one options keeps only its first option (and says so).
+function toggleOptional(btn){
+  var id=btn.closest('.li').dataset.id;
+  var items=collectItems();
+  items.forEach(function(it){
+    if(it.id!==id) return;
+    it.optional=!it.optional;
+    if(it.optional && it.variants.length>1){ it.variants=[it.variants[0]]; it.selected_key=it.variants[0].key; setStatus('items-status','That item had several pick-one options; as an add-on only the first one ("'+(it.variants[0].label||'option 1')+'") was kept.','warn'); }
+  });
+  state.current.line_items=items; renderItems();
+}
 function removeItem(btn){ var el=btn.closest('.li'); var id=el.dataset.id; state.current.line_items=collectItems().filter(function(it){ return it.id!==id; }); renderItems(); }
 async function saveItems(){
   var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
   setStatus('items-status','Saving…');
-  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; setStatus('items-status','✅ saved','ok'); gateSections(); }
+  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; setStatus('items-status','✅ saved'+((state.current.Proposal_Text||'').trim()?' — tap "Generate proposal" in step 7 to update what the customer sees':''),'ok'); gateSections(); }
   catch(e){ setStatus('items-status','⚠ '+e.message,'err'); }
 }
 async function applyCommand(){
@@ -1112,6 +1190,7 @@ async function genProposal(){
     document.getElementById('proposal-out').classList.remove('hide');
     document.getElementById('proposal-text').value=r.proposal_text;
     state.current.Proposal_Text=r.proposal_text; state.current.Status='proposed'; document.getElementById('ed-status-pill').innerHTML=statusPill('proposed');
+    renderCustomerPreview(r.items, r.schedule);
     var schedTxt=(r.schedule||[]).map(function(m){ return m.label+' $'+Number(m.customer_amount).toFixed(2); }).join(' · ');
     var msg='✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+' — '+schedTxt;
     if(r.materials && Number(r.materials.cost_total)>0){
@@ -1120,6 +1199,44 @@ async function genProposal(){
     if(r.schedule_warnings && r.schedule_warnings.length) msg+=' ⚠ '+r.schedule_warnings.join(' ');
     setStatus('prop-status',msg,(r.schedule_warnings&&r.schedule_warnings.length)?'warn':'ok');
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
+}
+// "What your customer sees" (Oct 13 2026): every option the customer will be offered, built from the
+// last GENERATED proposal (the priced Proposal_Items_JSON — customer prices only, no vendor cost).
+function renderCustomerPreview(items, schedule){
+  var box=document.getElementById('cust-preview'); if(!box) return;
+  items=Array.isArray(items)?items:[];
+  if(!items.length){ box.classList.add('hide'); box.innerHTML=''; return; }
+  var money=function(n){ return '$'+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+  var base=items.filter(function(it){ return !it.optional; }), addons=items.filter(function(it){ return it.optional; });
+  var priceOf=function(it){ var v=(it.variants||[]).filter(function(x){ return x.key===it.selected_key; })[0]||(it.variants||[])[0]; return v?(+v.price||0):0; };
+  var baseTotal=base.reduce(function(s,it){ return s+priceOf(it); },0);
+  var sched=function(total){
+    return (schedule||[]).map(function(m,i,a){
+      var isLast=i===a.length-1; var prev=a.slice(0,i).reduce(function(s,x){ return s+Math.round((+x.percent||0)/100*total*100)/100; },0);
+      var amt=isLast?total-prev:Math.round((+m.percent||0)/100*total*100)/100;
+      return '<div class="pv-row"><span>'+esc(m.label||'Payment')+' ('+(+m.percent||0)+'%)</span><span>'+money(amt)+'</span></div>';
+    }).join('');
+  };
+  var itemHtml=function(it,plus){
+    var vs=it.variants||[];
+    var h='<div class="pv-item"><b>'+esc(it.description||'')+'</b>';
+    if(vs.length>1){ h+='<div style="font-size:11px;color:var(--muted);">Customer picks ONE:</div>'+vs.map(function(v){ return '<div class="pv-opt"><span>○ '+esc(v.label||'Option')+'</span><span>'+(plus?'+':'')+money(v.price)+'</span></div>'; }).join(''); }
+    else if(vs[0]){ h+='<div class="pv-opt"><span></span><span>'+(plus?'+':'')+money(vs[0].price)+'</span></div>'; }
+    return h+'</div>';
+  };
+  var h='<h4>What your customer will see — from the last generated proposal</h4>';
+  h+=base.map(function(it){ return itemHtml(it,false); }).join('');
+  if(addons.length){
+    h+='<div class="pv-addon"><b>Optional add-ons</b> <span style="font-size:11px;color:var(--muted);">(unticked by default; not in the base total)</span>'+addons.map(function(it){ return '<div style="margin-top:4px;">☐ '+itemHtml(it,true).replace('class="pv-item"','class="pv-item" style="border:none;display:inline-block;width:94%;vertical-align:top;"')+'</div>'; }).join('')+'</div>';
+  }
+  h+='<div class="pv-scn"><b>Base job only: '+money(baseTotal)+'</b>'+sched(baseTotal)+'</div>';
+  addons.forEach(function(it){
+    var vs=it.variants||[]; if(vs.length!==1) return;
+    var t=baseTotal+(+vs[0].price||0);
+    h+='<div class="pv-scn"><b>With "'+esc((it.description||'add-on').slice(0,60))+'": '+money(t)+'</b>'+sched(t)+'</div>';
+  });
+  h+='<div class="sub" style="margin-top:6px;">Preview only — the customer link is not touched. After editing items or the schedule, tap Generate proposal to refresh this.</div>';
+  box.innerHTML=h; box.classList.remove('hide');
 }
 function copyProposal(){ var t=document.getElementById('proposal-text').value; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 copied','ok'); }); }
 // Edit the proposal text directly and save it — bypasses AI regeneration (genProposal), for a

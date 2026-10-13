@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-13.3-queue-upgrade';
+const BUILD_VERSION = '2026-10-13.4-scope-addons';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -661,6 +661,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-task-request/mark-reviewed') return await markVendorTaskReviewed(env, body);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
+        if (path === '/message-queue/translate')  return await translateMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
         if (path === '/property/add')             { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); return await propertyAddWithDupeCheck(env, body); }
@@ -3496,6 +3497,10 @@ function scopeCleanItems(arr) {
       variants, selected_key,
       // vendor's own wording when `description` is the English rendering of it (Sep 28 2026) — kept, never shown to the owner
       ...((it && it.description_orig) ? { description_orig: String(it.description_orig) } : {}),
+      // Optional add-on (Oct 13 2026, Brett): true = NOT part of the base job — the customer ticks it
+      // on or off on the proposal. Absent/false = included in the job (an item with 2+ variants is
+      // still a pick-one choice). Only written when true, so every existing item keeps its exact shape.
+      ...((it && (it.optional === true || it.optional === 'true')) ? { optional: true } : {}),
     };
   }).filter(it => it.description);
 }
@@ -4272,10 +4277,34 @@ function scopeItemsPricing(items, pc, mp) {
     let selKey = it.selected_key || variants[0].key;
     if (!variants.some(v => v.key === selKey)) selKey = variants[0].key;
     const sel = variants.find(v => v.key === selKey) || variants[0];
-    subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
-    rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
-    return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey };
+    // An optional add-on is NOT part of the base job: it never counts toward the base subtotal /
+    // vendor cost / materials totals. It only enters them at signing, if the customer ticks it.
+    if (!it.optional) {
+      subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
+      rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
+    }
+    return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey, ...(it.optional ? { optional: true } : {}) };
   });
+  // Add-on pricing (Oct 13 2026, Brett: "price the whole job, show the difference"): an add-on's
+  // customer price is price(base job + add-on) − price(base job), so a small add-on is never hit
+  // with its own small-job minimum markup/admin fee and "base + add-on" always lands on the price
+  // the whole job would have had. Never below the add-on's own vendor cost (falls back to its
+  // stand-alone price if the difference would be). Variants with a manual price_override or Ridge Co
+  // materials keep the stand-alone price computed above.
+  const baseVendor = vendorCostTotal;
+  if (baseVendor > 0) {
+    const baseCalc = calcTieredEstimate(baseVendor, pc);
+    if (baseCalc) for (const it of priced) {
+      if (!it.optional) continue;
+      for (const v of it.variants) {
+        if (v.price_override != null || v.rc_materials_cost > 0) continue;
+        const whole = calcTieredEstimate(baseVendor + v.vendor_cost, pc);
+        if (!whole) continue;
+        const diff = r2(whole.finalPrice - baseCalc.finalPrice);
+        if (diff >= v.vendor_cost && diff > 0) v.price = diff;
+      }
+    }
+  }
   subtotal = +subtotal.toFixed(2);
   return {
     items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2),
@@ -4316,6 +4345,7 @@ async function scopeProposal(env, body) {
   // materials-only item (Ridge Co buys it, no vendor labor) is legitimately $0 vendor cost
   // (Sep 22 2026; before this, Brett had to type a fake $1 vendor cost, which then got paid to
   // the vendor on the milestone bill).
+  if (!items.some(it => !it.optional)) return json({ error: 'Every line item is marked as an optional add-on — a proposal needs at least one included item (the base job). Un-mark one add-on, or add the main job.' }, 400);
   const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0 || (parseFloat(v.rc_materials_cost) || 0) > 0));
   if (unpriced.length) return json({ error: `Add vendor cost (or Ridge Co materials) to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
   // The materials description is hand-typed and shown to the customer verbatim — same leak class
@@ -4354,15 +4384,35 @@ async function scopeProposal(env, body) {
   // Ridge Co–supplied materials get their own customer line (Brett, Sep 22 2026: "owner gets NO
   // transparency on markup info. just sees description and price to them") — description + the
   // customer's materials price only, never Ridge Co's cost or the mode/markup used.
-  const scopeText = priced.items.map(it => {
+  // Oct 13 2026 (Brett): the text now shows EVERY option the customer will be offered — pick-one
+  // alternatives with their prices, and optional add-ons as a separate "+$X" block that is NOT in
+  // the Total — so what Brett reads/copies matches what the customer page presents. Customer prices
+  // only; never vendor cost.
+  const money = n => '$' + (+n || 0).toFixed(2);
+  const itemLine = it => {
+    const vs = it.variants || [];
+    const multi = vs.length > 1;
     let line = '- ' + (it.area ? it.area + ': ' : '') + it.description;
-    const multi = (it.variants || []).length > 1;
-    for (const v of (it.variants || [])) {
+    if (it.optional && !multi && vs[0]) line += ' (+' + money(vs[0].price) + ')';
+    if (multi) {
+      line += '\n    Choose one:';
+      for (const v of vs) line += '\n      * ' + (v.label || 'Option') + ' - ' + (it.optional ? '+' : '') + money(v.price);
+    }
+    for (const v of vs) {
       if (!(v.materials_price > 0)) continue;
-      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — $' + v.materials_price.toFixed(2);
+      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — ' + money(v.materials_price);
     }
     return line;
-  }).join('\n');
+  };
+  const baseItems = priced.items.filter(it => !it.optional), addonItems = priced.items.filter(it => it.optional);
+  let scopeText = baseItems.map(itemLine).join('\n');
+  if (addonItems.length) {
+    scopeText += '\n\nOptional add-ons (NOT included in the total below - you choose whether to add them when you approve):\n' + addonItems.map(itemLine).join('\n');
+    for (const it of addonItems) {
+      const vs = it.variants || [];
+      if (vs.length === 1) scopeText += '\n  Total with this add-on: ' + money(priced.subtotal + vs[0].price);
+    }
+  }
   // Standing policy (Aug 21 2026, Brett): if only PART of a scope is approved/completed instead of
   // the full project, itemized pricing for those pieces is a best-efforts estimate, not a fixed
   // quote — the combined price is built to absorb small unknowns across a mixed batch of larger and
@@ -4374,14 +4424,14 @@ async function scopeProposal(env, body) {
       : ' — billed once this milestone is reached';
     return `  - ${m.label} (${m.percent}%): $${m.customer_amount.toFixed(2)}${when}`;
   }).join('\n');
-  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${priced.subtotal.toFixed(2)}\nPayment Schedule:\n${scheduleLines}\n\nPayment & Project Terms:\n\n- Payment is due per the schedule above; the first payment is required to approve this proposal and schedule the work.\n- All scheduled payments must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn't get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.`;
+  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost${addonItems.length ? ' (base job, before any optional add-ons)' : ''}: $${priced.subtotal.toFixed(2)}\nPayment Schedule:\n${scheduleLines}\n\nPayment & Project Terms:\n\n- Payment is due per the schedule above; the first payment is required to approve this proposal and schedule the work.\n- All scheduled payments must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.${addonItems.length ? '\n- Optional add-ons are included only if you select them when you approve; the payment schedule above then applies to the new total.' : ''}\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn't get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.`;
 
   await ensureColumns(env, 'Scopes', ['Proposal_Items_JSON']);
   await updateRow(env, 'Scopes', id, {
     Proposal_Text: doc, Proposal_Items_JSON: JSON.stringify(priced.items),
     Estimate_Amount: String(priced.vendorCostTotal), Status: 'proposed', Updated_Date: new Date().toISOString(),
   });
-  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: scheduleCheck.warnings || [], items: priced.items,
+  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: [...(scheduleCheck.warnings || []), ...(addonItems.length && schedule.some(m => m.calc_mode === 'flat') ? ['This proposal has optional add-ons AND a flat-dollar payment milestone. Flat milestones do not grow when a customer adds an add-on — only the percent-based milestones do. Use percentages if you want add-ons spread across the whole schedule.'] : [])], items: priced.items,
     // Admin-only caller (scope-creator.html) — lets Brett see the materials split he just priced.
     materials: { mode: materialsPricing.mode, pct: materialsPricing.pct, cost_total: priced.rcMaterialsCostTotal, price_total: priced.rcMaterialsPriceTotal, vendor_cost_total: priced.vendorCostTotal } });
 }
@@ -4553,9 +4603,10 @@ async function scopeProposalView(env, url) {
       ? { key: v.key, label: v.label, price: v.price, materials_price: +v.materials_price, materials_desc: String(v.materials_desc || 'Materials') }
       : { key: v.key, label: v.label, price: v.price }),
     selected_key: it.selected_key,
+    ...(it.optional ? { optional: true } : {}), // optional add-on: unticked by default, price = what it ADDS to the total
   })); // no `note` — free-text field with no internal/customer split; never safe to echo back
   const photos = await scopeProposalPhotos(env, s);
-  const subtotal = +(items.reduce((sum, it) => { const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
+  const subtotal = +(items.reduce((sum, it) => { if (it.optional) return sum; const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
   const rawSchedule = scopeParsePaymentSchedule(s);
   const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
@@ -4769,6 +4820,9 @@ async function scopeProposalSign(env, body, ip, ua) {
   for (const it of items) {
     const variants = it.variants || [];
     let key = selections[it.id];
+    // Optional add-on: only included if the customer's selection names one of its options; anything
+    // else (absent, '__none__', a bad key) means DECLINED — never silently added to what they owe.
+    if (it.optional && !variants.some(v => v.key === key)) continue;
     if (!variants.some(v => v.key === key)) key = it.selected_key || (variants[0] && variants[0].key);
     const sel = variants.find(v => v.key === key) || variants[0];
     if (!sel) continue;
@@ -4780,6 +4834,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   let vendorCostTotal = 0;
   for (const it of scopeParseItems(s)) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on — not signed, so no vendor cost
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) vendorCostTotal += (+v.vendor_cost || 0);
   }
@@ -4789,11 +4844,13 @@ async function scopeProposalSign(env, body, ip, ua) {
   let rcMaterialsCost = 0, rcMaterialsPrice = 0;
   for (const it of scopeParseItems(s)) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) rcMaterialsCost += (+v.rc_materials_cost || 0);
   }
   for (const it of items) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) rcMaterialsPrice += (+v.materials_price || 0);
   }
@@ -8219,15 +8276,19 @@ async function assignVendor(env, body, internal) {
     // misleading until real reply/call handling replaces the Flow. Portal Accept/Decline
     // (Aug 13 build) is unaffected by this — it's a real, working button, not an SMS reply.
     const link = vendorPortalLink(body.wo_id);
+    // English version always built (Oct 13 2026, Brett: the Message Queue showed only the Spanish that
+    // was sent): for a Spanish vendor it rides along as the queue row's Original_Body so the review
+    // screen can show what the text says in English.
+    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
     const msg = isSpanish
       ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.\n${link}`
-      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
+      : msgEn;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
     // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
     // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, bypassQuietHours: internal.bypassQuietHours === true });
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, original_body: isSpanish ? msgEn : '', translated_to: isSpanish ? 'es' : '', bypassQuietHours: internal.bypassQuietHours === true });
     vendorSMSSent = r.sent;
     const _lang = isSpanish ? 'es' : 'en';
     if (r.sent) vendorSmsDetail = { status: 'sent', reason: r.test_mode ? 'TEST MODE IS ON: the text went to the Hub test number, NOT to the vendor' : 'Text sent to the vendor', test_mode: !!r.test_mode, language: _lang, message_body: r.message_body || msg };
@@ -15232,6 +15293,41 @@ async function listWOSnippets(env) {
 // POST /message-queue/skip { ids:[...] } — never deletes (Active stays TRUE); matches the
 // Hub's standing "keep forever" pattern for reviewed rows (e.g. the receipt-reconciler
 // duplicate checker's confirmed-duplicate rows).
+// POST /message-queue/translate { ids:[...] } — English view for the review screen (Oct 13 2026,
+// Brett: "the messaging queue ... only shows what is being sent ... add a translation part so my view
+// shows the translation"). Rows that already carry the English original (Original_Body — set by the
+// automatic vendor translation and by the dispatch text) return it as-is. A vendor row with no saved
+// English whose text reads as Spanish (older rows, or any hand-built Spanish text) is translated
+// Spanish -> English on the spot. Read-only: never edits or re-sends a row. A translation that could
+// not be produced comes back as an explicit per-row `error`, never a blank.
+const MQ_LOOKS_SPANISH = /[áéíóúñ¿¡]|\b(nuevo trabajo|inicie|su portal|el trabajo|para aceptar|hola|gracias|por favor|trabajo|cita|inquilino)\b/i;
+async function translateMessageQueue(env, body) {
+  const ids = (Array.isArray(body && body.ids) ? body.ids : []).map(String).slice(0, 15);
+  if (!ids.length) return json({ error: 'ids required' }, 400);
+  await ensureSmsInfra(env);
+  const rows = await fetchTab(env, MSG_QUEUE_TAB);
+  const results = [];
+  for (const id of ids) {
+    const r = rows.find(x => String(x.ID) === id);
+    if (!r) { results.push({ id, error: 'Message not found' }); continue; }
+    if (String(r.Original_Body || '').trim()) { results.push({ id, english: r.Original_Body, source: 'saved' }); continue; }
+    if (r.Recipient_Type !== 'vendor' || !MQ_LOOKS_SPANISH.test(r.Message_Body || '')) { results.push({ id, skipped: 'english' }); continue; }
+    let failMsg = '';
+    try {
+      const out = await translateText(env, r.Message_Body, 'Spanish', 'English', { preserve: true, max_tokens: 1200 });
+      if (!out || !String(out).trim() || out === r.Message_Body) failMsg = 'translation returned nothing';
+      else results.push({ id, english: String(out), source: 'live' });
+    } catch (e) { failMsg = String(e && e.message || e).slice(0, 300); }
+    if (failMsg) {
+      // Failure is visible twice: on the row itself (so the screen says so) and in Ops_Telemetry.
+      const res = { id, error: 'English translation is unavailable right now - try again in a minute.' };
+      try { await logTelemetry(env, { Job_Type: 'message_queue_translate', Skill_Or_Endpoint: '/message-queue/translate', Success: 'FALSE', Notes: 'message ' + id + ': ' + failMsg }); }
+      catch (te) { res.telemetry_error = String(te && te.message || te).slice(0, 200); }
+      results.push(res);
+    }
+  }
+  return json({ ok: true, results });
+}
 async function skipMessageQueue(env, body) {
   const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
   if (!ids.length) return json({ error: 'ids required' }, 400);
