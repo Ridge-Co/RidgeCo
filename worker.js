@@ -14127,7 +14127,64 @@ async function schedRunNext(env, ctx, opts) {
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: state write failed and telemetry write failed:', stateErr, out.telemetry_error); }
     } else if (finalState) {
       const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only }).map(d => d.name);
-//@@SCHED_NEXT@@
+      out.due = stillDue; out.more = stillDue.length > 0 && !force;
+    }
+    return out;
+  })();
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(work.catch((e) => { console.error('scheduler: background completion of ' + job.name + ' failed:', schedErrText(e)); }));   // keeps running + records state even if the caller hung up
+  let timer;
+  const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), budget); });
+  const done = await Promise.race([work, timeout]);
+  clearTimeout(timer);
+  if (done === null) {
+    return { status: 200, body: Object.assign({}, base, { ran: job.name, job_ok: null, timed_out: true, error: null, note: `${job.name} is still running after ${Math.round(budget / 1000)}s; it keeps going in the background and records its result in Scheduler_State (see /cron/status)` }) };
+  }
+  return { status: 200, body: done };
+}
+
+async function schedRunHandler(env, ctx, body) {
+  body = body || {};
+  const only = Array.isArray(body.only) ? body.only : (typeof body.only === 'string' && body.only ? [body.only] : []);
+  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true });
+  return json(r.body, r.status);
+}
+async function schedStatusHandler(env) {
+  let rows, parsed;
+  try { rows = await schedReadConfigRows(env, true); parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY)); }
+  catch (e) { return json({ ok: false, error: 'could not read Config (scheduler state): ' + schedErrText(e) }, 503); }
+  if (parsed.error) return json({ ok: false, error: parsed.error }, 503);
+  const s = schedStatus(parsed.state, new Date(), SCHED_JOBS);
+  const claimUntil = Date.parse(parsed.state.claim_until || '');
+  return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
+}
+// Coarse, public (/health): names only, no detail. Never throws - a failure is reported in the field.
+async function schedHealthSummary(env) {
+  try {
+    const rows = await schedReadConfigRows(env, false);
+    const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+    if (parsed.error) return { error: 'state unreadable' };
+    const s = schedStatus(parsed.state, new Date(), SCHED_JOBS);
+    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
+  } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
+}
+// scheduled() is now a LOUD no-op. Cloudflare firing it means a stale Cron Trigger is still attached - a second,
+// unreliable clock that must not run jobs (duplicates) and must not go unnoticed. Rate-limited to once per 6h.
+async function schedUnexpectedCloudflareCron(env, event) {
+  const cron = String((event && event.cron) || '(unknown)');
+  const msg = `Cloudflare fired scheduled() for cron "${cron}" but NO cron is allowed (Apps Script is the only clock). A leftover Cron Trigger is still attached to this Worker - delete it in Cloudflare > Workers > Triggers. No job work was done.`;
+  console.error('scheduler: ' + msg);
+  const res = { ok: false, ran: false, cron, error: msg };
+  let last = '';
+  try { last = schedCell(await schedReadConfigRows(env, false), 'unexpected_cron_last_logged'); } catch (e) { res.config_error = schedErrText(e); }
+  const lastMs = Date.parse(last || '');
+  if (!isNaN(lastMs) && Date.now() - lastMs < 6 * 3600000) { res.rate_limited = true; return res; }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'unexpected_cloudflare_cron', Skill_Or_Endpoint: 'scheduled', Success: 'FALSE', Notes: msg.slice(0, 480) }); res.telemetry = 'logged'; }
+  catch (e) { res.telemetry_error = schedErrText(e); console.error('scheduler: unexpected-cron telemetry failed:', res.telemetry_error); }
+  try { res.alert = await alertAdminOnFailure(env, 'unexpected_cloudflare_cron', msg); } catch (e) { res.alert_error = schedErrText(e); }
+  try { await setConfigKey(env, { key: 'unexpected_cron_last_logged', value: new Date().toISOString() }); } catch (e) { res.stamp_error = schedErrText(e); }
+  return res;
+}
+// ═══ SCHEDULER-BLOCK-END ══════════════════════════════════════════════════════════════════════
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
