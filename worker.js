@@ -10080,6 +10080,13 @@ async function approveInvoiceReview(env, body) {
   // account with no labor bill) has NO vendor bill — so bill_id is optional, but we still need
   // a work order to anchor the review row to.
   if (!customer_total || (!bill_id && !wo_id)) return json({ error: 'customer_total and a bill_id or wo_id are required' }, 400);
+  // A cancelled/voided bid-group copy can never be approved for customer billing (Oct 12 2026).
+  {
+    let _wid = wo_id;
+    if (!_wid && bill_id) { const _b = (await fetchTab(env, 'Vendor_Bills')).find(b => String(b.ID) === String(bill_id)); _wid = _b ? _b.WO_ID : ''; }
+    const _blk = await bidGroupWriteBlock(env, _wid, 'invoice approvals', 'aprobaciones de factura', '/invoice-review/approve');
+    if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409);
+  }
   // Server-side backstop for the Sep 22 2026 double-billing block: receipts on a signed scope
   // proposal's WO are already billed through its payment milestones. The picker disables them
   // (listBilledReceipts), but a stale page could still send them — refuse rather than bill twice.
