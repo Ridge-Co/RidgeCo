@@ -207,6 +207,8 @@ function fetchEnglish(ids){
     api('POST','/message-queue/translate',{ ids: chunk }).then(function(r){
       if (!r || r.error || !Array.isArray(r.results)) throw new Error((r && r.error) || 'bad response');
       r.results.forEach(function(x){ english[x.id] = x.english ? { english: x.english } : x.error ? { error: x.error } : { skipped: true }; });
+      // A row the Hub didn't answer for must not sit on "Translating…" forever (silent stall).
+      chunk.forEach(function(id){ if (english[id] && english[id].loading) english[id] = { error: 'the Hub returned no answer for this message' }; });
       render();
     }).catch(function(err){
       chunk.forEach(function(id){ english[id] = { error: 'could not reach the Hub (' + (err && err.message || 'error') + ')' }; });
