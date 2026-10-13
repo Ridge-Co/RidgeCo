@@ -60,7 +60,7 @@ function isStaging(env, url) {
 }
 
 const _hubWorkerCore = {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
