@@ -8276,9 +8276,13 @@ async function assignVendor(env, body, internal) {
     // misleading until real reply/call handling replaces the Flow. Portal Accept/Decline
     // (Aug 13 build) is unaffected by this — it's a real, working button, not an SMS reply.
     const link = vendorPortalLink(body.wo_id);
+    // English version always built (Oct 13 2026, Brett: the Message Queue showed only the Spanish that
+    // was sent): for a Spanish vendor it rides along as the queue row's Original_Body so the review
+    // screen can show what the text says in English.
+    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
     const msg = isSpanish
       ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.\n${link}`
-      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
+      : msgEn;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
