@@ -16807,16 +16807,61 @@ function buildScoutQueueRow(it, now, reviewTs) {
 // items/call — before this was built.
 async function opsQueueScoutSubmit(env, body) {
   const items = Array.isArray(body && body.items) ? body.items : [];
-  const verdict = validateScoutSubmitItems(items);
-  if (!verdict.ok) return json({ error: verdict.error }, 400);
+  // Oct 13 2026: `rechecks` = the Scout's re-evaluation of snoozed proposals against builds shipped
+  // since: [{id, verdict:'keep'|'covered'|'update', note}]. May be sent alone (items empty).
+  const rechecks = Array.isArray(body && body.rechecks) ? body.rechecks.slice(0, 60) : [];
+  if (!(items.length === 0 && rechecks.length > 0)) {
+    const verdict = validateScoutSubmitItems(items);
+    if (!verdict.ok) return json({ error: verdict.error }, 400);
+  }
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   const now = new Date().toISOString();
   const reviewTs = String((body && body.review_ts) || now);
   let queued = 0;
+  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [];
+  let rechecked = 0;
+  // Oct 13 2026: the old loop inserted blindly, so every Optimizer round re-proposed ideas that were
+  // already queued, dropped or built. Now: read the WHOLE queue (all statuses) first; skip a
+  // near-verbatim copy of ANY row (reported back in skipped_duplicates — never silent); insert a
+  // looser overlap but tag it Dup_Of so the page shows "may overlap #N"; and flag titles that look
+  // already shipped per FEATURE_LOG (flag only).
+  let pool = [];
+  try {
+    const dq = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const vq = dq.values || [];
+    if (vq.length > 1) pool = vq.slice(1).map(r => { const o = {}; vq[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; });
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const shipped = items.length ? await getShippedIndex() : { ok: true, index: [] };
   for (const it of items) {
-    await addRow(env, OPS_QUEUE_TAB, buildScoutQueueRow(it, now, reviewTs));
+    const same = findQueueMatch(it, pool, 'same');
+    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status }); continue; }
+    const rowObj = buildScoutQueueRow(it, now, reviewTs);
+    const ov = findQueueMatch(it, pool, 'overlap');
+    if (ov) {
+      rowObj.Dup_Of = String(ov.row.ID);
+      flagged_overlaps.push({ title: rowObj.Title, overlaps: ov.row.ID, status: ov.row.Status });
+      const ovst = String(ov.row.Status || '').toLowerCase();
+      if (ovst === 'done') rowObj.Shipped_Match = 'Overlaps already-built queue item #' + ov.row.ID;
+    }
+    if (shipped.ok && !rowObj.Shipped_Match) {
+      const sm = findShippedMatch(rowObj.Title, shipped.index);
+      if (sm) rowObj.Shipped_Match = 'Looks already built: ' + sm.ref;
+    }
+    await addRow(env, OPS_QUEUE_TAB, rowObj);
+    pool.push({ ID: 'new-' + queued, Title: rowObj.Title, Problem: rowObj.Problem, First_Step: rowObj.First_Step, Status: 'proposed' });
     queued++;
+  }
+  for (const rc of rechecks) {
+    try {
+      const rid = rc && rc.id; const vd = String((rc && rc.verdict) || '').toLowerCase();
+      const target = pool.find(r => String(r.ID) === String(rid));
+      if (!target) { recheck_errors.push({ id: rid, error: 'not_found' }); continue; }
+      if (String(target.Status || '').toLowerCase() !== 'proposed') { recheck_errors.push({ id: rid, error: 'not_proposed' }); continue; }
+      if (!['keep', 'covered', 'update'].includes(vd)) { recheck_errors.push({ id: rid, error: 'verdict must be keep|covered|update' }); continue; }
+      await updateRow(env, OPS_QUEUE_TAB, rid, { Scout_Verdict: vd, Scout_Note: String((rc && rc.note) || '').slice(0, 300), Scout_Reviewed: now });
+      rechecked++;
+    } catch (e) { recheck_errors.push({ id: rc && rc.id, error: String((e && e.message) || e) }); }
   }
   // Best-effort history row in Ops_Review_Log — never let a failure here undo or fail the
   // request for the queue rows already written above (same posture as runWeeklyReview's own
