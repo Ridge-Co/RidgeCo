@@ -16716,6 +16716,7 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
       `Problem: ${row.Problem || ''}`,
       `First_Step: ${row.First_Step || ''}`,
       `Effort: ${row.Effort || ''}`,
+      ...(String(row.Brett_Note || '').trim() ? [`BRETT'S CHANGE (overrides the proposal wherever they conflict): ${String(row.Brett_Note).trim()}`] : []),
       `Build_Brief:`,
       briefText,
     ].join('\n');
