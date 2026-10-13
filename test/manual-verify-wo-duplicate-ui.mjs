@@ -63,7 +63,11 @@ const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', mem
         { wo_id: 'WO-1238', is_original: true, status_before: 'Assigned', vendor_name: 'Alex Busey', result: 'kept', reasons: [] },
         { wo_id: 'WO-1250', is_original: false, status_before: 'Assigned', vendor_name: 'Cesar Diaz', result: b.confirm ? 'cancelled' : 'would_cancel', reasons: [] },
         { wo_id: 'WO-1251', is_original: false, status_before: 'New', vendor_name: '', result: 'would_skip', reasons: ['Has a vendor bill ($120.00)'] } ];
-      json(r, { ok: true, group_id: 'BG-7', dry_run: !b.confirm, results: rows, errors: [], warnings: [], summary: { would_cancel: 1, would_skip: 1, kept: 1, already_cancelled: 0, cancelled: b.confirm ? 1 : 0, skipped: 1, failed: 0 } });
+      // keep_one on a COPY: the original stays kept, the winner is reported (Oct 13 2026 follow-up)
+      const winner = b.mode === 'keep_one' ? (b.keep_wo_id === 'WO-1238'
+        ? { wo_id: 'WO-1238', is_original: true, will_become_tenant_visible: false, became_tenant_visible: false, already_visible: false }
+        : { wo_id: b.keep_wo_id, is_original: false, will_become_tenant_visible: !b.confirm, became_tenant_visible: !!b.confirm, already_visible: false }) : null;
+      json(r, { ok: true, group_id: 'BG-7', dry_run: !b.confirm, results: rows, winner, errors: [], warnings: [], summary: { would_cancel: 1, would_skip: 1, kept: 1, already_cancelled: 0, cancelled: b.confirm ? 1 : 0, skipped: 1, failed: 0 } });
     });
 
     await page.goto('file://' + targetHtml, { waitUntil: 'load' });
