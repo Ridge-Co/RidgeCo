@@ -13849,7 +13849,7 @@ function schedStatus(state, now, jobs) {
   const nowDate = now instanceof Date ? now : new Date(now);
   const nowMs = +nowDate, et = schedEtParts(nowDate);
   const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
-  const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), jobs: {}, overdue: [] };
+  const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), seeded: (state && state.seeded) || null, jobs: {}, overdue: [] };
   for (const job of (jobs || SCHED_JOBS)) {
     const js = (state && state.jobs && state.jobs[job.name]) || {};
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
