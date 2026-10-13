@@ -8219,6 +8219,20 @@ async function woBidGroupCancel(env, body) {
     const members = all.filter(w => w.Bid_Group_ID === gid);
     if (!members.length) return await fail(404, `Bid group ${gid} has no members`);
     if (mode === 'keep_one' && !members.some(m => m.ID === result.keep_wo_id)) return await fail(400, `${result.keep_wo_id} is not a member of ${gid}.`);
+    // keep_one (Oct 13 2026): the kept member is the winner. Keeping a cancelled/voided job would leave nothing alive.
+    const winnerWO = mode === 'keep_one' ? members.find(m => m.ID === result.keep_wo_id) : null;
+    if (winnerWO && isCancelledWOStatus(winnerWO.Status)) return await fail(400, `${winnerWO.ID} is already cancelled, so it cannot be the one you keep. Pick a job that is still open.`);
+    if (winnerWO && String(winnerWO.Voided || '').toUpperCase() === 'TRUE') return await fail(400, `${winnerWO.ID} is voided, so it cannot be the one you keep. Pick a job that is still open.`);
+    if (winnerWO) {
+      const winnerIsOriginal = !String(winnerWO.Duplicated_From || '').trim();
+      const visBefore = String(winnerWO.Tenant_Visible == null ? '' : winnerWO.Tenant_Visible).trim();
+      result.winner = {
+        wo_id: winnerWO.ID, is_original: winnerIsOriginal, tenant_visible_before: visBefore,
+        already_visible: !winnerIsOriginal && visBefore.toUpperCase() === 'TRUE' && String(winnerWO.Bid_Winner || '').trim().toUpperCase() === 'TRUE',
+        will_become_tenant_visible: !winnerIsOriginal && visBefore.toUpperCase() !== 'TRUE', became_tenant_visible: false,
+        note: winnerIsOriginal ? 'The original is kept as it is; only the other copies are cancelled.' : 'Becomes visible to the tenant. No text message is sent to anyone.',
+      };
+    }
     const [vendors, bills, timeEntries, invoiceReview] = await Promise.all([fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'), fetchTab(env, 'Time_Entries'), fetchTab(env, 'Invoice_Review')]);
     const ctx = { bills, timeEntries, invoiceReview, workorders: all };
     const targets = [];
