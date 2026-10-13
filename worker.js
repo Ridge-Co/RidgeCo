@@ -15331,6 +15331,7 @@ async function opsQueueStartBuild(env, body) {
       const rowIndex = rows.findIndex(r => r.ID === row.ID);
       const sheetRow = rowIndex + 2;
       rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [[originalStatus[row.ID]]] });
+      if (bsCol !== -1) rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['']] });
     }
     if (rbUpdates.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: rbUpdates }); } catch (_) {} }
   };
