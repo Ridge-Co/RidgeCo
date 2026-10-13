@@ -94,7 +94,7 @@ ok(has('async function addEstimateVersion(', "type: 'admin_estimate_new'") && ha
 ok(has('async function approveEstimate(', 'vendor_estimate_approved') && !grab('async function approveEstimate(').includes('sendSMS(env'), 'approve texts the vendor through the gated template path (old raw amount text removed)');
 ok(has('async function scopeProposalSign(', "type: 'admin_proposal_signed'") && has('async function scopeProposalSign(', "type: 'vendor_proposal_signed'"), 'signing texts Brett and the vendor');
 ok(has('async function scopeDepositPaidTransition(', "type: 'admin_deposit_paid'") && has('async function scopeDepositPaidTransition(', "type: 'vendor_deposit_paid'") && has('async function scopeDepositPaidTransition(', "!== 'Pre-approved'"), 'deposit paid texts both, once (only from Pre-approved)');
-ok(has('async function cronSweep(', 'processEstimateReminders') && has('async function cronSweep(', 'processDepositPaidSweep'), 'both sweeps run from the 15-minute cron');
+ok(has('async function schedRunSweepWork(', 'processEstimateReminders') && has('async function schedRunSweepWork(', 'processDepositPaidSweep'), 'both sweeps run from the scheduler sweep_work job (every ~15 min, no cron)');
 ok(has('async function smsGatedSend(', "kind === 'admin' ? opts.admin"), "admin is a recipient kind in the gated sender (Global switch, test mode, quiet hours all still apply)");
 ok(has('async function flagEstimate(', "['Pending', 'Needs Info']") && has('async function flagEstimate(', "Status: 'Declined'"), 'only a pending estimate can be flagged; decline sets Declined');
 console.log(n + ' passed, 0 failed');
