@@ -4713,18 +4713,23 @@ function scopeValidatePaymentSchedule(milestones, maxUpfrontPct) {
 // short or over from percent rounding, same discipline as scopeSigVendorBillAmount below.
 function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
   subtotal = +subtotal || 0; vendorCostTotal = +vendorCostTotal || 0;
-  let custRunning = 0, vendRunning = 0;
+  // Oct 13 2026: 'flat' rows are fixed customer amounts, exactly as typed. The customer-side
+  // ABSORBER (the row that takes rounding and any add-on difference so milestones always foot to
+  // the signed total) is the LAST NON-FLAT row — not simply the last row, which may be flat. With
+  // no non-flat row there is no absorber (legacy all-flat schedules keep their typed amounts).
+  const isFlatRow = (m) => m.calc_mode === 'flat' && m.flat_customer_amount != null;
+  let absorber = -1;
+  for (let k = schedule.length - 1; k >= 0; k--) { if (!isFlatRow(schedule[k])) { absorber = k; break; } }
+  const custAmts = schedule.map((m, i) => isFlatRow(m) ? +(+m.flat_customer_amount).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
+  if (absorber >= 0) custAmts[absorber] = +(subtotal - custAmts.reduce((sum, a, i) => i === absorber ? sum : sum + a, 0)).toFixed(2);
+  let vendRunning = 0;
   return schedule.map((m, i) => {
     const isLast = i === schedule.length - 1;
     // 'flat' overrides the CUSTOMER amount only, exactly as typed — never the vendor side (see
-    // scopeValidatePaymentSchedule's comment on why). A flat milestone never absorbs rounding
-    // drift either, last or not: "exactly Flat_Customer_Amount" means exactly that.
-    const isFlat = m.calc_mode === 'flat' && m.flat_customer_amount != null;
-    const custAmt = isFlat
-      ? +(+m.flat_customer_amount).toFixed(2)
-      : (isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
+    // scopeValidatePaymentSchedule's comment on why); vendor proration stays percent-based.
+    const custAmt = custAmts[i];
     const vendAmt = isLast ? +(vendorCostTotal - vendRunning).toFixed(2) : +((m.percent / 100) * vendorCostTotal).toFixed(2);
-    custRunning = +(custRunning + custAmt).toFixed(2); vendRunning = +(vendRunning + vendAmt).toFixed(2);
+    vendRunning = +(vendRunning + vendAmt).toFixed(2);
     return {
       label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt,
       vendor_paid: m.vendor_paid !== false, calc_mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
