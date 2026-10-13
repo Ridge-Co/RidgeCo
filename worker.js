@@ -15249,8 +15249,16 @@ async function opsQueueStatus(env, body) {
   const fields = { Status: status };
   if (status === 'held') fields.Held_Note = String(note).slice(0, 500);
   if (status === 'done') fields.Held_Note = ''; // cleanup — in case this is a retry after a prior held attempt
+  // Oct 13 2026 two-way sync: the build session may report the PR it opened. A 'done' report means
+  // "built, PR open, awaiting Brett's merge" — opsQueueSync flips it to live/pr_closed from GitHub.
+  const _prn = cleanPrNumber(body && body.pr_number);
+  if (_prn) fields.PR_Number = _prn;
+  fields.Build_Updated = new Date().toISOString();
+  if (status === 'building') fields.Build_State = _prn ? 'pr_open' : 'building';
+  if (status === 'done') fields.Build_State = 'pr_open';
+  if (status === 'held') fields.Build_State = 'held';
   await updateRow(env, OPS_QUEUE_TAB, id, fields);
-  return json({ ok: true, id, status });
+  return json({ ok: true, id, status, pr_number: _prn || undefined });
 }
 
 // PURE — given the row's CURRENT state plus what a build session wants to report, decide whether
