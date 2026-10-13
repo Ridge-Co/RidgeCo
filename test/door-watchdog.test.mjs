@@ -417,7 +417,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   t('GET status is routed', /path === '\/watchdog\/door-system'\)\s*return await doorWatchdogStatus\(env\)/.test(src));
   t('no swallowing catches in the watchdog block', !/catch\s*\([^)]*\)\s*\{\s*\}/.test(block) && !/\.catch\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/.test(block) && !/catch\s*\(\s*_\s*\)\s*\{\s*\/\*/.test(block));
   t('no secrets / phone numbers in the block', !/\+?1?[ -]?\(?\d{3}\)?[ -]\d{3}-\d{4}/.test(block) && !/Bearer |TOKEN\s*=/.test(block));
-  t('BUILD_VERSION is a 2026-10-12 build or later', /const BUILD_VERSION = '2026-10-1[2-9]\.\d+-/.test(src));
+  t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-10-12\.3-door-watchdog'/.test(src));
 }
 
 console.log(`door-watchdog: ${pass} passed, ${fail} failed`);
