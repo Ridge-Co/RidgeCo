@@ -19,7 +19,7 @@ const dom = { 'schedule-rows': { innerHTML: '' } };
 const status = {};
 const scheduleState = { milestones: [], maxUpfrontPct: 33.34 };
 const factory = new Function('document', 'scheduleState', 'setStatus', 'esc',
-  grab('addScheduleRow') + '\n' + grab('updateScheduleField') + '\n' + grab('renderSchedule') + '\n' + grab('renderScheduleTotal') +
+  grab('addScheduleRow') + '\n' + grab('rebalanceSchedule') + '\n' + grab('updateScheduleField') + '\n' + grab('renderSchedule') + '\n' + grab('renderScheduleTotal') +
   '\nreturn { addScheduleRow, updateScheduleField, renderSchedule };');
 const api = factory({ getElementById: id => dom[id] }, scheduleState, (id, msg, cls) => { status[id] = { msg, cls }; }, s => String(s));
 
