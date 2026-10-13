@@ -133,6 +133,8 @@ issue to Brett, and when it does need him, name the exact narrow gap, not the wh
 - Reason: the Cloudflare account is at its cron cap, and an over-cap trigger fails to attach with no error, so jobs die silently.
 - Every job returns {ok, errors}. Failures must be loud (Ops_Telemetry plus /cron/status overdue), never swallowed.
 - A user-facing 'next sweep / runs hourly' message must name the scheduler job, not 'cron'.
+- Brett (Oct 13): "yes, all on apps script. this is why i wanted a master scheduler script so we can see it all and edit it all in one place." Everything scheduled is a row in the single JOBS table at the top of `apps-script/hub-scheduler/HubScheduler.gs` (PR #238) or a Hub SCHED_JOBS entry. Never run a live scheduler tick without Brett's approval: `setup` is a safe preview, `approveAndStart` installs the trigger.
+- Backlog (not built): a UI page to edit schedules, and pausing overnight runs. Keep the JOBS table data-driven for both.
 
 ## MANDATORY, ABOVE EVERYTHING ELSE: NOTHING EVER FAILS SILENTLY (Brett, Oct 1 2026)
 
