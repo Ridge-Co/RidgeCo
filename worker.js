@@ -8317,8 +8317,15 @@ async function assignVendor(env, body, internal) {
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
     // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
     // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true });
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, bypassQuietHours: internal.bypassQuietHours === true });
     vendorSMSSent = r.sent;
+    const _lang = isSpanish ? 'es' : 'en';
+    if (r.sent) vendorSmsDetail = { status: 'sent', reason: r.test_mode ? 'TEST MODE IS ON: the text went to the Hub test number, NOT to the vendor' : 'Text sent to the vendor', test_mode: !!r.test_mode, language: _lang, message_body: r.message_body || msg };
+    else if (r.held_for_quiet_hours) vendorSmsDetail = { status: 'held', reason: `Held for quiet hours — it will send after ${r.send_after}`, language: _lang, message_body: r.message_body || msg };
+    else if (r.send_ok === false) vendorSmsDetail = { status: 'failed', reason: `Blocked, not sent: ${r.gate_snapshot}`, language: _lang, message_body: r.message_body || msg };
+    else if (!r.recipient_phone) vendorSmsDetail = { status: 'failed', reason: 'Vendor phone number is missing or invalid — no text was sent', language: _lang, message_body: r.message_body || msg };
+    else if (env.__STAGING__ ?? isStaging(env)) vendorSmsDetail = { status: 'skipped', reason: 'STAGING: texts are stubbed, so nothing was really sent (the message was only logged)', language: _lang, message_body: r.message_body || msg };
+    else vendorSmsDetail = { status: 'failed', reason: 'Twilio rejected or failed to send the text (see Message_Queue)', language: _lang, message_body: r.message_body || msg };
   }
   if (notify && notifyTenantOnAssign) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
