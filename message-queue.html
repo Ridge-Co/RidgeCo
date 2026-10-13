@@ -249,7 +249,8 @@ function rowHtml(r){
     '<span class="badge ' + st + '">' + esc(r.Status || 'pending') + '</span>' +
     '</div>' +
     '<div class="row-type">' + esc(r.Message_Type || '') + (r.WO_ID ? ' · WO-' + esc(r.WO_ID) : '') + ' · ' + esc(r.Recipient_Phone || '') + '</div>' +
-    '<div class="row-msg">' + esc(r.Message_Body || '') + '</div>' +
+    '<div class="row-msg">' + esc(r.Message_Body || '') + (r.Translated_To ? '<span class="row-es-tag">sent in Spanish</span>' : '') + '</div>' +
+    englishHtml(r) +
     (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + '</div>' : '') +
     (r.Status === 'sent' ? '<div class="row-meta">Sent ' + esc(r.Sent_Date || '') + ' → ' + esc(r.Delivered_To || '') + '</div>' : '') +
     '<div class="row-meta">Queued ' + esc(r.Created_Date || '') + '</div>' +
