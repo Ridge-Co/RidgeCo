@@ -15788,7 +15788,7 @@ async function opsQueueSync(env, body, opts) {
       if (next && next !== String(r.Build_State || '')) { fields.Build_State = next; fields.Build_Updated = nowIso; }
       if (next === 'live' && String(r.Status || '').toLowerCase() !== 'done') fields.Status = 'done';
       if (Object.keys(fields).length) {
-        await updateRow(env, OPS_QUEUE_TAB, r.ID, fields);
+        await updateQueueRowOrThrow(env, r.ID, fields);
         changed.push({ id: r.ID, pr: n, build_state: fields.Build_State || r.Build_State, status: fields.Status || r.Status });
       }
     } catch (e) { errors.push({ id: r.ID, error: String((e && e.message) || e) }); }
