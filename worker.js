@@ -15891,7 +15891,7 @@ async function opsReviewLogRead(env, url) {
 
 // POST /ops-review {days?} — run the weekly review on demand (test + read). POST because
 // it spends (LLM) and writes rows — not idempotent (reviewer LOW-1). Manual runs NEVER
-// deliver (LOW-2); only the Monday cron path delivers, by calling runWeeklyReview directly.
+// deliver (LOW-2); only the scheduler's review_mon / review_wed jobs deliver, by calling runWeeklyReview directly.
 async function opsReviewRun(env, body) {
   const days = parseInt((body && body.days) || '7') || 7;
   return json(await runWeeklyReview(env, { days, deliver: false, trigger: 'manual' }));
