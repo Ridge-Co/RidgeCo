@@ -708,7 +708,25 @@ store.setCfg('admin_phone', '+15555550100');
     ['1', 'WO-1', 'x', '+15550000001', 'reminder', ago(30), 'FALSE', ago(31)], ['2', 'WO-2', 'x', '+15550000002', 'already', ago(30), 'TRUE', ago(31)], ['3', 'WO-3', 'x', '+15550000003', 'later', future, 'FALSE', ago(1)]]);
   store.tabs.set('Vendor_Requests', [['ID', 'WO_ID', 'Vendor_ID', 'Request_Type', 'Status', 'Next_Nudge_At'],
     ['1', 'WO-1', 'V1', 'photos', 'open', ago(3)], ['2', 'WO-2', 'V1', 'invoice', 'open', future], ['3', 'WO-3', 'V1', 'photos', 'satisfied', ago(3)]]);
-//@@PF_T_NEXT@@
+  store.setCfg('TWILIO_ENABLED', 'TRUE'); store.setCfg('TWILIO_TEST_MODE', 'FALSE');
+  const before = { state: store.cfg().Scheduler_State, mq: JSON.stringify(store.tabs.get('Message_Queue')), posts: store.calls.filter(x => x.startsWith('POST')).length, outbound: outbound.length };
+  const r = await call('POST', '/cron/run', H, { dry_run: true });
+  const pf = r.json && r.json.preflight;
+  t('preflight: dry_run:true is accepted with the Scheduler_Token and returns a preflight block', r.status === 200 && r.json.dry === true && pf && pf.ok === true && pf.read_only === true, r);
+  const qh = pf && pf.jobs.sweep && pf.jobs.sweep.quiet_hours_held_due;
+  t('preflight: held quiet-hours rows due = 2 (the future and the already-sent rows are not counted), with age buckets and oldest age', qh && qh.count === 2 && qh.by_recipient_type.tenant === 1 && qh.by_recipient_type.vendor === 1 && qh.by_age.h1_to_24 === 1 && qh.by_age.over_7d === 1 && qh.oldest_days >= 9.9 && qh.oldest_days <= 10.1, qh);
+  t('preflight: queued notifications due = 1, vendor nudges due = 1 (photos)', pf.jobs.sweep.queued_notifications_due.count === 1 && pf.jobs.sweep.vendor_nudges_due.count === 1 && pf.jobs.sweep.vendor_nudges_due.by_request_type.photos === 1, pf.jobs.sweep);
+  t('preflight: states whether Twilio is on and whether test mode is on (no secrets)', pf.jobs.sweep.twilio_enabled === true && pf.jobs.sweep.twilio_test_mode === false);
+  t('preflight: sweep_work reports the estimate reminder, recurring WOs and deposit sweep counts; every job has a plain-English "would"', pf.jobs.sweep_work && 'estimate_reminder' in pf.jobs.sweep_work && 'recurring_wos' in pf.jobs.sweep_work && pf.jobs.sweep_work.deposit_paid.pre_approved_scopes === 0 && Object.values(pf.jobs).every(j => typeof j.would === 'string' && j.would.length > 10), pf.jobs.sweep_work);
+  t('preflight: names the jobs that were seeded and will not run today (empty here: not a first run)', Array.isArray(pf.will_not_run_today_seeded));
+  t('preflight: ZERO side effects - no Sheets write, no state change, no queue row touched, no outbound SMS/HTTP', store.calls.filter(x => x.startsWith('POST')).length === before.posts && store.cfg().Scheduler_State === before.state && JSON.stringify(store.tabs.get('Message_Queue')) === before.mq && outbound.length === before.outbound, { posts: store.calls.filter(x => x.startsWith('POST')).length - before.posts, outbound: outbound.length - before.outbound });
+  const legacy = await call('POST', '/cron/run', H, { dry: true });
+  t('preflight: the older {dry:true} form returns the same preflight', legacy.status === 200 && legacy.json.preflight && legacy.json.preflight.jobs.sweep.quiet_hours_held_due.count === 2);
+  store.failWhen = (m, p) => m === 'GET' && p === '/values/Vendor_Requests';
+  const bad = await call('POST', '/cron/run', H, { dry_run: true });
+  t('preflight: a failing read is reported loudly in preflight.errors (ok:false), the other counts still come back', bad.status === 200 && bad.json.preflight.ok === false && bad.json.preflight.errors.some(e => /Vendor_Requests|vendor_nudges_due/.test(e.where + e.error)) && bad.json.preflight.jobs.sweep.quiet_hours_held_due.count === 2, bad.json.preflight && bad.json.preflight.errors);
+  store.failWhen = null;
+  store.tabs.delete('Message_Queue'); store.tabs.delete('Notification_Queue'); store.tabs.delete('Vendor_Requests');
 }
 {
   // the hub-test (staging) token may only dry-run / run the two safe jobs - exercise the REAL hubTestWriteAllowed (a TDZ bug here shipped once: `_b` is declared further down the function)
