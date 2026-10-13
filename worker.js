@@ -4834,6 +4834,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   let vendorCostTotal = 0;
   for (const it of scopeParseItems(s)) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on — not signed, so no vendor cost
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) vendorCostTotal += (+v.vendor_cost || 0);
   }
