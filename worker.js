@@ -15088,6 +15088,8 @@ async function opsQueueUpdate(env, body) {
     fields.Build_Updated = new Date(_nowMs).toISOString();
     if (status !== 'proposed') fields.Snooze_Until = ''; // moving on from review ends any snooze
     if (['proposed', 'greenlit', 'prepared'].includes(status) && _b.build_state === undefined) { fields.Build_State = ''; } // retry / re-approve starts the build state fresh
+    // ...and forgets the old PR, otherwise sync re-reads the closed PR and flags a fresh rebuild as closed again
+    if (['proposed', 'greenlit', 'prepared'].includes(status) && _b.pr_number === undefined) { fields.PR_Number = ''; }
   }
   // Brett's free-text "your change" (Oct 13 2026) — injected into the build brief as an override.
   if (_b.note !== undefined) fields.Brett_Note = String(_b.note || '').slice(0, 1000);
