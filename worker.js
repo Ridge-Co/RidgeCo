@@ -15068,10 +15068,40 @@ async function opsQueueUpdate(env, body) {
   const id = body && body.id;
   const status = String((body && body.status) || '').toLowerCase();
   if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
-  if (!OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
+  // Oct 13 2026: `status` is optional when the call only sets note / snooze_days / pr_number /
+  // build_state (Brett editing or snoozing a proposal without moving it through the lifecycle).
+  const _b = body || {};
+  const _hasExtra = _b.note !== undefined || _b.snooze_days !== undefined || _b.pr_number !== undefined || _b.build_state !== undefined;
+  if (!status && !_hasExtra) return json({ error: 'status (or note / snooze_days / pr_number / build_state) required' }, 400);
+  if (status && !OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
-  const fields = { Status: status };
+  const fields = {};
+  const _nowMs = Date.now();
+  if (status) {
+    fields.Status = status;
+    fields.Build_Updated = new Date(_nowMs).toISOString();
+    if (status !== 'proposed') fields.Snooze_Until = ''; // moving on from review ends any snooze
+    if (['proposed', 'greenlit', 'prepared'].includes(status) && _b.build_state === undefined) { fields.Build_State = ''; } // retry / re-approve starts the build state fresh
+  }
+  // Brett's free-text "your change" (Oct 13 2026) — injected into the build brief as an override.
+  if (_b.note !== undefined) fields.Brett_Note = String(_b.note || '').slice(0, 1000);
+  // Snooze = hide from Brett's review for N days (default 10 on the page); 0 clears. The Scout
+  // still sees snoozed rows and re-checks them against builds shipped since (Scout_Verdict reset).
+  if (_b.snooze_days !== undefined) {
+    const _s = snoozeUntilFromDays(_b.snooze_days, _nowMs);
+    if (_s === null) return json({ error: 'snooze_days must be a number from 0 to 365' }, 400);
+    fields.Snooze_Until = _s; fields.Scout_Verdict = ''; fields.Scout_Note = ''; fields.Scout_Reviewed = '';
+  }
+  if (_b.pr_number !== undefined) {
+    if (String(_b.pr_number) === '') fields.PR_Number = '';
+    else { const _pn = cleanPrNumber(_b.pr_number); if (!_pn) return json({ error: 'pr_number must be a positive integer' }, 400); fields.PR_Number = _pn; }
+  }
+  if (_b.build_state !== undefined) {
+    const _bs = String(_b.build_state);
+    if (!['', 'building', 'pr_open', 'live', 'pr_closed', 'abandoned', 'held'].includes(_bs)) return json({ error: 'invalid build_state' }, 400);
+    fields.Build_State = _bs; fields.Build_Updated = new Date(_nowMs).toISOString();
+  }
   if (body && body.reason) fields.Drop_Reason = String(body.reason).slice(0, 500);
   if (body && body.superseded_by) fields.Superseded_By = String(body.superseded_by).slice(0, 200);
   // Risk_Class (Sep 20 2026, "Proposed" review lane, proposals.html): optional — sent only when
