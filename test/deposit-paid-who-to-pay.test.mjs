@@ -257,7 +257,8 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
 }
 
 // ── wiring tripwires on the real source ─────────────────────────────────────────
-const sched0 = wsrc.slice(wsrc.indexOf('async scheduled(event, env, ctx) {'), wsrc.indexOf('// Thin wrapper (Sep 29 2026)'));
+// Oct 12 2026: scheduled() is a loud no-op; the daily jobs are scheduler jobs (daily_qb_sync), not cron branches.
+const sched0 = grab(wsrc, 'async function schedRunDailyQbSync(');
 const qbp = grab(wsrc, 'async function qbPayables(');
 t('qbPayables uses milestone fallback', qbp.includes('depositMilestoneForSignature(r, allMilestones)') && qbp.includes('warnings,'));
 t('scheduled() does not run the sweep twice', sched0.includes('if (!_sweepRanInSync) await processDepositPaidSweep(env)'));
