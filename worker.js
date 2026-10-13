@@ -14165,7 +14165,32 @@ async function schedRunNext(env, ctx, opts) {
   return { status: 200, body: done };
 }
 
-//__SCHED_CHUNK_3C__
+async function schedRunHandler(env, ctx, body) {
+  body = body || {};
+  const only = Array.isArray(body.only) ? body.only : (typeof body.only === 'string' && body.only ? [body.only] : []);
+  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true });
+  return json(r.body, r.status);
+}
+async function schedStatusHandler(env) {
+  let rows, parsed;
+  try { rows = await schedReadConfigRows(env, true); parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY)); }
+  catch (e) { return json({ ok: false, error: 'could not read Config (scheduler state): ' + schedErrText(e) }, 503); }
+  if (parsed.error) return json({ ok: false, error: parsed.error }, 503);
+  const s = schedStatus(parsed.state, new Date(), SCHED_JOBS);
+  const claimUntil = Date.parse(parsed.state.claim_until || '');
+  return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
+}
+// Coarse, public (/health): names only, no detail. Never throws - a failure is reported in the field.
+async function schedHealthSummary(env) {
+  try {
+    const rows = await schedReadConfigRows(env, false);
+    const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+    if (parsed.error) return { error: 'state unreadable' };
+    const s = schedStatus(parsed.state, new Date(), SCHED_JOBS);
+    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
+  } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
+}
+//__SCHED_CHUNK_3D__
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
