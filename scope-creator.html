@@ -908,9 +908,12 @@ function renderItems(){
   var wrap=document.getElementById('items-wrap');
   if(!items.length){ wrap.innerHTML='<div class="empty">No items yet. Organize your notes above, or “+ Add item”.</div>'; return; }
   wrap.innerHTML=items.map(function(it){
-    return '<div class="li" data-id="'+esc(it.id)+'">'+
+    return '<div class="li'+(it.optional?' addon':'')+'" data-id="'+esc(it.id)+'" data-optional="'+(it.optional?'1':'0')+'">'+
       '<input type="checkbox" class="li-sel">'+
       '<div class="fields">'+
+        '<div class="full li-badge">'+(it.optional
+          ? '<span class="tag">Optional add-on</span><span>Customer ticks this to ADD it on top of the base job. Not in the base total.</span><button type="button" class="btn small secondary" onclick="toggleOptional(this)">Make it part of the base job instead</button>'
+          : '<span class="tag base">Base job</span><span>Included in the price the customer approves.</span><button type="button" class="btn small secondary" onclick="toggleOptional(this)">Make this an optional add-on</button>')+'</div>'+
         '<div><label>Area</label><input class="f-area" value="'+esc(it.area)+'"></div>'+
         '<div><label>Trade</label><input class="f-trade" value="'+esc(it.trade)+'"></div>'+
         '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
