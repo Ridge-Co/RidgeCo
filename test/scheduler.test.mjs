@@ -98,6 +98,8 @@ function load(store, over) {
 }
 const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
 const P = load(makeStore());
+// A store that already holds a Scheduler_State (i.e. NOT the first-ever tick), so first-run seeding does not apply.
+const primeState = (store) => { store.tabs.get('Config').push(['Scheduler_State', JSON.stringify(S0())]); return store; };
 
 // registry shape
 {
