@@ -7795,7 +7795,7 @@ async function updateStatus(env, body) {
   }
   // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
   // each other, but Cleaning is created On Hold and must wait until BOTH finish (or the
-  // date-fallback sweep in scheduled() releases it first). This only ever fires for a WO
+  // date-fallback `daily_turnover` scheduler job releases it first). This only ever fires for a WO
   // that's actually part of a turnover group and just went Complete — everything else is a
   // no-op single extra field read.
   if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
