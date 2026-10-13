@@ -7793,6 +7793,11 @@ function woDupSerialize(fn) {
 }
 
 function isCancelledWOStatus(s) { const v = String(s == null ? '' : s).trim(); return v === 'Cancelled' || v === 'Canceled'; }
+// A still-linked copy (both stamps) is Brett's internal shotgun and is hidden from owners — UNLESS it was chosen
+// as the winner (Bid_Winner TRUE, set by keep_one). Pure; unit-tested.
+function isHiddenBidCopy(w) {
+  return !!(w && String(w.Duplicated_From || '').trim() && String(w.Bid_Group_ID || '').trim() && String(w.Bid_Winner || '').trim().toUpperCase() !== 'TRUE');
+}
 function isBidGroupWO(wo) { return !!(wo && (String(wo.Bid_Group_ID || '').trim() || String(wo.Duplicated_From || '').trim())); }
 function nextBidGroupId(workorders) {
   const nums = (workorders || [])
