@@ -478,6 +478,65 @@ for (const N of [2, 5, 8]) {
   t('weekly review: history row not saved is a failure', (await wr.SCHED_JOBS.find(j => j.name === 'review_mon').run({})).ok === false);
 }
 
+// 2o FIRST-EVER TICK: no duplicates. With a blank Scheduler_State, daily/weekly jobs whose slot already passed today (ET) are
+// SEEDED as done (the old crons / a person already ran them), 15-minute jobs run at once, and later slots run normally.
+const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync'];
+const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard'];
+// Drain one "tick" the way the Apps Script does: call until more=false. Returns { ran, first } (first = the first response).
+const drain = async (L, c, extra) => {
+  const ran = []; let first = null;
+  for (let i = 0; i < 30; i++) {
+    const r = await L.schedRunNext({}, null, fast(c, extra || {}));
+    if (!first) first = r;
+    if (r.body.ran) ran.push(r.body.ran);
+    if (!r.body.more) break;
+  }
+  return { ran, first };
+};
+{
+  // Monday 21:00 ET (Oct 13 01:00Z): the old crons ran this morning
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
+  const a = await drain(L, c);
+  t('first tick Mon 21:00 ET runs ONLY the five 15-minute jobs', a.ran.join() === INTERVAL5.join(), a.ran);
+  t('first tick reports first_run + seeded:[the 5 dailies and the two Monday weeklies]', a.first.body.first_run === true && a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'ar_report_mon'].join(), a.first.body);
+  const s = stateOf(store);
+  t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
+  t('review_wed (Wednesday job) is not seeded on a Monday', !s.jobs.review_wed);
+  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 7 && !!s.seeded.at);
+  const st = L.schedStatus(s, new Date(c.v), L.SCHED_JOBS);
+  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 7 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
+  c.v += 20 * 60000;
+  const b = await drain(L, c);
+  t('second tick does NOT reseed (no seeded / first_run fields) and the dailies stay quiet', b.first.body.seeded === undefined && b.first.body.first_run === undefined && b.ran.every(n => INTERVAL5.includes(n)), b);
+  c.v = Date.parse('2026-10-13T11:00:00Z');   // Tue 07:00 EDT
+  const d = await drain(L, c);
+  t('next morning 07:00 ET the five dailies run (once), the Monday jobs do not', DAILY5.every(n => d.ran.includes(n)) && !d.ran.includes('review_mon') && !d.ran.includes('ar_report_mon'), d.ran);
+  t('...and the seed marker is replaced by a real run', stateOf(store).jobs.daily_digest.last_seeded === undefined && stateOf(store).jobs.daily_digest.last_status === 'ok' && !!stateOf(store).jobs.daily_digest.last_ok);
+  c.v = Date.parse('2026-10-14T12:00:00Z');   // Wed 08:00 EDT
+  t('Wednesday 08:00 ET review_wed runs', (await drain(L, c)).ran.includes('review_wed'));
+  c.v = Date.parse('2026-10-19T12:29:00Z');   // next Mon 08:29
+  t('next Monday 08:29 ET review_mon does not run yet', !(await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-10-19T12:30:00Z');
+  t('next Monday 08:30 ET review_mon runs', (await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-10-19T13:00:00Z');
+  t('next Monday 09:00 ET ar_report_mon runs', (await drain(L, c)).ran.includes('ar_report_mon'));
+}
+{
+  // Monday 06:00 ET (10:00Z): nothing has passed yet -> nothing seeded, everything runs at its slot
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T10:00:00Z'));
+  const a = await drain(L, c);
+  t('first tick Mon 06:00 ET seeds nothing (seeded is an empty list) and runs the five interval jobs', a.first.body.first_run === true && a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join() && !stateOf(store).seeded, a.first.body);
+  c.v = Date.parse('2026-10-12T10:59:00Z');
+  t('06:59 ET: dailies still not due', !(await drain(L, c)).ran.some(n => DAILY5.includes(n)));
+  c.v = Date.parse('2026-10-12T11:00:00Z');
+  const d = await drain(L, c);
+  t('07:00 ET: all five dailies run', DAILY5.every(n => d.ran.includes(n)), d.ran);
+  c.v = Date.parse('2026-10-12T12:30:00Z');
+  t('08:30 ET: review_mon runs', (await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-10-12T13:00:00Z');
+  t('09:00 ET: ar_report_mon runs', (await drain(L, c)).ran.includes('ar_report_mon'));
+}
+//@@T2O_NEXT@@
 // ───────────────────────────── 3. the REAL worker.js over a fake Google ─────────────────────────────
 const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
 const store = makeStore();
