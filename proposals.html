@@ -302,7 +302,7 @@ function render(rev,q){
   if(c.built.length){
     html+='<details class="card" id="sec-built"><summary><b>Probably already built ('+c.built.length+')</b> <span class="sub">— hidden from review</span></summary>'
       +'<div class="sub" style="margin:6px 0">The Optimizer flagged these as already shipped (or covered by builds since you snoozed them). Drop them, or bring one back to review.</div>'
-      +'<div class="ctrls"><button class="mini" onclick="dropAllBuilt()">✕ Drop all '+c.built.length+' as already built</button></div>';
+      +'<div class="ctrls"><button class="mini" onclick="dropAllBuilt(this)">✕ Drop all '+c.built.length+' as already built</button></div>';
     c.built.forEach(function(x){
       html+='<div class="q" data-id="'+h(x.ID)+'" style="flex-direction:column;gap:4px"><div><span class="rank">#'+h(x.ID)+'</span> <b>'+h(x.Title||'')+'</b></div>'
         +'<div class="pimp">'+h(x.__why||'')+'</div>'
