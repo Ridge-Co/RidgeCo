@@ -16351,7 +16351,7 @@ async function opsApprove(env, body) {
     });
     queued++;
   }
-  return json({ ok: true, queued });
+  return json({ ok: true, queued, promoted, already });
 }
 
 async function opsQueueRead(env, url) {
