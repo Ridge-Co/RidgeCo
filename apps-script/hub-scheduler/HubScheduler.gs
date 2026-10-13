@@ -88,7 +88,6 @@ var JOBS = [
   { name: 'ci_doc_audit',         run: 'github', repo: 'Ridge-Co/RidgeCo', workflow: 'doc-audit.yml',        ref: 'main', at: '09:00',               enabled: true, what: 'Flags commits that landed with no FEATURE_LOG entry.' },
   { name: 'ci_drift_check',       run: 'github', repo: 'Ridge-Co/RidgeCo', workflow: 'drift-check.yml',      ref: 'main', at: '07:45',               enabled: true, what: 'Opens an issue if the staging branch differs from main with no explanation.' },
   { name: 'ci_selftest_invoice',  run: 'github', repo: 'Ridge-Co/RidgeCo', workflow: 'selftest-invoice.yml', ref: 'main', at: '08:00',               enabled: true, what: 'Daily invoice-OCR canary: one real Claude vision call against the live Hub.' },
-  { name: 'ci_sync_staging_check', run: 'github', repo: 'Ridge-Co/RidgeCo', workflow: 'sync-staging.yml',    ref: 'main', every_min: 60, inputs: { mode: 'check' }, enabled: true, what: 'Hourly report-only check that staging has not drifted from main (never changes staging).' },
   { name: 'data_video_watcher',   run: 'github', repo: 'brett332/data',    workflow: 'video-watcher.yml',    ref: 'main', at: '07:30',               enabled: true, what: 'Watches the YouTube channels, summarises new videos with Gemini, saves the digests (uses paid API keys).' }
 ];
 

@@ -57,17 +57,34 @@ const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', mem
       return json(r, { ...base, errors: ['Vendor text FAILED: Twilio rejected the number'], vendor_sms: { status: 'failed', reason: 'Twilio rejected the number (21211)' } });
     });
     await page.route('**/wo/bid-group/unlink', (r) => { unlinkPosts.push(JSON.parse(r.request().postData() || '{}')); json(r, { ok: true, cleared: ['WO-1251'], warnings: [], errors: [] }); });
+    // Oct 13 2026 follow-up #2: the cancel response now carries the per-vendor text plan (preview) / outcome (confirm),
+    // vendor_text_notices, quiet_hours_now, needs_attention and winner.notify. cancelSms = what the (mock) Worker reports for the confirm.
+    let cancelSms = 'sent', quietNow = false;
+    const ES_TXT = '[WO-1250] CANCELADO: el trabajo de Painting en 931 Saint Paul St ya no es necesario. Por favor no realice este trabajo. Gracias.';
+    const EN_TXT = '[WO-1250] CANCELLED: the Painting job at 931 Saint Paul St is no longer needed. Please do not do this work. Thank you.';
     await page.route('**/wo/bid-group/cancel', (r) => {
       const b = JSON.parse(r.request().postData() || '{}'); cancelPosts.push(b);
+      const keptSms = (id, why) => ({ wo_id: id, status: 'skipped', reason: why });
+      const confirmSms = cancelSms === 'sent' ? { wo_id: 'WO-1250', vendor_id: '3', vendor_name: 'Cesar Diaz', status: 'sent', reason: 'Text sent to the vendor', language: 'es', message_body: ES_TXT }
+        : cancelSms === 'held' ? { wo_id: 'WO-1250', vendor_id: '3', vendor_name: 'Cesar Diaz', status: 'held', reason: 'Held for quiet hours — it will send after 2026-10-15T13:00:00.000Z', language: 'es', message_body: ES_TXT }
+        : { wo_id: 'WO-1250', vendor_id: '3', vendor_name: 'Cesar Diaz', status: 'failed', reason: 'Blocked, not sent: Global OFF', language: 'es', message_body: ES_TXT };
+      const planSms = { wo_id: 'WO-1250', vendor_id: '3', vendor_name: 'Cesar Diaz', status: 'will_send', reason: 'Cesar Diaz will be texted that WO-1250 is cancelled.', language: 'es', message_body: ES_TXT, message_en: EN_TXT };
       const rows = [
-        { wo_id: 'WO-1238', is_original: true, status_before: 'Assigned', vendor_name: 'Alex Busey', result: 'kept', reasons: [] },
-        { wo_id: 'WO-1250', is_original: false, status_before: 'Assigned', vendor_name: 'Cesar Diaz', result: b.confirm ? 'cancelled' : 'would_cancel', reasons: [] },
-        { wo_id: 'WO-1251', is_original: false, status_before: 'New', vendor_name: '', result: 'would_skip', reasons: ['Has a vendor bill ($120.00)'] } ];
-      // keep_one on a COPY: the original stays kept, the winner is reported (Oct 13 2026 follow-up)
+        { wo_id: 'WO-1238', is_original: true, status_before: 'Assigned', vendor_name: 'Alex Busey', result: 'kept', reasons: [], warnings: [], vendor_sms: keptSms('WO-1238', 'Kept, so not texted.') },
+        { wo_id: 'WO-1250', is_original: false, status_before: 'Assigned', vendor_name: 'Cesar Diaz', result: b.confirm ? 'cancelled' : 'would_cancel', reasons: [], warnings: [], vendor_sms: b.confirm ? confirmSms : planSms },
+        { wo_id: 'WO-1251', is_original: false, status_before: 'New', vendor_name: '', result: 'would_skip', reasons: ['Has a vendor bill ($120.00)'], warnings: [], vendor_sms: keptSms('WO-1251', 'Not cancelled, so not texted.') } ];
       const winner = b.mode === 'keep_one' ? (b.keep_wo_id === 'WO-1238'
-        ? { wo_id: 'WO-1238', is_original: true, will_become_tenant_visible: false, became_tenant_visible: false, already_visible: false }
-        : { wo_id: b.keep_wo_id, is_original: false, will_become_tenant_visible: !b.confirm, became_tenant_visible: !!b.confirm, already_visible: false }) : null;
-      json(r, { ok: true, group_id: 'BG-7', dry_run: !b.confirm, results: rows, winner, errors: [], warnings: [], summary: { would_cancel: 1, would_skip: 1, kept: 1, already_cancelled: 0, cancelled: b.confirm ? 1 : 0, skipped: 1, failed: 0 } });
+        ? { wo_id: 'WO-1238', is_original: true, will_become_tenant_visible: false, became_tenant_visible: false, already_visible: false, notify: null, note: 'The original is kept as it is; only the other copies are cancelled. Its notification settings are not touched.' }
+        : { wo_id: b.keep_wo_id, is_original: false, will_become_tenant_visible: !b.confirm, became_tenant_visible: !!b.confirm, already_visible: false,
+            notify: { settings: { Tenant_Visible: 'TRUE', Tenant_Notify_Created: 'TRUE', Tenant_Notify_Updates: 'TRUE', Owner_Notify_Override: '' }, source_wo_id: 'WO-1238', from_original: true, will_change: ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override'], changed: b.confirm ? ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override'] : [], text_sent_now: false },
+            note: b.keep_wo_id + ' now follows the normal work order rules (copied from the original WO-1238): the tenant can see it and gets its status texts; the owner is notified per the owner\'s own setting. No text is sent right now; later status changes notify as usual.' }) : null;
+      const failed = !!b.confirm && cancelSms === 'failed';
+      json(r, { ok: true, group_id: 'BG-7', dry_run: !b.confirm, results: rows, winner, errors: [],
+        warnings: (b.confirm ? (failed ? ['Vendor text FAILED for WO-1250 (Cesar Diaz): Blocked, not sent: Global OFF The job IS cancelled, but the vendor was not told: call them.'] : []) : (quietNow ? ['It is quiet hours right now (7pm-9am ET): the vendor texts will be held and sent automatically after 9am ET by the scheduler.'] : [])),
+        needs_attention: failed, quiet_hours_now: !b.confirm && quietNow,
+        vendor_texts: b.confirm ? [confirmSms] : [],
+        vendor_text_notices: b.confirm ? [] : [{ wo_id: 'WO-1250', level: 'ok', text: 'Cesar Diaz will be texted that WO-1250 is cancelled.' }],
+        summary: { would_cancel: 1, would_skip: 1, would_text: 1, kept: 1, already_cancelled: 0, cancelled: b.confirm ? 1 : 0, skipped: 1, failed: 0, vendor_texts: { sent: b.confirm && cancelSms === 'sent' ? 1 : 0, held: b.confirm && cancelSms === 'held' ? 1 : 0, failed: failed ? 1 : 0, skipped: 0 } } });
     });
 
     await page.goto('file://' + targetHtml, { waitUntil: 'load' });
@@ -183,6 +200,13 @@ const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', mem
     const pt = await page.textContent('#bidcancel-body');
     ok(/WO-1238/.test(pt) && /WO-1250/.test(pt) && /WO-1251/.test(pt) && /Cesar Diaz/.test(pt) && /Alex Busey/.test(pt), 'preview lists each member with its vendor');
     ok(/WILL CANCEL/.test(pt) && /SKIPPED/.test(pt) && /KEPT/.test(pt) && /Has a vendor bill/.test(pt), 'preview shows will-cancel, skipped (with reason) and kept');
+    // Oct 13 2026 follow-up #2: the preview says WHO will be texted, in words, with the exact message
+    const ts = await page.textContent('[data-bgc-textsummary]');
+    ok(/1 vendor will be texted that their job is cancelled/.test(ts) && /Cesar Diaz will be texted that WO-1250 is cancelled\./.test(ts), 'preview names who will be texted: "Cesar Diaz will be texted that WO-1250 is cancelled."');
+    ok(/CANCELADO/.test(await page.textContent('[data-bgc-sms="WO-1250"] + div')) , 'preview shows the exact (Spanish) text the vendor gets');
+    ok(await page.locator('[data-bgc-sms="WO-1238"]').count() === 0 && await page.locator('[data-bgc-sms="WO-1251"]').count() === 0, 'kept / skipped rows show no text line');
+    ok(!/Vendors are\s+not\s+texted/i.test(pt) && /never texted by a cancel/.test(pt), 'old "vendors are not texted" claim is gone; tenant/owner are never texted by a cancel');
+    ok(/and text 1 vendor/.test(await page.textContent('#bgc-ack')), 'the tick-box says it will text 1 vendor');
     ok(await page.evaluate(() => document.getElementById('bgc-confirm').disabled), 'Confirm is disabled until the box is ticked');
     await page.evaluate(() => document.getElementById('bgc-confirm').click());
     await page.waitForTimeout(150);
@@ -195,6 +219,8 @@ const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', mem
     await page.click('#bgc-confirm'); await page.waitForTimeout(400);
     ok(cancelPosts.length === 2 && cancelPosts[1].confirm === true && !cancelPosts[1].dry_run, 'second request carries confirm:true');
     ok(/Done — 1 cancelled/.test(await page.textContent('#bidcancel-body')) && /CANCELLED/.test(await page.textContent('#bidcancel-body')), 'result shows Done — 1 cancelled');
+    ok(/vendor texts: 1 sent, 0 held, 0 failed, 0 skipped/.test(await page.textContent('[data-bgc-textcounts]')), 'result shows the vendor text counts');
+    ok(/Vendor texted: Cesar Diaz \(in Spanish\)/.test(await page.textContent('[data-bgc-sms="WO-1250"]')) && (await page.getAttribute('[data-bgc-sms="WO-1250"]', 'data-bgc-sms-status')) === 'sent', 'result shows the per-vendor outcome: Vendor texted: Cesar Diaz (in Spanish)');
     await page.screenshot({ path: join(shots, vp.name + '-8-cancel-done.png') });
     cancelled = true;
     await page.click('#modal-bidcancel button:has-text("Close")'); await page.waitForSelector('[data-bg-member]'); await page.waitForTimeout(300);
@@ -211,17 +237,38 @@ const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', mem
     await page.evaluate(() => window.openWODetail('WO-1238')); await page.waitForSelector('[data-bg-member]');
     await page.click('[data-bg-keep="WO-1251"]'); await page.waitForSelector('#bgc-confirm');
     const cp = await page.textContent('[data-bgc-winner]');
-    ok(/WO-1251 will become visible to the tenant\. No text message is sent/.test(cp), 'keeping a copy: preview says it becomes tenant-visible and no text is sent');
+    ok(/WO-1251 now follows the normal work order rules/.test(cp) && /Nothing is texted to the tenant or owner when you keep it/.test(cp), 'keeping a copy: preview says it follows the normal work order rules and no text is sent to tenant/owner');
     ok(cancelPosts[cancelPosts.length - 1].keep_wo_id === 'WO-1251' && cancelPosts[cancelPosts.length - 1].dry_run === true, 'keeping a copy previews with that copy as keep_wo_id');
     await noOverflow('#modal-bidcancel', 'Keep-a-copy preview'); await smallTargets('#modal-bidcancel', 'Keep-a-copy preview');
     await page.screenshot({ path: join(shots, vp.name + '-9-keep-copy-preview.png') });
     await page.click('#bgc-ack'); await page.click('#bgc-confirm'); await page.waitForTimeout(400);
-    ok(/WO-1251 is now visible to the tenant\. No text message was sent/.test(await page.textContent('[data-bgc-winner]')), 'after confirming: "now visible to the tenant, no text was sent"');
+    ok(/WO-1251 kept\./.test(await page.textContent('[data-bgc-winner]')) && /Changed: Tenant_Visible, Tenant_Notify_Created, Tenant_Notify_Updates, Owner_Notify_Override\./.test(await page.textContent('[data-bgc-winner]')) && /No text message was sent to the tenant or owner/.test(await page.textContent('[data-bgc-winner]')), 'after confirming: lists the settings that changed and says no text was sent to tenant/owner');
     await page.screenshot({ path: join(shots, vp.name + '-10-keep-copy-done.png') });
     await page.click('#modal-bidcancel button:has-text("Close")'); await page.waitForSelector('[data-bg-member]'); await page.waitForTimeout(300);
     ok(await page.locator('[data-bg-member="WO-1251"] >> text="KEPT"').count() === 1 && /the tenant can see it/.test(await page.textContent('[data-bg-winner-note]')), 'the panel marks the kept copy KEPT and says the tenant can see it');
     await noOverflow('#modal-wo-detail', 'Bid group panel with a KEPT copy');
     await page.screenshot({ path: join(shots, vp.name + '-11-panel-kept.png') });
+    // ── Oct 13 2026 follow-up #2: quiet-hours preview, HELD outcome, FAILED outcome (red, "call them") ──
+    await page.evaluate(() => window.openWODetail('WO-1238')); await page.waitForSelector('[data-bg-member]');
+    quietNow = true; cancelSms = 'held';
+    await page.click('[data-bg-act="duplicates"]'); await page.waitForSelector('#bgc-confirm');
+    ok(/held and go out automatically after 9am/.test(await page.textContent('[data-bgc-textsummary]')), 'quiet-hours preview says the texts are held until after 9am');
+    await noOverflow('#modal-bidcancel', 'Cancel preview (quiet hours)'); await smallTargets('#modal-bidcancel', 'Cancel preview (quiet hours)');
+    await page.click('#bgc-ack'); await page.click('#bgc-confirm'); await page.waitForTimeout(400);
+    ok(/vendor texts: 0 sent, 1 held/.test(await page.textContent('[data-bgc-textcounts]')) && /Text held, not sent yet/.test(await page.textContent('[data-bgc-sms="WO-1250"]')), 'held outcome is shown as HELD, not as sent');
+    await page.screenshot({ path: join(shots, vp.name + '-12-cancel-held.png') });
+    await page.click('#modal-bidcancel button:has-text("Close")'); await page.waitForSelector('[data-bg-member]'); await page.waitForTimeout(300);
+    quietNow = false; cancelSms = 'failed';
+    await page.click('[data-bg-act="duplicates"]'); await page.waitForSelector('#bgc-confirm');
+    await page.click('#bgc-ack'); await page.click('#bgc-confirm'); await page.waitForTimeout(400);
+    const failTxt = await page.textContent('#bidcancel-body');
+    ok(/Cancelled — but a vendor was NOT texted\. Call them\./.test(failTxt) && /Vendor NOT texted: Blocked, not sent: Global OFF/.test(failTxt) && /Vendor text FAILED for WO-1250/.test(failTxt), 'a failed vendor text is shown loudly (red headline, reason, warning) and says to call them');
+    const failCol = await page.evaluate(() => getComputedStyle(document.querySelector('[data-bgc-sms="WO-1250"]')).color);
+    ok(await page.getAttribute('[data-bgc-sms="WO-1250"]', 'data-bgc-sms-status') === 'failed' && failCol !== 'rgb(0, 0, 0)', 'failed outcome row is styled as an error');
+    await noOverflow('#modal-bidcancel', 'Cancel result (failed text)'); await smallTargets('#modal-bidcancel', 'Cancel result (failed text)');
+    await page.screenshot({ path: join(shots, vp.name + '-13-cancel-failed-text.png') });
+    await page.click('#modal-bidcancel button:has-text("Close")'); await page.waitForSelector('[data-bg-member]'); await page.waitForTimeout(300);
+    ok(/vendor texts: 0 sent, 0 held, 1 failed/.test(await page.textContent('#bg-banner')) && /vendor text failed/.test(await page.textContent('#bg-banner')), 'the panel banner after a failed text says a vendor text failed');
     console.log('  (stubbed-by-catch-all, ignored: ' + [...new Set(unmatched)].join(', ') + ')');
     ok(errs.length === 0, 'no JS errors during the whole run (' + errs.slice(0, 2).join(' | ') + ')');
     await ctx.close();

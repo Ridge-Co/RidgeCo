@@ -456,7 +456,9 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
   // GitHub rows point at real workflow files that can be run by hand, never have a timer, and accept the inputs given
   const wfDir = path.join(repoRoot, '.github', 'workflows');
   const ghRows = rows.filter(r => r.run === 'github');
-  ok(ghRows.length === 6, 'six GitHub rows (five RidgeCo CI workflows + the data repo video watcher)', ghRows.map(r => r.name));
+  ok(ghRows.length === 5, 'five GitHub rows (four RidgeCo CI workflows + the data repo video watcher)', ghRows.map(r => r.name));
+  ok(!rows.some(r => r.name === 'ci_sync_staging_check') && !rows.some(r => r.workflow === 'sync-staging.yml'), 'the hourly staging check row is gone (Brett Oct 13: the daily drift-check covers it; sync-staging.yml itself stays for push-to-main resets)');
+  ok(fs.existsSync(path.join(wfDir, 'sync-staging.yml')) && fs.existsSync(path.join(wfDir, 'context-sync.yml')) && rows.some(r => r.name === 'ci_context_sync') && rows.some(r => r.name === 'data_video_watcher'), 'the sync-staging and context-sync workflow files stay, and the ci_context_sync and data_video_watcher rows are kept');
   ghRows.filter(r => r.repo === 'Ridge-Co/RidgeCo').forEach(r => {
     const f = path.join(wfDir, r.workflow); const txt = fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
     ok(txt && /^\s*workflow_dispatch:/m.test(txt), r.name + ': ' + r.workflow + ' exists and can be run by hand (workflow_dispatch)');
@@ -674,14 +676,16 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
 // ── GitHub workflows: press Run, then check the result later ───────────────────────────────────────────
 const runsBody = (w, list) => ({ code: 200, body: { workflow_runs: list.map(x => Object.assign({ created_at: new Date(w.clock + 5000).toISOString(), html_url: 'https://github.com/Ridge-Co/RidgeCo/actions/runs/1' }, x)) } });
 {
-  const w = started(allSecretProps); onlyRows(w, ['ci_drift_check', 'ci_sync_staging_check', 'data_video_watcher']);
+  const w = started(allSecretProps); onlyRows(w, ['ci_drift_check', 'data_video_watcher']);
+  // the generic `inputs` support is kept (a workflow row may pass workflow_dispatch inputs); no real row uses it today, so probe it with a synthetic row
+  vm.runInContext("JOBS.push({ name: 'ci_inputs_probe', run: 'github', repo: 'Ridge-Co/RidgeCo', workflow: 'sync-staging.yml', ref: 'main', every_min: 60, inputs: { mode: 'check' }, enabled: true, what: 'test probe' });", w.ctx);
   let runsReply = [];
   const calls = net(w, { routes: [[/dispatches$/, () => ({ code: 204, body: '' })], [/\/runs\?/, () => runsBody(w, runsReply)]] });
   w.run('runScheduler');
   const d = calls.filter(c => /dispatches$/.test(c.url));
   const drift = d.find(c => /drift-check/.test(c.url)), sync = d.find(c => /sync-staging/.test(c.url)), vid = d.find(c => /video-watcher/.test(c.url));
   ok(drift && drift.url === 'https://api.github.com/repos/Ridge-Co/RidgeCo/actions/workflows/drift-check.yml/dispatches' && JSON.parse(drift.o.payload).ref === 'main' && drift.o.headers.Authorization === 'Bearer ' + SECRETS[1], 'GitHub: POST .../dispatches on the right repo + workflow with the RidgeCo token');
-  ok(JSON.stringify(JSON.parse(sync.o.payload)) === '{"ref":"main","inputs":{"mode":"check"}}', 'sync-staging is dispatched in CHECK mode only (never the destructive reset)', sync && sync.o.payload);
+  ok(JSON.stringify(JSON.parse(sync.o.payload)) === '{"ref":"main","inputs":{"mode":"check"}}', 'a github row with inputs dispatches them verbatim (synthetic probe row)', sync && sync.o.payload);
   ok(vid && vid.url.includes('/repos/brett332/data/') && vid.o.headers.Authorization === 'Bearer ' + SECRETS[2], 'the data repo uses its own (brett332) token, not the RidgeCo one');
   ok(drift.o.headers.Accept === 'application/vnd.github+json', 'GitHub API headers set');
   ok(jstate(w).ci_drift_check.last_status === 'dispatched' && jstate(w).ci_drift_check.pending && !jstate(w).ci_drift_check.last_ok, 'a dispatched workflow is NOT counted as a success until its run is seen finishing');
@@ -805,7 +809,7 @@ const runsBody = (w, list) => ({ code: 200, body: { workflow_runs: list.map(x =>
   w.run('setup'); calls.length = 0;
   w.run('approveAndStart');
   const disp = calls.filter(c => /dispatches$/.test(c.url)).map(c => c.url.split('/workflows/')[1].split('/')[0]);
-  ok(disp.sort().join() === 'context-sync.yml,sync-staging.yml', 'Monday 10:00 ET start: only the INTERVAL GitHub rows run at once; the daily ones whose time already passed today (doc-audit 09:00, selftest 08:00, drift 07:45, video 07:30) are not re-run', disp);
+  ok(disp.sort().join() === 'context-sync.yml', 'Monday 10:00 ET start: only the INTERVAL GitHub row (context-sync) runs at once; the daily ones whose time already passed today (doc-audit 09:00, selftest 08:00, drift 07:45, video 07:30) are not re-run', disp);
   ok(!calls.some(c => /entities\/sync/.test(c.url)), 'the 06:30 BrettOS sync is also marked done, not run at the start');
   ok(w.logs.some(l => /Marked as already done today.*brettos_sync.*ci_doc_audit.*ci_drift_check.*ci_selftest_invoice.*data_video_watcher/.test(l)), 'and says so in plain words', w.logs.filter(l => /already done/.test(l)));
   ok(calls.some(c => /entry\/run/.test(c.url) && JSON.parse(c.o.payload).dry_run !== true), 'the BarrelCo entry row runs at the first tick');
