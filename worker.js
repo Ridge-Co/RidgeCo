@@ -14190,7 +14190,24 @@ async function schedHealthSummary(env) {
     return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
   } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
 }
-//__SCHED_CHUNK_3D__
+// scheduled() is now a LOUD no-op. Cloudflare firing it means a stale Cron Trigger is still attached - a second,
+// unreliable clock that must not run jobs (duplicates) and must not go unnoticed. Rate-limited to once per 6h.
+async function schedUnexpectedCloudflareCron(env, event) {
+  const cron = String((event && event.cron) || '(unknown)');
+  const msg = `Cloudflare fired scheduled() for cron "${cron}" but NO cron is allowed (Apps Script is the only clock). A leftover Cron Trigger is still attached to this Worker - delete it in Cloudflare > Workers > Triggers. No job work was done.`;
+  console.error('scheduler: ' + msg);
+  const res = { ok: false, ran: false, cron, error: msg };
+  let last = '';
+  try { last = schedCell(await schedReadConfigRows(env, false), 'unexpected_cron_last_logged'); } catch (e) { res.config_error = schedErrText(e); }
+  const lastMs = Date.parse(last || '');
+  if (!isNaN(lastMs) && Date.now() - lastMs < 6 * 3600000) { res.rate_limited = true; return res; }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'unexpected_cloudflare_cron', Skill_Or_Endpoint: 'scheduled', Success: 'FALSE', Notes: msg.slice(0, 480) }); res.telemetry = 'logged'; }
+  catch (e) { res.telemetry_error = schedErrText(e); console.error('scheduler: unexpected-cron telemetry failed:', res.telemetry_error); }
+  try { res.alert = await alertAdminOnFailure(env, 'unexpected_cloudflare_cron', msg); } catch (e) { res.alert_error = schedErrText(e); }
+  try { await setConfigKey(env, { key: 'unexpected_cron_last_logged', value: new Date().toISOString() }); } catch (e) { res.stamp_error = schedErrText(e); }
+  return res;
+}
+// ═══ SCHEDULER-BLOCK-END ══════════════════════════════════════════════════════════════════════
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
