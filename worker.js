@@ -14833,7 +14833,69 @@ function schedAgeSummary(isoList, nowMs) {
   }
   return { by_age, oldest_days: oldest === null ? null : Math.round(oldest / 2.4) / 10 };
 }
-//@@PF_NEXT@@
+async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
+  const nowMs = +now;
+  const out = { ok: true, read_only: true, note: 'Counts only. Nothing was sent, claimed or written by this dry run.', errors: [], will_not_run_today_seeded: (seeded || []).slice(), jobs: {} };
+  const cfg = {};
+  for (const r of (cfgRows || [])) { const k = String((r && r[0]) || '').trim(); if (k) cfg[k] = String((r && r[1]) || ''); }
+  const fail = (where, e) => { const m = schedErrText(e); out.ok = false; out.errors.push({ where, error: m }); return { error: m }; };
+  for (const name of dueNames) {
+    const entry = { would: SCHED_PF_WHAT[name] || '' };
+    const sub = async (key, fn) => { try { entry[key] = await fn(); } catch (e) { entry[key] = fail(name + '.' + key, e); } };
+    if (name === 'sweep') {
+      entry.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+      entry.twilio_test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+      await sub('quiet_hours_held_due', async () => {
+        const rows = (await schedPfTab(env, MSG_QUEUE_TAB)).filter(r => r.Status === 'pending' && r.Send_After && Date.parse(r.Send_After) <= nowMs);
+        const by_type = {}; for (const r of rows) by_type[r.Recipient_Type || '?'] = (by_type[r.Recipient_Type || '?'] || 0) + 1;
+        return Object.assign({ count: rows.length, by_recipient_type: by_type }, schedAgeSummary(rows.map(r => r.Send_After), nowMs));
+      });
+      await sub('queued_notifications_due', async () => {
+        const rows = (await schedPfTab(env, NOTIF_QUEUE_TAB)).filter(r => r.Sent !== 'TRUE' && r.Phone && r.Message && (!r.Send_After || Date.parse(r.Send_After) <= nowMs));
+        return Object.assign({ count: rows.length }, schedAgeSummary(rows.map(r => r.Send_After || r.Created_At), nowMs));
+      });
+      await sub('vendor_nudges_due', async () => {
+        const rows = (await schedPfTab(env, VENDOR_REQ_TAB)).filter(r => r.Status === 'open' && r.Next_Nudge_At && Date.parse(r.Next_Nudge_At) <= nowMs);
+        const by_type = {}; for (const r of rows) by_type[r.Request_Type || '?'] = (by_type[r.Request_Type || '?'] || 0) + 1;
+        return { count: rows.length, by_request_type: by_type };
+      });
+    } else if (name === 'sweep_work') {
+      const h = etHour(now);
+      await sub('estimate_reminder', async () => {
+        if (h < 8 || h >= 18) return { would_send: false, reason: 'outside the 8am-6pm ET window' };
+        if (cfg.estimate_reminder_last_date === etDateString(now)) return { would_send: false, reason: 'already sent today' };
+        const [ests, wos] = await Promise.all([schedPfTab(env, 'Estimates'), schedPfTab(env, 'Work_Orders')]);
+        const n = estimatesAwaitingDecision(ests, wos, now, cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE).length;
+        return { would_send: n > 0, estimates_awaiting_decision: n };
+      });
+      await sub('recurring_wos', async () => {
+        if (h < RECUR_POST_START_HOUR_ET || h >= QUIET_HOURS_START_ET) return { would_post: 0, reason: 'outside the 8:00am-7:00pm ET posting window' };
+        const tpls = (await schedPfTab(env, 'WO_Templates')).filter(x => x.Active !== 'FALSE' && recurIsTrue(x.Recurrence_Enabled));
+        if (!tpls.length) return { active_templates: 0, would_post: 0 };
+        const wos = await schedPfTab(env, 'Work_Orders'), today = recurEtDateISO(now);
+        let would = 0; const notes = [];
+        for (const tpl of tpls) {
+          const due = recurLatestDue(tpl, today); if (!due) continue;
+          let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (e) { skips = {}; notes.push('template ' + tpl.ID + ' has unreadable Last_Skips (' + schedErrText(e) + ')'); }
+          for (const tg of recurTargets(tpl)) {
+            const mine = wos.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === tg.p && (w.Unit_ID || '') === tg.u);
+            if (mine.some(w => w.Recurring_Due === due)) continue;
+            const key = recurTargetKey(tg); if (skips[key] && skips[key] >= due) continue;
+            if (mine.find(recurWOIsOpen)) continue;
+            would++;
+          }
+        }
+        return Object.assign({ active_templates: tpls.length, would_post: would }, notes.length ? { notes } : {});
+      });
+      await sub('deposit_paid', async () => ({ pre_approved_scopes: (await schedPfTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved').length }));
+    } else if (name === 'daily_digest') {
+      entry.admin_phone_set = !!String(cfg.admin_phone || '').trim();
+    }
+    out.jobs[name] = entry;
+  }
+  return out;
+}
+
 function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 // Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
 async function schedRunNext(env, ctx, opts) {
