@@ -13935,7 +13935,7 @@ async function processRecurringWorkOrders(env, opts) {
   const h = etHour(now);
   if (h < RECUR_POST_START_HOUR_ET || h >= QUIET_HOURS_START_ET) return { skipped: 'outside posting window (8:00am-7:00pm ET)' };
   let templates;
-  try { templates = await fetchTab(env, 'WO_Templates'); } catch (e) { return { skipped: 'no WO_Templates tab' }; }
+  try { templates = await fetchTab(env, 'WO_Templates'); } catch (e) { if (isMissingTabError(e)) return { skipped: 'no WO_Templates tab (no templates created yet)' }; throw e; }   // any other read failure is a failure, not "no tab"
   templates = templates.filter(t => t.Active !== 'FALSE' && recurIsTrue(t.Recurrence_Enabled));
   if (!templates.length) return { templates: 0, posted: 0 };
   await recurEnsureCols(env);
