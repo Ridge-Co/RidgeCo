@@ -14391,7 +14391,8 @@ async function processRecurringWorkOrders(env, opts) {
       } catch (e) { result.errors.push({ template: tpl.ID, target: key, error: String((e && e.message) || e) }); }
     }
     if (skipsChanged || postedAny) {
-      try { await updateRow(env, 'WO_Templates', tpl.ID, { ...(skipsChanged ? { Last_Skips: JSON.stringify(skips) } : {}), ...(postedAny ? { Last_Posted_Date: today } : {}) }); } catch (_) {}
+      try { await updateRow(env, 'WO_Templates', tpl.ID, { ...(skipsChanged ? { Last_Skips: JSON.stringify(skips) } : {}), ...(postedAny ? { Last_Posted_Date: today } : {}) }); }
+      catch (e) { result.errors.push({ template: tpl.ID, target: 'template-state', error: 'posted/skipped but could not save Last_Skips/Last_Posted_Date: ' + String((e && e.message) || e) }); }
     }
   }
   return result;
