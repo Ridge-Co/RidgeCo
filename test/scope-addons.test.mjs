@@ -168,6 +168,7 @@ async function sign(selections) {
   eng['3'] = { error: 'down' };
   ok(/English view unavailable/.test(englishHtml({ ID: '3', Original_Body: '' })) && /Retry/.test(englishHtml({ ID: '3', Original_Body: '' })), 'a failed translation is a visible warning with Retry, not blank');
   eq(englishHtml({ ID: '9', Original_Body: '' }), '', 'an English-only message shows no extra box');
+  ok(/the Hub returned no answer for this message/.test(mqHtml), 'a row the Hub omits from the translate reply gets a warning, never "Translating…" forever');
 }
 {
   // server: dispatch text carries the English original; translate endpoint behaviour
