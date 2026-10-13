@@ -4606,7 +4606,7 @@ async function scopeProposalView(env, url) {
     ...(it.optional ? { optional: true } : {}), // optional add-on: unticked by default, price = what it ADDS to the total
   })); // no `note` — free-text field with no internal/customer split; never safe to echo back
   const photos = await scopeProposalPhotos(env, s);
-  const subtotal = +(items.reduce((sum, it) => { const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
+  const subtotal = +(items.reduce((sum, it) => { if (it.optional) return sum; const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
   const rawSchedule = scopeParsePaymentSchedule(s);
   const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
