@@ -86,7 +86,8 @@ const wrapBody = grabAsync('callWithFailureAlert');
 
 // ---- structural: cronSweep calls the dead-man's-switch on its existing cadence, no new
 // Cloudflare Cron Trigger slot (all 5 are already spoken for per rule 166/rule "maybeRunDailySelftest") ----
-const sweepBody = grabAsync('cronSweep');
+// Oct 12 2026: no cron - the check now rides the Apps Script scheduler's `sweep_checks` job (every ~15 min).
+const sweepBody = grabAsync('schedRunSweepChecks');
 {
   ok(sweepBody.includes('checkDeadManSwitch(env)'), 'cronSweep calls checkDeadManSwitch every pass, riding the existing ~15-min sweep cadence');
   ok(/try\s*\{\s*out\.dead_man_switch/.test(sweepBody), 'the call is wrapped in its own try/catch, matching every other cronSweep sub-task, so one failing check can never take down the rest of the sweep');
