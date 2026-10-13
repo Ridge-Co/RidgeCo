@@ -390,7 +390,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   const restore = logsOff();
   let threw = false;
   try { await mk(async () => { throw new Error('kaboom'); }, false, false)({}); } catch (e) { threw = true; }
-  t('unexpected throw does not propagate to scheduled()', threw === false);
+  t('unexpected throw does not propagate to the scheduler job', threw === false);
   t('unexpected throw -> FALSE telemetry + admin failure alert', log.tel.length === 1 && log.tel[0].Success === 'FALSE' && /kaboom/.test(log.tel[0].Notes) && log.alerts.length === 1 && log.alerts[0][0] === 'door_watchdog');
   threw = false;
   try { await mk(async () => { throw new Error('kaboom2'); }, true, true)({}); } catch (e) { threw = true; }
