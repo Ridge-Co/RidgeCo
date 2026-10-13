@@ -220,15 +220,10 @@ const _hubWorkerCore = {
         const _signOk = !!env.PROPOSAL_SIGN_TOKEN
           && _tok === env.PROPOSAL_SIGN_TOKEN
           && request.method === 'POST' && path === '/proposal/sign';
-        // Narrow WRITE token for the periodic message-queue sweep (Sep 14 2026) — replaces
-        // Cloudflare Cron Triggers for time-sensitive message processing (quiet-hours-held
-        // sends, deferred appointment-reminder notifications). Cloudflare caps Cron Triggers at
-        // 3 (free) / 5 (paid) per Worker, and all 4 paid-tier slots are already used (daily
-        // digest, 2x optimizer review, weekly AR report) — so this runs from a GitHub Actions
-        // scheduled workflow instead (free, no practical limit, on the public repo), the same
-        // pattern already proven by the Invoice OCR Canary. Accepted ONLY for POST /cron/sweep.
-        // Fully inert unless env.CRON_SWEEP_TOKEN is set, so deploying this has zero effect
-        // until the secret exists.
+        // Narrow WRITE token for the MANUAL message-queue sweep (Sep 14 2026). Historical note: it was built for
+        // a GitHub Actions `schedule:` caller (deleted Oct 12 2026 - NO CRON ANYWHERE; the Apps Script scheduler's
+        // POST /cron/run is the only clock). Nothing calls this on a timer any more; it stays as a manual, on-demand
+        // POST /cron/sweep for Brett/a session. Accepted ONLY for POST /cron/sweep. Fully inert unless env.CRON_SWEEP_TOKEN is set.
         const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
           && _tok === env.CRON_SWEEP_TOKEN
           && request.method === 'POST' && path === '/cron/sweep';
