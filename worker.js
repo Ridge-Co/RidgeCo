@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-12.5-apps-script-scheduler';
+const BUILD_VERSION = '2026-10-13.1-queue-upgrade';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -194,7 +194,11 @@ const _hubWorkerCore = {
             // greenlit/prepared/dropped — same narrow-write posture as /ops-queue-prepare above.
             // POST /ops-queue/start-build (the button that actually fires a routine, i.e. spends)
             // deliberately stays OFF this list — full admin secret only, same tier as /ops-approve.
-            (request.method === 'POST' && path === '/ops-queue-status')
+            (request.method === 'POST' && path === '/ops-queue-status') ||
+            // POST /ops-queue/sync (Oct 13 2026): checks public GitHub PR state for in-flight builds and
+            // writes Build_State/PR_Number/Status→done only. Lets the Hub scheduler (Apps Script) call it
+            // daily without the admin secret.
+            (request.method === 'POST' && path === '/ops-queue/sync')
           );
         // Narrow WRITE token for the Optimizer Scout & Reuse-Radar scheduled task (new, Sep 20
         // 2026): accepted ONLY for POST /ops-queue/scout-submit, which inserts the task's ranked
@@ -834,6 +838,7 @@ const _hubWorkerCore = {
         if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
         if (path === '/ops-queue/start-build')    return await opsQueueStartBuild(env, body);
         if (path === '/ops-queue/scout-submit')   return await opsQueueScoutSubmit(env, body);
+        if (path === '/ops-queue/sync')           return await opsQueueSync(env, body);
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/selftest')                 return await selftestRunEndpoint(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
@@ -16280,7 +16285,13 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // is the free/cheap alternative, when one exists, so a paid idea always ships with its cheap
 // sibling right next to it. Blank on every row created by opsApprove/opsQueuePrepare — only
 // opsQueueScoutSubmit ever populates these.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround'];
+// Oct 13 2026 (queue upgrade, all additive via ensureColumns): Brett_Note = Brett's free-text
+// "your change" on a proposal (overrides the proposal in the build brief); Snooze_Until = ISO time
+// the item is hidden from his review until; PR_Number/Build_State/Build_Updated = two-way build
+// sync (building → pr_open → live | pr_closed [flagged] | abandoned); Dup_Of = "may overlap
+// row #N"; Shipped_Match = "looks already built: <FEATURE_LOG ref>"; Scout_Verdict/Scout_Note/
+// Scout_Reviewed = the Scout's re-check of a snoozed item against builds shipped since.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed'];
 // 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
 // awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
 // approved it to build. The ONLY status opsQueueScoutSubmit can ever write (see
@@ -16307,8 +16318,29 @@ async function opsApprove(env, body) {
   if (items.length > 20) return json({ error: 'too many at once (max 20)' }, 400);
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
-  const now = new Date().toISOString(); let queued = 0;
+  const now = new Date().toISOString(); let queued = 0, promoted = 0, already = 0;
+  // Oct 13 2026: approving must never CLONE a row that is already in the queue (that is how
+  // proposals.html's "this week's review" approvals created the duplicates Brett saw). Match
+  // against the live queue first: a proposed/held twin is promoted in place, anything already
+  // greenlit/building/done is reported as `already` and skipped.
+  let existing = [];
+  try {
+    const d0 = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const v0 = d0.values || [];
+    if (v0.length > 1) existing = v0.slice(1).map(r => { const o = {}; v0[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; });
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
   for (const it of items) {
+    const _m = findQueueMatch(it, existing.filter(r => String(r.Status || '').toLowerCase() !== 'dropped'), 'same');
+    if (_m) {
+      const _st = String(_m.row.Status || '').toLowerCase();
+      if (_st === 'proposed' || _st === 'held') {
+        const _rc = String(it.risk_class || it.riskClass || '').toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+        await updateRow(env, OPS_QUEUE_TAB, _m.row.ID, { Status: 'greenlit', Approved_By: String((body && body.by) || 'command-center'), Risk_Class: _rc, Snooze_Until: '', Build_Updated: now });
+        _m.row.Status = 'greenlit'; promoted++;
+      } else already++;
+      continue;
+    }
+    existing.push({ ID: 'new-' + queued, Title: String(it.title || ''), Problem: String(it.problem || ''), First_Step: String(it.action || it.first_step || ''), Status: 'greenlit' });
     // Risk_Class carries through from whatever proposed the item — never invented here, and
     // never defaulted to SAFE. Only the literal string 'SAFE' counts as SAFE; anything else
     // (missing, misspelled, explicitly 'GATED') stores as GATED, matching judge()'s own
@@ -16324,7 +16356,7 @@ async function opsApprove(env, body) {
     });
     queued++;
   }
-  return json({ ok: true, queued });
+  return json({ ok: true, queued, promoted, already });
 }
 
 async function opsQueueRead(env, url) {
@@ -16338,7 +16370,7 @@ async function opsQueueRead(env, url) {
   // that's already been queued or built instead of re-offering it as fresh. Same read-only data
   // (titles/problems, no money/PII), so the narrow OPS_QUEUE_TOKEN may read it too.
   if (url && url.searchParams && url.searchParams.get('all') === '1') {
-    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 200) });
+    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 400) });
   }
   const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
   return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
@@ -16353,10 +16385,40 @@ async function opsQueueUpdate(env, body) {
   const id = body && body.id;
   const status = String((body && body.status) || '').toLowerCase();
   if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
-  if (!OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
+  // Oct 13 2026: `status` is optional when the call only sets note / snooze_days / pr_number /
+  // build_state (Brett editing or snoozing a proposal without moving it through the lifecycle).
+  const _b = body || {};
+  const _hasExtra = _b.note !== undefined || _b.snooze_days !== undefined || _b.pr_number !== undefined || _b.build_state !== undefined;
+  if (!status && !_hasExtra) return json({ error: 'status (or note / snooze_days / pr_number / build_state) required' }, 400);
+  if (status && !OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
-  const fields = { Status: status };
+  const fields = {};
+  const _nowMs = Date.now();
+  if (status) {
+    fields.Status = status;
+    fields.Build_Updated = new Date(_nowMs).toISOString();
+    if (status !== 'proposed') fields.Snooze_Until = ''; // moving on from review ends any snooze
+    if (['proposed', 'greenlit', 'prepared'].includes(status) && _b.build_state === undefined) { fields.Build_State = ''; } // retry / re-approve starts the build state fresh
+  }
+  // Brett's free-text "your change" (Oct 13 2026) — injected into the build brief as an override.
+  if (_b.note !== undefined) fields.Brett_Note = String(_b.note || '').slice(0, 1000);
+  // Snooze = hide from Brett's review for N days (default 10 on the page); 0 clears. The Scout
+  // still sees snoozed rows and re-checks them against builds shipped since (Scout_Verdict reset).
+  if (_b.snooze_days !== undefined) {
+    const _s = snoozeUntilFromDays(_b.snooze_days, _nowMs);
+    if (_s === null) return json({ error: 'snooze_days must be a number from 0 to 365' }, 400);
+    fields.Snooze_Until = _s; fields.Scout_Verdict = ''; fields.Scout_Note = ''; fields.Scout_Reviewed = '';
+  }
+  if (_b.pr_number !== undefined) {
+    if (String(_b.pr_number) === '') fields.PR_Number = '';
+    else { const _pn = cleanPrNumber(_b.pr_number); if (!_pn) return json({ error: 'pr_number must be a positive integer' }, 400); fields.PR_Number = _pn; }
+  }
+  if (_b.build_state !== undefined) {
+    const _bs = String(_b.build_state);
+    if (!['', 'building', 'pr_open', 'live', 'pr_closed', 'abandoned', 'held'].includes(_bs)) return json({ error: 'invalid build_state' }, 400);
+    fields.Build_State = _bs; fields.Build_Updated = new Date(_nowMs).toISOString();
+  }
   if (body && body.reason) fields.Drop_Reason = String(body.reason).slice(0, 500);
   if (body && body.superseded_by) fields.Superseded_By = String(body.superseded_by).slice(0, 200);
   // Risk_Class (Sep 20 2026, "Proposed" review lane, proposals.html): optional — sent only when
@@ -16504,8 +16566,16 @@ async function opsQueueStatus(env, body) {
   const fields = { Status: status };
   if (status === 'held') fields.Held_Note = String(note).slice(0, 500);
   if (status === 'done') fields.Held_Note = ''; // cleanup — in case this is a retry after a prior held attempt
+  // Oct 13 2026 two-way sync: the build session may report the PR it opened. A 'done' report means
+  // "built, PR open, awaiting Brett's merge" — opsQueueSync flips it to live/pr_closed from GitHub.
+  const _prn = cleanPrNumber(body && body.pr_number);
+  if (_prn) fields.PR_Number = _prn;
+  fields.Build_Updated = new Date().toISOString();
+  if (status === 'building') fields.Build_State = _prn ? 'pr_open' : 'building';
+  if (status === 'done') fields.Build_State = 'pr_open';
+  if (status === 'held') fields.Build_State = 'held';
   await updateRow(env, OPS_QUEUE_TAB, id, fields);
-  return json({ ok: true, id, status });
+  return json({ ok: true, id, status, pr_number: _prn || undefined });
 }
 
 // PURE — given the row's CURRENT state plus what a build session wants to report, decide whether
@@ -16557,6 +16627,7 @@ async function opsQueueStartBuild(env, body) {
   const originalStatus = {};
   const statusCol = headers.indexOf('Status');
   const heldNoteCol = headers.indexOf('Held_Note');
+  const bsCol = headers.indexOf('Build_State'), buCol = headers.indexOf('Build_Updated');
   const buildUpdates = [];
   for (const row of eligible) {
     originalStatus[row.ID] = row.Status;
@@ -16564,6 +16635,8 @@ async function opsQueueStartBuild(env, body) {
     const sheetRow = rowIndex + 2;
     if (statusCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [['building']] });
     if (heldNoteCol !== -1 && row.Status === 'held') buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(heldNoteCol)}${sheetRow}`, values: [['']] });
+    if (bsCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['building']] });
+    if (buCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(buCol)}${sheetRow}`, values: [[new Date().toISOString()]] });
   }
   // ONE batched write across every eligible row, not N round-trips.
   if (buildUpdates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: buildUpdates });
@@ -16575,6 +16648,7 @@ async function opsQueueStartBuild(env, body) {
       const rowIndex = rows.findIndex(r => r.ID === row.ID);
       const sheetRow = rowIndex + 2;
       rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [[originalStatus[row.ID]]] });
+      if (bsCol !== -1) rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['']] });
     }
     if (rbUpdates.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: rbUpdates }); } catch (_) {} }
   };
@@ -16647,6 +16721,7 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
       `Problem: ${row.Problem || ''}`,
       `First_Step: ${row.First_Step || ''}`,
       `Effort: ${row.Effort || ''}`,
+      ...(String(row.Brett_Note || '').trim() ? [`BRETT'S CHANGE (overrides the proposal wherever they conflict): ${String(row.Brett_Note).trim()}`] : []),
       `Build_Brief:`,
       briefText,
     ].join('\n');
@@ -16654,6 +16729,8 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
 
   const instructions = [
     '---',
+    QUEUE_STANDING_RULES,
+    '',
     'INSTRUCTIONS FOR THIS BUILD SESSION',
     '',
     'You are building the item(s) above for Brett\'s RidgeCo Hub (Ridge-Co/RidgeCo). Load the brett-context skill first if you have not already. Follow CLAUDE.md discipline for every item: read live repo state before writing code, node --check, run the full test suite, add/update tests for what you build, write a FEATURE_LOG.md entry (use the [FL-YYYYMMDD-HHMM-xx] tag convention, not a bare rule number), update CURRENT.md\'s "WHERE THINGS STAND" section, then push via GH Broker (commit_patch for worker.js given its size, commit_file/commit_files elsewhere).',
@@ -16661,9 +16738,10 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
     'If this batch has more than one item, build them independently. If one item fails, hits a real blocker, or needs a design decision only Brett can make, do NOT let it block the others — hold that one item and keep going on the rest.',
     '',
     'As EACH item finishes (success OR failure), report it back immediately — do not wait until the whole batch is done:',
-    '- On success: POST https://maintenance-hub.brett-2f8.workers.dev/ops-queue-status',
+    'Put the line "Ops queue item #<ID>" in the body of every PR you open for an item (one PR per item where practical) — the Hub uses it to track the PR (open → merged / closed) back onto Brett\'s proposals page.',
+    '- On success (PR opened, awaiting Brett\'s merge): POST https://maintenance-hub.brett-2f8.workers.dev/ops-queue-status',
     `  Header: X-Auth-Token: ${opsQueueToken}`,
-    '  Body: {"id": "<the item\'s ID>", "status": "done"}',
+    '  Body: {"id": "<the item\'s ID>", "status": "done", "pr_number": <the PR number>}',
     '- On failure/blocker: same URL/header, Body: {"id": "<the item\'s ID>", "status": "held", "note": "<one or two sentences on what happened and what Brett needs to decide or check>"}',
     '',
     'Do this for every item in this batch, individually, even if some succeed and some don\'t.',
@@ -16734,22 +16812,68 @@ function buildScoutQueueRow(it, now, reviewTs) {
 // items/call — before this was built.
 async function opsQueueScoutSubmit(env, body) {
   const items = Array.isArray(body && body.items) ? body.items : [];
-  const verdict = validateScoutSubmitItems(items);
-  if (!verdict.ok) return json({ error: verdict.error }, 400);
+  // Oct 13 2026: `rechecks` = the Scout's re-evaluation of snoozed proposals against builds shipped
+  // since: [{id, verdict:'keep'|'covered'|'update', note}]. May be sent alone (items empty).
+  const rechecks = Array.isArray(body && body.rechecks) ? body.rechecks.slice(0, 60) : [];
+  if (!(items.length === 0 && rechecks.length > 0)) {
+    const verdict = validateScoutSubmitItems(items);
+    if (!verdict.ok) return json({ error: verdict.error }, 400);
+  }
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   const now = new Date().toISOString();
   const reviewTs = String((body && body.review_ts) || now);
   let queued = 0;
+  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [];
+  let rechecked = 0;
+  // Oct 13 2026: the old loop inserted blindly, so every Optimizer round re-proposed ideas that were
+  // already queued, dropped or built. Now: read the WHOLE queue (all statuses) first; skip a
+  // near-verbatim copy of ANY row (reported back in skipped_duplicates — never silent); insert a
+  // looser overlap but tag it Dup_Of so the page shows "may overlap #N"; and flag titles that look
+  // already shipped per FEATURE_LOG (flag only).
+  let pool = [];
+  try {
+    const dq = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const vq = dq.values || [];
+    if (vq.length > 1) pool = vq.slice(1).map(r => { const o = {}; vq[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; });
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const shipped = items.length ? await getShippedIndex() : { ok: true, index: [] };
   for (const it of items) {
-    await addRow(env, OPS_QUEUE_TAB, buildScoutQueueRow(it, now, reviewTs));
+    const same = findQueueMatch(it, pool, 'same');
+    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status }); continue; }
+    const rowObj = buildScoutQueueRow(it, now, reviewTs);
+    const ov = findQueueMatch(it, pool, 'overlap');
+    if (ov) {
+      rowObj.Dup_Of = String(ov.row.ID);
+      flagged_overlaps.push({ title: rowObj.Title, overlaps: ov.row.ID, status: ov.row.Status });
+      const ovst = String(ov.row.Status || '').toLowerCase();
+      if (ovst === 'done') rowObj.Shipped_Match = 'Overlaps already-built queue item #' + ov.row.ID;
+    }
+    if (shipped.ok && !rowObj.Shipped_Match) {
+      const sm = findShippedMatch(rowObj.Title, shipped.index);
+      if (sm) rowObj.Shipped_Match = 'Looks already built: ' + sm.ref;
+    }
+    await addRow(env, OPS_QUEUE_TAB, rowObj);
+    pool.push({ ID: 'new-' + queued, Title: rowObj.Title, Problem: rowObj.Problem, First_Step: rowObj.First_Step, Status: 'proposed' });
     queued++;
+  }
+  for (const rc of rechecks) {
+    try {
+      const rid = rc && rc.id; const vd = String((rc && rc.verdict) || '').toLowerCase();
+      const target = pool.find(r => String(r.ID) === String(rid));
+      if (!target) { recheck_errors.push({ id: rid, error: 'not_found' }); continue; }
+      if (String(target.Status || '').toLowerCase() !== 'proposed') { recheck_errors.push({ id: rid, error: 'not_proposed' }); continue; }
+      if (!['keep', 'covered', 'update'].includes(vd)) { recheck_errors.push({ id: rid, error: 'verdict must be keep|covered|update' }); continue; }
+      await updateRow(env, OPS_QUEUE_TAB, rid, { Scout_Verdict: vd, Scout_Note: String((rc && rc.note) || '').slice(0, 300), Scout_Reviewed: now });
+      rechecked++;
+    } catch (e) { recheck_errors.push({ id: rc && rc.id, error: String((e && e.message) || e) }); }
   }
   // Best-effort history row in Ops_Review_Log — never let a failure here undo or fail the
   // request for the queue rows already written above (same posture as runWeeklyReview's own
   // history write, and rule 174/CLAUDE.md: this really is non-fatal to the caller, since the
   // thing the caller asked for — the queue insert — has already succeeded by the time this runs).
   try {
+    if (!items.length) throw new Error('recheck-only call — no review-log row');
     await ensureTab(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await ensureColumns(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await addRow(env, OPS_REVIEW_TAB, {
@@ -16760,8 +16884,215 @@ async function opsQueueScoutSubmit(env, body) {
       Trigger: 'scout_reuse_radar', Delivered: 'no',
     });
   } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
-  return json({ ok: true, queued });
+  return json({ ok: true, queued, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
 }
+
+// ── Ops queue upgrade (Oct 13 2026): duplicate guard, shipped-index flag, snooze, PR sync ────────
+// Brett's ask: the proposals/greenlit queue filled with duplicate + overlapping proposals, he
+// could not tweak a proposal before approving it, and approved items never reported back. Every
+// helper marked PURE below has no env/I/O and is pinned by test/ops-queue-upgrade.test.mjs.
+
+// Words that carry no meaning for "is this the same ask" comparison.
+const QUEUE_STOPWORDS = new Set(['the','and','for','with','from','that','this','into','via','per','new','add','build','show','make','use','using','when','not','all','any','every','each','are','was','were','been','will','can','should','would','could','item','items','page','view','flow','tool','auto','automatic','automatically','system','feature']);
+
+// PURE — lowercase, strip punctuation, drop short/stop words, naive plural/ing/ed stemming.
+function queueTokens(text) {
+  const out = new Set();
+  String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).forEach(w => {
+    if (w.length < 3 || QUEUE_STOPWORDS.has(w)) return;
+    let s = w;
+    if (s.length > 5 && /ing$/.test(s)) s = s.slice(0, -3);
+    else if (s.length > 4 && /ed$/.test(s)) s = s.slice(0, -2);
+    else if (s.length > 4 && /ies$/.test(s)) s = s.slice(0, -3) + 'y';
+    else if (s.length > 3 && /s$/.test(s) && !/ss$/.test(s)) s = s.slice(0, -1);
+    if (s.length >= 3) out.add(s);
+  });
+  return out;
+}
+
+// PURE — Dice coefficient of two token sets (0..1). Empty sets → 0.
+function queueDice(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  a.forEach(t => { if (b.has(t)) inter++; });
+  return (2 * inter) / (a.size + b.size);
+}
+
+// PURE — how alike two queue items are. `title` = Dice on titles; `full` = Dice on
+// Title+Problem+First_Step. Calibrated Oct 13 2026 against Brett's real 156-row queue:
+// title>=0.9 or full>=0.8 caught 14 same-ask pairs with 0 false positives (safe to auto-skip);
+// title>=0.6 or full>=0.30 is the "possible overlap, show Brett" band (87% recall). The
+// Optimizer rewords the same idea each round, so wording-only matching can never be perfect —
+// the Scout prompt also reads the queue first, and the page groups "may overlap #N" items.
+function queueSimilarity(a, b) {
+  a = a || {}; b = b || {};
+  const title = queueDice(queueTokens(a.Title != null ? a.Title : a.title), queueTokens(b.Title != null ? b.Title : b.title));
+  const fa = [a.Title != null ? a.Title : a.title, a.Problem != null ? a.Problem : a.problem, a.First_Step != null ? a.First_Step : (a.action || a.first_step)].join(' ');
+  const fb = [b.Title != null ? b.Title : b.title, b.Problem != null ? b.Problem : b.problem, b.First_Step != null ? b.First_Step : (b.action || b.first_step)].join(' ');
+  const full = queueDice(queueTokens(fa), queueTokens(fb));
+  return { title, full, same: title >= 0.9 || full >= 0.8, overlap: title >= 0.6 || full >= 0.30 };
+}
+
+// PURE — best match for `item` among queue `rows` (any status). Returns {row, sim} or null.
+// level 'same' = near-verbatim copy; 'overlap' = possibly the same ask. Rows listed in
+// `ignoreIds` (e.g. the row being approved itself) are skipped.
+function findQueueMatch(item, rows, level, ignoreIds) {
+  let best = null;
+  const skip = new Set((ignoreIds || []).map(String));
+  for (const r of rows || []) {
+    if (!r || skip.has(String(r.ID))) continue;
+    const sim = queueSimilarity(item, r);
+    const hit = level === 'same' ? sim.same : sim.overlap;
+    if (!hit) continue;
+    const score = Math.max(sim.title, sim.full);
+    if (!best || score > best.score) best = { row: r, sim, score };
+  }
+  return best;
+}
+
+// PURE — is this row currently hidden from Brett's review by a snooze?
+function isSnoozed(row, nowMs) {
+  const t = Date.parse(String((row && row.Snooze_Until) || ''));
+  return Number.isFinite(t) && t > nowMs;
+}
+
+// PURE — snooze_days (1..365) → ISO timestamp, 0/'' → '' (clears). null = invalid.
+function snoozeUntilFromDays(days, nowMs) {
+  if (days === '' || days === null || days === undefined) return null;
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 0 || n > 365) return null;
+  if (n === 0) return '';
+  return new Date(nowMs + Math.round(n) * 86400000).toISOString();
+}
+
+// PURE — turn FEATURE_LOG.md text into [{ref, tokens}] "headline" entries so a new proposal can
+// be checked against everything already shipped. Entries are `## [FL-…] headline` sections and
+// `**N. headline.**` rules; only the first ~300 chars of each (the headline) are indexed.
+function buildShippedIndex(text) {
+  const idx = [];
+  const lines = String(text || '').split('\n');
+  for (const line of lines) {
+    let m = line.match(/^## (\[FL-[0-9A-Za-z-]+\])\s*(.*)$/);
+    if (m) { idx.push({ ref: m[1], tokens: queueTokens(m[2].slice(0, 300)) }); continue; }
+    m = line.match(/^\*\*(\d{1,3})\.\s+(.{10,300}?)(?:\*\*|\.\s)/);
+    if (m) idx.push({ ref: 'rule ' + m[1], tokens: queueTokens(m[2]) });
+  }
+  return idx;
+}
+
+// PURE — does a proposal title look already shipped? Needs >=3 meaningful title words and
+// >=75% of them present in one shipped headline. FLAG ONLY (never blocks a write).
+function findShippedMatch(title, index) {
+  const t = queueTokens(title);
+  if (t.size < 3) return null;
+  let best = null;
+  for (const e of index || []) {
+    let hit = 0;
+    t.forEach(w => { if (e.tokens.has(w)) hit++; });
+    const frac = hit / t.size;
+    if (frac >= 0.75 && (!best || frac > best.frac)) best = { ref: e.ref, frac };
+  }
+  return best;
+}
+
+let _shippedIndexCache = { at: 0, idx: null };
+// Fetches the public FEATURE_LOG once per 6h per isolate. Returns {ok, index?, error?}.
+async function getShippedIndex() {
+  if (_shippedIndexCache.idx && Date.now() - _shippedIndexCache.at < 6 * 3600 * 1000) return { ok: true, index: _shippedIndexCache.idx };
+  try {
+    const r = await fetch('https://raw.githubusercontent.com/Ridge-Co/RidgeCo/main/context/FEATURE_LOG.md', { headers: { 'User-Agent': 'ridgeco-hub' } });
+    if (!r.ok) return { ok: false, error: 'FEATURE_LOG fetch HTTP ' + r.status };
+    const idx = buildShippedIndex(await r.text());
+    _shippedIndexCache = { at: Date.now(), idx };
+    return { ok: true, index: idx };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+
+// PURE — GitHub PR JSON → queue Build_State. merged → 'live' (main auto-deploys), closed
+// without merge → 'pr_closed' (FLAGGED to Brett, never auto-abandoned), else 'pr_open'.
+function prStateToBuildState(pr) {
+  if (!pr) return null;
+  if (pr.merged === true || pr.merged_at) return 'live';
+  if (String(pr.state) === 'closed') return 'pr_closed';
+  return 'pr_open';
+}
+
+// PURE — find the PR a build session opened for queue item `id` when it did not report a number:
+// the routine text tells sessions to put "Ops queue item #ID" in the PR body/title.
+function matchPrToItem(prs, id) {
+  const re = new RegExp('ops[ -]?queue\\s+(?:item\\s+)?#?' + String(id).replace(/[^0-9A-Za-z]/g, '') + '(?![0-9])', 'i');
+  for (const p of prs || []) {
+    if (re.test(String((p && p.title) || '') + '\n' + String((p && p.body) || ''))) return p;
+  }
+  return null;
+}
+
+// PURE — normalise a PR number from user/session input; null if not a positive integer.
+function cleanPrNumber(v) {
+  const n = parseInt(String(v == null ? '' : v).replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(n) && n > 0 && n < 100000 ? String(n) : null;
+}
+
+const QUEUE_REPO = 'Ridge-Co/RidgeCo';
+async function ghPublicJson(path) {
+  const r = await fetch('https://api.github.com/repos/' + QUEUE_REPO + path, { headers: { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github+json' } });
+  if (!r.ok) throw new Error('GitHub ' + path + ' → HTTP ' + r.status + (r.status === 403 || r.status === 429 ? ' (rate limited; will retry next sync)' : ''));
+  return await r.json();
+}
+
+// POST /ops-queue/sync — two-way sync: checks the PR behind every in-flight build and records
+// live / pr_closed / pr_open on the row. Called by the proposals page on load and (once the Hub
+// scheduler PR #229 is merged) as a daily scheduler job — NOT a cron. Reads public GitHub only;
+// writes only Build_State/Build_Updated/PR_Number (+ Status→done when the PR merged). Every
+// failure is returned in `errors` — never swallowed. Accepts OPS_QUEUE_TOKEN or the admin secret.
+async function opsQueueSync(env, body) {
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+  const v = d.values || [];
+  const rows = v.length > 1 ? v.slice(1).map(r => { const o = {}; v[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }) : [];
+  const _pref = body && body.title_prefix ? String(body.title_prefix) : '';
+  const inflight = rows.filter(r => {
+    if (_pref && !String(r.Title || '').startsWith(_pref)) return false;
+    const st = String(r.Status || '').toLowerCase();
+    const bs = String(r.Build_State || '');
+    return (st === 'building' || st === 'done' || st === 'held') && (bs === 'building' || bs === 'pr_open' || (bs === '' && r.PR_Number && st !== 'done'));
+  }).slice(0, 25);
+  const changed = [], errors = [];
+  let prList = null;
+  const nowIso = new Date().toISOString();
+  for (const r of inflight) {
+    try {
+      let n = cleanPrNumber(r.PR_Number);
+      if (!n) {
+        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60');
+        const hit = matchPrToItem(prList, r.ID);
+        if (hit) n = String(hit.number);
+      }
+      if (!n) continue; // no PR yet — page shows "building / no PR reported" (and "stalled" after 24h)
+      const pr = await ghPublicJson('/pulls/' + n);
+      const next = prStateToBuildState(pr);
+      const fields = {};
+      if (String(r.PR_Number || '') !== n) fields.PR_Number = n;
+      if (next && next !== String(r.Build_State || '')) { fields.Build_State = next; fields.Build_Updated = nowIso; }
+      if (next === 'live' && String(r.Status || '').toLowerCase() !== 'done') fields.Status = 'done';
+      if (Object.keys(fields).length) {
+        await updateRow(env, OPS_QUEUE_TAB, r.ID, fields);
+        changed.push({ id: r.ID, pr: n, build_state: fields.Build_State || r.Build_State, status: fields.Status || r.Status });
+      }
+    } catch (e) { errors.push({ id: r.ID, error: String((e && e.message) || e) }); }
+  }
+  return json({ ok: errors.length === 0, checked: inflight.length, changed, errors });
+}
+
+// Standing rules every build brief carries (Brett, Oct 13 2026).
+const QUEUE_STANDING_RULES = [
+  'STANDING RULES (Brett, Oct 13 2026) — apply to every item below:',
+  '- Owner-facing views NEVER show what an owner spends with Brett (no monthly spend, spend YTD, cost per work order, or spend totals). Owners see work completed / open / scheduled instead. Estimate and approval screens still ALWAYS show amounts.',
+  '- Brett\'s "Brett\'s change" note on an item OVERRIDES the proposal text where they conflict.',
+  '- No cron anywhere: scheduled work is a job in the Hub scheduler (Apps Script), never a Cloudflare cron or GitHub Actions schedule.',
+  '- Nothing may fail silently: every failure path must surface visibly.',
+].join('\n');
 
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
 async function opsTelemetryRead(env, url) {
@@ -20949,6 +21280,23 @@ async function intakeNoticeTestGuard(env, subject, text) {
 
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  // Ops queue upgrade (Oct 13 2026): staging token may only create/modify/sync queue rows whose Title starts with TEST-.
+  if (path === '/ops-queue/scout-submit') {
+    const _its = (body && body.items) || [];
+    if (!_its.every(i => String((i && i.title) || '').startsWith('TEST-'))) return { ok: false, debug: 'queue-guard: every item title must start with TEST-' };
+    const _rcs = (body && body.rechecks) || [];
+    if (_rcs.length) { const _qr = await fetchTab(env, OPS_QUEUE_TAB); for (const rc of _rcs) { const _r = _qr.find(r => String(r.ID) === String(rc && rc.id)); if (!_r || !String(_r.Title || '').startsWith('TEST-')) return { ok: false, debug: 'queue-guard: recheck target is not a TEST- row' }; } }
+    return { ok: true };
+  }
+  if (path === '/ops-approve') {
+    return ((body && body.items) || []).every(i => String((i && i.title) || '').startsWith('TEST-'));
+  }
+  if (path === '/ops-queue-update' || path === '/ops-queue-status') {
+    const _qr = await fetchTab(env, OPS_QUEUE_TAB);
+    const _r = _qr.find(r => String(r.ID) === String(body && body.id));
+    return !!_r && String(_r.Title || '').startsWith('TEST-');
+  }
+  if (path === '/ops-queue/sync') return !!body && body.title_prefix === 'TEST-'; // staging token may only sync TEST- rows (opsQueueSync honours title_prefix)
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
   if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
