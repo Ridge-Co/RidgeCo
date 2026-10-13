@@ -4629,7 +4629,7 @@ async function scopeProposalView(env, url) {
       try {
         await paymentMilestonesTab(env);
         const ms = (await fetchTab(env, 'Payment_Milestones')).filter(m => m.Signature_ID === String(row.ID) && String(m.Active || '').toUpperCase() !== 'FALSE');
-        if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, status: m.Status || 'pending' }));
+        if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, calc_mode: m.Calc_Mode === 'flat' ? 'flat' : 'percent', status: m.Status || 'pending' }));
       } catch (_) {}
       signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel, schedule: signedSchedule };
     }
