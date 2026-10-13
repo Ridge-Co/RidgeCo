@@ -373,4 +373,100 @@ for (const N of [2, 5, 8]) {
   const sres = await L2.schedStatusHandler({});
   t('status handler: Config read failure is a 503, not an empty report', sres.status === 503 && sres.body.ok === false);
 }
+// 2k time budget: slow job answers timed_out, finishes in the background and records itself
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const waits = [];
+  const jobs = mkJobs(log, [['slow', 'interval', { run: async () => { await tick(120); log.push('slow'); return { ok: true, errors: [] }; } }]]);
+  const r = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 30 }));
+  t('slow job: caller gets timed_out (not a hang, not a failure), more=false', r.body.timed_out === true && r.body.ran === 'slow' && r.body.job_ok === null && r.body.more === false && r.body.ok === true, r.body);
+  t('slow job: handed to ctx.waitUntil so it survives the caller hanging up', waits.length === 1);
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('while it is still running the claim holds: no second run', r2.body.skipped && log.length === 0);
+  await Promise.all(waits);
+  t('slow job finished and recorded its result in state', log.length === 1 && stateOf(store).jobs.slow.last_status === 'ok' && stateOf(store).claim_id === '');
+}
+// 2l daily retry / no_retry / retry:false semantics
+{
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+  let fails = 2;
+  const jobs = mkJobs(log, [['d', 'daily', { run: async () => { log.push('d'); return fails-- > 0 ? { ok: false, errors: [{ step: 's', error: 'transient' }] } : { ok: true, errors: [] }; } }]]);
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('daily failure recorded with attempts=1 and NOT marked done', r1.body.job_ok === false && stateOf(store).jobs.d.attempts.n === 1 && !stateOf(store).jobs.d.last_key);
+  t('retry not before 30 min', (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === null && log.length === 1);
+  c.v += 31 * 60000;
+  const r3 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('retried after 30 min (still failing)', r3.body.ran === 'd' && r3.body.job_ok === false && stateOf(store).jobs.d.attempts.n === 2);
+  c.v += 31 * 60000;
+  const r4 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('third attempt succeeds -> marked done for the ET day', r4.body.job_ok === true && stateOf(store).jobs.d.last_key === '2026-10-12' && !stateOf(store).jobs.d.attempts);
+  c.v += 31 * 60000;
+  t('and is then never run again that day', (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === null && log.length === 3);
+}
+{
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+  const jobs = mkJobs(log, [
+    ['noretry', 'daily', { retry: false, run: async () => { log.push('noretry'); return { ok: false, errors: [{ step: 'send', error: 'smtp 500' }] }; } }],
+    ['after_send', 'daily', { run: async () => { log.push('after_send'); return { ok: false, errors: [{ step: 'send', error: 'half sent' }], no_retry: true }; } }],
+  ]);
+  await L.schedRunNext({}, null, fast(c, { jobs })); await L.schedRunNext({}, null, fast(c, { jobs }));
+  c.v += 3 * 3600000;
+  await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('retry:false and result.no_retry:true failures are never auto-retried (no duplicate sends)', log.join() === 'noretry,after_send', log);
+  const s = stateOf(store), st = L.schedStatus(s, new Date(c.v), jobs);
+  t('...but they are loudly overdue with the error in /cron/status', st.overdue.join() === 'noretry,after_send' && /smtp 500/.test(st.jobs.noretry.overdue_reason), st);
+}
+// 2m only / force / unknown / dry
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval']]);
+  const bad = await L.schedRunNext({}, null, fast(c, { jobs, only: ['zzz'] }));
+  t('unknown job name -> 400', bad.status === 400 && /unknown job/.test(bad.body.error) && log.length === 0);
+  const badForce = await L.schedRunNext({}, null, fast(c, { jobs, force: true }));
+  t('force without exactly one job -> 400', badForce.status === 400);
+  const dry = await L.schedRunNext({}, null, fast(c, { jobs, dry: true }));
+  t('dry run: lists due jobs, runs nothing, writes nothing', dry.body.dry === true && dry.body.due.join() === 'a,b' && log.length === 0 && !store.cfg().Scheduler_State && !store.calls.some(x => x.startsWith('POST')));
+  const only = await L.schedRunNext({}, null, fast(c, { jobs, only: ['b'] }));
+  t('only[] runs just that job', only.body.ran === 'b' && log.join() === 'b' && only.body.more === false);
+  const f = await L.schedRunNext({}, null, fast(c, { jobs, only: ['b'], force: true }));
+  t('force re-runs a not-due job once', f.body.ran === 'b' && log.join() === 'b,b');
+}
+// 2n the real registry's job functions: inspect + split behaviour with stubs
+{
+  const store = makeStore(), c = clock(Date.parse('2026-10-12T14:00:00Z'));
+  const L = load(store, { stubs: {
+    processQuietHoursQueue: async () => ({ checked: 2, results: [{ id: '1', sent: true, failed: false }, { id: '2', sent: false, failed: true, gate_snapshot: 'ok' }] }),
+    receiptScan: async () => ({ status: 200, clone() { return this; }, async json() { return { ok: true, errors: ['file x unreadable'] }; } }),
+    sendReceiptsToQBEmail: async () => ({ ok: true, sent: 1, failed: [{ id: 'r1' }] }),
+    deliverDigest: async () => { throw new Error('twilio down'); },
+    maybeRunDailySelftest: async () => ({ ok: true, total: 10, passed: 8, failed: 2 }),
+    qbSyncPayments: async () => ({ ok: true, errors: [], failed: 3, deposit_sweep: true }),
+  } });
+  const env = {};
+  const sweep = await L.SCHED_JOBS.find(j => j.name === 'sweep').run(env);
+  t('sweep: a held message that failed to SEND is a job failure (not a quiet "sent:false")', sweep.ok === false && sweep.errors.some(e => /failed to send: 2/.test(e.error)), sweep.errors);
+  const rec = await L.SCHED_JOBS.find(j => j.name === 'daily_receipts').run(env);
+  t('daily_receipts: a Response whose body lists errors is a failure', rec.ok === false && /file x unreadable/.test(JSON.stringify(rec.errors)));
+  const post = await L.SCHED_JOBS.find(j => j.name === 'daily_receipts_post').run(env);
+  t('daily_receipts_post: failed email batch -> failure AND no_retry (never blindly re-sent)', post.ok === false && post.no_retry === true);
+  const dig = await L.SCHED_JOBS.find(j => j.name === 'daily_digest').run(env);
+  t('daily_digest: delivery throwing is a failure and no_retry (it may already have texted)', dig.ok === false && dig.no_retry === true && /twilio down/.test(JSON.stringify(dig.errors)));
+  const chk = await L.SCHED_JOBS.find(j => j.name === 'sweep_checks').run(env);
+  t('sweep_checks: selftest findings are reported by the selftest itself, not as a scheduler failure', chk.ok === true && chk.detail.selftest.selftest_failed === 2);
+  const qb = await L.SCHED_JOBS.find(j => j.name === 'daily_qb_sync').run(env);
+  t('daily_qb_sync: same failure condition as the old scheduled() (ok:false / errors) - a failed count alone is not a job failure', qb.ok === true);
+  const dig2 = load(makeStore(), { stubs: { buildDigest: async () => { throw new Error('sheet down'); } } });
+  const d2 = await dig2.SCHED_JOBS.find(j => j.name === 'daily_digest').run({});
+  t('daily_digest: build failing is retryable (nothing was sent)', d2.ok === false && !d2.no_retry);
+  const okL = load(makeStore());
+  const d3 = await okL.SCHED_JOBS.find(j => j.name === 'daily_digest').run({});
+  t('daily_digest: success writes its heartbeat row (Job_Type daily_digest, Success TRUE)', d3.ok === true && okL.telemetry.length === 1 && okL.telemetry[0].Job_Type === 'daily_digest' && okL.telemetry[0].Success === 'TRUE');
+  const insp = load(makeStore(), { stubs: { inspStrGuardTick: async () => { throw new Error('calendar 500'); } } });
+  const ir = await insp.SCHED_JOBS.find(j => j.name === 'insp_guard').run({});
+  t('insp_guard: throw is reported (and the inspection alert path still fires)', ir.ok === false && /calendar 500/.test(JSON.stringify(ir.errors)));
+  const insp2 = load(makeStore(), { stubs: { inspStrGuardTick: async () => ({ enabled: true, error: 'cannot read calendar' }) } });
+  t('insp_guard: a returned {error} is a failure', (await insp2.SCHED_JOBS.find(j => j.name === 'insp_guard').run({})).ok === false);
+  const wr = load(makeStore(), { stubs: { runWeeklyReview: async () => ({ ok: true, logged: false, logged_error: 'tab missing', delivery: null }) } });
+  t('weekly review: history row not saved is a failure', (await wr.SCHED_JOBS.find(j => j.name === 'review_mon').run({})).ok === false);
+}
 //@@TEST_NEXT@@
