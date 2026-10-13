@@ -394,7 +394,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   t('unexpected throw -> FALSE telemetry + admin failure alert', log.tel.length === 1 && log.tel[0].Success === 'FALSE' && /kaboom/.test(log.tel[0].Notes) && log.alerts.length === 1 && log.alerts[0][0] === 'door_watchdog');
   threw = false;
   try { await mk(async () => { throw new Error('kaboom2'); }, true, true)({}); } catch (e) { threw = true; }
-  t('even telemetry + alert failing cannot break scheduled()', threw === false);
+  t('even telemetry + alert failing cannot break the scheduler job', threw === false);
   const okRes = await mk(async () => ({ ok: true, errors: [] }), false, false)({});
   restore();
   t('normal pass result passed through', okRes.ok === true);
