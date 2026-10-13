@@ -2908,7 +2908,7 @@ function renderBidGroupPanel(holder, woId, res) {
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap"><span style="font-size:14px">⧉</span>' +
       '<span style="color:var(--accent);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold">Bid group ' + esc(res.group_id) + '</span>' +
       '<span style="color:var(--muted);font-size:10px;margin-left:auto">' + members.length + ' jobs · ' + openCount + ' open</span></div>' +
-    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Same job given to several vendors. Nothing is cancelled automatically. Cancelling never texts the vendors.</div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Same job given to several vendors. Nothing is cancelled automatically. Cancelling never texts the vendors. "Keep this" never cancels the original; a copy you keep becomes visible to the tenant (no text is sent).</div>' +
     rows +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
       '<button class="btn small danger" style="min-height:44px;flex:1 1 150px" data-bg-act="duplicates" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'duplicates\',\'\')">Cancel all duplicates</button>' +
