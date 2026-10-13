@@ -1,9 +1,10 @@
 name: Staging drift check
 
 # Daily: staging should equal main. If its content differs and no staging-test-only PR explains it, open/update an issue.
+# NO TIMER HERE (permanent rule: no cron anywhere). The Hub Scheduler Apps Script presses "Run workflow" on this
+# workflow on its schedule (see the JOBS table at the top of apps-script/hub-scheduler/HubScheduler.gs, row ci_drift_check).
+# You can still run it by hand from the Actions tab.
 on:
-  schedule:
-    - cron: '43 11 * * *'
   workflow_dispatch: {}
 
 concurrency:

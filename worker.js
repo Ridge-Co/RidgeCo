@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-13.1-wo-dup-winner-visible';
+const BUILD_VERSION = '2026-10-13.6-wo-dup-winner-visible';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -60,7 +60,7 @@ function isStaging(env, url) {
 }
 
 const _hubWorkerCore = {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
@@ -194,7 +194,11 @@ const _hubWorkerCore = {
             // greenlit/prepared/dropped — same narrow-write posture as /ops-queue-prepare above.
             // POST /ops-queue/start-build (the button that actually fires a routine, i.e. spends)
             // deliberately stays OFF this list — full admin secret only, same tier as /ops-approve.
-            (request.method === 'POST' && path === '/ops-queue-status')
+            (request.method === 'POST' && path === '/ops-queue-status') ||
+            // POST /ops-queue/sync (Oct 13 2026): checks public GitHub PR state for in-flight builds and
+            // writes Build_State/PR_Number/Status→done only. Lets the Hub scheduler (Apps Script) call it
+            // daily without the admin secret.
+            (request.method === 'POST' && path === '/ops-queue/sync')
           );
         // Narrow WRITE token for the Optimizer Scout & Reuse-Radar scheduled task (new, Sep 20
         // 2026): accepted ONLY for POST /ops-queue/scout-submit, which inserts the task's ranked
@@ -220,15 +224,10 @@ const _hubWorkerCore = {
         const _signOk = !!env.PROPOSAL_SIGN_TOKEN
           && _tok === env.PROPOSAL_SIGN_TOKEN
           && request.method === 'POST' && path === '/proposal/sign';
-        // Narrow WRITE token for the periodic message-queue sweep (Sep 14 2026) — replaces
-        // Cloudflare Cron Triggers for time-sensitive message processing (quiet-hours-held
-        // sends, deferred appointment-reminder notifications). Cloudflare caps Cron Triggers at
-        // 3 (free) / 5 (paid) per Worker, and all 4 paid-tier slots are already used (daily
-        // digest, 2x optimizer review, weekly AR report) — so this runs from a GitHub Actions
-        // scheduled workflow instead (free, no practical limit, on the public repo), the same
-        // pattern already proven by the Invoice OCR Canary. Accepted ONLY for POST /cron/sweep.
-        // Fully inert unless env.CRON_SWEEP_TOKEN is set, so deploying this has zero effect
-        // until the secret exists.
+        // Narrow WRITE token for the MANUAL message-queue sweep (Sep 14 2026). Historical note: it was built for
+        // a GitHub Actions `schedule:` caller (deleted Oct 12 2026 - NO CRON ANYWHERE; the Apps Script scheduler's
+        // POST /cron/run is the only clock). Nothing calls this on a timer any more; it stays as a manual, on-demand
+        // POST /cron/sweep for Brett/a session. Accepted ONLY for POST /cron/sweep. Fully inert unless env.CRON_SWEEP_TOKEN is set.
         const _cronSweepOk = !!env.CRON_SWEEP_TOKEN
           && _tok === env.CRON_SWEEP_TOKEN
           && request.method === 'POST' && path === '/cron/sweep';
@@ -375,7 +374,14 @@ const _hubWorkerCore = {
           // and the gh-broker Worker (Brett only — no session can set a Cloudflare secret).
           const HUB_PROD_QB_RO_PATHS = ['/qb/find-bills', '/qb/vendor-reconcile'];
           const _qbRoOk = !!env.HUB_PROD_QB_RO_TOKEN && _tok === env.HUB_PROD_QB_RO_TOKEN && request.method === 'POST' && HUB_PROD_QB_RO_PATHS.includes(path);
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk) {
+          // Scheduler token (Oct 12 2026): the Apps Script scheduler's own Config `Scheduler_Token`, accepted ONLY for
+          // POST /cron/run and GET /cron/status (schedTokenOk: constant-time, fail-closed on a blank/short/missing value).
+          // Config is read only when the request is one of those two routes. A failed Config read is a loud 503,
+          // never a quiet "Unauthorized".
+          const _schedAuth = _hubTestOk ? { ok: false } : await schedAuthCheck(env, _tok, request.method, path);
+          if (_schedAuth.error) return json({ error: 'scheduler auth unavailable: could not read the Config sheet (' + _schedAuth.error + ')' }, 503);
+          const _schedOk = _schedAuth.ok;
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -390,6 +396,7 @@ const _hubWorkerCore = {
     try {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
+        if (path === '/cron/status')            return await schedStatusHandler(env);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
@@ -646,6 +653,7 @@ const _hubWorkerCore = {
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
         if (path === '/message/send-custom')      return await sendCustomMessage(env, body);
         if (path === '/cron/sweep')                return await cronSweep(env);
+        if (path === '/cron/run')                  return await schedRunHandler(env, ctx, body);
         if (path === '/admin-notify')              return await adminNotify(env, body);
         if (path === '/vendor-request/create')     return await createVendorRequest(env, body);
         if (path === '/vendor-task-request/create')       return await createVendorTaskRequest(env, body);
@@ -653,6 +661,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-task-request/mark-reviewed') return await markVendorTaskReviewed(env, body);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
+        if (path === '/message-queue/translate')  return await translateMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
         if (path === '/property/add')             { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); return await propertyAddWithDupeCheck(env, body); }
@@ -830,6 +839,7 @@ const _hubWorkerCore = {
         if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
         if (path === '/ops-queue/start-build')    return await opsQueueStartBuild(env, body);
         if (path === '/ops-queue/scout-submit')   return await opsQueueScoutSubmit(env, body);
+        if (path === '/ops-queue/sync')           return await opsQueueSync(env, body, { ignoreSuppliedPrs: !!env.OPS_QUEUE_TOKEN && request.headers.get('X-Auth-Token') === env.OPS_QUEUE_TOKEN });
         if (path === '/ops-review')               return await opsReviewRun(env, body);
         if (path === '/selftest')                 return await selftestRunEndpoint(env, body);
         if (path === '/invoice-review/approve')   return await approveInvoiceReview(env, body);
@@ -953,114 +963,15 @@ const _hubWorkerCore = {
     }
   },
 
-  // Daily digest cron (Session 5). Delivery is gated by Config flags and stays
-  // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
-  // with delivery off just builds the digest and returns — no messages, negligible cost.
+  // LOUD NO-OP (Oct 12 2026). PERMANENT RULE: NO CRON ANYWHERE - Apps Script time-driven triggers are the only
+  // clock (see the APPS SCRIPT SCHEDULER block: POST /cron/run). wrangler.toml deliberately sets `crons = []`.
+  // If Cloudflare ever fires this, a stale Cron Trigger is still attached: that is a second, unreliable clock,
+  // so it does NO job work (no duplicates) and shouts instead (Ops_Telemetry FALSE row + admin alert, rate-limited).
   async scheduled(event, env, ctx) {
-    // No cron triggers are configured on the staging Worker (wrangler.toml's
-    // `staging` branch override removes [triggers] entirely), so this never
-    // actually fires there today — set defensively in case that ever changes.
     env.__STAGING__ = isStaging(env);
-    env = __cronEnv(env); // paced, cache-sharing Sheets reads for every background job
-    const cron = event && event.cron;
-    // Message-queue sweep (Sep 15 2026) — quiet-hours release, deferred notifications, and
-    // vendor nudges. Uses the 5th (last available) paid-tier Cloudflare Cron Trigger slot.
-    // Originally built to run ONLY via a GitHub Actions workflow (cron-sweep.yml, rule 166/167)
-    // to avoid using a Cloudflare slot at all — but real live testing (Sep 15 2026) found
-    // GitHub's own `schedule:` trigger is unreliable for this repo's activity level: it ran
-    // roughly every 5 hours instead of every 15 minutes (confirmed via the Actions run
-    // history), which is a real problem for anything time-sensitive (quiet-hours release
-    // meant to happen at 9am ET, daily vendor nudges). Cloudflare Cron Triggers don't have
-    // that queueing-delay behavior. Calls cronSweep(env) directly — no HTTP round-trip, no
-    // CRON_SWEEP_TOKEN needed for this path (that token still gates the GitHub Actions path,
-    // which stays in place as a redundant second path — both call the same idempotent
-    // function, so having both fire is harmless, just occasionally redundant work).
-    if (cron === '*/15 * * * *') {
-      await doorWatchdogCron(env); // door-code watchdog FIRST (never throws; see its block)
-      await cronSweepLogged(env);  // failures logged to Ops_Telemetry, no longer swallowed
-      // STR cleaning-coverage guard for inspection booking: no-op until configured; alerts Brett on its own failures.
-      try { await inspStrGuardTick(env); } catch (e) { console.error('insp: cleaning guard tick failed:', e && e.message); try { await inspAlert(env, 'str_guard_tick', String(e && e.message)); } catch (e2) { console.error('insp: could not alert about guard tick failure:', e2 && e2.message); } }
-      return;
-    }
-    // Optimizer Reviewer (B-129). Reads the last 7 days of Ops_Telemetry, computes metrics,
-    // asks Claude for a ranked proposal, logs it to Ops_Review_Log. Mid-week (Wed) run added
-    // per greenlit ID-1 to halve max issue-detection lag (7d → ~3.5d) — still runs, still logs,
-    // but Sep 17 2026: Brett asked for delivery to be weekly, not twice a week, so only the
-    // Monday run (now 12:30 UTC / 8:30am ET) actually pushes a notification.
-    if (cron === '30 12 * * 1') {
-      try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    if (cron === '0 12 * * 3') {
-      try { await runWeeklyReview(env, { deliver: false, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    // Weekly Open Item Report (Aug 18 session) — Monday 13:00 UTC (9am EDT/8am EST), one hour
-    // after the daily digest slot so it never collides. Fully dormant until Brett sets Config
-    // ar_report_enabled=TRUE AND adds owners to AR_Report_OptIn — see runWeeklyArReport.
-    if (cron === '0 13 * * 1') {
-      try { await runWeeklyArReport(env); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    // Daily digest (existing) — 11:00 UTC. Now self-instruments a telemetry row so the
-    // Ops_Telemetry tab self-creates and gets a heartbeat row every morning (best-effort).
-    try {
-      const _t0 = Date.now();
-      const digest = await buildDigest(env);
-      const delivery = await deliverDigest(env, digest);
-      try { await logTelemetry(env, { Source:'worker', Job_Type:'daily_digest', Skill_Or_Endpoint:'scheduled/daily-digest', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes: (delivery&&delivery.delivered)?'delivered':'dormant' }); } catch (_) { /* telemetry best-effort */ }
-    } catch (e) { /* non-fatal: a digest error must never affect anything else */ }
-    // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
-    // the confirm-first queue. Read + queue only; no money, no customer contact.
-    try { await receiptScan(env); } catch (e) { /* non-fatal */ }
-    // Turnover cleaning date-fallback release (B-100). A blocked Cleaning WO normally
-    // releases the moment its sibling Repairs+Paint WOs both hit Complete (see the hook in
-    // updateStatus) — this sweep is the OTHER half of "whichever comes first": if the
-    // turnover's target move-in date arrives (Turnover_Release_Date <= today) before the
-    // other two ever finish, release Cleaning anyway so a late vendor doesn't block the
-    // one job that has to happen right before a new tenant moves in. Read-then-write only
-    // on WOs that actually qualify; a normal day with nothing due does one harmless read.
-    try { await releaseTurnoverByDate(env); } catch (e) { /* non-fatal */ }
-    // Receipt RECONCILER sweep (CAP-002 phase 2) — separate pipeline, separate folder: polls the
-    // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
-    // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
-    // read + queue only — nothing bills until Brett taps Confirm in the Hub.
-    // Capped at 5 new files here (vs 8 for the Hub's Scan button): this cron invocation shares one
-    // Cloudflare subrequest budget with every other sweep in it, and an email backfill can drop
-    // dozens of files into the folder at once (Receipt Mail → Hub, Sep 22 2026).
-    try { await receiptReconScan(env, { max: 5 }); } catch (e) { /* non-fatal */ }
-    // Backfill Items_Summary for any Receipt_Recon_Queue rows still missing it (Sep 10 2026) —
-    // catches receipts scanned before this field existed, or a rare failed AI call. Cheap and
-    // bounded; no-op once caught up.
-    try { await backfillItemsSummary(env, {}); } catch (e) { /* non-fatal */ }
-    // Confirmed-duplicate retention sweep (Aug 23) — soft-deletes Receipt_Recon_Queue rows
-    // Brett explicitly confirmed as duplicates more than 180 days ago. Runs daily alongside the
-    // scan above; a normal day with nothing past the window does one harmless read.
-    try { await purgeConfirmedDuplicateReceipts(env); } catch (e) { /* non-fatal */ }
-    // Forward any not-yet-emailed receipts to Brett's QuickBooks receipts-capture inbox (Sep
-    // 2026) — bounded per run (default 8, max 10 — Cloudflare's per-invocation subrequest
-    // budget, hit live at 25) since a large backlog is worked down over several days' cron
-    // sweeps rather than all in one Worker invocation. No-op once caught up.
-    try { await sendReceiptsToQBEmail(env, {}); } catch (e) { /* non-fatal */ }
-    // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
-    // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
-    // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
-    // Oct 1 2026 (Brett: nothing may fail silently): a failure here is logged to Ops_Telemetry, never swallowed.
-    // qbSyncPayments returns a Response (never throws on its own errors) -- inspect its JSON for ok:false/errors too.
-    let _sweepRanInSync = false;
-    try {
-      const _syncRes = await qbSyncPayments(env, {});
-      let _syncJson = null; try { _syncJson = await _syncRes.clone().json(); } catch (_) {}
-      _sweepRanInSync = !!(_syncJson && _syncJson.deposit_sweep);
-      if (_syncJson && (_syncJson.ok === false || (_syncJson.errors && _syncJson.errors.length))) {
-        await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify(_syncJson.errors || _syncJson.error || 'ok:false')).slice(0, 480) });
-      }
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_qb_sync_payments failed and telemetry write failed', e); } }
-    // Safety net (Oct 1 2026): the 15-minute cron may not be scheduled in production, so also run the
-    // deposit-paid sweep daily. processDepositPaidSweep logs its own errors / not-found scopes to Ops_Telemetry.
-    // qbSyncPayments already runs the sweep (and logs its findings) -- only run it here if that did not happen, so there is no duplicate telemetry/SMS.
-    try { if (!_sweepRanInSync) await processDepositPaidSweep(env); }
-    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduled/deposit-paid-sweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_deposit_paid_sweep failed and telemetry write failed', e); } }
+    env = __cronEnv(env); // paced, cache-sharing Sheets reads
+    const r = await schedUnexpectedCloudflareCron(env, event);
+    throw new Error(r.error); // also shows as a failed run in Cloudflare's Cron Events
   }
 };
 
@@ -3586,6 +3497,10 @@ function scopeCleanItems(arr) {
       variants, selected_key,
       // vendor's own wording when `description` is the English rendering of it (Sep 28 2026) — kept, never shown to the owner
       ...((it && it.description_orig) ? { description_orig: String(it.description_orig) } : {}),
+      // Optional add-on (Oct 13 2026, Brett): true = NOT part of the base job — the customer ticks it
+      // on or off on the proposal. Absent/false = included in the job (an item with 2+ variants is
+      // still a pick-one choice). Only written when true, so every existing item keeps its exact shape.
+      ...((it && (it.optional === true || it.optional === 'true')) ? { optional: true } : {}),
     };
   }).filter(it => it.description);
 }
@@ -4362,10 +4277,34 @@ function scopeItemsPricing(items, pc, mp) {
     let selKey = it.selected_key || variants[0].key;
     if (!variants.some(v => v.key === selKey)) selKey = variants[0].key;
     const sel = variants.find(v => v.key === selKey) || variants[0];
-    subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
-    rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
-    return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey };
+    // An optional add-on is NOT part of the base job: it never counts toward the base subtotal /
+    // vendor cost / materials totals. It only enters them at signing, if the customer ticks it.
+    if (!it.optional) {
+      subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
+      rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
+    }
+    return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey, ...(it.optional ? { optional: true } : {}) };
   });
+  // Add-on pricing (Oct 13 2026, Brett: "price the whole job, show the difference"): an add-on's
+  // customer price is price(base job + add-on) − price(base job), so a small add-on is never hit
+  // with its own small-job minimum markup/admin fee and "base + add-on" always lands on the price
+  // the whole job would have had. Never below the add-on's own vendor cost (falls back to its
+  // stand-alone price if the difference would be). Variants with a manual price_override or Ridge Co
+  // materials keep the stand-alone price computed above.
+  const baseVendor = vendorCostTotal;
+  if (baseVendor > 0) {
+    const baseCalc = calcTieredEstimate(baseVendor, pc);
+    if (baseCalc) for (const it of priced) {
+      if (!it.optional) continue;
+      for (const v of it.variants) {
+        if (v.price_override != null || v.rc_materials_cost > 0) continue;
+        const whole = calcTieredEstimate(baseVendor + v.vendor_cost, pc);
+        if (!whole) continue;
+        const diff = r2(whole.finalPrice - baseCalc.finalPrice);
+        if (diff >= v.vendor_cost && diff > 0) v.price = diff;
+      }
+    }
+  }
   subtotal = +subtotal.toFixed(2);
   return {
     items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2),
@@ -4406,6 +4345,7 @@ async function scopeProposal(env, body) {
   // materials-only item (Ridge Co buys it, no vendor labor) is legitimately $0 vendor cost
   // (Sep 22 2026; before this, Brett had to type a fake $1 vendor cost, which then got paid to
   // the vendor on the milestone bill).
+  if (!items.some(it => !it.optional)) return json({ error: 'Every line item is marked as an optional add-on — a proposal needs at least one included item (the base job). Un-mark one add-on, or add the main job.' }, 400);
   const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0 || (parseFloat(v.rc_materials_cost) || 0) > 0));
   if (unpriced.length) return json({ error: `Add vendor cost (or Ridge Co materials) to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
   // The materials description is hand-typed and shown to the customer verbatim — same leak class
@@ -4429,6 +4369,12 @@ async function scopeProposal(env, body) {
   // somehow left in a bad state, fall back to the default rather than 500ing proposal generation.
   const schedule = scheduleCheck.schedule || scopeDefaultPaymentSchedule();
   const milestones = scopeComputeMilestoneAmounts(schedule, priced.subtotal, priced.vendorCostTotal);
+  if (priced.items.some(it => it.optional)) {
+    // Smallest total a customer could sign = cheapest option on every base item, no add-ons.
+    const smallest = priced.items.filter(it => !it.optional).reduce((sum, it) => { const ps = (it.variants || []).map(v => +v.price || 0); return sum + (ps.length ? Math.min(...ps) : 0); }, 0);
+    const addonProblem = scopeScheduleAddonProblem(schedule, smallest);
+    if (addonProblem) return json({ error: 'This proposal has optional add-ons, but its payment schedule can\'t take them: ' + addonProblem }, 400);
+  }
 
   const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite each of the following scope-of-work item descriptions into a short, polished, customer-facing sentence. Correct typos/slang/grammar, imperative and specific. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items (JSON array):\n${JSON.stringify(items.map(it => ({ id: it.id, area: it.area, description: it.description, note: it.note })))}\n\nReturn ONLY strict minified JSON: an array of {"id":"<same id>","text":"<rewritten sentence>"}, same order, no preamble.`;
   const rewritten = {};
@@ -4444,15 +4390,35 @@ async function scopeProposal(env, body) {
   // Ridge Co–supplied materials get their own customer line (Brett, Sep 22 2026: "owner gets NO
   // transparency on markup info. just sees description and price to them") — description + the
   // customer's materials price only, never Ridge Co's cost or the mode/markup used.
-  const scopeText = priced.items.map(it => {
+  // Oct 13 2026 (Brett): the text now shows EVERY option the customer will be offered — pick-one
+  // alternatives with their prices, and optional add-ons as a separate "+$X" block that is NOT in
+  // the Total — so what Brett reads/copies matches what the customer page presents. Customer prices
+  // only; never vendor cost.
+  const money = n => '$' + (+n || 0).toFixed(2);
+  const itemLine = it => {
+    const vs = it.variants || [];
+    const multi = vs.length > 1;
     let line = '- ' + (it.area ? it.area + ': ' : '') + it.description;
-    const multi = (it.variants || []).length > 1;
-    for (const v of (it.variants || [])) {
+    if (it.optional && !multi && vs[0]) line += ' (+' + money(vs[0].price) + ')';
+    if (multi) {
+      line += '\n    Choose one:';
+      for (const v of vs) line += '\n      * ' + (v.label || 'Option') + ' - ' + (it.optional ? '+' : '') + money(v.price);
+    }
+    for (const v of vs) {
       if (!(v.materials_price > 0)) continue;
-      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — $' + v.materials_price.toFixed(2);
+      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — ' + money(v.materials_price);
     }
     return line;
-  }).join('\n');
+  };
+  const baseItems = priced.items.filter(it => !it.optional), addonItems = priced.items.filter(it => it.optional);
+  let scopeText = baseItems.map(itemLine).join('\n');
+  if (addonItems.length) {
+    scopeText += '\n\nOptional add-ons (NOT included in the total below - you choose whether to add them when you approve):\n' + addonItems.map(itemLine).join('\n');
+    for (const it of addonItems) {
+      const vs = it.variants || [];
+      if (vs.length === 1) scopeText += '\n  Total with this add-on: ' + money(priced.subtotal + vs[0].price);
+    }
+  }
   // Standing policy (Aug 21 2026, Brett): if only PART of a scope is approved/completed instead of
   // the full project, itemized pricing for those pieces is a best-efforts estimate, not a fixed
   // quote — the combined price is built to absorb small unknowns across a mixed batch of larger and
@@ -4462,16 +4428,16 @@ async function scopeProposal(env, body) {
     const when = m.trigger === 'upfront' ? ' — due to approve this proposal and schedule the work'
       : m.trigger === 'completion' ? ' — due at job completion'
       : ' — billed once this milestone is reached';
-    return `  - ${m.label} (${m.percent}%): $${m.customer_amount.toFixed(2)}${when}`;
+    return `  - ${m.label}${m.calc_mode === 'flat' ? '' : ` (${m.percent}%)`}: $${m.customer_amount.toFixed(2)}${when}`; // a flat-$ payment shows no % (it isn't one)
   }).join('\n');
-  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${priced.subtotal.toFixed(2)}\nPayment Schedule:\n${scheduleLines}\n\nPayment & Project Terms:\n\n- Payment is due per the schedule above; the first payment is required to approve this proposal and schedule the work.\n- All scheduled payments must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn't get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.`;
+  const doc = `${addr}\n\nScope of Work:\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost${addonItems.length ? ' (base job, before any optional add-ons)' : ''}: $${priced.subtotal.toFixed(2)}\nPayment Schedule:\n${scheduleLines}\n\nPayment & Project Terms:\n\n- Payment is due per the schedule above; the first payment is required to approve this proposal and schedule the work.\n- All scheduled payments must be paid electronically. Physical checks are not accepted.\n- Where an item offers more than one option, the price shown reflects the option selected at signing; the invoice matches that selection.${addonItems.length ? '\n- Optional add-ons are included only if you select them when you approve; the payment schedule above then applies to the new total.' : ''}\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn't get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.`;
 
   await ensureColumns(env, 'Scopes', ['Proposal_Items_JSON']);
   await updateRow(env, 'Scopes', id, {
     Proposal_Text: doc, Proposal_Items_JSON: JSON.stringify(priced.items),
     Estimate_Amount: String(priced.vendorCostTotal), Status: 'proposed', Updated_Date: new Date().toISOString(),
   });
-  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: scheduleCheck.warnings || [], items: priced.items,
+  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: [...(scheduleCheck.warnings || []), ...(addonItems.length && schedule.some(m => m.calc_mode === 'flat') ? [`This proposal has optional add-ons AND a flat-dollar payment. Flat payments stay at the exact amount you typed when a customer adds an add-on; the last "% of total" payment ("${scopeAbsorberLabel(schedule)}") takes the whole difference.`] : [])], items: priced.items,
     // Admin-only caller (scope-creator.html) — lets Brett see the materials split he just priced.
     materials: { mode: materialsPricing.mode, pct: materialsPricing.pct, cost_total: priced.rcMaterialsCostTotal, price_total: priced.rcMaterialsPriceTotal, vendor_cost_total: priced.vendorCostTotal } });
 }
@@ -4643,14 +4609,15 @@ async function scopeProposalView(env, url) {
       ? { key: v.key, label: v.label, price: v.price, materials_price: +v.materials_price, materials_desc: String(v.materials_desc || 'Materials') }
       : { key: v.key, label: v.label, price: v.price }),
     selected_key: it.selected_key,
+    ...(it.optional ? { optional: true } : {}), // optional add-on: unticked by default, price = what it ADDS to the total
   })); // no `note` — free-text field with no internal/customer split; never safe to echo back
   const photos = await scopeProposalPhotos(env, s);
-  const subtotal = +(items.reduce((sum, it) => { const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
+  const subtotal = +(items.reduce((sum, it) => { if (it.optional) return sum; const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
   const rawSchedule = scopeParsePaymentSchedule(s);
   const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
   const schedule = scopeComputeMilestoneAmounts(scheduleValidation.schedule || scopeDefaultPaymentSchedule(), subtotal, 0)
-    .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount })); // never vendor_amount — customer-facing boundary
+    .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount, calc_mode: m.calc_mode, flat_customer_amount: m.flat_customer_amount })); // never vendor_amount — customer-facing boundary
   let signed = null;
   try {
     await scopeSigTab(env);
@@ -4662,7 +4629,7 @@ async function scopeProposalView(env, url) {
       try {
         await paymentMilestonesTab(env);
         const ms = (await fetchTab(env, 'Payment_Milestones')).filter(m => m.Signature_ID === String(row.ID) && String(m.Active || '').toUpperCase() !== 'FALSE');
-        if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, status: m.Status || 'pending' }));
+        if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, calc_mode: m.Calc_Mode === 'flat' ? 'flat' : 'percent', status: m.Status || 'pending' }));
       } catch (_) {}
       signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel, schedule: signedSchedule };
     }
@@ -4752,24 +4719,43 @@ function scopeValidatePaymentSchedule(milestones, maxUpfrontPct) {
 // short or over from percent rounding, same discipline as scopeSigVendorBillAmount below.
 function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
   subtotal = +subtotal || 0; vendorCostTotal = +vendorCostTotal || 0;
-  let custRunning = 0, vendRunning = 0;
+  // Oct 13 2026: 'flat' rows are fixed customer amounts, exactly as typed. The customer-side
+  // ABSORBER (the row that takes rounding and any add-on difference so milestones always foot to
+  // the signed total) is the LAST NON-FLAT row — not simply the last row, which may be flat. With
+  // no non-flat row there is no absorber (legacy all-flat schedules keep their typed amounts).
+  const isFlatRow = (m) => m.calc_mode === 'flat' && m.flat_customer_amount != null;
+  let absorber = -1;
+  for (let k = schedule.length - 1; k >= 0; k--) { if (!isFlatRow(schedule[k])) { absorber = k; break; } }
+  const custAmts = schedule.map((m, i) => isFlatRow(m) ? +(+m.flat_customer_amount).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
+  if (absorber >= 0) custAmts[absorber] = +(subtotal - custAmts.reduce((sum, a, i) => i === absorber ? sum : sum + a, 0)).toFixed(2);
+  let vendRunning = 0;
   return schedule.map((m, i) => {
     const isLast = i === schedule.length - 1;
     // 'flat' overrides the CUSTOMER amount only, exactly as typed — never the vendor side (see
-    // scopeValidatePaymentSchedule's comment on why). A flat milestone never absorbs rounding
-    // drift either, last or not: "exactly Flat_Customer_Amount" means exactly that.
-    const isFlat = m.calc_mode === 'flat' && m.flat_customer_amount != null;
-    const custAmt = isFlat
-      ? +(+m.flat_customer_amount).toFixed(2)
-      : (isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
+    // scopeValidatePaymentSchedule's comment on why); vendor proration stays percent-based.
+    const custAmt = custAmts[i];
     const vendAmt = isLast ? +(vendorCostTotal - vendRunning).toFixed(2) : +((m.percent / 100) * vendorCostTotal).toFixed(2);
-    custRunning = +(custRunning + custAmt).toFixed(2); vendRunning = +(vendRunning + vendAmt).toFixed(2);
+    vendRunning = +(vendRunning + vendAmt).toFixed(2);
     return {
       label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt,
       vendor_paid: m.vendor_paid !== false, calc_mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
       flat_customer_amount: (m.flat_customer_amount != null ? m.flat_customer_amount : null),
     };
   });
+}
+function scopeAbsorberLabel(schedule) { for (let k = schedule.length - 1; k >= 0; k--) { if (!(schedule[k].calc_mode === 'flat' && schedule[k].flat_customer_amount != null)) return schedule[k].label; } return ''; }
+// Oct 13 2026: can this schedule take an optional add-on at all? Returns '' when fine, else a plain
+// explanation. Flat rows stay fixed; the last non-flat row absorbs the difference, so it must exist
+// and must not go negative at the SMALLEST total the customer could sign (percent rows only grow with
+// the total, so if it is >= 0 there it is >= 0 at every larger total).
+function scopeScheduleAddonProblem(schedule, smallestTotal) {
+  const isFlatRow = (m) => m.calc_mode === 'flat' && m.flat_customer_amount != null;
+  let absorber = -1;
+  for (let k = schedule.length - 1; k >= 0; k--) { if (!isFlatRow(schedule[k])) { absorber = k; break; } }
+  if (absorber < 0) return 'Every payment on this schedule is a fixed $ amount, so an optional add-on would leave the payments not adding up to the new total. Make at least one payment (usually the Final) a "% of total" row.';
+  const amts = scopeComputeMilestoneAmounts(schedule, smallestTotal, 0);
+  if (amts[absorber].customer_amount < 0) return `The fixed-$ payments on this schedule leave "${schedule[absorber].label}" at $${amts[absorber].customer_amount.toFixed(2)} on a $${(+smallestTotal).toFixed(2)} job — lower a fixed amount or raise the % rows so the last % payment is not negative.`;
+  return '';
 }
 // Given a signature's FULL milestone schedule (any order; sorted here by `sequence`), returns the
 // ACTUAL vendor-payable amount per milestone once a Vendor_Paid_At_This_Milestone:false milestone's
@@ -4859,6 +4845,9 @@ async function scopeProposalSign(env, body, ip, ua) {
   for (const it of items) {
     const variants = it.variants || [];
     let key = selections[it.id];
+    // Optional add-on: only included if the customer's selection names one of its options; anything
+    // else (absent, '__none__', a bad key) means DECLINED — never silently added to what they owe.
+    if (it.optional && !variants.some(v => v.key === key)) continue;
     if (!variants.some(v => v.key === key)) key = it.selected_key || (variants[0] && variants[0].key);
     const sel = variants.find(v => v.key === key) || variants[0];
     if (!sel) continue;
@@ -4870,6 +4859,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   let vendorCostTotal = 0;
   for (const it of scopeParseItems(s)) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on — not signed, so no vendor cost
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) vendorCostTotal += (+v.vendor_cost || 0);
   }
@@ -4879,17 +4869,30 @@ async function scopeProposalSign(env, body, ip, ua) {
   let rcMaterialsCost = 0, rcMaterialsPrice = 0;
   for (const it of scopeParseItems(s)) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) rcMaterialsCost += (+v.rc_materials_cost || 0);
   }
   for (const it of items) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) rcMaterialsPrice += (+v.materials_price || 0);
   }
   rcMaterialsCost = +rcMaterialsCost.toFixed(2); rcMaterialsPrice = +rcMaterialsPrice.toFixed(2);
   subtotal = +subtotal.toFixed(2); vendorCostTotal = +vendorCostTotal.toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2); // legacy column, kept for any old dashboard summing it — not used for new billing
+  if (items.some(it => it.optional)) {
+    // A schedule that can't absorb the signed total (all rows flat, or fixed $ exceed the total) must
+    // never be signed — refuse BEFORE any write, tell Brett (telemetry), show the customer a plain message.
+    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s), await scopeMaxUpfrontPct(env));
+    const addonProblem = scopeScheduleAddonProblem(sv.schedule || scopeDefaultPaymentSchedule(), subtotal);
+    if (addonProblem) {
+      let telemetryError = '';
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_sign_schedule_mismatch', Skill_Or_Endpoint: '/scope-proposal/sign', Success: 'FALSE', Notes: `scope=${s.ID} subtotal=${subtotal} problem=${addonProblem}`.slice(0, 480) }); } catch (e) { telemetryError = String(e && e.message || e); }
+      return json({ error: 'schedule_unavailable', message: 'This proposal can\'t be signed online right now. Please contact Ridge Co and we\'ll send you a corrected copy.', ...(telemetryError ? { telemetry_error: telemetryError } : {}) }, 409);
+    }
+  }
   const now = new Date();
   if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
     try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
@@ -8367,15 +8370,19 @@ async function assignVendor(env, body, internal) {
     // misleading until real reply/call handling replaces the Flow. Portal Accept/Decline
     // (Aug 13 build) is unaffected by this — it's a real, working button, not an SMS reply.
     const link = vendorPortalLink(body.wo_id);
+    // English version always built (Oct 13 2026, Brett: the Message Queue showed only the Spanish that
+    // was sent): for a Spanish vendor it rides along as the queue row's Original_Body so the review
+    // screen can show what the text says in English.
+    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
     const msg = isSpanish
       ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.\n${link}`
-      : `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
+      : msgEn;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
     // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
     // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, bypassQuietHours: internal.bypassQuietHours === true });
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, original_body: isSpanish ? msgEn : '', translated_to: isSpanish ? 'es' : '', bypassQuietHours: internal.bypassQuietHours === true });
     vendorSMSSent = r.sent;
     const _lang = isSpanish ? 'es' : 'en';
     if (r.sent) vendorSmsDetail = { status: 'sent', reason: r.test_mode ? 'TEST MODE IS ON: the text went to the Hub test number, NOT to the vendor' : 'Text sent to the vendor', test_mode: !!r.test_mode, language: _lang, message_body: r.message_body || msg };
@@ -8485,7 +8492,7 @@ async function updateStatus(env, body) {
   }
   // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
   // each other, but Cleaning is created On Hold and must wait until BOTH finish (or the
-  // date-fallback sweep in scheduled() releases it first). This only ever fires for a WO
+  // date-fallback `daily_turnover` scheduler job releases it first). This only ever fires for a WO
   // that's actually part of a turnover group and just went Complete — everything else is a
   // no-op single extra field read.
   if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
@@ -10499,12 +10506,12 @@ function estimatesAwaitingDecision(estimates, workorders, now, sinceISO) {
   return out.sort((a, b) => String(a.estimate.Created_Date).localeCompare(String(b.estimate.Created_Date)));
 }
 function etDateString(date) { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(date); }
-// Runs from cronSweep (every 15 min). Sends ONE digest text per day, in the 8am ET hour, only when
-// something is awaiting a decision. Claims the day BEFORE sending, so a double-firing sweep (the
-// GitHub Actions path and the Cloudflare cron both call cronSweep) can never text twice.
+// Runs from the scheduler's `sweep_work` job (every ~15 min). Sends ONE digest text per day, from 8am ET until
+// 6pm ET (so a scheduler outage at 8am still catches up that day, never after hours), only when something is
+// awaiting a decision. Claims the day BEFORE sending, so two overlapping callers can never text twice.
 async function processEstimateReminders(env, nowArg) {
   const now = nowArg || new Date();
-  if (etHour(now) !== 8) return { skipped: 'not the 8am ET hour' };
+  { const h = etHour(now); if (h < 8 || h >= 18) return { skipped: 'outside the 8am-6pm ET reminder window' }; }
   let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
   const today = etDateString(now);
   if (cfg.estimate_reminder_last_date === today) return { skipped: 'already sent today' };
@@ -10672,7 +10679,7 @@ async function depositSweepSurface(env, out, cfg, kind, entry) {
   try { await setConfigKey(env, { key, value: stamp }); cfg[key] = stamp; }
   catch (ce) { out.errors.push({ scope: entry.scope || '', stage: 'alert_marker', error: String((ce && ce.message) || ce).slice(0, 200) }); }
 }
-// Fast sweep (cronSweep every 15 min, qbSyncPayments / the daily scheduled() run, and POST /scope-deposit/sweep
+// Fast sweep (the scheduler's sweep_work job every ~15 min, the daily_qb_sync job via qbSyncPayments, and POST /scope-deposit/sweep
 // which the Who To Pay page fires when it opens). Only touches QuickBooks when a Pre-approved scope exists.
 // Returns { ok, checked, transitioned:[{scope,wo_id,texted,text_errors?,invoice_id,source}], not_found:[{scope,wo_id,reason,invoice_id?}],
 // awaiting_invoice:[{scope,wo_id,reason}] (fresh signing, normal wait, no alert), errors:[{scope?,wo_id?,stage,error}] }.
@@ -12956,7 +12963,7 @@ async function createVendorRequest(env, body) {
 // PURE — true while an add-on child has not been approved (no vendor nudges yet).
 function addonNudgeHold(wo) { return !!wo && String(wo.Type || '') === 'addon' && String(wo.Approval_Stage || '') !== 'Approved'; }
 
-// Called from the periodic sweep (POST /cron/sweep, cronSweep). Handles all 3 request types
+// Called from the scheduler's `sweep` job (POST /cron/run; also manual POST /cron/sweep). Handles all 3 request types
 // through one loop: satisfied-checks first (so a row that's already resolved never nudges
 // again even if it's technically "due"), then the type-specific quiet/nudge/cap logic.
 async function processVendorNudges(env) {
@@ -13436,7 +13443,7 @@ async function adminNotify(env, body) {
 }
 
 // ── Door-code system watchdog (Oct 12 2026) ──────────────────────────────────────────────────────────
-// An independent check, run from the Hub's EXISTING */15 cron (no new trigger), that GETs the public
+// An independent check, run by the scheduler's `door_watchdog` job (Apps Script clock, ~every 15 min - NO cron), that GETs the public
 // /health of the str-automation Worker (guest door codes + alerts) and texts Brett when it looks broken:
 // fetch throws/times out (8s) / non-200 / non-JSON; ok !== true; any secrets_set value not true;
 // last_tick null/invalid/older than 75 min (normally refreshes every ~25-30 min); problems[] non-empty.
@@ -13453,7 +13460,7 @@ async function adminNotify(env, body) {
 //     SMS cannot be delivered (Twilio off/failing, admin_phone missing) an email goes to the same
 //     address inspAlert uses; if NEITHER channel delivers the alert is NOT marked sent, so the next
 //     15-min pass retries it. If the state store is unavailable a per-isolate in-memory copy limits
-//     repeats until it recovers. The scheduled() caller wraps the whole pass so it can never break
+//     repeats until it recovers. The scheduler's `door_watchdog` job wraps the whole pass so it can never break
 //     the other jobs.
 //   * Testable without waiting for cron: pure evaluateDoorHealth / doorWdDecide / doorWdNextState /
 //     doorWdComposeAlert (unit tests), runDoorWatchdogPass with injectable io (fetch, Config read,
@@ -13752,8 +13759,8 @@ async function runDoorWatchdogPass(env, opts) {
   return res;
 }
 
-// The scheduled() entry points for the watchdog + the (formerly swallowed) sweep. Both NEVER throw, so
-// neither can break the other jobs in scheduled(). Every failure inside runDoorWatchdogPass is already
+// The scheduler entry point for the watchdog (job `door_watchdog`). It NEVER throws, so it cannot break the
+// other jobs. Every failure inside runDoorWatchdogPass is already
 // logged + alerted there; the catch here is for a genuinely unexpected throw.
 async function doorWatchdogCron(env) {
   try {
@@ -13768,16 +13775,6 @@ async function doorWatchdogCron(env) {
     return { ok: false, errors: ['pass threw: ' + m] };
   }
 }
-// Oct 12 2026 (nothing may fail silently): cronSweep's failure used to be swallowed in scheduled().
-async function cronSweepLogged(env) {
-  try { await cronSweep(env); }
-  catch (e) {
-    const m = String((e && e.message) || e).slice(0, 300);
-    console.error('cronSweep failed:', m);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'cron_sweep', Skill_Or_Endpoint: 'scheduled/cron-sweep', Success: 'FALSE', Notes: ('cronSweep threw: ' + m).slice(0, 480) }); } catch (e2) { console.error('cronSweep failure telemetry write failed:', e2 && e2.message); }
-  }
-}
-
 // GET /watchdog/door-system - read-only: live health evaluation + stored state. Sends nothing, writes nothing.
 async function doorWatchdogStatus(env) {
   const nowMs = Date.now();
@@ -14069,8 +14066,8 @@ async function smsGatedSend(env, opts) {
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
-    // not sent; the row keeps Status:'pending' with Send_After set, and the GitHub Actions
-    // sweep (processQuietHoursQueue, replacing Cloudflare cron — see CURRENT.md) re-checks
+    // not sent; the row keeps Status:'pending' with Send_After set, and the scheduler's `sweep`
+    // job (processQuietHoursQueue, Apps Script clock - NO cron) re-checks
     // Global/Test-Mode and actually sends once due.
     // bypassQuietHours (Sep 16 2026): property-wide urgent notices — water shutoffs, power
     // outages — can't wait for a 9am release like a routine status update can. Only
@@ -14228,26 +14225,19 @@ async function processQuietHoursQueue(env) {
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
     const sent = !!(result && result.sid);
     await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
-    results.push({ id, sent, gate_snapshot: gateSnapshot });
+    results.push({ id, sent, failed: !sent, gate_snapshot: gateSnapshot });
   }
   return { checked: due.length, results };
 }
 
-// POST /cron/sweep — the ONE endpoint the GitHub Actions workflow (.github/workflows/
-// cron-sweep.yml) hits periodically, replacing Cloudflare Cron Triggers for this kind of
-// time-sensitive work. Consolidates every periodic message-processing job into one call so
-// one scheduled workflow run covers all of them:
-//   1. processQuietHoursQueue — fires quiet-hours-held Message_Queue rows now due.
-//   2. processPendingNotifications — the Notification_Queue deferred-appointment-reminder
-//      sweep (tenant_job_scheduled messages queued days ahead). This existed already but was
-//      NEVER actually called automatically anywhere — only reachable via the admin-gated
-//      GET /notifications/pending — so deferred reminders have been silently sitting unsent
-//      this whole time. Wiring it in here is the actual fix, not just a new feature riding
-//      alongside one.
-//   3. processVendorNudges — the vendor status-update clock + manual photos/invoice nudges
-//      (Sep 14 2026). This closes the exact open question flagged when the sweep was first
-//      built (CURRENT.md, rule 166) — no new scheduling mechanism needed, it just plugs in here.
-// Each step is independently try/caught so one failing step never blocks the others.
+// POST /cron/sweep - MANUAL use only (Oct 12 2026: no cron anywhere; the Apps Script scheduler runs the same work as
+// the `sweep`, `sweep_work` and `sweep_checks` jobs via POST /cron/run). Runs, back to back:
+//   1. processQuietHoursQueue - fires quiet-hours-held Message_Queue rows now due.
+//   2. processPendingNotifications - the Notification_Queue deferred-appointment-reminder sweep.
+//   3. processVendorNudges - the vendor status-update clock + manual photos/invoice nudges (Sep 14 2026).
+//   4. processRecurringWorkOrders, processEstimateReminders, processDepositPaidSweep,
+//      maybeRunDailySelftest, checkDeadManSwitch.
+// Each step is independently caught so one failing step never blocks the others - and every failure is returned in `errors`.
 // ── Admin failure alerting (Ops_Build_Queue #14, #10 — Sep 19 2026) ────────────────────────
 // Two related, deliberately dormant-by-default alerting features, both reusing the existing
 // admin-alert delivery shape (config.admin_phone + sendSMS — the same pattern every other
@@ -14262,15 +14252,14 @@ async function processQuietHoursQueue(env) {
 //    optional admin SMS, then re-throws so the outer handler's existing 500-response behavior
 //    to the caller is completely unchanged — this only adds observability, never changes what
 //    a failing request returns.
-// 2. checkDeadManSwitch runs every cronSweep pass (piggybacking the existing ~15-min cadence,
-//    no new Cloudflare Cron Trigger slot needed) and alerts if NO telemetry row of any
+// 2. checkDeadManSwitch runs in the scheduler's `sweep_checks` job (~every 15 min, Apps Script clock - NO cron)
+//    and alerts if NO telemetry row of any
 //    Job_Type has been logged in the last 24h. Known, honest limitation (not hidden): a
 //    self-check that runs *inside* this Worker can't detect the Worker being totally down —
 //    if nothing is running, this can't run either. It DOES catch a real, common failure class
-//    (the Worker is up, cron is firing, but something upstream silently stopped completing
-//    jobs). Total-outage coverage already exists separately via cron-sweep.yml's own
-//    GitHub-Actions-level failure email (non-200 -> exit 1 -> GitHub notifies watchers) — the
-//    two are complementary, not redundant.
+//    (the Worker is up, the scheduler is ticking, but something upstream silently stopped completing
+//    jobs). Total-outage coverage is the Apps Script's own email alerts (HubScheduler.gs mails Brett on any
+//    non-200 / unreachable Worker / overdue job, independent of the Hub) - the two are complementary.
 
 // Pure: has an alert for this debounce `key` already fired within `windowMs`? No I/O — easy to
 // test in isolation. Shared by both features below so a real, ongoing problem doesn't re-page
@@ -14339,8 +14328,8 @@ async function checkDeadManSwitch(env) {
 
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
 // independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
-// `schedule:` (now removed, see that file — it's manual/workflow_dispatch-only going forward)
-// and the Cloudflare Cron Trigger in scheduled() below. Both called cronSweep() on the
+// `schedule:` and the Cloudflare Cron Trigger in scheduled(). (Oct 12 2026: BOTH are now gone - cron-sweep.yml is deleted,
+// the Cloudflare cron is removed, and the Apps Script scheduler is the only clock; cronSweep below is manual-only.) Both called cronSweep() on the
 // assumption it was idempotent to fire twice. It wasn't: processVendorNudges (and the other two
 // sub-sweeps) read a row as "due," act on it, and only mark it done AFTERWARD — no claim step.
 // Real result: a vendor (Eddie Smith, WO-1195) got the same invoice-nudge SMS twice, 2.5 hours
@@ -14356,27 +14345,766 @@ const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a norma
 async function cronSweep(env) {
   env = __cronEnv(env);
   const now = new Date();
-  let cfg;
-  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
-  const claimedUntil = cfg[CRON_SWEEP_LOCK_KEY] ? new Date(cfg[CRON_SWEEP_LOCK_KEY]) : null;
+  let rows;
+  try { rows = await schedReadConfigRows(env, true); }
+  catch (e) { return json({ ok: false, error: 'could not read Config: ' + schedErrText(e) }, 503); }   // was: cfg = {} (a failed read looked like "no claim")
+  // The Apps Script scheduler owns these jobs: never sweep beside one of its in-flight runs (duplicate sends).
+  const sp = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+  if (sp.error) return json({ ok: false, error: sp.error }, 503);
+  const sUntil = Date.parse(sp.state.claim_until || '');
+  if (!isNaN(sUntil) && sUntil > now.getTime()) return json({ ok: true, skipped: 'the scheduler is running a job right now', claim_job: sp.state.claim_job || null });
+  const cs = schedCell(rows, CRON_SWEEP_LOCK_KEY);
+  const claimedUntil = cs ? new Date(cs) : null;
   if (claimedUntil && !isNaN(claimedUntil.getTime()) && claimedUntil > now) {
     return json({ ok: true, skipped: 'already claimed', claimed_until: claimedUntil.toISOString() });
   }
+  const out = { ok: true, ts: now.toISOString(), errors: [], warnings: [] };
   try {
     await setConfigKey(env, { key: CRON_SWEEP_LOCK_KEY, value: new Date(now.getTime() + CRON_SWEEP_LOCK_TTL_MS).toISOString() });
-  } catch (e) { /* best-effort — if the claim write itself fails, still proceed rather than silently never sweeping again */ }
-
-  const out = { ok: true, ts: now.toISOString() };
-  try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
-  try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
-  try { out.recurring_wos = await processRecurringWorkOrders(env); } catch (e) { out.recurring_wos = { error: String((e && e.message) || e) }; }
-  try { out.estimate_reminders = await processEstimateReminders(env); } catch (e) { out.estimate_reminders = { error: String((e && e.message) || e) }; }
-  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'cronSweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) {} }
-  try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
-  try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
-  try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
+  } catch (e) { out.warnings.push('could not write the sweep claim (' + schedErrText(e) + '); sweeping anyway'); console.error('cronSweep: claim write failed:', schedErrText(e)); }
+  // Same work as the scheduler's sweep / sweep_work / sweep_checks jobs, run back to back (manual use only).
+  for (const run of [schedRunSweepMessages, schedRunSweepWork, schedRunSweepChecks]) {
+    const r = await run(env);
+    Object.assign(out, r.detail);
+    for (const e of r.errors) out.errors.push(e);
+  }
+  out.ok = out.errors.length === 0;
+  if (!out.ok) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'cron_sweep', Skill_Or_Endpoint: 'manual/cron-sweep', Success: 'FALSE', Notes: JSON.stringify(out.errors).slice(0, 480) }); }
+    catch (e) { out.telemetry_error = schedErrText(e); console.error('cronSweep: failure telemetry write failed:', out.telemetry_error); }
+  }
   return json(out);
 }
+
+// ═══ SCHEDULER-BLOCK-BEGIN ════════════════════════════════════════════════════════════════════
+// APPS SCRIPT SCHEDULER (Oct 12 2026) — PERMANENT RULE: NO CRON ANYWHERE. Apps Script time-driven
+// triggers are the ONLY clock (apps-script/hub-scheduler/HubScheduler.gs, one `everyMinutes(15)` trigger).
+// No Cloudflare Cron Triggers (the account is at its cap, so a trigger silently never attaches — that is
+// why quiet-hours messages were never released), no GitHub Actions `schedule:`. To add a periodic job, add
+// it to SCHED_JOBS below AND a row to the JOBS table at the top of HubScheduler.gs (the one place every
+// schedule - Hub jobs, other Workers, GitHub workflows - is seen and edited); never add a cron.
+//
+//   POST /cron/run     (Scheduler_Token) runs AT MOST ONE due job, in its own Worker invocation, and says
+//                      whether more are due; the Apps Script loops until more=false.
+//   GET  /cron/status  (Scheduler_Token) per-job last-run / overdue report. /health shows a coarse copy.
+//
+// State is ONE Config JSON key (Scheduler_State) so the shared Sheets quota is barely touched. Single-flight:
+// a caller claims the dispatcher (claim_until ~4 min + claim_id, written then RE-READ to prove it won the
+// race) before running anything, and every job is also gated by its own min-interval / once-per-ET-day key,
+// so a second caller (even a second Apps Script project) is a no-op: no duplicate runs, no duplicate sends.
+// Nothing here fails silently: a throwing job is caught, logged to Ops_Telemetry (Success FALSE,
+// Job_Type 'scheduler_job'), recorded in state, and returned as job_ok:false. Successful ticks write NO
+// telemetry row (the Config state key is the heartbeat; Ops_Telemetry has a ~1000-row grid).
+const SCHED_TOKEN_KEY = 'Scheduler_Token';
+const SCHED_STATE_KEY = 'Scheduler_State';
+const SCHED_TOKEN_MIN_LEN = 24;
+const SCHED_CLAIM_TTL_MS = 4 * 60 * 1000;
+const SCHED_JOB_BUDGET_MS = 50 * 1000;      // Apps Script UrlFetch gives up around 60s; a longer job finishes in the background (ctx.waitUntil) and records its result in state
+const SCHED_VERIFY_DELAY_MS = 700;
+const SCHED_RETRY_GAP_MS = 30 * 60 * 1000;  // failed daily/weekly job: retry no sooner than this ...
+const SCHED_MAX_ATTEMPTS = 3;               // ... and at most this many tries per ET day
+const SCHED_OVERDUE_INTERVAL_MIN = 45;
+const SCHED_OVERDUE_GRACE_MIN = 180;
+const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard'];
+
+// Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
+// Fails closed for a blank/short/missing secret, an empty header, any other method or path.
+function schedTokenOk(secret, tok, method, path) {
+  if (typeof secret !== 'string') return false;
+  const s = secret.trim();
+  if (s.length < SCHED_TOKEN_MIN_LEN) return false;
+  if (typeof tok !== 'string' || !tok) return false;
+  const routeOk = (method === 'POST' && path === '/cron/run') || (method === 'GET' && path === '/cron/status');
+  if (!routeOk) return false;
+  if (tok.length !== s.length) return false;
+  let diff = 0;
+  for (let i = 0; i < s.length; i++) diff |= tok.charCodeAt(i) ^ s.charCodeAt(i);
+  return diff === 0;
+}
+
+// ── Config access (STRICT: unlike fetchConfig, a failed read THROWS — a swallowed read would look like
+// "no state" and re-run every job, i.e. duplicate sends) ─────────────────────────────────────────────
+async function schedReadConfigRows(env, fresh) {
+  if (fresh) invalidateTabCache('Config');
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  return (data && data.values) || [];
+}
+function schedFindRow(rows, key) { return rows.findIndex(r => String((r && r[0]) || '').trim() === key); }
+function schedCell(rows, key) { const i = schedFindRow(rows, key); return i < 0 ? '' : String((rows[i] && rows[i][1]) || ''); }
+// The auth gate's lookup. Returns { ok } or { ok:false, error } (a Config read failure must not look like a bad token).
+async function schedAuthCheck(env, tok, method, path) {
+  const routeOk = (method === 'POST' && path === '/cron/run') || (method === 'GET' && path === '/cron/status');
+  if (!routeOk || typeof tok !== 'string' || !tok) return { ok: false };
+  try { return { ok: schedTokenOk(schedCell(await schedReadConfigRows(env, false), SCHED_TOKEN_KEY), tok, method, path) }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 300) }; }
+}
+// Pure. Parse the state cell. Blank = first run; invalid JSON is an ERROR (never silently "empty").
+function schedParseState(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { state: { v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} } };
+  let st;
+  try { st = JSON.parse(s); } catch (e) { return { error: 'Scheduler_State in Config is not valid JSON (' + String(e.message).slice(0, 80) + '). Delete that Config row to reset it - the next tick is then a first run: the 15-minute jobs run at once, and daily/weekly jobs whose time already passed today are marked done (seeded) so nothing is sent twice.' }; }
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return { error: 'Scheduler_State in Config is not a JSON object. Delete that Config row to reset it.' };
+  if (!st.jobs || typeof st.jobs !== 'object') st.jobs = {};
+  return { state: st };
+}
+async function schedWriteState(env, state, rows) {
+  const text = JSON.stringify(state);
+  if (text.length > 40000) throw new Error('Scheduler_State grew past 40000 chars (' + text.length + ') - refusing to write');
+  const idx = schedFindRow(rows, SCHED_STATE_KEY);
+  if (idx >= 0) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `Config!B${idx + 1}`, values: [[text]] }] });
+  else await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [[SCHED_STATE_KEY, text]] });
+  return text;
+}
+// Write, wait, re-read: returns { text, rows, parsed, landed } where landed = the cell now holds exactly what we wrote.
+async function schedWriteVerified(env, state, rows, sleep, delayMs) {
+  const text = await schedWriteState(env, state, rows);
+  if (delayMs > 0) await sleep(delayMs);
+  const rows2 = await schedReadConfigRows(env, true);
+  const parsed = schedParseState(schedCell(rows2, SCHED_STATE_KEY));
+  return { text, rows: rows2, parsed, landed: schedCell(rows2, SCHED_STATE_KEY) === text };
+}
+
+// ── Eastern wall-clock helpers (DST-correct via Intl, like etHour/nyOffsetMinutes) ─────────────────
+function schedEtParts(date) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hourCycle: 'h23', weekday: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  const dow = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[p.weekday];
+  return { date: `${p.year}-${p.month}-${p.day}`, minutes: (+p.hour) * 60 + (+p.minute), dow };
+}
+function schedAtMinutes(at) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); return m ? (+m[1]) * 60 + (+m[2]) : NaN; }
+
+// ── The registry. Priority = array order. Add a job here; never add a cron. ──────────────────────────
+// kind 'interval': due when >= every_min since its last START. 'daily'/'weekly': due once per ET calendar day
+// (and, weekly, only on `dow`) once ET wall-clock >= `at` - and they CATCH UP: if the Apps Script was down at
+// 7am the job runs on the next tick that day. retry:false = never auto-retry a failed run (it may have
+// already sent something); a job result may also set no_retry:true when the failure was after a send.
+const SCHED_JOBS = [
+  { name: 'door_watchdog',      kind: 'interval', every_min: 14, run: (env) => schedRunDoorWatchdog(env) },
+  { name: 'sweep',              kind: 'interval', every_min: 14, run: (env) => schedRunSweepMessages(env) },
+  { name: 'sweep_work',         kind: 'interval', every_min: 14, run: (env) => schedRunSweepWork(env) },
+  { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
+  { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
+  { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
+  { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
+  { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
+  { name: 'daily_turnover',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyTurnover(env) },
+  { name: 'daily_qb_sync',      kind: 'daily',    at: '07:00', run: (env) => schedRunDailyQbSync(env) },
+  { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
+  { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
+  { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
+];
+
+// Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
+function schedJobDue(job, js, nowDate) {
+  js = js || {};
+  const nowMs = +nowDate;
+  if (job.disabled) return null;                                  // turned off in the Apps Script JOBS table (enabled:false)
+  if (job.kind === 'interval') {
+    const last = Date.parse(js.last_start || '');
+    if (!isNaN(last) && last <= nowMs + 5 * 60000 && nowMs - last < job.every_min * 60000) return null;
+    return { key: 'interval' };
+  }
+  const et = schedEtParts(nowDate);
+  if (job.kind === 'weekly' && et.dow !== job.dow) return null;
+  if (et.minutes < schedAtMinutes(job.at)) return null;
+  if (js.last_key === et.date) return null;                       // already done (or deliberately not retried) for this ET day
+  const at = js.attempts;
+  if (at && at.key === et.date && at.n > 0) {
+    if (at.n >= SCHED_MAX_ATTEMPTS) return null;                  // gave up for today; /cron/status shows it overdue
+    const lastEnd = Date.parse(js.last_end || js.last_start || '');
+    if (!isNaN(lastEnd) && nowMs - lastEnd < SCHED_RETRY_GAP_MS) return null;
+  }
+  return { key: et.date };
+}
+// Pure + clock-injectable: the due jobs, in priority order. opts.only restricts to named jobs.
+function schedDueJobs(state, now, jobs, opts) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const only = opts && opts.only && opts.only.length ? opts.only : null;
+  const out = [];
+  for (const job of (jobs || SCHED_JOBS)) {
+    if (only && !only.includes(job.name)) continue;
+    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate);
+    if (d) out.push({ name: job.name, key: d.key });
+  }
+  return out;
+}
+// FIRST-EVER TICK ONLY (Scheduler_State cell blank/absent): mark every daily/weekly job whose slot has ALREADY PASSED today
+// (ET) as done for today, so the first tick cannot re-send a digest / weekly review / AR report that the old Cloudflare
+// crons (or a person) already ran this morning. Mutates `state`; returns the seeded names. No last_ok is forged: the entry
+// carries last_status 'seeded' + last_seeded:true so /cron/status can tell it from a real run. Interval jobs are never
+// seeded (they run at once). Jobs added to the registry LATER (state exists, no entry) are not seeded: they keep catch-up.
+function schedSeedFirstRun(state, nowDate, jobs) {
+  const et = schedEtParts(nowDate), seeded = [];
+  for (const job of (jobs || SCHED_JOBS)) {
+    if (job.kind === 'interval') continue;
+    if (job.kind === 'weekly' && et.dow !== job.dow) continue;
+    if (et.minutes < schedAtMinutes(job.at)) continue;
+    state.jobs[job.name] = Object.assign({}, state.jobs[job.name], { last_key: et.date, last_status: 'seeded', last_seeded: true, seeded_at: nowDate.toISOString() });
+    seeded.push(job.name);
+  }
+  if (seeded.length) state.seeded = { at: nowDate.toISOString(), jobs: seeded.slice() };
+  return seeded;
+}
+// ── SCHEDULE OVERRIDES (Oct 13 2026) ─────────────────────────────────────────────────────────────────────────
+// Brett wants every schedule visible and editable in ONE place: the JOBS table at the top of HubScheduler.gs. The
+// registry above holds the DEFAULTS; each tick the Apps Script sends its JOBS table as `schedule` in POST /cron/run
+// ({ jobName: { enabled, every_min, at, dow } }) and the Hub applies it on top of the defaults. The last accepted map is
+// remembered in Scheduler_State (`schedule`) so /cron/status, /health and a manual dry run all describe the SAME schedule.
+// Strictly validated and never silently ignored: an unknown job, an unknown field, a kind change, or a bad value rejects the
+// whole map (400 + telemetry), so a typo in the table is an email, not a job that quietly keeps its old time.
+// `every_min` is the HUMAN cadence ("every 15 minutes"); the Hub subtracts 1 minute of jitter allowance (the ticks are never
+// exactly 15:00 apart), which is why the registry stores 14 for a 15-minute job.
+// RESERVED, deliberately NOT implemented: `quiet` (an overnight pause window). It is rejected with a plain message until built.
+const SCHED_OVERRIDE_FIELDS = ['enabled', 'every_min', 'at', 'dow'];
+const SCHED_EVERY_MIN_MAX = 24 * 60;
+function schedHumanEvery(job) { return job.every_human || (job.every_min + 1); }
+function schedOverdueLimitMin(job) { return Math.max(SCHED_OVERDUE_INTERVAL_MIN, 3 * schedHumanEvery(job)); }
+// Pure. -> { jobs, applied, errors }. `raw` undefined/null = no overrides.
+function schedApplyOverrides(jobs, raw) {
+  const errors = [], applied = {};
+  if (raw === undefined || raw === null) return { jobs, applied, errors };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { jobs, applied, errors: ['schedule must be an object keyed by job name'] };
+  const byName = new Map(jobs.map(j => [j.name, j]));
+  for (const name of Object.keys(raw)) {
+    const job = byName.get(name), o = raw[name];
+    if (!job) { errors.push(`unknown job "${name}"`); continue; }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) { errors.push(`${name}: must be an object`); continue; }
+    const norm = {};
+    for (const k of Object.keys(o)) {
+      if (k === 'quiet') { errors.push(`${name}: quiet windows (pausing a job overnight) are not active yet - remove "quiet"`); continue; }
+      if (!SCHED_OVERRIDE_FIELDS.includes(k)) { errors.push(`${name}: unknown field "${k}" (allowed: ${SCHED_OVERRIDE_FIELDS.join(', ')})`); continue; }
+      const v = o[k];
+      if (k === 'enabled') { if (typeof v !== 'boolean') errors.push(`${name}: enabled must be true or false`); else norm.enabled = v; }
+      else if (k === 'every_min') {
+        if (job.kind !== 'interval') errors.push(`${name}: it is a ${job.kind} job - it has a time ("at"), not "every_min"`);
+        else if (!Number.isInteger(v) || v < 1 || v > SCHED_EVERY_MIN_MAX) errors.push(`${name}: every_min must be a whole number from 1 to ${SCHED_EVERY_MIN_MAX}`);
+        else norm.every_min = v;
+      } else if (k === 'at') {
+        if (job.kind === 'interval') errors.push(`${name}: it is an every-N-minutes job - it has "every_min", not a time ("at")`);
+        else if (typeof v !== 'string' || !/^([01]?\d|2[0-3]):[0-5]\d$/.test(v)) errors.push(`${name}: at must look like "07:00" (24-hour, Eastern time)`);
+        else norm.at = v.length === 4 ? '0' + v : v;
+      } else if (k === 'dow') {
+        if (job.kind !== 'weekly') errors.push(`${name}: only weekly jobs have a day of the week`);
+        else if (!Number.isInteger(v) || v < 0 || v > 6) errors.push(`${name}: dow must be 0 (Sunday) to 6 (Saturday)`);
+        else norm.dow = v;
+      }
+    }
+    if (Object.keys(norm).length) applied[name] = norm;
+  }
+  if (errors.length) return { jobs, applied: {}, errors };
+  const out = jobs.map(job => {
+    const o = applied[job.name];
+    if (!o) return job;
+    const j = Object.assign({}, job);
+    if (o.enabled === false) j.disabled = true;
+    if (o.every_min !== undefined) { j.every_min = o.every_min <= 1 ? 1 : o.every_min - 1; j.every_human = o.every_min; }
+    if (o.at !== undefined) j.at = o.at;
+    if (o.dow !== undefined) j.dow = o.dow;
+    return j;
+  });
+  return { jobs: out, applied, errors };
+}
+// The schedule currently in force according to a (parsed) Scheduler_State. Never throws; a corrupt stored map falls back to the defaults and says so.
+function schedEffective(state) {
+  const r = schedApplyOverrides(SCHED_JOBS, state && state.schedule);
+  return r.errors.length ? { jobs: SCHED_JOBS, schedule_error: 'stored schedule is invalid (' + r.errors.join('; ').slice(0, 200) + '); using the defaults' } : { jobs: r.jobs };
+}
+function schedExpected(job) {
+  if (job.disabled) return 'DISABLED (enabled:false in the JOBS table)';
+  if (job.kind === 'interval') return job.every_human ? `every ${job.every_human} min` : `every ${job.every_min}+ min`;
+  if (job.kind === 'daily') return `daily after ${job.at} ET`;
+  return `${SCHED_DOW_NAMES[job.dow]} after ${job.at} ET`;
+}
+// Pure. Per-job health for /cron/status and /health.
+function schedStatus(state, now, jobs) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const nowMs = +nowDate, et = schedEtParts(nowDate);
+  const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
+  const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), seeded: (state && state.seeded) || null, jobs: {}, overdue: [] };
+  for (const job of (jobs || SCHED_JOBS)) {
+    const js = (state && state.jobs && state.jobs[job.name]) || {};
+    if (job.disabled) {   // switched off on purpose: never "overdue"
+      out.jobs[job.name] = { expected: schedExpected(job), enabled: false, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue: false, overdue_reason: '' };
+      continue;
+    }
+    const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
+    let overdue = false, reason = '';
+    if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
+      overdue = true; reason = `started ${ageMin(js.last_start)} min ago and never finished (timed out or crashed)`;
+    }
+    if (job.kind === 'interval') {
+      const okAge = ageMin(js.last_ok);
+      if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
+      else if (okAge > schedOverdueLimitMin(job)) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${schedOverdueLimitMin(job)})`; }
+    } else {
+      const expectedToday = job.kind === 'daily' || et.dow === job.dow;
+      if (expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
+        overdue = true; reason = reason || `has not run for ${et.date} (was due ${job.at} ET)`;
+      }
+      if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
+    }
+    out.jobs[job.name] = { expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
+    if (overdue) out.overdue.push(job.name);
+  }
+  return out;
+}
+
+// ── Job runners. Each returns { ok, errors:[{step,error}], detail, no_retry? } and NEVER swallows. ──────
+function schedErrText(e) { return String((e && e.message) || e).slice(0, 300); }
+// Normalise a step's return (plain object or fetch Response) and report anything that looks like a failure.
+async function schedUnwrap(v) {
+  if (v && typeof v === 'object' && typeof v.status === 'number' && typeof v.clone === 'function') {
+    let body = null;
+    try { body = await v.clone().json(); } catch (e) { body = { unparseable_response: schedErrText(e) }; }
+    return { status: v.status, body };
+  }
+  return { status: 200, body: v };
+}
+function schedBadness(status, b) {
+  if (status >= 400) return `HTTP ${status}: ${b && b.error ? (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)) : 'failed'}`.slice(0, 300);
+  if (b && typeof b === 'object') {
+    if (b.unparseable_response) return 'unreadable response: ' + b.unparseable_response;
+    if (b.error) return (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)).slice(0, 300);
+    if (b.ok === false) return ('ok:false ' + JSON.stringify(b.errors || b.reason || '')).slice(0, 300);
+    if (Array.isArray(b.errors) && b.errors.length) return (b.errors.length + ' error(s): ' + JSON.stringify(b.errors)).slice(0, 300);
+    if (typeof b.failed === 'number' && b.failed > 0) return `${b.failed} item(s) failed`;
+    if (Array.isArray(b.failed) && b.failed.length) return `${b.failed.length} item(s) failed: ${JSON.stringify(b.failed)}`.slice(0, 300);
+  }
+  return null;
+}
+// Runs one step: a throw OR a failure-shaped result is pushed to `errors`; the (unwrapped) body is returned.
+async function schedStep(name, fn, errors) {
+  try {
+    const u = await schedUnwrap(await fn());
+    const bad = schedBadness(u.status, u.body);
+    if (bad) errors.push({ step: name, error: bad });
+    return u.body;
+  } catch (e) { errors.push({ step: name, error: schedErrText(e) }); return undefined; }
+}
+async function schedRunDoorWatchdog(env) {
+  const errors = [];
+  const wd = await schedStep('door_watchdog', () => doorWatchdogCron(env), errors);
+  return { ok: !errors.length, errors, detail: wd };
+}
+// The three sweep jobs below are cronSweep split three ways so each gets its own Worker invocation / time budget.
+async function schedRunSweepMessages(env) {
+  const errors = [], detail = {};
+  detail.quiet_hours = await schedStep('quiet_hours', () => processQuietHoursQueue(env), errors);
+  const failedSends = detail.quiet_hours && Array.isArray(detail.quiet_hours.results) ? detail.quiet_hours.results.filter(r => r && r.failed) : [];
+  if (failedSends.length) errors.push({ step: 'quiet_hours', error: `${failedSends.length} held message(s) failed to send: ${failedSends.map(r => r.id).join(',')}`.slice(0, 300) });
+  detail.pending_notifications = await schedStep('pending_notifications', () => processPendingNotifications(env), errors);
+  detail.vendor_nudges = await schedStep('vendor_nudges', () => processVendorNudges(env), errors);
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunSweepWork(env) {
+  const errors = [], detail = {};
+  detail.recurring_wos = await schedStep('recurring_wos', () => processRecurringWorkOrders(env), errors);
+  detail.estimate_reminders = await schedStep('estimate_reminders', () => processEstimateReminders(env), errors);
+  detail.deposit_paid = await schedStep('deposit_paid', async () => {
+    try { return await processDepositPaidSweep(env); }
+    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); } throw e; }
+  }, errors);
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunSweepChecks(env) {
+  const errors = [], detail = {};
+  // A selftest FINDING is delivered by selftestRun itself (its own digest + telemetry); only a run that cannot execute is a job failure.
+  detail.selftest = await schedStep('selftest', async () => { const r = await maybeRunDailySelftest(env); return (r && r.total !== undefined) ? { ok: r.ok, total: r.total, passed: r.passed, selftest_failed: r.failed } : r; }, errors);
+  detail.dead_man_switch = await schedStep('dead_man_switch', () => checkDeadManSwitch(env), errors);
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunInspGuard(env) {
+  const errors = [], warnings = [];
+  const r = await schedStep('insp_guard', async () => {
+    try { return await inspStrGuardTick(env); }
+    catch (e) { try { await inspAlert(env, 'str_guard_tick', schedErrText(e)); } catch (e2) { warnings.push('could not alert about the guard failure: ' + schedErrText(e2)); } throw e; }
+  }, errors);
+  return { ok: !errors.length, errors, warnings, detail: r };
+}
+async function schedRunDailyDigest(env) {
+  const errors = [], warnings = []; let no_retry = false;
+  const t0 = Date.now();
+  let digest, delivery;
+  try { digest = await buildDigest(env); } catch (e) { errors.push({ step: 'build_digest', error: schedErrText(e) }); }
+  if (digest) {
+    no_retry = true;   // from here a message may have gone out - never blindly re-send
+    try { delivery = await deliverDigest(env, digest); } catch (e) { errors.push({ step: 'deliver_digest', error: schedErrText(e) }); }
+    if (!errors.length) {
+      no_retry = false;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_digest', Skill_Or_Endpoint: 'scheduler/daily-digest', Success: 'TRUE', Latency_ms: Date.now() - t0, Notes: (delivery && delivery.delivered) ? 'delivered' : 'dormant' }); }
+      catch (e) { warnings.push('heartbeat telemetry row failed: ' + schedErrText(e)); }
+    }
+  }
+  return { ok: !errors.length, errors, warnings, no_retry, detail: { delivered: !!(delivery && delivery.delivered) } };
+}
+async function schedRunDailyReceipts(env) {
+  const errors = [], detail = {};
+  detail.receipt_scan = await schedStep('receipt_scan', () => receiptScan(env), errors);
+  detail.receipt_recon_scan = await schedStep('receipt_recon_scan', () => receiptReconScan(env, { max: 5 }), errors);
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunDailyReceiptsPost(env) {
+  const errors = [], detail = {};
+  detail.items_summary = await schedStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors);
+  detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
+  const before = errors.length;
+  detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, {}), errors);
+  return { ok: !errors.length, errors, detail, no_retry: errors.length > before };   // a half-failed email batch is not blindly re-sent
+}
+async function schedRunDailyTurnover(env) {
+  const errors = [];
+  const r = await schedStep('release_turnover_by_date', () => releaseTurnoverByDate(env), errors);
+  return { ok: !errors.length, errors, detail: r };
+}
+async function schedRunDailyQbSync(env) {
+  const errors = [], detail = {};
+  let sweepRanInSync = false;
+  try {
+    const res = await qbSyncPayments(env, {});
+    const u = await schedUnwrap(res);
+    sweepRanInSync = !!(u.body && u.body.deposit_sweep);
+    // Same condition scheduled() always used (ok:false or a non-empty errors list), plus a non-2xx status.
+    const b = u.body;
+    const bad = u.status >= 400 ? `HTTP ${u.status}` : (b && (b.ok === false || (b.errors && b.errors.length))) ? String(JSON.stringify((b.errors || b.error || 'ok:false'))).slice(0, 300) : null;
+    if (bad) {
+      errors.push({ step: 'qb_sync_payments', error: bad });
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify((u.body && (u.body.errors || u.body.error)) || 'ok:false')).slice(0, 480) }); }
+      catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
+    }
+    detail.qb_sync = { status: u.status, deposit_sweep: sweepRanInSync };
+  } catch (e) {
+    errors.push({ step: 'qb_sync_payments', error: schedErrText(e) });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: schedErrText(e) }); }
+    catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
+  }
+  // qbSyncPayments already runs the deposit-paid sweep (and logs its findings) - only run it here if that did not happen.
+  if (!sweepRanInSync) {
+    try { detail.deposit_paid = await processDepositPaidSweep(env); }
+    catch (e) {
+      errors.push({ step: 'deposit_paid_sweep', error: schedErrText(e) });
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduler/deposit-paid-sweep', Success: 'FALSE', Notes: schedErrText(e) }); }
+      catch (e2) { errors.push({ step: 'deposit_paid_sweep_telemetry', error: schedErrText(e2) }); }
+    }
+  }
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunWeeklyReview(env, deliver) {
+  const errors = [];
+  const r = await schedStep('weekly_review', () => runWeeklyReview(env, { deliver: !!deliver, trigger: 'cron' }), errors);
+  if (r && r.logged === false) errors.push({ step: 'weekly_review', error: 'review ran but its Ops_Review_Log history row did not save' + (r.logged_error ? ': ' + r.logged_error : '') });
+  if (r && r.delivery && r.delivery.reason === 'error') errors.push({ step: 'weekly_review', error: 'delivery failed: ' + (r.delivery.error || 'unknown') });
+  return { ok: !errors.length, errors, detail: r ? { logged: r.logged, delivery: r.delivery } : null };
+}
+async function schedRunArReport(env) {
+  const errors = [];
+  const r = await schedStep('weekly_ar_report', () => runWeeklyArReport(env), errors);
+  return { ok: !errors.length, errors, detail: r };
+}
+
+// ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
+// ── PREFLIGHT (dry run only): plain-English, COUNTS ONLY, strictly read-only (GETs; no claim, no state write, no SMS). ──
+const SCHED_PF_WHAT = {
+  door_watchdog: 'checks the door-code system (str-automation /health); texts Brett only if it is unhealthy',
+  sweep: 'texts any quiet-hours-held messages that are now due, sends due queued reminders, and sends due vendor nudges',
+  sweep_work: 'posts due recurring work orders, sends the once-a-day estimate reminder, and moves paid-deposit scopes forward',
+  sweep_checks: 'runs the daily self-test (once a day) and the dead-man check (alerts if no telemetry for 24h)',
+  insp_guard: 'checks inspection bookings against the STR calendar (does nothing until the inspection module is configured)',
+  daily_digest: 'builds the morning digest and texts it to the admin phone',
+  daily_receipts: 'scans the receipt inbox',
+  daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
+  daily_turnover: 'releases turnover work orders due today',
+  daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
+  review_mon: 'runs the Monday weekly review and delivers it',
+  review_wed: 'runs the Wednesday weekly review (logged only)',
+  ar_report_mon: 'builds and delivers the Monday AR aging report',
+};
+async function schedPfTab(env, tab) {
+  try { return await fetchTab(env, tab); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }
+}
+function schedAgeSummary(isoList, nowMs) {
+  const by_age = { under_1h: 0, h1_to_24: 0, d1_to_7: 0, over_7d: 0, unknown: 0 };
+  let oldest = null;
+  for (const iso of isoList) {
+    const ts = Date.parse(iso || '');
+    if (isNaN(ts)) { by_age.unknown++; continue; }
+    const h = (nowMs - ts) / 3600000;
+    if (h < 1) by_age.under_1h++; else if (h < 24) by_age.h1_to_24++; else if (h < 168) by_age.d1_to_7++; else by_age.over_7d++;
+    if (oldest === null || h > oldest) oldest = h;
+  }
+  return { by_age, oldest_days: oldest === null ? null : Math.round(oldest / 2.4) / 10 };
+}
+async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
+  const nowMs = +now;
+  const out = { ok: true, read_only: true, note: 'Counts only. Nothing was sent, claimed or written by this dry run.', errors: [], will_not_run_today_seeded: (seeded || []).slice(), jobs: {} };
+  const cfg = {};
+  for (const r of (cfgRows || [])) { const k = String((r && r[0]) || '').trim(); if (k) cfg[k] = String((r && r[1]) || ''); }
+  const fail = (where, e) => { const m = schedErrText(e); out.ok = false; out.errors.push({ where, error: m }); return { error: m }; };
+  for (const name of dueNames) {
+    const entry = { would: SCHED_PF_WHAT[name] || '' };
+    const sub = async (key, fn) => { try { entry[key] = await fn(); } catch (e) { entry[key] = fail(name + '.' + key, e); } };
+    if (name === 'sweep') {
+      entry.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+      entry.twilio_test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+      await sub('quiet_hours_held_due', async () => {
+        const rows = (await schedPfTab(env, MSG_QUEUE_TAB)).filter(r => r.Status === 'pending' && r.Send_After && Date.parse(r.Send_After) <= nowMs);
+        const by_type = {}; for (const r of rows) by_type[r.Recipient_Type || '?'] = (by_type[r.Recipient_Type || '?'] || 0) + 1;
+        const ages = schedAgeSummary(rows.map(r => r.Send_After), nowMs);
+        return Object.assign({ count: rows.length, by_recipient_type: by_type }, ages, { stale_over_1d: ages.by_age.d1_to_7 + ages.by_age.over_7d });
+      });
+      await sub('queued_notifications_due', async () => {
+        const rows = (await schedPfTab(env, NOTIF_QUEUE_TAB)).filter(r => r.Sent !== 'TRUE' && r.Phone && r.Message && (!r.Send_After || Date.parse(r.Send_After) <= nowMs));
+        return Object.assign({ count: rows.length }, schedAgeSummary(rows.map(r => r.Send_After || r.Created_At), nowMs));
+      });
+      await sub('vendor_nudges_due', async () => {
+        const rows = (await schedPfTab(env, VENDOR_REQ_TAB)).filter(r => r.Status === 'open' && r.Next_Nudge_At && Date.parse(r.Next_Nudge_At) <= nowMs);
+        const by_type = {}; for (const r of rows) by_type[r.Request_Type || '?'] = (by_type[r.Request_Type || '?'] || 0) + 1;
+        const ages = schedAgeSummary(rows.map(r => r.Next_Nudge_At), nowMs);   // how long each nudge has been due: a pile of old ones is a "stale" backlog
+        return Object.assign({ count: rows.length, by_request_type: by_type }, ages, { stale_over_1d: ages.by_age.d1_to_7 + ages.by_age.over_7d });
+      });
+    } else if (name === 'sweep_work') {
+      const h = etHour(now);
+      await sub('estimate_reminder', async () => {
+        if (h < 8 || h >= 18) return { would_send: false, reason: 'outside the 8am-6pm ET window' };
+        if (cfg.estimate_reminder_last_date === etDateString(now)) return { would_send: false, reason: 'already sent today' };
+        const [ests, wos] = await Promise.all([schedPfTab(env, 'Estimates'), schedPfTab(env, 'Work_Orders')]);
+        const n = estimatesAwaitingDecision(ests, wos, now, cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE).length;
+        return { would_send: n > 0, estimates_awaiting_decision: n };
+      });
+      await sub('recurring_wos', async () => {
+        if (h < RECUR_POST_START_HOUR_ET || h >= QUIET_HOURS_START_ET) return { would_post: 0, reason: 'outside the 8:00am-7:00pm ET posting window' };
+        const tpls = (await schedPfTab(env, 'WO_Templates')).filter(x => x.Active !== 'FALSE' && recurIsTrue(x.Recurrence_Enabled));
+        if (!tpls.length) return { active_templates: 0, would_post: 0 };
+        const wos = await schedPfTab(env, 'Work_Orders'), today = recurEtDateISO(now);
+        let would = 0; const notes = [];
+        for (const tpl of tpls) {
+          const due = recurLatestDue(tpl, today); if (!due) continue;
+          let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (e) { skips = {}; notes.push('template ' + tpl.ID + ' has unreadable Last_Skips (' + schedErrText(e) + ')'); }
+          for (const tg of recurTargets(tpl)) {
+            const mine = wos.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === tg.p && (w.Unit_ID || '') === tg.u);
+            if (mine.some(w => w.Recurring_Due === due)) continue;
+            const key = recurTargetKey(tg); if (skips[key] && skips[key] >= due) continue;
+            if (mine.find(recurWOIsOpen)) continue;
+            would++;
+          }
+        }
+        return Object.assign({ active_templates: tpls.length, would_post: would }, notes.length ? { notes } : {});
+      });
+      await sub('deposit_paid', async () => ({ pre_approved_scopes: (await schedPfTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved').length }));
+    } else if (name === 'daily_digest') {
+      entry.admin_phone_set = !!String(cfg.admin_phone || '').trim();
+    }
+    out.jobs[name] = entry;
+  }
+  return out;
+}
+
+function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
+// Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
+async function schedRunNext(env, ctx, opts) {
+  opts = opts || {};
+  const baseJobs = opts.jobs || SCHED_JOBS;
+  let jobs = baseJobs;
+  const nowMs = opts.now || (() => Date.now());
+  const sleep = opts.sleep || ((ms) => new Promise(r => setTimeout(r, ms)));
+  const verifyDelay = opts.verifyDelayMs != null ? opts.verifyDelayMs : SCHED_VERIFY_DELAY_MS;
+  const budget = opts.budgetMs != null ? opts.budgetMs : SCHED_JOB_BUDGET_MS;
+  const only = Array.isArray(opts.only) ? opts.only.map(String) : (opts.only ? [String(opts.only)] : []);
+  const force = !!opts.force && only.length === 1;
+  const unknown = only.filter(n => !baseJobs.some(j => j.name === n));
+  const base = { ok: true, ran: null, job_ok: null, error: null, more: false, due: [], ts: new Date(nowMs()).toISOString() };
+  const infraFail = async (msg) => {
+    const body = Object.assign({}, base, { ok: false, error: msg });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: 'dispatcher', Success: 'FALSE', Notes: msg.slice(0, 480) }); }
+    catch (e) { body.telemetry_error = schedErrText(e); console.error('scheduler: dispatcher failure and telemetry write failed:', msg, body.telemetry_error); }
+    return { status: 503, body };
+  };
+  if (unknown.length) return { status: 400, body: Object.assign({}, base, { ok: false, error: 'unknown job(s): ' + unknown.join(', ') }) };
+  if (opts.force && !force) return { status: 400, body: Object.assign({}, base, { ok: false, error: 'force requires exactly one job in "only"' }) };
+
+  let rows, parsed;
+  try { rows = await schedReadConfigRows(env, true); parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY)); }
+  catch (e) { return await infraFail('could not read Config (scheduler state): ' + schedErrText(e)); }
+  if (parsed.error) return await infraFail(parsed.error);
+  let st = parsed.state;
+  // The schedule in force: the map the caller just sent (the Apps Script JOBS table), else the last one remembered in state, else the defaults.
+  const sentSchedule = opts.schedule !== undefined && opts.schedule !== null;
+  const ov = schedApplyOverrides(baseJobs, sentSchedule ? opts.schedule : st.schedule);
+  if (ov.errors.length) {
+    const msg = (sentSchedule ? 'the schedule sent by the Apps Script JOBS table was rejected: ' : 'the stored schedule is invalid: ') + ov.errors.join('; ');
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: 'schedule_overrides', Success: 'FALSE', Notes: msg.slice(0, 480) }); }
+    catch (e) { console.error('scheduler: schedule rejected and telemetry write failed:', msg, schedErrText(e)); }
+    return { status: 400, body: Object.assign({}, base, { ok: false, error: msg.slice(0, 500) }) };
+  }
+  jobs = ov.jobs;
+  if (sentSchedule && !opts.dry) st.schedule = ov.applied;   // remembered for /cron/status, /health and later manual runs (persisted by the next state write below)
+  base.schedule_overrides = Object.keys(ov.applied);
+  base.disabled = jobs.filter(j => j.disabled).map(j => j.name);
+  const t = nowMs(), now = new Date(t), nowISO = now.toISOString();
+  // First-ever tick (blank/absent Scheduler_State): seed daily/weekly jobs whose slot already passed today so nothing is re-sent.
+  const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
+  const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
+  if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
+  const dueNow = schedDueJobs(st, now, jobs, { only });
+  base.due = force ? only.slice() : dueNow.map(d => d.name);
+
+  // DRY RUN / PREFLIGHT: no claim, no state write, no SMS, no job code. Lists what is due and (counts only) what it would do.
+  if (opts.dry) {
+    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) });
+    if (opts.preflight !== false) body.preflight = await schedPreflight(env, force ? only.slice() : dueNow.map(d => d.name), rows, now, seeded);
+    return { status: 200, body };
+  }
+
+  const claimedUntil = Date.parse(st.claim_until || '');
+  if (!isNaN(claimedUntil) && claimedUntil > t) {
+    return { status: 200, body: Object.assign({}, base, { skipped: 'another run holds the claim', claim_job: st.claim_job || null, claim_until: st.claim_until }) };
+  }
+  // Nothing to do: stamp the heartbeat (read-modify-write from the fresh read above) and finish.
+  if (!dueNow.length && !force) {
+    st.last_tick = nowISO; st.claim_until = ''; st.claim_id = ''; st.claim_job = '';
+    try {
+      const w = await schedWriteVerified(env, st, rows, sleep, 0);
+      if (!w.landed) return await infraFail('heartbeat write to Scheduler_State did not land (the cell does not hold what was written)');
+    } catch (e) { return await infraFail('could not write Scheduler_State heartbeat: ' + schedErrText(e)); }
+    return { status: 200, body: base };
+  }
+  const job = jobs.find(j => j.name === (force ? only[0] : dueNow[0].name));
+  const key = force ? 'forced' : dueNow[0].key;
+  // Claim: write {claim_id, claim_until, job.last_start}, wait, re-read - only the caller whose claim_id is still there runs.
+  const myId = schedRand();
+  st.last_tick = nowISO; st.claim_id = myId; st.claim_job = job.name; st.claim_until = new Date(t + SCHED_CLAIM_TTL_MS).toISOString();
+  const prev = st.jobs[job.name] || {};
+  st.jobs[job.name] = Object.assign({}, prev, { last_start: nowISO, last_status: 'running' });
+  try {
+    const w = await schedWriteVerified(env, st, rows, sleep, verifyDelay);
+    if (w.parsed.error) return await infraFail(w.parsed.error);
+    if (!w.parsed.state.claim_id || w.parsed.state.claim_id !== myId) {
+      return { status: 200, body: Object.assign({}, base, { skipped: 'lost the claim race to another caller', claim_job: w.parsed.state.claim_job || null }) };
+    }
+  } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
+
+  const jobEnv = __cronEnv(env);
+  const t0 = Date.now();
+  const work = (async () => {
+    let jobRes;
+    try { jobRes = await job.run(jobEnv, { now }); }
+    catch (e) { jobRes = { ok: false, errors: [{ step: 'job', error: schedErrText(e) }], threw: true }; }
+    if (!jobRes || typeof jobRes !== 'object') jobRes = { ok: false, errors: [{ step: 'job', error: 'job returned no result' }] };
+    const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
+    const jobOk = jobRes.ok !== false && errors.length === 0;
+    const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
+    const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
+    if (errors.length) out.errors = errors;
+    if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
+    if (!jobOk) {
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
+      catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
+      try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
+      catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
+    }
+    // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
+    let landed = false, stateErr = null, finalState = null;
+    for (let attempt = 0; attempt < 2 && !landed; attempt++) {
+      try {
+        const r2 = await schedReadConfigRows(env, true);
+        const p2 = schedParseState(schedCell(r2, SCHED_STATE_KEY));
+        if (p2.error) { stateErr = p2.error; break; }
+        const cur = p2.state;
+        const rec = Object.assign({}, cur.jobs[job.name] || {});
+        delete rec.last_seeded; delete rec.seeded_at;   // a real run replaces the first-run seed marker
+        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? 'ok' : 'failed';
+        rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
+        if (jobOk) rec.last_ok = rec.last_end;
+        if (job.kind !== 'interval') {
+          const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
+          const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
+          if (jobOk || finalFail) {
+            rec.last_key = etDay; rec.attempts = null;
+            rec.last_failed_final = finalFail ? etDay : null;
+          } else {
+            const a = rec.attempts && rec.attempts.key === etDay ? rec.attempts.n : 0;
+            rec.attempts = { key: etDay, n: a + 1 };
+          }
+        }
+        cur.jobs[job.name] = rec;
+        if (cur.claim_id === myId) { cur.claim_id = ''; cur.claim_until = ''; cur.claim_job = ''; }
+        const w2 = await schedWriteVerified(env, cur, r2, sleep, 0);
+        landed = w2.landed; finalState = cur;
+        if (!landed) stateErr = 'the end-of-run state write did not land (another writer overwrote Scheduler_State)';
+      } catch (e) { stateErr = schedErrText(e); }
+    }
+    if (!landed) {
+      out.ok = false; out.state_error = stateErr;
+      out.error = (out.error ? out.error + ' | ' : '') + 'STATE NOT RECORDED: ' + stateErr;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Notes: ('could not record the result of this run in Scheduler_State (the job may run again early): ' + stateErr).slice(0, 480) }); }
+      catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: state write failed and telemetry write failed:', stateErr, out.telemetry_error); }
+    } else if (finalState) {
+      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only }).map(d => d.name);
+      out.due = stillDue; out.more = stillDue.length > 0 && !force;
+    }
+    return out;
+  })();
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(work.catch((e) => { console.error('scheduler: background completion of ' + job.name + ' failed:', schedErrText(e)); }));   // keeps running + records state even if the caller hung up
+  let timer;
+  const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), budget); });
+  const done = await Promise.race([work, timeout]);
+  clearTimeout(timer);
+  if (done === null) {
+    return { status: 200, body: Object.assign({}, base, { ran: job.name, job_ok: null, timed_out: true, error: null, note: `${job.name} is still running after ${Math.round(budget / 1000)}s; it keeps going in the background and records its result in Scheduler_State (see /cron/status)` }) };
+  }
+  return { status: 200, body: done };
+}
+
+async function schedRunHandler(env, ctx, body) {
+  body = body || {};
+  const only = Array.isArray(body.only) ? body.only : (typeof body.only === 'string' && body.only ? [body.only] : []);
+  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true || body.dry_run === true, schedule: body.schedule });
+  return json(r.body, r.status);
+}
+async function schedStatusHandler(env) {
+  let rows, parsed;
+  try { rows = await schedReadConfigRows(env, true); parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY)); }
+  catch (e) { return json({ ok: false, error: 'could not read Config (scheduler state): ' + schedErrText(e) }, 503); }
+  if (parsed.error) return json({ ok: false, error: parsed.error }, 503);
+  const eff = schedEffective(parsed.state);
+  const s = schedStatus(parsed.state, new Date(), eff.jobs);
+  if (eff.schedule_error) s.schedule_error = eff.schedule_error;
+  const claimUntil = Date.parse(parsed.state.claim_until || '');
+  return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
+}
+// Coarse, public (/health): names only, no detail. Never throws - a failure is reported in the field.
+async function schedHealthSummary(env) {
+  try {
+    const rows = await schedReadConfigRows(env, false);
+    const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+    if (parsed.error) return { error: 'state unreadable' };
+    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs);
+    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
+  } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
+}
+// scheduled() is now a LOUD no-op. Cloudflare firing it means a stale Cron Trigger is still attached - a second,
+// unreliable clock that must not run jobs (duplicates) and must not go unnoticed. Rate-limited to once per 6h.
+async function schedUnexpectedCloudflareCron(env, event) {
+  const cron = String((event && event.cron) || '(unknown)');
+  const msg = `Cloudflare fired scheduled() for cron "${cron}" but NO cron is allowed (Apps Script is the only clock). A leftover Cron Trigger is still attached to this Worker - delete it in Cloudflare > Workers > Triggers. No job work was done.`;
+  console.error('scheduler: ' + msg);
+  const res = { ok: false, ran: false, cron, error: msg };
+  let last = '';
+  try { last = schedCell(await schedReadConfigRows(env, false), 'unexpected_cron_last_logged'); } catch (e) { res.config_error = schedErrText(e); }
+  const lastMs = Date.parse(last || '');
+  if (!isNaN(lastMs) && Date.now() - lastMs < 6 * 3600000) { res.rate_limited = true; return res; }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'unexpected_cloudflare_cron', Skill_Or_Endpoint: 'scheduled', Success: 'FALSE', Notes: msg.slice(0, 480) }); res.telemetry = 'logged'; }
+  catch (e) { res.telemetry_error = schedErrText(e); console.error('scheduler: unexpected-cron telemetry failed:', res.telemetry_error); }
+  try { res.alert = await alertAdminOnFailure(env, 'unexpected_cloudflare_cron', msg); } catch (e) { res.alert_error = schedErrText(e); }
+  try { await setConfigKey(env, { key: 'unexpected_cron_last_logged', value: new Date().toISOString() }); } catch (e) { res.stamp_error = schedErrText(e); }
+  return res;
+}
+// ═══ SCHEDULER-BLOCK-END ══════════════════════════════════════════════════════════════════════
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
@@ -14543,7 +15271,7 @@ async function processRecurringWorkOrders(env, opts) {
   const h = etHour(now);
   if (h < RECUR_POST_START_HOUR_ET || h >= QUIET_HOURS_START_ET) return { skipped: 'outside posting window (8:00am-7:00pm ET)' };
   let templates;
-  try { templates = await fetchTab(env, 'WO_Templates'); } catch (e) { return { skipped: 'no WO_Templates tab' }; }
+  try { templates = await fetchTab(env, 'WO_Templates'); } catch (e) { if (isMissingTabError(e)) return { skipped: 'no WO_Templates tab (no templates created yet)' }; throw e; }   // any other read failure is a failure, not "no tab"
   templates = templates.filter(t => t.Active !== 'FALSE' && recurIsTrue(t.Recurrence_Enabled));
   if (!templates.length) return { templates: 0, posted: 0 };
   await recurEnsureCols(env);
@@ -14570,7 +15298,8 @@ async function processRecurringWorkOrders(env, opts) {
       } catch (e) { result.errors.push({ template: tpl.ID, target: key, error: String((e && e.message) || e) }); }
     }
     if (skipsChanged || postedAny) {
-      try { await updateRow(env, 'WO_Templates', tpl.ID, { ...(skipsChanged ? { Last_Skips: JSON.stringify(skips) } : {}), ...(postedAny ? { Last_Posted_Date: today } : {}) }); } catch (_) {}
+      try { await updateRow(env, 'WO_Templates', tpl.ID, { ...(skipsChanged ? { Last_Skips: JSON.stringify(skips) } : {}), ...(postedAny ? { Last_Posted_Date: today } : {}) }); }
+      catch (e) { result.errors.push({ template: tpl.ID, target: 'template-state', error: 'posted/skipped but could not save Last_Skips/Last_Posted_Date: ' + String((e && e.message) || e) }); }
     }
   }
   return result;
@@ -14659,6 +15388,41 @@ async function listWOSnippets(env) {
 // POST /message-queue/skip { ids:[...] } — never deletes (Active stays TRUE); matches the
 // Hub's standing "keep forever" pattern for reviewed rows (e.g. the receipt-reconciler
 // duplicate checker's confirmed-duplicate rows).
+// POST /message-queue/translate { ids:[...] } — English view for the review screen (Oct 13 2026,
+// Brett: "the messaging queue ... only shows what is being sent ... add a translation part so my view
+// shows the translation"). Rows that already carry the English original (Original_Body — set by the
+// automatic vendor translation and by the dispatch text) return it as-is. A vendor row with no saved
+// English whose text reads as Spanish (older rows, or any hand-built Spanish text) is translated
+// Spanish -> English on the spot. Read-only: never edits or re-sends a row. A translation that could
+// not be produced comes back as an explicit per-row `error`, never a blank.
+const MQ_LOOKS_SPANISH = /[áéíóúñ¿¡]|\b(nuevo trabajo|inicie|su portal|el trabajo|para aceptar|hola|gracias|por favor|trabajo|cita|inquilino)\b/i;
+async function translateMessageQueue(env, body) {
+  const ids = (Array.isArray(body && body.ids) ? body.ids : []).map(String).slice(0, 15);
+  if (!ids.length) return json({ error: 'ids required' }, 400);
+  await ensureSmsInfra(env);
+  const rows = await fetchTab(env, MSG_QUEUE_TAB);
+  const results = [];
+  for (const id of ids) {
+    const r = rows.find(x => String(x.ID) === id);
+    if (!r) { results.push({ id, error: 'Message not found' }); continue; }
+    if (String(r.Original_Body || '').trim()) { results.push({ id, english: r.Original_Body, source: 'saved' }); continue; }
+    if (r.Recipient_Type !== 'vendor' || !MQ_LOOKS_SPANISH.test(r.Message_Body || '')) { results.push({ id, skipped: 'english' }); continue; }
+    let failMsg = '';
+    try {
+      const out = await translateText(env, r.Message_Body, 'Spanish', 'English', { preserve: true, max_tokens: 1200 });
+      if (!out || !String(out).trim() || out === r.Message_Body) failMsg = 'translation returned nothing';
+      else results.push({ id, english: String(out), source: 'live' });
+    } catch (e) { failMsg = String(e && e.message || e).slice(0, 300); }
+    if (failMsg) {
+      // Failure is visible twice: on the row itself (so the screen says so) and in Ops_Telemetry.
+      const res = { id, error: 'English translation is unavailable right now - try again in a minute.' };
+      try { await logTelemetry(env, { Job_Type: 'message_queue_translate', Skill_Or_Endpoint: '/message-queue/translate', Success: 'FALSE', Notes: 'message ' + id + ': ' + failMsg }); }
+      catch (te) { res.telemetry_error = String(te && te.message || te).slice(0, 200); }
+      results.push(res);
+    }
+  }
+  return json({ ok: true, results });
+}
 async function skipMessageQueue(env, body) {
   const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
   if (!ids.length) return json({ error: 'ids required' }, 400);
@@ -15524,9 +16288,9 @@ async function runWeeklyReview(env, opts) {
   }
   // Deliver first (gated), so the history row records the REAL outcome (reviewer NIT-1).
   let delivery = null;
-  if (opts.deliver) { try { delivery = await deliverReview(env, metrics, proposal, days); } catch (_) { delivery = { delivered: false, reason: 'error' }; } }
+  if (opts.deliver) { try { delivery = await deliverReview(env, metrics, proposal, days); } catch (e) { delivery = { delivered: false, reason: 'error', error: String((e && e.message) || e).slice(0, 200) }; } }
   const deliveredCol = !opts.deliver ? 'no' : (delivery && delivery.delivered) ? 'yes' : ('attempted:' + ((delivery && delivery.reason) || 'failed'));
-  let logged = false;
+  let logged = false, loggedError = '';
   try {
     await ensureTab(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await ensureColumns(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
@@ -15538,10 +16302,10 @@ async function runWeeklyReview(env, opts) {
       Proposal: proposal, Proposal_JSON: JSON.stringify(proposalItems || []), Trigger: opts.trigger || 'manual', Delivered: deliveredCol,
     });
     logged = true;
-  } catch (_) { /* history write is best-effort; the review still returns */ }
+  } catch (e) { loggedError = String((e && e.message) || e).slice(0, 200); console.error('weekly review: history row not saved:', loggedError); }   // the review still returns - with logged:false + logged_error, which the scheduler job reports
   // Self-instrument (PAT-031): the reviewer is itself a measured job.
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
-  return { ok: true, window_days: days, metrics, proposal, items: proposalItems, thin_data: thinData, logged, delivery };
+  return { ok: true, window_days: days, metrics, proposal, items: proposalItems, thin_data: thinData, logged, logged_error: loggedError || undefined, delivery };
 }
 
 // ── OPTIMIZER BUILD QUEUE (approve proposals → queue for the Prepare agent) ────
@@ -15575,7 +16339,13 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // is the free/cheap alternative, when one exists, so a paid idea always ships with its cheap
 // sibling right next to it. Blank on every row created by opsApprove/opsQueuePrepare — only
 // opsQueueScoutSubmit ever populates these.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround'];
+// Oct 13 2026 (queue upgrade, all additive via ensureColumns): Brett_Note = Brett's free-text
+// "your change" on a proposal (overrides the proposal in the build brief); Snooze_Until = ISO time
+// the item is hidden from his review until; PR_Number/Build_State/Build_Updated = two-way build
+// sync (building → pr_open → live | pr_closed [flagged] | abandoned); Dup_Of = "may overlap
+// row #N"; Shipped_Match = "looks already built: <FEATURE_LOG ref>"; Scout_Verdict/Scout_Note/
+// Scout_Reviewed = the Scout's re-check of a snoozed item against builds shipped since.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed'];
 // 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
 // awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
 // approved it to build. The ONLY status opsQueueScoutSubmit can ever write (see
@@ -15602,8 +16372,29 @@ async function opsApprove(env, body) {
   if (items.length > 20) return json({ error: 'too many at once (max 20)' }, 400);
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
-  const now = new Date().toISOString(); let queued = 0;
+  const now = new Date().toISOString(); let queued = 0, promoted = 0, already = 0;
+  // Oct 13 2026: approving must never CLONE a row that is already in the queue (that is how
+  // proposals.html's "this week's review" approvals created the duplicates Brett saw). Match
+  // against the live queue first: a proposed/held twin is promoted in place, anything already
+  // greenlit/building/done is reported as `already` and skipped.
+  let existing = [];
+  try {
+    const d0 = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const v0 = d0.values || [];
+    if (v0.length > 1) existing = v0.slice(1).map(r => { const o = {}; v0[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; });
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
   for (const it of items) {
+    const _m = findQueueMatch(it, existing.filter(r => String(r.Status || '').toLowerCase() !== 'dropped'), 'same');
+    if (_m) {
+      const _st = String(_m.row.Status || '').toLowerCase();
+      if (_st === 'proposed' || _st === 'held') {
+        const _rc = String(it.risk_class || it.riskClass || '').toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+        await updateRow(env, OPS_QUEUE_TAB, _m.row.ID, { Status: 'greenlit', Approved_By: String((body && body.by) || 'command-center'), Risk_Class: _rc, Snooze_Until: '', Build_Updated: now });
+        _m.row.Status = 'greenlit'; promoted++;
+      } else already++;
+      continue;
+    }
+    existing.push({ ID: 'new-' + queued, Title: String(it.title || ''), Problem: String(it.problem || ''), First_Step: String(it.action || it.first_step || ''), Status: 'greenlit' });
     // Risk_Class carries through from whatever proposed the item — never invented here, and
     // never defaulted to SAFE. Only the literal string 'SAFE' counts as SAFE; anything else
     // (missing, misspelled, explicitly 'GATED') stores as GATED, matching judge()'s own
@@ -15619,7 +16410,7 @@ async function opsApprove(env, body) {
     });
     queued++;
   }
-  return json({ ok: true, queued });
+  return json({ ok: true, queued, promoted, already });
 }
 
 async function opsQueueRead(env, url) {
@@ -15633,7 +16424,7 @@ async function opsQueueRead(env, url) {
   // that's already been queued or built instead of re-offering it as fresh. Same read-only data
   // (titles/problems, no money/PII), so the narrow OPS_QUEUE_TOKEN may read it too.
   if (url && url.searchParams && url.searchParams.get('all') === '1') {
-    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 200) });
+    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 400) });
   }
   const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
   return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
@@ -15648,10 +16439,42 @@ async function opsQueueUpdate(env, body) {
   const id = body && body.id;
   const status = String((body && body.status) || '').toLowerCase();
   if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
-  if (!OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
+  // Oct 13 2026: `status` is optional when the call only sets note / snooze_days / pr_number /
+  // build_state (Brett editing or snoozing a proposal without moving it through the lifecycle).
+  const _b = body || {};
+  const _hasExtra = _b.note !== undefined || _b.snooze_days !== undefined || _b.pr_number !== undefined || _b.build_state !== undefined;
+  if (!status && !_hasExtra) return json({ error: 'status (or note / snooze_days / pr_number / build_state) required' }, 400);
+  if (status && !OPS_QUEUE_STATUSES.includes(status)) return json({ error: 'status must be one of ' + OPS_QUEUE_STATUSES.join('|') }, 400);
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
-  const fields = { Status: status };
+  const fields = {};
+  const _nowMs = Date.now();
+  if (status) {
+    fields.Status = status;
+    fields.Build_Updated = new Date(_nowMs).toISOString();
+    if (status !== 'proposed') fields.Snooze_Until = ''; // moving on from review ends any snooze
+    if (['proposed', 'greenlit', 'prepared'].includes(status) && _b.build_state === undefined) { fields.Build_State = ''; } // retry / re-approve starts the build state fresh
+    // ...and forgets the old PR, otherwise sync re-reads the closed PR and flags a fresh rebuild as closed again
+    if (['proposed', 'greenlit', 'prepared'].includes(status) && _b.pr_number === undefined) { fields.PR_Number = ''; }
+  }
+  // Brett's free-text "your change" (Oct 13 2026) — injected into the build brief as an override.
+  if (_b.note !== undefined) fields.Brett_Note = String(_b.note || '').slice(0, 1000);
+  // Snooze = hide from Brett's review for N days (default 10 on the page); 0 clears. The Scout
+  // still sees snoozed rows and re-checks them against builds shipped since (Scout_Verdict reset).
+  if (_b.snooze_days !== undefined) {
+    const _s = snoozeUntilFromDays(_b.snooze_days, _nowMs);
+    if (_s === null) return json({ error: 'snooze_days must be a number from 0 to 365' }, 400);
+    fields.Snooze_Until = _s; fields.Scout_Verdict = ''; fields.Scout_Note = ''; fields.Scout_Reviewed = '';
+  }
+  if (_b.pr_number !== undefined) {
+    if (String(_b.pr_number) === '') fields.PR_Number = '';
+    else { const _pn = cleanPrNumber(_b.pr_number); if (!_pn) return json({ error: 'pr_number must be a positive integer' }, 400); fields.PR_Number = _pn; }
+  }
+  if (_b.build_state !== undefined) {
+    const _bs = String(_b.build_state);
+    if (!['', 'building', 'pr_open', 'live', 'pr_closed', 'abandoned', 'held'].includes(_bs)) return json({ error: 'invalid build_state' }, 400);
+    fields.Build_State = _bs; fields.Build_Updated = new Date(_nowMs).toISOString();
+  }
   if (body && body.reason) fields.Drop_Reason = String(body.reason).slice(0, 500);
   if (body && body.superseded_by) fields.Superseded_By = String(body.superseded_by).slice(0, 200);
   // Risk_Class (Sep 20 2026, "Proposed" review lane, proposals.html): optional — sent only when
@@ -15799,8 +16622,16 @@ async function opsQueueStatus(env, body) {
   const fields = { Status: status };
   if (status === 'held') fields.Held_Note = String(note).slice(0, 500);
   if (status === 'done') fields.Held_Note = ''; // cleanup — in case this is a retry after a prior held attempt
+  // Oct 13 2026 two-way sync: the build session may report the PR it opened. A 'done' report means
+  // "built, PR open, awaiting Brett's merge" — opsQueueSync flips it to live/pr_closed from GitHub.
+  const _prn = cleanPrNumber(body && body.pr_number);
+  if (_prn) fields.PR_Number = _prn;
+  fields.Build_Updated = new Date().toISOString();
+  if (status === 'building') fields.Build_State = _prn ? 'pr_open' : 'building';
+  if (status === 'done') fields.Build_State = 'pr_open';
+  if (status === 'held') fields.Build_State = 'held';
   await updateRow(env, OPS_QUEUE_TAB, id, fields);
-  return json({ ok: true, id, status });
+  return json({ ok: true, id, status, pr_number: _prn || undefined });
 }
 
 // PURE — given the row's CURRENT state plus what a build session wants to report, decide whether
@@ -15852,6 +16683,7 @@ async function opsQueueStartBuild(env, body) {
   const originalStatus = {};
   const statusCol = headers.indexOf('Status');
   const heldNoteCol = headers.indexOf('Held_Note');
+  const bsCol = headers.indexOf('Build_State'), buCol = headers.indexOf('Build_Updated'), prCol = headers.indexOf('PR_Number');
   const buildUpdates = [];
   for (const row of eligible) {
     originalStatus[row.ID] = row.Status;
@@ -15859,6 +16691,9 @@ async function opsQueueStartBuild(env, body) {
     const sheetRow = rowIndex + 2;
     if (statusCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [['building']] });
     if (heldNoteCol !== -1 && row.Status === 'held') buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(heldNoteCol)}${sheetRow}`, values: [['']] });
+    if (bsCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['building']] });
+    if (prCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(prCol)}${sheetRow}`, values: [['']] }); // a fresh build starts with no PR
+    if (buCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(buCol)}${sheetRow}`, values: [[new Date().toISOString()]] });
   }
   // ONE batched write across every eligible row, not N round-trips.
   if (buildUpdates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: buildUpdates });
@@ -15870,6 +16705,7 @@ async function opsQueueStartBuild(env, body) {
       const rowIndex = rows.findIndex(r => r.ID === row.ID);
       const sheetRow = rowIndex + 2;
       rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [[originalStatus[row.ID]]] });
+      if (bsCol !== -1) rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['']] });
     }
     if (rbUpdates.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: rbUpdates }); } catch (_) {} }
   };
@@ -15942,6 +16778,7 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
       `Problem: ${row.Problem || ''}`,
       `First_Step: ${row.First_Step || ''}`,
       `Effort: ${row.Effort || ''}`,
+      ...(String(row.Brett_Note || '').trim() ? [`BRETT'S CHANGE (overrides the proposal wherever they conflict): ${String(row.Brett_Note).trim()}`] : []),
       `Build_Brief:`,
       briefText,
     ].join('\n');
@@ -15949,6 +16786,8 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
 
   const instructions = [
     '---',
+    QUEUE_STANDING_RULES,
+    '',
     'INSTRUCTIONS FOR THIS BUILD SESSION',
     '',
     'You are building the item(s) above for Brett\'s RidgeCo Hub (Ridge-Co/RidgeCo). Load the brett-context skill first if you have not already. Follow CLAUDE.md discipline for every item: read live repo state before writing code, node --check, run the full test suite, add/update tests for what you build, write a FEATURE_LOG.md entry (use the [FL-YYYYMMDD-HHMM-xx] tag convention, not a bare rule number), update CURRENT.md\'s "WHERE THINGS STAND" section, then push via GH Broker (commit_patch for worker.js given its size, commit_file/commit_files elsewhere).',
@@ -15956,9 +16795,10 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
     'If this batch has more than one item, build them independently. If one item fails, hits a real blocker, or needs a design decision only Brett can make, do NOT let it block the others — hold that one item and keep going on the rest.',
     '',
     'As EACH item finishes (success OR failure), report it back immediately — do not wait until the whole batch is done:',
-    '- On success: POST https://maintenance-hub.brett-2f8.workers.dev/ops-queue-status',
+    'Put the line "Ops queue item #<ID>" in the body of every PR you open for an item (one PR per item where practical) — the Hub uses it to track the PR (open → merged / closed) back onto Brett\'s proposals page.',
+    '- On success (PR opened, awaiting Brett\'s merge): POST https://maintenance-hub.brett-2f8.workers.dev/ops-queue-status',
     `  Header: X-Auth-Token: ${opsQueueToken}`,
-    '  Body: {"id": "<the item\'s ID>", "status": "done"}',
+    '  Body: {"id": "<the item\'s ID>", "status": "done", "pr_number": <the PR number>}',
     '- On failure/blocker: same URL/header, Body: {"id": "<the item\'s ID>", "status": "held", "note": "<one or two sentences on what happened and what Brett needs to decide or check>"}',
     '',
     'Do this for every item in this batch, individually, even if some succeed and some don\'t.',
@@ -16029,22 +16869,68 @@ function buildScoutQueueRow(it, now, reviewTs) {
 // items/call — before this was built.
 async function opsQueueScoutSubmit(env, body) {
   const items = Array.isArray(body && body.items) ? body.items : [];
-  const verdict = validateScoutSubmitItems(items);
-  if (!verdict.ok) return json({ error: verdict.error }, 400);
+  // Oct 13 2026: `rechecks` = the Scout's re-evaluation of snoozed proposals against builds shipped
+  // since: [{id, verdict:'keep'|'covered'|'update', note}]. May be sent alone (items empty).
+  const rechecks = Array.isArray(body && body.rechecks) ? body.rechecks.slice(0, 60) : [];
+  if (!(items.length === 0 && rechecks.length > 0)) {
+    const verdict = validateScoutSubmitItems(items);
+    if (!verdict.ok) return json({ error: verdict.error }, 400);
+  }
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   const now = new Date().toISOString();
   const reviewTs = String((body && body.review_ts) || now);
   let queued = 0;
+  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [];
+  let rechecked = 0;
+  // Oct 13 2026: the old loop inserted blindly, so every Optimizer round re-proposed ideas that were
+  // already queued, dropped or built. Now: read the WHOLE queue (all statuses) first; skip a
+  // near-verbatim copy of ANY row (reported back in skipped_duplicates — never silent); insert a
+  // looser overlap but tag it Dup_Of so the page shows "may overlap #N"; and flag titles that look
+  // already shipped per FEATURE_LOG (flag only).
+  let pool = [];
+  try {
+    const dq = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const vq = dq.values || [];
+    if (vq.length > 1) pool = vq.slice(1).map(r => { const o = {}; vq[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; });
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const shipped = items.length ? await getShippedIndex() : { ok: true, index: [] };
   for (const it of items) {
-    await addRow(env, OPS_QUEUE_TAB, buildScoutQueueRow(it, now, reviewTs));
+    const same = findQueueMatch(it, pool, 'same');
+    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status }); continue; }
+    const rowObj = buildScoutQueueRow(it, now, reviewTs);
+    const ov = findQueueMatch(it, pool, 'overlap');
+    if (ov) {
+      rowObj.Dup_Of = String(ov.row.ID);
+      flagged_overlaps.push({ title: rowObj.Title, overlaps: ov.row.ID, status: ov.row.Status });
+      const ovst = String(ov.row.Status || '').toLowerCase();
+      if (ovst === 'done') rowObj.Shipped_Match = 'Overlaps already-built queue item #' + ov.row.ID;
+    }
+    if (shipped.ok && !rowObj.Shipped_Match) {
+      const sm = findShippedMatch(rowObj.Title, shipped.index);
+      if (sm) rowObj.Shipped_Match = 'Looks already built: ' + sm.ref;
+    }
+    await addRow(env, OPS_QUEUE_TAB, rowObj);
+    pool.push({ ID: 'new-' + queued, Title: rowObj.Title, Problem: rowObj.Problem, First_Step: rowObj.First_Step, Status: 'proposed' });
     queued++;
+  }
+  for (const rc of rechecks) {
+    try {
+      const rid = rc && rc.id; const vd = String((rc && rc.verdict) || '').toLowerCase();
+      const target = pool.find(r => String(r.ID) === String(rid));
+      if (!target) { recheck_errors.push({ id: rid, error: 'not_found' }); continue; }
+      if (String(target.Status || '').toLowerCase() !== 'proposed') { recheck_errors.push({ id: rid, error: 'not_proposed' }); continue; }
+      if (!['keep', 'covered', 'update'].includes(vd)) { recheck_errors.push({ id: rid, error: 'verdict must be keep|covered|update' }); continue; }
+      await updateQueueRowOrThrow(env, rid, { Scout_Verdict: vd, Scout_Note: String((rc && rc.note) || '').slice(0, 300), Scout_Reviewed: now });
+      rechecked++;
+    } catch (e) { recheck_errors.push({ id: rc && rc.id, error: String((e && e.message) || e) }); }
   }
   // Best-effort history row in Ops_Review_Log — never let a failure here undo or fail the
   // request for the queue rows already written above (same posture as runWeeklyReview's own
   // history write, and rule 174/CLAUDE.md: this really is non-fatal to the caller, since the
   // thing the caller asked for — the queue insert — has already succeeded by the time this runs).
   try {
+    if (!items.length) throw new Error('recheck-only call — no review-log row');
     await ensureTab(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await ensureColumns(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await addRow(env, OPS_REVIEW_TAB, {
@@ -16055,8 +16941,235 @@ async function opsQueueScoutSubmit(env, body) {
       Trigger: 'scout_reuse_radar', Delivered: 'no',
     });
   } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
-  return json({ ok: true, queued });
+  return json({ ok: true, queued, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
 }
+
+// ── Ops queue upgrade (Oct 13 2026): duplicate guard, shipped-index flag, snooze, PR sync ────────
+// Brett's ask: the proposals/greenlit queue filled with duplicate + overlapping proposals, he
+// could not tweak a proposal before approving it, and approved items never reported back. Every
+// helper marked PURE below has no env/I/O and is pinned by test/ops-queue-upgrade.test.mjs.
+
+// Words that carry no meaning for "is this the same ask" comparison.
+const QUEUE_STOPWORDS = new Set(['the','and','for','with','from','that','this','into','via','per','new','add','build','show','make','use','using','when','not','all','any','every','each','are','was','were','been','will','can','should','would','could','item','items','page','view','flow','tool','auto','automatic','automatically','system','feature']);
+
+// PURE — lowercase, strip punctuation, drop short/stop words, naive plural/ing/ed stemming.
+function queueTokens(text) {
+  const out = new Set();
+  String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).forEach(w => {
+    if (w.length < 3 || QUEUE_STOPWORDS.has(w)) return;
+    let s = w;
+    if (s.length > 5 && /ing$/.test(s)) s = s.slice(0, -3);
+    else if (s.length > 4 && /ed$/.test(s)) s = s.slice(0, -2);
+    else if (s.length > 4 && /ies$/.test(s)) s = s.slice(0, -3) + 'y';
+    else if (s.length > 3 && /s$/.test(s) && !/ss$/.test(s)) s = s.slice(0, -1);
+    if (s.length >= 3) out.add(s);
+  });
+  return out;
+}
+
+// PURE — Dice coefficient of two token sets (0..1). Empty sets → 0.
+function queueDice(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  a.forEach(t => { if (b.has(t)) inter++; });
+  return (2 * inter) / (a.size + b.size);
+}
+
+// PURE — how alike two queue items are. `title` = Dice on titles; `full` = Dice on
+// Title+Problem+First_Step. Calibrated Oct 13 2026 against Brett's real 156-row queue:
+// title>=0.9 or full>=0.8 caught 14 same-ask pairs with 0 false positives (safe to auto-skip);
+// title>=0.6 or full>=0.30 is the "possible overlap, show Brett" band (87% recall). The
+// Optimizer rewords the same idea each round, so wording-only matching can never be perfect —
+// the Scout prompt also reads the queue first, and the page groups "may overlap #N" items.
+function queueSimilarity(a, b) {
+  a = a || {}; b = b || {};
+  const _ta = queueTokens(a.Title != null ? a.Title : a.title), _tb = queueTokens(b.Title != null ? b.Title : b.title);
+  const title = queueDice(_ta, _tb);
+  const fa = [a.Title != null ? a.Title : a.title, a.Problem != null ? a.Problem : a.problem, a.First_Step != null ? a.First_Step : (a.action || a.first_step)].join(' ');
+  const fb = [b.Title != null ? b.Title : b.title, b.Problem != null ? b.Problem : b.problem, b.First_Step != null ? b.First_Step : (b.action || b.first_step)].join(' ');
+  const _fa = queueTokens(fa), _fb = queueTokens(fb);
+  const full = queueDice(_fa, _fb);
+  // Short titles collapse to 1-2 tokens once stopwords go ("Add vendor page" vs "Show vendor flow"), so
+  // "same" (auto-skip / promote-in-place) needs enough meaningful tokens on both sides; short ones can
+  // still be flagged as an overlap for Brett to see, never silently swallowed.
+  const _enoughT = _ta.size >= 3 && _tb.size >= 3, _enoughF = _fa.size >= 6 && _fb.size >= 6;
+  return { title, full, same: (_enoughT && title >= 0.9) || (_enoughF && full >= 0.8), overlap: title >= 0.6 || full >= 0.30 };
+}
+
+// PURE — best match for `item` among queue `rows` (any status). Returns {row, sim} or null.
+// level 'same' = near-verbatim copy; 'overlap' = possibly the same ask. Rows listed in
+// `ignoreIds` (e.g. the row being approved itself) are skipped.
+function findQueueMatch(item, rows, level, ignoreIds) {
+  let best = null;
+  const skip = new Set((ignoreIds || []).map(String));
+  for (const r of rows || []) {
+    if (!r || skip.has(String(r.ID))) continue;
+    const sim = queueSimilarity(item, r);
+    const hit = level === 'same' ? sim.same : sim.overlap;
+    if (!hit) continue;
+    const score = Math.max(sim.title, sim.full);
+    if (!best || score > best.score) best = { row: r, sim, score };
+  }
+  return best;
+}
+
+// PURE — is this row currently hidden from Brett's review by a snooze?
+function isSnoozed(row, nowMs) {
+  const t = Date.parse(String((row && row.Snooze_Until) || ''));
+  return Number.isFinite(t) && t > nowMs;
+}
+
+// PURE — snooze_days (1..365) → ISO timestamp, 0/'' → '' (clears). null = invalid.
+function snoozeUntilFromDays(days, nowMs) {
+  if (days === '' || days === null || days === undefined) return null;
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 0 || n > 365) return null;
+  if (n === 0) return '';
+  return new Date(nowMs + Math.round(n) * 86400000).toISOString();
+}
+
+// PURE — turn FEATURE_LOG.md text into [{ref, tokens}] "headline" entries so a new proposal can
+// be checked against everything already shipped. Entries are `## [FL-…] headline` sections and
+// `**N. headline.**` rules; only the first ~300 chars of each (the headline) are indexed.
+function buildShippedIndex(text) {
+  const idx = [];
+  const lines = String(text || '').split('\n');
+  for (const line of lines) {
+    let m = line.match(/^## (\[FL-[0-9A-Za-z-]+\])\s*(.*)$/);
+    if (m) { idx.push({ ref: m[1], tokens: queueTokens(m[2].slice(0, 300)) }); continue; }
+    m = line.match(/^\*\*(\d{1,3})\.\s+(.{10,300}?)(?:\*\*|\.\s)/);
+    if (m) idx.push({ ref: 'rule ' + m[1], tokens: queueTokens(m[2]) });
+  }
+  return idx;
+}
+
+// PURE — does a proposal title look already shipped? Needs >=3 meaningful title words and
+// >=75% of them present in one shipped headline. FLAG ONLY (never blocks a write).
+function findShippedMatch(title, index) {
+  const t = queueTokens(title);
+  if (t.size < 3) return null;
+  let best = null;
+  for (const e of index || []) {
+    let hit = 0;
+    t.forEach(w => { if (e.tokens.has(w)) hit++; });
+    const frac = hit / t.size;
+    if (frac >= 0.75 && (!best || frac > best.frac)) best = { ref: e.ref, frac };
+  }
+  return best;
+}
+
+let _shippedIndexCache = { at: 0, idx: null };
+// Fetches the public FEATURE_LOG once per 6h per isolate. Returns {ok, index?, error?}.
+async function getShippedIndex() {
+  if (_shippedIndexCache.idx && Date.now() - _shippedIndexCache.at < 6 * 3600 * 1000) return { ok: true, index: _shippedIndexCache.idx };
+  try {
+    const r = await fetch('https://raw.githubusercontent.com/Ridge-Co/RidgeCo/main/context/FEATURE_LOG.md', { headers: { 'User-Agent': 'ridgeco-hub' } });
+    if (!r.ok) return { ok: false, error: 'FEATURE_LOG fetch HTTP ' + r.status };
+    const idx = buildShippedIndex(await r.text());
+    _shippedIndexCache = { at: Date.now(), idx };
+    return { ok: true, index: idx };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+}
+
+// PURE — GitHub PR JSON → queue Build_State. merged → 'live' (main auto-deploys), closed
+// without merge → 'pr_closed' (FLAGGED to Brett, never auto-abandoned), else 'pr_open'.
+function prStateToBuildState(pr) {
+  if (!pr) return null;
+  if (pr.merged === true || pr.merged_at) return 'live';
+  if (String(pr.state) === 'closed') return 'pr_closed';
+  return 'pr_open';
+}
+
+// PURE — find the PR a build session opened for queue item `id` when it did not report a number:
+// the routine text tells sessions to put "Ops queue item #ID" in the PR body/title.
+function matchPrToItem(prs, id) {
+  const re = new RegExp('ops[ -]?queue\\s+(?:item\\s+)?#?' + String(id).replace(/[^0-9A-Za-z]/g, '') + '(?![0-9])', 'i');
+  for (const p of prs || []) {
+    if (re.test(String((p && p.title) || '') + '\n' + String((p && p.body) || ''))) return p;
+  }
+  return null;
+}
+
+// PURE — normalise a PR number from user/session input; null if not a positive integer.
+function cleanPrNumber(v) {
+  const n = parseInt(String(v == null ? '' : v).replace(/[^0-9]/g, ''), 10);
+  return Number.isFinite(n) && n > 0 && n < 100000 ? String(n) : null;
+}
+
+const QUEUE_REPO = 'Ridge-Co/RidgeCo';
+async function ghPublicJson(path, env) {
+  const hdrs = { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github+json' };
+  if (env && env.GITHUB_READ_TOKEN) hdrs['Authorization'] = 'Bearer ' + env.GITHUB_READ_TOKEN; // optional read-only token; works without it
+  const r = await fetch('https://api.github.com/repos/' + QUEUE_REPO + path, { headers: hdrs });
+  if (!r.ok) throw new Error('GitHub ' + path + ' → HTTP ' + r.status + (r.status === 403 || r.status === 429 ? ' (GitHub rate-limits the Hub\'s shared address; open the Proposals page to sync from your browser)' : ''));
+  return await r.json();
+}
+
+// POST /ops-queue/sync — two-way sync: checks the PR behind every in-flight build and records
+// live / pr_closed / pr_open on the row. Called by the proposals page on load and (once the Hub
+// scheduler PR #229 is merged) as a daily scheduler job — NOT a cron. Reads public GitHub only;
+// writes only Build_State/Build_Updated/PR_Number (+ Status→done when the PR merged). Every
+// failure is returned in `errors` — never swallowed. Accepts OPS_QUEUE_TOKEN or the admin secret.
+// updateRow returns a 404 Response (not a throw) for a missing row — callers that count successes must not treat that as success.
+async function updateQueueRowOrThrow(env, id, fields) {
+  const r = await updateRow(env, OPS_QUEUE_TAB, id, fields);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('queue row #' + id + ' could not be updated (HTTP ' + r.status + ')');
+  return r;
+}
+async function opsQueueSync(env, body, opts) {
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+  const v = d.values || [];
+  const rows = v.length > 1 ? v.slice(1).map(r => { const o = {}; v[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }) : [];
+  const _pref = body && body.title_prefix ? String(body.title_prefix) : '';
+  const inflight = rows.filter(r => {
+    if (_pref && !String(r.Title || '').startsWith(_pref)) return false;
+    const st = String(r.Status || '').toLowerCase();
+    const bs = String(r.Build_State || '');
+    return (st === 'building' || st === 'done' || st === 'held') && (bs === 'building' || bs === 'pr_open' || (bs === '' && r.PR_Number && st !== 'done'));
+  }).slice(0, 25);
+  const changed = [], errors = [];
+  // GitHub rate-limits anonymous calls from Cloudflare's shared addresses, so the Proposals page can
+  // look PRs up from Brett's own browser and pass them in as body.prs (same shape as GitHub's /pulls list).
+  // The narrow OPS_QUEUE_TOKEN (carried by every fired build session) is NOT trusted to supply PR state — it can only trigger a
+  // Worker-side GitHub read; supplied PR data is honoured for the admin secret (the Proposals page) and the TEST-only staging token.
+  const supplied = (body && Array.isArray(body.prs) && !(opts && opts.ignoreSuppliedPrs) ? body.prs : []).slice(0, 100)
+    .filter(p => p && Number.isFinite(Number(p.number)) && typeof p.state === 'string');
+  let prList = supplied.length ? supplied : null;
+  const nowIso = new Date().toISOString();
+  for (const r of inflight) {
+    try {
+      let n = cleanPrNumber(r.PR_Number);
+      if (!n) {
+        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env);
+        const hit = matchPrToItem(prList, r.ID);
+        if (hit) n = String(hit.number);
+      }
+      if (!n) continue; // no PR yet — page shows "building / no PR reported" (and "stalled" after 24h)
+      const pr = supplied.find(p => String(p.number) === n) || await ghPublicJson('/pulls/' + n, env);
+      const next = prStateToBuildState(pr);
+      const fields = {};
+      if (String(r.PR_Number || '') !== n) fields.PR_Number = n;
+      if (next && next !== String(r.Build_State || '')) { fields.Build_State = next; fields.Build_Updated = nowIso; }
+      if (next === 'live' && String(r.Status || '').toLowerCase() !== 'done') fields.Status = 'done';
+      if (Object.keys(fields).length) {
+        await updateQueueRowOrThrow(env, r.ID, fields);
+        changed.push({ id: r.ID, pr: n, build_state: fields.Build_State || r.Build_State, status: fields.Status || r.Status });
+      }
+    } catch (e) { errors.push({ id: r.ID, error: String((e && e.message) || e) }); }
+  }
+  return json({ ok: errors.length === 0, checked: inflight.length, changed, errors });
+}
+
+// Standing rules every build brief carries (Brett, Oct 13 2026).
+const QUEUE_STANDING_RULES = [
+  'STANDING RULES (Brett, Oct 13 2026) — apply to every item below:',
+  '- Owner-facing views NEVER show what an owner spends with Brett (no monthly spend, spend YTD, cost per work order, or spend totals). Owners see work completed / open / scheduled instead. Estimate and approval screens still ALWAYS show amounts.',
+  '- Brett\'s "Brett\'s change" note on an item OVERRIDES the proposal text where they conflict.',
+  '- No cron anywhere: scheduled work is a job in the Hub scheduler (Apps Script), never a Cloudflare cron or GitHub Actions schedule.',
+  '- Nothing may fail silently: every failure path must surface visibly.',
+].join('\n');
 
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
 async function opsTelemetryRead(env, url) {
@@ -16082,7 +17195,7 @@ async function opsReviewLogRead(env, url) {
 
 // POST /ops-review {days?} — run the weekly review on demand (test + read). POST because
 // it spends (LLM) and writes rows — not idempotent (reviewer LOW-1). Manual runs NEVER
-// deliver (LOW-2); only the Monday cron path delivers, by calling runWeeklyReview directly.
+// deliver (LOW-2); only the scheduler's review_mon / review_wed jobs deliver, by calling runWeeklyReview directly.
 async function opsReviewRun(env, body) {
   const days = parseInt((body && body.days) || '7') || 7;
   return json(await runWeeklyReview(env, { days, deliver: false, trigger: 'manual' }));
@@ -16512,28 +17625,27 @@ async function selftestRun(env, opts) {
 // POST /selftest {deliver?} — auto-verification pass, on demand. Gated EXACTLY like /ops-review:
 // no PUBLIC_PATHS entry, no narrow token — the full admin secret only (see the top auth gate).
 // Same deliver convention as /ops-review too: manual/on-demand calls default deliver:false so
-// checking this never spams a real email; only the daily cron path (maybeRunDailySelftest,
-// inside cronSweep) passes deliver:true.
+// checking this never spams a real email; only the daily scheduler path (maybeRunDailySelftest,
+// inside the scheduler's sweep_checks job) passes deliver:true.
 async function selftestRunEndpoint(env, body) {
   return json(await selftestRun(env, { deliver: !!(body && body.deliver), trigger: 'manual' }));
 }
 
-// Runs selftestRun({deliver:true}) once a day, around 7am ET, from inside cronSweep — piggybacks
-// on the EXISTING periodic sweep (both the reliable Cloudflare native `*/15 * * * *` trigger and
-// the GitHub Actions cron-sweep.yml redundant path already call cronSweep) rather than claiming a
-// new Cloudflare Cron Trigger slot — all 5 are already spoken for (wrangler.toml: daily digest,
-// 2x weekly review, weekly AR report, message-queue sweep). etHour() is the same DST-aware
-// Intl-derived local-time check quiet-hours already uses elsewhere in this file. Guarded so the
-// ~every-15-min sweep cadence doesn't fire this repeatedly inside the same 7am hour, or a second
-// time later the same day if GitHub Actions' own redundant path also lands inside that hour.
+// Runs selftestRun({deliver:true}) once a day, from the scheduler's `sweep_checks` job (Apps Script ticks every
+// ~15 min; NO cron). From 7am ET onward: if the scheduler was down at 7 the run CATCHES UP on the next tick that
+// day, and the once-per-ET-day guard below keeps the 15-minute cadence from running it again. etHour() is the
+// same DST-aware Intl-derived local-time check quiet-hours uses elsewhere in this file.
 async function maybeRunDailySelftest(env) {
-  if (etHour() !== 7) return { skipped: true, reason: 'outside the ~7am ET run window' };
+  if (etHour() < 7) return { skipped: true, reason: 'before the 7am ET run window' };
   const today = etTodayISO();
   try {
     const rows = await fetchTab(env, SELFTEST_RESULTS_TAB);
     const etDateOf = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     if (rows.some(r => etDateOf(r.Run_Date) === today)) return { skipped: true, reason: `already ran today (${today})` };
-  } catch (e) { /* tab doesn't exist yet on a genuine first run — fall through, selftestRun creates it */ }
+  } catch (e) {
+    // Only a genuinely missing tab (a first run - selftestRun creates it) may fall through; any other read failure is a failure.
+    if (!isMissingTabError(e)) throw e;
+  }
   return await selftestRun(env, { deliver: true, trigger: 'cron' });
 }
 
@@ -18943,7 +20055,7 @@ async function receiptIntake(env, body) {
   return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
 }
 
-// POST /receipt-scan (also called by cron) — pull new files from the inbox Drive folder.
+// POST /receipt-scan (also called by the scheduler's daily_receipts job) — pull new files from the inbox Drive folder.
 // Self-provisions the folder the first time so there's no manual setup.
 async function receiptScan(env) {
   const cfg = await fetchConfig(env);
@@ -19850,9 +20962,9 @@ async function health(env, url) {
     out.twilio.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
     out.twilio.test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
   } catch (_) {}
-  // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. If this is
-  // false, the GitHub Actions sweep (cron-sweep.yml) has nothing to authenticate with, so
-  // quiet-hours-held messages and deferred appointment reminders will sit unsent until it's set.
+  // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. LEGACY (Oct 12 2026): the GitHub
+  // Actions sweep is gone; the Apps Script scheduler authenticates with Config `Scheduler_Token` instead (see
+  // out.scheduler below). CRON_SWEEP_TOKEN now only guards the manual POST /cron/sweep.
   out.cron_sweep = { token_set: !!(env && env.CRON_SWEEP_TOKEN) };
   // ALERT_PUSH_TOKEN presence (Oct 12 2026) — POST /admin-notify rejects everything while this is false.
   out.alert_push = { token_set: !!(env && typeof env.ALERT_PUSH_TOKEN === 'string' && env.ALERT_PUSH_TOKEN.trim()) };
@@ -19862,6 +20974,9 @@ async function health(env, url) {
   // his own one-time setup at claude.ai/code/routines.
   out.routine_fire_token_set = !!(env && env.ROUTINE_FIRE_TOKEN);
   out.routine_id_set = !!(env && env.ROUTINE_ID);
+  // Apps Script scheduler heartbeat (Oct 12 2026): coarse and public - the age of the last tick and the NAMES of any
+  // overdue jobs; no detail. Detail is GET /cron/status (Scheduler_Token).
+  out.scheduler = await schedHealthSummary(env);
   return json(out);
 }
 
@@ -20230,6 +21345,28 @@ async function isTestRecord(env, tab, id) {
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  // Ops queue upgrade (Oct 13 2026): staging token may only create/modify/sync queue rows whose Title starts with TEST-.
+  if (path === '/ops-queue/scout-submit') {
+    const _its = (body && body.items) || [];
+    if (!_its.every(i => String((i && i.title) || '').startsWith('TEST-'))) return { ok: false, debug: 'queue-guard: every item title must start with TEST-' };
+    const _rcs = (body && body.rechecks) || [];
+    if (_rcs.length) { const _qr = await fetchTab(env, OPS_QUEUE_TAB); for (const rc of _rcs) { const _r = _qr.find(r => String(r.ID) === String(rc && rc.id)); if (!_r || !String(_r.Title || '').startsWith('TEST-')) return { ok: false, debug: 'queue-guard: recheck target is not a TEST- row' }; } }
+    return { ok: true };
+  }
+  if (path === '/ops-approve') {
+    const _its = (body && body.items) || [];
+    if (!_its.every(i => String((i && i.title) || '').startsWith('TEST-'))) return false;
+    // opsApprove promotes a matching existing row in place, so a TEST- title that fuzzy-matches a REAL row must be refused too.
+    const _qa = await fetchTab(env, OPS_QUEUE_TAB);
+    const _real = _qa.filter(r => !String(r.Title || '').startsWith('TEST-') && String(r.Status || '').toLowerCase() !== 'dropped');
+    return _its.every(i => !findQueueMatch({ title: String(i.title || '').replace(/^TEST-/, ''), problem: i.problem, action: i.action || i.first_step }, _real, 'same'));
+  }
+  if (path === '/ops-queue-update' || path === '/ops-queue-status') {
+    const _qr = await fetchTab(env, OPS_QUEUE_TAB);
+    const _r = _qr.find(r => String(r.ID) === String(body && body.id));
+    return !!_r && String(_r.Title || '').startsWith('TEST-');
+  }
+  if (path === '/ops-queue/sync') return !!body && body.title_prefix === 'TEST-'; // staging token may only sync TEST- rows (opsQueueSync honours title_prefix)
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
   if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
@@ -20320,6 +21457,8 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/insp/customer/book-link' || path === '/insp/customer/key-pickup') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
+  // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
+  if (path === '/cron/run') { const _sb = body || {}; return !_sb.force && (_sb.dry === true || _sb.dry_run === true || (typeof _sb.only === 'string' && SCHED_STAGING_SAFE_JOBS.includes(_sb.only))); }   // NB: `_b` (declared further down) is in its TDZ here - use `body`
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
@@ -20409,6 +21548,17 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  // Scope proposal build (Oct 13 2026, add-ons): the staging token may create a scope only on a TEST-
+  // Property and edit / generate a proposal / mint a link only for a scope that sits on one. (Customer
+  // view + sign are public, link-token gated — they never need this token.) /message-queue/translate is
+  // read-only (it never edits a row), so it is safe for any row on staging.
+  if (path === '/scope/create') return await isTestRecord(env, 'Properties', body && body.property_id);
+  if (path === '/scope/update' || path === '/scope/proposal' || path === '/scope/proposal/link') {
+    const _sc2 = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
+    if (!_sc2) return false;
+    return await isTestRecord(env, 'Properties', _sc2.Property_ID);
+  }
+  if (path === '/message-queue/translate') return true;
   if (path === '/scope/payment-schedule') {
     const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
     if (!_sc) return false;
@@ -27852,7 +29002,7 @@ async function inspSendBrettText(env, cfg, subject, smsText, htmlLines, link) {
   } catch (e) { log.push('email: FAILED ' + e.message); }
   return { ok, log };
 }
-// Every 15 minutes (and on demand with dry=1): find open blocks / bookings that sit on an uncovered-checkout day and tell Brett
+// Every ~15 minutes via the scheduler's `insp_guard` job (and on demand with dry=1): find open blocks / bookings that sit on an uncovered-checkout day and tell Brett
 // ONCE per change (and again if a booking gets inside 24h / 72h). Also tells him when a day gets covered and reopens.
 async function inspStrGuardTick(env, opts) {
   const dry = !!(opts && opts.dry), cfg = await fetchConfig(env), sc = inspStrConfig(env, cfg);

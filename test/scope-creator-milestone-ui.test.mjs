@@ -19,7 +19,7 @@ const dom = { 'schedule-rows': { innerHTML: '' } };
 const status = {};
 const scheduleState = { milestones: [], maxUpfrontPct: 33.34 };
 const factory = new Function('document', 'scheduleState', 'setStatus', 'esc',
-  grab('addScheduleRow') + '\n' + grab('updateScheduleField') + '\n' + grab('renderSchedule') + '\n' + grab('renderScheduleTotal') +
+  grab('addScheduleRow') + '\n' + grab('rebalanceSchedule') + '\n' + grab('updateScheduleField') + '\n' + grab('renderSchedule') + '\n' + grab('renderScheduleTotal') +
   '\nreturn { addScheduleRow, updateScheduleField, renderSchedule };');
 const api = factory({ getElementById: id => dom[id] }, scheduleState, (id, msg, cls) => { status[id] = { msg, cls }; }, s => String(s));
 
@@ -53,5 +53,30 @@ ok(scheduleState.milestones[1].calc_mode === 'percent' && scheduleState.mileston
 api.updateScheduleField(0, 'percent', '40');
 api.updateScheduleField(0, 'label', 'Deposit');
 ok(scheduleState.milestones[0].percent === 40 && scheduleState.milestones[0].label === 'Deposit', 'percent and label edits are unchanged');
+
+// ---- auto-rebalance (Oct 13 2026): editing one % reshapes the others so the total stays 100 ----
+{
+  const live = (arr) => { scheduleState.milestones = arr.map(p => ({ label: 'm', percent: p, trigger: 'manual', vendor_paid: true, calc_mode: 'percent', flat_customer_amount: null })); };
+  const pcts = () => scheduleState.milestones.map(x => x.percent);
+  const sum = () => +pcts().reduce((a, b) => a + b, 0).toFixed(2);
+  live([33.34, 66.66]); api.updateScheduleField(0, 'percent', '40');
+  ok(pcts()[0] === 40 && pcts()[1] === 60, "Brett's case: 40% upfront makes the final 60% automatically");
+  live([33.34, 66.66]); api.updateScheduleField(1, 'percent', '70');
+  ok(pcts()[1] === 70 && pcts()[0] === 30, 'editing the LAST row rebalances the first');
+  live([25, 25, 25, 25]); api.updateScheduleField(0, 'percent', '10');
+  ok(pcts()[0] === 10 && sum() === 100 && pcts()[1] === 30 && pcts()[2] === 30 && pcts()[3] === 30, 'three other rows share the rest in proportion (equal here)');
+  live([20, 30, 50]); api.updateScheduleField(0, 'percent', '40');
+  ok(pcts()[0] === 40 && sum() === 100 && pcts()[1] === 22.5 && pcts()[2] === 37.5, 'unequal rows keep their ratio (30:50 -> 22.5:37.5)');
+  live([50, 0, 0]); api.updateScheduleField(0, 'percent', '40');
+  ok(sum() === 100 && pcts()[1] === 30 && pcts()[2] === 30, 'rows that were all 0 split the remainder equally');
+  live([33.33, 33.33, 33.34]); api.updateScheduleField(1, 'percent', '33.33');
+  ok(sum() === 100, 'rounding never leaves the total off 100');
+  live([100]); api.updateScheduleField(0, 'percent', '60');
+  ok(pcts()[0] === 60, 'a single milestone has nothing to rebalance and is left as typed');
+  live([50, 50]); api.updateScheduleField(0, 'percent', '120');
+  ok(pcts()[1] === 0 && pcts()[0] === 120, 'over 100: the others drop to 0 and the 120 stays visible so the total warning fires');
+  live([50, 50]); api.updateScheduleField(0, 'percent', '');
+  ok(pcts()[0] === 0 && pcts()[1] === 100, 'clearing the box (mid-typing) is safe');
+}
 
 console.log(n + ' passed, 0 failed');

@@ -75,8 +75,8 @@ t('sanitize blanks bad dates', sf.Start_Date === '' && sf.Season_Start === '');
 t('sanitize bools', sf.Recurrence_Enabled === 'TRUE' && sf.Notify_Tenant === 'FALSE' && sf.Name === 'x');
 
 // ── structural wiring ──
-const proc = grab('processRecurringWorkOrders'), post = grab('recurPostWO'), sms = grab('smsGatedSend'), assign = grab('assignVendor'), sweep = grab('cronSweep'), hubw = grab('hubTestWriteAllowed');
-t('sweep runs recurring poster', /processRecurringWorkOrders\(env\)/.test(sweep));
+const proc = grab('processRecurringWorkOrders'), post = grab('recurPostWO'), sms = grab('smsGatedSend'), assign = grab('assignVendor'), sweep = grab('schedRunSweepWork'), hubw = grab('hubTestWriteAllowed');
+t('scheduler sweep_work job (no cron) runs the recurring poster', /processRecurringWorkOrders\(env\)/.test(sweep));
 t('poster gated to 8am-7pm ET', /h < RECUR_POST_START_HOUR_ET \|\| h >= QUIET_HOURS_START_ET/.test(proc) && /RECUR_POST_START_HOUR_ET = 8/.test(src));
 t('skip when previous still open', /recurWOIsOpen/.test(proc) && /skipped_open/.test(proc));
 t('idempotent per occurrence', /Recurring_Due === due/.test(proc));
