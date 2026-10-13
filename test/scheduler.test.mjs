@@ -396,7 +396,7 @@ for (const N of [2, 5, 8]) {
 }
 // 2l daily retry / no_retry / retry:false semantics
 {
-  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+  const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
   let fails = 2;
   const jobs = mkJobs(log, [['d', 'daily', { run: async () => { log.push('d'); return fails-- > 0 ? { ok: false, errors: [{ step: 's', error: 'transient' }] } : { ok: true, errors: [] }; } }]]);
   const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
