@@ -997,7 +997,7 @@ function removeItem(btn){ var el=btn.closest('.li'); var id=el.dataset.id; state
 async function saveItems(){
   var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
   setStatus('items-status','Saving…');
-  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; setStatus('items-status','✅ saved','ok'); gateSections(); }
+  try{ await post('/scope/update',{ scope_id:state.current.ID, line_items:items }); state.current.line_items=items; setStatus('items-status','✅ saved'+((state.current.Proposal_Text||'').trim()?' — tap "Generate proposal" in step 7 to update what the customer sees':''),'ok'); gateSections(); }
   catch(e){ setStatus('items-status','⚠ '+e.message,'err'); }
 }
 async function applyCommand(){
