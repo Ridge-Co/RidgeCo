@@ -567,13 +567,13 @@ store.setCfg('admin_phone', '+15555550100');
   t('GET /cron/run -> 401 (Scheduler_Token only authorises POST there)', getRun.status === 401);
 }
 {
-  // the hub-test (staging) token may only dry-run / run the two safe jobs - guard function
-  const guardLine = wsrc.slice(wsrc.indexOf("  if (path === '/cron/run') return"), wsrc.indexOf('\n', wsrc.indexOf("  if (path === '/cron/run') return")));
-  const check = new Function('SCHED_STAGING_SAFE_JOBS', 'path', '_b', guardLine + '\nreturn undefined;');
-  const SAFE = ['door_watchdog', 'insp_guard'];
-  t('hub-test guard: dry run allowed', check(SAFE, '/cron/run', { dry: true }) === true);
-  t('hub-test guard: insp_guard / door_watchdog allowed', check(SAFE, '/cron/run', { only: 'insp_guard' }) === true && check(SAFE, '/cron/run', { only: 'door_watchdog' }) === true);
-  t('hub-test guard: a bare run (all due jobs), the sweeps, force and arrays are refused', check(SAFE, '/cron/run', {}) === false && check(SAFE, '/cron/run', { only: 'sweep' }) === false && check(SAFE, '/cron/run', { only: 'insp_guard', force: true }) === false && check(SAFE, '/cron/run', { only: ['insp_guard'] }) === false && check(SAFE, '/cron/run', { dry: 'true' }) === false);
+  // the hub-test (staging) token may only dry-run / run the two safe jobs - exercise the REAL hubTestWriteAllowed (a TDZ bug here shipped once: `_b` is declared further down the function)
+  const fstart = wsrc.indexOf('async function hubTestWriteAllowed('), fend = wsrc.indexOf('\nasync function ', fstart + 10);
+  const real = new Function('SCHED_STAGING_SAFE_JOBS', wsrc.slice(fstart, fend) + '\nreturn hubTestWriteAllowed;')(['door_watchdog', 'insp_guard']);
+  const check = (body) => real({}, '/cron/run', body);
+  t('hub-test guard: dry run allowed', (await check({ dry: true })) === true);
+  t('hub-test guard: insp_guard / door_watchdog allowed', (await check({ only: 'insp_guard' })) === true && (await check({ only: 'door_watchdog' })) === true);
+  t('hub-test guard: a bare run (all due jobs), the sweeps, force and arrays are refused', (await check({})) === false && (await check(undefined)) === false && (await check({ only: 'sweep' })) === false && (await check({ only: 'insp_guard', force: true })) === false && (await check({ only: ['insp_guard'] })) === false && (await check({ dry: 'true' })) === false);
 }
 {
   // scheduled() is a loud no-op
