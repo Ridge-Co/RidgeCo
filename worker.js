@@ -953,40 +953,16 @@ const _hubWorkerCore = {
     }
   },
 
-  // Daily digest cron (Session 5). Delivery is gated by Config flags and stays
-  // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
-  // with delivery off just builds the digest and returns — no messages, negligible cost.
+  // LOUD NO-OP (Oct 12 2026). PERMANENT RULE: NO CRON ANYWHERE - Apps Script time-driven triggers are the only
+  // clock (see the APPS SCRIPT SCHEDULER block: POST /cron/run). wrangler.toml deliberately sets `crons = []`.
+  // If Cloudflare ever fires this, a stale Cron Trigger is still attached: that is a second, unreliable clock,
+  // so it does NO job work (no duplicates) and shouts instead (Ops_Telemetry FALSE row + admin alert, rate-limited).
   async scheduled(event, env, ctx) {
-    // No cron triggers are configured on the staging Worker (wrangler.toml's
-    // `staging` branch override removes [triggers] entirely), so this never
-    // actually fires there today — set defensively in case that ever changes.
     env.__STAGING__ = isStaging(env);
-    env = __cronEnv(env); // paced, cache-sharing Sheets reads for every background job
-    const cron = event && event.cron;
-    // Message-queue sweep (Sep 15 2026) — quiet-hours release, deferred notifications, and
-    // vendor nudges. Uses the 5th (last available) paid-tier Cloudflare Cron Trigger slot.
-    // Originally built to run ONLY via a GitHub Actions workflow (cron-sweep.yml, rule 166/167)
-    // to avoid using a Cloudflare slot at all — but real live testing (Sep 15 2026) found
-    // GitHub's own `schedule:` trigger is unreliable for this repo's activity level: it ran
-    // roughly every 5 hours instead of every 15 minutes (confirmed via the Actions run
-    // history), which is a real problem for anything time-sensitive (quiet-hours release
-    // meant to happen at 9am ET, daily vendor nudges). Cloudflare Cron Triggers don't have
-    // that queueing-delay behavior. Calls cronSweep(env) directly — no HTTP round-trip, no
-    // CRON_SWEEP_TOKEN needed for this path (that token still gates the GitHub Actions path,
-    // which stays in place as a redundant second path — both call the same idempotent
-    // function, so having both fire is harmless, just occasionally redundant work).
-    if (cron === '*/15 * * * *') {
-      await doorWatchdogCron(env); // door-code watchdog FIRST (never throws; see its block)
-      await cronSweepLogged(env);  // failures logged to Ops_Telemetry, no longer swallowed
-      // STR cleaning-coverage guard for inspection booking: no-op until configured; alerts Brett on its own failures.
-      try { await inspStrGuardTick(env); } catch (e) { console.error('insp: cleaning guard tick failed:', e && e.message); try { await inspAlert(env, 'str_guard_tick', String(e && e.message)); } catch (e2) { console.error('insp: could not alert about guard tick failure:', e2 && e2.message); } }
-      return;
-    }
-    // Optimizer Reviewer (B-129). Reads the last 7 days of Ops_Telemetry, computes metrics,
-    // asks Claude for a ranked proposal, logs it to Ops_Review_Log. Mid-week (Wed) run added
-    // per greenlit ID-1 to halve max issue-detection lag (7d → ~3.5d) — still runs, still logs,
-    // but Sep 17 2026: Brett asked for delivery to be weekly, not twice a week, so only the
-    // Monday run (now 12:30 UTC / 8:30am ET) actually pushes a notification.
+    env = __cronEnv(env); // paced, cache-sharing Sheets reads
+    const r = await schedUnexpectedCloudflareCron(env, event);
+    throw new Error(r.error); // also shows as a failed run in Cloudflare's Cron Events
+  }
     if (cron === '30 12 * * 1') {
       try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
       return;
