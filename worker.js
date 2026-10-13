@@ -17034,9 +17034,11 @@ function cleanPrNumber(v) {
 }
 
 const QUEUE_REPO = 'Ridge-Co/RidgeCo';
-async function ghPublicJson(path) {
-  const r = await fetch('https://api.github.com/repos/' + QUEUE_REPO + path, { headers: { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github+json' } });
-  if (!r.ok) throw new Error('GitHub ' + path + ' → HTTP ' + r.status + (r.status === 403 || r.status === 429 ? ' (rate limited; will retry next sync)' : ''));
+async function ghPublicJson(path, env) {
+  const hdrs = { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github+json' };
+  if (env && env.GITHUB_READ_TOKEN) hdrs['Authorization'] = 'Bearer ' + env.GITHUB_READ_TOKEN; // optional read-only token; works without it
+  const r = await fetch('https://api.github.com/repos/' + QUEUE_REPO + path, { headers: hdrs });
+  if (!r.ok) throw new Error('GitHub ' + path + ' → HTTP ' + r.status + (r.status === 403 || r.status === 429 ? ' (GitHub rate-limits the Hub\'s shared address; open the Proposals page to sync from your browser)' : ''));
   return await r.json();
 }
 
