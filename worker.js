@@ -19254,6 +19254,9 @@ async function health(env, url) {
   // his own one-time setup at claude.ai/code/routines.
   out.routine_fire_token_set = !!(env && env.ROUTINE_FIRE_TOKEN);
   out.routine_id_set = !!(env && env.ROUTINE_ID);
+  // Apps Script scheduler heartbeat (Oct 12 2026): coarse and public - the age of the last tick and the NAMES of any
+  // overdue jobs; no detail. Detail is GET /cron/status (Scheduler_Token).
+  out.scheduler = await schedHealthSummary(env);
   return json(out);
 }
 
