@@ -13880,7 +13880,79 @@ function schedStatus(state, now, jobs) {
   return out;
 }
 
-//__SCHED_CHUNK_2__
+// ── Job runners. Each returns { ok, errors:[{step,error}], detail, no_retry? } and NEVER swallows. ──────
+function schedErrText(e) { return String((e && e.message) || e).slice(0, 300); }
+// Normalise a step's return (plain object or fetch Response) and report anything that looks like a failure.
+async function schedUnwrap(v) {
+  if (v && typeof v === 'object' && typeof v.status === 'number' && typeof v.clone === 'function') {
+    let body = null;
+    try { body = await v.clone().json(); } catch (e) { body = { unparseable_response: schedErrText(e) }; }
+    return { status: v.status, body };
+  }
+  return { status: 200, body: v };
+}
+function schedBadness(status, b) {
+  if (status >= 400) return `HTTP ${status}: ${b && b.error ? (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)) : 'failed'}`.slice(0, 300);
+  if (b && typeof b === 'object') {
+    if (b.unparseable_response) return 'unreadable response: ' + b.unparseable_response;
+    if (b.error) return (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)).slice(0, 300);
+    if (b.ok === false) return ('ok:false ' + JSON.stringify(b.errors || b.reason || '')).slice(0, 300);
+    if (Array.isArray(b.errors) && b.errors.length) return (b.errors.length + ' error(s): ' + JSON.stringify(b.errors)).slice(0, 300);
+    if (typeof b.failed === 'number' && b.failed > 0) return `${b.failed} item(s) failed`;
+    if (Array.isArray(b.failed) && b.failed.length) return `${b.failed.length} item(s) failed: ${JSON.stringify(b.failed)}`.slice(0, 300);
+  }
+  return null;
+}
+// Runs one step: a throw OR a failure-shaped result is pushed to `errors`; the (unwrapped) body is returned.
+async function schedStep(name, fn, errors) {
+  try {
+    const u = await schedUnwrap(await fn());
+    const bad = schedBadness(u.status, u.body);
+    if (bad) errors.push({ step: name, error: bad });
+    return u.body;
+  } catch (e) { errors.push({ step: name, error: schedErrText(e) }); return undefined; }
+}
+async function schedRunDoorWatchdog(env) {
+  const errors = [];
+  const wd = await schedStep('door_watchdog', () => doorWatchdogCron(env), errors);
+  return { ok: !errors.length, errors, detail: wd };
+}
+// The three sweep jobs below are cronSweep split three ways so each gets its own Worker invocation / time budget.
+async function schedRunSweepMessages(env) {
+  const errors = [], detail = {};
+  detail.quiet_hours = await schedStep('quiet_hours', () => processQuietHoursQueue(env), errors);
+  const failedSends = detail.quiet_hours && Array.isArray(detail.quiet_hours.results) ? detail.quiet_hours.results.filter(r => r && r.failed) : [];
+  if (failedSends.length) errors.push({ step: 'quiet_hours', error: `${failedSends.length} held message(s) failed to send: ${failedSends.map(r => r.id).join(',')}`.slice(0, 300) });
+  detail.pending_notifications = await schedStep('pending_notifications', () => processPendingNotifications(env), errors);
+  detail.vendor_nudges = await schedStep('vendor_nudges', () => processVendorNudges(env), errors);
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunSweepWork(env) {
+  const errors = [], detail = {};
+  detail.recurring_wos = await schedStep('recurring_wos', () => processRecurringWorkOrders(env), errors);
+  detail.estimate_reminders = await schedStep('estimate_reminders', () => processEstimateReminders(env), errors);
+  detail.deposit_paid = await schedStep('deposit_paid', async () => {
+    try { return await processDepositPaidSweep(env); }
+    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); } throw e; }
+  }, errors);
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunSweepChecks(env) {
+  const errors = [], detail = {};
+  // A selftest FINDING is delivered by selftestRun itself (its own digest + telemetry); only a run that cannot execute is a job failure.
+  detail.selftest = await schedStep('selftest', async () => { const r = await maybeRunDailySelftest(env); return (r && r.total !== undefined) ? { ok: r.ok, total: r.total, passed: r.passed, selftest_failed: r.failed } : r; }, errors);
+  detail.dead_man_switch = await schedStep('dead_man_switch', () => checkDeadManSwitch(env), errors);
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunInspGuard(env) {
+  const errors = [], warnings = [];
+  const r = await schedStep('insp_guard', async () => {
+    try { return await inspStrGuardTick(env); }
+    catch (e) { try { await inspAlert(env, 'str_guard_tick', schedErrText(e)); } catch (e2) { warnings.push('could not alert about the guard failure: ' + schedErrText(e2)); } throw e; }
+  }, errors);
+  return { ok: !errors.length, errors, warnings, detail: r };
+}
+//__SCHED_CHUNK_3__
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
