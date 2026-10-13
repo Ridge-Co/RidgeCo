@@ -4820,6 +4820,9 @@ async function scopeProposalSign(env, body, ip, ua) {
   for (const it of items) {
     const variants = it.variants || [];
     let key = selections[it.id];
+    // Optional add-on: only included if the customer's selection names one of its options; anything
+    // else (absent, '__none__', a bad key) means DECLINED — never silently added to what they owe.
+    if (it.optional && !variants.some(v => v.key === key)) continue;
     if (!variants.some(v => v.key === key)) key = it.selected_key || (variants[0] && variants[0].key);
     const sel = variants.find(v => v.key === key) || variants[0];
     if (!sel) continue;
