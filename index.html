@@ -2894,12 +2894,13 @@ function renderBidGroupPanel(holder, woId, res) {
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">' +
         '<div style="min-width:0"><span style="color:var(--info);font-size:13px;font-weight:bold">' + esc(m.id) + '</span>' +
           chip(m.is_original ? 'ORIGINAL' : 'COPY', m.is_original ? 'var(--surface2)' : '#eaf2ff', m.is_original ? 'var(--muted)' : '#1d4ed8') +
-          chip(esc(m.status||'New'), cancelled ? '#f3f5f8' : '#e8f5e9', cancelled ? 'var(--muted)' : '#1b5e20') + (here ? chip('THIS ONE','#fff4d6','#8a5a00') : '') +
-          '<div style="font-size:12px;color:var(--text);margin-top:3px">' + (m.vendor_name ? esc(m.vendor_name) : '<span style="color:var(--muted)">no vendor yet</span>') + '</div>' + est + '</div>' +
+          chip(esc(m.status||'New'), cancelled ? '#f3f5f8' : '#e8f5e9', cancelled ? 'var(--muted)' : '#1b5e20') + (m.is_winner ? chip('KEPT','#e0f2fe','#075985') : '') + (here ? chip('THIS ONE','#fff4d6','#8a5a00') : '') +
+          '<div style="font-size:12px;color:var(--text);margin-top:3px">' + (m.vendor_name ? esc(m.vendor_name) : '<span style="color:var(--muted)">no vendor yet</span>') + '</div>' + est +
+          (m.is_winner ? '<div data-bg-winner-note style="font-size:11px;color:var(--muted);margin-top:2px">The copy you kept' + (m.tenant_visible ? ' — the tenant can see it' : '') + '</div>' : '') + '</div>' +
       '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
         (here ? '' : '<button class="btn small secondary" style="min-height:44px;flex:1 1 90px" onclick="bgOpen(\'' + esc(m.id) + '\')">Open</button>') +
-        (cancelled ? '' : '<button class="btn small" style="min-height:44px;flex:1 1 140px" data-bg-keep="' + esc(m.id) + '" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'keep_one\',\'' + esc(m.id) + '\')">Keep this, cancel others</button>') +
+        (cancelled ? '' : '<button class="btn small" style="min-height:44px;flex:1 1 140px" data-bg-keep="' + esc(m.id) + '" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'keep_one\',\'' + esc(m.id) + '\')">Keep this, cancel other copies</button>') +
         '<button class="btn small secondary" style="min-height:44px;flex:1 1 90px" data-bg-unlink="' + esc(m.id) + '" onclick="bgUnlink(\'' + esc(woId) + '\',\'' + esc(m.id) + '\')">Unlink</button>' +
       '</div></div>';
   }).join('');
@@ -2907,7 +2908,7 @@ function renderBidGroupPanel(holder, woId, res) {
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap"><span style="font-size:14px">⧉</span>' +
       '<span style="color:var(--accent);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold">Bid group ' + esc(res.group_id) + '</span>' +
       '<span style="color:var(--muted);font-size:10px;margin-left:auto">' + members.length + ' jobs · ' + openCount + ' open</span></div>' +
-    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Same job given to several vendors. Nothing is cancelled automatically. Cancelling never texts the vendors.</div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Same job given to several vendors. Nothing is cancelled automatically. Cancelling never texts the vendors. "Keep this" never cancels the original; a copy you keep becomes visible to the tenant (no text is sent).</div>' +
     rows +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
       '<button class="btn small danger" style="min-height:44px;flex:1 1 150px" data-bg-act="duplicates" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'duplicates\',\'\')">Cancel all duplicates</button>' +
@@ -2943,7 +2944,7 @@ var _bgCancelCtx = null;
 function bgCancelPreview(woId, mode, keepId) {
   if (_bidCancelBusy) return;
   _bgCancelCtx = { woId: woId, mode: mode, keepId: keepId };
-  var titles = { all: 'CANCEL WHOLE GROUP', duplicates: 'CANCEL ALL DUPLICATES', keep_one: 'KEEP ' + keepId + ', CANCEL THE OTHERS' };
+  var titles = { all: 'CANCEL WHOLE GROUP', duplicates: 'CANCEL ALL DUPLICATES', keep_one: 'KEEP ' + keepId + ', CANCEL THE OTHER COPIES' };
   document.getElementById('bidcancel-title').textContent = titles[mode] || 'CANCEL JOBS';
   document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--muted);font-size:13px">Checking what would be cancelled…</div>';
   closeModal('modal-wo-detail'); openModal('modal-bidcancel');
@@ -2962,6 +2963,14 @@ function bgResultRow(r) {
   var warn = safeArray(r.warnings).map(function(x){ return '<div style="font-size:11px;color:#b7791f">⚠ ' + esc(x) + '</div>'; }).join('');
   return '<div style="padding:8px 0;border-bottom:1px solid var(--border)" data-bgc-row="' + esc(r.wo_id) + '"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><b style="color:var(--info)">' + esc(r.wo_id) + '</b> <span style="font-size:11px;color:var(--muted)">' + (r.is_original ? 'original' : 'copy') + ' · ' + esc(r.status_before) + '</span><div style="font-size:12px">' + (r.vendor_name ? esc(r.vendor_name) : '<span style="color:var(--muted)">no vendor</span>') + '</div></div><div style="font-weight:bold;font-size:12px;color:' + col + '">' + esc(label) + '</div></div>' + why + warn + '</div>';
 }
+function bgWinnerLine(res, done) {
+  var w = res && res.winner; if (!w) return '';
+  var txt;
+  if (w.is_original) txt = esc(w.wo_id) + ' is the original. It stays exactly as it is; only the other copies are cancelled.';
+  else if (done) txt = w.became_tenant_visible ? esc(w.wo_id) + ' is now visible to the tenant. No text message was sent.' : esc(w.wo_id) + (w.already_visible ? ' was already visible to the tenant.' : ' kept. Its tenant visibility is unchanged.');
+  else txt = w.will_become_tenant_visible ? esc(w.wo_id) + ' will become visible to the tenant. No text message is sent.' : esc(w.wo_id) + ' is already visible to the tenant.';
+  return '<div data-bgc-winner style="margin-top:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text)">' + txt + '</div>';
+}
 function renderBidCancelPreview(res) {
   var body = document.getElementById('bidcancel-body');
   if (res.error || !res.results) {
@@ -2970,7 +2979,7 @@ function renderBidCancelPreview(res) {
   }
   var n = res.summary.would_cancel;
   body.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Bid group ' + esc(res.group_id) + ' · preview only, nothing has been changed yet</div>' +
-    safeArray(res.results).map(bgResultRow).join('') +
+    safeArray(res.results).map(bgResultRow).join('') + bgWinnerLine(res, false) +
     '<div style="margin-top:12px;font-size:13px"><b>' + n + '</b> job' + (n===1?'':'s') + ' will be cancelled · ' + (res.summary.would_skip) + ' skipped · ' + (res.summary.kept) + ' kept' + (res.summary.already_cancelled ? ' · ' + res.summary.already_cancelled + ' already cancelled' : '') + '</div>' +
     '<div style="font-size:11px;color:var(--muted);margin-top:4px">Vendors are <b>not</b> texted. Anything with bills, time, charges, QuickBooks numbers or a finished status is skipped, never cancelled.</div>' +
     (n > 0 ? '<button type="button" class="btn secondary" id="bgc-ack" onclick="bgToggleAck()" style="width:100%;min-height:44px;margin-top:12px;text-align:left">☐ Yes, cancel these ' + n + ' job' + (n===1?'':'s') + '</button>' : '<div style="margin-top:12px;color:var(--muted);font-size:13px">Nothing to cancel.</div>') +
@@ -2995,7 +3004,7 @@ function bgCancelConfirm() {
     var errs = safeArray(res.errors).slice(), sm = res.summary || {};
     if (res.error && errs.indexOf(res.error) < 0) errs.push(res.error);
     var head = errs.length || sm.failed ? '<div style="color:var(--danger);font-weight:bold;font-size:14px">❌ Finished with problems</div>' : '<div style="color:var(--accent2);font-weight:bold;font-size:14px">✅ Done — ' + (sm.cancelled||0) + ' cancelled</div>';
-    document.getElementById('bidcancel-body').innerHTML = head + safeArray(res.results).map(bgResultRow).join('') +
+    document.getElementById('bidcancel-body').innerHTML = head + safeArray(res.results).map(bgResultRow).join('') + bgWinnerLine(res, true) +
       (errs.length ? errs.map(function(e){ return '<div style="color:var(--danger);font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') : '') +
       safeArray(res.warnings).map(function(e){ return '<div style="color:#b7791f;font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') +
       '<div class="modal-actions"><button class="btn" style="min-height:44px" onclick="bgCancelDone()">Close</button></div>';

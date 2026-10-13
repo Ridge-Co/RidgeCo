@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-12.4-wo-duplicate';
+const BUILD_VERSION = '2026-10-13.1-wo-dup-winner-visible';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -7757,6 +7757,11 @@ async function getWorkOrdersList(env, url) {
 //     dry_run!==true; anything else is a preview. Members with bills/time/charges/QBO numbers
 //     or a finished status are SKIPPED with a reason, never cancelled.
 //   - GET /wo/bid-group?wo_id=  members for the Hub panel.
+//   - Oct 13 2026 follow-up (Brett): "Keep this, cancel others" (mode keep_one) NEVER cancels the ORIGINAL
+//     (the member with no Duplicated_From) — it cancels only the other duplicate copies. When the kept
+//     member is a COPY it becomes tenant-visible (Tenant_Visible TRUE) and is marked Bid_Winner TRUE so the
+//     owner portal (which hides still-linked copies) shows it too. NO tenant/owner/vendor SMS is sent by any of
+//     this, and Unlink leaves Tenant_Visible exactly as it is. Vendors who lose are still never texted.
 // Why not createWorkOrder: its dupe guard (the point of rule 162) would block the copy, skipping
 // the guard reopens the duplicate-ID race (WO-1192), and the row needs ~10 columns it never
 // writes at create. So the copy is appended by woDupAppendCopy: serialized per isolate, one
@@ -7768,6 +7773,7 @@ async function getWorkOrdersList(env, url) {
 const WO_DUP_ALLOWED_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
 const BID_CANCEL_PROTECTED_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'];
 const WO_BID_COLUMNS = ['Bid_Group_ID', 'Duplicated_From', 'Owner_Notify_Override'];
+const WO_BID_WINNER_COLUMNS = ['Tenant_Visible', 'Bid_Winner'];   // ensured only when a COPY is chosen as the keep_one winner
 const WO_DUP_ENSURE_COLUMNS = WO_BID_COLUMNS.concat(['Checklist', 'Managed_By', 'Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes']);
 // Copied verbatim from the source. Deliberately NOT here: Vendor_ID, Status, Scheduled_*,
 // Completed_Date, Invoice_*, QBO_*, Customer_Charge, Deposit_*, Scope_ID, Approval_Stage,
@@ -7787,6 +7793,11 @@ function woDupSerialize(fn) {
 }
 
 function isCancelledWOStatus(s) { const v = String(s == null ? '' : s).trim(); return v === 'Cancelled' || v === 'Canceled'; }
+// A still-linked copy (both stamps) is Brett's internal shotgun and is hidden from owners — UNLESS it was chosen
+// as the winner (Bid_Winner TRUE, set by keep_one). Pure; unit-tested.
+function isHiddenBidCopy(w) {
+  return !!(w && String(w.Duplicated_From || '').trim() && String(w.Bid_Group_ID || '').trim() && String(w.Bid_Winner || '').trim().toUpperCase() !== 'TRUE');
+}
 function isBidGroupWO(wo) { return !!(wo && (String(wo.Bid_Group_ID || '').trim() || String(wo.Duplicated_From || '').trim())); }
 function nextBidGroupId(workorders) {
   const nums = (workorders || [])
@@ -8146,6 +8157,7 @@ async function woBidGroupGet(env, url) {
       id: w.ID, status: w.Status || 'New', vendor_id: w.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '',
       duplicated_from: w.Duplicated_From || '', is_original: !String(w.Duplicated_From || '').trim(),
       voided: String(w.Voided || '').toUpperCase() === 'TRUE', scheduled_date: w.Scheduled_Date || '', created_date: w.Created_Date || '',
+      is_winner: String(w.Bid_Winner || '').trim().toUpperCase() === 'TRUE', tenant_visible: String(w.Tenant_Visible || '').trim().toUpperCase() !== 'FALSE',   // same predicate the tenant portal uses (only an explicit FALSE hides)
       latest_estimate: est ? { version: est.Version || '', subtotal: est.Subtotal || '', status: est.Status || '' } : null,
     };
   }).sort((a, b) => (a.is_original === b.is_original ? String(a.created_date).localeCompare(String(b.created_date)) : (a.is_original ? -1 : 1)));
@@ -8186,7 +8198,7 @@ async function woBidGroupCancel(env, body) {
   const mode = String(body.mode || '').trim();
   const confirmed = body.confirm === true && body.dry_run !== true;
   const result = {
-    ok: false, dry_run: !confirmed, mode, group_id: '', keep_wo_id: String(body.keep_wo_id || '').trim(), results: [],
+    ok: false, dry_run: !confirmed, mode, group_id: '', keep_wo_id: String(body.keep_wo_id || '').trim(), results: [], winner: null,
     summary: { would_cancel: 0, would_skip: 0, cancelled: 0, skipped: 0, failed: 0, kept: 0, already_cancelled: 0 },
     warnings: [], errors: [],
   };
@@ -8207,14 +8219,33 @@ async function woBidGroupCancel(env, body) {
     const members = all.filter(w => w.Bid_Group_ID === gid);
     if (!members.length) return await fail(404, `Bid group ${gid} has no members`);
     if (mode === 'keep_one' && !members.some(m => m.ID === result.keep_wo_id)) return await fail(400, `${result.keep_wo_id} is not a member of ${gid}.`);
+    // keep_one (Oct 13 2026): the kept member is the winner. Keeping a cancelled/voided job would leave nothing alive.
+    const winnerWO = mode === 'keep_one' ? members.find(m => m.ID === result.keep_wo_id) : null;
+    if (winnerWO && isCancelledWOStatus(winnerWO.Status)) return await fail(400, `${winnerWO.ID} is already cancelled, so it cannot be the one you keep. Pick a job that is still open.`);
+    if (winnerWO && String(winnerWO.Voided || '').toUpperCase() === 'TRUE') return await fail(400, `${winnerWO.ID} is voided, so it cannot be the one you keep. Pick a job that is still open.`);
+    if (winnerWO) {
+      const winnerIsOriginal = !String(winnerWO.Duplicated_From || '').trim();
+      const visBefore = String(winnerWO.Tenant_Visible == null ? '' : winnerWO.Tenant_Visible).trim();
+      result.winner = {
+        wo_id: winnerWO.ID, is_original: winnerIsOriginal, tenant_visible_before: visBefore,
+        already_visible: !winnerIsOriginal && visBefore.toUpperCase() === 'TRUE' && String(winnerWO.Bid_Winner || '').trim().toUpperCase() === 'TRUE',
+        will_become_tenant_visible: !winnerIsOriginal && visBefore.toUpperCase() !== 'TRUE', became_tenant_visible: false,
+        note: winnerIsOriginal ? 'The original is kept as it is; only the other copies are cancelled.' : 'Becomes visible to the tenant. No text message is sent to anyone.',
+      };
+    }
     const [vendors, bills, timeEntries, invoiceReview] = await Promise.all([fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'), fetchTab(env, 'Time_Entries'), fetchTab(env, 'Invoice_Review')]);
     const ctx = { bills, timeEntries, invoiceReview, workorders: all };
     const targets = [];
     for (const m of members) {
       const v = m.Vendor_ID ? vendors.find(x => String(x.ID) === String(m.Vendor_ID)) : null;
       const row = { wo_id: m.ID, status_before: m.Status || 'New', vendor_id: m.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '', is_original: !String(m.Duplicated_From || '').trim(), reasons: [], warnings: [], result: '' };
-      const isTarget = mode === 'all' ? true : mode === 'duplicates' ? !row.is_original : m.ID !== result.keep_wo_id;
-      if (!isTarget) { row.result = 'kept'; row.reasons.push(mode === 'keep_one' ? 'Kept (the one you chose)' : 'Kept (the original)'); result.summary.kept++; result.results.push(row); continue; }
+      // keep_one (Oct 13 2026, Brett): cancel ONLY the duplicate copies that are not the winner. The original is never cancelled by "Keep this".
+      const isTarget = mode === 'all' ? true : mode === 'duplicates' ? !row.is_original : (m.ID !== result.keep_wo_id && !row.is_original);
+      if (!isTarget) {
+        row.result = 'kept';
+        row.reasons.push(mode === 'keep_one' ? (m.ID === result.keep_wo_id ? 'Kept (the one you chose)' : 'Kept (the original is never cancelled by "Keep this")') : 'Kept (the original)');
+        result.summary.kept++; result.results.push(row); continue;
+      }
       const c = bidCancelClassify(m, ctx);
       row.reasons = c.reasons; row.warnings = c.warnings;
       if (c.kind === 'already') { row.result = 'already_cancelled'; result.summary.already_cancelled++; }
@@ -8228,6 +8259,33 @@ async function woBidGroupCancel(env, body) {
       return json(result, 200);
     }
     if (!targets.length) result.warnings.push('Nothing to cancel — every targeted member was skipped, kept or already cancelled.');
+    // Winner first: if it cannot be made visible, STOP before cancelling anything (no half-done shotgun).
+    if (winnerWO && !result.winner.is_original) {
+      try {
+        await ensureColumns(env, 'Work_Orders', WO_BID_WINNER_COLUMNS);
+        const fresh = findWO(await bidFreshWOs(env), winnerWO.ID);
+        if (!fresh) throw new Error('the row could not be found');
+        const want = {};
+        if (String(fresh.Tenant_Visible == null ? '' : fresh.Tenant_Visible).trim().toUpperCase() !== 'TRUE') want.Tenant_Visible = 'TRUE';
+        if (String(fresh.Bid_Winner || '').trim().toUpperCase() !== 'TRUE') want.Bid_Winner = 'TRUE';
+        if (Object.keys(want).length) {
+          await bidWriteWOFields(env, winnerWO.ID, want);
+          result.winner.became_tenant_visible = 'Tenant_Visible' in want;
+          const now = new Date().toISOString(), aud = [];
+          if (want.Tenant_Visible) aud.push({ WO_ID: winnerWO.ID, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Tenant_Visible', Old_Value: String(fresh.Tenant_Visible == null ? '' : fresh.Tenant_Visible), New_Value: 'TRUE', Timestamp: now, Notes: `Kept as the winner of bid group ${gid}; now visible to the tenant (no text message sent)` });
+          if (want.Bid_Winner) aud.push({ WO_ID: winnerWO.ID, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Winner', Old_Value: String(fresh.Bid_Winner || ''), New_Value: 'TRUE', Timestamp: now, Notes: `Chosen to keep in bid group ${gid}` });
+          try { await bidAppendRows(env, 'WO_Audit', aud); }
+          catch (ae) { await bidStepFailed(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', `The WO_Audit rows for the winner ${winnerWO.ID} were not written`, ae, winnerWO.ID); }
+        }
+        // A previous winner in this group (Brett changed his mind) loses the marker; it is about to be cancelled.
+        for (const prev of members.filter(m => m.ID !== winnerWO.ID && String(m.Bid_Winner || '').trim().toUpperCase() === 'TRUE')) {
+          try { await bidWriteWOFields(env, prev.ID, { Bid_Winner: '' }); }
+          catch (pe) { await bidStepFailed(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', `Could not clear the old winner marker on ${prev.ID}`, pe, prev.ID); }
+        }
+      } catch (e) {
+        return await fail(500, `${winnerWO.ID} could not be made visible to the tenant (${String((e && e.message) || e)}), so NOTHING was cancelled. Try again.`);
+      }
+    }
     for (const row of targets) {
       try {
         const res = await updateStatus(env, { wo_id: row.wo_id, status: 'Cancelled', updated_by: changedBy, updated_by_role: 'admin' });
@@ -8576,7 +8634,8 @@ async function ownerWorkorders(env, url) {
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
   // Still-linked bid-group copies (Duplicated_From AND Bid_Group_ID both set) are Brett's internal shotgun
   // and would show the owner every competing vendor — hidden here (this endpoint ignores Tenant_Visible).
-  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && !(String(w.Duplicated_From || '').trim() && String(w.Bid_Group_ID || '').trim()) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  // The copy Brett KEPT ("Keep this", Bid_Winner TRUE) is shown (isHiddenBidCopy, Oct 13 2026).
+  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && !isHiddenBidCopy(w) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him. No
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below,
