@@ -9327,6 +9327,7 @@ async function recordVendorLoanDeduction(env, { vendorId, vendorName, deduction,
 }
 
 async function addVendorBill(env, body) {
+  { const _blk = await bidGroupWriteBlock(env, body.WO_ID || body.wo_id, 'vendor bills', 'facturas', '/vendor-bill/add'); if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409); }
   // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
   // available here is the same day: same job, same vendor, same total, same day, still
   // sitting unreviewed. That is a re-submit, not a second bill. Returned as success with
