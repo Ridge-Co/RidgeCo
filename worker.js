@@ -8292,6 +8292,10 @@ async function assignVendor(env, body, internal) {
   // `accessInfo`/`getWOLockboxes` computation that used to run here and go nowhere (Aug 24,
   // 2026) — real access info flows through enrichWO's vendorView, gated on accessGated.
   let vendorSMSSent = false, tenantSMSSent = false;
+  // Outcome of the vendor text in plain words (Oct 12 2026, Duplicate Work Order): sent / held /
+  // failed / skipped + WHY, returned to the caller so a text that did not go out is never silent.
+  let vendorSmsDetail = { status: 'skipped', reason: notify ? 'Vendor has no phone number on file' : 'Notifications were turned off for this assignment' };
+  if (notify && !vendor.Phone) vendorSmsDetail = { status: 'failed', reason: 'Vendor has no phone number on file — no text was sent' };
   if (notify && vendor.Phone) {
     const isSpanish = vendor.Language === 'es';
     // Access-gate: the lockbox code + tenant contact are NOT sent on dispatch — they unlock
