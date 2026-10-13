@@ -7773,6 +7773,7 @@ async function getWorkOrdersList(env, url) {
 const WO_DUP_ALLOWED_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
 const BID_CANCEL_PROTECTED_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'];
 const WO_BID_COLUMNS = ['Bid_Group_ID', 'Duplicated_From', 'Owner_Notify_Override'];
+const WO_BID_WINNER_COLUMNS = ['Tenant_Visible', 'Bid_Winner'];   // ensured only when a COPY is chosen as the keep_one winner
 const WO_DUP_ENSURE_COLUMNS = WO_BID_COLUMNS.concat(['Checklist', 'Managed_By', 'Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes']);
 // Copied verbatim from the source. Deliberately NOT here: Vendor_ID, Status, Scheduled_*,
 // Completed_Date, Invoice_*, QBO_*, Customer_Charge, Deposit_*, Scope_ID, Approval_Stage,
