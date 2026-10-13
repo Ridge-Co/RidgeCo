@@ -7321,6 +7321,7 @@ async function woCombine(env, body) {
     const w = findWO(workorders, id);
     if (!w) return json({ error: `Work order ${id} not found` }, 404);
     if (String(w.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Work order ${id} is already voided — cannot combine it again` }, 400);
+    if (String(w.Bid_Group_ID || '').trim()) return json({ error: `Work order ${id} is in bid group ${w.Bid_Group_ID} — unlink it from the group first (WO detail > Bid group) before combining.` }, 400);
     combinedWOs.push(w);
   }
   // Same same-Property_ID/Unit_ID scoping the existing single-WO Combined picker already
