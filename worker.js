@@ -8157,6 +8157,7 @@ async function woBidGroupGet(env, url) {
       id: w.ID, status: w.Status || 'New', vendor_id: w.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '',
       duplicated_from: w.Duplicated_From || '', is_original: !String(w.Duplicated_From || '').trim(),
       voided: String(w.Voided || '').toUpperCase() === 'TRUE', scheduled_date: w.Scheduled_Date || '', created_date: w.Created_Date || '',
+      is_winner: String(w.Bid_Winner || '').trim().toUpperCase() === 'TRUE', tenant_visible: String(w.Tenant_Visible || '').trim().toUpperCase() !== 'FALSE',   // same predicate the tenant portal uses (only an explicit FALSE hides)
       latest_estimate: est ? { version: est.Version || '', subtotal: est.Subtotal || '', status: est.Status || '' } : null,
     };
   }).sort((a, b) => (a.is_original === b.is_original ? String(a.created_date).localeCompare(String(b.created_date)) : (a.is_original ? -1 : 1)));
