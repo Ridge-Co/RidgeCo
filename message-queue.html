@@ -182,8 +182,40 @@ function loadList(){
   api('GET','/message-queue' + q).then(function(list){
     rows = Array.isArray(list) ? list : [];
     render();
+    fetchEnglish();
   }).catch(function(){ document.getElementById('list').innerHTML = '<div class="empty">Could not load — check connection.</div>'; });
 }
+// ── English view: show what a Spanish vendor text says (Oct 13 2026) ─────────────────────
+// Rows that carry the English original (Original_Body) show it straight away. Older vendor rows
+// without one are sent to the Hub to translate (the Hub only translates text that reads as Spanish).
+// A translation that can't be produced shows a visible warning + Retry — never a blank.
+var english = {};
+function englishHtml(r){
+  var saved = String(r.Original_Body || '').trim();
+  var e = english[r.ID];
+  var txt = saved || (e && e.english) || '';
+  if (txt) return '<div class="row-en"><b>English:</b> ' + esc(txt) + '</div>';
+  if (e && e.error) return '<div class="row-en err">⚠ English view unavailable — ' + esc(e.error) + ' <button class="btn small" onclick="retryEnglish(\'' + r.ID + '\')">Retry</button></div>';
+  if (e && e.loading) return '<div class="row-en">Translating to English…</div>';
+  return '';
+}
+function fetchEnglish(ids){
+  var need = ids || rows.filter(function(r){ return r.Recipient_Type === 'vendor' && !String(r.Original_Body || '').trim() && !english[r.ID]; }).map(function(r){ return r.ID; });
+  need = need.slice(0, 45);
+  for (var i = 0; i < need.length; i += 15) (function(chunk){
+    chunk.forEach(function(id){ english[id] = { loading: true }; });
+    api('POST','/message-queue/translate',{ ids: chunk }).then(function(r){
+      if (!r || r.error || !Array.isArray(r.results)) throw new Error((r && r.error) || 'bad response');
+      r.results.forEach(function(x){ english[x.id] = x.english ? { english: x.english } : x.error ? { error: x.error } : { skipped: true }; });
+      render();
+    }).catch(function(err){
+      chunk.forEach(function(id){ english[id] = { error: 'could not reach the Hub (' + (err && err.message || 'error') + ')' }; });
+      render();
+    });
+  })(need.slice(i, i + 15));
+  if (need.length) render();
+}
+function retryEnglish(id){ delete english[id]; fetchEnglish([id]); }
 function groupKey(r){
   if (r.Recipient_Type === 'vendor') return 'Vendor · ' + (r.Recipient_Name || 'Unknown');
   return (r.Property_Address || 'No property') + (r.Recipient_Name ? (' — ' + r.Recipient_Name) : '');
