@@ -8198,7 +8198,7 @@ async function woBidGroupCancel(env, body) {
   const mode = String(body.mode || '').trim();
   const confirmed = body.confirm === true && body.dry_run !== true;
   const result = {
-    ok: false, dry_run: !confirmed, mode, group_id: '', keep_wo_id: String(body.keep_wo_id || '').trim(), results: [],
+    ok: false, dry_run: !confirmed, mode, group_id: '', keep_wo_id: String(body.keep_wo_id || '').trim(), results: [], winner: null,
     summary: { would_cancel: 0, would_skip: 0, cancelled: 0, skipped: 0, failed: 0, kept: 0, already_cancelled: 0 },
     warnings: [], errors: [],
   };
