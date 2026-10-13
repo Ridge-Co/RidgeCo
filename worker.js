@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-13.4-scope-addons';
+const BUILD_VERSION = '2026-10-13.5-scope-addons-flat';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -4369,6 +4369,12 @@ async function scopeProposal(env, body) {
   // somehow left in a bad state, fall back to the default rather than 500ing proposal generation.
   const schedule = scheduleCheck.schedule || scopeDefaultPaymentSchedule();
   const milestones = scopeComputeMilestoneAmounts(schedule, priced.subtotal, priced.vendorCostTotal);
+  if (priced.items.some(it => it.optional)) {
+    // Smallest total a customer could sign = cheapest option on every base item, no add-ons.
+    const smallest = priced.items.filter(it => !it.optional).reduce((sum, it) => { const ps = (it.variants || []).map(v => +v.price || 0); return sum + (ps.length ? Math.min(...ps) : 0); }, 0);
+    const addonProblem = scopeScheduleAddonProblem(schedule, smallest);
+    if (addonProblem) return json({ error: 'This proposal has optional add-ons, but its payment schedule can\'t take them: ' + addonProblem }, 400);
+  }
 
   const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite each of the following scope-of-work item descriptions into a short, polished, customer-facing sentence. Correct typos/slang/grammar, imperative and specific. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items (JSON array):\n${JSON.stringify(items.map(it => ({ id: it.id, area: it.area, description: it.description, note: it.note })))}\n\nReturn ONLY strict minified JSON: an array of {"id":"<same id>","text":"<rewritten sentence>"}, same order, no preamble.`;
   const rewritten = {};
@@ -4431,7 +4437,7 @@ async function scopeProposal(env, body) {
     Proposal_Text: doc, Proposal_Items_JSON: JSON.stringify(priced.items),
     Estimate_Amount: String(priced.vendorCostTotal), Status: 'proposed', Updated_Date: new Date().toISOString(),
   });
-  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: [...(scheduleCheck.warnings || []), ...(addonItems.length && schedule.some(m => m.calc_mode === 'flat') ? ['This proposal has optional add-ons AND a flat-dollar payment milestone. Flat milestones do not grow when a customer adds an add-on — only the percent-based milestones do. Use percentages if you want add-ons spread across the whole schedule.'] : [])], items: priced.items,
+  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: [...(scheduleCheck.warnings || []), ...(addonItems.length && schedule.some(m => m.calc_mode === 'flat') ? [`This proposal has optional add-ons AND a flat-dollar payment. Flat payments stay at the exact amount you typed when a customer adds an add-on; the last "% of total" payment ("${scopeAbsorberLabel(schedule)}") takes the whole difference.`] : [])], items: priced.items,
     // Admin-only caller (scope-creator.html) — lets Brett see the materials split he just priced.
     materials: { mode: materialsPricing.mode, pct: materialsPricing.pct, cost_total: priced.rcMaterialsCostTotal, price_total: priced.rcMaterialsPriceTotal, vendor_cost_total: priced.vendorCostTotal } });
 }
@@ -4611,7 +4617,7 @@ async function scopeProposalView(env, url) {
   const rawSchedule = scopeParsePaymentSchedule(s);
   const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
   const schedule = scopeComputeMilestoneAmounts(scheduleValidation.schedule || scopeDefaultPaymentSchedule(), subtotal, 0)
-    .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount })); // never vendor_amount — customer-facing boundary
+    .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount, calc_mode: m.calc_mode, flat_customer_amount: m.flat_customer_amount })); // never vendor_amount — customer-facing boundary
   let signed = null;
   try {
     await scopeSigTab(env);
@@ -4623,7 +4629,7 @@ async function scopeProposalView(env, url) {
       try {
         await paymentMilestonesTab(env);
         const ms = (await fetchTab(env, 'Payment_Milestones')).filter(m => m.Signature_ID === String(row.ID) && String(m.Active || '').toUpperCase() !== 'FALSE');
-        if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, status: m.Status || 'pending' }));
+        if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, calc_mode: m.Calc_Mode === 'flat' ? 'flat' : 'percent', status: m.Status || 'pending' }));
       } catch (_) {}
       signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel, schedule: signedSchedule };
     }
@@ -4713,24 +4719,43 @@ function scopeValidatePaymentSchedule(milestones, maxUpfrontPct) {
 // short or over from percent rounding, same discipline as scopeSigVendorBillAmount below.
 function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
   subtotal = +subtotal || 0; vendorCostTotal = +vendorCostTotal || 0;
-  let custRunning = 0, vendRunning = 0;
+  // Oct 13 2026: 'flat' rows are fixed customer amounts, exactly as typed. The customer-side
+  // ABSORBER (the row that takes rounding and any add-on difference so milestones always foot to
+  // the signed total) is the LAST NON-FLAT row — not simply the last row, which may be flat. With
+  // no non-flat row there is no absorber (legacy all-flat schedules keep their typed amounts).
+  const isFlatRow = (m) => m.calc_mode === 'flat' && m.flat_customer_amount != null;
+  let absorber = -1;
+  for (let k = schedule.length - 1; k >= 0; k--) { if (!isFlatRow(schedule[k])) { absorber = k; break; } }
+  const custAmts = schedule.map((m, i) => isFlatRow(m) ? +(+m.flat_customer_amount).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
+  if (absorber >= 0) custAmts[absorber] = +(subtotal - custAmts.reduce((sum, a, i) => i === absorber ? sum : sum + a, 0)).toFixed(2);
+  let vendRunning = 0;
   return schedule.map((m, i) => {
     const isLast = i === schedule.length - 1;
     // 'flat' overrides the CUSTOMER amount only, exactly as typed — never the vendor side (see
-    // scopeValidatePaymentSchedule's comment on why). A flat milestone never absorbs rounding
-    // drift either, last or not: "exactly Flat_Customer_Amount" means exactly that.
-    const isFlat = m.calc_mode === 'flat' && m.flat_customer_amount != null;
-    const custAmt = isFlat
-      ? +(+m.flat_customer_amount).toFixed(2)
-      : (isLast ? +(subtotal - custRunning).toFixed(2) : +((m.percent / 100) * subtotal).toFixed(2));
+    // scopeValidatePaymentSchedule's comment on why); vendor proration stays percent-based.
+    const custAmt = custAmts[i];
     const vendAmt = isLast ? +(vendorCostTotal - vendRunning).toFixed(2) : +((m.percent / 100) * vendorCostTotal).toFixed(2);
-    custRunning = +(custRunning + custAmt).toFixed(2); vendRunning = +(vendRunning + vendAmt).toFixed(2);
+    vendRunning = +(vendRunning + vendAmt).toFixed(2);
     return {
       label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: custAmt, vendor_amount: vendAmt,
       vendor_paid: m.vendor_paid !== false, calc_mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
       flat_customer_amount: (m.flat_customer_amount != null ? m.flat_customer_amount : null),
     };
   });
+}
+function scopeAbsorberLabel(schedule) { for (let k = schedule.length - 1; k >= 0; k--) { if (!(schedule[k].calc_mode === 'flat' && schedule[k].flat_customer_amount != null)) return schedule[k].label; } return ''; }
+// Oct 13 2026: can this schedule take an optional add-on at all? Returns '' when fine, else a plain
+// explanation. Flat rows stay fixed; the last non-flat row absorbs the difference, so it must exist
+// and must not go negative at the SMALLEST total the customer could sign (percent rows only grow with
+// the total, so if it is >= 0 there it is >= 0 at every larger total).
+function scopeScheduleAddonProblem(schedule, smallestTotal) {
+  const isFlatRow = (m) => m.calc_mode === 'flat' && m.flat_customer_amount != null;
+  let absorber = -1;
+  for (let k = schedule.length - 1; k >= 0; k--) { if (!isFlatRow(schedule[k])) { absorber = k; break; } }
+  if (absorber < 0) return 'Every payment on this schedule is a fixed $ amount, so an optional add-on would leave the payments not adding up to the new total. Make at least one payment (usually the Final) a "% of total" row.';
+  const amts = scopeComputeMilestoneAmounts(schedule, smallestTotal, 0);
+  if (amts[absorber].customer_amount < 0) return `The fixed-$ payments on this schedule leave "${schedule[absorber].label}" at $${amts[absorber].customer_amount.toFixed(2)} on a $${(+smallestTotal).toFixed(2)} job — lower a fixed amount or raise the % rows so the last % payment is not negative.`;
+  return '';
 }
 // Given a signature's FULL milestone schedule (any order; sorted here by `sequence`), returns the
 // ACTUAL vendor-payable amount per milestone once a Vendor_Paid_At_This_Milestone:false milestone's
@@ -4857,6 +4882,17 @@ async function scopeProposalSign(env, body, ip, ua) {
   rcMaterialsCost = +rcMaterialsCost.toFixed(2); rcMaterialsPrice = +rcMaterialsPrice.toFixed(2);
   subtotal = +subtotal.toFixed(2); vendorCostTotal = +vendorCostTotal.toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2); // legacy column, kept for any old dashboard summing it — not used for new billing
+  if (items.some(it => it.optional)) {
+    // A schedule that can't absorb the signed total (all rows flat, or fixed $ exceed the total) must
+    // never be signed — refuse BEFORE any write, tell Brett (telemetry), show the customer a plain message.
+    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s), await scopeMaxUpfrontPct(env));
+    const addonProblem = scopeScheduleAddonProblem(sv.schedule || scopeDefaultPaymentSchedule(), subtotal);
+    if (addonProblem) {
+      let telemetryError = '';
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_sign_schedule_mismatch', Skill_Or_Endpoint: '/scope-proposal/sign', Success: 'FALSE', Notes: `scope=${s.ID} subtotal=${subtotal} problem=${addonProblem}`.slice(0, 480) }); } catch (e) { telemetryError = String(e && e.message || e); }
+      return json({ error: 'schedule_unavailable', message: 'This proposal can\'t be signed online right now. Please contact Ridge Co and we\'ll send you a corrected copy.', ...(telemetryError ? { telemetry_error: telemetryError } : {}) }, 409);
+    }
+  }
   const now = new Date();
   if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
     try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
