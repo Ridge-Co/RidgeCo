@@ -15555,7 +15555,7 @@ async function opsQueueScoutSubmit(env, body) {
       if (!target) { recheck_errors.push({ id: rid, error: 'not_found' }); continue; }
       if (String(target.Status || '').toLowerCase() !== 'proposed') { recheck_errors.push({ id: rid, error: 'not_proposed' }); continue; }
       if (!['keep', 'covered', 'update'].includes(vd)) { recheck_errors.push({ id: rid, error: 'verdict must be keep|covered|update' }); continue; }
-      await updateRow(env, OPS_QUEUE_TAB, rid, { Scout_Verdict: vd, Scout_Note: String((rc && rc.note) || '').slice(0, 300), Scout_Reviewed: now });
+      await updateQueueRowOrThrow(env, rid, { Scout_Verdict: vd, Scout_Note: String((rc && rc.note) || '').slice(0, 300), Scout_Reviewed: now });
       rechecked++;
     } catch (e) { recheck_errors.push({ id: rc && rc.id, error: String((e && e.message) || e) }); }
   }
