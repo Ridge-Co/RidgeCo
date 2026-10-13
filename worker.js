@@ -20370,6 +20370,25 @@ async function hubTestWriteAllowed(env, path, body) {
     }
     return true;
   }
+  if (path === '/wo/duplicate') {
+    // The source WO must sit on a TEST- property and any vendor must be a TEST- vendor. The copy
+    // inherits the source's Property_ID, so nothing real can be created or texted.
+    if (!(await isTestWO(env, body && body.source_wo_id))) return false;
+    if (body.vendor_id && !(await isTestRecord(env, 'Vendors', body.vendor_id))) return false;
+    return true;
+  }
+  if (path === '/wo/bid-group/unlink' || path === '/wo/bid-group/cancel') {
+    // Every member of the group this touches must be a TEST- WO (unlink can release the last
+    // other member; cancel touches the whole group) — a group with even one real WO is refused.
+    const wos = await fetchTab(env, 'Work_Orders');
+    let gid = String((body && body.group_id) || '').trim();
+    const anchor = findWO(wos, String((body && (body.wo_id || body.keep_wo_id)) || ''));
+    if (!gid && anchor) gid = String(anchor.Bid_Group_ID || '').trim();
+    const members = gid ? wos.filter(w => w.Bid_Group_ID === gid) : (anchor ? [anchor] : []);
+    if (!members.length) return false;
+    for (const m of members) { if (!(await isTestRecord(env, 'Properties', m.Property_ID))) return false; }
+    return true;
+  }
   if (path === '/wo/split') {
     // /wo/split only ever touches an existing Work_Orders row as its target (the original);
     // the new WOs it creates inherit that same Property_ID, so gating on the original's
