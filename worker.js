@@ -3497,6 +3497,10 @@ function scopeCleanItems(arr) {
       variants, selected_key,
       // vendor's own wording when `description` is the English rendering of it (Sep 28 2026) — kept, never shown to the owner
       ...((it && it.description_orig) ? { description_orig: String(it.description_orig) } : {}),
+      // Optional add-on (Oct 13 2026, Brett): true = NOT part of the base job — the customer ticks it
+      // on or off on the proposal. Absent/false = included in the job (an item with 2+ variants is
+      // still a pick-one choice). Only written when true, so every existing item keeps its exact shape.
+      ...((it && (it.optional === true || it.optional === 'true')) ? { optional: true } : {}),
     };
   }).filter(it => it.description);
 }
