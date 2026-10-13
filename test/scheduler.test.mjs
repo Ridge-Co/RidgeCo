@@ -599,6 +599,7 @@ store.setCfg('admin_phone', '+15555550100');
 }
 globalThis.fetch = realFetch;
 globalThis.setTimeout = _realSetTimeout;
+
 // ───────────────────────────── 4. no cron anywhere (structure) ─────────────────────────────
 {
   const toml = fs.readFileSync(root + 'wrangler.toml', 'utf8');
