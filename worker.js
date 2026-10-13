@@ -13654,10 +13654,9 @@ async function processQuietHoursQueue(env) {
 //    Job_Type has been logged in the last 24h. Known, honest limitation (not hidden): a
 //    self-check that runs *inside* this Worker can't detect the Worker being totally down —
 //    if nothing is running, this can't run either. It DOES catch a real, common failure class
-//    (the Worker is up, cron is firing, but something upstream silently stopped completing
-//    jobs). Total-outage coverage already exists separately via cron-sweep.yml's own
-//    GitHub-Actions-level failure email (non-200 -> exit 1 -> GitHub notifies watchers) — the
-//    two are complementary, not redundant.
+//    (the Worker is up, the scheduler is ticking, but something upstream silently stopped completing
+//    jobs). Total-outage coverage is the Apps Script's own email alerts (HubScheduler.gs mails Brett on any
+//    non-200 / unreachable Worker / overdue job, independent of the Hub) - the two are complementary.
 
 // Pure: has an alert for this debounce `key` already fired within `windowMs`? No I/O — easy to
 // test in isolation. Shared by both features below so a real, ongoing problem doesn't re-page
