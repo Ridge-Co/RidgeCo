@@ -231,6 +231,27 @@ function itemHtml(it, locked, signedSelections){
   var selKey = locked ? (signedSelections && signedSelections[it.id]) : it.selected_key;
   var multi = it.variants && it.variants.length > 1;
   var body = '';
+  if (it.optional) {
+    // Optional add-on (Oct 13 2026): NOT in the base total. The customer ticks it to add it; the price
+    // shown is what it ADDS. Signed pages show whether it was added.
+    var ov = it.variants || [];
+    if (locked) {
+      var chosen = ov.find(function(v){ return v.key === selKey; });
+      body = chosen
+        ? '<div class="vopt locked selected"><span class="vlabel">&#10003; Added to your job' + (multi && chosen.label ? ' &mdash; ' + esc(chosen.label) : '') + '</span><span class="vprice">+' + money(chosen.price) + '</span>' + matLineHtml(chosen) + '</div>'
+        : '<div class="addon-off">Not added to this job</div>';
+    } else if (!multi) {
+      var only1 = ov[0];
+      body = '<label class="vopt addon-pick"><input type="checkbox" name="addon-' + esc(it.id) + '" value="' + esc(only1 ? only1.key : '') + '" onchange="recalc()"><span class="vlabel">Add this to my job</span><span class="vprice">+' + money(only1 ? only1.price : 0) + '</span>' + matLineHtml(only1) + '</label>';
+    } else {
+      body = '<div class="variant-group"><label class="vopt addon-pick"><input type="radio" name="item-' + esc(it.id) + '" value="" checked onchange="recalc()"><span class="vlabel">No thanks &mdash; not adding this</span><span class="vprice">$0.00</span></label>' + ov.map(function(v){
+        return '<label class="vopt addon-pick"><input type="radio" name="item-' + esc(it.id) + '" value="' + esc(v.key) + '" onchange="recalc()"><span class="vlabel">' + esc(v.label || v.key) + '</span><span class="vprice">+' + money(v.price) + '</span>' + matLineHtml(v) + '</label>';
+      }).join('') + '</div>';
+    }
+    return '<div class="item addon"><span class="addon-tag">Optional add-on</span>' +
+      (it.area ? '<div class="item-area">' + esc(it.area) + '</div>' : '') +
+      '<div class="item-desc">' + esc(it.description) + '</div>' + body + '</div>';
+  }
   if (multi) {
     body = '<div class="variant-group">' + it.variants.map(function(v){
       var checked = v.key === selKey;
