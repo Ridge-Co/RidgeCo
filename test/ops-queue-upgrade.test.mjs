@@ -241,6 +241,31 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   eq(SHEET[0].Build_State, 'pr_open', 'title_prefix restricts which rows sync touches');
 }
 
+// ── sync with browser-supplied PRs (GitHub rate-limits the Worker's shared address) ─────────
+{
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return { ok: false, status: 403, json: async () => ({}) }; };
+  resetSheet([
+    { ID: '40', Title: 'supplied merged', Status: 'done', PR_Number: '50', Build_State: 'pr_open' },
+    { ID: '41', Title: 'supplied closed', Status: 'building', PR_Number: '51', Build_State: 'pr_open' },
+    { ID: '42', Title: 'matched by body', Status: 'building', Build_State: 'building' },
+    { ID: '43', Title: 'not supplied', Status: 'building', PR_Number: '99', Build_State: 'pr_open' },
+  ]);
+  const r = await L.opsQueueSync(env, { prs: [
+    { number: 50, state: 'closed', merged_at: '2026-10-12T00:00:00Z' },
+    { number: 51, state: 'closed', merged_at: null },
+    { number: 52, state: 'open', title: 'x', body: 'Ops queue item #42' },
+    { number: 'bad', state: 'open' }, null,
+  ] });
+  eq([SHEET[0].Build_State, SHEET[0].Status], ['live', 'done'], 'supplied merged PR → live');
+  eq(SHEET[1].Build_State, 'pr_closed', 'supplied closed PR → flagged');
+  eq([SHEET[2].PR_Number, SHEET[2].Build_State], ['52', 'pr_open'], 'supplied PR matched by body');
+  eq(r.body.errors.length, 1, 'PR missing from the supplied list falls back to GitHub and reports its failure');
+  eq(r.body.errors[0].id, '43', 'which row');
+  ok(/rate-limits/.test(r.body.errors[0].error), 'error explains the rate limit');
+  eq(calls, 1, 'GitHub only called for the one PR not supplied');
+}
+
 // ── routine text carries Brett's change + standing rules ──────────────────────────────────────────────────────────────────────────────────────────
 {
   const t = L.buildStartBuildRoutineText([{ ID: '5', Title: 'Owner view', Risk_Class: 'SAFE', Brett_Note: 'Do not show monthly spend' }, { ID: '6', Title: 'Other', Risk_Class: 'SAFE' }], 'TOK');

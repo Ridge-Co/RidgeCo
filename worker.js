@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-13.1-queue-upgrade';
+const BUILD_VERSION = '2026-10-13.2-queue-upgrade';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -17034,9 +17034,11 @@ function cleanPrNumber(v) {
 }
 
 const QUEUE_REPO = 'Ridge-Co/RidgeCo';
-async function ghPublicJson(path) {
-  const r = await fetch('https://api.github.com/repos/' + QUEUE_REPO + path, { headers: { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github+json' } });
-  if (!r.ok) throw new Error('GitHub ' + path + ' → HTTP ' + r.status + (r.status === 403 || r.status === 429 ? ' (rate limited; will retry next sync)' : ''));
+async function ghPublicJson(path, env) {
+  const hdrs = { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github+json' };
+  if (env && env.GITHUB_READ_TOKEN) hdrs['Authorization'] = 'Bearer ' + env.GITHUB_READ_TOKEN; // optional read-only token; works without it
+  const r = await fetch('https://api.github.com/repos/' + QUEUE_REPO + path, { headers: hdrs });
+  if (!r.ok) throw new Error('GitHub ' + path + ' → HTTP ' + r.status + (r.status === 403 || r.status === 429 ? ' (GitHub rate-limits the Hub\'s shared address; open the Proposals page to sync from your browser)' : ''));
   return await r.json();
 }
 
@@ -17059,18 +17061,22 @@ async function opsQueueSync(env, body) {
     return (st === 'building' || st === 'done' || st === 'held') && (bs === 'building' || bs === 'pr_open' || (bs === '' && r.PR_Number && st !== 'done'));
   }).slice(0, 25);
   const changed = [], errors = [];
-  let prList = null;
+  // GitHub rate-limits anonymous calls from Cloudflare's shared addresses, so the Proposals page can
+  // look PRs up from Brett's own browser and pass them in as body.prs (same shape as GitHub's /pulls list).
+  const supplied = (body && Array.isArray(body.prs) ? body.prs : []).slice(0, 100)
+    .filter(p => p && Number.isFinite(Number(p.number)) && typeof p.state === 'string');
+  let prList = supplied.length ? supplied : null;
   const nowIso = new Date().toISOString();
   for (const r of inflight) {
     try {
       let n = cleanPrNumber(r.PR_Number);
       if (!n) {
-        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60');
+        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env);
         const hit = matchPrToItem(prList, r.ID);
         if (hit) n = String(hit.number);
       }
       if (!n) continue; // no PR yet — page shows "building / no PR reported" (and "stalled" after 24h)
-      const pr = await ghPublicJson('/pulls/' + n);
+      const pr = supplied.find(p => String(p.number) === n) || await ghPublicJson('/pulls/' + n, env);
       const next = prStateToBuildState(pr);
       const fields = {};
       if (String(r.PR_Number || '') !== n) fields.PR_Number = n;
