@@ -14027,6 +14027,39 @@ async function schedRunArReport(env) {
 }
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
+// ── PREFLIGHT (dry run only): plain-English, COUNTS ONLY, strictly read-only (GETs; no claim, no state write, no SMS). ──
+const SCHED_PF_WHAT = {
+  door_watchdog: 'checks the door-code system (str-automation /health); texts Brett only if it is unhealthy',
+  sweep: 'texts any quiet-hours-held messages that are now due, sends due queued reminders, and sends due vendor nudges',
+  sweep_work: 'posts due recurring work orders, sends the once-a-day estimate reminder, and moves paid-deposit scopes forward',
+  sweep_checks: 'runs the daily self-test (once a day) and the dead-man check (alerts if no telemetry for 24h)',
+  insp_guard: 'checks inspection bookings against the STR calendar (does nothing until the inspection module is configured)',
+  daily_digest: 'builds the morning digest and texts it to the admin phone',
+  daily_receipts: 'scans the receipt inbox',
+  daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
+  daily_turnover: 'releases turnover work orders due today',
+  daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
+  review_mon: 'runs the Monday weekly review and delivers it',
+  review_wed: 'runs the Wednesday weekly review (logged only)',
+  ar_report_mon: 'builds and delivers the Monday AR aging report',
+};
+async function schedPfTab(env, tab) {
+  try { return await fetchTab(env, tab); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }
+}
+function schedAgeSummary(isoList, nowMs) {
+  const by_age = { under_1h: 0, h1_to_24: 0, d1_to_7: 0, over_7d: 0, unknown: 0 };
+  let oldest = null;
+  for (const iso of isoList) {
+    const ts = Date.parse(iso || '');
+    if (isNaN(ts)) { by_age.unknown++; continue; }
+    const h = (nowMs - ts) / 3600000;
+    if (h < 1) by_age.under_1h++; else if (h < 24) by_age.h1_to_24++; else if (h < 168) by_age.d1_to_7++; else by_age.over_7d++;
+    if (oldest === null || h > oldest) oldest = h;
+  }
+  return { by_age, oldest_days: oldest === null ? null : Math.round(oldest / 2.4) / 10 };
+}
+//@@PF_NEXT@@
 function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 // Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
 async function schedRunNext(env, ctx, opts) {
