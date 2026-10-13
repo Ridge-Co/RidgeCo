@@ -328,4 +328,49 @@ for (const N of [2, 5, 8]) {
   t('throwing job -> admin alert attempted (rate-limited inside alertAdminOnFailure)', L.alerts.length === 1 && L.alerts[0].k === 'scheduler_bad');
   t('throwing job -> state records last_error + failed status, no last_ok', (() => { const j = stateOf(store).jobs.bad; return /kaboom/.test(j.last_error) && j.last_status === 'failed' && !j.last_ok; })());
   t('throwing job -> the next job still runs on the next call', r1.body.more === true && (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === 'good' && log.join() === 'good');
+  const r3 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('failed interval job is not hammered: not re-run before its interval', r3.body.ran === null);
+  const st = L.schedStatus(stateOf(store), new Date(c.v + 50 * 60000), jobs);
+  t('and shows up overdue in the status report with its error', st.overdue.includes('bad') && /never completed/.test(st.jobs.bad.overdue_reason) && /kaboom/.test(st.jobs.bad.last_error));
+}
+// 2h step-level failures (a job returning errors without throwing) are failures too; telemetry failure is surfaced
+{
+  const store = makeStore(), L = load(store, { telemetryFails: true }), c = clock(T0);
+  const jobs = mkJobs([], [['x', 'interval', { run: async () => ({ ok: true, errors: [{ step: 'quiet_hours', error: 'sheet 429' }] }) }]]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('job returning errors[] is job_ok false with step names', r.body.job_ok === false && /quiet_hours: sheet 429/.test(r.body.error));
+  t('telemetry write failing is itself reported in the result (not swallowed)', /telemetry sheet down/.test(r.body.telemetry_error || ''), r.body);
+}
+// 2i state write failures are loud
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval']]);
+  let writes = 0;
+  store.failWhen = (m, p) => { if (m === 'POST' && p === '/values:batchUpdate') { writes++; return writes > 0; } return false; };
+  store.tabs.get('Config').push(['Scheduler_State', '']);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('cannot write the claim -> 503, job NOT run, error says why', r.status === 503 && r.body.ok === false && /claim/.test(r.body.error) && log.length === 0, r.body);
+  t('dispatcher failure is logged to telemetry', L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dispatcher'));
+}
+{
+  // claim write works, end-of-run write fails -> ok:false + STATE NOT RECORDED
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval', { run: async () => { log.push('a'); store.failWhen = (m, p) => m === 'POST' && p === '/values:batchUpdate'; return { ok: true, errors: [] }; } }]]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('end-of-run state write failing -> ok:false, state_error set, telemetry row', r.body.ok === false && /STATE NOT RECORDED/.test(r.body.error) && !!r.body.state_error && L.telemetry.some(x => /could not record/.test(x.Notes)), r.body);
+}
+// 2j unreadable / corrupt state never "re-runs everything"
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval']]);
+  store.tabs.get('Config').push(['Scheduler_State', '{corrupt']);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('corrupt Scheduler_State -> 503 with reset instructions, nothing run', r.status === 503 && /not valid JSON/.test(r.body.error) && /Delete that Config row/.test(r.body.error) && log.length === 0);
+  const store2 = makeStore(), L2 = load(store2);
+  store2.failWhen = (m, p) => m === 'GET';
+  const r2 = await L2.schedRunNext({}, null, fast(c, { jobs }));
+  t('Config read failure -> 503, nothing run, error names the read', r2.status === 503 && /could not read Config/.test(r2.body.error) && log.length === 0);
+  const sres = await L2.schedStatusHandler({});
+  t('status handler: Config read failure is a 503, not an empty report', sres.status === 503 && sres.body.ok === false);
+}
 //@@TEST_NEXT@@
