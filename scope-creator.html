@@ -1190,6 +1190,7 @@ async function genProposal(){
     document.getElementById('proposal-out').classList.remove('hide');
     document.getElementById('proposal-text').value=r.proposal_text;
     state.current.Proposal_Text=r.proposal_text; state.current.Status='proposed'; document.getElementById('ed-status-pill').innerHTML=statusPill('proposed');
+    renderCustomerPreview(r.items, r.schedule);
     var schedTxt=(r.schedule||[]).map(function(m){ return m.label+' $'+Number(m.customer_amount).toFixed(2); }).join(' · ');
     var msg='✅ proposal ready — total $'+Number(r.final_price).toFixed(2)+' — '+schedTxt;
     if(r.materials && Number(r.materials.cost_total)>0){
