@@ -434,6 +434,7 @@ const _hubWorkerCore = {
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
+        if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
         // tenant-by-pin payload are cached in the client's mh_tenant_sess at login and never
@@ -714,6 +715,9 @@ const _hubWorkerCore = {
         if (path === '/wo/bulk-void')             return await woBulkVoid(env, body);
         if (path === '/wo/combine')               return await woCombine(env, body);
         if (path === '/wo/split')                 return await woSplit(env, body);
+        if (path === '/wo/duplicate')             return await woDuplicate(env, body);
+        if (path === '/wo/bid-group/unlink')      return await woBidGroupUnlink(env, body);
+        if (path === '/wo/bid-group/cancel')      return await woBidGroupCancel(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
         if (path === '/tenant/schedule-move-out') return await scheduleMoveOutWithTurnover(env, body);
         if (path === '/schedule')                 return await scheduleWO(env, body);
@@ -5895,6 +5899,7 @@ async function addTimeEntry(env, body) {
   const { wo_id, entered_by, entered_by_id, role, entry_type, start_datetime, end_datetime, duration_minutes_raw, notes, invoice_description, billable, hourly_rate } = body;
   if (!wo_id) return json({ error: 'wo_id required' }, 400);
   if (!role)  return json({ error: 'role required (hub or vendor)' }, 400);
+  { const _blk = await bidGroupWriteBlock(env, wo_id, 'time entries', 'horas', '/time-entry/add'); if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409); }
   let durationMinutes = 0;
   if (start_datetime && end_datetime) { durationMinutes = roundUpTo15((new Date(end_datetime) - new Date(start_datetime)) / 60000); }
   else if (duration_minutes_raw) { durationMinutes = roundUpTo15(parseFloat(duration_minutes_raw) || 0); }
@@ -7536,11 +7541,13 @@ async function woCombine(env, body) {
   const survivor = findWO(workorders, survivorId);
   if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
   if (String(survivor.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Survivor work order ${survivorId} is voided — cannot combine into it` }, 400);
+  if (String(survivor.Bid_Group_ID || '').trim()) return json({ error: `Work order ${survivorId} is in bid group ${survivor.Bid_Group_ID} — unlink it from the group first (WO detail > Bid group) before combining.` }, 400);
   const combinedWOs = [];
   for (const id of combinedIds) {
     const w = findWO(workorders, id);
     if (!w) return json({ error: `Work order ${id} not found` }, 404);
     if (String(w.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Work order ${id} is already voided — cannot combine it again` }, 400);
+    if (String(w.Bid_Group_ID || '').trim()) return json({ error: `Work order ${id} is in bid group ${w.Bid_Group_ID} — unlink it from the group first (WO detail > Bid group) before combining.` }, 400);
     combinedWOs.push(w);
   }
   // Same same-Property_ID/Unit_ID scoping the existing single-WO Combined picker already
@@ -7773,6 +7780,7 @@ async function woSplit(env, body) {
   const original = findWO(workorders, originalId);
   if (!original) return json({ error: `Work order ${originalId} not found` }, 404);
   if (original.Voided === 'TRUE') return json({ error: `Work order ${originalId} is voided — cannot split it` }, 400);
+  if (String(original.Bid_Group_ID || '').trim()) return json({ error: `Work order ${originalId} is in bid group ${original.Bid_Group_ID} — unlink it from the group first (WO detail > Bid group) before splitting.` }, 400);
   // Same billing-state guard as woCombine (Sep 23 2026 field audit, widened same day to also
   // cover vendor-bill state) — splitting a WO that QuickBooks already has a final invoice
   // number for would leave that invoice referring to a job that's now spread across N work
@@ -7956,7 +7964,525 @@ async function getWorkOrdersList(env, url) {
     : rows.filter(r => r.Voided !== 'TRUE');
   return json(filtered.filter(r => String(r.Addon_Status || '') !== 'Draft'));   // additional-work drafts are never listed
 }
-async function assignVendor(env, body) {
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// DUPLICATE WORK ORDER + BID GROUPS  (Oct 12 2026, Brett)
+// Brett has vendors who don't keep promised schedules, so he wants a deliberate "shotgun": give
+// the SAME job to several vendors at once and keep whichever comes back first/best. Normally a
+// duplicate WO is exactly what rule 162 (findRecentDuplicate) exists to stop, so this is an
+// explicit, admin-only, one-copy-per-tap feature with its own rules:
+//   - POST /wo/duplicate {source_wo_id, vendor_id?}  one COPY per call, linked in a bid group
+//     (Work_Orders.Bid_Group_ID 'BG-n'); Duplicated_From = the WO the button was tapped on.
+//     Copies everything EXCEPT vendor, estimates, bills, time/labor, billing/QBO/deposit/scope
+//     fields, schedule and Drive folder. SILENT to tenant and owner. The chosen vendor gets the
+//     normal "new job" SMS right away and that one SMS bypasses quiet hours (this feature only).
+//     The SMS outcome (sent/held/failed + reason) is ALWAYS returned and shown by the Hub.
+//   - POST /wo/bid-group/unlink {wo_id}   makes a copy independent (clears Bid_Group_ID).
+//   - POST /wo/bid-group/cancel {group_id|wo_id, mode:'all'|'duplicates'|'keep_one', keep_wo_id?,
+//     dry_run?, confirm?}  cancels members through updateStatus (same semantics as /status
+//     Cancelled: WO_Audit row + add-on orphan guard). Executes ONLY with confirm:true and
+//     dry_run!==true; anything else is a preview. Members with bills/time/charges/QBO numbers
+//     or a finished status are SKIPPED with a reason, never cancelled.
+//   - GET /wo/bid-group?wo_id=  members for the Hub panel.
+// Why not createWorkOrder: its dupe guard (the point of rule 162) would block the copy, skipping
+// the guard reopens the duplicate-ID race (WO-1192), and the row needs ~10 columns it never
+// writes at create. So the copy is appended by woDupAppendCopy: serialized per isolate, one
+// complete row in ONE append, then re-read to prove the ID is unique (and repaired if another
+// isolate raced us). No notification code is reached at all, so "silent" is structural.
+// NOTHING FAILS SILENTLY: every failure is logged to Ops_Telemetry (Success FALSE, WO ids) AND
+// returned in `errors`/`warnings`; every write is re-read and verified.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+const WO_DUP_ALLOWED_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+const BID_CANCEL_PROTECTED_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'];
+const WO_BID_COLUMNS = ['Bid_Group_ID', 'Duplicated_From', 'Owner_Notify_Override'];
+const WO_DUP_ENSURE_COLUMNS = WO_BID_COLUMNS.concat(['Checklist', 'Managed_By', 'Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes']);
+// Copied verbatim from the source. Deliberately NOT here: Vendor_ID, Status, Scheduled_*,
+// Completed_Date, Invoice_*, QBO_*, Customer_Charge, Deposit_*, Scope_ID, Approval_Stage,
+// Estimate_Revised, Current_Estimate, Hold_Reason, Drive_Folder_*, Void*, Parent_WO_ID,
+// Turnover_*, Recurring_*, Source, Intake_Message_ID, Share_Rev.
+const WO_DUP_COPY_FIELDS = ['Property_ID', 'Unit_ID', 'Tenant_ID', 'Type', 'Trade', 'Description', 'Priority', 'Owner_WO_Ref', 'WO_Contact_Name', 'WO_Contact_Phone', 'Notes', 'Room', 'Vendor_Needs_Access', 'Managed_By', 'Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes'];
+const WO_DUP_TAP_TTL_MS = 8000;
+const __woDupTapCache = new Map();           // "source|vendor" -> { exp, newWoId }   (double-tap guard)
+let __woDupChain = Promise.resolve();        // per-isolate mutex for everything that changes group membership / appends a WO
+
+function woDupSerialize(fn) {
+  const run = __woDupChain.then(fn);
+  // The chain only needs to know the previous job FINISHED; the caller still gets the real result
+  // or the real error from `run`. The rejection handler logs so a failure is never invisible.
+  __woDupChain = run.then(function () {}, function (e) { console.error('[wo-dup] serialized job failed: ' + ((e && e.message) || e)); });
+  return run;
+}
+
+function isCancelledWOStatus(s) { const v = String(s == null ? '' : s).trim(); return v === 'Cancelled' || v === 'Canceled'; }
+function isBidGroupWO(wo) { return !!(wo && (String(wo.Bid_Group_ID || '').trim() || String(wo.Duplicated_From || '').trim())); }
+function nextBidGroupId(workorders) {
+  const nums = (workorders || [])
+    .map(w => String(w.Bid_Group_ID || '').match(/^BG-(\d+)$/))
+    .filter(Boolean)
+    .map(m => parseInt(m[1], 10))
+    .filter(n => Number.isFinite(n) && n > 0);
+  return `BG-${nums.length ? Math.max(...nums) + 1 : 1001}`;
+}
+
+// Checklist = JSON string [{t,done,code,why}]. The copy starts with every item NOT done and no
+// "why not" reason. An unparseable value is copied untouched and REPORTED (never dropped quietly).
+function woDupResetChecklist(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { value: '', count: 0, ok: true };
+  let arr;
+  try { arr = JSON.parse(s); } catch (e) { return { value: s, count: 0, ok: false, error: 'not valid JSON (' + String((e && e.message) || e) + ')' }; }
+  if (!Array.isArray(arr)) return { value: s, count: 0, ok: false, error: 'not a list' };
+  const out = arr.map(it => (it && typeof it === 'object') ? Object.assign({}, it, { done: false, code: '', why: '' }) : it);
+  return { value: JSON.stringify(out), count: out.length, ok: true };
+}
+
+// Log a bid-group telemetry row. A failed telemetry write is itself surfaced in result.warnings.
+async function bidLogTelemetry(env, result, jobType, endpoint, success, notes) {
+  try {
+    await logTelemetry(env, { Source: 'worker', Job_Type: jobType, Skill_Or_Endpoint: endpoint, Success: success ? 'TRUE' : 'FALSE', Notes: String(notes || '').slice(0, 900) });
+  } catch (e) {
+    console.error('[wo-dup] telemetry write failed: ' + ((e && e.message) || e));
+    if (result && Array.isArray(result.warnings)) result.warnings.push('Could not write the Ops_Telemetry row for this action: ' + String((e && e.message) || e));
+  }
+}
+// A step failed AFTER the copy existed: record it, surface it, keep going with the other steps.
+async function bidStepFailed(env, result, jobType, endpoint, what, e, ids) {
+  const msg = `${what}: ${String((e && e.message) || e)}`;
+  result.errors.push(msg);
+  await bidLogTelemetry(env, result, jobType, endpoint, false, `${ids || ''} ${msg}`);
+}
+
+// Append N objects to a tab in ONE request (columns mapped by header, ID = max+1 sequentially),
+// returning the IDs it used. Throws on any Sheets error. Callers verify with bidCountRows.
+async function bidAppendRows(env, tab, objs) {
+  if (!objs || !objs.length) return { ids: [] };
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`);
+  const rows = data.values || [];
+  if (!rows.length || !rows[0].length) throw new Error(`${tab} tab has no header row`);
+  const headers = rows[0];
+  const idc = idColIndex(headers);
+  let next = 1;
+  for (let i = 1; i < rows.length; i++) { const n = parseInt((rows[i] && rows[i][idc]) || '0', 10); if (Number.isFinite(n) && n >= next) next = n + 1; }
+  const ids = [];
+  const out = objs.map(o => headers.map(h => {
+    if (h === 'ID') { const id = String(next++); ids.push(id); return id; }
+    return o[h] !== undefined && o[h] !== null ? String(o[h]) : '';
+  }));
+  await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW`, { values: out });
+  return { ids };
+}
+async function bidCountRows(env, tab, pred) {
+  invalidateTabCache(tab);
+  return (await fetchTab(env, tab)).filter(pred).length;
+}
+async function bidFreshWOs(env) { invalidateTabCache('Work_Orders'); return await fetchTab(env, 'Work_Orders'); }
+
+// Write fields on one WO and PROVE they landed (updateWOFields no-ops silently when a row or a
+// column is missing). Returns the fresh row. Throws with the mismatching fields named.
+async function bidWriteWOFields(env, woId, fields) {
+  await updateWOFields(env, woId, fields);
+  const row = findWO(await bidFreshWOs(env), woId);
+  if (!row) throw new Error(`${woId} not found when re-reading after the write`);
+  const bad = Object.keys(fields).filter(k => String(row[k] == null ? '' : row[k]) !== String(fields[k] == null ? '' : fields[k]));
+  if (bad.length) throw new Error(`${woId}: the write did not stick for ${bad.join(', ')} (column missing or write dropped)`);
+  return row;
+}
+
+// Guard used by addEstimateVersion / addVendorBill / addTimeEntry / approveInvoiceReview: a
+// Cancelled (or Voided) bid-group copy can never take new money-side records, so a customer can
+// never be billed for a shotgun copy that lost. Returns null (fine) or {message, logged}.
+async function bidGroupWriteBlock(env, woId, what, whatEs, endpoint) {
+  const id = String(woId == null ? '' : woId).trim();
+  if (!id) return null;
+  const wo = findWO(await fetchTab(env, 'Work_Orders'), id);
+  if (!wo || !isBidGroupWO(wo)) return null;
+  const cancelled = isCancelledWOStatus(wo.Status), voided = String(wo.Voided || '').toUpperCase() === 'TRUE';
+  if (!cancelled && !voided) return null;
+  const word = cancelled ? 'cancelled' : 'voided', wordEs = cancelled ? 'cancelado' : 'anulado';
+  const message = `${id} has been ${word} (the job went to another vendor), so it cannot take new ${what}. Contact Ridge Co if this is a mistake. / ${id} fue ${wordEs} (el trabajo se asignó a otro proveedor), por lo que no se pueden agregar ${whatEs}. Comuníquese con Ridge Co si es un error.`;
+  let logged = true;
+  try {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'bid_group_write_blocked', Skill_Or_Endpoint: endpoint, Success: 'FALSE', Notes: `${id} (${word} bid-group copy) refused new ${what}` });
+  } catch (e) {
+    logged = false;
+    console.error('[wo-dup] could not log a blocked write for ' + id + ': ' + ((e && e.message) || e));
+  }
+  return { message, logged };
+}
+
+// POST /wo/duplicate -------------------------------------------------------------------------
+// The only part that must be serialized: pick the group id + WO number, append the one complete
+// row, and prove the number is unique. Returns { woId, groupId, stampedSource, repairedId }.
+async function woDupAppendCopy(env, srcId, opts) {
+  await ensureColumns(env, 'Work_Orders', WO_DUP_ENSURE_COLUMNS);
+  invalidateTabCache('Work_Orders');
+  const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
+  const rows = data.values || [];
+  if (!rows.length) throw new Error('Work_Orders tab has no headers');
+  const headers = rows[0];
+  const missing = WO_DUP_ENSURE_COLUMNS.filter(c => !headers.includes(c));
+  if (missing.length) throw new Error('Work_Orders is missing columns after ensureColumns: ' + missing.join(', '));
+  const idc = idColIndex(headers);
+  if (!headers.includes('ID')) throw new Error('Work_Orders tab has no ID column');
+  const objs = rows.slice(1).map(r => { const o = {}; headers.forEach((h, i) => { o[h] = (r && r[i]) || ''; }); return o; });
+  const src = objs.find(w => w.ID === srcId);
+  if (!src) throw new Error(`${srcId} not found`);
+  const groupId = String(src.Bid_Group_ID || '').trim() || nextBidGroupId(objs);
+  const stampedSource = !String(src.Bid_Group_ID || '').trim();
+  if (stampedSource) {
+    try { await bidWriteWOFields(env, srcId, { Bid_Group_ID: groupId }); }
+    catch (e) { throw new Error(`could not put ${srcId} into bid group ${groupId}: ${e.message}`); }
+    invalidateTabCache('Work_Orders');
+  }
+  // WO number: max+1 over the whole tab (same rule as createWorkOrder) from the FRESH read above.
+  let maxNum = 1000;
+  for (const w of objs) { const n = parseInt(String(w.ID || '').replace(/\D/g, ''), 10); if (Number.isFinite(n) && n > maxNum) maxNum = n; }
+  const woId = `WO-${maxNum + 1}`, now = opts.now;
+  const cl = woDupResetChecklist(src.Checklist);
+  const f = {};
+  for (const k of WO_DUP_COPY_FIELDS) f[k] = src[k] || '';
+  f.Checklist = cl.value;
+  Object.assign(f, {
+    ID: woId, Vendor_ID: '', Status: 'New', Priority: src.Priority || 'normal',
+    // SILENT to the tenant and owner: the copy is invisible in the tenant portal, never texts a
+    // tenant on create/updates, and owner notifications are 'off' (NOTIFY_TIERS.off = no events).
+    Tenant_Visible: 'FALSE', Tenant_Notify_Created: 'FALSE', Tenant_Notify_Updates: 'FALSE', Owner_Notify_Override: 'off',
+    Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE',
+    Created_By: opts.changedBy || 'admin', Created_Date: now,
+    Bid_Group_ID: groupId, Duplicated_From: srcId,
+  });
+  const newRow = headers.map(h => (f[h] !== undefined ? String(f[h]) : ''));
+  try {
+    await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
+  } catch (e) {
+    if (stampedSource) {
+      try { await bidWriteWOFields(env, srcId, { Bid_Group_ID: '' }); }
+      catch (e2) { throw new Error(`append failed (${e.message}) AND ${srcId} could not be taken back out of bid group ${groupId} (${e2.message}) — clear Bid_Group_ID on ${srcId} by hand`); }
+    }
+    throw new Error(`append failed: ${e.message}`);
+  }
+  // Prove the WO number is unique. Another isolate (a tenant submit, the Buildium intake) can
+  // race the in-isolate mutex; if the number was taken, renumber OUR row (identified by the
+  // Duplicated_From + Created_Date + group stamps) — never touch theirs.
+  let finalId = woId, repaired = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    invalidateTabCache('Work_Orders');
+    const chk = (await sheetsRequest(env, 'GET', `/values/Work_Orders`)).values || [];
+    const ch = chk[0] || headers;
+    const cIdc = idColIndex(ch), cDup = ch.indexOf(WO_BID_COLUMNS[1]), cCreated = ch.indexOf('Created_Date'), cGroup = ch.indexOf(WO_BID_COLUMNS[0]);
+    if (cDup < 0 || cCreated < 0 || cGroup < 0) throw new Error('Work_Orders lost a required column while verifying the new WO number');
+    const same = [];
+    for (let i = 1; i < chk.length; i++) if (String((chk[i] || [])[cIdc] || '') === finalId) same.push(i);
+    if (same.length === 1) return { woId: finalId, groupId, stampedSource, repairedId: repaired };
+    if (same.length === 0) throw new Error(`the new row ${finalId} could not be found after appending`);
+    const mine = same.filter(i => String(chk[i][cDup] || '') === srcId && String(chk[i][cCreated] || '') === now && String(chk[i][cGroup] || '') === groupId);
+    if (!mine.length) throw new Error(`WO number ${finalId} is shared by ${same.length} rows and none is identifiable as this copy`);
+    let mx = 1000;
+    for (let i = 1; i < chk.length; i++) { const n = parseInt(String((chk[i] || [])[cIdc] || '').replace(/\D/g, ''), 10); if (Number.isFinite(n) && n > mx) mx = n; }
+    const renumbered = `WO-${mx + 1}`;
+    await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: [{ range: `Work_Orders!${col(cIdc)}${mine[mine.length - 1] + 1}`, values: [[renumbered]] }] });
+    finalId = renumbered; repaired = true;
+  }
+  throw new Error(`could not settle on a unique WO number for the copy of ${srcId} after 3 attempts — check Work_Orders for a duplicate row`);
+}
+
+async function woDuplicate(env, body) {
+  const _t0 = Date.now();
+  body = body || {};
+  const result = {
+    ok: false, created: false, source_wo_id: String(body.source_wo_id || '').trim(), new_wo_id: '', bid_group_id: '',
+    vendor_id: '', vendor_name: '',
+    vendor_sms: { status: 'skipped', reason: 'No vendor chosen — the copy was created unassigned.' },
+    copied: { attachments: 0, tenants: 0, checklist: false, checklist_items: 0 },
+    warnings: [], errors: [],
+  };
+  let tapKey = '', ownsTap = false;       // the double-tap claim this call holds (released again if this call fails before creating)
+  const fail = async (status, msg, extra) => {
+    if (ownsTap && !result.created) __woDupTapCache.delete(tapKey);
+    result.errors.push(msg); result.error = msg;
+    if (extra) Object.assign(result, extra);
+    await bidLogTelemetry(env, result, 'wo_duplicate', '/wo/duplicate', false, `source=${result.source_wo_id} ${msg}`);
+    return json(result, status);
+  };
+  const srcId = result.source_wo_id, vendorId = String(body.vendor_id || '').trim();
+  const changedBy = String(body.updated_by || 'admin');
+  if (!srcId) return await fail(400, 'source_wo_id required');
+  // One copy per tap: an identical request seconds later (double-tap, network retry) is refused,
+  // and the claim is taken synchronously (no await between the check and the set) so two requests
+  // arriving together cannot both pass. It is handed back if this call ends up creating nothing.
+  tapKey = srcId + '|' + vendorId;
+  const nowMs = Date.now();
+  for (const [k, v] of __woDupTapCache) if (v.exp <= nowMs) __woDupTapCache.delete(k);
+  const tap = __woDupTapCache.get(tapKey);
+  if (tap) return await fail(409, `A copy of ${srcId}${vendorId ? ' for vendor ' + vendorId : ''} was just ${tap.newWoId ? 'created (' + tap.newWoId + ')' : 'started'} — this repeat tap was ignored so you don't get two copies.`, { previous_new_wo_id: tap.newWoId || '' });
+  __woDupTapCache.set(tapKey, { exp: nowMs + WO_DUP_TAP_TTL_MS, newWoId: '' }); ownsTap = true;
+  const workorders = await bidFreshWOs(env);
+  const src = findWO(workorders, srcId);
+  if (!src) return await fail(404, `Work order ${srcId} not found`);
+  if (String(src.Voided || '').toUpperCase() === 'TRUE') return await fail(400, `${srcId} is voided — it cannot be duplicated.`);
+  if (String(src.Type || '') === 'addon' || String(src.Parent_WO_ID || '').trim()) return await fail(400, `${srcId} is vendor-found additional work — it cannot be duplicated.`);
+  const srcStatus = String(src.Status || 'New').trim() || 'New';
+  if (!WO_DUP_ALLOWED_STATUSES.includes(srcStatus)) return await fail(400, `${srcId} is ${srcStatus} — only open jobs (${WO_DUP_ALLOWED_STATUSES.join(', ')}) can be duplicated.`);
+  if (String(src.Turnover_Group_ID || '').trim()) result.warnings.push(`${srcId} is part of turnover group ${src.Turnover_Group_ID}; the copy is NOT linked to the turnover.`);
+  let vendor = null;
+  if (vendorId) {
+    vendor = (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === vendorId);
+    if (!vendor) return await fail(404, `Vendor ${vendorId} not found`);
+    if (String(vendor.Active || '').toUpperCase() === 'FALSE') return await fail(400, `${vendor.Name || 'Vendor ' + vendorId} is inactive — pick an active vendor.`);
+    if (String(src.Managed_By || '') === 'Owner') return await fail(400, `${srcId} is being handled by the property owner (Managed_By = Owner), so a vendor cannot be assigned to a copy of it.`);
+    // Same vendor twice in one bid group is almost certainly a mis-tap, not a strategy.
+    const gid = String(src.Bid_Group_ID || '').trim();
+    const sameVendor = workorders.filter(w => (w.ID === srcId || (gid && w.Bid_Group_ID === gid)) && String(w.Vendor_ID || '') === vendorId && !isCancelledWOStatus(w.Status) && String(w.Voided || '').toUpperCase() !== 'TRUE');
+    if (sameVendor.length) return await fail(409, `${vendor.Name || 'This vendor'} already has ${sameVendor[0].ID} in this bid group — pick a different vendor or create the copy without a vendor.`);
+    result.vendor_id = vendorId; result.vendor_name = vendor.Name || '';
+  }
+
+  // 1. Create + link the copy (serialized; one complete row; WO number proven unique).
+  const now = new Date().toISOString();
+  let created;
+  try { created = await woDupSerialize(() => woDupAppendCopy(env, srcId, { now, changedBy })); }
+  catch (e) { return await fail(500, `Could not create the copy: ${String((e && e.message) || e)}`); }
+  const newId = created.woId;
+  __woDupTapCache.set(tapKey, { exp: Date.now() + WO_DUP_TAP_TTL_MS, newWoId: newId });
+  result.created = true; result.new_wo_id = newId; result.bid_group_id = created.groupId;
+  if (created.repairedId) result.warnings.push(`Another record took the WO number first, so the copy was renumbered to ${newId}.`);
+  const copyRow = findWO(await bidFreshWOs(env), newId);
+  if (!copyRow) await bidStepFailed(env, result, 'wo_duplicate', '/wo/duplicate', 'The new row could not be re-read after creating it', new Error('row not found'), `${srcId}->${newId}`);
+  else {
+    const cl = woDupResetChecklist(src.Checklist);
+    result.copied.checklist = !!cl.value; result.copied.checklist_items = cl.count;
+    if (!cl.ok) result.warnings.push(`The checklist on ${srcId} is ${cl.error}; it was copied as-is (not reset).`);
+    if (String(copyRow.Bid_Group_ID || '') !== created.groupId || String(copyRow.Duplicated_From || '') !== srcId) {
+      await bidStepFailed(env, result, 'wo_duplicate', '/wo/duplicate', 'The copy row did not keep its bid group / Duplicated_From stamps', new Error(`got group=${copyRow.Bid_Group_ID || ''} from=${copyRow.Duplicated_From || ''}`), `${srcId}->${newId}`);
+    }
+  }
+
+  // 2. Tenant links (WO_Tenants): same active tenants as the source. Silent: no message is sent.
+  try {
+    const wt = (await fetchTab(env, 'WO_Tenants')).filter(r => r.WO_ID === srcId && r.Active !== 'FALSE');
+    const objs = wt.map(r => ({ WO_ID: newId, Tenant_ID: r.Tenant_ID, Tenant_Name: r.Tenant_Name, Tenant_Phone: r.Tenant_Phone, Added_By: 'duplicate-of-' + srcId, Added_Date: now, Active: 'TRUE' }));
+    if (objs.length) {
+      await bidAppendRows(env, 'WO_Tenants', objs);
+      const n = await bidCountRows(env, 'WO_Tenants', r => r.WO_ID === newId && r.Active !== 'FALSE');
+      if (n !== objs.length) throw new Error(`expected ${objs.length} tenant link(s) on ${newId}, found ${n}`);
+    }
+    result.copied.tenants = objs.length;
+  } catch (e) { await bidStepFailed(env, result, 'wo_duplicate', '/wo/duplicate', `Tenant links were not copied to ${newId}`, e, `${srcId}->${newId}`); }
+
+  // 3. Photos / videos (Attachments): the SAME Drive file re-pointed at the new WO (no Drive copy).
+  // Vendor cost documents (receipt/bill/invoice) and anything tied to a receipt or invoice stay put.
+  try {
+    const atts = (await fetchTab(env, 'Attachments')).filter(a => a.WO_ID === srcId && a.Active !== 'FALSE'
+      && !NON_SHARE_FILE_TYPES.includes(String(a.File_Type || '').toLowerCase())
+      && !String(a.Receipt_ID || '').trim() && !String(a.Invoice_ID || '').trim());
+    const today = now.split('T')[0];
+    const objs = atts.map(a => ({ WO_ID: newId, File_Type: a.File_Type, Drive_File_ID: a.Drive_File_ID, Drive_URL: a.Drive_URL, File_Name: a.File_Name, Uploaded_By: a.Uploaded_By, Created_Date: today, Notes: a.Notes, Active: 'TRUE', Mime_Type: a.Mime_Type }));
+    if (objs.length) {
+      await bidAppendRows(env, 'Attachments', objs);
+      const n = await bidCountRows(env, 'Attachments', r => r.WO_ID === newId && r.Active !== 'FALSE');
+      if (n !== objs.length) throw new Error(`expected ${objs.length} attachment(s) on ${newId}, found ${n}`);
+    }
+    result.copied.attachments = objs.length;
+  } catch (e) { await bidStepFailed(env, result, 'wo_duplicate', '/wo/duplicate', `Photos/videos were not copied to ${newId}`, e, `${srcId}->${newId}`); }
+
+  // 4. WO_Audit trail on both WOs (so the history explains where the copy came from).
+  try {
+    const audit = [
+      { WO_ID: newId, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Duplicated', Old_Value: '', New_Value: srcId, Timestamp: now, Notes: `Copy of ${srcId} in bid group ${created.groupId} (silent to tenant/owner)` },
+      { WO_ID: srcId, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Duplicated', Old_Value: '', New_Value: newId, Timestamp: now, Notes: `Copy ${newId} created in bid group ${created.groupId}` },
+    ];
+    if (created.stampedSource) audit.push({ WO_ID: srcId, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Group_ID', Old_Value: '', New_Value: created.groupId, Timestamp: now, Notes: 'Started a bid group' });
+    await bidAppendRows(env, 'WO_Audit', audit);
+    const n = await bidCountRows(env, 'WO_Audit', r => r.Field === 'Duplicated' && r.Timestamp === now && (r.WO_ID === newId || r.WO_ID === srcId));
+    if (n < 2) throw new Error(`expected 2 audit rows, found ${n}`);
+  } catch (e) { await bidStepFailed(env, result, 'wo_duplicate', '/wo/duplicate', 'The WO_Audit rows were not written', e, `${srcId}->${newId}`); }
+
+  // 5. Assign the chosen vendor: the normal "new job" SMS, vendor only (notify_tenant:false),
+  // bypassing quiet hours for THIS feature only. The outcome is returned verbatim.
+  if (vendor) {
+    try {
+      const ares = await assignVendor(env, { wo_id: newId, vendor_id: vendorId, notify: true, notify_tenant: false }, { bypassQuietHours: true });
+      let aj = null, parseErr = '';
+      try { aj = await ares.json(); } catch (pe) { parseErr = String((pe && pe.message) || pe); }
+      if (!aj) throw new Error(`assign returned an unreadable response (HTTP ${ares.status}) ${parseErr}`);
+      if (ares.status !== 200 || !aj.success) throw new Error(aj.error || `assign failed (HTTP ${ares.status})`);
+      result.vendor_sms = aj.vendor_sms_detail || { status: aj.vendor_sms ? 'sent' : 'failed', reason: aj.vendor_sms ? 'Sent' : 'The assign call did not report why the text was not sent.' };
+      if (aj.tenant_sms) result.errors.push(`UNEXPECTED: the assign step reported a tenant text for ${newId}. Check the tenant's messages.`);
+      const after = findWO(await bidFreshWOs(env), newId);
+      if (!after || String(after.Vendor_ID || '') !== vendorId || String(after.Status || '') !== 'Assigned') {
+        throw new Error(`after assigning, ${newId} reads back Vendor_ID=${after ? after.Vendor_ID : '(row missing)'} Status=${after ? after.Status : ''}`);
+      }
+    } catch (e) {
+      result.vendor_sms = { status: 'failed', reason: `The vendor was NOT assigned and NOT texted: ${String((e && e.message) || e)}` };
+      await bidStepFailed(env, result, 'wo_duplicate', '/wo/duplicate', `Vendor ${vendor.Name || vendorId} was not assigned to ${newId}`, e, `${srcId}->${newId}`);
+    }
+    if (result.vendor_sms.status !== 'sent') result.warnings.push(`Vendor text ${String(result.vendor_sms.status).toUpperCase()}: ${result.vendor_sms.reason}`);
+  }
+
+  result.ok = result.errors.length === 0;
+  await bidLogTelemetry(env, result, 'wo_duplicate', '/wo/duplicate', result.ok, `source=${srcId} new=${newId} group=${created.groupId} vendor=${vendorId || 'none'} sms=${result.vendor_sms.status} attachments=${result.copied.attachments} tenants=${result.copied.tenants} errors=${result.errors.length} ms=${Date.now() - _t0}`);
+  return json(result, 200);
+}
+
+// POST /wo/bid-group/unlink -------------------------------------------------------------------
+async function woBidGroupUnlink(env, body) {
+  body = body || {};
+  const result = { ok: false, wo_id: String(body.wo_id || '').trim(), group_id: '', cleared: [], warnings: [], errors: [] };
+  const fail = async (status, msg) => { result.errors.push(msg); result.error = msg; await bidLogTelemetry(env, result, 'wo_bid_unlink', '/wo/bid-group/unlink', false, `${result.wo_id} ${msg}`); return json(result, status); };
+  if (!result.wo_id) return await fail(400, 'wo_id required');
+  const changedBy = String(body.updated_by || 'admin');
+  try {
+    return await woDupSerialize(async () => {
+      const all = await bidFreshWOs(env);
+      const wo = findWO(all, result.wo_id);
+      if (!wo) return await fail(404, `Work order ${result.wo_id} not found`);
+      const gid = String(wo.Bid_Group_ID || '').trim();
+      if (!gid) return await fail(400, `${result.wo_id} is not in a bid group, so there is nothing to unlink.`);
+      result.group_id = gid;
+      const others = all.filter(w => w.Bid_Group_ID === gid && w.ID !== wo.ID);
+      const toClear = [wo].concat(others.length === 1 ? others : []);
+      for (const w of toClear) {
+        try { await bidWriteWOFields(env, w.ID, { Bid_Group_ID: '' }); result.cleared.push(w.ID); }
+        catch (e) { await bidStepFailed(env, result, 'wo_bid_unlink', '/wo/bid-group/unlink', `Could not clear the bid group on ${w.ID}`, e, w.ID); }
+      }
+      if (others.length === 1) result.warnings.push(`${gid} had only ${others[0].ID} left, so it was released from the group too.`);
+      try {
+        const now = new Date().toISOString();
+        await bidAppendRows(env, 'WO_Audit', result.cleared.map(id => ({ WO_ID: id, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Group_ID', Old_Value: gid, New_Value: '', Timestamp: now, Notes: id === wo.ID ? `Unlinked from bid group ${gid}` : `Released from bid group ${gid} (last member)` })));
+      } catch (e) { await bidStepFailed(env, result, 'wo_bid_unlink', '/wo/bid-group/unlink', 'The WO_Audit rows were not written', e, result.wo_id); }
+      result.ok = result.errors.length === 0 && result.cleared.includes(wo.ID);
+      await bidLogTelemetry(env, result, 'wo_bid_unlink', '/wo/bid-group/unlink', result.ok, `wo=${wo.ID} group=${gid} cleared=${result.cleared.join(',')}`);
+      return json(result, result.ok ? 200 : 500);
+    });
+  } catch (e) { return await fail(500, `Unlink failed: ${String((e && e.message) || e)}`); }
+}
+
+// GET /wo/bid-group?wo_id=...|group_id=... -------------------------------------------------------
+async function woBidGroupGet(env, url) {
+  const woId = String(url.searchParams.get('wo_id') || '').trim(), groupParam = String(url.searchParams.get('group_id') || '').trim();
+  if (!woId && !groupParam) return json({ error: 'wo_id or group_id required' }, 400);
+  const [all, vendors, estimates] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors'), fetchTab(env, 'Estimates')]);
+  let wo = null, gid = groupParam;
+  if (woId) { wo = findWO(all, woId); if (!wo) return json({ error: `Work order ${woId} not found` }, 404); gid = String(wo.Bid_Group_ID || '').trim(); }
+  if (!gid) return json({ ok: true, group_id: '', members: [], duplicated_from: wo ? String(wo.Duplicated_From || '') : '', note: wo && wo.Duplicated_From ? `Independent copy of ${wo.Duplicated_From} (unlinked)` : 'Not in a bid group' });
+  const members = all.filter(w => w.Bid_Group_ID === gid).map(w => {
+    const v = w.Vendor_ID ? vendors.find(x => String(x.ID) === String(w.Vendor_ID)) : null;
+    const est = estimates.filter(e => e.WO_ID === w.ID && String(e.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (parseInt(b.Version || '0', 10) || 0) - (parseInt(a.Version || '0', 10) || 0))[0];
+    return {
+      id: w.ID, status: w.Status || 'New', vendor_id: w.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '',
+      duplicated_from: w.Duplicated_From || '', is_original: !String(w.Duplicated_From || '').trim(),
+      voided: String(w.Voided || '').toUpperCase() === 'TRUE', scheduled_date: w.Scheduled_Date || '', created_date: w.Created_Date || '',
+      latest_estimate: est ? { version: est.Version || '', subtotal: est.Subtotal || '', status: est.Status || '' } : null,
+    };
+  }).sort((a, b) => (a.is_original === b.is_original ? String(a.created_date).localeCompare(String(b.created_date)) : (a.is_original ? -1 : 1)));
+  return json({ ok: true, group_id: gid, members, this_wo_id: woId });
+}
+
+// Pure classifier (unit-tested): may this bid-group member be cancelled, and what should Brett know?
+function bidCancelClassify(wo, ctx) {
+  const reasons = [], warnings = [];
+  const id = wo.ID, st = String(wo.Status || 'New').trim() || 'New';
+  const num = v => { const n = parseFloat(String(v == null ? '' : v).replace(/[^0-9.\-]/g, '')); return Number.isFinite(n) ? n : 0; };
+  let kind = 'cancel';
+  if (isCancelledWOStatus(st)) { reasons.push('Already cancelled'); kind = 'already'; }
+  if (String(wo.Voided || '').toUpperCase() === 'TRUE') { reasons.push('Voided'); kind = kind === 'already' ? kind : 'skip'; }
+  if (BID_CANCEL_PROTECTED_STATUSES.includes(st)) { reasons.push(`Status is ${st} — finished work is never auto-cancelled`); kind = 'skip'; }
+  const bills = (ctx.bills || []).filter(b => b.WO_ID === id && String(b.Active || '').toUpperCase() !== 'FALSE');
+  if (bills.length) { reasons.push(`Has ${bills.length} vendor bill${bills.length > 1 ? 's' : ''}`); kind = 'skip'; }
+  const times = (ctx.timeEntries || []).filter(t => t.WO_ID === id && String(t.Active || '').toUpperCase() !== 'FALSE');
+  if (times.length) { reasons.push(`Has ${times.length} time entr${times.length > 1 ? 'ies' : 'y'}`); kind = 'skip'; }
+  if (num(wo.Customer_Charge) > 0) { reasons.push(`Customer charge $${num(wo.Customer_Charge).toFixed(2)} is set`); kind = 'skip'; }
+  if (String(wo.QBO_Invoice_Number || '').trim()) { reasons.push(`QuickBooks invoice ${wo.QBO_Invoice_Number}`); kind = 'skip'; }
+  if (String(wo.QBO_Bill_Number || '').trim()) { reasons.push(`QuickBooks bill ${wo.QBO_Bill_Number}`); kind = 'skip'; }
+  if (String(wo.Invoice_ID || '').trim()) { reasons.push(`Linked to invoice ${wo.Invoice_ID}`); kind = 'skip'; }
+  if (num(wo.Deposit_Amount) > 0 || String(wo.Deposit_QB_Bill_Number || '').trim()) { reasons.push('Has a vendor deposit'); kind = 'skip'; }
+  if (String(wo.Scope_ID || '').trim()) { reasons.push(`Linked to scope proposal ${wo.Scope_ID}`); kind = 'skip'; }
+  const irs = (ctx.invoiceReview || []).filter(r => r.WO_ID === id && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (irs.length) { reasons.push('Has an invoice review / approval row'); kind = 'skip'; }
+  if (kind === 'cancel') {
+    if (['Accepted', 'In Progress', 'On Hold'].includes(st)) warnings.push(`Vendor has already ${st === 'Accepted' ? 'accepted' : 'started'} this job and will NOT be told it was cancelled`);
+    if ((ctx.workorders || []).some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === id)) warnings.push('Has additional-work children; the cancel is refused if any are still live');
+  }
+  return { kind, reasons, warnings };
+}
+
+// POST /wo/bid-group/cancel --------------------------------------------------------------------
+async function woBidGroupCancel(env, body) {
+  body = body || {};
+  const mode = String(body.mode || '').trim();
+  const confirmed = body.confirm === true && body.dry_run !== true;
+  const result = {
+    ok: false, dry_run: !confirmed, mode, group_id: '', keep_wo_id: String(body.keep_wo_id || '').trim(), results: [],
+    summary: { would_cancel: 0, would_skip: 0, cancelled: 0, skipped: 0, failed: 0, kept: 0, already_cancelled: 0 },
+    warnings: [], errors: [],
+  };
+  const fail = async (status, msg) => { result.errors.push(msg); result.error = msg; await bidLogTelemetry(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', false, `${body.group_id || body.wo_id || ''} ${msg}`); return json(result, status); };
+  if (!['all', 'duplicates', 'keep_one'].includes(mode)) return await fail(400, "mode must be 'all', 'duplicates' or 'keep_one'");
+  if (mode === 'keep_one' && !result.keep_wo_id) return await fail(400, 'keep_wo_id is required for mode keep_one');
+  const changedBy = String(body.updated_by || 'admin');
+  const run = async () => {
+    const all = await bidFreshWOs(env);
+    let gid = String(body.group_id || '').trim();
+    if (!gid) {
+      const w = findWO(all, String(body.wo_id || '').trim());
+      if (!w) return await fail(404, `Work order ${body.wo_id || ''} not found`);
+      gid = String(w.Bid_Group_ID || '').trim();
+      if (!gid) return await fail(400, `${w.ID} is not in a bid group.`);
+    }
+    result.group_id = gid;
+    const members = all.filter(w => w.Bid_Group_ID === gid);
+    if (!members.length) return await fail(404, `Bid group ${gid} has no members`);
+    if (mode === 'keep_one' && !members.some(m => m.ID === result.keep_wo_id)) return await fail(400, `${result.keep_wo_id} is not a member of ${gid}.`);
+    const [vendors, bills, timeEntries, invoiceReview] = await Promise.all([fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'), fetchTab(env, 'Time_Entries'), fetchTab(env, 'Invoice_Review')]);
+    const ctx = { bills, timeEntries, invoiceReview, workorders: all };
+    const targets = [];
+    for (const m of members) {
+      const v = m.Vendor_ID ? vendors.find(x => String(x.ID) === String(m.Vendor_ID)) : null;
+      const row = { wo_id: m.ID, status_before: m.Status || 'New', vendor_id: m.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '', is_original: !String(m.Duplicated_From || '').trim(), reasons: [], warnings: [], result: '' };
+      const isTarget = mode === 'all' ? true : mode === 'duplicates' ? !row.is_original : m.ID !== result.keep_wo_id;
+      if (!isTarget) { row.result = 'kept'; row.reasons.push(mode === 'keep_one' ? 'Kept (the one you chose)' : 'Kept (the original)'); result.summary.kept++; result.results.push(row); continue; }
+      const c = bidCancelClassify(m, ctx);
+      row.reasons = c.reasons; row.warnings = c.warnings;
+      if (c.kind === 'already') { row.result = 'already_cancelled'; result.summary.already_cancelled++; }
+      else if (c.kind === 'skip') { row.result = confirmed ? 'skipped' : 'would_skip'; result.summary[confirmed ? 'skipped' : 'would_skip']++; }
+      else { row.result = confirmed ? 'pending' : 'would_cancel'; if (!confirmed) result.summary.would_cancel++; targets.push(row); }
+      result.results.push(row);
+    }
+    if (!confirmed) {
+      result.ok = true;
+      await bidLogTelemetry(env, result, 'wo_bid_cancel_preview', '/wo/bid-group/cancel', true, `group=${gid} mode=${mode} would_cancel=${result.summary.would_cancel} would_skip=${result.summary.would_skip}`);
+      return json(result, 200);
+    }
+    if (!targets.length) result.warnings.push('Nothing to cancel — every targeted member was skipped, kept or already cancelled.');
+    for (const row of targets) {
+      try {
+        const res = await updateStatus(env, { wo_id: row.wo_id, status: 'Cancelled', updated_by: changedBy, updated_by_role: 'admin' });
+        let j = null, perr = '';
+        try { j = await res.json(); } catch (pe) { perr = String((pe && pe.message) || pe); }
+        if (!j) throw new Error(`status call returned an unreadable response (HTTP ${res.status}) ${perr}`);
+        if (res.status !== 200 || !j.success) throw new Error(j.error || `status call failed (HTTP ${res.status})`);
+        const after = findWO(await bidFreshWOs(env), row.wo_id);
+        if (!after || !isCancelledWOStatus(after.Status)) throw new Error(`${row.wo_id} still reads Status=${after ? after.Status : '(row missing)'} after the cancel`);
+        const audited = await bidCountRows(env, 'WO_Audit', r => r.WO_ID === row.wo_id && r.Field === 'Status' && isCancelledWOStatus(r.New_Value));
+        if (!audited) row.warnings.push('Cancelled, but no WO_Audit row for the status change was found');
+        await bidAppendRows(env, 'WO_Audit', [{ WO_ID: row.wo_id, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Group_Cancel', Old_Value: row.status_before, New_Value: 'Cancelled', Timestamp: new Date().toISOString(), Notes: `Cancelled from bid group ${gid} (${mode}${mode === 'keep_one' ? ', kept ' + result.keep_wo_id : ''}). The vendor was not texted.` }]);
+        row.result = 'cancelled'; result.summary.cancelled++;
+      } catch (e) {
+        row.result = 'failed'; row.reasons.push(String((e && e.message) || e)); result.summary.failed++;
+        result.errors.push(`${row.wo_id}: ${String((e && e.message) || e)}`);
+        await bidLogTelemetry(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', false, `group=${gid} ${row.wo_id} ${String((e && e.message) || e)}`);
+      }
+    }
+    result.ok = result.errors.length === 0;
+    await bidLogTelemetry(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', result.ok, `group=${gid} mode=${mode} keep=${result.keep_wo_id} cancelled=${result.summary.cancelled} skipped=${result.summary.skipped} failed=${result.summary.failed}`);
+    return json(result, result.ok ? 200 : 500);
+  };
+  try { return await woDupSerialize(run); }
+  catch (e) { return await fail(500, `Cancel failed: ${String((e && e.message) || e)}`); }
+}
+
+async function assignVendor(env, body, internal) {
+  internal = internal || {};   // server-side options (NOT reachable from the HTTP body): { bypassQuietHours }
   const _t0 = Date.now();
   // notify defaults TRUE — preserves existing behavior for the Assign/Reassign Vendor modal
   // (which always says "Assign + Send SMS" and should keep meaning that). Pass notify:false
@@ -7992,6 +8518,10 @@ async function assignVendor(env, body) {
   // `accessInfo`/`getWOLockboxes` computation that used to run here and go nowhere (Aug 24,
   // 2026) — real access info flows through enrichWO's vendorView, gated on accessGated.
   let vendorSMSSent = false, tenantSMSSent = false;
+  // Outcome of the vendor text in plain words (Oct 12 2026, Duplicate Work Order): sent / held /
+  // failed / skipped + WHY, returned to the caller so a text that did not go out is never silent.
+  let vendorSmsDetail = { status: 'skipped', reason: notify ? 'Vendor has no phone number on file' : 'Notifications were turned off for this assignment' };
+  if (notify && !vendor.Phone) vendorSmsDetail = { status: 'failed', reason: 'Vendor has no phone number on file — no text was sent' };
   if (notify && vendor.Phone) {
     const isSpanish = vendor.Language === 'es';
     // Access-gate: the lockbox code + tenant contact are NOT sent on dispatch — they unlock
@@ -8013,8 +8543,15 @@ async function assignVendor(env, body) {
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
     // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
     // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true });
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, bypassQuietHours: internal.bypassQuietHours === true });
     vendorSMSSent = r.sent;
+    const _lang = isSpanish ? 'es' : 'en';
+    if (r.sent) vendorSmsDetail = { status: 'sent', reason: r.test_mode ? 'TEST MODE IS ON: the text went to the Hub test number, NOT to the vendor' : 'Text sent to the vendor', test_mode: !!r.test_mode, language: _lang, message_body: r.message_body || msg };
+    else if (r.held_for_quiet_hours) vendorSmsDetail = { status: 'held', reason: `Held for quiet hours — it will send after ${r.send_after}`, language: _lang, message_body: r.message_body || msg };
+    else if (r.send_ok === false) vendorSmsDetail = { status: 'failed', reason: `Blocked, not sent: ${r.gate_snapshot}`, language: _lang, message_body: r.message_body || msg };
+    else if (!r.recipient_phone) vendorSmsDetail = { status: 'failed', reason: 'Vendor phone number is missing or invalid — no text was sent', language: _lang, message_body: r.message_body || msg };
+    else if (env.__STAGING__ ?? isStaging(env)) vendorSmsDetail = { status: 'skipped', reason: 'STAGING: texts are stubbed, so nothing was really sent (the message was only logged)', language: _lang, message_body: r.message_body || msg };
+    else vendorSmsDetail = { status: 'failed', reason: 'Twilio rejected or failed to send the text (see Message_Queue)', language: _lang, message_body: r.message_body || msg };
   }
   if (notify && notifyTenantOnAssign) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
@@ -8035,7 +8572,7 @@ async function assignVendor(env, body) {
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch(_){}
-  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify });
+  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail });
 }
 
 async function updateStatus(env, body) {
@@ -8263,7 +8800,9 @@ async function ownerWorkorders(env, url) {
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
   const ownerPropIds = new Set(properties.filter(p => p.Owner_ID === ownerId).map(p => p.ID));
-  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  // Still-linked bid-group copies (Duplicated_From AND Bid_Group_ID both set) are Brett's internal shotgun
+  // and would show the owner every competing vendor — hidden here (this endpoint ignores Tenant_Visible).
+  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && !(String(w.Duplicated_From || '').trim() && String(w.Bid_Group_ID || '').trim()) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him. No
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below,
@@ -9014,6 +9553,7 @@ async function recordVendorLoanDeduction(env, { vendorId, vendorName, deduction,
 }
 
 async function addVendorBill(env, body) {
+  { const _blk = await bidGroupWriteBlock(env, body.WO_ID || body.wo_id, 'vendor bills', 'facturas', '/vendor-bill/add'); if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409); }
   // Vendor_Bills stores Created_Date as a date only, so the finest duplicate window
   // available here is the same day: same job, same vendor, same total, same day, still
   // sitting unreviewed. That is a re-submit, not a second bill. Returned as success with
@@ -9766,6 +10306,13 @@ async function approveInvoiceReview(env, body) {
   // account with no labor bill) has NO vendor bill — so bill_id is optional, but we still need
   // a work order to anchor the review row to.
   if (!customer_total || (!bill_id && !wo_id)) return json({ error: 'customer_total and a bill_id or wo_id are required' }, 400);
+  // A cancelled/voided bid-group copy can never be approved for customer billing (Oct 12 2026).
+  {
+    let _wid = wo_id;
+    if (!_wid && bill_id) { const _b = (await fetchTab(env, 'Vendor_Bills')).find(b => String(b.ID) === String(bill_id)); _wid = _b ? _b.WO_ID : ''; }
+    const _blk = await bidGroupWriteBlock(env, _wid, 'invoice approvals', 'aprobaciones de factura', '/invoice-review/approve');
+    if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409);
+  }
   // Server-side backstop for the Sep 22 2026 double-billing block: receipts on a signed scope
   // proposal's WO are already billed through its payment milestones. The picker disables them
   // (listBilledReceipts), but a stale page could still send them — refuse rather than bill twice.
@@ -10655,6 +11202,7 @@ async function depositClear(env, body) {
 async function addEstimateVersion(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   if (!Array.isArray(body.line_items) || !body.line_items.length) return json({ error: 'line_items required' }, 400);
+  { const _blk = await bidGroupWriteBlock(env, woId, 'estimates', 'presupuestos', '/estimate'); if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409); }
   const existing = await fetchTab(env, 'Estimates'), priorVersions = existing.filter(e => e.WO_ID === woId);
   const nextVersion = priorVersions.length ? Math.max(...priorVersions.map(e => parseInt(e.Version||'0'))) + 1 : 1;
   const subtotal = body.line_items.reduce((sum, li) => sum + (parseFloat(li.amount)||0), 0);
@@ -20060,6 +20608,25 @@ async function hubTestWriteAllowed(env, path, body) {
       if (!w) return false;
       if (!(await isTestRecord(env, 'Properties', w.Property_ID))) return false;
     }
+    return true;
+  }
+  if (path === '/wo/duplicate') {
+    // The source WO must sit on a TEST- property and any vendor must be a TEST- vendor. The copy
+    // inherits the source's Property_ID, so nothing real can be created or texted.
+    if (!(await isTestWO(env, body && body.source_wo_id))) return false;
+    if (body.vendor_id && !(await isTestRecord(env, 'Vendors', body.vendor_id))) return false;
+    return true;
+  }
+  if (path === '/wo/bid-group/unlink' || path === '/wo/bid-group/cancel') {
+    // Every member of the group this touches must be a TEST- WO (unlink can release the last
+    // other member; cancel touches the whole group) — a group with even one real WO is refused.
+    const wos = await fetchTab(env, 'Work_Orders');
+    let gid = String((body && body.group_id) || '').trim();
+    const anchor = findWO(wos, String((body && (body.wo_id || body.keep_wo_id)) || ''));
+    if (!gid && anchor) gid = String(anchor.Bid_Group_ID || '').trim();
+    const members = gid ? wos.filter(w => w.Bid_Group_ID === gid) : (anchor ? [anchor] : []);
+    if (!members.length) return false;
+    for (const m of members) { if (!(await isTestRecord(env, 'Properties', m.Property_ID))) return false; }
     return true;
   }
   if (path === '/wo/split') {
