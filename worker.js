@@ -15293,6 +15293,41 @@ async function listWOSnippets(env) {
 // POST /message-queue/skip { ids:[...] } — never deletes (Active stays TRUE); matches the
 // Hub's standing "keep forever" pattern for reviewed rows (e.g. the receipt-reconciler
 // duplicate checker's confirmed-duplicate rows).
+// POST /message-queue/translate { ids:[...] } — English view for the review screen (Oct 13 2026,
+// Brett: "the messaging queue ... only shows what is being sent ... add a translation part so my view
+// shows the translation"). Rows that already carry the English original (Original_Body — set by the
+// automatic vendor translation and by the dispatch text) return it as-is. A vendor row with no saved
+// English whose text reads as Spanish (older rows, or any hand-built Spanish text) is translated
+// Spanish -> English on the spot. Read-only: never edits or re-sends a row. A translation that could
+// not be produced comes back as an explicit per-row `error`, never a blank.
+const MQ_LOOKS_SPANISH = /[áéíóúñ¿¡]|\b(nuevo trabajo|inicie|su portal|el trabajo|para aceptar|hola|gracias|por favor|trabajo|cita|inquilino)\b/i;
+async function translateMessageQueue(env, body) {
+  const ids = (Array.isArray(body && body.ids) ? body.ids : []).map(String).slice(0, 15);
+  if (!ids.length) return json({ error: 'ids required' }, 400);
+  await ensureSmsInfra(env);
+  const rows = await fetchTab(env, MSG_QUEUE_TAB);
+  const results = [];
+  for (const id of ids) {
+    const r = rows.find(x => String(x.ID) === id);
+    if (!r) { results.push({ id, error: 'Message not found' }); continue; }
+    if (String(r.Original_Body || '').trim()) { results.push({ id, english: r.Original_Body, source: 'saved' }); continue; }
+    if (r.Recipient_Type !== 'vendor' || !MQ_LOOKS_SPANISH.test(r.Message_Body || '')) { results.push({ id, skipped: 'english' }); continue; }
+    let failMsg = '';
+    try {
+      const out = await translateText(env, r.Message_Body, 'Spanish', 'English', { preserve: true, max_tokens: 1200 });
+      if (!out || !String(out).trim() || out === r.Message_Body) failMsg = 'translation returned nothing';
+      else results.push({ id, english: String(out), source: 'live' });
+    } catch (e) { failMsg = String(e && e.message || e).slice(0, 300); }
+    if (failMsg) {
+      // Failure is visible twice: on the row itself (so the screen says so) and in Ops_Telemetry.
+      const res = { id, error: 'English translation is unavailable right now - try again in a minute.' };
+      try { await logTelemetry(env, { Job_Type: 'message_queue_translate', Skill_Or_Endpoint: '/message-queue/translate', Success: 'FALSE', Notes: 'message ' + id + ': ' + failMsg }); }
+      catch (te) { res.telemetry_error = String(te && te.message || te).slice(0, 200); }
+      results.push(res);
+    }
+  }
+  return json({ ok: true, results });
+}
 async function skipMessageQueue(env, body) {
   const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
   if (!ids.length) return json({ error: 'ids required' }, 400);
