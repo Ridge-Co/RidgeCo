@@ -12751,7 +12751,7 @@ async function adminNotify(env, body) {
 //     SMS cannot be delivered (Twilio off/failing, admin_phone missing) an email goes to the same
 //     address inspAlert uses; if NEITHER channel delivers the alert is NOT marked sent, so the next
 //     15-min pass retries it. If the state store is unavailable a per-isolate in-memory copy limits
-//     repeats until it recovers. The scheduled() caller wraps the whole pass so it can never break
+//     repeats until it recovers. The scheduler's `door_watchdog` job wraps the whole pass so it can never break
 //     the other jobs.
 //   * Testable without waiting for cron: pure evaluateDoorHealth / doorWdDecide / doorWdNextState /
 //     doorWdComposeAlert (unit tests), runDoorWatchdogPass with injectable io (fetch, Config read,
