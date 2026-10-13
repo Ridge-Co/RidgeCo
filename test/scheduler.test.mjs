@@ -286,7 +286,7 @@ const stateOf = (store) => JSON.parse(store.cfg().Scheduler_State);
 }
 // 2c once-per-key for a daily job, even called repeatedly (a second Apps Script project would look like this)
 {
-  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T12:00:00Z')), log = [];   // 08:00 ET
+  const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T12:00:00Z')), log = [];   // 08:00 ET
   const jobs = mkJobs(log, [['d', 'daily', {}]]);
   for (let i = 0; i < 6; i++) { await L.schedRunNext({}, null, fast(c, { jobs })); c.v += 20 * 60000; }
   t('daily job ran once across six ticks the same ET day', log.length === 1, log);
