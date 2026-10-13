@@ -13659,27 +13659,228 @@ const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a norma
 async function cronSweep(env) {
   env = __cronEnv(env);
   const now = new Date();
-  let cfg;
-  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
-  const claimedUntil = cfg[CRON_SWEEP_LOCK_KEY] ? new Date(cfg[CRON_SWEEP_LOCK_KEY]) : null;
+  let rows;
+  try { rows = await schedReadConfigRows(env, true); }
+  catch (e) { return json({ ok: false, error: 'could not read Config: ' + schedErrText(e) }, 503); }   // was: cfg = {} (a failed read looked like "no claim")
+  // The Apps Script scheduler owns these jobs: never sweep beside one of its in-flight runs (duplicate sends).
+  const sp = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+  if (sp.error) return json({ ok: false, error: sp.error }, 503);
+  const sUntil = Date.parse(sp.state.claim_until || '');
+  if (!isNaN(sUntil) && sUntil > now.getTime()) return json({ ok: true, skipped: 'the scheduler is running a job right now', claim_job: sp.state.claim_job || null });
+  const cs = schedCell(rows, CRON_SWEEP_LOCK_KEY);
+  const claimedUntil = cs ? new Date(cs) : null;
   if (claimedUntil && !isNaN(claimedUntil.getTime()) && claimedUntil > now) {
     return json({ ok: true, skipped: 'already claimed', claimed_until: claimedUntil.toISOString() });
   }
+  const out = { ok: true, ts: now.toISOString(), errors: [], warnings: [] };
   try {
     await setConfigKey(env, { key: CRON_SWEEP_LOCK_KEY, value: new Date(now.getTime() + CRON_SWEEP_LOCK_TTL_MS).toISOString() });
-  } catch (e) { /* best-effort — if the claim write itself fails, still proceed rather than silently never sweeping again */ }
-
-  const out = { ok: true, ts: now.toISOString() };
-  try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
-  try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
-  try { out.recurring_wos = await processRecurringWorkOrders(env); } catch (e) { out.recurring_wos = { error: String((e && e.message) || e) }; }
-  try { out.estimate_reminders = await processEstimateReminders(env); } catch (e) { out.estimate_reminders = { error: String((e && e.message) || e) }; }
-  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'cronSweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) {} }
-  try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
-  try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
-  try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
+  } catch (e) { out.warnings.push('could not write the sweep claim (' + schedErrText(e) + '); sweeping anyway'); console.error('cronSweep: claim write failed:', schedErrText(e)); }
+  // Same work as the scheduler's sweep / sweep_work / sweep_checks jobs, run back to back (manual use only).
+  for (const run of [schedRunSweepMessages, schedRunSweepWork, schedRunSweepChecks]) {
+    const r = await run(env);
+    Object.assign(out, r.detail);
+    for (const e of r.errors) out.errors.push(e);
+  }
+  out.ok = out.errors.length === 0;
+  if (!out.ok) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'cron_sweep', Skill_Or_Endpoint: 'manual/cron-sweep', Success: 'FALSE', Notes: JSON.stringify(out.errors).slice(0, 480) }); }
+    catch (e) { out.telemetry_error = schedErrText(e); console.error('cronSweep: failure telemetry write failed:', out.telemetry_error); }
+  }
   return json(out);
 }
+
+// ═══ SCHEDULER-BLOCK-BEGIN ════════════════════════════════════════════════════════════════════
+// APPS SCRIPT SCHEDULER (Oct 12 2026) — PERMANENT RULE: NO CRON ANYWHERE. Apps Script time-driven
+// triggers are the ONLY clock (apps-script/hub-scheduler/HubScheduler.gs, one `everyMinutes(15)` trigger).
+// No Cloudflare Cron Triggers (the account is at its cap, so a trigger silently never attaches — that is
+// why quiet-hours messages were never released), no GitHub Actions `schedule:`. To add a periodic job, add
+// it to SCHED_JOBS below; never add a cron.
+//
+//   POST /cron/run     (Scheduler_Token) runs AT MOST ONE due job, in its own Worker invocation, and says
+//                      whether more are due; the Apps Script loops until more=false.
+//   GET  /cron/status  (Scheduler_Token) per-job last-run / overdue report. /health shows a coarse copy.
+//
+// State is ONE Config JSON key (Scheduler_State) so the shared Sheets quota is barely touched. Single-flight:
+// a caller claims the dispatcher (claim_until ~4 min + claim_id, written then RE-READ to prove it won the
+// race) before running anything, and every job is also gated by its own min-interval / once-per-ET-day key,
+// so a second caller (even a second Apps Script project) is a no-op: no duplicate runs, no duplicate sends.
+// Nothing here fails silently: a throwing job is caught, logged to Ops_Telemetry (Success FALSE,
+// Job_Type 'scheduler_job'), recorded in state, and returned as job_ok:false. Successful ticks write NO
+// telemetry row (the Config state key is the heartbeat; Ops_Telemetry has a ~1000-row grid).
+const SCHED_TOKEN_KEY = 'Scheduler_Token';
+const SCHED_STATE_KEY = 'Scheduler_State';
+const SCHED_TOKEN_MIN_LEN = 24;
+const SCHED_CLAIM_TTL_MS = 4 * 60 * 1000;
+const SCHED_JOB_BUDGET_MS = 50 * 1000;      // Apps Script UrlFetch gives up around 60s; a longer job finishes in the background (ctx.waitUntil) and records its result in state
+const SCHED_VERIFY_DELAY_MS = 700;
+const SCHED_RETRY_GAP_MS = 30 * 60 * 1000;  // failed daily/weekly job: retry no sooner than this ...
+const SCHED_MAX_ATTEMPTS = 3;               // ... and at most this many tries per ET day
+const SCHED_OVERDUE_INTERVAL_MIN = 45;
+const SCHED_OVERDUE_GRACE_MIN = 180;
+const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard'];
+
+// Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
+// Fails closed for a blank/short/missing secret, an empty header, any other method or path.
+function schedTokenOk(secret, tok, method, path) {
+  if (typeof secret !== 'string') return false;
+  const s = secret.trim();
+  if (s.length < SCHED_TOKEN_MIN_LEN) return false;
+  if (typeof tok !== 'string' || !tok) return false;
+  const routeOk = (method === 'POST' && path === '/cron/run') || (method === 'GET' && path === '/cron/status');
+  if (!routeOk) return false;
+  if (tok.length !== s.length) return false;
+  let diff = 0;
+  for (let i = 0; i < s.length; i++) diff |= tok.charCodeAt(i) ^ s.charCodeAt(i);
+  return diff === 0;
+}
+
+// ── Config access (STRICT: unlike fetchConfig, a failed read THROWS — a swallowed read would look like
+// "no state" and re-run every job, i.e. duplicate sends) ─────────────────────────────────────────────
+async function schedReadConfigRows(env, fresh) {
+  if (fresh) invalidateTabCache('Config');
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  return (data && data.values) || [];
+}
+function schedFindRow(rows, key) { return rows.findIndex(r => String((r && r[0]) || '').trim() === key); }
+function schedCell(rows, key) { const i = schedFindRow(rows, key); return i < 0 ? '' : String((rows[i] && rows[i][1]) || ''); }
+// The auth gate's lookup. Returns { ok } or { ok:false, error } (a Config read failure must not look like a bad token).
+async function schedAuthCheck(env, tok, method, path) {
+  const routeOk = (method === 'POST' && path === '/cron/run') || (method === 'GET' && path === '/cron/status');
+  if (!routeOk || typeof tok !== 'string' || !tok) return { ok: false };
+  try { return { ok: schedTokenOk(schedCell(await schedReadConfigRows(env, false), SCHED_TOKEN_KEY), tok, method, path) }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 300) }; }
+}
+// Pure. Parse the state cell. Blank = first run; invalid JSON is an ERROR (never silently "empty").
+function schedParseState(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { state: { v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} } };
+  let st;
+  try { st = JSON.parse(s); } catch (e) { return { error: 'Scheduler_State in Config is not valid JSON (' + String(e.message).slice(0, 80) + '). Delete that Config row to reset it - every job will then run once as a first run.' }; }
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return { error: 'Scheduler_State in Config is not a JSON object. Delete that Config row to reset it.' };
+  if (!st.jobs || typeof st.jobs !== 'object') st.jobs = {};
+  return { state: st };
+}
+async function schedWriteState(env, state, rows) {
+  const text = JSON.stringify(state);
+  if (text.length > 40000) throw new Error('Scheduler_State grew past 40000 chars (' + text.length + ') - refusing to write');
+  const idx = schedFindRow(rows, SCHED_STATE_KEY);
+  if (idx >= 0) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `Config!B${idx + 1}`, values: [[text]] }] });
+  else await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [[SCHED_STATE_KEY, text]] });
+  return text;
+}
+// Write, wait, re-read: returns { text, rows, parsed, landed } where landed = the cell now holds exactly what we wrote.
+async function schedWriteVerified(env, state, rows, sleep, delayMs) {
+  const text = await schedWriteState(env, state, rows);
+  if (delayMs > 0) await sleep(delayMs);
+  const rows2 = await schedReadConfigRows(env, true);
+  const parsed = schedParseState(schedCell(rows2, SCHED_STATE_KEY));
+  return { text, rows: rows2, parsed, landed: schedCell(rows2, SCHED_STATE_KEY) === text };
+}
+
+// ── Eastern wall-clock helpers (DST-correct via Intl, like etHour/nyOffsetMinutes) ─────────────────
+function schedEtParts(date) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hourCycle: 'h23', weekday: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  const dow = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[p.weekday];
+  return { date: `${p.year}-${p.month}-${p.day}`, minutes: (+p.hour) * 60 + (+p.minute), dow };
+}
+function schedAtMinutes(at) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); return m ? (+m[1]) * 60 + (+m[2]) : NaN; }
+
+// ── The registry. Priority = array order. Add a job here; never add a cron. ──────────────────────────
+// kind 'interval': due when >= every_min since its last START. 'daily'/'weekly': due once per ET calendar day
+// (and, weekly, only on `dow`) once ET wall-clock >= `at` - and they CATCH UP: if the Apps Script was down at
+// 7am the job runs on the next tick that day. retry:false = never auto-retry a failed run (it may have
+// already sent something); a job result may also set no_retry:true when the failure was after a send.
+const SCHED_JOBS = [
+  { name: 'door_watchdog',      kind: 'interval', every_min: 14, run: (env) => schedRunDoorWatchdog(env) },
+  { name: 'sweep',              kind: 'interval', every_min: 14, run: (env) => schedRunSweepMessages(env) },
+  { name: 'sweep_work',         kind: 'interval', every_min: 14, run: (env) => schedRunSweepWork(env) },
+  { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
+  { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
+  { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
+  { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
+  { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
+  { name: 'daily_turnover',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyTurnover(env) },
+  { name: 'daily_qb_sync',      kind: 'daily',    at: '07:00', run: (env) => schedRunDailyQbSync(env) },
+  { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
+  { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
+  { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
+];
+
+// Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
+function schedJobDue(job, js, nowDate) {
+  js = js || {};
+  const nowMs = +nowDate;
+  if (job.kind === 'interval') {
+    const last = Date.parse(js.last_start || '');
+    if (!isNaN(last) && last <= nowMs + 5 * 60000 && nowMs - last < job.every_min * 60000) return null;
+    return { key: 'interval' };
+  }
+  const et = schedEtParts(nowDate);
+  if (job.kind === 'weekly' && et.dow !== job.dow) return null;
+  if (et.minutes < schedAtMinutes(job.at)) return null;
+  if (js.last_key === et.date) return null;                       // already done (or deliberately not retried) for this ET day
+  const at = js.attempts;
+  if (at && at.key === et.date && at.n > 0) {
+    if (at.n >= SCHED_MAX_ATTEMPTS) return null;                  // gave up for today; /cron/status shows it overdue
+    const lastEnd = Date.parse(js.last_end || js.last_start || '');
+    if (!isNaN(lastEnd) && nowMs - lastEnd < SCHED_RETRY_GAP_MS) return null;
+  }
+  return { key: et.date };
+}
+// Pure + clock-injectable: the due jobs, in priority order. opts.only restricts to named jobs.
+function schedDueJobs(state, now, jobs, opts) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const only = opts && opts.only && opts.only.length ? opts.only : null;
+  const out = [];
+  for (const job of (jobs || SCHED_JOBS)) {
+    if (only && !only.includes(job.name)) continue;
+    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate);
+    if (d) out.push({ name: job.name, key: d.key });
+  }
+  return out;
+}
+function schedExpected(job) {
+  if (job.kind === 'interval') return `every ${job.every_min}+ min`;
+  if (job.kind === 'daily') return `daily after ${job.at} ET`;
+  return `${SCHED_DOW_NAMES[job.dow]} after ${job.at} ET`;
+}
+// Pure. Per-job health for /cron/status and /health.
+function schedStatus(state, now, jobs) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const nowMs = +nowDate, et = schedEtParts(nowDate);
+  const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
+  const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), jobs: {}, overdue: [] };
+  for (const job of (jobs || SCHED_JOBS)) {
+    const js = (state && state.jobs && state.jobs[job.name]) || {};
+    const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
+    let overdue = false, reason = '';
+    if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
+      overdue = true; reason = `started ${ageMin(js.last_start)} min ago and never finished (timed out or crashed)`;
+    }
+    if (job.kind === 'interval') {
+      const okAge = ageMin(js.last_ok);
+      if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
+      else if (okAge > SCHED_OVERDUE_INTERVAL_MIN) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${SCHED_OVERDUE_INTERVAL_MIN})`; }
+    } else {
+      const expectedToday = job.kind === 'daily' || et.dow === job.dow;
+      if (expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
+        overdue = true; reason = reason || `has not run for ${et.date} (was due ${job.at} ET)`;
+      }
+      if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
+    }
+    out.jobs[job.name] = { expected: schedExpected(job), last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, overdue, overdue_reason: overdue ? reason : '' };
+    if (overdue) out.overdue.push(job.name);
+  }
+  return out;
+}
+
+//__SCHED_CHUNK_2__
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
