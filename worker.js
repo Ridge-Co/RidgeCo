@@ -8239,8 +8239,13 @@ async function woBidGroupCancel(env, body) {
     for (const m of members) {
       const v = m.Vendor_ID ? vendors.find(x => String(x.ID) === String(m.Vendor_ID)) : null;
       const row = { wo_id: m.ID, status_before: m.Status || 'New', vendor_id: m.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '', is_original: !String(m.Duplicated_From || '').trim(), reasons: [], warnings: [], result: '' };
-      const isTarget = mode === 'all' ? true : mode === 'duplicates' ? !row.is_original : m.ID !== result.keep_wo_id;
-      if (!isTarget) { row.result = 'kept'; row.reasons.push(mode === 'keep_one' ? 'Kept (the one you chose)' : 'Kept (the original)'); result.summary.kept++; result.results.push(row); continue; }
+      // keep_one (Oct 13 2026, Brett): cancel ONLY the duplicate copies that are not the winner. The original is never cancelled by "Keep this".
+      const isTarget = mode === 'all' ? true : mode === 'duplicates' ? !row.is_original : (m.ID !== result.keep_wo_id && !row.is_original);
+      if (!isTarget) {
+        row.result = 'kept';
+        row.reasons.push(mode === 'keep_one' ? (m.ID === result.keep_wo_id ? 'Kept (the one you chose)' : 'Kept (the original is never cancelled by "Keep this")') : 'Kept (the original)');
+        result.summary.kept++; result.results.push(row); continue;
+      }
       const c = bidCancelClassify(m, ctx);
       row.reasons = c.reasons; row.warnings = c.warnings;
       if (c.kind === 'already') { row.result = 'already_cancelled'; result.summary.already_cancelled++; }
