@@ -194,4 +194,44 @@ async function sign(selections, schedule) {
   ok(bad.results[0].error && tel.length === 1 && tel[0].Success === 'FALSE', 'a translation that returns nothing is a visible per-row error AND an Ops_Telemetry failure');
 }
 
+// ---- flat-$ milestones + add-ons (Oct 13 2026): flat rows fixed, LAST NON-FLAT row absorbs ----
+{
+  const F = new Function(grab('scopeComputeMilestoneAmounts') + '\n' + grab('scopeScheduleAddonProblem') + '\nreturn { scopeComputeMilestoneAmounts, scopeScheduleAddonProblem };')();
+  const flatDep = [{ label: 'Deposit', percent: 25, trigger: 'upfront', calc_mode: 'flat', flat_customer_amount: 500 }, { label: 'Final', percent: 75, trigger: 'completion', calc_mode: 'percent', flat_customer_amount: null }];
+  const sum = a => +a.reduce((s, m) => s + m.customer_amount, 0).toFixed(2);
+  let a = F.scopeComputeMilestoneAmounts(flatDep, 1775, 1300);
+  eq([a[0].customer_amount, a[1].customer_amount], [500, 1275], 'flat deposit stays $500, Final takes the rest (base job)');
+  a = F.scopeComputeMilestoneAmounts(flatDep, 3810, 2900);
+  eq([a[0].customer_amount, a[1].customer_amount], [500, 3310], 'with an add-on the flat deposit is STILL $500 and Final absorbs the whole difference');
+  ok(sum(a) === 3810, 'payments add up to the new total');
+  const flatLast = [{ label: 'Deposit', percent: 50, trigger: 'upfront', calc_mode: 'percent' }, { label: 'Mid', percent: 20, trigger: 'manual', calc_mode: 'percent' }, { label: 'Final', percent: 30, trigger: 'completion', calc_mode: 'flat', flat_customer_amount: 400 }];
+  a = F.scopeComputeMilestoneAmounts(flatLast, 3810, 0);
+  ok(a[2].customer_amount === 400 && a[1].customer_amount === +(3810 - a[0].customer_amount - 400).toFixed(2) && sum(a) === 3810, 'a flat LAST row stays fixed; the last % row (not the flat one) absorbs, and it still adds up');
+  a = F.scopeComputeMilestoneAmounts([{ label: 'A', percent: 33.34, trigger: 'upfront' }, { label: 'B', percent: 66.66, trigger: 'completion' }], 1775, 0);
+  eq([a[0].customer_amount, a[1].customer_amount], [591.79, 1183.21], 'plain percent schedules are unchanged (last row absorbs rounding)');
+  ok(F.scopeScheduleAddonProblem(flatDep, 1775) === '', 'flat deposit + % final can take add-ons');
+  ok(/fixed \$ amount/.test(F.scopeScheduleAddonProblem([{ label: 'A', percent: 50, calc_mode: 'flat', flat_customer_amount: 500 }, { label: 'B', percent: 50, calc_mode: 'flat', flat_customer_amount: 1275 }], 1775)), 'an all-flat schedule is refused for add-ons with a plain reason');
+  ok(/negative/.test(F.scopeScheduleAddonProblem([{ label: 'Deposit', percent: 25, calc_mode: 'flat', flat_customer_amount: 2000 }, { label: 'Final', percent: 75, calc_mode: 'percent' }], 1775)), 'fixed $ larger than the smallest total is refused (Final would go negative)');
+  // customer page mirrors the server
+  const pageFn = new Function(grabFrom(proposalHtml, 'isFlatRow', false) + '\n' + grabFrom(proposalHtml, 'scheduleAmounts', false) + '\nreturn scheduleAmounts;')();
+  const sched = flatDep.map(m => ({ ...m }));
+  for (const total of [1775, 3810, 7640]) {
+    const srv = F.scopeComputeMilestoneAmounts(sched, total, 0).map(m => m.customer_amount), pg = pageFn(sched, total).map(m => m.customer_amount);
+    eq(pg, srv, 'customer page and server agree on every payment at total $' + total);
+  }
+  // end-to-end sign with a flat deposit + add-on, and with an impossible all-flat schedule
+  const ft = await sign({ li1: 'v1', li2: 'v1' }, flatDep);
+  ok(ft.out.ok && +ft.mil[0].Customer_Amount === 500 && +(+ft.mil[0].Customer_Amount + +ft.mil[1].Customer_Amount).toFixed(2) === whole, 'signing with an add-on keeps the flat $500 deposit and the payments add up to the new total ' + whole);
+  const allFlat = [{ label: 'A', percent: 50, trigger: 'upfront', calc_mode: 'flat', flat_customer_amount: 500 }, { label: 'B', percent: 50, trigger: 'completion', calc_mode: 'flat', flat_customer_amount: base - 500 }];
+  const refused = await sign({ li1: 'v1', li2: 'v1' }, allFlat);
+  ok(refused.out.error === 'schedule_unavailable' && refused.signedRow === null && refused.mil.length === 0, 'an all-flat schedule + ticked add-on is refused BEFORE anything is written');
+  ok(tel2.length === 1 && tel2[0].Success === 'FALSE' && tel2[0].Job_Type === 'scope_sign_schedule_mismatch', 'the refusal is logged to Ops_Telemetry so Brett sees it');
+  // wiring: the view passes flat info (customer amounts only), generate + sign refuse impossible schedules
+  const view = grab('scopeProposalView', true), signSrc = grab('scopeProposalSign', true), gen = grab('scopeProposal', true);
+  ok(/calc_mode: m\.calc_mode, flat_customer_amount: m\.flat_customer_amount/.test(view) && !/vendor_amount: m\./.test(view.slice(view.indexOf('const schedule = scopeComputeMilestoneAmounts'), view.indexOf('let signed'))), 'view exposes calc_mode + flat amount, never vendor_amount');
+  ok(/scopeScheduleAddonProblem\(sv\.schedule/.test(signSrc) && signSrc.indexOf('scopeScheduleAddonProblem') < signSrc.indexOf("addRow(env, 'Scope_Signatures'"), 'sign refuses an impossible schedule BEFORE writing the signature');
+  ok(/scope_sign_schedule_mismatch/.test(signSrc) && /telemetry_error/.test(signSrc), 'a refused sign is logged to Ops_Telemetry and a telemetry failure is returned, not swallowed');
+  ok(/optional add-ons, but its payment schedule can/.test(gen), 'generate refuses an impossible schedule with a plain reason');
+}
+
 console.log(`scope-addons: ${n} assertions passed`);
