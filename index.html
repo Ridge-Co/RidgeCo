@@ -2979,7 +2979,7 @@ function renderBidCancelPreview(res) {
   }
   var n = res.summary.would_cancel;
   body.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Bid group ' + esc(res.group_id) + ' · preview only, nothing has been changed yet</div>' +
-    safeArray(res.results).map(bgResultRow).join('') +
+    safeArray(res.results).map(bgResultRow).join('') + bgWinnerLine(res, false) +
     '<div style="margin-top:12px;font-size:13px"><b>' + n + '</b> job' + (n===1?'':'s') + ' will be cancelled · ' + (res.summary.would_skip) + ' skipped · ' + (res.summary.kept) + ' kept' + (res.summary.already_cancelled ? ' · ' + res.summary.already_cancelled + ' already cancelled' : '') + '</div>' +
     '<div style="font-size:11px;color:var(--muted);margin-top:4px">Vendors are <b>not</b> texted. Anything with bills, time, charges, QuickBooks numbers or a finished status is skipped, never cancelled.</div>' +
     (n > 0 ? '<button type="button" class="btn secondary" id="bgc-ack" onclick="bgToggleAck()" style="width:100%;min-height:44px;margin-top:12px;text-align:left">☐ Yes, cancel these ' + n + ' job' + (n===1?'':'s') + '</button>' : '<div style="margin-top:12px;color:var(--muted);font-size:13px">Nothing to cancel.</div>') +
