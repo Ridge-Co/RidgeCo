@@ -8346,7 +8346,7 @@ async function assignVendor(env, body, internal) {
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch(_){}
-  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify });
+  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail });
 }
 
 async function updateStatus(env, body) {
