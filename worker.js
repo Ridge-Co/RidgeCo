@@ -13456,8 +13456,8 @@ async function smsGatedSend(env, opts) {
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
-    // not sent; the row keeps Status:'pending' with Send_After set, and the GitHub Actions
-    // sweep (processQuietHoursQueue, replacing Cloudflare cron — see CURRENT.md) re-checks
+    // not sent; the row keeps Status:'pending' with Send_After set, and the scheduler's `sweep`
+    // job (processQuietHoursQueue, Apps Script clock - NO cron) re-checks
     // Global/Test-Mode and actually sends once due.
     // bypassQuietHours (Sep 16 2026): property-wide urgent notices — water shutoffs, power
     // outages — can't wait for a 9am release like a routine status update can. Only
