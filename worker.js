@@ -15910,22 +15910,21 @@ async function selftestRunEndpoint(env, body) {
   return json(await selftestRun(env, { deliver: !!(body && body.deliver), trigger: 'manual' }));
 }
 
-// Runs selftestRun({deliver:true}) once a day, around 7am ET, from inside cronSweep — piggybacks
-// on the EXISTING periodic sweep (both the reliable Cloudflare native `*/15 * * * *` trigger and
-// the GitHub Actions cron-sweep.yml redundant path already call cronSweep) rather than claiming a
-// new Cloudflare Cron Trigger slot — all 5 are already spoken for (wrangler.toml: daily digest,
-// 2x weekly review, weekly AR report, message-queue sweep). etHour() is the same DST-aware
-// Intl-derived local-time check quiet-hours already uses elsewhere in this file. Guarded so the
-// ~every-15-min sweep cadence doesn't fire this repeatedly inside the same 7am hour, or a second
-// time later the same day if GitHub Actions' own redundant path also lands inside that hour.
+// Runs selftestRun({deliver:true}) once a day, from the scheduler's `sweep_checks` job (Apps Script ticks every
+// ~15 min; NO cron). From 7am ET onward: if the scheduler was down at 7 the run CATCHES UP on the next tick that
+// day, and the once-per-ET-day guard below keeps the 15-minute cadence from running it again. etHour() is the
+// same DST-aware Intl-derived local-time check quiet-hours uses elsewhere in this file.
 async function maybeRunDailySelftest(env) {
-  if (etHour() !== 7) return { skipped: true, reason: 'outside the ~7am ET run window' };
+  if (etHour() < 7) return { skipped: true, reason: 'before the 7am ET run window' };
   const today = etTodayISO();
   try {
     const rows = await fetchTab(env, SELFTEST_RESULTS_TAB);
     const etDateOf = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     if (rows.some(r => etDateOf(r.Run_Date) === today)) return { skipped: true, reason: `already ran today (${today})` };
-  } catch (e) { /* tab doesn't exist yet on a genuine first run — fall through, selftestRun creates it */ }
+  } catch (e) {
+    // Only a genuinely missing tab (a first run - selftestRun creates it) may fall through; any other read failure is a failure.
+    if (!isMissingTabError(e)) throw e;
+  }
   return await selftestRun(env, { deliver: true, trigger: 'cron' });
 }
 
