@@ -14994,6 +14994,7 @@ async function schedRunNext(env, ctx, opts) {
         if (p2.error) { stateErr = p2.error; break; }
         const cur = p2.state;
         const rec = Object.assign({}, cur.jobs[job.name] || {});
+        delete rec.last_seeded; delete rec.seeded_at;   // a real run replaces the first-run seed marker
         rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? 'ok' : 'failed';
         rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
         if (jobOk) rec.last_ok = rec.last_end;
