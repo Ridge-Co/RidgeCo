@@ -15326,6 +15326,7 @@ async function opsQueueStartBuild(env, body) {
     if (statusCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [['building']] });
     if (heldNoteCol !== -1 && row.Status === 'held') buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(heldNoteCol)}${sheetRow}`, values: [['']] });
     if (bsCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['building']] });
+    if (prCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(prCol)}${sheetRow}`, values: [['']] }); // a fresh build starts with no PR
     if (buCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(buCol)}${sheetRow}`, values: [[new Date().toISOString()]] });
   }
   // ONE batched write across every eligible row, not N round-trips.
