@@ -73,6 +73,7 @@ var JOBS = [
   { name: 'daily_receipts_post', run: 'hub', at: '07:00',                      enabled: true, what: 'Emails newly scanned receipts to QuickBooks.' },
   { name: 'daily_turnover',      run: 'hub', at: '07:00',                      enabled: true, what: 'Releases turnover work orders due today.' },
   { name: 'daily_qb_sync',       run: 'hub', at: '07:00',                      enabled: true, what: 'Syncs QuickBooks payments and runs the deposit-paid sweep.' },
+  { name: 'sms_delivery_check',  run: 'hub', at: '07:00',                      enabled: true, what: 'Reads the last day of outbound texts from Twilio, flags carrier-filtered or failing link texts, and emails Brett the result (set enabled:false once it is proven clean).' },
   { name: 'review_mon',          run: 'hub', day: 'Mon', at: '08:30',         enabled: true, what: 'Runs the Monday weekly review and delivers it.' },
   { name: 'review_wed',          run: 'hub', day: 'Wed', at: '08:00',         enabled: true, what: 'Runs the Wednesday weekly review (logged only).' },
   { name: 'ar_report_mon',       run: 'hub', day: 'Mon', at: '09:00',         enabled: true, what: 'Builds and delivers the Monday AR aging report.' },
