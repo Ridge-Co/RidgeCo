@@ -20,8 +20,9 @@ workers_dev = true
 # every-15-minutes sweep) silently never attached and quiet-hours messages, recurring WOs, nudges, the dead-man
 # switch etc. just stopped running with no error anywhere. The ONLY clock is the Apps Script scheduler
 # (apps-script/hub-scheduler/HubScheduler.gs, one everyMinutes(15) trigger) calling POST /cron/run.
-# TO ADD A PERIODIC JOB: add it to SCHED_JOBS in worker.js (the scheduler registry). NEVER add a cron here,
-# in GitHub Actions (`schedule:`), or anywhere else.
+# TO ADD A PERIODIC JOB: add it to SCHED_JOBS in worker.js (the scheduler registry) AND a row to the JOBS table at the top
+# of apps-script/hub-scheduler/HubScheduler.gs (the one place every schedule is seen and edited - Hub jobs, other Workers,
+# and GitHub workflows alike). NEVER add a cron here, in GitHub Actions (`schedule:`), or anywhere else.
 #
 # `crons = []` is deliberate and REQUIRED, not leftover: per Cloudflare's docs, when `crons` is omitted a deploy
 # leaves the previously attached Cron Triggers in place, whereas an empty array removes them all. worker.js's

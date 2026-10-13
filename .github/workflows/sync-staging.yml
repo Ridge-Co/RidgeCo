@@ -2,15 +2,24 @@ name: Sync staging to main
 
 # `main` is the single source of truth. `staging` is a disposable copy of main.
 # - push to main / manual run: force-reset staging to main (lists anything it drops).
-# - schedule: CHECK ONLY. Never rewrites staging (so an in-flight verification is not clobbered by a timer).
+# - manual run: mode "reset" (the default) force-resets staging to main. mode "check" is CHECK ONLY: it never rewrites staging
+#   (so an in-flight verification is not clobbered by a timer). The Hub Scheduler runs mode "check" hourly.
 # See context/BRANCH_POLICY_v1.0.md
+# NO TIMER HERE (permanent rule: no cron anywhere). The Hub Scheduler Apps Script presses "Run workflow" on this
+# workflow on its schedule (see the JOBS table at the top of apps-script/hub-scheduler/HubScheduler.gs, row ci_sync_staging_check).
+# You can still run it by hand from the Actions tab.
 
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
-  schedule:
-    - cron: '17 * * * *'   # hourly drift check (report only)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'reset = force-reset staging to main (default); check = report drift only, never changes staging'
+        required: false
+        default: 'reset'
+        type: choice
+        options: [reset, check]
 
 concurrency:
   group: sync-staging
@@ -39,7 +48,7 @@ jobs:
       - name: Reset (or check) staging
         id: reset
         env:
-          MODE: ${{ github.event_name == 'schedule' && 'check' || 'reset' }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'check' && 'check' || 'reset' }}
         run: |
           set -euo pipefail
           bash .github/scripts/staging-reset.sh

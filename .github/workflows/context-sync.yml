@@ -5,10 +5,11 @@ name: Context Inbox Sync
 # (written via account OAuth — no pasted GitHub token) and folds them into
 # context/CAPTURE_INBOX.md, committing with the built-in GITHUB_TOKEN.
 
+# NO TIMER HERE (permanent rule: no cron anywhere). The Hub Scheduler Apps Script presses "Run workflow" on this
+# workflow on its schedule (see the JOBS table at the top of apps-script/hub-scheduler/HubScheduler.gs, row ci_context_sync).
+# You can still run it by hand from the Actions tab.
 on:
-  schedule:
-    - cron: '*/30 * * * *'   # every ~30 min (GitHub may delay scheduled runs; that's fine)
-  workflow_dispatch: {}       # allows manual / API-triggered runs for testing
+  workflow_dispatch: {}       # run by the Hub Scheduler (every 30 min) and by hand
 
 jobs:
   sync-inbox:

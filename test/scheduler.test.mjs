@@ -99,7 +99,7 @@ function load(store, over) {
   };
   Object.assign(stubs, over.stubs || {});
   const names = Object.keys(stubs);
-  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
+  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
   return Object.assign(fn(...names.map(n => stubs[n])), { telemetry, alerts, stubs });
 }
 const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
@@ -729,6 +729,42 @@ store.setCfg('admin_phone', '+15555550100');
   store.tabs.delete('Message_Queue'); store.tabs.delete('Notification_Queue'); store.tabs.delete('Vendor_Requests');
 }
 {
+  // END TO END (real worker.js default export): the JOBS-table schedule flows through POST /cron/run into status + health
+  const H = { 'X-Auth-Token': SCHED_TOKEN };
+  const ago = (h) => new Date(Date.now() + skew - h * 3600000).toISOString();
+  store.tabs.set('Message_Queue', [['ID', 'Status', 'Send_After', 'Recipient_Type', 'Message_Body', 'Recipient_Phone'],
+    ['1', 'pending', ago(2), 'tenant', 'hello', '+15550000001'], ['2', 'pending', ago(240), 'vendor', 'old one', '+15550000002'], ['3', 'pending', ago(30), 'tenant', 'day-old', '+15550000003']]);
+  store.tabs.set('Notification_Queue', [['ID', 'WO_ID', 'Type', 'Phone', 'Message', 'Send_After', 'Sent', 'Created_At']]);
+  store.tabs.set('Vendor_Requests', [['ID', 'WO_ID', 'Vendor_ID', 'Request_Type', 'Status', 'Next_Nudge_At'],
+    ['1', 'WO-1', 'V1', 'photos', 'open', ago(3)], ['2', 'WO-2', 'V1', 'invoice', 'open', ago(50)], ['3', 'WO-3', 'V1', 'photos', 'open', ago(400)]]);
+  const posts = store.calls.filter(x => x.startsWith('POST')).length;
+  const dry = await call('POST', '/cron/run', H, { dry_run: true, schedule: { daily_digest: { enabled: false }, review_mon: { at: '10:15' } } });
+  const pf = dry.json && dry.json.preflight;
+  t('preflight: held quiet-hours rows are listed BY AGE with a stale count (3 rows: 2h, 30h, 10d -> 2 older than a day, oldest ~10 days)', pf && pf.jobs.sweep.quiet_hours_held_due.count === 3 && pf.jobs.sweep.quiet_hours_held_due.by_age.h1_to_24 === 1 && pf.jobs.sweep.quiet_hours_held_due.by_age.d1_to_7 === 1 && pf.jobs.sweep.quiet_hours_held_due.by_age.over_7d === 1 && pf.jobs.sweep.quiet_hours_held_due.stale_over_1d === 2, pf && pf.jobs.sweep.quiet_hours_held_due);
+  t('preflight: stale vendor nudges are listed by age (3h, 50h, 400h -> 2 stale, oldest ~16 days)', pf && pf.jobs.sweep.vendor_nudges_due.count === 3 && pf.jobs.sweep.vendor_nudges_due.by_age.under_1h === 0 && pf.jobs.sweep.vendor_nudges_due.by_age.h1_to_24 === 1 && pf.jobs.sweep.vendor_nudges_due.stale_over_1d === 2 && pf.jobs.sweep.vendor_nudges_due.oldest_days > 16 && pf.jobs.sweep.vendor_nudges_due.oldest_days < 17.5, pf && pf.jobs.sweep.vendor_nudges_due);
+  t('preflight with a schedule: previews it (digest disabled -> not in the due list / preflight jobs), writes nothing', dry.status === 200 && dry.json.disabled.join() === 'daily_digest' && !dry.json.due.includes('daily_digest') && !(pf.jobs.daily_digest) && store.calls.filter(x => x.startsWith('POST')).length === posts && !JSON.parse(store.cfg().Scheduler_State || '{}').schedule);
+  const live = await call('POST', '/cron/run', H, { only: 'insp_guard', schedule: { door_watchdog: { enabled: false }, sweep: { every_min: 30 } } });
+  t('live call with a schedule is accepted, and remembers it in Scheduler_State', live.status === 200 && live.json.schedule_overrides.join() === 'door_watchdog,sweep' && live.json.disabled.join() === 'door_watchdog' && JSON.stringify(JSON.parse(store.cfg().Scheduler_State).schedule) === '{"door_watchdog":{"enabled":false},"sweep":{"every_min":30}}', live.json);
+  const stat = await call('GET', '/cron/status', H);
+  t('/cron/status uses the remembered schedule: door_watchdog DISABLED and not overdue, sweep "every 30 min"', stat.json.jobs.door_watchdog.enabled === false && stat.json.jobs.door_watchdog.overdue === false && !stat.json.overdue.includes('door_watchdog') && stat.json.jobs.sweep.expected === 'every 30 min' && stat.json.overdue.includes('sweep_work'), stat.json.jobs.door_watchdog);
+  const health = await call('GET', '/health', {});
+  t('/health overdue list also ignores the disabled job', !health.json.scheduler.overdue.includes('door_watchdog') && health.json.scheduler.overdue.includes('sweep_work'), health.json.scheduler);
+  const rej = await call('POST', '/cron/run', H, { schedule: { door_watchdog: { cron: '* * * * *' } } });
+  t('a bad schedule over HTTP -> 400 with the reason (an email from the Apps Script), nothing ran', rej.status === 400 && /unknown field "cron"/.test(rej.json.error) && rej.json.ran === null, rej);
+  const str = await call('POST', '/cron/run', H, { schedule: 'every minute' });
+  t('a non-object schedule -> 400', str.status === 400 && /keyed by job name/.test(str.json.error), str.json);
+  const clear = await call('POST', '/cron/run', H, { only: 'insp_guard', schedule: {} });
+  t('sending {} clears the remembered schedule again', clear.status === 200 && JSON.stringify(JSON.parse(store.cfg().Scheduler_State).schedule) === '{}');
+  store.tabs.delete('Message_Queue'); store.tabs.delete('Notification_Queue'); store.tabs.delete('Vendor_Requests');
+  void posts;
+}
+{
+  const fstart = wsrc.indexOf('async function hubTestWriteAllowed('), fend = wsrc.indexOf('\nasync function ', fstart + 10);
+  const real = new Function('SCHED_STAGING_SAFE_JOBS', wsrc.slice(fstart, fend) + '\nreturn hubTestWriteAllowed;')(['door_watchdog', 'insp_guard']);
+  const check = (body) => real({}, '/cron/run', body);
+  t('hub-test guard: a dry run WITH a schedule is allowed; a live run with only a schedule is refused (it would run every due job)', (await check({ dry_run: true, schedule: { sweep: { enabled: false } } })) === true && (await check({ schedule: { sweep: { enabled: false } } })) === false && (await check({ only: 'insp_guard', schedule: {} })) === true);
+}
+{
   // the hub-test (staging) token may only dry-run / run the two safe jobs - exercise the REAL hubTestWriteAllowed (a TDZ bug here shipped once: `_b` is declared further down the function)
   const fstart = wsrc.indexOf('async function hubTestWriteAllowed('), fend = wsrc.indexOf('\nasync function ', fstart + 10);
   const real = new Function('SCHED_STAGING_SAFE_JOBS', wsrc.slice(fstart, fend) + '\nreturn hubTestWriteAllowed;')(['door_watchdog', 'insp_guard']);
@@ -736,6 +772,79 @@ store.setCfg('admin_phone', '+15555550100');
   t('hub-test guard: dry run allowed (dry and dry_run)', (await check({ dry: true })) === true && (await check({ dry_run: true })) === true && (await check({ dry_run: 'true' })) === false && (await check({ dry_run: true, force: true })) === false);
   t('hub-test guard: insp_guard / door_watchdog allowed', (await check({ only: 'insp_guard' })) === true && (await check({ only: 'door_watchdog' })) === true);
   t('hub-test guard: a bare run (all due jobs), the sweeps, force and arrays are refused', (await check({})) === false && (await check(undefined)) === false && (await check({ only: 'sweep' })) === false && (await check({ only: 'insp_guard', force: true })) === false && (await check({ only: ['insp_guard'] })) === false && (await check({ dry: 'true' })) === false);
+}
+// ═══ SCHEDULE OVERRIDES (Oct 13 2026): the Apps Script JOBS table is the one place schedules are edited ═══
+{
+  const SJ = P.SCHED_JOBS;
+  const same = P.schedApplyOverrides(SJ, undefined);
+  t('overrides: undefined / null = the defaults, untouched', same.jobs === SJ && same.errors.length === 0 && P.schedApplyOverrides(SJ, null).jobs === SJ && P.schedApplyOverrides(SJ, {}).jobs.every((j, i) => j === SJ[i]));
+  const ok = P.schedApplyOverrides(SJ, { sweep: { every_min: 30 }, door_watchdog: { every_min: 15 }, sweep_work: { every_min: 1 }, insp_guard: { every_min: 60, enabled: false }, daily_digest: { at: '6:45' }, review_mon: { at: '10:00', dow: 2 }, daily_turnover: { enabled: true } });
+  const g = (n) => ok.jobs.find(j => j.name === n);
+  t('overrides: valid map accepted, no errors', ok.errors.length === 0, ok.errors);
+  t('overrides: every_min is the HUMAN cadence (Hub keeps 1 min of jitter slack): 30 -> 29, 15 -> 14 (the default), 1 -> 1', g('sweep').every_min === 29 && g('sweep').every_human === 30 && g('door_watchdog').every_min === 14 && g('sweep_work').every_min === 1);
+  t('overrides: enabled:false -> disabled; enabled:true leaves it on', g('insp_guard').disabled === true && !g('daily_turnover').disabled);
+  t('overrides: at is normalised to HH:MM, dow changes the weekday, untouched fields stay', g('daily_digest').at === '06:45' && g('review_mon').at === '10:00' && g('review_mon').dow === 2 && g('review_wed').dow === 3);
+  t('overrides: the defaults array itself is never mutated', SJ.find(j => j.name === 'sweep').every_min === 14 && !SJ.some(j => j.disabled) && SJ.find(j => j.name === 'daily_digest').at === '07:00');
+  t('overrides: only fields that were sent are remembered (applied)', JSON.stringify(ok.applied.daily_digest) === '{"at":"06:45"}' && JSON.stringify(ok.applied.insp_guard) === '{"every_min":60,"enabled":false}' || JSON.stringify(ok.applied.insp_guard) === '{"enabled":false,"every_min":60}', ok.applied);
+  const bads = [
+    [{ nope: { enabled: true } }, /unknown job "nope"/], [{ sweep: { color: 'red' } }, /unknown field "color"/], [{ sweep: { quiet: '22:00-06:00' } }, /not active yet/],
+    [{ daily_digest: { every_min: 15 } }, /daily job/], [{ sweep: { at: '07:00' } }, /every-N-minutes/], [{ daily_digest: { dow: 1 } }, /only weekly/], [{ sweep: { dow: 1 } }, /only weekly/],
+    [{ sweep: { every_min: 0 } }, /whole number/], [{ sweep: { every_min: 1.5 } }, /whole number/], [{ sweep: { every_min: 1441 } }, /whole number/], [{ sweep: { every_min: '15' } }, /whole number/],
+    [{ daily_digest: { at: '25:00' } }, /look like/], [{ daily_digest: { at: '7am' } }, /look like/], [{ daily_digest: { at: '07:60' } }, /look like/], [{ review_mon: { dow: 7 } }, /0 \(Sunday\)/],
+    [{ sweep: { enabled: 'yes' } }, /true or false/], [{ sweep: 'off' }, /must be an object/], [[], /keyed by job name/], ['x', /keyed by job name/],
+  ];
+  for (const [raw, re] of bads) { const r = P.schedApplyOverrides(SJ, raw); t('overrides: rejected loudly - ' + JSON.stringify(raw).slice(0, 60), r.errors.length >= 1 && re.test(r.errors.join(' | ')) && r.jobs === SJ && Object.keys(r.applied).length === 0, r.errors); }
+  const mixed = P.schedApplyOverrides(SJ, { sweep: { every_min: 30 }, daily_digest: { at: 'bad' } });
+  t('overrides: one bad entry rejects the WHOLE map (no half-applied schedule)', mixed.errors.length === 1 && mixed.jobs === SJ);
+  // behaviour: due logic honours the override
+  const L0 = Date.parse('2026-10-12T14:00:00Z');
+  const sw = (m) => ({ jobs: { sweep: { last_start: new Date(L0 - m * 60000).toISOString(), last_ok: new Date(L0 - m * 60000).toISOString() } } });
+  const j30 = P.schedApplyOverrides(SJ, { sweep: { every_min: 30 } }).jobs;
+  t('overrides: "every 30" is not due 20 min after the last run, is due at 29.5 and 45', P.schedDueJobs(sw(20), new Date(L0), j30, { only: ['sweep'] }).length === 0 && P.schedDueJobs(sw(29.5), new Date(L0), j30, { only: ['sweep'] }).length === 1 && P.schedDueJobs(sw(45), new Date(L0), j30, { only: ['sweep'] }).length === 1);
+  t('overrides: default "every 15" still due at 14.5 min', P.schedDueJobs(sw(14.5), new Date(L0), SJ, { only: ['sweep'] }).length === 1 && P.schedDueJobs(sw(10), new Date(L0), SJ, { only: ['sweep'] }).length === 0);
+  const off = P.schedApplyOverrides(SJ, { sweep: { enabled: false } }).jobs;
+  t('overrides: a disabled job is never due (even if never run)', P.schedDueJobs({ jobs: {} }, new Date(L0), off, { only: ['sweep'] }).length === 0 && P.schedDueJobs({ jobs: {} }, new Date(L0), off, {}).every(d => d.name !== 'sweep'));
+  const stOff = P.schedStatus({ jobs: {} }, new Date(L0), off);
+  t('overrides: a disabled job is reported as DISABLED and is never overdue; the other never-run jobs still are', stOff.jobs.sweep.enabled === false && stOff.jobs.sweep.overdue === false && /DISABLED/.test(stOff.jobs.sweep.expected) && !stOff.overdue.includes('sweep') && stOff.overdue.includes('sweep_work'), stOff.jobs.sweep);
+  t('overrides: expected text shows the human cadence and the new time', P.schedExpected(j30.find(j => j.name === 'sweep')) === 'every 30 min' && P.schedExpected(P.schedApplyOverrides(SJ, { daily_digest: { at: '06:45' } }).jobs.find(j => j.name === 'daily_digest')) === 'daily after 06:45 ET');
+  // overdue limit scales with the cadence: hourly -> 180, default 15-minute -> 45
+  const hourly = P.schedApplyOverrides(SJ, { sweep: { every_min: 60 } }).jobs;
+  const okAgo = (m) => ({ jobs: { sweep: { last_start: new Date(L0 - m * 60000).toISOString(), last_end: new Date(L0 - m * 60000 + 1000).toISOString(), last_ok: new Date(L0 - m * 60000).toISOString() } } });
+  t('overrides: overdue limit scales with the cadence (hourly job fine at 100 min, overdue at 200; default job overdue at 50)', !P.schedStatus(okAgo(100), new Date(L0), hourly).jobs.sweep.overdue && P.schedStatus(okAgo(200), new Date(L0), hourly).jobs.sweep.overdue && P.schedStatus(okAgo(50), new Date(L0), SJ).jobs.sweep.overdue && !P.schedStatus(okAgo(40), new Date(L0), SJ).jobs.sweep.overdue);
+  // schedEffective: stored schedule, corrupt fallback
+  const e1 = P.schedEffective({ schedule: { sweep: { every_min: 30 } } });
+  t('schedEffective: uses the stored map; a corrupt stored map falls back to the defaults and says so', e1.jobs.find(j => j.name === 'sweep').every_human === 30 && !e1.schedule_error && P.schedEffective({ schedule: { zzz: {} } }).schedule_error && P.schedEffective({ schedule: { zzz: {} } }).jobs === SJ && P.schedEffective(null).jobs === SJ);
+}
+{
+  // the dispatcher: sent schedule is validated, applied, remembered; a rejected one runs nothing
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval'], ['d', 'daily']]);
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs, schedule: { a: { enabled: false } } }));
+  t('dispatcher: a disabled job is skipped, the next due one runs; the reply names overrides + disabled', r1.body.ran === 'b' && log.join() === 'b' && r1.body.disabled.join() === 'a' && r1.body.schedule_overrides.join() === 'a', r1.body);
+  t('dispatcher: the schedule is remembered in Scheduler_State', JSON.stringify(stateOf(store).schedule) === '{"a":{"enabled":false}}', stateOf(store).schedule);
+  c.v += 15 * 60000;
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('dispatcher: a later call WITHOUT a schedule (manual run) still honours the remembered one', r2.body.ran === 'b' && log.join() === 'b,b' && r2.body.disabled.join() === 'a', r2.body);
+  c.v += 15 * 60000;
+  const r3 = await L.schedRunNext({}, null, fast(c, { jobs, schedule: {} }));
+  t('dispatcher: sending {} re-enables everything and clears the remembered schedule', r3.body.disabled.length === 0 && r3.body.ran === 'a' && JSON.stringify(stateOf(store).schedule) === '{}', r3.body);
+  const before = store.cfg().Scheduler_State, logLen = log.length;
+  const bad = await L.schedRunNext({}, null, fast(c, { jobs, schedule: { b: { every_min: 'fast' }, ghost: {} } }));
+  t('dispatcher: a rejected schedule is a 400 with the reason, runs NOTHING, writes NO state, and logs telemetry', bad.status === 400 && bad.body.ok === false && /rejected/.test(bad.body.error) && /every_min/.test(bad.body.error) && /unknown job "ghost"/.test(bad.body.error) && log.length === logLen && store.cfg().Scheduler_State === before && L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'schedule_overrides'), { body: bad.body, tel: L.telemetry });
+  const dry = await L.schedRunNext({}, null, fast(c, { jobs, schedule: { b: { enabled: false } }, dry: true }));
+  t('dispatcher: a dry run previews the sent schedule (b disabled) but does NOT remember it', dry.status === 200 && !dry.body.due.includes('b') && dry.body.disabled.join() === 'b' && store.cfg().Scheduler_State === before);
+  // a stored schedule that became invalid (job renamed in a later deploy) is a loud 400, never a silent default
+  const store2 = makeStore(); const s2 = S0(); s2.schedule = { gone_job: { enabled: false } }; store2.tabs.get('Config').push(['Scheduler_State', JSON.stringify(s2)]);
+  const L2 = load(store2), r4 = await L2.schedRunNext({}, null, fast(clock(T0), { jobs, }));
+  t('dispatcher: an invalid STORED schedule is loud (400 + telemetry), and a corrected schedule from the caller fixes it', r4.status === 400 && /stored schedule is invalid/.test(r4.body.error) && L2.telemetry.length === 1 && (await L2.schedRunNext({}, null, fast(clock(T0), { jobs, schedule: {} }))).status === 200);
+}
+{
+  // a job with an override that changes its time runs at the NEW time (daily at 06:30 ET)
+  const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T10:40:00Z')), log = [];   // 06:40 ET
+  const jobs = mkJobs(log, [['d', 'daily']]);
+  const none = await L.schedRunNext({}, null, fast(c, { jobs }));
+  const early = await L.schedRunNext({}, null, fast(c, { jobs, schedule: { d: { at: '06:30' } } }));
+  t('dispatcher: daily job with at=06:30 is not due at 06:40 by default (07:00) but runs once the table says 06:30', none.body.ran === null && early.body.ran === 'd' && log.length === 1);
 }
 {
   // scheduled() is a loud no-op
