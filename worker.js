@@ -10976,6 +10976,7 @@ async function depositClear(env, body) {
 async function addEstimateVersion(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   if (!Array.isArray(body.line_items) || !body.line_items.length) return json({ error: 'line_items required' }, 400);
+  { const _blk = await bidGroupWriteBlock(env, woId, 'estimates', 'presupuestos', '/estimate'); if (_blk) return json({ error: _blk.message, code: 'bid_group_cancelled', refusal_logged: _blk.logged }, 409); }
   const existing = await fetchTab(env, 'Estimates'), priorVersions = existing.filter(e => e.WO_ID === woId);
   const nextVersion = priorVersions.length ? Math.max(...priorVersions.map(e => parseInt(e.Version||'0'))) + 1 : 1;
   const subtotal = body.line_items.reduce((sum, li) => sum + (parseFloat(li.amount)||0), 0);
