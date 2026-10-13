@@ -4844,11 +4844,13 @@ async function scopeProposalSign(env, body, ip, ua) {
   let rcMaterialsCost = 0, rcMaterialsPrice = 0;
   for (const it of scopeParseItems(s)) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) rcMaterialsCost += (+v.rc_materials_cost || 0);
   }
   for (const it of items) {
     const key = finalSelections[it.id];
+    if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
     if (v) rcMaterialsPrice += (+v.materials_price || 0);
   }
