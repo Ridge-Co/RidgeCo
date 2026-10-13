@@ -15760,7 +15760,9 @@ async function opsQueueSync(env, body, opts) {
   const changed = [], errors = [];
   // GitHub rate-limits anonymous calls from Cloudflare's shared addresses, so the Proposals page can
   // look PRs up from Brett's own browser and pass them in as body.prs (same shape as GitHub's /pulls list).
-  const supplied = (body && Array.isArray(body.prs) ? body.prs : []).slice(0, 100)
+  // The narrow OPS_QUEUE_TOKEN (carried by every fired build session) is NOT trusted to supply PR state — it can only trigger a
+  // Worker-side GitHub read; supplied PR data is honoured for the admin secret (the Proposals page) and the TEST-only staging token.
+  const supplied = (body && Array.isArray(body.prs) && !(opts && opts.ignoreSuppliedPrs) ? body.prs : []).slice(0, 100)
     .filter(p => p && Number.isFinite(Number(p.number)) && typeof p.state === 'string');
   let prList = supplied.length ? supplied : null;
   const nowIso = new Date().toISOString();
