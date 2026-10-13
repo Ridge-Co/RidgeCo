@@ -2908,7 +2908,7 @@ function renderBidGroupPanel(holder, woId, res) {
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap"><span style="font-size:14px">⧉</span>' +
       '<span style="color:var(--accent);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold">Bid group ' + esc(res.group_id) + '</span>' +
       '<span style="color:var(--muted);font-size:10px;margin-left:auto">' + members.length + ' jobs · ' + openCount + ' open</span></div>' +
-    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Same job given to several vendors. Nothing is cancelled automatically. Cancelling never texts the vendors. "Keep this" never cancels the original; a copy you keep becomes visible to the tenant (no text is sent).</div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Same job given to several vendors. Nothing is cancelled automatically. When you cancel a job, its vendor is texted that it is cancelled (you see who first). "Keep this" never cancels the original; a copy you keep then notifies the tenant and owner like any normal work order (no text is sent at the moment you keep it).</div>' +
     rows +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
       '<button class="btn small danger" style="min-height:44px;flex:1 1 150px" data-bg-act="duplicates" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'duplicates\',\'\')">Cancel all duplicates</button>' +
@@ -2955,21 +2955,41 @@ function bgCancelPreview(woId, mode, keepId) {
     document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--danger);font-size:13px;font-weight:bold">❌ Could not check: ' + esc(e.message) + '</div><div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal(\'modal-bidcancel\')">Close</button></div>';
   });
 }
+// One line per cancelled job saying what happens / happened to its vendor's text (Oct 13 2026: cancelling now tells the vendor).
+function bgSmsLine(r) {
+  var s = r && r.vendor_sms; if (!s) return '';
+  if (!(r.result === 'would_cancel' || r.result === 'cancelled') && s.status !== 'failed') return '';
+  var st = String(s.status || ''), col = 'var(--muted)', head = '', cls = '';
+  if (st === 'will_send') { col = 'var(--text)'; head = '📱 ' + esc(s.reason || ''); }
+  else if (st === 'cannot_send' || st === 'failed') { col = 'var(--danger)'; head = '⚠ Vendor NOT texted: ' + esc(s.reason || ''); }
+  else if (st === 'sent') { col = 'var(--accent2)'; head = '📱 Vendor texted' + (s.vendor_name ? ': ' + esc(s.vendor_name) : '') + (s.language === 'es' ? ' (in Spanish)' : '') + (s.reason && /TEST MODE/.test(s.reason) ? ' — ' + esc(s.reason) : ''); }
+  else if (st === 'held') { col = '#b7791f'; head = '📱 Text held, not sent yet: ' + esc(s.reason || ''); }
+  else { head = '📱 ' + esc(s.reason || 'Vendor not texted'); }
+  var body = s.message_body && (st === 'will_send' || st === 'sent' || st === 'held') ? '<div style="font-size:11px;color:var(--muted);font-style:italic;word-break:break-word">“' + esc(s.message_body) + '”</div>' : '';
+  return '<div data-bgc-sms="' + esc(r.wo_id) + '" data-bgc-sms-status="' + esc(st) + '" style="margin-top:4px;font-size:12px;font-weight:' + (st === 'failed' || st === 'cannot_send' ? 'bold' : 'normal') + ';color:' + col + ';word-break:break-word">' + head + '</div>' + body;
+}
 function bgResultRow(r) {
   var label = { would_cancel: 'WILL CANCEL', would_skip: 'SKIPPED', kept: 'KEPT', already_cancelled: 'ALREADY CANCELLED', cancelled: 'CANCELLED', skipped: 'SKIPPED', failed: 'FAILED' }[r.result] || String(r.result).toUpperCase();
   var good = (r.result === 'would_cancel' || r.result === 'cancelled'), bad = (r.result === 'failed');
   var col = bad ? 'var(--danger)' : (good ? 'var(--danger)' : 'var(--muted)');
   var why = safeArray(r.reasons).map(function(x){ return '<div style="font-size:11px;color:' + (bad ? 'var(--danger)' : 'var(--muted)') + '">' + esc(x) + '</div>'; }).join('');
-  var warn = safeArray(r.warnings).map(function(x){ return '<div style="font-size:11px;color:#b7791f">⚠ ' + esc(x) + '</div>'; }).join('');
+  var warn = safeArray(r.warnings).map(function(x){ return '<div style="font-size:11px;color:#b7791f">⚠ ' + esc(x) + '</div>'; }).join('') + bgSmsLine(r);
   return '<div style="padding:8px 0;border-bottom:1px solid var(--border)" data-bgc-row="' + esc(r.wo_id) + '"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><b style="color:var(--info)">' + esc(r.wo_id) + '</b> <span style="font-size:11px;color:var(--muted)">' + (r.is_original ? 'original' : 'copy') + ' · ' + esc(r.status_before) + '</span><div style="font-size:12px">' + (r.vendor_name ? esc(r.vendor_name) : '<span style="color:var(--muted)">no vendor</span>') + '</div></div><div style="font-weight:bold;font-size:12px;color:' + col + '">' + esc(label) + '</div></div>' + why + warn + '</div>';
 }
 function bgWinnerLine(res, done) {
   var w = res && res.winner; if (!w) return '';
   var txt;
   if (w.is_original) txt = esc(w.wo_id) + ' is the original. It stays exactly as it is; only the other copies are cancelled.';
-  else if (done) txt = w.became_tenant_visible ? esc(w.wo_id) + ' is now visible to the tenant. No text message was sent.' : esc(w.wo_id) + (w.already_visible ? ' was already visible to the tenant.' : ' kept. Its tenant visibility is unchanged.');
-  else txt = w.will_become_tenant_visible ? esc(w.wo_id) + ' will become visible to the tenant. No text message is sent.' : esc(w.wo_id) + ' is already visible to the tenant.';
-  return '<div data-bgc-winner style="margin-top:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text)">' + txt + '</div>';
+  else if (done) txt = esc(w.wo_id) + ' kept. ' + (w.notify && safeArray(w.notify.changed).length ? 'Changed: ' + esc(safeArray(w.notify.changed).join(', ')) + '.' : 'Its settings already matched.') + ' No text message was sent to the tenant or owner.';
+  else txt = esc(w.note || (w.wo_id + ' will be kept.')) + ' Nothing is texted to the tenant or owner when you keep it.';
+  return '<div data-bgc-winner style="margin-top:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);font-size:12px;color:var(--text);word-break:break-word">' + txt + '</div>';
+}
+function bgTextSummary(res) {
+  var notices = safeArray(res.vendor_text_notices), wt = (res.summary && res.summary.would_text) || 0;
+  var lines = notices.filter(function(x){ return x.level === 'ok' || x.level === 'bad'; }).map(function(x){ return '<div data-bgc-notice="' + esc(x.wo_id) + '" style="font-size:12px;color:' + (x.level === 'bad' ? 'var(--danger)' : 'var(--text)') + ';font-weight:' + (x.level === 'bad' ? 'bold' : 'normal') + ';word-break:break-word">' + (x.level === 'bad' ? '⚠ ' : '📱 ') + esc(x.text) + '</div>'; }).join('');
+  var quiet = res.quiet_hours_now && wt ? '<div style="font-size:11px;color:#b7791f;margin-top:2px">It is after 7pm (or before 9am) Eastern: these texts are held and go out automatically after 9am.</div>' : '';
+  if (!lines && !wt) return '<div data-bgc-textsummary style="margin-top:8px;font-size:12px;color:var(--muted)">No vendor will be texted.</div>';
+  return '<div data-bgc-textsummary style="margin-top:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface2)"><div style="font-size:12px;font-weight:bold;margin-bottom:2px">' + wt + ' vendor' + (wt===1?'':'s') + ' will be texted that their job is cancelled</div>' + lines + quiet + '</div>';
 }
 function renderBidCancelPreview(res) {
   var body = document.getElementById('bidcancel-body');
@@ -2981,8 +3001,9 @@ function renderBidCancelPreview(res) {
   body.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Bid group ' + esc(res.group_id) + ' · preview only, nothing has been changed yet</div>' +
     safeArray(res.results).map(bgResultRow).join('') + bgWinnerLine(res, false) +
     '<div style="margin-top:12px;font-size:13px"><b>' + n + '</b> job' + (n===1?'':'s') + ' will be cancelled · ' + (res.summary.would_skip) + ' skipped · ' + (res.summary.kept) + ' kept' + (res.summary.already_cancelled ? ' · ' + res.summary.already_cancelled + ' already cancelled' : '') + '</div>' +
-    '<div style="font-size:11px;color:var(--muted);margin-top:4px">Vendors are <b>not</b> texted. Anything with bills, time, charges, QuickBooks numbers or a finished status is skipped, never cancelled.</div>' +
-    (n > 0 ? '<button type="button" class="btn secondary" id="bgc-ack" onclick="bgToggleAck()" style="width:100%;min-height:44px;margin-top:12px;text-align:left">☐ Yes, cancel these ' + n + ' job' + (n===1?'':'s') + '</button>' : '<div style="margin-top:12px;color:var(--muted);font-size:13px">Nothing to cancel.</div>') +
+    bgTextSummary(res) +
+    '<div style="font-size:11px;color:var(--muted);margin-top:4px">Anything with bills, time, charges, QuickBooks numbers or a finished status is skipped, never cancelled. The tenant and owner are never texted by a cancel.</div>' +
+    (n > 0 ? '<button type="button" class="btn secondary" id="bgc-ack" onclick="bgToggleAck()" style="width:100%;min-height:44px;margin-top:12px;text-align:left">☐ Yes, cancel these ' + n + ' job' + (n===1?'':'s') + (res.summary.would_text ? ' and text ' + res.summary.would_text + ' vendor' + (res.summary.would_text===1?'':'s') : '') + '</button>' : '<div style="margin-top:12px;color:var(--muted);font-size:13px">Nothing to cancel.</div>') +
     '<div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal(\'modal-bidcancel\')">Back</button>' +
     (n > 0 ? '<button class="btn danger" id="bgc-confirm" style="min-height:44px" disabled onclick="bgCancelConfirm()">Cancel ' + n + ' job' + (n===1?'':'s') + '</button>' : '') + '</div>';
   _bgCancelCtx.acked = false; _bgCancelCtx.n = n;
@@ -3003,16 +3024,18 @@ function bgCancelConfirm() {
     _bidCancelBusy = false;
     var errs = safeArray(res.errors).slice(), sm = res.summary || {};
     if (res.error && errs.indexOf(res.error) < 0) errs.push(res.error);
-    var head = errs.length || sm.failed ? '<div style="color:var(--danger);font-weight:bold;font-size:14px">❌ Finished with problems</div>' : '<div style="color:var(--accent2);font-weight:bold;font-size:14px">✅ Done — ' + (sm.cancelled||0) + ' cancelled</div>';
+    var vt = sm.vendor_texts || {}, vtLine = ' · vendor texts: ' + (vt.sent||0) + ' sent, ' + (vt.held||0) + ' held, ' + (vt.failed||0) + ' failed, ' + (vt.skipped||0) + ' skipped';
+    var head = (errs.length || sm.failed ? '<div style="color:var(--danger);font-weight:bold;font-size:14px">❌ Finished with problems</div>' : (res.needs_attention || vt.failed ? '<div style="color:var(--danger);font-weight:bold;font-size:14px">⚠ Cancelled — but a vendor was NOT texted. Call them.</div>' : '<div style="color:var(--accent2);font-weight:bold;font-size:14px">✅ Done — ' + (sm.cancelled||0) + ' cancelled</div>')) + '<div data-bgc-textcounts style="font-size:12px;color:var(--muted);margin-top:2px">' + (sm.cancelled||0) + ' cancelled' + vtLine + '</div>';
     document.getElementById('bidcancel-body').innerHTML = head + safeArray(res.results).map(bgResultRow).join('') + bgWinnerLine(res, true) +
       (errs.length ? errs.map(function(e){ return '<div style="color:var(--danger);font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') : '') +
       safeArray(res.warnings).map(function(e){ return '<div style="color:#b7791f;font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') +
       '<div class="modal-actions"><button class="btn" style="min-height:44px" onclick="bgCancelDone()">Close</button></div>';
-    bgSetBanner(ctx.woId, errs.length || sm.failed ? 'bad' : 'good', (errs.length || sm.failed ? '❌ Cancel finished with problems' : '✅ ' + (sm.cancelled||0) + ' cancelled') + ' · ' + (sm.skipped||0) + ' skipped · ' + (sm.failed||0) + ' failed');
+    var bad = errs.length || sm.failed || res.needs_attention || vt.failed;
+    bgSetBanner(ctx.woId, bad ? 'bad' : 'good', (errs.length || sm.failed ? '❌ Cancel finished with problems' : (bad ? '⚠ Cancelled, but a vendor text failed' : '✅ ' + (sm.cancelled||0) + ' cancelled')) + ' · ' + (sm.skipped||0) + ' skipped · ' + (sm.failed||0) + ' failed' + vtLine);
     loadAll();
   }).catch(function(e){
     _bidCancelBusy = false; logError('Bid cancel', e.message);
-    document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--danger);font-weight:bold;font-size:13px">❌ No answer from the server (' + esc(e.message) + '). Some jobs may have been cancelled — open the work order and check the Bid group box.</div><div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="bgCancelDone()">Close</button></div>';
+    document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--danger);font-weight:bold;font-size:13px">❌ No answer from the server (' + esc(e.message) + '). Some jobs may have been cancelled and their vendors texted — open the work order and check the Bid group box and its history before trying again.</div><div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="bgCancelDone()">Close</button></div>';
   });
 }
 function bgCancelDone() {

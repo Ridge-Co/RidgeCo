@@ -50,7 +50,9 @@ const S = {
   quietConsts: grabConst(wsrc, 'const QUIET_HOURS_START_ET') + '\n' + grabConst(wsrc, 'const QUIET_HOURS_END_ET'),
   isQuiet: grab(wsrc, 'function isQuietHoursNow('), nextQuiet: grab(wsrc, 'function nextQuietHoursEnd('),
   sendRaw: grab(wsrc, 'async function sendSMSRaw('), updMq: grab(wsrc, 'async function updateMessageQueueRow('), fetchConfig: grab(wsrc, 'async function fetchConfig('),
-  smsGated: grab(wsrc, 'async function smsGatedSend('),
+  smsGated: grab(wsrc, 'async function smsGatedSend(').replace('async function smsGatedSend(', 'async function __realSmsGatedSend('),
+  quietQueue: grab(wsrc, 'async function processQuietHoursQueue('),
+  notifyConsts: grabConst(wsrc, 'const OWNER_NOTIFY_DEFAULTS') + '\n' + grabConst(wsrc, 'const NOTIFY_TIERS'), shouldNotify: grab(wsrc, 'async function shouldNotifyOwner('),
   portalLink: grab(wsrc, 'function vendorPortalLink('), unitLabel: grab(wsrc, 'function formatUnitLabel('), phoneDisp: grab(wsrc, 'function formatPhoneDisplay('), jobLabel: grab(wsrc, 'function woJobLabel('),
   ownerWOs: grab(wsrc, 'async function ownerWorkorders('), woCombine: grab(wsrc, 'async function woCombine('), woSplit: grab(wsrc, 'async function woSplit('),
   voidCols: grabConst(wsrc, 'const WO_VOID_COLUMNS'), splitMax: grabConst(wsrc, 'const WO_SPLIT_MAX_NEW'), splitFields: grabConst(wsrc, 'const WO_SPLIT_ORIGINAL_FIELDS'),
@@ -95,6 +97,7 @@ function makeFetch(db, opts, log) {
     if (/api\.twilio\.com/.test(url)) {
       log.twilio.push(String(fopts.body || ''));
       if (!opts.allowTwilio) throw new Error('unexpected real Twilio call in a test');
+      if (opts.twilioFail) return { json: async () => ({ message: 'The \'To\' number is not a valid phone number', code: 21211 }) };
       return { json: async () => ({ sid: 'SM_FAKE' + log.twilio.length }) };
     }
     const full = url.replace(/^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+/, '');
@@ -140,26 +143,27 @@ const NOON_ET = Date.UTC(2026, 9, 14, 16, 0, 0);       // 12:00 ET  -> outside q
 const NIGHT_ET = Date.UTC(2026, 9, 15, 2, 30, 0);      // 22:30 ET  -> inside quiet hours (7pm-9am)
 
 function build(db, o = {}) {
-  const log = { twilio: [] };
+  const log = { twilio: [], sms: [] };   // sms = every smsGatedSend call (the gate), recorded by the spy wrapper below
   const fixed = o.now || NOON_ET;
   const src = [
     'const CORS = {};', S.cache, S.isMissing, S.sr, S.ensureInner, S.ensure, S.ensureTab, S.idc, S.col, S.json, S.fetchTab, S.fetchTabs, S.findWO,
     S.updateWOFields, S.nextSafeId, S.logAudit, S.logAuditMany, S.logMsgAudit, S.auditCols, S.addRow, S.invalidate, S.telemetry, S.nonShare, S.block,
     S.addonLive, S.isTenantCurrent, S.currentTenant, S.tenantsFor, S.isBackground, S.isNotifiable, S.smsGate, S.smsToggle, S.normPhone, S.mqTab, S.mqCols,
     S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, S.sendRaw, S.updMq, S.fetchConfig, S.smsGated,
-    S.portalLink, S.unitLabel, S.phoneDisp, S.jobLabel, S.voidCols, S.splitMax, S.splitFields, S.testMarker, S.openStatuses,
+    'async function smsGatedSend(env, o) { __spy.push({ wo_id: o.wo_id, message_type: o.message_type, recipient_type: o.recipient_type, vendor_id: o.vendor && o.vendor.ID, vendor_name: o.vendor && o.vendor.Name, body: o.message_body, already_localized: o.already_localized, original_body: o.original_body, bypassQuietHours: o.bypassQuietHours === true }); return await __realSmsGatedSend(env, o); }',
+    S.quietQueue, S.portalLink, S.unitLabel, S.phoneDisp, S.jobLabel, S.voidCols, S.splitMax, S.splitFields, S.testMarker, S.openStatuses,
     // stubs for unrelated collaborators (not under test here)
     'async function createVendorNudgeClock() {}', 'async function resetVendorNudgeClock() {}',
     'async function translateForVendorDetailed(env, vendor, text) { return { translated: false, text }; }',
-    'async function translateToEnglish(env, t) { return t; }', 'async function sendSMS() {}', 'async function shouldNotifyOwner() { return false; }',
+    'async function translateToEnglish(env, t) { return t; }', 'async function sendSMS() {}', S.notifyConsts, o.realOwnerNotify ? S.shouldNotify : 'async function shouldNotifyOwner() { return false; }',
     'async function releaseTurnoverCleaningIfReady() {}', 'async function findLockedVendorBillForWOs() { return null; }',
     'function enrichWO(wo) { return { ID: wo.ID, Vendor_ID: wo.Vendor_ID, Status: wo.Status }; }',
     'async function logSMS() {}',
     S.assign, S.updateStatus, S.ownerWOs, S.woCombine, S.woSplit, S.isTestWO, S.isTestRecord, S.hubGuard,
-    'return { woDuplicate, woBidGroupUnlink, woBidGroupGet, woBidGroupCancel, assignVendor, updateStatus, bidGroupWriteBlock, bidCancelClassify, nextBidGroupId, woDupResetChecklist, ownerWorkorders, woCombine, woSplit, hubTestWriteAllowed, isBidGroupWO, woDupAppendCopy, woDupSerialize, __woDupTapCache };',
+    'return { processQuietHoursQueue, bidCancelVendorMessage, bidCancelVendorPlan, bidWinnerNotifyPlan, bidWinnerNotifyDiff, vendorSmsDetailFromResult, woDuplicate, woBidGroupUnlink, woBidGroupGet, woBidGroupCancel, assignVendor, updateStatus, bidGroupWriteBlock, bidCancelClassify, nextBidGroupId, woDupResetChecklist, ownerWorkorders, woCombine, woSplit, hubTestWriteAllowed, isBidGroupWO, woDupAppendCopy, woDupSerialize, __woDupTapCache };',
   ].join('\n');
   class FD extends Date { constructor(...a) { if (a.length) super(...a); else super(fixed); } static now() { return fixed; } }
-  const api = new Function('getAccessToken', 'fetch', 'setTimeout', 'Date', src)(async () => 'tok', makeFetch(db, o, log), (fn) => fn(), FD);
+  const api = new Function('getAccessToken', 'fetch', 'setTimeout', 'Date', '__spy', src)(async () => 'tok', makeFetch(db, o, log), (fn) => fn(), FD, log.sms);
   return Object.assign({ log }, api);
 }
 
@@ -446,7 +450,7 @@ for (const [label, vendorId, cfg, wantStatus, wantRe] of [
   const b = build(makeDb()); const ctx = { bills: [{ WO_ID: 'B1', Active: 'TRUE' }, { WO_ID: 'B2', Active: 'FALSE' }], timeEntries: [{ WO_ID: 'T1', Active: 'TRUE' }], invoiceReview: [{ WO_ID: 'I1', Active: 'TRUE' }], workorders: [{ Type: 'addon', Parent_WO_ID: 'A1' }] };
   const k = (wo) => b.bidCancelClassify(Object.assign({ Status: 'Assigned' }, wo), ctx);
   t('plain assigned copy: cancellable', k({ ID: 'X' }).kind === 'cancel');
-  t('accepted copy: cancellable WITH a warning that the vendor is not told', k({ ID: 'X', Status: 'Accepted' }).warnings.some(w => /will NOT be told/.test(w)));
+  t('accepted copy: cancellable WITH a warning that the vendor has accepted and WILL be texted it is cancelled (Oct 13 follow-up #2)', k({ ID: 'X', Status: 'Accepted' }).warnings.some(w => /already accepted/.test(w) && /will be texted that it is cancelled/.test(w)) && !k({ ID: 'X', Status: 'Accepted' }).warnings.some(w => /NOT be told/.test(w)));
   for (const s of ['Complete', 'Pending Invoice', 'Invoiced', 'Paid']) t(`status ${s} is skipped`, k({ ID: 'X', Status: s }).kind === 'skip');
   t('already cancelled', k({ ID: 'X', Status: 'Cancelled' }).kind === 'already' && k({ ID: 'X', Status: 'Canceled' }).kind === 'already');
   t('live vendor bill -> skip; inactive bill -> fine', k({ ID: 'B1' }).kind === 'skip' && k({ ID: 'B2' }).kind === 'cancel');
@@ -495,8 +499,8 @@ async function groupOf4() {
   t('statuses written + read back', wf(db, 'WO-1250', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Status') === 'Cancelled' && wf(db, 'WO-1251', 'Status') === 'Complete' && wf(db, 'WO-1239', 'Status') === 'Accepted');
   const aud = tab(db, 'WO_Audit').filter(a => a.Field === 'Status' && a.New_Value === 'Cancelled');
   t('goes through updateStatus: a WO_Audit Status row per cancel (changed_by from the request)', aud.length === 2 && aud.every(a => a.Changed_By === 'Brett'));
-  t('plus a Bid_Group_Cancel audit row stating the vendor was not texted', tab(db, 'WO_Audit').filter(a => a.Field === 'Bid_Group_Cancel').length === 2 && tab(db, 'WO_Audit').some(a => /vendor was not texted/.test(a.Notes)));
-  t('NO message of any kind was sent on cancel', tab(db, 'Message_Queue').length === 0 && b.log.twilio.length === 0);
+  t('plus a Bid_Group_Cancel audit row per cancel stating what happened to the vendor text', tab(db, 'WO_Audit').filter(a => a.Field === 'Bid_Group_Cancel').length === 2 && tab(db, 'WO_Audit').filter(a => a.Field === 'Bid_Group_Cancel').every(a => /Vendor text: sent/.test(a.Notes)));
+  t('ONLY the two cancelled copies\' vendors were texted (Oct 13 follow-up #2); the skipped one, the kept original and the tenant/owner were not', tab(db, 'Message_Queue').length === 2 && tab(db, 'Message_Queue').every(q => q.Message_Type === 'vendor_job_cancelled' && q.Recipient_Type === 'vendor') && b.log.twilio.length === 2);
   t('the skipped member is reported with its reason', r.body.results.find(x => x.wo_id === 'WO-1251').result === 'skipped');
   t('cancel result is in telemetry (Success TRUE)', tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel' && x.Success === 'TRUE' && /cancelled=2/.test(x.Notes)));
   const again = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'all', confirm: true }));
@@ -643,8 +647,8 @@ async function groupOf4() {
     t('winning copy is now Tenant_Visible TRUE and marked Bid_Winner TRUE (read back)', wf(db, 'WO-1252', 'Tenant_Visible') === 'TRUE' && wf(db, 'WO-1252', 'Bid_Winner') === 'TRUE');
     t('the losing copies are NOT made visible and are not marked winner', wf(db, 'WO-1250', 'Tenant_Visible') === 'FALSE' && wf(db, 'WO-1251', 'Tenant_Visible') === 'FALSE' && wf(db, 'WO-1250', 'Bid_Winner') !== 'TRUE' && wf(db, 'WO-1239', 'Bid_Winner') !== 'TRUE');
     t('result reports the winner became tenant-visible', r.body.winner && r.body.winner.became_tenant_visible === true && r.body.winner.wo_id === 'WO-1252');
-    t('NO SMS / queue row / Twilio call of any kind (tenant, owner or vendor)', JSON.stringify(db.Message_Queue.rows) === snapQ && tab(db, 'Message_Queue').length === 0 && b.log.twilio.length === 0);
-    t('winner still has the flags that keep it silent (Tenant_Notify_* untouched)', wf(db, 'WO-1252', 'Tenant_SMS_Sent') !== 'TRUE');
+    t('NO text to the tenant or owner at keep time; the only queued text is the losing copy\'s vendor cancellation', tab(db, 'Message_Queue').length === 1 && tab(db, 'Message_Queue')[0].Message_Type === 'vendor_job_cancelled' && tab(db, 'Message_Queue')[0].WO_ID === 'WO-1250' && b.log.twilio.length === 1 && JSON.stringify(db.Message_Queue.rows) !== snapQ);
+    t('the kept winner\'s vendor and the original\'s vendor were NOT texted', !b.log.sms.some(c => c.wo_id === 'WO-1252' || c.wo_id === 'WO-1239') && wf(db, 'WO-1252', 'Tenant_SMS_Sent') !== 'TRUE');
     t('WO_Audit has a Tenant_Visible FALSE->TRUE row for the winner', tab(db, 'WO_Audit').some(a => a.WO_ID === 'WO-1252' && a.Field === 'Tenant_Visible' && a.Old_Value === 'FALSE' && a.New_Value === 'TRUE' && a.Changed_By === 'Brett' && /no text/i.test(a.Notes)));
     t('telemetry row for the cancel is Success TRUE and names the winner', tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel' && x.Success === 'TRUE' && /keep=WO-1252/.test(x.Notes)));
     // idempotent re-run: nothing breaks, no second Tenant_Visible audit row
@@ -665,7 +669,7 @@ async function groupOf4() {
     const r = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1250', mode: 'keep_one', keep_wo_id: 'WO-1239', confirm: true }));
     t('keep_one(original): all live copies cancelled, original untouched and active', r.body.ok && wf(db, 'WO-1239', 'Status') === 'Accepted' && wf(db, 'WO-1250', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Status') === 'Cancelled');
     t('keep_one(original): no Tenant_Visible/Bid_Winner writes, no audit for them', wf(db, 'WO-1239', 'Tenant_Visible') === 'TRUE' && wf(db, 'WO-1252', 'Tenant_Visible') === 'FALSE' && !tab(db, 'WO_Audit').some(a => a.Field === 'Tenant_Visible' || a.Field === 'Bid_Winner') && r.body.winner.became_tenant_visible === false);
-    t('keep_one(original): no SMS', tab(db, 'Message_Queue').length === 0 && b.log.twilio.length === 0);
+    t('keep_one(original): only the two cancelled copies\' vendors are texted (no tenant/owner text, original\'s vendor not texted)', tab(db, 'Message_Queue').length === 2 && tab(db, 'Message_Queue').every(q => q.Recipient_Type === 'vendor' && ['WO-1250', 'WO-1252'].includes(q.WO_ID)) && b.log.twilio.length === 2);
   }
   // (c) original is protected EVEN IF it is cancellable and the winner is a copy (explicit regression for decision 1); 'all' still cancels it
   {
@@ -731,10 +735,271 @@ async function groupOf4() {
   // (j) source-level guards
   {
     const cancelSrc = grab(wsrc, 'async function woBidGroupCancel(');
-    t('cancel code: no SMS/notify/queue call anywhere in the cancel path', !/sendSMS|smsGatedSend|assignVendor|queueMessage|Message_Queue|notifyTenant/.test(cancelSrc));
+    const notifySrc = grab(wsrc, 'async function bidCancelNotifyVendor(');
+    t('cancel code: the ONLY way it texts is bidCancelNotifyVendor -> smsGatedSend with recipient_type vendor (never tenant/owner/sendSMS/assign/queueNotification)', !/sendSMS|smsGatedSend|assignVendor|queueMessage|queueNotification|notifyTenant/.test(cancelSrc) && /smsGatedSend\(env, \{[^}]*recipient_type: 'vendor'/.test(notifySrc) && !/recipient_type: '(tenant|owner)'/.test(notifySrc + cancelSrc) && /bidCancelNotifyVendor\(/.test(cancelSrc));
     t('cancel code: no swallowing catch', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(cancelSrc));
     t('BUILD_VERSION bumped to the follow-up value', /const BUILD_VERSION = '2026-10-13\.\d+-[a-z-]+'/.test(wsrc));
   }
+}
+
+// ── 17. FOLLOW-UP #2 (Oct 13 2026, Brett): "tell the vendor." + "kept copy notifies according to that work order's settings." ──
+// Build 1: executing a cancel texts the assigned vendor of every copy that REALLY got cancelled (never on a preview, never twice,
+// quiet hours respected, failures returned + logged, a failed text never undoes the cancel). Build 2: a kept COPY starts notifying like
+// its original work order; no "new work order" blast at keep time.
+const twi = (b) => b.log.twilio.map(x => { const p = new URLSearchParams(x); return { to: p.get('To'), body: p.get('Body') }; });
+const MORNING_NEXT = Date.UTC(2026, 9, 15, 14, 0, 0);   // 10:00 ET the next morning
+const stamp = (set, ids) => { for (const id of ids || ['WO-1250', 'WO-1251', 'WO-1252']) { set(id, 'Tenant_Visible', 'FALSE'); set(id, 'Tenant_Notify_Created', 'FALSE'); set(id, 'Tenant_Notify_Updates', 'FALSE'); set(id, 'Owner_Notify_Override', 'off'); } };
+const EN_1250 = '[WO-1250] CANCELLED: the job at 931 Saint Paul St Unit 2 is no longer needed. Please do not do this work. Thank you.';
+const ES_1252 = '[WO-1252] CANCELADO: el trabajo de Painting en 931 Saint Paul St Unit 2 ya no es necesario. Por favor no realice este trabajo. Gracias.';
+const EN_1252 = '[WO-1252] CANCELLED: the Painting job at 931 Saint Paul St Unit 2 is no longer needed. Please do not do this work. Thank you.';
+{
+  // 17a. wording + pure plan
+  const b = build(makeDb());
+  const en = b.bidCancelVendorMessage('WO-1252', 'Painting', '931 Saint Paul St Unit 2', false), es = b.bidCancelVendorMessage('WO-1252', 'Painting', '931 Saint Paul St Unit 2', true);
+  t('wording EN is exactly the agreed short text with WO number, trade and address', en.text === EN_1252 && en.language === 'en');
+  t('wording ES is exactly the agreed short text and keeps the English as .en', es.text === ES_1252 && es.language === 'es' && es.en === EN_1252);
+  t('no trade -> "the job" / "el trabajo"', b.bidCancelVendorMessage('WO-1', '', 'X', false).text === '[WO-1] CANCELLED: the job at X is no longer needed. Please do not do this work. Thank you.' && b.bidCancelVendorMessage('WO-1', '', 'X', true).text === '[WO-1] CANCELADO: el trabajo en X ya no es necesario. Por favor no realice este trabajo. Gracias.');
+  t('texts carry no tenant/owner info, no phone numbers, no money', !/Tina|Olive|tenant|owner|inquilino|\$|\+1/i.test(en.text + es.text));
+  t('texts fit in 2 SMS segments (< 320 chars) even with a long address', b.bidCancelVendorMessage('WO-1252', 'General Maintenance', '1234 Some Very Long Street Name Avenue Unit 12B (Back Bedroom)', true).text.length < 320);
+  const row = { wo_id: 'WO-9', vendor_id: '3', vendor_name: 'Cesar Diaz' }, prop = { Address: '1 A St' }, vcz = { ID: '3', Name: 'Cesar Diaz', Phone: '+12407051090', Language: 'es' };
+  const pl = (vendor, kept) => b.bidCancelVendorPlan(row, vendor, { Trade: 'Painting' }, prop, null, kept || new Map());
+  t('plan: assigned vendor with a phone -> will_send in their language', pl(vcz).status === 'will_send' && pl(vcz).language === 'es' && /CANCELADO/.test(pl(vcz).message_body) && /CANCELLED/.test(pl(vcz).message_en));
+  t('plan: no vendor -> skipped; unknown vendor / no phone -> cannot_send; vendor holding a job that stays open -> skipped',
+    b.bidCancelVendorPlan({ wo_id: 'W', vendor_id: '' }, null, {}, null, null, new Map()).status === 'skipped' && pl(null).status === 'cannot_send' && pl({ ID: '3', Name: 'X', Phone: '' }).status === 'cannot_send' && pl(vcz, new Map([['3', 'WO-1']])).status === 'skipped' && /WO-1/.test(pl(vcz, new Map([['3', 'WO-1']])).reason));
+}
+{
+  // 17b. PREVIEW never texts and says exactly who will be told
+  const { db, set } = await groupOf4(); set('WO-1252', 'Trade', 'Painting'); const b = build(db, { allowTwilio: true });
+  for (const body of [{ wo_id: 'WO-1239', mode: 'all' }, { wo_id: 'WO-1239', mode: 'all', dry_run: true }, { wo_id: 'WO-1239', mode: 'all', dry_run: true, confirm: true }, { wo_id: 'WO-1239', mode: 'all', confirm: 'yes' }, { wo_id: 'WO-1239', mode: 'keep_one', keep_wo_id: 'WO-1252' }, { wo_id: 'WO-1239', mode: 'duplicates' }])
+    await call(b.woBidGroupCancel(env, body));
+  t('6 preview variants: the SMS gate is NEVER called, no queue row, no Twilio call', b.log.sms.length === 0 && tab(db, 'Message_Queue').length === 0 && b.log.twilio.length === 0);
+  const p = (await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'all' }))).body;
+  const by = Object.fromEntries(p.results.map(x => [x.wo_id, x]));
+  t('preview: each cancel target has a vendor_sms plan naming who will be texted', by['WO-1252'].vendor_sms.status === 'will_send' && by['WO-1252'].vendor_sms.reason === 'Cesar Diaz will be texted that WO-1252 is cancelled.' && by['WO-1250'].vendor_sms.status === 'will_send' && by['WO-1239'].vendor_sms.status === 'will_send');
+  t('preview shows the exact text the vendor gets (Spanish for Cesar, English underneath)', by['WO-1252'].vendor_sms.message_body === ES_1252 && by['WO-1252'].vendor_sms.message_en === EN_1252 && by['WO-1250'].vendor_sms.message_body === EN_1250);
+  t('preview: the Complete (skipped) member is not texted', by['WO-1251'].result === 'would_skip' && by['WO-1251'].vendor_sms.status === 'skipped');
+  t('preview: summary.would_text counts the vendors and the notices say who', p.summary.would_text === 3 && p.vendor_text_notices.filter(n => n.level === 'ok').map(n => n.text).includes('Cesar Diaz will be texted that WO-1252 is cancelled.') && p.vendor_text_notices.filter(n => n.level === 'ok').length === 3);
+  t('preview: noon ET -> no quiet-hours warning', p.quiet_hours_now === false && !p.warnings.some(w => /quiet hours/i.test(w)));
+  const k = (await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252' }))).body;
+  t('preview keep_one: only the cancelled copy\'s vendor is named; the winner\'s vendor (Cesar) and the original\'s (Alex) are NOT', k.summary.would_text === 1 && k.vendor_text_notices.length === 1 && /TEST-VENDOR-001 will be texted that WO-1250/.test(k.vendor_text_notices[0].text) && k.results.find(x => x.wo_id === 'WO-1252').vendor_sms.status === 'skipped' && k.results.find(x => x.wo_id === 'WO-1239').vendor_sms.status === 'skipped');
+  set('WO-1251', 'Status', 'Assigned');   // vendor 4 has no phone
+  const np = (await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates' }))).body;
+  t('preview: a vendor with no phone is flagged as CANNOT be texted (bad level) before Brett confirms', np.results.find(x => x.wo_id === 'WO-1251').vendor_sms.status === 'cannot_send' && np.vendor_text_notices.some(n => n.level === 'bad' && /No Phone Co/.test(n.text)) && np.summary.would_text === 2);
+  const bn = build(db, { allowTwilio: true, now: NIGHT_ET });
+  const nq = (await call(bn.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates' }))).body;
+  t('preview at 10:30pm ET: says the texts will be held until after 9am', nq.quiet_hours_now === true && nq.warnings.some(w => /quiet hours/i.test(w) && /held/.test(w)) && bn.log.sms.length === 0);
+  t('preview wrote no WO_Audit rows and no status changes', tab(db, 'WO_Audit').length === 0 && woRows(db).every(w => w.Status !== 'Cancelled'));
+}
+{
+  // 17c. EXECUTE (noon): the SMS gate is called once per cancelled copy with the right vendor and WO
+  const { db, set } = await groupOf4(); set('WO-1252', 'Trade', 'Painting'); const b = build(db, { allowTwilio: true });
+  const r = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true, updated_by: 'Brett' }));
+  t('confirm: 200 ok, 2 cancelled, nothing to attend to', r.status === 200 && r.body.ok === true && r.body.summary.cancelled === 2 && r.body.needs_attention === false && r.body.errors.length === 0);
+  t('SMS gate called exactly twice: WO-1250 -> vendor 8 and WO-1252 -> vendor 3, type vendor_job_cancelled, vendor recipient', b.log.sms.length === 2 && b.log.sms.every(c => c.message_type === 'vendor_job_cancelled' && c.recipient_type === 'vendor') && b.log.sms.some(c => c.wo_id === 'WO-1250' && c.vendor_id === '8') && b.log.sms.some(c => c.wo_id === 'WO-1252' && c.vendor_id === '3'));
+  t('hand-built bilingual text goes through (already_localized), Spanish for Cesar with the English kept as Original_Body', b.log.sms.every(c => c.already_localized === true) && b.log.sms.find(c => c.wo_id === 'WO-1252').body === ES_1252 && b.log.sms.find(c => c.wo_id === 'WO-1252').original_body === EN_1252 && b.log.sms.find(c => c.wo_id === 'WO-1250').body === EN_1250 && b.log.sms.find(c => c.wo_id === 'WO-1250').original_body === '');
+  t('the quiet-hours bypass is NOT used (a cancellation notice is not urgent)', b.log.sms.every(c => c.bypassQuietHours === false));
+  const w = twi(b);
+  t('exactly 2 Twilio sends: Cesar (Spanish) and TEST-VENDOR (English); nobody else', w.length === 2 && w.some(x => x.to === '+12407051090' && x.body === ES_1252) && w.some(x => x.to === '+14105557777' && x.body === EN_1250));
+  t('no text to the tenant (Tina), owner (Olive), the original\'s vendor (Alex) or the Complete copy\'s vendor', !w.some(x => ['+14105551111', '+14105552222', '+14436172152'].includes(x.to)));
+  const mq = tab(db, 'Message_Queue');
+  t('Message_Queue: 2 sent vendor rows, WO ids right, gates open, Spanish row keeps its English original', mq.length === 2 && mq.every(q => q.Status === 'sent' && q.Message_Type === 'vendor_job_cancelled' && q.Recipient_Type === 'vendor' && q.Gate_Snapshot === 'all gates open') && mq.find(q => q.WO_ID === 'WO-1252').Original_Body === EN_1252 && mq.find(q => q.WO_ID === 'WO-1252').Translated_To === 'es');
+  const by = Object.fromEntries(r.body.results.map(x => [x.wo_id, x]));
+  t('per-vendor outcome returned on each row: sent + reason + language', by['WO-1252'].vendor_sms.status === 'sent' && by['WO-1252'].vendor_sms.language === 'es' && by['WO-1250'].vendor_sms.status === 'sent' && by['WO-1250'].vendor_sms.language === 'en' && by['WO-1251'].vendor_sms.status === 'skipped');
+  t('summary.vendor_texts and vendor_texts[] report 2 sent', r.body.summary.vendor_texts.sent === 2 && r.body.vendor_texts.length === 2 && r.body.vendor_texts.every(x => x.status === 'sent'));
+  t('the vendor of the kept ORIGINAL (Alex) was not texted', !b.log.sms.some(c => c.vendor_id === '2'));
+  t('each Bid_Group_Cancel audit row records the vendor text outcome', tab(db, 'WO_Audit').filter(a => a.Field === 'Bid_Group_Cancel').every(a => /Vendor text: sent/.test(a.Notes)));
+  t('per-WO SMS audit rows exist (who was texted, what)', tab(db, 'WO_Audit').filter(a => a.Field === 'SMS' && a.Message_Type === 'vendor_job_cancelled').length === 2);
+  t('telemetry: one wo_bid_cancel_vendor_sms row per text, Success TRUE, with WO + vendor', tab(db, 'Ops_Telemetry').filter(x => x.Job_Type === 'wo_bid_cancel_vendor_sms' && x.Success === 'TRUE').length === 2 && tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel_vendor_sms' && /WO-1252 vendor=3 status=sent/.test(x.Notes)));
+  t('cancel telemetry carries the text counts', tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel' && /"sent":2/.test(x.Notes)));
+  t('the texts were sent only AFTER the statuses were verified Cancelled', wf(db, 'WO-1250', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Status') === 'Cancelled');
+  // mode all: the original IS cancelled, so its vendor is told
+  const { db: d2 } = await groupOf4(); const b2 = build(d2, { allowTwilio: true });
+  const ra = await call(b2.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'all', confirm: true }));
+  t('mode all: the original is cancelled AND its vendor (Alex) is texted, with trade + unit + room', ra.body.summary.cancelled === 3 && b2.log.sms.some(c => c.wo_id === 'WO-1239' && c.vendor_id === '2' && c.body === '[WO-1239] CANCELLED: the Painting job at 931 Saint Paul St Unit 2 (Kitchen) is no longer needed. Please do not do this work. Thank you.') && b2.log.sms.length === 3);
+  // keep_one: only losers are told
+  const { db: d3 } = await groupOf4(); stampSilent(d3); const b3 = build(d3, { allowTwilio: true });
+  const rk = await call(b3.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+  t('keep_one(copy): only WO-1250\'s vendor is texted; the winner\'s vendor (Cesar), the original\'s (Alex) and the Complete copy\'s are not', rk.body.ok && b3.log.sms.length === 1 && b3.log.sms[0].wo_id === 'WO-1250');
+}
+function stampSilent(db) { const set = (id, k, v) => { db.Work_Orders.rows.find(r => r[1] === id)[db.Work_Orders.headers.indexOf(k)] = v; }; stamp(set); }
+{
+  // 17d. QUIET HOURS: held (not bypassed), cancel still done, released later by the scheduler's sweep
+  const { db, set } = await groupOf4(); set('WO-1252', 'Trade', 'Painting'); const b = build(db, { allowTwilio: true, now: NIGHT_ET });
+  const r = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+  t('10:30pm ET: cancels done, both vendor texts HELD, no Twilio call, not flagged as a failure', r.status === 200 && r.body.ok && r.body.summary.cancelled === 2 && r.body.summary.vendor_texts.held === 2 && r.body.summary.vendor_texts.failed === 0 && b.log.twilio.length === 0 && r.body.needs_attention === false && !r.body.warnings.some(x => /FAILED/.test(x)));
+  t('held rows say when they go out', r.body.vendor_texts.every(x => x.status === 'held' && /Held for quiet hours/.test(x.reason) && /2026-10-15T13:00:00\.000Z/.test(x.reason)));
+  const mq = tab(db, 'Message_Queue');
+  t('queue rows are pending with Send_After = 9:00am ET next morning, and the bypass flag was off', mq.length === 2 && mq.every(q => q.Status === 'pending' && q.Send_After === '2026-10-15T13:00:00.000Z') && b.log.sms.every(c => c.bypassQuietHours === false));
+  const later = build(db, { allowTwilio: true, now: MORNING_NEXT });
+  const rel = await later.processQuietHoursQueue(env);
+  t('the scheduler sweep (processQuietHoursQueue) releases them at 10am: both sent, to the right numbers', rel.checked === 2 && rel.results.every(x => x.sent) && twi(later).length === 2 && twi(later).some(x => x.to === '+12407051090' && x.body === ES_1252) && tab(db, 'Message_Queue').every(q => q.Status === 'sent'));
+  const again = await call(later.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+  t('a retried confirm after the release sends nothing more', again.body.summary.cancelled === 0 && again.body.summary.already_cancelled === 2 && later.log.sms.length === 0 && twi(later).length === 2);
+}
+{
+  // 17e. IDEMPOTENT: never twice
+  const { db, set } = await groupOf4(); const b = build(db, { allowTwilio: true });
+  await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+  const r2 = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+  t('second confirm on already-cancelled copies: nothing cancelled, nothing texted, gate not called again', r2.body.summary.cancelled === 0 && r2.body.summary.already_cancelled === 2 && b.log.sms.length === 2 && b.log.twilio.length === 2 && tab(db, 'Message_Queue').length === 2 && r2.body.results.filter(x => x.result === 'already_cancelled').every(x => x.vendor_sms.status === 'skipped'));
+  const { db: d2 } = await groupOf4(); const b2 = build(d2, { allowTwilio: true });
+  const [x, y] = await Promise.all([b2.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }), b2.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true })].map(call));
+  t('two simultaneous confirms: still exactly one text per cancelled WO', b2.log.sms.length === 2 && b2.log.twilio.length === 2 && x.body.summary.cancelled + y.body.summary.cancelled === 2);
+  // belt and braces: a WO that was re-opened by hand and cancelled again does not get a second text (one queued/sent text per WO is the rule)
+  const sets = (id, k, v) => { d2.Work_Orders.rows.find(r => r[1] === id)[d2.Work_Orders.headers.indexOf(k)] = v; };
+  sets('WO-1250', 'Status', 'Assigned');
+  const r3 = await call(b2.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+  t('re-opened then cancelled again: no second text, and it says why', r3.body.summary.cancelled === 1 && b2.log.sms.length === 2 && r3.body.results.find(z => z.wo_id === 'WO-1250').vendor_sms.status === 'skipped' && /already sent/.test(r3.body.results.find(z => z.wo_id === 'WO-1250').vendor_sms.reason));
+  // a vendor with two cancelled copies gets one text per WO
+  const { db: d4, set: s4 } = await groupOf4(); s4('WO-1250', 'Vendor_ID', '3'); const b4 = build(d4, { allowTwilio: true });
+  await call(b4.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+  t('one vendor on two cancelled copies: one text per WO (two), each naming its own WO', b4.log.sms.length === 2 && new Set(b4.log.sms.map(c => c.wo_id)).size === 2 && twi(b4).every(x => x.to === '+12407051090') && twi(b4).some(x => /WO-1250/.test(x.body)) && twi(b4).some(x => /WO-1252/.test(x.body)));
+}
+{
+  // 17f. FAILURES: returned + logged, never swallowed, never undo or block the cancel
+  const failCase = async (label, prep, opts, check) => {
+    const { db, set } = await groupOf4(); prep && prep(db, set); const b = build(db, Object.assign({ allowTwilio: true }, opts || {}));
+    const r = await call(b.woBidGroupCancel((opts && opts.env) || env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+    check(r, db, b, label);
+  };
+  const cancelledOk = (db) => wf(db, 'WO-1250', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Status') === 'Cancelled';
+  const telFail = (db, re) => tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel_vendor_sms' && x.Success === 'FALSE' && re.test(x.Notes));
+  await failCase('Twilio switched off', (db) => { db.Config.rows.find(r => r[0] === 'TWILIO_ENABLED')[1] = 'FALSE'; }, {}, (r, db, b, l) => {
+    t(`${l}: both cancels stand, 200, ok true`, r.status === 200 && r.body.ok === true && cancelledOk(db));
+    t(`${l}: each vendor_sms is FAILED with the gate reason`, r.body.vendor_texts.length === 2 && r.body.vendor_texts.every(x => x.status === 'failed' && /Blocked.*Global OFF/.test(x.reason)) && r.body.summary.vendor_texts.failed === 2);
+    t(`${l}: needs_attention + a warning per failed text telling Brett to call`, r.body.needs_attention === true && r.body.warnings.filter(w => /Vendor text FAILED/.test(w) && /call them/.test(w)).length === 2);
+    t(`${l}: logged to Ops_Telemetry as failures with the WO ids`, telFail(db, /WO-1250/) && telFail(db, /WO-1252/) && b.log.twilio.length === 0);
+    t(`${l}: the audit row says the text failed`, tab(db, 'WO_Audit').filter(a => a.Field === 'Bid_Group_Cancel').every(a => /Vendor text: failed/.test(a.Notes)));
+  });
+  await failCase('vendor has no phone', (db, set) => { db.Vendors.rows.push(['9', 'Phoneless Pete', '', '', '', '', '']); set('WO-1250', 'Vendor_ID', '9'); }, {}, (r, db, b, l) => {
+    const v = r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms;
+    t(`${l}: failed with a clear reason, gate not called for it, the other vendor still texted, cancel stands`, v.status === 'failed' && /Phoneless Pete has no valid phone/.test(v.reason) && !b.log.sms.some(c => c.wo_id === 'WO-1250') && b.log.sms.some(c => c.wo_id === 'WO-1252') && cancelledOk(db) && r.body.needs_attention === true && telFail(db, /WO-1250/));
+  });
+  await failCase('queue write blows up', null, { throwOnWrite: (path, method) => method === 'POST' && path === '/values/Message_Queue:append' }, (r, db, b, l) => {
+    t(`${l}: texts reported failed (could not be queued), cancels stand, no Twilio call`, r.status === 200 && r.body.vendor_texts.every(x => x.status === 'failed' && /could not be queued or sent/.test(x.reason)) && cancelledOk(db) && b.log.twilio.length === 0);
+    t(`${l}: logged to telemetry and in warnings`, telFail(db, /WO-1252/) && r.body.warnings.some(w => /Vendor text FAILED for WO-1252/.test(w)));
+  });
+  await failCase('Twilio rejects the number', null, { twilioFail: true }, (r, db, b, l) => {
+    t(`${l}: failed "Twilio rejected", queue row marked failed, cancels stand`, r.body.vendor_texts.every(x => x.status === 'failed' && /Twilio rejected/.test(x.reason)) && tab(db, 'Message_Queue').every(q => q.Status === 'failed') && cancelledOk(db) && telFail(db, /Twilio rejected/));
+  });
+  await failCase('vendor id not in Vendors', (db, set) => set('WO-1250', 'Vendor_ID', '99'), {}, (r, db, b, l) => {
+    t(`${l}: failed "not found in the Vendors tab", never silently skipped`, r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms.status === 'failed' && /not found in the Vendors tab/.test(r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms.reason) && cancelledOk(db) && r.body.needs_attention === true);
+  });
+  await failCase('vendor opted out', (db, set) => set('WO-1250', 'Vendor_ID', '6'), {}, (r, db, b, l) => {
+    t(`${l}: gate blocks it and the block is reported as failed`, r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms.status === 'failed' && /Vendor opted out/.test(r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms.reason) && cancelledOk(db));
+  });
+  await failCase('no vendor on the copy', (db, set) => set('WO-1250', 'Vendor_ID', ''), {}, (r, db, b, l) => {
+    const v = r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms;
+    t(`${l}: skipped with a reason, gate not called for it, not a failure`, v.status === 'skipped' && /No vendor/.test(v.reason) && !b.log.sms.some(c => c.wo_id === 'WO-1250') && r.body.needs_attention === false && r.body.summary.vendor_texts.skipped === 1 && cancelledOk(db));
+  });
+  await failCase('same vendor holds the kept original', (db, set) => set('WO-1250', 'Vendor_ID', '2'), {}, (r, db, b, l) => {
+    const v = r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms;
+    t(`${l}: that vendor is NOT texted about the cancelled copy (they still have the kept job), and it says so`, v.status === 'skipped' && /also has WO-1239/.test(v.reason) && !b.log.sms.some(c => c.wo_id === 'WO-1250') && cancelledOk(db));
+  });
+  await failCase('staging worker', null, { env: envStg }, (r, db, b, l) => {
+    t(`${l}: reported skipped/STAGING (never claims sent), no Twilio, cancels stand`, r.body.vendor_texts.length === 2 && r.body.vendor_texts.every(x => x.status === 'skipped' && /STAGING/.test(x.reason)) && b.log.twilio.length === 0 && cancelledOk(db));
+  });
+  await failCase('test mode on', (db) => { db.Config.rows.find(r => r[0] === 'TWILIO_TEST_MODE')[1] = 'TRUE'; }, {}, (r, db, b, l) => {
+    t(`${l}: sent to the TEST number and says so (not a normal send)`, r.body.vendor_texts.every(x => x.status === 'sent' && /TEST MODE/.test(x.reason)) && twi(b).every(x => x.to === '+14439617927'));
+  });
+  // the cancel itself fails for one copy -> that vendor is NOT texted about a cancel that did not happen
+  {
+    const { db } = await groupOf4(); const b = build(db, { allowTwilio: true });
+    db.Work_Orders.headers.push('Addon_Status'); db.Work_Orders.rows.forEach(r => r.push(''));
+    db.Work_Orders.rows.push(db.Work_Orders.headers.map(h => ({ ID: 'WO-AD1', Type: 'addon', Parent_WO_ID: 'WO-1250', Status: 'New', Property_ID: '70', Addon_Status: 'Submitted' }[h] ?? '')));
+    db.Estimates.rows.push(['9', 'WO-AD1', '8', '1', '100.00', 'Pending', 'TRUE']);
+    const r = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+    t('a cancel that FAILS (live add-on) texts nobody about it; the copy that did cancel is texted', r.body.results.find(x => x.wo_id === 'WO-1250').result === 'failed' && r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms.status === 'skipped' && /cancel failed/.test(r.body.results.find(x => x.wo_id === 'WO-1250').vendor_sms.reason) && b.log.sms.length === 1 && b.log.sms[0].wo_id === 'WO-1252');
+  }
+}
+{
+  // 17g. BUILD 2: a kept COPY notifies per its original work order's settings; nothing is sent at keep time
+  const keep = async (prep, opts) => {
+    const { db, set } = await groupOf4(); stamp(set); prep && prep(db, set);
+    const b = build(db, Object.assign({ allowTwilio: true, realOwnerNotify: true }, opts || {}));
+    const snapMq = JSON.stringify(db.Message_Queue.rows);
+    const r = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true, updated_by: 'Brett' }));
+    return { db, set, b, r, snapMq };
+  };
+  const { db, set, b, r, snapMq } = await keep();
+  t('keep: ok, winner restored to a normal work order\'s settings (read back): visible, tenant create + update notices on, owner override cleared',
+    r.status === 200 && r.body.ok && wf(db, 'WO-1252', 'Tenant_Visible') === 'TRUE' && wf(db, 'WO-1252', 'Tenant_Notify_Created') === 'TRUE' && wf(db, 'WO-1252', 'Tenant_Notify_Updates') === 'TRUE' && wf(db, 'WO-1252', 'Owner_Notify_Override') === '' && wf(db, 'WO-1252', 'Bid_Winner') === 'TRUE');
+  t('the same four settings as the original WO-1239 (which was created normally)', ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates'].every(k => wf(db, 'WO-1252', k) === wf(db, 'WO-1239', k)) && wf(db, 'WO-1239', 'Owner_Notify_Override') === '');
+  t('losing / skipped copies stay silent (flags untouched), the original is untouched', wf(db, 'WO-1250', 'Tenant_Notify_Updates') === 'FALSE' && wf(db, 'WO-1250', 'Owner_Notify_Override') === 'off' && wf(db, 'WO-1251', 'Tenant_Visible') === 'FALSE' && wf(db, 'WO-1239', 'Tenant_Visible') === 'TRUE' && wf(db, 'WO-1239', 'Status') === 'Accepted');
+  const n = r.body.winner.notify;
+  t('result reports what changed and where it came from', n.from_original === true && n.source_wo_id === 'WO-1239' && n.text_sent_now === false && ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override'].every(k => n.changed.includes(k)) && /follows the normal work order rules/.test(r.body.winner.note));
+  const aud = tab(db, 'WO_Audit').filter(a => a.WO_ID === 'WO-1252' && ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'].includes(a.Field));
+  t('WO_Audit: one row per changed field with old and new value, who, and "no text"', aud.length === 5 && aud.find(a => a.Field === 'Owner_Notify_Override').Old_Value === 'off' && aud.find(a => a.Field === 'Owner_Notify_Override').New_Value === '' && aud.find(a => a.Field === 'Tenant_Notify_Updates').Old_Value === 'FALSE' && aud.find(a => a.Field === 'Tenant_Notify_Updates').New_Value === 'TRUE' && aud.every(a => a.Changed_By === 'Brett') && aud.filter(a => a.Field !== 'Bid_Winner').every(a => /no text/i.test(a.Notes)));
+  const mq = tab(db, 'Message_Queue');
+  t('NO "new work order" blast: Message_Queue holds no tenant/owner row, only the losing copy\'s vendor cancellation; no Twilio to Tina/Olive', mq.every(q => q.Recipient_Type === 'vendor' && q.Message_Type === 'vendor_job_cancelled') && !twi(b).some(x => ['+14105551111', '+14105552222'].includes(x.to)) && !db.Notification_Queue && !tab(db, 'Message_Queue').some(q => q.WO_ID === 'WO-1252'));
+  // behaviour from then on: a status change on the winner notifies like any WO
+  const afterKeep = twi(b).length;
+  await call(b.updateStatus(env, { wo_id: 'WO-1252', status: 'Complete', updated_by: 'Brett' }));
+  const w2 = twi(b).slice(afterKeep);
+  t('after the keep, marking the winner Complete texts the TENANT (Tina) and the OWNER (Olive) exactly like a normal WO', w2.some(x => x.to === '+14105551111' && /is complete/.test(x.body)) && w2.some(x => x.to === '+14105552222' && /is complete/.test(x.body)));
+  // contrast: the same Complete on a copy that was NOT kept stays silent for tenant and owner
+  const { db: d2, set: s2 } = await groupOf4(); stamp(s2); const b2 = build(d2, { allowTwilio: true, realOwnerNotify: true });
+  await call(b2.updateStatus(env, { wo_id: 'WO-1252', status: 'Complete', updated_by: 'Brett' }));
+  t('contrast: a silent copy that was never kept texts neither tenant nor owner on Complete', !twi(b2).some(x => ['+14105551111', '+14105552222'].includes(x.to)));
+  // idempotent re-run: no second round of audit rows
+  const again = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+  t('re-running keep_one changes nothing and writes no new audit rows for the winner', again.body.ok && again.body.winner.notify.changed.length === 0 && tab(db, 'WO_Audit').filter(a => a.WO_ID === 'WO-1252' && ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'].includes(a.Field)).length === 5);
+}
+{
+  // preview states the notification plan and writes nothing
+  const { db, set } = await groupOf4(); stamp(set); const b = build(db, { allowTwilio: true });
+  const before = JSON.stringify(db.Work_Orders.rows);
+  const pv = (await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252' }))).body;
+  t('preview: winner.notify lists the fields that WILL change and says no text is sent now; nothing written', pv.winner.notify.will_change.length === 4 && pv.winner.notify.text_sent_now === false && /No text is sent right now/.test(pv.winner.note) && pv.winner.notify.settings.Tenant_Notify_Updates === 'TRUE' && JSON.stringify(db.Work_Orders.rows) === before);
+}
+{
+  // settings come from THE ORIGINAL's own configuration, not blindly TRUE
+  const { db, b, r } = await (async () => {
+    const { db, set } = await groupOf4(); stamp(set);
+    set('WO-1239', 'Tenant_Notify_Updates', 'FALSE'); set('WO-1239', 'Owner_Notify_Override', 'completion');   // Brett had turned tenant updates off on this job
+    const b = build(db, { allowTwilio: true }); const r = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+    return { db, b, r };
+  })();
+  t('original has tenant updates OFF and owner level "completion": the kept copy gets exactly that (not blindly everything on)', r.body.ok && wf(db, 'WO-1252', 'Tenant_Notify_Updates') === 'FALSE' && wf(db, 'WO-1252', 'Tenant_Notify_Created') === 'TRUE' && wf(db, 'WO-1252', 'Tenant_Visible') === 'TRUE' && wf(db, 'WO-1252', 'Owner_Notify_Override') === 'completion');
+  // chain: the winner is a copy of a copy -> still the ORIGINAL's settings
+  const g = await groupOf4(); stamp(g.set); g.set('WO-1252', 'Duplicated_From', 'WO-1250');
+  const bb = build(g.db, { allowTwilio: true }); const rr = await call(bb.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+  t('copy of a copy: walks Duplicated_From up to the original WO-1239', rr.body.winner.notify.source_wo_id === 'WO-1239' && wf(g.db, 'WO-1252', 'Tenant_Notify_Updates') === 'TRUE' && wf(g.db, 'WO-1252', 'Owner_Notify_Override') === '');
+  // original missing -> the normal defaults
+  const h = await groupOf4(); stamp(h.set); h.set('WO-1252', 'Duplicated_From', 'WO-GONE');
+  const bh = build(h.db, { allowTwilio: true }); const rh = await call(bh.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+  t('original cannot be found: the normal defaults (visible, notices on, owner override cleared) and the result says so', rh.body.winner.notify.from_original === false && /normal defaults/.test(rh.body.winner.note) && wf(h.db, 'WO-1252', 'Tenant_Visible') === 'TRUE' && wf(h.db, 'WO-1252', 'Tenant_Notify_Updates') === 'TRUE' && wf(h.db, 'WO-1252', 'Owner_Notify_Override') === '');
+  // unknown override value on the original is not copied
+  const pl = build(makeDb()).bidWinnerNotifyPlan([{ ID: 'A', Owner_Notify_Override: 'banana' }, { ID: 'B', Duplicated_From: 'A' }], { ID: 'B', Duplicated_From: 'A' });
+  t('an unrecognised owner override on the original is not copied (falls back to the owner\'s own setting)', pl.settings.Owner_Notify_Override === '' && pl.from_original === true);
+  // winner is the original: nothing about notifications is touched
+  const o = await groupOf4(); stamp(o.set); const bo = build(o.db, { allowTwilio: true });
+  const ro = await call(bo.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1239', confirm: true }));
+  t('keep_one on the ORIGINAL: no notification setting is touched anywhere, result.winner.notify is null', ro.body.winner.notify === null && !tab(o.db, 'WO_Audit').some(a => ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'].includes(a.Field)) && wf(o.db, 'WO-1252', 'Owner_Notify_Override') === 'off');
+}
+{
+  // write ordering guarantee: if the winner write fails NOTHING is cancelled and NOBODY is texted
+  const { db, set } = await groupOf4(); stamp(set);
+  const b = build(db, { allowTwilio: true, throwOnWrite: (path, method, body) => method === 'POST' && path === '/values:batchUpdate' && /"TRUE"/.test(String(body)) && !/Cancelled/.test(String(body)) });
+  const r = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+  t('winner write fails: 500, nothing cancelled, no vendor text, no Twilio, failure logged', r.status === 500 && woRows(db).every(w => w.Status !== 'Cancelled') && b.log.sms.length === 0 && b.log.twilio.length === 0 && tab(db, 'Message_Queue').length === 0 && tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel' && x.Success === 'FALSE' && /WO-1252/.test(x.Notes)) && /NOTHING was cancelled/.test(r.body.error));
+  // unlink after a keep leaves every setting exactly as it is
+  const { db: d2, set: s2 } = await groupOf4(); stamp(s2); const b2 = build(d2, { allowTwilio: true });
+  await call(b2.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+  const snap = ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'].map(k => wf(d2, 'WO-1252', k)).join('|');
+  await call(b2.woBidGroupUnlink(env, { wo_id: 'WO-1252' }));
+  t('Unlink after a keep: Bid_Group_ID cleared but all four notification settings (and the winner marker) exactly as they were', wf(d2, 'WO-1252', 'Bid_Group_ID') === '' && ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'].map(k => wf(d2, 'WO-1252', k)).join('|') === snap);
+  t('unlink code touches none of the notification fields', !/Tenant_Notify|Owner_Notify_Override|Tenant_Visible/.test(grab(wsrc, 'async function woBidGroupUnlink(')));
+}
+{
+  // 17h. source-level guards + refactor equivalence
+  const asg = grab(wsrc, 'async function assignVendor(');
+  t('assignVendor now uses the shared vendorSmsDetailFromResult mapping (one copy of the sent/held/failed/skipped rules)', /vendorSmsDetail = vendorSmsDetailFromResult\(env, r, _lang, msg\)/.test(asg) && !/Held for quiet hours/.test(asg));
+  const notifySrc = grab(wsrc, 'async function bidCancelNotifyVendor(');
+  t('bidCancelNotifyVendor: no quiet-hours bypass, no swallowing catch', !/bypassQuietHours/.test(notifySrc) && !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(notifySrc) && /catch \(e\) \{\s*out\.status = 'failed'/.test(notifySrc));
+  t('the cancel path never calls the vendor text for a preview (it returns before the cancel loop)', grab(wsrc, 'async function woBidGroupCancel(').indexOf('return json(result, 200);') < grab(wsrc, 'async function woBidGroupCancel(').indexOf('bidCancelNotifyVendor('));
+  t('only one new SMS message type is introduced: vendor_job_cancelled', /const BID_CANCEL_SMS_TYPE = 'vendor_job_cancelled'/.test(wsrc));
+  t('BUILD_VERSION is the .7 follow-up', /const BUILD_VERSION = '2026-10-13\.7-[a-z-]+'/.test(wsrc));
 }
 
 console.log(`\nwo-duplicate: ${pass} passed, ${fail} failed`);

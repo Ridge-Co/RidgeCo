@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-13.6-wo-dup-winner-visible';
+const BUILD_VERSION = '2026-10-13.7-bid-cancel-tells-vendor';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -7763,8 +7763,21 @@ async function getWorkOrdersList(env, url) {
 //   - Oct 13 2026 follow-up (Brett): "Keep this, cancel others" (mode keep_one) NEVER cancels the ORIGINAL
 //     (the member with no Duplicated_From) — it cancels only the other duplicate copies. When the kept
 //     member is a COPY it becomes tenant-visible (Tenant_Visible TRUE) and is marked Bid_Winner TRUE so the
-//     owner portal (which hides still-linked copies) shows it too. NO tenant/owner/vendor SMS is sent by any of
-//     this, and Unlink leaves Tenant_Visible exactly as it is. Vendors who lose are still never texted.
+//     owner portal (which hides still-linked copies) shows it too. Unlink leaves Tenant_Visible exactly as it is.
+//   - Oct 13 2026 follow-up #2 (Brett: "tell the vendor." / "kept copy notifies according to that work order's settings."):
+//     (1) When a cancel is EXECUTED (confirm:true, never a preview) the assigned vendor of every copy that really got
+//         cancelled is texted that the job is cancelled / no longer needed (vendor_job_cancelled; bilingual by Vendor
+//         Language; through smsGatedSend so every SMS gate, Test Mode and QUIET HOURS apply: a cancellation notice is not
+//         urgent, so overnight it is HELD and the scheduler's `sweep` job releases it). One text per cancelled WO; an
+//         already-Cancelled WO is never texted again (a retried confirm sends nothing); a vendor who also holds a job that
+//         stays open is not texted (it would confuse them); no vendor = skipped. The per-vendor outcome (sent / held /
+//         failed / skipped + reason) is returned and shown; a failed text is logged to Ops_Telemetry, returned in warnings
+//         + needs_attention, and never blocks or undoes the cancel. Tenant and owner are never texted by a cancel.
+//     (2) When a COPY is kept (keep_one) it starts notifying like any normal work order: Tenant_Visible / Tenant_Notify_Created /
+//         Tenant_Notify_Updates are taken from the ORIGINAL work order of the group (a normal WO's own settings; defaults
+//         TRUE when the original has none) and Owner_Notify_Override is cleared (or copied from the original), so the
+//         owner's own notification setting applies. NO "new work order" text is sent at keep time: tenant and owner are
+//         told about later status changes/updates only. Written first, read back, audited; if that fails nothing is cancelled.
 // Why not createWorkOrder: its dupe guard (the point of rule 162) would block the copy, skipping
 // the guard reopens the duplicate-ID race (WO-1192), and the row needs ~10 columns it never
 // writes at create. So the copy is appended by woDupAppendCopy: serialized per isolate, one
@@ -7776,7 +7789,8 @@ async function getWorkOrdersList(env, url) {
 const WO_DUP_ALLOWED_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
 const BID_CANCEL_PROTECTED_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'];
 const WO_BID_COLUMNS = ['Bid_Group_ID', 'Duplicated_From', 'Owner_Notify_Override'];
-const WO_BID_WINNER_COLUMNS = ['Tenant_Visible', 'Bid_Winner'];   // ensured only when a COPY is chosen as the keep_one winner
+const WO_BID_WINNER_COLUMNS = ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'];   // ensured only when a COPY is chosen as the keep_one winner
+const BID_CANCEL_SMS_TYPE = 'vendor_job_cancelled';
 const WO_DUP_ENSURE_COLUMNS = WO_BID_COLUMNS.concat(['Checklist', 'Managed_By', 'Entry_Notes', 'Owner_Notes', 'Vendor_Admin_Notes', 'Admin_Notes']);
 // Copied verbatim from the source. Deliberately NOT here: Vendor_ID, Status, Scheduled_*,
 // Completed_Date, Invoice_*, QBO_*, Customer_Charge, Deposit_*, Scope_ID, Approval_Stage,
@@ -8189,10 +8203,124 @@ function bidCancelClassify(wo, ctx) {
   const irs = (ctx.invoiceReview || []).filter(r => r.WO_ID === id && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (irs.length) { reasons.push('Has an invoice review / approval row'); kind = 'skip'; }
   if (kind === 'cancel') {
-    if (['Accepted', 'In Progress', 'On Hold'].includes(st)) warnings.push(`Vendor has already ${st === 'Accepted' ? 'accepted' : 'started'} this job and will NOT be told it was cancelled`);
+    if (['Accepted', 'In Progress', 'On Hold'].includes(st)) warnings.push(`Vendor has already ${st === 'Accepted' ? 'accepted' : 'started'} this job; they will be texted that it is cancelled`);
     if ((ctx.workorders || []).some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === id)) warnings.push('Has additional-work children; the cancel is refused if any are still live');
   }
   return { kind, reasons, warnings };
+}
+
+// ── Vendor cancellation text (Oct 13 2026, Brett: "tell the vendor.") ────────────────────────────────
+// Same vendor-text conventions as the "new job" text in assignVendor: bilingual by Vendor Language (hand-built, so
+// already_localized), WO number first, trade + property address (with unit/room), nothing about the tenant or owner.
+function bidWoAddress(wo, property, unit, isSpanish) {
+  const room = String((wo && wo.Room) || '').trim();
+  if (!property) return isSpanish ? 'la propiedad' : 'the property';
+  return `${property.Address}${unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''}${room ? ' (' + room + ')' : ''}`;
+}
+function bidCancelVendorMessage(woId, trade, address, isSpanish) {
+  const t = String(trade || '').trim();
+  const en = `[${woId}] CANCELLED: the ${t ? t + ' ' : ''}job at ${address} is no longer needed. Please do not do this work. Thank you.`;
+  const es = `[${woId}] CANCELADO: el trabajo${t ? ' de ' + t : ''} en ${address} ya no es necesario. Por favor no realice este trabajo. Gracias.`;
+  return { en, es, text: isSpanish ? es : en, language: isSpanish ? 'es' : 'en' };
+}
+// Turns smsGatedSend's return value into the plain-words outcome the Hub shows (sent / held / failed / skipped + why).
+// One copy of this mapping, used by assignVendor (new-job text) and the bid-group cancel text.
+function vendorSmsDetailFromResult(env, r, lang, msg) {
+  if (r.sent) return { status: 'sent', reason: r.test_mode ? 'TEST MODE IS ON: the text went to the Hub test number, NOT to the vendor' : 'Text sent to the vendor', test_mode: !!r.test_mode, language: lang, message_body: r.message_body || msg };
+  if (r.held_for_quiet_hours) return { status: 'held', reason: `Held for quiet hours — it will send after ${r.send_after}`, language: lang, message_body: r.message_body || msg };
+  if (r.send_ok === false) return { status: 'failed', reason: `Blocked, not sent: ${r.gate_snapshot}`, language: lang, message_body: r.message_body || msg };
+  if (!r.recipient_phone) return { status: 'failed', reason: 'Vendor phone number is missing or invalid — no text was sent', language: lang, message_body: r.message_body || msg };
+  if (env.__STAGING__ ?? isStaging(env)) return { status: 'skipped', reason: 'STAGING: texts are stubbed, so nothing was really sent (the message was only logged)', language: lang, message_body: r.message_body || msg };
+  return { status: 'failed', reason: 'Twilio rejected or failed to send the text (see Message_Queue)', language: lang, message_body: r.message_body || msg };
+}
+// What WILL / WOULD happen for one cancelled copy's vendor. Pure (no I/O). Statuses: will_send | skipped | cannot_send.
+// keptVendors: Map vendorId -> id of a job that stays open for that vendor (they are not texted about the cancelled one).
+function bidCancelVendorPlan(row, vendor, wo, property, unit, keptVendors) {
+  const vid = String((row && row.vendor_id) || '').trim();
+  const base = { vendor_id: vid, vendor_name: (row && row.vendor_name) || '', wo_id: row.wo_id };
+  if (!vid) return Object.assign(base, { status: 'skipped', reason: 'No vendor is assigned, so nobody is texted.' });
+  if (!vendor) return Object.assign(base, { status: 'cannot_send', reason: `Vendor ${vid} was not found in the Vendors tab, so nobody could be texted. Call whoever was assigned.` });
+  const name = vendor.Name || ('Vendor ' + vid);
+  base.vendor_name = name;
+  const keptWo = keptVendors && keptVendors.get(vid);
+  if (keptWo) return Object.assign(base, { status: 'skipped', reason: `${name} also has ${keptWo}, which stays open, so they are not texted about ${row.wo_id} (it would be confusing).` });
+  if (!normalizePhone(vendor.Phone)) return Object.assign(base, { status: 'cannot_send', reason: `${name} has no valid phone number on file, so they cannot be texted. Call them.` });
+  const es = vendor.Language === 'es';
+  const m = bidCancelVendorMessage(row.wo_id, wo && wo.Trade, bidWoAddress(wo, property, unit, es), es);
+  return Object.assign(base, { status: 'will_send', reason: `${name} will be texted that ${row.wo_id} is cancelled.`, language: m.language, message_body: m.text, message_en: m.en });
+}
+// Sends (or declines to send) the cancellation text for ONE copy that was just cancelled. NEVER throws and never touches the
+// cancel itself: every outcome is returned, counted in result.summary.vendor_texts, and a failure is also logged to
+// Ops_Telemetry and put in result.warnings (+ needs_attention). At most one text per WO, ever (Message_Queue is checked).
+async function bidCancelNotifyVendor(env, result, row, wo, vendor, property, unit, keptVendors) {
+  const plan = bidCancelVendorPlan(row, vendor, wo, property, unit, keptVendors);
+  const out = { wo_id: row.wo_id, vendor_id: plan.vendor_id, vendor_name: plan.vendor_name, status: plan.status, reason: plan.reason, language: plan.language || '', message_body: plan.message_body || '', message_en: plan.message_en || '' };
+  try {
+    if (plan.status === 'cannot_send') out.status = 'failed';
+    else if (plan.status === 'will_send') {
+      await ensureSmsInfra(env);
+      invalidateTabCache(MSG_QUEUE_TAB);
+      const prior = (await fetchTab(env, MSG_QUEUE_TAB)).filter(q => q.WO_ID === row.wo_id && q.Message_Type === BID_CANCEL_SMS_TYPE && q.Recipient_Type === 'vendor' && String(q.Active || '').toUpperCase() !== 'FALSE' && (q.Status === 'pending' || q.Status === 'sent'));
+      if (prior.length) { out.status = 'skipped'; out.reason = `A cancellation text for ${row.wo_id} was already ${prior[0].Status === 'sent' ? 'sent' : 'queued'} (${prior[0].Created_Date || 'earlier'}), so no second one was sent.`; }
+      else {
+        const es = plan.language === 'es';
+        const r = await smsGatedSend(env, { wo_id: row.wo_id, message_type: BID_CANCEL_SMS_TYPE, recipient_type: 'vendor', vendor, property, message_body: plan.message_body, already_localized: true, original_body: es ? plan.message_en : '', translated_to: es ? 'es' : '' });
+        const d = vendorSmsDetailFromResult(env, r, plan.language, plan.message_body);
+        out.status = d.status; out.reason = d.reason; out.message_body = d.message_body || out.message_body; out.queued_id = r.queued_id || '';
+        if (d.test_mode) out.test_mode = true;
+      }
+    }
+  } catch (e) {
+    out.status = 'failed'; out.reason = `The cancellation text could not be queued or sent: ${String((e && e.message) || e)}`;
+  }
+  const c = result.summary.vendor_texts;
+  c[out.status] = (c[out.status] || 0) + 1;
+  result.vendor_texts.push(out);
+  if (out.status === 'failed') {
+    result.needs_attention = true;
+    result.warnings.push(`Vendor text FAILED for ${out.wo_id}${out.vendor_name ? ' (' + out.vendor_name + ')' : ''}: ${out.reason} The job IS cancelled, but the vendor was not told: call them.`);
+  }
+  if (out.status === 'sent' || out.status === 'held' || out.status === 'failed') {
+    await bidLogTelemetry(env, result, 'wo_bid_cancel_vendor_sms', '/wo/bid-group/cancel', out.status !== 'failed', `${out.wo_id} vendor=${out.vendor_id} status=${out.status} ${out.reason}`);
+  }
+  return out;
+}
+
+// ── Kept copy notifies like a normal work order (Oct 13 2026, Brett: "kept copy notifies according to that work order's settings.") ──
+// A bid-group copy is created silent (Tenant_Visible/Notify FALSE, Owner_Notify_Override 'off'). When Brett KEEPS a copy it must behave
+// like the work order it stands in for. A normal WO carries Tenant_Visible / Tenant_Notify_Created / Tenant_Notify_Updates (TRUE unless
+// someone turned them off for that WO) and an optional Owner_Notify_Override ('' = the owner's own setting by priority, see shouldNotifyOwner).
+// So the winner takes those four values from the ORIGINAL work order of its group (walking Duplicated_From up to the row with none);
+// if the original cannot be found it gets the normal defaults (TRUE / TRUE / TRUE / ''). Pure; unit-tested.
+function bidWinnerNotifyPlan(all, winner) {
+  const byId = id => (all || []).find(w => String(w.ID) === String(id));
+  let cur = winner, hops = 0, source = null;
+  while (cur && String(cur.Duplicated_From || '').trim() && hops < 12) {
+    const next = byId(String(cur.Duplicated_From).trim());
+    if (!next || next.ID === winner.ID) { cur = null; break; }
+    cur = next; hops++;
+  }
+  if (cur && cur !== winner && !String(cur.Duplicated_From || '').trim()) source = cur;
+  const flag = v => (String(v == null ? '' : v).trim().toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE');
+  let ov = source ? String(source.Owner_Notify_Override == null ? '' : source.Owner_Notify_Override).trim() : '';
+  if (ov && !Object.prototype.hasOwnProperty.call(NOTIFY_TIERS, ov)) ov = '';
+  const settings = {
+    Tenant_Visible: source ? flag(source.Tenant_Visible) : 'TRUE',
+    Tenant_Notify_Created: source ? flag(source.Tenant_Notify_Created) : 'TRUE',
+    Tenant_Notify_Updates: source ? flag(source.Tenant_Notify_Updates) : 'TRUE',
+    Owner_Notify_Override: ov,
+  };
+  const tenantPart = settings.Tenant_Visible !== 'TRUE' ? 'hidden from the tenant' : (settings.Tenant_Notify_Updates === 'TRUE' ? 'the tenant can see it and gets its status texts' : 'the tenant can see it but gets no status texts');
+  const ownerPart = ov === '' ? "the owner is notified per the owner's own setting" : (ov === 'off' ? 'the owner gets no texts about it' : `the owner is notified at the "${ov}" level`);
+  const src = source ? `the original ${source.ID}` : 'the normal defaults (the original could not be found)';
+  return { settings, source_wo_id: source ? source.ID : '', from_original: !!source, note: `${winner.ID} now follows the normal work order rules (copied from ${src}): ${tenantPart}; ${ownerPart}. No text is sent right now; later status changes notify as usual.` };
+}
+function bidWinnerNotifyDiff(fresh, settings) {
+  const want = {};
+  const up = v => String(v == null ? '' : v).trim().toUpperCase();
+  for (const k of ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates']) if (up(fresh[k]) !== settings[k]) want[k] = settings[k];
+  if (String(fresh.Owner_Notify_Override == null ? '' : fresh.Owner_Notify_Override).trim() !== settings.Owner_Notify_Override) want.Owner_Notify_Override = settings.Owner_Notify_Override;
+  return want;
 }
 
 // POST /wo/bid-group/cancel --------------------------------------------------------------------
@@ -8202,7 +8330,8 @@ async function woBidGroupCancel(env, body) {
   const confirmed = body.confirm === true && body.dry_run !== true;
   const result = {
     ok: false, dry_run: !confirmed, mode, group_id: '', keep_wo_id: String(body.keep_wo_id || '').trim(), results: [], winner: null,
-    summary: { would_cancel: 0, would_skip: 0, cancelled: 0, skipped: 0, failed: 0, kept: 0, already_cancelled: 0 },
+    summary: { would_cancel: 0, would_skip: 0, cancelled: 0, skipped: 0, failed: 0, kept: 0, already_cancelled: 0, would_text: 0, vendor_texts: { sent: 0, held: 0, failed: 0, skipped: 0 } },
+    vendor_texts: [], vendor_text_notices: [], quiet_hours_now: false, needs_attention: false,
     warnings: [], errors: [],
   };
   const fail = async (status, msg) => { result.errors.push(msg); result.error = msg; await bidLogTelemetry(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', false, `${body.group_id || body.wo_id || ''} ${msg}`); return json(result, status); };
@@ -8226,22 +8355,26 @@ async function woBidGroupCancel(env, body) {
     const winnerWO = mode === 'keep_one' ? members.find(m => m.ID === result.keep_wo_id) : null;
     if (winnerWO && isCancelledWOStatus(winnerWO.Status)) return await fail(400, `${winnerWO.ID} is already cancelled, so it cannot be the one you keep. Pick a job that is still open.`);
     if (winnerWO && String(winnerWO.Voided || '').toUpperCase() === 'TRUE') return await fail(400, `${winnerWO.ID} is voided, so it cannot be the one you keep. Pick a job that is still open.`);
+    let winnerPlan = null;
     if (winnerWO) {
       const winnerIsOriginal = !String(winnerWO.Duplicated_From || '').trim();
       const visBefore = String(winnerWO.Tenant_Visible == null ? '' : winnerWO.Tenant_Visible).trim();
+      winnerPlan = winnerIsOriginal ? null : bidWinnerNotifyPlan(all, winnerWO);
+      const willChange = winnerPlan ? Object.keys(bidWinnerNotifyDiff(winnerWO, winnerPlan.settings)) : [];
       result.winner = {
         wo_id: winnerWO.ID, is_original: winnerIsOriginal, tenant_visible_before: visBefore,
         already_visible: !winnerIsOriginal && visBefore.toUpperCase() === 'TRUE' && String(winnerWO.Bid_Winner || '').trim().toUpperCase() === 'TRUE',
-        will_become_tenant_visible: !winnerIsOriginal && visBefore.toUpperCase() !== 'TRUE', became_tenant_visible: false,
-        note: winnerIsOriginal ? 'The original is kept as it is; only the other copies are cancelled.' : 'Becomes visible to the tenant. No text message is sent to anyone.',
+        will_become_tenant_visible: !winnerIsOriginal && !!winnerPlan && winnerPlan.settings.Tenant_Visible === 'TRUE' && visBefore.toUpperCase() !== 'TRUE', became_tenant_visible: false,
+        notify: winnerPlan ? { settings: winnerPlan.settings, source_wo_id: winnerPlan.source_wo_id, from_original: winnerPlan.from_original, will_change: willChange, changed: [], text_sent_now: false } : null,
+        note: winnerIsOriginal ? 'The original is kept as it is; only the other copies are cancelled. Its notification settings are not touched.' : winnerPlan.note,
       };
     }
-    const [vendors, bills, timeEntries, invoiceReview] = await Promise.all([fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'), fetchTab(env, 'Time_Entries'), fetchTab(env, 'Invoice_Review')]);
+    const [vendors, bills, timeEntries, invoiceReview, properties, units] = await Promise.all([fetchTab(env, 'Vendors'), fetchTab(env, 'Vendor_Bills'), fetchTab(env, 'Time_Entries'), fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Properties'), fetchTab(env, 'Units')]);
     const ctx = { bills, timeEntries, invoiceReview, workorders: all };
     const targets = [];
     for (const m of members) {
       const v = m.Vendor_ID ? vendors.find(x => String(x.ID) === String(m.Vendor_ID)) : null;
-      const row = { wo_id: m.ID, status_before: m.Status || 'New', vendor_id: m.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '', is_original: !String(m.Duplicated_From || '').trim(), reasons: [], warnings: [], result: '' };
+      const row = { wo_id: m.ID, status_before: m.Status || 'New', vendor_id: m.Vendor_ID || '', vendor_name: v ? (v.Name || '') : '', is_original: !String(m.Duplicated_From || '').trim(), reasons: [], warnings: [], result: '', vendor_sms: null };
       // keep_one (Oct 13 2026, Brett): cancel ONLY the duplicate copies that are not the winner. The original is never cancelled by "Keep this".
       const isTarget = mode === 'all' ? true : mode === 'duplicates' ? !row.is_original : (m.ID !== result.keep_wo_id && !row.is_original);
       if (!isTarget) {
@@ -8256,27 +8389,56 @@ async function woBidGroupCancel(env, body) {
       else { row.result = confirmed ? 'pending' : 'would_cancel'; if (!confirmed) result.summary.would_cancel++; targets.push(row); }
       result.results.push(row);
     }
+    // Vendors who still hold a job that STAYS open are not texted about a cancelled one (Oct 13 2026): kept / skipped / still-open members.
+    const keptVendors = new Map();
+    for (const r of result.results) {
+      if (!['kept', 'would_skip', 'skipped'].includes(r.result)) continue;
+      const m = members.find(x => x.ID === r.wo_id);
+      if (m && m.Vendor_ID && !isCancelledWOStatus(m.Status) && String(m.Voided || '').toUpperCase() !== 'TRUE' && !keptVendors.has(String(m.Vendor_ID))) keptVendors.set(String(m.Vendor_ID), m.ID);
+    }
+    const woById = id => members.find(x => x.ID === id);
+    const planFor = row => { const m = woById(row.wo_id); const prop = properties.find(p => p.ID === m.Property_ID); const unit = units.find(u => u.ID === m.Unit_ID); const vendor = m.Vendor_ID ? vendors.find(x => String(x.ID) === String(m.Vendor_ID)) : null; return { m, prop, unit, vendor }; };
     if (!confirmed) {
+      // PREVIEW: say exactly who will be texted. Nothing is sent, queued or changed.
+      result.quiet_hours_now = isQuietHoursNow(new Date());
+      for (const row of result.results) {
+        if (row.result === 'would_cancel') {
+          const { m, prop, unit, vendor } = planFor(row);
+          const p = bidCancelVendorPlan(row, vendor, m, prop, unit, keptVendors);
+          row.vendor_sms = p;
+          if (p.status === 'will_send') { result.summary.would_text++; result.vendor_text_notices.push({ wo_id: row.wo_id, level: 'ok', text: p.reason }); }
+          else if (p.status === 'cannot_send') result.vendor_text_notices.push({ wo_id: row.wo_id, level: 'bad', text: p.reason });
+          else if (p.vendor_id) result.vendor_text_notices.push({ wo_id: row.wo_id, level: 'info', text: p.reason });
+        } else {
+          row.vendor_sms = { wo_id: row.wo_id, vendor_id: row.vendor_id, vendor_name: row.vendor_name, status: 'skipped', reason: row.result === 'kept' ? 'Kept, so not texted.' : (row.result === 'already_cancelled' ? 'Already cancelled earlier, so no new text.' : 'Not cancelled, so not texted.') };
+        }
+      }
+      if (result.summary.would_text && result.quiet_hours_now) result.warnings.push('It is quiet hours right now (7pm-9am ET): the vendor texts will be held and sent automatically after 9am ET by the scheduler.');
       result.ok = true;
-      await bidLogTelemetry(env, result, 'wo_bid_cancel_preview', '/wo/bid-group/cancel', true, `group=${gid} mode=${mode} would_cancel=${result.summary.would_cancel} would_skip=${result.summary.would_skip}`);
+      await bidLogTelemetry(env, result, 'wo_bid_cancel_preview', '/wo/bid-group/cancel', true, `group=${gid} mode=${mode} would_cancel=${result.summary.would_cancel} would_skip=${result.summary.would_skip} would_text=${result.summary.would_text}`);
       return json(result, 200);
     }
     if (!targets.length) result.warnings.push('Nothing to cancel — every targeted member was skipped, kept or already cancelled.');
-    // Winner first: if it cannot be made visible, STOP before cancelling anything (no half-done shotgun).
+    // Winner first: if it cannot be made visible / notifying, STOP before cancelling anything (no half-done shotgun).
     if (winnerWO && !result.winner.is_original) {
       try {
         await ensureColumns(env, 'Work_Orders', WO_BID_WINNER_COLUMNS);
         const fresh = findWO(await bidFreshWOs(env), winnerWO.ID);
         if (!fresh) throw new Error('the row could not be found');
-        const want = {};
-        if (String(fresh.Tenant_Visible == null ? '' : fresh.Tenant_Visible).trim().toUpperCase() !== 'TRUE') want.Tenant_Visible = 'TRUE';
+        const want = bidWinnerNotifyDiff(fresh, winnerPlan.settings);
         if (String(fresh.Bid_Winner || '').trim().toUpperCase() !== 'TRUE') want.Bid_Winner = 'TRUE';
         if (Object.keys(want).length) {
           await bidWriteWOFields(env, winnerWO.ID, want);
-          result.winner.became_tenant_visible = 'Tenant_Visible' in want;
+          result.winner.became_tenant_visible = 'Tenant_Visible' in want && want.Tenant_Visible === 'TRUE';
+          result.winner.notify.changed = Object.keys(want).filter(k => k !== 'Bid_Winner');
           const now = new Date().toISOString(), aud = [];
-          if (want.Tenant_Visible) aud.push({ WO_ID: winnerWO.ID, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Tenant_Visible', Old_Value: String(fresh.Tenant_Visible == null ? '' : fresh.Tenant_Visible), New_Value: 'TRUE', Timestamp: now, Notes: `Kept as the winner of bid group ${gid}; now visible to the tenant (no text message sent)` });
-          if (want.Bid_Winner) aud.push({ WO_ID: winnerWO.ID, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Winner', Old_Value: String(fresh.Bid_Winner || ''), New_Value: 'TRUE', Timestamp: now, Notes: `Chosen to keep in bid group ${gid}` });
+          for (const k of Object.keys(want)) {
+            const nv = want[k];
+            const notes = k === 'Bid_Winner' ? `Chosen to keep in bid group ${gid}`
+              : k === 'Tenant_Visible' ? `Kept as the winner of bid group ${gid}; Tenant_Visible now ${nv}, as on the original (no text message sent)`
+              : `Kept as the winner of bid group ${gid}; now follows ${winnerPlan.from_original ? 'the original ' + winnerPlan.source_wo_id : 'the normal defaults'} so tenant/owner are notified like any work order (no text message sent now)`;
+            aud.push({ WO_ID: winnerWO.ID, Changed_By: changedBy, Changed_By_Role: 'admin', Field: k, Old_Value: String(fresh[k] == null ? '' : fresh[k]), New_Value: nv, Timestamp: now, Notes: notes });
+          }
           try { await bidAppendRows(env, 'WO_Audit', aud); }
           catch (ae) { await bidStepFailed(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', `The WO_Audit rows for the winner ${winnerWO.ID} were not written`, ae, winnerWO.ID); }
         }
@@ -8286,10 +8448,12 @@ async function woBidGroupCancel(env, body) {
           catch (pe) { await bidStepFailed(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', `Could not clear the old winner marker on ${prev.ID}`, pe, prev.ID); }
         }
       } catch (e) {
-        return await fail(500, `${winnerWO.ID} could not be made visible to the tenant (${String((e && e.message) || e)}), so NOTHING was cancelled. Try again.`);
+        return await fail(500, `${winnerWO.ID} could not be made visible/notifying like a normal work order (${String((e && e.message) || e)}), so NOTHING was cancelled. Try again.`);
       }
     }
+    for (const row of result.results) if (row.result !== 'pending') row.vendor_sms = { wo_id: row.wo_id, vendor_id: row.vendor_id, vendor_name: row.vendor_name, status: 'skipped', reason: row.result === 'kept' ? 'Kept, so not texted.' : (row.result === 'already_cancelled' ? 'Already cancelled earlier, so no new text.' : 'Not cancelled, so not texted.') };
     for (const row of targets) {
+      // 1. The cancel itself (same path as a normal Cancelled status), verified by reading it back.
       try {
         const res = await updateStatus(env, { wo_id: row.wo_id, status: 'Cancelled', updated_by: changedBy, updated_by_role: 'admin' });
         let j = null, perr = '';
@@ -8298,18 +8462,26 @@ async function woBidGroupCancel(env, body) {
         if (res.status !== 200 || !j.success) throw new Error(j.error || `status call failed (HTTP ${res.status})`);
         const after = findWO(await bidFreshWOs(env), row.wo_id);
         if (!after || !isCancelledWOStatus(after.Status)) throw new Error(`${row.wo_id} still reads Status=${after ? after.Status : '(row missing)'} after the cancel`);
-        const audited = await bidCountRows(env, 'WO_Audit', r => r.WO_ID === row.wo_id && r.Field === 'Status' && isCancelledWOStatus(r.New_Value));
-        if (!audited) row.warnings.push('Cancelled, but no WO_Audit row for the status change was found');
-        await bidAppendRows(env, 'WO_Audit', [{ WO_ID: row.wo_id, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Group_Cancel', Old_Value: row.status_before, New_Value: 'Cancelled', Timestamp: new Date().toISOString(), Notes: `Cancelled from bid group ${gid} (${mode}${mode === 'keep_one' ? ', kept ' + result.keep_wo_id : ''}). The vendor was not texted.` }]);
         row.result = 'cancelled'; result.summary.cancelled++;
       } catch (e) {
         row.result = 'failed'; row.reasons.push(String((e && e.message) || e)); result.summary.failed++;
+        row.vendor_sms = { wo_id: row.wo_id, vendor_id: row.vendor_id, vendor_name: row.vendor_name, status: 'skipped', reason: 'The cancel failed, so the vendor was not texted.' };
         result.errors.push(`${row.wo_id}: ${String((e && e.message) || e)}`);
         await bidLogTelemetry(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', false, `group=${gid} ${row.wo_id} ${String((e && e.message) || e)}`);
+        continue;
       }
+      // 2. Tell the vendor (only for a cancel THIS call just made; never throws; never undoes the cancel).
+      const { m, prop, unit, vendor } = planFor(row);
+      row.vendor_sms = await bidCancelNotifyVendor(env, result, row, m, vendor, prop, unit, keptVendors);
+      // 3. Audit trail for the cancel (includes what happened to the vendor text).
+      try {
+        const audited = await bidCountRows(env, 'WO_Audit', r => r.WO_ID === row.wo_id && r.Field === 'Status' && isCancelledWOStatus(r.New_Value));
+        if (!audited) row.warnings.push('Cancelled, but no WO_Audit row for the status change was found');
+        await bidAppendRows(env, 'WO_Audit', [{ WO_ID: row.wo_id, Changed_By: changedBy, Changed_By_Role: 'admin', Field: 'Bid_Group_Cancel', Old_Value: row.status_before, New_Value: 'Cancelled', Timestamp: new Date().toISOString(), Notes: `Cancelled from bid group ${gid} (${mode}${mode === 'keep_one' ? ', kept ' + result.keep_wo_id : ''}). Vendor text: ${row.vendor_sms.status}${row.vendor_sms.reason ? ' (' + row.vendor_sms.reason + ')' : ''}` }]);
+      } catch (ae) { await bidStepFailed(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', `${row.wo_id} was cancelled but its WO_Audit rows were not written`, ae, row.wo_id); }
     }
     result.ok = result.errors.length === 0;
-    await bidLogTelemetry(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', result.ok, `group=${gid} mode=${mode} keep=${result.keep_wo_id} cancelled=${result.summary.cancelled} skipped=${result.summary.skipped} failed=${result.summary.failed}`);
+    await bidLogTelemetry(env, result, 'wo_bid_cancel', '/wo/bid-group/cancel', result.ok, `group=${gid} mode=${mode} keep=${result.keep_wo_id} cancelled=${result.summary.cancelled} skipped=${result.summary.skipped} failed=${result.summary.failed} texts=${JSON.stringify(result.summary.vendor_texts)}`);
     return json(result, result.ok ? 200 : 500);
   };
   try { return await woDupSerialize(run); }
@@ -8385,12 +8557,7 @@ async function assignVendor(env, body, internal) {
     const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, original_body: isSpanish ? msgEn : '', translated_to: isSpanish ? 'es' : '', bypassQuietHours: internal.bypassQuietHours === true });
     vendorSMSSent = r.sent;
     const _lang = isSpanish ? 'es' : 'en';
-    if (r.sent) vendorSmsDetail = { status: 'sent', reason: r.test_mode ? 'TEST MODE IS ON: the text went to the Hub test number, NOT to the vendor' : 'Text sent to the vendor', test_mode: !!r.test_mode, language: _lang, message_body: r.message_body || msg };
-    else if (r.held_for_quiet_hours) vendorSmsDetail = { status: 'held', reason: `Held for quiet hours — it will send after ${r.send_after}`, language: _lang, message_body: r.message_body || msg };
-    else if (r.send_ok === false) vendorSmsDetail = { status: 'failed', reason: `Blocked, not sent: ${r.gate_snapshot}`, language: _lang, message_body: r.message_body || msg };
-    else if (!r.recipient_phone) vendorSmsDetail = { status: 'failed', reason: 'Vendor phone number is missing or invalid — no text was sent', language: _lang, message_body: r.message_body || msg };
-    else if (env.__STAGING__ ?? isStaging(env)) vendorSmsDetail = { status: 'skipped', reason: 'STAGING: texts are stubbed, so nothing was really sent (the message was only logged)', language: _lang, message_body: r.message_body || msg };
-    else vendorSmsDetail = { status: 'failed', reason: 'Twilio rejected or failed to send the text (see Message_Queue)', language: _lang, message_body: r.message_body || msg };
+    vendorSmsDetail = vendorSmsDetailFromResult(env, r, _lang, msg);
   }
   if (notify && notifyTenantOnAssign) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
