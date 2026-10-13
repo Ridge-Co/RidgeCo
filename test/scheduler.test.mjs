@@ -598,4 +598,34 @@ store.setCfg('admin_phone', '+15555550100');
 }
 globalThis.fetch = realFetch;
 globalThis.setTimeout = _realSetTimeout;
-//@@TEST_NEXT@@
+// ───────────────────────────── 4. no cron anywhere (structure) ─────────────────────────────
+{
+  const toml = fs.readFileSync(root + 'wrangler.toml', 'utf8');
+  const live = toml.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+  t('wrangler.toml: no cron schedules (the only allowed form is an explicit empty `crons = []`, which is what REMOVES attached triggers)', !/crons\s*=\s*\[\s*["']/.test(live) && /\[triggers\]\s*\n\s*crons\s*=\s*\[\s*\]/.test(live));
+  t('wrangler.toml: states the permanent no-cron rule and where to add jobs', /NO CRON TRIGGERS\. EVER\./.test(toml) && /SCHED_JOBS/.test(toml));
+  t('wrangler.toml: keep_vars still true', /^keep_vars = true/m.test(toml));
+  t('cron-sweep.yml workflow is deleted', !fs.existsSync(root + '.github/workflows/cron-sweep.yml'));
+  const wfs = fs.readdirSync(root + '.github/workflows').map(f => [f, fs.readFileSync(root + '.github/workflows/' + f, 'utf8')]);
+  t('no workflow calls POST /cron/sweep or /cron/run', wfs.every(([f, s]) => !/cron\/sweep|cron\/run|CRON_SWEEP_TOKEN|SCHEDULER_TOKEN/i.test(s)), wfs.filter(([f, s]) => /cron\/sweep|cron\/run/.test(s)).map(x => x[0]));
+  const sched = wsrc.slice(wsrc.indexOf('  async scheduled(event, env, ctx) {'), wsrc.indexOf('// Thin wrapper (Sep 29 2026)'));
+  t('scheduled() contains no job calls', !/receiptScan|buildDigest|runWeeklyReview|cronSweep|doorWatchdogCron|qbSyncPayments|processDepositPaidSweep|inspStrGuardTick|releaseTurnoverByDate/.test(sched) && /schedUnexpectedCloudflareCron/.test(sched));
+  t('no leftover cronSweepLogged / cron-branch dispatch in worker.js', !/cronSweepLogged/.test(wsrc) && !/cron === '/.test(wsrc));
+  // every registry job points at a real function
+  const names = [...blockSrc.matchAll(/run: \(env(?:[^)]*)\) => (\w+)\(/g)].map(m => m[1]);
+  t('every registry entry maps to a defined job function', names.length === 13 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
+  // the scheduler block never swallows
+  t('scheduler block has no empty/underscore catch', !/catch\s*\(\s*_?\s*\)\s*\{\s*\}/.test(blockSrc) && !/catch\s*\(\s*_\s*\)/.test(blockSrc) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(blockSrc));
+  const ver = /const BUILD_VERSION = '([^']+)'/.exec(wsrc)[1];
+  t('BUILD_VERSION is a 2026-10-12+ build (the scheduler build is 2026-10-12.5-apps-script-scheduler; a same-day bump by another build is fine)', /^2026-10-1[2-9]\.\d+-/.test(ver), ver);
+}
+{
+  // catch-up forms of the two jobs that used to need the exact hour
+  const self = wsrc.slice(wsrc.indexOf('async function maybeRunDailySelftest('), wsrc.indexOf('// GET /ar/aging'));
+  t('maybeRunDailySelftest: catch-up form (skips only BEFORE 7am), keeps its once-per-day guard, no swallowed read error', /etHour\(\) < 7/.test(self) && !/etHour\(\) !== 7/.test(self) && /already ran today/.test(self) && /if \(!isMissingTabError\(e\)\) throw e/.test(self));
+  const est = wsrc.slice(wsrc.indexOf('async function processEstimateReminders('), wsrc.indexOf('async function processEstimateReminders(') + 600);
+  t('processEstimateReminders: no longer requires the exact 8am hour', !/!== 8/.test(est) && /h < 8 \|\| h >= 18/.test(est));
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
