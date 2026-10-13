@@ -15614,7 +15614,8 @@ function queueDice(a, b) {
 // the Scout prompt also reads the queue first, and the page groups "may overlap #N" items.
 function queueSimilarity(a, b) {
   a = a || {}; b = b || {};
-  const title = queueDice(queueTokens(a.Title != null ? a.Title : a.title), queueTokens(b.Title != null ? b.Title : b.title));
+  const _ta = queueTokens(a.Title != null ? a.Title : a.title), _tb = queueTokens(b.Title != null ? b.Title : b.title);
+  const title = queueDice(_ta, _tb);
   const fa = [a.Title != null ? a.Title : a.title, a.Problem != null ? a.Problem : a.problem, a.First_Step != null ? a.First_Step : (a.action || a.first_step)].join(' ');
   const fb = [b.Title != null ? b.Title : b.title, b.Problem != null ? b.Problem : b.problem, b.First_Step != null ? b.First_Step : (b.action || b.first_step)].join(' ');
   const full = queueDice(queueTokens(fa), queueTokens(fb));
