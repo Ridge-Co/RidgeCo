@@ -23,7 +23,7 @@ Fixes the duplicate ideas Brett saw on the Proposals page: Scout submissions and
 **Open items:**
 - (a) 🟡 One-time PROD cluster merge of the ~117 live queue rows → ~50 NOT yet applied. Plan is in the Continuous Improvement project doc. Waits for this deploy + Brett's go.
 - (b) 🟡 Tasks-sheet Scout lens + Scout prompt update (`rechecks`, `skipped_duplicates`) — pending.
-- (c) 🟡 Register an `ops_queue_sync` DAILY job in the Hub scheduler (Apps Script) once PR #229 merges — NO cron. Until then Brett taps sync on the Proposals page (the browser supplies the PR lookups).
+- (c) 🟡 Register an `ops_queue_sync` DAILY job in the Hub scheduler (Apps Script) once PR #229 merges — NO cron. The Proposals page looks PRs up in the browser and passes them to the sync (GitHub rate-limits the Worker's shared address).
 
 # BUILDIUM EMAIL → WORK ORDER INTAKE (B-103) — Oct 12, 2026 — Ridge-Co/RidgeCo PR #215, base `main`, head `feat/buildium-email-intake-r2`, NOT merged (Brett merges); staging test PRs #213/#214 merged, build `2026-10-12.2-buildium-email-intake` confirmed live on staging
 Phoenix Estate Rentals (Buildium) work-order emails now become Hub Work Orders automatically, with an immediate admin SMS (bypasses quiet hours). Apps Script poller → `POST /intake/email` (narrow `INTAKE_TOKEN`) → parse → strict property/unit match → `createWorkOrder` → read-back → SMS → `Intake_Queue` row + telemetry. Uncertain cases park (no junk WO) and text Brett. FEATURE_LOG rule 204. Tests 83/83, tripwires 8/8, live staging loop green, adversarial review no blockers (sender-spoof + script-exception findings fixed).
