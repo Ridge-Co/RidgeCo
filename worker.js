@@ -15041,7 +15041,7 @@ async function schedRunNext(env, ctx, opts) {
 async function schedRunHandler(env, ctx, body) {
   body = body || {};
   const only = Array.isArray(body.only) ? body.only : (typeof body.only === 'string' && body.only ? [body.only] : []);
-  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true });
+  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true || body.dry_run === true });
   return json(r.body, r.status);
 }
 async function schedStatusHandler(env) {
