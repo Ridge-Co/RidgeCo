@@ -402,9 +402,10 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
 
 // ───────────────────────── structural (wiring) ─────────────────────────
 {
-  const sched = src.slice(src.indexOf("if (cron === '*/15 * * * *')"), src.indexOf("if (cron === '30 12 * * 1')"));
-  t('watchdog runs inside the EXISTING */15 cron branch, before the sweep', /await doorWatchdogCron\(env\)/.test(sched) && sched.indexOf('doorWatchdogCron') < sched.indexOf('cronSweepLogged'));
-  t('the sweep is no longer swallowed in scheduled()', !/await cronSweep\(env\); \} catch/.test(sched) && /await cronSweepLogged\(env\)/.test(sched));
+  // Oct 12 2026: no cron - the watchdog is the scheduler's `door_watchdog` job (first in priority, every ~15 min).
+  const wdJob = src.slice(src.indexOf('async function schedRunDoorWatchdog('), src.indexOf('// The three sweep jobs below'));
+  t('watchdog is the FIRST scheduler job (priority order), 15-minute interval', /\{ name: 'door_watchdog',\s+kind: 'interval', every_min: 14/.test(src) && src.indexOf("name: 'door_watchdog'") < src.indexOf("name: 'sweep'"));
+  t('the watchdog job calls doorWatchdogCron and returns its errors (not swallowed)', /schedStep\('door_watchdog', \(\) => doorWatchdogCron\(env\)/.test(wdJob) && /ok: !errors\.length/.test(wdJob));
   const cronFn = block.slice(block.indexOf('async function doorWatchdogCron('), block.indexOf('// GET /watchdog/door-system - read-only'));
   t('cron wrapper: own try/catch, logs telemetry AND alerts, never rethrows', /try \{\s*const wd = await runDoorWatchdogPass\(env\)/.test(cronFn) && /Job_Type: DOOR_WD_JOB/.test(cronFn) && /alertAdminOnFailure\(env, 'door_watchdog'/.test(cronFn) && !/throw /.test(cronFn));
   const toml = fs.readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
