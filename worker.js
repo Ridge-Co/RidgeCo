@@ -19975,7 +19975,12 @@ async function hubTestWriteAllowed(env, path, body) {
     return { ok: true };
   }
   if (path === '/ops-approve') {
-    return ((body && body.items) || []).every(i => String((i && i.title) || '').startsWith('TEST-'));
+    const _its = (body && body.items) || [];
+    if (!_its.every(i => String((i && i.title) || '').startsWith('TEST-'))) return false;
+    // opsApprove promotes a matching existing row in place, so a TEST- title that fuzzy-matches a REAL row must be refused too.
+    const _qa = await fetchTab(env, OPS_QUEUE_TAB);
+    const _real = _qa.filter(r => !String(r.Title || '').startsWith('TEST-') && String(r.Status || '').toLowerCase() !== 'dropped');
+    return _its.every(i => !findQueueMatch({ title: String(i.title || '').replace(/^TEST-/, ''), problem: i.problem, action: i.action || i.first_step }, _real, 'same'));
   }
   if (path === '/ops-queue-update' || path === '/ops-queue-status') {
     const _qr = await fetchTab(env, OPS_QUEUE_TAB);
