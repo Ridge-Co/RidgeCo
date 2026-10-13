@@ -7757,6 +7757,11 @@ async function getWorkOrdersList(env, url) {
 //     dry_run!==true; anything else is a preview. Members with bills/time/charges/QBO numbers
 //     or a finished status are SKIPPED with a reason, never cancelled.
 //   - GET /wo/bid-group?wo_id=  members for the Hub panel.
+//   - Oct 13 2026 follow-up (Brett): "Keep this, cancel others" (mode keep_one) NEVER cancels the ORIGINAL
+//     (the member with no Duplicated_From) — it cancels only the other duplicate copies. When the kept
+//     member is a COPY it becomes tenant-visible (Tenant_Visible TRUE) and is marked Bid_Winner TRUE so the
+//     owner portal (which hides still-linked copies) shows it too. NO tenant/owner/vendor SMS is sent by any of
+//     this, and Unlink leaves Tenant_Visible exactly as it is. Vendors who lose are still never texted.
 // Why not createWorkOrder: its dupe guard (the point of rule 162) would block the copy, skipping
 // the guard reopens the duplicate-ID race (WO-1192), and the row needs ~10 columns it never
 // writes at create. So the copy is appended by woDupAppendCopy: serialized per isolate, one
