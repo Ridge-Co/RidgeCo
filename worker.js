@@ -9803,12 +9803,12 @@ function estimatesAwaitingDecision(estimates, workorders, now, sinceISO) {
   return out.sort((a, b) => String(a.estimate.Created_Date).localeCompare(String(b.estimate.Created_Date)));
 }
 function etDateString(date) { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(date); }
-// Runs from cronSweep (every 15 min). Sends ONE digest text per day, in the 8am ET hour, only when
-// something is awaiting a decision. Claims the day BEFORE sending, so a double-firing sweep (the
-// GitHub Actions path and the Cloudflare cron both call cronSweep) can never text twice.
+// Runs from the scheduler's `sweep_work` job (every ~15 min). Sends ONE digest text per day, from 8am ET until
+// 6pm ET (so a scheduler outage at 8am still catches up that day, never after hours), only when something is
+// awaiting a decision. Claims the day BEFORE sending, so two overlapping callers can never text twice.
 async function processEstimateReminders(env, nowArg) {
   const now = nowArg || new Date();
-  if (etHour(now) !== 8) return { skipped: 'not the 8am ET hour' };
+  { const h = etHour(now); if (h < 8 || h >= 18) return { skipped: 'outside the 8am-6pm ET reminder window' }; }
   let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
   const today = etDateString(now);
   if (cfg.estimate_reminder_last_date === today) return { skipped: 'already sent today' };
