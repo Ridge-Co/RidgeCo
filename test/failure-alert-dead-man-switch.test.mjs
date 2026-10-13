@@ -5,7 +5,7 @@
 // so nothing pages Brett until he opts in. This file covers the pure decision logic
 // (alertDebounceOk, isDeadManSwitchTripped) directly, plus structural checks that the router
 // dispatch for /workorder and /status now route through callWithFailureAlert, and that
-// cronSweep calls checkDeadManSwitch on its existing ~15-min cadence (no new cron slot).
+// the scheduler's sweep_checks job calls checkDeadManSwitch on its ~15-min cadence (no cron).
 import fs from 'fs';
 import assert from 'node:assert';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
@@ -86,10 +86,12 @@ const wrapBody = grabAsync('callWithFailureAlert');
 
 // ---- structural: cronSweep calls the dead-man's-switch on its existing cadence, no new
 // Cloudflare Cron Trigger slot (all 5 are already spoken for per rule 166/rule "maybeRunDailySelftest") ----
-const sweepBody = grabAsync('cronSweep');
+// Oct 12 2026: no cron - the check now rides the Apps Script scheduler's `sweep_checks` job (every ~15 min).
+const sweepBody = grabAsync('schedRunSweepChecks');
 {
-  ok(sweepBody.includes('checkDeadManSwitch(env)'), 'cronSweep calls checkDeadManSwitch every pass, riding the existing ~15-min sweep cadence');
-  ok(/try\s*\{\s*out\.dead_man_switch/.test(sweepBody), 'the call is wrapped in its own try/catch, matching every other cronSweep sub-task, so one failing check can never take down the rest of the sweep');
+  ok(sweepBody.includes('checkDeadManSwitch(env)'), 'sweep_checks calls checkDeadManSwitch every pass, riding the scheduler 15-min cadence');
+  ok(/schedStep\('dead_man_switch'/.test(sweepBody), 'the call is its own caught step (schedStep), so one failing check can never take down the rest and its failure is returned/logged');
+  ok(/name: 'sweep_checks',\s+kind: 'interval', every_min: 14/.test(src), 'sweep_checks is a 15-minute scheduler job');
 }
 
 console.log(`failure-alert-dead-man-switch: ${n}/${n} passing`);
