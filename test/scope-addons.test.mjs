@@ -139,7 +139,7 @@ async function sign(selections, schedule) {
     let m = /input\[name="addon-(.+)"\]$/.exec(sel); if (m) return boxes[m[1]] || null;
     m = /input\[name="item-(.+)"\]:checked$/.exec(sel); if (m) return radios[m[1]] !== undefined ? { value: radios[m[1]] } : null;
     return null; } };
-  const f = new Function('document', 'CSS', 'DATA', g('chosenKey') + g('buildSelections') + g('scheduleAmounts') + g('currentTotals') + '\nreturn { buildSelections, currentTotals };');
+  const f = new Function('document', 'CSS', 'DATA', g('chosenKey') + g('buildSelections') + g('isFlatRow') + g('scheduleAmounts') + g('currentTotals') + '\nreturn { buildSelections, currentTotals };');
   const DATA = { items: [
     { id: 'li1', selected_key: 'v1', variants: [{ key: 'v1', price: 1775 }] },
     { id: 'li2', optional: true, selected_key: 'v1', variants: [{ key: 'v1', price: 1250 }] },
