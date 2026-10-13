@@ -967,6 +967,32 @@ function collectItems(){
   return out;
 }
 function addItem(){ var items=collectItems(); var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0); items.push({ id:'li'+(maxn+1), area:'', trade:'', qty:'', description:'', note:'', variants:[{key:'v1',label:'',vendor_cost:0,price_override:null}], selected_key:'v1' }); state.current.line_items=items; renderItems(); }
+// Optional add-on (Oct 13 2026, Brett): a NEW line item flagged optional, inserted right under the job
+// it goes with. The customer ticks it on the proposal; it is priced as the difference it makes to the whole job.
+function addAddon(btn){
+  var after=btn.closest('.li').dataset.id;
+  var items=collectItems();
+  var maxn=items.reduce(function(m,it){ var n=parseInt(String(it.id).replace(/\D/g,''))||0; return n>m?n:m; },0);
+  var parent=items.filter(function(it){ return it.id===after; })[0]||{};
+  var add={ id:'li'+(maxn+1), area:parent.area||'', trade:parent.trade||'', qty:'', description:'', note:'', variants:[{key:'v1',label:'',vendor_cost:0,price_override:null}], selected_key:'v1', optional:true };
+  var idx=items.findIndex(function(it){ return it.id===after; });
+  items.splice(idx+1,0,add);
+  state.current.line_items=items; renderItems();
+  var el=document.querySelector('#items-wrap .li[data-id="'+add.id+'"] .f-desc'); if(el){ el.placeholder='What is the add-on? (e.g. Silvercoat the whole roof)'; el.focus(); el.scrollIntoView({block:'center'}); }
+  setStatus('items-status','Add-on created under that job — describe it, enter its vendor cost, then Save edits.','info');
+}
+// Switch an existing item between base job and optional add-on. An add-on is a single fixed price, so
+// converting an item that has several pick-one options keeps only its first option (and says so).
+function toggleOptional(btn){
+  var id=btn.closest('.li').dataset.id;
+  var items=collectItems();
+  items.forEach(function(it){
+    if(it.id!==id) return;
+    it.optional=!it.optional;
+    if(it.optional && it.variants.length>1){ it.variants=[it.variants[0]]; it.selected_key=it.variants[0].key; setStatus('items-status','That item had several pick-one options; as an add-on only the first one ("'+(it.variants[0].label||'option 1')+'") was kept.','warn'); }
+  });
+  state.current.line_items=items; renderItems();
+}
 function removeItem(btn){ var el=btn.closest('.li'); var id=el.dataset.id; state.current.line_items=collectItems().filter(function(it){ return it.id!==id; }); renderItems(); }
 async function saveItems(){
   var items=collectItems().filter(function(it){ return (it.description||'').trim(); });
