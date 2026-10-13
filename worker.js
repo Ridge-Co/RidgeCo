@@ -14509,7 +14509,7 @@ function schedParseState(raw) {
   const s = String(raw == null ? '' : raw).trim();
   if (!s) return { state: { v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} } };
   let st;
-  try { st = JSON.parse(s); } catch (e) { return { error: 'Scheduler_State in Config is not valid JSON (' + String(e.message).slice(0, 80) + '). Delete that Config row to reset it - every job will then run once as a first run.' }; }
+  try { st = JSON.parse(s); } catch (e) { return { error: 'Scheduler_State in Config is not valid JSON (' + String(e.message).slice(0, 80) + '). Delete that Config row to reset it - the next tick is then a first run: the 15-minute jobs run at once, and daily/weekly jobs whose time already passed today are marked done (seeded) so nothing is sent twice.' }; }
   if (!st || typeof st !== 'object' || Array.isArray(st)) return { error: 'Scheduler_State in Config is not a JSON object. Delete that Config row to reset it.' };
   if (!st.jobs || typeof st.jobs !== 'object') st.jobs = {};
   return { state: st };
