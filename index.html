@@ -2705,6 +2705,7 @@ function openWODetail(woId) {
         loadHubEstimateView(_woIdForPhoto, _db, _inv);
         if (String(wo.Type||'').toLowerCase() !== 'addon') loadHubAdditionalWork(_woIdForPhoto, _db);
         loadHubNearbyWOs(_woIdForPhoto, _db);
+        loadHubBidGroup(_woIdForPhoto, _db);
         loadHubReceiptTracking(_woIdForPhoto, _db);
         loadHubTimeTracking(_woIdForPhoto, _db);
       }
