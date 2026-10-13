@@ -5,7 +5,7 @@
 // so nothing pages Brett until he opts in. This file covers the pure decision logic
 // (alertDebounceOk, isDeadManSwitchTripped) directly, plus structural checks that the router
 // dispatch for /workorder and /status now route through callWithFailureAlert, and that
-// cronSweep calls checkDeadManSwitch on its existing ~15-min cadence (no new cron slot).
+// the scheduler's sweep_checks job calls checkDeadManSwitch on its ~15-min cadence (no cron).
 import fs from 'fs';
 import assert from 'node:assert';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
