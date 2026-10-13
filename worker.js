@@ -4369,6 +4369,12 @@ async function scopeProposal(env, body) {
   // somehow left in a bad state, fall back to the default rather than 500ing proposal generation.
   const schedule = scheduleCheck.schedule || scopeDefaultPaymentSchedule();
   const milestones = scopeComputeMilestoneAmounts(schedule, priced.subtotal, priced.vendorCostTotal);
+  if (priced.items.some(it => it.optional)) {
+    // Smallest total a customer could sign = cheapest option on every base item, no add-ons.
+    const smallest = priced.items.filter(it => !it.optional).reduce((sum, it) => { const ps = (it.variants || []).map(v => +v.price || 0); return sum + (ps.length ? Math.min(...ps) : 0); }, 0);
+    const addonProblem = scopeScheduleAddonProblem(schedule, smallest);
+    if (addonProblem) return json({ error: 'This proposal has optional add-ons, but its payment schedule can\'t take them: ' + addonProblem }, 400);
+  }
 
   const bulletsPrompt = `You are a property maintenance estimate writer. Rewrite each of the following scope-of-work item descriptions into a short, polished, customer-facing sentence. Correct typos/slang/grammar, imperative and specific. Do NOT include ANY dollar amounts, costs, or pricing of any kind. Items (JSON array):\n${JSON.stringify(items.map(it => ({ id: it.id, area: it.area, description: it.description, note: it.note })))}\n\nReturn ONLY strict minified JSON: an array of {"id":"<same id>","text":"<rewritten sentence>"}, same order, no preamble.`;
   const rewritten = {};
