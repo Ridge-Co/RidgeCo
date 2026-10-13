@@ -7554,6 +7554,7 @@ async function woSplit(env, body) {
   const original = findWO(workorders, originalId);
   if (!original) return json({ error: `Work order ${originalId} not found` }, 404);
   if (original.Voided === 'TRUE') return json({ error: `Work order ${originalId} is voided — cannot split it` }, 400);
+  if (String(original.Bid_Group_ID || '').trim()) return json({ error: `Work order ${originalId} is in bid group ${original.Bid_Group_ID} — unlink it from the group first (WO detail > Bid group) before splitting.` }, 400);
   // Same billing-state guard as woCombine (Sep 23 2026 field audit, widened same day to also
   // cover vendor-bill state) — splitting a WO that QuickBooks already has a final invoice
   // number for would leave that invoice referring to a job that's now spread across N work
