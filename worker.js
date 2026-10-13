@@ -7315,6 +7315,7 @@ async function woCombine(env, body) {
   const survivor = findWO(workorders, survivorId);
   if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
   if (String(survivor.Voided || '').toUpperCase() === 'TRUE') return json({ error: `Survivor work order ${survivorId} is voided — cannot combine into it` }, 400);
+  if (String(survivor.Bid_Group_ID || '').trim()) return json({ error: `Work order ${survivorId} is in bid group ${survivor.Bid_Group_ID} — unlink it from the group first (WO detail > Bid group) before combining.` }, 400);
   const combinedWOs = [];
   for (const id of combinedIds) {
     const w = findWO(workorders, id);
