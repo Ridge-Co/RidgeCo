@@ -401,7 +401,7 @@ function renderSchedule(){
   var html = scheduleState.milestones.map(function(m,i){
     return '<div class="row" style="gap:6px;margin:4px 0;align-items:center;">'
       +'<input value="'+esc(m.label)+'" oninput="updateScheduleField('+i+',\'label\',this.value)" placeholder="Label" style="flex:2;min-width:60px;">'
-      +'<input type="number" step="0.01" min="0" max="100" value="'+m.percent+'" oninput="updateScheduleField('+i+',\'percent\',this.value)" style="width:64px;">'
+      +'<input type="number" data-pct="1" step="0.01" min="0" max="100" value="'+m.percent+'" oninput="updateScheduleField('+i+',\'percent\',this.value)" style="width:64px;">'
       +'<span style="font-size:11px;color:var(--muted);">%</span>'
       +'<select onchange="updateScheduleField('+i+',\'trigger\',this.value)" style="flex:1;min-width:110px;">'
         +'<option value="upfront"'+(m.trigger==='upfront'?' selected':'')+'>Upfront</option>'
