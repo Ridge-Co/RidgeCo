@@ -360,7 +360,10 @@ function removeScheduleRow(i){ scheduleState.milestones.splice(i,1); renderSched
 // customer-facing dollar amount for this milestone (vendor proration stays percent-based).
 function updateScheduleField(i,field,val){
   var m = scheduleState.milestones[i];
-  if(field==='percent') m.percent = parseFloat(val)||0;
+  if(field==='percent'){
+    m.percent = parseFloat(val)||0;
+    rebalanceSchedule(i);
+  }
   else if(field==='vendor_paid') m.vendor_paid = !!val;
   else if(field==='flat_customer_amount'){ var n=parseFloat(val); m.flat_customer_amount = isFinite(n)&&n>=0 ? n : null; }
   else if(field==='calc_mode'){
