@@ -16280,7 +16280,13 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // is the free/cheap alternative, when one exists, so a paid idea always ships with its cheap
 // sibling right next to it. Blank on every row created by opsApprove/opsQueuePrepare — only
 // opsQueueScoutSubmit ever populates these.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround'];
+// Oct 13 2026 (queue upgrade, all additive via ensureColumns): Brett_Note = Brett's free-text
+// "your change" on a proposal (overrides the proposal in the build brief); Snooze_Until = ISO time
+// the item is hidden from his review until; PR_Number/Build_State/Build_Updated = two-way build
+// sync (building → pr_open → live | pr_closed [flagged] | abandoned); Dup_Of = "may overlap
+// row #N"; Shipped_Match = "looks already built: <FEATURE_LOG ref>"; Scout_Verdict/Scout_Note/
+// Scout_Reviewed = the Scout's re-check of a snoozed item against builds shipped since.
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed'];
 // 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
 // awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
 // approved it to build. The ONLY status opsQueueScoutSubmit can ever write (see
