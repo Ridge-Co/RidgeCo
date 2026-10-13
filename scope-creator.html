@@ -962,7 +962,7 @@ function collectItems(){
       variants.push(vv);
     });
     if(!variants.length) variants=[{key:'v1',label:'',vendor_cost:0,price_override:null}];
-    out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key });
+    out.push({ id:el.dataset.id, area:el.querySelector('.f-area').value, trade:el.querySelector('.f-trade').value, qty:el.querySelector('.f-qty').value, description:el.querySelector('.f-desc').value, note:el.querySelector('.f-note').value, variants:variants, selected_key:variants[0].key, optional:el.dataset.optional==='1' });
   });
   return out;
 }
