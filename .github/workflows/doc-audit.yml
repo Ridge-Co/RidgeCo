@@ -16,12 +16,11 @@ name: Documentation Audit
 # human/Claude to actually look at, never a substitute for someone describing
 # what they built.
 
+# NO TIMER HERE (permanent rule: no cron anywhere). The Hub Scheduler Apps Script presses "Run workflow" on this
+# workflow on its schedule (see the JOBS table at the top of apps-script/hub-scheduler/HubScheduler.gs, row ci_doc_audit).
+# You can still run it by hand from the Actions tab.
 on:
-  schedule:
-    - cron: '0 13 * * *'   # 9am ET daily (UTC 13:00; doesn't account for DST, so this
-                            # drifts to 8am ET during EDT — fine for a daily check, not
-                            # worth the complexity of a DST-aware cron schedule)
-  workflow_dispatch:        # manual/on-demand trigger
+  workflow_dispatch:        # run by the Hub Scheduler (daily, 9am Eastern) and by hand
 
 jobs:
   audit:

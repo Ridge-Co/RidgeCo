@@ -14220,7 +14220,8 @@ async function cronSweep(env) {
 // triggers are the ONLY clock (apps-script/hub-scheduler/HubScheduler.gs, one `everyMinutes(15)` trigger).
 // No Cloudflare Cron Triggers (the account is at its cap, so a trigger silently never attaches — that is
 // why quiet-hours messages were never released), no GitHub Actions `schedule:`. To add a periodic job, add
-// it to SCHED_JOBS below; never add a cron.
+// it to SCHED_JOBS below AND a row to the JOBS table at the top of HubScheduler.gs (the one place every
+// schedule - Hub jobs, other Workers, GitHub workflows - is seen and edited); never add a cron.
 //
 //   POST /cron/run     (Scheduler_Token) runs AT MOST ONE due job, in its own Worker invocation, and says
 //                      whether more are due; the Apps Script loops until more=false.
@@ -14341,6 +14342,7 @@ const SCHED_JOBS = [
 function schedJobDue(job, js, nowDate) {
   js = js || {};
   const nowMs = +nowDate;
+  if (job.disabled) return null;                                  // turned off in the Apps Script JOBS table (enabled:false)
   if (job.kind === 'interval') {
     const last = Date.parse(js.last_start || '');
     if (!isNaN(last) && last <= nowMs + 5 * 60000 && nowMs - last < job.every_min * 60000) return null;
@@ -14387,8 +14389,73 @@ function schedSeedFirstRun(state, nowDate, jobs) {
   if (seeded.length) state.seeded = { at: nowDate.toISOString(), jobs: seeded.slice() };
   return seeded;
 }
+// ── SCHEDULE OVERRIDES (Oct 13 2026) ─────────────────────────────────────────────────────────────────────────
+// Brett wants every schedule visible and editable in ONE place: the JOBS table at the top of HubScheduler.gs. The
+// registry above holds the DEFAULTS; each tick the Apps Script sends its JOBS table as `schedule` in POST /cron/run
+// ({ jobName: { enabled, every_min, at, dow } }) and the Hub applies it on top of the defaults. The last accepted map is
+// remembered in Scheduler_State (`schedule`) so /cron/status, /health and a manual dry run all describe the SAME schedule.
+// Strictly validated and never silently ignored: an unknown job, an unknown field, a kind change, or a bad value rejects the
+// whole map (400 + telemetry), so a typo in the table is an email, not a job that quietly keeps its old time.
+// `every_min` is the HUMAN cadence ("every 15 minutes"); the Hub subtracts 1 minute of jitter allowance (the ticks are never
+// exactly 15:00 apart), which is why the registry stores 14 for a 15-minute job.
+// RESERVED, deliberately NOT implemented: `quiet` (an overnight pause window). It is rejected with a plain message until built.
+const SCHED_OVERRIDE_FIELDS = ['enabled', 'every_min', 'at', 'dow'];
+const SCHED_EVERY_MIN_MAX = 24 * 60;
+function schedHumanEvery(job) { return job.every_human || (job.every_min + 1); }
+function schedOverdueLimitMin(job) { return Math.max(SCHED_OVERDUE_INTERVAL_MIN, 3 * schedHumanEvery(job)); }
+// Pure. -> { jobs, applied, errors }. `raw` undefined/null = no overrides.
+function schedApplyOverrides(jobs, raw) {
+  const errors = [], applied = {};
+  if (raw === undefined || raw === null) return { jobs, applied, errors };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { jobs, applied, errors: ['schedule must be an object keyed by job name'] };
+  const byName = new Map(jobs.map(j => [j.name, j]));
+  for (const name of Object.keys(raw)) {
+    const job = byName.get(name), o = raw[name];
+    if (!job) { errors.push(`unknown job "${name}"`); continue; }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) { errors.push(`${name}: must be an object`); continue; }
+    const norm = {};
+    for (const k of Object.keys(o)) {
+      if (k === 'quiet') { errors.push(`${name}: quiet windows (pausing a job overnight) are not active yet - remove "quiet"`); continue; }
+      if (!SCHED_OVERRIDE_FIELDS.includes(k)) { errors.push(`${name}: unknown field "${k}" (allowed: ${SCHED_OVERRIDE_FIELDS.join(', ')})`); continue; }
+      const v = o[k];
+      if (k === 'enabled') { if (typeof v !== 'boolean') errors.push(`${name}: enabled must be true or false`); else norm.enabled = v; }
+      else if (k === 'every_min') {
+        if (job.kind !== 'interval') errors.push(`${name}: it is a ${job.kind} job - it has a time ("at"), not "every_min"`);
+        else if (!Number.isInteger(v) || v < 1 || v > SCHED_EVERY_MIN_MAX) errors.push(`${name}: every_min must be a whole number from 1 to ${SCHED_EVERY_MIN_MAX}`);
+        else norm.every_min = v;
+      } else if (k === 'at') {
+        if (job.kind === 'interval') errors.push(`${name}: it is an every-N-minutes job - it has "every_min", not a time ("at")`);
+        else if (typeof v !== 'string' || !/^([01]?\d|2[0-3]):[0-5]\d$/.test(v)) errors.push(`${name}: at must look like "07:00" (24-hour, Eastern time)`);
+        else norm.at = v.length === 4 ? '0' + v : v;
+      } else if (k === 'dow') {
+        if (job.kind !== 'weekly') errors.push(`${name}: only weekly jobs have a day of the week`);
+        else if (!Number.isInteger(v) || v < 0 || v > 6) errors.push(`${name}: dow must be 0 (Sunday) to 6 (Saturday)`);
+        else norm.dow = v;
+      }
+    }
+    if (Object.keys(norm).length) applied[name] = norm;
+  }
+  if (errors.length) return { jobs, applied: {}, errors };
+  const out = jobs.map(job => {
+    const o = applied[job.name];
+    if (!o) return job;
+    const j = Object.assign({}, job);
+    if (o.enabled === false) j.disabled = true;
+    if (o.every_min !== undefined) { j.every_min = o.every_min <= 1 ? 1 : o.every_min - 1; j.every_human = o.every_min; }
+    if (o.at !== undefined) j.at = o.at;
+    if (o.dow !== undefined) j.dow = o.dow;
+    return j;
+  });
+  return { jobs: out, applied, errors };
+}
+// The schedule currently in force according to a (parsed) Scheduler_State. Never throws; a corrupt stored map falls back to the defaults and says so.
+function schedEffective(state) {
+  const r = schedApplyOverrides(SCHED_JOBS, state && state.schedule);
+  return r.errors.length ? { jobs: SCHED_JOBS, schedule_error: 'stored schedule is invalid (' + r.errors.join('; ').slice(0, 200) + '); using the defaults' } : { jobs: r.jobs };
+}
 function schedExpected(job) {
-  if (job.kind === 'interval') return `every ${job.every_min}+ min`;
+  if (job.disabled) return 'DISABLED (enabled:false in the JOBS table)';
+  if (job.kind === 'interval') return job.every_human ? `every ${job.every_human} min` : `every ${job.every_min}+ min`;
   if (job.kind === 'daily') return `daily after ${job.at} ET`;
   return `${SCHED_DOW_NAMES[job.dow]} after ${job.at} ET`;
 }
@@ -14400,6 +14467,10 @@ function schedStatus(state, now, jobs) {
   const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), seeded: (state && state.seeded) || null, jobs: {}, overdue: [] };
   for (const job of (jobs || SCHED_JOBS)) {
     const js = (state && state.jobs && state.jobs[job.name]) || {};
+    if (job.disabled) {   // switched off on purpose: never "overdue"
+      out.jobs[job.name] = { expected: schedExpected(job), enabled: false, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue: false, overdue_reason: '' };
+      continue;
+    }
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
     let overdue = false, reason = '';
     if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
@@ -14408,7 +14479,7 @@ function schedStatus(state, now, jobs) {
     if (job.kind === 'interval') {
       const okAge = ageMin(js.last_ok);
       if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
-      else if (okAge > SCHED_OVERDUE_INTERVAL_MIN) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${SCHED_OVERDUE_INTERVAL_MIN})`; }
+      else if (okAge > schedOverdueLimitMin(job)) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${schedOverdueLimitMin(job)})`; }
     } else {
       const expectedToday = job.kind === 'daily' || et.dow === job.dow;
       if (expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
@@ -14416,7 +14487,7 @@ function schedStatus(state, now, jobs) {
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
     }
-    out.jobs[job.name] = { expected: schedExpected(job), last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
+    out.jobs[job.name] = { expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
     if (overdue) out.overdue.push(job.name);
   }
   return out;
@@ -14622,7 +14693,8 @@ async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
       await sub('quiet_hours_held_due', async () => {
         const rows = (await schedPfTab(env, MSG_QUEUE_TAB)).filter(r => r.Status === 'pending' && r.Send_After && Date.parse(r.Send_After) <= nowMs);
         const by_type = {}; for (const r of rows) by_type[r.Recipient_Type || '?'] = (by_type[r.Recipient_Type || '?'] || 0) + 1;
-        return Object.assign({ count: rows.length, by_recipient_type: by_type }, schedAgeSummary(rows.map(r => r.Send_After), nowMs));
+        const ages = schedAgeSummary(rows.map(r => r.Send_After), nowMs);
+        return Object.assign({ count: rows.length, by_recipient_type: by_type }, ages, { stale_over_1d: ages.by_age.d1_to_7 + ages.by_age.over_7d });
       });
       await sub('queued_notifications_due', async () => {
         const rows = (await schedPfTab(env, NOTIF_QUEUE_TAB)).filter(r => r.Sent !== 'TRUE' && r.Phone && r.Message && (!r.Send_After || Date.parse(r.Send_After) <= nowMs));
@@ -14631,7 +14703,8 @@ async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
       await sub('vendor_nudges_due', async () => {
         const rows = (await schedPfTab(env, VENDOR_REQ_TAB)).filter(r => r.Status === 'open' && r.Next_Nudge_At && Date.parse(r.Next_Nudge_At) <= nowMs);
         const by_type = {}; for (const r of rows) by_type[r.Request_Type || '?'] = (by_type[r.Request_Type || '?'] || 0) + 1;
-        return { count: rows.length, by_request_type: by_type };
+        const ages = schedAgeSummary(rows.map(r => r.Next_Nudge_At), nowMs);   // how long each nudge has been due: a pile of old ones is a "stale" backlog
+        return Object.assign({ count: rows.length, by_request_type: by_type }, ages, { stale_over_1d: ages.by_age.d1_to_7 + ages.by_age.over_7d });
       });
     } else if (name === 'sweep_work') {
       const h = etHour(now);
@@ -14674,14 +14747,15 @@ function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); r
 // Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
 async function schedRunNext(env, ctx, opts) {
   opts = opts || {};
-  const jobs = opts.jobs || SCHED_JOBS;
+  const baseJobs = opts.jobs || SCHED_JOBS;
+  let jobs = baseJobs;
   const nowMs = opts.now || (() => Date.now());
   const sleep = opts.sleep || ((ms) => new Promise(r => setTimeout(r, ms)));
   const verifyDelay = opts.verifyDelayMs != null ? opts.verifyDelayMs : SCHED_VERIFY_DELAY_MS;
   const budget = opts.budgetMs != null ? opts.budgetMs : SCHED_JOB_BUDGET_MS;
   const only = Array.isArray(opts.only) ? opts.only.map(String) : (opts.only ? [String(opts.only)] : []);
   const force = !!opts.force && only.length === 1;
-  const unknown = only.filter(n => !jobs.some(j => j.name === n));
+  const unknown = only.filter(n => !baseJobs.some(j => j.name === n));
   const base = { ok: true, ran: null, job_ok: null, error: null, more: false, due: [], ts: new Date(nowMs()).toISOString() };
   const infraFail = async (msg) => {
     const body = Object.assign({}, base, { ok: false, error: msg });
@@ -14697,6 +14771,19 @@ async function schedRunNext(env, ctx, opts) {
   catch (e) { return await infraFail('could not read Config (scheduler state): ' + schedErrText(e)); }
   if (parsed.error) return await infraFail(parsed.error);
   let st = parsed.state;
+  // The schedule in force: the map the caller just sent (the Apps Script JOBS table), else the last one remembered in state, else the defaults.
+  const sentSchedule = opts.schedule !== undefined && opts.schedule !== null;
+  const ov = schedApplyOverrides(baseJobs, sentSchedule ? opts.schedule : st.schedule);
+  if (ov.errors.length) {
+    const msg = (sentSchedule ? 'the schedule sent by the Apps Script JOBS table was rejected: ' : 'the stored schedule is invalid: ') + ov.errors.join('; ');
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: 'schedule_overrides', Success: 'FALSE', Notes: msg.slice(0, 480) }); }
+    catch (e) { console.error('scheduler: schedule rejected and telemetry write failed:', msg, schedErrText(e)); }
+    return { status: 400, body: Object.assign({}, base, { ok: false, error: msg.slice(0, 500) }) };
+  }
+  jobs = ov.jobs;
+  if (sentSchedule && !opts.dry) st.schedule = ov.applied;   // remembered for /cron/status, /health and later manual runs (persisted by the next state write below)
+  base.schedule_overrides = Object.keys(ov.applied);
+  base.disabled = jobs.filter(j => j.disabled).map(j => j.name);
   const t = nowMs(), now = new Date(t), nowISO = now.toISOString();
   // First-ever tick (blank/absent Scheduler_State): seed daily/weekly jobs whose slot already passed today so nothing is re-sent.
   const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
@@ -14815,7 +14902,7 @@ async function schedRunNext(env, ctx, opts) {
 async function schedRunHandler(env, ctx, body) {
   body = body || {};
   const only = Array.isArray(body.only) ? body.only : (typeof body.only === 'string' && body.only ? [body.only] : []);
-  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true || body.dry_run === true });
+  const r = await schedRunNext(env, ctx, { only, force: body.force === true, dry: body.dry === true || body.dry_run === true, schedule: body.schedule });
   return json(r.body, r.status);
 }
 async function schedStatusHandler(env) {
@@ -14823,7 +14910,9 @@ async function schedStatusHandler(env) {
   try { rows = await schedReadConfigRows(env, true); parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY)); }
   catch (e) { return json({ ok: false, error: 'could not read Config (scheduler state): ' + schedErrText(e) }, 503); }
   if (parsed.error) return json({ ok: false, error: parsed.error }, 503);
-  const s = schedStatus(parsed.state, new Date(), SCHED_JOBS);
+  const eff = schedEffective(parsed.state);
+  const s = schedStatus(parsed.state, new Date(), eff.jobs);
+  if (eff.schedule_error) s.schedule_error = eff.schedule_error;
   const claimUntil = Date.parse(parsed.state.claim_until || '');
   return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
 }
@@ -14833,7 +14922,7 @@ async function schedHealthSummary(env) {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
     if (parsed.error) return { error: 'state unreadable' };
-    const s = schedStatus(parsed.state, new Date(), SCHED_JOBS);
+    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs);
     return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
   } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
 }
