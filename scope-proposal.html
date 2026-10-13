@@ -464,7 +464,7 @@ function render(d){
   html += '<div class="card terms">'
     + '<div class="section-hd">Payment &amp; project terms</div>'
     + '<ul>'
-    + '<li>Payment is due per the schedule above; the first payment (' + firstUpfront.percent + '%) is required to approve this proposal and schedule the work.</li>'
+    + '<li>Payment is due per the schedule above; the first payment (' + (firstUpfront.calc_mode==='flat' ? money(firstUpfront.customer_amount) : firstUpfront.percent + '%') + ') is required to approve this proposal and schedule the work.</li>'
     + '<li>All scheduled payments must be paid electronically. Physical checks are not accepted.</li>'
     + '<li>Where an item offers more than one option, the price shown reflects the option selected' + (locked ? ' at signing' : '') + '; the invoice matches that selection.</li>'
     + '</ul></div>';
