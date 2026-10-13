@@ -16321,8 +16321,8 @@ async function selftestRun(env, opts) {
 // POST /selftest {deliver?} — auto-verification pass, on demand. Gated EXACTLY like /ops-review:
 // no PUBLIC_PATHS entry, no narrow token — the full admin secret only (see the top auth gate).
 // Same deliver convention as /ops-review too: manual/on-demand calls default deliver:false so
-// checking this never spams a real email; only the daily cron path (maybeRunDailySelftest,
-// inside cronSweep) passes deliver:true.
+// checking this never spams a real email; only the daily scheduler path (maybeRunDailySelftest,
+// inside the scheduler's sweep_checks job) passes deliver:true.
 async function selftestRunEndpoint(env, body) {
   return json(await selftestRun(env, { deliver: !!(body && body.deliver), trigger: 'manual' }));
 }
