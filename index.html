@@ -2899,7 +2899,7 @@ function renderBidGroupPanel(holder, woId, res) {
       '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
         (here ? '' : '<button class="btn small secondary" style="min-height:44px;flex:1 1 90px" onclick="bgOpen(\'' + esc(m.id) + '\')">Open</button>') +
-        (cancelled ? '' : '<button class="btn small" style="min-height:44px;flex:1 1 140px" data-bg-keep="' + esc(m.id) + '" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'keep_one\',\'' + esc(m.id) + '\')">Keep this, cancel others</button>') +
+        (cancelled ? '' : '<button class="btn small" style="min-height:44px;flex:1 1 140px" data-bg-keep="' + esc(m.id) + '" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'keep_one\',\'' + esc(m.id) + '\')">Keep this, cancel other copies</button>') +
         '<button class="btn small secondary" style="min-height:44px;flex:1 1 90px" data-bg-unlink="' + esc(m.id) + '" onclick="bgUnlink(\'' + esc(woId) + '\',\'' + esc(m.id) + '\')">Unlink</button>' +
       '</div></div>';
   }).join('');
