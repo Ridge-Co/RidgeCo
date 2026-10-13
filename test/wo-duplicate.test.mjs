@@ -486,7 +486,7 @@ async function groupOf4() {
   const dup = (await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates' }))).body;
   t('preview duplicates mode keeps the original', dup.results.find(x => x.wo_id === 'WO-1239').result === 'kept' && dup.summary.would_cancel === 2);
   const k1 = (await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252' }))).body;
-  t('preview keep_one keeps the chosen WO and targets the rest', k1.results.find(x => x.wo_id === 'WO-1252').result === 'kept' && k1.results.find(x => x.wo_id === 'WO-1239').result === 'would_cancel');
+  t('preview keep_one keeps the chosen WO and targets the rest', k1.results.find(x => x.wo_id === 'WO-1252').result === 'kept' && k1.results.find(x => x.wo_id === 'WO-1239').result === 'kept' && k1.results.find(x => x.wo_id === 'WO-1250').result === 'would_cancel');
 }
 {
   const { db } = await groupOf4(); const b = build(db, { allowTwilio: true });
@@ -516,7 +516,7 @@ async function groupOf4() {
   for (const [body, want] of bad) { const r = await call(b.woBidGroupCancel(env, body)); t(`rejected ${JSON.stringify(body)} -> ${want}`, r.status === want && r.body.errors.length >= 1); }
   t('nothing was cancelled by the rejected calls', woRows(db).every(w => w.Status !== 'Cancelled'));
   const k = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'keep_one', keep_wo_id: 'WO-1250', confirm: true }));
-  t('keep_one: the chosen WO stays open; the others are cancelled (Complete skipped)', k.body.ok && wf(db, 'WO-1250', 'Status') === 'Assigned' && wf(db, 'WO-1239', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Status') === 'Cancelled' && wf(db, 'WO-1251', 'Status') === 'Complete');
+  t('keep_one: the chosen WO stays open; the other COPIES are cancelled (Complete skipped); the ORIGINAL is never cancelled (Oct 13 follow-up)', k.body.ok && wf(db, 'WO-1250', 'Status') === 'Assigned' && wf(db, 'WO-1239', 'Status') === 'Accepted' && wf(db, 'WO-1252', 'Status') === 'Cancelled' && wf(db, 'WO-1251', 'Status') === 'Complete');
 }
 {
   // one member's status write fails: the others still go, the failure is reported, ok:false
@@ -614,6 +614,127 @@ async function groupOf4() {
   t('the HTTP body cannot set Bid_Group_ID/Duplicated_From through createWorkOrder (not touched)', !/Bid_Group_ID|Duplicated_From/.test(grab(wsrc, 'async function createWorkOrder(')));
   t('BUILD_VERSION bumped for this feature', /const BUILD_VERSION = '2026-10-1[2-9]\.\d+-[a-z-]+'/.test(wsrc));
   t('no swallowing catch in the new block', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(S.block) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(S.block));
+}
+
+// ── 16. FOLLOW-UP (Oct 13 2026): "Keep this" never cancels the ORIGINAL; a kept COPY becomes tenant-visible ─────────
+// Brett: keep_one must cancel only the duplicate copies that are not the winner. "Yes, winning becomes visible to
+// tenant" = Tenant_Visible TRUE on the winning copy, and NO SMS of any kind. Unlinking leaves Tenant_Visible alone.
+{
+  const winnerDb = async () => {
+    const { db, set } = await groupOf4();
+    for (const id of ['WO-1250', 'WO-1251', 'WO-1252']) set(id, 'Tenant_Visible', 'FALSE');   // exactly how /wo/duplicate stamps a copy
+    set('WO-1239', 'Tenant_Visible', 'TRUE');
+    return { db, set };
+  };
+  // (a) winner is a COPY: original stays active and untouched, other live copies cancelled, winner visible
+  {
+    const { db } = await winnerDb(); const b = build(db, { allowTwilio: true });
+    const pv = (await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252' }))).body;
+    const by = Object.fromEntries(pv.results.map(x => [x.wo_id, x]));
+    t('preview keep_one(copy): the ORIGINAL is kept, not targeted', by['WO-1239'].result === 'kept' && /original/i.test(by['WO-1239'].reasons.join()));
+    t('preview keep_one(copy): only the other live copy would be cancelled; Complete one skipped', by['WO-1250'].result === 'would_cancel' && by['WO-1251'].result === 'would_skip' && pv.summary.would_cancel === 1);
+    t('preview states the winner will become tenant-visible (nothing written yet)', pv.winner && pv.winner.wo_id === 'WO-1252' && pv.winner.is_original === false && pv.winner.will_become_tenant_visible === true && pv.winner.became_tenant_visible === false && wf(db, 'WO-1252', 'Tenant_Visible') === 'FALSE');
+    t('preview wrote nothing to the winner (no Bid_Winner column added either)', !db.Work_Orders.headers.includes('Bid_Winner') && wf(db, 'WO-1250', 'Status') === 'Assigned');
+    const snapQ = JSON.stringify(db.Message_Queue.rows);
+    const r = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true, updated_by: 'Brett' }));
+    t('confirm keep_one(copy): 200 ok, no errors', r.status === 200 && r.body.ok === true && r.body.errors.length === 0);
+    t('original WO-1239 is NOT cancelled (still Accepted, same vendor)', wf(db, 'WO-1239', 'Status') === 'Accepted' && wf(db, 'WO-1239', 'Vendor_ID') === '2' && by['WO-1239'] && r.body.results.find(x => x.wo_id === 'WO-1239').result === 'kept');
+    t('the other live copy WO-1250 is cancelled; Complete WO-1251 is skipped; winner stays open', wf(db, 'WO-1250', 'Status') === 'Cancelled' && wf(db, 'WO-1251', 'Status') === 'Complete' && wf(db, 'WO-1252', 'Status') === 'Assigned');
+    t('winning copy is now Tenant_Visible TRUE and marked Bid_Winner TRUE (read back)', wf(db, 'WO-1252', 'Tenant_Visible') === 'TRUE' && wf(db, 'WO-1252', 'Bid_Winner') === 'TRUE');
+    t('the losing copies are NOT made visible and are not marked winner', wf(db, 'WO-1250', 'Tenant_Visible') === 'FALSE' && wf(db, 'WO-1251', 'Tenant_Visible') === 'FALSE' && wf(db, 'WO-1250', 'Bid_Winner') !== 'TRUE' && wf(db, 'WO-1239', 'Bid_Winner') !== 'TRUE');
+    t('result reports the winner became tenant-visible', r.body.winner && r.body.winner.became_tenant_visible === true && r.body.winner.wo_id === 'WO-1252');
+    t('NO SMS / queue row / Twilio call of any kind (tenant, owner or vendor)', JSON.stringify(db.Message_Queue.rows) === snapQ && tab(db, 'Message_Queue').length === 0 && b.log.twilio.length === 0);
+    t('winner still has the flags that keep it silent (Tenant_Notify_* untouched)', wf(db, 'WO-1252', 'Tenant_SMS_Sent') !== 'TRUE');
+    t('WO_Audit has a Tenant_Visible FALSE->TRUE row for the winner', tab(db, 'WO_Audit').some(a => a.WO_ID === 'WO-1252' && a.Field === 'Tenant_Visible' && a.Old_Value === 'FALSE' && a.New_Value === 'TRUE' && a.Changed_By === 'Brett' && /no text/i.test(a.Notes)));
+    t('telemetry row for the cancel is Success TRUE and names the winner', tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel' && x.Success === 'TRUE' && /keep=WO-1252/.test(x.Notes)));
+    // idempotent re-run: nothing breaks, no second Tenant_Visible audit row
+    const again = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+    t('re-running the same keep_one is clean and does not re-audit visibility', again.body.ok && again.body.winner.became_tenant_visible === false && again.body.winner.already_visible === true && tab(db, 'WO_Audit').filter(a => a.WO_ID === 'WO-1252' && a.Field === 'Tenant_Visible').length === 1);
+    // owner portal: winner (still linked) is shown; a still-linked non-winner copy stays hidden
+    db.Work_Orders.rows.push(db.Work_Orders.headers.map(h => ({ ID: 'L9', Property_ID: '70', Status: 'Assigned', Duplicated_From: 'WO-1239', Bid_Group_ID: 'BG-1001', Tenant_Visible: 'FALSE' }[h] ?? '')));
+    const ow = await call(b.ownerWorkorders(env, new URL('https://x/owner-workorders?owner_id=5')));
+    const oids = ow.body.map(w => w.ID);
+    t('owner portal: the winning copy (still linked to the group) IS shown', oids.includes('WO-1252'));
+    t('owner portal: the original is shown; a still-linked non-winner copy is still hidden', oids.includes('WO-1239') && !oids.includes('L9') && !oids.includes('WO-1250'));
+  }
+  // (b) winner is the ORIGINAL: copies cancelled, original untouched, nothing made visible/winner
+  {
+    const { db } = await winnerDb(); const b = build(db, { allowTwilio: true });
+    const pv = (await call(b.woBidGroupCancel(env, { wo_id: 'WO-1250', mode: 'keep_one', keep_wo_id: 'WO-1239' }))).body;
+    t('preview keep_one(original): winner is the original, no visibility change planned', pv.winner.is_original === true && pv.winner.will_become_tenant_visible === false);
+    const r = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1250', mode: 'keep_one', keep_wo_id: 'WO-1239', confirm: true }));
+    t('keep_one(original): all live copies cancelled, original untouched and active', r.body.ok && wf(db, 'WO-1239', 'Status') === 'Accepted' && wf(db, 'WO-1250', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Status') === 'Cancelled');
+    t('keep_one(original): no Tenant_Visible/Bid_Winner writes, no audit for them', wf(db, 'WO-1239', 'Tenant_Visible') === 'TRUE' && wf(db, 'WO-1252', 'Tenant_Visible') === 'FALSE' && !tab(db, 'WO_Audit').some(a => a.Field === 'Tenant_Visible' || a.Field === 'Bid_Winner') && r.body.winner.became_tenant_visible === false);
+    t('keep_one(original): no SMS', tab(db, 'Message_Queue').length === 0 && b.log.twilio.length === 0);
+  }
+  // (c) original is protected EVEN IF it is cancellable and the winner is a copy (explicit regression for decision 1); 'all' still cancels it
+  {
+    const { db } = await winnerDb(); const b = build(db, { allowTwilio: true });
+    await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'keep_one', keep_wo_id: 'WO-1250', confirm: true }));
+    t('regression: keep_one never cancels the original (before this follow-up it did)', wf(db, 'WO-1239', 'Status') === 'Accepted');
+    const { db: db2 } = await winnerDb(); const b2 = build(db2);
+    await call(b2.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'all', confirm: true }));
+    t('"Cancel whole group" (mode all) is unchanged: it still cancels the original', wf(db2, 'WO-1239', 'Status') === 'Cancelled');
+  }
+  // (d) winner write fails -> NOTHING is cancelled, error is returned and logged (a downstream effect never fires after a failed write)
+  {
+    const { db } = await winnerDb();
+    const b = build(db, { allowTwilio: true, throwOnWrite: (path, method, body) => method === 'POST' && path === '/values:batchUpdate' && /Tenant_Visible|"TRUE"/.test(String(body)) && !/Cancelled/.test(String(body)) && String(body).includes('"TRUE"') });
+    const r = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+    t('failed winner write: 500, ok false, error names the winner', r.status === 500 && r.body.ok === false && r.body.errors.some(e => /WO-1252/.test(e)));
+    t('failed winner write: no member was cancelled', woRows(db).every(w => w.Status !== 'Cancelled'));
+    t('failed winner write is logged to Ops_Telemetry as a failure', tab(db, 'Ops_Telemetry').some(x => x.Job_Type === 'wo_bid_cancel' && x.Success === 'FALSE' && /WO-1252/.test(x.Notes)));
+  }
+  // (e) a cancelled / voided winner is refused (would leave nothing alive)
+  {
+    const { db, set } = await winnerDb(); const b = build(db);
+    set('WO-1250', 'Status', 'Cancelled'); set('WO-1252', 'Voided', 'TRUE');
+    const r1 = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1250', confirm: true }));
+    const r2 = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252' }));
+    t('keep_one on a cancelled member is a clear 400 (also in preview), nothing changes', r1.status === 400 && /cancelled/i.test(r1.body.error) && r2.status === 400 && /voided/i.test(r2.body.error) && wf(db, 'WO-1239', 'Status') === 'Accepted');
+  }
+  // (f) switching the winner: Brett earlier kept WO-1250, now keeps WO-1252 -> the old marker is cleared
+  {
+    const { db, set } = await winnerDb();
+    db.Work_Orders.headers.push('Bid_Winner'); db.Work_Orders.rows.forEach(r => r.push(''));
+    set('WO-1250', 'Bid_Winner', 'TRUE'); set('WO-1250', 'Tenant_Visible', 'TRUE');
+    const b = build(db);
+    const r = await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+    t('re-choosing a different winner moves the marker (old winner is cancelled and no longer marked)', r.status === 200 && wf(db, 'WO-1252', 'Bid_Winner') === 'TRUE' && wf(db, 'WO-1250', 'Bid_Winner') === '' && wf(db, 'WO-1250', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Tenant_Visible') === 'TRUE');
+  }
+  // (g) Unlink leaves Tenant_Visible exactly as it is (both values); duplicates/all modes never touch visibility
+  {
+    const { db } = await winnerDb(); const b = build(db);
+    await call(b.woBidGroupUnlink(env, { wo_id: 'WO-1250' }));
+    t('unlink a hidden copy: Tenant_Visible stays FALSE', wf(db, 'WO-1250', 'Bid_Group_ID') === '' && wf(db, 'WO-1250', 'Tenant_Visible') === 'FALSE');
+    const { db: d2, set } = await winnerDb(); set('WO-1252', 'Tenant_Visible', 'TRUE'); const b2 = build(d2);
+    await call(b2.woBidGroupUnlink(env, { wo_id: 'WO-1252' }));
+    t('unlink a visible copy: Tenant_Visible stays TRUE', wf(d2, 'WO-1252', 'Bid_Group_ID') === '' && wf(d2, 'WO-1252', 'Tenant_Visible') === 'TRUE');
+    const { db: d3 } = await winnerDb(); const b3 = build(d3);
+    await call(b3.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates', confirm: true }));
+    t('mode duplicates never changes any Tenant_Visible', ['WO-1250', 'WO-1251', 'WO-1252'].every(id => wf(d3, id, 'Tenant_Visible') === 'FALSE') && wf(d3, 'WO-1239', 'Tenant_Visible') === 'TRUE');
+    t('unlink code does not touch Tenant_Visible at all', !/Tenant_Visible/.test(grab(wsrc, 'async function woBidGroupUnlink(')));
+  }
+  // (h) GET /wo/bid-group exposes the winner + visibility for the Hub panel
+  {
+    const { db } = await winnerDb(); const b = build(db);
+    await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252', confirm: true }));
+    const g = (await call(b.woBidGroupGet(env, new URL('https://x/wo/bid-group?wo_id=WO-1252')))).body;
+    const m = Object.fromEntries(g.members.map(x => [x.id, x]));
+    t('GET /wo/bid-group: winner flagged with tenant_visible; others not', m['WO-1252'].is_winner === true && m['WO-1252'].tenant_visible === true && m['WO-1250'].is_winner === false && m['WO-1250'].tenant_visible === false);
+  }
+  // (i) tenant portal: the winner is no longer filtered out (the same predicate tenantWorkorders uses)
+  {
+    const tw = grab(wsrc, 'async function tenantWorkorders(').slice(0, 2500);
+    t('tenant portal hides only Tenant_Visible === "FALSE" (so TRUE shows the winner)', /w\.Tenant_Visible === 'FALSE'\) return false/.test(tw));
+  }
+  // (j) source-level guards
+  {
+    const cancelSrc = grab(wsrc, 'async function woBidGroupCancel(');
+    t('cancel code: no SMS/notify/queue call anywhere in the cancel path', !/sendSMS|smsGatedSend|assignVendor|queueMessage|Message_Queue|notifyTenant/.test(cancelSrc));
+    t('cancel code: no swallowing catch', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(cancelSrc));
+    t('BUILD_VERSION bumped to the follow-up value', /const BUILD_VERSION = '2026-10-13\.\d+-[a-z-]+'/.test(wsrc));
+  }
 }
 
 console.log(`\nwo-duplicate: ${pass} passed, ${fail} failed`);
