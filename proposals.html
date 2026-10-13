@@ -184,7 +184,7 @@ function classify(allQ){
       if(Number.isFinite(sn)&&sn<=now){            // snooze expired → only resurface after the Scout re-checked it vs builds since
         const v=String(x.Scout_Verdict||'').toLowerCase();
         const graceOver=(now-sn)>RECHECK_GRACE_DAYS*86400000;
-        if(v==='covered'){ x.__why=x.Scout_Note||'Scout says builds shipped since cover this'; out.built.push(x); return; }
+        if(v==='covered'&&!REVIEW_ANYWAY[x.ID]){ x.__why=x.Scout_Note||'Scout says builds shipped since cover this'; out.built.push(x); return; }
         if(v==='keep'||v==='update'||graceOver){ back=true; x.__back=v?('back from snooze · Scout re-checked: '+v):'back from snooze · not re-checked yet'; }
         else waiting=true;
       }
