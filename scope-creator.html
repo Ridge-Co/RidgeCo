@@ -375,6 +375,28 @@ function updateScheduleField(i,field,val){
   else m[field] = val;
   renderScheduleTotal();
 }
+// Auto-rebalance (Oct 13 2026, Brett: "when I change the payment schedule, the other milestones did not
+// recalculate"): after editing one milestone's %, the OTHER milestones share what is left of 100%,
+// in proportion to what they had (equal shares if they were all 0). The row you typed is never touched.
+// Updates the other rows' boxes in place so the field you are typing in keeps focus.
+function rebalanceSchedule(editedIdx){
+  var ms=scheduleState.milestones;
+  var others=[]; ms.forEach(function(m,j){ if(j!==editedIdx) others.push(j); });
+  if(!others.length) return;
+  var remaining=Math.max(0, 100-(+ms[editedIdx].percent||0));
+  var sumOthers=others.reduce(function(s,j){ return s+(+ms[j].percent||0); },0);
+  var running=0;
+  others.forEach(function(j,k){
+    var v;
+    if(k===others.length-1) v=Math.round((remaining-running)*100)/100;           // last other row absorbs rounding
+    else v=Math.round((sumOthers>0 ? remaining*(+ms[j].percent||0)/sumOthers : remaining/others.length)*100)/100;
+    if(v<0) v=0;
+    ms[j].percent=v; running+=v;
+  });
+  var host=document.getElementById('schedule-rows');
+  var boxes=(host&&host.querySelectorAll)?host.querySelectorAll('input[data-pct]'):[];
+  for(var b=0;b<boxes.length;b++){ if(b!==editedIdx && ms[b]) boxes[b].value=ms[b].percent; }
+}
 function renderSchedule(){
   var html = scheduleState.milestones.map(function(m,i){
     return '<div class="row" style="gap:6px;margin:4px 0;align-items:center;">'
