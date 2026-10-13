@@ -16365,7 +16365,7 @@ async function opsQueueRead(env, url) {
   // that's already been queued or built instead of re-offering it as fresh. Same read-only data
   // (titles/problems, no money/PII), so the narrow OPS_QUEUE_TOKEN may read it too.
   if (url && url.searchParams && url.searchParams.get('all') === '1') {
-    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 200) });
+    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 400) });
   }
   const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
   return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
