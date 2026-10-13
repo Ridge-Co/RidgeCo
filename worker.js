@@ -14924,10 +14924,19 @@ async function schedRunNext(env, ctx, opts) {
   if (parsed.error) return await infraFail(parsed.error);
   let st = parsed.state;
   const t = nowMs(), now = new Date(t), nowISO = now.toISOString();
+  // First-ever tick (blank/absent Scheduler_State): seed daily/weekly jobs whose slot already passed today so nothing is re-sent.
+  const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
+  const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
+  if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
   const dueNow = schedDueJobs(st, now, jobs, { only });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
 
-  if (opts.dry) return { status: 200, body: Object.assign({}, base, { dry: true, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) }) };
+  // DRY RUN / PREFLIGHT: no claim, no state write, no SMS, no job code. Lists what is due and (counts only) what it would do.
+  if (opts.dry) {
+    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) });
+    if (opts.preflight !== false) body.preflight = await schedPreflight(env, force ? only.slice() : dueNow.map(d => d.name), rows, now, seeded);
+    return { status: 200, body };
+  }
 
   const claimedUntil = Date.parse(st.claim_until || '');
   if (!isNaN(claimedUntil) && claimedUntil > t) {
