@@ -2894,8 +2894,9 @@ function renderBidGroupPanel(holder, woId, res) {
       '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">' +
         '<div style="min-width:0"><span style="color:var(--info);font-size:13px;font-weight:bold">' + esc(m.id) + '</span>' +
           chip(m.is_original ? 'ORIGINAL' : 'COPY', m.is_original ? 'var(--surface2)' : '#eaf2ff', m.is_original ? 'var(--muted)' : '#1d4ed8') +
-          chip(esc(m.status||'New'), cancelled ? '#f3f5f8' : '#e8f5e9', cancelled ? 'var(--muted)' : '#1b5e20') + (here ? chip('THIS ONE','#fff4d6','#8a5a00') : '') +
-          '<div style="font-size:12px;color:var(--text);margin-top:3px">' + (m.vendor_name ? esc(m.vendor_name) : '<span style="color:var(--muted)">no vendor yet</span>') + '</div>' + est + '</div>' +
+          chip(esc(m.status||'New'), cancelled ? '#f3f5f8' : '#e8f5e9', cancelled ? 'var(--muted)' : '#1b5e20') + (m.is_winner ? chip('KEPT','#e0f2fe','#075985') : '') + (here ? chip('THIS ONE','#fff4d6','#8a5a00') : '') +
+          '<div style="font-size:12px;color:var(--text);margin-top:3px">' + (m.vendor_name ? esc(m.vendor_name) : '<span style="color:var(--muted)">no vendor yet</span>') + '</div>' + est +
+          (m.is_winner ? '<div data-bg-winner-note style="font-size:11px;color:var(--muted);margin-top:2px">The copy you kept' + (m.tenant_visible ? ' — the tenant can see it' : '') + '</div>' : '') + '</div>' +
       '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
         (here ? '' : '<button class="btn small secondary" style="min-height:44px;flex:1 1 90px" onclick="bgOpen(\'' + esc(m.id) + '\')">Open</button>') +
