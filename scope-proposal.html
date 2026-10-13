@@ -307,14 +307,15 @@ function buildSelections(){
   return sel;
 }
 
+function isFlatRow(m){ return m && m.calc_mode==='flat' && m.flat_customer_amount!=null; }
+// Mirrors the server (scopeComputeMilestoneAmounts): flat-$ rows are fixed exactly as typed; the LAST
+// non-flat row absorbs rounding and any add-on difference so the payments always add up to the total.
 function scheduleAmounts(schedule, subtotal){
-  var running=0;
-  return (schedule||[]).map(function(m,i){
-    var isLast = i===((schedule||[]).length-1);
-    var amt = isLast ? +(subtotal-running).toFixed(2) : +((m.percent/100)*subtotal).toFixed(2);
-    running = +(running+amt).toFixed(2);
-    return { label:m.label, percent:m.percent, trigger:m.trigger, customer_amount:amt };
-  });
+  var s = schedule || [], absorber = -1, k;
+  for (k=s.length-1;k>=0;k--){ if(!isFlatRow(s[k])){ absorber=k; break; } }
+  var amts = s.map(function(m){ return isFlatRow(m) ? +(+m.flat_customer_amount).toFixed(2) : +((m.percent/100)*subtotal).toFixed(2); });
+  if (absorber>=0){ var others=0; amts.forEach(function(a,i){ if(i!==absorber) others+=a; }); amts[absorber]=+(subtotal-others).toFixed(2); }
+  return s.map(function(m,i){ return { label:m.label, percent:m.percent, trigger:m.trigger, customer_amount:amts[i], calc_mode:m.calc_mode, flat_customer_amount:m.flat_customer_amount }; });
 }
 function scheduleLineHtml(m){
   var when = m.trigger==='upfront' ? ' (due now)' : m.trigger==='completion' ? ' (due at completion)' : '';
