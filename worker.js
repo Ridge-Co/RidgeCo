@@ -4617,7 +4617,7 @@ async function scopeProposalView(env, url) {
   const rawSchedule = scopeParsePaymentSchedule(s);
   const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
   const schedule = scopeComputeMilestoneAmounts(scheduleValidation.schedule || scopeDefaultPaymentSchedule(), subtotal, 0)
-    .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount })); // never vendor_amount — customer-facing boundary
+    .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount, calc_mode: m.calc_mode, flat_customer_amount: m.flat_customer_amount })); // never vendor_amount — customer-facing boundary
   let signed = null;
   try {
     await scopeSigTab(env);
