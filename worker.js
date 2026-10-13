@@ -194,7 +194,11 @@ const _hubWorkerCore = {
             // greenlit/prepared/dropped — same narrow-write posture as /ops-queue-prepare above.
             // POST /ops-queue/start-build (the button that actually fires a routine, i.e. spends)
             // deliberately stays OFF this list — full admin secret only, same tier as /ops-approve.
-            (request.method === 'POST' && path === '/ops-queue-status')
+            (request.method === 'POST' && path === '/ops-queue-status') ||
+            // POST /ops-queue/sync (Oct 13 2026): checks public GitHub PR state for in-flight builds and
+            // writes Build_State/PR_Number/Status→done only. Lets the Hub scheduler (Apps Script) call it
+            // daily without the admin secret.
+            (request.method === 'POST' && path === '/ops-queue/sync')
           );
         // Narrow WRITE token for the Optimizer Scout & Reuse-Radar scheduled task (new, Sep 20
         // 2026): accepted ONLY for POST /ops-queue/scout-submit, which inserts the task's ranked
