@@ -16878,7 +16878,7 @@ async function opsQueueScoutSubmit(env, body) {
       Trigger: 'scout_reuse_radar', Delivered: 'no',
     });
   } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
-  return json({ ok: true, queued });
+  return json({ ok: true, queued, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
 }
 
 // GET /ops-telemetry?days=7 — authed read of the telemetry tab (for the Hub + humans).
