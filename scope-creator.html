@@ -671,6 +671,8 @@ function renderEditor(){
   // proposal
   if((s.Proposal_Text||'').trim()){ document.getElementById('proposal-out').classList.remove('hide'); document.getElementById('proposal-text').value=s.Proposal_Text; }
   else { document.getElementById('proposal-out').classList.add('hide'); document.getElementById('proposal-text').value=''; }
+  try{ var pvItems=JSON.parse(s.Proposal_Items_JSON||'[]'); renderCustomerPreview(pvItems, scheduleState.milestones); }
+  catch(e){ document.getElementById('cust-preview').classList.add('hide'); setStatus('prop-status','⚠ Could not read the saved proposal options for the preview ('+e.message+'). Tap Generate proposal to rebuild it.','err'); }
   ownerGateEditMode=false;
   gateSections();
   loadScopePhotos();
