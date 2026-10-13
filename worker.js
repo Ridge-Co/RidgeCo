@@ -15348,7 +15348,7 @@ async function runWeeklyReview(env, opts) {
   let delivery = null;
   if (opts.deliver) { try { delivery = await deliverReview(env, metrics, proposal, days); } catch (e) { delivery = { delivered: false, reason: 'error', error: String((e && e.message) || e).slice(0, 200) }; } }
   const deliveredCol = !opts.deliver ? 'no' : (delivery && delivery.delivered) ? 'yes' : ('attempted:' + ((delivery && delivery.reason) || 'failed'));
-  let logged = false;
+  let logged = false, loggedError = '';
   try {
     await ensureTab(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await ensureColumns(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
