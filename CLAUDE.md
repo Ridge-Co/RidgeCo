@@ -127,6 +127,13 @@ it without my direct intervention."* Treat that as the standing bar for anything
 shaped, not staging-specific — diagnose with the tools already in the session before naming an
 issue to Brett, and when it does need him, name the exact narrow gap, not the whole symptom.
 
+## NO CRON ANYWHERE (permanent, Brett, Oct 12 2026)
+- Never add a Cloudflare Cron Trigger, a wrangler.toml `crons` entry, or a GitHub Actions `schedule:` for anything that must run. Keep `[triggers] crons = []`.
+- The only clock is the Apps Script trigger that calls POST /cron/run. Add jobs to SCHED_JOBS in worker.js; never a new trigger.
+- Reason: the Cloudflare account is at its cron cap, and an over-cap trigger fails to attach with no error, so jobs die silently.
+- Every job returns {ok, errors}. Failures must be loud (Ops_Telemetry plus /cron/status overdue), never swallowed.
+- A user-facing 'next sweep / runs hourly' message must name the scheduler job, not 'cron'.
+
 ## MANDATORY, ABOVE EVERYTHING ELSE: NOTHING EVER FAILS SILENTLY (Brett, Oct 1 2026)
 
 Brett's own words: *"Failing silently is not an option, not acceptable. I don't want anything that
