@@ -26,7 +26,7 @@ function grabConst(name) {
   return src.slice(i, j + 1);
 }
 
-// ── fake sheet backing the handlers ──────────────────────────────────────────────────────────────────────
+// ── fake sheet backing the handlers ─────────────────────────────────────────────────────────
 const COLS = new Function('return ' + grabConst('OPS_QUEUE_COLS').replace(/^const OPS_QUEUE_COLS = /, '').replace(/;$/, ''))();
 const STATUSES = new Function('return ' + grabConst('OPS_QUEUE_STATUSES').replace(/^const OPS_QUEUE_STATUSES = /, '').replace(/;$/, ''))();
 let SHEET = [];
@@ -54,7 +54,7 @@ const names = ['QUEUE_STOPWORDS', 'QUEUE_STANDING_RULES', 'QUEUE_REPO'];
 const code = names.map(grabConst).join('\n') + '\n' + [
   'queueTokens', 'queueDice', 'queueSimilarity', 'findQueueMatch', 'isSnoozed', 'snoozeUntilFromDays',
   'buildShippedIndex', 'findShippedMatch', 'prStateToBuildState', 'matchPrToItem', 'cleanPrNumber', 'ghPublicJson',
-  'opsApprove', 'opsQueueUpdate', 'opsQueueStatus', 'validateQueueStatusReport', 'opsQueueSync',
+  'opsApprove', 'opsQueueUpdate', 'opsQueueStatus', 'validateQueueStatusReport', 'opsQueueSync', 'updateQueueRowOrThrow',
   'validateScoutSubmitItems', 'buildScoutQueueRow', 'opsQueueScoutSubmit', 'buildStartBuildRoutineText',
 ].map(n => grab(n)).join('\n') + `
 const OPS_QUEUE_TAB = 'Ops_Build_Queue', OPS_REVIEW_TAB = 'Ops_Review_Log', OPS_REVIEW_COLS = [];
@@ -67,11 +67,11 @@ const L = new Function('__COLS', '__STATUSES', ...Object.keys(helpers), code)(CO
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 const eq = (a, b, m) => { assert.deepStrictEqual(a, b, m); n++; };
 
-// ── schema ───────────────────────────────────────────────────────────────────────────────────────────
+// ── schema ──────────────────────────────────────────────────────────────────────────────────
 for (const c of ['Brett_Note', 'Snooze_Until', 'PR_Number', 'Build_State', 'Build_Updated', 'Dup_Of', 'Shipped_Match', 'Scout_Verdict', 'Scout_Note', 'Scout_Reviewed']) ok(COLS.includes(c), 'column ' + c);
 ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (no new lifecycle status needed)');
 
-// ── similarity (real rows from Brett's queue, Oct 13 2026) ────────────────────────────────────────────────────────────────────────────────────────────────
+// ── similarity (real rows from Brett's queue, Oct 13 2026) ──────────────────────────────────
 {
   const a = { Title: 'Add prompt caching to the model router', First_Step: "Mark the stable prefix (system prompt + reference data) as cached in routeAI's request", Problem: 'Every call re-sends the full static prefix.' };
   const b = Object.assign({}, a);
@@ -86,7 +86,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   eq(L.queueDice(new Set(), new Set(['a'])), 0, 'empty set dice = 0');
 }
 
-// ── findQueueMatch ───────────────────────────────────────────────────────────────────────────────────────────────────
+// ── findQueueMatch ──────────────────────────────────────────────────────────────────────────
 {
   const rows = [{ ID: '1', Title: 'Monthly owner summary email', Problem: 'owners want a recap', First_Step: 'send per-owner email', Status: 'dropped' }];
   const it = { title: 'Monthly owner summary email', problem: 'owners want a recap', action: 'send per-owner email' };
@@ -94,7 +94,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   ok(L.findQueueMatch(it, rows, 'same', ['1']) === null, 'ignoreIds skips the row itself');
 }
 
-// ── snooze helpers ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── snooze helpers ──────────────────────────────────────────────────────────────────────────
 {
   const now = Date.parse('2026-10-13T12:00:00Z');
   eq(L.snoozeUntilFromDays(10, now), '2026-10-23T12:00:00.000Z', '10 days');
@@ -107,7 +107,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   ok(!L.isSnoozed({ Snooze_Until: '' }, now), 'blank = not snoozed');
 }
 
-// ── PR helpers ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── PR helpers ──────────────────────────────────────────────────────────────────────────────
 {
   eq(L.prStateToBuildState({ state: 'open' }), 'pr_open', 'open');
   eq(L.prStateToBuildState({ state: 'closed', merged: true }), 'live', 'merged');
@@ -121,7 +121,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   eq(L.matchPrToItem(prs, '7'), null, 'no match');
 }
 
-// ── shipped index ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── shipped index ───────────────────────────────────────────────────────────────────────────
 {
   const log = '# Log\n\n## [FL-20261009-1200-sfx] Oct 9, 2026 — small-fixes batch — mobile input font zoom prompt caching\nbody\n**5. Door watchdog health check alert guest lockout.** more text\n';
   const idx = L.buildShippedIndex(log);
@@ -131,7 +131,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   ok(L.findShippedMatch('font fix', idx) === null, 'too-short titles never flag');
 }
 
-// ── opsApprove promotes in place (no clone) ────────────────────────────────────────────────────────────────────────────────────────────────
+// ── opsApprove promotes in place (no clone) ─────────────────────────────────────────────────
 {
   resetSheet([
     { ID: '1', Title: 'Monthly owner summary email', Problem: 'recap', First_Step: 'send email', Status: 'proposed' },
@@ -147,7 +147,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   eq(SHEET.find(x => x.ID === '1').Status, 'greenlit', 'proposed twin promoted in place');
 }
 
-// ── opsQueueUpdate: note, snooze, status clears snooze ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── opsQueueUpdate: note, snooze, status clears snooze ──────────────────────────────────────
 {
   resetSheet([{ ID: '9', Title: 'Owner view', Status: 'proposed' }]);
   let r = await L.opsQueueUpdate(env, { id: '9', note: "Don't show monthly spend" });
@@ -163,7 +163,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   r = await L.opsQueueUpdate(env, { id: '9', build_state: 'bogus' }); eq(r.status, 400, 'bad build_state rejected');
 }
 
-// ── opsQueueStatus: build session reports PR ───────────────────────────────────────────────────────────────────────────────────────────────
+// ── opsQueueStatus: build session reports PR ────────────────────────────────────────────────
 {
   resetSheet([{ ID: '3', Title: 'T', Status: 'building', Build_State: 'building' }]);
   let r = await L.opsQueueStatus(env, { id: '3', status: 'done', pr_number: 231 });
@@ -173,7 +173,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   eq(SHEET[0].Build_State, 'held', 'held build state');
 }
 
-// ── scout submit: dedup / overlap / shipped flag / rechecks ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── scout submit: dedup / overlap / shipped flag / rechecks ─────────────────────────────────
 {
   globalThis.__shipped = { ok: true, index: L.buildShippedIndex('## [FL-1] shipped — gutter cleaning reminder schedule template\n') };
   resetSheet([
@@ -208,7 +208,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   const r4 = await L.opsQueueScoutSubmit(env, {}); eq(r4.status, 400, 'empty submit still 400');
 }
 
-// ── sync: PR state onto rows ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── sync: PR state onto rows ────────────────────────────────────────────────────────────────
 {
   const prs = {
     '/pulls/10': { number: 10, state: 'closed', merged: true, merged_at: 'x' },
@@ -266,7 +266,26 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   eq(calls, 1, 'GitHub only called for the one PR not supplied');
 }
 
-// ── routine text carries Brett's change + standing rules ──────────────────────────────────────────────────────────────────────────────────────────
+// ── review fixes: short titles, rebuild clears the PR, untrusted PR data, approve guard ─────
+{
+  ok(!L.queueSimilarity({ title: 'Add vendor page' }, { title: 'Show vendor flow' }).same, 'short titles are never auto-"same"');
+  ok(L.queueSimilarity({ title: 'Add vendor page' }, { title: 'Show vendor flow' }).overlap, 'short near-twins are still flagged as overlap');
+  ok(L.queueSimilarity({ title: 'Owner portal hides monthly spend totals dashboard' }, { title: 'Owner portal hides monthly spend totals on dashboard' }).same, 'long near-verbatim titles still count as same');
+  resetSheet([{ ID: '60', Title: 'rebuild me', Status: 'done', PR_Number: '77', Build_State: 'pr_closed' }]);
+  await L.opsQueueUpdate(env, { id: '60', status: 'greenlit', build_state: '' });
+  eq([SHEET[0].PR_Number || '', SHEET[0].Build_State || ''], ['', ''], 'Rebuild clears the old PR number and build state');
+  resetSheet([{ ID: '61', Title: 'x', Status: 'building', PR_Number: '77', Build_State: 'pr_open' }]);
+  globalThis.fetch = async () => ({ ok: false, status: 403, json: async () => ({}) });
+  const r = await L.opsQueueSync(env, { prs: [{ number: 77, state: 'closed', merged_at: 'x' }] }, { ignoreSuppliedPrs: true });
+  eq(SHEET[0].Build_State, 'pr_open', 'PR data from the narrow build-session token is ignored (cannot mark an item live)');
+  eq(r.body.errors.length, 1, 'and the Worker-side GitHub failure is reported');
+  resetSheet([{ ID: '62', Title: 'x', Status: 'done', PR_Number: '77', Build_State: 'pr_open' }]);
+  const r2 = await L.opsQueueSync(env, {});
+  ok(r2.body.errors.length === 1, 'missing-row / GitHub failures are reported');
+  ok(/_its\.every\(i => !findQueueMatch\(/.test(src), 'staging-token /ops-approve refuses TEST- titles that fuzzy-match a real row');
+}
+
+// ── routine text carries Brett's change + standing rules ────────────────────────────────────
 {
   const t = L.buildStartBuildRoutineText([{ ID: '5', Title: 'Owner view', Risk_Class: 'SAFE', Brett_Note: 'Do not show monthly spend' }, { ID: '6', Title: 'Other', Risk_Class: 'SAFE' }], 'TOK');
   ok(/BRETT'S CHANGE \(overrides the proposal wherever they conflict\): Do not show monthly spend/.test(t), 'note injected');
@@ -275,7 +294,7 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   ok(/Ops queue item #/.test(t) && /"pr_number"/.test(t), 'PR reporting instructions');
 }
 
-// ── wiring ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── wiring ──────────────────────────────────────────────────────────────────────────────────
 ok(/path === '\/ops-queue\/sync'\)\s+return await opsQueueSync/.test(src), 'sync route wired');
 ok(/path === '\/ops-queue\/sync'\)\n\s+\);/.test(src) || /request\.method === 'POST' && path === '\/ops-queue\/sync'/.test(src), 'sync reachable with OPS_QUEUE_TOKEN');
 ok(/BUILD_VERSION = '\d{4}-\d{2}-\d{2}\.\d+-[a-z-]+'/.test(src), 'BUILD_VERSION format rule');
