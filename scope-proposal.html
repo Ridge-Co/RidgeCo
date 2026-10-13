@@ -424,7 +424,15 @@ function render(d){
     renderLegacyText(d);
     return;
   }
-  var itemsHtml = items.map(function(it){ return itemHtml(it, locked, locked ? d.signed.selections : null); }).join('');
+  var sigSel = locked ? d.signed.selections : null;
+  var baseHtml = items.filter(function(it){ return !it.optional; }).map(function(it){ return itemHtml(it, locked, sigSel); }).join('');
+  var addonItems = items.filter(function(it){ return it.optional; });
+  var itemsHtml = baseHtml;
+  if (addonItems.length) {
+    itemsHtml += '<div class="addon-hd">Optional add-ons</div>'
+      + '<div class="addon-sub">' + (locked ? 'What you chose to add to your job.' : 'Not included in the total unless you tick them &mdash; the total and payment schedule below update as you choose.') + '</div>'
+      + addonItems.map(function(it){ return itemHtml(it, locked, sigSel); }).join('');
+  }
   var subtotal = locked ? d.signed.subtotal : d.subtotal;
   var schedule = locked ? (d.signed.schedule || []) : (d.schedule || []);
   // Signed milestone rows carry customer_amount already computed at sign time; the live (unsigned)
