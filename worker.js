@@ -963,26 +963,6 @@ const _hubWorkerCore = {
     const r = await schedUnexpectedCloudflareCron(env, event);
     throw new Error(r.error); // also shows as a failed run in Cloudflare's Cron Events
   }
-    // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
-    // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
-    // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
-    // Oct 1 2026 (Brett: nothing may fail silently): a failure here is logged to Ops_Telemetry, never swallowed.
-    // qbSyncPayments returns a Response (never throws on its own errors) -- inspect its JSON for ok:false/errors too.
-    let _sweepRanInSync = false;
-    try {
-      const _syncRes = await qbSyncPayments(env, {});
-      let _syncJson = null; try { _syncJson = await _syncRes.clone().json(); } catch (_) {}
-      _sweepRanInSync = !!(_syncJson && _syncJson.deposit_sweep);
-      if (_syncJson && (_syncJson.ok === false || (_syncJson.errors && _syncJson.errors.length))) {
-        await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify(_syncJson.errors || _syncJson.error || 'ok:false')).slice(0, 480) });
-      }
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_qb_sync_payments failed and telemetry write failed', e); } }
-    // Safety net (Oct 1 2026): the 15-minute cron may not be scheduled in production, so also run the
-    // deposit-paid sweep daily. processDepositPaidSweep logs its own errors / not-found scopes to Ops_Telemetry.
-    // qbSyncPayments already runs the sweep (and logs its findings) -- only run it here if that did not happen, so there is no duplicate telemetry/SMS.
-    try { if (!_sweepRanInSync) await processDepositPaidSweep(env); }
-    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduled/deposit-paid-sweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_deposit_paid_sweep failed and telemetry write failed', e); } }
-  }
 };
 
 // Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
