@@ -58,7 +58,10 @@ const mk = (o) => Object.assign({ hour: 8, cfg: { estimate_sms_since: SINCE }, e
   ok(r.sent[0].tokens.List.includes('A Cesar $1250.00') && r.sent[0].tokens.Count === 1, 'digest lists the WO, vendor and amount');
   ok(r.cfgWrites.some(x => x.key === 'estimate_reminder_last_date' && x.value === '2026-10-02'), 'claims the day before sending');
 }
-{ const r = runner(mk({ hour: 9 })); const out = await r.fn({}, NOW); ok(out.skipped && !r.sent.length, 'nothing at any other hour'); }
+// Oct 12 2026: no cron any more - the scheduler (Apps Script) ticks every ~15 min and may have been down at 8am, so the
+// reminder CATCHES UP from 8am until 6pm ET (still once per day via the day claim) and never fires before 8 or after hours.
+for (const h of [0, 7, 18, 19, 23]) { const r = runner(mk({ hour: h })); const out = await r.fn({}, NOW); ok(out.skipped && !r.sent.length, `nothing at ${h}:00 ET (outside the 8am-6pm window)`); }
+for (const h of [9, 12, 17]) { const r = runner(mk({ hour: h })); const out = await r.fn({}, NOW); ok(out.count === 1 && r.sent.length === 1, `catch-up: still sends once at ${h}:00 ET if the scheduler was down at 8`); }
 { const r = runner(mk({ cfg: { estimate_sms_since: SINCE, estimate_reminder_last_date: '2026-10-02' } })); const out = await r.fn({}, NOW); ok(out.skipped === 'already sent today' && !r.sent.length, 'never twice in one day (two sweeps can both fire)'); }
 { const r = runner(mk({ ests: [] })); const out = await r.fn({}, NOW); ok(out.count === 0 && !r.sent.length && !r.cfgWrites.length, 'nothing awaiting -> no text and the day is not burned'); }
 
