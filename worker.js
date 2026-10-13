@@ -661,6 +661,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-task-request/mark-reviewed') return await markVendorTaskReviewed(env, body);
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
+        if (path === '/message-queue/translate')  return await translateMessageQueue(env, body);
         if (path === '/invoice')                  return await createInvoice(env, body);
         if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
         if (path === '/property/add')             { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); return await propertyAddWithDupeCheck(env, body); }
