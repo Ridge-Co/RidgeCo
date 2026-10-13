@@ -410,7 +410,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   t('cron wrapper: own try/catch, logs telemetry AND alerts, never rethrows', /try \{\s*const wd = await runDoorWatchdogPass\(env\)/.test(cronFn) && /Job_Type: DOOR_WD_JOB/.test(cronFn) && /alertAdminOnFailure\(env, 'door_watchdog'/.test(cronFn) && !/throw /.test(cronFn));
   const toml = fs.readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   t('same-account Worker fetch enabled (global_fetch_strictly_public) - otherwise Cloudflare answers error 1042/404', /compatibility_flags = \["global_fetch_strictly_public"\]/.test(toml));
-  t('no new cron trigger added (account quota is full)', /crons = \["0 11 \* \* \*", "30 12 \* \* 1", "0 12 \* \* 3", "0 13 \* \* 1", "\*\/15 \* \* \* \*"\]/.test(toml));
+  t('NO cron triggers at all (permanent rule, Oct 12 2026): crons = [] removes any attached trigger', /\[triggers\]\s*\ncrons = \[\]/.test(toml) && !/crons = \[\s*"/.test(toml));
   const testFn = block.slice(block.indexOf('async function doorWatchdogTest('));
   t('test hook is staging-only (first statement)', /^async function doorWatchdogTest\(env, url, body\) \{\s*if \(!isStaging\(env, url\)\) return json\(\{ error: 'Not found' \}, 404\);/.test(testFn));
   t('test hook is routed + allowed for HUB_TEST_TOKEN writes', /path === '\/watchdog\/door-system\/test'\)\s*return await doorWatchdogTest\(env, url, body\)/.test(src) && /if \(path === '\/watchdog\/door-system\/test'\) return true;/.test(src));
