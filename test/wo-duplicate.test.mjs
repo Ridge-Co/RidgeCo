@@ -516,7 +516,7 @@ async function groupOf4() {
   for (const [body, want] of bad) { const r = await call(b.woBidGroupCancel(env, body)); t(`rejected ${JSON.stringify(body)} -> ${want}`, r.status === want && r.body.errors.length >= 1); }
   t('nothing was cancelled by the rejected calls', woRows(db).every(w => w.Status !== 'Cancelled'));
   const k = await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'keep_one', keep_wo_id: 'WO-1250', confirm: true }));
-  t('keep_one: the chosen WO stays open; the others are cancelled (Complete skipped)', k.body.ok && wf(db, 'WO-1250', 'Status') === 'Assigned' && wf(db, 'WO-1239', 'Status') === 'Cancelled' && wf(db, 'WO-1252', 'Status') === 'Cancelled' && wf(db, 'WO-1251', 'Status') === 'Complete');
+  t('keep_one: the chosen WO stays open; the other COPIES are cancelled (Complete skipped); the ORIGINAL is never cancelled (Oct 13 follow-up)', k.body.ok && wf(db, 'WO-1250', 'Status') === 'Assigned' && wf(db, 'WO-1239', 'Status') === 'Accepted' && wf(db, 'WO-1252', 'Status') === 'Cancelled' && wf(db, 'WO-1251', 'Status') === 'Complete');
 }
 {
   // one member's status write fails: the others still go, the failure is reported, ok:false
