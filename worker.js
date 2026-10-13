@@ -14596,6 +14596,23 @@ function schedDueJobs(state, now, jobs, opts) {
   }
   return out;
 }
+// FIRST-EVER TICK ONLY (Scheduler_State cell blank/absent): mark every daily/weekly job whose slot has ALREADY PASSED today
+// (ET) as done for today, so the first tick cannot re-send a digest / weekly review / AR report that the old Cloudflare
+// crons (or a person) already ran this morning. Mutates `state`; returns the seeded names. No last_ok is forged: the entry
+// carries last_status 'seeded' + last_seeded:true so /cron/status can tell it from a real run. Interval jobs are never
+// seeded (they run at once). Jobs added to the registry LATER (state exists, no entry) are not seeded: they keep catch-up.
+function schedSeedFirstRun(state, nowDate, jobs) {
+  const et = schedEtParts(nowDate), seeded = [];
+  for (const job of (jobs || SCHED_JOBS)) {
+    if (job.kind === 'interval') continue;
+    if (job.kind === 'weekly' && et.dow !== job.dow) continue;
+    if (et.minutes < schedAtMinutes(job.at)) continue;
+    state.jobs[job.name] = Object.assign({}, state.jobs[job.name], { last_key: et.date, last_status: 'seeded', last_seeded: true, seeded_at: nowDate.toISOString() });
+    seeded.push(job.name);
+  }
+  if (seeded.length) state.seeded = { at: nowDate.toISOString(), jobs: seeded.slice() };
+  return seeded;
+}
 function schedExpected(job) {
   if (job.kind === 'interval') return `every ${job.every_min}+ min`;
   if (job.kind === 'daily') return `daily after ${job.at} ET`;
