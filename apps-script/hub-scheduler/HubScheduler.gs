@@ -136,7 +136,7 @@ function runScheduler() {
 }
 
 // One HTTPS call to the Hub. Returns { ok:true, body } or { ok:false, problem } — never throws.
-function hub_(method, path, token) {
+function hub_(method, path, token, payload) {
   var opts = { method: method, headers: { 'X-Auth-Token': token }, muteHttpExceptions: true, followRedirects: false };
   if (method === 'post') { opts.contentType = 'application/json'; opts.payload = '{}'; }
   var resp;
