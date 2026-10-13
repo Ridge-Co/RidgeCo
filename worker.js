@@ -963,21 +963,6 @@ const _hubWorkerCore = {
     const r = await schedUnexpectedCloudflareCron(env, event);
     throw new Error(r.error); // also shows as a failed run in Cloudflare's Cron Events
   }
-    if (cron === '30 12 * * 1') {
-      try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    if (cron === '0 12 * * 3') {
-      try { await runWeeklyReview(env, { deliver: false, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    // Weekly Open Item Report (Aug 18 session) — Monday 13:00 UTC (9am EDT/8am EST), one hour
-    // after the daily digest slot so it never collides. Fully dormant until Brett sets Config
-    // ar_report_enabled=TRUE AND adds owners to AR_Report_OptIn — see runWeeklyArReport.
-    if (cron === '0 13 * * 1') {
-      try { await runWeeklyArReport(env); } catch (e) { /* non-fatal */ }
-      return;
-    }
     // Daily digest (existing) — 11:00 UTC. Now self-instruments a telemetry row so the
     // Ops_Telemetry tab self-creates and gets a heartbeat row every morning (best-effort).
     try {
