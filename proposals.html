@@ -219,7 +219,7 @@ async function maybeSync(q){
   if(!need)return; SYNCED=true;
   try{
     // GitHub blocks the Hub's shared server address, so look the PRs up from this browser and hand them over.
-    let prs=[]; try{ const g=await fetch('https://api.github.com/repos/Ridge-Co/RidgeCo/pulls?state=all&sort=updated&direction=desc&per_page=100',{headers:{'Accept':'application/vnd.github+json'}}); if(g.ok) prs=(await g.json()).map(function(p){return {number:p.number,state:p.state,merged_at:p.merged_at,title:p.title,body:String(p.body||'').slice(0,600)};}); }catch(e){ prs=[]; }
+    let prs=[]; try{ const ac=new AbortController(); const tm=setTimeout(function(){ac.abort();},6000); const g=await fetch('https://api.github.com/repos/Ridge-Co/RidgeCo/pulls?state=all&sort=updated&direction=desc&per_page=100',{headers:{'Accept':'application/vnd.github+json'},signal:ac.signal}); clearTimeout(tm); if(g.ok) prs=(await g.json()).map(function(p){return {number:p.number,state:p.state,merged_at:p.merged_at,title:p.title,body:String(p.body||'').slice(0,600)};}); }catch(e){ prs=[]; }
     const r=await fetch(WORKER+'/ops-queue/sync',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({prs:prs})});
     const d=await r.json().catch(function(){return null;});
     if(!d) throw new Error('HTTP '+r.status);
