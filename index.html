@@ -898,6 +898,38 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- DUPLICATE WORK ORDER (bid group, Oct 12 2026): one copy per tap, silent to tenant/owner, vendor text bypasses quiet hours -->
+<div class="modal-overlay" id="modal-dup-wo">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title" id="dup-title">DUPLICATE WORK ORDER</div><button class="modal-close" onclick="closeDupModal()">✕</button></div>
+    <div id="dup-form">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:var(--muted);line-height:1.5">
+        Makes <b>one copy</b> of this job and links the jobs in a <b>bid group</b>, so you can give the same job to several vendors and keep whichever comes back first/best.
+        <b style="color:var(--text)">The tenant and the owner are NOT texted.</b> The vendor you pick gets the normal "new job" text right away, even at night.
+      </div>
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>Search Vendor</label>
+          <input type="text" id="dup-vendor-search" placeholder="Type name or trade to filter…" oninput="renderDupVendorOptions()" autocomplete="off" style="margin-bottom:6px">
+          <select id="dup-vendor-select" onchange="updateDupPreview()" size="6" style="height:auto;min-height:120px;font-size:13px;cursor:pointer;width:100%"><option value="">Select vendor...</option></select>
+        </div>
+      </div>
+      <button type="button" class="btn secondary" id="dup-novendor-btn" onclick="toggleDupNoVendor()" style="width:100%;min-height:44px;margin-top:10px;text-align:left">☐ Create copy without a vendor</button>
+      <div id="dup-preview" style="margin-top:12px;color:var(--muted);font-size:12px;line-height:1.5"></div>
+      <div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeDupModal()">Cancel</button><button class="btn" id="dup-submit-btn" style="min-height:44px" onclick="submitDuplicate()">Create copy</button></div>
+    </div>
+    <div id="dup-result" style="display:none"></div>
+  </div>
+</div>
+
+<!-- BID GROUP CANCEL (preview, then confirm) -->
+<div class="modal-overlay" id="modal-bidcancel">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title" id="bidcancel-title">CANCEL JOBS</div><button class="modal-close" onclick="closeModal('modal-bidcancel')">✕</button></div>
+    <div id="bidcancel-body"></div>
+  </div>
+</div>
+
 <!-- INVOICE MODAL -->
 <div class="modal-overlay" id="modal-invoice">
   <div class="modal">
