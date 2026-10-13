@@ -13055,8 +13055,8 @@ async function runDoorWatchdogPass(env, opts) {
   return res;
 }
 
-// The scheduled() entry points for the watchdog + the (formerly swallowed) sweep. Both NEVER throw, so
-// neither can break the other jobs in scheduled(). Every failure inside runDoorWatchdogPass is already
+// The scheduler entry point for the watchdog (job `door_watchdog`). It NEVER throws, so it cannot break the
+// other jobs. Every failure inside runDoorWatchdogPass is already
 // logged + alerted there; the catch here is for a genuinely unexpected throw.
 async function doorWatchdogCron(env) {
   try {
