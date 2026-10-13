@@ -113,6 +113,7 @@ function runScheduler() {
         if (b.job_ok === false) jobFailure_(b);
         else if (b.timed_out) Logger.log(b.ran + ' is taking longer than 50 s; it continues in the background (see statusReport).');
       }
+      if (b.first_run) Logger.log('FIRST RUN on the Hub. Daily/weekly jobs whose time had already passed today were marked as already done (so nothing is sent twice): ' + ((b.seeded && b.seeded.length) ? b.seeded.join(', ') : '(none)') + '.');
       if (b.skipped) Logger.log('Hub says: ' + b.skipped + (b.claim_job ? ' (' + b.claim_job + ')' : ''));
       more = !!b.more;
       if (!more) break;
