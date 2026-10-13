@@ -14032,7 +14032,140 @@ async function schedRunArReport(env) {
   return { ok: !errors.length, errors, detail: r };
 }
 
-//__SCHED_CHUNK_3B__
+// ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
+function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
+// Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
+async function schedRunNext(env, ctx, opts) {
+  opts = opts || {};
+  const jobs = opts.jobs || SCHED_JOBS;
+  const nowMs = opts.now || (() => Date.now());
+  const sleep = opts.sleep || ((ms) => new Promise(r => setTimeout(r, ms)));
+  const verifyDelay = opts.verifyDelayMs != null ? opts.verifyDelayMs : SCHED_VERIFY_DELAY_MS;
+  const budget = opts.budgetMs != null ? opts.budgetMs : SCHED_JOB_BUDGET_MS;
+  const only = Array.isArray(opts.only) ? opts.only.map(String) : (opts.only ? [String(opts.only)] : []);
+  const force = !!opts.force && only.length === 1;
+  const unknown = only.filter(n => !jobs.some(j => j.name === n));
+  const base = { ok: true, ran: null, job_ok: null, error: null, more: false, due: [], ts: new Date(nowMs()).toISOString() };
+  const infraFail = async (msg) => {
+    const body = Object.assign({}, base, { ok: false, error: msg });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: 'dispatcher', Success: 'FALSE', Notes: msg.slice(0, 480) }); }
+    catch (e) { body.telemetry_error = schedErrText(e); console.error('scheduler: dispatcher failure and telemetry write failed:', msg, body.telemetry_error); }
+    return { status: 503, body };
+  };
+  if (unknown.length) return { status: 400, body: Object.assign({}, base, { ok: false, error: 'unknown job(s): ' + unknown.join(', ') }) };
+  if (opts.force && !force) return { status: 400, body: Object.assign({}, base, { ok: false, error: 'force requires exactly one job in "only"' }) };
+
+  let rows, parsed;
+  try { rows = await schedReadConfigRows(env, true); parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY)); }
+  catch (e) { return await infraFail('could not read Config (scheduler state): ' + schedErrText(e)); }
+  if (parsed.error) return await infraFail(parsed.error);
+  let st = parsed.state;
+  const t = nowMs(), now = new Date(t), nowISO = now.toISOString();
+  const dueNow = schedDueJobs(st, now, jobs, { only });
+  base.due = force ? only.slice() : dueNow.map(d => d.name);
+
+  if (opts.dry) return { status: 200, body: Object.assign({}, base, { dry: true, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) }) };
+
+  const claimedUntil = Date.parse(st.claim_until || '');
+  if (!isNaN(claimedUntil) && claimedUntil > t) {
+    return { status: 200, body: Object.assign({}, base, { skipped: 'another run holds the claim', claim_job: st.claim_job || null, claim_until: st.claim_until }) };
+  }
+  // Nothing to do: stamp the heartbeat (read-modify-write from the fresh read above) and finish.
+  if (!dueNow.length && !force) {
+    st.last_tick = nowISO; st.claim_until = ''; st.claim_id = ''; st.claim_job = '';
+    try {
+      const w = await schedWriteVerified(env, st, rows, sleep, 0);
+      if (!w.landed) return await infraFail('heartbeat write to Scheduler_State did not land (the cell does not hold what was written)');
+    } catch (e) { return await infraFail('could not write Scheduler_State heartbeat: ' + schedErrText(e)); }
+    return { status: 200, body: base };
+  }
+  const job = jobs.find(j => j.name === (force ? only[0] : dueNow[0].name));
+  const key = force ? 'forced' : dueNow[0].key;
+  // Claim: write {claim_id, claim_until, job.last_start}, wait, re-read - only the caller whose claim_id is still there runs.
+  const myId = schedRand();
+  st.last_tick = nowISO; st.claim_id = myId; st.claim_job = job.name; st.claim_until = new Date(t + SCHED_CLAIM_TTL_MS).toISOString();
+  const prev = st.jobs[job.name] || {};
+  st.jobs[job.name] = Object.assign({}, prev, { last_start: nowISO, last_status: 'running' });
+  try {
+    const w = await schedWriteVerified(env, st, rows, sleep, verifyDelay);
+    if (w.parsed.error) return await infraFail(w.parsed.error);
+    if (!w.parsed.state.claim_id || w.parsed.state.claim_id !== myId) {
+      return { status: 200, body: Object.assign({}, base, { skipped: 'lost the claim race to another caller', claim_job: w.parsed.state.claim_job || null }) };
+    }
+  } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
+
+  const jobEnv = __cronEnv(env);
+  const t0 = Date.now();
+  const work = (async () => {
+    let jobRes;
+    try { jobRes = await job.run(jobEnv, { now }); }
+    catch (e) { jobRes = { ok: false, errors: [{ step: 'job', error: schedErrText(e) }], threw: true }; }
+    if (!jobRes || typeof jobRes !== 'object') jobRes = { ok: false, errors: [{ step: 'job', error: 'job returned no result' }] };
+    const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
+    const jobOk = jobRes.ok !== false && errors.length === 0;
+    const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
+    const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
+    if (errors.length) out.errors = errors;
+    if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
+    if (!jobOk) {
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
+      catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
+      try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
+      catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
+    }
+    // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
+    let landed = false, stateErr = null, finalState = null;
+    for (let attempt = 0; attempt < 2 && !landed; attempt++) {
+      try {
+        const r2 = await schedReadConfigRows(env, true);
+        const p2 = schedParseState(schedCell(r2, SCHED_STATE_KEY));
+        if (p2.error) { stateErr = p2.error; break; }
+        const cur = p2.state;
+        const rec = Object.assign({}, cur.jobs[job.name] || {});
+        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? 'ok' : 'failed';
+        rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
+        if (jobOk) rec.last_ok = rec.last_end;
+        if (job.kind !== 'interval') {
+          const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
+          const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
+          if (jobOk || finalFail) {
+            rec.last_key = etDay; rec.attempts = null;
+            rec.last_failed_final = finalFail ? etDay : null;
+          } else {
+            const a = rec.attempts && rec.attempts.key === etDay ? rec.attempts.n : 0;
+            rec.attempts = { key: etDay, n: a + 1 };
+          }
+        }
+        cur.jobs[job.name] = rec;
+        if (cur.claim_id === myId) { cur.claim_id = ''; cur.claim_until = ''; cur.claim_job = ''; }
+        const w2 = await schedWriteVerified(env, cur, r2, sleep, 0);
+        landed = w2.landed; finalState = cur;
+        if (!landed) stateErr = 'the end-of-run state write did not land (another writer overwrote Scheduler_State)';
+      } catch (e) { stateErr = schedErrText(e); }
+    }
+    if (!landed) {
+      out.ok = false; out.state_error = stateErr;
+      out.error = (out.error ? out.error + ' | ' : '') + 'STATE NOT RECORDED: ' + stateErr;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Notes: ('could not record the result of this run in Scheduler_State (the job may run again early): ' + stateErr).slice(0, 480) }); }
+      catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: state write failed and telemetry write failed:', stateErr, out.telemetry_error); }
+    } else if (finalState) {
+      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only }).map(d => d.name);
+      out.due = stillDue; out.more = stillDue.length > 0 && !force;
+    }
+    return out;
+  })();
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(work.catch((e) => { console.error('scheduler: background completion of ' + job.name + ' failed:', schedErrText(e)); }));   // keeps running + records state even if the caller hung up
+  let timer;
+  const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), budget); });
+  const done = await Promise.race([work, timeout]);
+  clearTimeout(timer);
+  if (done === null) {
+    return { status: 200, body: Object.assign({}, base, { ran: job.name, job_ok: null, timed_out: true, error: null, note: `${job.name} is still running after ${Math.round(budget / 1000)}s; it keeps going in the background and records its result in Scheduler_State (see /cron/status)` }) };
+  }
+  return { status: 200, body: done };
+}
+
+//__SCHED_CHUNK_3C__
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
