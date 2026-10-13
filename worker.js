@@ -16313,8 +16313,29 @@ async function opsApprove(env, body) {
   if (items.length > 20) return json({ error: 'too many at once (max 20)' }, 400);
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
-  const now = new Date().toISOString(); let queued = 0;
+  const now = new Date().toISOString(); let queued = 0, promoted = 0, already = 0;
+  // Oct 13 2026: approving must never CLONE a row that is already in the queue (that is how
+  // proposals.html's "this week's review" approvals created the duplicates Brett saw). Match
+  // against the live queue first: a proposed/held twin is promoted in place, anything already
+  // greenlit/building/done is reported as `already` and skipped.
+  let existing = [];
+  try {
+    const d0 = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+    const v0 = d0.values || [];
+    if (v0.length > 1) existing = v0.slice(1).map(r => { const o = {}; v0[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; });
+  } catch (e) { if (!isMissingTabError(e)) throw e; }
   for (const it of items) {
+    const _m = findQueueMatch(it, existing.filter(r => String(r.Status || '').toLowerCase() !== 'dropped'), 'same');
+    if (_m) {
+      const _st = String(_m.row.Status || '').toLowerCase();
+      if (_st === 'proposed' || _st === 'held') {
+        const _rc = String(it.risk_class || it.riskClass || '').toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+        await updateRow(env, OPS_QUEUE_TAB, _m.row.ID, { Status: 'greenlit', Approved_By: String((body && body.by) || 'command-center'), Risk_Class: _rc, Snooze_Until: '', Build_Updated: now });
+        _m.row.Status = 'greenlit'; promoted++;
+      } else already++;
+      continue;
+    }
+    existing.push({ ID: 'new-' + queued, Title: String(it.title || ''), Problem: String(it.problem || ''), First_Step: String(it.action || it.first_step || ''), Status: 'greenlit' });
     // Risk_Class carries through from whatever proposed the item — never invented here, and
     // never defaulted to SAFE. Only the literal string 'SAFE' counts as SAFE; anything else
     // (missing, misspelled, explicitly 'GATED') stores as GATED, matching judge()'s own
