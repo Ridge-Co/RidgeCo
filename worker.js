@@ -12833,7 +12833,7 @@ async function adminNotify(env, body) {
 }
 
 // ── Door-code system watchdog (Oct 12 2026) ──────────────────────────────────────────────────────────
-// An independent check, run from the Hub's EXISTING */15 cron (no new trigger), that GETs the public
+// An independent check, run by the scheduler's `door_watchdog` job (Apps Script clock, ~every 15 min - NO cron), that GETs the public
 // /health of the str-automation Worker (guest door codes + alerts) and texts Brett when it looks broken:
 // fetch throws/times out (8s) / non-200 / non-JSON; ok !== true; any secrets_set value not true;
 // last_tick null/invalid/older than 75 min (normally refreshes every ~25-30 min); problems[] non-empty.
