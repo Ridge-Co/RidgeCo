@@ -15412,6 +15412,8 @@ function buildStartBuildRoutineText(items, opsQueueToken) {
 
   const instructions = [
     '---',
+    QUEUE_STANDING_RULES,
+    '',
     'INSTRUCTIONS FOR THIS BUILD SESSION',
     '',
     'You are building the item(s) above for Brett\'s RidgeCo Hub (Ridge-Co/RidgeCo). Load the brett-context skill first if you have not already. Follow CLAUDE.md discipline for every item: read live repo state before writing code, node --check, run the full test suite, add/update tests for what you build, write a FEATURE_LOG.md entry (use the [FL-YYYYMMDD-HHMM-xx] tag convention, not a bare rule number), update CURRENT.md\'s "WHERE THINGS STAND" section, then push via GH Broker (commit_patch for worker.js given its size, commit_file/commit_files elsewhere).',
