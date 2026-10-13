@@ -13620,21 +13620,14 @@ async function processQuietHoursQueue(env) {
   return { checked: due.length, results };
 }
 
-// POST /cron/sweep — the ONE endpoint the GitHub Actions workflow (.github/workflows/
-// cron-sweep.yml) hits periodically, replacing Cloudflare Cron Triggers for this kind of
-// time-sensitive work. Consolidates every periodic message-processing job into one call so
-// one scheduled workflow run covers all of them:
-//   1. processQuietHoursQueue — fires quiet-hours-held Message_Queue rows now due.
-//   2. processPendingNotifications — the Notification_Queue deferred-appointment-reminder
-//      sweep (tenant_job_scheduled messages queued days ahead). This existed already but was
-//      NEVER actually called automatically anywhere — only reachable via the admin-gated
-//      GET /notifications/pending — so deferred reminders have been silently sitting unsent
-//      this whole time. Wiring it in here is the actual fix, not just a new feature riding
-//      alongside one.
-//   3. processVendorNudges — the vendor status-update clock + manual photos/invoice nudges
-//      (Sep 14 2026). This closes the exact open question flagged when the sweep was first
-//      built (CURRENT.md, rule 166) — no new scheduling mechanism needed, it just plugs in here.
-// Each step is independently try/caught so one failing step never blocks the others.
+// POST /cron/sweep - MANUAL use only (Oct 12 2026: no cron anywhere; the Apps Script scheduler runs the same work as
+// the `sweep`, `sweep_work` and `sweep_checks` jobs via POST /cron/run). Runs, back to back:
+//   1. processQuietHoursQueue - fires quiet-hours-held Message_Queue rows now due.
+//   2. processPendingNotifications - the Notification_Queue deferred-appointment-reminder sweep.
+//   3. processVendorNudges - the vendor status-update clock + manual photos/invoice nudges (Sep 14 2026).
+//   4. processRecurringWorkOrders, processEstimateReminders, processDepositPaidSweep,
+//      maybeRunDailySelftest, checkDeadManSwitch.
+// Each step is independently caught so one failing step never blocks the others - and every failure is returned in `errors`.
 // ── Admin failure alerting (Ops_Build_Queue #14, #10 — Sep 19 2026) ────────────────────────
 // Two related, deliberately dormant-by-default alerting features, both reusing the existing
 // admin-alert delivery shape (config.admin_phone + sendSMS — the same pattern every other
