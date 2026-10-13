@@ -323,13 +323,8 @@ function scheduleLineHtml(m){
 function currentTotals(){
   var subtotal = 0;
   (DATA.items || []).forEach(function(it){
-    var key;
-    if (it.variants && it.variants.length > 1) {
-      var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
-      key = checked ? checked.value : it.selected_key;
-    } else {
-      key = (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
-    }
+    var key = chosenKey(it);
+    if (key === null) return;
     var v = (it.variants || []).find(function(x){ return x.key === key; }) || (it.variants || [])[0];
     if (v) subtotal += (+v.price || 0);
   });
