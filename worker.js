@@ -4277,10 +4277,34 @@ function scopeItemsPricing(items, pc, mp) {
     let selKey = it.selected_key || variants[0].key;
     if (!variants.some(v => v.key === selKey)) selKey = variants[0].key;
     const sel = variants.find(v => v.key === selKey) || variants[0];
-    subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
-    rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
-    return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey };
+    // An optional add-on is NOT part of the base job: it never counts toward the base subtotal /
+    // vendor cost / materials totals. It only enters them at signing, if the customer ticks it.
+    if (!it.optional) {
+      subtotal += sel.price; vendorCostTotal += sel.vendor_cost;
+      rcMaterialsCostTotal += (sel.rc_materials_cost || 0); rcMaterialsPriceTotal += (sel.materials_price || 0);
+    }
+    return { id: it.id, area: it.area, trade: it.trade, description: it.description, qty: it.qty, note: it.note, variants, selected_key: selKey, ...(it.optional ? { optional: true } : {}) };
   });
+  // Add-on pricing (Oct 13 2026, Brett: "price the whole job, show the difference"): an add-on's
+  // customer price is price(base job + add-on) − price(base job), so a small add-on is never hit
+  // with its own small-job minimum markup/admin fee and "base + add-on" always lands on the price
+  // the whole job would have had. Never below the add-on's own vendor cost (falls back to its
+  // stand-alone price if the difference would be). Variants with a manual price_override or Ridge Co
+  // materials keep the stand-alone price computed above.
+  const baseVendor = vendorCostTotal;
+  if (baseVendor > 0) {
+    const baseCalc = calcTieredEstimate(baseVendor, pc);
+    if (baseCalc) for (const it of priced) {
+      if (!it.optional) continue;
+      for (const v of it.variants) {
+        if (v.price_override != null || v.rc_materials_cost > 0) continue;
+        const whole = calcTieredEstimate(baseVendor + v.vendor_cost, pc);
+        if (!whole) continue;
+        const diff = r2(whole.finalPrice - baseCalc.finalPrice);
+        if (diff >= v.vendor_cost && diff > 0) v.price = diff;
+      }
+    }
+  }
   subtotal = +subtotal.toFixed(2);
   return {
     items: priced, subtotal, deposit: +(subtotal / 2).toFixed(2), vendorCostTotal: +vendorCostTotal.toFixed(2),
