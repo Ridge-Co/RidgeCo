@@ -16868,6 +16868,7 @@ async function opsQueueScoutSubmit(env, body) {
   // history write, and rule 174/CLAUDE.md: this really is non-fatal to the caller, since the
   // thing the caller asked for — the queue insert — has already succeeded by the time this runs).
   try {
+    if (!items.length) throw new Error('recheck-only call — no review-log row');
     await ensureTab(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await ensureColumns(env, OPS_REVIEW_TAB, OPS_REVIEW_COLS);
     await addRow(env, OPS_REVIEW_TAB, {
