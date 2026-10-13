@@ -1,0 +1,331 @@
+// Apps Script scheduler (Oct 12 2026) - PERMANENT RULE: NO CRON ANYWHERE.
+// Covers the dispatcher (POST /cron/run, GET /cron/status), the pure due/status logic across DST, the
+// no-duplicate-run guarantees (concurrent callers, double calls, claim expiry), the Scheduler_Token gate,
+// the redaction of that token, the loud no-op scheduled(), the /health summary, and the "no cron anywhere"
+// structure (wrangler.toml, workflows). Runs two ways:
+//   * the scheduler block is sliced out of worker.js and evaluated with in-memory fakes (fast, deterministic, injected clock)
+//   * the REAL worker.js default export is imported and driven over a fake Google Sheets (fetch is stubbed)
+// The clock is pinned everywhere it matters (opts.now / explicit dates) - nothing here depends on today's date.
+import fs from 'fs';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+const root = fileURLToPath(new URL('..', import.meta.url));
+const wsrc = fs.readFileSync(root + 'worker.js', 'utf8');
+let pass = 0, fail = 0;
+const t = (name, cond, extra) => { if (cond) pass++; else { fail++; console.log('FAIL:', name, extra === undefined ? '' : JSON.stringify(extra)); } };
+const tick = (ms) => new Promise(r => setTimeout(r, ms));
+const iso = (s) => new Date(s);
+
+// ───────────────────────────── in-memory Google Sheets ─────────────────────────────
+function makeStore() {
+  const tabs = new Map();           // name -> array of row arrays
+  const calls = [];
+  const st = { tabs, calls, latency: () => 0, failNext: null, failWhen: null };
+  const missing = (name) => ({ error: { code: 400, message: `Unable to parse range: ${name}` } });
+  st.handle = async (method, path, body) => {   // path relative to /spreadsheets/{id}
+    calls.push(method + ' ' + path);
+    const lat = st.latency(); if (lat) await tick(lat);
+    if (st.failWhen && st.failWhen(method, path, body)) return { error: { code: 500, message: 'injected sheets failure' } };
+    let m;
+    if (method === 'GET' && (m = /^\/values\/([^!:?]+)$/.exec(path))) {
+      const name = decodeURIComponent(m[1]); if (!tabs.has(name)) return missing(name);
+      return { range: name, values: tabs.get(name).map(r => r.slice()) };
+    }
+    if (method === 'GET' && path.startsWith('?fields=')) return { sheets: [...tabs.keys()].map((title, i) => ({ properties: { sheetId: i + 1, title, gridProperties: { columnCount: 60, rowCount: 1000 } } })) };
+    if (method === 'POST' && (m = /^\/values\/([^!:?]+):append/.exec(path))) {
+      const name = decodeURIComponent(m[1]); if (!tabs.has(name)) return missing(name);
+      for (const r of body.values) tabs.get(name).push(r.slice());
+      return { updates: { updatedRows: body.values.length } };
+    }
+    if (method === 'POST' && path === '/values:batchUpdate') {
+      for (const d of body.data) {
+        const [tab, cell] = d.range.split('!'); const mm = /^([A-Z]+)(\d+)$/.exec(cell);
+        const col = mm[1].split('').reduce((a, c) => a * 26 + c.charCodeAt(0) - 64, 0) - 1, row = +mm[2] - 1;
+        const rows = tabs.get(tab); if (!rows) return missing(tab);
+        while (rows.length <= row) rows.push([]);
+        while (rows[row].length <= col) rows[row].push('');
+        rows[row][col] = d.values[0][0];
+      }
+      return { totalUpdatedCells: body.data.length };
+    }
+    if (method === 'POST' && path === ':batchUpdate') {
+      for (const r of body.requests || []) if (r.addSheet) tabs.set(r.addSheet.properties.title, []);
+      return {};
+    }
+    return { error: { code: 400, message: 'fake sheets: unsupported ' + method + ' ' + path } };
+  };
+  st.cfg = () => Object.fromEntries((tabs.get('Config') || []).filter(r => r[0]).map(r => [r[0], r[1] || '']));
+  st.setCfg = (k, v) => { const rows = tabs.get('Config'); const i = rows.findIndex(r => r[0] === k); if (i >= 0) rows[i][1] = v; else rows.push([k, v]); };
+  tabs.set('Config', [['Key', 'Value']]);
+  return st;
+}
+
+// ───────────────────────────── 1. scheduler block, sliced out of worker.js ─────────────────────────────
+const bi = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-BEGIN'), be = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-END');
+t('scheduler block markers exist', bi > 0 && be > bi);
+const blockSrc = wsrc.slice(bi, be);
+function load(store, over) {
+  over = over || {};
+  const telemetry = [], alerts = [];
+  const stubs = {
+    invalidateTabCache: () => {},
+    sheetsRequest: async (env, method, path, body) => { const r = await store.handle(method, path, body); if (r && r.error) throw new Error(`Sheets API error on ${method} ${path}: ${r.error.message}`); return r; },
+    logTelemetry: async (env, rec) => { if (over.telemetryFails) throw new Error('telemetry sheet down'); telemetry.push(rec); },
+    alertAdminOnFailure: async (env, k, m) => { alerts.push({ k, m }); return { skipped: true }; },
+    setConfigKey: async (env, b) => { store.setCfg(b.key, b.value); return { ok: true }; },
+    json: (b, s) => ({ body: b, status: s || 200 }),
+    __cronEnv: (e) => e,
+    doorWatchdogCron: async () => ({ ok: true }),
+    processQuietHoursQueue: async () => ({ checked: 0, results: [] }),
+    processPendingNotifications: async () => ({ status: 200, clone() { return this; }, async json() { return { processed: 0 }; } }),
+    processVendorNudges: async () => ({ checked: 0, results: [] }),
+    processRecurringWorkOrders: async () => ({ templates: 0, posted: 0 }),
+    processEstimateReminders: async () => ({ skipped: 'x' }),
+    processDepositPaidSweep: async () => ({ ok: true }),
+    maybeRunDailySelftest: async () => ({ skipped: true }),
+    checkDeadManSwitch: async () => ({ skipped: true }),
+    inspStrGuardTick: async () => ({ enabled: false }), inspAlert: async () => {},
+    buildDigest: async () => ({}), deliverDigest: async () => ({ delivered: false }),
+    receiptScan: async () => ({ ok: true }), receiptReconScan: async () => ({ ok: true }),
+    backfillItemsSummary: async () => ({ ok: true, updated: 0, failed: 0 }), purgeConfirmedDuplicateReceipts: async () => ({ ok: true }),
+    sendReceiptsToQBEmail: async () => ({ ok: true, sent: 0, failed: [] }), releaseTurnoverByDate: async () => ({}),
+    qbSyncPayments: async () => ({ ok: true }), runWeeklyReview: async () => ({ ok: true, logged: true, delivery: null }), runWeeklyArReport: async () => ({ delivered: false }),
+  };
+  Object.assign(stubs, over.stubs || {});
+  const names = Object.keys(stubs);
+  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
+  return Object.assign(fn(...names.map(n => stubs[n])), { telemetry, alerts, stubs });
+}
+const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
+const P = load(makeStore());
+
+// registry shape
+{
+  const names = P.SCHED_JOBS.map(j => j.name);
+  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'review_mon', 'review_wed', 'ar_report_mon']), names);
+  t('registry names unique', new Set(names).size === names.length);
+  const dw = P.SCHED_JOBS.find(j => j.name === 'door_watchdog'), sw = P.SCHED_JOBS.find(j => j.name === 'sweep');
+  t('15-minute jobs gate at >=14 min', dw.every_min === 14 && sw.every_min === 14);
+  const g = (n) => P.SCHED_JOBS.find(j => j.name === n);
+  t('daily jobs at 07:00 ET', ['daily_digest', 'daily_receipts', 'daily_turnover', 'daily_qb_sync'].every(n => g(n).kind === 'daily' && g(n).at === '07:00'));
+  t('weekly jobs', g('review_mon').dow === 1 && g('review_mon').at === '08:30' && g('review_wed').dow === 3 && g('review_wed').at === '08:00' && g('ar_report_mon').dow === 1 && g('ar_report_mon').at === '09:00' && g('ar_report_mon').retry === false);
+}
+
+// ET wall clock across DST
+{
+  t('EDT wall clock', JSON.stringify(P.schedEtParts(iso('2026-10-12T12:30:00Z'))) === JSON.stringify({ date: '2026-10-12', minutes: 8 * 60 + 30, dow: 1 }));
+  t('EST wall clock', JSON.stringify(P.schedEtParts(iso('2026-11-02T13:30:00Z'))) === JSON.stringify({ date: '2026-11-02', minutes: 8 * 60 + 30, dow: 1 }));
+  t('midnight ET is hour 0, not 24', P.schedEtParts(iso('2026-11-02T05:00:00Z')).minutes === 0 && P.schedEtParts(iso('2026-11-02T05:00:00Z')).date === '2026-11-02');
+}
+const job = (n) => P.SCHED_JOBS.find(j => j.name === n);
+const due = (n, js, at) => P.schedJobDue(job(n), js, iso(at));
+// weekly review_mon 08:30 ET: EDT (Oct 12) vs EST (Nov 2)
+t('review_mon EDT: 12:29Z (08:29 ET) not due', due('review_mon', {}, '2026-10-12T12:29:00Z') === null);
+t('review_mon EDT: 12:30Z (08:30 ET) due', !!due('review_mon', {}, '2026-10-12T12:30:00Z'));
+t('review_mon EST: 12:30Z is 07:30 ET - NOT due (a UTC cron would have fired an hour early)', due('review_mon', {}, '2026-11-02T12:30:00Z') === null);
+t('review_mon EST: 13:29Z not due, 13:30Z due', due('review_mon', {}, '2026-11-02T13:29:00Z') === null && !!due('review_mon', {}, '2026-11-02T13:30:00Z'));
+// daily 07:00 ET on DST change days
+t('daily_digest on the fall-back day (Nov 1, EST after 2am): 11:59Z = 06:59 EST not due, 12:00Z = 07:00 EST due', due('daily_digest', {}, '2026-11-01T11:59:00Z') === null && !!due('daily_digest', {}, '2026-11-01T12:00:00Z'));
+t('daily_digest on the spring-forward day (Mar 8, EDT): 10:59Z = 06:59 EDT not due, 11:00Z due', due('daily_digest', {}, '2026-03-08T10:59:00Z') === null && !!due('daily_digest', {}, '2026-03-08T11:00:00Z'));
+t('daily_digest summer 07:00 EDT = 11:00Z; winter 07:00 EST = 12:00Z', !!due('daily_digest', {}, '2026-07-15T11:00:00Z') && due('daily_digest', {}, '2026-12-15T11:00:00Z') === null && !!due('daily_digest', {}, '2026-12-15T12:00:00Z'));
+// weekday gating
+t('review_mon not due on a Tuesday', due('review_mon', {}, '2026-10-13T15:00:00Z') === null);
+t('review_wed due Wednesday 08:00 ET only', due('review_wed', {}, '2026-10-14T11:59:00Z') === null && !!due('review_wed', {}, '2026-10-14T12:00:00Z') && due('review_wed', {}, '2026-10-15T15:00:00Z') === null);
+t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59:00Z') === null && !!due('ar_report_mon', {}, '2026-10-12T13:00:00Z'));
+// catch-up after a missed slot + once-per-key
+{
+  const ydone = { last_key: '2026-10-11' };
+  t('catch-up: scheduler was down at 7am, runs at 3:10pm ET the same day', due('daily_digest', ydone, '2026-10-12T19:10:00Z') && due('daily_digest', ydone, '2026-10-12T19:10:00Z').key === '2026-10-12');
+  t('once-per-key: not due again the same ET day after success', due('daily_digest', { last_key: '2026-10-12' }, '2026-10-12T23:00:00Z') === null);
+  t('a missed day does not pile up: next ET day runs once', due('daily_digest', { last_key: '2026-10-08' }, '2026-10-12T11:00:00Z').key === '2026-10-12');
+  t('late-evening ET still the same key (UTC date already rolled)', due('daily_digest', { last_key: '2026-10-12' }, '2026-10-13T02:30:00Z') === null);
+  t('Monday review missed all day is dropped (not carried to Tuesday)', due('review_mon', { last_key: '2026-10-05' }, '2026-10-13T14:00:00Z') === null);
+}
+// interval gating
+{
+  const base = '2026-10-12T14:00:00Z';
+  const ago = (min) => new Date(Date.parse(base) - min * 60000).toISOString();
+  t('interval: never run -> due', !!due('sweep', {}, base));
+  t('interval: started 13 min ago -> not due', due('sweep', { last_start: ago(13) }, base) === null);
+  t('interval: started 14 min ago -> due', !!due('sweep', { last_start: ago(14) }, base));
+  t('interval: a 15-min Apps Script trigger always finds it due', !!due('sweep', { last_start: ago(15) }, base));
+  t('interval: gated on START (a slow run does not shorten the gap)', due('sweep', { last_start: ago(10), last_end: ago(1) }, base) === null);
+  t('interval: a last_start far in the future (bad clock) cannot stall the job forever', !!due('sweep', { last_start: new Date(Date.parse(base) + 3 * 3600000).toISOString() }, base));
+}
+// failed daily: retry gap + attempt cap
+{
+  const day = '2026-10-12', at = (min) => new Date(Date.parse('2026-10-12T15:00:00Z') + min * 60000).toISOString();
+  const js = (n, endMin) => ({ attempts: { key: day, n }, last_end: at(endMin), last_start: at(endMin - 1) });
+  t('failed daily: not retried within 30 min', due('daily_turnover', js(1, -10), '2026-10-12T15:00:00Z') === null);
+  t('failed daily: retried after 30 min', !!due('daily_turnover', js(1, -31), '2026-10-12T15:00:00Z'));
+  t('failed daily: gives up after 3 attempts', due('daily_turnover', js(3, -300), '2026-10-12T15:00:00Z') === null);
+  t('attempts from yesterday do not block today', !!due('daily_turnover', { attempts: { key: '2026-10-11', n: 3 }, last_end: at(-600) }, '2026-10-12T15:00:00Z'));
+}
+// priority order with everything due
+{
+  const names = P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
+  t('priority order when everything is due (Monday 10am ET)', names.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,review_mon,ar_report_mon', names.join());
+  const early = P.schedDueJobs(S0(), iso('2026-10-14T09:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 05:00 EDT: only the interval jobs
+  t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard', early.join());
+  t('only[] restricts', P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, { only: ['sweep'] }).map(d => d.name).join() === 'sweep');
+}
+// schedStatus overdue logic
+{
+  const now = iso('2026-10-12T16:00:00Z');   // Monday 12:00 ET
+  const mins = (m) => new Date(now.getTime() - m * 60000).toISOString();
+  const fresh = S0(); fresh.last_tick = mins(3);
+  for (const n of ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard']) fresh.jobs[n] = { last_start: mins(5), last_end: mins(4), last_ok: mins(4), last_status: 'ok' };
+  for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync']) fresh.jobs[n] = { last_start: mins(300), last_end: mins(299), last_ok: mins(299), last_key: '2026-10-12', last_status: 'ok' };
+  for (const n of ['review_mon', 'ar_report_mon']) fresh.jobs[n] = { last_end: mins(200), last_ok: mins(200), last_key: '2026-10-12', last_status: 'ok' };
+  const s = P.schedStatus(fresh, now, P.SCHED_JOBS);
+  t('status: healthy scheduler has no overdue jobs', s.overdue.length === 0 && s.tick_age_min === 3, s.overdue);
+  const stale = JSON.parse(JSON.stringify(fresh)); stale.jobs.sweep.last_ok = mins(46); stale.jobs.daily_digest.last_key = '2026-10-11';
+  const s2 = P.schedStatus(stale, now, P.SCHED_JOBS);
+  t('status: 15-min job with last_ok 46 min ago is overdue; daily not run today (due 5h ago) is overdue', s2.overdue.join() === 'sweep,daily_digest', s2.overdue);
+  t('status: 45 min exactly is not yet overdue', (() => { const x = JSON.parse(JSON.stringify(fresh)); x.jobs.sweep.last_ok = mins(45); return P.schedStatus(x, now, P.SCHED_JOBS).overdue.length === 0; })());
+  const within = P.schedStatus(S0(), iso('2026-10-12T12:00:00Z'), [job('daily_digest')]);   // 08:00 ET, 1h after due: inside the 3h grace
+  t('status: a daily job inside its 3h grace is not overdue', within.overdue.length === 0);
+  const after = P.schedStatus(S0(), iso('2026-10-12T14:00:01Z'), [job('daily_digest')]);     // 10:00:01 ET, 3h after due
+  t('status: a daily job 3h past due is overdue', after.overdue.join() === 'daily_digest', after);
+  const empty = P.schedStatus(S0(), now, P.SCHED_JOBS);
+  t('status: before the first-ever run every 15-min job reads overdue (never completed)', empty.jobs.sweep.overdue && /never completed/.test(empty.jobs.sweep.overdue_reason) && empty.tick_age_min === null);
+  const hung = JSON.parse(JSON.stringify(fresh)); hung.jobs.sweep = { last_start: mins(20), last_end: mins(40), last_ok: mins(40) };
+  t('status: started but never finished is flagged', /never finished/.test(P.schedStatus(hung, now, P.SCHED_JOBS).jobs.sweep.overdue_reason));
+  const failedFinal = JSON.parse(JSON.stringify(fresh)); failedFinal.jobs.ar_report_mon.last_failed_final = '2026-10-12'; failedFinal.jobs.ar_report_mon.last_error = 'boom';
+  t('status: a failed-and-not-retried weekly job is overdue with the error', P.schedStatus(failedFinal, now, P.SCHED_JOBS).jobs.ar_report_mon.overdue_reason.includes('boom'));
+  t('status: non-expected weekday (Tuesday) weekly job is not overdue', P.schedStatus(S0(), iso('2026-10-13T20:00:00Z'), [job('review_mon')]).overdue.length === 0);
+}
+// parse state: blank = first run, garbage = error (never silently "empty")
+{
+  t('parseState blank -> fresh state', P.schedParseState('').state && P.schedParseState(undefined).state.jobs && Object.keys(P.schedParseState('  ').state.jobs).length === 0);
+  t('parseState garbage -> error (so a corrupt cell cannot re-run every job)', !!P.schedParseState('{not json').error && !P.schedParseState('{not json').state);
+  t('parseState array -> error', !!P.schedParseState('[]').error);
+}
+// step-result inspection
+{
+  t('badness: ok:false', !!P.schedBadness(200, { ok: false, errors: ['x'] }));
+  t('badness: error field', /boom/.test(P.schedBadness(200, { error: 'boom' })));
+  t('badness: non-empty errors list', !!P.schedBadness(200, { ok: true, errors: [{ file: 'a' }] }));
+  t('badness: empty errors list is fine', P.schedBadness(200, { ok: true, errors: [] }) === null);
+  t('badness: HTTP 500', /HTTP 500/.test(P.schedBadness(500, { error: 'x' })));
+  t('badness: failed count', !!P.schedBadness(200, { ok: true, failed: 2 }) && P.schedBadness(200, { ok: true, failed: 0 }) === null);
+  t('badness: skipped/dormant results are fine', P.schedBadness(200, { skipped: true, reason: 'dormant' }) === null && P.schedBadness(200, { delivered: false, reason: 'dormant' }) === null);
+}
+
+// Token gate (pure)
+{
+  const SEC = 'a'.repeat(24) + 'XYZ123';
+  t('token: exact match on POST /cron/run', P.schedTokenOk(SEC, SEC, 'POST', '/cron/run'));
+  t('token: exact match on GET /cron/status', P.schedTokenOk(SEC, SEC, 'GET', '/cron/status'));
+  t('token: wrong method on /cron/run', !P.schedTokenOk(SEC, SEC, 'GET', '/cron/run'));
+  t('token: wrong method on /cron/status', !P.schedTokenOk(SEC, SEC, 'POST', '/cron/status'));
+  for (const [m, p] of [['POST', '/cron/sweep'], ['GET', '/workorders'], ['POST', '/status'], ['POST', '/config/set'], ['GET', '/config'], ['POST', '/admin-notify'], ['POST', '/cron/run/'], ['POST', '/cron/runx']])
+    t(`token: rejected on ${m} ${p}`, !P.schedTokenOk(SEC, SEC, m, p));
+  t('token: mismatch', !P.schedTokenOk(SEC, SEC.slice(0, -1) + 'Q', 'POST', '/cron/run'));
+  t('token: prefix / longer value', !P.schedTokenOk(SEC, SEC.slice(0, 20), 'POST', '/cron/run') && !P.schedTokenOk(SEC, SEC + 'x', 'POST', '/cron/run'));
+  t('token: blank secret fails closed (even with a blank header)', !P.schedTokenOk('', '', 'POST', '/cron/run') && !P.schedTokenOk('', 'x', 'POST', '/cron/run') && !P.schedTokenOk('   ', '   ', 'POST', '/cron/run'));
+  t('token: missing secret (undefined/null) fails closed', !P.schedTokenOk(undefined, 'x', 'POST', '/cron/run') && !P.schedTokenOk(null, '', 'GET', '/cron/status'));
+  t('token: short secret (<24) fails closed even when it matches', !P.schedTokenOk('short', 'short', 'POST', '/cron/run'));
+  t('token: empty header with a real secret', !P.schedTokenOk(SEC, '', 'POST', '/cron/run'));
+  t('token: secret with trailing newline from the sheet still matches the clean token', P.schedTokenOk(SEC + '\n', SEC, 'POST', '/cron/run'));
+}
+
+// ───────────────────────────── 2. dispatcher with fakes ─────────────────────────────
+const T0 = Date.parse('2026-10-12T14:00:00Z');   // Monday 10:00 ET
+const clock = (start) => { const c = { v: start }; c.now = () => c.v; return c; };
+function mkJobs(log, spec) {
+  const out = [];
+  for (const [name, kind, extra] of spec) {
+    out.push(Object.assign({ name, kind, every_min: 14, at: '07:00', run: async () => { log.push(name); return { ok: true, errors: [] }; } }, extra || {}));
+  }
+  return out;
+}
+const fast = (c, extra) => Object.assign({ now: c.now, sleep: async () => {}, verifyDelayMs: 0, budgetMs: 5000 }, extra || {});
+const stateOf = (store) => JSON.parse(store.cfg().Scheduler_State);
+
+// 2a first run, one job per call, more flag, then idle
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval'], ['c', 'interval']]);
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('first call runs exactly one job (the first by priority)', r1.status === 200 && r1.body.ran === 'a' && r1.body.job_ok === true && log.join() === 'a', r1.body);
+  t('first call says more=true with the remaining due names', r1.body.more === true && r1.body.due.join() === 'b,c', r1.body);
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('second call runs b', r2.body.ran === 'b' && r2.body.more === true && log.join() === 'a,b');
+  const r3 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('third call runs c and says more=false', r3.body.ran === 'c' && r3.body.more === false && log.join() === 'a,b,c');
+  const r4 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('fourth call: nothing due -> ran null, more false, heartbeat written', r4.body.ran === null && r4.body.more === false && r4.status === 200 && log.length === 3 && stateOf(store).last_tick === new Date(c.v).toISOString());
+  const s = stateOf(store);
+  t('state has last_start/last_end/last_ok/last_status for each job and no claim left behind', ['a', 'b', 'c'].every(n => s.jobs[n].last_start && s.jobs[n].last_end && s.jobs[n].last_ok && s.jobs[n].last_status === 'ok' && s.jobs[n].last_error === null) && s.claim_id === '' && s.claim_until === '', s);
+  t('successful ticks write NO Ops_Telemetry rows', L.telemetry.length === 0);
+  t('one Scheduler_State row only (no per-job Config keys)', Object.keys(store.cfg()).filter(k => /^Scheduler|Cron_Sweep/.test(k)).join() === 'Scheduler_State');
+}
+// 2b double call within the interval is a no-op (no duplicate run)
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval']]);
+  await L.schedRunNext({}, null, fast(c, { jobs }));
+  c.v += 5 * 60000;
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('double call 5 min later: job not run again', r.body.ran === null && log.length === 1);
+  c.v += 8 * 60000;   // 13 min since start
+  await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('13 min after start: still not run', log.length === 1);
+  c.v += 60000;       // 14 min
+  await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('14 min after start: runs again', log.length === 2);
+}
+// 2c once-per-key for a daily job, even called repeatedly (a second Apps Script project would look like this)
+{
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T12:00:00Z')), log = [];   // 08:00 ET
+  const jobs = mkJobs(log, [['d', 'daily', {}]]);
+  for (let i = 0; i < 6; i++) { await L.schedRunNext({}, null, fast(c, { jobs })); c.v += 20 * 60000; }
+  t('daily job ran once across six ticks the same ET day', log.length === 1, log);
+  c.v = Date.parse('2026-10-13T12:00:00Z');
+  await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('and once more the next ET day', log.length === 2);
+}
+// 2d concurrency: N callers at once, one due job -> runs exactly once
+for (const N of [2, 5, 8]) {
+  const store = makeStore(); store.latency = () => Math.floor(Math.random() * 6);
+  const L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['only_job', 'interval', { run: async () => { await tick(15); log.push('only_job'); return { ok: true, errors: [] }; } }]]);
+  const rs = await Promise.all(Array.from({ length: N }, () => L.schedRunNext({}, null, { now: c.now, sleep: tick, verifyDelayMs: 60, budgetMs: 5000, jobs })));
+  const ran = rs.filter(r => r.body.ran === 'only_job');
+  t(`concurrency (${N} simultaneous callers): the job ran exactly once`, log.length === 1 && ran.length === 1, { log, skipped: rs.map(r => r.body.skipped || r.body.ran) });
+  t(`concurrency (${N}): every other caller was told it lost / the claim is held`, rs.filter(r => r.body.skipped).length === N - 1);
+}
+// 2e two callers each with their own job list pass, interleaved over several rounds: no job runs twice in a tick
+{
+  const store = makeStore(); store.latency = () => Math.floor(Math.random() * 4);
+  const L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval'], ['c', 'interval']]);
+  const caller = async () => { for (let i = 0; i < 6; i++) { await L.schedRunNext({}, null, { now: c.now, sleep: tick, verifyDelayMs: 40, budgetMs: 5000, jobs }); await tick(2); } };
+  await Promise.all([caller(), caller()]);
+  t('two looping callers: each job ran exactly once in the window', ['a', 'b', 'c'].every(n => log.filter(x => x === n).length === 1), log);
+}
+// 2f held claim and expiry self-heal
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval']]);
+  const held = S0(); held.claim_id = 'dead'; held.claim_job = 'a'; held.claim_until = new Date(T0 + 3 * 60000).toISOString();
+  store.tabs.get('Config').push(['Scheduler_State', JSON.stringify(held)]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('a live claim blocks the run and names the holder', r.status === 200 && r.body.ran === null && /claim/.test(r.body.skipped) && r.body.claim_job === 'a' && log.length === 0);
+  c.v = T0 + 3 * 60000 + 1;   // claim expired (runner died mid-flight)
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('an expired claim self-heals: the next caller runs the job', r2.body.ran === 'a' && log.length === 1);
+  t('and the stale claim is cleared', stateOf(store).claim_id === '');
+}
+// 2g throwing job: logged, recorded, returned, never blocks the others
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['bad', 'interval', { run: async () => { throw new Error('kaboom with detail'); } }], ['good', 'interval']]);
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('throwing job -> job_ok false + error text returned (HTTP 200: the dispatcher itself worked)', r1.status === 200 && r1.body.ran === 'bad' && r1.body.job_ok === false && /kaboom with detail/.test(r1.body.error) && r1.body.ok === true, r1.body);
+  t('throwing job -> Ops_Telemetry FALSE row with Job_Type scheduler_job and the job name', L.telemetry.length === 1 && L.telemetry[0].Success === 'FALSE' && L.telemetry[0].Job_Type === 'scheduler_job' && L.telemetry[0].Skill_Or_Endpoint === 'bad' && /kaboom/.test(L.telemetry[0].Notes), L.telemetry);
+  t('throwing job -> admin alert attempted (rate-limited inside alertAdminOnFailure)', L.alerts.length === 1 && L.alerts[0].k === 'scheduler_bad');
+  t('throwing job -> state records last_error + failed status, no last_ok', (() => { const j = stateOf(store).jobs.bad; return /kaboom/.test(j.last_error) && j.last_status === 'failed' && !j.last_ok; })());
+  t('throwing job -> the next job still runs on the next call', r1.body.more === true && (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === 'good' && log.join() === 'good');
+//@@TEST_NEXT@@
