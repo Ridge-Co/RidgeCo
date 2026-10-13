@@ -136,6 +136,26 @@ function runScheduler() {
   }
 }
 
+// Run any time (after setup): asks the Hub what its NEXT tick would do - counts only. Sends nothing, claims nothing, changes nothing.
+function preflight() {
+  var token = props_().getProperty('SCHEDULER_TOKEN');
+  if (!token) { Logger.log('Not set up yet: run setup() first.'); return { ok: false, problem: 'not set up' }; }
+  var r = hub_('post', '/cron/run', token, { dry_run: true });
+  if (!r.ok) { Logger.log('PREFLIGHT FAILED: ' + r.problem); return r; }
+  var b = r.body, pf = b.preflight || {}, jobs = pf.jobs || {};
+  Logger.log('PREFLIGHT (nothing was sent, claimed or changed).' + (b.first_run ? ' This would be the Hub\'s FIRST scheduler tick.' : ''));
+  Logger.log('Would run now: ' + ((b.due && b.due.length) ? b.due.join(', ') : 'nothing'));
+  if (b.would_seed && b.would_seed.length) Logger.log('Marked as already done today, will NOT run until their next slot: ' + b.would_seed.join(', '));
+  Object.keys(jobs).forEach(function (n) {
+    var j = jobs[n], detail = {};
+    Object.keys(j).forEach(function (k) { if (k !== 'would') detail[k] = j[k]; });
+    Logger.log('  ' + n + ': ' + j.would);
+    if (Object.keys(detail).length) Logger.log('      ' + JSON.stringify(detail));
+  });
+  if (pf.errors && pf.errors.length) Logger.log('PREFLIGHT COULD NOT COUNT SOME THINGS: ' + JSON.stringify(pf.errors));
+  return { ok: pf.ok !== false, body: b };
+}
+
 // One HTTPS call to the Hub. Returns { ok:true, body } or { ok:false, problem } — never throws.
 function hub_(method, path, token, payload) {
   var opts = { method: method, headers: { 'X-Auth-Token': token }, muteHttpExceptions: true, followRedirects: false };
