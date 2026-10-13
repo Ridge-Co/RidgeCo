@@ -296,5 +296,28 @@ function ready(w, queue, statusBody) { w.props.SCHEDULER_TOKEN = 'hs_' + 'a'.rep
   ok(w2.logs.some(l => /Not set up/.test(l)), 'statusReport before setup says so');
 }
 
+// ── preflight(): dry run only, readable log, no mail, no state ──────────────────────────────────
+{
+  const w = world({ triggers: 1 }); const tok = 'hs_' + 'd'.repeat(64); w.props.SCHEDULER_TOKEN = tok;
+  w.hub = (url, o) => ({ code: 200, body: { ok: true, dry: true, first_run: true, due: ['sweep'], would_seed: ['daily_digest', 'review_mon'], preflight: { ok: true, errors: [], jobs: { sweep: { would: 'texts held messages', quiet_hours_held_due: { count: 3 } } } } } });
+  const r = w.run('preflight');
+  const f = w.fetches[0];
+  ok(f && /\/cron\/run$/.test(f.url) && JSON.parse(f.o.payload).dry_run === true && f.o.headers['X-Auth-Token'] === tok, 'preflight POSTs /cron/run with {dry_run:true}', f && f.o.payload);
+  ok(w.logs.some(l => /FIRST scheduler tick/.test(l)) && w.logs.some(l => /Would run now: sweep/.test(l)) && w.logs.some(l => /daily_digest, review_mon/.test(l)) && w.logs.some(l => /sweep: texts held messages/.test(l)) && w.logs.some(l => /"count":3/.test(l)), 'preflight logs a readable summary', w.logs);
+  ok(w.mails.length === 0 && w.fetches.length === 1 && !w.logs.some(l => l.includes(tok)), 'preflight sends no mail, makes one call, never prints the token');
+  const w2 = world(); w2.run('preflight');
+  ok(w2.logs.some(l => /Not set up/.test(l)) && w2.fetches.length === 0, 'preflight before setup says so and calls nothing');
+  const w3 = world({ triggers: 1 }); w3.props.SCHEDULER_TOKEN = tok; w3.hub = () => ({ code: 401, body: 'no' });
+  w3.run('preflight');
+  ok(w3.logs.some(l => /PREFLIGHT FAILED/.test(l) && /401/.test(l)), 'preflight reports a failing Hub loudly');
+}
+// ── a tick on a first-ever Hub run logs what was seeded ─────────────────────────────────────────
+{
+  const w = world({ triggers: 1 }); w.props.SCHEDULER_TOKEN = 'hs_' + 'e'.repeat(64);
+  scriptedHub(w, [{ ran: 'sweep', job_ok: true, more: false, first_run: true, seeded: ['daily_digest', 'ar_report_mon'] }]);
+  w.run('runScheduler');
+  ok(w.logs.some(l => /FIRST RUN on the Hub/.test(l) && /daily_digest, ar_report_mon/.test(l)), 'a first-run tick logs the seeded job names');
+}
+
 console.log(`\nhub-scheduler: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
