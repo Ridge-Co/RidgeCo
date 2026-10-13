@@ -18751,7 +18751,7 @@ async function receiptIntake(env, body) {
   return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
 }
 
-// POST /receipt-scan (also called by cron) — pull new files from the inbox Drive folder.
+// POST /receipt-scan (also called by the scheduler's daily_receipts job) — pull new files from the inbox Drive folder.
 // Self-provisions the folder the first time so there's no manual setup.
 async function receiptScan(env) {
   const cfg = await fetchConfig(env);
