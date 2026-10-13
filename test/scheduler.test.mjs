@@ -412,7 +412,7 @@ for (const N of [2, 5, 8]) {
   t('and is then never run again that day', (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === null && log.length === 3);
 }
 {
-  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+  const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
   const jobs = mkJobs(log, [
     ['noretry', 'daily', { retry: false, run: async () => { log.push('noretry'); return { ok: false, errors: [{ step: 'send', error: 'smtp 500' }] }; } }],
     ['after_send', 'daily', { run: async () => { log.push('after_send'); return { ok: false, errors: [{ step: 'send', error: 'half sent' }], no_retry: true }; } }],
