@@ -19229,9 +19229,9 @@ async function health(env, url) {
     out.twilio.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
     out.twilio.test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
   } catch (_) {}
-  // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. If this is
-  // false, the GitHub Actions sweep (cron-sweep.yml) has nothing to authenticate with, so
-  // quiet-hours-held messages and deferred appointment reminders will sit unsent until it's set.
+  // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. LEGACY (Oct 12 2026): the GitHub
+  // Actions sweep is gone; the Apps Script scheduler authenticates with Config `Scheduler_Token` instead (see
+  // out.scheduler below). CRON_SWEEP_TOKEN now only guards the manual POST /cron/sweep.
   out.cron_sweep = { token_set: !!(env && env.CRON_SWEEP_TOKEN) };
   // ALERT_PUSH_TOKEN presence (Oct 12 2026) — POST /admin-notify rejects everything while this is false.
   out.alert_push = { token_set: !!(env && typeof env.ALERT_PUSH_TOKEN === 'string' && env.ALERT_PUSH_TOKEN.trim()) };
