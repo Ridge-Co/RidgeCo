@@ -9971,7 +9971,7 @@ async function depositSweepSurface(env, out, cfg, kind, entry) {
   try { await setConfigKey(env, { key, value: stamp }); cfg[key] = stamp; }
   catch (ce) { out.errors.push({ scope: entry.scope || '', stage: 'alert_marker', error: String((ce && ce.message) || ce).slice(0, 200) }); }
 }
-// Fast sweep (cronSweep every 15 min, qbSyncPayments / the daily scheduled() run, and POST /scope-deposit/sweep
+// Fast sweep (the scheduler's sweep_work job every ~15 min, the daily_qb_sync job via qbSyncPayments, and POST /scope-deposit/sweep
 // which the Who To Pay page fires when it opens). Only touches QuickBooks when a Pre-approved scope exists.
 // Returns { ok, checked, transitioned:[{scope,wo_id,texted,text_errors?,invoice_id,source}], not_found:[{scope,wo_id,reason,invoice_id?}],
 // awaiting_invoice:[{scope,wo_id,reason}] (fresh signing, normal wait, no alert), errors:[{scope?,wo_id?,stage,error}] }.
