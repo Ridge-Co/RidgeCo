@@ -4384,15 +4384,35 @@ async function scopeProposal(env, body) {
   // Ridge Co–supplied materials get their own customer line (Brett, Sep 22 2026: "owner gets NO
   // transparency on markup info. just sees description and price to them") — description + the
   // customer's materials price only, never Ridge Co's cost or the mode/markup used.
-  const scopeText = priced.items.map(it => {
+  // Oct 13 2026 (Brett): the text now shows EVERY option the customer will be offered — pick-one
+  // alternatives with their prices, and optional add-ons as a separate "+$X" block that is NOT in
+  // the Total — so what Brett reads/copies matches what the customer page presents. Customer prices
+  // only; never vendor cost.
+  const money = n => '$' + (+n || 0).toFixed(2);
+  const itemLine = it => {
+    const vs = it.variants || [];
+    const multi = vs.length > 1;
     let line = '- ' + (it.area ? it.area + ': ' : '') + it.description;
-    const multi = (it.variants || []).length > 1;
-    for (const v of (it.variants || [])) {
+    if (it.optional && !multi && vs[0]) line += ' (+' + money(vs[0].price) + ')';
+    if (multi) {
+      line += '\n    Choose one:';
+      for (const v of vs) line += '\n      * ' + (v.label || 'Option') + ' - ' + (it.optional ? '+' : '') + money(v.price);
+    }
+    for (const v of vs) {
       if (!(v.materials_price > 0)) continue;
-      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — $' + v.materials_price.toFixed(2);
+      line += '\n    Includes materials' + (multi && v.label ? ' (' + v.label + ' option)' : '') + ': ' + v.materials_desc + ' — ' + money(v.materials_price);
     }
     return line;
-  }).join('\n');
+  };
+  const baseItems = priced.items.filter(it => !it.optional), addonItems = priced.items.filter(it => it.optional);
+  let scopeText = baseItems.map(itemLine).join('\n');
+  if (addonItems.length) {
+    scopeText += '\n\nOptional add-ons (NOT included in the total below - you choose whether to add them when you approve):\n' + addonItems.map(itemLine).join('\n');
+    for (const it of addonItems) {
+      const vs = it.variants || [];
+      if (vs.length === 1) scopeText += '\n  Total with this add-on: ' + money(priced.subtotal + vs[0].price);
+    }
+  }
   // Standing policy (Aug 21 2026, Brett): if only PART of a scope is approved/completed instead of
   // the full project, itemized pricing for those pieces is a best-efforts estimate, not a fixed
   // quote — the combined price is built to absorb small unknowns across a mixed batch of larger and
