@@ -1200,6 +1200,44 @@ async function genProposal(){
     setStatus('prop-status',msg,(r.schedule_warnings&&r.schedule_warnings.length)?'warn':'ok');
   }catch(e){ setStatus('prop-status','⚠ '+e.message,'err'); }
 }
+// "What your customer sees" (Oct 13 2026): every option the customer will be offered, built from the
+// last GENERATED proposal (the priced Proposal_Items_JSON — customer prices only, no vendor cost).
+function renderCustomerPreview(items, schedule){
+  var box=document.getElementById('cust-preview'); if(!box) return;
+  items=Array.isArray(items)?items:[];
+  if(!items.length){ box.classList.add('hide'); box.innerHTML=''; return; }
+  var money=function(n){ return '$'+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+  var base=items.filter(function(it){ return !it.optional; }), addons=items.filter(function(it){ return it.optional; });
+  var priceOf=function(it){ var v=(it.variants||[]).filter(function(x){ return x.key===it.selected_key; })[0]||(it.variants||[])[0]; return v?(+v.price||0):0; };
+  var baseTotal=base.reduce(function(s,it){ return s+priceOf(it); },0);
+  var sched=function(total){
+    return (schedule||[]).map(function(m,i,a){
+      var isLast=i===a.length-1; var prev=a.slice(0,i).reduce(function(s,x){ return s+Math.round((+x.percent||0)/100*total*100)/100; },0);
+      var amt=isLast?total-prev:Math.round((+m.percent||0)/100*total*100)/100;
+      return '<div class="pv-row"><span>'+esc(m.label||'Payment')+' ('+(+m.percent||0)+'%)</span><span>'+money(amt)+'</span></div>';
+    }).join('');
+  };
+  var itemHtml=function(it,plus){
+    var vs=it.variants||[];
+    var h='<div class="pv-item"><b>'+esc(it.description||'')+'</b>';
+    if(vs.length>1){ h+='<div style="font-size:11px;color:var(--muted);">Customer picks ONE:</div>'+vs.map(function(v){ return '<div class="pv-opt"><span>○ '+esc(v.label||'Option')+'</span><span>'+(plus?'+':'')+money(v.price)+'</span></div>'; }).join(''); }
+    else if(vs[0]){ h+='<div class="pv-opt"><span></span><span>'+(plus?'+':'')+money(vs[0].price)+'</span></div>'; }
+    return h+'</div>';
+  };
+  var h='<h4>What your customer will see — from the last generated proposal</h4>';
+  h+=base.map(function(it){ return itemHtml(it,false); }).join('');
+  if(addons.length){
+    h+='<div class="pv-addon"><b>Optional add-ons</b> <span style="font-size:11px;color:var(--muted);">(unticked by default; not in the base total)</span>'+addons.map(function(it){ return '<div style="margin-top:4px;">☐ '+itemHtml(it,true).replace('class="pv-item"','class="pv-item" style="border:none;display:inline-block;width:94%;vertical-align:top;"')+'</div>'; }).join('')+'</div>';
+  }
+  h+='<div class="pv-scn"><b>Base job only: '+money(baseTotal)+'</b>'+sched(baseTotal)+'</div>';
+  addons.forEach(function(it){
+    var vs=it.variants||[]; if(vs.length!==1) return;
+    var t=baseTotal+(+vs[0].price||0);
+    h+='<div class="pv-scn"><b>With "'+esc((it.description||'add-on').slice(0,60))+'": '+money(t)+'</b>'+sched(t)+'</div>';
+  });
+  h+='<div class="sub" style="margin-top:6px;">Preview only — the customer link is not touched. After editing items or the schedule, tap Generate proposal to refresh this.</div>';
+  box.innerHTML=h; box.classList.remove('hide');
+}
 function copyProposal(){ var t=document.getElementById('proposal-text').value; navigator.clipboard.writeText(t).then(function(){ setStatus('prop-status','📋 copied','ok'); }); }
 // Edit the proposal text directly and save it — bypasses AI regeneration (genProposal), for a
 // hand-tuned proposal (e.g. a custom combined/standalone comparison) that shouldn't get
