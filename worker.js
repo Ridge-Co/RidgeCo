@@ -13636,27 +13636,125 @@ const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a norma
 async function cronSweep(env) {
   env = __cronEnv(env);
   const now = new Date();
-  let cfg;
-  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
-  const claimedUntil = cfg[CRON_SWEEP_LOCK_KEY] ? new Date(cfg[CRON_SWEEP_LOCK_KEY]) : null;
+  let rows;
+  try { rows = await schedReadConfigRows(env, true); }
+  catch (e) { return json({ ok: false, error: 'could not read Config: ' + schedErrText(e) }, 503); }   // was: cfg = {} (a failed read looked like "no claim")
+  // The Apps Script scheduler owns these jobs: never sweep beside one of its in-flight runs (duplicate sends).
+  const sp = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+  if (sp.error) return json({ ok: false, error: sp.error }, 503);
+  const sUntil = Date.parse(sp.state.claim_until || '');
+  if (!isNaN(sUntil) && sUntil > now.getTime()) return json({ ok: true, skipped: 'the scheduler is running a job right now', claim_job: sp.state.claim_job || null });
+  const cs = schedCell(rows, CRON_SWEEP_LOCK_KEY);
+  const claimedUntil = cs ? new Date(cs) : null;
   if (claimedUntil && !isNaN(claimedUntil.getTime()) && claimedUntil > now) {
     return json({ ok: true, skipped: 'already claimed', claimed_until: claimedUntil.toISOString() });
   }
+  const out = { ok: true, ts: now.toISOString(), errors: [], warnings: [] };
   try {
     await setConfigKey(env, { key: CRON_SWEEP_LOCK_KEY, value: new Date(now.getTime() + CRON_SWEEP_LOCK_TTL_MS).toISOString() });
-  } catch (e) { /* best-effort — if the claim write itself fails, still proceed rather than silently never sweeping again */ }
-
-  const out = { ok: true, ts: now.toISOString() };
-  try { out.quiet_hours = await processQuietHoursQueue(env); } catch (e) { out.quiet_hours = { error: String((e && e.message) || e) }; }
-  try { const r = await processPendingNotifications(env); out.pending_notifications = (r && r.json) ? await r.json() : r; } catch (e) { out.pending_notifications = { error: String((e && e.message) || e) }; }
-  try { out.recurring_wos = await processRecurringWorkOrders(env); } catch (e) { out.recurring_wos = { error: String((e && e.message) || e) }; }
-  try { out.estimate_reminders = await processEstimateReminders(env); } catch (e) { out.estimate_reminders = { error: String((e && e.message) || e) }; }
-  try { out.deposit_paid = await processDepositPaidSweep(env); } catch (e) { out.deposit_paid = { error: String((e && e.message) || e) }; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'cronSweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) {} }
-  try { out.vendor_nudges = await processVendorNudges(env); } catch (e) { out.vendor_nudges = { error: String((e && e.message) || e) }; }
-  try { out.selftest = await maybeRunDailySelftest(env); } catch (e) { out.selftest = { error: String((e && e.message) || e) }; }
-  try { out.dead_man_switch = await checkDeadManSwitch(env); } catch (e) { out.dead_man_switch = { error: String((e && e.message) || e) }; }
+  } catch (e) { out.warnings.push('could not write the sweep claim (' + schedErrText(e) + '); sweeping anyway'); console.error('cronSweep: claim write failed:', schedErrText(e)); }
+  // Same work as the scheduler's sweep / sweep_work / sweep_checks jobs, run back to back (manual use only).
+  for (const run of [schedRunSweepMessages, schedRunSweepWork, schedRunSweepChecks]) {
+    const r = await run(env);
+    Object.assign(out, r.detail);
+    for (const e of r.errors) out.errors.push(e);
+  }
+  out.ok = out.errors.length === 0;
+  if (!out.ok) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'cron_sweep', Skill_Or_Endpoint: 'manual/cron-sweep', Success: 'FALSE', Notes: JSON.stringify(out.errors).slice(0, 480) }); }
+    catch (e) { out.telemetry_error = schedErrText(e); console.error('cronSweep: failure telemetry write failed:', out.telemetry_error); }
+  }
   return json(out);
 }
+
+// ═══ SCHEDULER-BLOCK-BEGIN ════════════════════════════════════════════════════════════════════
+// APPS SCRIPT SCHEDULER (Oct 12 2026) — PERMANENT RULE: NO CRON ANYWHERE. Apps Script time-driven
+// triggers are the ONLY clock (apps-script/hub-scheduler/HubScheduler.gs, one `everyMinutes(15)` trigger).
+// No Cloudflare Cron Triggers (the account is at its cap, so a trigger silently never attaches — that is
+// why quiet-hours messages were never released), no GitHub Actions `schedule:`. To add a periodic job, add
+// it to SCHED_JOBS below; never add a cron.
+//
+//   POST /cron/run     (Scheduler_Token) runs AT MOST ONE due job, in its own Worker invocation, and says
+//                      whether more are due; the Apps Script loops until more=false.
+//   GET  /cron/status  (Scheduler_Token) per-job last-run / overdue report. /health shows a coarse copy.
+//
+// State is ONE Config JSON key (Scheduler_State) so the shared Sheets quota is barely touched. Single-flight:
+// a caller claims the dispatcher (claim_until ~4 min + claim_id, written then RE-READ to prove it won the
+// race) before running anything, and every job is also gated by its own min-interval / once-per-ET-day key,
+// so a second caller (even a second Apps Script project) is a no-op: no duplicate runs, no duplicate sends.
+// Nothing here fails silently: a throwing job is caught, logged to Ops_Telemetry (Success FALSE,
+// Job_Type 'scheduler_job'), recorded in state, and returned as job_ok:false. Successful ticks write NO
+// telemetry row (the Config state key is the heartbeat; Ops_Telemetry has a ~1000-row grid).
+const SCHED_TOKEN_KEY = 'Scheduler_Token';
+const SCHED_STATE_KEY = 'Scheduler_State';
+const SCHED_TOKEN_MIN_LEN = 24;
+const SCHED_CLAIM_TTL_MS = 4 * 60 * 1000;
+const SCHED_JOB_BUDGET_MS = 50 * 1000;      // Apps Script UrlFetch gives up around 60s; a longer job finishes in the background (ctx.waitUntil) and records its result in state
+const SCHED_VERIFY_DELAY_MS = 700;
+const SCHED_RETRY_GAP_MS = 30 * 60 * 1000;  // failed daily/weekly job: retry no sooner than this ...
+const SCHED_MAX_ATTEMPTS = 3;               // ... and at most this many tries per ET day
+const SCHED_OVERDUE_INTERVAL_MIN = 45;
+const SCHED_OVERDUE_GRACE_MIN = 180;
+const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard'];
+
+// Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
+// Fails closed for a blank/short/missing secret, an empty header, any other method or path.
+function schedTokenOk(secret, tok, method, path) {
+  if (typeof secret !== 'string') return false;
+  const s = secret.trim();
+  if (s.length < SCHED_TOKEN_MIN_LEN) return false;
+  if (typeof tok !== 'string' || !tok) return false;
+  const routeOk = (method === 'POST' && path === '/cron/run') || (method === 'GET' && path === '/cron/status');
+  if (!routeOk) return false;
+  if (tok.length !== s.length) return false;
+  let diff = 0;
+  for (let i = 0; i < s.length; i++) diff |= tok.charCodeAt(i) ^ s.charCodeAt(i);
+  return diff === 0;
+}
+
+// ── Config access (STRICT: unlike fetchConfig, a failed read THROWS — a swallowed read would look like
+// "no state" and re-run every job, i.e. duplicate sends) ─────────────────────────────────────────────
+async function schedReadConfigRows(env, fresh) {
+  if (fresh) invalidateTabCache('Config');
+  const data = await sheetsRequest(env, 'GET', '/values/Config');
+  return (data && data.values) || [];
+}
+function schedFindRow(rows, key) { return rows.findIndex(r => String((r && r[0]) || '').trim() === key); }
+function schedCell(rows, key) { const i = schedFindRow(rows, key); return i < 0 ? '' : String((rows[i] && rows[i][1]) || ''); }
+// The auth gate's lookup. Returns { ok } or { ok:false, error } (a Config read failure must not look like a bad token).
+async function schedAuthCheck(env, tok, method, path) {
+  const routeOk = (method === 'POST' && path === '/cron/run') || (method === 'GET' && path === '/cron/status');
+  if (!routeOk || typeof tok !== 'string' || !tok) return { ok: false };
+  try { return { ok: schedTokenOk(schedCell(await schedReadConfigRows(env, false), SCHED_TOKEN_KEY), tok, method, path) }; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 300) }; }
+}
+// Pure. Parse the state cell. Blank = first run; invalid JSON is an ERROR (never silently "empty").
+function schedParseState(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return { state: { v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} } };
+  let st;
+  try { st = JSON.parse(s); } catch (e) { return { error: 'Scheduler_State in Config is not valid JSON (' + String(e.message).slice(0, 80) + '). Delete that Config row to reset it - every job will then run once as a first run.' }; }
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return { error: 'Scheduler_State in Config is not a JSON object. Delete that Config row to reset it.' };
+  if (!st.jobs || typeof st.jobs !== 'object') st.jobs = {};
+  return { state: st };
+}
+async function schedWriteState(env, state, rows) {
+  const text = JSON.stringify(state);
+  if (text.length > 40000) throw new Error('Scheduler_State grew past 40000 chars (' + text.length + ') - refusing to write');
+  const idx = schedFindRow(rows, SCHED_STATE_KEY);
+  if (idx >= 0) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `Config!B${idx + 1}`, values: [[text]] }] });
+  else await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [[SCHED_STATE_KEY, text]] });
+  return text;
+}
+// Write, wait, re-read: returns { text, rows, parsed, landed } where landed = the cell now holds exactly what we wrote.
+async function schedWriteVerified(env, state, rows, sleep, delayMs) {
+  const text = await schedWriteState(env, state, rows);
+  if (delayMs > 0) await sleep(delayMs);
+  const rows2 = await schedReadConfigRows(env, true);
+  const parsed = schedParseState(schedCell(rows2, SCHED_STATE_KEY));
+//@@SCHED_NEXT@@
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
 // A WO template can carry a schedule; the 15-minute cron sweep posts a real WO for every linked
