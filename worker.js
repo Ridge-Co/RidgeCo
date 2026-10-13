@@ -15744,6 +15744,12 @@ async function ghPublicJson(path, env) {
 // scheduler PR #229 is merged) as a daily scheduler job — NOT a cron. Reads public GitHub only;
 // writes only Build_State/Build_Updated/PR_Number (+ Status→done when the PR merged). Every
 // failure is returned in `errors` — never swallowed. Accepts OPS_QUEUE_TOKEN or the admin secret.
+// updateRow returns a 404 Response (not a throw) for a missing row — callers that count successes must not treat that as success.
+async function updateQueueRowOrThrow(env, id, fields) {
+  const r = await updateRow(env, OPS_QUEUE_TAB, id, fields);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('queue row #' + id + ' could not be updated (HTTP ' + r.status + ')');
+  return r;
+}
 async function opsQueueSync(env, body, opts) {
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
