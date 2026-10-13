@@ -17076,7 +17076,7 @@ async function opsQueueSync(env, body) {
         if (hit) n = String(hit.number);
       }
       if (!n) continue; // no PR yet — page shows "building / no PR reported" (and "stalled" after 24h)
-      const pr = await ghPublicJson('/pulls/' + n);
+      const pr = supplied.find(p => String(p.number) === n) || await ghPublicJson('/pulls/' + n, env);
       const next = prStateToBuildState(pr);
       const fields = {};
       if (String(r.PR_Number || '') !== n) fields.PR_Number = n;
