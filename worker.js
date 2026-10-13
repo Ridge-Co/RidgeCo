@@ -15749,7 +15749,11 @@ async function opsQueueSync(env, body) {
     return (st === 'building' || st === 'done' || st === 'held') && (bs === 'building' || bs === 'pr_open' || (bs === '' && r.PR_Number && st !== 'done'));
   }).slice(0, 25);
   const changed = [], errors = [];
-  let prList = null;
+  // GitHub rate-limits anonymous calls from Cloudflare's shared addresses, so the Proposals page can
+  // look PRs up from Brett's own browser and pass them in as body.prs (same shape as GitHub's /pulls list).
+  const supplied = (body && Array.isArray(body.prs) ? body.prs : []).slice(0, 100)
+    .filter(p => p && Number.isFinite(Number(p.number)) && typeof p.state === 'string');
+  let prList = supplied.length ? supplied : null;
   const nowIso = new Date().toISOString();
   for (const r of inflight) {
     try {
