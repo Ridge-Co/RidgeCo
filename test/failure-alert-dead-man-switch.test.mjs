@@ -89,8 +89,9 @@ const wrapBody = grabAsync('callWithFailureAlert');
 // Oct 12 2026: no cron - the check now rides the Apps Script scheduler's `sweep_checks` job (every ~15 min).
 const sweepBody = grabAsync('schedRunSweepChecks');
 {
-  ok(sweepBody.includes('checkDeadManSwitch(env)'), 'cronSweep calls checkDeadManSwitch every pass, riding the existing ~15-min sweep cadence');
-  ok(/try\s*\{\s*out\.dead_man_switch/.test(sweepBody), 'the call is wrapped in its own try/catch, matching every other cronSweep sub-task, so one failing check can never take down the rest of the sweep');
+  ok(sweepBody.includes('checkDeadManSwitch(env)'), 'sweep_checks calls checkDeadManSwitch every pass, riding the scheduler 15-min cadence');
+  ok(/schedStep\('dead_man_switch'/.test(sweepBody), 'the call is its own caught step (schedStep), so one failing check can never take down the rest and its failure is returned/logged');
+  ok(/name: 'sweep_checks',\s+kind: 'interval', every_min: 14/.test(src), 'sweep_checks is a 15-minute scheduler job');
 }
 
 console.log(`failure-alert-dead-man-switch: ${n}/${n} passing`);
