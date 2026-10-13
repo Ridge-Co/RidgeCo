@@ -13964,6 +13964,52 @@ async function schedRunDailyTurnover(env) {
   const r = await schedStep('release_turnover_by_date', () => releaseTurnoverByDate(env), errors);
   return { ok: !errors.length, errors, detail: r };
 }
+async function schedRunDailyQbSync(env) {
+  const errors = [], detail = {};
+  let sweepRanInSync = false;
+  try {
+    const res = await qbSyncPayments(env, {});
+    const u = await schedUnwrap(res);
+    sweepRanInSync = !!(u.body && u.body.deposit_sweep);
+    // Same condition scheduled() always used (ok:false or a non-empty errors list), plus a non-2xx status.
+    const b = u.body;
+    const bad = u.status >= 400 ? `HTTP ${u.status}` : (b && (b.ok === false || (b.errors && b.errors.length))) ? String(JSON.stringify((b.errors || b.error || 'ok:false'))).slice(0, 300) : null;
+    if (bad) {
+      errors.push({ step: 'qb_sync_payments', error: bad });
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify((u.body && (u.body.errors || u.body.error)) || 'ok:false')).slice(0, 480) }); }
+      catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
+    }
+    detail.qb_sync = { status: u.status, deposit_sweep: sweepRanInSync };
+  } catch (e) {
+    errors.push({ step: 'qb_sync_payments', error: schedErrText(e) });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: schedErrText(e) }); }
+    catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
+  }
+  // qbSyncPayments already runs the deposit-paid sweep (and logs its findings) - only run it here if that did not happen.
+  if (!sweepRanInSync) {
+    try { detail.deposit_paid = await processDepositPaidSweep(env); }
+    catch (e) {
+      errors.push({ step: 'deposit_paid_sweep', error: schedErrText(e) });
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduler/deposit-paid-sweep', Success: 'FALSE', Notes: schedErrText(e) }); }
+      catch (e2) { errors.push({ step: 'deposit_paid_sweep_telemetry', error: schedErrText(e2) }); }
+    }
+  }
+  return { ok: !errors.length, errors, detail };
+}
+async function schedRunWeeklyReview(env, deliver) {
+  const errors = [];
+  const r = await schedStep('weekly_review', () => runWeeklyReview(env, { deliver: !!deliver, trigger: 'cron' }), errors);
+  if (r && r.logged === false) errors.push({ step: 'weekly_review', error: 'review ran but its Ops_Review_Log history row did not save' + (r.logged_error ? ': ' + r.logged_error : '') });
+  if (r && r.delivery && r.delivery.reason === 'error') errors.push({ step: 'weekly_review', error: 'delivery failed: ' + (r.delivery.error || 'unknown') });
+  return { ok: !errors.length, errors, detail: r ? { logged: r.logged, delivery: r.delivery } : null };
+}
+async function schedRunArReport(env) {
+  const errors = [];
+  const r = await schedStep('weekly_ar_report', () => runWeeklyArReport(env), errors);
+  return { ok: !errors.length, errors, detail: r };
+}
+
+// ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
 //@@SCHED_NEXT@@
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
