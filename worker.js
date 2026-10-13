@@ -21453,6 +21453,17 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  // Scope proposal build (Oct 13 2026, add-ons): the staging token may create a scope only on a TEST-
+  // Property and edit / generate a proposal / mint a link only for a scope that sits on one. (Customer
+  // view + sign are public, link-token gated — they never need this token.) /message-queue/translate is
+  // read-only (it never edits a row), so it is safe for any row on staging.
+  if (path === '/scope/create') return await isTestRecord(env, 'Properties', body && body.property_id);
+  if (path === '/scope/update' || path === '/scope/proposal' || path === '/scope/proposal/link') {
+    const _sc2 = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
+    if (!_sc2) return false;
+    return await isTestRecord(env, 'Properties', _sc2.Property_ID);
+  }
+  if (path === '/message-queue/translate') return true;
   if (path === '/scope/payment-schedule') {
     const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
     if (!_sc) return false;
