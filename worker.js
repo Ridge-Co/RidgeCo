@@ -13170,16 +13170,6 @@ async function doorWatchdogCron(env) {
     return { ok: false, errors: ['pass threw: ' + m] };
   }
 }
-// Oct 12 2026 (nothing may fail silently): cronSweep's failure used to be swallowed in scheduled().
-async function cronSweepLogged(env) {
-  try { await cronSweep(env); }
-  catch (e) {
-    const m = String((e && e.message) || e).slice(0, 300);
-    console.error('cronSweep failed:', m);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'cron_sweep', Skill_Or_Endpoint: 'scheduled/cron-sweep', Success: 'FALSE', Notes: ('cronSweep threw: ' + m).slice(0, 480) }); } catch (e2) { console.error('cronSweep failure telemetry write failed:', e2 && e2.message); }
-  }
-}
-
 // GET /watchdog/door-system - read-only: live health evaluation + stored state. Sends nothing, writes nothing.
 async function doorWatchdogStatus(env) {
   const nowMs = Date.now();
