@@ -3004,7 +3004,7 @@ function bgCancelConfirm() {
     var errs = safeArray(res.errors).slice(), sm = res.summary || {};
     if (res.error && errs.indexOf(res.error) < 0) errs.push(res.error);
     var head = errs.length || sm.failed ? '<div style="color:var(--danger);font-weight:bold;font-size:14px">❌ Finished with problems</div>' : '<div style="color:var(--accent2);font-weight:bold;font-size:14px">✅ Done — ' + (sm.cancelled||0) + ' cancelled</div>';
-    document.getElementById('bidcancel-body').innerHTML = head + safeArray(res.results).map(bgResultRow).join('') +
+    document.getElementById('bidcancel-body').innerHTML = head + safeArray(res.results).map(bgResultRow).join('') + bgWinnerLine(res, true) +
       (errs.length ? errs.map(function(e){ return '<div style="color:var(--danger);font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') : '') +
       safeArray(res.warnings).map(function(e){ return '<div style="color:#b7791f;font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') +
       '<div class="modal-actions"><button class="btn" style="min-height:44px" onclick="bgCancelDone()">Close</button></div>';
