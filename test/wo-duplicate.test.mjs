@@ -616,7 +616,6 @@ async function groupOf4() {
   t('no swallowing catch in the new block', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(S.block) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(S.block));
 }
 
-
 // ── 16. FOLLOW-UP (Oct 13 2026): "Keep this" never cancels the ORIGINAL; a kept COPY becomes tenant-visible ─────────
 // Brett: keep_one must cancel only the duplicate copies that are not the winner. "Yes, winning becomes visible to
 // tenant" = Tenant_Visible TRUE on the winning copy, and NO SMS of any kind. Unlinking leaves Tenant_Visible alone.
