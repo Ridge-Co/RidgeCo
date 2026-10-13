@@ -89,6 +89,12 @@ function load(store, over) {
     receiptScan: async () => ({ ok: true }), receiptReconScan: async () => ({ ok: true }),
     backfillItemsSummary: async () => ({ ok: true, updated: 0, failed: 0 }), purgeConfirmedDuplicateReceipts: async () => ({ ok: true }),
     sendReceiptsToQBEmail: async () => ({ ok: true, sent: 0, failed: [] }), releaseTurnoverByDate: async () => ({}),
+    fetchTab: async () => [], isMissingTabError: () => false, MSG_QUEUE_TAB: 'Message_Queue', NOTIF_QUEUE_TAB: 'Notification_Queue', VENDOR_REQ_TAB: 'Vendor_Requests',
+    etHour: (d) => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(d)) % 24,
+    etDateString: (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d),
+    estimatesAwaitingDecision: () => [], ESTIMATE_SMS_DEFAULT_SINCE: '2026-09-29T00:00:00.000Z', RECUR_POST_START_HOUR_ET: 8, QUIET_HOURS_START_ET: 19,
+    recurIsTrue: (v) => String(v).toUpperCase() === 'TRUE', recurEtDateISO: (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d),
+    recurLatestDue: () => null, recurTargets: () => [], recurTargetKey: (x) => x.p + '|' + (x.u || ''), recurWOIsOpen: () => false,
     qbSyncPayments: async () => ({ ok: true }), runWeeklyReview: async () => ({ ok: true, logged: true, delivery: null }), runWeeklyArReport: async () => ({ delivered: false }),
   };
   Object.assign(stubs, over.stubs || {});
