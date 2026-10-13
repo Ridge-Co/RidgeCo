@@ -20,7 +20,8 @@ ratchet('LLM key literal', /\bsk-[A-Za-z0-9]{30,}/g, 0, 'Never commit API keys.'
 ratchet('eval()', /\beval\(/g, 0, 'No eval in the Worker.');
 ratchet('secret/PIN console.log', /console\.log\([^)]*(PIN|token|secret)/gi, 0, 'Never log secrets or PINs.');
 // Ratchets: existing debt is tolerated, new debt is not.
-ratchet('unguarded header-column indexOf', /=\s*\w+\.indexOf\('[^']+'\)\s*;/g, 15, 'Column lookups must handle -1 (missing header) and be by header name, not index.');
+// 15→16 (Oct 13 2026, ops-queue upgrade): `buCol = headers.indexOf('Build_Updated')` in opsQueueStartBuild — every use is guarded by `!== -1`, same pattern as the existing statusCol/heldNoteCol.
+ratchet('unguarded header-column indexOf', /=\s*\w+\.indexOf\('[^']+'\)\s*;/g, 16, 'Column lookups must handle -1 (missing header) and be by header name, not index.');
 ratchet('btoa()', /\bbtoa\(/g, 12, 'btoa throws on non-Latin-1 text (gh-broker bug class). Use a UTF-8-safe encoder for text.');
 ratchet('bare await request.json()', /await\s+request\.json\(\)(?!\s*\))/g, 1, 'Empty POST bodies must not 500 (rule 167). Wrap in try/catch.');
 console.log(`bug-class-tripwires: ${n}/${n} passing`);
