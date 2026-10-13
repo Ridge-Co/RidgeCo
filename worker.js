@@ -17071,7 +17071,7 @@ async function opsQueueSync(env, body) {
     try {
       let n = cleanPrNumber(r.PR_Number);
       if (!n) {
-        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60');
+        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env);
         const hit = matchPrToItem(prList, r.ID);
         if (hit) n = String(hit.number);
       }
