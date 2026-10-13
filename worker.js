@@ -13868,7 +13868,7 @@ function schedStatus(state, now, jobs) {
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
     }
-    out.jobs[job.name] = { expected: schedExpected(job), last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, overdue, overdue_reason: overdue ? reason : '' };
+    out.jobs[job.name] = { expected: schedExpected(job), last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
     if (overdue) out.overdue.push(job.name);
   }
   return out;
