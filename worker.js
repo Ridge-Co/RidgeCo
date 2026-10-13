@@ -8288,7 +8288,7 @@ async function assignVendor(env, body, internal) {
     // SMS-reply instruction was removed per the comment above. Link added per Brett's ask
     // (Sep 14 2026) — deep-links into the portal (vendorPortalLink), not the no-login
     // shareable-link mechanism, specifically to avoid bypassing this same accept-gate.
-    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, bypassQuietHours: internal.bypassQuietHours === true });
+    const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor, message_body: msg, allowEarlyMorning: body.allow_early_morning_sms === true, already_localized: true, original_body: isSpanish ? msgEn : '', translated_to: isSpanish ? 'es' : '', bypassQuietHours: internal.bypassQuietHours === true });
     vendorSMSSent = r.sent;
     const _lang = isSpanish ? 'es' : 'en';
     if (r.sent) vendorSmsDetail = { status: 'sent', reason: r.test_mode ? 'TEST MODE IS ON: the text went to the Hub test number, NOT to the vendor' : 'Text sent to the vendor', test_mode: !!r.test_mode, language: _lang, message_body: r.message_body || msg };
