@@ -384,17 +384,17 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
 {
   const log = { tel: [], alerts: [] };
   const mk = (runImpl, telFails, alertFails) => new Function('runDoorWatchdogPass', 'logTelemetry', 'alertAdminOnFailure', 'DOOR_WD_JOB',
-    'return (' + src.slice(src.indexOf('async function doorWatchdogCron('), src.indexOf('// Oct 12 2026 (nothing may fail silently): cronSweep')).trim() + ');')(runImpl,
+    'return (' + src.slice(src.indexOf('async function doorWatchdogCron('), src.indexOf('// GET /watchdog/door-system - read-only')).trim() + ');')(runImpl,
     async (env, rec) => { if (telFails) throw new Error('tel down'); log.tel.push(rec); },
     async (env, job, msg) => { if (alertFails) throw new Error('alert down'); log.alerts.push([job, msg]); }, 'door_watchdog');
   const restore = logsOff();
   let threw = false;
   try { await mk(async () => { throw new Error('kaboom'); }, false, false)({}); } catch (e) { threw = true; }
-  t('unexpected throw does not propagate to scheduled()', threw === false);
+  t('unexpected throw does not propagate to the scheduler job', threw === false);
   t('unexpected throw -> FALSE telemetry + admin failure alert', log.tel.length === 1 && log.tel[0].Success === 'FALSE' && /kaboom/.test(log.tel[0].Notes) && log.alerts.length === 1 && log.alerts[0][0] === 'door_watchdog');
   threw = false;
   try { await mk(async () => { throw new Error('kaboom2'); }, true, true)({}); } catch (e) { threw = true; }
-  t('even telemetry + alert failing cannot break scheduled()', threw === false);
+  t('even telemetry + alert failing cannot break the scheduler job', threw === false);
   const okRes = await mk(async () => ({ ok: true, errors: [] }), false, false)({});
   restore();
   t('normal pass result passed through', okRes.ok === true);
@@ -402,14 +402,15 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
 
 // ───────────────────────── structural (wiring) ─────────────────────────
 {
-  const sched = src.slice(src.indexOf("if (cron === '*/15 * * * *')"), src.indexOf("if (cron === '30 12 * * 1')"));
-  t('watchdog runs inside the EXISTING */15 cron branch, before the sweep', /await doorWatchdogCron\(env\)/.test(sched) && sched.indexOf('doorWatchdogCron') < sched.indexOf('cronSweepLogged'));
-  t('the sweep is no longer swallowed in scheduled()', !/await cronSweep\(env\); \} catch/.test(sched) && /await cronSweepLogged\(env\)/.test(sched));
+  // Oct 12 2026: no cron - the watchdog is the scheduler's `door_watchdog` job (first in priority, every ~15 min).
+  const wdJob = src.slice(src.indexOf('async function schedRunDoorWatchdog('), src.indexOf('// The three sweep jobs below'));
+  t('watchdog is the FIRST scheduler job (priority order), 15-minute interval', /\{ name: 'door_watchdog',\s+kind: 'interval', every_min: 14/.test(src) && src.indexOf("name: 'door_watchdog'") < src.indexOf("name: 'sweep'"));
+  t('the watchdog job calls doorWatchdogCron and returns its errors (not swallowed)', /schedStep\('door_watchdog', \(\) => doorWatchdogCron\(env\)/.test(wdJob) && /ok: !errors\.length/.test(wdJob));
   const cronFn = block.slice(block.indexOf('async function doorWatchdogCron('), block.indexOf('// GET /watchdog/door-system - read-only'));
   t('cron wrapper: own try/catch, logs telemetry AND alerts, never rethrows', /try \{\s*const wd = await runDoorWatchdogPass\(env\)/.test(cronFn) && /Job_Type: DOOR_WD_JOB/.test(cronFn) && /alertAdminOnFailure\(env, 'door_watchdog'/.test(cronFn) && !/throw /.test(cronFn));
   const toml = fs.readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   t('same-account Worker fetch enabled (global_fetch_strictly_public) - otherwise Cloudflare answers error 1042/404', /compatibility_flags = \["global_fetch_strictly_public"\]/.test(toml));
-  t('no new cron trigger added (account quota is full)', /crons = \["0 11 \* \* \*", "30 12 \* \* 1", "0 12 \* \* 3", "0 13 \* \* 1", "\*\/15 \* \* \* \*"\]/.test(toml));
+  t('NO cron triggers at all (permanent rule, Oct 12 2026): crons = [] removes any attached trigger', /\[triggers\]\s*\ncrons = \[\]/.test(toml) && !/crons = \[\s*"/.test(toml));
   const testFn = block.slice(block.indexOf('async function doorWatchdogTest('));
   t('test hook is staging-only (first statement)', /^async function doorWatchdogTest\(env, url, body\) \{\s*if \(!isStaging\(env, url\)\) return json\(\{ error: 'Not found' \}, 404\);/.test(testFn));
   t('test hook is routed + allowed for HUB_TEST_TOKEN writes', /path === '\/watchdog\/door-system\/test'\)\s*return await doorWatchdogTest\(env, url, body\)/.test(src) && /if \(path === '\/watchdog\/door-system\/test'\) return true;/.test(src));
