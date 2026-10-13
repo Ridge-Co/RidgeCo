@@ -958,114 +958,15 @@ const _hubWorkerCore = {
     }
   },
 
-  // Daily digest cron (Session 5). Delivery is gated by Config flags and stays
-  // dormant until Brett flips digest_enabled=TRUE after Twilio send is live. A fire
-  // with delivery off just builds the digest and returns — no messages, negligible cost.
+  // LOUD NO-OP (Oct 12 2026). PERMANENT RULE: NO CRON ANYWHERE - Apps Script time-driven triggers are the only
+  // clock (see the APPS SCRIPT SCHEDULER block: POST /cron/run). wrangler.toml deliberately sets `crons = []`.
+  // If Cloudflare ever fires this, a stale Cron Trigger is still attached: that is a second, unreliable clock,
+  // so it does NO job work (no duplicates) and shouts instead (Ops_Telemetry FALSE row + admin alert, rate-limited).
   async scheduled(event, env, ctx) {
-    // No cron triggers are configured on the staging Worker (wrangler.toml's
-    // `staging` branch override removes [triggers] entirely), so this never
-    // actually fires there today — set defensively in case that ever changes.
     env.__STAGING__ = isStaging(env);
-    env = __cronEnv(env); // paced, cache-sharing Sheets reads for every background job
-    const cron = event && event.cron;
-    // Message-queue sweep (Sep 15 2026) — quiet-hours release, deferred notifications, and
-    // vendor nudges. Uses the 5th (last available) paid-tier Cloudflare Cron Trigger slot.
-    // Originally built to run ONLY via a GitHub Actions workflow (cron-sweep.yml, rule 166/167)
-    // to avoid using a Cloudflare slot at all — but real live testing (Sep 15 2026) found
-    // GitHub's own `schedule:` trigger is unreliable for this repo's activity level: it ran
-    // roughly every 5 hours instead of every 15 minutes (confirmed via the Actions run
-    // history), which is a real problem for anything time-sensitive (quiet-hours release
-    // meant to happen at 9am ET, daily vendor nudges). Cloudflare Cron Triggers don't have
-    // that queueing-delay behavior. Calls cronSweep(env) directly — no HTTP round-trip, no
-    // CRON_SWEEP_TOKEN needed for this path (that token still gates the GitHub Actions path,
-    // which stays in place as a redundant second path — both call the same idempotent
-    // function, so having both fire is harmless, just occasionally redundant work).
-    if (cron === '*/15 * * * *') {
-      await doorWatchdogCron(env); // door-code watchdog FIRST (never throws; see its block)
-      await cronSweepLogged(env);  // failures logged to Ops_Telemetry, no longer swallowed
-      // STR cleaning-coverage guard for inspection booking: no-op until configured; alerts Brett on its own failures.
-      try { await inspStrGuardTick(env); } catch (e) { console.error('insp: cleaning guard tick failed:', e && e.message); try { await inspAlert(env, 'str_guard_tick', String(e && e.message)); } catch (e2) { console.error('insp: could not alert about guard tick failure:', e2 && e2.message); } }
-      return;
-    }
-    // Optimizer Reviewer (B-129). Reads the last 7 days of Ops_Telemetry, computes metrics,
-    // asks Claude for a ranked proposal, logs it to Ops_Review_Log. Mid-week (Wed) run added
-    // per greenlit ID-1 to halve max issue-detection lag (7d → ~3.5d) — still runs, still logs,
-    // but Sep 17 2026: Brett asked for delivery to be weekly, not twice a week, so only the
-    // Monday run (now 12:30 UTC / 8:30am ET) actually pushes a notification.
-    if (cron === '30 12 * * 1') {
-      try { await runWeeklyReview(env, { deliver: true, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    if (cron === '0 12 * * 3') {
-      try { await runWeeklyReview(env, { deliver: false, trigger: 'cron' }); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    // Weekly Open Item Report (Aug 18 session) — Monday 13:00 UTC (9am EDT/8am EST), one hour
-    // after the daily digest slot so it never collides. Fully dormant until Brett sets Config
-    // ar_report_enabled=TRUE AND adds owners to AR_Report_OptIn — see runWeeklyArReport.
-    if (cron === '0 13 * * 1') {
-      try { await runWeeklyArReport(env); } catch (e) { /* non-fatal */ }
-      return;
-    }
-    // Daily digest (existing) — 11:00 UTC. Now self-instruments a telemetry row so the
-    // Ops_Telemetry tab self-creates and gets a heartbeat row every morning (best-effort).
-    try {
-      const _t0 = Date.now();
-      const digest = await buildDigest(env);
-      const delivery = await deliverDigest(env, digest);
-      try { await logTelemetry(env, { Source:'worker', Job_Type:'daily_digest', Skill_Or_Endpoint:'scheduled/daily-digest', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes: (delivery&&delivery.delivered)?'delivered':'dormant' }); } catch (_) { /* telemetry best-effort */ }
-    } catch (e) { /* non-fatal: a digest error must never affect anything else */ }
-    // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
-    // the confirm-first queue. Read + queue only; no money, no customer contact.
-    try { await receiptScan(env); } catch (e) { /* non-fatal */ }
-    // Turnover cleaning date-fallback release (B-100). A blocked Cleaning WO normally
-    // releases the moment its sibling Repairs+Paint WOs both hit Complete (see the hook in
-    // updateStatus) — this sweep is the OTHER half of "whichever comes first": if the
-    // turnover's target move-in date arrives (Turnover_Release_Date <= today) before the
-    // other two ever finish, release Cleaning anyway so a late vendor doesn't block the
-    // one job that has to happen right before a new tenant moves in. Read-then-write only
-    // on WOs that actually qualify; a normal day with nothing due does one harmless read.
-    try { await releaseTurnoverByDate(env); } catch (e) { /* non-fatal */ }
-    // Receipt RECONCILER sweep (CAP-002 phase 2) — separate pipeline, separate folder: polls the
-    // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
-    // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
-    // read + queue only — nothing bills until Brett taps Confirm in the Hub.
-    // Capped at 5 new files here (vs 8 for the Hub's Scan button): this cron invocation shares one
-    // Cloudflare subrequest budget with every other sweep in it, and an email backfill can drop
-    // dozens of files into the folder at once (Receipt Mail → Hub, Sep 22 2026).
-    try { await receiptReconScan(env, { max: 5 }); } catch (e) { /* non-fatal */ }
-    // Backfill Items_Summary for any Receipt_Recon_Queue rows still missing it (Sep 10 2026) —
-    // catches receipts scanned before this field existed, or a rare failed AI call. Cheap and
-    // bounded; no-op once caught up.
-    try { await backfillItemsSummary(env, {}); } catch (e) { /* non-fatal */ }
-    // Confirmed-duplicate retention sweep (Aug 23) — soft-deletes Receipt_Recon_Queue rows
-    // Brett explicitly confirmed as duplicates more than 180 days ago. Runs daily alongside the
-    // scan above; a normal day with nothing past the window does one harmless read.
-    try { await purgeConfirmedDuplicateReceipts(env); } catch (e) { /* non-fatal */ }
-    // Forward any not-yet-emailed receipts to Brett's QuickBooks receipts-capture inbox (Sep
-    // 2026) — bounded per run (default 8, max 10 — Cloudflare's per-invocation subrequest
-    // budget, hit live at 25) since a large backlog is worked down over several days' cron
-    // sweeps rather than all in one Worker invocation. No-op once caught up.
-    try { await sendReceiptsToQBEmail(env, {}); } catch (e) { /* non-fatal */ }
-    // Payment sync — reads QuickBooks and auto-closes work orders whose vendor bill is now paid
-    // (marks them Paid so they drop off the active work list). Read + status-only; no money moves,
-    // no customer/vendor contact. Runs once here; the "Check & save" button does the same on demand.
-    // Oct 1 2026 (Brett: nothing may fail silently): a failure here is logged to Ops_Telemetry, never swallowed.
-    // qbSyncPayments returns a Response (never throws on its own errors) -- inspect its JSON for ok:false/errors too.
-    let _sweepRanInSync = false;
-    try {
-      const _syncRes = await qbSyncPayments(env, {});
-      let _syncJson = null; try { _syncJson = await _syncRes.clone().json(); } catch (_) {}
-      _sweepRanInSync = !!(_syncJson && _syncJson.deposit_sweep);
-      if (_syncJson && (_syncJson.ok === false || (_syncJson.errors && _syncJson.errors.length))) {
-        await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify(_syncJson.errors || _syncJson.error || 'ok:false')).slice(0, 480) });
-      }
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduled/qb-sync-payments', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_qb_sync_payments failed and telemetry write failed', e); } }
-    // Safety net (Oct 1 2026): the 15-minute cron may not be scheduled in production, so also run the
-    // deposit-paid sweep daily. processDepositPaidSweep logs its own errors / not-found scopes to Ops_Telemetry.
-    // qbSyncPayments already runs the sweep (and logs its findings) -- only run it here if that did not happen, so there is no duplicate telemetry/SMS.
-    try { if (!_sweepRanInSync) await processDepositPaidSweep(env); }
-    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduled/deposit-paid-sweep', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); } catch (_) { console.error('daily_deposit_paid_sweep failed and telemetry write failed', e); } }
+    env = __cronEnv(env); // paced, cache-sharing Sheets reads
+    const r = await schedUnexpectedCloudflareCron(env, event);
+    throw new Error(r.error); // also shows as a failed run in Cloudflare's Cron Events
   }
 };
 
