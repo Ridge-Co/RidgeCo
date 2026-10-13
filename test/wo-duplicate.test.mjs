@@ -486,7 +486,7 @@ async function groupOf4() {
   const dup = (await call(b.woBidGroupCancel(env, { wo_id: 'WO-1239', mode: 'duplicates' }))).body;
   t('preview duplicates mode keeps the original', dup.results.find(x => x.wo_id === 'WO-1239').result === 'kept' && dup.summary.would_cancel === 2);
   const k1 = (await call(b.woBidGroupCancel(env, { group_id: 'BG-1001', mode: 'keep_one', keep_wo_id: 'WO-1252' }))).body;
-  t('preview keep_one keeps the chosen WO and targets the rest', k1.results.find(x => x.wo_id === 'WO-1252').result === 'kept' && k1.results.find(x => x.wo_id === 'WO-1239').result === 'would_cancel');
+  t('preview keep_one keeps the chosen WO and targets the rest', k1.results.find(x => x.wo_id === 'WO-1252').result === 'kept' && k1.results.find(x => x.wo_id === 'WO-1239').result === 'kept' && k1.results.find(x => x.wo_id === 'WO-1250').result === 'would_cancel');
 }
 {
   const { db } = await groupOf4(); const b = build(db, { allowTwilio: true });
