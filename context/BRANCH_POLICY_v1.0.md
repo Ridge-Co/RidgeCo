@@ -37,7 +37,8 @@ when a PR head is more than 20 commits behind main.
 - If a session is told "use staging", that means the test-only PR flow above — not a PR based on staging.
 
 ## What the automation enforces
-- `sync-staging.yml`: push to main / manual -> force-reset staging = main, summary lists dropped commits. Hourly run only
+- `sync-staging.yml`: push to main / manual -> force-reset staging = main, summary lists dropped commits. A run with mode `check` (by hand only;
+  the Hub Scheduler's hourly `ci_sync_staging_check` row was removed Oct 13 2026, the daily `ci_drift_check` covers it) only
   CHECKS, never rewrites. If main changed `.github/workflows/*`, GITHUB_TOKEN cannot push it: the run fails loudly and opens
   the issue "staging reset blocked: workflow files changed" (fix: have a Claude session commit those workflow files to
   staging through GH Broker, or add repo secret `STAGING_SYNC_TOKEN`).
