@@ -15618,8 +15618,13 @@ function queueSimilarity(a, b) {
   const title = queueDice(_ta, _tb);
   const fa = [a.Title != null ? a.Title : a.title, a.Problem != null ? a.Problem : a.problem, a.First_Step != null ? a.First_Step : (a.action || a.first_step)].join(' ');
   const fb = [b.Title != null ? b.Title : b.title, b.Problem != null ? b.Problem : b.problem, b.First_Step != null ? b.First_Step : (b.action || b.first_step)].join(' ');
-  const full = queueDice(queueTokens(fa), queueTokens(fb));
-  return { title, full, same: title >= 0.9 || full >= 0.8, overlap: title >= 0.6 || full >= 0.30 };
+  const _fa = queueTokens(fa), _fb = queueTokens(fb);
+  const full = queueDice(_fa, _fb);
+  // Short titles collapse to 1-2 tokens once stopwords go ("Add vendor page" vs "Show vendor flow"), so
+  // "same" (auto-skip / promote-in-place) needs enough meaningful tokens on both sides; short ones can
+  // still be flagged as an overlap for Brett to see, never silently swallowed.
+  const _enoughT = _ta.size >= 3 && _tb.size >= 3, _enoughF = _fa.size >= 6 && _fb.size >= 6;
+  return { title, full, same: (_enoughT && title >= 0.9) || (_enoughF && full >= 0.8), overlap: title >= 0.6 || full >= 0.30 };
 }
 
 // PURE — best match for `item` among queue `rows` (any status). Returns {row, sim} or null.
