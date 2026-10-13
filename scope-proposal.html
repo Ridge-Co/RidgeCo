@@ -281,15 +281,28 @@ function itemHtml(it, locked, signedSelections){
     '</div>';
 }
 
+// The variant key the customer currently has chosen for an item, or null when it is NOT part of
+// their job (an optional add-on left unticked / "No thanks"). Base items always resolve to a key.
+function chosenKey(it){
+  if (it.optional) {
+    if (it.variants && it.variants.length > 1) {
+      var r = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
+      return (r && r.value) ? r.value : null;
+    }
+    var c = document.querySelector('input[name="addon-' + CSS.escape(it.id) + '"]');
+    return (c && c.checked) ? c.value : null;
+  }
+  if (it.variants && it.variants.length > 1) {
+    var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
+    return checked ? checked.value : it.selected_key;
+  }
+  return (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
+}
 function buildSelections(){
   var sel = {};
   (DATA.items || []).forEach(function(it){
-    if (it.variants && it.variants.length > 1) {
-      var checked = document.querySelector('input[name="item-' + CSS.escape(it.id) + '"]:checked');
-      sel[it.id] = checked ? checked.value : it.selected_key;
-    } else {
-      sel[it.id] = (it.variants && it.variants[0]) ? it.variants[0].key : it.selected_key;
-    }
+    var k = chosenKey(it);
+    if (k !== null) sel[it.id] = k;   // declined add-ons are simply absent — the server treats absent as declined
   });
   return sel;
 }
