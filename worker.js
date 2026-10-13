@@ -4737,6 +4737,20 @@ function scopeComputeMilestoneAmounts(schedule, subtotal, vendorCostTotal) {
     };
   });
 }
+function scopeAbsorberLabel(schedule) { for (let k = schedule.length - 1; k >= 0; k--) { if (!(schedule[k].calc_mode === 'flat' && schedule[k].flat_customer_amount != null)) return schedule[k].label; } return ''; }
+// Oct 13 2026: can this schedule take an optional add-on at all? Returns '' when fine, else a plain
+// explanation. Flat rows stay fixed; the last non-flat row absorbs the difference, so it must exist
+// and must not go negative at the SMALLEST total the customer could sign (percent rows only grow with
+// the total, so if it is >= 0 there it is >= 0 at every larger total).
+function scopeScheduleAddonProblem(schedule, smallestTotal) {
+  const isFlatRow = (m) => m.calc_mode === 'flat' && m.flat_customer_amount != null;
+  let absorber = -1;
+  for (let k = schedule.length - 1; k >= 0; k--) { if (!isFlatRow(schedule[k])) { absorber = k; break; } }
+  if (absorber < 0) return 'Every payment on this schedule is a fixed $ amount, so an optional add-on would leave the payments not adding up to the new total. Make at least one payment (usually the Final) a "% of total" row.';
+  const amts = scopeComputeMilestoneAmounts(schedule, smallestTotal, 0);
+  if (amts[absorber].customer_amount < 0) return `The fixed-$ payments on this schedule leave "${schedule[absorber].label}" at $${amts[absorber].customer_amount.toFixed(2)} on a $${(+smallestTotal).toFixed(2)} job — lower a fixed amount or raise the % rows so the last % payment is not negative.`;
+  return '';
+}
 // Given a signature's FULL milestone schedule (any order; sorted here by `sequence`), returns the
 // ACTUAL vendor-payable amount per milestone once a Vendor_Paid_At_This_Milestone:false milestone's
 // share has rolled forward — the vendor's total across the whole schedule is always the sum of
