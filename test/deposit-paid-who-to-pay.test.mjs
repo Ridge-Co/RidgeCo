@@ -261,7 +261,7 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
 const sched0 = grab(wsrc, 'async function schedRunDailyQbSync(');
 const qbp = grab(wsrc, 'async function qbPayables(');
 t('qbPayables uses milestone fallback', qbp.includes('depositMilestoneForSignature(r, allMilestones)') && qbp.includes('warnings,'));
-t('scheduled() does not run the sweep twice', sched0.includes('if (!_sweepRanInSync) await processDepositPaidSweep(env)'));
+t('daily_qb_sync job does not run the sweep twice', sched0.includes('if (!sweepRanInSync) {') && sched0.includes('processDepositPaidSweep(env)'));
 t('banner resets on a failed payables read', isrc.includes("errors = [{ stage: 'payables_read'") && isrc.includes('awaiting_invoice'));
 t('qbPayables has no bare swallow in signed-proposal block', !/never break the Invoice_Review-based rows above \*\/ \}/.test(qbp));
 const qbs = grab(wsrc, 'async function qbSyncPayments(');
