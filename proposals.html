@@ -434,9 +434,9 @@ async function saveNote(el){
   catch(e){ el.classList.add('bad'); toast('Your change wasn’t saved — '+h(e&&e.message||e)); }
 }
 function reviewAnyway(btn){ const id=btn.closest('[data-id]').getAttribute('data-id'); REVIEW_ANYWAY[id]=1; try{localStorage.setItem('prop_review_anyway',JSON.stringify(REVIEW_ANYWAY));}catch(e){} load(); }
-async function dropAllBuilt(){
+async function dropAllBuilt(btn){
   const list=(window.__c&&window.__c.built)||[]; if(!list.length)return;
-  if(!confirm('Drop all '+list.length+' items marked probably-already-built? (You can still find them with search.)'))return;
+  if(!btn.getAttribute('data-armed')){ const old=btn.textContent; btn.setAttribute('data-armed','1'); btn.textContent='Tap again to drop all '+list.length+' (still searchable later)'; setTimeout(function(){ btn.removeAttribute('data-armed'); btn.textContent=old; },4000); return; }
   let fail=0;
   for(const x of list){ try{ await postJSON('/ops-queue-update',{id:x.ID,status:'dropped',reason:'already built (per Optimizer flag)'}); }catch(e){ fail++; } }
   if(fail) toast(fail+' of '+list.length+' didn’t save — try again.');
