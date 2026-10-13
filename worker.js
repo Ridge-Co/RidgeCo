@@ -4345,6 +4345,7 @@ async function scopeProposal(env, body) {
   // materials-only item (Ridge Co buys it, no vendor labor) is legitimately $0 vendor cost
   // (Sep 22 2026; before this, Brett had to type a fake $1 vendor cost, which then got paid to
   // the vendor on the milestone bill).
+  if (!items.some(it => !it.optional)) return json({ error: 'Every line item is marked as an optional add-on — a proposal needs at least one included item (the base job). Un-mark one add-on, or add the main job.' }, 400);
   const unpriced = items.filter(it => !(it.variants || []).some(v => (parseFloat(v.vendor_cost) || 0) > 0 || (parseFloat(v.rc_materials_cost) || 0) > 0));
   if (unpriced.length) return json({ error: `Add vendor cost (or Ridge Co materials) to every item first (missing on ${unpriced.length} item(s), e.g. "${unpriced[0].description}") — price each option (Repair/Replace, etc.) on the item editor.` }, 400);
   // The materials description is hand-typed and shown to the customer verbatim — same leak class
