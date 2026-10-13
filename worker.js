@@ -27646,7 +27646,7 @@ async function inspSendBrettText(env, cfg, subject, smsText, htmlLines, link) {
   } catch (e) { log.push('email: FAILED ' + e.message); }
   return { ok, log };
 }
-// Every 15 minutes (and on demand with dry=1): find open blocks / bookings that sit on an uncovered-checkout day and tell Brett
+// Every ~15 minutes via the scheduler's `insp_guard` job (and on demand with dry=1): find open blocks / bookings that sit on an uncovered-checkout day and tell Brett
 // ONCE per change (and again if a booking gets inside 24h / 72h). Also tells him when a day gets covered and reopens.
 async function inspStrGuardTick(env, opts) {
   const dry = !!(opts && opts.dry), cfg = await fetchConfig(env), sc = inspStrConfig(env, cfg);
