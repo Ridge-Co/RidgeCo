@@ -469,4 +469,133 @@ for (const N of [2, 5, 8]) {
   const wr = load(makeStore(), { stubs: { runWeeklyReview: async () => ({ ok: true, logged: false, logged_error: 'tab missing', delivery: null }) } });
   t('weekly review: history row not saved is a failure', (await wr.SCHED_JOBS.find(j => j.name === 'review_mon').run({})).ok === false);
 }
+// ───────────────────────────── 3. the REAL worker.js over a fake Google ─────────────────────────────
+const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+const store = makeStore();
+const outbound = [];     // every non-Google URL the worker tried to reach
+const realFetch = globalThis.fetch;
+const _realSetTimeout = globalThis.setTimeout;   // cron-env reads are paced 2.5s apart (real quota protection) - skip those waits here
+globalThis.setTimeout = (fn, ms, ...a) => _realSetTimeout(fn, ms >= 2000 ? 1 : ms, ...a);
+globalThis.fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input.url;
+  const method = (init && init.method) || 'GET';
+  if (url.startsWith('https://oauth2.googleapis.com/token')) return new Response(JSON.stringify({ access_token: 'fake-access', expires_in: 3600 }), { status: 200 });
+  const m = /^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/TESTSHEET(.*)$/.exec(url);
+  if (m) {
+    const body = init && init.body ? JSON.parse(init.body) : undefined;
+    const r = await store.handle(method, decodeURIComponent(m[1]).replace(/%3A/gi, ':'), body);
+    return new Response(JSON.stringify(r), { status: r && r.error ? r.error.code : 200 });
+  }
+  outbound.push(method + ' ' + url);
+  return new Response(JSON.stringify({ ok: true }), { status: 200 });
+};
+const worker = (await import(root + 'worker.js')).default;
+const BASE = 'https://maintenance-hub.brett-2f8.workers.dev';
+const SECRET = 'admin-secret-for-tests-0123456789';
+const SCHED_TOKEN = 'sched-token-for-tests-' + 'k'.repeat(30);
+const env = { SHEET_ID: 'TESTSHEET', GOOGLE_SA_KEY: privateKey, GOOGLE_SA_EMAIL: 'sa@test.iam', WORKER_SECRET: SECRET };
+// The worker caches whole-tab reads for 6s per isolate; the fake sheet is edited out-of-band between calls, so move the worker's
+// Date.now() forward before each request (only Date.now - the scheduler's own clock use is injected/relative).
+let skew = 0; const _realNow = Date.now.bind(Date); Date.now = () => _realNow() + skew;
+const call = async (method, path, headers, body) => {
+  skew += 10000;
+  const res = await worker.fetch(new Request(BASE + path, { method, headers: Object.assign({ 'Content-Type': 'application/json' }, headers || {}), body: body === undefined ? undefined : JSON.stringify(body) }), env, { waitUntil: () => {} });
+  let j = null; try { j = await res.clone().json(); } catch (_) {}
+  return { status: res.status, json: j };
+};
+store.setCfg('Scheduler_Token', SCHED_TOKEN);
+store.setCfg('admin_phone', '+15555550100');
+
+{
+  // auth matrix against the real gate
+  const H = { 'X-Auth-Token': SCHED_TOKEN };
+  const st = await call('GET', '/cron/status', H);
+  t('gate: GET /cron/status with Scheduler_Token -> 200 + report', st.status === 200 && st.json.ok === true && st.json.jobs && st.json.jobs.sweep, st);
+  const denied = [['POST', '/cron/status'], ['GET', '/cron/run'], ['POST', '/cron/sweep'], ['GET', '/workorders'], ['GET', '/vendors'], ['POST', '/status'], ['GET', '/config'], ['POST', '/config/set'], ['POST', '/admin-notify'], ['POST', '/workorder'], ['GET', '/hub-bootstrap']];
+  for (const [m, p] of denied) { const r = await call(m, p, H, m === 'POST' ? {} : undefined); t(`gate: Scheduler_Token is rejected (401) on ${m} ${p}`, r.status === 401, r.status); }
+  const bad = await call('GET', '/cron/status', { 'X-Auth-Token': SCHED_TOKEN.slice(0, -1) + 'Z' });
+  t('gate: wrong token -> 401', bad.status === 401);
+  const none = await call('GET', '/cron/status', {});
+  t('gate: no token -> 401', none.status === 401);
+  const empty = await call('GET', '/cron/status', { 'X-Auth-Token': '' });
+  t('gate: empty token -> 401', empty.status === 401);
+  const admin = await call('GET', '/cron/status', { 'X-Auth-Token': SECRET });
+  t('gate: the admin secret still works for the status report', admin.status === 200);
+  // blank / missing / short Scheduler_Token in Config fails closed
+  store.setCfg('Scheduler_Token', '');
+  const blank = await call('GET', '/cron/status', { 'X-Auth-Token': '' });
+  const blank2 = await call('GET', '/cron/status', { 'X-Auth-Token': 'anything-at-all-anything-at-all' });
+  t('gate: blank Scheduler_Token in Config fails closed (empty and non-empty headers)', blank.status === 401 && blank2.status === 401);
+  store.setCfg('Scheduler_Token', 'short');
+  t('gate: short Scheduler_Token fails closed', (await call('GET', '/cron/status', { 'X-Auth-Token': 'short' })).status === 401);
+  const row = store.tabs.get('Config'); const saved = row.filter(r => r[0] === 'Scheduler_Token'); row.splice(0, row.length, ...row.filter(r => r[0] !== 'Scheduler_Token'));
+  t('gate: missing Scheduler_Token row fails closed', (await call('GET', '/cron/status', { 'X-Auth-Token': SCHED_TOKEN })).status === 401);
+  store.setCfg('Scheduler_Token', SCHED_TOKEN);
+  store.failWhen = (m, p) => m === 'GET' && p === '/values/Config';
+  const down = await call('GET', '/cron/status', H);
+  t('gate: a Config read failure is a loud 503, not a misleading 401', down.status === 503 && /scheduler auth unavailable/.test(down.json.error), down);
+  store.failWhen = null;
+}
+{
+  // Scheduler_Token is redacted in every Config listing (admin-secret caller included)
+  const cfg = await call('GET', '/config', { 'X-Auth-Token': SECRET });
+  t('redaction: GET /config hides Scheduler_Token for the admin caller', cfg.status === 200 && cfg.json.Scheduler_Token === '(set — hidden)' && !JSON.stringify(cfg.json).includes(SCHED_TOKEN), cfg.json && cfg.json.Scheduler_Token);
+  const isSecret = new Function(wsrc.slice(wsrc.indexOf('const CONFIG_SECRET_KEYS'), wsrc.indexOf('function isConfigRedactionPlaceholder')) + '\nreturn isSecretConfigKey;')();
+  t('redaction: Scheduler_Token matches the secret-key pattern; Scheduler_State (not a secret) does not', isSecret('Scheduler_Token') === true && isSecret('Scheduler_State') === false);
+}
+{
+  // real end-to-end: dry run, a real job, state, status, health
+  const H = { 'X-Auth-Token': SCHED_TOKEN };
+  const dry = await call('POST', '/cron/run', H, { dry: true });
+  t('POST /cron/run dry: lists due jobs, nothing run/written', dry.status === 200 && dry.json.dry === true && dry.json.due.includes('door_watchdog') && !store.cfg().Scheduler_State, dry);
+  const unk = await call('POST', '/cron/run', H, { only: 'nope' });
+  t('POST /cron/run: unknown job -> 400', unk.status === 400);
+  const r = await call('POST', '/cron/run', H, { only: 'insp_guard' });
+  t('POST /cron/run only=insp_guard: ran, job_ok (module not configured -> clean no-op), more=false', r.status === 200 && r.json.ran === 'insp_guard' && r.json.job_ok === true && r.json.more === false, r);
+  const s = JSON.parse(store.cfg().Scheduler_State);
+  t('state landed in the single Config key with last_ok', s.jobs.insp_guard && s.jobs.insp_guard.last_status === 'ok' && !!s.jobs.insp_guard.last_ok && s.claim_id === '');
+  const again = await call('POST', '/cron/run', H, { only: 'insp_guard' });
+  t('calling it again immediately is a no-op (interval gate)', again.json.ran === null);
+  const stat = await call('GET', '/cron/status', H);
+  t('status: insp_guard fine, never-run jobs overdue', stat.json.jobs.insp_guard.overdue === false && stat.json.overdue.includes('sweep') && stat.json.tick_age_min <= 2, stat.json.overdue);
+  const h = await call('GET', '/health', {});
+  t('public /health carries a coarse scheduler summary (age + overdue NAMES only)', h.status === 200 && h.json.scheduler && typeof h.json.scheduler.last_tick_age_min === 'number' && Array.isArray(h.json.scheduler.overdue) && h.json.scheduler.overdue.includes('sweep') && !('jobs' in h.json.scheduler) && !JSON.stringify(h.json.scheduler).includes('last_error'), h.json && h.json.scheduler);
+  const noauth = await call('POST', '/cron/run', {}, {});
+  t('POST /cron/run without a token -> 401', noauth.status === 401);
+  const getRun = await call('GET', '/cron/run', H);
+  t('GET /cron/run -> 401 (Scheduler_Token only authorises POST there)', getRun.status === 401);
+}
+{
+  // the hub-test (staging) token may only dry-run / run the two safe jobs - exercise the REAL hubTestWriteAllowed (a TDZ bug here shipped once: `_b` is declared further down the function)
+  const fstart = wsrc.indexOf('async function hubTestWriteAllowed('), fend = wsrc.indexOf('\nasync function ', fstart + 10);
+  const real = new Function('SCHED_STAGING_SAFE_JOBS', wsrc.slice(fstart, fend) + '\nreturn hubTestWriteAllowed;')(['door_watchdog', 'insp_guard']);
+  const check = (body) => real({}, '/cron/run', body);
+  t('hub-test guard: dry run allowed', (await check({ dry: true })) === true);
+  t('hub-test guard: insp_guard / door_watchdog allowed', (await check({ only: 'insp_guard' })) === true && (await check({ only: 'door_watchdog' })) === true);
+  t('hub-test guard: a bare run (all due jobs), the sweeps, force and arrays are refused', (await check({})) === false && (await check(undefined)) === false && (await check({ only: 'sweep' })) === false && (await check({ only: 'insp_guard', force: true })) === false && (await check({ only: ['insp_guard'] })) === false && (await check({ dry: 'true' })) === false);
+}
+{
+  // scheduled() is a loud no-op
+  outbound.length = 0;
+  const unexpectedRows = () => { const tab = store.tabs.get('Ops_Telemetry') || []; const jt = (tab[0] || []).indexOf('Job_Type'); return tab.slice(1).filter(r => r[jt] === 'unexpected_cloudflare_cron'); };
+  const hdrOf = () => store.tabs.get('Ops_Telemetry')[0];
+  let threw = null;
+  try { await worker.scheduled({ cron: '*/15 * * * *', scheduledTime: Date.parse('2026-10-12T14:00:00Z') }, env, { waitUntil() {} }); } catch (e) { threw = e; }
+  const tel = unexpectedRows();
+  const su = hdrOf().indexOf('Success'), no = hdrOf().indexOf('Notes');
+  t('scheduled(): throws (shows as a failed run in Cloudflare)', !!threw && /NO cron is allowed/.test(threw.message), threw && threw.message);
+  t('scheduled(): logs ONE Ops_Telemetry FALSE row "unexpected_cloudflare_cron" naming the cron', tel.length === 1 && tel[0][su] === 'FALSE' && /\*\/15/.test(tel[0][no]), tel);
+  t('scheduled(): does NO job work (no outbound calls, no sweep claim, no scheduler job run)', outbound.length === 0 && !store.cfg().Cron_Sweep_Claimed_Until, outbound);
+  const stateBefore = store.cfg().Scheduler_State;
+  let threw2 = null;
+  try { await worker.scheduled({ cron: '0 11 * * *' }, env, {}); } catch (e) { threw2 = e; }
+  t('scheduled(): second fire within 6h still throws but does not spam telemetry', !!threw2 && unexpectedRows().length === 1);
+  t('scheduled(): never touches Scheduler_State', store.cfg().Scheduler_State === stateBefore);
+  store.setCfg('unexpected_cron_last_logged', new Date(Date.now() - 7 * 3600000).toISOString());
+  skew += 100000;   // scheduled() reads Config through the cron env, which caches whole tabs for 90s
+  try { await worker.scheduled({ cron: '0 11 * * *' }, env, {}); } catch (_) {}
+  t('scheduled(): logs again after the 6h rate limit', unexpectedRows().length === 2);
+}
+globalThis.fetch = realFetch;
+globalThis.setTimeout = _realSetTimeout;
 //@@TEST_NEXT@@
