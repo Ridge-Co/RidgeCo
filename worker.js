@@ -13754,6 +13754,136 @@ async function schedWriteVerified(env, state, rows, sleep, delayMs) {
   if (delayMs > 0) await sleep(delayMs);
   const rows2 = await schedReadConfigRows(env, true);
   const parsed = schedParseState(schedCell(rows2, SCHED_STATE_KEY));
+  return { text, rows: rows2, parsed, landed: schedCell(rows2, SCHED_STATE_KEY) === text };
+}
+
+// ── Eastern wall-clock helpers (DST-correct via Intl, like etHour/nyOffsetMinutes) ─────────────────
+function schedEtParts(date) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hourCycle: 'h23', weekday: 'short',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  const dow = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }[p.weekday];
+  return { date: `${p.year}-${p.month}-${p.day}`, minutes: (+p.hour) * 60 + (+p.minute), dow };
+}
+function schedAtMinutes(at) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); return m ? (+m[1]) * 60 + (+m[2]) : NaN; }
+
+// ── The registry. Priority = array order. Add a job here; never add a cron. ──────────────────────────
+// kind 'interval': due when >= every_min since its last START. 'daily'/'weekly': due once per ET calendar day
+// (and, weekly, only on `dow`) once ET wall-clock >= `at` - and they CATCH UP: if the Apps Script was down at
+// 7am the job runs on the next tick that day. retry:false = never auto-retry a failed run (it may have
+// already sent something); a job result may also set no_retry:true when the failure was after a send.
+const SCHED_JOBS = [
+  { name: 'door_watchdog',      kind: 'interval', every_min: 14, run: (env) => schedRunDoorWatchdog(env) },
+  { name: 'sweep',              kind: 'interval', every_min: 14, run: (env) => schedRunSweepMessages(env) },
+  { name: 'sweep_work',         kind: 'interval', every_min: 14, run: (env) => schedRunSweepWork(env) },
+  { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
+  { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
+  { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
+  { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
+  { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
+  { name: 'daily_turnover',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyTurnover(env) },
+  { name: 'daily_qb_sync',      kind: 'daily',    at: '07:00', run: (env) => schedRunDailyQbSync(env) },
+  { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
+  { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
+  { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
+];
+
+// Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
+function schedJobDue(job, js, nowDate) {
+  js = js || {};
+  const nowMs = +nowDate;
+  if (job.kind === 'interval') {
+    const last = Date.parse(js.last_start || '');
+    if (!isNaN(last) && last <= nowMs + 5 * 60000 && nowMs - last < job.every_min * 60000) return null;
+    return { key: 'interval' };
+  }
+  const et = schedEtParts(nowDate);
+  if (job.kind === 'weekly' && et.dow !== job.dow) return null;
+  if (et.minutes < schedAtMinutes(job.at)) return null;
+  if (js.last_key === et.date) return null;                       // already done (or deliberately not retried) for this ET day
+  const at = js.attempts;
+  if (at && at.key === et.date && at.n > 0) {
+    if (at.n >= SCHED_MAX_ATTEMPTS) return null;                  // gave up for today; /cron/status shows it overdue
+    const lastEnd = Date.parse(js.last_end || js.last_start || '');
+    if (!isNaN(lastEnd) && nowMs - lastEnd < SCHED_RETRY_GAP_MS) return null;
+  }
+  return { key: et.date };
+}
+// Pure + clock-injectable: the due jobs, in priority order. opts.only restricts to named jobs.
+function schedDueJobs(state, now, jobs, opts) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const only = opts && opts.only && opts.only.length ? opts.only : null;
+  const out = [];
+  for (const job of (jobs || SCHED_JOBS)) {
+    if (only && !only.includes(job.name)) continue;
+    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate);
+    if (d) out.push({ name: job.name, key: d.key });
+  }
+  return out;
+}
+function schedExpected(job) {
+  if (job.kind === 'interval') return `every ${job.every_min}+ min`;
+  if (job.kind === 'daily') return `daily after ${job.at} ET`;
+  return `${SCHED_DOW_NAMES[job.dow]} after ${job.at} ET`;
+}
+// Pure. Per-job health for /cron/status and /health.
+function schedStatus(state, now, jobs) {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const nowMs = +nowDate, et = schedEtParts(nowDate);
+  const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
+  const out = { now: nowDate.toISOString(), last_tick: (state && state.last_tick) || null, tick_age_min: ageMin(state && state.last_tick), jobs: {}, overdue: [] };
+  for (const job of (jobs || SCHED_JOBS)) {
+    const js = (state && state.jobs && state.jobs[job.name]) || {};
+    const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
+    let overdue = false, reason = '';
+    if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
+      overdue = true; reason = `started ${ageMin(js.last_start)} min ago and never finished (timed out or crashed)`;
+    }
+    if (job.kind === 'interval') {
+      const okAge = ageMin(js.last_ok);
+      if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
+      else if (okAge > SCHED_OVERDUE_INTERVAL_MIN) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${SCHED_OVERDUE_INTERVAL_MIN})`; }
+    } else {
+      const expectedToday = job.kind === 'daily' || et.dow === job.dow;
+      if (expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
+        overdue = true; reason = reason || `has not run for ${et.date} (was due ${job.at} ET)`;
+      }
+      if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
+    }
+    out.jobs[job.name] = { expected: schedExpected(job), last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, overdue, overdue_reason: overdue ? reason : '' };
+    if (overdue) out.overdue.push(job.name);
+  }
+  return out;
+}
+
+// ── Job runners. Each returns { ok, errors:[{step,error}], detail, no_retry? } and NEVER swallows. ──────
+function schedErrText(e) { return String((e && e.message) || e).slice(0, 300); }
+// Normalise a step's return (plain object or fetch Response) and report anything that looks like a failure.
+async function schedUnwrap(v) {
+  if (v && typeof v === 'object' && typeof v.status === 'number' && typeof v.clone === 'function') {
+    let body = null;
+    try { body = await v.clone().json(); } catch (e) { body = { unparseable_response: schedErrText(e) }; }
+    return { status: v.status, body };
+  }
+  return { status: 200, body: v };
+}
+function schedBadness(status, b) {
+  if (status >= 400) return `HTTP ${status}: ${b && b.error ? (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)) : 'failed'}`.slice(0, 300);
+  if (b && typeof b === 'object') {
+    if (b.unparseable_response) return 'unreadable response: ' + b.unparseable_response;
+    if (b.error) return (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)).slice(0, 300);
+    if (b.ok === false) return ('ok:false ' + JSON.stringify(b.errors || b.reason || '')).slice(0, 300);
+    if (Array.isArray(b.errors) && b.errors.length) return (b.errors.length + ' error(s): ' + JSON.stringify(b.errors)).slice(0, 300);
+    if (typeof b.failed === 'number' && b.failed > 0) return `${b.failed} item(s) failed`;
+    if (Array.isArray(b.failed) && b.failed.length) return `${b.failed.length} item(s) failed: ${JSON.stringify(b.failed)}`.slice(0, 300);
+  }
+  return null;
+}
+// Runs one step: a throw OR a failure-shaped result is pushed to `errors`; the (unwrapped) body is returned.
+async function schedStep(name, fn, errors) {
+  try {
+    const u = await schedUnwrap(await fn());
 //@@SCHED_NEXT@@
 
 // ── RECURRING / SCHEDULED WORK ORDERS (Sep 28 2026, Brett's Sep 17 spec) ─────────────────────
