@@ -701,7 +701,7 @@ store.setCfg('admin_phone', '+15555550100');
   const fstart = wsrc.indexOf('async function hubTestWriteAllowed('), fend = wsrc.indexOf('\nasync function ', fstart + 10);
   const real = new Function('SCHED_STAGING_SAFE_JOBS', wsrc.slice(fstart, fend) + '\nreturn hubTestWriteAllowed;')(['door_watchdog', 'insp_guard']);
   const check = (body) => real({}, '/cron/run', body);
-  t('hub-test guard: dry run allowed', (await check({ dry: true })) === true);
+  t('hub-test guard: dry run allowed (dry and dry_run)', (await check({ dry: true })) === true && (await check({ dry_run: true })) === true && (await check({ dry_run: 'true' })) === false && (await check({ dry_run: true, force: true })) === false);
   t('hub-test guard: insp_guard / door_watchdog allowed', (await check({ only: 'insp_guard' })) === true && (await check({ only: 'door_watchdog' })) === true);
   t('hub-test guard: a bare run (all due jobs), the sweeps, force and arrays are refused', (await check({})) === false && (await check(undefined)) === false && (await check({ only: 'sweep' })) === false && (await check({ only: 'insp_guard', force: true })) === false && (await check({ only: ['insp_guard'] })) === false && (await check({ dry: 'true' })) === false);
 }
