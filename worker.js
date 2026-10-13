@@ -4431,7 +4431,7 @@ async function scopeProposal(env, body) {
     Proposal_Text: doc, Proposal_Items_JSON: JSON.stringify(priced.items),
     Estimate_Amount: String(priced.vendorCostTotal), Status: 'proposed', Updated_Date: new Date().toISOString(),
   });
-  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: scheduleCheck.warnings || [], items: priced.items,
+  return json({ success: true, proposal_text: doc, final_price: priced.subtotal, deposit: priced.deposit, schedule: milestones, schedule_warnings: [...(scheduleCheck.warnings || []), ...(addonItems.length && schedule.some(m => m.calc_mode === 'flat') ? ['This proposal has optional add-ons AND a flat-dollar payment milestone. Flat milestones do not grow when a customer adds an add-on — only the percent-based milestones do. Use percentages if you want add-ons spread across the whole schedule.'] : [])], items: priced.items,
     // Admin-only caller (scope-creator.html) — lets Brett see the materials split he just priced.
     materials: { mode: materialsPricing.mode, pct: materialsPricing.pct, cost_total: priced.rcMaterialsCostTotal, price_total: priced.rcMaterialsPriceTotal, vendor_cost_total: priced.vendorCostTotal } });
 }
