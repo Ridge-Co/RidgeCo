@@ -449,7 +449,7 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
   // Hub rows == the Hub's SCHED_JOBS registry (same names, same defaults), so editing the table is always a real choice
   const reg = [...WORKER.slice(WORKER.indexOf('const SCHED_JOBS = ['), WORKER.indexOf('// Pure. Is this one job due')).matchAll(/\{ name: '(\w+)',\s+kind: '(\w+)',\s*(?:dow: (\d), )?(?:at: '([\d:]+)', )?(?:every_min: (\d+), )?/g)].map(m => ({ name: m[1], kind: m[2], dow: m[3] === undefined ? undefined : +m[3], at: m[4], every_min: m[5] === undefined ? undefined : +m[5] }));
   const hubRows = rows.filter(r => r.run === 'hub');
-  ok(reg.length === 13 && hubRows.length === 13 && JSON.stringify(reg.map(r => r.name)) === JSON.stringify(hubRows.map(r => r.name)), 'the 13 Hub rows are exactly the Hub registry, in the same order', { reg: reg.map(r => r.name), rows: hubRows.map(r => r.name) });
+  ok(reg.length === 14 && hubRows.length === 14 && JSON.stringify(reg.map(r => r.name)) === JSON.stringify(hubRows.map(r => r.name)), 'the 14 Hub rows are exactly the Hub registry, in the same order', { reg: reg.map(r => r.name), rows: hubRows.map(r => r.name) });
   const DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   ok(reg.every(r => { const h = hubRows.find(x => x.name === r.name); return r.kind === 'interval' ? (h.every_min === r.every_min + 1 && h.at === undefined) : (h.at === r.at && (r.kind === 'weekly' ? DOW[h.day] === r.dow : h.day === undefined)); }), 'every Hub row carries the same default time as the registry (15 min = registry 14 + 1 jitter minute)', reg);
   ok(hubRows.every(r => r.enabled === true), 'all Hub rows are on by default');
@@ -530,7 +530,7 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
   w.run('runScheduler');
   const sent = JSON.parse(calls.find(c => run(c.url)).o.payload).schedule;
   ok(sent.door_watchdog.enabled === false && sent.sweep.every_min === 30 && sent.daily_digest.at === '06:45' && sent.review_mon.dow === 1 && sent.review_mon.at === '08:30' && sent.review_wed.dow === 3, 'edits to the table are exactly what the Hub is sent (off / every 30 / 06:45 / weekday numbers)', sent);
-  ok(Object.keys(sent).length === 13 && !('pinterest_sync' in sent) && !('ci_drift_check' in sent), 'only the 13 Hub rows go to the Hub');
+  ok(Object.keys(sent).length === 14 && !('pinterest_sync' in sent) && !('ci_drift_check' in sent), 'only the 14 Hub rows go to the Hub');
 }
 
 // ── pure due / overdue logic for the non-Hub rows ───────────────────────────────────────────────────
