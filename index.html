@@ -2753,6 +2753,264 @@ function openWODetail(woId) {
   }, 80);
 }
 
+// ── Duplicate Work Order + bid groups (Oct 12 2026) ───────────────────────────────────────────────
+// POST /wo/duplicate makes ONE copy per tap (silent to tenant/owner; the chosen vendor gets the normal new-job
+// text immediately, even during quiet hours). The outcome of that text is ALWAYS shown here. The panel below
+// the WO lists the bid group and offers Unlink and the cancel actions (preview first, then an explicit confirm).
+var _dupWOId = null, _dupBusy = false, _dupNoVendor = false, _dupVendorList = [], _bidCancelBusy = false, _bidUnlinkBusy = false;
+function bgIsOpenForDup(wo) {
+  return !!wo && wo.Voided !== 'TRUE' && String(wo.Type||'').toLowerCase() !== 'addon' && ['New','Assigned','Accepted','In Progress','On Hold'].indexOf(wo.Status||'New') >= 0;
+}
+function openDupModal(woId) {
+  _dupWOId = woId; _dupBusy = false; _dupNoVendor = false;
+  var wo = safeArray(state.workorders).find(function(w){return w.ID===woId;});
+  _dupVendorList = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
+  document.getElementById('dup-title').textContent = 'DUPLICATE ' + woId + (wo && wo.Trade ? ' · ' + wo.Trade : '');
+  document.getElementById('dup-form').style.display = '';
+  var res = document.getElementById('dup-result'); res.style.display = 'none'; res.innerHTML = '';
+  document.getElementById('dup-vendor-search').value = '';
+  renderDupVendorOptions();
+  paintDupNoVendor();
+  var b = document.getElementById('dup-submit-btn'); b.disabled = false; b.textContent = 'Create copy + text vendor';
+  updateDupPreview();
+  closeModal('modal-wo-detail');
+  openModal('modal-dup-wo');
+  setTimeout(function(){ var el = document.getElementById('dup-vendor-search'); if (el) el.focus(); }, 100);
+}
+function closeDupModal() { if (_dupBusy) { toast('Still creating the copy — wait for the answer first','info'); return; } closeModal('modal-dup-wo'); }
+function renderDupVendorOptions() {
+  var q = (document.getElementById('dup-vendor-search').value||'').toLowerCase().trim();
+  var list = q ? _dupVendorList.filter(function(v){ return (v.Name||'').toLowerCase().includes(q) || (v.Trade||'').toLowerCase().includes(q) || (v.Phone||'').includes(q); }) : _dupVendorList;
+  document.getElementById('dup-vendor-select').innerHTML = '<option value="">— Select vendor —</option>' +
+    list.map(function(v){ return '<option value="'+esc(v.ID)+'">'+esc(v.Name)+' — '+esc(v.Trade||'')+(v.Phone?' — '+esc(v.Phone):'')+'</option>'; }).join('');
+  updateDupPreview();
+}
+function toggleDupNoVendor() { _dupNoVendor = !_dupNoVendor; paintDupNoVendor(); updateDupPreview(); }
+function paintDupNoVendor() {
+  var b = document.getElementById('dup-novendor-btn'); if (!b) return;
+  b.textContent = (_dupNoVendor ? '☑' : '☐') + ' Create copy without a vendor';
+  document.getElementById('dup-vendor-select').disabled = _dupNoVendor;
+  document.getElementById('dup-vendor-search').disabled = _dupNoVendor;
+  var sb = document.getElementById('dup-submit-btn'); if (sb && !_dupBusy) sb.textContent = _dupNoVendor ? 'Create copy (no vendor)' : 'Create copy + text vendor';
+}
+function updateDupPreview() {
+  var el = document.getElementById('dup-preview'); if (!el) return;
+  if (_dupNoVendor) { el.innerHTML = 'The copy is created <b>unassigned</b> and nobody is texted. Assign a vendor to it later from its own page.'; return; }
+  var vid = document.getElementById('dup-vendor-select').value;
+  var v = safeArray(state.vendors).find(function(x){return String(x.ID)===String(vid);});
+  if (!v) { el.textContent = ''; return; }
+  el.innerHTML = '<b>' + esc(v.Name) + '</b>' + (v.Phone ? ' (' + esc(v.Phone) + ')' : ' <span style="color:var(--danger)">has NO phone number — no text can be sent</span>') +
+    ' gets the new-job text right now' + (v.Language === 'es' ? ' <b>in Spanish</b>' : '') + ', even if it is after 7pm. Tenant and owner: <b>no text</b>.';
+}
+function submitDuplicate() {
+  if (_dupBusy) return;                       // latched until the answer comes back (no double-submit)
+  var vid = _dupNoVendor ? '' : document.getElementById('dup-vendor-select').value;
+  if (!_dupNoVendor && !vid) { toast('Pick a vendor, or choose "Create copy without a vendor"','error'); return; }
+  _dupBusy = true;
+  var btn = document.getElementById('dup-submit-btn'); btn.disabled = true; btn.textContent = 'Creating…';
+  var src = _dupWOId;
+  api('POST','/wo/duplicate',{source_wo_id:src, vendor_id:vid, updated_by:'admin'}, 60000).then(function(res){
+    _dupBusy = false; btn.disabled = false;
+    renderDupResult(res || {created:false, errors:['Empty answer from the server']}, src);
+    if (res && res.created) { try { var p = loadAll(); if (p && p.catch) p.catch(function(e){ logError('Reload after duplicate', e.message); toast('Copy made, but the list did not refresh: '+e.message,'error'); }); } catch (e2) { logError('Reload after duplicate', e2.message); } }
+  }).catch(function(e){
+    _dupBusy = false; btn.disabled = false;
+    logError('Duplicate WO', e.message);
+    renderDupResult({created:false, ok:false, errors:['No answer from the server (' + e.message + '). The copy MAY have been created — open the Bid group box on ' + src + ' to check BEFORE tapping again.']}, src);
+  });
+}
+function renderDupResult(res, src) {
+  var errs = safeArray(res.errors).slice(), warns = safeArray(res.warnings), sms = res.vendor_sms || {};
+  if (res.error && errs.indexOf(res.error) < 0) errs.push(res.error);
+  var hasVendor = !!res.vendor_id;
+  var level = !res.created ? 'bad' : (errs.length ? 'bad' : (hasVendor ? (sms.status === 'sent' && !sms.test_mode ? 'good' : (sms.status === 'failed' ? 'bad' : 'warn')) : 'warn'));
+  var col = level === 'good' ? 'var(--accent2)' : (level === 'warn' ? '#b7791f' : 'var(--danger)');
+  var h = '<div style="border:2px solid '+col+';border-radius:8px;padding:12px;margin-bottom:10px">';
+  if (!res.created) {
+    h += '<div style="font-weight:bold;color:var(--danger);font-size:15px">❌ NO COPY WAS CREATED</div>';
+  } else {
+    h += '<div style="font-weight:bold;font-size:15px;color:'+col+'">' + (errs.length ? '⚠ ' : '✅ ') + esc(res.new_wo_id) + ' created' + (errs.length ? ' — but something went wrong' : '') + '</div>' +
+      '<div style="font-size:12px;color:var(--muted);margin-top:2px">Copy of ' + esc(res.source_wo_id) + ' · bid group ' + esc(res.bid_group_id) + '</div>';
+    if (hasVendor) {
+      var stLabel = { sent: 'SENT', held: 'HELD (not sent yet)', failed: 'NOT SENT', skipped: 'NOT SENT' }[sms.status] || String(sms.status||'?').toUpperCase();
+      h += '<div id="dup-sms-status" style="margin-top:10px;font-size:15px;font-weight:bold;color:'+col+'">📱 Text to ' + esc(res.vendor_name || 'vendor') + ': ' + esc(stLabel) + '</div>' +
+        '<div style="font-size:12px;color:var(--text);margin-top:2px">' + esc(sms.reason || '') + '</div>';
+      if (sms.message_body) h += '<div style="margin-top:6px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:11px;color:var(--muted);white-space:pre-wrap;word-break:break-word">' + esc(sms.message_body) + '</div>';
+    } else {
+      h += '<div style="margin-top:8px;font-size:13px">No vendor chosen — the copy is <b>unassigned</b> and nobody was texted.</div>';
+    }
+    var c = res.copied || {};
+    h += '<div style="margin-top:8px;font-size:12px;color:var(--muted)">Copied: ' + (c.attachments||0) + ' photo/video' + ((c.attachments||0)===1?'':'s') + ' · ' + (c.tenants||0) + ' tenant link' + ((c.tenants||0)===1?'':'s') + ' · checklist ' + (c.checklist ? (c.checklist_items||0) + ' items, all unchecked' : 'none') + '</div>' +
+      '<div style="margin-top:4px;font-size:12px;color:var(--muted)">Tenant and owner were <b>not</b> texted. Vendor, estimates, bills and time were not copied.</div>';
+  }
+  if (errs.length) h += '<div style="margin-top:10px;color:var(--danger);font-size:12px;font-weight:bold">Problems:</div>' + errs.map(function(e){ return '<div style="color:var(--danger);font-size:12px;margin-top:2px">• ' + esc(e) + '</div>'; }).join('');
+  if (warns.length) h += '<div style="margin-top:8px;color:#b7791f;font-size:12px;font-weight:bold">Heads up:</div>' + warns.map(function(w){ return '<div style="color:#b7791f;font-size:12px;margin-top:2px">• ' + esc(w) + '</div>'; }).join('');
+  h += '</div><div class="modal-actions" style="flex-direction:column;align-items:stretch">';
+  if (res.created) h += '<button class="btn" style="min-height:44px" onclick="dupOpenNew(\'' + esc(res.new_wo_id) + '\')">Open ' + esc(res.new_wo_id) + '</button>';
+  h += '<button class="btn secondary" style="min-height:44px" onclick="dupAgain()">' + (res.created ? 'Duplicate ' + esc(src) + ' again for another vendor' : 'Back') + '</button>' +
+    '<button class="btn secondary" style="min-height:44px" onclick="closeDupModal()">Close</button></div>';
+  document.getElementById('dup-form').style.display = 'none';
+  var box = document.getElementById('dup-result'); box.innerHTML = h; box.style.display = '';
+}
+function dupAgain() {
+  document.getElementById('dup-result').style.display = 'none'; document.getElementById('dup-form').style.display = '';
+  _dupNoVendor = false; document.getElementById('dup-vendor-search').value = ''; renderDupVendorOptions(); paintDupNoVendor(); updateDupPreview();
+  var b = document.getElementById('dup-submit-btn'); b.disabled = false; b.textContent = 'Create copy + text vendor';
+}
+function dupOpenNew(id) {
+  closeModal('modal-dup-wo');
+  var p = loadAll();
+  var go = function(){ openWODetail(id); };
+  if (p && p.then) p.then(go).catch(function(e){ logError('Open copy', e.message); toast('Could not reload: '+e.message,'error'); }); else go();
+}
+
+// Bid group panel (WO detail) ---------------------------------------------------------------------
+function loadHubBidGroup(woId, detailBody) {
+  var holder = document.getElementById('bidgroup-' + woId);
+  if (!holder) { holder = document.createElement('div'); holder.id = 'bidgroup-' + woId; if (detailBody) detailBody.insertBefore(holder, detailBody.firstChild); }
+  api('GET', '/wo/bid-group?wo_id=' + encodeURIComponent(woId)).then(function(res) {
+    if (res && res.error) { holder.innerHTML = '<div style="margin:10px 0;padding:10px;border:2px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12px">⚠ Could not load the bid group: ' + esc(res.error) + '</div>'; return; }
+    renderBidGroupPanel(holder, woId, res || {});
+  }).catch(function(e) {
+    logError('Bid group', e.message);
+    holder.innerHTML = '<div style="margin:10px 0;padding:10px;border:2px solid var(--danger);border-radius:8px;color:var(--danger);font-size:12px">⚠ Could not load the bid group: ' + esc(e.message) + '</div>';
+  });
+}
+var _bgBanner = {};
+function renderBidGroupPanel(holder, woId, res) {
+  var banner = _bgBanner[woId] || '';
+  var members = safeArray(res.members);
+  if (!res.group_id || !members.length) {
+    holder.innerHTML = banner + (res.duplicated_from ? '<div style="margin:10px 0;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--muted)">⧉ ' + esc(res.note || ('Copy of ' + res.duplicated_from)) + '</div>' : '');
+    return;
+  }
+  var chip = function(t, bg, fg){ return '<span style="background:'+bg+';color:'+fg+';font-size:10px;padding:2px 6px;border-radius:3px;margin-left:6px;font-weight:bold">'+t+'</span>'; };
+  var openCount = members.filter(function(m){ return m.status !== 'Cancelled' && m.status !== 'Canceled' && !m.voided; }).length;
+  var rows = members.map(function(m) {
+    var cancelled = (m.status === 'Cancelled' || m.status === 'Canceled');
+    var est = m.latest_estimate ? '<div style="font-size:11px;color:var(--text);margin-top:2px">Estimate v' + esc(m.latest_estimate.version) + ': <b>$' + esc(m.latest_estimate.subtotal) + '</b> (' + esc(m.latest_estimate.status||'') + ')</div>' : '';
+    var here = m.id === woId;
+    return '<div style="padding:10px 0;border-bottom:1px solid var(--border)" data-bg-member="' + esc(m.id) + '">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">' +
+        '<div style="min-width:0"><span style="color:var(--info);font-size:13px;font-weight:bold">' + esc(m.id) + '</span>' +
+          chip(m.is_original ? 'ORIGINAL' : 'COPY', m.is_original ? 'var(--surface2)' : '#eaf2ff', m.is_original ? 'var(--muted)' : '#1d4ed8') +
+          chip(esc(m.status||'New'), cancelled ? '#f3f5f8' : '#e8f5e9', cancelled ? 'var(--muted)' : '#1b5e20') + (here ? chip('THIS ONE','#fff4d6','#8a5a00') : '') +
+          '<div style="font-size:12px;color:var(--text);margin-top:3px">' + (m.vendor_name ? esc(m.vendor_name) : '<span style="color:var(--muted)">no vendor yet</span>') + '</div>' + est + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
+        (here ? '' : '<button class="btn small secondary" style="min-height:44px;flex:1 1 90px" onclick="bgOpen(\'' + esc(m.id) + '\')">Open</button>') +
+        (cancelled ? '' : '<button class="btn small" style="min-height:44px;flex:1 1 140px" data-bg-keep="' + esc(m.id) + '" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'keep_one\',\'' + esc(m.id) + '\')">Keep this, cancel others</button>') +
+        '<button class="btn small secondary" style="min-height:44px;flex:1 1 90px" data-bg-unlink="' + esc(m.id) + '" onclick="bgUnlink(\'' + esc(woId) + '\',\'' + esc(m.id) + '\')">Unlink</button>' +
+      '</div></div>';
+  }).join('');
+  holder.innerHTML = banner + '<div style="margin:12px 0;background:var(--surface2);border:2px solid var(--accent);border-radius:8px;padding:14px">' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap"><span style="font-size:14px">⧉</span>' +
+      '<span style="color:var(--accent);font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold">Bid group ' + esc(res.group_id) + '</span>' +
+      '<span style="color:var(--muted);font-size:10px;margin-left:auto">' + members.length + ' jobs · ' + openCount + ' open</span></div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Same job given to several vendors. Nothing is cancelled automatically. Cancelling never texts the vendors.</div>' +
+    rows +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">' +
+      '<button class="btn small danger" style="min-height:44px;flex:1 1 150px" data-bg-act="duplicates" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'duplicates\',\'\')">Cancel all duplicates</button>' +
+      '<button class="btn small danger" style="min-height:44px;flex:1 1 150px" data-bg-act="all" onclick="bgCancelPreview(\'' + esc(woId) + '\',\'all\',\'\')">Cancel whole group</button>' +
+    '</div></div>';
+}
+function bgOpen(id) { closeModal('modal-wo-detail'); setTimeout(function(){ openWODetail(id); }, 100); }
+function bgSetBanner(woId, level, html) {
+  var col = level === 'good' ? 'var(--accent2)' : (level === 'warn' ? '#b7791f' : 'var(--danger)');
+  _bgBanner[woId] = '<div id="bg-banner" style="margin:10px 0;padding:10px 12px;border:2px solid '+col+';border-radius:8px;font-size:12px;color:var(--text)">' + html + '</div>';
+}
+function bgRefresh(woId) {
+  var h = document.getElementById('bidgroup-' + woId);
+  if (h) loadHubBidGroup(woId, h.parentNode);
+}
+function bgUnlink(woId, memberId) {
+  if (_bidUnlinkBusy) return;
+  if (!confirm('Unlink ' + memberId + ' from its bid group?\n\nIt becomes an independent job. "Cancel group" actions will no longer touch it.')) return;
+  _bidUnlinkBusy = true;
+  api('POST','/wo/bid-group/unlink',{wo_id:memberId, updated_by:'admin'}, 30000).then(function(res){
+    _bidUnlinkBusy = false;
+    var errs = safeArray(res.errors), warns = safeArray(res.warnings);
+    if (res.ok) bgSetBanner(woId, 'good', '✅ Unlinked: ' + esc(safeArray(res.cleared).join(', ')) + (warns.length ? '<br>' + warns.map(esc).join('<br>') : ''));
+    else bgSetBanner(woId, 'bad', '❌ Unlink problem: ' + (errs.length ? errs.map(esc).join('<br>') : esc(res.error || 'unknown error')));
+    bgRefresh(woId); loadAll();
+  }).catch(function(e){
+    _bidUnlinkBusy = false; logError('Unlink bid group', e.message);
+    bgSetBanner(woId, 'bad', '❌ No answer from the server (' + esc(e.message) + '). Check the group below before trying again.'); bgRefresh(woId);
+  });
+}
+// Cancel: ALWAYS preview first (dry_run), then an explicit confirm. Confirm button stays disabled until the box is ticked.
+var _bgCancelCtx = null;
+function bgCancelPreview(woId, mode, keepId) {
+  if (_bidCancelBusy) return;
+  _bgCancelCtx = { woId: woId, mode: mode, keepId: keepId };
+  var titles = { all: 'CANCEL WHOLE GROUP', duplicates: 'CANCEL ALL DUPLICATES', keep_one: 'KEEP ' + keepId + ', CANCEL THE OTHERS' };
+  document.getElementById('bidcancel-title').textContent = titles[mode] || 'CANCEL JOBS';
+  document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--muted);font-size:13px">Checking what would be cancelled…</div>';
+  closeModal('modal-wo-detail'); openModal('modal-bidcancel');
+  api('POST','/wo/bid-group/cancel',{wo_id:woId, mode:mode, keep_wo_id:keepId||'', dry_run:true}, 30000).then(function(res){
+    renderBidCancelPreview(res);
+  }).catch(function(e){
+    logError('Bid cancel preview', e.message);
+    document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--danger);font-size:13px;font-weight:bold">❌ Could not check: ' + esc(e.message) + '</div><div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal(\'modal-bidcancel\')">Close</button></div>';
+  });
+}
+function bgResultRow(r) {
+  var label = { would_cancel: 'WILL CANCEL', would_skip: 'SKIPPED', kept: 'KEPT', already_cancelled: 'ALREADY CANCELLED', cancelled: 'CANCELLED', skipped: 'SKIPPED', failed: 'FAILED' }[r.result] || String(r.result).toUpperCase();
+  var good = (r.result === 'would_cancel' || r.result === 'cancelled'), bad = (r.result === 'failed');
+  var col = bad ? 'var(--danger)' : (good ? 'var(--danger)' : 'var(--muted)');
+  var why = safeArray(r.reasons).map(function(x){ return '<div style="font-size:11px;color:' + (bad ? 'var(--danger)' : 'var(--muted)') + '">' + esc(x) + '</div>'; }).join('');
+  var warn = safeArray(r.warnings).map(function(x){ return '<div style="font-size:11px;color:#b7791f">⚠ ' + esc(x) + '</div>'; }).join('');
+  return '<div style="padding:8px 0;border-bottom:1px solid var(--border)" data-bgc-row="' + esc(r.wo_id) + '"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><b style="color:var(--info)">' + esc(r.wo_id) + '</b> <span style="font-size:11px;color:var(--muted)">' + (r.is_original ? 'original' : 'copy') + ' · ' + esc(r.status_before) + '</span><div style="font-size:12px">' + (r.vendor_name ? esc(r.vendor_name) : '<span style="color:var(--muted)">no vendor</span>') + '</div></div><div style="font-weight:bold;font-size:12px;color:' + col + '">' + esc(label) + '</div></div>' + why + warn + '</div>';
+}
+function renderBidCancelPreview(res) {
+  var body = document.getElementById('bidcancel-body');
+  if (res.error || !res.results) {
+    body.innerHTML = '<div style="color:var(--danger);font-size:13px;font-weight:bold">❌ ' + esc(res.error || 'Unexpected answer') + '</div><div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal(\'modal-bidcancel\')">Close</button></div>';
+    return;
+  }
+  var n = res.summary.would_cancel;
+  body.innerHTML = '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Bid group ' + esc(res.group_id) + ' · preview only, nothing has been changed yet</div>' +
+    safeArray(res.results).map(bgResultRow).join('') +
+    '<div style="margin-top:12px;font-size:13px"><b>' + n + '</b> job' + (n===1?'':'s') + ' will be cancelled · ' + (res.summary.would_skip) + ' skipped · ' + (res.summary.kept) + ' kept' + (res.summary.already_cancelled ? ' · ' + res.summary.already_cancelled + ' already cancelled' : '') + '</div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-top:4px">Vendors are <b>not</b> texted. Anything with bills, time, charges, QuickBooks numbers or a finished status is skipped, never cancelled.</div>' +
+    (n > 0 ? '<button type="button" class="btn secondary" id="bgc-ack" onclick="bgToggleAck()" style="width:100%;min-height:44px;margin-top:12px;text-align:left">☐ Yes, cancel these ' + n + ' job' + (n===1?'':'s') + '</button>' : '<div style="margin-top:12px;color:var(--muted);font-size:13px">Nothing to cancel.</div>') +
+    '<div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal(\'modal-bidcancel\')">Back</button>' +
+    (n > 0 ? '<button class="btn danger" id="bgc-confirm" style="min-height:44px" disabled onclick="bgCancelConfirm()">Cancel ' + n + ' job' + (n===1?'':'s') + '</button>' : '') + '</div>';
+  _bgCancelCtx.acked = false; _bgCancelCtx.n = n;
+}
+function bgToggleAck() {
+  if (!_bgCancelCtx || _bidCancelBusy) return;
+  _bgCancelCtx.acked = !_bgCancelCtx.acked;
+  var a = document.getElementById('bgc-ack'), c = document.getElementById('bgc-confirm');
+  a.textContent = (_bgCancelCtx.acked ? '☑' : '☐') + ' Yes, cancel these ' + _bgCancelCtx.n + ' job' + (_bgCancelCtx.n===1?'':'s');
+  c.disabled = !_bgCancelCtx.acked;
+}
+function bgCancelConfirm() {
+  if (_bidCancelBusy || !_bgCancelCtx || !_bgCancelCtx.acked) return;
+  _bidCancelBusy = true;
+  var c = document.getElementById('bgc-confirm'); c.disabled = true; c.textContent = 'Cancelling…';
+  var ctx = _bgCancelCtx;
+  api('POST','/wo/bid-group/cancel',{wo_id:ctx.woId, mode:ctx.mode, keep_wo_id:ctx.keepId||'', confirm:true, updated_by:'admin'}, 120000).then(function(res){
+    _bidCancelBusy = false;
+    var errs = safeArray(res.errors).slice(), sm = res.summary || {};
+    if (res.error && errs.indexOf(res.error) < 0) errs.push(res.error);
+    var head = errs.length || sm.failed ? '<div style="color:var(--danger);font-weight:bold;font-size:14px">❌ Finished with problems</div>' : '<div style="color:var(--accent2);font-weight:bold;font-size:14px">✅ Done — ' + (sm.cancelled||0) + ' cancelled</div>';
+    document.getElementById('bidcancel-body').innerHTML = head + safeArray(res.results).map(bgResultRow).join('') +
+      (errs.length ? errs.map(function(e){ return '<div style="color:var(--danger);font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') : '') +
+      safeArray(res.warnings).map(function(e){ return '<div style="color:#b7791f;font-size:12px;margin-top:6px">• ' + esc(e) + '</div>'; }).join('') +
+      '<div class="modal-actions"><button class="btn" style="min-height:44px" onclick="bgCancelDone()">Close</button></div>';
+    bgSetBanner(ctx.woId, errs.length || sm.failed ? 'bad' : 'good', (errs.length || sm.failed ? '❌ Cancel finished with problems' : '✅ ' + (sm.cancelled||0) + ' cancelled') + ' · ' + (sm.skipped||0) + ' skipped · ' + (sm.failed||0) + ' failed');
+    loadAll();
+  }).catch(function(e){
+    _bidCancelBusy = false; logError('Bid cancel', e.message);
+    document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--danger);font-weight:bold;font-size:13px">❌ No answer from the server (' + esc(e.message) + '). Some jobs may have been cancelled — open the work order and check the Bid group box.</div><div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="bgCancelDone()">Close</button></div>';
+  });
+}
+function bgCancelDone() {
+  var w = _bgCancelCtx && _bgCancelCtx.woId; closeModal('modal-bidcancel');
+  if (w) { var p = loadAll(); var go = function(){ openWODetail(w); }; if (p && p.then) p.then(go).catch(function(e){ logError('Reload after cancel', e.message); toast('Could not reload: '+e.message,'error'); }); else go(); }
+}
+
 // Store all active vendors for filtering
 var _assignVendorList = [];
 
