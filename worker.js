@@ -715,6 +715,9 @@ const _hubWorkerCore = {
         if (path === '/wo/bulk-void')             return await woBulkVoid(env, body);
         if (path === '/wo/combine')               return await woCombine(env, body);
         if (path === '/wo/split')                 return await woSplit(env, body);
+        if (path === '/wo/duplicate')             return await woDuplicate(env, body);
+        if (path === '/wo/bid-group/unlink')      return await woBidGroupUnlink(env, body);
+        if (path === '/wo/bid-group/cancel')      return await woBidGroupCancel(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
         if (path === '/tenant/schedule-move-out') return await scheduleMoveOutWithTurnover(env, body);
         if (path === '/schedule')                 return await scheduleWO(env, body);
