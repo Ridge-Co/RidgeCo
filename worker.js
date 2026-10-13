@@ -21280,6 +21280,23 @@ async function intakeNoticeTestGuard(env, subject, text) {
 
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  // Ops queue upgrade (Oct 13 2026): staging token may only create/modify/sync queue rows whose Title starts with TEST-.
+  if (path === '/ops-queue/scout-submit') {
+    const _its = (body && body.items) || [];
+    if (!_its.every(i => String((i && i.title) || '').startsWith('TEST-'))) return { ok: false, debug: 'queue-guard: every item title must start with TEST-' };
+    const _rcs = (body && body.rechecks) || [];
+    if (_rcs.length) { const _qr = await fetchTab(env, OPS_QUEUE_TAB); for (const rc of _rcs) { const _r = _qr.find(r => String(r.ID) === String(rc && rc.id)); if (!_r || !String(_r.Title || '').startsWith('TEST-')) return { ok: false, debug: 'queue-guard: recheck target is not a TEST- row' }; } }
+    return { ok: true };
+  }
+  if (path === '/ops-approve') {
+    return ((body && body.items) || []).every(i => String((i && i.title) || '').startsWith('TEST-'));
+  }
+  if (path === '/ops-queue-update' || path === '/ops-queue-status') {
+    const _qr = await fetchTab(env, OPS_QUEUE_TAB);
+    const _r = _qr.find(r => String(r.ID) === String(body && body.id));
+    return !!_r && String(_r.Title || '').startsWith('TEST-');
+  }
+  if (path === '/ops-queue/sync') return !!body && body.title_prefix === 'TEST-'; // staging token may only sync TEST- rows (opsQueueSync honours title_prefix)
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
   if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
