@@ -14934,7 +14934,7 @@ async function runWeeklyReview(env, opts) {
   } catch (e) { loggedError = String((e && e.message) || e).slice(0, 200); console.error('weekly review: history row not saved:', loggedError); }   // the review still returns - with logged:false + logged_error, which the scheduler job reports
   // Self-instrument (PAT-031): the reviewer is itself a measured job.
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
-  return { ok: true, window_days: days, metrics, proposal, items: proposalItems, thin_data: thinData, logged, delivery };
+  return { ok: true, window_days: days, metrics, proposal, items: proposalItems, thin_data: thinData, logged, logged_error: loggedError || undefined, delivery };
 }
 
 // ── OPTIMIZER BUILD QUEUE (approve proposals → queue for the Prepare agent) ────
