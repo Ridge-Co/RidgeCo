@@ -203,7 +203,25 @@ const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', mem
     // keep-one path
     await page.click('[data-bg-keep="WO-1238"]'); await page.waitForSelector('#bgc-confirm');
     const last = cancelPosts[cancelPosts.length - 1];
-    ok(last.mode === 'keep_one' && last.keep_wo_id === 'WO-1238' && last.dry_run === true, '"Keep this, cancel others" previews with keep_wo_id');
+    ok(last.mode === 'keep_one' && last.keep_wo_id === 'WO-1238' && last.dry_run === true, '"Keep this, cancel other copies" previews with keep_wo_id');
+    ok(/CANCEL THE OTHER COPIES/.test(await page.textContent('#bidcancel-title')), 'keep-one title says it cancels the other COPIES');
+    ok(/original\. It stays exactly as it is/.test(await page.textContent('[data-bgc-winner]')), 'keeping the original says it stays as it is');
+    await page.click('#modal-bidcancel button:has-text("Back")'); await page.waitForTimeout(150);
+    // keep a COPY: preview says it becomes tenant-visible with no text; confirm shows the done line; panel marks it KEPT
+    await page.evaluate(() => window.openWODetail('WO-1238')); await page.waitForSelector('[data-bg-member]');
+    await page.click('[data-bg-keep="WO-1251"]'); await page.waitForSelector('#bgc-confirm');
+    const cp = await page.textContent('[data-bgc-winner]');
+    ok(/WO-1251 will become visible to the tenant\. No text message is sent/.test(cp), 'keeping a copy: preview says it becomes tenant-visible and no text is sent');
+    ok(cancelPosts[cancelPosts.length - 1].keep_wo_id === 'WO-1251' && cancelPosts[cancelPosts.length - 1].dry_run === true, 'keeping a copy previews with that copy as keep_wo_id');
+    await noOverflow('#modal-bidcancel', 'Keep-a-copy preview'); await smallTargets('#modal-bidcancel', 'Keep-a-copy preview');
+    await page.screenshot({ path: join(shots, vp.name + '-9-keep-copy-preview.png') });
+    await page.click('#bgc-ack'); await page.click('#bgc-confirm'); await page.waitForTimeout(400);
+    ok(/WO-1251 is now visible to the tenant\. No text message was sent/.test(await page.textContent('[data-bgc-winner]')), 'after confirming: "now visible to the tenant, no text was sent"');
+    await page.screenshot({ path: join(shots, vp.name + '-10-keep-copy-done.png') });
+    await page.click('#modal-bidcancel button:has-text("Close")'); await page.waitForSelector('[data-bg-member]'); await page.waitForTimeout(300);
+    ok(await page.locator('[data-bg-member="WO-1251"] >> text="KEPT"').count() === 1 && /the tenant can see it/.test(await page.textContent('[data-bg-winner-note]')), 'the panel marks the kept copy KEPT and says the tenant can see it');
+    await noOverflow('#modal-wo-detail', 'Bid group panel with a KEPT copy');
+    await page.screenshot({ path: join(shots, vp.name + '-11-panel-kept.png') });
     console.log('  (stubbed-by-catch-all, ignored: ' + [...new Set(unmatched)].join(', ') + ')');
     ok(errs.length === 0, 'no JS errors during the whole run (' + errs.slice(0, 2).join(' | ') + ')');
     await ctx.close();
