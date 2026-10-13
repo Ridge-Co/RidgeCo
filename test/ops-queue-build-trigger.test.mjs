@@ -24,7 +24,11 @@ function grab(name) {
   return src.slice(i, j + 1);
 }
 
+// Oct 13 2026: buildStartBuildRoutineText now embeds the QUEUE_STANDING_RULES const.
+const _ri = src.indexOf('const QUEUE_STANDING_RULES = [');
+const QUEUE_RULES_SRC = src.slice(_ri, src.indexOf(".join('\\n');", _ri) + ".join('\\n');".length);
 const { validateQueueStatusReport, isEligibleForStartBuild, buildStartBuildRoutineText } = new Function(
+  QUEUE_RULES_SRC + '\n' +
   grab('validateQueueStatusReport') + '\n' +
   grab('isEligibleForStartBuild') + '\n' +
   grab('buildStartBuildRoutineText') +
