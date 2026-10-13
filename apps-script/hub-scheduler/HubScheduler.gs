@@ -138,7 +138,7 @@ function runScheduler() {
 // One HTTPS call to the Hub. Returns { ok:true, body } or { ok:false, problem } — never throws.
 function hub_(method, path, token, payload) {
   var opts = { method: method, headers: { 'X-Auth-Token': token }, muteHttpExceptions: true, followRedirects: false };
-  if (method === 'post') { opts.contentType = 'application/json'; opts.payload = '{}'; }
+  if (method === 'post') { opts.contentType = 'application/json'; opts.payload = payload ? JSON.stringify(payload) : '{}'; }
   var resp;
   try { resp = UrlFetchApp.fetch(WORKER_URL + path, opts); }
   catch (e) { return { ok: false, problem: 'could not reach the Hub (' + path + '): ' + e }; }
