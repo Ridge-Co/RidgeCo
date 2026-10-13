@@ -963,25 +963,6 @@ const _hubWorkerCore = {
     const r = await schedUnexpectedCloudflareCron(env, event);
     throw new Error(r.error); // also shows as a failed run in Cloudflare's Cron Events
   }
-    // Daily digest (existing) — 11:00 UTC. Now self-instruments a telemetry row so the
-    // Ops_Telemetry tab self-creates and gets a heartbeat row every morning (best-effort).
-    try {
-      const _t0 = Date.now();
-      const digest = await buildDigest(env);
-      const delivery = await deliverDigest(env, digest);
-      try { await logTelemetry(env, { Source:'worker', Job_Type:'daily_digest', Skill_Or_Endpoint:'scheduled/daily-digest', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes: (delivery&&delivery.delivered)?'delivered':'dormant' }); } catch (_) { /* telemetry best-effort */ }
-    } catch (e) { /* non-fatal: a digest error must never affect anything else */ }
-    // Receipt inbox sweep — self-provisions the folder, then pulls any new drops into
-    // the confirm-first queue. Read + queue only; no money, no customer contact.
-    try { await receiptScan(env); } catch (e) { /* non-fatal */ }
-    // Turnover cleaning date-fallback release (B-100). A blocked Cleaning WO normally
-    // releases the moment its sibling Repairs+Paint WOs both hit Complete (see the hook in
-    // updateStatus) — this sweep is the OTHER half of "whichever comes first": if the
-    // turnover's target move-in date arrives (Turnover_Release_Date <= today) before the
-    // other two ever finish, release Cleaning anyway so a late vendor doesn't block the
-    // one job that has to happen right before a new tenant moves in. Read-then-write only
-    // on WOs that actually qualify; a normal day with nothing due does one harmless read.
-    try { await releaseTurnoverByDate(env); } catch (e) { /* non-fatal */ }
     // Receipt RECONCILER sweep (CAP-002 phase 2) — separate pipeline, separate folder: polls the
     // real "Receipts and Invoices" Drive folder Brett drops purchase receipts into, OCRs new
     // files, and runs them through the zero-AI matching engine into Receipt_Recon_Queue. Still
