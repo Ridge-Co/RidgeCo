@@ -2944,7 +2944,7 @@ var _bgCancelCtx = null;
 function bgCancelPreview(woId, mode, keepId) {
   if (_bidCancelBusy) return;
   _bgCancelCtx = { woId: woId, mode: mode, keepId: keepId };
-  var titles = { all: 'CANCEL WHOLE GROUP', duplicates: 'CANCEL ALL DUPLICATES', keep_one: 'KEEP ' + keepId + ', CANCEL THE OTHERS' };
+  var titles = { all: 'CANCEL WHOLE GROUP', duplicates: 'CANCEL ALL DUPLICATES', keep_one: 'KEEP ' + keepId + ', CANCEL THE OTHER COPIES' };
   document.getElementById('bidcancel-title').textContent = titles[mode] || 'CANCEL JOBS';
   document.getElementById('bidcancel-body').innerHTML = '<div style="color:var(--muted);font-size:13px">Checking what would be cancelled…</div>';
   closeModal('modal-wo-detail'); openModal('modal-bidcancel');
