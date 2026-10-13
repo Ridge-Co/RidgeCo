@@ -16630,6 +16630,8 @@ async function opsQueueStartBuild(env, body) {
     const sheetRow = rowIndex + 2;
     if (statusCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [['building']] });
     if (heldNoteCol !== -1 && row.Status === 'held') buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(heldNoteCol)}${sheetRow}`, values: [['']] });
+    if (bsCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['building']] });
+    if (buCol !== -1) buildUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(buCol)}${sheetRow}`, values: [[new Date().toISOString()]] });
   }
   // ONE batched write across every eligible row, not N round-trips.
   if (buildUpdates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: buildUpdates });
