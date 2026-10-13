@@ -536,7 +536,70 @@ const drain = async (L, c, extra) => {
   c.v = Date.parse('2026-10-12T13:00:00Z');
   t('09:00 ET: ar_report_mon runs', (await drain(L, c)).ran.includes('ar_report_mon'));
 }
-//@@T2O_NEXT@@
+{
+  // mid-morning first tick (Mon 08:45 ET): dailies + review_mon seeded, ar_report_mon (09:00) still to come
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T12:45:00Z'));
+  const a = await drain(L, c);
+  t('first tick Mon 08:45 ET: seeds the dailies + review_mon but NOT ar_report_mon', a.first.body.seeded.join() === [...DAILY5, 'review_mon'].join(), a.first.body.seeded);
+  c.v = Date.parse('2026-10-12T13:00:00Z');
+  const b = await drain(L, c);
+  t('...and ar_report_mon then runs at 09:00 ET while the seeded ones stay quiet', b.ran.includes('ar_report_mon') && !b.ran.includes('review_mon') && !b.ran.some(n => DAILY5.includes(n)), b.ran);
+}
+{
+  // DST: fall-back day, Monday Nov 2 2026 is EST (UTC-5): 13:29Z = 08:29 EST
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-11-02T13:29:00Z'));
+  const a = await drain(L, c);
+  t('DST (EST): first tick 08:29 EST seeds the dailies only (review_mon is 08:30 EST)', a.first.body.seeded.join() === DAILY5.join() && a.ran.join() === INTERVAL5.join(), a.first.body.seeded);
+  c.v = Date.parse('2026-11-02T13:30:00Z');
+  t('DST (EST): review_mon runs at 13:30Z = 08:30 EST', (await drain(L, c)).ran.includes('review_mon'));
+  c.v = Date.parse('2026-11-02T14:00:00Z');
+  t('DST (EST): ar_report_mon runs at 14:00Z = 09:00 EST', (await drain(L, c)).ran.includes('ar_report_mon'));
+}
+{
+  // DST: spring-forward day, Sunday Mar 8 2026 is EDT after 2am (UTC-4): 10:59Z = 06:59 EDT, 11:00Z = 07:00 EDT
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-03-08T10:59:00Z'));
+  const a = await drain(L, c);
+  t('DST (spring-forward day): first tick 06:59 EDT seeds nothing', a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join());
+  c.v = Date.parse('2026-03-08T11:00:00Z');
+  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 5);
+  const store2 = makeStore(), L2 = load(store2);
+  t('DST (spring-forward day): a first tick at 07:30 EDT seeds the five dailies', (await drain(L2, clock(Date.parse('2026-03-08T11:30:00Z')))).first.body.seeded.join() === DAILY5.join());
+}
+{
+  // a Scheduler_State row that exists but is blank is ALSO a first run
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
+  store.tabs.get('Config').push(['Scheduler_State', '   ']);
+  const a = await drain(L, c);
+  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 7);
+}
+{
+  // jobs added to the registry LATER keep catch-up: existing state, no entry for the new job -> it runs
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T19:00:00Z')), log = [];   // 15:00 ET
+  const st0 = S0(); st0.jobs.old_job = { last_key: '2026-10-12', last_status: 'ok', last_ok: '2026-10-12T11:00:00.000Z' };
+  store.tabs.get('Config').push(['Scheduler_State', JSON.stringify(st0)]);
+  const jobs = mkJobs(log, [['old_job', 'daily'], ['new_job', 'daily']]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('a newly added daily job whose slot passed catches up on existing state (not seeded)', r.body.ran === 'new_job' && r.body.seeded === undefined && r.body.first_run === undefined && log.join() === 'new_job', r.body);
+  t('...while the job that already ran today stays quiet', (await L.schedRunNext({}, null, fast(c, { jobs }))).body.ran === null && log.length === 1);
+}
+{
+  // dry run on a blank state: reports first_run + would_seed, writes NOTHING, claims NOTHING
+  const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
+  const r = await L.schedRunNext({}, null, fast(c, { dry: true }));
+  t('dry run on blank state: first_run true, would_seed lists the seven, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 7 && r.body.due.join() === INTERVAL5.join(), r.body);
+  t('dry run wrote nothing (no POST, no Scheduler_State) and a real tick afterwards is still a first run', !store.calls.some(x => x.startsWith('POST')) && !store.cfg().Scheduler_State && (await L.schedRunNext({}, null, fast(c, {}))).body.first_run === true);
+}
+{
+  // concurrent first ticks: still exactly one run of each interval job, no daily job runs
+  const store = makeStore(); store.latency = () => Math.floor(Math.random() * 4);
+  const L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z')), log = [];
+  const jobs = [...INTERVAL5.map(n => ({ name: n, kind: 'interval', every_min: 14, run: async () => { log.push(n); return { ok: true, errors: [] }; } })),
+    ...DAILY5.map(n => ({ name: n, kind: 'daily', at: '07:00', run: async () => { log.push(n); return { ok: true, errors: [] }; } }))];
+  const caller = async () => { for (let i = 0; i < 80 && log.length < INTERVAL5.length; i++) { await L.schedRunNext({}, null, { now: c.now, sleep: tick, verifyDelayMs: 30, budgetMs: 5000, jobs }); await tick(2); } };
+  await Promise.all([caller(), caller(), caller()]);
+  t('three simultaneous first-tick callers: each interval job ran once, no daily job ran (seeded)', INTERVAL5.every(n => log.filter(x => x === n).length === 1) && !log.some(n => DAILY5.includes(n)), log);
+}
+
 // ───────────────────────────── 3. the REAL worker.js over a fake Google ─────────────────────────────
 const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
 const store = makeStore();
