@@ -15,7 +15,7 @@
 
 ## ⚡ STANDING RULE — NOTHING EVER FAILS SILENTLY (Brett, Oct 1, 2026) — see CLAUDE.md. Applies to every repo/worker/sheet/automation/PR; a repo-wide audit + fix program is in progress ("Silent-Failure Audit Plan" doc in the Continuous Improvement project).
 
-# OPS QUEUE UPGRADE (dedupe, Brett's change note, snooze, two-way build sync) — Oct 13, 2026 — Ridge-Co/RidgeCo PR #229, base `main`, head `feat/queue-upgrade-oct13`, NOT merged (Brett merges)
+# OPS QUEUE UPGRADE (dedupe, Brett's change note, snooze, two-way build sync) — Oct 13, 2026 — Ridge-Co/RidgeCo PR #236, base `main`, head `feat/queue-upgrade-oct13`, NOT merged (Brett merges)
 
 ## 🟡 Built, not yet live-verified on prod: Ops queue upgrade — BUILD_VERSION `2026-10-13.3-queue-upgrade`
 Fixes the duplicate ideas Brett saw on the Proposals page: Scout submissions and approvals are now fuzzy de-duped (same = skipped/promoted in place, overlap = shown with `Dup_Of`), items already shipped are flagged against FEATURE_LOG (`Shipped_Match`), Brett can attach a free-text change note to any item (injected into the build brief as "BRETT'S CHANGE"), "Not now" snoozes an item (default 10 days; returns only after a Scout re-check or a 4-day grace), and `POST /ops-queue/sync` ties each item to its PR (merged → live + done; closed unmerged → flagged, never auto-abandoned). `proposals.html` rewritten around those states. New `Ops_Build_Queue` columns are added additively. FEATURE_LOG `[FL-20261013-1130-qu]`. Tests: `test/ops-queue-upgrade.test.mjs` (101).
