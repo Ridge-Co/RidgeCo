@@ -198,7 +198,7 @@ const GROUP = (cancelled) => ({ group_id: 'BG-7', original_wo_id: 'WO-1238', mem
     await page.screenshot({ path: join(shots, vp.name + '-8-cancel-done.png') });
     cancelled = true;
     await page.click('#modal-bidcancel button:has-text("Close")'); await page.waitForSelector('[data-bg-member]'); await page.waitForTimeout(300);
-    ok(await page.locator('[data-bg-keep="WO-1250"]').count() === 0, 'a cancelled member no longer offers "Keep this, cancel others"');
+    ok(await page.locator('[data-bg-keep="WO-1250"]').count() === 0, 'a cancelled member no longer offers "Keep this, cancel other copies"');
 
     // keep-one path
     await page.click('[data-bg-keep="WO-1238"]'); await page.waitForSelector('#bgc-confirm');
