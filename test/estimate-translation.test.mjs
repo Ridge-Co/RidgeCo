@@ -90,6 +90,7 @@ function estHarness(existing, vendors) {
     ensureColumns: async (e, t, cols) => { state.ensure.push({ t, cols }); },
     updateWOField: async () => {}, updateWOFields: async () => {}, setApprovalStage: async (e, a) => { state.stage.push(a); },
     findWO: (l, id) => l.find(w => w.ID === id),
+    bidGroupWriteBlock: async () => null,   // bid-group cancelled-copy guard (Oct 12 2026) is covered in wo-duplicate.test.mjs
   };
   curFetchTab = deps.fetchTab;
   const names = Object.keys(deps);
