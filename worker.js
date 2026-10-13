@@ -15744,7 +15744,7 @@ async function ghPublicJson(path, env) {
 // scheduler PR #229 is merged) as a daily scheduler job — NOT a cron. Reads public GitHub only;
 // writes only Build_State/Build_Updated/PR_Number (+ Status→done when the PR merged). Every
 // failure is returned in `errors` — never swallowed. Accepts OPS_QUEUE_TOKEN or the admin secret.
-async function opsQueueSync(env, body) {
+async function opsQueueSync(env, body, opts) {
   await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
