@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.19-sched-unblock';
+const BUILD_VERSION = '2026-10-14.21-str-next-guest-note';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -30522,6 +30522,9 @@ function strSettings(cfg) {
 
 // ── Pure date / window helpers ────────────────────────────────────────────────────────────────
 function strDaysBetween(a, b) { return Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10)) - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86400000); }
+// The next guest's arrival, for any text/page that names it. Bookings can still change, so when the next guest is MORE than a day
+// after this clean (a same-day or next-day arrival is fixed enough to state flat) it says so (Brett, Oct 14 2026).
+function strNextDate(date, next) { return strFmtDate(next) + (strDaysBetween(date, next) > 1 ? ' (subject to change with new bookings)' : ''); }
 function strFmtDate(d, long) {
   const t = new Date(String(d).slice(0, 10) + 'T12:00:00Z'); if (isNaN(t)) return String(d || '');
   return t.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: long ? 'long' : 'short', month: long ? 'long' : 'short', day: 'numeric' });
@@ -30602,9 +30605,9 @@ function strDesiredCalendar(tasks, cleanersById, today, S) {
     if (t.date < today) continue;
     if (t.status === 'covered' && t.assigned) {
       const c = cleanersById[String(t.assigned)] || {}, nm = String(c.Nickname || String(c.Name || '').split(/\s+/)[0] || 'Cleaner').trim();
-      out.push({ key: t.key, kind: 'cover', date: t.date, title: `${nm} Cleaning`, desc: `${S.label} ${t.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub. Checkout 11 AM${t.next ? '; next guest arrives ' + strFmtDate(t.next) : ''}.` });
+      out.push({ key: t.key, kind: 'cover', date: t.date, title: `${nm} Cleaning`, desc: `${S.label} ${t.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub. Checkout 11 AM${t.next ? '; next guest arrives ' + strNextDate(t.date, t.next) : ''}.` });
     } else if (!t.coveredAny && strDaysBetween(today, t.date) <= S.redDays) {
-      out.push({ key: t.key, kind: 'gap', date: t.date, title: STR_BLOCK_TITLE, desc: `${S.label}: no cleaner is booked for this ${t.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover'}${t.next ? ' (next guest arrives ' + strFmtDate(t.next) + ')' : ''}. The Ridge Co Hub is working the cleaner queue; this block disappears once someone is booked.` });
+      out.push({ key: t.key, kind: 'gap', date: t.date, title: STR_BLOCK_TITLE, desc: `${S.label}: no cleaner is booked for this ${t.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover'}${t.next ? ' (next guest arrives ' + strNextDate(t.date, t.next) + ')' : ''}. The Ridge Co Hub is working the cleaner queue; this block disappears once someone is booked.` });
     }
   }
   return out;
@@ -30674,7 +30677,7 @@ const STR_DEFAULT_TEXTS = {
 };
 function strNextLine(task) {
   if (!task.next) return ' (no booking after that yet)';
-  return task.next === task.date ? ' and the next guest arrives the same day' : `; next guest arrives ${strFmtDate(task.next)}`;
+  return task.next === task.date ? ' and the next guest arrives the same day' : `; next guest arrives ${strNextDate(task.date, task.next)}`;
 }
 function strTodayLines(task, nowDate, label) {
   const next = task.next;
@@ -30682,7 +30685,7 @@ function strTodayLines(task, nowDate, label) {
   let nextLine2;
   if (!next) nextLine2 = 'There is no booking after this one yet.';
   else if (next === nowDate) nextLine2 = 'The next guest arrives TODAY.';
-  else nextLine2 = `The next guest arrives ${strFmtDate(next)}.`;
+  else nextLine2 = `The next guest arrives ${strNextDate(task.date, next)}.`;
   return { todayLine, nextLine2 };
 }
 
@@ -31050,7 +31053,7 @@ async function strAfterAssign(ctx, trow, cleaner) {
   if (cleaner.Email && ctx.S.engine) {
     try {
       const views = strComputeViews(ctx, null), ics = strIcsForCleaner(ctx, cleaner, views);
-      const html = `<p>Hi ${strEsc(strFirst(cleaner))},</p><p>You're set to clean <b>${strEsc(ctx.S.label)}</b> on <b>${strEsc(strFmtDate(task.date, true))}</b> (checkout 11 AM${task.next ? '; next guest arrives ' + strEsc(strFmtDate(task.next)) : ''}).</p><p>The calendar invite is attached. Your schedule, availability and any changes: <a href="${strCleanerUrl(cleaner.Token)}">open your page</a>.</p><p>Thank you!<br>${strEsc(ctx.S.assistant)} - Ridge Co</p>`;
+      const html = `<p>Hi ${strEsc(strFirst(cleaner))},</p><p>You're set to clean <b>${strEsc(ctx.S.label)}</b> on <b>${strEsc(strFmtDate(task.date, true))}</b> (checkout 11 AM${task.next ? '; next guest arrives ' + strEsc(strNextDate(task.date, task.next)) : ''}).</p><p>The calendar invite is attached. Your schedule, availability and any changes: <a href="${strCleanerUrl(cleaner.Token)}">open your page</a>.</p><p>Thank you!<br>${strEsc(ctx.S.assistant)} - Ridge Co</p>`;
       const r = await gmailSendEmailWithAttachment(ctx.env, { to: cleaner.Email, subject: `You're set: ${ctx.S.label} cleaning ${strFmtDate(task.date)}`, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } });
       res.email = r && r.staged ? 'staged' : 'sent';
     } catch (e) { problems.push(`Could not email ${cleaner.Name} the calendar invite: ${strErrText(e)}`); res.email = 'failed'; }
@@ -31069,7 +31072,7 @@ function strIcsForCleaner(ctx, c, views) {
     if (!mine && !backup) continue;
     ev.push({ uid: `str-${v.key.replace(/[^a-z0-9]+/gi, '-')}-${c.ID}@ridgeco`, date: v.date, seq: Math.floor(ctx.now / 60000), url,
       summary: (backup ? 'BACKUP - ' : '') + `${ctx.S.label} cleaning`,
-      description: `${backup ? 'You marked yourself available as the backup cleaner. ' : ''}Checkout 11 AM${v.next ? '. Next guest arrives ' + strFmtDate(v.next) : ''}. Your page: ${url}` });
+      description: `${backup ? 'You marked yourself available as the backup cleaner. ' : ''}Checkout 11 AM${v.next ? '. Next guest arrives ' + strNextDate(v.date, v.next) : ''}. Your page: ${url}` });
   }
   return strIcs(ev, ctx.now);
 }
@@ -31148,11 +31151,17 @@ async function strCheckoutTexts(ctx, views) {
 }
 
 // ── The tick (scheduler job `str_cleaning`, every ~14 minutes; also admin "Run now" with dry:true) ──
+// Time budget (Oct 14 2026). A cron tick gets ~50 s plus ~30 s of background time, and every Sheets read in cron is paced 2.5 s apart,
+// so one offer (a dozen verified reads) costs ~25 s. Past these marks the tick stops STARTING new work and reports what is deferred
+// (a warning on the job result) instead of being cut off mid-write with no record. Dry runs and tests are never limited.
+const STR_NEW_WORK_MS = 40 * 1000, STR_TAIL_MS = 62 * 1000;
+function strBudgetLeft(ctx, limitMs) { return ctx.dry || (Date.now() - ctx.t0) < limitMs; }
+function strDefer(ctx, what) { ctx.deferred = ctx.deferred || {}; ctx.deferred[what] = (ctx.deferred[what] || 0) + 1; }
 async function strTick(env, opts) {
   opts = opts || {};
   const cfg = await fetchConfig(env), S = strSettings(cfg);
-  const ctx = { env, cfg, S, dry: !!opts.dry, now: opts.nowMs || Date.now(), errors: [], warnings: [], actions: [], detail: {} };
-  const done = () => ({ ok: !ctx.errors.length, errors: ctx.errors, warnings: ctx.warnings, detail: ctx.detail });
+  const ctx = { env, cfg, S, dry: !!opts.dry, now: opts.nowMs || Date.now(), errors: [], warnings: [], actions: [], detail: {}, t0: Date.now() };
+  const done = () => { ctx.detail.elapsed_ms = Date.now() - ctx.t0; if (ctx.deferred) { ctx.detail.deferred = ctx.deferred; ctx.warnings.push('Ran out of time this tick, so ' + Object.entries(ctx.deferred).map(([k, n]) => n + ' ' + k).join(', ') + ' wait for the next tick (about 15 minutes). Nothing was skipped for good.'); } return { ok: !ctx.errors.length, errors: ctx.errors, warnings: ctx.warnings, detail: ctx.detail }; };
   if (!S.engine && !ctx.dry) { ctx.detail = { enabled: false, note: 'STR_ENGINE_ENABLED is FALSE - the cleaning scheduler is idle.' }; return done(); }
   await strEnsureTabs(env);
   await strLoad(ctx, true);
@@ -31205,6 +31214,7 @@ async function strTick(env, opts) {
   const foreign = feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr));
   let views = strComputeViews(ctx, foreign);
   if (!ctx.dry) for (const v of views) {
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS) && (v.row.Status === 'ext_covered' ? !v.ext.length : v.ext.length && ['open', 'offering', 'exhausted'].includes(v.row.Status))) { strDefer(ctx, 'coverage updates'); continue; }
     try {
       if (v.row.Status === 'ext_covered' && !v.ext.length) { await strSetTurnover(ctx, v.row, { Status: 'open', Note: 'calendar entry removed' }); v.status = 'open'; v.coveredAny = false; v.via = ''; }
       else if (v.ext.length && ['open', 'offering', 'exhausted'].includes(v.row.Status)) {
@@ -31218,6 +31228,7 @@ async function strTick(env, opts) {
   // 3. offers: expire stale ones, ask the next cleaner
   const offered = [];
   for (const v of views.filter(v => !v.coveredAny && ['open', 'offering', 'exhausted'].includes(v.row.Status))) {
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'turnover(s) to check for offers'); continue; }
     try { const r = await strAdvanceTask(ctx, v.row); offered.push(Object.assign({ task: v.key }, r)); v.status = v.row.Status; }
     catch (e) { ctx.errors.push({ step: 'offers', error: `${v.key}: ${strErrText(e)}` }); }
   }
@@ -31225,9 +31236,10 @@ async function strTick(env, opts) {
   // 4. calendar
   try { ctx.detail.calendar = await strReconcileCalendar(ctx, feed, views); } catch (e) { ctx.errors.push({ step: 'calendar', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'calendar', 'The cleaning calendar could not be updated: ' + strErrText(e)); }
   // 5. checkout-day texts
-  ctx.detail.checkout_texts = await strCheckoutTexts(ctx, views);
+  if (strBudgetLeft(ctx, STR_TAIL_MS)) ctx.detail.checkout_texts = await strCheckoutTexts(ctx, views); else strDefer(ctx, 'checkout-day text check(s)');
   // 6. alerts to Brett
-  try { await strEvalAlerts(ctx, views); ctx.detail.alerts_sent = (await strDeliverAlerts(ctx)).sent; } catch (e) { ctx.errors.push({ step: 'alerts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'alerts', 'Cleaning alerts could not be evaluated: ' + strErrText(e)); }
+  if (!strBudgetLeft(ctx, STR_TAIL_MS)) strDefer(ctx, 'alert check(s)');
+  else try { await strEvalAlerts(ctx, views); ctx.detail.alerts_sent = (await strDeliverAlerts(ctx)).sent; } catch (e) { ctx.errors.push({ step: 'alerts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'alerts', 'Cleaning alerts could not be evaluated: ' + strErrText(e)); }
   const by = {}; for (const v of views) by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] = (by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] || 0) + 1;
   ctx.detail.summary = { turnovers: views.length, by_status: by, uncovered: views.filter(v => !v.coveredAny).length, next_14_days_uncovered: views.filter(v => !v.coveredAny && strDaysBetween(today, v.date) <= 14).length };
   if (ctx.actions.length) ctx.detail.actions = ctx.actions.slice(0, 40);
@@ -31271,11 +31283,11 @@ async function strCleanerPage(env, url) {
     const today = inspEtDate(ctx.now), views = strComputeViews(ctx, null).filter(v => strDaysBetween(today, v.date) <= ctx.S.lookahead);
     const tasks = views.map(v => {
       const mine = String(v.assigned) === c.ID && v.status === 'covered';
-      return { key: v.key, kind: v.kind, date: v.date, label: strFmtDate(v.date), kind_label: v.kind === 'prearrival' ? 'Pre-arrival clean' : 'Checkout 11 AM', next_arrival: v.next || '', next_label: v.next ? strFmtDate(v.next) : '', days_out: strDaysBetween(today, v.date), covered: v.coveredAny, covered_by: v.via === 'hub' ? v.assignedName : '', mine, can_cancel: mine, my_mark: ctx.st.marks[c.ID + '|' + v.date] || '' };
+      return { key: v.key, kind: v.kind, date: v.date, label: strFmtDate(v.date), kind_label: v.kind === 'prearrival' ? 'Pre-arrival clean' : 'Checkout 11 AM', next_arrival: v.next || '', next_label: v.next ? strNextDate(v.date, v.next) : '', days_out: strDaysBetween(today, v.date), covered: v.coveredAny, covered_by: v.via === 'hub' ? v.assignedName : '', mine, can_cancel: mine, my_mark: ctx.st.marks[c.ID + '|' + v.date] || '' };
     });
     const offers = ctx.st.offers.filter(o => String(o.Cleaner_ID) === c.ID && (o.Status === 'pending' || o.Status === 'expired')).map(o => {
       const v = views.find(x => x.key === o.Task_Key); if (!v || v.coveredAny || !['open', 'offering', 'exhausted'].includes(v.status)) return null;
-      return { id: o.ID, task_key: v.key, date: v.date, label: strFmtDate(v.date, true), next_label: v.next ? strFmtDate(v.next) : '', deadline: o.Deadline_At, late: o.Status === 'expired' || Date.parse(o.Deadline_At) < ctx.now };
+      return { id: o.ID, task_key: v.key, date: v.date, label: strFmtDate(v.date, true), next_label: v.next ? strNextDate(v.date, v.next) : '', deadline: o.Deadline_At, late: o.Status === 'expired' || Date.parse(o.Deadline_At) < ctx.now };
     }).filter(Boolean);
     const bd = String(url.searchParams.get('backup') || ''), bt = /^\d{4}-\d{2}-\d{2}$/.test(bd) ? views.find(v => v.date === bd && v.coveredAny && String(v.assigned) !== c.ID) : null;
     return json({ ok: true, cleaner: { name: c.Name, first: strFirst(c), language: c.Language }, property: ctx.S.label, today, server_time: new Date(ctx.now).toISOString(), tasks, offers, backup_prompt: bt ? { date: bt.date, label: strFmtDate(bt.date, true) } : null, ics_url: `${new URL(url).origin}/str/c/ics?k=${encodeURIComponent(c.Token)}`, coming_soon: STR_COMING_SOON });
@@ -31317,7 +31329,7 @@ async function strOfferRespond(env, body) {
     const after = await strAfterAssign(ctx, trow, c);
     const warnings = [...after.problems];
     await strAlertsNow(ctx, warnings, 'covered_notice');
-    return json({ ok: true, result: 'accepted', date: task.date, message: `You're set for ${label}. Checkout is 11 AM${task.next ? '; the next guest arrives ' + strFmtDate(task.next) : ''}. It will show on the calendar shortly.`, warnings });
+    return json({ ok: true, result: 'accepted', date: task.date, message: `You're set for ${label}. Checkout is 11 AM${task.next ? '; the next guest arrives ' + strNextDate(task.date, task.next) : ''}. It will show on the calendar shortly.`, warnings });
   } catch (e) { return await strHandleErr(env, e, 'offer response'); }
 }
 
@@ -31402,11 +31414,11 @@ async function strAdminState(env) {
     const foreign = feed ? feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr)) : null, views = strComputeViews(ctx, foreign), today = inspEtDate(ctx.now), act = ctx.st.cleaners.filter(x => String(x.Active).toUpperCase() !== 'FALSE');
     const stored = new Set(ctx.st.turnovers.map(t => t.Task_Key));
     const tasks = views.map(v => ({
-      key: v.key, kind: v.kind, date: v.date, label: strFmtDate(v.date), days_out: strDaysBetween(today, v.date), next_arrival: v.next || '', next_label: v.next ? strFmtDate(v.next) : '', guests: v.guests,
+      key: v.key, kind: v.kind, date: v.date, label: strFmtDate(v.date), days_out: strDaysBetween(today, v.date), next_arrival: v.next || '', next_label: v.next ? strNextDate(v.date, v.next) : '', guests: v.guests,
       status: v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status, covered: v.coveredAny, via: v.via, assigned_id: v.status === 'covered' ? v.assigned : '', assigned_name: v.assignedName, note: v.row.Note || '', checkout_text: v.row.Checkout_Text_Sent || '',
       offers: ctx.st.offers.filter(o => o.Task_Key === v.key).map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, status: o.Status, sent_at: o.Sent_At || '', deadline: o.Deadline_At || '', note: o.Note || '' })),
       backups: strBackupPicture(v, act, ctx.st.marks, v.status === 'covered' ? v.assigned : ''), uncovered_alert: !v.coveredAny && strDaysBetween(today, v.date) <= ctx.S.alertDays }));
-    if (feed) for (const t of strBuildTasks(feed.stays, today, ctx.S)) if (!stored.has(t.key)) tasks.push({ key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), days_out: strDaysBetween(today, t.date), next_arrival: t.next || '', next_label: t.next ? strFmtDate(t.next) : '', guests: t.guests, status: 'new', covered: false, via: '', assigned_id: '', assigned_name: '', note: 'not picked up by the scheduler yet', offers: [], backups: { can: [], out: [], unknown: [] }, uncovered_alert: false });
+    if (feed) for (const t of strBuildTasks(feed.stays, today, ctx.S)) if (!stored.has(t.key)) tasks.push({ key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), days_out: strDaysBetween(today, t.date), next_arrival: t.next || '', next_label: t.next ? strNextDate(t.date, t.next) : '', guests: t.guests, status: 'new', covered: false, via: '', assigned_id: '', assigned_name: '', note: 'not picked up by the scheduler yet', offers: [], backups: { can: [], out: [], unknown: [] }, uncovered_alert: false });
     tasks.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
     const log = (await fetchTab(env, 'STR_Log')).slice(-40).reverse();
     return json({ ok: true, build: BUILD_VERSION, today, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), coming_soon: STR_COMING_SOON });
