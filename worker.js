@@ -4487,7 +4487,46 @@ async function scopeProposalLinkRevoke(env, body) {
 }
 
 const PROPOSAL_SEND_LOG_TAB = 'Proposal_Send_Log';
-const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result'];
+const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result', 'SMS_Result'];
+
+// ── Proposal read status + owner heads-up text (Hub Improvements, Oct 14 2026; FEATURE_LOG rule 209) ──
+// Two read signals, both written onto the Scopes row:
+//   * Page_*  = the owner opened scope-proposal.html (reliable; a real click-through).
+//   * Email_* = the 1x1 tracking pixel in the proposal email loaded (the owner's mail app showed images). Gmail and
+//     Apple Mail prefetch images through proxies, so a hit within PROPOSAL_OPEN_AUTO_WINDOW_MS of the send is counted
+//     as Email_Auto_Opens (a machine, not a person) and does NOT mark the email "opened". Treat Email_* as "probably".
+// Either signal counts as "seen" - that is what cancels a held owner text (processQuietHoursQueue) .
+const PROPOSAL_TRACK_COLS = ['Email_First_Opened', 'Email_Last_Opened', 'Email_Open_Count', 'Email_Auto_Opens', 'Page_First_Viewed', 'Page_Last_Viewed', 'Page_View_Count', 'Owner_SMS_Status', 'Owner_SMS_Time'];
+const PROPOSAL_OPEN_AUTO_WINDOW_MS = 120000;
+const PROPOSAL_BOT_UA = /bot|crawl|spider|slurp|facebookexternalhit|whatsapp|slackbot|twitterbot|curl\/|python-requests|headless|linkpreview|link preview/i;
+const SCOPE_SMS_QUIET_WINDOW = { start: 20, end: 8 };   // owner proposal text: fine until 8pm ET, held until 8am ET
+const PROPOSAL_PIXEL_GIF_B64 = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+// Pure: how to treat one hit. 'ignore' = obvious bot; 'auto' = email image fetched right after send (prefetch); 'real' = count it.
+function classifyProposalHit({ kind, ua, sentDate, now }) {
+  if (PROPOSAL_BOT_UA.test(String(ua || ''))) return 'ignore';
+  if (kind === 'email') { const sent = Date.parse(sentDate || ''); if (sent && (now - sent) < PROPOSAL_OPEN_AUTO_WINDOW_MS) return 'auto'; }
+  return 'real';
+}
+// Pure: has the owner (probably) seen this proposal?
+function proposalSeenByOwner(s) { return !!(s && (String(s.Page_First_Viewed || '').trim() || String(s.Email_First_Opened || '').trim())); }
+// Never silent: a failed log lands in Ops_Telemetry; the public page/pixel still works.
+async function proposalRecordHit(env, s, kind, ua) {
+  try {
+    const verdict = classifyProposalHit({ kind, ua, sentDate: s.Sent_Date, now: Date.now() });
+    if (verdict === 'ignore') return;
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const nowIso = new Date().toISOString();
+    let f;
+    if (kind === 'email' && verdict === 'auto') f = { Email_Auto_Opens: String((parseInt(s.Email_Auto_Opens || '0', 10) || 0) + 1) };
+    else if (kind === 'email') f = { Email_First_Opened: s.Email_First_Opened || nowIso, Email_Last_Opened: nowIso, Email_Open_Count: String((parseInt(s.Email_Open_Count || '0', 10) || 0) + 1) };
+    else f = { Page_First_Viewed: s.Page_First_Viewed || nowIso, Page_Last_Viewed: nowIso, Page_View_Count: String((parseInt(s.Page_View_Count || '0', 10) || 0) + 1) };
+    const r = await updateRow(env, 'Scopes', s.ID, f);
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/' + kind, Success: 'FALSE', Notes: 'scope=' + (s && s.ID) + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+}
+// @@PROPOSAL_BLOCK_2@@
 
 // Pure: resolves the CONFIRMED PAYOR for a scope's property — never the Realtor/PM referral
 // source (that's a separate Properties.Source_* field, kept deliberately apart — see
