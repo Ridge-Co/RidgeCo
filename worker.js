@@ -29345,6 +29345,7 @@ async function hubBulkImport(env, body) {
         tenantsCreated++;
         unit.Tenant_ID = tid;
         if (!unitIsNew) linkUpdates.push({ tab: 'Units', id: unit.ID, field: 'Tenant_ID', value: tid });
+        }
       }
       if (unitIsNew) newUnitRows.push(tabState.Units.headers.map(h => unit[h] !== undefined ? unit[h] : ''));
     }
