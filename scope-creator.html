@@ -1301,7 +1301,7 @@ async function sendEstimateEmail(){
   var already=(s.Sent_Date||'').trim();
   var confirmMsg = already
     ? 'This was already sent to '+email+' on '+new Date(already).toLocaleDateString()+'. Send it again?'
-    : 'Send this estimate to '+email+'?';
+    : 'Send this estimate to '+email+'? (The owner also gets a short text saying it was emailed.)';
   if(!confirm(confirmMsg)) return;
   setStatus('send-status','Sending…');
   try{
