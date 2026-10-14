@@ -2,6 +2,7 @@
 // combined-invoice.test.mjs: pure helpers are executed for real, handlers are executed against stubbed
 // Sheets helpers, and the money / plumbing edits are asserted structurally.
 import fs from 'fs';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const src = fs.readFileSync('worker.js', 'utf8');
 
 function grabAny(prefix, name) {
