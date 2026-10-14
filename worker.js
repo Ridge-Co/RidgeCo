@@ -17065,7 +17065,7 @@ async function opsQueueScoutSubmit(env, body) {
   const now = new Date().toISOString();
   const reviewTs = String((body && body.review_ts) || now);
   let queued = 0;
-  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [];
+  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [], queued_items = [];
   let rechecked = 0;
   // Oct 13 2026: the old loop inserted blindly, so every Optimizer round re-proposed ideas that were
   // already queued, dropped or built. Now: read the WHOLE queue (all statuses) first; skip a
