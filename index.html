@@ -9450,6 +9450,13 @@ function sendWOToQuickBooks(woId) {
         '<a href="#" onclick="closeModal(\'modal-wo-detail\');showPage(\'invoice-review\',null);return false" style="color:var(--accent)">Review Bills</a> first.</span>';
       return;
     }
+    // Same guard as the Invoice Builder: never open a preview of a figure other than the one typed.
+    var typedEl = document.getElementById('inv-charge-' + woId);
+    var typed = typedEl ? parseFloat(typedEl.value) : NaN;
+    if (invPriceMismatch(typed, row.customer_total)) {
+      if (msgEl) msgEl.innerHTML = invPriceMismatchHtml(parseFloat(row.customer_total), typed, row.id);
+      return;
+    }
     if (msgEl) msgEl.innerHTML = '';
     closeModal('modal-wo-detail');
     previewQBSend(row.id);   // preview creates nothing — confirm happens in the modal
