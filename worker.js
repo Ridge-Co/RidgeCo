@@ -6453,6 +6453,11 @@ async function processMoveOut(env, body) {
 // A future move-out date only records the date + flags the row for the daily scheduler flip (daily_turnover job, no cron);
 // NO turnover work orders are created - Brett is alerted and approves those himself.
 const ROSTER_MAX_ROWS = 200;
+// Cloudflare allows ~50 outbound calls per request on this plan. A big roster file therefore applies in SLICES: each call does as
+// many rows as fit in the budget, then answers { partial:true, remaining:N }; the page re-sends the same file until remaining is 0.
+// Safe to repeat because the plan is recomputed every call and finished rows then plan as unchanged / already_done.
+const ROSTER_SUBREQ_LIMIT = 44, ROSTER_TAIL_RESERVE = 10;
+const ROSTER_COST = { move_out: 13, move_out_future: 5, update: 5, insert: 10 };
 const ROSTER_LOG_TAB = 'Roster_Imports';
 const ROSTER_LOG_COLS = ['ID', 'Timestamp', 'Batch', 'Owner_ID', 'Actor', 'Rows', 'Moved_In', 'Moved_Out', 'Future_Move_Outs', 'Name_Fixes', 'Consent_Attested', 'Result', 'Details_JSON', 'Active'];
 // Tenants columns this tool relies on. SMS_Consent: 'attested' (upload box ticked) | 'pending' (not ticked) | 'welcome_sent'.
