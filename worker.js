@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.23-sched-daily-first';
+const BUILD_VERSION = '2026-10-14.24-sched-no-repick';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -15729,8 +15729,10 @@ function schedJobDue(job, js, nowDate) {
   const at = js.attempts;
   if (at && at.key === et.date && at.n > 0) {
     if (at.n >= SCHED_MAX_ATTEMPTS) return null;                  // gave up for today; /cron/status shows it overdue
-    const lastEnd = Date.parse(js.last_end || js.last_start || '');
-    if (!isNaN(lastEnd) && nowMs - lastEnd < SCHED_RETRY_GAP_MS) return null;
+    // Gap runs from the LATEST of last_end / last_start: a run that started and never finished (timed out, crashed) has an old
+    // last_end from a previous day, which made it due again on the very next call of the same tick (Oct 14 2026).
+    const lastEnd = Math.max(Date.parse(js.last_end || '') || 0, Date.parse(js.last_start || '') || 0);
+    if (lastEnd && nowMs - lastEnd < SCHED_RETRY_GAP_MS) return null;
   }
   return { key: et.date };
 }
@@ -16430,6 +16432,12 @@ async function schedRunNext(env, ctx, opts) {
   st.last_tick = nowISO; st.claim_id = myId; st.claim_job = job.name; st.claim_until = new Date(t + SCHED_CLAIM_TTL_MS).toISOString();
   const prev = st.jobs[job.name] || {};
   st.jobs[job.name] = Object.assign({}, prev, { last_start: nowISO, last_status: 'running' });
+  if (job.kind !== 'interval' && !force) {
+    // Count the attempt when it STARTS (not when it fails): a run that times out or crashes never reaches the end-of-run write, so
+    // counting there let it retry forever. Success clears this; the 30 min gap and 3/day cap in schedJobDue now bound it.
+    const dayKey = key, n0 = prev.attempts && prev.attempts.key === dayKey ? prev.attempts.n : 0;
+    st.jobs[job.name].attempts = { key: dayKey, n: n0 + 1 };
+  }
   try {
     const w = await schedWriteVerified(env, st, rows, sleep, verifyDelay);
     if (w.parsed.error) return await infraFail(w.parsed.error);
@@ -16476,10 +16484,10 @@ async function schedRunNext(env, ctx, opts) {
           if (jobOk || finalFail) {
             rec.last_key = etDay; rec.attempts = null;
             rec.last_failed_final = finalFail ? etDay : null;
-          } else {
+          } else if (force) {
             const a = rec.attempts && rec.attempts.key === etDay ? rec.attempts.n : 0;
             rec.attempts = { key: etDay, n: a + 1 };
-          }
+          }   // (a normal failed run was already counted when it started)
         }
         cur.jobs[job.name] = rec;
         if (cur.claim_id === myId) { cur.claim_id = ''; cur.claim_until = ''; cur.claim_job = ''; }
