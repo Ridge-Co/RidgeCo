@@ -12153,7 +12153,7 @@ function payablesBuildFilters() {
 function payablesApplyFilters() { renderPayablesList(); }
 
 function payablesClearFilters() {
-  ['pay-q', 'pay-f-state', 'pay-f-vendor', 'pay-f-prop', 'pay-f-owner', 'pay-f-trade'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
+  ['pay-q', 'pay-f-state', 'pay-f-clear', 'pay-f-vendor', 'pay-f-prop', 'pay-f-owner', 'pay-f-trade'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
   renderPayablesList();
 }
 
