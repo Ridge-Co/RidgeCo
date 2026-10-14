@@ -505,7 +505,7 @@ const drain = async (L, c, extra) => {
   t('review_wed (Wednesday job) is not seeded on a Monday', !s.jobs.review_wed);
   t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 9 && !!s.seeded.at);
   const st = L.schedStatus(s, new Date(c.v), L.SCHED_JOBS);
-  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 7 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
+  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 9 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
   c.v += 20 * 60000;
   const b = await drain(L, c);
   t('second tick does NOT reseed (no seeded / first_run fields) and the dailies stay quiet', b.first.body.seeded === undefined && b.first.body.first_run === undefined && b.ran.every(n => INTERVAL5.includes(n)), b);
