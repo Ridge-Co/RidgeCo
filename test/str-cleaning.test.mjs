@@ -67,7 +67,7 @@ function makeWorld(opts) {
   return W;
 }
 const names = ['fetchConfig', 'fetchTab', 'fetchTabs', 'invalidateTabCache', 'json', 'sheetsRequest', 'ensureColumns', 'addRow', 'updateRow', 'setConfigKey', 'logTelemetry', 'getMessageTemplate', 'smsGatedSend', 'sendSMS', 'gmailSendEmail', 'gmailSendEmailWithAttachment', 'inspCalStaged', 'getCalendarAccessToken', 'inspStrReadIcs', 'inspStrReadGoogle', 'schedStep', 'schedErrText', 'isStaging', 'normalizePhone', 'inspRandToken', '_utf8B64url', 'BUILD_VERSION', 'PORTAL_BASE', 'CORS', 'fetch'];
-const exportsList = ['strBuildTasks', 'strReplyWindow', 'strReplyDeadlineMs', 'strInSendWindow', 'strBrettSmsOk', 'strNextCleaner', 'strDesiredCalendar', 'strPlanCalendar', 'strCalBody', 'strIcs', 'strExternalCover', 'strSettings', 'strDaysBetween', 'strFmtDate', 'strTick', 'strCleanerPage', 'strOfferRespond', 'strCleanerMark', 'strCleanerCancel', 'strCleanerIcs', 'strAdminState', 'strAdminCleanerSave', 'strAdminAssign', 'strAdminOfferNow', 'strAdminConfig', 'strAdminAlertAck', 'strAdminPreview', 'strRunDigest', 'strBackupLine', 'strBackupPicture', 'schedRunStrCleaning', 'schedRunStrDigest', 'STR_DEFAULT_TEXTS', 'STR_BLOCK_TITLE', 'inspStrCleaningKind', 'inspEtWallToMs', 'inspEtDate', 'inspAddDays', 'strSystemAlert'];
+const exportsList = ['strBuildTasks', 'strReplyWindow', 'strReplyDeadlineMs', 'strInSendWindow', 'strBrettSmsOk', 'strNextCleaner', 'strDesiredCalendar', 'strPlanCalendar', 'strCalBody', 'strIcs', 'strExternalCover', 'strSettings', 'strDaysBetween', 'strFmtDate', 'strNextDate', 'strTick', 'strCleanerPage', 'strOfferRespond', 'strCleanerMark', 'strCleanerCancel', 'strCleanerIcs', 'strAdminState', 'strAdminCleanerSave', 'strAdminAssign', 'strAdminOfferNow', 'strAdminConfig', 'strAdminAlertAck', 'strAdminPreview', 'strRunDigest', 'strBackupLine', 'strBackupPicture', 'schedRunStrCleaning', 'schedRunStrDigest', 'STR_DEFAULT_TEXTS', 'STR_BLOCK_TITLE', 'inspStrCleaningKind', 'inspEtWallToMs', 'inspEtDate', 'inspAddDays', 'strSystemAlert'];
 function build(W) {
   const F = new Function(...names, realFns + '\n' + realConsts + '\n' + block + '\nreturn {' + exportsList.join(',') + '};');
   return F(...names.map(n => W.stubs[n]));
@@ -417,6 +417,18 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   const W = makeWorld(); seed(W); W.smsAdvanceMs = 70000; const E = build(W); clock = at(E, '2026-10-14', '10:00');
   const r = await E.strTick({}, {});
   t('budget: past the tail mark the checkout-text and alert checks are deferred AND reported', r.detail.deferred['alert check(s)'] === 1 && r.detail.deferred['checkout-day text check(s)'] === 1 && r.warnings.some(w => /alert check/.test(w)), r.detail.deferred);
+}
+{
+  // ── next-guest wording (Oct 14 2026): "(subject to change with new bookings)" when the next guest is MORE than a day after the clean ──
+  const W = makeWorld(); seed(W); const E = build(W); clock = at(E, '2026-10-14', '10:00');
+  const NOTE = ' (subject to change with new bookings)';
+  t('next-guest: same day, next day -> stated flat', E.strNextDate('2026-11-08', '2026-11-08') === E.strFmtDate('2026-11-08') && E.strNextDate('2026-11-11', '2026-11-12') === E.strFmtDate('2026-11-12'));
+  t('next-guest: Nov 8 -> Nov 12 carries the note', E.strNextDate('2026-11-08', '2026-11-12') === E.strFmtDate('2026-11-12') + NOTE, E.strNextDate('2026-11-08', '2026-11-12'));
+  t('next-guest: two days out also carries it ("any longer than next day")', E.strNextDate('2026-11-08', '2026-11-10').endsWith(NOTE));
+  await E.strTick({}, {});
+  const texts = W.sms.map(x => x.text), offs = rowsOf(W, 'STR_Offers'), trs = rowsOf(W, 'STR_Turnovers');
+  const withGap = trs.filter(x => x.Next_Arrival && E.strDaysBetween(x.Date, x.Next_Arrival) > 1), flat = trs.filter(x => x.Next_Arrival && E.strDaysBetween(x.Date, x.Next_Arrival) <= 1);
+  t('next-guest: offer text for a >1-day gap carries the note, a flat one does not (live tick)', texts.length > 0 && withGap.length > 0 && texts.some((tx, i) => { const o = offs[i], tr = trs.find(x => x.Task_Key === o.Task_Key); return tr.Next_Arrival && E.strDaysBetween(tr.Date, tr.Next_Arrival) > 1; }) && texts.every((tx, i) => { const o = offs[i], tr = trs.find(x => x.Task_Key === o.Task_Key); const gap = tr.Next_Arrival && E.strDaysBetween(tr.Date, tr.Next_Arrival) > 1; return gap ? tx.includes(NOTE.trim()) : !tx.includes('subject to change'); }), { texts, withGap: withGap.length, flat: flat.length });
 }
 Date.now = realNow;
 console.log(`\nstr-cleaning: ${pass} passed, ${fail} failed`);
