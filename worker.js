@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.14-str-cleaning-scheduler';
+const BUILD_VERSION = '2026-10-14.15-str-sms-test-mode';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -14657,7 +14657,17 @@ async function smsGatedSend(env, opts) {
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
-    deliveredTo = testMode ? testRecipient : recipientPhone;
+    // opts.redirectTo (Oct 14 2026): a caller may send THIS text to a safe test phone while the global
+    // TWILIO_TEST_MODE stays off, so one feature (the Milam Ridge cleaning scheduler) can be tested live without
+    // redirecting every other Hub text. Only a valid, already-normalized phone is accepted; any other value
+    // fails the send closed (nothing goes to the real recipient) - never silently falls through to the real phone.
+    const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
+    if (opts.redirectTo && !_redirect) {
+      outcome = 'failed';
+      await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' });
+      return { queued_id: id, send_ok: sendOk, sent: false, test_mode: true, gate_snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent', delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+    }
+    deliveredTo = _redirect || (testMode ? testRecipient : recipientPhone);
     const result = await sendSMSRaw(env, deliveredTo, messageBody);
     sent = !!(result && result.sid);
     outcome = sent ? 'sent' : 'failed';
@@ -14685,7 +14695,7 @@ async function smsGatedSend(env, opts) {
       });
     } catch (e) {}
   }
-  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
@@ -30367,7 +30377,7 @@ const STR_TABS = {
   STR_Alerts: ['ID', 'Alert_Key', 'Kind', 'Severity', 'Task_Key', 'Message', 'Sms_Text', 'Send_Count', 'Last_Sent_At', 'Next_Send_At', 'Resolved_At', 'Acked_At', 'Created_At'],
 };
 // Config keys the admin page may change (allow-list). Value rules in strConfigSave.
-const STR_CFG_BOOL = ['STR_ENGINE_ENABLED', 'STR_SMS_ENABLED', 'STR_CAL_WRITE_ENABLED', 'STR_DIGEST_ENABLED'];
+const STR_CFG_BOOL = ['STR_ENGINE_ENABLED', 'STR_SMS_ENABLED', 'STR_SMS_TEST_MODE', 'STR_CAL_WRITE_ENABLED', 'STR_DIGEST_ENABLED'];
 const STR_CFG_INT = { STR_ALERT_DAYS: [1, 30], STR_LOOKAHEAD_DAYS: [30, 90], STR_RED_BLOCK_DAYS: [1, 60], STR_REPLY_4H_DAYS: [1, 30], STR_REPLY_2H_DAYS: [0, 30], STR_ALERT_REPEAT_HOURS: [1, 24], STR_MARK_ALERT_DAYS: [1, 30], STR_PREARRIVAL_GAP_DAYS: [0, 30], STR_MAX_PENDING_PER_CLEANER: [1, 10] };
 const STR_OFFER_ACTIVE = ['queued', 'pending'];
 const STR_OFFER_BLOCKS = ['declined', 'expired', 'failed', 'cancelled', 'accepted', 'pending', 'queued']; // a cleaner with one of these on a task is not offered it again
@@ -30380,6 +30390,10 @@ function strSettings(cfg) {
   cfg = cfg || {};
   return {
     engine: strBool(cfg.STR_ENGINE_ENABLED, false), sms: strBool(cfg.STR_SMS_ENABLED, false),
+    // Cleaning-only test mode (Oct 14 2026, Brett): DEFAULTS TO TRUE, so a missing/blank key can never text a real cleaner.
+    // While TRUE every cleaning text goes to the Hub test phone (TWILIO_TEST_RECIPIENT) with a [TEST - for <name>] prefix,
+    // whatever the global TWILIO_TEST_MODE says. Turn it FALSE (board switch) only when going live.
+    smsTest: strBool(cfg.STR_SMS_TEST_MODE, true),
     calWrite: strBool(cfg.STR_CAL_WRITE_ENABLED, false), digest: strBool(cfg.STR_DIGEST_ENABLED, false),
     alertDays: strInt(cfg.STR_ALERT_DAYS, 7, 1, 30), lookahead: strInt(cfg.STR_LOOKAHEAD_DAYS, 35, 30, 90),
     redDays: strInt(cfg.STR_RED_BLOCK_DAYS, 14, 1, 60),
@@ -30776,7 +30790,14 @@ async function strTextCleaner(ctx, c, type, tokens, task) {
   const text = await strRenderText(ctx, type, tokens);
   if (!ctx.S.sms) return { ok: false, off: true, text, detail: 'STR_SMS_ENABLED is FALSE - would have sent: ' + text };
   try {
-    const r = await smsGatedSend(ctx.env, { message_type: type, recipient_type: 'vendor', vendor: c.vendor, message_body: text, property_address: ctx.S.label, bypassQuietHours: true });
+    const o = { message_type: type, recipient_type: 'vendor', vendor: c.vendor, message_body: text, property_address: ctx.S.label, bypassQuietHours: true };
+    if (ctx.S.smsTest) {
+      // Cleaning-only test mode: this text goes to Brett's test phone, labelled with who it was really for.
+      const to = normalizePhone((ctx.cfg && ctx.cfg.TWILIO_TEST_RECIPIENT) || '+14439617927');
+      if (!to) return { ok: false, text, detail: 'STR_SMS_TEST_MODE is on but the test phone (Config TWILIO_TEST_RECIPIENT) is not a valid number - NOT sent to the cleaner.' };
+      o.redirectTo = to; o.message_body = `[TEST - for ${c.Nickname || c.Name || 'cleaner'}] ${text}`;
+    }
+    const r = await smsGatedSend(ctx.env, o);
     if (r.sent) return { ok: true, sent: true, mode: r.test_mode ? 'test' : 'live', queueId: r.queued_id, text, detail: r.test_mode ? 'sent to the TEST recipient (Brett), not the cleaner' : 'sent' };
     return { ok: false, text, queueId: r.queued_id, detail: r.send_ok ? 'the text provider did not accept the message' : 'blocked: ' + r.gate_snapshot, blocked: !r.send_ok };
   } catch (e) { return { ok: false, text, detail: 'send error: ' + strErrText(e) }; }
@@ -31254,7 +31275,7 @@ async function strCleanerIcs(env, url) {
 // ── Admin ────────────────────────────────────────────────────────────────────────────────────
 function strSettingsOut(cfg) {
   const S = strSettings(cfg), g = k => String((cfg && cfg[k]) == null ? '' : cfg[k]);
-  return { engine: S.engine, sms: S.sms, cal_write: S.calWrite, digest: S.digest, alert_days: S.alertDays, lookahead_days: S.lookahead, red_block_days: S.redDays, reply_4h_days: S.reply4hDays, reply_2h_days: S.reply2hDays, alert_repeat_hours: S.alertRepeatH, mark_alert_days: S.markAlertDays, prearrival_gap_days: S.preGap, max_pending_per_cleaner: S.maxPending,
+  return { engine: S.engine, sms: S.sms, sms_test_mode: S.smsTest, cal_write: S.calWrite, digest: S.digest, alert_days: S.alertDays, lookahead_days: S.lookahead, red_block_days: S.redDays, reply_4h_days: S.reply4hDays, reply_2h_days: S.reply2hDays, alert_repeat_hours: S.alertRepeatH, mark_alert_days: S.markAlertDays, prearrival_gap_days: S.preGap, max_pending_per_cleaner: S.maxPending,
     twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
 }
 function strCleanerOut(c, pool) {
