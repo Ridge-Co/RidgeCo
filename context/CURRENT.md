@@ -13,6 +13,13 @@
 
 ---
 
+# HUB IMPROVEMENTS SWEEP — Oct 14, 2026 — Ridge-Co/RidgeCo PR #264 -> main (verified with create_pull_request response: base `main`), head `feat/hub-improvements-sweep-oct14` cut from main tip f94458d, NOT merged (Brett merges); companion PR brett332/BrettOS #4 (`feat/hub-improvements-applier-oct14`)
+
+## 🟡 Tested: 49 unit checks (real worker functions on fake sheets) + scheduler suite (285) + BrettOS applier 28 checks (fake Apps Script services). NOT run on staging (staging holds another session's branch), no live run yet: first live check is Thursday 07:15 ET (or run `hub_impr_daily` from the Hub scheduler status page after merge). BUILD_VERSION `2026-10-14.2-hub-improvements-sweep`.
+Mon + Thu 07:15 ET the Hub scheduler pulls new items from Brett's Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as `proposed`; a daily 07:30 job marks them done in the ledger tab `Hub_Improvements` once the queue item is done / the PR merged; the BrettOS Tasks Sync script then writes "[Hub] In progress" on the Google Task and completes it with "[Hub] Built <date> (PR #n)". Details: FEATURE_LOG rule 210. Merge order: the Hub PR first (creates the jobs), then the BrettOS PR (auto-deploys via clasp). Already created: ledger tab `Hub_Improvements` (Hub sheet) and tabs `Hub_Ledger_View` + `Hub_Applied` (BrettOS sheet), seeded with the five items from Oct 14.
+
+---
+
 # WHO TO PAY CLEARING INDICATOR — Oct 14, 2026 — Ridge-Co/RidgeCo PR #253 -> main (verified with get_pull_request), head `feat/who-to-pay-clearing-indicator-oct14` cut from main tip 22f91ee4, NOT merged (Brett merges)
 
 ## 🟢 Tested: 74 unit checks + 17 Playwright checks (412px and 1280px) + staging smoke on a test copy — BUILD_VERSION `2026-10-14.1-who-to-pay-clearing-indicator` (staging copy runs `2026-10-14.2-who-to-pay-clearing-test`; staging's Intuit sandbox has no paid invoice, so the paid-invoice path is unit-tested with a fake QuickBooks only)
