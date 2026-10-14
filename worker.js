@@ -14484,8 +14484,28 @@ async function processQuietHoursQueue(env) {
   ]);
   const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
   const results = [];
+  let _scopesForSkip = null;   // loaded lazily, only when a due row carries Skip_If_Seen
   for (const row of due) {
     const id = row.ID, kind = row.Recipient_Type;
+    // Skip-if-seen (Oct 14 2026): a held "your estimate was emailed" text is pointless once the owner has already
+    // opened the email or the proposal page - sending it next morning would only confuse. Visible, never silent:
+    // the row becomes Status 'skipped' with the reason, and the Scope's Owner_SMS_Status says so. If the lookup
+    // itself fails we SEND (and log) rather than quietly drop a text.
+    if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) {
+      try {
+        if (!_scopesForSkip) _scopesForSkip = await fetchTab(env, 'Scopes');
+        const sid = String(row.Skip_If_Seen).slice(6);
+        const sc = _scopesForSkip.find(x => x.ID === sid);
+        if (sc && proposalSeenByOwner(sc)) {
+          await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: 'skipped at release: owner already opened the proposal email/page', Send_After: '' });
+          await proposalStampSms(env, sid, 'skipped_seen');
+          results.push({ id, sent: false, skipped: 'owner_already_seen' });
+          continue;
+        }
+      } catch (e) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
+      }
+    }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
