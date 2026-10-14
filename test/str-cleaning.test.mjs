@@ -148,7 +148,7 @@ const at = (E, d, hm) => E.inspEtWallToMs(d, hm);
 
 // ═══ 2. the whole loop over a fake sheet ═══
 function seed(W, over) {
-  const c = Object.assign({ admin_phone: '+15555550100', STR_ENGINE_ENABLED: 'TRUE', STR_SMS_ENABLED: 'TRUE', TWILIO_ENABLED: 'TRUE', STR_CAL_WRITE_ENABLED: 'FALSE', STR_GUARD_FIXTURE: JSON.stringify({ stays: [{ start: '2026-10-10', end: '2026-10-16', guest: 'Guest A' }, { start: '2026-10-18', end: '2026-10-21', guest: 'Guest B' }, { start: '2026-10-22', end: '2026-10-25', guest: 'Guest C' }], cleaning: [] }) }, over || {});
+  const c = Object.assign({ admin_phone: '+15555550100', STR_ENGINE_ENABLED: 'TRUE', STR_SMS_ENABLED: 'TRUE', STR_SMS_TEST_MODE: 'FALSE', TWILIO_ENABLED: 'TRUE', STR_CAL_WRITE_ENABLED: 'FALSE', STR_GUARD_FIXTURE: JSON.stringify({ stays: [{ start: '2026-10-10', end: '2026-10-16', guest: 'Guest A' }, { start: '2026-10-18', end: '2026-10-21', guest: 'Guest B' }, { start: '2026-10-22', end: '2026-10-25', guest: 'Guest C' }], cleaning: [] }) }, over || {});
   W.cfg = c;
   W.tabs.set('Vendors', [['ID', 'Name', 'Phone', 'Email', 'Trade', 'Active', 'Service_Area', 'Language', 'SMS_Enabled', 'SMS_OptOut'], ['101', 'Regina Seville', '+15403364284', 'gina@x.test', 'Short-Term Rental Cleaner', 'TRUE', 'Milam Ridge', 'en', '', ''], ['102', 'Kayla K', '+13043590045', 'kayla@x.test', 'Short-Term Rental Cleaner', 'TRUE', 'Milam Ridge', 'en', '', ''], ['103', 'Rachel R', '+13048135101', '', 'Short-Term Rental Cleaner', 'TRUE', 'Milam Ridge', 'en', '', '']]);
   W.tabs.set('STR_Cleaners', [['ID', 'Vendor_ID', 'Name', 'Nickname', 'Language', 'Link_Token', 'Active', 'Digest', 'Created_Date'], ['1', '101', 'Regina Seville', 'Gina', 'en', 'TOKGINA' + 'a'.repeat(30), 'TRUE', 'TRUE', ''], ['2', '102', 'Kayla K', 'Kayla', 'en', 'TOKKAYLA' + 'b'.repeat(30), 'TRUE', 'TRUE', ''], ['3', '103', 'Rachel R', 'Rachel', 'en', 'TOKRACHEL' + 'c'.repeat(30), 'TRUE', 'TRUE', '']]);
@@ -385,6 +385,23 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   t('str_cleaning is staging-safe', /SCHED_STAGING_SAFE_JOBS = \[[^\]]*'str_cleaning'/.test(src));
   t('public paths are token-gated cleaner endpoints only', ['/str/c/page', '/str/c/mark', '/str/c/offer', '/str/c/cancel', '/str/c/ics'].every(p => src.includes("'" + p + "'")) && !/PUBLIC_PATHS = \[[^\]]*\/str\/admin/.test(src));
   t('no swallowing catches in the STR block', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(block) && !/\.catch\(\s*\(\)\s*=>\s*(\{\s*\}|null|undefined)\s*\)/.test(block));
+}
+{
+  // ── cleaning-only test mode (Oct 14 2026): the default can never text a real cleaner ──
+  const run = async over => { const W = makeWorld(); seed(W, over); const E = build(W); clock = at(E, '2026-10-14', '10:00'); const r = await E.strTick({}, {}); return { W, E, r }; };
+  const d = await run({ STR_SMS_TEST_MODE: '' });
+  t('test mode DEFAULTS ON (blank key): the offer is redirected to the test phone, labelled for the cleaner', d.W.gated.length >= 1 && d.W.gated.every(o => o.redirectTo && /^\[TEST - for \w+\] /.test(o.message_body)), d.W.gated.map(o => [o.redirectTo, o.message_body]));
+  const on = await run({ STR_SMS_TEST_MODE: 'TRUE', TWILIO_TEST_RECIPIENT: '+15555550177' });
+  t('test mode ON uses TWILIO_TEST_RECIPIENT', on.W.gated.length >= 1 && on.W.gated.every(o => o.redirectTo === '+15555550177'), on.W.gated.map(o => o.redirectTo));
+  const off = await run({ STR_SMS_TEST_MODE: 'FALSE' });
+  t('test mode explicitly OFF: no redirect, plain text to the real cleaner', off.W.gated.length >= 1 && off.W.gated.every(o => !o.redirectTo && !/^\[TEST/.test(o.message_body)), off.W.gated.map(o => [o.redirectTo, o.message_body]));
+  const bad = await run({ STR_SMS_TEST_MODE: 'TRUE', TWILIO_TEST_RECIPIENT: 'not a phone' });
+  t('test phone invalid: nothing is sent to the cleaner, the failure is surfaced', bad.W.gated.length === 0 && !bad.r.ok, bad.r);
+  const W = makeWorld(); seed(W); const E = build(W); clock = at(E, '2026-10-14', '10:00');
+  const so = await resJson(E.strAdminConfig({}, { values: { STR_SMS_TEST_MODE: 'FALSE' } }));
+  t('config: STR_SMS_TEST_MODE can be switched and reads back in settings', so.ok && so.settings.sms_test_mode === false && W.cfg.STR_SMS_TEST_MODE === 'FALSE', so);
+  const st2 = await resJson(E.strAdminState({}));
+  t('admin state exposes sms_test_mode', st2.ok && typeof st2.settings.sms_test_mode === 'boolean');
 }
 Date.now = realNow;
 console.log(`\nstr-cleaning: ${pass} passed, ${fail} failed`);

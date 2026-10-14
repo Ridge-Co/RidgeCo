@@ -42,13 +42,14 @@ Owner request (Oct 13–14, 2026): keep every Milam Ridge (1864 Kerns School Rd,
 |---|---|---|
 | `STR_ENGINE_ENABLED` | FALSE | Whole engine (offers, alerts, assignments). FALSE = idle; "Run now (preview)" still works. |
 | `STR_SMS_ENABLED` | FALSE | Texts to cleaners. FALSE = nothing texted; the board shows who would be asked next. Still goes through `smsGatedSend` (global `TWILIO_ENABLED`, `TWILIO_TEST_MODE` → Brett's phone). |
+| `STR_SMS_TEST_MODE` | **TRUE** (blank = TRUE) | Cleaning-only test mode (PR #285, Oct 14). While TRUE every cleaning text goes to Brett's test phone (`TWILIO_TEST_RECIPIENT`) as `[TEST - for <name>] ...`, whatever the global `TWILIO_TEST_MODE` says, so the scheduler can be tested live without redirecting other Hub texts. Set FALSE (board switch, red confirm) only to go live. An invalid test phone blocks the send (fails closed). |
 | `STR_CAL_WRITE_ENABLED` | FALSE | Hub writes the cleaning calendar. FALSE = plan only. Needs the service account to have "Make changes to events" on that calendar. |
 | `STR_DIGEST_ENABLED` | FALSE | Mon/Wed/Fri cleaning email. |
 | `STR_ALERT_DAYS` 7 · `STR_LOOKAHEAD_DAYS` 35 · `STR_RED_BLOCK_DAYS` 14 · `STR_REPLY_4H_DAYS` 5 · `STR_REPLY_2H_DAYS` 3 · `STR_ALERT_REPEAT_HOURS` 6 · `STR_MARK_ALERT_DAYS` 5 · `STR_PREARRIVAL_GAP_DAYS` 3 · `STR_MAX_PENDING_PER_CLEANER` 2 | | tuning |
 
 Rollout order: (1) add cleaners on the board (creates Vendors rows: Trade "Short-Term Rental Cleaner", Service_Area "Milam Ridge"); (2) "Run now (preview)";
-(3) `STR_ENGINE_ENABLED` TRUE with SMS off → alerts + board only; (4) `STR_SMS_ENABLED` TRUE while `TWILIO_TEST_MODE` is TRUE → every cleaner text goes to Brett's phone
-with the real link, so he can tap Take it as "Gina"; (5) `STR_CAL_WRITE_ENABLED`; (6) `STR_DIGEST_ENABLED` and turn off the Make.com email; (7) `TWILIO_TEST_MODE` FALSE.
+(3) `STR_ENGINE_ENABLED` TRUE with SMS off → alerts + board only; (4) `STR_SMS_ENABLED` TRUE while `STR_SMS_TEST_MODE` is TRUE (the default; global `TWILIO_TEST_MODE` can stay FALSE) → every cleaner text goes to Brett's phone
+with the real link, so he can tap Take it as "Gina"; (5) `STR_CAL_WRITE_ENABLED`; (6) `STR_DIGEST_ENABLED` and turn off the Make.com email; (7) `STR_SMS_TEST_MODE` FALSE (go live; the board asks for a red confirmation).
 
 ## Data (Google Sheets tabs, self-provisioned by `strEnsureTabs`)
 
