@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.19-sched-unblock';
+const BUILD_VERSION = '2026-10-14.20-str-tick-budget';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -31148,11 +31148,17 @@ async function strCheckoutTexts(ctx, views) {
 }
 
 // ── The tick (scheduler job `str_cleaning`, every ~14 minutes; also admin "Run now" with dry:true) ──
+// Time budget (Oct 14 2026). A cron tick gets ~50 s plus ~30 s of background time, and every Sheets read in cron is paced 2.5 s apart,
+// so one offer (a dozen verified reads) costs ~25 s. Past these marks the tick stops STARTING new work and reports what is deferred
+// (a warning on the job result) instead of being cut off mid-write with no record. Dry runs and tests are never limited.
+const STR_NEW_WORK_MS = 40 * 1000, STR_TAIL_MS = 62 * 1000;
+function strBudgetLeft(ctx, limitMs) { return ctx.dry || (Date.now() - ctx.t0) < limitMs; }
+function strDefer(ctx, what) { ctx.deferred = ctx.deferred || {}; ctx.deferred[what] = (ctx.deferred[what] || 0) + 1; }
 async function strTick(env, opts) {
   opts = opts || {};
   const cfg = await fetchConfig(env), S = strSettings(cfg);
-  const ctx = { env, cfg, S, dry: !!opts.dry, now: opts.nowMs || Date.now(), errors: [], warnings: [], actions: [], detail: {} };
-  const done = () => ({ ok: !ctx.errors.length, errors: ctx.errors, warnings: ctx.warnings, detail: ctx.detail });
+  const ctx = { env, cfg, S, dry: !!opts.dry, now: opts.nowMs || Date.now(), errors: [], warnings: [], actions: [], detail: {}, t0: Date.now() };
+  const done = () => { ctx.detail.elapsed_ms = Date.now() - ctx.t0; if (ctx.deferred) { ctx.detail.deferred = ctx.deferred; ctx.warnings.push('Ran out of time this tick, so ' + Object.entries(ctx.deferred).map(([k, n]) => n + ' ' + k).join(', ') + ' wait for the next tick (about 15 minutes). Nothing was skipped for good.'); } return { ok: !ctx.errors.length, errors: ctx.errors, warnings: ctx.warnings, detail: ctx.detail }; };
   if (!S.engine && !ctx.dry) { ctx.detail = { enabled: false, note: 'STR_ENGINE_ENABLED is FALSE - the cleaning scheduler is idle.' }; return done(); }
   await strEnsureTabs(env);
   await strLoad(ctx, true);
@@ -31205,6 +31211,7 @@ async function strTick(env, opts) {
   const foreign = feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr));
   let views = strComputeViews(ctx, foreign);
   if (!ctx.dry) for (const v of views) {
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS) && (v.row.Status === 'ext_covered' ? !v.ext.length : v.ext.length && ['open', 'offering', 'exhausted'].includes(v.row.Status))) { strDefer(ctx, 'coverage updates'); continue; }
     try {
       if (v.row.Status === 'ext_covered' && !v.ext.length) { await strSetTurnover(ctx, v.row, { Status: 'open', Note: 'calendar entry removed' }); v.status = 'open'; v.coveredAny = false; v.via = ''; }
       else if (v.ext.length && ['open', 'offering', 'exhausted'].includes(v.row.Status)) {
@@ -31218,6 +31225,7 @@ async function strTick(env, opts) {
   // 3. offers: expire stale ones, ask the next cleaner
   const offered = [];
   for (const v of views.filter(v => !v.coveredAny && ['open', 'offering', 'exhausted'].includes(v.row.Status))) {
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'turnover(s) to check for offers'); continue; }
     try { const r = await strAdvanceTask(ctx, v.row); offered.push(Object.assign({ task: v.key }, r)); v.status = v.row.Status; }
     catch (e) { ctx.errors.push({ step: 'offers', error: `${v.key}: ${strErrText(e)}` }); }
   }
@@ -31225,9 +31233,10 @@ async function strTick(env, opts) {
   // 4. calendar
   try { ctx.detail.calendar = await strReconcileCalendar(ctx, feed, views); } catch (e) { ctx.errors.push({ step: 'calendar', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'calendar', 'The cleaning calendar could not be updated: ' + strErrText(e)); }
   // 5. checkout-day texts
-  ctx.detail.checkout_texts = await strCheckoutTexts(ctx, views);
+  if (strBudgetLeft(ctx, STR_TAIL_MS)) ctx.detail.checkout_texts = await strCheckoutTexts(ctx, views); else strDefer(ctx, 'checkout-day text check(s)');
   // 6. alerts to Brett
-  try { await strEvalAlerts(ctx, views); ctx.detail.alerts_sent = (await strDeliverAlerts(ctx)).sent; } catch (e) { ctx.errors.push({ step: 'alerts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'alerts', 'Cleaning alerts could not be evaluated: ' + strErrText(e)); }
+  if (!strBudgetLeft(ctx, STR_TAIL_MS)) strDefer(ctx, 'alert check(s)');
+  else try { await strEvalAlerts(ctx, views); ctx.detail.alerts_sent = (await strDeliverAlerts(ctx)).sent; } catch (e) { ctx.errors.push({ step: 'alerts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'alerts', 'Cleaning alerts could not be evaluated: ' + strErrText(e)); }
   const by = {}; for (const v of views) by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] = (by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] || 0) + 1;
   ctx.detail.summary = { turnovers: views.length, by_status: by, uncovered: views.filter(v => !v.coveredAny).length, next_14_days_uncovered: views.filter(v => !v.coveredAny && strDaysBetween(today, v.date) <= 14).length };
   if (ctx.actions.length) ctx.detail.actions = ctx.actions.slice(0, 40);
