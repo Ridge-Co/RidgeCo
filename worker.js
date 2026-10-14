@@ -15881,6 +15881,19 @@ function nextQuietHoursEnd(date) {
   if (h >= QUIET_HOURS_START_ET) d += 1;
   return new Date(Date.UTC(y, mo, d, QUIET_HOURS_END_ET, 0, 0) - offsetMin * 60000);
 }
+// Custom quiet window (Oct 14 2026, owner proposal text: ok until 8pm ET, held until 8am ET).
+// Returns the real UTC Date the window ends if `date` is inside [startH, 24) U [0, endH) Eastern, else null.
+function quietHoldUntil(date, startH, endH) {
+  date = date || new Date();
+  const h = etHour(date);
+  if (!(h >= startH || h < endH)) return null;
+  const offsetMin = nyOffsetMinutes(date);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  let d = +p.day; if (h >= startH) d += 1;
+  return new Date(Date.UTC(+p.year, +p.month - 1, d, endH, 0, 0) - offsetMin * 60000);
+}
 // General "next 9am ET after this instant" — unlike nextQuietHoursEnd (only meaningful when
 // already inside quiet hours), this works from ANY starting time. Used by the vendor nudge
 // clock's first-nudge rule: max(next 9am ET, trigger + 16h). Verified against Brett's own
