@@ -12169,11 +12169,13 @@ function renderPayablesList() {
   var fp = (document.getElementById('pay-f-prop') || {}).value || '';
   var fo = (document.getElementById('pay-f-owner') || {}).value || '';
   var ft = (document.getElementById('pay-f-trade') || {}).value || '';
-  var filterActive = !!(q || fs || fv || fp || fo || ft);
+  var fc = (document.getElementById('pay-f-clear') || {}).value || '';
+  var filterActive = !!(q || fs || fc || fv || fp || fo || ft);
 
   var filtered = rows.filter(function(r) {
     var c = payablesContext(r);
     if (fs && r.state !== fs) return false;
+    if (fc && r.customer_clear_status !== fc) return false;
     if (fv && c.vendor !== fv) return false;
     if (fp && c.propId !== fp) return false;
     if (fo && c.ownerId !== fo) return false;
