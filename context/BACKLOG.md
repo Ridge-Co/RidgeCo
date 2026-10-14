@@ -27,6 +27,12 @@ findable by grep even though they never share a number. Example:
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
 
+**Oct 14, 2026 update**
+- ✅ B-20261014-0640-ats · 🔴 **[security] [attachments]** `/attachments` cross-account leak (Ops_Build_Queue #150) — built + staging-verified, PR #251 awaiting Brett's merge. See FEATURE_LOG `[FL-20261014-0640-ats]`.
+- ▶ B-20261014-0700-ats2 · 🟠 **[security]** Adjacent gaps found, NOT fixed: `/tenant-workorders?tenant_id=` and `/owner-workorders?owner_id=` trust query-string ids; `/vendor-file/view` has no per-record check; the outer 500 handler returns `err.message` + `err.stack` to the caller.
+- ▶ B-20261014-0705-tst · 🟡 **[tests]** 9 tests fail on untouched main (pre-existing); the "78/78 clean" note is stale.
+- ▶ Queue order Brett chose: #150 (done) → #100 collapse the 3 invoice/QB paths → #140 WO status single source of truth; each as its own PR.
+
 ---
 
 <!-- QUICK-INDEX:START — always-loadable map; full entries below; grep an ID to jump to detail -->
