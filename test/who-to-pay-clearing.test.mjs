@@ -61,7 +61,9 @@ ok(!('foo' in c.map) && Object.keys(c.map).length === 5, 'unknown keys cannot po
 // Payment method classification
 const methods = new Map([['1', { Id: '1', Name: 'Cash', Type: 'NON_CREDIT_CARD' }], ['2', { Id: '2', Name: 'Check', Type: 'NON_CREDIT_CARD' }],
   ['3', { Id: '3', Name: 'Visa', Type: 'CREDIT_CARD' }], ['4', { Id: '4', Name: 'ACH', Type: 'NON_CREDIT_CARD' }], ['5', { Id: '5', Name: 'E-Check', Type: 'NON_CREDIT_CARD' }],
-  ['6', { Id: '6', Name: 'Zelle', Type: 'NON_CREDIT_CARD' }], ['7', { Id: '7', Name: 'Some Custom', Type: 'CREDIT_CARD' }]]);
+  ['6', { Id: '6', Name: 'Zelle', Type: 'NON_CREDIT_CARD' }], ['7', { Id: '7', Name: 'Some Custom', Type: 'CREDIT_CARD' }],
+  ['8', { Id: '8', Name: 'QuickBooks Payments-Bank', Type: 'CREDIT_CARD' }], ['9', { Id: '9', Name: 'QuickBooks Payments-Credit Card', Type: 'CREDIT_CARD' }],
+  ['10', { Id: '10', Name: 'QuickBooks Payments-PayPal', Type: 'CREDIT_CARD' }], ['11', { Id: '11', Name: 'Bank of America Visa', Type: 'CREDIT_CARD' }]]);
 const cls = (p) => H.classifyPaymentMethod(p, methods).cls;
 ok(cls({ PaymentMethodRef: { value: '1' } }) === 'cash', 'Cash -> cash');
 ok(cls({ PaymentMethodRef: { value: '2' } }) === 'check', 'Check -> check');
