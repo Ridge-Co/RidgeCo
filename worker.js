@@ -21988,6 +21988,7 @@ async function sheetsRequest(env, method, path, body, readOpts) {
     const token=await getAccessToken(env);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
     if(body) opts.body=JSON.stringify(body);
+    __sheetsFetchCount++;
     const res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts);
     const data=await res.json();
     if(data.error){
