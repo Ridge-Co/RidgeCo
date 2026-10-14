@@ -215,17 +215,43 @@
         render(); var b = el.querySelector('[data-plan]'); if (b && b.scrollIntoView) b.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, function (e) { S.busy = false; S.banner = '<div class="tr-banner bad">The check could not run: ' + esc(e && e.message || e) + '</div>'; render(); });
     }
+    // A big file is saved in slices (the server can only make so many calls per request): the same file is re-sent, carrying the
+    // batch id, until the server says nothing remains. Finished rows plan as "already done", so repeating is safe. A failure stops
+    // the loop and says exactly what is and is not saved.
     function apply() {
       if (S.busy) return;
       S.busy = true; S.banner = ''; render();
-      cfg.call('POST', '/owner/tenant-roster/apply', body({ rows: currentRows(), consent: S.consent })).then(function (d) {
+      var rows = currentRows(), consent = S.consent, batch = '', loops = 0;
+      var acc = { ok: true, applied: true, batch: '', counts: { move_in: 0, move_out: 0, future_move_out: 0, name_fix: 0, unchanged: 0, failed: 0 }, results: [], warnings: [] };
+      function finish(extraBanner) {
         S.busy = false;
-        if (d && d.refused) { S.plan = d.plan; S.banner = '<div class="tr-banner bad">' + esc(d.error) + '</div>'; render(); return; }
-        if (!d || (d.error && !d.results)) { S.banner = '<div class="tr-banner bad">Saving failed: ' + esc((d && d.error) || 'no response') + ' Nothing may have been saved - check the list below before trying again.</div>'; render(); return; }
-        S.applied = d; S.plan = null; S.cards = [newCard()]; S.csvRows = []; S.csvNote = '';
+        if (extraBanner) S.banner = extraBanner;
+        S.applied = acc; S.plan = null; S.cards = [newCard()]; S.csvRows = []; S.csvNote = '';
         cfg.call('GET', '/owner/tenant-roster' + (cfg.admin ? '?owner_id=' + encodeURIComponent(cfg.ownerId()) : ''), null).then(function (nd) { if (nd && !nd.error) S.data = nd; render(); }, function (e) { S.banner = '<div class="tr-banner warn">Saved, but the list could not refresh: ' + esc(e && e.message || e) + '</div>'; render(); });
-      }, function (e) { S.busy = false; S.banner = '<div class="tr-banner bad">Saving failed: ' + esc(e && e.message || e) + ' Check the list below before trying again.</div>'; render(); });
+      }
+      function stop(msg) { S.busy = false; S.banner = '<div class="tr-banner bad">' + esc(msg) + '</div>'; if (acc.results.length) { acc.ok = false; S.applied = acc; } render(); }
+      function step() {
+        loops++;
+        cfg.call('POST', '/owner/tenant-roster/apply', body({ rows: rows, consent: consent, batch: batch })).then(function (d) {
+          if (d && d.refused) { S.plan = d.plan; return stop(d.error + (acc.results.length ? ' Part of the file was already saved - check "Tenants on file" below before trying again.' : '')); }
+          if (!d || (d.error && !d.results)) return stop('Saving failed: ' + ((d && d.error) || 'no response') + (acc.results.length ? ' Part of the file was already saved - check "Tenants on file" below.' : ' Nothing may have been saved - check the list below before trying again.'));
+          batch = d.batch || batch; acc.batch = batch;
+          ['move_in', 'move_out', 'future_move_out', 'name_fix', 'failed'].forEach(function (k) { acc.counts[k] += (d.counts && d.counts[k]) || 0; });
+          acc.counts.unchanged = (d.counts && d.counts.unchanged) || 0;
+          acc.results = acc.results.concat(d.results || []); acc.warnings = acc.warnings.concat(d.warnings || []);
+          if (!d.ok) acc.ok = false;
+          if (d.partial && d.ok) {
+            if (!(d.results || []).length) return stop('Saving stopped: the server made no progress. Check "Tenants on file" below, then try again.');
+            if (loops >= 40) return stop('Saving stopped after too many parts. Check "Tenants on file" below, then try again.');
+            S.banner = '<div class="tr-banner warn">Saving… ' + acc.results.length + ' done, ' + (d.remaining || 0) + ' to go. Keep this page open.</div>'; render();
+            return step();
+          }
+          finish(d.partial ? '<div class="tr-banner bad">Saving stopped because a row failed; ' + (d.remaining || 0) + ' more row(s) were NOT attempted. Fix the failed row, then check again - rows already saved are skipped.</div>' : '');
+        }, function (e) { stop('Saving failed: ' + (e && e.message || e) + (acc.results.length ? ' Part of the file was already saved - check "Tenants on file" below.' : ' Check the list below before trying again.')); });
+      }
+      step();
     }
+
 
     el.addEventListener('click', function (ev) {
       var t = ev.target.closest ? ev.target.closest('[data-act]') : null; if (!t) return;
