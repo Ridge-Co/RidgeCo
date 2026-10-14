@@ -22719,6 +22719,37 @@ async function qbPayables(env, url) {
     // shows them in its banner) and logged to Ops_Telemetry instead of being swallowed.
     const warnings = [];
 
+    // Oct 14 2026: customer-payment clearing indicator context (see paymentClearDaysMap above). fetchConfig() itself returns {}
+    // on a Sheets failure, so an empty/short result is reported below instead of quietly dropping bank holidays.
+    const cfg = await fetchConfig(env);
+    const holidayMap = parseHolidayMap(cfg.US_HOLIDAYS);
+    const today = etDateString(new Date());
+    if (!holidayMap.size) {
+      await logAndCollectError(env, warnings, 'qb_payables_holidays_missing', '/qb/payables', 'Config.US_HOLIDAYS',
+        new Error('Config.US_HOLIDAYS is empty or unreadable: clearing dates skip weekends only, NOT bank holidays'));
+    } else if (![...holidayMap.keys()].some(d => d.startsWith(String(today).slice(0, 4)))) {
+      await logAndCollectError(env, warnings, 'qb_payables_holidays_stale', '/qb/payables', 'Config.US_HOLIDAYS',
+        new Error('Config.US_HOLIDAYS has no dates for ' + String(today).slice(0, 4) + ': clearing dates may land on bank holidays'));
+    }
+    const clearCfg = paymentClearDaysMap(cfg.PAYMENT_CLEAR_DAYS);
+    if (clearCfg.bad.length) {
+      await logAndCollectError(env, warnings, 'qb_payables_clear_days_config', '/qb/payables', 'Config.PAYMENT_CLEAR_DAYS',
+        new Error('ignored invalid PAYMENT_CLEAR_DAYS entries (using defaults for them): ' + clearCfg.bad.join(' | ')));
+    }
+    const methodsCache = { loaded: false, map: new Map() };
+    const payCtx = { methodsById: methodsCache.map, clearMap: clearCfg.map, holidayMap, today };
+    const paymentDateMissing = [];
+    // The fields one row gets. `''` status = not applicable (nothing paid yet). Money applied but no usable Payment date
+    // = 'unknown' and is listed in ONE aggregated warning below -- never a blank that looks like "no payment".
+    function clearFields(woId, inv, paidOrPartial, payMap) {
+      const none = { customer_paid_date: '', customer_pay_method: '', customer_pay_method_name: '', customer_clear_days: null, customer_clears_on: '', customer_clear_status: '', customer_payment_count: 0 };
+      if (!paidOrPartial || !inv) return none;
+      const s = summarizeInvoicePayments(payMap.get(String(inv.Id)) || [], payCtx);
+      if (s.status === 'unknown') paymentDateMissing.push(woId || ('invoice ' + inv.Id));
+      return { customer_paid_date: s.paid_date, customer_pay_method: s.method, customer_pay_method_name: s.method_name,
+        customer_clear_days: s.clear_days, customer_clears_on: s.clears_on, customer_clear_status: s.status, customer_payment_count: s.count };
+    }
+
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
     const candidates = irs.filter(ir => {
