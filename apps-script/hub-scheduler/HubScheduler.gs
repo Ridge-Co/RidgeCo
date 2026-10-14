@@ -68,6 +68,7 @@ var JOBS = [
   { name: 'sweep_work',          run: 'hub', every_min: 15,                    enabled: true, what: 'Posts due recurring work orders, sends the once-a-day estimate reminder, moves paid-deposit scopes forward.' },
   { name: 'sweep_checks',        run: 'hub', every_min: 15,                    enabled: true, what: 'Runs the daily self-test and the dead-man check (alerts if there is no telemetry for 24h).' },
   { name: 'insp_guard',          run: 'hub', every_min: 15,                    enabled: true, what: 'Checks inspection bookings against the STR calendar (does nothing until that module is set up).' },
+  { name: 'str_cleaning',        run: 'hub', every_min: 15,                    enabled: true, what: 'Milam Ridge cleaning scheduler: keeps 35 days of turnovers covered, texts the cleaner queue, writes the cleaning calendar, alerts Brett (does nothing until STR_ENGINE_ENABLED is TRUE).' },
   { name: 'daily_digest',        run: 'hub', at: '07:00',                      enabled: true, what: 'Builds the morning digest and texts it to the admin phone.' },
   { name: 'daily_receipts',      run: 'hub', at: '07:00',                      enabled: true, what: 'Scans the receipt inbox.' },
   { name: 'daily_receipts_post', run: 'hub', at: '07:00',                      enabled: true, what: 'Emails newly scanned receipts to QuickBooks.' },
@@ -80,6 +81,9 @@ var JOBS = [
   { name: 'hub_impr_mon',        run: 'hub', day: 'Mon', at: '07:15',         enabled: true, what: 'Pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue (as proposed).' },
   { name: 'hub_impr_thu',        run: 'hub', day: 'Thu', at: '07:15',         enabled: true, what: 'Same sweep, Thursday.' },
   { name: 'hub_impr_daily',      run: 'hub', at: '07:30',                      enabled: true, what: 'Marks Hub Improvements items done once built (queue item done / PR merged) and reports any that are stuck.' },
+  { name: 'str_digest_mon',      run: 'hub', day: 'Mon', at: '08:00',         enabled: true, what: 'Emails the cleaners the Milam Ridge cleaning calendar with calendar invites (does nothing until STR_DIGEST_ENABLED is TRUE).' },
+  { name: 'str_digest_wed',      run: 'hub', day: 'Wed', at: '08:00',         enabled: true, what: 'Same cleaning email, Wednesday.' },
+  { name: 'str_digest_fri',      run: 'hub', day: 'Fri', at: '08:00',         enabled: true, what: 'Same cleaning email, Friday.' },
 
   // ── Other Workers (this script calls them; secrets live in Script properties, never in this file) ──
   { name: 'pinterest_sync',      run: 'pinterest',      day: 'Sun', at: '09:00', enabled: true,  what: 'BarrelCo: copies new Pinterest pins into the Google Drive folders (was a weekly GitHub Action).' },
