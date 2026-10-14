@@ -6561,13 +6561,11 @@ async function submitMoveIn() {
       msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Step 1/'+(toMoveOut.length+2)+': Moving out existing tenants…</div>';
       for (var i = 0; i < toMoveOut.length; i++) {
         var moRes = await apiWithTimeout(api('POST', '/tenant/move-out', {
-          tenant_id: toMoveOut[i].id, move_out_date: today, move_out_by: 'admin'
+          tenant_id: toMoveOut[i].id, move_out_date: moveOutDate, move_out_by: 'admin'
         }), 8000);
         if (moRes && moRes.error) throw new Error('Move-out failed for ' + toMoveOut[i].name + ': ' + moRes.error);
-        var moTenant = safeArray(state.tenants).find(function(t){ return t.ID === toMoveOut[i].id; });
-        if (moTenant && moTenant.Unit_ID) {
-          await apiWithTimeout(api('POST', '/unit/update', { id: moTenant.Unit_ID, fields: { Tenant_ID: '' } }), 6000).catch(function(){});
-        }
+        // The Worker's move-out also switches the old tenant's texts off and clears the unit pointer; say so if any part failed.
+        if (moRes && moRes.warning) toast(moRes.warning, 'warn');
       }
     }
 
