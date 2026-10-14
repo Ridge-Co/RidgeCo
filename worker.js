@@ -6688,6 +6688,64 @@ function rosterPlan(inp) {
   out.ok = out.counts.error === 0;
   return out;
 }
+
+// Verified-write helpers ------------------------------------------------------------------------------------------
+async function rosterWriteTenant(env, tenantId, fields) {
+  const r = await updateRow(env, 'Tenants', tenantId, fields);
+  if (!r.ok) throw new Error(await respErrText(r));
+  const back = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(tenantId));
+  if (!back) throw new Error('tenant ' + tenantId + ' not found after the write');
+  for (const [k, v] of Object.entries(fields)) {
+    if (String(back[k] == null ? '' : back[k]) !== String(v)) throw new Error('read-back mismatch on ' + k + ' (wanted "' + v + '", sheet has "' + (back[k] || '') + '")');
+  }
+  return back;
+}
+
+// owner_id for the roster routes: an owner session is bound to its own id; admin must name one.
+function rosterOwnerId(callerRole, callerSessionId, body, url) {
+  if (callerRole === 'owner') return String(callerSessionId || '');
+  return String((body && body.owner_id) || (url && url.searchParams && url.searchParams.get('owner_id')) || '');
+}
+
+// GET /owner/tenant-roster - what the manual form and the CSV check need. No PINs, no SMS/consent state (owners are not shown those rules).
+async function ownerRosterList(env, callerRole, callerSessionId, url) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, null, url);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const [properties, units, tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+  const props = properties.filter(p => String(p.Owner_ID || '') === ownerId && p.Active !== 'FALSE');
+  const ids = new Set(props.map(p => String(p.ID)));
+  return json({
+    owner_id: ownerId,
+    max_rows: ROSTER_MAX_ROWS,
+    properties: props.map(p => ({ id: String(p.ID), address: p.Address || '', units: units.filter(u => String(u.Property_ID) === String(p.ID) && u.Active !== 'FALSE').map(u => ({ id: String(u.ID), label: u.Unit_Label || '' })) })),
+    tenants: tenants.filter(t => ids.has(String(t.Property_ID))).map(t => ({
+      id: String(t.ID), property_id: String(t.Property_ID), unit_id: String(t.Unit_ID || ''),
+      name: ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim(), phone: t.Phone || '', email: t.Email || '',
+      move_in_date: t.Move_In_Date || '', move_out_date: t.Move_Out_Date || '', current: !tenantMovedOut(t),
+    })),
+  });
+}
+
+async function rosterLoadPlan(env, ownerId, body, batch) {
+  const [owners, properties, units, tenants] = await fetchTabs(env, ['Owners', 'Properties', 'Units', 'Tenants']);
+  const owner = owners.find(o => String(o.ID) === String(ownerId) && o.Active !== 'FALSE');
+  if (!owner) return { error: 'Owner not found', status: 404 };
+  const rows = body && Array.isArray(body.rows) ? body.rows : null;
+  if (!rows) return { error: 'rows (array) required', status: 400 };
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  // ONLY rows + the consent box are read from the client. No other option exists (no SMS switch, no notify, no override).
+  const plan = rosterPlan({ ownerId, today, rows, properties, units, tenants, consent: !!(body && body.consent === true), batch });
+  return { owner, plan, units, tenants, today };
+}
+
+// POST /owner/tenant-roster/preview - validate only. Writes NOTHING.
+async function ownerRosterPreview(env, callerRole, callerSessionId, body) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, body);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const L = await rosterLoadPlan(env, ownerId, body, '');
+  if (L.error) return json({ error: L.error }, L.status);
+  return json({ ok: L.plan.ok, mode: 'preview', plan: L.plan, writes: false });
+}
 //@@ROSTER_NEXT@@
 
 // ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
