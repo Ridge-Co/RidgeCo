@@ -3525,15 +3525,6 @@ function revokeShare(){
     else toast('Could not revoke','error');
   }).catch(function(){ toast('Could not revoke','error'); });
 }
-function submitInvoice(){
-  var amount=document.getElementById('inv-amount').value;
-  if(!amount){toast('Enter amount','error');return;}
-  var wo=state.workorders.find(function(w){return w.ID===invoiceWOId;});
-  api('POST','/invoice',{wo_id:invoiceWOId,vendor_id:wo?wo.Vendor_ID||'':'',amount:amount,qb_ref:document.getElementById('inv-qb').value,notes:document.getElementById('inv-notes').value})
-    .then(function(){toast('Invoice logged','success');closeModal('modal-invoice');loadAll();})
-    .catch(function(e){logError('Log invoice',e.message);toast('Error: '+e.message,'error');});
-}
-
 // ── New WO ───────────────────────────────────────────────────
 function openNewWOModal() {
   // Clear EVERY field so nothing persists from previous WO creation
