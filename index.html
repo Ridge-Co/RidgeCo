@@ -3439,7 +3439,6 @@ function submitSplitWO() {
   }).catch(function(e){ btn.disabled = false; btn.textContent = 'Confirm Split'; logError('Split WO', e.message); toast('Error: ' + e.message, 'error'); });
 }
 
-function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
 
 // ── Send Work Order to Vendor (B-117 shareable WO) ────────────
 var _shareData = null, _shareWOId = null;
