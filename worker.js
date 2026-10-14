@@ -14186,6 +14186,9 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, the owner has signed the proposal for {Job}. Pending deposit payment - we'll text you when it's paid." },
   { Message_Type: 'vendor_deposit_paid', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, proposal approved for {Job}: the DEPOSIT for {Job} has been paid to RidgeCo. (This is the deposit only - not your final invoice payment.)" },
+  // Owner heads-up when a proposal is emailed (Oct 14 2026, FEATURE_LOG rule 209). No link on purpose: it points at the email.
+  { Message_Type: 'owner_proposal_ready', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. Your estimate for {Address} is ready and was just emailed to you - please check your inbox (and spam folder) to review it. Questions? Just reply to that email." },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
