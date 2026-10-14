@@ -293,3 +293,10 @@ Branch `feat/str-cleaning-scheduler` (rebased on main twice; staging is reset to
 - Brett's phone tests passed: Nov 8 accepted -> covered via offer; Nov 11/12 pre-arrival declined -> Kayla asked; Nov 15 still to be offered.
 - Open: scopes 4 and 6 (WO-1180/WO-1183) need deposit invoices or an exclusion decision (`sweep_work` fails every tick until then); duplicate STR_Log ID race (cosmetic); calendar sync, Mon/Wed/Fri digest and going live are still ahead. `sweep_checks` self-test should write its first `Selftest_Results` row after its slices finish (check `selftest_progress` Config row).
 - Note: `main` now requires the `guard` status check, so context commits go through a PR (branch `context/...`), not a direct `commit_patch` to main.
+
+## Checkpoint - Oct 14 2026 (3:30 pm ET) scheduler: daily/weekly first, scopes 4/6 skipped
+- Brett: "skip the scopes four and six ... do the daily, weekly runs first", then "Merge to main". Live on prod: `.23-sched-daily-first` (PR #310) and `.24-sched-no-repick` (PR #311).
+- Config `DEPOSIT_SWEEP_SKIP_SCOPES` = `4,6` added on the prod Config sheet (row 43). Remove the row/value to alarm on them again.
+- First catch-up (19:03 UTC): daily_digest, daily_receipts, daily_receipts_post, daily_turnover ran OK. `daily_qb_sync` timed out and stayed "running"; found it would be re-picked every call, fixed in #311.
+- OPEN: `daily_qb_sync` needs time-slicing to ever finish (see FEATURE_LOG 216). `sms_delivery_check`, `review_wed`, `hub_impr_daily`, `str_digest_wed` had not run yet at 19:30 UTC; check next ticks.
+- Cleaning scheduler unchanged: ON, test mode ON, calendar sync not built, Mon/Wed/Fri email OFF.
