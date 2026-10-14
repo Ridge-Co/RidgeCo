@@ -385,6 +385,7 @@ function runImport(){
         totals.units_created += r.units_created||0; totals.units_matched += r.units_matched||0;
         totals.tenants_created += r.tenants_created||0; totals.tenants_skipped_existing += r.tenants_skipped_existing||0;
         totals.tenants_flagged_elsewhere = totals.tenants_flagged_elsewhere.concat(r.tenants_flagged_elsewhere||[]);
+        totals.tenants_refused_no_move_in_date = totals.tenants_refused_no_move_in_date.concat(r.tenants_refused_no_move_in_date||[]);
         totals.owners_flagged_no_match = totals.owners_flagged_no_match.concat(r.owners_flagged_no_match||[]);
       } else {
         totals.properties_created += r.properties_created||0; totals.properties_matched += r.properties_matched||0;
