@@ -175,6 +175,7 @@ function validate(scope){
           need(u.tenant.first.trim(), uf+'.tenant.first', 'Enter the tenant\'s first name.');
           need(phoneOk(u.tenant.phone), uf+'.tenant.phone', 'Enter the tenant\'s 10-digit phone number.');
           if (u.tenant.email.trim()) need(emailOk(u.tenant.email), uf+'.tenant.email', 'That email doesn\'t look right.');
+          need(/^\d{4}-\d{2}-\d{2}$/.test(String(u.tenant.move_in||'').trim()), uf+'.tenant.move_in', 'Enter the date this tenant moved in (an approximate date is fine).');
           resolved++;
         } else if (u.status === 'vacant') {
           need(u.access.method, uf+'.access.method', 'Choose a lockbox, or "No lockbox".');
