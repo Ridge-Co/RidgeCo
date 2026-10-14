@@ -2281,8 +2281,26 @@ function renderWOPage() {
 
   updateFilterBadge();
   var el = document.getElementById('wo-list-full');
+  // Hub Improvements (Oct 14 2026): under the "Not Assigned" vendor filter, Cancelled / Paid / Invoiced
+  // orders are finished business — fold them into a collapsed group at the bottom so live items lead.
+  var woCardsHtml;
+  if (vendId === '__unassigned__') {
+    var CLOSED_OUT = ['Cancelled','Paid','Invoiced'];
+    var liveWOs = wos.filter(function(w){ return CLOSED_OUT.indexOf(w.Status) === -1; });
+    var closedWOs = wos.filter(function(w){ return CLOSED_OUT.indexOf(w.Status) !== -1; });
+    woCardsHtml = liveWOs.map(woCard).join('');
+    if (closedWOs.length) {
+      var _cnt = {}; closedWOs.forEach(function(w){ _cnt[w.Status] = (_cnt[w.Status]||0)+1; });
+      var _brk = CLOSED_OUT.filter(function(s){return _cnt[s];}).map(function(s){return _cnt[s]+' '+s.toLowerCase();}).join(' · ');
+      woCardsHtml += '<details id="wo-closed-out-group" style="margin-top:12px"'+(window._woClosedOutOpen?' open':'')+' ontoggle="window._woClosedOutOpen=this.open">' +
+        '<summary style="cursor:pointer;color:var(--muted);font-size:12px;padding:8px 0">Closed out ('+closedWOs.length+') — '+_brk+'</summary>' +
+        closedWOs.map(woCard).join('') + '</details>';
+    }
+  } else {
+    woCardsHtml = wos.map(woCard).join('');
+  }
   el.innerHTML = wos.length
-    ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+wos.length+' work order'+(wos.length!==1?'s':'')+' — <span style="cursor:pointer;color:var(--info)" onclick="toggleFilterPanel()">adjust filters</span></div>'+wos.map(woCard).join('')
+    ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+wos.length+' work order'+(wos.length!==1?'s':'')+' — <span style="cursor:pointer;color:var(--info)" onclick="toggleFilterPanel()">adjust filters</span></div>'+woCardsHtml
     : '<div class="loading">No work orders match your filters. <span style="cursor:pointer;color:var(--info)" onclick="clearWOFilters()">Clear filters</span></div>';
   renderBundlingOpportunities();
 }
