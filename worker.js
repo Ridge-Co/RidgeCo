@@ -6437,6 +6437,80 @@ async function processMoveOut(env, body) {
                 units_incomplete: unitsFailed, errors: r.errors,
                 warning: r.errors.length ? ('Move-out saved but some follow-up steps failed (' + r.errors.map(e => e.step).join(', ') + ') - run "Check units naming moved-out tenants" in Dev tools.') : '' });
 }
+
+// ══ OWNER TENANT ROSTER - importer / updater (Oct 14 2026, Brett) ═══════════════════════════════════════════════════
+// Why: tenants kept entering the Hub with a BLANK Move_In_Date (bulk importer, owner onboarding, admin Add Tenant), and a
+// blank date switches off the only protection a new tenant has from the previous tenant's work orders (isBackgroundWO
+// hides + never texts a WO created before Move_In_Date). Amanda Ireland's Oct 2026 list was the trigger. This tool makes
+// the dates impossible to skip, on a screen the owner can use herself:
+//   GET  /owner/tenant-roster          the owner's properties/units/current tenants (for the manual form + the CSV check)
+//   POST /owner/tenant-roster/preview  {rows, consent?}  validates EVERYTHING, writes NOTHING
+//   POST /owner/tenant-roster/apply    {rows, consent?}  same validation; refuses the whole file if any row is bad
+// Owner sessions are bound to their own id (callerSessionId, never a client-sent owner_id). Admin (Brett) may pass owner_id.
+// DEFAULTS BAKED IN, NO SWITCHES (Brett's explicit call): a departing tenant is deactivated, PIN cleared, SMS_Enabled FALSE;
+// an arriving tenant is linked to NO work order (so only work created on/after the move-in day, Eastern, ever reaches them
+// - isBackgroundWO); nobody is texted or emailed by this tool, tenant OR owner. The owner is never shown these rules.
+// A future move-out date only records the date + flags the row for the daily scheduler flip (daily_turnover job, no cron);
+// NO turnover work orders are created - Brett is alerted and approves those himself.
+const ROSTER_MAX_ROWS = 200;
+const ROSTER_LOG_TAB = 'Roster_Imports';
+const ROSTER_LOG_COLS = ['ID', 'Timestamp', 'Batch', 'Owner_ID', 'Actor', 'Rows', 'Moved_In', 'Moved_Out', 'Future_Move_Outs', 'Name_Fixes', 'Consent_Attested', 'Result', 'Details_JSON', 'Active'];
+// Tenants columns this tool relies on. SMS_Consent: 'attested' (upload box ticked) | 'pending' (not ticked) | 'welcome_sent'.
+// Welcome_Sent stays blank until Brett sends the welcome, which is what puts the person on his "not yet welcomed" list.
+const ROSTER_TENANT_COLS = ['SMS_Enabled', 'SMS_Consent', 'Roster_Source', 'Roster_Batch', 'Roster_Pending_Flip', 'Welcome_Sent', 'Welcome_Sent_Date', 'Onboarding_Source'];
+
+// '' = blank, null = not a real date, otherwise YYYY-MM-DD. Accepts YYYY-MM-DD, M/D/YYYY, M/D/YY, M-D-YYYY.
+function rosterNormDate(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  let y, m, d, mt;
+  if ((mt = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s))) { y = +mt[1]; m = +mt[2]; d = +mt[3]; }
+  else if ((mt = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2}|\d{4})$/.exec(s))) { m = +mt[1]; d = +mt[2]; y = +mt[3]; if (mt[3].length === 2) y += 2000; }
+  else return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+function rosterUnitKey(label) {
+  return String(label || '').trim().toLowerCase().replace(/^(apartment|apt|unit|suite|ste|#)\s*\.?\s*/, '').replace(/\s+/g, '');
+}
+// Only the name parts the row actually supplies AND that really differ (trimmed, case-sensitive so a capitalisation fix counts).
+// A blank part never blanks what is on file - this tool amends names, it never overwrites them with nothing.
+function rosterNameFields(first, last, t) {
+  const f = {};
+  if (first && first !== String(t.First_Name || '').trim()) f.First_Name = first;
+  if (last && last !== String(t.Last_Name || '').trim()) f.Last_Name = last;
+  return f;
+}
+function rosterNameKey(first, last) {
+  return (String(first || '') + ' ' + String(last || '')).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function rosterSplitName(name) {
+  const s = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!s) return { first: '', last: '' };
+  const m = /^(\S+)\s+(.*)$/.exec(s);
+  return m ? { first: m[1], last: m[2] } : { first: s, last: '' };
+}
+// Match a typed/CSV address to one of the OWNER'S properties only. Exact normalized match first; then the same address
+// without a ", City" tail; then a UNIQUE whole-word prefix ("1599 Ingleside" -> "1599 Ingleside Ave"), which is flagged as a
+// warning so the person sees what it matched. Anything else is an error that names close candidates.
+function rosterFindProperty(ownerProps, row) {
+  const pid = String(row.property_id || '').trim();
+  const addr = String(row.property || row.address || '').trim();
+  if (pid) { const p = ownerProps.find(x => String(x.ID) === pid); return p ? { prop: p } : { error: 'Property id ' + pid + ' is not one of your properties.' }; }
+  if (!addr) return { error: 'Property is required.' };
+  const k = qbNormAddress(addr);
+  const k0 = qbNormAddress(addr.split(',')[0]);
+  const street = x => qbNormAddress(String(x.Address || '').split(',')[0]);
+  let hit = ownerProps.filter(p => qbNormAddress(p.Address) === k);
+  if (!hit.length) hit = ownerProps.filter(p => street(p) === k0);
+  if (hit.length === 1) return { prop: hit[0] };
+  if (hit.length > 1) return { error: '"' + addr + '" matches more than one of your properties - add the city or use the property picker.' };
+  const pre = ownerProps.filter(p => { const s = street(p); return k0 && (s.startsWith(k0 + ' ') || k0.startsWith(s + ' ')); });
+  if (pre.length === 1) return { prop: pre[0], warning: 'Matched "' + addr + '" to ' + pre[0].Address + '.' };
+  const near = ownerProps.filter(p => { const s = street(p); const num = k0.split(' ')[0]; return num && s.split(' ')[0] === num; }).slice(0, 3).map(p => p.Address);
+  return { error: 'Property "' + addr + '" is not one of your properties.' + (near.length ? ' Did you mean: ' + near.join(' / ') + '?' : '') };
+}
 //@@ROSTER_NEXT@@
 
 // ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
