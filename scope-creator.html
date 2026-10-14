@@ -1305,8 +1305,10 @@ async function sendEstimateEmail(){
   if(!confirm(confirmMsg)) return;
   setStatus('send-status','Sending…');
   try{
-    var r=await post('/scope/proposal/send',{ scope_id:s.ID });
+    var ov=document.getElementById('send-override-quiet');
+    var r=await post('/scope/proposal/send',{ scope_id:s.ID, override_quiet_hours: !!(ov&&ov.checked) });
     s.Sent_Date=r.sent_at; s.Sent_To=r.sent_to; s.Send_Count=String((parseInt(s.Send_Count||'0',10)||0)+1);
+    if(r.sms&&r.sms.status&&r.sms.status!=='not_attempted'){ s.Owner_SMS_Status=r.sms.status; s.Owner_SMS_Time=new Date().toISOString(); s._smsNote=r.sms.note||''; }
     document.getElementById('link-out').classList.remove('hide');
     document.getElementById('link-text').value=r.url;
     setStatus('send-status','✅ sent to '+r.sent_to,'ok');
