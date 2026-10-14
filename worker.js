@@ -6776,10 +6776,14 @@ async function ownerRosterApply(env, callerRole, callerSessionId, body) {
   catch (e) { return json({ ok: false, applied: false, error: 'Could not prepare the Tenants sheet columns - nothing was imported: ' + String((e && e.message) || e).slice(0, 200) }, 500); }
   const done = (row, extra) => results.push(Object.assign({ n: row.n, label: row.label, status: row.status, applied: true }, extra || {}));
   const failed = (row, e) => results.push({ n: row.n, label: row.label, status: row.status, applied: false, error: String((e && e.message) || e).slice(0, 240) });
+  // Budget: always attempt the first row (so every call makes progress); after that only start a row if it fits.
+  const deferred = [];
+  const fits = est => results.length === 0 || used() + est + ROSTER_TAIL_RESERVE <= ROSTER_SUBREQ_LIMIT;
 
   // 1. departures
   for (const row of plan.rows.filter(r => r.status === 'move_out')) {
     const w = row.write;
+    if (!fits(w.future ? ROSTER_COST.move_out_future : ROSTER_COST.move_out)) { deferred.push(row); continue; }
     try {
       if (w.future) { await rosterWriteTenant(env, w.tenant_id, { Move_Out_Date: w.move_out_date, Roster_Pending_Flip: 'TRUE' }); done(row, { future: true, move_out_date: w.move_out_date }); }
       else {
