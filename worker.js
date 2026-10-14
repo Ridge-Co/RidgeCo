@@ -15095,6 +15095,10 @@ function smsGateDecision(o) {
     if (!o.ownerOn) fails.push('Customer OFF');
     if (!o.tenantOn) fails.push('Tenant OFF');
     if (o.tenantOptOut) fails.push('Tenant opted out');
+    // Oct 14 2026 (owner tenant roster): a tenant who has MOVED OUT is never texted, whatever path got us here
+    // (welcome, a held message released later, a property notice). Before this the gate only looked at the
+    // toggles, so an old tenant row with SMS still ON kept receiving texts after the new roster went in.
+    if (o.tenantMovedOut) fails.push('Tenant moved out');
   } else if (o.kind === 'vendor') {
     if (!o.vendorOn) fails.push('Vendor OFF');
     if (o.vendorOptOut) fails.push('Vendor opted out');
