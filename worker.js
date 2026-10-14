@@ -6823,13 +6823,15 @@ async function ownerRosterApply(env, callerRole, callerSessionId, body) {
     future_move_out: results.filter(r => r.applied && r.future).length, name_fix: results.filter(r => r.applied && (r.status === 'name_fix' || r.status === 'backfill')).length,
     unchanged: plan.counts.unchanged + plan.counts.already_done, failed: bad.length };
   const ok = bad.length === 0;
+  const partial = deferred.length > 0;   // more rows still to do: the page re-sends the same file (same batch) until this is false
   const owner = L.owner;
   const ownerLabel = (owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim() || 'owner ' + ownerId);
 
   // audit row + telemetry (failures here are reported, never swallowed)
+  const auditTs = new Date().toISOString();
   try {
-    const lr = await addRow(env, ROSTER_LOG_TAB, { Timestamp: new Date().toISOString(), Batch: batch, Owner_ID: ownerId, Actor: actor, Rows: String(plan.rows.length), Moved_In: String(counts.move_in), Moved_Out: String(counts.move_out),
-      Future_Move_Outs: String(counts.future_move_out), Name_Fixes: String(counts.name_fix), Consent_Attested: body.consent === true ? 'TRUE' : 'FALSE', Result: ok ? 'ok' : 'partial_failure',
+    const lr = await addRow(env, ROSTER_LOG_TAB, { Timestamp: auditTs, Batch: batch, Owner_ID: ownerId, Actor: actor, Rows: String(plan.rows.length), Moved_In: String(counts.move_in), Moved_Out: String(counts.move_out),
+      Future_Move_Outs: String(counts.future_move_out), Name_Fixes: String(counts.name_fix), Consent_Attested: body.consent === true ? 'TRUE' : 'FALSE', Result: !ok ? 'partial_failure' : (partial ? 'in_progress' : 'ok'),
       Details_JSON: JSON.stringify(results.map(r => ({ n: r.n, s: r.status, ok: r.applied, id: r.tenant_id || '', e: r.error || '' }))).slice(0, 40000), Active: 'TRUE' });
     if (!lr.ok) warnings.push('The audit log row could not be written (' + await respErrText(lr) + ').');
   } catch (e) { warnings.push('The audit log row could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
