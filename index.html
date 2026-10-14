@@ -12139,6 +12139,7 @@ function payablesBuildFilters() {
       '<input id="pay-q" type="text" placeholder="Search WO#, vendor, address, owner, invoice #, trade…" oninput="payablesApplyFilters()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px;box-sizing:border-box">' +
       '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' +
         '<select id="pay-f-state" onchange="payablesApplyFilters()" style="' + ss + '">' + optsState(statesPresent) + '</select>' +
+        '<select id="pay-f-clear" onchange="payablesApplyFilters()" style="' + ss + '"><option value="">Any payment timing</option><option value="clearing">⏳ Still clearing</option><option value="cleared">✓ Cleared</option><option value="unknown">Payment date unknown</option></select>' +
         '<select id="pay-f-vendor" onchange="payablesApplyFilters()" style="' + ss + '">' + opts(vendors, 'All vendors') + '</select>' +
         '<select id="pay-f-prop" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(props, 'All properties') + '</select>' +
         '<select id="pay-f-owner" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(owners, 'All owners') + '</select>' +
