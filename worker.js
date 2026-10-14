@@ -1451,12 +1451,72 @@ async function updateKeyWithHistory(env, body) {
 
 // ── ATTACHMENTS ──────────────────────────────────────────────
 
-async function getAttachments(env, url) {
+// GET /attachments?wo_id= | ?invoice_id= — per-record scope (Oct 14 2026, queue #150).
+// Before this, ANY signed-in tenant/owner/vendor session token could list ANY job's attachments
+// (cross-account leak of photos, Drive links and receipt file names). Now:
+//   - Admin secret / internal tokens (callerRole null): unchanged, full access.
+//   - A role session may only see attachments on a WO it could already see in its own portal list
+//     (attachmentScopeAllows below mirrors vendorWorkorders / tenantWorkorders / ownerWorkorders).
+//   - Tenants never receive receipt/bill/invoice rows (vendor cost docs) even on their own jobs.
+//   - Asking for a WO the session may not see is a generic 404 (same for "missing" and "not yours",
+//     like /owner-file/view) and is logged to Ops_Telemetry as a failure so a probe or a real
+//     regression is visible. A telemetry failure propagates (loud 500) instead of being swallowed.
+//   - Unknown roles fail closed.
+const ATTACHMENT_COST_DOC_TYPES = ['receipt', 'bill', 'invoice'];
+
+// Shared with tenantWorkorders so "what a tenant can see" has ONE definition. Status/include_closed
+// filtering stays in the list endpoint (a tenant may view photos on a closed job they can see).
+function tenantCanSeeWO(tenant, w) {
+  if (!tenant || !w) return false;
+  if (w.Voided === 'TRUE') return false;
+  if (w.Tenant_Visible === 'FALSE') return false;
+  if (w.Property_ID !== tenant.Property_ID) return false;
+  if (isBackgroundWO(tenant, w)) return false;
+  if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenant.ID;
+  return true;
+}
+
+function attachmentScopeAllows(role, sessionId, wo, tenants, properties) {
+  if (!wo || !role || !sessionId) return false;
+  const sid = String(sessionId);
+  if (role === 'vendor') {
+    // Assigned vendor only. A voided WO is still theirs: additional-work drafts are stored as voided
+    // children and the vendor attaches photos to them before submitting.
+    return String(wo.Vendor_ID || '') !== '' && String(wo.Vendor_ID) === sid;
+  }
+  if (role === 'tenant') {
+    const tenant = (tenants || []).find(t => t.ID === sid && t.Active !== 'FALSE');
+    return tenantCanSeeWO(tenant, wo);
+  }
+  if (role === 'owner') {
+    const prop = (properties || []).find(p => p.ID === wo.Property_ID);
+    if (!prop || String(prop.Owner_ID || '') !== sid) return false;
+    return wo.Voided !== 'TRUE' && String(wo.Type || '') !== 'addon' && !isHiddenBidCopy(wo);
+  }
+  return false;
+}
+
+async function getAttachments(env, url, callerRole, callerSessionId) {
   const woId = url.searchParams.get('wo_id') || '';
   const invoiceId = url.searchParams.get('invoice_id') || '';
   if (!woId && !invoiceId) return json({ error: 'Missing wo_id or invoice_id' }, 400);
   const attachments = await fetchTab(env, 'Attachments');
-  return json(attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; }));
+  const rows = attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; });
+  if (!callerRole) return json(rows);   // admin secret / internal token: full access, as before
+  const [workorders, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+  const allowedWO = new Map();
+  const woAllowed = (id) => {
+    if (!id) return false;
+    if (!allowedWO.has(id)) allowedWO.set(id, attachmentScopeAllows(callerRole, callerSessionId, findWO(workorders, id), tenants, properties));
+    return allowedWO.get(id);
+  };
+  if (woId && !woAllowed(woId)) {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'attachments_scope_denied', Skill_Or_Endpoint: '/attachments', Success: 'FALSE', Notes: `role=${callerRole} session=${callerSessionId} wo=${woId}` });
+    return json({ error: 'Not found' }, 404);
+  }
+  let visible = rows.filter(a => woAllowed(a.WO_ID));
+  if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
+  return json(visible);
 }
 
 // Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
