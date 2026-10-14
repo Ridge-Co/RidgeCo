@@ -23173,6 +23173,7 @@ async function qbPayables(env, url) {
           qbBatchById('Invoice', sigCandidates.map(c => c.invId)),
           qbBatchById('Bill', sigCandidates.map(c => c.billId)),
         ]);
+        const sigPayments = await qbLoadInvoicePayments(env, token, [...sigInvById.values()], warnings, methodsCache);
         for (const c of sigCandidates) {
           let customerPaid = null, customerBalance = null, invNumber = '';
           const q = sigInvById.get(c.invId);
