@@ -20760,7 +20760,11 @@ function ownerOnboardValidate(input) {
         if (!tf) err(uf('tenant.first'), 'Enter the tenant\'s first name.');
         if (!ooPhoneOk(t.phone)) err(uf('tenant.phone'), 'Enter the tenant\'s 10-digit phone number.');
         if (te && !ooEmailOk(te)) err(uf('tenant.email'), 'That tenant email doesn\'t look right.');
-        cu.tenant = { first: tf, last: tl, phone: ooDigits(t.phone).slice(-10), email: te };
+        // Oct 14 2026 (Brett): a tenant cannot be saved without a move-in date. An approximate date is fine (the 1st of the month).
+        const tmiRaw = ooClean(t.move_in, 20);
+        const tmiWhy = tenantDatesError({ Move_In_Date: tmiRaw });
+        if (tmiWhy) err(uf('tenant.move_in'), tmiRaw ? 'That move-in date doesn\'t look right - use the calendar.' : 'Enter the date this tenant moved in (an approximate date is fine).');
+        cu.tenant = { first: tf, last: tl, phone: ooDigits(t.phone).slice(-10), email: te, move_in: tmiWhy ? '' : rosterNormDate(tmiRaw) };
         resolvedUnits++;
       } else if (status === 'vacant') {
         const a = (u.access && typeof u.access === 'object') ? u.access : {};
