@@ -45,7 +45,10 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 // ── worker.js wiring sanity (routes/functions exist exactly as named) ──────────────────────
 ok(/if \(path === '\/receipt\/attach-only'\)\s+return await receiptAttachOnly\(env, body\);/.test(src), 'POST /receipt/attach-only is routed to receiptAttachOnly');
 ok(/async function receiptAttachOnly\(env, body\)/.test(src), 'receiptAttachOnly is defined');
-ok(/HUB_TEST_WRITE_PATHS = \[[^\]]*'\/receipt\/attach-only'/.test(src), '/receipt/attach-only is allow-listed for HUB_TEST_TOKEN writes');
+// Sep 24 2026 (allow-list simplification): the HUB_TEST_WRITE_PATHS array is gone. The only gate for
+// HUB_TEST_TOKEN writes is hubTestWriteAllowed()'s record-level TEST- check, which default-denies.
+ok(!/HUB_TEST_WRITE_PATHS\s*=\s*\[/.test(src), 'the second, drift-prone path array stays removed');
+ok(/async function hubTestWriteAllowed[\s\S]*?if \(path === '\/receipt\/attach-only'\) \{[\s\S]*?isTestRecord\(env, 'Properties', wo\.Property_ID\)/.test(src), '/receipt/attach-only is handled by hubTestWriteAllowed and only for a WO on a TEST- property');
 {
   const gateStart = src.indexOf("if (path === '/receipt/attach-only') {", src.indexOf('async function hubTestWriteAllowed'));
   const gateBody = gateStart >= 0 ? src.slice(gateStart, gateStart + 900) : '';

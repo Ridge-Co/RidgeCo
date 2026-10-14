@@ -4,6 +4,7 @@
 // drift from what ships. woSplit() itself calls the real createWorkOrder()/updateWOFields()/
 // woVoid()/smsGatedSend() (grabbed alongside it) so the numbering/rollback/SMS-gating behavior
 // under test is exactly what the endpoint actually runs, not a re-implementation.
+import './_midday-clock.mjs';
 import fs from 'fs';
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 
