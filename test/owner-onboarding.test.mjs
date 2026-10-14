@@ -98,6 +98,11 @@ const mk = (u) => { const g = good(); g.properties = [house([u])]; return H.owne
 t('unit status is required', errFields(mk({ label: '' })).includes('properties[0].units[0].status'));
 t('tenant: first name + phone required', ['tenant.first','tenant.phone'].every(f => errFields(mk({ status: 'tenant', tenant: {} })).includes('properties[0].units[0].' + f)));
 t('tenant: email optional but validated if present', errFields(mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: 'bad' } })).includes('properties[0].units[0].tenant.email'));
+// Oct 14 2026 (Brett): no tenant without a move-in date.
+t('tenant: move-in date is required', errFields(mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: '' } })).includes('properties[0].units[0].tenant.move_in'));
+t('tenant: junk move-in date refused', errFields(mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: '', move_in: '2026-02-31' } })).includes('properties[0].units[0].tenant.move_in'));
+r = mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: '', move_in: '10/1/2026' } });
+t('tenant: a real move-in date is accepted and normalised', r.ok && r.clean.properties[0].units[0].tenant.move_in === '2026-10-01', r.errors);
 t('vacant: must choose lockbox or none', errFields(mk({ status: 'vacant', access: {} })).includes('properties[0].units[0].access.method'));
 t('vacant + lockbox: code required', errFields(mk({ status: 'vacant', access: { method: 'lockbox', code: '' } })).includes('properties[0].units[0].access.code'));
 r = mk({ status: 'vacant', access: { method: 'lockbox', code: '4421', location: 'left of door' } });
