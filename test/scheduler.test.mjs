@@ -388,12 +388,43 @@ for (const N of [2, 5, 8]) {
   const waits = [];
   const jobs = mkJobs(log, [['slow', 'interval', { run: async () => { await tick(120); log.push('slow'); return { ok: true, errors: [] }; } }]]);
   const r = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 30 }));
-  t('slow job: caller gets timed_out (not a hang, not a failure), more=false', r.body.timed_out === true && r.body.ran === 'slow' && r.body.job_ok === null && r.body.more === false && r.body.ok === true, r.body);
+  t('slow job: caller gets timed_out (not a hang, not a failure), more=false when nothing else is due', r.body.timed_out === true && r.body.ran === 'slow' && r.body.job_ok === null && r.body.more === false && r.body.ok === true, r.body);
   t('slow job: handed to ctx.waitUntil so it survives the caller hanging up', waits.length === 1);
+  t('slow job: its claim is released at the timeout (Oct 14 2026: a held claim blocked the whole queue)', r.body.claim_released === true && stateOf(store).claim_id === '', r.body);
   const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
-  t('while it is still running the claim holds: no second run', r2.body.skipped && log.length === 0);
+  t('the slow job itself is not started a second time while it is still running (its last_start holds it)', r2.body.ran === null && log.length === 0, r2.body);
   await Promise.all(waits);
   t('slow job finished and recorded its result in state', log.length === 1 && stateOf(store).jobs.slow.last_status === 'ok' && stateOf(store).claim_id === '');
+}
+// 2k-b Oct 14 2026 REGRESSION: a job that times out must NOT stop the queue. The daily self-test hung every tick from 7am and the
+// jobs behind it (the cleaning scheduler, insp_guard) never ran. Now: more:true, the next call runs the next job, nobody is clobbered.
+{
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const waits = [];
+  const jobs = mkJobs(log, [['hang', 'interval', { run: async () => { await tick(150); log.push('hang'); return { ok: true, errors: [] }; } }], ['next', 'interval']]);
+  const r = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 30 }));
+  t('timed-out job: more=true and the other due job is named', r.body.timed_out === true && r.body.more === true && JSON.stringify(r.body.due) === JSON.stringify(['next']), r.body);
+  const r2 = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 2000 }));
+  t('the very next call runs the job behind it (not "another run holds the claim")', r2.body.ran === 'next' && r2.body.job_ok === true && !r2.body.skipped, r2.body);
+  await Promise.all(waits);
+  const stf = stateOf(store);
+  t('both jobs recorded ok, no claim left behind', stf.jobs.hang.last_status === 'ok' && stf.jobs.next.last_status === 'ok' && stf.claim_id === '', stf);
+}
+{
+  // if the claim cannot be released the old behaviour holds AND it is loud (warning in the result + telemetry row)
+  const store = makeStore(), L = load(store), c = clock(T0), log = [];
+  const waits = [];
+  const jobs = mkJobs(log, [['hang', 'interval', { run: async () => { store.failWhen = (m, p) => m === 'POST' && p === '/values:batchUpdate'; await tick(150); store.failWhen = null; log.push('hang'); return { ok: true, errors: [] }; } }], ['next', 'interval']]);
+  const r = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 30 }));
+  t('claim release failing: more=false, claim_released=false, a visible warning', r.body.timed_out === true && r.body.more === false && r.body.claim_released === false && /could NOT be released/.test((r.body.warnings || [])[0] || ''), r.body);
+  t('claim release failing is logged to telemetry (Success FALSE, dispatcher)', L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dispatcher' && /could NOT be released/.test(x.Notes)), L.telemetry);
+  await Promise.all(waits);
+}
+// 2k-c a failed job says WHY (the deposit sweep failed 70+ times as "ok:false []")
+{
+  const msg = P.schedBadness(200, { ok: false, errors: [], not_found: [{ scope: '4', wo_id: 'WO-1180', reason: 'no deposit invoice on the signature' }] });
+  t('ok:false with an empty errors list names the not_found scope + reason', /scope 4/.test(msg) && /WO-1180/.test(msg) && /no deposit invoice/.test(msg), msg);
+  t('ok:false with nothing at all still says so in words, not []', /gave no reason/.test(P.schedBadness(200, { ok: false })), P.schedBadness(200, { ok: false }));
 }
 // 2l daily retry / no_retry / retry:false semantics
 {

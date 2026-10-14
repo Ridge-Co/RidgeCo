@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.15-str-sms-test-mode';
+const BUILD_VERSION = '2026-10-14.18-sched-unblock';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -15284,7 +15284,14 @@ function schedBadness(status, b) {
   if (b && typeof b === 'object') {
     if (b.unparseable_response) return 'unreadable response: ' + b.unparseable_response;
     if (b.error) return (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)).slice(0, 300);
-    if (b.ok === false) return ('ok:false ' + JSON.stringify(b.errors || b.reason || '')).slice(0, 300);
+    if (b.ok === false) {
+      // Oct 14 2026: the deposit sweep failed 70+ times in a row with the useless text "ok:false []" (its not_found list was the
+      // reason, its errors list was empty). A failure must say WHY, or nobody can act on it.
+      const why = (Array.isArray(b.errors) && b.errors.length) ? b.errors
+        : (Array.isArray(b.not_found) && b.not_found.length) ? { not_found: b.not_found.map(x => [x.scope ? 'scope ' + x.scope : '', x.wo_id || '', x.reason || ''].filter(Boolean).join(' ')) }
+        : (b.reason || 'the job reported ok:false and gave no reason');
+      return ('ok:false ' + JSON.stringify(why)).slice(0, 300);
+    }
     if (Array.isArray(b.errors) && b.errors.length) return (b.errors.length + ' error(s): ' + JSON.stringify(b.errors)).slice(0, 300);
     if (typeof b.failed === 'number' && b.failed > 0) return `${b.failed} item(s) failed`;
     if (Array.isArray(b.failed) && b.failed.length) return `${b.failed.length} item(s) failed: ${JSON.stringify(b.failed)}`.slice(0, 300);
@@ -15328,7 +15335,7 @@ async function schedRunSweepWork(env) {
 async function schedRunSweepChecks(env) {
   const errors = [], detail = {};
   // A selftest FINDING is delivered by selftestRun itself (its own digest + telemetry); only a run that cannot execute is a job failure.
-  detail.selftest = await schedStep('selftest', async () => { const r = await maybeRunDailySelftest(env); return (r && r.total !== undefined) ? { ok: r.ok, total: r.total, passed: r.passed, selftest_failed: r.failed } : r; }, errors);
+  detail.selftest = await schedStep('selftest', async () => { const r = await maybeRunDailySelftest(env); return (r && r.total !== undefined) ? { ok: r.ok, total: r.total, passed: r.passed, selftest_failed: r.failed, errors: r.errors || [] } : r; }, errors);
   detail.dead_man_switch = await schedStep('dead_man_switch', () => checkDeadManSwitch(env), errors);
   return { ok: !errors.length, errors, detail };
 }
@@ -15892,7 +15899,32 @@ async function schedRunNext(env, ctx, opts) {
   const done = await Promise.race([work, timeout]);
   clearTimeout(timer);
   if (done === null) {
-    return { status: 200, body: Object.assign({}, base, { ran: job.name, job_ok: null, timed_out: true, error: null, note: `${job.name} is still running after ${Math.round(budget / 1000)}s; it keeps going in the background and records its result in Scheduler_State (see /cron/status)` }) };
+    const tbody = Object.assign({}, base, { ran: job.name, job_ok: null, timed_out: true, error: null, note: `${job.name} is still running after ${Math.round(budget / 1000)}s; it keeps going in the background and records its result in Scheduler_State (see /cron/status)` });
+    // Oct 14 2026: a job that timed out kept the claim and answered more:false, so the caller (Apps Script) stopped its loop and every
+    // job queued BEHIND it never ran - the daily self-test hung every tick from 7am and starved the cleaning scheduler and insp_guard
+    // for hours, with nothing saying so. Release the claim now (the background run still records its own result, and its end-of-run
+    // write re-reads fresh state so it cannot clobber anyone else's claim) and tell the caller whether more jobs are due.
+    const others = dueNow.filter(d => d.name !== job.name).map(d => d.name);
+    try {
+      const r3 = await schedReadConfigRows(env, true);
+      const p3 = schedParseState(schedCell(r3, SCHED_STATE_KEY));
+      if (p3.error) throw new Error(p3.error);
+      const cur = p3.state;
+      if (cur.claim_id === myId) {
+        cur.claim_id = ''; cur.claim_until = ''; cur.claim_job = '';
+        const w3 = await schedWriteVerified(env, cur, r3, sleep, 0);
+        if (!w3.landed) throw new Error('the claim release did not land (another writer overwrote Scheduler_State)');
+      }
+      tbody.claim_released = true;
+      tbody.more = !force && others.length > 0;
+      if (tbody.more) tbody.due = others;
+    } catch (e) {
+      tbody.more = false; tbody.claim_released = false;
+      tbody.warnings = [`${job.name} timed out and its claim could NOT be released, so the rest of the queue waits for the next tick: ${schedErrText(e)}`];
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: 'dispatcher', Success: 'FALSE', Notes: tbody.warnings[0].slice(0, 480) }); }
+      catch (e2) { tbody.telemetry_error = schedErrText(e2); console.error('scheduler: claim release failed and telemetry write failed:', tbody.warnings[0], tbody.telemetry_error); }
+    }
+    return { status: 200, body: tbody };
   }
   return { status: 200, body: done };
 }
@@ -18503,23 +18535,25 @@ async function selftestCallEndpoint(env, name) {
   }
 }
 
+// One endpoint check. (Split out Oct 14 2026 so the daily run can do a few per scheduler tick - see selftestRunSlice.)
+async function selftestRunOneEndpointCheck(env, c) {
+  const t0 = Date.now();
+  try {
+    const resp = await selftestCallEndpoint(env, c.name);
+    const status = (resp && typeof resp.status === 'number') ? resp.status : 200;
+    let data = null, parseNote = '';
+    try { data = await resp.json(); } catch (e) { parseNote = ' (non-JSON body: ' + String((e && e.message) || e).slice(0, 80) + ')'; }   // assertion below fails honestly
+    const a = selftestAssertEndpoint(c.name, status, data);
+    return { name: c.name, path: c.path, status, ok: a.ok, reason: a.ok ? a.reason : String(a.reason || '') + parseNote, latency_ms: Date.now() - t0 };
+  } catch (e) {
+    // A THROW is a fail, never a skip — matches "a failed sub-check must never silently
+    // count as passed."
+    return { name: c.name, path: c.path, status: 0, ok: false, reason: 'threw: ' + String((e && e.message) || e), latency_ms: Date.now() - t0 };
+  }
+}
 async function selftestRunEndpointChecks(env) {
   const results = [];
-  for (const c of SELFTEST_ENDPOINT_CHECKS) {
-    const t0 = Date.now();
-    try {
-      const resp = await selftestCallEndpoint(env, c.name);
-      const status = (resp && typeof resp.status === 'number') ? resp.status : 200;
-      let data = null;
-      try { data = await resp.json(); } catch (_) { /* non-JSON body — assertion below fails honestly */ }
-      const a = selftestAssertEndpoint(c.name, status, data);
-      results.push({ name: c.name, path: c.path, status, ok: a.ok, reason: a.reason, latency_ms: Date.now() - t0 });
-    } catch (e) {
-      // A THROW is a fail, never a skip — matches "a failed sub-check must never silently
-      // count as passed."
-      results.push({ name: c.name, path: c.path, status: 0, ok: false, reason: 'threw: ' + String((e && e.message) || e), latency_ms: Date.now() - t0 });
-    }
-  }
+  for (const c of SELFTEST_ENDPOINT_CHECKS) results.push(await selftestRunOneEndpointCheck(env, c));
   return results;
 }
 
@@ -18670,17 +18704,18 @@ function selftestComposeDigest(agg, endpointResults, goldenResults, runDateISO) 
 const SELFTEST_RESULTS_TAB = 'Selftest_Results';
 const SELFTEST_RESULTS_COLS = ['ID', 'Run_Date', 'Total_Checks', 'Passed', 'Failed', 'Failures_JSON', 'Digest_Sent'];
 
+// Returns true once the history row is written. THROWS on failure (Oct 14 2026: it used to swallow the error and return false, so
+// a Selftest_Results tab that could never be created went unnoticed - the tab does not exist on prod today). The caller
+// (selftestFinish) turns a throw into a visible error on the run's result.
 async function selftestRecordResult(env, agg, deliverAttempted, delivered) {
-  try {
-    await ensureTab(env, SELFTEST_RESULTS_TAB, SELFTEST_RESULTS_COLS);
-    await ensureColumns(env, SELFTEST_RESULTS_TAB, SELFTEST_RESULTS_COLS);
-    await addRow(env, SELFTEST_RESULTS_TAB, {
-      Run_Date: new Date().toISOString(), Total_Checks: String(agg.total), Passed: String(agg.passed),
-      Failed: String(agg.failed), Failures_JSON: JSON.stringify(agg.failures || []),
-      Digest_Sent: !deliverAttempted ? 'no' : (delivered ? 'yes' : 'attempted:failed'),
-    });
-    return true;
-  } catch (_) { return false; } // history write is best-effort; the run itself still returns
+  await ensureTab(env, SELFTEST_RESULTS_TAB, SELFTEST_RESULTS_COLS);
+  await ensureColumns(env, SELFTEST_RESULTS_TAB, SELFTEST_RESULTS_COLS);
+  await addRow(env, SELFTEST_RESULTS_TAB, {
+    Run_Date: new Date().toISOString(), Total_Checks: String(agg.total), Passed: String(agg.passed),
+    Failed: String(agg.failed), Failures_JSON: JSON.stringify(agg.failures || []),
+    Digest_Sent: !deliverAttempted ? 'no' : (delivered ? 'yes' : 'attempted:failed'),
+  });
+  return true;
 }
 
 // Admin-facing email recipient for THIS endpoint's own digest. Checked directly (Sep 18 2026):
@@ -18711,6 +18746,31 @@ async function selftestDeliverDigest(env, digestText) {
   }
 }
 
+// Everything after the checks have run: tally, digest, deliver, record, self-instrument. NOTHING here is swallowed (Oct 14 2026):
+// a digest that cannot be sent, a history row that cannot be written or a telemetry row that cannot be logged is pushed onto
+// `errors` so the caller (the scheduler job, or the /selftest response) shows it.
+async function selftestFinish(env, endpointResults, goldenResults, opts, t0) {
+  opts = opts || {};
+  const errors = [];
+  const agg = selftestAggregateResults(endpointResults, goldenResults);
+  const runDateISO = new Date().toISOString();
+  const digestText = selftestComposeDigest(agg, endpointResults, goldenResults, runDateISO);
+  let delivery = null;
+  if (opts.deliver) {
+    try { delivery = await selftestDeliverDigest(env, digestText); }
+    catch (e) { delivery = { delivered: false, reason: 'error: ' + schedErrText(e) }; errors.push({ step: 'selftest_deliver', error: schedErrText(e) }); }
+  }
+  let logged = false;
+  try { logged = await selftestRecordResult(env, agg, !!opts.deliver, !!(delivery && delivery.delivered)); }
+  catch (e) { errors.push({ step: 'selftest_record', error: 'the self-test ran but its Selftest_Results history row did not save: ' + schedErrText(e) }); }
+  // Self-instrument (PAT-031 pattern, same as runWeeklyReview) — the selftest is itself a
+  // measured job, and its OWN success reflects whether every check passed, not just whether the
+  // function ran without throwing.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}` }); }
+  catch (e) { errors.push({ step: 'selftest_telemetry', error: schedErrText(e) }); }
+  return { ok: true, total: agg.total, passed: agg.passed, failed: agg.failed, failures: agg.failures, digest: digestText, delivery, logged, errors, endpoint_results: endpointResults, golden_results: goldenResults };
+}
+
 async function selftestRun(env, opts) {
   const _t0 = Date.now();
   opts = opts || {};
@@ -18718,17 +18778,63 @@ async function selftestRun(env, opts) {
     selftestRunEndpointChecks(env),
     selftestRunGoldenChecks(env),
   ]);
-  const agg = selftestAggregateResults(endpointResults, goldenResults);
-  const runDateISO = new Date().toISOString();
-  const digestText = selftestComposeDigest(agg, endpointResults, goldenResults, runDateISO);
-  let delivery = null;
-  if (opts.deliver) { try { delivery = await selftestDeliverDigest(env, digestText); } catch (_) { delivery = { delivered: false, reason: 'error' }; } }
-  const logged = await selftestRecordResult(env, agg, !!opts.deliver, !!(delivery && delivery.delivered));
-  // Self-instrument (PAT-031 pattern, same as runWeeklyReview) — the selftest is itself a
-  // measured job, and its OWN success reflects whether every check passed, not just whether the
-  // function ran without throwing.
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - _t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}` }); } catch (_) {}
-  return { ok: true, total: agg.total, passed: agg.passed, failed: agg.failed, failures: agg.failures, digest: digestText, delivery, logged, endpoint_results: endpointResults, golden_results: goldenResults };
+  return await selftestFinish(env, endpointResults, goldenResults, opts, _t0);
+}
+
+// ── The DAILY self-test, run in slices (Oct 14 2026) ─────────────────────────────────────────────────────
+// WHY: 35 endpoint checks + 4 golden checks, one after another, take minutes - far longer than one scheduler call (50 s) plus
+// the 30 s a background run is given. Since the move off Cloudflare cron the daily run was cut off on EVERY tick from 7am, never
+// wrote its result, and so started over on the next tick, hanging that tick's 50 s each time and (with the old dispatcher)
+// starving every job queued behind it - including the cleaning scheduler. Now each tick runs as many checks as fit in
+// SELFTEST_SLICE_MS, saves its progress in the Config row `selftest_progress`, and the next tick carries on; when the last
+// check is done the digest/history/telemetry go out exactly once. A progress read/write failure THROWS (the job shows failed).
+const SELFTEST_PROGRESS_KEY = 'selftest_progress';
+const SELFTEST_SLICE_MS = 30 * 1000;
+const SELFTEST_GOLDEN_MARGIN_MS = 12 * 1000;   // do not START the golden checks with less than this left in the slice
+async function selftestReadProgress(env) {
+  const raw = schedCell(await schedReadConfigRows(env, true), SELFTEST_PROGRESS_KEY).trim();   // fresh read: sheetsRequest caches tab reads
+  if (!raw) return null;
+  try { return JSON.parse(raw); }
+  catch (e) { throw new Error(`Config row ${SELFTEST_PROGRESS_KEY} is not valid JSON (${schedErrText(e)}); delete that row to restart today's self-test`); }
+}
+async function selftestWriteProgress(env, prog) {
+  const value = JSON.stringify(prog);
+  const rows = await schedReadConfigRows(env, true);
+  const idx = schedFindRow(rows, SELFTEST_PROGRESS_KEY);
+  if (idx >= 0) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `Config!B${idx + 1}`, values: [[value]] }] });
+  else await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [[SELFTEST_PROGRESS_KEY, value]] });
+  if (schedCell(await schedReadConfigRows(env, true), SELFTEST_PROGRESS_KEY) !== value) throw new Error('the self-test progress write did not land (the Config cell does not hold what was written)');
+}
+// opts (tests): sliceMs, checks, runOne(check), golden(), now(), progress { read, write }
+async function selftestRunSlice(env, today, opts) {
+  opts = opts || {};
+  const now = opts.now || (() => Date.now());
+  const t0 = now();
+  const deadline = t0 + (opts.sliceMs != null ? opts.sliceMs : SELFTEST_SLICE_MS);
+  const read = (opts.progress && opts.progress.read) || (() => selftestReadProgress(env));
+  const write = (opts.progress && opts.progress.write) || ((p) => selftestWriteProgress(env, p));
+  const checks = opts.checks || SELFTEST_ENDPOINT_CHECKS;
+  const runOne = opts.runOne || ((c) => selftestRunOneEndpointCheck(env, c));
+  let prog = await read();
+  if (!prog || prog.date !== today) prog = { date: today, started: new Date(t0).toISOString(), endpoint: [], golden: null, complete: false };
+  if (prog.complete) return { skipped: true, reason: `already finished today (${today})` };
+  while (prog.endpoint.length < checks.length && now() < deadline) prog.endpoint.push(await runOne(checks[prog.endpoint.length]));
+  if (prog.endpoint.length < checks.length) {
+    await write(prog);
+    return { ok: true, partial: true, progress: `${prog.endpoint.length}/${checks.length} endpoint checks done; the rest run on the next ticks` };
+  }
+  if (!prog.golden) {
+    if (deadline - now() < SELFTEST_GOLDEN_MARGIN_MS) {
+      await write(prog);
+      return { ok: true, partial: true, progress: 'all endpoint checks done; the golden checks run on the next tick' };
+    }
+    prog.golden = await (opts.golden ? opts.golden() : selftestRunGoldenChecks(env));
+  }
+  const res = await selftestFinish(env, prog.endpoint, prog.golden, { deliver: true, trigger: 'cron' }, t0);
+  prog.complete = true; prog.finished = new Date(now()).toISOString(); prog.summary = { total: res.total, passed: res.passed, failed: res.failed };
+  try { await write(prog); }
+  catch (e) { res.errors.push({ step: 'selftest_progress', error: 'finished, but could not mark today as done (it may run again): ' + schedErrText(e) }); }
+  return res;
 }
 
 // POST /selftest {deliver?} — auto-verification pass, on demand. Gated EXACTLY like /ops-review:
@@ -18755,7 +18861,7 @@ async function maybeRunDailySelftest(env) {
     // Only a genuinely missing tab (a first run - selftestRun creates it) may fall through; any other read failure is a failure.
     if (!isMissingTabError(e)) throw e;
   }
-  return await selftestRun(env, { deliver: true, trigger: 'cron' });
+  return await selftestRunSlice(env, today);   // a slice per tick (see above) - NOT one all-at-once run that the scheduler cuts off
 }
 
 // GET /ar/aging — READ-ONLY accounts-receivable aging, straight from QuickBooks (source of
