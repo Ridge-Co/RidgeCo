@@ -15095,6 +15095,10 @@ function smsGateDecision(o) {
     if (!o.ownerOn) fails.push('Customer OFF');
     if (!o.tenantOn) fails.push('Tenant OFF');
     if (o.tenantOptOut) fails.push('Tenant opted out');
+    // Oct 14 2026 (owner tenant roster): a tenant who has MOVED OUT is never texted, whatever path got us here
+    // (welcome, a held message released later, a property notice). Before this the gate only looked at the
+    // toggles, so an old tenant row with SMS still ON kept receiving texts after the new roster went in.
+    if (o.tenantMovedOut) fails.push('Tenant moved out');
   } else if (o.kind === 'vendor') {
     if (!o.vendorOn) fails.push('Vendor OFF');
     if (o.vendorOptOut) fails.push('Vendor opted out');
@@ -15105,6 +15109,22 @@ function smsGateDecision(o) {
   return { sendOk: fails.length === 0, gateSnapshot: fails.length ? fails.join(', ') : 'all gates open' };
 }
 const smsToggleOn = v => String(v == null ? '' : v).toUpperCase() !== 'FALSE';
+// True when the Tenants row says this person no longer lives there (Active FALSE, or a Move_Out_Date that has passed,
+// Eastern). Deliberately NOT isTenantCurrent: a synthetic/partial tenant object with no Active or Move_Out_Date field
+// (tests, one-off sends) must keep working exactly as before.
+function tenantMovedOut(t) {
+  if (!t) return false;
+  if (String(t.Active == null ? '' : t.Active).toUpperCase() === 'FALSE') return true;
+  const mo = String(t.Move_Out_Date || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(mo) && new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) > mo;
+}
+// Phone-based re-resolution of the tenant behind a queued text (releaseMessageQueue / processQuietHoursQueue). When
+// the same number is on more than one row at a property (a returning tenant, a re-keyed record) the CURRENT row wins;
+// before this the first row in the sheet won, which could be the old, switched-off one.
+function tenantForQueuedText(tenants, phone, propertyId) {
+  const m = (tenants || []).filter(t => normalizePhone(t.Phone) === phone && (!propertyId || t.Property_ID === propertyId));
+  return m.find(t => !tenantMovedOut(t)) || m[0] || null;
+}
 
 // The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types. Always writes a
 // Message_Queue row first (queue-write-first, per the brief's Build Order step 3), regardless
