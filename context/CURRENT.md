@@ -6,7 +6,7 @@
 
 # WO STATUS SINGLE SOURCE OF TRUTH — Oct 14, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/wo-status-ssot-oct14` (cut from main tip f94458d), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.5-wo-status-ssot`. PR #259 (base `main`, verified with get_pull_request); staging test-only PR #260.
 
-## 🟡 Milam Ridge STR cleaning scheduler — Oct 14 2026 — built, 117 offline tests, live on staging except the offer loop (staging Twilio is OFF); PR to `main` awaiting Brett's go/no-go; everything ships OFF (FEATURE_LOG rule 211). Rollout order and required Brett actions are in `context/STR_CLEANING_SCHEDULER_BUILD_BRIEF_v1.0.md`.
+## 🟢 Milam Ridge STR cleaning scheduler — Oct 14 2026 — LIVE on prod in TEST MODE (build `2026-10-14.21-str-next-guest-note`): Scheduler ON, Texts ON, Cleaning test mode ON (texts go only to Brett's phone as `[TEST - for <name>]`), Cleaning calendar sync OFF (not built), Mon/Wed/Fri email OFF. Brett confirmed the full offer -> accept / decline -> next cleaner loop on his phone (rules 211-215). Still to do: calendar sync (Apps Script CalendarApp as Brett on the existing calendar), Mon/Wed/Fri digest replacing the Make.com email, then going live (turn Cleaning test mode OFF, red confirm, Brett's approval only). Open for Brett: `sweep_work` fails every tick on scopes 4 and 6 (WO-1180/WO-1183) having no deposit invoice. Rollout order and required Brett actions are in `context/STR_CLEANING_SCHEDULER_BUILD_BRIEF_v1.0.md`.
 
 
 ## 🟡 Built, tested (141 new assertions + headless-Chromium load of all 5 pages) and verified on staging (Worker `2026-10-14.5-wo-status-ssot`: tenant 86 / vendor 7 portal lists return the same open statuses as before, include_closed adds Cancelled): closes Ops_Build_Queue #140 / #87
