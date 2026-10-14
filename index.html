@@ -2656,7 +2656,10 @@ function openWODetail(woId) {
   // tenant's move-in date (isBackgroundWO, B-fix Aug 17) — same rule that already governed SMS.
   // Surface that here so "why isn't Matt seeing this" has an answer without digging into code,
   // and so it's obvious the Show-to toggle below isn't what's hiding it in that case.
-  var _tvAutoHidden = tenant && tenant.Move_In_Date && wo.Created_Date && new Date(tenant.Move_In_Date) > new Date(wo.Created_Date);
+  // Mirrors worker isBackgroundWO (Oct 14 2026): Eastern calendar-day compare, not a UTC-midnight compare.
+  var _tvCr = String(wo.Created_Date || '');
+  var _tvCrDay = /^\d{4}-\d{2}-\d{2}$/.test(_tvCr) ? _tvCr : (_tvCr && !isNaN(new Date(_tvCr)) ? new Date(_tvCr).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '');
+  var _tvAutoHidden = !!(tenant && tenant.Move_In_Date && _tvCrDay && (/^\d{4}-\d{2}-\d{2}$/.test(String(tenant.Move_In_Date).trim()) ? _tvCrDay < String(tenant.Move_In_Date).trim() : new Date(tenant.Move_In_Date) > new Date(wo.Created_Date)));
   var tvSection = '<div style="margin-top:14px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">TENANT ACCESS SETTINGS</div>' +
     (_tvAutoHidden ? '<div style="font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-bottom:10px">🚫 Auto-hidden from '+esc(_tvName||'this tenant')+' — this WO was opened before their move-in date, so it\'s treated as background work and left out of their portal automatically.</div>' : '') +
@@ -4399,6 +4402,9 @@ function renderTenantsPage() {
       var welcomeBadge = t.Welcome_Sent === 'TRUE'
         ? '<span style="color:var(--accent2);font-size:11px" title="'+esc(t.Welcome_Sent_Date||'')+'">👋 sent'+(t.Welcome_Sent_Date?' '+esc(t.Welcome_Sent_Date.slice(0,10)):'')+'</span>'
         : '<span style="color:var(--muted);font-size:11px">— not yet</span>';
+      // Oct 14 2026: tenants added through the owner roster tool are flagged here until Brett sends the welcome / consent text.
+      if (t.SMS_Consent === 'pending') welcomeBadge += '<div style="color:var(--warn);font-size:10px;font-weight:700" title="Added by the owner roster tool. Texts are OFF until you send the welcome (👋) or switch SMS on.">⏳ consent pending · SMS off</div>';
+      else if (t.SMS_Consent === 'attested' && t.Welcome_Sent !== 'TRUE') welcomeBadge += '<div style="color:var(--info);font-size:10px;font-weight:700" title="The owner ticked that these tenants agreed to maintenance texts. No welcome has gone out yet.">✓ owner says agreed · no welcome yet</div>';
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+t.ID+'" data-type="tenant" data-name="'+nm+'" data-phone="'+(t.Phone||'')+'" onchange="updatePinActionBar(\'tenants-action-bar\')"></td>' +
         '<td>'+esc(nm)+'</td>' +
@@ -6339,7 +6345,9 @@ function openMoveInModal(propIdOverride, unitIdOverride) {
   document.getElementById('mi-last').value = '';
   document.getElementById('mi-phone').value = '';
   document.getElementById('mi-email').value = '';
-  document.getElementById('mi-date').value = new Date().toISOString().split('T')[0];
+  // Oct 14 2026: no default date. The move-in date is REQUIRED and must be chosen on purpose - a defaulted "today" is how tenants ended
+  // up with the wrong date (or none) and saw the previous tenant's work orders.
+  document.getElementById('mi-date').value = '';
   document.getElementById('mi-msg').innerHTML = '';
   document.getElementById('mi-current-tenant-banner').style.display = 'none';
 
@@ -6436,9 +6444,15 @@ function loadMoveInWOPanel(propId, unitId) {
   var list  = document.getElementById('mi-wo-list');
   if (!panel || !list) return;
   var OPEN = WOStatus.sets.FIELD_OPEN;
-  var openWOs = safeArray(state.workorders).filter(function(w) {
+  // Oct 14 2026: a new tenant is only ever linked to work created on/after their move-in day (Eastern). Until a move-in date is
+  // chosen nothing is offered; WOs from before it are not listed at all (the server refuses to link them too).
+  var miDay = (document.getElementById('mi-date') || {}).value || '';
+  var openWOs = !miDay ? [] : safeArray(state.workorders).filter(function(w) {
     if (!OPEN.includes(w.Status)) return false;
     if (w.Voided === 'TRUE') return false;
+    var cr = String(w.Created_Date || '');
+    var crDay = /^\d{4}-\d{2}-\d{2}$/.test(cr) ? cr : (cr && !isNaN(new Date(cr)) ? new Date(cr).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '');
+    if (!crDay || crDay < miDay) return false;
     if (unitId) return w.Unit_ID === unitId;
     if (propId) return String(w.Property_ID) === String(propId);
     return false;
@@ -6476,6 +6490,7 @@ async function submitMoveIn() {
   }
   if (!propId) { showMiError('Select a property.'); return; }
   if (!first)  { showMiError('First name is required.'); return; }
+  if (!moveIn) { showMiError('Move-in date is required. It decides which work orders the new tenant can see and be texted about.'); return; }
 
   // Determine action: add alongside existing tenants, or move some out first
   var actionRadio = document.querySelector('input[name="mi-action"]:checked');
@@ -6535,7 +6550,10 @@ async function submitMoveIn() {
   btn.removeAttribute('data-confirmed');
   btn.disabled = true; btn.textContent = 'Moving in…';
   console.log('[submitMoveIn] Starting move-in for', first, last, '| propId:', propId, '| unitId:', unitId, '| toMoveOut:', toMoveOut.length);
-  var today = new Date().toISOString().split('T')[0];
+  var today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  // The old tenants leave on the new tenant's move-in day when that is today or earlier (so new move-in >= old move-out, never
+  // before it); a future move-in means the old tenants are out as of today.
+  var moveOutDate = moveIn <= today ? moveIn : today;
 
   try {
     // Step 1: Move out selected tenants
@@ -6543,13 +6561,11 @@ async function submitMoveIn() {
       msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Step 1/'+(toMoveOut.length+2)+': Moving out existing tenants…</div>';
       for (var i = 0; i < toMoveOut.length; i++) {
         var moRes = await apiWithTimeout(api('POST', '/tenant/move-out', {
-          tenant_id: toMoveOut[i].id, move_out_date: today, move_out_by: 'admin'
+          tenant_id: toMoveOut[i].id, move_out_date: moveOutDate, move_out_by: 'admin'
         }), 8000);
         if (moRes && moRes.error) throw new Error('Move-out failed for ' + toMoveOut[i].name + ': ' + moRes.error);
-        var moTenant = safeArray(state.tenants).find(function(t){ return t.ID === toMoveOut[i].id; });
-        if (moTenant && moTenant.Unit_ID) {
-          await apiWithTimeout(api('POST', '/unit/update', { id: moTenant.Unit_ID, fields: { Tenant_ID: '' } }), 6000).catch(function(){});
-        }
+        // The Worker's move-out also switches the old tenant's texts off and clears the unit pointer; say so if any part failed.
+        if (moRes && moRes.warning) toast(moRes.warning, 'warn');
       }
     }
 
@@ -6559,7 +6575,7 @@ async function submitMoveIn() {
     var newTenantBody = {
       First_Name: first, Last_Name: last, Phone: phone, Email: email,
       Property_ID: propId, Unit_ID: unitId||'',
-      Move_In_Date: moveIn || today,
+      Move_In_Date: moveIn,
       Active: 'TRUE',
     };
     var res = await apiWithTimeout(api('POST', '/tenant/add', newTenantBody), 10000);
@@ -6584,9 +6600,14 @@ async function submitMoveIn() {
     });
     if (checkedWOs.length && res.id) {
       msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Linking to '+checkedWOs.length+' open WO(s)…</div>';
+      var linkFails = [];
       for (var j = 0; j < checkedWOs.length; j++) {
-        await api('POST', '/wo-tenant/add', { wo_id: checkedWOs[j], tenant_id: res.id, added_by: 'admin-movein' }).catch(function(){});
+        try {
+          var lr = await api('POST', '/wo-tenant/add', { wo_id: checkedWOs[j], tenant_id: res.id, added_by: 'admin-movein' });
+          if (lr && lr.error) linkFails.push(checkedWOs[j] + ': ' + lr.error);
+        } catch (linkErr) { linkFails.push(checkedWOs[j] + ': ' + (linkErr && linkErr.message || linkErr)); }
       }
+      if (linkFails.length) toast('Tenant moved in, but ' + linkFails.length + ' work order link(s) failed: ' + linkFails.join('; '), 'error');
     }
 
     closeModal('modal-move-in');
@@ -13639,7 +13660,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group"><label>Email</label><input type="email" id="mi-email" placeholder="tenant@email.com"></div>
       <div class="form-group full">
         <label>Move-In Date</label>
-        <input type="date" id="mi-date">
+        <input type="date" id="mi-date" required onchange="loadMoveInWOPanel(document.getElementById('mi-property').value, document.getElementById('mi-unit').value)">
       </div>
       <div id="mi-wo-panel" style="display:none;grid-column:1/-1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px">
         <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">📋 Add to Open Work Orders at this address</div>

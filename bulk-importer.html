@@ -87,7 +87,7 @@
     <div class="card">
       <div class="card-title">Step 2 — Paste your spreadsheet</div>
       <p class="muted">Paste rows copied from a CSV or spreadsheet (first row = column headers). One row per unit/tenant — multiple rows with the same address become one multi-unit property automatically.</p>
-      <p class="muted" style="margin-top:6px">Recognized columns (any order, case-insensitive): <code>Property</code>/<code>Address</code>, <code>Unit</code>/<code>Units</code>, <code>Renter Name</code>/<code>Tenant Name</code>, <code>Phone</code>, <code>Email</code>/<code>Email Address</code><span id="owner-cols-hint">, and optionally <code>Owner Name</code>, <code>Owner Email</code>, <code>Owner Phone</code> (matched to an existing owner only — never auto-created)</span>.</p>
+      <p class="muted" style="margin-top:6px">Recognized columns (any order, case-insensitive): <code>Property</code>/<code>Address</code>, <code>Unit</code>/<code>Units</code>, <code>Renter Name</code>/<code>Tenant Name</code>, <code>Phone</code>, <code>Email</code>/<code>Email Address</code>, and <b><code>Move In Date</code> (required for every tenant — a tenant row without one is refused)</b><span id="owner-cols-hint">, and optionally <code>Owner Name</code>, <code>Owner Email</code>, <code>Owner Phone</code> (matched to an existing owner only — never auto-created)</span>.</p>
       <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
         <button class="btn ghost" style="flex:1" onclick="document.getElementById('csv-file-input').click()">📄 Choose CSV file…</button>
         <input type="file" id="csv-file-input" accept=".csv,.tsv,text/csv,text/tab-separated-values,text/plain" style="display:none" onchange="loadCsvFile(this.files[0])">
@@ -261,6 +261,7 @@ function mapRow(p){
     Tenant_Name: pick(p, ['tenant_name','renter_name','name','tenant']),
     Tenant_Phone: pick(p, ['tenant_phone','phone']),
     Tenant_Email: pick(p, ['tenant_email','email','email_address']),
+    Move_In_Date: pick(p, ['move_in_date','move_in','move_in_dt','movein','movein_date']),
     Owner_Name: pick(p, ['owner_name','owner']),
     Owner_Email: pick(p, ['owner_email']),
     Owner_Phone: pick(p, ['owner_phone'])
@@ -321,6 +322,14 @@ function renderPreview(r){
     });
     flags += '</tbody></table>';
   }
+  if (r.tenants_refused_no_move_in_date && r.tenants_refused_no_move_in_date.length) {
+    flags += '<div class="banner err">✖ '+r.tenants_refused_no_move_in_date.length+' tenant(s) will be REFUSED — no usable move-in date. Add a Move In Date column (YYYY-MM-DD or M/D/YYYY) and paste again:</div>';
+    flags += '<table><thead><tr><th>Name</th><th>Address / unit</th><th>Why</th></tr></thead><tbody>';
+    r.tenants_refused_no_move_in_date.forEach(function(f){
+      flags += '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.address)+' / '+esc(f.unit_label)+'</td><td>'+esc(f.reason)+'</td></tr>';
+    });
+    flags += '</tbody></table>';
+  }
   if (r.owners_flagged_no_match && r.owners_flagged_no_match.length) {
     flags += '<div class="banner">⚠ '+r.owners_flagged_no_match.length+' propert(y/ies) named an owner with no confident match in Owners — not attached. Add the owner in the Hub and attach manually:</div>';
     flags += '<table><thead><tr><th>Address</th><th>Owner name given</th><th>Email / phone given</th></tr></thead><tbody>';
@@ -345,7 +354,7 @@ function runImport(){
   var path = TARGET==='hub' ? '/bulk-import' : '/insp/bulk-import';
   var custId = TARGET==='insp' ? document.getElementById('insp-customer').value : null;
   var totals = TARGET==='hub'
-    ? { properties_created:0, properties_matched:0, units_created:0, units_matched:0, tenants_created:0, tenants_skipped_existing:0, tenants_flagged_elsewhere:[], owners_flagged_no_match:[] }
+    ? { properties_created:0, properties_matched:0, units_created:0, units_matched:0, tenants_created:0, tenants_skipped_existing:0, tenants_flagged_elsewhere:[], tenants_refused_no_move_in_date:[], owners_flagged_no_match:[] }
     : { properties_created:0, properties_matched:0, units_created:0, units_skipped_duplicate:0 };
   var idx = 0;
   function next(){
@@ -353,7 +362,8 @@ function runImport(){
       btn.disabled = false;
       var card = document.getElementById('result-card'), body = document.getElementById('result-body');
       card.classList.remove('hide'); card.scrollIntoView({ behavior:'smooth' });
-      var html = '<div class="banner ok">✓ Import complete.</div>';
+      var html = (TARGET==='hub' && totals.tenants_refused_no_move_in_date.length) ? '<div class="banner err">✖ Import finished, but '+totals.tenants_refused_no_move_in_date.length+' tenant(s) were REFUSED because they had no move-in date (listed below). Properties and units were still imported.</div>' : '<div class="banner ok">✓ Import complete.</div>';
+      if (TARGET==='hub' && totals.tenants_refused_no_move_in_date.length) { html += '<table><thead><tr><th>Name</th><th>Address / unit</th></tr></thead><tbody>' + totals.tenants_refused_no_move_in_date.map(function(f){ return '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.address)+' / '+esc(f.unit_label)+'</td></tr>'; }).join('') + '</tbody></table>'; }
       if (TARGET==='hub') {
         html += '<div class="stats-row">'+statBox(totals.properties_created,'New properties')+statBox(totals.properties_matched,'Matched')+statBox(totals.units_created,'New units')+statBox(totals.tenants_created,'New tenants')+'</div>';
         if (totals.tenants_flagged_elsewhere.length) html += '<div class="banner">⚠ '+totals.tenants_flagged_elsewhere.length+' tenant(s) need manual review — matched an existing phone on a different unit.</div>';
@@ -375,6 +385,7 @@ function runImport(){
         totals.units_created += r.units_created||0; totals.units_matched += r.units_matched||0;
         totals.tenants_created += r.tenants_created||0; totals.tenants_skipped_existing += r.tenants_skipped_existing||0;
         totals.tenants_flagged_elsewhere = totals.tenants_flagged_elsewhere.concat(r.tenants_flagged_elsewhere||[]);
+        totals.tenants_refused_no_move_in_date = totals.tenants_refused_no_move_in_date.concat(r.tenants_refused_no_move_in_date||[]);
         totals.owners_flagged_no_match = totals.owners_flagged_no_match.concat(r.owners_flagged_no_match||[]);
       } else {
         totals.properties_created += r.properties_created||0; totals.properties_matched += r.properties_matched||0;
