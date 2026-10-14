@@ -102,7 +102,7 @@ var pinTimer = null;
 var submitting = false;
 var topMsg = '';
 
-function newUnit(){ return { label:'', status:'', tenant:{first:'',last:'',phone:'',email:''}, access:{method:'',code:'',location:'',note:''} }; }
+function newUnit(){ return { label:'', status:'', tenant:{first:'',last:'',phone:'',email:'',move_in:''}, access:{method:'',code:'',location:'',note:''} }; }
 function newProperty(){ return { address:'', city:'', type:'', subtype:'', unit_count:'', units:[ newUnit() ] }; }
 function isSingle(p){ return p.type === 'house' || p.type === 'rowhome'; }
 
