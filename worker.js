@@ -18828,7 +18828,7 @@ function buildArReportEmailHtml(group, link) {
 }
 
 // House-style mirror of buildArReportEmailHtml, for scopeProposalSend (B-210 follow-on).
-function buildScopeProposalEmailHtml({ ownerName, addr, url }) {
+function buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl }) {
   return `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1b1f24;">
     <h2 style="color:#1d4ed8;">Ridge Co — Estimate for ${addr}</h2>
     <p>Hi ${ownerName || 'there'},</p>
