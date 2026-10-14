@@ -22,8 +22,8 @@ const W = new Function(mod + '\nreturn WOStatus;')();
 // ---- 2. no hand-written status list anywhere else -------------------------------------------
 const KNOWN = new Set([...W.statuses, ...W.legacy, ...W.reserved]);
 const arr = /\[\s*((?:'[^'\n]*'|"[^"\n]*")(?:\s*,\s*(?:'[^'\n]*'|"[^"\n]*"))*)\s*,?\s*\]/g;
-// Allowed leftovers: the Log Invoice button line, which PR #256 deletes (remove this entry when it merges).
-const ALLOW = [{ file: 'index.html', text: "['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice'" }];
+// Allowed leftovers: none (the Log Invoice button line was deleted by PR #256).
+const ALLOW = [];
 const files = ['worker.js', ...fs.readdirSync(new URL('..', import.meta.url)).filter(f => f.endsWith('.html'))];
 const offenders = [];
 for (const f of files) {

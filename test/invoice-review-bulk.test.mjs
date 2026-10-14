@@ -47,6 +47,7 @@ const idcSrc     = grab(wsrc, 'function idColIndex(');
 const nextIdSrc  = grab(wsrc, 'function nextSafeId(');
 const jsonSrc    = grab(wsrc, 'function json(data');
 const bulkSrc    = grab(wsrc, 'async function approveInvoiceReviewBulk(');
+const centsSrc   = grab(wsrc, 'function sameCents(');   // dollar amounts compare by whole cents (queue #100)
 
 // ── In-memory fake Sheets backend ────────────────────────────────────────────
 function makeDb() {
@@ -105,7 +106,7 @@ function makeFetch(db, callLog) {
 function build(db, callLog) {
   const src = [
     'const CORS = {};', // json() spreads this into response headers; irrelevant to these assertions
-    cacheSrc, srSrc, ensureSrc, colSrc, idcSrc, nextIdSrc, jsonSrc, bulkSrc,
+    cacheSrc, srSrc, ensureSrc, colSrc, idcSrc, nextIdSrc, jsonSrc, centsSrc, bulkSrc,
     'return { approveInvoiceReviewBulk };',
   ].join('\n');
   return new Function('getAccessToken', 'fetch', 'setTimeout',

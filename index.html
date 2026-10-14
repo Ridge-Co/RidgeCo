@@ -934,19 +934,6 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
-<!-- INVOICE MODAL -->
-<div class="modal-overlay" id="modal-invoice">
-  <div class="modal">
-    <div class="modal-header"><div class="modal-title">LOG INVOICE</div><button class="modal-close" onclick="closeModal('modal-invoice')">✕</button></div>
-    <div class="form-grid">
-      <div class="form-group full"><label>Amount ($)</label><input type="number" id="inv-amount" placeholder="0.00" step="0.01"></div>
-      <div class="form-group full"><label>QB Reference # (optional)</label><input type="text" id="inv-qb" placeholder="QuickBooks ref"></div>
-      <div class="form-group full"><label>Notes</label><textarea id="inv-notes" placeholder="Invoice notes..."></textarea></div>
-    </div>
-    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-invoice')">Cancel</button><button class="btn" onclick="submitInvoice()">Log Invoice</button></div>
-  </div>
-</div>
-
 <!-- VOID / HIDE WORK ORDER MODAL -->
 <div class="modal-overlay" id="modal-void-wo">
   <div class="modal">
@@ -1627,7 +1614,6 @@ function ownerOptionsHtml(selectedId, firstOptionHtml) {
   }).join('');
 }
 var assignWOId = null;
-var invoiceWOId = null;
 
 // ── Numeric address sort ───────────────────────────────────────────
 function goToWorkOrder(woId) {
@@ -2738,7 +2724,6 @@ function openWODetail(woId) {
   if (WOStatus.sets.PRE_START.includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
   if (WOStatus.sets.VENDOR_STARTED.includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
-  if (['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
   if (!WOStatus.sets.CLOSED_TERMINAL.includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
@@ -3475,7 +3460,6 @@ function submitSplitWO() {
   }).catch(function(e){ btn.disabled = false; btn.textContent = 'Confirm Split'; logError('Split WO', e.message); toast('Error: ' + e.message, 'error'); });
 }
 
-function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
 
 // ── Send Work Order to Vendor (B-117 shareable WO) ────────────
 var _shareData = null, _shareWOId = null;
@@ -3562,15 +3546,6 @@ function revokeShare(){
     else toast('Could not revoke','error');
   }).catch(function(){ toast('Could not revoke','error'); });
 }
-function submitInvoice(){
-  var amount=document.getElementById('inv-amount').value;
-  if(!amount){toast('Enter amount','error');return;}
-  var wo=state.workorders.find(function(w){return w.ID===invoiceWOId;});
-  api('POST','/invoice',{wo_id:invoiceWOId,vendor_id:wo?wo.Vendor_ID||'':'',amount:amount,qb_ref:document.getElementById('inv-qb').value,notes:document.getElementById('inv-notes').value})
-    .then(function(){toast('Invoice logged','success');closeModal('modal-invoice');loadAll();})
-    .catch(function(e){logError('Log invoice',e.message);toast('Error: '+e.message,'error');});
-}
-
 // ── New WO ───────────────────────────────────────────────────
 function openNewWOModal() {
   // Clear EVERY field so nothing persists from previous WO creation
@@ -9266,6 +9241,26 @@ function invRenderStatus(k, s) {
 // with allowBelowCost:true; bulk mode just excludes it and says so), { alreadyKnownId, woId }
 // if this job is already approved and queued, or { payload, memo, charge, woId, bill } when
 // clear to send.
+// True when a price was typed (> 0) and it is not the same whole-cent amount as the approved one.
+// A blank or zero box is "nothing typed", not a mismatch. Unreadable approved figure counts as a
+// mismatch so it can never silently pass.
+function invPriceMismatch(typed, approvedRaw) {
+  var t = parseFloat(typed);
+  if (!(t > 0)) return false;
+  var a = parseFloat(approvedRaw);
+  if (!isFinite(a)) return true;
+  return Math.round(t * 100) !== Math.round(a * 100);
+}
+// The plain-language message + the two safe choices, shared by the Invoice Builder and the
+// bill-less fallback so they cannot word it differently.
+function invPriceMismatchHtml(approved, typed, id) {
+  return '<div style="color:var(--warn);font-size:12px;line-height:1.5">' +
+    '⚠ This job is already approved at <b>$' + approved.toFixed(2) + '</b>, but the price box says <b>$' + typed.toFixed(2) + '</b>. ' +
+    'QuickBooks would get $' + approved.toFixed(2) + ' — nothing has been changed.<br>' +
+    '<button onclick="previewQBSend(\'' + esc(String(id)) + '\')" style="margin-top:6px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;padding:8px 12px;cursor:pointer">Preview the approved $' + approved.toFixed(2) + '</button>' +
+    '<div style="color:var(--muted);margin-top:6px">To use $' + typed.toFixed(2) + ' instead, withdraw the approval on the Send to QB screen, then price it again.</div></div>';
+}
+
 function invBuildApprovalPayload(k, opts) {
   opts = opts || {};
   var woId = _invWO[k] || k;
@@ -9276,6 +9271,12 @@ function invBuildApprovalPayload(k, opts) {
 
   var known = _invIRRow[k];
   if (bill && (bill.Status || '').toLowerCase() === 'reviewed' && known && known.id) {
+    // Already approved. The preview shows the APPROVED figure, so if the price box has moved
+    // since, say so instead of previewing a number that is not the one in the box (queue #100:
+    // "sends a different number than you typed"). Nothing is repriced automatically.
+    if (invPriceMismatch(charge, known.customer_total)) {
+      return { priceMismatch: true, approved: parseFloat(known.customer_total), typed: charge, id: known.id, woId: woId };
+    }
     return { alreadyKnownId: known.id, woId: woId };
   }
 
@@ -9330,6 +9331,11 @@ function invBillThisJob(k) {
 
   var built = invBuildApprovalPayload(k);
   if (built.error) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">' + esc(built.error) + '</span>'; return; }
+
+  if (built.priceMismatch) {
+    if (msg) msg.innerHTML = invPriceMismatchHtml(built.approved, built.typed, built.id);
+    return;
+  }
 
   // Already approved AND queued — skip straight to the preview-first send modal.
   if (built.alreadyKnownId) {
@@ -9464,6 +9470,13 @@ function sendWOToQuickBooks(woId) {
     if (!row) {
       if (msgEl) msgEl.innerHTML = '<span style="color:var(--warn)">No approved bill for this WO yet — approve it in ' +
         '<a href="#" onclick="closeModal(\'modal-wo-detail\');showPage(\'invoice-review\',null);return false" style="color:var(--accent)">Review Bills</a> first.</span>';
+      return;
+    }
+    // Same guard as the Invoice Builder: never open a preview of a figure other than the one typed.
+    var typedEl = document.getElementById('inv-charge-' + woId);
+    var typed = typedEl ? parseFloat(typedEl.value) : NaN;
+    if (invPriceMismatch(typed, row.customer_total)) {
+      if (msgEl) msgEl.innerHTML = invPriceMismatchHtml(parseFloat(row.customer_total), typed, row.id);
       return;
     }
     if (msgEl) msgEl.innerHTML = '';
@@ -11785,11 +11798,12 @@ function irBulkApprove() {
   var btn = document.getElementById('ir-bulk-approve-btn');
   var statusEl = document.getElementById('ir-bulk-status');
 
-  var ready = [], belowCost = [], errors = [], alreadyApproved = [];
+  var ready = [], belowCost = [], errors = [], alreadyApproved = [], mismatched = [];
   checks.forEach(function(cb) {
     var i = cb.getAttribute('data-i'), k = 'ir' + i;
     var built = invBuildApprovalPayload(k);
     if (built.error) { errors.push({ i: i, k: k, error: built.error }); return; }
+    if (built.priceMismatch) { mismatched.push({ i: i, k: k, approved: built.approved, typed: built.typed }); return; }   // already approved at another price: never re-approved in bulk
     if (built.alreadyKnownId) { alreadyApproved.push({ i: i, k: k }); irHideCard(k); return; }
     // A below-cost item needs its own explicit "you'd lose money" confirmation — firing N
     // browser confirm() dialogs back to back in a batch is a bad experience and easy to
@@ -11800,7 +11814,8 @@ function irBulkApprove() {
   });
 
   if (!ready.length) {
-    var why = belowCost.length ? (belowCost.length + ' selected bill(s) are priced BELOW cost — approve those individually, they need their own confirmation.')
+    var why = mismatched.length ? (mismatched.length + ' selected bill(s) were already approved at a different price than the price box now shows - open each one and use its own card to resolve it.')
+      : belowCost.length ? (belowCost.length + ' selected bill(s) are priced BELOW cost — approve those individually, they need their own confirmation.')
       : (errors.length ? 'None of the selected bills have a price set yet.' : 'Nothing left to approve — those were already approved.');
     if (statusEl) statusEl.innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:8px">' + esc(why) + '</div>';
     return;
@@ -11809,6 +11824,7 @@ function irBulkApprove() {
   var total = ready.reduce(function(s, r) { return s + (parseFloat(r.built.payload.customer_total) || 0); }, 0);
   var msg = 'Approve ' + ready.length + ' bill' + (ready.length === 1 ? '' : 's') + ' — $' + total.toFixed(2) + ' total?' +
     (belowCost.length ? '\n\n(' + belowCost.length + ' other selected bill(s) are below cost and will be SKIPPED — approve those one at a time.)' : '') +
+    (mismatched.length ? '\n\n(' + mismatched.length + ' other selected bill(s) were already approved at a different price and will be SKIPPED — open each one to resolve it.)' : '') +
     '\n\nThis moves them to "approved, awaiting QuickBooks." Nothing is sent to QuickBooks yet — you still send each one from Send & Track / Send to QB.';
   if (!confirm(msg)) return;
 
