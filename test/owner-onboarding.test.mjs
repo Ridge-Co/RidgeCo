@@ -23,7 +23,7 @@ const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n,
 
 const owner = () => ({ first: 'Pat', last: 'Lee', business_choice: 'name', business_name: '', phone: '(410) 555-0142', billing_email: 'Pat@Example.com',
   billing_address: { street: '12 Main St', city: 'Baltimore', state: 'md', zip: '21201' }, pin: 'pat48213' });
-const tenantUnit = (label = '') => ({ label, status: 'tenant', tenant: { first: 'Sam', last: 'Doe', phone: '410-555-0199', email: '' } });
+const tenantUnit = (label = '') => ({ label, status: 'tenant', tenant: { first: 'Sam', last: 'Doe', phone: '410-555-0199', email: '', move_in: '2026-01-01' } });
 const house = (units) => ({ address: '5 Oak Ave', city: 'Baltimore', type: 'house', units: units || [tenantUnit()] });
 const good = () => ({ owner: owner(), properties: [house()], sms_consent: true });
 const errFields = (r) => r.errors.map(e => e.field);
