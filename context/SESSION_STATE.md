@@ -300,3 +300,10 @@ Branch `feat/str-cleaning-scheduler` (rebased on main twice; staging is reset to
 - First catch-up (19:03 UTC): daily_digest, daily_receipts, daily_receipts_post, daily_turnover ran OK. `daily_qb_sync` timed out and stayed "running"; found it would be re-picked every call, fixed in #311.
 - OPEN: `daily_qb_sync` needs time-slicing to ever finish (see FEATURE_LOG 216). `sms_delivery_check`, `review_wed`, `hub_impr_daily`, `str_digest_wed` had not run yet at 19:30 UTC; check next ticks.
 - Cleaning scheduler unchanged: ON, test mode ON, calendar sync not built, Mon/Wed/Fri email OFF.
+
+## Checkpoint - Oct 14 2026 (5:10 pm ET) daily_qb_sync fix live
+- Brett: "build the fix", then "merge it". Live on prod: `.25-qb-sync-sliced` (PR #316; staging PR #315). FEATURE_LOG rule 217.
+- `daily_qb_sync` had used its 3 tries for Oct 14 before the deploy, so it shows overdue ("started N min ago and never finished") until its first run on the new code, Oct 15 after 07:00 ET. Check `/cron/status`; the job result carries `detail.qb_sync.timings_ms` (payables / write / rows / sweep) and slice number.
+- If it ever stays partial: Config row `qb_sync_progress` holds today's progress (delete the row to restart the day). 13th slice in a day = loud failure.
+- `hub_impr_daily` went OK at 21:01 UTC (the GitHub 403 was transient). Overdue list now only `daily_qb_sync`.
+- Still open: STR_Log duplicate ID race (cosmetic), calendar sync, Mon/Wed/Fri digest, going live (Cleaning test mode OFF - Brett's approval only), first `Selftest_Results` row check.
