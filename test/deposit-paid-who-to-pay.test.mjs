@@ -17,7 +17,7 @@ const t = (n, c) => { if (c) pass++; else { fail++; console.log('  FAIL:', n); }
 
 const src = [
   'function alertDebounceOk(', 'function firstMilestoneForSignature(', 'function depositMilestoneForSignature(', 'function resolveScopeDepositInvoice(',
-  'function classifyMissingDeposit(', 'async function claimDepositTextMarker(',
+  'function classifyMissingDeposit(', 'function depositSweepSkipSet(', 'async function claimDepositTextMarker(',
   'async function scopeDepositInvoiceId(', 'async function scopeDepositPaidTransition(', 'async function logAndCollectError(',
   'async function depositSweepSurface(', 'async function processDepositPaidSweep(',
 ].map(s => grab(wsrc, s)).join('\n');
@@ -104,6 +104,26 @@ function makeWorld(opts = {}) {
   const r2 = await api.processDepositPaidSweep(env);
   t('2nd sweep same day still reports in result', r2.not_found.length === 1);
   t('...but telemetry + SMS rate-limited to once/day/scope', w.telemetry.length === 1 && w.sms.length === 1);
+}
+// skip list (Oct 14 2026): Brett said stop alarming on scopes with no deposit invoice that never will have one
+{
+  const { api, w, env } = makeWorld({ milestones: [], cfg: { admin_phone: '+15550001111', DEPOSIT_SWEEP_SKIP_SCOPES: '4, 8 ,6' } });
+  const r = await api.processDepositPaidSweep(env);
+  t('skip list: listed scope with no invoice is NOT a failure (ok, no not_found)', r.ok === true && !r.not_found.length && !r.errors.length);
+  t('skip list: ...and is reported under skipped (never silent)', r.skipped.length === 1 && r.skipped[0].scope === '8' && r.skipped[0].wo_id === 'WO-1227' && /DEPOSIT_SWEEP_SKIP_SCOPES/.test(r.skipped[0].reason) && /no deposit invoice/.test(r.skipped[0].reason));
+  t('skip list: no admin SMS and no telemetry failure row for the skipped scope', w.sms.length === 0 && w.telemetry.length === 0);
+}
+{
+  // a skip-listed scope is only muted for the missing-invoice alarm: once an invoice exists it is checked and paid like any other
+  const { api, w, env } = makeWorld({ cfg: { admin_phone: '+15550001111', DEPOSIT_SWEEP_SKIP_SCOPES: '8' } });
+  const r = await api.processDepositPaidSweep(env);
+  t('skip list: a listed scope that HAS an invoice still transitions when paid', r.transitioned.length === 1 && w.scopes[0].Approval_Stage === 'Approved' && !r.skipped.length);
+}
+{
+  // a scope that is NOT on the list still alarms
+  const { api, w, env } = makeWorld({ milestones: [], cfg: { admin_phone: '+15550001111', DEPOSIT_SWEEP_SKIP_SCOPES: '4,6' } });
+  const r = await api.processDepositPaidSweep(env);
+  t('skip list: an unlisted scope still alarms', r.not_found.length === 1 && r.ok === false && !r.skipped.length && w.sms.length === 1);
 }
 // not_found: QB has no such invoice
 {

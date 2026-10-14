@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.22-owner-tenant-roster-slices';
+const BUILD_VERSION = '2026-10-14.22-sched-daily-first';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -11808,10 +11808,19 @@ async function depositSweepSurface(env, out, cfg, kind, entry) {
 // NEVER throws and NEVER swallows: every failure is in `errors` AND in Ops_Telemetry.
 // not_found = a Pre-approved scope whose deposit invoice cannot be resolved for real (no signature, milestone 1 billed with
 // no invoice id, or signed 24h+ ago with none) or cannot be fetched from QuickBooks. ok is false when errors/not_found exist.
+// Pure. Config DEPOSIT_SWEEP_SKIP_SCOPES = comma/space separated Scope IDs Brett has said to stop alarming on (Oct 14 2026:
+// scopes 4 and 6 have no deposit invoice and never will). Only the "no deposit invoice" ALARM is muted for a listed scope:
+// if an invoice shows up later the sweep still checks it and still marks the deposit paid. Every muted scope is reported in
+// the sweep result under `skipped` (never dropped), so the skip is visible in /cron/status detail and on the Who To Pay page.
+function depositSweepSkipSet(cfg) {
+  const raw = String((cfg && cfg.DEPOSIT_SWEEP_SKIP_SCOPES) == null ? '' : cfg.DEPOSIT_SWEEP_SKIP_SCOPES);
+  return new Set(raw.split(/[\s,;]+/).map(x => x.trim()).filter(Boolean));
+}
 async function processDepositPaidSweep(env) {
-  const out = { ok: true, checked: 0, transitioned: [], not_found: [], awaiting_invoice: [], errors: [] };
+  const out = { ok: true, checked: 0, transitioned: [], not_found: [], awaiting_invoice: [], skipped: [], errors: [] };
   let cfg = {};
   try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; await logAndCollectError(env, out.errors, 'deposit_sweep_config', 'processDepositPaidSweep', 'fetchConfig', e); }
+  const skipScopes = depositSweepSkipSet(cfg);
   let scopes, tabs, token;
   try {
     scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
@@ -11835,7 +11844,8 @@ async function processDepositPaidSweep(env) {
       const { sig, first, invoiceId, source } = await scopeDepositInvoiceId(env, sc.ID, tabs);
       if (!invoiceId) {
         const k = classifyMissingDeposit(sig, first, Date.now());
-        if (k.alarm) await depositSweepSurface(env, out, cfg, 'not_found', Object.assign({}, base, { reason: k.reason }));
+        if (k.alarm && skipScopes.has(String(sc.ID))) out.skipped.push(Object.assign({}, base, { reason: 'on the DEPOSIT_SWEEP_SKIP_SCOPES list: ' + k.reason }));
+        else if (k.alarm) await depositSweepSurface(env, out, cfg, 'not_found', Object.assign({}, base, { reason: k.reason }));
         else out.awaiting_invoice.push(Object.assign({}, base, { reason: k.reason }));
         continue;
       }
@@ -15673,7 +15683,7 @@ function schedEtParts(date) {
 }
 function schedAtMinutes(at) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); return m ? (+m[1]) * 60 + (+m[2]) : NaN; }
 
-// ── The registry. Priority = array order. Add a job here; never add a cron. ──────────────────────────
+// ── The registry. Priority = daily/weekly jobs first, then interval jobs, each group in array order. Add a job here; never add a cron. ──────────────────────────
 // kind 'interval': due when >= every_min since its last START. 'daily'/'weekly': due once per ET calendar day
 // (and, weekly, only on `dow`) once ET wall-clock >= `at` - and they CATCH UP: if the Apps Script was down at
 // 7am the job runs on the next tick that day. retry:false = never auto-retry a failed run (it may have
@@ -15734,8 +15744,12 @@ function schedDueJobs(state, now, jobs, opts) {
     const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate);
     if (d) out.push({ name: job.name, key: d.key });
   }
-  return out;
+  // DAILY/WEEKLY JOBS GO FIRST (Oct 14 2026). They run once a day, so they are cheap; the 15-minute jobs come back around anyway.
+  // With plain array order the six interval jobs used ~all of the Hub's time share every tick, so no daily/weekly job had run
+  // since the Apps Script clock started. Stable: array order is kept inside each group.
+  return out.filter(d => schedKindOf(jobs || SCHED_JOBS, d.name) !== 'interval').concat(out.filter(d => schedKindOf(jobs || SCHED_JOBS, d.name) === 'interval'));
 }
+function schedKindOf(jobs, name) { const j = jobs.find(x => x.name === name); return j ? j.kind : 'interval'; }
 // FIRST-EVER TICK ONLY (Scheduler_State cell blank/absent): mark every daily/weekly job whose slot has ALREADY PASSED today
 // (ET) as done for today, so the first tick cannot re-send a digest / weekly review / AR report that the old Cloudflare
 // crons (or a person) already ran this morning. Mutates `state`; returns the seeded names. No last_ok is forged: the entry
