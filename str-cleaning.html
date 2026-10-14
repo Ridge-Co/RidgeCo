@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cleaning scheduler</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --surface2:#f8f9fb; --border:#dfe3e8; --text:#1c2430; --muted:#5f6b7a;
+    --accent:#1d4ed8; --accent-fg:#fff; --ok:#1a7f4b; --okbg:#e7f6ec; --err:#b42318; --errbg:#fdecea; --errstrong:#b42318;
+    --warn:#8a5a00; --warnbg:#fdf3e0; --info:#1d4ed8; --infobg:#eaf1fd; --chip:#eef2f7; --shadow:rgba(0,0,0,.45);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#10151c; --surface:#19202a; --surface2:#1f2733; --border:#2d3745; --text:#e7ecf3; --muted:#9aa7b8;
+      --accent:#5b8def; --accent-fg:#0b1220; --ok:#4cc38a; --okbg:#12301f; --err:#ff8a7d; --errbg:#3a1714; --errstrong:#ff6b5b;
+      --warn:#e6bd55; --warnbg:#33290f; --info:#8db3ff; --infobg:#152642; --chip:#232d3a; --shadow:rgba(0,0,0,.65);
+    }
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.4;overflow-wrap:anywhere}
+  .hide{display:none !important}
+  .muted{color:var(--muted);font-size:13px}
+  .say{font-size:14px;color:var(--muted);margin:6px 0 0}
+  b{font-weight:700}
+
+  /* top bar: always visible, one line of coverage status */
+  .topbar{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--border)}
+  .topbar .row1{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 14px;max-width:1100px;margin:0 auto}
+  .topbar h1{font-size:17px;margin:0}
+  .linkbtn{background:none;border:none;color:var(--accent);font-size:14px;font-weight:600;cursor:pointer;min-height:44px;padding:0 6px}
+  .cover{padding:10px 14px;font-weight:700;font-size:15px;text-align:center}
+  .cover.ok{background:var(--okbg);color:var(--ok)} .cover.bad{background:var(--errbg);color:var(--err)} .cover.warn{background:var(--warnbg);color:var(--warn)} .cover.load{background:var(--chip);color:var(--muted)}
+  main{padding:12px 12px 70px;max-width:1100px;margin:0 auto}
+
+  .msg{border-radius:12px;padding:12px 14px;margin:0 0 12px;font-size:14px;border:1px solid transparent}
+  .msg.err{background:var(--errbg);color:var(--err);border-color:var(--err)}
+  .msg.warn{background:var(--warnbg);color:var(--warn);border-color:var(--warn)}
+  .msg.ok{background:var(--okbg);color:var(--ok);border-color:var(--ok)}
+  .msg.info{background:var(--infobg);color:var(--info);border-color:var(--info)}
+  .msg b{display:block;margin-bottom:2px}
+  .msg ul{margin:6px 0 0;padding-left:20px}
+  .msg .btn{margin-top:10px}
+  .alert{border-left-width:6px}
+  .alert.urgent{background:var(--errstrong);color:#fff;border-color:var(--errstrong)}
+  .alert.urgent .say{color:#fff;opacity:.9}
+  .alert .lines div{margin:2px 0}
+
+  details.sec{background:var(--surface);border:1px solid var(--border);border-radius:14px;margin-bottom:12px}
+  details.sec>summary{list-style:none;cursor:pointer;min-height:52px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:17px;font-weight:700}
+  details.sec>summary::-webkit-details-marker{display:none}
+  details.sec>summary .meta{font-size:13px;font-weight:600;color:var(--muted);margin-left:auto;text-align:right}
+  details.sec>summary::after{content:"▾";color:var(--muted);font-size:14px}
+  details.sec[open]>summary::after{content:"▴"}
+  details.sec>.body{padding:0 14px 14px}
+
+  .btn{min-height:48px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:15px;font-weight:600;cursor:pointer;font-family:inherit}
+  .btn.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+  .btn.danger{background:var(--err);color:#fff;border-color:var(--err)}
+  .btn.ghost{background:transparent}
+  .btn.sm{min-height:44px;padding:8px 12px;font-size:14px}
+  .btn.full{width:100%}
+  .btn:disabled{opacity:.55;cursor:not-allowed}
+  .btn:active:not(:disabled){opacity:.85}
+  .pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:13px;font-weight:700;background:var(--chip);color:var(--muted)}
+  .pill.ok{background:var(--okbg);color:var(--ok)} .pill.bad{background:var(--errbg);color:var(--err)} .pill.warn{background:var(--warnbg);color:var(--warn)} .pill.info{background:var(--infobg);color:var(--info)}
+  .chip{display:inline-block;background:var(--chip);border-radius:8px;padding:3px 8px;font-size:13px;font-weight:600;color:var(--muted)}
+
+  /* turnover + cleaner cards */
+  .grid{display:grid;grid-template-columns:1fr;gap:10px}
+  @media (min-width:900px){ .grid{grid-template-columns:1fr 1fr} }
+  .tcard,.ccard{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px;min-width:0}
+  .tcard.urgent{border-left:6px solid var(--errstrong)}
+  .t-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  .t-date{font-size:17px}
+  .offers{margin:8px 0 0;padding:0;list-style:none;font-size:14px}
+  .offers li{padding:3px 0;border-top:1px dashed var(--border)}
+  .offers li:first-child{border-top:none}
+  .t-actions,.c-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .t-actions .btn,.c-actions .btn{flex:1 1 140px}
+  .seg{display:flex;gap:6px;margin:0 0 10px}
+  .seg button{flex:1;min-height:44px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:14px;font-weight:600;cursor:pointer}
+  .seg button.sel{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+  .kv{display:grid;grid-template-columns:1fr;gap:2px;font-size:14px;margin-top:6px}
+  .kv span.k{color:var(--muted)}
+  .fb{margin-top:8px}
+
+  /* switches */
+  .swrow{border-top:1px solid var(--border);padding:12px 0}
+  .swrow:first-child{border-top:none}
+  .swhead{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .sw{min-height:48px;min-width:96px;border-radius:999px;border:2px solid var(--border);background:var(--chip);color:var(--muted);font-size:15px;font-weight:800;cursor:pointer;padding:0 16px;font-family:inherit}
+  .sw.on{background:var(--ok);border-color:var(--ok);color:#fff}
+  .sw:disabled{opacity:.55}
+  .nums{display:grid;grid-template-columns:1fr;gap:4px;margin:8px 0}
+  .nums div{display:flex;justify-content:space-between;gap:10px;border-top:1px solid var(--border);padding:6px 0;font-size:14px}
+  .nums div:first-child{border-top:none}
+  .nums b{white-space:nowrap}
+
+  /* forms + sheet */
+  input[type=text],input[type=tel],input[type=email],input[type=password],input[type=number],select{width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text);font-family:inherit}
+  label.fld{display:block;margin:12px 0 4px;font-size:13px;color:var(--muted);font-weight:600}
+  label.tog{display:flex;align-items:center;gap:12px;min-height:48px;margin-top:6px;padding:6px 0;font-size:15px;font-weight:600;cursor:pointer}
+  label.tog input{width:26px;height:26px;flex:none}
+  .modal{position:fixed;inset:0;background:var(--shadow);display:none;align-items:flex-end;justify-content:center;z-index:50}
+  .modal.open{display:flex}
+  .sheet{background:var(--surface);color:var(--text);width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px;max-height:92vh;overflow:auto}
+  .sheet h2{margin:2px 0 4px;font-size:19px}
+  .btnrow{display:flex;gap:10px;margin-top:16px}
+  .btnrow .btn{flex:1}
+  .btnrow .btn.primary,.btnrow .btn.danger{flex:2}
+  @media (min-width:700px){ .modal{align-items:center} .sheet{border-radius:16px} }
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:12px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw}
+  .toast.show{opacity:1}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  pre.txt{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;margin:6px 0 0;font-family:inherit;font-size:14px}
+  .out{margin-top:10px}
+  .out h4{margin:12px 0 4px;font-size:14px}
+  .out ul{margin:4px 0;padding-left:20px;font-size:14px}
+  .tool{border-top:1px solid var(--border);padding:12px 0}
+  .tool:first-of-type{border-top:none}
+  .loglist{font-size:13px}
+  .loglist .li{border-top:1px solid var(--border);padding:7px 0}
+  .loglist .li:first-child{border-top:none}
+  .soon{font-size:13px;color:var(--muted);text-align:center;padding:6px 0}
+  .stg{background:var(--warnbg);color:var(--warn);text-align:center;font-size:13px;font-weight:700;padding:4px}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Cleaning scheduler</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password" aria-label="Access code">
+  <div id="login-error" class="msg err hide" role="alert" style="margin-top:12px;text-align:left"></div>
+  <button class="btn primary full" id="login-btn" data-act="login" style="margin-top:12px">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <div class="topbar">
+    <div id="stg" class="stg hide">TEST SERVER (staging) - nothing here touches the real cleaners</div>
+    <div class="row1"><h1>Cleaning scheduler</h1><span><button class="linkbtn" data-act="refresh">Refresh</button><button class="linkbtn" data-act="logout">Sign out</button></span></div>
+    <div id="cover" class="cover load">Loading…</div>
+  </div>
+  <main>
+    <div id="flash"></div>
+    <div id="loaderr"></div>
+    <div id="alerts"></div>
+
+    <details class="sec" id="sec-turn" open>
+      <summary>Turnovers <span class="meta" id="m-turn"></span></summary>
+      <div class="body">
+        <div class="seg"><button data-act="filter" data-v="all" class="sel">Everything</button><button data-act="filter" data-v="open">Needs a cleaner</button></div>
+        <div id="turn-list"><p class="muted">Loading…</p></div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-clean" open>
+      <summary>Cleaners <span class="meta" id="m-clean"></span></summary>
+      <div class="body">
+        <p class="say" style="margin:0 0 10px">Cleaners are asked in queue order: number 1 first, then 2, and so on. Change the order by changing the queue number.</p>
+        <div id="clean-list"><p class="muted">Loading…</p></div>
+        <button class="btn primary full" data-act="addcleaner" style="margin-top:12px">Add a cleaner</button>
+        <p class="say">Opens a form. Nothing is saved until you press Save on it.</p>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-sw" open>
+      <summary>Switches <span class="meta" id="m-sw"></span></summary>
+      <div class="body"><div id="sw-body"><p class="muted">Loading…</p></div></div>
+    </details>
+
+    <details class="sec" id="sec-tools">
+      <summary>Tools: preview before you trust it</summary>
+      <div class="body">
+        <div class="tool">
+          <button class="btn primary full" data-act="run-dry">Preview what the scheduler would do now</button>
+          <p class="say">Reads your bookings and the cleaning calendar and shows what it WOULD do. Sends nothing, writes nothing.</p>
+          <div class="out" id="out-run"></div>
+        </div>
+        <div class="tool">
+          <button class="btn full" data-act="preview-msgs">Preview the cleaner texts</button>
+          <p class="say">Shows the wording of each text a cleaner can get, with a sample date. Sends nothing.</p>
+          <div class="out" id="out-msgs"></div>
+        </div>
+        <div class="tool">
+          <button class="btn full" data-act="digest-dry">Preview the Mon/Wed/Fri email</button>
+          <p class="say">Shows who would get the email and flags anyone it can't send to. Sends nothing.</p>
+          <div class="out" id="out-digest"></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="sec" id="sec-log">
+      <summary>Activity log <span class="meta" id="m-log"></span></summary>
+      <div class="body"><div id="log-list" class="loglist"><p class="muted">Loading…</p></div></div>
+    </details>
+
+    <div class="soon" id="soon"></div>
+  </main>
+</div>
+
+<div class="modal" id="sheet" aria-hidden="true"><div class="sheet" id="sheet-box" role="dialog" aria-modal="true" aria-labelledby="sh-title"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+var Q = new URLSearchParams(location.search);
+// ?api= may only point at the staging Worker (pre-merge testing); anything else is ignored.
+var WORKER = /^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(Q.get('api')||'') ? Q.get('api') : 'https://maintenance-hub.brett-2f8.workers.dev';
+var IS_STAGING = WORKER.indexOf('maintenance-hub-staging') !== -1;
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var S = null;                 // last good state from the server
+var filterMode = 'all';
+var loading = false;
+var ET = 'America/New_York';
+
+/* ---------- small helpers ---------- */
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function toast(m){ var t=$('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){ t.className='toast'; },2600); }
+function lsGet(){ try { return localStorage.getItem(SECRET_KEY) || ''; } catch(e){ storageProblem = 'This browser is blocking saved logins, so you will have to enter the code each visit (' + e.message + ').'; return ''; } }
+function lsSet(v){ try { if(v) localStorage.setItem(SECRET_KEY, v); else localStorage.removeItem(SECRET_KEY); return true; } catch(e){ storageProblem = 'This browser would not save your login (' + e.message + '). You will have to enter the code each visit.'; return false; } }
+var storageProblem = '';
+function fmtET(iso){
+  var d = new Date(iso); if(!iso || isNaN(d.getTime())) return String(iso||'');
+  return new Intl.DateTimeFormat('en-US',{timeZone:ET,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(d);
+}
+function fmtDay(ymd){
+  var m = /^(\d{4})-(\d\d)-(\d\d)$/.exec(String(ymd||'')); if(!m) return String(ymd||'');
+  return new Intl.DateTimeFormat('en-US',{timeZone:'UTC',weekday:'short',month:'short',day:'numeric'}).format(new Date(Date.UTC(+m[1],+m[2]-1,+m[3],12)));
+}
+function taskName(key){ var p = String(key||'').split('|'); if(p.length===3) return (p[1]==='prearrival'?'pre-arrival clean ':'checkout clean ') + fmtDay(p[2]); return String(key||''); }
+function fmtPhone(p){ var d = String(p||'').replace(/\D/g,''); if(d.length===11 && d.charAt(0)==='1') d = d.slice(1); return d.length===10 ? '('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6) : String(p||''); }
+function daysText(n){ n = parseInt(n,10); if(isNaN(n)) return ''; if(n===0) return 'today'; if(n===1) return 'tomorrow'; if(n<0) return Math.abs(n)+' day'+(n===-1?'':'s')+' ago'; return 'in '+n+' days'; }
+function human(s){ s = String(s||'').replace(/_/g,' '); return s.charAt(0).toUpperCase()+s.slice(1); }
+function plural(n, one, many){ return n+' '+(n===1?one:many); }
+function labelNums(msg){ return String(msg||'').replace(/STR_[A-Z0-9_]+/g,function(k){ var f=NUMS.filter(function(x){return x.k===k;})[0]; if(f) return '"'+f.label+'"'; var s=SWITCHES.filter(function(x){return x.k===k;})[0]; return s?'"'+s.title+'"':k; }); }
+function listHtml(arr){ return '<ul>'+arr.map(function(x){ return '<li>'+esc(x)+'</li>'; }).join('')+'</ul>'; }
+function errText(e){ return e && e.message ? e.message : String(e); }
+function stepErrs(errors){ return (errors||[]).map(function(e){ return (e && typeof e==='object') ? ((e.step?human(e.step)+': ':'')+(e.error||e.message||JSON.stringify(e))) : String(e); }); }
+
+/* ---------- network: every failure becomes a plain-English Error ---------- */
+function mkErr(msg, code, status){ var e = new Error(msg); e.code = code||''; e.status = status||0; return e; }
+function api(method, path, body, opts){
+  opts = opts || {};
+  var o = { method: method, headers: { 'X-Auth-Token': AUTH_TOKEN } };
+  if(body !== undefined){ o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(body); }
+  return fetch(WORKER + path, o).then(function(res){
+    return res.text().then(function(txt){
+      var j = null, bad = false;
+      try { j = txt ? JSON.parse(txt) : null; } catch(e){ bad = true; }
+      if(res.status === 401 || (j && j.error === 'Unauthorized')) throw mkErr('Your access code was not accepted.', 'unauthorized', 401);
+      if(bad || j === null || typeof j !== 'object') throw mkErr("The server sent an answer this page can't read (HTTP " + res.status + "). Nothing was changed by this page. Try again; if it keeps happening, tell Claude.", 'bad_response', res.status);
+      if(!res.ok || (j.ok === false && !(opts.allowFail && Array.isArray(j.errors)))) throw mkErr(j.message || j.error || ('The server said no (HTTP ' + res.status + ').'), j.error || 'http_' + res.status, res.status);
+      return j;
+    });
+  }, function(e){ throw mkErr("Can't reach the server (" + ((e && e.message) || 'network error') + "). Check your internet connection and try again.", 'network', 0); });
+}
+function busy(btn, label, p){
+  var old = btn.textContent; btn.disabled = true; btn.textContent = label;
+  var done = function(){ btn.disabled = false; btn.textContent = old; };
+  return p.then(function(v){ done(); return v; }, function(e){ done(); throw e; });
+}
+function flash(msg, tone){
+  $('flash').innerHTML = '<div class="msg ' + (tone||'err') + '" role="alert">' + esc(msg) + '<br><button class="btn sm" data-act="flash-x">Dismiss</button></div>';
+}
+function authFailed(){ closeSheet(); showLogin('Your access code was not accepted. Enter it again.'); }
+
+/* ---------- login ---------- */
+function showLogin(msg){
+  $('app').classList.add('hide'); $('login').classList.remove('hide');
+  lsSet(''); AUTH_TOKEN = '';
+  var el = $('login-error'); var m = (msg||'') + (storageProblem ? ' ' + storageProblem : '');
+  if(m.trim()){ el.textContent = m.trim(); el.classList.remove('hide'); } else el.classList.add('hide');
+}
+function doLogin(){
+  var v = $('login-input').value.trim(); if(!v){ showLogin('Type your access code first.'); return; }
+  AUTH_TOKEN = v;
+  busy($('login-btn'), 'Checking…', api('GET', '/str/admin/state')).then(function(d){
+    lsSet(v); enterApp(d);
+  }).catch(function(e){
+    AUTH_TOKEN = '';
+    var el = $('login-error');
+    el.textContent = e.code === 'unauthorized' ? 'Not recognized. Check the code and try again.' : 'Could not check the code: ' + errText(e);
+    el.classList.remove('hide');
+  });
+}
+function enterApp(state){
+  $('login').classList.add('hide'); $('app').classList.remove('hide');
+  if(IS_STAGING) $('stg').classList.remove('hide');
+  if(state){ S = state; safeRender(); } else loadState();
+}
+
+/* ---------- state ---------- */
+function loadState(){
+  if(loading) return Promise.resolve();
+  loading = true;
+  return api('GET', '/str/admin/state').then(function(d){
+    S = d; $('loaderr').innerHTML = ''; safeRender();
+  }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    var stale = S ? ' What you see below may be out of date.' : '';
+    $('loaderr').innerHTML = '<div class="msg err" role="alert"><b>Could not load the latest information.</b>' + esc(errText(e)) + esc(stale) + '<br><button class="btn" data-act="retry">Try again</button></div>';
+    if(!S){ $('cover').className = 'cover bad'; $('cover').textContent = "Can't load - coverage is NOT being shown"; ['turn-list','clean-list','sw-body','log-list'].forEach(function(id){ $(id).innerHTML = '<p class="muted">Not loaded.</p>'; }); }
+  }).then(function(){ loading = false; });
+}
+function safeRender(){
+  try { render(); }
+  catch(e){ $('loaderr').innerHTML = '<div class="msg err" role="alert"><b>This page hit a problem showing the information.</b>' + esc(errText(e)) + '<br><button class="btn" data-act="retry">Try again</button></div>'; }
+}
+function render(){
+  renderTop(); renderAlerts(); renderTurnovers(); renderCleaners(); renderSwitches(); renderLog();
+  $('soon').textContent = (S.coming_soon && S.coming_soon.length) ? 'Coming soon: ' + S.coming_soon.join(' · ') : '';
+}
+
+/* ---------- top status + alerts ---------- */
+function uncoveredSoon(){
+  return (S.tasks||[]).filter(function(t){ return t.status !== 'cancelled' && !t.covered && t.days_out >= 0 && t.days_out <= 14; });
+}
+function renderTop(){
+  var c = $('cover'), st = S.settings || {};
+  if(S.feed_ok === false){
+    c.className = 'cover bad'; c.textContent = "Can't read your bookings feed - coverage is NOT being checked";
+  } else {
+    var n = uncoveredSoon().length;
+    if(n){ c.className = 'cover bad'; c.textContent = n + (n===1 ? ' turnover' : ' turnovers') + ' in the next 14 days ' + (n===1 ? 'has' : 'have') + ' no cleaner'; }
+    else { c.className = 'cover ok'; c.textContent = 'Next 14 days: all covered'; }
+  }
+}
+function renderAlerts(){
+  var h = '', st = S.settings || {};
+  if(S.feed_ok === false) h += '<div class="msg err" role="alert"><b>Can\'t read your bookings feed. Coverage is NOT being checked.</b>' + esc(S.feed_error || 'No reason was given.') + '</div>';
+  if(S.settings && st.engine === false) h += '<div class="msg warn"><b>The scheduler is switched OFF.</b>Nothing is being asked, assigned or alerted until you turn it on under Switches. You can still preview.</div>';
+  var alerts = (S.alerts||[]).slice().sort(function(a,b){ return (b.severity==='urgent') - (a.severity==='urgent'); });
+  alerts.forEach(function(a){
+    var lines = String(a.message||'').split('\n').filter(function(x){ return x.trim(); });
+    var meta = 'Sent ' + plural(a.sent||0, 'time', 'times') + (a.last_sent ? ', last ' + fmtET(a.last_sent) : '');
+    var urgent = a.severity === 'urgent';
+    h += '<div class="msg err alert ' + (urgent?'urgent':'') + '" role="alert"><b>' + (urgent ? 'URGENT: ' : '') + esc(ALERT_KIND[a.kind] || human(a.kind)) + '</b><div class="lines">' + lines.map(function(l){ return '<div>' + esc(l) + '</div>'; }).join('') + '</div><div class="say">' + esc(meta) + '</div>';
+    if(a.acked) h += '<div class="say"><b style="display:inline">Acknowledged.</b> The repeat texts for this alert have stopped.</div>';
+    else h += '<button class="btn sm" style="margin-top:10px" data-act="ack" data-id="' + esc(a.id) + '">Acknowledge (stop repeating)</button><p class="say">Stops the repeat texts for this alert. It does not cover the turnover.</p>';
+    h += '</div>';
+  });
+  $('alerts').innerHTML = h;
+}
+
+/* ---------- turnovers ---------- */
+var ALERT_KIND = { uncovered:'Turnover not covered', cancel:'A cleaner cancelled', mark:'Availability change', event:'Event' };
+var OFFER_WORDS = { queued:'text being sent', pending:'waiting for a reply', accepted:'said yes', declined:'said no', expired:'no reply', superseded:'replaced by a newer ask', failed:'text did not go through', cancelled:'cancelled' };
+function statusPill(t){
+  var pend = (t.offers||[]).filter(function(o){ return o.status === 'pending' || o.status === 'queued'; })[0];
+  if(t.status === 'covered') return '<span class="pill ok">Covered: ' + esc(t.assigned_name || 'assigned') + '</span>';
+  if(t.status === 'on_calendar') return '<span class="pill ok">Covered' + (t.assigned_name ? ': ' + esc(t.assigned_name) : '') + ' (on calendar)</span>';
+  if(t.status === 'offering') return '<span class="pill info">' + (pend ? 'Offer out: ' + esc(pend.cleaner) : 'Waiting on cleaners') + '</span>';
+  if(t.status === 'exhausted') return '<span class="pill bad">Everyone asked</span>';
+  if(t.status === 'open') return '<span class="pill warn">Open</span>';
+  if(t.status === 'new') return '<span class="pill">Not picked up yet</span>';
+  return '<span class="pill">' + esc(human(t.status)) + '</span>';
+}
+function offersHtml(t){
+  if(!(t.offers||[]).length) return '';
+  return '<div class="muted" style="margin-top:8px">Who was asked</div><ul class="offers">' + t.offers.map(function(o){
+    var w = OFFER_WORDS[o.status] || o.status, extra = '';
+    if(o.status === 'pending' && o.deadline) extra = ' until ' + fmtET(o.deadline);
+    if(o.status === 'expired' && !t.covered) w += ' (can still say yes until someone else has it)';
+    return '<li><b>' + esc(o.cleaner) + '</b>: ' + esc(w) + esc(extra) + (o.note && o.status !== 'pending' ? ' <span class="muted">- ' + esc(o.note) + '</span>' : '') + '</li>';
+  }).join('') + '</ul>';
+}
+function backupsHtml(t){
+  var b = t.backups || {}, nm = function(a){ return (a||[]).map(function(x){ return typeof x === 'object' && x ? (x.name||x.nickname||'') : x; }).join(', '); }, parts = [];
+  if((b.can||[]).length) parts.push('<b>Backup available:</b> ' + esc(nm(b.can)));
+  if((b.out||[]).length) parts.push('<b>Out:</b> ' + esc(nm(b.out)));
+  if((b.unknown||[]).length) parts.push('<span class="muted">Haven\'t said: ' + esc(nm(b.unknown)) + '</span>');
+  return parts.length ? '<div style="margin-top:8px;font-size:14px">' + parts.join('<br>') + '</div>' : '';
+}
+function turnoverCard(t){
+  var kind = t.kind === 'prearrival' ? 'Pre-arrival' : 'Checkout';
+  var next = t.next_label ? 'next guest ' + t.next_label : 'no booking after';
+  var guests = t.guests ? ' · ' + t.guests + (String(t.guests).match(/^\d+$/) ? (t.guests==1?' guest':' guests') : '') : '';
+  var urgent = !t.covered && t.uncovered_alert;
+  var k = esc(t.key), acts = '';
+  if(t.status === 'new'){
+    acts = '<p class="say">The scheduler hasn\'t picked this one up yet, so nothing can be done to it here. It appears after the next scheduler run (every 15 minutes while it is ON), or use "Preview" under Tools.</p>';
+  } else if(t.status === 'covered'){
+    acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Change cleaner…</button><button class="btn sm" data-act="unassign" data-key="' + k + '">Unassign</button>';
+  } else if(t.status === 'on_calendar'){
+    acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">This is covered by an entry someone typed on the cleaning calendar. To undo that, change the calendar itself.</p>';
+  } else {
+    acts = '<button class="btn sm primary" data-act="assign" data-key="' + k + '">Assign…</button><button class="btn sm" data-act="offer" data-key="' + k + '">Ask next cleaner now</button><button class="btn sm" data-act="restart" data-key="' + k + '">Restart the queue</button>';
+  }
+  return '<div class="tcard' + (urgent ? ' urgent' : '') + '"><div class="t-head"><div><b class="t-date">' + esc(t.label || fmtDay(t.date)) + '</b> <span class="chip">' + kind + '</span></div>' + statusPill(t) + '</div>'
+    + '<div class="muted" style="margin-top:4px">' + esc(daysText(t.days_out)) + ' · ' + esc(next) + esc(guests) + '</div>'
+    + (t.note ? '<div class="muted" style="margin-top:4px">Note: ' + esc(t.note) + '</div>' : '')
+    + offersHtml(t) + backupsHtml(t) + '<div class="t-actions">' + acts + '</div></div>';
+}
+function renderTurnovers(){
+  var list = (S.tasks||[]).filter(function(t){ return t.status !== 'cancelled'; }).sort(function(a,b){ return String(a.date).localeCompare(String(b.date)) || String(a.kind).localeCompare(String(b.kind)); });
+  var open = list.filter(function(t){ return !t.covered; });
+  $('m-turn').textContent = open.length ? open.length + ' need a cleaner' : (list.length ? 'all covered' : '');
+  var show = filterMode === 'open' ? open : list;
+  Array.prototype.forEach.call(document.querySelectorAll('[data-act=filter]'), function(b){ b.classList.toggle('sel', b.getAttribute('data-v') === filterMode); });
+  if(!show.length){ $('turn-list').innerHTML = '<p class="muted">' + (filterMode === 'open' ? 'Nothing needs a cleaner right now.' : (S.feed_ok === false ? 'No turnovers to show because the bookings feed could not be read.' : 'No upcoming turnovers found.')) + '</p>'; return; }
+  $('turn-list').innerHTML = '<div class="grid">' + show.map(turnoverCard).join('') + '</div>';
+}
+function findTask(key){ return (S.tasks||[]).filter(function(t){ return t.key === key; })[0]; }
+
+/* ---------- cleaners ---------- */
+var LANG = { en:'English', es:'Español' };
+function cleanerCard(c){
+  var title = esc(c.name) + (c.nickname ? ' (' + esc(c.nickname) + ')' : '');
+  var q = c.in_pool && c.priority ? '<span class="pill info">Asked #' + esc(c.priority) + '</span>' : '<span class="pill">Not in queue</span>';
+  var h = '<div class="ccard"><div class="t-head"><b style="font-size:17px">' + title + '</b><span>' + q + ' ' + (c.active ? '<span class="pill ok">Active</span>' : '<span class="pill warn">Not active</span>') + '</span></div>';
+  h += '<div style="margin-top:6px">' + (c.sms_ok === false ? '<span class="pill bad">Texts switched off for this cleaner</span>' : '<span class="pill ok">Texts OK</span>') + '</div>';
+  h += '<div class="kv"><div><span class="k">Phone: </span>' + (c.phone ? esc(fmtPhone(c.phone)) : '<b style="color:var(--err)">none on file</b>') + '</div>'
+    + '<div><span class="k">Email: </span>' + (c.email ? esc(c.email) : '<b style="color:var(--warn)">none on file</b>') + '</div>'
+    + '<div><span class="k">Language: </span>' + esc(LANG[c.language] || c.language || '') + '</div>'
+    + '<div><span class="k">Mon/Wed/Fri email: </span>' + (c.digest ? 'yes' : 'no') + '</div></div>';
+  h += '<div class="c-actions"><button class="btn sm" data-act="copylink" data-link="' + esc(c.link) + '" data-id="' + esc(c.id) + '">Copy link</button>'
+    + '<button class="btn sm" data-act="newlink" data-id="' + esc(c.id) + '">New link (old one stops working)</button>'
+    + '<button class="btn sm" data-act="editcleaner" data-id="' + esc(c.id) + '">Edit</button></div>'
+    + '<p class="say">Copy link: copies their personal page link so you can text it to them.</p><div class="fb" id="fb-' + esc(c.id) + '"></div></div>';
+  return h;
+}
+function renderCleaners(){
+  var l = S.cleaners || [];
+  $('m-clean').textContent = plural(l.length, 'cleaner', 'cleaners');
+  $('clean-list').innerHTML = l.length ? '<div class="grid">' + l.map(cleanerCard).join('') + '</div>' : '<p class="muted">No cleaners yet. Add one below.</p>';
+}
+function findCleaner(id){ return (S.cleaners||[]).filter(function(c){ return String(c.id) === String(id); })[0]; }
+function copyLink(btn){
+  var link = btn.getAttribute('data-link'), fb = $('fb-' + btn.getAttribute('data-id')) || btn.parentNode;
+  var show = function(why){
+    fb.innerHTML = '<div class="msg warn"><b>Could not copy automatically</b>' + esc(why) + ' Press and hold the link below, choose Select all, then Copy.<input type="text" readonly value="' + esc(link) + '" aria-label="Personal link" style="margin-top:8px"></div>';
+    var inp = fb.querySelector('input'); if(inp){ inp.focus(); inp.select(); }
+  };
+  if(!(navigator.clipboard && navigator.clipboard.writeText)){ show('This browser does not allow it.'); return; }
+  navigator.clipboard.writeText(link).then(function(){ fb.innerHTML = ''; toast('Link copied'); }, function(e){ show('(' + errText(e) + ')'); });
+}
+
+/* cleaner form */
+function cleanerForm(c){
+  c = c || {};
+  var nextPrio = (S.cleaners||[]).reduce(function(m,x){ return Math.max(m, x.priority||0); }, 0) + 1;
+  var tog = function(id, label, on){ return '<label class="tog"><input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + '>' + esc(label) + '</label>'; };
+  return '<label class="fld" for="cf-name">Name</label><input type="text" id="cf-name" value="' + esc(c.name||'') + '" autocomplete="off">'
+    + '<label class="fld" for="cf-nick">Nickname (what the texts call them)</label><input type="text" id="cf-nick" value="' + esc(c.nickname||'') + '" autocomplete="off">'
+    + '<label class="fld" for="cf-phone">Phone (10-digit US)' + (c.id ? ' - leave as is to keep it' : '') + '</label><input type="tel" id="cf-phone" inputmode="tel" value="' + esc(c.phone ? fmtPhone(c.phone) : '') + '" autocomplete="off">'
+    + '<label class="fld" for="cf-email">Email</label><input type="email" id="cf-email" value="' + esc(c.email||'') + '" autocomplete="off">'
+    + '<label class="fld" for="cf-lang">Language</label><select id="cf-lang"><option value="en"' + (c.language==='es'?'':' selected') + '>English</option><option value="es"' + (c.language==='es'?' selected':'') + '>Español</option></select>'
+    + '<label class="fld" for="cf-prio">Queue position (1 = asked first)</label><input type="number" id="cf-prio" inputmode="numeric" value="' + esc(c.priority || nextPrio) + '">'
+    + tog('cf-pool', 'In the queue (gets asked about turnovers)', c.id ? c.in_pool : true)
+    + tog('cf-active', 'Active', c.id ? c.active : true)
+    + tog('cf-digest', 'Send them the Mon/Wed/Fri email', c.id ? c.digest : true);
+}
+function openCleanerForm(id){
+  var c = id ? findCleaner(id) : null;
+  if(id && !c){ flash('That cleaner is no longer in the list. Refresh and try again.'); return; }
+  openAction({
+    title: c ? 'Edit ' + c.name : 'Add a cleaner',
+    say: "Saving creates (or updates) the cleaner's entry in Vendors as Short-Term Rental Cleaner · Milam Ridge. Cleaners are asked in queue order, 1 first.",
+    body: cleanerForm(c), go: 'Save cleaner',
+    validate: function(){
+      var name = $('cf-name').value.trim(); if(!name) return 'A name is required.';
+      if(!c && !$('cf-phone').value.trim()) return 'A phone number is required for a new cleaner.';
+      var p = parseInt($('cf-prio').value, 10); if(!(p >= 1)) return 'Queue position must be a whole number, 1 or higher.';
+      return '';
+    },
+    run: function(){
+      var body = { name: $('cf-name').value.trim(), nickname: $('cf-nick').value.trim(), phone: $('cf-phone').value.trim(), email: $('cf-email').value.trim(), language: $('cf-lang').value,
+        priority: parseInt($('cf-prio').value, 10), in_pool: $('cf-pool').checked, active: $('cf-active').checked, digest: $('cf-digest').checked };
+      if(c) body.id = c.id;
+      return api('POST', '/str/admin/cleaner/save', body).then(function(r){
+        return { tone: 'ok', head: 'Saved ' + ((r.cleaner && r.cleaner.name) || body.name) + '.', extra: c ? '' : '<p>Their personal link is ready. Use "Copy link" on their card to send it.</p>' };
+      });
+    }
+  });
+}
+
+/* ---------- switches + numbers ---------- */
+var SWITCHES = [
+  { k:'STR_ENGINE_ENABLED', f:'engine', title:'Scheduler',
+    on: function(){ return 'ON: the scheduler runs every 15 minutes, asks cleaners in order, and alerts you.'; },
+    off: function(){ return 'OFF: nothing happens (you can still preview).'; } },
+  { k:'STR_SMS_ENABLED', f:'sms', title:'Texts to cleaners',
+    on: function(s){ return 'ON: cleaners get texts. ' + (s.twilio_test_mode ? 'Right now texts go to YOUR phone only (test mode is on)' : 'Test mode is OFF, so texts go to the REAL cleaners') + ' - Twilio is ' + (s.twilio_enabled ? 'on' : 'off') + '.'; },
+    off: function(){ return 'OFF: nobody is texted. The board shows who would be asked next.'; } },
+  { k:'STR_CAL_WRITE_ENABLED', f:'cal_write', title:'Cleaning calendar',
+    on: function(){ return "ON: the Hub writes '<Name> Cleaning' and the red 'not covered' block to the cleaning calendar."; },
+    off: function(){ return 'OFF: the Hub only plans calendar changes and writes nothing to the calendar.'; } },
+  { k:'STR_DIGEST_ENABLED', f:'digest', title:'Mon/Wed/Fri email',
+    on: function(){ return 'ON: cleaners get the Mon/Wed/Fri email.'; },
+    off: function(){ return 'OFF: no cleaning email is sent.'; } }
+];
+var NUMS = [
+  { k:'STR_ALERT_DAYS', f:'alert_days', label:'Alert me when a turnover is still uncovered this many days out' },
+  { k:'STR_LOOKAHEAD_DAYS', f:'lookahead_days', label:'How far ahead to look (days)' },
+  { k:'STR_RED_BLOCK_DAYS', f:'red_block_days', label:"Show the red 'not covered' calendar block this many days out" },
+  { k:'STR_REPLY_4H_DAYS', f:'reply_4h_days', label:'Cleaners get 4 hours to reply when the turnover is within (days)' },
+  { k:'STR_REPLY_2H_DAYS', f:'reply_2h_days', label:'Cleaners get 2 hours to reply when the turnover is within (days)' },
+  { k:'STR_ALERT_REPEAT_HOURS', f:'alert_repeat_hours', label:'Repeat an alert text every (hours)' },
+  { k:'STR_MARK_ALERT_DAYS', f:'mark_alert_days', label:'Tell me about availability changes within (days) of a turnover' },
+  { k:'STR_PREARRIVAL_GAP_DAYS', f:'prearrival_gap_days', label:'Add a pre-arrival clean when the gap to the next guest is more than (days; 0 = never)' },
+  { k:'STR_MAX_PENDING_PER_CLEANER', f:'max_pending_per_cleaner', label:'Most open offers one cleaner can have at once' }
+];
+function renderSwitches(){
+  var s = S.settings || {}, h = '';
+  var onCount = SWITCHES.filter(function(x){ return s[x.f]; }).length;
+  $('m-sw').textContent = onCount + ' of 4 ON';
+  if(s.bookings_set === false) h += '<div class="msg warn"><b>Not set up yet: bookings feed.</b>The scheduler has no guest bookings to read. Add the feed link on the <a href="inspect.html" style="color:inherit">Inspection Scheduler</a> page (Open blocks tab, "Cabin cleaning protection").</div>';
+  if(s.cleaning_cal_set === false) h += '<div class="msg warn"><b>Not set up yet: cleaning calendar.</b>There is no cleaning calendar to read or write. Add it on the <a href="inspect.html" style="color:inherit">Inspection Scheduler</a> page (Open blocks tab, "Cabin cleaning protection").</div>';
+  if(s.sms && !s.twilio_enabled) h += '<div class="msg err" role="alert"><b>Texts are paused because Twilio is switched off globally.</b>Texts to cleaners are ON here, but nothing can be sent until Twilio is switched on.</div>';
+  SWITCHES.forEach(function(x){
+    var on = !!s[x.f];
+    h += '<div class="swrow"><div class="swhead"><b>' + esc(x.title) + '</b><button class="sw' + (on ? ' on' : '') + '" role="switch" aria-checked="' + on + '" aria-label="' + esc(x.title) + '" data-act="switch" data-k="' + x.k + '">' + (on ? 'ON' : 'OFF') + '</button></div>'
+      + '<p class="say">' + esc(on ? x.on(s) : x.off(s)) + '</p><p class="say" style="margin-top:2px">Tap the switch to turn it ' + (on ? 'off' : 'on') + '. You will be asked to confirm first.</p></div>';
+  });
+  h += '<div class="swrow"><b>Tuning numbers</b><div class="nums">' + NUMS.map(function(n){ return '<div><span>' + esc(n.label) + '</span><b>' + esc(s[n.f]) + '</b></div>'; }).join('') + '</div>'
+    + '<button class="btn sm" data-act="editnums">Edit numbers</button><p class="say">Opens a form. Nothing is saved until you press Save on it.</p></div>';
+  $('sw-body').innerHTML = h;
+}
+function openSwitch(key){
+  var x = SWITCHES.filter(function(z){ return z.k === key; })[0], s = S.settings || {}, now = !!s[x.f], target = !now;
+  var say = (target ? x.on(s) : x.off(s));
+  if(key === 'STR_SMS_ENABLED' && target && !s.twilio_enabled) say += ' WARNING: Twilio is switched off globally, so no text will actually go out yet.';
+  if(key === 'STR_SMS_ENABLED' && target && !s.twilio_test_mode) say += ' WARNING: real cleaners will be texted.';
+  openAction({
+    title: 'Turn "' + x.title + '" ' + (target ? 'ON' : 'OFF') + '?', say: say, go: 'Yes, turn it ' + (target ? 'ON' : 'OFF'), danger: false,
+    run: function(){
+      var v = {}; v[key] = target ? 'TRUE' : 'FALSE';
+      return api('POST', '/str/admin/config', { values: v }).then(function(r){
+        var got = r.settings ? !!r.settings[x.f] : target;
+        if(got !== target) throw mkErr('The server answered, but "' + x.title + '" still shows ' + (got ? 'ON' : 'OFF') + '. It did not change.');
+        return { tone: 'ok', head: '"' + x.title + '" is now ' + (target ? 'ON' : 'OFF') + '.' };
+      });
+    }
+  });
+}
+function openNums(){
+  var s = S.settings || {};
+  var body = NUMS.map(function(n){ return '<label class="fld" for="n-' + n.f + '">' + esc(n.label) + '</label><input type="number" inputmode="numeric" id="n-' + n.f + '" value="' + esc(s[n.f]) + '">'; }).join('');
+  openAction({
+    title: 'Edit numbers', say: "Saves only the numbers you changed, right away. The scheduler uses them from its next run (within 15 minutes).", body: body, go: 'Save numbers',
+    validate: function(){
+      var bad = NUMS.filter(function(n){ return $('n-' + n.f).value.trim() === ''; })[0];
+      if(bad) return 'Fill in "' + bad.label + '" (or put the old number back).';
+      return NUMS.some(function(n){ return String($('n-' + n.f).value.trim()) !== String(s[n.f]); }) ? '' : 'Nothing has changed yet.';
+    },
+    run: function(){
+      var v = {}; NUMS.forEach(function(n){ var nv = $('n-' + n.f).value.trim(); if(String(nv) !== String(s[n.f])) v[n.k] = nv; });
+      return api('POST', '/str/admin/config', { values: v }).then(function(){
+        return { tone: 'ok', head: 'Saved ' + plural(Object.keys(v).length, 'number', 'numbers') + '.' };
+      });
+    }
+  });
+}
+
+/* ---------- actions on turnovers ---------- */
+var OFFER_RESULT = {
+  offered: function(r){ return ['ok', 'Texted ' + r.cleaner + '.' + (r.deadline ? ' They have until ' + fmtET(r.deadline) + ' to reply.' : '')]; },
+  would_offer: function(r){ return ['warn', 'The scheduler is OFF, so nobody was texted. ' + r.next + ' would be asked next.']; },
+  waiting_send_window: function(r){ return ['warn', 'Outside 8am-9pm, so ' + r.next + ' will be texted at 8am.']; },
+  waiting_cleaner_busy: function(r){ return ['warn', r.next + ' already has the most open offers allowed, so they were not asked yet.']; },
+  waiting_reply: function(){ return ['info', 'Still waiting for a reply to an open offer.']; },
+  waiting_queued: function(){ return ['warn', 'A text is still being sent. Check again in a few minutes.']; },
+  sms_off: function(r){ return ['warn', 'Texts are switched off, so nobody was texted. ' + r.next + ' is next in line.']; },
+  twilio_off: function(r){ return ['err', 'Twilio is switched off globally, so nobody can be texted. ' + r.next + ' is next in line.']; },
+  exhausted: function(){ return ['err', 'Everyone in the queue has already been asked (said no, did not answer, is out, or cannot be texted).']; },
+  offer_failed: function(r){ return ['err', 'The text to ' + r.cleaner + ' did not go through.']; },
+  none: function(){ return ['info', 'Nothing to do for this turnover.']; }
+};
+function problemsHtml(errors, warnings){
+  var h = '', e = stepErrs(errors), w = (warnings||[]).map(String);
+  if(e.length) h += '<div class="msg err" role="alert"><b>Problems</b>' + listHtml(e) + '</div>';
+  if(w.length) h += '<div class="msg warn"><b>Heads up</b>' + listHtml(w) + '</div>';
+  return h;
+}
+function openAssign(key){
+  var t = findTask(key); if(!t) return;
+  var act = (S.cleaners||[]).filter(function(c){ return c.active; });
+  if(!act.length){ openAction({ title: 'Assign a cleaner', say: 'There are no active cleaners to choose from. Add or re-activate one under Cleaners first.', go: null, run: null }); return; }
+  var opts = act.map(function(c){ return '<option value="' + esc(c.id) + '"' + (String(c.id) === String(t.assigned_id) ? ' selected' : '') + '>' + esc(c.name + (c.nickname ? ' (' + c.nickname + ')' : '') + (c.sms_ok === false ? ' - texts off' : '')) + '</option>'; }).join('');
+  openAction({
+    title: 'Assign ' + (t.label || fmtDay(t.date)) + ' ' + (t.kind === 'prearrival' ? 'pre-arrival clean' : 'checkout clean'),
+    say: 'Texts and emails them a confirmation and calendar invite, and tells the other cleaners who were asked the slot is filled.',
+    body: '<p class="say">If the scheduler is OFF, or it is outside 8am-9pm, some of that is skipped. This page will tell you exactly what was and was not sent.</p><label class="fld" for="as-c">Cleaner</label><select id="as-c">' + opts + '</select>'
+      + (t.status === 'covered' ? '<p class="say"><b>' + esc(t.assigned_name) + '</b> is assigned now. Picking someone else replaces them and does NOT tell them.</p>' : ''),
+    go: 'Assign and notify',
+    run: function(){
+      var cid = $('as-c').value, c = findCleaner(cid);
+      return api('POST', '/str/admin/assign', { task_key: key, cleaner_id: cid }).then(function(r){
+        var lines = [];
+        (Array.isArray(r.texts) ? r.texts : []).forEach(function(x){ lines.push((x.ok ? 'Text sent to ' : 'Text NOT sent to ') + x.cleaner + (x.ok ? '' : ' - ' + (x.note || 'no reason given'))); });
+        if(r.email === 'sent') lines.push('Confirmation email with calendar invite: sent'); else if(r.email === 'staged') lines.push('Confirmation email: staged only (test server)'); else if(r.email === 'failed') lines.push('Confirmation email: FAILED'); else lines.push('Confirmation email: not sent (the scheduler is OFF or they have no email)');
+        var fl = r.filled; if(Array.isArray(fl)) lines.push('Other cleaners told the slot is filled: ' + (fl.length ? fl.map(function(x){ return typeof x === 'object' && x ? (x.cleaner||x.name||JSON.stringify(x)) : x; }).join(', ') : 'nobody to tell')); else if(typeof fl === 'number') lines.push('Other cleaners told the slot is filled: ' + fl);
+        var warn = (r.warnings||[]).map(String);
+        return { tone: warn.length ? 'warn' : 'ok', head: 'Assigned to ' + (c ? c.name : 'the cleaner') + '.', extra: (warn.length ? '<div class="msg warn" style="margin-top:10px" role="alert"><b>Read this</b>' + listHtml(warn) + '</div>' : '') + '<div style="margin-top:10px;font-size:14px">' + listHtml(lines) + '</div>' };
+      });
+    }
+  });
+}
+function openUnassign(key){
+  var t = findTask(key); if(!t) return;
+  openAction({
+    title: 'Unassign ' + (t.assigned_name || 'this cleaner') + '?', say: 'Reopens the turnover. The cleaner is NOT told automatically.', go: 'Yes, unassign', danger: true,
+    body: '<p class="say">' + esc((t.label||'') + ' - ' + (t.kind === 'prearrival' ? 'pre-arrival' : 'checkout')) + '. You should let ' + esc(t.assigned_name || 'them') + ' know yourself.</p>',
+    run: function(){ return api('POST', '/str/admin/assign', { task_key: key, cleaner_id: '' }).then(function(r){
+      var w = (r.warnings||[]).map(String);
+      return { tone: w.length ? 'warn' : 'ok', head: 'Turnover reopened.', extra: w.length ? '<div class="msg warn" style="margin-top:10px" role="alert"><b>Read this</b>' + listHtml(w) + '</div>' : '' };
+    }); }
+  });
+}
+function openOffer(key, restart){
+  var t = findTask(key); if(!t) return;
+  openAction({
+    title: restart ? 'Restart the queue?' : 'Ask the next cleaner now?',
+    say: restart ? 'Lets cleaners who already declined or didn\'t answer be asked again, and starts over with the first cleaner in the queue.' : 'Cancels any offer still waiting and asks the next cleaner in line right now.',
+    body: '<p class="say">' + esc((t.label||'') + ' - ' + (t.kind === 'prearrival' ? 'pre-arrival' : 'checkout')) + '. The cleaner being asked at the moment loses their offer. Texts only go out 8am-9pm, and only while the scheduler and texts are ON.</p>',
+    go: restart ? 'Yes, restart the queue' : 'Yes, ask now',
+    run: function(){
+      var b = { task_key: key }; if(restart) b.restart = true;
+      return api('POST', '/str/admin/offer-now', b).then(function(r){
+        var res = r.result || {}, f = OFFER_RESULT[res.action], pair = f ? f(res) : ['info', 'Result: ' + human(res.action || 'unknown')];
+        return { tone: pair[0], head: pair[1], extra: problemsHtml(r.errors, r.warnings) };
+      });
+    }
+  });
+}
+
+/* ---------- the one confirm / result sheet ---------- */
+var sheetBusy = false;
+function openSheet(html){ var m = $('sheet'); $('sheet-box').innerHTML = html; m.classList.add('open'); m.setAttribute('aria-hidden', 'false'); var f = $('sheet-box').querySelector('input,select,button'); if(f) setTimeout(function(){ f.focus({preventScroll:true}); }, 30); }
+function closeSheet(){ if(sheetBusy) return; var m = $('sheet'); m.classList.remove('open'); m.setAttribute('aria-hidden', 'true'); $('sheet-box').innerHTML = ''; }
+function openAction(o){
+  var h = '<h2 id="sh-title">' + esc(o.title) + '</h2><p class="say" style="font-size:15px;color:var(--text)">' + esc(o.say) + '</p>' + (o.body || '')
+    + '<div id="sh-err" class="msg err hide" role="alert" style="margin-top:12px"></div>'
+    + '<div class="btnrow"><button class="btn ghost" id="sh-cancel">' + (o.run ? 'Cancel' : 'Close') + '</button>' + (o.run ? '<button class="btn ' + (o.danger ? 'danger' : 'primary') + '" id="sh-go">' + esc(o.go) + '</button>' : '') + '</div>';
+  openSheet(h);
+  $('sh-cancel').onclick = closeSheet;
+  if(!o.run) return;
+  var go = $('sh-go'), showErr = function(m){ var e = $('sh-err'); if(!e) return; e.innerHTML = m; e.classList.remove('hide'); e.scrollIntoView({block:'nearest'}); };
+  go.onclick = function(){
+    $('sh-err').classList.add('hide');
+    if(o.validate){ var v = o.validate(); if(v){ showErr(esc(v)); return; } }
+    sheetBusy = true; go.disabled = true; $('sh-cancel').disabled = true; var label = go.textContent; go.textContent = 'Working…';
+    o.run().then(function(res){
+      sheetBusy = false;
+      $('sheet-box').innerHTML = '<h2 id="sh-title">' + esc(o.title) + '</h2><div class="msg ' + (res.tone || 'ok') + '" style="margin-top:10px" role="status"><b style="margin:0">' + esc(res.head) + '</b></div>' + (res.extra || '') + '<div class="btnrow"><button class="btn primary" id="sh-done">Done</button></div>';
+      $('sh-done').onclick = closeSheet; $('sh-done').focus();
+      loadState();
+    }, function(e){
+      sheetBusy = false;
+      if(e.code === 'unauthorized'){ authFailed(); return; }
+      var d = $('sh-go'); if(d){ d.disabled = false; d.textContent = label; } var c = $('sh-cancel'); if(c) c.disabled = false;
+      showErr('<b>Not done.</b>' + esc(labelNums(errText(e))) + '<br>If you are not sure whether it went through, close this and press Refresh to check.');
+    });
+  };
+}
+
+/* ---------- tools ---------- */
+function toolRun(btn, outId, loadingText, fn){
+  var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
+  busy(btn, 'Working…', fn()).then(function(html){ out.innerHTML = html; }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    out.innerHTML = '<div class="msg err" role="alert"><b>Could not run this.</b>' + esc(errText(e)) + '</div>';
+  });
+}
+function actionLine(a){
+  if(a.would_offer) return 'Would ask ' + a.would_offer + ' about the ' + taskName(a.task) + (a.window ? ' (' + a.window + ')' : '');
+  if(a.would_text) return 'Would text ' + a.would_text + ' about the ' + taskName(a.task) + ' (texts are OFF)';
+  if(a.expire) return 'Would mark an unanswered offer on the ' + taskName(a.task) + ' as expired';
+  if(a.alert) return 'Would alert you (' + (a.severity || 'normal') + '): ' + (a.sms || a.alert);
+  return Object.keys(a).map(function(k){ return human(k) + ': ' + (typeof a[k] === 'object' ? JSON.stringify(a[k]) : a[k]); }).join(' · ');
+}
+function renderRun(d){
+  var det = d.detail || {}, h = '';
+  h += problemsHtml(d.errors, d.warnings);
+  if(det.enabled === false && det.note) h += '<div class="msg info">' + esc(det.note) + '</div>';
+  var s = det.summary;
+  if(s){
+    var by = s.by_status ? Object.keys(s.by_status).map(function(k){ return human(k) + ': ' + s.by_status[k]; }).join(' · ') : '';
+    h += '<div class="msg ' + (s.next_14_days_uncovered ? 'warn' : 'ok') + '"><b>' + plural(s.turnovers || 0, 'turnover', 'turnovers') + ' found, ' + (s.uncovered || 0) + ' without a cleaner (' + (s.next_14_days_uncovered || 0) + ' in the next 14 days)</b>' + esc(by) + '</div>';
+  }
+  if(det.feed) h += '<p class="muted">Bookings feed: ' + esc(det.feed.stays) + ' stays read, ' + esc(det.feed.tasks) + ' turnovers built, ' + esc(det.feed.new_tasks) + ' new.</p>';
+  if((det.actions||[]).length) h += '<h4>What it would do</h4>' + listHtml(det.actions.map(actionLine));
+  if((det.offers||[]).length) h += '<h4>Offers</h4>' + listHtml(det.offers.map(function(o){ var f = OFFER_RESULT[o.action]; var p = f ? f(o)[1] : human(o.action); return taskName(o.task) + ': ' + p; }));
+  if(det.calendar){
+    var c = det.calendar;
+    h += '<h4>Cleaning calendar</h4><p style="font-size:14px;margin:4px 0">Would add ' + esc(c.create||0) + ', update ' + esc(c.patch||0) + ', remove ' + esc(c.remove||0) + ' calendar events.' + (c.mode ? ' ' + esc(labelNums(c.mode)) + '.' : '') + (c.deferred ? ' ' + esc(c.deferred) + ' more later.' : '') + '</p>';
+  }
+  if(!h) h = '<div class="msg info">The preview ran and had nothing to report.</div>';
+  return h;
+}
+function previewMsgs(btn){
+  toolRun(btn, 'out-msgs', 'Loading the texts…', function(){ return api('GET', '/str/admin/preview-messages').then(function(r){
+    var p = r.previews || [];
+    if(!p.length) return '<div class="msg warn">The server returned no message texts.</div>';
+    return problemsHtml([], r.warnings) + p.map(function(x){ return '<h4>' + esc(human(String(x.type||'').replace(/^str_/,''))) + ' <span class="muted">(' + esc(x.length != null ? x.length : String(x.text||'').length) + ' characters' + ((x.length||0) > 160 ? ' - long, may go out as several texts' : '') + ')</span></h4><pre class="txt">' + esc(x.text) + '</pre>'; }).join('');
+  }); });
+}
+function digestDry(btn){
+  toolRun(btn, 'out-digest', 'Checking who would get the email…', function(){ return api('POST', '/str/admin/digest-run', { dry: true }, { allowFail: true }).then(function(r){
+    var rec = (r.detail && r.detail.recipients) || [], h = problemsHtml(r.errors, r.warnings);
+    if(r.detail && r.detail.enabled === false && r.detail.note) h += '<div class="msg info">' + esc(r.detail.note) + '</div>';
+    if(rec.length) h += '<h4>Would email</h4>' + listHtml(rec.map(function(x){ return x.to + (x.ok ? '' : ' - CAN\'T SEND' + (x.note ? ' (' + x.note + ')' : '')); }));
+    else if(!h) h = '<div class="msg warn">Nobody would get the email. Check that cleaners are active, have an email, and have "Send them the Mon/Wed/Fri email" on.</div>';
+    return h;
+  }); });
+}
+
+/* ---------- log ---------- */
+function renderLog(){
+  var l = S.log || [];
+  $('m-log').textContent = l.length ? 'latest ' + l.length : '';
+  $('log-list').innerHTML = l.length ? l.map(function(x){
+    return '<div class="li"><b>' + esc(human(x.event)) + '</b> <span class="muted">' + esc(fmtET(x.time)) + '</span><div>' + (x.cleaner ? esc(x.cleaner) + ' · ' : '') + (x.task ? esc(taskName(x.task)) : '') + '</div>' + (x.detail ? '<div class="muted">' + esc(x.detail) + '</div>' : '') + '</div>';
+  }).join('') : '<p class="muted">Nothing logged yet.</p>';
+}
+
+/* ---------- click routing ---------- */
+document.addEventListener('click', function(ev){
+  var el = ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if(!el || el.disabled) return;
+  var a = el.getAttribute('data-act'), key = el.getAttribute('data-key'), id = el.getAttribute('data-id');
+  if(a === 'login') doLogin();
+  else if(a === 'logout'){ showLogin(''); }
+  else if(a === 'refresh' || a === 'retry') loadState();
+  else if(a === 'flash-x') $('flash').innerHTML = '';
+  else if(a === 'filter'){ filterMode = el.getAttribute('data-v'); if(S) renderTurnovers(); }
+  else if(a === 'ack'){
+    busy(el, 'Working…', api('POST', '/str/admin/alert/ack', { id: id })).then(function(){ toast('Acknowledged'); loadState(); }, function(e){ if(e.code === 'unauthorized') authFailed(); else flash('Could not acknowledge the alert: ' + errText(e)); });
+  }
+  else if(a === 'assign') openAssign(key);
+  else if(a === 'unassign') openUnassign(key);
+  else if(a === 'offer') openOffer(key, false);
+  else if(a === 'restart') openOffer(key, true);
+  else if(a === 'copylink') copyLink(el);
+  else if(a === 'newlink'){
+    var c = findCleaner(id); if(!c) return;
+    openAction({
+      title: 'Give ' + c.name + ' a new link?', say: "Gives them a brand-new personal link and stops the old one working. The new link is NOT sent to them automatically.", go: 'Yes, make a new link', danger: true,
+      body: '<p class="say">Anyone using the old link (a saved bookmark or an old text) will see "link not valid" until you send the new one.</p>',
+      run: function(){ return api('POST', '/str/admin/cleaner/new-link', { id: id }).then(function(r){
+        var link = r.cleaner && r.cleaner.link;
+        if(!link) throw mkErr('The server said it worked but sent no new link. Refresh and check before sending anything.');
+        return { tone: 'ok', head: 'New link made. The old one no longer works.', extra: '<input type="text" readonly value="' + esc(link) + '" style="margin-top:8px" aria-label="New personal link" onclick="this.select()"><button class="btn sm" style="margin-top:8px" data-act="copylink" data-link="' + esc(link) + '" data-id="">Copy link</button><div class="fb" id="fb-"></div>' };
+      }); }
+    });
+  }
+  else if(a === 'editcleaner') openCleanerForm(id);
+  else if(a === 'addcleaner') openCleanerForm(null);
+  else if(a === 'switch') openSwitch(el.getAttribute('data-k'));
+  else if(a === 'editnums') openNums();
+  else if(a === 'run-dry') toolRun(el, 'out-run', 'Reading your bookings and calendar… this can take a few seconds.', function(){ return api('POST', '/str/admin/run', { dry: true }, { allowFail: true }).then(renderRun); });
+  else if(a === 'preview-msgs') previewMsgs(el);
+  else if(a === 'digest-dry') digestDry(el);
+});
+$('sheet').addEventListener('click', function(ev){ if(ev.target === $('sheet')) closeSheet(); });
+document.addEventListener('keydown', function(ev){ if(ev.key === 'Escape') closeSheet(); });
+$('login-input').addEventListener('keydown', function(ev){ if(ev.key === 'Enter') doLogin(); });
+
+/* ---------- start ---------- */
+(function(){
+  var stored = lsGet();
+  if(!stored){ showLogin(''); return; }
+  AUTH_TOKEN = stored;
+  enterApp(null);
+})();
+</script>
+</body>
+</html>
