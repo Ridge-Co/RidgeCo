@@ -14,7 +14,7 @@ function grab(name, kind = 'function') {
 }
 const H = new Function(
   ['OWNER_ONBOARD_TYPES','OWNER_ONBOARD_SUBTYPES','OWNER_ONBOARD_MAX_PROPERTIES','OWNER_ONBOARD_MAX_UNITS','OWNER_ONBOARD_STATES'].map(n => grab(n, 'const')).join('\n') + '\n' +
-  ['ooClean','ooDigits','ooPhoneOk','ooEmailOk','ownerOnboardPinCheck','ownerOnboardInferMarket','ownerOnboardValidate','ooInviteState','ooInviteProblem'].map(n => grab(n)).join('\n') +
+  ['ooClean','ooDigits','ooPhoneOk','ooEmailOk','ownerOnboardPinCheck','ownerOnboardInferMarket','ownerOnboardValidate','ooInviteState','ooInviteProblem','rosterNormDate','tenantDatesError'].map(n => grab(n)).join('\n') +
   '\nreturn { ooClean, ooPhoneOk, ooEmailOk, ownerOnboardPinCheck, ownerOnboardInferMarket, ownerOnboardValidate, ooInviteState, ooInviteProblem };'
 )();
 
