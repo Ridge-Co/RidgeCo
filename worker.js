@@ -17132,7 +17132,7 @@ async function opsQueueScoutSubmit(env, body) {
       Human_Corrected: '', Est_Cost: '', Stuck_Patterns: '',
       Proposal: String((body && body.summary) || '').slice(0, 2000),
       Proposal_JSON: JSON.stringify(items),
-      Trigger: 'scout_reuse_radar', Delivered: 'no',
+      Trigger: String((body && body.trigger) || 'scout_reuse_radar').slice(0, 60), Delivered: 'no',
     });
   } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
   return json({ ok: true, queued, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
