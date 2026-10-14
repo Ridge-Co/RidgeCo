@@ -75,6 +75,13 @@ ok(cls({ PaymentMethodRef: { value: '7' } }) === 'card', 'a custom-named method 
 ok(cls({ PaymentMethodRef: { value: '99', name: 'Credit Card' } }) === 'card', 'ref carrying only a name still classifies');
 ok(cls({ CreditCardPayment: { CreditChargeResponse: {} } }) === 'card', 'a QuickBooks Payments card payment object -> card');
 ok(cls({}) === 'other' && cls(null) === 'other', 'no method at all -> other');
+// Oct 14 bank-label fix: QuickBooks files "QuickBooks Payments-Bank" under Type CREDIT_CARD, so it used to read as card.
+ok(cls({ PaymentMethodRef: { value: '8' } }) === 'ach', '"QuickBooks Payments-Bank" (Type CREDIT_CARD) -> ach, not card');
+ok(cls({ PaymentMethodRef: { value: '99', name: 'QuickBooks Payments-Bank' } }) === 'ach', 'bank name carried on the ref alone -> ach');
+ok(cls({ PaymentMethodRef: { value: '9' } }) === 'card', '"QuickBooks Payments-Credit Card" stays card');
+ok(cls({ PaymentMethodRef: { value: '10' } }) === 'card', '"QuickBooks Payments-PayPal" stays card (PayPal landed like a card in the statement study)');
+ok(cls({ PaymentMethodRef: { value: '11' } }) === 'card', 'a card whose name contains "Bank" (Bank of America Visa) stays card');
+ok(cls({ PaymentMethodRef: { value: '8' }, CreditCardPayment: { CreditChargeResponse: {} } }) === 'card', 'a real QuickBooks card-charge object still wins -> card');
 
 // summarizeInvoicePayments: clearing vs cleared, today boundary, multiple payments, unknown
 const ctx = (today) => ({ methodsById: methods, clearMap: H.paymentClearDaysMap('').map, holidayMap: hol, today });
