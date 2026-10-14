@@ -17097,7 +17097,14 @@ async function opsQueueScoutSubmit(env, body) {
       const sm = findShippedMatch(rowObj.Title, shipped.index);
       if (sm) rowObj.Shipped_Match = 'Looks already built: ' + sm.ref;
     }
-    await addRow(env, OPS_QUEUE_TAB, rowObj);
+    const addRes = await addRow(env, OPS_QUEUE_TAB, rowObj);
+    let newId = '';
+    if (it && it.source_task_id) {
+      if (addRes && typeof addRes.status === 'number' && addRes.status >= 400) throw new Error('queue row for "' + rowObj.Title.slice(0, 60) + '" could not be saved (HTTP ' + addRes.status + ')');
+      try { newId = String((await addRes.clone().json()).id || ''); } catch (_) { newId = ''; }
+      if (!newId) throw new Error('queue row for "' + rowObj.Title.slice(0, 60) + '" saved but its id was not returned');
+      queued_items.push({ source_task_id: String(it.source_task_id), queue_id: newId, shipped_match: rowObj.Shipped_Match || '', overlaps: rowObj.Dup_Of || '' });
+    }
     pool.push({ ID: 'new-' + queued, Title: rowObj.Title, Problem: rowObj.Problem, First_Step: rowObj.First_Step, Status: 'proposed' });
     queued++;
   }
