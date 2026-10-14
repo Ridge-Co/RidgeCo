@@ -10585,7 +10585,7 @@ async function approveInvoiceReviewBulk(env, body) {
       : irBody.find(r => r.Active !== 'FALSE' && !String(r.Bill_ID || '') && String(r.WO_ID) === String(wo_id));
     if (already) {
       results.push({ bill_id, wo_id, success: true, already_approved: true, id: String(already.ID),
-        approved_total: already.Customer_Total || '', differs: String(already.Customer_Total || '') !== String(a.customer_total || '') });
+        approved_total: already.Customer_Total || '', differs: !sameCents(already.Customer_Total, a.customer_total) });
       continue;
     }
 
