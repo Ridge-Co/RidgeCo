@@ -14664,6 +14664,9 @@ const SCHED_JOBS = [
   { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
   { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
   { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
+  { name: 'hub_impr_mon',       kind: 'weekly',   dow: 1, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
+  { name: 'hub_impr_thu',       kind: 'weekly',   dow: 4, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
+  { name: 'hub_impr_daily',     kind: 'daily',    at: '07:30', run: (env) => schedRunHubImprovements(env, false) },
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
