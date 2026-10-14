@@ -17463,7 +17463,118 @@ function hubImpPlan(ledger, queue, prStates, nowMs) {
   }
   return { updates, problems };
 }
-// @@HUBIMP-CONT@@
+async function hubImpUpdate(env, id, fields) {
+  const r = await updateRow(env, HUBIMP_TAB, id, fields);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('ledger row #' + id + ' could not be updated (HTTP ' + r.status + ')');
+}
+async function hubImpAdd(env, obj) {
+  const r = await addRow(env, HUBIMP_TAB, obj);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('ledger row for "' + String(obj.Title || '').slice(0, 60) + '" could not be saved (HTTP ' + r.status + ')');
+}
+
+// Read-only look at a BrettOS tab (the Hub NEVER writes that sheet). Returns { rows, hdr }; { missing:true } if the tab does not exist.
+async function hubImpReadBrettos(env, tab) {
+  if (!env.BRETTOS_TASKS_SHEET_ID) throw new Error('BRETTOS_TASKS_SHEET_ID is not set, so the Hub cannot read the BrettOS sheet');
+  const token = await getAccessToken(env);
+  const resp = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + env.BRETTOS_TASKS_SHEET_ID + '/values/' + tab, { headers: { 'Authorization': 'Bearer ' + token } });
+  const data = await resp.json();
+  if (data.error) {
+    const m = String(data.error.message || JSON.stringify(data.error));
+    if (/unable to parse range|not found/i.test(m)) return { rows: [], hdr: [], missing: true };
+    throw new Error('could not read the BrettOS ' + tab + ' tab: ' + m.slice(0, 200));
+  }
+  return { rows: hubImpObjs(data.values), hdr: (data.values && data.values[0]) || [] };
+}
+async function hubImpReadTasks(env) {
+  const r = await hubImpReadBrettos(env, 'Tasks_Sync');
+  if (r.missing) throw new Error('the BrettOS sheet has no Tasks_Sync tab');
+  if (!r.hdr.includes('Task_ID') || !r.hdr.includes('Category') || !r.hdr.includes('Status')) throw new Error('Tasks_Sync has unexpected columns (' + r.hdr.join(',') + ') - the sweep needs Task_ID, Category and Status');
+  return r.rows;
+}
+// What the BrettOS applier says it has already done in Google Tasks (its own Hub_Applied tab: Task_ID, Applied_Status, Applied_At, Error).
+async function hubImpReadApplied(env) {
+  const r = await hubImpReadBrettos(env, 'Hub_Applied');
+  if (r.missing) return [];
+  if (!r.hdr.includes('Task_ID') || !r.hdr.includes('Applied_Status')) throw new Error('Hub_Applied has unexpected columns (' + r.hdr.join(',') + ')');
+  return r.rows;
+}
+
+// Pull new "RidgeCo Hub Improvements" items into the queue (as proposed) and record each in the ledger.
+async function hubImpPull(env) {
+  await ensureTab(env, HUBIMP_TAB, HUBIMP_COLS); await ensureColumns(env, HUBIMP_TAB, HUBIMP_COLS);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const tasks = await hubImpReadTasks(env);
+  const [ledger, queue] = [await fetchTab(env, HUBIMP_TAB), await fetchTab(env, OPS_QUEUE_TAB)];
+  const { fresh, adopt } = hubImpPickNew(tasks, ledger, queue);
+  const now = new Date().toISOString();
+  const out = { list_items_open: tasks.filter(t => String(t.Category || '').trim() === HUBIMP_LIST && t.Status === 'needsAction').length, new: fresh.length, adopted: adopt.length, queued: [], skipped_duplicates: [], possibly_already_built: [] };
+  for (const a of adopt) {
+    await hubImpAdd(env, { Task_ID: a.task.Task_ID, List_ID: a.task.List_ID || '', Title: String(a.task.Title).slice(0, 200), Status: 'pulled', Status_Changed_At: now, Queue_ID: a.queue.ID, Queue_Status: String(a.queue.Status || '').toLowerCase(), First_Seen: now, Note: 'Linked to existing queue item #' + a.queue.ID + '.' });
+    out.queued.push({ task_id: a.task.Task_ID, queue_id: a.queue.ID, adopted: true });
+  }
+  for (let i = 0; i < fresh.length; i += 20) {
+    const chunk = fresh.slice(i, i + 20);
+    const resp = await opsQueueScoutSubmit(env, { items: chunk.map(hubImpQueueItem), review_ts: now, trigger: 'hub_improvements_sweep', summary: 'Hub Improvements sweep: ' + chunk.length + ' new item(s) from the Google Tasks list' });
+    const body = await resp.json();
+    if (resp.status >= 400 || body.ok !== true) throw new Error('queue submit failed: ' + String((body && body.error) || ('HTTP ' + resp.status)).slice(0, 200));
+    const byTask = {};
+    for (const q of (body.queued_items || [])) byTask[String(q.source_task_id)] = { kind: 'queued', q };
+    for (const s of (body.skipped_duplicates || [])) if (s.source_task_id) byTask[String(s.source_task_id)] = { kind: 'dup', s };
+    for (const t of chunk) {
+      const hit = byTask[String(t.Task_ID)];
+      if (!hit) throw new Error('queue submit did not report what happened to "' + String(t.Title).slice(0, 60) + '" (task ' + t.Task_ID + ')');
+      const base = { Task_ID: t.Task_ID, List_ID: t.List_ID || '', Title: String(t.Title).slice(0, 200), Status: 'pulled', Status_Changed_At: now, First_Seen: now };
+      if (hit.kind === 'queued') {
+        const note = hit.q.shipped_match ? 'Queue says: ' + hit.q.shipped_match + ' - check before building.' : (hit.q.overlaps ? 'May overlap queue item #' + hit.q.overlaps + '.' : '');
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: hit.q.queue_id, Queue_Status: 'proposed', Note: note }));
+        out.queued.push({ task_id: t.Task_ID, queue_id: hit.q.queue_id, title: base.Title });
+        if (hit.q.shipped_match) out.possibly_already_built.push({ title: base.Title, queue_id: hit.q.queue_id, match: hit.q.shipped_match });
+      } else {
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: hit.s.duplicate_of, Queue_Status: String(hit.s.status || '').toLowerCase(), Note: 'Same as existing queue item #' + hit.s.duplicate_of + ' (' + hit.s.status + ').' }));
+        out.skipped_duplicates.push({ title: base.Title, duplicate_of: hit.s.duplicate_of, status: hit.s.status });
+      }
+    }
+  }
+  return out;
+}
+
+// Move ledger rows forward (queue item done/dropped, or a tracked PR merged) and report anything stuck.
+async function hubImpReconcile(env) {
+  await ensureTab(env, HUBIMP_TAB, HUBIMP_COLS); await ensureColumns(env, HUBIMP_TAB, HUBIMP_COLS);
+  const ledger = await fetchTab(env, HUBIMP_TAB);
+  if (!ledger.length) return { rows: 0, updated: 0, completed_now: [], problems: [] };
+  const queue = await fetchTab(env, OPS_QUEUE_TAB);
+  const problems = [];
+  // Copy what the applier reported (BrettOS Hub_Applied tab, read-only) into the ledger so the ledger shows it.
+  const appliedSync = [];
+  try {
+    const applied = await hubImpReadApplied(env), byTask = {};
+    for (const a of applied) if (a.Task_ID) byTask[String(a.Task_ID)] = a;
+    for (const r of ledger) {
+      const a = byTask[String(r.Task_ID)]; if (!a) continue;
+      const f = {};
+      if (String(r.Applied_Status || '') !== String(a.Applied_Status || '')) f.Applied_Status = a.Applied_Status || '';
+      if (String(r.Applied_At || '') !== String(a.Applied_At || '')) f.Applied_At = a.Applied_At || '';
+      if (String(r.Apply_Error || '') !== String(a.Error || '')) f.Apply_Error = a.Error || '';
+      if (Object.keys(f).length) { Object.assign(r, f); appliedSync.push({ id: r.ID, fields: f }); }
+    }
+  } catch (e) { problems.push('could not read what the Google Tasks applier has done: ' + String((e && e.message) || e).slice(0, 200)); }
+  const prStates = {};
+  for (const r of ledger) {
+    if (!HUBIMP_ACTIVE.includes(String(r.Status || '').toLowerCase()) || r.Queue_ID || !r.PR) continue;
+    const n = cleanPrNumber(r.PR); if (!n || prStates[n]) continue;
+    try { prStates[n] = prStateToBuildState(await ghPublicJson('/pulls/' + n, env)) || 'error: no PR data'; }
+    catch (e) { prStates[n] = 'error: ' + String((e && e.message) || e).slice(0, 120); }
+  }
+  const plan = hubImpPlan(ledger, queue, prStates, Date.now());
+  problems.push(...plan.problems);
+  const completed_now = [];
+  for (const u of appliedSync.concat(plan.updates)) {
+    try { await hubImpUpdate(env, u.id, u.fields); if (u.fields.Status === 'done') completed_now.push(u.id); }
+    catch (e) { problems.push('could not save ledger row #' + u.id + ': ' + String((e && e.message) || e).slice(0, 160)); }
+  }
+  return { rows: ledger.length, updated: plan.updates.length, completed_now, problems };
+}
 
 // Standing rules every build brief carries (Brett, Oct 13 2026).
 const QUEUE_STANDING_RULES = [
