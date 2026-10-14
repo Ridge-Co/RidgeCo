@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tenant Roster (admin) — Ridge Co</title>
+<style>
+  :root{--bg:#f4f5f7;--surface:#fff;--surface2:#f7f8fa;--border:#dfe3e8;--text:#1c2430;--muted:#6b7684;--accent:#1d4ed8;--accent2:#1a7f4b;--danger:#c0392b}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10}
+  header h1{font-size:17px;margin:0} header .ver{font-size:11px;color:var(--muted)}
+  main{padding:14px 14px 60px;max-width:680px;margin:0 auto}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  select,input{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text)}
+  .btn{padding:11px 14px;border:1px solid var(--accent);border-radius:10px;background:var(--accent);color:#fff;font-size:15px;font-weight:600;cursor:pointer;width:100%;margin-top:12px}
+  .muted{color:var(--muted);font-size:13px;line-height:1.5}
+  .hide{display:none}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+</style>
+</head>
+<body>
+<div id="login">
+  <h1>Tenant Roster</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <header><h1>👥 Tenant Roster (admin)</h1><span class="ver" id="ver"></span></header>
+  <main>
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px">Runs the same tool an owner sees in their portal, on that owner's behalf. Same rules: every new tenant needs a move-in date, every tenant leaving needs a move-out date; the whole file is refused if any row is wrong. Nothing here texts or emails any tenant or owner.</div>
+      <label class="muted" for="owner-pick">Owner</label>
+      <select id="owner-pick" onchange="pickOwner()"><option value="">Choose an owner…</option></select>
+    </div>
+    <div id="roster"></div>
+  </main>
+</div>
+
+<script src="tenant-roster.js"></script>
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var panel = null;
+
+function api(method, path, body){
+  var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.json().then(function(data){
+      if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
+      return data;
+    });
+  });
+}
+function doLogin(){
+  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
+  api('GET','/owners').then(function(r){
+    if (!Array.isArray(r)) throw new Error((r && r.error) || 'bad response');
+    localStorage.setItem(SECRET_KEY,v); enterApp(r);
+  }).catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+}
+document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=localStorage.getItem(SECRET_KEY);
+  if(stored){ AUTH_TOKEN=stored; api('GET','/owners').then(function(r){ if(!Array.isArray(r)) throw new Error(); enterApp(r); }).catch(function(){ AUTH_TOKEN=''; }); }
+})();
+function enterApp(owners){
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(e){ document.getElementById('ver').textContent='version unavailable'; });
+  var sel = document.getElementById('owner-pick');
+  owners.filter(function(o){ return o.Active !== 'FALSE'; }).sort(function(a,b){ return String(a.Company||a.First_Name||'').localeCompare(String(b.Company||b.First_Name||'')); }).forEach(function(o){
+    var op = document.createElement('option'); op.value = o.ID; op.textContent = (o.Company || ((o.First_Name||'')+' '+(o.Last_Name||'')).trim() || ('Owner '+o.ID)) + '  (#' + o.ID + ')'; sel.appendChild(op);
+  });
+  panel = TenantRoster.mount(document.getElementById('roster'), { admin: true, ownerId: function(){ return document.getElementById('owner-pick').value; }, call: function(method, path, body){ return api(method, path, body); } });
+}
+function pickOwner(){ if (panel) panel.reload(); }
+</script>
+</body>
+</html>
