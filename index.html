@@ -6345,7 +6345,9 @@ function openMoveInModal(propIdOverride, unitIdOverride) {
   document.getElementById('mi-last').value = '';
   document.getElementById('mi-phone').value = '';
   document.getElementById('mi-email').value = '';
-  document.getElementById('mi-date').value = new Date().toISOString().split('T')[0];
+  // Oct 14 2026: no default date. The move-in date is REQUIRED and must be chosen on purpose - a defaulted "today" is how tenants ended
+  // up with the wrong date (or none) and saw the previous tenant's work orders.
+  document.getElementById('mi-date').value = '';
   document.getElementById('mi-msg').innerHTML = '';
   document.getElementById('mi-current-tenant-banner').style.display = 'none';
 
