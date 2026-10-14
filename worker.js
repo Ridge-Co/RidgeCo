@@ -17135,7 +17135,7 @@ async function opsQueueScoutSubmit(env, body) {
       Trigger: String((body && body.trigger) || 'scout_reuse_radar').slice(0, 60), Delivered: 'no',
     });
   } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
-  return json({ ok: true, queued, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
+  return json({ ok: true, queued, queued_items, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
 }
 
 // ── Ops queue upgrade (Oct 13 2026): duplicate guard, shipped-index flag, snooze, PR sync ────────
