@@ -730,8 +730,10 @@ async function groupOf4() {
   }
   // (i) tenant portal: the winner is no longer filtered out (the same predicate tenantWorkorders uses)
   {
+    // Oct 14 2026 (#150): the predicate moved into tenantCanSeeWO so /attachments shares it; tenantWorkorders calls it.
     const tw = grab(wsrc, 'async function tenantWorkorders(').slice(0, 2500);
-    t('tenant portal hides only Tenant_Visible === "FALSE" (so TRUE shows the winner)', /w\.Tenant_Visible === 'FALSE'\) return false/.test(tw));
+    const tcs = grab(wsrc, 'function tenantCanSeeWO(');
+    t('tenant portal hides only Tenant_Visible === "FALSE" (so TRUE shows the winner)', /w\.Tenant_Visible === 'FALSE'\) return false/.test(tcs) && /tenantCanSeeWO\(tenant, w\)/.test(tw));
   }
   // (j) source-level guards
   {

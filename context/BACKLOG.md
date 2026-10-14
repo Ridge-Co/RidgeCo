@@ -31,6 +31,11 @@ Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked 
 - ✅ B-20261014-1100-sts · 🟠 **[wo-status] [refactor]** WO status single source of truth (Ops_Build_Queue #140 + #87) — built, awaiting Brett's merge. See FEATURE_LOG `[FL-20261014-1100-sts]`.
 - ▶ B-20261014-1110-sts2 · 🟠 **[wo-status]** `Estimate Requested` WOs (set by /scope/to-wo; 3 live) appear in no open group, so they are missing from portal lists and open counts. Needs Brett's call: show them as open?
 - ▶ B-20261014-1115-sts3 · 🟡 **[wo-status]** Not done: per-status label / color / badge map, role-aware labels (owner mask Pending Invoice→Complete), `canTransition`, and the new `Pending Payment` / `Paid by Customer` statuses (Brett: existing statuses only for now).
+**Oct 14, 2026 update**
+- ✅ B-20261014-0640-ats · 🔴 **[security] [attachments]** `/attachments` cross-account leak (Ops_Build_Queue #150) — built + staging-verified, PR #251 awaiting Brett's merge. See FEATURE_LOG `[FL-20261014-0640-ats]`.
+- ▶ B-20261014-0700-ats2 · 🟠 **[security]** Adjacent gaps found, NOT fixed: `/tenant-workorders?tenant_id=` and `/owner-workorders?owner_id=` trust query-string ids; `/vendor-file/view` has no per-record check; the outer 500 handler returns `err.message` + `err.stack` to the caller.
+- ▶ B-20261014-0705-tst · 🟡 **[tests]** 9 tests fail on untouched main (pre-existing); the "78/78 clean" note is stale.
+- ▶ Queue order Brett chose: #150 (done) → #100 collapse the 3 invoice/QB paths → #140 WO status single source of truth; each as its own PR.
 
 ---
 
