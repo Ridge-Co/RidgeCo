@@ -4402,6 +4402,9 @@ function renderTenantsPage() {
       var welcomeBadge = t.Welcome_Sent === 'TRUE'
         ? '<span style="color:var(--accent2);font-size:11px" title="'+esc(t.Welcome_Sent_Date||'')+'">👋 sent'+(t.Welcome_Sent_Date?' '+esc(t.Welcome_Sent_Date.slice(0,10)):'')+'</span>'
         : '<span style="color:var(--muted);font-size:11px">— not yet</span>';
+      // Oct 14 2026: tenants added through the owner roster tool are flagged here until Brett sends the welcome / consent text.
+      if (t.SMS_Consent === 'pending') welcomeBadge += '<div style="color:var(--warn);font-size:10px;font-weight:700" title="Added by the owner roster tool. Texts are OFF until you send the welcome (👋) or switch SMS on.">⏳ consent pending · SMS off</div>';
+      else if (t.SMS_Consent === 'attested' && t.Welcome_Sent !== 'TRUE') welcomeBadge += '<div style="color:var(--info);font-size:10px;font-weight:700" title="The owner ticked that these tenants agreed to maintenance texts. No welcome has gone out yet.">✓ owner says agreed · no welcome yet</div>';
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+t.ID+'" data-type="tenant" data-name="'+nm+'" data-phone="'+(t.Phone||'')+'" onchange="updatePinActionBar(\'tenants-action-bar\')"></td>' +
         '<td>'+esc(nm)+'</td>' +
