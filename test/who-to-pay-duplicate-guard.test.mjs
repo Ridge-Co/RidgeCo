@@ -87,6 +87,9 @@ ok(match7 === null, 'a QuickBooks API failure fails open (no warning shown) rath
 // ═══════════════════ Part 2: full qbPayables state-machine integration ═══════════════════
 console.log('\nqbPayables — state machine integration — offline tests\n');
 
+// Config the clearing indicator reads (current-year holiday present so older assertions see no 'holidays missing' noise).
+const TEST_FETCH_CONFIG = async () => ({ US_HOLIDAYS: new Date().getFullYear() + '-12-25:Christmas Day' });
+
 function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, irs, vendors }) {
   const fetchTabs = async (env, tabs) => tabs.map(t => (t === 'Invoice_Review' ? irs : t === 'Vendors' ? vendors : []));
   const qbAccessToken = async () => 'FAKE_TOKEN';
