@@ -26,12 +26,86 @@ const CORS = {
 };
 const PIN_MAX_ATTEMPTS = 4;
 const PIN_LOCKOUT_MIN  = 5;
-const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+// ── Work-order status lists: ONE definition (Ops_Build_Queue #140). Mirror of wo-status.js; the two copies are
+// compared by test/wo-status-ssot.test.mjs. Add or change a status group in BOTH, never write a new status array here.
+/* WO_STATUS_SSOT:BEGIN */
+function __makeWOStatus() {
+  var FIELD = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+  // Lifecycle order of the statuses a WO really holds today. 'Estimate Requested' is set by
+  // /scope/to-wo (a WO created from a scope, waiting for the vendor's estimate) and sits before Assigned.
+  // Declined / Cancelled are side exits, not steps.
+  var ORDER = ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Complete',
+               'Pending Invoice', 'Invoiced', 'Paid'];
+  var SIDE = ['Declined', 'Cancelled'];
+  // Names that appear in old code paths but are NOT statuses a WO is given today. Kept only so the groups
+  // that listed them keep identical membership. Do not write these.
+  var LEGACY = ['Canceled', 'Closed', 'Void', 'Scheduled'];
+  // Designed in HUB_UX §4, not built. Listed so the two groups that already mention them keep working.
+  var RESERVED = ['Pending Payment', 'Paid by Customer'];
+
+  var sets = {
+    // --- the two core groups (HUB_UX isOpen / isActive) ---
+    FIELD_OPEN: FIELD,                                                    // work not finished yet
+    ACTIVE: FIELD.concat(['Complete', 'Pending Invoice']),                // still on a portal / dashboard open list
+    // --- what a vendor may set / what the admin picker offers ---
+    VENDOR_SETTABLE: ['Accepted', 'In Progress', 'On Hold', 'Complete'],  // vendor portal, share links
+    VENDOR_STARTED: ['Accepted', 'In Progress', 'On Hold'],               // vendor has taken or begun the job
+    PRE_START: ['Assigned', 'Accepted'],                                  // not started yet (Mark In Progress offered)
+    ADMIN_PICKER: ['Assigned', 'Accepted', 'In Progress', 'On Hold', 'Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled'],
+    // --- finished / billing ---
+    DONE_THROUGH_PAID: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'],
+    COMPLETE_INVOICED_PAID: ['Complete', 'Invoiced', 'Paid'],
+    COMPLETE_OR_LATER: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Closed'],
+    ACCEPTED_OR_LATER: ['Accepted', 'In Progress', 'On Hold', 'Complete', 'Pending Invoice', 'Invoiced', 'Paid'],
+    INVOICED_OR_LATER: ['Invoiced', 'Paid'],
+    INVOICED_OR_PAYMENT: ['Invoiced', 'Paid', 'Pending Payment'],
+    // --- ended / closed (they differ on purpose; see each use) ---
+    DEAD: ['Cancelled', 'Declined'],
+    CLOSED_OUT_FOLD: ['Cancelled', 'Paid', 'Invoiced'],                   // admin WO list, "Not Assigned" filter: folded into the collapsed Closed-out group
+    CLOSED_TERMINAL: ['Paid', 'Cancelled'],
+    CLOSED_FINAL: ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'],
+    ADDON_PARENT_BLOCKED: ['Cancelled', 'Canceled', 'Paid', 'Invoiced', 'Closed'],
+    RECEIPT_CLOSED: ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void', 'Complete', 'Invoiced'],
+    RECUR_CLOSED: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Canceled', 'Closed', 'Void', 'Declined'],
+    DIGEST_CLOSED: ['Paid', 'Invoiced', 'Cancelled', 'Closed', 'Void'],
+    TURNOVER_DONE: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'],
+    STALE_ACTIVE: ['New', 'Assigned', 'Accepted', 'In Progress'],         // can go stale (On Hold is waiting on purpose)
+    // --- command-center dashboard counts ---
+    DASH_NOT_OPEN: ['Complete', 'Paid', 'Pending Invoice', 'Invoiced', 'Pending Payment', 'Paid by Customer', 'Cancelled', 'Canceled', 'Closed', 'Void'],
+    DASH_OPEN_LEGACY: ['New', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],
+    // --- what a tenant sees ---
+    TENANT_OPEN: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Pending Invoice'],
+    TENANT_TIMELINE: ['New', 'Assigned', 'Accepted', 'In Progress', 'Complete'],
+    TENANT_TIMELINE_STEPS: ['New', 'Assigned', 'In Progress', 'Complete'],
+    BILLING_STAGE: ['Pending Invoice', 'Invoiced', 'Paid']
+  };
+  var names = Object.keys(sets);
+  for (var i = 0; i < names.length; i++) Object.freeze(sets[names[i]]);
+  Object.freeze(sets);
+
+  var known = ORDER.concat(SIDE, LEGACY, RESERVED);
+  return Object.freeze({
+    statuses: Object.freeze(ORDER.concat(SIDE)),
+    legacy: Object.freeze(LEGACY.slice()),
+    reserved: Object.freeze(RESERVED.slice()),
+    sets: sets,
+    // Position in the lifecycle (0..9); -1 for a side exit or anything unknown.
+    order: function (s) { return ORDER.indexOf(s); },
+    isKnown: function (s) { return known.indexOf(s) >= 0; },
+    inSet: function (name, s) {
+      if (!sets[name]) throw new Error('WOStatus: no such status group "' + name + '"');
+      return sets[name].indexOf(s) >= 0;
+    }
+  });
+}
+/* WO_STATUS_SSOT:END */
+const WOStatus = __makeWOStatus();
+const OPEN_WO_STATUSES = WOStatus.sets.ACTIVE;
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.8-hub-improvements-sweep';
+const BUILD_VERSION = '2026-10-14.9-wo-status-ssot';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -2137,7 +2211,7 @@ function matchReceiptProperty(po, properties) {
   return bestScore >= 2 ? { property: best, score: bestScore } : null;
 }
 
-const RECEIPT_OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
+const RECEIPT_OPEN_STATUSES = WOStatus.sets.ACTIVE;
 const RECEIPT_STOP = new Set(['the','and','for','with','apt','ste','unit','street','saint','st','ave','rd','ln','pl','n','s','e','w','2x','x']);
 
 // PURE — rank a property's work orders by keyword overlap between the receipt (items + PO) and each
@@ -2303,7 +2377,7 @@ function receiptSuggestCore(input, properties, workorders, receipts, custCards) 
   const top = ranked[0] || null;
   const flags = [];
   if (top && receiptIsDuplicate(receipts, top.id, total, date, store)) flags.push('duplicate_on_wo');
-  if (top && ['Invoiced','Paid','Pending Payment'].includes(top.status)) flags.push('wo_already_invoiced');
+  if (top && WOStatus.sets.INVOICED_OR_PAYMENT.includes(top.status)) flags.push('wo_already_invoiced');
   if (!ranked.length) flags.push('no_open_wo');
   return {
     ok: true, category: 'billable',
@@ -3742,7 +3816,7 @@ async function scopeCreate(env, body) {
 // WO statuses meaning the crew is still actively working the job (before 'Complete'). Anything
 // NOT in this set — Complete, Pending Invoice, Invoiced, Paid, or anything else — means the job
 // itself is done from a work-execution standpoint, per the existing OPEN_WO_STATUSES ordering.
-const WO_STILL_ACTIVE_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+const WO_STILL_ACTIVE_STATUSES = WOStatus.sets.FIELD_OPEN;
 
 // GET /scopes — Brett (Sep 8 2026): "link status on proposal to the work order since that's how
 // we are billing it... 'complete' is not just the proposal being complete but the job, and thus
@@ -7005,7 +7079,7 @@ async function workorderSelfServe(env, body) {
 const ADDON_WO_COLUMNS = ['Parent_WO_ID', 'Addon_Status', 'Addon_Tenant_Mentioned', 'Addon_Items_JSON', 'Addon_Amount', 'Addon_Owner_Notified_Date'];
 const ADDON_MAX_ITEMS = 20;
 const ADDON_PHOTO_TYPES = ['before', 'photo'];
-const ADDON_PARENT_BLOCKED_STATUSES = ['Cancelled', 'Canceled', 'Paid', 'Invoiced', 'Closed'];
+const ADDON_PARENT_BLOCKED_STATUSES = WOStatus.sets.ADDON_PARENT_BLOCKED;
 
 // Draft children are hidden everywhere a normal WO list reads (see getWorkOrdersList / hubBootstrap /
 // vendorWorkorders / ownerWorkorders). Belt and braces: a draft is ALSO Voided=TRUE, which every other
@@ -8066,8 +8140,8 @@ async function getWorkOrdersList(env, url) {
 // NOTHING FAILS SILENTLY: every failure is logged to Ops_Telemetry (Success FALSE, WO ids) AND
 // returned in `errors`/`warnings`; every write is re-read and verified.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-const WO_DUP_ALLOWED_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
-const BID_CANCEL_PROTECTED_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'];
+const WO_DUP_ALLOWED_STATUSES = WOStatus.sets.FIELD_OPEN;
+const BID_CANCEL_PROTECTED_STATUSES = WOStatus.sets.DONE_THROUGH_PAID;
 const WO_BID_COLUMNS = ['Bid_Group_ID', 'Duplicated_From', 'Owner_Notify_Override'];
 const WO_BID_WINNER_COLUMNS = ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'];   // ensured only when a COPY is chosen as the keep_one winner
 const BID_CANCEL_SMS_TYPE = 'vendor_job_cancelled';
@@ -8483,7 +8557,7 @@ function bidCancelClassify(wo, ctx) {
   const irs = (ctx.invoiceReview || []).filter(r => r.WO_ID === id && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (irs.length) { reasons.push('Has an invoice review / approval row'); kind = 'skip'; }
   if (kind === 'cancel') {
-    if (['Accepted', 'In Progress', 'On Hold'].includes(st)) warnings.push(`Vendor has already ${st === 'Accepted' ? 'accepted' : 'started'} this job; they will be texted that it is cancelled`);
+    if (WOStatus.sets.VENDOR_STARTED.includes(st)) warnings.push(`Vendor has already ${st === 'Accepted' ? 'accepted' : 'started'} this job; they will be texted that it is cancelled`);
     if ((ctx.workorders || []).some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === id)) warnings.push('Has additional-work children; the cancel is refused if any are still live');
   }
   return { kind, reasons, warnings };
@@ -9146,7 +9220,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // Accept-gate (vendor portal only): the lockbox code + tenant contact are withheld until
   // the vendor has ACCEPTED the work order. Accepting is what unlocks them — and accepting
   // moves the status, which lets the tenant-notification automation fire. New/Assigned = gated.
-  const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid'];
+  const ACCEPTED_OR_LATER = WOStatus.sets.ACCEPTED_OR_LATER;
   const accessGated = !!opts.vendorView && !ACCEPTED_OR_LATER.includes((wo.Status||'').trim());
   // Resolve the assigned vendor's name/phone/trade/in-house status when a vendor directory
   // was handed in. This never happened before — tenant.html and owner.html both had a
@@ -9919,7 +9993,7 @@ async function addVendorBill(env, body) {
     if (woKey) {
       const wos = await fetchTab(env, 'Work_Orders');
       const wo = findWO(wos, woKey);
-      const preComplete = ['New','Assigned','Accepted','In Progress','On Hold'];
+      const preComplete = WOStatus.sets.FIELD_OPEN;
       if (wo && preComplete.includes(wo.Status)) {
         await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
       }
@@ -10938,7 +11012,7 @@ async function notifyVendorTemplated(env, type, woId, vendorIdHint, extraTokens,
 // version per WO; Pending (or blank) counts; 'Needs Info' pauses and resumes NEEDS_INFO_RESUME_DAYS
 // after it was flagged; Approved / Declined / Converted never count. Voided/closed WOs never count.
 function estimatesAwaitingDecision(estimates, workorders, now, sinceISO) {
-  const CLOSED = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void', 'Complete', 'Invoiced'];
+  const CLOSED = WOStatus.sets.RECEIPT_CLOSED;
   const latest = {};
   for (const e of estimates || []) {
     if (e.Active === 'FALSE' || !e.WO_ID) continue;
@@ -11606,7 +11680,7 @@ async function listNearbyWOs(env, url) {
   const nearbyPropIds = new Set();
   props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
   if (!nearbyPropIds.size) return json({ nearby: [], message: 'no_nearby', primary_cluster: primary });
-  const OPEN = new Set(['New','Assigned','Accepted','In Progress','On Hold']);
+  const OPEN = new Set(WOStatus.sets.FIELD_OPEN);
   const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
   return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
 }
@@ -12092,7 +12166,7 @@ const TURNOVER_DESC_BY_ROLE = {
 };
 // "Done" for the purposes of unblocking Cleaning — Cancelled counts too, so one dead/void
 // leg of a turnover can't permanently wedge the cleaner behind a job that will never finish.
-const TURNOVER_RELEASE_DONE_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'];
+const TURNOVER_RELEASE_DONE_STATUSES = WOStatus.sets.TURNOVER_DONE;
 
 function dayBefore(dateStr) {
   if (!dateStr) return '';
@@ -13170,7 +13244,7 @@ async function scheduleWO(env, body) {
   const workorders=await fetchTab(env,'Work_Orders'); const wo=workorders.find(w=>w.ID===body.wo_id); if(!wo) return json({error:'WO not found'},404);
   const isWithinHour=body.window==='Within 1 hour', today=new Date().toISOString().split('T')[0], schedDate=body.date||today;
   const updates={Scheduled_Date:schedDate,Scheduled_Window:body.window||''};
-  if(isWithinHour&&['Assigned','Accepted'].includes(wo.Status)) updates.Status='In Progress';
+  if(isWithinHour&&WOStatus.sets.PRE_START.includes(wo.Status)) updates.Status='In Progress';
   await updateWOFields(env,body.wo_id,updates);
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
   // Vendor nudge clock reset (Sep 14 2026) — a vendor setting a schedule is real activity.
@@ -13323,8 +13397,8 @@ const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a
 // nudge is answered the moment the WO reaches Complete or later; the invoice nudge is a
 // separate, later-starting ask that isn't answered until the WO actually reaches Invoiced or
 // later. Cancelled/Declined already short-circuit BOTH types earlier in the sweep, unchanged.
-const WO_STATUS_COMPLETE_OR_LATER = ['Complete','Pending Invoice','Invoiced','Paid','Closed'];
-const WO_STATUS_INVOICED_OR_LATER = ['Invoiced','Paid'];
+const WO_STATUS_COMPLETE_OR_LATER = WOStatus.sets.COMPLETE_OR_LATER;
+const WO_STATUS_INVOICED_OR_LATER = WOStatus.sets.INVOICED_OR_LATER;
 let _vendorReqReady = false;
 async function ensureVendorReqTab(env) {
   if (!_vendorReqReady) { await ensureTab(env, VENDOR_REQ_TAB, VENDOR_REQ_COLS); _vendorReqReady = true; }
@@ -13437,7 +13511,7 @@ async function processVendorNudges(env) {
     if (!wo || wo.Voided === 'TRUE' || !vendor) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_missing' }); continue; }
     // Cancelled/Declined stop ALL open request types for this WO outright — nothing left worth
     // chasing a vendor for on a job that isn't happening (per Brett, Sep 16 2026).
-    if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
+    if (WOStatus.sets.DEAD.includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
     // Additional work (Sep 30 2026): an add-on child is not a real job until Brett approves it. assignVendor(notify:false)
     // at /start opened the status clock, so: a declined add-on (stage cleared) closes its clock, a pending / needs-info
     // one is skipped (no nudge, nothing written) and starts nudging only once Approval_Stage is 'Approved'.
@@ -15620,7 +15694,7 @@ async function schedUnexpectedCloudflareCron(env, event) {
 // exercises it directly.
 const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date'];
 const RECUR_WO_COLS = ['Recurring_Template_ID','Recurring_Due','Owner_Notify_Override'];
-const RECUR_CLOSED_STATUSES = ['Complete','Pending Invoice','Invoiced','Paid','Cancelled','Canceled','Closed','Void','Declined'];
+const RECUR_CLOSED_STATUSES = WOStatus.sets.RECUR_CLOSED;
 const RECUR_LOOKBACK_DAYS = 3; // a sweep outage of up to 3 days still catches up an occurrence; older ones are dropped, not posted late
 const RECUR_POST_START_HOUR_ET = 8;
 const WO_SNIPPETS_TAB = 'WO_Snippets';
@@ -16038,7 +16112,7 @@ async function logSMS(env, woId, recipientType, recipientId, phone, message) {
 // Read-only 7am morning digest. buildDigest NEVER writes business data. Delivery
 // is gated by Config flags and stays dormant until Brett enables it after Twilio
 // send is live. Pulls from live tabs by their real column names.
-const DIGEST_CLOSED = ['Paid','Invoiced','Cancelled','Closed','Void'];
+const DIGEST_CLOSED = WOStatus.sets.DIGEST_CLOSED;
 
 function etTodayISO() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
 function etStamp() { return new Date().toLocaleString('en-US', { timeZone:'America/New_York', weekday:'short', month:'short', day:'numeric', year:'numeric' }); }
@@ -16172,7 +16246,7 @@ async function buildDigest(env) {
 // so a job that has quietly stalled surfaces before an SLA slips (greenlit #2 "wo_status polling on
 // open WOs"). Admin-gated. SAFE class: read-only; returns only the same WO summary the daily digest
 // already shows (no money, no PII beyond WO label). 'On Hold' is excluded — it's a deliberate pause.
-const STALE_ACTIVE_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress'];
+const STALE_ACTIVE_STATUSES = WOStatus.sets.STALE_ACTIVE;
 async function staleWos(env, url) {
   const days = Math.max(1, parseInt((url && url.searchParams && url.searchParams.get('days')) || '4') || 4);
   let wos = [];
@@ -18852,7 +18926,7 @@ async function vendorPerformance(env, url) {
   // Complete/Pending Invoice as "open" because there's billing follow-up left. Guarding `open`
   // below with `&& !DONE.has(w.Status)` reconciles the two so a completed-but-unbilled job never
   // double-counts as both done and open.
-  const DONE = new Set(['Complete', 'Pending Invoice', 'Invoiced', 'Paid']);
+  const DONE = new Set(WOStatus.sets.DONE_THROUGH_PAID);
   const now = Date.now();
   const daysBetween = (a, b) => {
     const ta = Date.parse(a), tb = Date.parse(b);
@@ -20929,7 +21003,7 @@ function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\
 // ══════════════════════════════════════════════════════════════
 const WO_SHARE_LINK_TTL = 60*60*24*180;   // 180 days — set-and-forget; revoke any time
 const WO_SHARE_VIEW_TTL = 60*60*24;       // 24 hours — one last-4 entry covers a full day
-const WO_SHARE_STATUSES = ['Accepted','In Progress','On Hold','Complete'];
+const WO_SHARE_STATUSES = WOStatus.sets.VENDOR_SETTABLE;
 
 // Last 4 digits of a phone, canonicalised. '' if there aren't 4.
 function _last4(phone){ const d = String(phone||'').replace(/\D/g,''); return d.length>=4 ? d.slice(-4) : ''; }
@@ -23604,7 +23678,7 @@ async function qbSyncPayments(env, body) {
 
   const now = new Date().toISOString();
   // Auto-close needs the current WO status so we never overwrite one already finished.
-  const WO_DONE = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'];
+  const WO_DONE = WOStatus.sets.CLOSED_FINAL;
   let workorders = [];
   try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
 
