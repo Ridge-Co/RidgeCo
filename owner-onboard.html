@@ -257,7 +257,8 @@ function renderUnit(p, pi, u, j){
   if (u.status === 'tenant') {
     h += '<div class="row2"><div>'+field(uf+'.tenant.first','Tenant first name',{ac:'off'})+'</div><div>'+field(uf+'.tenant.last','Tenant last name',{optional:true})+'</div></div>' +
       field(uf+'.tenant.phone','Tenant phone',{type:'tel',im:'tel',placeholder:'(410) 555-0123'}) +
-      field(uf+'.tenant.email','Tenant email',{type:'email',im:'email',optional:true});
+      field(uf+'.tenant.email','Tenant email',{type:'email',im:'email',optional:true}) +
+      field(uf+'.tenant.move_in','Date this tenant moved in',{type:'date',ac:'off'});
   } else if (u.status === 'vacant') {
     h += '<label class="f">How do we get in?</label>' +
       choice(uf+'.access.method','lockbox','There\'s a lockbox') +
