@@ -10724,7 +10724,9 @@ async function sendTemplatedSms(env, o) {
     const body = renderTemplate(tpl ? tpl.Body : (def ? def.Body : ''), Object.assign({ HubUrl: HUB_URL }, o.tokens || {})).replace(/\s+/g, ' ').trim();
     if (!body) return { sent: false, reason: 'no template for ' + o.type };
     const opts = { wo_id: o.wo_id || '', message_type: o.type, recipient_type: o.kind, message_body: body, property: o.property, bypassQuietHours: !!o.bypassQuietHours };
-    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else opts.vendor = o.vendor;
+    if (o.quietWindow) opts.quietWindow = o.quietWindow;
+    if (o.skip_if_seen) opts.skip_if_seen = o.skip_if_seen;
+    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else if (o.kind === 'owner') opts.owner = o.owner; else opts.vendor = o.vendor;
     return await smsGatedSend(env, opts);
   } catch (e) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
