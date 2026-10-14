@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Cleaning schedule</title>
+<style>
+  :root{--bg:#f4f5f7;--surface:#fff;--border:#dfe3e8;--text:#1c2430;--muted:#5f6b7a;--accent:#1d4ed8;--accent-t:#fff;
+    --ok:#1a7f4b;--ok-bg:#e7f6ec;--ok-bd:#b7e0c5;--ok-t:#14532d;
+    --warn-bg:#fdf3e0;--warn-bd:#f0d9a8;--warn-t:#7a4a00;--bad:#c0392b;--bad-bg:#fdecea;--bad-bd:#f3b9b3;--bad-t:#8a1f14;
+    --chip:#eef2f7;--hl:#fff7d6}
+  @media (prefers-color-scheme:dark){:root{--bg:#10151c;--surface:#1a212b;--border:#2e3947;--text:#e8edf3;--muted:#9aa7b7;--accent:#5b8cff;--accent-t:#0b1220;
+    --ok:#3fbf7f;--ok-bg:#12301f;--ok-bd:#245c3b;--ok-t:#bdf0d1;
+    --warn-bg:#33270f;--warn-bd:#5e4817;--warn-t:#f3d38b;--bad:#ff7b6b;--bad-bg:#3a1a17;--bad-bd:#6b2f29;--bad-t:#ffc9c2;
+    --chip:#232c38;--hl:#3a3515}}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:17px;line-height:1.4;overflow-wrap:anywhere}
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px}
+  header .in{max-width:600px;margin:0 auto}
+  header h1{font-size:22px;margin:0;line-height:1.2} header .sub{color:var(--muted);font-size:16px;margin-top:2px}
+  main{max-width:600px;margin:0 auto;padding:14px 14px 40px}
+  footer{text-align:center;color:var(--muted);font-size:13px;padding:0 14px 28px}
+  h2{font-size:19px;margin:0 0 4px;line-height:1.25}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px}
+  .muted{color:var(--muted);font-size:15px}
+  .btn{display:block;width:100%;min-height:52px;margin-top:10px;padding:12px 14px;border:2px solid transparent;border-radius:12px;background:var(--accent);color:var(--accent-t);font:inherit;font-size:17px;font-weight:700;text-align:center;text-decoration:none;cursor:pointer}
+  .btn.ok{background:var(--ok);color:#fff} .btn.ghost{background:var(--surface);color:var(--text);border-color:var(--border)}
+  .btn.bad{background:var(--surface);color:var(--bad);border-color:var(--bad)} .btn.badfill{background:var(--bad);color:#fff}
+  .btn.small{min-height:48px;font-size:16px}
+  .btn:disabled{opacity:.55;cursor:default}
+  .btn:focus-visible,.seg button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .pair .btn{margin-top:10px}
+  @media (max-width:340px){.pair{grid-template-columns:1fr}}
+  .msg{border-radius:12px;padding:12px 14px;margin:10px 0 0;font-size:16px;border:1px solid}
+  .msg.err{background:var(--bad-bg);border-color:var(--bad-bd);color:var(--bad-t)}
+  .msg.warn{background:var(--warn-bg);border-color:var(--warn-bd);color:var(--warn-t)}
+  .msg.good{background:var(--ok-bg);border-color:var(--ok-bd);color:var(--ok-t)}
+  .msg.info{background:var(--chip);border-color:var(--border);color:var(--text)}
+  .msg.top{margin:0 0 14px}
+  .msg .btn{margin-top:8px}
+  .offer{border:2px solid var(--accent)} .offer.hl{background:var(--hl)}
+  .eyebrow{font-size:13px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+  .dl{margin-top:8px;font-weight:600}
+  .sched-h{display:flex;justify-content:space-between;align-items:baseline;margin:22px 2px 6px}
+  .sched-h h2{margin:0}
+  .help{margin:0 2px 8px}
+  .month{margin:18px 2px 8px;font-size:14px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .task{background:var(--surface);border:1px solid var(--border);border-left:6px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px}
+  .task.mine{border-left-color:var(--ok);background:var(--ok-bg);border-color:var(--ok-bd)}
+  .task.need{border-left-color:#d98a00} .task.covered{border-left-color:var(--muted)}
+  .task.hl{box-shadow:0 0 0 3px var(--accent)}
+  .t-top{display:flex;gap:10px;justify-content:space-between;align-items:flex-start}
+  .t-date{font-size:19px;font-weight:700} .t-kind{color:var(--muted);font-size:15px}
+  .t-next{margin-top:6px;font-size:15px}
+  .pill{flex:none;max-width:48%;border-radius:999px;padding:6px 12px;font-size:14px;font-weight:700;text-align:center;line-height:1.2}
+  .pill.mine{background:var(--ok);color:#fff} .pill.covered{background:var(--chip);color:var(--text);border:1px solid var(--border)}
+  .pill.need{background:var(--warn-bg);color:var(--warn-t);border:1px solid #d98a00}
+  .seg-l{font-size:13px;font-weight:600;color:var(--muted);margin:12px 0 4px}
+  .seg{display:grid;grid-template-columns:1.5fr 1fr 1fr;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--chip)}
+  .seg button{min-height:52px;padding:6px 4px;border:0;border-left:1px solid var(--border);background:transparent;color:var(--text);font:inherit;font-size:15px;font-weight:600;line-height:1.15;cursor:pointer}
+  .seg button:first-child{border-left:0}
+  .seg button[aria-checked=true]{background:var(--accent);color:var(--accent-t)}
+  .seg button[aria-checked=true].out{background:var(--bad);color:#fff}
+  .seg button[aria-checked=true].none{background:var(--surface);color:var(--text);box-shadow:inset 0 0 0 2px var(--muted)}
+  .seg button:disabled{opacity:.6;cursor:default}
+  .confirm{margin-top:12px;border:2px solid var(--bad);border-radius:12px;padding:12px;background:var(--surface)}
+  .empty{text-align:center;color:var(--muted);padding:26px 16px}
+  .soon{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+  .soon div{border:1px dashed var(--border);border-radius:12px;padding:12px;color:var(--muted);font-size:15px;opacity:.85;user-select:none}
+  .soon small{display:block;font-size:12px;margin-top:2px}
+  .cal p{margin:8px 0 0}
+  .full{max-width:420px;margin:18vh auto 0;text-align:center;padding:0 24px;font-size:20px;font-weight:600}
+</style>
+</head>
+<body>
+<header id="hdr"><div class="in"><h1 id="h-title">Cleaning schedule</h1><div class="sub" id="h-sub"></div></div></header>
+<main id="main"><div class="card"><p class="muted" style="margin:0">Loading your schedule…</p></div></main>
+<footer id="foot">Ridge Co</footer>
+<noscript><div class="card" style="margin:14px"><p>This page needs JavaScript turned on to work.</p></div></noscript>
+<script>
+var Q=new URLSearchParams(location.search);
+// ?api= may only point at the staging Worker (pre-merge testing); anything else is ignored.
+var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(Q.get('api')||'')?Q.get('api'):'https://maintenance-hub.brett-2f8.workers.dev';
+var K=Q.get('k')||'', OFFER=Q.get('offer')||'', BACKUP=/^\d{4}-\d{2}-\d{2}$/.test(Q.get('backup')||'')?Q.get('backup'):'', HL_DATE=Q.get('date')||'';
+var ET='America/New_York';
+var S={data:null, loading:true, loadErr:'', fatal:false, seq:0, marksInflight:0, scrolled:false,
+  offerRes:{}, offerBusy:{}, offerErr:{}, bk:{}, rowMsg:{}, markBusy:{}, confirmKey:'', cancelBusy:''};
+
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function $(id){return document.getElementById(id);}
+function arr(x){return Array.isArray(x)?x:[];}
+
+// ── API ─────────────────────────────────────────────────────
+// Always resolves with the parsed JSON on success; otherwise rejects with an Error that carries a plain-English reason.
+function api(method,path,body){
+  var o={method:method,headers:{}};
+  if(body){o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
+  return fetch(WORKER+path,o).then(function(r){
+    // An unreadable body becomes null here and is turned into a visible error just below (never ignored).
+    return r.json().then(function(j){return j;},function(){return null;}).then(function(j){
+      if(!j||typeof j!=='object'){var e=new Error('The server sent an answer we could not read (code '+r.status+').');e.status=r.status;e.unreadable=true;throw e;}
+      if(!r.ok||j.ok===false){var e2=new Error(j.message||('The server said no (code '+r.status+').'));e2.status=r.status;e2.code=j.error||'';e2.serverMessage=j.message||'';throw e2;}
+      return j;
+    });
+  },function(){var e3=new Error('No connection.');e3.net=true;throw e3;});
+}
+function failText(e,what){
+  var base=(what||'Couldn’t save that')+' — check your signal and try again.';
+  if(e&&e.net) return base;
+  var extra=e&&(e.serverMessage||(e.unreadable&&e.message)||'');
+  return base+(extra?' '+extra:'');
+}
+
+// ── dates ───────────────────────────────────────────────────
+function dayLong(iso){var d=new Date(iso+'T12:00:00Z');return isNaN(d)?String(iso):d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',timeZone:'UTC'});}
+function monthName(iso){var d=new Date(iso+'T12:00:00Z');return isNaN(d)?'':d.toLocaleDateString('en-US',{month:'long',year:'numeric',timeZone:'UTC'});}
+function etYmd(d){return d.toLocaleDateString('en-CA',{timeZone:ET});}
+function replyBy(iso){
+  var d=new Date(iso); if(!iso||isNaN(d)) return '';
+  var t=d.toLocaleTimeString('en-US',{timeZone:ET,hour:'numeric',minute:'2-digit'});
+  var today=(S.data&&S.data.today)||etYmd(new Date());
+  var pre=etYmd(d)===today?'':d.toLocaleDateString('en-US',{timeZone:ET,weekday:'long'})+' ';
+  return 'Please reply by '+pre+t;
+}
+function inDays(n){n=Number(n);if(!isFinite(n)||n<0)return '';return n===0?'today':(n===1?'tomorrow':'in '+n+' days');}
+
+// ── loading ─────────────────────────────────────────────────
+function loadPage(){
+  var seq=++S.seq;
+  var path='/str/c/page?k='+encodeURIComponent(K)+(OFFER?'&offer='+encodeURIComponent(OFFER):'')+(BACKUP?'&backup='+encodeURIComponent(BACKUP):'');
+  S.loading=true; if(!S.data) render();
+  return api('GET',path).then(function(j){
+    if(!Array.isArray(j.tasks)){var e=new Error('The schedule came back in a shape we did not expect.');e.unreadable=true;throw e;}
+    if(seq!==S.seq||S.marksInflight>0) return;   // a newer load or an unsaved tap is in charge
+    S.data=j; S.loading=false; S.loadErr=''; render();
+    if(!S.scrolled){S.scrolled=true;jumpToTarget();}
+  }).catch(function(e){
+    if(seq!==S.seq) return;
+    S.loading=false;
+    if(e.status===404&&e.code==='bad_link'){S.fatal=true;S.data=null;render();return;}
+    S.loadErr=(S.data?'Couldn’t refresh your schedule.':'Couldn’t load your schedule.')+(e.net?' Check your signal and try again.':' '+(e.serverMessage||e.message||''));
+    render();
+  });
+}
+function jumpToTarget(){
+  var el=null;
+  if(OFFER) el=document.getElementById('offer-'+OFFER);
+  if(!el&&HL_DATE) el=document.querySelector('.task[data-date="'+HL_DATE.replace(/[^0-9-]/g,'')+'"]');
+  if(el&&el.scrollIntoView) el.scrollIntoView({block:'center'});
+}
+
+// ── render ──────────────────────────────────────────────────
+function render(){
+  var main=$('main'), y=window.scrollY, ae=document.activeElement, fid=ae&&ae.getAttribute?ae.getAttribute('data-fid'):null;
+  if(S.fatal){
+    $('hdr').style.display='none';$('foot').style.display='none';
+    main.innerHTML='<div class="full">This link isn’t working any more. Text Brett for a new one.</div>'; return;
+  }
+  var d=S.data, h='';
+  if(d){
+    $('h-title').textContent=(d.property||'Your')+' cleaning';
+    $('h-sub').textContent=(d.cleaner&&d.cleaner.first)?'Hi '+d.cleaner.first:'';
+  }
+  if(S.loadErr) h+='<div class="msg err top" role="alert">'+esc(S.loadErr)+'<button class="btn small" data-act="retry">Try again</button></div>';
+  if(!d){
+    if(!S.loadErr) h+='<div class="card"><p class="muted" style="margin:0">Loading your schedule…</p></div>';
+    main.innerHTML=h; return;
+  }
+  h+=offersHtml(d)+backupTopHtml(d)+scheduleHtml(d)+calendarHtml(d)+soonHtml(d);
+  main.innerHTML=h;
+  window.scrollTo(0,y);
+  if(fid){var n=main.querySelector('[data-fid="'+fid.replace(/"/g,'')+'"]'); if(n&&!n.disabled) n.focus({preventScroll:true});}
+}
+function msgs(list){return arr(list).map(function(m){return '<div class="msg '+esc(m.kind)+'" role="status">'+esc(m.text)+'</div>';}).join('');}
+function warnMsgs(w){return arr(w).map(function(x){return {kind:'warn',text:x};});}
+
+function offersHtml(d){
+  var seen={}, list=arr(d.offers).slice();
+  list.forEach(function(o){seen[o.id]=1;});
+  Object.keys(S.offerRes).forEach(function(id){ if(!seen[id]) list.push(S.offerRes[id].offer); });   // keep a finished card on screen after the reload drops it
+  return list.map(function(o){return offerCard(o,d);}).join('');
+}
+function offerCard(o,d){
+  var id=String(o.id), res=S.offerRes[id], busy=!!S.offerBusy[id], err=S.offerErr[id];
+  var h='<section class="card offer'+(OFFER===id?' hl':'')+'" id="offer-'+esc(id)+'" data-offer="'+esc(id)+'">';
+  var task=arr(d.tasks).filter(function(t){return t.key===o.task_key;})[0];
+  var kindLine=(task&&task.kind==='prearrival')?'This is a pre-arrival clean.':'Checkout is 11 AM.';
+  h+='<div class="eyebrow">Can you take this one?</div><h2>Can you clean '+esc(o.label)+'?</h2>';
+  if(!res){
+    h+='<div class="muted">'+kindLine+(o.next_label?' Next guest arrives '+esc(o.next_label)+'.':'')+'</div>';
+    if(!o.late){var rb=replyBy(o.deadline); if(rb) h+='<div class="dl">'+esc(rb)+'</div>';}
+    if(err) h+='<div class="msg err" role="alert">'+esc(err)+'</div>';
+    h+='<button class="btn ok" data-act="offer" data-id="'+esc(id)+'" data-do="accept" data-fid="o|'+esc(id)+'|a"'+(busy?' disabled':'')+'>'+(busy&&S.offerBusy[id]==='accept'?'Saving…':'Yes, I’ll take it')+'</button>'
+      +'<button class="btn ghost" data-act="offer" data-id="'+esc(id)+'" data-do="decline" data-fid="o|'+esc(id)+'|d"'+(busy?' disabled':'')+'>'+(busy&&S.offerBusy[id]==='decline'?'Saving…':'No, can’t this time')+'</button>';
+  }else{
+    var kind={accepted:'good',declined:'info',filled:'warn',already:'info',already_yours:'good',cancelled:'info'}[res.result]||'info';
+    h+='<div class="msg '+kind+'" role="status">'+esc(res.message||'Saved.')+'</div>'+msgs(warnMsgs(res.warnings));
+    if(res.result==='filled'&&res.backup_date) h+=backupPair(res.backup_date,'o'+id);
+  }
+  return h+'</section>';
+}
+// "Yes, backup / No" pair for a filled date; also shows its own result or error.
+function backupPair(date,fidp){
+  var b=S.bk[date]||{};
+  if(b.done) return '<div class="msg good" role="status">'+(b.done==='can'?'Thanks — you’re marked as the backup for '+esc(dayLong(date))+'.':'Got it — you’re marked as out on '+esc(dayLong(date))+'.')+'</div>';
+  return (b.err?'<div class="msg err" role="alert">'+esc(b.err)+'</div>':'')
+    +'<div class="pair"><button class="btn ok" data-act="backup" data-date="'+esc(date)+'" data-do="can" data-fid="b|'+esc(fidp)+'|y"'+(b.busy?' disabled':'')+'>Yes, backup</button>'
+    +'<button class="btn ghost" data-act="backup" data-date="'+esc(date)+'" data-do="out" data-fid="b|'+esc(fidp)+'|n"'+(b.busy?' disabled':'')+'>No</button></div>';
+}
+function backupTopHtml(d){
+  var p=d.backup_prompt; if(!p||!p.date) return '';
+  var inOffer=Object.keys(S.offerRes).some(function(id){return S.offerRes[id].backup_date===p.date;});
+  if(inOffer) return '';
+  return '<section class="card offer"><div class="eyebrow">Backup needed</div><h2>'+esc(p.label||dayLong(p.date))+' has been filled.</h2><div class="muted">Could you be the backup for that date?</div>'+backupPair(p.date,'top')+'</section>';
+}
+
+function scheduleHtml(d){
+  var h='<div class="sched-h"><h2>Schedule</h2></div>'
+    +'<p class="muted help">Mark when you’re free to be a backup, or when you’re out of town, so Brett knows who he can count on. You can change this any time.</p>';
+  var tasks=arr(d.tasks);
+  if(!tasks.length) return h+'<div class="card empty">Nothing coming up yet — you’ll get a text when a turnover needs a cleaner.</div>';
+  var lastMonth='';
+  tasks.forEach(function(t){
+    var m=monthName(t.date); if(m!==lastMonth){h+='<h3 class="month">'+esc(m)+'</h3>';lastMonth=m;}
+    h+=taskRow(t);
+  });
+  return h;
+}
+function taskRow(t){
+  var cls=t.mine?'mine':(t.covered?'covered':'need'), key=String(t.key);
+  var pill=t.mine?'<span class="pill mine">You’re cleaning</span>':(t.covered?'<span class="pill covered">Covered'+(t.covered_by?' — '+esc(t.covered_by):'')+'</span>':'<span class="pill need">Needs a cleaner</span>');
+  var di=inDays(t.days_out);
+  var h='<article class="task '+cls+(HL_DATE&&HL_DATE===t.date?' hl':'')+'" data-date="'+esc(t.date)+'" data-key="'+esc(key)+'">'
+    +'<div class="t-top"><div><div class="t-date">'+esc(t.label)+'</div><div class="t-kind">'+esc(t.kind_label)+(di?' · '+di:'')+'</div></div>'+pill+'</div>'
+    +(t.next_label?'<div class="t-next">Next guest '+esc(t.next_label)+'</div>':'');
+  if(t.mine){
+    if(t.can_cancel){
+      if(S.confirmKey===key){
+        var cb=S.cancelBusy===key;
+        h+='<div class="confirm" role="alertdialog" aria-label="Confirm cancel"><b>Cancel your clean on '+esc(t.label)+'?</b><div class="muted">Brett will be told right away so he can find someone else.</div>'
+          +'<button class="btn badfill small" data-act="cancel-yes" data-key="'+esc(key)+'" data-fid="c|'+esc(key)+'|y"'+(cb?' disabled':'')+'>'+(cb?'Cancelling…':'Yes, cancel my clean')+'</button>'
+          +'<button class="btn ghost small" data-act="cancel-no" data-fid="c|'+esc(key)+'|n"'+(cb?' disabled':'')+'>No, keep it</button></div>';
+      }else h+='<button class="btn bad small" data-act="cancel-ask" data-key="'+esc(key)+'" data-fid="c|'+esc(key)+'">Can’t make it — cancel</button>';
+    }
+  }else{
+    var mk=t.my_mark||'', busy=!!S.markBusy[t.date];
+    h+='<div class="seg-l" id="sl-'+esc(key)+'">Your availability</div><div class="seg" role="radiogroup" aria-labelledby="sl-'+esc(key)+'">'
+      +[['can','Available as backup',''],['out','Out','out'],['','Not marked','none']].map(function(o){
+        return '<button type="button" role="radio" class="'+o[2]+'" aria-checked="'+(mk===o[0]?'true':'false')+'" data-act="mark" data-key="'+esc(key)+'" data-date="'+esc(t.date)+'" data-mark="'+o[0]+'" data-fid="m|'+esc(key)+'|'+o[0]+'"'+(busy?' disabled':'')+'>'+o[1]+'</button>';
+      }).join('')+'</div>';
+  }
+  return h+msgs(S.rowMsg[key])+'</article>';
+}
+function calendarHtml(d){
+  var ok=typeof d.ics_url==='string'&&/^https?:\/\//.test(d.ics_url);
+  return '<div class="card cal" style="margin-top:20px">'
+    +(ok?'<a class="btn" href="'+esc(d.ics_url)+'" download="cleaning.ics">Add to my calendar</a><p class="muted">Adds the dates you’re cleaning and any you marked as backup.</p>'
+        :'<div class="msg warn">The calendar link isn’t available right now. Try again later.</div>')+'</div>';
+}
+function soonHtml(d){
+  var l=arr(d.coming_soon); if(!l.length) return '';
+  return '<h3 class="month">Coming soon</h3><div class="soon" aria-label="Coming soon">'+l.map(function(x){
+    var t=(x&&typeof x==='object')?(x.title||x.label||''):x;
+    return '<div aria-disabled="true">'+esc(t)+'<small>coming soon</small></div>';}).join('')+'</div>';
+}
+
+// ── actions ─────────────────────────────────────────────────
+function setRow(key,list){S.rowMsg[key]=list;}
+function doMark(date,mark){   // resolves {ok:true,res} or {ok:false,err}
+  return api('POST','/str/c/mark',{k:K,marks:[{date:date,mark:mark}]}).then(function(res){return {ok:true,res:res};},function(e){return {ok:false,err:e};});
+}
+function onMark(key,date,mark){
+  if(S.markBusy[date]) return;
+  var prev={}, d=S.data;
+  arr(d.tasks).forEach(function(t){ if(t.date===date){prev[t.key]=t.my_mark||''; t.my_mark=mark;} });
+  S.markBusy[date]=1; S.marksInflight++; setRow(key,[]); render();
+  doMark(date,mark).then(function(r){
+    S.marksInflight--; delete S.markBusy[date];
+    if(!r.ok){
+      arr(S.data.tasks).forEach(function(t){ if(t.date===date&&prev.hasOwnProperty(t.key)) t.my_mark=prev[t.key]; });
+      setRow(key,[{kind:'err',text:failText(r.err)}]);
+      render();
+      if(r.err&&r.err.status===409) loadPage();   // e.g. they actually hold that date
+      return;
+    }
+    setRow(key,warnMsgs(r.res.warnings));
+    render(); loadPage();
+  });
+}
+function onOffer(id,action){
+  if(S.offerBusy[id]) return;
+  S.offerBusy[id]=action; delete S.offerErr[id]; render();
+  var o=arr(S.data.offers).filter(function(x){return String(x.id)===id;})[0];
+  api('POST','/str/c/offer',{k:K,offer_id:id,action:action}).then(function(res){
+    delete S.offerBusy[id];
+    S.offerRes[id]={offer:o,result:res.result,message:res.message,backup_date:res.backup_date||'',warnings:res.warnings};
+    render(); loadPage();
+  },function(e){
+    delete S.offerBusy[id];
+    S.offerErr[id]=failText(e);
+    render();
+  });
+}
+function onBackup(date,mark){
+  var b=S.bk[date]||(S.bk[date]={}); if(b.busy) return;
+  b.busy=true; b.err=''; S.marksInflight++; render();
+  doMark(date,mark).then(function(r){
+    S.marksInflight--; b.busy=false;
+    if(!r.ok){b.err=failText(r.err);render();return;}
+    b.done=mark||'can'; render(); loadPage();
+  });
+}
+function onCancel(key){
+  if(S.cancelBusy) return;
+  S.cancelBusy=key; render();
+  api('POST','/str/c/cancel',{k:K,task_key:key}).then(function(res){
+    S.cancelBusy=''; S.confirmKey='';
+    setRow(key,[{kind:'good',text:res.message||'Cancelled. Brett has been told.'}].concat(warnMsgs(res.warnings)));
+    render(); loadPage();
+  },function(e){
+    S.cancelBusy=''; S.confirmKey='';
+    setRow(key,[{kind:'err',text:failText(e,'Couldn’t cancel')}]);
+    render();
+    if(e&&e.status===409) loadPage();   // not_yours: the schedule has changed, refresh it
+  });
+}
+
+$('main').addEventListener('click',function(ev){
+  var b=ev.target.closest?ev.target.closest('[data-act]'):null; if(!b||b.disabled) return;
+  var a=b.getAttribute('data-act');
+  if(a==='retry'){S.loadErr='';loadPage();}
+  else if(a==='mark') onMark(b.getAttribute('data-key'),b.getAttribute('data-date'),b.getAttribute('data-mark'));
+  else if(a==='offer') onOffer(b.getAttribute('data-id'),b.getAttribute('data-do'));
+  else if(a==='backup') onBackup(b.getAttribute('data-date'),b.getAttribute('data-do'));
+  else if(a==='cancel-ask'){S.confirmKey=b.getAttribute('data-key');setRow(S.confirmKey,[]);render();}
+  else if(a==='cancel-no'){S.confirmKey='';render();}
+  else if(a==='cancel-yes') onCancel(b.getAttribute('data-key'));
+});
+
+if(!K){S.fatal=true;render();}
+else loadPage();
+</script>
+</body>
+</html>
