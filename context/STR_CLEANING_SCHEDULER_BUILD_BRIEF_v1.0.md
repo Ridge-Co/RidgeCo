@@ -1,6 +1,6 @@
 # STR Cleaning Scheduler — Milam Ridge — Build Brief v1.0 (Oct 14, 2026)
 
-Status: built on branch `feat/str-cleaning-scheduler`, **everything OFF by default**. Brett's rule: test mode first.
+Status (Oct 14 2026, 2:50 pm ET): **LIVE on prod in test mode** (build `2026-10-14.21-str-next-guest-note`). Scheduler ON, Texts ON, Cleaning test mode ON, calendar sync OFF (not built), Mon/Wed/Fri email OFF. Everything ships OFF by default. Brett's rule: test mode first.
 Owner request (Oct 13–14, 2026): keep every Milam Ridge (1864 Kerns School Rd, Springfield WV) turnover covered for the next
 30+ days, by texting a preferred cleaner queue one at a time, with Brett told loudly when coverage is at risk.
 
