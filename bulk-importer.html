@@ -354,7 +354,7 @@ function runImport(){
   var path = TARGET==='hub' ? '/bulk-import' : '/insp/bulk-import';
   var custId = TARGET==='insp' ? document.getElementById('insp-customer').value : null;
   var totals = TARGET==='hub'
-    ? { properties_created:0, properties_matched:0, units_created:0, units_matched:0, tenants_created:0, tenants_skipped_existing:0, tenants_flagged_elsewhere:[], owners_flagged_no_match:[] }
+    ? { properties_created:0, properties_matched:0, units_created:0, units_matched:0, tenants_created:0, tenants_skipped_existing:0, tenants_flagged_elsewhere:[], tenants_refused_no_move_in_date:[], owners_flagged_no_match:[] }
     : { properties_created:0, properties_matched:0, units_created:0, units_skipped_duplicate:0 };
   var idx = 0;
   function next(){
