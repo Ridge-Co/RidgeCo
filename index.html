@@ -6490,6 +6490,7 @@ async function submitMoveIn() {
   }
   if (!propId) { showMiError('Select a property.'); return; }
   if (!first)  { showMiError('First name is required.'); return; }
+  if (!moveIn) { showMiError('Move-in date is required. It decides which work orders the new tenant can see and be texted about.'); return; }
 
   // Determine action: add alongside existing tenants, or move some out first
   var actionRadio = document.querySelector('input[name="mi-action"]:checked');
