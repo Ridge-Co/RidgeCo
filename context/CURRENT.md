@@ -13,6 +13,10 @@
 
 ---
 
+## 🟡 PR #262 -> main (head `feat/proposal-read-status-owner-sms-oct14`, cut from main f94458d), awaiting Brett's merge. NOT verified on staging: staging currently holds another session's in-flight wo-status branch and a test-only PR (#263) conflicted, so it was closed; unit + Playwright tests only. First real send after merge is the live check (Oct 14): Proposal read status + owner "estimate emailed" text — BUILD_VERSION `2026-10-14.3-proposal-read-status-owner-sms` (FEATURE_LOG rule 209)
+Review fixes Oct 14 (after merging main): the held owner text is skipped only when the owner opened the proposal AT/AFTER the latest Sent_Date (an older open no longer cancels a resend's text); a repeat send within 60s is refused with 409 just_sent before any email/text, and the Send button disables in flight. BUILD_VERSION 2026-10-14.7-proposal-read-status-owner-sms.
+Brett's Hub Improvements items 1 and 5. Proposal email gets a tracking pixel; owner page views are logged; Scope Creator shows opened/viewed and the text outcome. Owner is texted "your estimate was emailed" on the first send: fine until 8pm ET, held until 8am ET after that, dropped if the owner opens the estimate first; a "text right now" checkbox overrides the hold. Email always goes. Tests: 55 unit + 15 Playwright (412px). **After merge:** nothing to configure; first real send is the live check (owner SMS follows Global/property/owner toggles + TWILIO_TEST_MODE). Open: email-open is "probably" (Apple/Gmail image proxies); page view is the reliable signal.
+
 # SESSION IDENTITY BINDING — Oct 14, 2026 — Ridge-Co/RidgeCo PR #268, base `main`, head `fix/session-scope-oct14` (stacked on #251: merge #251 first), NOT merged (Brett merges). Staging test copy #269 merged. BUILD_VERSION `2026-10-14.6-session-scope`.
 
 ## 🟢 Built, unit-tested (44 assertions on the real router) and verified live on staging with real tenant/owner/vendor sessions. Closes B-20261014-0700-ats2.

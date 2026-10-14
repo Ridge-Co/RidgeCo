@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.6-session-scope';
+const BUILD_VERSION = '2026-10-14.7-proposal-read-status-owner-sms';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -123,7 +123,7 @@ const _hubWorkerCore = {
       // Scope-creator customer proposal link (Aug 18 session, rule 113): same pattern — public
       // at the gate, but scopeProposalView self-verifies a signed scope-proposal share token.
       // /scope-proposal/sign (Aug 19, e-sign): same token, self-verified inside scopeProposalSign.
-      '/scope-proposal/view','/scope-proposal/sign',
+      '/scope-proposal/view','/scope-proposal/sign','/scope-proposal/px',
       // vendor-setup.html self-service link (Sept 2 2026): a NEW vendor with no PIN/login yet
       // fills their own contact info from a shared link. Both handlers are read-only-or-review:
       // /vendor-setup/contact-extract never writes; /vendor-setup/submit only ever creates a
@@ -544,7 +544,8 @@ const _hubWorkerCore = {
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
         if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
-        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url);
+        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url, request.headers.get('User-Agent') || '', ctx);
+        if (path === '/scope-proposal/px')      return await scopeProposalPixel(env, url, request.headers.get('User-Agent') || '', ctx);
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
@@ -4649,7 +4650,105 @@ async function scopeProposalLinkRevoke(env, body) {
 }
 
 const PROPOSAL_SEND_LOG_TAB = 'Proposal_Send_Log';
-const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result'];
+const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result', 'SMS_Result'];
+
+// ── Proposal read status + owner heads-up text (Hub Improvements, Oct 14 2026; FEATURE_LOG rule 209) ──
+// Two read signals, both written onto the Scopes row:
+//   * Page_*  = the owner opened scope-proposal.html (reliable; a real click-through).
+//   * Email_* = the 1x1 tracking pixel in the proposal email loaded (the owner's mail app showed images). Gmail and
+//     Apple Mail prefetch images through proxies, so a hit within PROPOSAL_OPEN_AUTO_WINDOW_MS of the send is counted
+//     as Email_Auto_Opens (a machine, not a person) and does NOT mark the email "opened". Treat Email_* as "probably".
+// Either signal counts as "seen" - that is what cancels a held owner text (processQuietHoursQueue) .
+const PROPOSAL_TRACK_COLS = ['Email_First_Opened', 'Email_Last_Opened', 'Email_Open_Count', 'Email_Auto_Opens', 'Page_First_Viewed', 'Page_Last_Viewed', 'Page_View_Count', 'Owner_SMS_Status', 'Owner_SMS_Time'];
+const PROPOSAL_OPEN_AUTO_WINDOW_MS = 120000;
+const PROPOSAL_RESEND_GUARD_MS = 60000;
+const PROPOSAL_BOT_UA = /bot|crawl|spider|slurp|facebookexternalhit|whatsapp|slackbot|twitterbot|curl\/|python-requests|headless|linkpreview|link preview/i;
+const SCOPE_SMS_QUIET_WINDOW = { start: 20, end: 8 };   // owner proposal text: fine until 8pm ET, held until 8am ET
+const PROPOSAL_PIXEL_GIF_B64 = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+// Pure: how to treat one hit. 'ignore' = obvious bot; 'auto' = email image fetched right after send (prefetch); 'real' = count it.
+function classifyProposalHit({ kind, ua, sentDate, now }) {
+  if (PROPOSAL_BOT_UA.test(String(ua || ''))) return 'ignore';
+  if (kind === 'email') { const sent = Date.parse(sentDate || ''); if (sent && (now - sent) < PROPOSAL_OPEN_AUTO_WINDOW_MS) return 'auto'; }
+  return 'real';
+}
+// Pure: has the owner (probably) seen this proposal?
+// `sinceIso` (the send that queued the text = the scope's Sent_Date): only a view AT OR AFTER it counts, so an
+// open from an earlier send/preview cannot cancel the text for a later resend. Compares the LAST view stamps
+// (they move on every hit). With no usable sinceIso it falls back to "any view ever" (legacy rows).
+function proposalSeenByOwner(s, sinceIso) {
+  if (!s) return false;
+  const since = Date.parse(sinceIso || '');
+  if (!since) return !!(String(s.Page_First_Viewed || '').trim() || String(s.Email_First_Opened || '').trim());
+  const at = (v) => { const t = Date.parse(String(v || '').trim()); return t ? t : 0; };
+  return at(s.Page_Last_Viewed || s.Page_First_Viewed) >= since || at(s.Email_Last_Opened || s.Email_First_Opened) >= since;
+}
+// Never silent: a failed log lands in Ops_Telemetry; the public page/pixel still works.
+async function proposalRecordHit(env, s, kind, ua) {
+  try {
+    const verdict = classifyProposalHit({ kind, ua, sentDate: s.Sent_Date, now: Date.now() });
+    if (verdict === 'ignore') return;
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const nowIso = new Date().toISOString();
+    let f;
+    if (kind === 'email' && verdict === 'auto') f = { Email_Auto_Opens: String((parseInt(s.Email_Auto_Opens || '0', 10) || 0) + 1) };
+    else if (kind === 'email') f = { Email_First_Opened: s.Email_First_Opened || nowIso, Email_Last_Opened: nowIso, Email_Open_Count: String((parseInt(s.Email_Open_Count || '0', 10) || 0) + 1) };
+    else f = { Page_First_Viewed: s.Page_First_Viewed || nowIso, Page_Last_Viewed: nowIso, Page_View_Count: String((parseInt(s.Page_View_Count || '0', 10) || 0) + 1) };
+    const r = await updateRow(env, 'Scopes', s.ID, f);
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/' + kind, Success: 'FALSE', Notes: 'scope=' + (s && s.ID) + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+}
+// PUBLIC GET /scope-proposal/px?t=<proposal link token> - the tracking pixel. ALWAYS answers with the gif (a broken
+// image in the owner's email would look worse than a missed open); only a valid, current token is recorded.
+async function scopeProposalPixel(env, url, ua, ctx) {
+  try {
+    const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
+    if (auth) await proposalRecordHit(env, auth.s, 'email', ua);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/px', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+  const bin = Uint8Array.from(atob(PROPOSAL_PIXEL_GIF_B64), c => c.charCodeAt(0));
+  return new Response(bin, { status: 200, headers: { 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate, private', 'Pragma': 'no-cache', 'Access-Control-Allow-Origin': '*' } });
+}
+// Stamp the owner-text outcome on the Scope so the Scope Creator can show it. Best-effort + telemetry, never throws.
+async function proposalStampSms(env, scopeId, status) {
+  try {
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const r = await updateRow(env, 'Scopes', scopeId, { Owner_SMS_Status: status, Owner_SMS_Time: new Date().toISOString() });
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) {}
+  }
+}
+// Text the owner "your estimate was emailed". Gated like every owner SMS (global / property / owner toggles, test mode).
+// Quiet window 8pm-8am ET (not the global 7pm-9am); `override` (Brett's per-send choice) sends right now. When held, the
+// Message_Queue row carries Skip_If_Seen so the release sweep drops it if the owner has already opened the proposal.
+// Returns { status, ... } - every outcome (including blocked / failed / no phone) is reported, none swallowed.
+async function proposalOwnerSms(env, { scopeId, prop, owner, addr, ownerName, override }) {
+  let out;
+  try {
+    const cfg = await fetchConfig(env);
+    const first = ((owner && (owner.First_Name || '')) || (ownerName && ownerName !== 'there' ? String(ownerName).split(' ')[0] : '') || 'there');
+    if (!owner || !normalizePhone(owner.Phone)) out = { status: 'no_phone', note: 'Owner has no phone on file - email sent, no text.' };
+    else {
+      const r = await sendTemplatedSms(env, { type: 'owner_proposal_ready', kind: 'owner', owner, property: prop,
+        tokens: { FirstName: first, Address: addr, AssistantName: cfg.ASSISTANT_NAME || 'Riley' },
+        bypassQuietHours: !!override, quietWindow: SCOPE_SMS_QUIET_WINDOW, skip_if_seen: 'scope:' + scopeId });
+      if (r && r.error) out = { status: 'failed', note: String(r.error).slice(0, 200) };
+      else if (r && r.held_for_quiet_hours) out = { status: 'held', send_after: r.send_after, note: 'Held for quiet hours; sends at 8:00am ET unless the owner opens the estimate first.' };
+      else if (r && r.sent) out = { status: 'sent', test_mode: !!r.test_mode, delivered_to: r.delivered_to, note: r.test_mode ? 'TEST MODE: delivered to the test number, not the owner.' : 'Texted the owner.' };
+      else if (r && r.send_ok === false) out = { status: 'blocked', note: 'SMS gates blocked it: ' + String(r.gate_snapshot || '').slice(0, 200) };
+      else if (r && r.reason) out = { status: 'failed', note: String(r.reason).slice(0, 200) };
+      else out = { status: 'failed', note: 'Twilio did not confirm the send.' };
+    }
+  } catch (e) { out = { status: 'failed', note: String((e && e.message) || e).slice(0, 200) }; }
+  await proposalStampSms(env, scopeId, out.status);
+  if (out.status !== 'sent' && out.status !== 'held') {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (_) {}
+  }
+  return out;
+}
 
 // Pure: resolves the CONFIRMED PAYOR for a scope's property — never the Realtor/PM referral
 // source (that's a separate Properties.Source_* field, kept deliberately apart — see
@@ -4675,6 +4774,12 @@ async function scopeProposalSend(env, body) {
   const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   if (!(s.Proposal_Text || '').trim()) return json({ error: 'Generate the proposal first (Generate proposal), then send.' }, 400);
+  // Double-send guard (Oct 14 2026): a double tap / retry within PROPOSAL_RESEND_GUARD_MS of the last send is refused
+  // BEFORE any email or text goes out (409, nothing sent). A deliberate resend after that still works.
+  const lastSent = Date.parse(s.Sent_Date || '');
+  if (lastSent && (Date.now() - lastSent) < PROPOSAL_RESEND_GUARD_MS && (Date.now() - lastSent) >= 0) {
+    return json({ error: 'This estimate was just sent ' + Math.max(1, Math.round((Date.now() - lastSent) / 1000)) + 's ago - nothing was sent again. Wait a minute if you really want to resend.', code: 'just_sent' }, 409);
+  }
 
   const [props, owners] = await fetchTabs(env, ['Properties', 'Owners']);
   const prop = props.find(p => p.ID === String(s.Property_ID)) || null;
@@ -4687,7 +4792,8 @@ async function scopeProposalSend(env, body) {
   const token = await scopeProposalLinkToken(env, id);
   if (!token) return json({ error: 'Could not create the proposal link.' }, 500);
   const url = `${PORTAL_BASE}/scope-proposal.html?t=${encodeURIComponent(token)}`;
-  const html = buildScopeProposalEmailHtml({ ownerName, addr, url });
+  const pixelUrl = `${String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '')}/scope-proposal/px?t=${encodeURIComponent(token)}`;
+  const html = buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl });
   const subject = `Ridge Co — your estimate for ${addr}`;
 
   try {
@@ -4706,12 +4812,20 @@ async function scopeProposalSend(env, body) {
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount });
   } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
 
+  // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
+  // Email already went; the text is held/skipped/blocked on its own rules and its outcome is always reported.
+  let sms;
+  if ((parseInt(s.Send_Count || '0', 10) || 0) === 0 || body.sms_again === true) {
+    sms = await proposalOwnerSms(env, { scopeId: String(id), prop, owner, addr, ownerName, override: body.override_quiet_hours === true });
+  } else sms = { status: 'not_attempted', note: 'Resend: the owner was already texted on the first send.' };
+
   try {
     await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
-    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent' });
+    await ensureColumns(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
+    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent', SMS_Result: sms.status + (sms.note ? ' - ' + sms.note : '') });
   } catch (_) { /* audit log best-effort; the send already happened */ }
 
-  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url });
+  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms });
 }
 
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
@@ -4758,10 +4872,13 @@ async function scopeProposalPhotos(env, s) {
 // price was derived, or any vendor-facing commentary may ever reach a customer-facing surface —
 // only the job description and the final price. If a genuinely customer-safe note is ever
 // needed, it must be a SEPARATE, explicitly-labeled field — never this one.
-async function scopeProposalView(env, url) {
+async function scopeProposalView(env, url, ua, ctx) {
   const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
   if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
   const s = auth.s;
+  // Read status (Oct 14 2026): the owner opening the proposal page is the reliable "they looked" signal.
+  // Awaited (short) so a failed log is never lost; append &preview=1 to the link to look without counting.
+  if (url.searchParams.get('preview') !== '1') await proposalRecordHit(env, s, 'page', ua);
   let addr = await scopeAddr(env, s);
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
@@ -10793,7 +10910,9 @@ async function sendTemplatedSms(env, o) {
     const body = renderTemplate(tpl ? tpl.Body : (def ? def.Body : ''), Object.assign({ HubUrl: HUB_URL }, o.tokens || {})).replace(/\s+/g, ' ').trim();
     if (!body) return { sent: false, reason: 'no template for ' + o.type };
     const opts = { wo_id: o.wo_id || '', message_type: o.type, recipient_type: o.kind, message_body: body, property: o.property, bypassQuietHours: !!o.bypassQuietHours };
-    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else opts.vendor = o.vendor;
+    if (o.quietWindow) opts.quietWindow = o.quietWindow;
+    if (o.skip_if_seen) opts.skip_if_seen = o.skip_if_seen;
+    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else if (o.kind === 'owner') opts.owner = o.owner; else opts.vendor = o.vendor;
     return await smsGatedSend(env, opts);
   } catch (e) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
@@ -14191,7 +14310,7 @@ async function doorWatchdogTest(env, url, body) {
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
 // Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
 const MSG_QUEUE_TAB = 'Message_Queue';
-const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To'];
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To','Skip_If_Seen'];
 const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
 let _msgQueueTabReady = false, _smsTogglesReady = false;
 
@@ -14253,6 +14372,9 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, the owner has signed the proposal for {Job}. Pending deposit payment - we'll text you when it's paid." },
   { Message_Type: 'vendor_deposit_paid', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, proposal approved for {Job}: the DEPOSIT for {Job} has been paid to RidgeCo. (This is the deposit only - not your final invoice payment.)" },
+  // Owner heads-up when a proposal is emailed (Oct 14 2026, FEATURE_LOG rule 209). No link on purpose: it points at the email.
+  { Message_Type: 'owner_proposal_ready', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. Your estimate for {Address} is ready and was just emailed to you - please check your inbox (and spam folder) to review it. Questions? Just reply to that email." },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
@@ -14394,7 +14516,7 @@ async function smsGatedSend(env, opts) {
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
     Message_Body: messageBody, Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
-    Original_Body: originalBody, Translated_To: translatedTo,
+    Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
   const newRow = headers.map(h => rowObj[h] ?? '');
   await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
@@ -14413,8 +14535,12 @@ async function smsGatedSend(env, opts) {
     // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
     // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
     const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
-    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours && !_earlyMorningOk) {
-      const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
+    // opts.quietWindow {start,end} (Oct 14 2026): a caller may use its own ET window instead of the
+    // global 7pm-9am (owner proposal heads-up text: 8pm-8am). Default path is unchanged.
+    const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
+    const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+    if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
+      const sendAfter = _holdUntil.toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
@@ -14544,8 +14670,28 @@ async function processQuietHoursQueue(env) {
   ]);
   const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
   const results = [];
+  let _scopesForSkip = null;   // loaded lazily, only when a due row carries Skip_If_Seen
   for (const row of due) {
     const id = row.ID, kind = row.Recipient_Type;
+    // Skip-if-seen (Oct 14 2026): a held "your estimate was emailed" text is pointless once the owner has already
+    // opened the email or the proposal page - sending it next morning would only confuse. Visible, never silent:
+    // the row becomes Status 'skipped' with the reason, and the Scope's Owner_SMS_Status says so. If the lookup
+    // itself fails we SEND (and log) rather than quietly drop a text.
+    if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) {
+      try {
+        if (!_scopesForSkip) _scopesForSkip = await fetchTab(env, 'Scopes');
+        const sid = String(row.Skip_If_Seen).slice(6);
+        const sc = _scopesForSkip.find(x => x.ID === sid);
+        if (sc && proposalSeenByOwner(sc, sc.Sent_Date)) {
+          await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: 'skipped at release: owner already opened the proposal email/page', Send_After: '' });
+          await proposalStampSms(env, sid, 'skipped_seen');
+          results.push({ id, sent: false, skipped: 'owner_already_seen' });
+          continue;
+        }
+      } catch (e) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
+      }
+    }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
@@ -14557,11 +14703,12 @@ async function processQuietHoursQueue(env) {
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
-    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
+    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
     const sent = !!(result && result.sid);
     await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
+    if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), sent ? 'sent' : 'failed');
     results.push({ id, sent, failed: !sent, gate_snapshot: gateSnapshot });
   }
   return { checked: due.length, results };
@@ -15919,6 +16066,19 @@ function nextQuietHoursEnd(date) {
   let y = +p.year, mo = +p.month - 1, d = +p.day;
   if (h >= QUIET_HOURS_START_ET) d += 1;
   return new Date(Date.UTC(y, mo, d, QUIET_HOURS_END_ET, 0, 0) - offsetMin * 60000);
+}
+// Custom quiet window (Oct 14 2026, owner proposal text: ok until 8pm ET, held until 8am ET).
+// Returns the real UTC Date the window ends if `date` is inside [startH, 24) U [0, endH) Eastern, else null.
+function quietHoldUntil(date, startH, endH) {
+  date = date || new Date();
+  const h = etHour(date);
+  if (!(h >= startH || h < endH)) return null;
+  const offsetMin = nyOffsetMinutes(date);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  let d = +p.day; if (h >= startH) d += 1;
+  return new Date(Date.UTC(+p.year, +p.month - 1, d, endH, 0, 0) - offsetMin * 60000);
 }
 // General "next 9am ET after this instant" — unlike nextQuietHoursEnd (only meaningful when
 // already inside quiet hours), this works from ANY starting time. Used by the vendor nudge
@@ -18854,13 +19014,14 @@ function buildArReportEmailHtml(group, link) {
 }
 
 // House-style mirror of buildArReportEmailHtml, for scopeProposalSend (B-210 follow-on).
-function buildScopeProposalEmailHtml({ ownerName, addr, url }) {
+function buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl }) {
   return `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1b1f24;">
     <h2 style="color:#1d4ed8;">Ridge Co — Estimate for ${addr}</h2>
     <p>Hi ${ownerName || 'there'},</p>
     <p>Your estimate for the work at <strong>${addr}</strong> is ready to review. Tap below to see the full breakdown and sign off whenever you're ready to move forward.</p>
     <p style="text-align:center;margin:24px 0;"><a href="${url}" style="background:#1d4ed8;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">View &amp; Sign Estimate</a></p>
     <p style="color:#66707c;font-size:12px;">Questions about anything in the estimate? Just reply to this email. — Ridge Co</p>
+    ${pixelUrl ? `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">` : ''}
   </div>`;
 }
 

@@ -209,7 +209,7 @@ const r2 = x => Math.round(x * 100) / 100;
     scopeValidatePaymentSchedule: (m) => ({ schedule: m }), scopeMaxUpfrontPct: async () => 33.34,
     scopeComputeMilestoneAmounts: H.scopeComputeMilestoneAmounts, scopeDefaultPaymentSchedule: () => [],
     scopeSigTab: async () => {}, fetchTab: async () => [], paymentMilestonesTab: async () => {},
-    json: (o) => o,
+    json: (o) => o, proposalRecordHit: async () => {},
   };
   const view = new Function(...Object.keys(stubs), viewSrc + '\nreturn scopeProposalView;')(...Object.values(stubs));
   const out = await view({}, { searchParams: { get: () => 't' } });
