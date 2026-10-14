@@ -4,6 +4,7 @@
 // The clock is PINNED (a fake Date is injected into the evaluated code) so the quiet-hours cases do
 // not depend on what time of day the suite runs.
 import fs from 'fs';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(src, sig) {
@@ -729,8 +730,10 @@ async function groupOf4() {
   }
   // (i) tenant portal: the winner is no longer filtered out (the same predicate tenantWorkorders uses)
   {
+    // Oct 14 2026 (#150): the predicate moved into tenantCanSeeWO so /attachments shares it; tenantWorkorders calls it.
     const tw = grab(wsrc, 'async function tenantWorkorders(').slice(0, 2500);
-    t('tenant portal hides only Tenant_Visible === "FALSE" (so TRUE shows the winner)', /w\.Tenant_Visible === 'FALSE'\) return false/.test(tw));
+    const tcs = grab(wsrc, 'function tenantCanSeeWO(');
+    t('tenant portal hides only Tenant_Visible === "FALSE" (so TRUE shows the winner)', /w\.Tenant_Visible === 'FALSE'\) return false/.test(tcs) && /tenantCanSeeWO\(tenant, w\)/.test(tw));
   }
   // (j) source-level guards
   {
@@ -738,7 +741,7 @@ async function groupOf4() {
     const notifySrc = grab(wsrc, 'async function bidCancelNotifyVendor(');
     t('cancel code: the ONLY way it texts is bidCancelNotifyVendor -> smsGatedSend with recipient_type vendor (never tenant/owner/sendSMS/assign/queueNotification)', !/sendSMS|smsGatedSend|assignVendor|queueMessage|queueNotification|notifyTenant/.test(cancelSrc) && /smsGatedSend\(env, \{[^}]*recipient_type: 'vendor'/.test(notifySrc) && !/recipient_type: '(tenant|owner)'/.test(notifySrc + cancelSrc) && /bidCancelNotifyVendor\(/.test(cancelSrc));
     t('cancel code: no swallowing catch', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(cancelSrc));
-    t('BUILD_VERSION bumped to the follow-up value', /const BUILD_VERSION = '2026-10-(13|1[4-9])\.\d+-[a-z-]+'/.test(wsrc));
+    t('BUILD_VERSION bumped to the follow-up value (or a later build)', /const BUILD_VERSION = '2026-10-(1[3-9]|2\d|3[01])\.\d+-[a-z-]+'/.test(wsrc));
   }
 }
 
@@ -999,7 +1002,7 @@ function stampSilent(db) { const set = (id, k, v) => { db.Work_Orders.rows.find(
   t('bidCancelNotifyVendor: no quiet-hours bypass, no swallowing catch', !/bypassQuietHours/.test(notifySrc) && !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(notifySrc) && /catch \(e\) \{\s*out\.status = 'failed'/.test(notifySrc));
   t('the cancel path never calls the vendor text for a preview (it returns before the cancel loop)', grab(wsrc, 'async function woBidGroupCancel(').indexOf('return json(result, 200);') < grab(wsrc, 'async function woBidGroupCancel(').indexOf('bidCancelNotifyVendor('));
   t('only one new SMS message type is introduced: vendor_job_cancelled', /const BID_CANCEL_SMS_TYPE = 'vendor_job_cancelled'/.test(wsrc));
-  t('BUILD_VERSION is the .7 follow-up or later', /const BUILD_VERSION = '2026-10-(13\.([7-9]|\d{2,})|1[4-9]\.\d+)-[a-z-]+'/.test(wsrc));
+  t('BUILD_VERSION is the .7 follow-up (or a later build)', /const BUILD_VERSION = '2026-10-(1[3-9]|2\d|3[01])\.\d+-[a-z-]+'/.test(wsrc)); // Oct 14 2026: was pinned to exactly 2026-10-13.7, which failed on ANY later build bump
 }
 
 console.log(`\nwo-duplicate: ${pass} passed, ${fail} failed`);

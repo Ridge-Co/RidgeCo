@@ -2,6 +2,7 @@
 // worker.js and runs them against in-memory fakes.
 import fs from 'fs';
 import assert from 'node:assert';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const w = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 function grab(sig) {
   const i = w.indexOf(sig); if (i < 0) throw new Error('missing ' + sig);

@@ -106,6 +106,12 @@ ok(/isConfigRedactionPlaceholder\(value\)/.test(setSrc) && setSrc.indexOf('isCon
 ok(/export default \{[\s\S]*scrubResponseForProdReadToken\(request, env, await _hubWorkerCore\.fetch/.test(src), 'export default wraps the core fetch with the prod-token scrubber');
 ok(/async scheduled\(event, env, ctx\) \{ return await _hubWorkerCore\.scheduled/.test(src), 'cron scheduled() still delegated');
 ok(!/config\[k\] = '\(set/.test(src), 'old GMAIL-only masking loop is gone (replaced by the general redactor)');
-ok(/BUILD_VERSION = '2026-09-29\.1-config-secret-redaction'/.test(src), 'BUILD_VERSION bumped');
+// Was pinned to the exact Sep 29 string, which breaks on every deploy since. The redaction itself is
+// pinned by the assertions above; here only require that the version is a well-formed one that is no
+// older than the build that introduced redaction.
+{
+  const m = /const BUILD_VERSION = '(\d{4}-\d{2}-\d{2})\.\d+-[a-z-]+'/.exec(src);
+  ok(!!m && m[1] >= '2026-09-29', 'BUILD_VERSION is well-formed and not older than the redaction build');
+}
 
 console.log('config-redaction: ' + n + ' assertions passed');

@@ -26,12 +26,86 @@ const CORS = {
 };
 const PIN_MAX_ATTEMPTS = 4;
 const PIN_LOCKOUT_MIN  = 5;
-const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+// ── Work-order status lists: ONE definition (Ops_Build_Queue #140). Mirror of wo-status.js; the two copies are
+// compared by test/wo-status-ssot.test.mjs. Add or change a status group in BOTH, never write a new status array here.
+/* WO_STATUS_SSOT:BEGIN */
+function __makeWOStatus() {
+  var FIELD = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+  // Lifecycle order of the statuses a WO really holds today. 'Estimate Requested' is set by
+  // /scope/to-wo (a WO created from a scope, waiting for the vendor's estimate) and sits before Assigned.
+  // Declined / Cancelled are side exits, not steps.
+  var ORDER = ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Complete',
+               'Pending Invoice', 'Invoiced', 'Paid'];
+  var SIDE = ['Declined', 'Cancelled'];
+  // Names that appear in old code paths but are NOT statuses a WO is given today. Kept only so the groups
+  // that listed them keep identical membership. Do not write these.
+  var LEGACY = ['Canceled', 'Closed', 'Void', 'Scheduled'];
+  // Designed in HUB_UX §4, not built. Listed so the two groups that already mention them keep working.
+  var RESERVED = ['Pending Payment', 'Paid by Customer'];
+
+  var sets = {
+    // --- the two core groups (HUB_UX isOpen / isActive) ---
+    FIELD_OPEN: FIELD,                                                    // work not finished yet
+    ACTIVE: FIELD.concat(['Complete', 'Pending Invoice']),                // still on a portal / dashboard open list
+    // --- what a vendor may set / what the admin picker offers ---
+    VENDOR_SETTABLE: ['Accepted', 'In Progress', 'On Hold', 'Complete'],  // vendor portal, share links
+    VENDOR_STARTED: ['Accepted', 'In Progress', 'On Hold'],               // vendor has taken or begun the job
+    PRE_START: ['Assigned', 'Accepted'],                                  // not started yet (Mark In Progress offered)
+    ADMIN_PICKER: ['Assigned', 'Accepted', 'In Progress', 'On Hold', 'Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled'],
+    // --- finished / billing ---
+    DONE_THROUGH_PAID: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'],
+    COMPLETE_INVOICED_PAID: ['Complete', 'Invoiced', 'Paid'],
+    COMPLETE_OR_LATER: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Closed'],
+    ACCEPTED_OR_LATER: ['Accepted', 'In Progress', 'On Hold', 'Complete', 'Pending Invoice', 'Invoiced', 'Paid'],
+    INVOICED_OR_LATER: ['Invoiced', 'Paid'],
+    INVOICED_OR_PAYMENT: ['Invoiced', 'Paid', 'Pending Payment'],
+    // --- ended / closed (they differ on purpose; see each use) ---
+    DEAD: ['Cancelled', 'Declined'],
+    CLOSED_OUT_FOLD: ['Cancelled', 'Paid', 'Invoiced'],                   // admin WO list, "Not Assigned" filter: folded into the collapsed Closed-out group
+    CLOSED_TERMINAL: ['Paid', 'Cancelled'],
+    CLOSED_FINAL: ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'],
+    ADDON_PARENT_BLOCKED: ['Cancelled', 'Canceled', 'Paid', 'Invoiced', 'Closed'],
+    RECEIPT_CLOSED: ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void', 'Complete', 'Invoiced'],
+    RECUR_CLOSED: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Canceled', 'Closed', 'Void', 'Declined'],
+    DIGEST_CLOSED: ['Paid', 'Invoiced', 'Cancelled', 'Closed', 'Void'],
+    TURNOVER_DONE: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'],
+    STALE_ACTIVE: ['New', 'Assigned', 'Accepted', 'In Progress'],         // can go stale (On Hold is waiting on purpose)
+    // --- command-center dashboard counts ---
+    DASH_NOT_OPEN: ['Complete', 'Paid', 'Pending Invoice', 'Invoiced', 'Pending Payment', 'Paid by Customer', 'Cancelled', 'Canceled', 'Closed', 'Void'],
+    DASH_OPEN_LEGACY: ['New', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],
+    // --- what a tenant sees ---
+    TENANT_OPEN: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Pending Invoice'],
+    TENANT_TIMELINE: ['New', 'Assigned', 'Accepted', 'In Progress', 'Complete'],
+    TENANT_TIMELINE_STEPS: ['New', 'Assigned', 'In Progress', 'Complete'],
+    BILLING_STAGE: ['Pending Invoice', 'Invoiced', 'Paid']
+  };
+  var names = Object.keys(sets);
+  for (var i = 0; i < names.length; i++) Object.freeze(sets[names[i]]);
+  Object.freeze(sets);
+
+  var known = ORDER.concat(SIDE, LEGACY, RESERVED);
+  return Object.freeze({
+    statuses: Object.freeze(ORDER.concat(SIDE)),
+    legacy: Object.freeze(LEGACY.slice()),
+    reserved: Object.freeze(RESERVED.slice()),
+    sets: sets,
+    // Position in the lifecycle (0..9); -1 for a side exit or anything unknown.
+    order: function (s) { return ORDER.indexOf(s); },
+    isKnown: function (s) { return known.indexOf(s) >= 0; },
+    inSet: function (name, s) {
+      if (!sets[name]) throw new Error('WOStatus: no such status group "' + name + '"');
+      return sets[name].indexOf(s) >= 0;
+    }
+  });
+}
+/* WO_STATUS_SSOT:END */
+const WOStatus = __makeWOStatus();
+const OPEN_WO_STATUSES = WOStatus.sets.ACTIVE;
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.2-invoice-single-path';
+const BUILD_VERSION = '2026-10-14.10-invoice-single-path';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -123,7 +197,7 @@ const _hubWorkerCore = {
       // Scope-creator customer proposal link (Aug 18 session, rule 113): same pattern — public
       // at the gate, but scopeProposalView self-verifies a signed scope-proposal share token.
       // /scope-proposal/sign (Aug 19, e-sign): same token, self-verified inside scopeProposalSign.
-      '/scope-proposal/view','/scope-proposal/sign',
+      '/scope-proposal/view','/scope-proposal/sign','/scope-proposal/px',
       // vendor-setup.html self-service link (Sept 2 2026): a NEW vendor with no PIN/login yet
       // fills their own contact info from a shared link. Both handlers are read-only-or-review:
       // /vendor-setup/contact-extract never writes; /vendor-setup/submit only ever creates a
@@ -394,6 +468,17 @@ const _hubWorkerCore = {
       }
     }
     try {
+      if (callerRole) {
+        const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
+        if (_mm) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mm);
+        if (request.method === 'GET') {
+          url.searchParams.set(SESSION_IDENTITY_PARAM[callerRole], String(callerSessionId));
+          if (WO_KEYED_READ_PATHS.includes(path)) {
+            const _denied = await woKeyedReadDenied(env, path, url, callerRole, callerSessionId);
+            if (_denied) return _denied;
+          }
+        }
+      }
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
         if (path === '/cron/status')            return await schedStatusHandler(env);
@@ -436,8 +521,8 @@ const _hubWorkerCore = {
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
-        if (path === '/attachments')            return await getAttachments(env, url);
-        if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
+        if (path === '/attachments')            return await getAttachments(env, url, callerRole, callerSessionId);
+        if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
@@ -457,9 +542,9 @@ const _hubWorkerCore = {
         if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
-        if (path === '/vendor-workorders')      return await vendorWorkorders(env, url);
-        if (path === '/tenant-workorders')      return await tenantWorkorders(env, url);
-        if (path === '/owner-workorders')       return await ownerWorkorders(env, url);
+        if (path === '/vendor-workorders')      return await vendorWorkorders(env, url, callerRole, callerSessionId);
+        if (path === '/tenant-workorders')      return await tenantWorkorders(env, url, callerRole, callerSessionId);
+        if (path === '/owner-workorders')       return await ownerWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/owner-notifications')    return await getOwnerNotifications(env, url);
         if (path === '/owner-users')            return await getOwnerUsers(env, url);
         if (path === '/notifications/pending') {
@@ -533,7 +618,8 @@ const _hubWorkerCore = {
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
         if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
-        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url);
+        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url, request.headers.get('User-Agent') || '', ctx);
+        if (path === '/scope-proposal/px')      return await scopeProposalPixel(env, url, request.headers.get('User-Agent') || '', ctx);
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
@@ -571,6 +657,10 @@ const _hubWorkerCore = {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        if (callerRole) {
+          const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
+          if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
+        }
         // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
         // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
         // actual DATA being touched is too. Runs only for requests authenticated via
@@ -958,7 +1048,25 @@ const _hubWorkerCore = {
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
-      return json({ error: err.message, stack: err.stack, type: err.constructor.name }, 500);
+      // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
+      // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
+      //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
+      //     with a short ref the caller can quote;
+      //   - only the admin secret / the staging test token get the detail back; everyone else gets a
+      //     generic message plus the ref. If the telemetry write itself fails the admin response says
+      //     so (telemetry_error) and the failure goes to the Worker log - it is never swallowed.
+      const _ref = crypto.randomUUID().slice(0, 8);
+      const _tokHdr = request.headers.get('X-Auth-Token') || '';
+      const _detailOk = _viaHubTestToken || (!!env.WORKER_SECRET && _tokHdr === env.WORKER_SECRET);
+      let _telemetryError = '';
+      try {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'unhandled_500', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `ref=${_ref} role=${callerRole || 'none'} ${String((err && err.message) || err)}`.slice(0, 480) });
+      } catch (te) {
+        _telemetryError = String((te && te.message) || te);
+        console.error('[unhandled_500] could not log to Ops_Telemetry', _ref, path, _telemetryError, err && err.stack);
+      }
+      if (_detailOk) return json({ error: err.message, stack: err.stack, type: err.constructor.name, ref: _ref, telemetry_error: _telemetryError || undefined }, 500);
+      return json({ error: 'Something went wrong on our side. Please try again; if it keeps happening, tell Ridge Co and quote ref ' + _ref + '.', ref: _ref }, 500);
     }
   },
 
@@ -1450,12 +1558,121 @@ async function updateKeyWithHistory(env, body) {
 
 // ── ATTACHMENTS ──────────────────────────────────────────────
 
-async function getAttachments(env, url) {
+// GET /attachments?wo_id= | ?invoice_id= — per-record scope (Oct 14 2026, queue #150).
+// Before this, ANY signed-in tenant/owner/vendor session token could list ANY job's attachments
+// (cross-account leak of photos, Drive links and receipt file names). Now:
+//   - Admin secret / internal tokens (callerRole null): unchanged, full access.
+//   - A role session may only see attachments on a WO it could already see in its own portal list
+//     (attachmentScopeAllows below mirrors vendorWorkorders / tenantWorkorders / ownerWorkorders).
+//   - Tenants never receive receipt/bill/invoice rows (vendor cost docs) even on their own jobs.
+//   - Asking for a WO the session may not see is a generic 404 (same for "missing" and "not yours",
+//     like /owner-file/view) and is logged to Ops_Telemetry as a failure so a probe or a real
+//     regression is visible. A telemetry failure propagates (loud 500) instead of being swallowed.
+//   - Unknown roles fail closed.
+const ATTACHMENT_COST_DOC_TYPES = ['receipt', 'bill', 'invoice'];
+
+// Shared with tenantWorkorders so "what a tenant can see" has ONE definition. Status/include_closed
+// filtering stays in the list endpoint (a tenant may view photos on a closed job they can see).
+function tenantCanSeeWO(tenant, w) {
+  if (!tenant || !w) return false;
+  if (w.Voided === 'TRUE') return false;
+  if (w.Tenant_Visible === 'FALSE') return false;
+  if (w.Property_ID !== tenant.Property_ID) return false;
+  if (isBackgroundWO(tenant, w)) return false;
+  if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenant.ID;
+  return true;
+}
+
+function attachmentScopeAllows(role, sessionId, wo, tenants, properties) {
+  if (!wo || !role || !sessionId) return false;
+  const sid = String(sessionId);
+  if (role === 'vendor') {
+    // Assigned vendor only. A voided WO is still theirs: additional-work drafts are stored as voided
+    // children and the vendor attaches photos to them before submitting.
+    return String(wo.Vendor_ID || '') !== '' && String(wo.Vendor_ID) === sid;
+  }
+  if (role === 'tenant') {
+    const tenant = (tenants || []).find(t => t.ID === sid && t.Active !== 'FALSE');
+    return tenantCanSeeWO(tenant, wo);
+  }
+  if (role === 'owner') {
+    const prop = (properties || []).find(p => p.ID === wo.Property_ID);
+    if (!prop || String(prop.Owner_ID || '') !== sid) return false;
+    return wo.Voided !== 'TRUE' && String(wo.Type || '') !== 'addon' && !isHiddenBidCopy(wo);
+  }
+  return false;
+}
+
+// ── SESSION IDENTITY BINDING (Oct 14 2026, Brett: "fix them") ──────────────────────────────────
+// Before this, every tenant/owner/vendor endpoint trusted the id the PAGE sent (?tenant_id=,
+// ?owner_id=, ?vendor_id=, body.vendor_id ...) instead of the id baked into the signed session
+// token, so any signed-in account could read another account's job list, bills, receipts or
+// notification settings by changing one number in the URL. One central rule, enforced in the
+// router for every role session (admin secret and internal tokens never reach it):
+//   - The id param for the caller's role (vendor_id / owner_id / tenant_id), when supplied in the
+//     query string OR the POST body, must equal the verified session id. A mismatch is a 403 and a
+//     failed Ops_Telemetry row (`session_identity_mismatch`) - never silently "corrected".
+//   - On GET the session id is then FORCED into the query, so a request that simply omits the param
+//     (e.g. /vendor-bills?status=submitted, which used to return every vendor's bills) is scoped to
+//     the caller instead of falling through to "everything".
+//   - GETs that name a work order (wo_id) must be for a job this session may see (the same
+//     attachmentScopeAllows used by /attachments - one definition). Generic 404 otherwise.
+// POST bodies are validated when the id is present; per-record write checks (e.g. /status on a WO id)
+// are a separate layer and are listed in BACKLOG.
+const SESSION_IDENTITY_PARAM = { vendor: 'vendor_id', owner: 'owner_id', tenant: 'tenant_id' };
+const WO_KEYED_READ_PATHS = ['/estimates', '/time-entries', '/receipts', '/vendor-bills', '/nearby-wos', '/wo-audit'];
+
+function sessionIdentityMismatch(role, sessionId, url, body) {
+  if (!role) return null;                                   // admin secret / internal token
+  const param = SESSION_IDENTITY_PARAM[role];
+  if (!param) return { param: '(role)', supplied: String(role) };   // unknown role fails closed
+  const sid = String(sessionId || '');
+  const supplied = [];
+  if (url && url.searchParams) supplied.push(url.searchParams.get(param));
+  if (body && typeof body === 'object') supplied.push(body[param]);
+  for (const v of supplied) {
+    if (v === null || v === undefined || v === '') continue;
+    if (!sid || String(v) !== sid) return { param, supplied: String(v).slice(0, 60) };
+  }
+  return null;
+}
+
+async function denySessionIdentity(env, path, role, sessionId, mm) {
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'session_identity_mismatch', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${role} session=${sessionId} sent ${mm.param}=${mm.supplied}` });
+  return json({ error: 'Forbidden' }, 403);
+}
+
+// Returns a Response when the session may NOT read this wo_id, otherwise null.
+async function woKeyedReadDenied(env, path, url, role, sessionId) {
+  const woId = url.searchParams.get('wo_id') || '';
+  if (!woId) return null;                                   // handlers that need a wo_id 400 on their own
+  const [workorders, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+  if (attachmentScopeAllows(role, sessionId, findWO(workorders, woId), tenants, properties)) return null;
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_scope_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${role} session=${sessionId} wo=${woId}` });
+  return json({ error: 'Not found' }, 404);
+}
+
+async function getAttachments(env, url, callerRole, callerSessionId) {
   const woId = url.searchParams.get('wo_id') || '';
   const invoiceId = url.searchParams.get('invoice_id') || '';
   if (!woId && !invoiceId) return json({ error: 'Missing wo_id or invoice_id' }, 400);
   const attachments = await fetchTab(env, 'Attachments');
-  return json(attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; }));
+  const rows = attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; });
+  if (!callerRole) return json(rows);   // admin secret / internal token: full access, as before
+  const [workorders, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+  const allowedWO = new Map();
+  const woAllowed = (id) => {
+    if (!id) return false;
+    if (!allowedWO.has(id)) allowedWO.set(id, attachmentScopeAllows(callerRole, callerSessionId, findWO(workorders, id), tenants, properties));
+    return allowedWO.get(id);
+  };
+  if (woId && !woAllowed(woId)) {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'attachments_scope_denied', Skill_Or_Endpoint: '/attachments', Success: 'FALSE', Notes: `role=${callerRole} session=${callerSessionId} wo=${woId}` });
+    return json({ error: 'Not found' }, 404);
+  }
+  let visible = rows.filter(a => woAllowed(a.WO_ID));
+  if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
+  return json(visible);
 }
 
 // Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
@@ -1467,7 +1684,7 @@ async function getAttachments(env, url) {
 // correctly kept private. This does NOT change the sharing policy (the file is still never
 // public); it only lets an already-authenticated vendor session read the bytes of a file that's
 // logged against a WO_ID they have legitimate access to, same trust boundary as GET /attachments.
-async function viewInternalFile(env, url) {
+async function viewInternalFile(env, url, callerRole, callerSessionId) {
   const woId = url.searchParams.get('wo_id') || '';
   const fileId = url.searchParams.get('file_id') || '';
   if (!woId || !fileId) return json({ error: 'wo_id and file_id required' }, 400);
@@ -1475,6 +1692,18 @@ async function viewInternalFile(env, url) {
     const attachments = await fetchTab(env, 'Attachments');
     const row = attachments.find(a => a.Active !== 'FALSE' && a.WO_ID === woId && a.Drive_File_ID === fileId);
     if (!row) return json({ error: 'File not found for this work order' }, 404);
+    // Oct 14 2026: any signed-in session could stream any job's receipt/bill/invoice bytes by
+    // guessing wo_id + file_id. A role session now needs the same access to the WO as /attachments
+    // (the assigned vendor; a tenant/owner can never reach cost documents through this route since
+    // it is not in their scope list, and attachmentScopeAllows fails closed on anything else).
+    // Admin secret / internal token (callerRole null) is unchanged. Same generic 404 as "no such file".
+    if (callerRole) {
+      const [wos, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+      if (!attachmentScopeAllows(callerRole, callerSessionId, findWO(wos, woId), tenants, properties)) {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_file_scope_denied', Skill_Or_Endpoint: '/vendor-file/view', Success: 'FALSE', Notes: `role=${callerRole} session=${callerSessionId} wo=${woId} file=${fileId}` });
+        return json({ error: 'File not found for this work order' }, 404);
+      }
+    }
     const token = await getAccessToken(env);
     const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -1487,8 +1716,17 @@ async function viewInternalFile(env, url) {
       headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
     });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return await fileViewError(env, '/vendor-file/view', e, callerRole, callerSessionId);
   }
+}
+
+// Shared by the two file streamers (Oct 14 2026): a role session never sees raw Drive/Sheets error
+// text, but the failure is always logged with a ref (a telemetry failure propagates to the router's
+// own 500 handler, so it is never swallowed). Admin/internal callers (callerRole null) keep the detail.
+async function fileViewError(env, path, e, callerRole, callerSessionId) {
+  const ref = crypto.randomUUID().slice(0, 8);
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'file_view_error', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `ref=${ref} role=${callerRole || 'none'} session=${callerSessionId || ''} ${String((e && e.message) || e)}`.slice(0, 480) });
+  return json({ error: callerRole ? 'Could not load this file. Please try again; if it keeps happening, tell Ridge Co and quote ref ' + ref + '.' : ((e && e.message) || String(e)), ref }, 500);
 }
 
 // GET /owner-file/view?wo_id=&file_id=&t= — owner-scoped receipt viewer (rule 177, Sep 16 2026).
@@ -1534,7 +1772,7 @@ async function viewOwnerReceiptFile(env, url, callerRole, callerSessionId) {
       headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
     });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return await fileViewError(env, '/owner-file/view', e, callerRole, callerSessionId);
   }
 }
 
@@ -1972,7 +2210,7 @@ function matchReceiptProperty(po, properties) {
   return bestScore >= 2 ? { property: best, score: bestScore } : null;
 }
 
-const RECEIPT_OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
+const RECEIPT_OPEN_STATUSES = WOStatus.sets.ACTIVE;
 const RECEIPT_STOP = new Set(['the','and','for','with','apt','ste','unit','street','saint','st','ave','rd','ln','pl','n','s','e','w','2x','x']);
 
 // PURE — rank a property's work orders by keyword overlap between the receipt (items + PO) and each
@@ -2138,7 +2376,7 @@ function receiptSuggestCore(input, properties, workorders, receipts, custCards) 
   const top = ranked[0] || null;
   const flags = [];
   if (top && receiptIsDuplicate(receipts, top.id, total, date, store)) flags.push('duplicate_on_wo');
-  if (top && ['Invoiced','Paid','Pending Payment'].includes(top.status)) flags.push('wo_already_invoiced');
+  if (top && WOStatus.sets.INVOICED_OR_PAYMENT.includes(top.status)) flags.push('wo_already_invoiced');
   if (!ranked.length) flags.push('no_open_wo');
   return {
     ok: true, category: 'billable',
@@ -3577,7 +3815,7 @@ async function scopeCreate(env, body) {
 // WO statuses meaning the crew is still actively working the job (before 'Complete'). Anything
 // NOT in this set — Complete, Pending Invoice, Invoiced, Paid, or anything else — means the job
 // itself is done from a work-execution standpoint, per the existing OPEN_WO_STATUSES ordering.
-const WO_STILL_ACTIVE_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+const WO_STILL_ACTIVE_STATUSES = WOStatus.sets.FIELD_OPEN;
 
 // GET /scopes — Brett (Sep 8 2026): "link status on proposal to the work order since that's how
 // we are billing it... 'complete' is not just the proposal being complete but the job, and thus
@@ -4485,7 +4723,105 @@ async function scopeProposalLinkRevoke(env, body) {
 }
 
 const PROPOSAL_SEND_LOG_TAB = 'Proposal_Send_Log';
-const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result'];
+const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result', 'SMS_Result'];
+
+// ── Proposal read status + owner heads-up text (Hub Improvements, Oct 14 2026; FEATURE_LOG rule 209) ──
+// Two read signals, both written onto the Scopes row:
+//   * Page_*  = the owner opened scope-proposal.html (reliable; a real click-through).
+//   * Email_* = the 1x1 tracking pixel in the proposal email loaded (the owner's mail app showed images). Gmail and
+//     Apple Mail prefetch images through proxies, so a hit within PROPOSAL_OPEN_AUTO_WINDOW_MS of the send is counted
+//     as Email_Auto_Opens (a machine, not a person) and does NOT mark the email "opened". Treat Email_* as "probably".
+// Either signal counts as "seen" - that is what cancels a held owner text (processQuietHoursQueue) .
+const PROPOSAL_TRACK_COLS = ['Email_First_Opened', 'Email_Last_Opened', 'Email_Open_Count', 'Email_Auto_Opens', 'Page_First_Viewed', 'Page_Last_Viewed', 'Page_View_Count', 'Owner_SMS_Status', 'Owner_SMS_Time'];
+const PROPOSAL_OPEN_AUTO_WINDOW_MS = 120000;
+const PROPOSAL_RESEND_GUARD_MS = 60000;
+const PROPOSAL_BOT_UA = /bot|crawl|spider|slurp|facebookexternalhit|whatsapp|slackbot|twitterbot|curl\/|python-requests|headless|linkpreview|link preview/i;
+const SCOPE_SMS_QUIET_WINDOW = { start: 20, end: 8 };   // owner proposal text: fine until 8pm ET, held until 8am ET
+const PROPOSAL_PIXEL_GIF_B64 = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+// Pure: how to treat one hit. 'ignore' = obvious bot; 'auto' = email image fetched right after send (prefetch); 'real' = count it.
+function classifyProposalHit({ kind, ua, sentDate, now }) {
+  if (PROPOSAL_BOT_UA.test(String(ua || ''))) return 'ignore';
+  if (kind === 'email') { const sent = Date.parse(sentDate || ''); if (sent && (now - sent) < PROPOSAL_OPEN_AUTO_WINDOW_MS) return 'auto'; }
+  return 'real';
+}
+// Pure: has the owner (probably) seen this proposal?
+// `sinceIso` (the send that queued the text = the scope's Sent_Date): only a view AT OR AFTER it counts, so an
+// open from an earlier send/preview cannot cancel the text for a later resend. Compares the LAST view stamps
+// (they move on every hit). With no usable sinceIso it falls back to "any view ever" (legacy rows).
+function proposalSeenByOwner(s, sinceIso) {
+  if (!s) return false;
+  const since = Date.parse(sinceIso || '');
+  if (!since) return !!(String(s.Page_First_Viewed || '').trim() || String(s.Email_First_Opened || '').trim());
+  const at = (v) => { const t = Date.parse(String(v || '').trim()); return t ? t : 0; };
+  return at(s.Page_Last_Viewed || s.Page_First_Viewed) >= since || at(s.Email_Last_Opened || s.Email_First_Opened) >= since;
+}
+// Never silent: a failed log lands in Ops_Telemetry; the public page/pixel still works.
+async function proposalRecordHit(env, s, kind, ua) {
+  try {
+    const verdict = classifyProposalHit({ kind, ua, sentDate: s.Sent_Date, now: Date.now() });
+    if (verdict === 'ignore') return;
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const nowIso = new Date().toISOString();
+    let f;
+    if (kind === 'email' && verdict === 'auto') f = { Email_Auto_Opens: String((parseInt(s.Email_Auto_Opens || '0', 10) || 0) + 1) };
+    else if (kind === 'email') f = { Email_First_Opened: s.Email_First_Opened || nowIso, Email_Last_Opened: nowIso, Email_Open_Count: String((parseInt(s.Email_Open_Count || '0', 10) || 0) + 1) };
+    else f = { Page_First_Viewed: s.Page_First_Viewed || nowIso, Page_Last_Viewed: nowIso, Page_View_Count: String((parseInt(s.Page_View_Count || '0', 10) || 0) + 1) };
+    const r = await updateRow(env, 'Scopes', s.ID, f);
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/' + kind, Success: 'FALSE', Notes: 'scope=' + (s && s.ID) + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+}
+// PUBLIC GET /scope-proposal/px?t=<proposal link token> - the tracking pixel. ALWAYS answers with the gif (a broken
+// image in the owner's email would look worse than a missed open); only a valid, current token is recorded.
+async function scopeProposalPixel(env, url, ua, ctx) {
+  try {
+    const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
+    if (auth) await proposalRecordHit(env, auth.s, 'email', ua);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/px', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+  const bin = Uint8Array.from(atob(PROPOSAL_PIXEL_GIF_B64), c => c.charCodeAt(0));
+  return new Response(bin, { status: 200, headers: { 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate, private', 'Pragma': 'no-cache', 'Access-Control-Allow-Origin': '*' } });
+}
+// Stamp the owner-text outcome on the Scope so the Scope Creator can show it. Best-effort + telemetry, never throws.
+async function proposalStampSms(env, scopeId, status) {
+  try {
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const r = await updateRow(env, 'Scopes', scopeId, { Owner_SMS_Status: status, Owner_SMS_Time: new Date().toISOString() });
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) {}
+  }
+}
+// Text the owner "your estimate was emailed". Gated like every owner SMS (global / property / owner toggles, test mode).
+// Quiet window 8pm-8am ET (not the global 7pm-9am); `override` (Brett's per-send choice) sends right now. When held, the
+// Message_Queue row carries Skip_If_Seen so the release sweep drops it if the owner has already opened the proposal.
+// Returns { status, ... } - every outcome (including blocked / failed / no phone) is reported, none swallowed.
+async function proposalOwnerSms(env, { scopeId, prop, owner, addr, ownerName, override }) {
+  let out;
+  try {
+    const cfg = await fetchConfig(env);
+    const first = ((owner && (owner.First_Name || '')) || (ownerName && ownerName !== 'there' ? String(ownerName).split(' ')[0] : '') || 'there');
+    if (!owner || !normalizePhone(owner.Phone)) out = { status: 'no_phone', note: 'Owner has no phone on file - email sent, no text.' };
+    else {
+      const r = await sendTemplatedSms(env, { type: 'owner_proposal_ready', kind: 'owner', owner, property: prop,
+        tokens: { FirstName: first, Address: addr, AssistantName: cfg.ASSISTANT_NAME || 'Riley' },
+        bypassQuietHours: !!override, quietWindow: SCOPE_SMS_QUIET_WINDOW, skip_if_seen: 'scope:' + scopeId });
+      if (r && r.error) out = { status: 'failed', note: String(r.error).slice(0, 200) };
+      else if (r && r.held_for_quiet_hours) out = { status: 'held', send_after: r.send_after, note: 'Held for quiet hours; sends at 8:00am ET unless the owner opens the estimate first.' };
+      else if (r && r.sent) out = { status: 'sent', test_mode: !!r.test_mode, delivered_to: r.delivered_to, note: r.test_mode ? 'TEST MODE: delivered to the test number, not the owner.' : 'Texted the owner.' };
+      else if (r && r.send_ok === false) out = { status: 'blocked', note: 'SMS gates blocked it: ' + String(r.gate_snapshot || '').slice(0, 200) };
+      else if (r && r.reason) out = { status: 'failed', note: String(r.reason).slice(0, 200) };
+      else out = { status: 'failed', note: 'Twilio did not confirm the send.' };
+    }
+  } catch (e) { out = { status: 'failed', note: String((e && e.message) || e).slice(0, 200) }; }
+  await proposalStampSms(env, scopeId, out.status);
+  if (out.status !== 'sent' && out.status !== 'held') {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (_) {}
+  }
+  return out;
+}
 
 // Pure: resolves the CONFIRMED PAYOR for a scope's property — never the Realtor/PM referral
 // source (that's a separate Properties.Source_* field, kept deliberately apart — see
@@ -4511,6 +4847,12 @@ async function scopeProposalSend(env, body) {
   const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   if (!(s.Proposal_Text || '').trim()) return json({ error: 'Generate the proposal first (Generate proposal), then send.' }, 400);
+  // Double-send guard (Oct 14 2026): a double tap / retry within PROPOSAL_RESEND_GUARD_MS of the last send is refused
+  // BEFORE any email or text goes out (409, nothing sent). A deliberate resend after that still works.
+  const lastSent = Date.parse(s.Sent_Date || '');
+  if (lastSent && (Date.now() - lastSent) < PROPOSAL_RESEND_GUARD_MS && (Date.now() - lastSent) >= 0) {
+    return json({ error: 'This estimate was just sent ' + Math.max(1, Math.round((Date.now() - lastSent) / 1000)) + 's ago - nothing was sent again. Wait a minute if you really want to resend.', code: 'just_sent' }, 409);
+  }
 
   const [props, owners] = await fetchTabs(env, ['Properties', 'Owners']);
   const prop = props.find(p => p.ID === String(s.Property_ID)) || null;
@@ -4523,7 +4865,8 @@ async function scopeProposalSend(env, body) {
   const token = await scopeProposalLinkToken(env, id);
   if (!token) return json({ error: 'Could not create the proposal link.' }, 500);
   const url = `${PORTAL_BASE}/scope-proposal.html?t=${encodeURIComponent(token)}`;
-  const html = buildScopeProposalEmailHtml({ ownerName, addr, url });
+  const pixelUrl = `${String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '')}/scope-proposal/px?t=${encodeURIComponent(token)}`;
+  const html = buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl });
   const subject = `Ridge Co — your estimate for ${addr}`;
 
   try {
@@ -4542,12 +4885,20 @@ async function scopeProposalSend(env, body) {
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount });
   } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
 
+  // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
+  // Email already went; the text is held/skipped/blocked on its own rules and its outcome is always reported.
+  let sms;
+  if ((parseInt(s.Send_Count || '0', 10) || 0) === 0 || body.sms_again === true) {
+    sms = await proposalOwnerSms(env, { scopeId: String(id), prop, owner, addr, ownerName, override: body.override_quiet_hours === true });
+  } else sms = { status: 'not_attempted', note: 'Resend: the owner was already texted on the first send.' };
+
   try {
     await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
-    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent' });
+    await ensureColumns(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
+    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent', SMS_Result: sms.status + (sms.note ? ' - ' + sms.note : '') });
   } catch (_) { /* audit log best-effort; the send already happened */ }
 
-  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url });
+  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms });
 }
 
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
@@ -4594,10 +4945,13 @@ async function scopeProposalPhotos(env, s) {
 // price was derived, or any vendor-facing commentary may ever reach a customer-facing surface —
 // only the job description and the final price. If a genuinely customer-safe note is ever
 // needed, it must be a SEPARATE, explicitly-labeled field — never this one.
-async function scopeProposalView(env, url) {
+async function scopeProposalView(env, url, ua, ctx) {
   const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
   if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
   const s = auth.s;
+  // Read status (Oct 14 2026): the owner opening the proposal page is the reliable "they looked" signal.
+  // Awaited (short) so a failed log is never lost; append &preview=1 to the link to look without counting.
+  if (url.searchParams.get('preview') !== '1') await proposalRecordHit(env, s, 'page', ua);
   let addr = await scopeAddr(env, s);
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
@@ -6724,7 +7078,7 @@ async function workorderSelfServe(env, body) {
 const ADDON_WO_COLUMNS = ['Parent_WO_ID', 'Addon_Status', 'Addon_Tenant_Mentioned', 'Addon_Items_JSON', 'Addon_Amount', 'Addon_Owner_Notified_Date'];
 const ADDON_MAX_ITEMS = 20;
 const ADDON_PHOTO_TYPES = ['before', 'photo'];
-const ADDON_PARENT_BLOCKED_STATUSES = ['Cancelled', 'Canceled', 'Paid', 'Invoiced', 'Closed'];
+const ADDON_PARENT_BLOCKED_STATUSES = WOStatus.sets.ADDON_PARENT_BLOCKED;
 
 // Draft children are hidden everywhere a normal WO list reads (see getWorkOrdersList / hubBootstrap /
 // vendorWorkorders / ownerWorkorders). Belt and braces: a draft is ALSO Voided=TRUE, which every other
@@ -7785,8 +8139,8 @@ async function getWorkOrdersList(env, url) {
 // NOTHING FAILS SILENTLY: every failure is logged to Ops_Telemetry (Success FALSE, WO ids) AND
 // returned in `errors`/`warnings`; every write is re-read and verified.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-const WO_DUP_ALLOWED_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
-const BID_CANCEL_PROTECTED_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid'];
+const WO_DUP_ALLOWED_STATUSES = WOStatus.sets.FIELD_OPEN;
+const BID_CANCEL_PROTECTED_STATUSES = WOStatus.sets.DONE_THROUGH_PAID;
 const WO_BID_COLUMNS = ['Bid_Group_ID', 'Duplicated_From', 'Owner_Notify_Override'];
 const WO_BID_WINNER_COLUMNS = ['Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Owner_Notify_Override', 'Bid_Winner'];   // ensured only when a COPY is chosen as the keep_one winner
 const BID_CANCEL_SMS_TYPE = 'vendor_job_cancelled';
@@ -8202,7 +8556,7 @@ function bidCancelClassify(wo, ctx) {
   const irs = (ctx.invoiceReview || []).filter(r => r.WO_ID === id && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (irs.length) { reasons.push('Has an invoice review / approval row'); kind = 'skip'; }
   if (kind === 'cancel') {
-    if (['Accepted', 'In Progress', 'On Hold'].includes(st)) warnings.push(`Vendor has already ${st === 'Accepted' ? 'accepted' : 'started'} this job; they will be texted that it is cancelled`);
+    if (WOStatus.sets.VENDOR_STARTED.includes(st)) warnings.push(`Vendor has already ${st === 'Accepted' ? 'accepted' : 'started'} this job; they will be texted that it is cancelled`);
     if ((ctx.workorders || []).some(w => String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() === id)) warnings.push('Has additional-work children; the cancel is refused if any are still live');
   }
   return { kind, reasons, warnings };
@@ -8730,8 +9084,9 @@ function sameCents(a, b) {
 
 // ── PORTAL VIEWS ─────────────────────────────────────────────
 
-async function vendorWorkorders(env, url) {
-  const vendorId = url.searchParams.get('vendor_id');
+async function vendorWorkorders(env, url, callerRole, callerSessionId) {
+  // A vendor session is always scoped to ITS OWN id from the signed token, never the query string.
+  const vendorId = callerRole === 'vendor' ? String(callerSessionId || '') : url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   // ONE batchGet for everything (was 3 separate Sheets reads per call: tabs + Config + Master_Key_Holders).
@@ -8767,8 +9122,9 @@ async function vendorWorkorders(env, url) {
   return json(enriched);
 }
 
-async function tenantWorkorders(env, url) {
-  const tenantId = url.searchParams.get('tenant_id');
+async function tenantWorkorders(env, url, callerRole, callerSessionId) {
+  // A tenant session is always scoped to ITS OWN id from the signed token, never the query string.
+  const tenantId = callerRole === 'tenant' ? String(callerSessionId || '') : url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors, owners] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Owners']);
@@ -8776,7 +9132,7 @@ async function tenantWorkorders(env, url) {
   // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
   // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
   // it in their portal" stay in sync instead of drifting apart (see isBackgroundWO comment).
-  const wos = workorders.filter(w => { if (w.Voided === 'TRUE') return false; if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (isBackgroundWO(tenant, w)) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
+  const wos = workorders.filter(w => { if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; return tenantCanSeeWO(tenant, w); });
   // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
   // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
   // owner.html both had a "Technician: —" row wired up with nothing to fill it). No
@@ -8809,8 +9165,9 @@ async function tenantWorkorders(env, url) {
   return json(enriched);
 }
 
-async function ownerWorkorders(env, url) {
-  const ownerId = url.searchParams.get('owner_id');
+async function ownerWorkorders(env, url, callerRole, callerSessionId) {
+  // An owner session is always scoped to ITS OWN id from the signed token, never the query string.
+  const ownerId = callerRole === 'owner' ? String(callerSessionId || '') : url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
@@ -8872,7 +9229,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // Accept-gate (vendor portal only): the lockbox code + tenant contact are withheld until
   // the vendor has ACCEPTED the work order. Accepting is what unlocks them — and accepting
   // moves the status, which lets the tenant-notification automation fire. New/Assigned = gated.
-  const ACCEPTED_OR_LATER = ['Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid'];
+  const ACCEPTED_OR_LATER = WOStatus.sets.ACCEPTED_OR_LATER;
   const accessGated = !!opts.vendorView && !ACCEPTED_OR_LATER.includes((wo.Status||'').trim());
   // Resolve the assigned vendor's name/phone/trade/in-house status when a vendor directory
   // was handed in. This never happened before — tenant.html and owner.html both had a
@@ -9645,7 +10002,7 @@ async function addVendorBill(env, body) {
     if (woKey) {
       const wos = await fetchTab(env, 'Work_Orders');
       const wo = findWO(wos, woKey);
-      const preComplete = ['New','Assigned','Accepted','In Progress','On Hold'];
+      const preComplete = WOStatus.sets.FIELD_OPEN;
       if (wo && preComplete.includes(wo.Status)) {
         await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
       }
@@ -9925,8 +10282,12 @@ async function listVendorBills(env, url) {
     const bills = await fetchTab(env, 'Vendor_Bills', { stale: !!vendorId });
     let results = bills.filter(b => b.Active !== 'FALSE');
     if (statusFilter && !woId) {
-      // Admin view: Invoice Review screen — return all bills matching this status
-      return json(results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase()));
+      // Admin view: Invoice Review screen — return all bills matching this status.
+      // Oct 14 2026: this branch used to ignore vendor_id, so a vendor session calling
+      // /vendor-bills?status=submitted got EVERY vendor's bills. A vendor session now always carries
+      // its own vendor_id here (forced by the router), so the filter applies; admin calls send none.
+      const byStatus = results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase());
+      return json(vendorId ? byStatus.filter(b => b.Vendor_ID === vendorId) : byStatus);
     }
     if (woId)     results = results.filter(b => b.WO_ID     === woId);
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
@@ -10632,7 +10993,9 @@ async function sendTemplatedSms(env, o) {
     const body = renderTemplate(tpl ? tpl.Body : (def ? def.Body : ''), Object.assign({ HubUrl: HUB_URL }, o.tokens || {})).replace(/\s+/g, ' ').trim();
     if (!body) return { sent: false, reason: 'no template for ' + o.type };
     const opts = { wo_id: o.wo_id || '', message_type: o.type, recipient_type: o.kind, message_body: body, property: o.property, bypassQuietHours: !!o.bypassQuietHours };
-    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else opts.vendor = o.vendor;
+    if (o.quietWindow) opts.quietWindow = o.quietWindow;
+    if (o.skip_if_seen) opts.skip_if_seen = o.skip_if_seen;
+    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else if (o.kind === 'owner') opts.owner = o.owner; else opts.vendor = o.vendor;
     return await smsGatedSend(env, opts);
   } catch (e) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
@@ -10658,7 +11021,7 @@ async function notifyVendorTemplated(env, type, woId, vendorIdHint, extraTokens,
 // version per WO; Pending (or blank) counts; 'Needs Info' pauses and resumes NEEDS_INFO_RESUME_DAYS
 // after it was flagged; Approved / Declined / Converted never count. Voided/closed WOs never count.
 function estimatesAwaitingDecision(estimates, workorders, now, sinceISO) {
-  const CLOSED = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void', 'Complete', 'Invoiced'];
+  const CLOSED = WOStatus.sets.RECEIPT_CLOSED;
   const latest = {};
   for (const e of estimates || []) {
     if (e.Active === 'FALSE' || !e.WO_ID) continue;
@@ -11326,7 +11689,7 @@ async function listNearbyWOs(env, url) {
   const nearbyPropIds = new Set();
   props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
   if (!nearbyPropIds.size) return json({ nearby: [], message: 'no_nearby', primary_cluster: primary });
-  const OPEN = new Set(['New','Assigned','Accepted','In Progress','On Hold']);
+  const OPEN = new Set(WOStatus.sets.FIELD_OPEN);
   const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
   return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
 }
@@ -11812,7 +12175,7 @@ const TURNOVER_DESC_BY_ROLE = {
 };
 // "Done" for the purposes of unblocking Cleaning — Cancelled counts too, so one dead/void
 // leg of a turnover can't permanently wedge the cleaner behind a job that will never finish.
-const TURNOVER_RELEASE_DONE_STATUSES = ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'];
+const TURNOVER_RELEASE_DONE_STATUSES = WOStatus.sets.TURNOVER_DONE;
 
 function dayBefore(dateStr) {
   if (!dateStr) return '';
@@ -12890,7 +13253,7 @@ async function scheduleWO(env, body) {
   const workorders=await fetchTab(env,'Work_Orders'); const wo=workorders.find(w=>w.ID===body.wo_id); if(!wo) return json({error:'WO not found'},404);
   const isWithinHour=body.window==='Within 1 hour', today=new Date().toISOString().split('T')[0], schedDate=body.date||today;
   const updates={Scheduled_Date:schedDate,Scheduled_Window:body.window||''};
-  if(isWithinHour&&['Assigned','Accepted'].includes(wo.Status)) updates.Status='In Progress';
+  if(isWithinHour&&WOStatus.sets.PRE_START.includes(wo.Status)) updates.Status='In Progress';
   await updateWOFields(env,body.wo_id,updates);
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
   // Vendor nudge clock reset (Sep 14 2026) — a vendor setting a schedule is real activity.
@@ -13043,8 +13406,8 @@ const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a
 // nudge is answered the moment the WO reaches Complete or later; the invoice nudge is a
 // separate, later-starting ask that isn't answered until the WO actually reaches Invoiced or
 // later. Cancelled/Declined already short-circuit BOTH types earlier in the sweep, unchanged.
-const WO_STATUS_COMPLETE_OR_LATER = ['Complete','Pending Invoice','Invoiced','Paid','Closed'];
-const WO_STATUS_INVOICED_OR_LATER = ['Invoiced','Paid'];
+const WO_STATUS_COMPLETE_OR_LATER = WOStatus.sets.COMPLETE_OR_LATER;
+const WO_STATUS_INVOICED_OR_LATER = WOStatus.sets.INVOICED_OR_LATER;
 let _vendorReqReady = false;
 async function ensureVendorReqTab(env) {
   if (!_vendorReqReady) { await ensureTab(env, VENDOR_REQ_TAB, VENDOR_REQ_COLS); _vendorReqReady = true; }
@@ -13157,7 +13520,7 @@ async function processVendorNudges(env) {
     if (!wo || wo.Voided === 'TRUE' || !vendor) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_missing' }); continue; }
     // Cancelled/Declined stop ALL open request types for this WO outright — nothing left worth
     // chasing a vendor for on a job that isn't happening (per Brett, Sep 16 2026).
-    if (['Cancelled','Declined'].includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
+    if (WOStatus.sets.DEAD.includes(wo.Status)) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_wo_status' }); continue; }
     // Additional work (Sep 30 2026): an add-on child is not a real job until Brett approves it. assignVendor(notify:false)
     // at /start opened the status clock, so: a declined add-on (stage cleared) closes its clock, a pending / needs-info
     // one is skipped (no nudge, nothing written) and starts nudging only once Approval_Stage is 'Approved'.
@@ -14030,7 +14393,7 @@ async function doorWatchdogTest(env, url, body) {
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
 // Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
 const MSG_QUEUE_TAB = 'Message_Queue';
-const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To'];
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To','Skip_If_Seen'];
 const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
 let _msgQueueTabReady = false, _smsTogglesReady = false;
 
@@ -14092,6 +14455,9 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, the owner has signed the proposal for {Job}. Pending deposit payment - we'll text you when it's paid." },
   { Message_Type: 'vendor_deposit_paid', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, proposal approved for {Job}: the DEPOSIT for {Job} has been paid to RidgeCo. (This is the deposit only - not your final invoice payment.)" },
+  // Owner heads-up when a proposal is emailed (Oct 14 2026, FEATURE_LOG rule 209). No link on purpose: it points at the email.
+  { Message_Type: 'owner_proposal_ready', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. Your estimate for {Address} is ready and was just emailed to you - please check your inbox (and spam folder) to review it. Questions? Just reply to that email." },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
@@ -14233,7 +14599,7 @@ async function smsGatedSend(env, opts) {
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
     Message_Body: messageBody, Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
-    Original_Body: originalBody, Translated_To: translatedTo,
+    Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
   const newRow = headers.map(h => rowObj[h] ?? '');
   await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
@@ -14252,8 +14618,12 @@ async function smsGatedSend(env, opts) {
     // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
     // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
     const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
-    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours && !_earlyMorningOk) {
-      const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
+    // opts.quietWindow {start,end} (Oct 14 2026): a caller may use its own ET window instead of the
+    // global 7pm-9am (owner proposal heads-up text: 8pm-8am). Default path is unchanged.
+    const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
+    const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+    if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
+      const sendAfter = _holdUntil.toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
@@ -14383,8 +14753,28 @@ async function processQuietHoursQueue(env) {
   ]);
   const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
   const results = [];
+  let _scopesForSkip = null;   // loaded lazily, only when a due row carries Skip_If_Seen
   for (const row of due) {
     const id = row.ID, kind = row.Recipient_Type;
+    // Skip-if-seen (Oct 14 2026): a held "your estimate was emailed" text is pointless once the owner has already
+    // opened the email or the proposal page - sending it next morning would only confuse. Visible, never silent:
+    // the row becomes Status 'skipped' with the reason, and the Scope's Owner_SMS_Status says so. If the lookup
+    // itself fails we SEND (and log) rather than quietly drop a text.
+    if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) {
+      try {
+        if (!_scopesForSkip) _scopesForSkip = await fetchTab(env, 'Scopes');
+        const sid = String(row.Skip_If_Seen).slice(6);
+        const sc = _scopesForSkip.find(x => x.ID === sid);
+        if (sc && proposalSeenByOwner(sc, sc.Sent_Date)) {
+          await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: 'skipped at release: owner already opened the proposal email/page', Send_After: '' });
+          await proposalStampSms(env, sid, 'skipped_seen');
+          results.push({ id, sent: false, skipped: 'owner_already_seen' });
+          continue;
+        }
+      } catch (e) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
+      }
+    }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
@@ -14396,11 +14786,12 @@ async function processQuietHoursQueue(env) {
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
-    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
+    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
     const sent = !!(result && result.sid);
     await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
+    if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), sent ? 'sent' : 'failed');
     results.push({ id, sent, failed: !sent, gate_snapshot: gateSnapshot });
   }
   return { checked: due.length, results };
@@ -14673,6 +15064,9 @@ const SCHED_JOBS = [
   { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
   { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
   { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
+  { name: 'hub_impr_mon',       kind: 'weekly',   dow: 1, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
+  { name: 'hub_impr_thu',       kind: 'weekly',   dow: 4, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
+  { name: 'hub_impr_daily',     kind: 'daily',    at: '07:30', run: (env) => schedRunHubImprovements(env, false) },
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
@@ -14981,6 +15375,17 @@ async function schedRunArReport(env) {
   const r = await schedStep('weekly_ar_report', () => runWeeklyArReport(env), errors);
   return { ok: !errors.length, errors, detail: r };
 }
+// Hub Improvements sweep (Oct 14 2026): the pull / reconcile logic lives with the ops queue (hubImpPull, hubImpReconcile); this is just the job wrapper.
+// Order matters: sync the queue's PR states first so a merged build is `done` before the ledger is reconciled.
+async function schedRunHubImprovements(env, pull) {
+  const errors = [], detail = {};
+  if (pull) detail.pull = await schedStep('hub_improvements_pull', () => hubImpPull(env), errors);
+  detail.queue_sync = await schedStep('queue_sync', () => opsQueueSync(env, {}, { ignoreSuppliedPrs: true }), errors);
+  const rec = await schedStep('hub_improvements_reconcile', () => hubImpReconcile(env), errors);
+  detail.reconcile = rec;
+  if (rec && Array.isArray(rec.problems)) for (const p of rec.problems) errors.push({ step: 'hub_improvements_reconcile', error: p });
+  return { ok: !errors.length, errors, detail };
+}
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
 // ── PREFLIGHT (dry run only): plain-English, COUNTS ONLY, strictly read-only (GETs; no claim, no state write, no SMS). ──
@@ -14998,6 +15403,9 @@ const SCHED_PF_WHAT = {
   review_mon: 'runs the Monday weekly review and delivers it',
   review_wed: 'runs the Wednesday weekly review (logged only)',
   ar_report_mon: 'builds and delivers the Monday AR aging report',
+  hub_impr_mon: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
+  hub_impr_thu: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
+  hub_impr_daily: 'checks which Hub Improvements items were built (queue item done / PR merged) so Google Tasks can be completed; reports anything stuck',
 };
 async function schedPfTab(env, tab) {
   try { return await fetchTab(env, tab); }
@@ -15295,7 +15703,7 @@ async function schedUnexpectedCloudflareCron(env, event) {
 // exercises it directly.
 const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date'];
 const RECUR_WO_COLS = ['Recurring_Template_ID','Recurring_Due','Owner_Notify_Override'];
-const RECUR_CLOSED_STATUSES = ['Complete','Pending Invoice','Invoiced','Paid','Cancelled','Canceled','Closed','Void','Declined'];
+const RECUR_CLOSED_STATUSES = WOStatus.sets.RECUR_CLOSED;
 const RECUR_LOOKBACK_DAYS = 3; // a sweep outage of up to 3 days still catches up an occurrence; older ones are dropped, not posted late
 const RECUR_POST_START_HOUR_ET = 8;
 const WO_SNIPPETS_TAB = 'WO_Snippets';
@@ -15713,7 +16121,7 @@ async function logSMS(env, woId, recipientType, recipientId, phone, message) {
 // Read-only 7am morning digest. buildDigest NEVER writes business data. Delivery
 // is gated by Config flags and stays dormant until Brett enables it after Twilio
 // send is live. Pulls from live tabs by their real column names.
-const DIGEST_CLOSED = ['Paid','Invoiced','Cancelled','Closed','Void'];
+const DIGEST_CLOSED = WOStatus.sets.DIGEST_CLOSED;
 
 function etTodayISO() { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
 function etStamp() { return new Date().toLocaleString('en-US', { timeZone:'America/New_York', weekday:'short', month:'short', day:'numeric', year:'numeric' }); }
@@ -15758,6 +16166,19 @@ function nextQuietHoursEnd(date) {
   let y = +p.year, mo = +p.month - 1, d = +p.day;
   if (h >= QUIET_HOURS_START_ET) d += 1;
   return new Date(Date.UTC(y, mo, d, QUIET_HOURS_END_ET, 0, 0) - offsetMin * 60000);
+}
+// Custom quiet window (Oct 14 2026, owner proposal text: ok until 8pm ET, held until 8am ET).
+// Returns the real UTC Date the window ends if `date` is inside [startH, 24) U [0, endH) Eastern, else null.
+function quietHoldUntil(date, startH, endH) {
+  date = date || new Date();
+  const h = etHour(date);
+  if (!(h >= startH || h < endH)) return null;
+  const offsetMin = nyOffsetMinutes(date);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  let d = +p.day; if (h >= startH) d += 1;
+  return new Date(Date.UTC(+p.year, +p.month - 1, d, endH, 0, 0) - offsetMin * 60000);
 }
 // General "next 9am ET after this instant" — unlike nextQuietHoursEnd (only meaningful when
 // already inside quiet hours), this works from ANY starting time. Used by the vendor nudge
@@ -15834,7 +16255,7 @@ async function buildDigest(env) {
 // so a job that has quietly stalled surfaces before an SLA slips (greenlit #2 "wo_status polling on
 // open WOs"). Admin-gated. SAFE class: read-only; returns only the same WO summary the daily digest
 // already shows (no money, no PII beyond WO label). 'On Hold' is excluded — it's a deliberate pause.
-const STALE_ACTIVE_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress'];
+const STALE_ACTIVE_STATUSES = WOStatus.sets.STALE_ACTIVE;
 async function staleWos(env, url) {
   const days = Math.max(1, parseInt((url && url.searchParams && url.searchParams.get('days')) || '4') || 4);
   let wos = [];
@@ -16521,7 +16942,7 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // sync (building → pr_open → live | pr_closed [flagged] | abandoned); Dup_Of = "may overlap
 // row #N"; Shipped_Match = "looks already built: <FEATURE_LOG ref>"; Scout_Verdict/Scout_Note/
 // Scout_Reviewed = the Scout's re-check of a snoozed item against builds shipped since.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed'];
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed','Source_Task_ID'];
 // 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
 // awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
 // approved it to build. The ONLY status opsQueueScoutSubmit can ever write (see
@@ -17057,7 +17478,7 @@ async function opsQueueScoutSubmit(env, body) {
   const now = new Date().toISOString();
   const reviewTs = String((body && body.review_ts) || now);
   let queued = 0;
-  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [];
+  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [], queued_items = [];
   let rechecked = 0;
   // Oct 13 2026: the old loop inserted blindly, so every Optimizer round re-proposed ideas that were
   // already queued, dropped or built. Now: read the WHOLE queue (all statuses) first; skip a
@@ -17073,8 +17494,11 @@ async function opsQueueScoutSubmit(env, body) {
   const shipped = items.length ? await getShippedIndex() : { ok: true, index: [] };
   for (const it of items) {
     const same = findQueueMatch(it, pool, 'same');
-    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status }); continue; }
+    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status, source_task_id: (it && it.source_task_id) ? String(it.source_task_id) : undefined }); continue; }
     const rowObj = buildScoutQueueRow(it, now, reviewTs);
+    // Oct 14 2026: an item pulled from Brett's Google Tasks list (hub-improvements sweep) carries its task id so the
+    // queue row and the ledger can always be re-linked; still Status 'proposed' (buildScoutQueueRow hardcodes it).
+    if (it && it.source_task_id) { rowObj.Source_Task_ID = String(it.source_task_id).slice(0, 80); rowObj.Approved_By = 'hub-improvements-sweep'; }
     const ov = findQueueMatch(it, pool, 'overlap');
     if (ov) {
       rowObj.Dup_Of = String(ov.row.ID);
@@ -17086,7 +17510,14 @@ async function opsQueueScoutSubmit(env, body) {
       const sm = findShippedMatch(rowObj.Title, shipped.index);
       if (sm) rowObj.Shipped_Match = 'Looks already built: ' + sm.ref;
     }
-    await addRow(env, OPS_QUEUE_TAB, rowObj);
+    const addRes = await addRow(env, OPS_QUEUE_TAB, rowObj);
+    let newId = '';
+    if (it && it.source_task_id) {
+      if (addRes && typeof addRes.status === 'number' && addRes.status >= 400) throw new Error('queue row for "' + rowObj.Title.slice(0, 60) + '" could not be saved (HTTP ' + addRes.status + ')');
+      try { newId = String((await addRes.clone().json()).id || ''); } catch (_) { newId = ''; }
+      if (!newId) throw new Error('queue row for "' + rowObj.Title.slice(0, 60) + '" saved but its id was not returned');
+      queued_items.push({ source_task_id: String(it.source_task_id), queue_id: newId, shipped_match: rowObj.Shipped_Match || '', overlaps: rowObj.Dup_Of || '' });
+    }
     pool.push({ ID: 'new-' + queued, Title: rowObj.Title, Problem: rowObj.Problem, First_Step: rowObj.First_Step, Status: 'proposed' });
     queued++;
   }
@@ -17114,10 +17545,10 @@ async function opsQueueScoutSubmit(env, body) {
       Human_Corrected: '', Est_Cost: '', Stuck_Patterns: '',
       Proposal: String((body && body.summary) || '').slice(0, 2000),
       Proposal_JSON: JSON.stringify(items),
-      Trigger: 'scout_reuse_radar', Delivered: 'no',
+      Trigger: String((body && body.trigger) || 'scout_reuse_radar').slice(0, 60), Delivered: 'no',
     });
   } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
-  return json({ ok: true, queued, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
+  return json({ ok: true, queued, queued_items, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
 }
 
 // ── Ops queue upgrade (Oct 13 2026): duplicate guard, shipped-index flag, snooze, PR sync ────────
@@ -17336,6 +17767,255 @@ async function opsQueueSync(env, body, opts) {
     } catch (e) { errors.push({ id: r.ID, error: String((e && e.message) || e) }); }
   }
   return json({ ok: errors.length === 0, checked: inflight.length, changed, errors });
+}
+
+// ── RidgeCo Hub Improvements sweep (Oct 14 2026) ─────────────────────────────────────────────────
+// Brett keeps a Google Tasks list called "RidgeCo Hub Improvements". Twice a week (Mon + Thu, Hub scheduler -
+// never a cron) this pulls every NEW open item from that list into the Optimizer queue as a `proposed` row, so
+// nothing sits forgotten in the phone list. A ledger tab (Hub_Improvements, in the Hub sheet) remembers each
+// item: pulled -> (queue) -> done. The Hub only READS the BrettOS sheet (task-linking decision #1: the Hub never
+// writes it). Telling Google Tasks ("In progress" note line, then complete) is the BrettOS TasksSync.js applier's
+// job - it reads this ledger. Nothing here fails silently: every problem comes back as a job error, and a ledger
+// change the applier has not applied within 24h is itself reported.
+const HUBIMP_TAB = 'Hub_Improvements';
+const HUBIMP_LIST = 'RidgeCo Hub Improvements';
+const HUBIMP_COLS = ['ID', 'Task_ID', 'List_ID', 'Title', 'Status', 'Status_Changed_At', 'Queue_ID', 'Queue_Status', 'PR', 'Note', 'First_Seen', 'Applied_Status', 'Applied_At', 'Apply_Error', 'Link_Kind'];
+// Link_Kind: '' = this sweep's own queue item; 'duplicate' / 'shipped_match' = the task points at a queue item that
+// already existed (or may already be built). Those are NEVER auto-completed - a human confirms they cover the task.
+const HUBIMP_REVIEW_KINDS = ['duplicate', 'shipped_match'];
+const HUBIMP_APPLY_STALE_MS = 24 * 3600 * 1000;
+const HUBIMP_ACTIVE = ['pulled', 'building'];       // still open: waiting on the queue or on a PR
+const HUBIMP_TRACKED = ['pulled', 'building', 'done', 'dropped'];
+
+function hubImpObjs(values) {
+  const v = values || [];
+  if (v.length < 2) return [];
+  return v.slice(1).map(r => { const o = {}; v[0].forEach((h, i) => { o[h] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+}
+
+// PURE — which Tasks_Sync rows are NEW work for the sweep. `fresh` = not yet in the ledger or the queue;
+// `adopt` = already in the queue (a previous run crashed after queueing but before writing the ledger) so we
+// record the link instead of queueing a second copy.
+function hubImpPickNew(taskRows, ledgerRows, queueRows) {
+  const seen = new Set((ledgerRows || []).map(r => String(r.Task_ID || '')));
+  const bySource = {};
+  for (const q of (queueRows || [])) if (q && q.Source_Task_ID) bySource[String(q.Source_Task_ID)] = q;
+  const fresh = [], adopt = [];
+  for (const t of (taskRows || [])) {
+    if (String(t.Category || '').trim() !== HUBIMP_LIST) continue;
+    if (String(t.Status || '') !== 'needsAction') continue;
+    const id = String(t.Task_ID || '');
+    if (!id || seen.has(id) || !String(t.Title || '').trim()) continue;
+    seen.add(id);
+    if (bySource[id]) adopt.push({ task: t, queue: bySource[id] }); else fresh.push(t);
+  }
+  return { fresh, adopt };
+}
+
+// PURE — one Google Task -> the item shape opsQueueScoutSubmit takes. Status stays `proposed` (that endpoint can
+// never produce a greenlit row); Brett still approves each one on the Proposals page.
+function hubImpQueueItem(t) {
+  const notes = String((t && t.Notes) || '').trim();
+  return {
+    title: String((t && t.Title) || '').trim().slice(0, 200),
+    problem: ('From Brett\'s Google Tasks list "' + HUBIMP_LIST + '"' + (notes ? ': ' + notes : '.')).slice(0, 600),
+    first_step: 'Check FEATURE_LOG.md and the code first - this may already be built. If not, build it, test it, and open a PR.',
+    tag: 'hub-improvement',
+    lens: 'brett-task-list',
+    source_task_id: String((t && t.Task_ID) || ''),
+  };
+}
+
+// PURE — the ledger changes for this moment. `queue` = Ops_Build_Queue rows, `prStates` = { '262': 'live'|'pr_open'|
+// 'pr_closed'|'error: ...' } for ledger rows that track a PR directly. Returns { updates:[{id,fields}], problems:[text] }.
+function hubImpPlan(ledger, queue, prStates, nowMs) {
+  const nowIso = new Date(nowMs).toISOString();
+  const updates = [], problems = [];
+  const qById = {};
+  for (const q of (queue || [])) qById[String(q.ID)] = q;
+  for (const r of (ledger || [])) {
+    const st = String(r.Status || '').toLowerCase();
+    if (!HUBIMP_ACTIVE.includes(st)) continue;      // done / dropped rows are final
+    const label = 'ledger #' + r.ID + ' "' + String(r.Title || '').slice(0, 60) + '"';
+    const f = {};
+    {
+      if (r.Queue_ID) {
+        const q = qById[String(r.Queue_ID)];
+        if (!q) problems.push(label + ': queue item #' + r.Queue_ID + ' no longer exists');
+        else {
+          const qs = String(q.Status || '').toLowerCase();
+          if (String(r.Queue_Status || '') !== qs) f.Queue_Status = qs;
+          const bs = String(q.Build_State || '').toLowerCase();
+          const needsReview = HUBIMP_REVIEW_KINDS.includes(String(r.Link_Kind || ''));
+          const reviewMarked = /Needs your review/.test(String(r.Note || ''));
+          if (qs === 'done' || qs === 'dropped') {
+            if (needsReview) {
+              // Duplicate / shipped-match links never auto-complete: the queue item may not be what this task asked for.
+              if (!reviewMarked && (qs === 'dropped' || bs === 'live')) {
+                f.Note = (String(r.Note || '') + ' Needs your review: linked queue item #' + r.Queue_ID + ' is ' + (qs === 'dropped' ? 'dropped' : 'live') + ' (' + r.Link_Kind.replace('_', ' ') + ') - confirm it covers this task, then finish it in Google Tasks.').trim();
+                problems.push(label + ': ' + r.Link_Kind.replace('_', ' ') + ' link to queue item #' + r.Queue_ID + ' is now ' + (qs === 'dropped' ? 'dropped' : 'live') + ' - needs your review, not auto-completed');
+              }
+            } else if (qs === 'dropped') {
+              f.Status = 'dropped'; f.Status_Changed_At = nowIso;
+              f.Note = (String(r.Note || '') + ' Dropped from the queue' + (q.Drop_Reason ? ': ' + q.Drop_Reason : '') + '.').trim();
+            } else if (bs === 'live') {
+              // Done means "PR opened" in the queue; only Build_State live (PR merged, main deployed) completes the task.
+              f.Status = 'done'; f.Status_Changed_At = nowIso; f.PR = String(q.PR_Number || r.PR || '');
+              f.Note = (String(r.Note || '') + ' Built and live (queue #' + r.Queue_ID + (q.PR_Number ? ', PR #' + q.PR_Number : '') + ').').trim();
+            } else if (bs === 'pr_closed') {
+              problems.push(label + ': PR ' + (q.PR_Number ? '#' + q.PR_Number : '') + ' for queue item #' + r.Queue_ID + ' was closed without merging');
+            } else if (!q.PR_Number) {
+              problems.push(label + ': queue item #' + r.Queue_ID + ' is marked done but has no PR to confirm it shipped');
+            } else {
+              // PR open (or build state not synced yet): keep waiting, but show the PR on the ledger row.
+              if (String(r.Status || '').toLowerCase() !== 'building') { f.Status = 'building'; f.Status_Changed_At = nowIso; }
+              if (String(r.PR || '') !== String(q.PR_Number)) f.PR = String(q.PR_Number);
+            }
+          }
+        }
+      } else if (r.PR) {
+        const n = cleanPrNumber(r.PR), ps = n ? prStates && prStates[n] : null;
+        if (!n) problems.push(label + ': PR "' + r.PR + '" is not a number');
+        else if (ps === 'live') { f.Status = 'done'; f.Status_Changed_At = nowIso; f.Note = (String(r.Note || '') + ' PR #' + n + ' merged.').trim(); }
+        else if (ps === 'pr_closed') problems.push(label + ': PR #' + n + ' was closed without merging');
+        else if (ps && String(ps).startsWith('error')) problems.push(label + ': could not check PR #' + n + ' (' + ps + ')');
+      } else {
+        problems.push(label + ' is ' + st + ' but has neither a queue item nor a PR to watch');
+      }
+    }
+    if (Object.keys(f).length) updates.push({ id: r.ID, fields: f });
+  }
+  // The applier (BrettOS Apps Script) copies Status into Applied_Status once Google Tasks is updated. Anything it has
+  // not applied for a day, or any error it recorded, is reported - a stuck applier must never be silent.
+  for (const r of (ledger || [])) {
+    const st = String(r.Status || '').toLowerCase();
+    if (!HUBIMP_TRACKED.includes(st)) continue;
+    const label = 'ledger #' + r.ID + ' "' + String(r.Title || '').slice(0, 60) + '"';
+    if (r.Apply_Error) problems.push(label + ': Google Tasks update failed: ' + String(r.Apply_Error).slice(0, 200));
+    else if (String(r.Applied_Status || '') !== st) {
+      const since = Date.parse(r.Status_Changed_At || r.First_Seen || '');
+      if (!isNaN(since) && nowMs - since > HUBIMP_APPLY_STALE_MS) problems.push(label + ': "' + st + '" has not reached Google Tasks for over 24h (is the BrettOS tasks-sync applier running and authorised?)');
+    }
+  }
+  return { updates, problems };
+}
+
+async function hubImpUpdate(env, id, fields) {
+  const r = await updateRow(env, HUBIMP_TAB, id, fields);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('ledger row #' + id + ' could not be updated (HTTP ' + r.status + ')');
+}
+async function hubImpAdd(env, obj) {
+  const r = await addRow(env, HUBIMP_TAB, obj);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('ledger row for "' + String(obj.Title || '').slice(0, 60) + '" could not be saved (HTTP ' + r.status + ')');
+}
+
+// Read-only look at a BrettOS tab (the Hub NEVER writes that sheet). Returns { rows, hdr }; { missing:true } if the tab does not exist.
+async function hubImpReadBrettos(env, tab) {
+  if (!env.BRETTOS_TASKS_SHEET_ID) throw new Error('BRETTOS_TASKS_SHEET_ID is not set, so the Hub cannot read the BrettOS sheet');
+  const token = await getAccessToken(env);
+  const resp = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + env.BRETTOS_TASKS_SHEET_ID + '/values/' + tab, { headers: { 'Authorization': 'Bearer ' + token } });
+  const data = await resp.json();
+  if (data.error) {
+    const m = String(data.error.message || JSON.stringify(data.error));
+    if (/unable to parse range|not found/i.test(m)) return { rows: [], hdr: [], missing: true };
+    throw new Error('could not read the BrettOS ' + tab + ' tab: ' + m.slice(0, 200));
+  }
+  return { rows: hubImpObjs(data.values), hdr: (data.values && data.values[0]) || [] };
+}
+async function hubImpReadTasks(env) {
+  const r = await hubImpReadBrettos(env, 'Tasks_Sync');
+  if (r.missing) throw new Error('the BrettOS sheet has no Tasks_Sync tab');
+  if (!r.hdr.includes('Task_ID') || !r.hdr.includes('Category') || !r.hdr.includes('Status')) throw new Error('Tasks_Sync has unexpected columns (' + r.hdr.join(',') + ') - the sweep needs Task_ID, Category and Status');
+  return r.rows;
+}
+// What the BrettOS applier says it has already done in Google Tasks (its own Hub_Applied tab: Task_ID, Applied_Status, Applied_At, Error).
+async function hubImpReadApplied(env) {
+  const r = await hubImpReadBrettos(env, 'Hub_Applied');
+  if (r.missing) return [];
+  if (!r.hdr.includes('Task_ID') || !r.hdr.includes('Applied_Status')) throw new Error('Hub_Applied has unexpected columns (' + r.hdr.join(',') + ')');
+  return r.rows;
+}
+
+// Pull new "RidgeCo Hub Improvements" items into the queue (as proposed) and record each in the ledger.
+async function hubImpPull(env) {
+  await ensureTab(env, HUBIMP_TAB, HUBIMP_COLS); await ensureColumns(env, HUBIMP_TAB, HUBIMP_COLS);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const tasks = await hubImpReadTasks(env);
+  const [ledger, queue] = [await fetchTab(env, HUBIMP_TAB), await fetchTab(env, OPS_QUEUE_TAB)];
+  const { fresh, adopt } = hubImpPickNew(tasks, ledger, queue);
+  const now = new Date().toISOString();
+  const out = { list_items_open: tasks.filter(t => String(t.Category || '').trim() === HUBIMP_LIST && t.Status === 'needsAction').length, new: fresh.length, adopted: adopt.length, queued: [], skipped_duplicates: [], possibly_already_built: [] };
+  for (const a of adopt) {
+    await hubImpAdd(env, { Task_ID: a.task.Task_ID, List_ID: a.task.List_ID || '', Title: String(a.task.Title).slice(0, 200), Status: 'pulled', Status_Changed_At: now, Queue_ID: a.queue.ID, Queue_Status: String(a.queue.Status || '').toLowerCase(), First_Seen: now, Note: 'Linked to existing queue item #' + a.queue.ID + '.' });
+    out.queued.push({ task_id: a.task.Task_ID, queue_id: a.queue.ID, adopted: true });
+  }
+  for (let i = 0; i < fresh.length; i += 20) {
+    const chunk = fresh.slice(i, i + 20);
+    const resp = await opsQueueScoutSubmit(env, { items: chunk.map(hubImpQueueItem), review_ts: now, trigger: 'hub_improvements_sweep', summary: 'Hub Improvements sweep: ' + chunk.length + ' new item(s) from the Google Tasks list' });
+    const body = await resp.json();
+    if (resp.status >= 400 || body.ok !== true) throw new Error('queue submit failed: ' + String((body && body.error) || ('HTTP ' + resp.status)).slice(0, 200));
+    const byTask = {};
+    for (const q of (body.queued_items || [])) byTask[String(q.source_task_id)] = { kind: 'queued', q };
+    for (const s of (body.skipped_duplicates || [])) if (s.source_task_id) byTask[String(s.source_task_id)] = { kind: 'dup', s };
+    for (const t of chunk) {
+      const hit = byTask[String(t.Task_ID)];
+      if (!hit) throw new Error('queue submit did not report what happened to "' + String(t.Title).slice(0, 60) + '" (task ' + t.Task_ID + ')');
+      const base = { Task_ID: t.Task_ID, List_ID: t.List_ID || '', Title: String(t.Title).slice(0, 200), Status: 'pulled', Status_Changed_At: now, First_Seen: now };
+      if (hit.kind === 'queued') {
+        const note = hit.q.shipped_match ? 'Queue says: ' + hit.q.shipped_match + ' - check before building.' : (hit.q.overlaps ? 'May overlap queue item #' + hit.q.overlaps + '.' : '');
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: hit.q.queue_id, Queue_Status: 'proposed', Note: note, Link_Kind: hit.q.shipped_match ? 'shipped_match' : '' }));
+        out.queued.push({ task_id: t.Task_ID, queue_id: hit.q.queue_id, title: base.Title });
+        if (hit.q.shipped_match) out.possibly_already_built.push({ title: base.Title, queue_id: hit.q.queue_id, match: hit.q.shipped_match });
+      } else {
+        // Two tasks with the same title in ONE batch: the second is "a duplicate of new-N" (the Nth row queued by this
+        // call, which has no real id yet). Resolve it to the real queue id so the ledger link is not left dangling.
+        let dupOf = String(hit.s.duplicate_of || '');
+        const mm = /^new-(\d+)$/.exec(dupOf);
+        if (mm) { const real = (body.queued_items || [])[Number(mm[1])]; if (real && real.queue_id) dupOf = String(real.queue_id); }
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: dupOf, Queue_Status: String(hit.s.status || '').toLowerCase() || 'proposed', Link_Kind: 'duplicate', Note: 'Same as existing queue item #' + dupOf + ' (' + (hit.s.status || 'proposed') + ').' }));
+        out.skipped_duplicates.push({ title: base.Title, duplicate_of: dupOf, status: hit.s.status });
+      }
+    }
+  }
+  return out;
+}
+
+// Move ledger rows forward (queue item done/dropped, or a tracked PR merged) and report anything stuck.
+async function hubImpReconcile(env) {
+  await ensureTab(env, HUBIMP_TAB, HUBIMP_COLS); await ensureColumns(env, HUBIMP_TAB, HUBIMP_COLS);
+  const ledger = await fetchTab(env, HUBIMP_TAB);
+  if (!ledger.length) return { rows: 0, updated: 0, completed_now: [], problems: [] };
+  const queue = await fetchTab(env, OPS_QUEUE_TAB);
+  const problems = [];
+  // Copy what the applier reported (BrettOS Hub_Applied tab, read-only) into the ledger so the ledger shows it.
+  const appliedSync = [];
+  try {
+    const applied = await hubImpReadApplied(env), byTask = {};
+    for (const a of applied) if (a.Task_ID) byTask[String(a.Task_ID)] = a;
+    for (const r of ledger) {
+      const a = byTask[String(r.Task_ID)]; if (!a) continue;
+      const f = {};
+      if (String(r.Applied_Status || '') !== String(a.Applied_Status || '')) f.Applied_Status = a.Applied_Status || '';
+      if (String(r.Applied_At || '') !== String(a.Applied_At || '')) f.Applied_At = a.Applied_At || '';
+      if (String(r.Apply_Error || '') !== String(a.Error || '')) f.Apply_Error = a.Error || '';
+      if (Object.keys(f).length) { Object.assign(r, f); appliedSync.push({ id: r.ID, fields: f }); }
+    }
+  } catch (e) { problems.push('could not read what the Google Tasks applier has done: ' + String((e && e.message) || e).slice(0, 200)); }
+  const prStates = {};
+  for (const r of ledger) {
+    if (!HUBIMP_ACTIVE.includes(String(r.Status || '').toLowerCase()) || r.Queue_ID || !r.PR) continue;
+    const n = cleanPrNumber(r.PR); if (!n || prStates[n]) continue;
+    try { prStates[n] = prStateToBuildState(await ghPublicJson('/pulls/' + n, env)) || 'error: no PR data'; }
+    catch (e) { prStates[n] = 'error: ' + String((e && e.message) || e).slice(0, 120); }
+  }
+  const plan = hubImpPlan(ledger, queue, prStates, Date.now());
+  problems.push(...plan.problems);
+  const completed_now = [];
+  for (const u of appliedSync.concat(plan.updates)) {
+    try { await hubImpUpdate(env, u.id, u.fields); if (u.fields.Status === 'done') completed_now.push(u.id); }
+    catch (e) { problems.push('could not save ledger row #' + u.id + ': ' + String((e && e.message) || e).slice(0, 160)); }
+  }
+  return { rows: ledger.length, updated: plan.updates.length, completed_now, problems };
 }
 
 // Standing rules every build brief carries (Brett, Oct 13 2026).
@@ -18255,7 +18935,7 @@ async function vendorPerformance(env, url) {
   // Complete/Pending Invoice as "open" because there's billing follow-up left. Guarding `open`
   // below with `&& !DONE.has(w.Status)` reconciles the two so a completed-but-unbilled job never
   // double-counts as both done and open.
-  const DONE = new Set(['Complete', 'Pending Invoice', 'Invoiced', 'Paid']);
+  const DONE = new Set(WOStatus.sets.DONE_THROUGH_PAID);
   const now = Date.now();
   const daysBetween = (a, b) => {
     const ta = Date.parse(a), tb = Date.parse(b);
@@ -18693,13 +19373,14 @@ function buildArReportEmailHtml(group, link) {
 }
 
 // House-style mirror of buildArReportEmailHtml, for scopeProposalSend (B-210 follow-on).
-function buildScopeProposalEmailHtml({ ownerName, addr, url }) {
+function buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl }) {
   return `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1b1f24;">
     <h2 style="color:#1d4ed8;">Ridge Co — Estimate for ${addr}</h2>
     <p>Hi ${ownerName || 'there'},</p>
     <p>Your estimate for the work at <strong>${addr}</strong> is ready to review. Tap below to see the full breakdown and sign off whenever you're ready to move forward.</p>
     <p style="text-align:center;margin:24px 0;"><a href="${url}" style="background:#1d4ed8;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">View &amp; Sign Estimate</a></p>
     <p style="color:#66707c;font-size:12px;">Questions about anything in the estimate? Just reply to this email. — Ridge Co</p>
+    ${pixelUrl ? `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">` : ''}
   </div>`;
 }
 
@@ -20331,7 +21012,7 @@ function b64url(str) { return btoa(unescape(encodeURIComponent(str))).replace(/\
 // ══════════════════════════════════════════════════════════════
 const WO_SHARE_LINK_TTL = 60*60*24*180;   // 180 days — set-and-forget; revoke any time
 const WO_SHARE_VIEW_TTL = 60*60*24;       // 24 hours — one last-4 entry covers a full day
-const WO_SHARE_STATUSES = ['Accepted','In Progress','On Hold','Complete'];
+const WO_SHARE_STATUSES = WOStatus.sets.VENDOR_SETTABLE;
 
 // Last 4 digits of a phone, canonicalised. '' if there aren't 4.
 function _last4(phone){ const d = String(phone||'').replace(/\D/g,''); return d.length>=4 ? d.slice(-4) : ''; }
@@ -22580,6 +23261,144 @@ async function qbFindLikelyUnlinkedPayment(env, token, vendorQboId, amountOwed) 
   } catch (_) { return null; }
 }
 
+// ── Who To Pay: "customer paid on" + funds-clearing indicator (Oct 14 2026) ──────────────────────
+// Brett decides when to pay a vendor off whether the customer's money has actually cleared his bank. This only
+// INFORMS that call -- it never blocks, hides, reorders or auto-pays anything (he sometimes pays early on purpose).
+// The clock starts on the QuickBooks Payment's TxnDate (day 0); weekends and every date in Config.US_HOLIDAYS are
+// skipped. Days-to-clear depends on how the customer paid; Config.PAYMENT_CLEAR_DAYS ("ach:3,card:3,check:5,cash:0,
+// other:3") overrides the defaults below so Brett can tune it without a deploy.
+function paymentClearDaysMap(raw) {
+  const map = { ach: 3, card: 3, check: 5, cash: 0, other: 3 };
+  const bad = [];
+  String(raw || '').split(',').forEach(pair => {
+    const s = pair.trim();
+    if (!s) return;
+    const parts = s.split(':');
+    const k = parts.length === 2 ? parts[0].trim().toLowerCase() : '';
+    const n = parts.length === 2 && /^\d+$/.test(parts[1].trim()) ? parseInt(parts[1].trim(), 10) : NaN;
+    if (Object.prototype.hasOwnProperty.call(map, k) && Number.isInteger(n) && n >= 0 && n <= 30) map[k] = n;
+    else bad.push(s);
+  });
+  return { map, bad };
+}
+
+// QuickBooks has no fixed "method" enum: PaymentMethodRef points at a company-defined PaymentMethod (Name + Type
+// CREDIT_CARD / NON_CREDIT_CARD). Classify by the card flag/Type first, then by name. e-check/ACH is tested BEFORE
+// "check" because "E-Check" contains the word check. Anything unrecognised is 'other' (default 3 business days).
+function classifyPaymentMethod(pay, methodsById) {
+  const ref = (pay && pay.PaymentMethodRef) || null;
+  const id = ref && ref.value != null ? String(ref.value) : '';
+  const pm = id && methodsById && typeof methodsById.get === 'function' ? methodsById.get(id) : null;
+  const name = String((ref && ref.name) || (pm && pm.Name) || '').trim();
+  const n = name.toLowerCase();
+  let cls = 'other';
+  if (pay && pay.CreditCardPayment) cls = 'card';
+  else if (pm && pm.Type === 'CREDIT_CARD') cls = 'card';
+  else if (/e-?check|\bach\b|\beft\b|\bwire\b|bank transfer|direct (debit|deposit)|bank draft/.test(n)) cls = 'ach';
+  else if (/cheque|\bcheck\b/.test(n)) cls = 'check';
+  else if (/\bcash\b/.test(n)) cls = 'cash';
+  else if (/credit|debit|\bcard\b|visa|master ?card|amex|american express|discover/.test(n)) cls = 'card';
+  return { cls, name };
+}
+
+// dateStr itself is day 0; returns the date n business days later ('' on a bad date / tripped guard -- never a guess).
+function addBusinessDays(dateStr, n, holidayMap) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ''))) return '';
+  let cur = dateStr;
+  for (let i = 0; i < n; i++) {
+    const r = nextBusinessDay(cur, holidayMap);
+    if (!r.date) return '';
+    cur = r.date;
+  }
+  return cur;
+}
+
+// Collapses all QuickBooks Payments applied to ONE invoice into the fields the page shows. paid_date = latest payment;
+// clears_on = the LAST date any of its payments clears (the whole amount isn't in the bank until then). status:
+// 'clearing' (today before clears_on), 'cleared', or 'unknown' (no payment with a usable date -- never silently blank).
+function summarizeInvoicePayments(payments, ctx) {
+  const list = Array.isArray(payments) ? payments : [];
+  let best = null, latestDate = '';
+  for (const p of list) {
+    const date = String((p && p.TxnDate) || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const m = classifyPaymentMethod(p, ctx.methodsById);
+    const days = Object.prototype.hasOwnProperty.call(ctx.clearMap, m.cls) ? ctx.clearMap[m.cls] : ctx.clearMap.other;
+    const clearsOn = addBusinessDays(date, days, ctx.holidayMap);
+    if (!clearsOn) continue;
+    if (date > latestDate) latestDate = date;
+    if (!best || clearsOn > best.clearsOn) best = { date, clearsOn, days, cls: m.cls, name: m.name };
+  }
+  if (!best) return { count: list.length, paid_date: '', method: '', method_name: '', clear_days: null, clears_on: '', status: 'unknown' };
+  return {
+    count: list.length, paid_date: latestDate, method: best.cls, method_name: best.name,
+    clear_days: best.days, clears_on: best.clearsOn, status: ctx.today >= best.clearsOn ? 'cleared' : 'clearing',
+  };
+}
+
+// Finds the QuickBooks Payments applied to a set of already-fetched Invoice objects. Primary path: Invoice.LinkedTxn
+// entries of TxnType 'Payment'. Fallback (only for invoices that clearly had money applied but expose no linked Payment):
+// query Payments per customer and match Payment.Line[].LinkedTxn back to the invoice id. Every failure is collected into
+// `warnings` + Ops_Telemetry via logAndCollectError -- a lookup problem must never look like "no payment".
+async function qbLoadInvoicePayments(env, token, invoices, warnings, methodsCache) {
+  const byInvoice = new Map();
+  const invList = (invoices || []).filter(Boolean);
+  const idsByInv = new Map();
+  const allIds = new Set();
+  for (const inv of invList) {
+    const ids = (Array.isArray(inv.LinkedTxn) ? inv.LinkedTxn : []).filter(t => t && t.TxnType === 'Payment' && t.TxnId != null).map(t => String(t.TxnId));
+    idsByInv.set(String(inv.Id), ids);
+    ids.forEach(i => allIds.add(i));
+  }
+  const payById = new Map();
+  const idArr = [...allIds];
+  for (let i = 0; i < idArr.length; i += 200) {
+    const chunk = idArr.slice(i, i + 200);
+    const idList = chunk.map(id => `'${qbEscape(id)}'`).join(',');
+    const q = encodeURIComponent(`select * from Payment where Id in (${idList}) maxresults 1000`);
+    try {
+      const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+      for (const p of ((r && r.QueryResponse && r.QueryResponse.Payment) || [])) payById.set(String(p.Id), p);
+    } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_payment_fetch', '/qb/payables', `Payment ids=${chunk.length}`, e); }
+  }
+  for (const inv of invList) {
+    const got = (idsByInv.get(String(inv.Id)) || []).map(id => payById.get(id)).filter(Boolean);
+    if (got.length) byInvoice.set(String(inv.Id), got);
+  }
+  // Fallback: money was applied (Balance below the total) but no linked Payment could be resolved.
+  const needFallback = invList.filter(inv => !byInvoice.has(String(inv.Id)) && Number(inv.TotalAmt) > 0 && Number(inv.Balance) < Number(inv.TotalAmt) - 0.005
+    && inv.CustomerRef && inv.CustomerRef.value != null);
+  if (needFallback.length) {
+    const customers = [...new Set(needFallback.map(inv => String(inv.CustomerRef.value)))];
+    const MAX_FALLBACK_CUSTOMERS = 25;
+    if (customers.length > MAX_FALLBACK_CUSTOMERS) {
+      await logAndCollectError(env, warnings, 'qb_payables_payment_fallback_capped', '/qb/payables', `customers=${customers.length}`,
+        new Error(`payment-date fallback looked at only ${MAX_FALLBACK_CUSTOMERS} of ${customers.length} customers; the rest show "payment date unavailable"`));
+    }
+    for (const cust of customers.slice(0, MAX_FALLBACK_CUSTOMERS)) {
+      try {
+        const q = encodeURIComponent(`select * from Payment where CustomerRef = '${qbEscape(cust)}' maxresults 1000`);
+        const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+        const pays = (r && r.QueryResponse && r.QueryResponse.Payment) || [];
+        for (const inv of needFallback.filter(x => String(x.CustomerRef.value) === cust)) {
+          const hit = pays.filter(p => (Array.isArray(p.Line) ? p.Line : []).some(l => (Array.isArray(l.LinkedTxn) ? l.LinkedTxn : []).some(t => t && t.TxnType === 'Invoice' && String(t.TxnId) === String(inv.Id))));
+          if (hit.length) byInvoice.set(String(inv.Id), hit);
+        }
+      } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_payment_fallback', '/qb/payables', `customer=${cust}`, e); }
+    }
+  }
+  // PaymentMethod names/types (once per page load): only needed when at least one payment was found.
+  if (byInvoice.size && methodsCache && !methodsCache.loaded) {
+    methodsCache.loaded = true;
+    try {
+      const q = encodeURIComponent('select * from PaymentMethod maxresults 200');
+      const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+      for (const pm of ((r && r.QueryResponse && r.QueryResponse.PaymentMethod) || [])) methodsCache.map.set(String(pm.Id), pm);
+    } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_paymentmethod_fetch', '/qb/payables', 'PaymentMethod', e); }
+  }
+  return byInvoice;
+}
+
 async function qbPayables(env, url) {
   try {
     const days = Math.max(1, Math.min(365, parseInt(url && url.searchParams.get('days')) || 90));
@@ -22589,6 +23408,37 @@ async function qbPayables(env, url) {
     // Oct 1 2026: nothing here may fail silently -- problems are returned as `warnings` (the Who To Pay page
     // shows them in its banner) and logged to Ops_Telemetry instead of being swallowed.
     const warnings = [];
+
+    // Oct 14 2026: customer-payment clearing indicator context (see paymentClearDaysMap above). fetchConfig() itself returns {}
+    // on a Sheets failure, so an empty/short result is reported below instead of quietly dropping bank holidays.
+    const cfg = await fetchConfig(env);
+    const holidayMap = parseHolidayMap(cfg.US_HOLIDAYS);
+    const today = etDateString(new Date());
+    if (!holidayMap.size) {
+      await logAndCollectError(env, warnings, 'qb_payables_holidays_missing', '/qb/payables', 'Config.US_HOLIDAYS',
+        new Error('Config.US_HOLIDAYS is empty or unreadable: clearing dates skip weekends only, NOT bank holidays'));
+    } else if (![...holidayMap.keys()].some(d => d.startsWith(String(today).slice(0, 4)))) {
+      await logAndCollectError(env, warnings, 'qb_payables_holidays_stale', '/qb/payables', 'Config.US_HOLIDAYS',
+        new Error('Config.US_HOLIDAYS has no dates for ' + String(today).slice(0, 4) + ': clearing dates may land on bank holidays'));
+    }
+    const clearCfg = paymentClearDaysMap(cfg.PAYMENT_CLEAR_DAYS);
+    if (clearCfg.bad.length) {
+      await logAndCollectError(env, warnings, 'qb_payables_clear_days_config', '/qb/payables', 'Config.PAYMENT_CLEAR_DAYS',
+        new Error('ignored invalid PAYMENT_CLEAR_DAYS entries (using defaults for them): ' + clearCfg.bad.join(' | ')));
+    }
+    const methodsCache = { loaded: false, map: new Map() };
+    const payCtx = { methodsById: methodsCache.map, clearMap: clearCfg.map, holidayMap, today };
+    const paymentDateMissing = [];
+    // The fields one row gets. `''` status = not applicable (nothing paid yet). Money applied but no usable Payment date
+    // = 'unknown' and is listed in ONE aggregated warning below -- never a blank that looks like "no payment".
+    function clearFields(woId, inv, paidOrPartial, payMap) {
+      const none = { customer_paid_date: '', customer_pay_method: '', customer_pay_method_name: '', customer_clear_days: null, customer_clears_on: '', customer_clear_status: '', customer_payment_count: 0 };
+      if (!paidOrPartial || !inv) return none;
+      const s = summarizeInvoicePayments(payMap.get(String(inv.Id)) || [], payCtx);
+      if (s.status === 'unknown') paymentDateMissing.push(woId || ('invoice ' + inv.Id));
+      return { customer_paid_date: s.paid_date, customer_pay_method: s.method, customer_pay_method_name: s.method_name,
+        customer_clear_days: s.clear_days, customer_clears_on: s.clears_on, customer_clear_status: s.status, customer_payment_count: s.count };
+    }
 
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
@@ -22628,6 +23478,7 @@ async function qbPayables(env, url) {
       qbBatchById('Invoice', candidates.map(ir => (ir.QB_Invoice_ID || '').trim())),
       qbBatchById('Bill', candidates.map(ir => (ir.QB_Bill_ID || '').trim())),
     ]);
+    const invPayments = await qbLoadInvoicePayments(env, token, [...invById.values()], warnings, methodsCache);
 
     const rows = [];
     for (const ir of candidates) {
@@ -22693,6 +23544,7 @@ async function qbPayables(env, url) {
         invoice_id: invId, invoice_number: invNumber,
         customer_total: Number(ir.Customer_Total) || 0, customer_balance: customerBalance, customer_paid: customerPaid,
         customer_partial: customerPartial,
+        ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
         vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
         bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
@@ -22745,6 +23597,7 @@ async function qbPayables(env, url) {
           qbBatchById('Invoice', sigCandidates.map(c => c.invId)),
           qbBatchById('Bill', sigCandidates.map(c => c.billId)),
         ]);
+        const sigPayments = await qbLoadInvoicePayments(env, token, [...sigInvById.values()], warnings, methodsCache);
         for (const c of sigCandidates) {
           let customerPaid = null, customerBalance = null, invNumber = '';
           const q = sigInvById.get(c.invId);
@@ -22792,6 +23645,7 @@ async function qbPayables(env, url) {
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
             customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
+            ...clearFields(c.sc.WO_ID + ' (' + c.phase + ')', q, customerPaid === true || customerPartial, sigPayments),
             bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
             vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
             bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
@@ -22800,9 +23654,14 @@ async function qbPayables(env, url) {
       }
     } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
+    if (paymentDateMissing.length) {
+      await logAndCollectError(env, warnings, 'qb_payables_payment_date_missing', '/qb/payables', paymentDateMissing.slice(0, 20).join(', '),
+        new Error(paymentDateMissing.length + ' paid/part-paid invoice(s) have no QuickBooks Payment with a usable date (credit memo, journal entry or lookup problem) -- shown as "payment date unavailable": ' + paymentDateMissing.slice(0, 20).join(', ')));
+    }
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
     return json({
       ok: true, count: rows.length,
+      as_of: today, clear_days: clearCfg.map,
       owed_now: owed.length,
       owed_total: +owed.reduce((n, r) => n + (r.vendor_balance != null ? r.vendor_balance : r.vendor_cost), 0).toFixed(2),
       warnings,
@@ -22828,7 +23687,7 @@ async function qbSyncPayments(env, body) {
 
   const now = new Date().toISOString();
   // Auto-close needs the current WO status so we never overwrite one already finished.
-  const WO_DONE = ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'];
+  const WO_DONE = WOStatus.sets.CLOSED_FINAL;
   let workorders = [];
   try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
 

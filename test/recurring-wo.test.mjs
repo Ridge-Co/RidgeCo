@@ -1,6 +1,7 @@
 // Recurring / scheduled work orders (Sep 28 2026). Pure date math is executed for real;
 // wiring (quiet-hours exception, vendor-only notify, owner suppression, cron hook) is checked structurally.
 import fs from 'fs';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const src = fs.readFileSync('worker.js', 'utf8');
 function grab(name) {
   let i = src.indexOf('async function ' + name + '('); if (i < 0) i = src.indexOf('function ' + name + '(');

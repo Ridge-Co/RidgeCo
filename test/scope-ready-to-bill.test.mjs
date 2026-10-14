@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workerSrc = readFileSync(join(here, '..', 'worker.js'), 'utf8');
