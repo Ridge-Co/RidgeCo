@@ -173,7 +173,18 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
 // priority order with everything due
 {
   const names = P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
-  t('priority order when everything is due (Monday 10am ET)', names.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,sms_delivery_check,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily,str_digest_mon', names.join());
+  t('priority order when everything is due (Monday 10am ET): daily/weekly jobs first, then the 15-minute jobs, array order inside each', names.join() === 'daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,sms_delivery_check,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily,str_digest_mon,door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning', names.join());
+  // Oct 14 2026 incident: the six 15-minute jobs filled every tick's time share, so no daily/weekly job ever ran. A due daily
+  // job must now come BEFORE every due interval job, and interval jobs still run once the dailies are done or backing off.
+  const wed = P.schedDueJobs(S0(), iso('2026-10-14T19:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 3pm ET, nothing has ever run
+  const firstInterval = wed.findIndex(n => ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning'].includes(n));
+  t('Wed 3pm, nothing ever run: every daily/weekly job is ahead of every interval job', firstInterval === wed.length - 6 && wed.slice(0, firstInterval).every(n => !['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning'].includes(n)) && wed.includes('review_wed') && wed.includes('str_digest_wed'), wed.join());
+  const done = S0(); for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'hub_impr_daily', 'review_wed', 'str_digest_wed']) done.jobs[n] = { last_key: '2026-10-14', last_status: 'ok', last_ok: '2026-10-14T19:00:00.000Z', last_end: '2026-10-14T19:00:00.000Z' };
+  const after = P.schedDueJobs(done, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
+  t('once the daily/weekly jobs are done the interval jobs run in their usual order', after.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning', after.join());
+  const backoff = S0(); backoff.jobs.daily_qb_sync = { attempts: { key: '2026-10-14', n: 1 }, last_end: '2026-10-14T19:00:00.000Z', last_start: '2026-10-14T18:59:00.000Z', last_status: 'failed' };
+  const bo = P.schedDueJobs(backoff, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
+  t('a failed daily job in its retry back-off does not block anything (not due until the gap passes)', !bo.includes('daily_qb_sync') && bo.includes('str_cleaning'), bo.join());
   const early = P.schedDueJobs(S0(), iso('2026-10-14T09:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 05:00 EDT: only the interval jobs
   t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning', early.join());
   t('only[] restricts', P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, { only: ['sweep'] }).map(d => d.name).join() === 'sweep');
@@ -852,11 +863,11 @@ store.setCfg('admin_phone', '+15555550100');
   const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
   const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval'], ['d', 'daily']]);
   const r1 = await L.schedRunNext({}, null, fast(c, { jobs, schedule: { a: { enabled: false } } }));
-  t('dispatcher: a disabled job is skipped, the next due one runs; the reply names overrides + disabled', r1.body.ran === 'b' && log.join() === 'b' && r1.body.disabled.join() === 'a' && r1.body.schedule_overrides.join() === 'a', r1.body);
+  t('dispatcher: a disabled job is skipped, the next due one runs (the daily job goes first, Oct 14 2026); the reply names overrides + disabled', r1.body.ran === 'd' && log.join() === 'd' && r1.body.more === true && r1.body.due.join() === 'b' && r1.body.disabled.join() === 'a' && r1.body.schedule_overrides.join() === 'a', r1.body);
   t('dispatcher: the schedule is remembered in Scheduler_State', JSON.stringify(stateOf(store).schedule) === '{"a":{"enabled":false}}', stateOf(store).schedule);
   c.v += 15 * 60000;
   const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
-  t('dispatcher: a later call WITHOUT a schedule (manual run) still honours the remembered one', r2.body.ran === 'b' && log.join() === 'b,b' && r2.body.disabled.join() === 'a', r2.body);
+  t('dispatcher: a later call WITHOUT a schedule (manual run) still honours the remembered one', r2.body.ran === 'b' && log.join() === 'd,b' && r2.body.disabled.join() === 'a', r2.body);
   c.v += 15 * 60000;
   const r3 = await L.schedRunNext({}, null, fast(c, { jobs, schedule: {} }));
   t('dispatcher: sending {} re-enables everything and clears the remembered schedule', r3.body.disabled.length === 0 && r3.body.ran === 'a' && JSON.stringify(stateOf(store).schedule) === '{}', r3.body);
