@@ -23230,9 +23230,14 @@ async function qbPayables(env, url) {
       }
     } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
+    if (paymentDateMissing.length) {
+      await logAndCollectError(env, warnings, 'qb_payables_payment_date_missing', '/qb/payables', paymentDateMissing.slice(0, 20).join(', '),
+        new Error(paymentDateMissing.length + ' paid/part-paid invoice(s) have no QuickBooks Payment with a usable date (credit memo, journal entry or lookup problem) -- shown as "payment date unavailable": ' + paymentDateMissing.slice(0, 20).join(', ')));
+    }
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
     return json({
       ok: true, count: rows.length,
+      as_of: today, clear_days: clearCfg.map,
       owed_now: owed.length,
       owed_total: +owed.reduce((n, r) => n + (r.vendor_balance != null ? r.vendor_balance : r.vendor_cost), 0).toFixed(2),
       warnings,
