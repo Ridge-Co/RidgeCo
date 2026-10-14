@@ -9229,6 +9229,12 @@ function invBuildApprovalPayload(k, opts) {
 
   var known = _invIRRow[k];
   if (bill && (bill.Status || '').toLowerCase() === 'reviewed' && known && known.id) {
+    // Already approved. The preview shows the APPROVED figure, so if the price box has moved
+    // since, say so instead of previewing a number that is not the one in the box (queue #100:
+    // "sends a different number than you typed"). Nothing is repriced automatically.
+    if (invPriceMismatch(charge, known.customer_total)) {
+      return { priceMismatch: true, approved: parseFloat(known.customer_total), typed: charge, id: known.id, woId: woId };
+    }
     return { alreadyKnownId: known.id, woId: woId };
   }
 
