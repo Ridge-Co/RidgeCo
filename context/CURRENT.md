@@ -13,6 +13,13 @@
 
 ---
 
+# /ATTACHMENTS PER-RECORD ACCESS CHECK — Oct 14, 2026 — Ridge-Co/RidgeCo PR #251, base `main`, head `feat/attachments-scope-oct14` (cut from main tip 22f91ee), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.1-attachments-scope`.
+
+## 🟡 Built and unit-tested (38 new assertions); staging verification in progress: closes Ops_Build_Queue #150
+`GET /attachments` used to return any job's attachments to any signed-in tenant/owner/vendor token. It now takes the verified role + session id: vendor = assigned jobs only (their additional-work drafts included), tenant = jobs they can see in their own portal (shared `tenantCanSeeWO`, never receipt/bill/invoice rows), owner = their properties' jobs (receipts kept for `/owner-file/view`); admin secret unchanged. Wrong account and missing job give the same 404 plus an `attachments_scope_denied` Ops_Telemetry failure row. Details + regression rules: FEATURE_LOG `FL-20261014-0640-ats`. **Open follow-ups (not built):** `/tenant-workorders?tenant_id=` and `/owner-workorders?owner_id=` trust a query-string id instead of the session; `/vendor-file/view` has no per-record check. **Baseline note:** 9 tests fail on untouched main (bill-to-note, config-redaction, invoice-no-bill, receipt-attach-only, receipt-recon-reassign-refund-search, receipt-recon-scan-cap, sheets-quota-stale-serve, wo-combine, wo-split) — the old "78/78 clean" baseline is stale.
+
+---
+
 # SCOPE ADD-ONS + MILESTONE REBALANCE + MESSAGE QUEUE ENGLISH — Oct 13, 2026 — Ridge-Co/RidgeCo PR #241, base `main`, head `feat/scope-addons-milestone-rebalance-queue-english` (cut from main tip e13be066), NOT merged (Brett merges)
 
 ## 🟡 Tested on staging, Brett approved merge (Oct 13 1:26pm ET: "merge 241 or change it as needed"): Scope add-ons vs. alternatives — BUILD_VERSION `2026-10-13.5-scope-addons-flat` (flat-$ milestones: flat rows fixed, last % row absorbs; impossible schedules refused at generate/sign; customer page now honors flat rows — see FEATURE_LOG `[FL-20261013-1500-ao]`; staging-only PRs #242, #243, #244, #245)
