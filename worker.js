@@ -6837,7 +6837,7 @@ async function ownerRosterApply(env, callerRole, callerSessionId, body) {
   } catch (e) { warnings.push('The audit log row could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
   try {
     await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_apply', Skill_Or_Endpoint: '/owner/tenant-roster/apply', Success: ok ? 'TRUE' : 'FALSE',
-      Notes: ('batch=' + batch + ' owner=' + ownerId + ' actor=' + actor + ' in=' + counts.move_in + ' out=' + counts.move_out + ' future=' + counts.future_move_out + ' fixes=' + counts.name_fix + ' failed=' + counts.failed + (bad.length ? ' ' + bad.map(b => 'row' + b.n + ':' + b.error).join('; ') : '')).slice(0, 480) });
+      Notes: ('batch=' + batch + ' owner=' + ownerId + ' actor=' + actor + ' in=' + counts.move_in + ' out=' + counts.move_out + ' future=' + counts.future_move_out + ' fixes=' + counts.name_fix + ' failed=' + counts.failed + ' deferred=' + deferred.length + ' calls=' + used() + (bad.length ? ' ' + bad.map(b => 'row' + b.n + ':' + b.error).join('; ') : '')).slice(0, 480) });
   } catch (e) { warnings.push('Telemetry could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
 
   // ONE heads-up to Brett (admin phone) - never to the owner or any tenant. A failure to alert is reported, not hidden.
