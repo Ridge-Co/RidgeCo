@@ -362,7 +362,8 @@ function runImport(){
       btn.disabled = false;
       var card = document.getElementById('result-card'), body = document.getElementById('result-body');
       card.classList.remove('hide'); card.scrollIntoView({ behavior:'smooth' });
-      var html = '<div class="banner ok">✓ Import complete.</div>';
+      var html = (TARGET==='hub' && totals.tenants_refused_no_move_in_date.length) ? '<div class="banner err">✖ Import finished, but '+totals.tenants_refused_no_move_in_date.length+' tenant(s) were REFUSED because they had no move-in date (listed below). Properties and units were still imported.</div>' : '<div class="banner ok">✓ Import complete.</div>';
+      if (TARGET==='hub' && totals.tenants_refused_no_move_in_date.length) { html += '<table><thead><tr><th>Name</th><th>Address / unit</th></tr></thead><tbody>' + totals.tenants_refused_no_move_in_date.map(function(f){ return '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.address)+' / '+esc(f.unit_label)+'</td></tr>'; }).join('') + '</tbody></table>'; }
       if (TARGET==='hub') {
         html += '<div class="stats-row">'+statBox(totals.properties_created,'New properties')+statBox(totals.properties_matched,'Matched')+statBox(totals.units_created,'New units')+statBox(totals.tenants_created,'New tenants')+'</div>';
         if (totals.tenants_flagged_elsewhere.length) html += '<div class="banner">⚠ '+totals.tenants_flagged_elsewhere.length+' tenant(s) need manual review — matched an existing phone on a different unit.</div>';
