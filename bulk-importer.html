@@ -322,6 +322,14 @@ function renderPreview(r){
     });
     flags += '</tbody></table>';
   }
+  if (r.tenants_refused_no_move_in_date && r.tenants_refused_no_move_in_date.length) {
+    flags += '<div class="banner err">✖ '+r.tenants_refused_no_move_in_date.length+' tenant(s) will be REFUSED — no usable move-in date. Add a Move In Date column (YYYY-MM-DD or M/D/YYYY) and paste again:</div>';
+    flags += '<table><thead><tr><th>Name</th><th>Address / unit</th><th>Why</th></tr></thead><tbody>';
+    r.tenants_refused_no_move_in_date.forEach(function(f){
+      flags += '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.address)+' / '+esc(f.unit_label)+'</td><td>'+esc(f.reason)+'</td></tr>';
+    });
+    flags += '</tbody></table>';
+  }
   if (r.owners_flagged_no_match && r.owners_flagged_no_match.length) {
     flags += '<div class="banner">⚠ '+r.owners_flagged_no_match.length+' propert(y/ies) named an owner with no confident match in Owners — not attached. Add the owner in the Hub and attach manually:</div>';
     flags += '<table><thead><tr><th>Address</th><th>Owner name given</th><th>Email / phone given</th></tr></thead><tbody>';
