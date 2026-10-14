@@ -77,6 +77,9 @@ var JOBS = [
   { name: 'review_mon',          run: 'hub', day: 'Mon', at: '08:30',         enabled: true, what: 'Runs the Monday weekly review and delivers it.' },
   { name: 'review_wed',          run: 'hub', day: 'Wed', at: '08:00',         enabled: true, what: 'Runs the Wednesday weekly review (logged only).' },
   { name: 'ar_report_mon',       run: 'hub', day: 'Mon', at: '09:00',         enabled: true, what: 'Builds and delivers the Monday AR aging report.' },
+  { name: 'hub_impr_mon',        run: 'hub', day: 'Mon', at: '07:15',         enabled: true, what: 'Pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue (as proposed).' },
+  { name: 'hub_impr_thu',        run: 'hub', day: 'Thu', at: '07:15',         enabled: true, what: 'Same sweep, Thursday.' },
+  { name: 'hub_impr_daily',      run: 'hub', at: '07:30',                      enabled: true, what: 'Marks Hub Improvements items done once built (queue item done / PR merged) and reports any that are stuck.' },
 
   // ── Other Workers (this script calls them; secrets live in Script properties, never in this file) ──
   { name: 'pinterest_sync',      run: 'pinterest',      day: 'Sun', at: '09:00', enabled: true,  what: 'BarrelCo: copies new Pinterest pins into the Google Drive folders (was a weekly GitHub Action).' },
@@ -105,7 +108,7 @@ var TOKEN_KEY     = 'Scheduler_Token';
 var ENTRY_TOKEN_KEY = 'Entry_Run_Token';   // the key in the BarrelCo sheet's Config tab
 var HANDLER       = 'runScheduler';
 var TICK_MINUTES  = 15;                    // how often the timer fires (Apps Script allows 1, 5, 10, 15 or 30)
-var MAX_CALLS     = 15;                    // one Hub job per call; the Hub has 13 jobs, so a tick can finish a full catch-up
+var MAX_CALLS     = 20;                    // one Hub job per call; the Hub has 16 jobs, so a tick can finish a full catch-up
 var MAX_RUN_MS    = 4.5 * 60 * 1000;       // stay under Apps Script's 6-minute limit; anything left waits for the next tick
 var HUB_SHARE     = 0.6;                   // the Hub loop may use at most this share of the run; the rest is for the other rows
 var FAIL_REMIND_MS    = 60 * 60 * 1000;    // Hub unreachable: reminder at most hourly

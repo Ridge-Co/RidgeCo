@@ -321,6 +321,7 @@
         <button class="btn" onclick="sendEstimateEmail()">📧 Send estimate to owner</button>
         <button class="btn secondary hide" id="gmail-reconnect-btn" onclick="reconnectGmail()">🔑 Reconnect Gmail</button>
       </div>
+      <label class="sub" style="display:block;margin-top:6px;"><input type="checkbox" id="send-override-quiet"> Also text the owner right now even if it's after 8pm (overrides quiet hours). The email always goes either way; the text is held until 8am if this is unchecked and it's late.</label>
       <div id="send-status" class="status"></div>
       <div id="gmail-reconnect-note" class="sub hide" style="margin-top:4px;">Opens Google in a new tab — sign in as the Ridge Co sender, allow sending, then come back and tap Send again.</div>
       <div id="send-sent-note"></div>
@@ -1300,25 +1301,50 @@ async function sendEstimateEmail(){
   var already=(s.Sent_Date||'').trim();
   var confirmMsg = already
     ? 'This was already sent to '+email+' on '+new Date(already).toLocaleDateString()+'. Send it again?'
-    : 'Send this estimate to '+email+'?';
+    : 'Send this estimate to '+email+'? (The owner also gets a short text saying it was emailed.)';
   if(!confirm(confirmMsg)) return;
+  if(window._proposalSending) return;   // double-tap guard; the server also refuses a re-send within a minute
+  window._proposalSending=true;
+  var _sb=document.querySelector('[onclick*="sendEstimateEmail"]'); if(_sb) _sb.disabled=true;
   setStatus('send-status','Sending…');
   try{
-    var r=await post('/scope/proposal/send',{ scope_id:s.ID });
+    var ov=document.getElementById('send-override-quiet');
+    var r=await post('/scope/proposal/send',{ scope_id:s.ID, override_quiet_hours: !!(ov&&ov.checked) });
     s.Sent_Date=r.sent_at; s.Sent_To=r.sent_to; s.Send_Count=String((parseInt(s.Send_Count||'0',10)||0)+1);
+    if(r.sms&&r.sms.status&&r.sms.status!=='not_attempted'){ s.Owner_SMS_Status=r.sms.status; s.Owner_SMS_Time=new Date().toISOString(); s._smsNote=r.sms.note||''; }
     document.getElementById('link-out').classList.remove('hide');
     document.getElementById('link-text').value=r.url;
-    setStatus('send-status','✅ sent to '+r.sent_to,'ok');
+    var smsBad=r.sms&&['blocked','failed','no_phone'].indexOf(r.sms.status)>=0;
+    setStatus('send-status','✅ emailed '+r.sent_to+(r.sms&&r.sms.note?' · '+(smsBad?'⚠ ':'')+r.sms.note:''),smsBad?'err':'ok');
     showGmailReconnect(false);
     renderSendStatus();
   }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
+  finally{ window._proposalSending=false; if(_sb) _sb.disabled=false; }
+}
+function smsStatusLine(s){
+  var st=(s.Owner_SMS_Status||'').trim(); if(!st) return '';
+  var m={sent:'✅ Owner texted',held:'⏳ Text held — goes out at 8:00am unless they open the estimate first',skipped_seen:'⏭ Text skipped — they had already opened the estimate',blocked:'⚠ Text blocked by SMS settings (see Messaging)',failed:'⚠ Text failed',no_phone:'⚠ No owner phone on file, no text'};
+  return '<div style="margin-top:4px;">'+esc(m[st]||('Text: '+st))+(s.Owner_SMS_Time?' · '+esc(new Date(s.Owner_SMS_Time).toLocaleString()):'')+'</div>';
+}
+function readStatusLines(s){
+  var pv=parseInt(s.Page_View_Count||'0',10)||0, eo=parseInt(s.Email_Open_Count||'0',10)||0, h='';
+  if(pv) h+='<div style="margin-top:4px;">👀 Opened the estimate page <b>'+esc(new Date(s.Page_First_Viewed).toLocaleString())+'</b> · viewed '+pv+'x (last '+esc(new Date(s.Page_Last_Viewed).toLocaleString())+')</div>';
+  if(eo) h+='<div style="margin-top:4px;">✉️ Email opened <b>'+esc(new Date(s.Email_First_Opened).toLocaleString())+'</b>'+(eo>1?' · '+eo+'x':'')+' <span class="sub">(from the image in the email; some mail apps load it automatically)</span></div>';
+  if(!pv&&!eo) h+='<div style="margin-top:4px;" class="sub">Not opened yet.</div>';
+  return h;
+}
+async function refreshReadStatus(){
+  var s=state.current; if(!s) return;
+  try{ var f=await get('/scope?id='+encodeURIComponent(s.ID));
+    ['Email_First_Opened','Email_Last_Opened','Email_Open_Count','Page_First_Viewed','Page_Last_Viewed','Page_View_Count','Owner_SMS_Status','Owner_SMS_Time'].forEach(function(k){ s[k]=f[k]; });
+    renderSendStatus(); }catch(e){ setStatus('send-status','⚠ Could not refresh read status: '+e.message,'err'); }
 }
 function renderSendStatus(){
   var el=document.getElementById('send-sent-note'); if(!el) return;
   var s=state.current;
   if(!s || !(s.Sent_Date||'').trim()){ el.innerHTML=''; return; }
   var n=parseInt(s.Send_Count||'1',10)||1;
-  el.innerHTML='<div class="owner-note ok" style="margin-top:8px;">✅ Sent to <b>'+esc(s.Sent_To||'')+'</b> on '+esc(new Date(s.Sent_Date).toLocaleString())+(n>1?(' · sent '+n+'x total'):'')+'.</div>';
+  el.innerHTML='<div class="owner-note ok" style="margin-top:8px;">✅ Sent to <b>'+esc(s.Sent_To||'')+'</b> on '+esc(new Date(s.Sent_Date).toLocaleString())+(n>1?(' · sent '+n+'x total'):'')+'.'+smsStatusLine(s)+readStatusLines(s)+'<div style="margin-top:6px;"><button class="btn small secondary" onclick="refreshReadStatus()">🔄 Refresh read status</button></div></div>';
 }
 
 boot();

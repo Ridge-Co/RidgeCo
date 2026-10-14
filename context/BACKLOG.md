@@ -27,6 +27,25 @@ findable by grep even though they never share a number. Example:
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
 
+**Oct 14, 2026 update (queue #100)**
+- ✅ B-20261014-0900-inv · 🔴 **[invoices] [money]** Collapse 3 invoice/QB paths into one (Ops_Build_Queue #100) — built, PR #256 awaiting Brett's merge. Log Invoice retired, price-mismatch guard, cents compare. See FEATURE_LOG `[FL-20261014-0900-inv]`.
+- ▶ B-20261014-0910-inv2 · 🟡 **[invoices]** Remaining invoice creators with their own pricing, not a typed charge: `scopeProposalBook*`, `scopeProposalBillMilestones`, `trashInvoice`, legacy `proposalBook`. Candidates to fold into the Review Bills path later; needs Brett's call.
+
+**Oct 14, 2026 update (queue #140)**
+- ✅ B-20261014-1100-sts · 🟠 **[wo-status] [refactor]** WO status single source of truth (Ops_Build_Queue #140 + #87) — built, awaiting Brett's merge. See FEATURE_LOG `[FL-20261014-1100-sts]`.
+- ▶ B-20261014-1110-sts2 · 🟠 **[wo-status]** `Estimate Requested` WOs (set by /scope/to-wo; 3 live) appear in no open group, so they are missing from portal lists and open counts. Needs Brett's call: show them as open?
+- ▶ B-20261014-1115-sts3 · 🟡 **[wo-status]** Not done: per-status label / color / badge map, role-aware labels (owner mask Pending Invoice→Complete), `canTransition`, and the new `Pending Payment` / `Paid by Customer` statuses (Brett: existing statuses only for now).
+
+**Oct 14, 2026 update**
+- ✅ B-20261014-1300-sid · 🔴 **[security]** Session identity binding + file view + 500 handler (closes B-20261014-0700-ats2) — PR #268 (stacked on #251), staging-verified. FEATURE_LOG `[FL-20261014-1300-sid]`.
+- ✅ B-20261014-1210-tst · 🟡 **[tests]** The 9 failing tests on main fixed at the cause — PR #265, test-only. FEATURE_LOG `[FL-20261014-1210-tst]`. Includes a clock-dependency fix: tests that expect a text to actually send import `test/_midday-clock.mjs` first.
+- ▶ B-20261014-1305-wr · 🟠 **[security]** Per-record checks on role-session WRITES that take a record id: `/status`, `/receipt/add`, `/receipt/delete`, `/time-entry/add|delete`, `/vendor-bill/add*`, `/vendor-bill/extract|reconcile-receipts`, `/estimate`, `/schedule`, `/wo/add-note`, `/wo/append-description`, `/wo/owner-update`, `/wo/set-tenant-visibility`, `/upload-photo`, `/log-attachment`, `/create-upload-session`, `/wishlist/add`. Each trusts the wo_id/receipt id in the body. Reads are done (B-20261014-1300-sid); writes need one rule per endpoint (assigned vendor / owner of the property / tenant of the unit) using `attachmentScopeAllows`. Do the money-touching ones first (`/receipt/delete`, `/time-entry/delete`, `/vendor-bill/add`, `/status`).
+- ▶ B-20261014-1310-e500 · 🟡 **[security] [silent-failure]** ~7 handler-level `catch (e) { return json({ error: e.message }, 500) }` sites outside the router still return raw error text, and some swallow instead of logging. Route them through the shared pattern in `fileViewError` / the router's `unhandled_500` (log with a ref, generic text to role sessions).
+- ✅ B-20261014-0640-ats · 🔴 **[security] [attachments]** `/attachments` cross-account leak (Ops_Build_Queue #150) — built + staging-verified, PR #251 awaiting Brett's merge. See FEATURE_LOG `[FL-20261014-0640-ats]`.
+- ✅ B-20261014-0700-ats2 · 🟠 **[security]** Adjacent gaps found, NOT fixed: `/tenant-workorders?tenant_id=` and `/owner-workorders?owner_id=` trust query-string ids; `/vendor-file/view` has no per-record check; the outer 500 handler returns `err.message` + `err.stack` to the caller.
+- ✅ B-20261014-0705-tst · 🟡 **[tests]** 9 tests fail on untouched main (pre-existing); the "78/78 clean" note is stale.
+- ▶ Queue order Brett chose: #150 (done) → #100 collapse the 3 invoice/QB paths → #140 WO status single source of truth; each as its own PR.
+
 ---
 
 <!-- QUICK-INDEX:START — always-loadable map; full entries below; grep an ID to jump to detail -->

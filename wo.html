@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <script src="test-login.js"></script>
+<script src="wo-status.js"></script>
+<script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
@@ -527,7 +529,7 @@ function renderPhotos(){
 }
 
 // ── STATUS ────────────────────────────────────────────────────
-var STATUSES=['Accepted','In Progress','On Hold','Complete'];
+var STATUSES=WOStatus.sets.VENDOR_SETTABLE;
 var _stPick='';
 function openStatus(){
   _stPick=''; document.getElementById('st-note').value=''; document.getElementById('st-msg').textContent='';

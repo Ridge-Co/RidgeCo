@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <script src="test-login.js"></script>
+<script src="wo-status.js"></script>
+<script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -187,7 +189,9 @@ window.addEventListener('pageshow', function(e){
   .copy-hint{color:var(--muted);font-size:10px;}
 
   /* Native select dark theme — make selection visible */
-  select[size] option:checked, select[size] option:hover { background: var(--accent) !important; color: #1b1f24 !important; }
+  /* Hub Improvements (Oct 14 2026): selected row was black text on blue until the pick was accepted. White on --accent is readable; hover only on real hover devices so touch doesn't leave a stuck highlight. */
+  select[size] option:checked { background: var(--accent) !important; color: #fff !important; }
+  @media (hover: hover) { select[size] option:hover { background: var(--accent) !important; color: #fff !important; } }
   select[size] option { padding: 6px 10px; }
   @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } .stats-row { grid-template-columns: repeat(2, 1fr); } .wo-right { flex-direction: column; gap: 4px; } }
 </style>
@@ -930,19 +934,6 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
-<!-- INVOICE MODAL -->
-<div class="modal-overlay" id="modal-invoice">
-  <div class="modal">
-    <div class="modal-header"><div class="modal-title">LOG INVOICE</div><button class="modal-close" onclick="closeModal('modal-invoice')">✕</button></div>
-    <div class="form-grid">
-      <div class="form-group full"><label>Amount ($)</label><input type="number" id="inv-amount" placeholder="0.00" step="0.01"></div>
-      <div class="form-group full"><label>QB Reference # (optional)</label><input type="text" id="inv-qb" placeholder="QuickBooks ref"></div>
-      <div class="form-group full"><label>Notes</label><textarea id="inv-notes" placeholder="Invoice notes..."></textarea></div>
-    </div>
-    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-invoice')">Cancel</button><button class="btn" onclick="submitInvoice()">Log Invoice</button></div>
-  </div>
-</div>
-
 <!-- VOID / HIDE WORK ORDER MODAL -->
 <div class="modal-overlay" id="modal-void-wo">
   <div class="modal">
@@ -1623,7 +1614,6 @@ function ownerOptionsHtml(selectedId, firstOptionHtml) {
   }).join('');
 }
 var assignWOId = null;
-var invoiceWOId = null;
 
 // ── Numeric address sort ───────────────────────────────────────────
 function goToWorkOrder(woId) {
@@ -2073,7 +2063,7 @@ function renderDashboard() {
   // "Open" here means ACTIVE WORK only — once a job is done or in the billing/payment tail it
   // drops off the work view (it lives in the billing screens instead). This is a work indicator,
   // not an admin/billing one.
-  var closed = ['Complete','Paid','Pending Invoice','Invoiced','Pending Payment','Paid by Customer','Cancelled','Canceled','Closed','Void'];
+  var closed = WOStatus.sets.DASH_NOT_OPEN;
   document.getElementById('stat-open').textContent = wos.filter(function(w){return !closed.includes(w.Status);}).length;
   document.getElementById('stat-urgent').textContent = wos.filter(function(w){return w.Priority==='urgent'&&!closed.includes(w.Status);}).length;
   document.getElementById('stat-invoiced').textContent = wos.filter(function(w){return w.Status==='Invoiced';}).length;
@@ -2092,7 +2082,7 @@ function woCard(w) {
   var addr = prop ? prop.Address : (w.Property_ID||'—');
   var sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s+/g,'');
   // Aging calculation
-  var OPEN_WO = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var OPEN_WO = WOStatus.sets.FIELD_OPEN;
   var daysOpen = w.Created_Date ? Math.floor((Date.now()-new Date(w.Created_Date))/(86400000)) : 0;
   var agingBadge = '';
   if (OPEN_WO.includes(w.Status)) {
@@ -2229,7 +2219,7 @@ function renderWOPage() {
   var priority = (document.getElementById('f-priority')||{}).value||'';
   var stage    = (document.getElementById('f-stage')||{}).value||'';
   var sort     = (document.getElementById('wo-sort')||{}).value||'date-desc';
-  var OPEN     = ['New','Assigned','Accepted','Scheduled','In Progress','On Hold'];
+  var OPEN     = WOStatus.sets.DASH_OPEN_LEGACY;
 
   var wos = safeArray(state.workorders).slice();
 
@@ -2279,8 +2269,26 @@ function renderWOPage() {
 
   updateFilterBadge();
   var el = document.getElementById('wo-list-full');
+  // Hub Improvements (Oct 14 2026): under the "Not Assigned" vendor filter, Cancelled / Paid / Invoiced
+  // orders are finished business — fold them into a collapsed group at the bottom so live items lead.
+  var woCardsHtml;
+  if (vendId === '__unassigned__') {
+    var CLOSED_OUT = WOStatus.sets.CLOSED_OUT_FOLD;
+    var liveWOs = wos.filter(function(w){ return CLOSED_OUT.indexOf(w.Status) === -1; });
+    var closedWOs = wos.filter(function(w){ return CLOSED_OUT.indexOf(w.Status) !== -1; });
+    woCardsHtml = liveWOs.map(woCard).join('');
+    if (closedWOs.length) {
+      var _cnt = {}; closedWOs.forEach(function(w){ _cnt[w.Status] = (_cnt[w.Status]||0)+1; });
+      var _brk = CLOSED_OUT.filter(function(s){return _cnt[s];}).map(function(s){return _cnt[s]+' '+s.toLowerCase();}).join(' · ');
+      woCardsHtml += '<details id="wo-closed-out-group" style="margin-top:12px"'+(window._woClosedOutOpen?' open':'')+' ontoggle="window._woClosedOutOpen=this.open">' +
+        '<summary style="cursor:pointer;color:var(--muted);font-size:12px;padding:8px 0">Closed out ('+closedWOs.length+') — '+_brk+'</summary>' +
+        closedWOs.map(woCard).join('') + '</details>';
+    }
+  } else {
+    woCardsHtml = wos.map(woCard).join('');
+  }
   el.innerHTML = wos.length
-    ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+wos.length+' work order'+(wos.length!==1?'s':'')+' — <span style="cursor:pointer;color:var(--info)" onclick="toggleFilterPanel()">adjust filters</span></div>'+wos.map(woCard).join('')
+    ? '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+wos.length+' work order'+(wos.length!==1?'s':'')+' — <span style="cursor:pointer;color:var(--info)" onclick="toggleFilterPanel()">adjust filters</span></div>'+woCardsHtml
     : '<div class="loading">No work orders match your filters. <span style="cursor:pointer;color:var(--info)" onclick="clearWOFilters()">Clear filters</span></div>';
   renderBundlingOpportunities();
 }
@@ -2343,7 +2351,7 @@ function openWODetail(woId) {
   '</div>';
   // Sticky action bar — Edit + quick status stay reachable at the top of the WO while you scroll,
   // so you never have to scroll to the bottom to edit or change status (6A).
-  var _stStatuses = ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'];
+  var _stStatuses = WOStatus.sets.ADMIN_PICKER;
   var stickyBar = '<div id="wo-sticky-bar" style="position:sticky;top:0;z-index:20;background:var(--surface);margin:calc(-1 * var(--wo-modal-pad, 24px)) calc(-1 * var(--wo-modal-pad, 24px)) 14px;padding:12px var(--wo-modal-pad, 24px);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<button class="btn small" onclick="openEditWOModal(\''+woId+'\')">✏️ Edit</button>' +
     '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
@@ -2702,7 +2710,7 @@ function openWODetail(woId) {
   qsDiv.innerHTML = '<span style="color:var(--muted);font-size:11px">Quick status:</span>' +
     '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:5px 8px;border-radius:var(--radius)">' +
     '<option value="">' + (wo.Status||'Current') + ' ▾</option>' +
-    ['Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice','Invoiced','Paid','Cancelled'].map(function(s){
+    WOStatus.sets.ADMIN_PICKER.map(function(s){
       return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>';
     }).join('') +
     '</select>';
@@ -2713,12 +2721,11 @@ function openWODetail(woId) {
     addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
     addBtn('🧾 Request Invoice','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'invoice');});
   }
-  if (['Assigned','Accepted'].includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
-  if (['In Progress','Accepted','On Hold'].includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
+  if (WOStatus.sets.PRE_START.includes(wo.Status)) addBtn('Mark In Progress','secondary',function(){updateWOStatus(woId,'In Progress');});
+  if (WOStatus.sets.VENDOR_STARTED.includes(wo.Status)) addBtn('Mark Complete','success',function(){updateWOStatus(woId,'Complete');});
   if (wo.Status==='Complete') addBtn('Mark Pending Invoice','secondary',function(){updateWOStatus(woId,'Pending Invoice');});
-  if (['Complete','Pending Invoice'].includes(wo.Status)) addBtn('Log Invoice','',function(){openInvoiceModal(woId);});
   if (wo.Status==='Invoiced') addBtn('Mark Paid','success',function(){updateWOStatus(woId,'Paid');});
-  if (!['Paid','Cancelled'].includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
+  if (!WOStatus.sets.CLOSED_TERMINAL.includes(wo.Status)) addBtn('Cancel WO','danger',function(){cancelWO(woId);});
   if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
   else { if (bgIsOpenForDup(wo)) addBtn('⧉ Duplicate','secondary',function(){openDupModal(woId);}); addBtn('✂ Split','secondary',function(){openSplitModal(woId);}); addBtn('🗑 Void / Hide','danger',function(){openVoidModal(woId);}); }
   openModal('modal-wo-detail');
@@ -2759,7 +2766,7 @@ function openWODetail(woId) {
 // the WO lists the bid group and offers Unlink and the cancel actions (preview first, then an explicit confirm).
 var _dupWOId = null, _dupBusy = false, _dupNoVendor = false, _dupVendorList = [], _bidCancelBusy = false, _bidUnlinkBusy = false;
 function bgIsOpenForDup(wo) {
-  return !!wo && wo.Voided !== 'TRUE' && String(wo.Type||'').toLowerCase() !== 'addon' && ['New','Assigned','Accepted','In Progress','On Hold'].indexOf(wo.Status||'New') >= 0;
+  return !!wo && wo.Voided !== 'TRUE' && String(wo.Type||'').toLowerCase() !== 'addon' && WOStatus.sets.FIELD_OPEN.indexOf(wo.Status||'New') >= 0;
 }
 function openDupModal(woId) {
   _dupWOId = woId; _dupBusy = false; _dupNoVendor = false;
@@ -3453,7 +3460,6 @@ function submitSplitWO() {
   }).catch(function(e){ btn.disabled = false; btn.textContent = 'Confirm Split'; logError('Split WO', e.message); toast('Error: ' + e.message, 'error'); });
 }
 
-function openInvoiceModal(woId){invoiceWOId=woId;closeModal('modal-wo-detail');openModal('modal-invoice');}
 
 // ── Send Work Order to Vendor (B-117 shareable WO) ────────────
 var _shareData = null, _shareWOId = null;
@@ -3540,15 +3546,6 @@ function revokeShare(){
     else toast('Could not revoke','error');
   }).catch(function(){ toast('Could not revoke','error'); });
 }
-function submitInvoice(){
-  var amount=document.getElementById('inv-amount').value;
-  if(!amount){toast('Enter amount','error');return;}
-  var wo=state.workorders.find(function(w){return w.ID===invoiceWOId;});
-  api('POST','/invoice',{wo_id:invoiceWOId,vendor_id:wo?wo.Vendor_ID||'':'',amount:amount,qb_ref:document.getElementById('inv-qb').value,notes:document.getElementById('inv-notes').value})
-    .then(function(){toast('Invoice logged','success');closeModal('modal-invoice');loadAll();})
-    .catch(function(e){logError('Log invoice',e.message);toast('Error: '+e.message,'error');});
-}
-
 // ── New WO ───────────────────────────────────────────────────
 function openNewWOModal() {
   // Clear EVERY field so nothing persists from previous WO creation
@@ -3804,7 +3801,7 @@ function renderPropertiesPage() {
     return;
   }
 
-  var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var OPEN_STATUSES = WOStatus.sets.FIELD_OPEN;
 
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+props.length+' propert'+(props.length===1?'y':'ies')+'</div>' +
     props.map(function(p) {
@@ -3933,7 +3930,7 @@ function openUnitDetail(propId, unitId) {
     return t.Active !== 'FALSE' &&
       (unitId ? t.Unit_ID === unitId : (!t.Unit_ID && String(t.Property_ID)===String(propId)));
   });
-  var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var OPEN = WOStatus.sets.FIELD_OPEN;
   var wos = safeArray(state.workorders).filter(function(w){
     return OPEN.includes(w.Status) && w.Voided !== 'TRUE' && String(w.Property_ID)===String(propId) &&
       (unitId ? String(w.Unit_ID)===String(unitId) : !w.Unit_ID);
@@ -3962,7 +3959,7 @@ function openUnitDetail(propId, unitId) {
   // family records without a unit don't get the button.
   if (unitId) {
     var activeTurnoverWO = safeArray(state.workorders).find(function(w) {
-      var doneStatuses = ['Complete','Pending Invoice','Invoiced','Paid','Cancelled','Closed'];
+      var doneStatuses = WOStatus.sets.TURNOVER_DONE;
       return String(w.Unit_ID) === String(unitId) && w.Turnover_Group_ID && doneStatuses.indexOf(w.Status) === -1;
     });
     html += '<div style="margin-bottom:14px">' +
@@ -4152,7 +4149,7 @@ function renderVendorsPage() {
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
     '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
-      var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!['Complete','Paid','Invoiced'].includes(w.Status);}).length;
+      var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!WOStatus.sets.COMPLETE_INVOICED_PAID.includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
       var nm = v.Name || '';
       var isInactive = v.Active==='FALSE';
@@ -5092,7 +5089,7 @@ function renameEpUnit(unitId){
 // Hard block (Brett's call, 2026-09-14): a unit with an active tenant, an open work order, or
 // an active key still attached cannot be removed here — clear those first. Prevents silently
 // orphaning a tenant/WO/key off a unit that vanishes out from under them.
-var UNIT_REMOVE_BLOCK_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Complete','Pending Invoice'];
+var UNIT_REMOVE_BLOCK_STATUSES = WOStatus.sets.ACTIVE;
 function deactivateEpUnit(unitId){
   var u = safeArray(state.units).find(function(x){ return x.ID===unitId; }); if (!u) return;
   var tenant = safeArray(state.tenants).find(function(t){ return t.Unit_ID===unitId && t.Active!=='FALSE'; });
@@ -6438,7 +6435,7 @@ function loadMoveInWOPanel(propId, unitId) {
   var panel = document.getElementById('mi-wo-panel');
   var list  = document.getElementById('mi-wo-list');
   if (!panel || !list) return;
-  var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var OPEN = WOStatus.sets.FIELD_OPEN;
   var openWOs = safeArray(state.workorders).filter(function(w) {
     if (!OPEN.includes(w.Status)) return false;
     if (w.Voided === 'TRUE') return false;
@@ -7016,7 +7013,7 @@ function renderMaterials() {
     html += '<div style="color:var(--accent);font-size:12px;letter-spacing:.1em;text-transform:uppercase;font-weight:bold;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">' + esc(trade) + ' <span style="color:var(--muted);font-size:10px">('+tradeItems.length+' item'+(tradeItems.length!==1?'s':'')+')</span></div>';
     tradeItems.forEach(function(m) {
       var isOnHold = m.wo_status === 'On Hold';
-      var isCancelled = ['Cancelled','Declined'].includes(m.wo_status);
+      var isCancelled = WOStatus.sets.DEAD.includes(m.wo_status);
       var storeColor = STORES[m.Store] || '#66707c';
       var statusStyle = STATUS_STYLE[m.Status||'needed'] || STATUS_STYLE['needed'];
       html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;'+(isOnHold?'opacity:.5':'')+(isCancelled?'opacity:.3;text-decoration:line-through':'') + '">';
@@ -9244,6 +9241,26 @@ function invRenderStatus(k, s) {
 // with allowBelowCost:true; bulk mode just excludes it and says so), { alreadyKnownId, woId }
 // if this job is already approved and queued, or { payload, memo, charge, woId, bill } when
 // clear to send.
+// True when a price was typed (> 0) and it is not the same whole-cent amount as the approved one.
+// A blank or zero box is "nothing typed", not a mismatch. Unreadable approved figure counts as a
+// mismatch so it can never silently pass.
+function invPriceMismatch(typed, approvedRaw) {
+  var t = parseFloat(typed);
+  if (!(t > 0)) return false;
+  var a = parseFloat(approvedRaw);
+  if (!isFinite(a)) return true;
+  return Math.round(t * 100) !== Math.round(a * 100);
+}
+// The plain-language message + the two safe choices, shared by the Invoice Builder and the
+// bill-less fallback so they cannot word it differently.
+function invPriceMismatchHtml(approved, typed, id) {
+  return '<div style="color:var(--warn);font-size:12px;line-height:1.5">' +
+    '⚠ This job is already approved at <b>$' + approved.toFixed(2) + '</b>, but the price box says <b>$' + typed.toFixed(2) + '</b>. ' +
+    'QuickBooks would get $' + approved.toFixed(2) + ' — nothing has been changed.<br>' +
+    '<button onclick="previewQBSend(\'' + esc(String(id)) + '\')" style="margin-top:6px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;padding:8px 12px;cursor:pointer">Preview the approved $' + approved.toFixed(2) + '</button>' +
+    '<div style="color:var(--muted);margin-top:6px">To use $' + typed.toFixed(2) + ' instead, withdraw the approval on the Send to QB screen, then price it again.</div></div>';
+}
+
 function invBuildApprovalPayload(k, opts) {
   opts = opts || {};
   var woId = _invWO[k] || k;
@@ -9254,6 +9271,12 @@ function invBuildApprovalPayload(k, opts) {
 
   var known = _invIRRow[k];
   if (bill && (bill.Status || '').toLowerCase() === 'reviewed' && known && known.id) {
+    // Already approved. The preview shows the APPROVED figure, so if the price box has moved
+    // since, say so instead of previewing a number that is not the one in the box (queue #100:
+    // "sends a different number than you typed"). Nothing is repriced automatically.
+    if (invPriceMismatch(charge, known.customer_total)) {
+      return { priceMismatch: true, approved: parseFloat(known.customer_total), typed: charge, id: known.id, woId: woId };
+    }
     return { alreadyKnownId: known.id, woId: woId };
   }
 
@@ -9308,6 +9331,11 @@ function invBillThisJob(k) {
 
   var built = invBuildApprovalPayload(k);
   if (built.error) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">' + esc(built.error) + '</span>'; return; }
+
+  if (built.priceMismatch) {
+    if (msg) msg.innerHTML = invPriceMismatchHtml(built.approved, built.typed, built.id);
+    return;
+  }
 
   // Already approved AND queued — skip straight to the preview-first send modal.
   if (built.alreadyKnownId) {
@@ -9442,6 +9470,13 @@ function sendWOToQuickBooks(woId) {
     if (!row) {
       if (msgEl) msgEl.innerHTML = '<span style="color:var(--warn)">No approved bill for this WO yet — approve it in ' +
         '<a href="#" onclick="closeModal(\'modal-wo-detail\');showPage(\'invoice-review\',null);return false" style="color:var(--accent)">Review Bills</a> first.</span>';
+      return;
+    }
+    // Same guard as the Invoice Builder: never open a preview of a figure other than the one typed.
+    var typedEl = document.getElementById('inv-charge-' + woId);
+    var typed = typedEl ? parseFloat(typedEl.value) : NaN;
+    if (invPriceMismatch(typed, row.customer_total)) {
+      if (msgEl) msgEl.innerHTML = invPriceMismatchHtml(parseFloat(row.customer_total), typed, row.id);
       return;
     }
     if (msgEl) msgEl.innerHTML = '';
@@ -10425,7 +10460,7 @@ function renderBundlingOpportunities() {
   var tagged = props.filter(function(p) { return p.Location_Cluster; });
   if (!tagged.length) { section.style.display = 'none'; return; }
 
-  var OPEN = ['New','Assigned','Accepted','In Progress','On Hold'];
+  var OPEN = WOStatus.sets.FIELD_OPEN;
   var openWOs = safeArray(state.workorders).filter(function(w) { return OPEN.includes(w.Status) && w.Voided !== 'TRUE'; });
 
   // Map each WO to its property's primary cluster
@@ -10557,6 +10592,34 @@ function qbInvoiceLink(id){ return 'https://app.qbo.intuit.com/app/invoice?txnId
 // "Schedule payment"/"Make payment" action right on it — same as opening the bill by hand from
 // Expenses > Vendors, just one tap instead of a manual search.
 function qbBillLink(id){ return 'https://app.qbo.intuit.com/app/bill?txnId='+encodeURIComponent(id); }
+// Who To Pay (Oct 14 2026): "YYYY-MM-DD" -> "Thu Oct 16" without a timezone shift (never new Date('YYYY-MM-DD'), which is UTC).
+function payFmtDate(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return '';
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+// Customer-payment clearing chip for a Who To Pay row. INFORMATIONAL ONLY -- it never disables, hides or reorders anything
+// (Brett decides when to pay the vendor and sometimes pays early). Status comes from the Hub (/qb/payables) so the page and
+// the server can never disagree about today's date or the holiday list.
+function payClearChip(r) {
+  var st = r && r.customer_clear_status;
+  if (!st) return '';
+  var box = 'border-radius:5px;padding:5px 8px;margin-top:6px;font-size:11px;line-height:1.5;';
+  if (st === 'unknown') {
+    return '<div style="' + box + 'background:var(--surface2);border:1px solid var(--border);color:var(--muted)">Customer payment date unavailable — check QuickBooks before relying on whether it has cleared.</div>';
+  }
+  var n = parseInt(r.customer_payment_count, 10) || 0;
+  var lead = r.customer_partial === true ? 'Part-payment ' : 'Paid ';
+  var line = lead + esc(payFmtDate(r.customer_paid_date)) +
+    (r.customer_pay_method_name ? ' by ' + esc(r.customer_pay_method_name) : (r.customer_pay_method && r.customer_pay_method !== 'other' ? ' by ' + esc(r.customer_pay_method) : '')) +
+    (n > 1 ? ' (latest of ' + n + ' payments)' : '');
+  var d = parseInt(r.customer_clear_days, 10);
+  var dayTxt = isNaN(d) ? '' : ' (' + d + ' business day' + (d === 1 ? '' : 's') + ')';
+  if (st === 'clearing') {
+    return '<div style="' + box + 'background:#fff7e0;border:1px solid var(--warn);color:var(--warn)">⏳ ' + line + ' · funds expected to clear <b>' + esc(payFmtDate(r.customer_clears_on)) + '</b>' + dayTxt + '</div>';
+  }
+  return '<div style="' + box + 'background:#eaf6ee;border:1px solid var(--accent2);color:var(--accent2)">✓ ' + line + ' · cleared ' + esc(payFmtDate(r.customer_clears_on)) + '</div>';
+}
 
 // One-invoice version of the qb-invoice-email-backfill.html tool, called right from a "no
 // email" row: resolves the send-to address from the invoice's customer (or the owner above
@@ -11735,11 +11798,12 @@ function irBulkApprove() {
   var btn = document.getElementById('ir-bulk-approve-btn');
   var statusEl = document.getElementById('ir-bulk-status');
 
-  var ready = [], belowCost = [], errors = [], alreadyApproved = [];
+  var ready = [], belowCost = [], errors = [], alreadyApproved = [], mismatched = [];
   checks.forEach(function(cb) {
     var i = cb.getAttribute('data-i'), k = 'ir' + i;
     var built = invBuildApprovalPayload(k);
     if (built.error) { errors.push({ i: i, k: k, error: built.error }); return; }
+    if (built.priceMismatch) { mismatched.push({ i: i, k: k, approved: built.approved, typed: built.typed }); return; }   // already approved at another price: never re-approved in bulk
     if (built.alreadyKnownId) { alreadyApproved.push({ i: i, k: k }); irHideCard(k); return; }
     // A below-cost item needs its own explicit "you'd lose money" confirmation — firing N
     // browser confirm() dialogs back to back in a batch is a bad experience and easy to
@@ -11750,7 +11814,8 @@ function irBulkApprove() {
   });
 
   if (!ready.length) {
-    var why = belowCost.length ? (belowCost.length + ' selected bill(s) are priced BELOW cost — approve those individually, they need their own confirmation.')
+    var why = mismatched.length ? (mismatched.length + ' selected bill(s) were already approved at a different price than the price box now shows - open each one and use its own card to resolve it.')
+      : belowCost.length ? (belowCost.length + ' selected bill(s) are priced BELOW cost — approve those individually, they need their own confirmation.')
       : (errors.length ? 'None of the selected bills have a price set yet.' : 'Nothing left to approve — those were already approved.');
     if (statusEl) statusEl.innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:8px">' + esc(why) + '</div>';
     return;
@@ -11759,6 +11824,7 @@ function irBulkApprove() {
   var total = ready.reduce(function(s, r) { return s + (parseFloat(r.built.payload.customer_total) || 0); }, 0);
   var msg = 'Approve ' + ready.length + ' bill' + (ready.length === 1 ? '' : 's') + ' — $' + total.toFixed(2) + ' total?' +
     (belowCost.length ? '\n\n(' + belowCost.length + ' other selected bill(s) are below cost and will be SKIPPED — approve those one at a time.)' : '') +
+    (mismatched.length ? '\n\n(' + mismatched.length + ' other selected bill(s) were already approved at a different price and will be SKIPPED — open each one to resolve it.)' : '') +
     '\n\nThis moves them to "approved, awaiting QuickBooks." Nothing is sent to QuickBooks yet — you still send each one from Send & Track / Send to QB.';
   if (!confirm(msg)) return;
 
@@ -12111,6 +12177,7 @@ function payablesBuildFilters() {
       '<input id="pay-q" type="text" placeholder="Search WO#, vendor, address, owner, invoice #, trade…" oninput="payablesApplyFilters()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px;box-sizing:border-box">' +
       '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' +
         '<select id="pay-f-state" onchange="payablesApplyFilters()" style="' + ss + '">' + optsState(statesPresent) + '</select>' +
+        '<select id="pay-f-clear" onchange="payablesApplyFilters()" style="' + ss + '"><option value="">Any payment timing</option><option value="clearing">⏳ Still clearing</option><option value="cleared">✓ Cleared</option><option value="unknown">Payment date unknown</option></select>' +
         '<select id="pay-f-vendor" onchange="payablesApplyFilters()" style="' + ss + '">' + opts(vendors, 'All vendors') + '</select>' +
         '<select id="pay-f-prop" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(props, 'All properties') + '</select>' +
         '<select id="pay-f-owner" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(owners, 'All owners') + '</select>' +
@@ -12124,7 +12191,7 @@ function payablesBuildFilters() {
 function payablesApplyFilters() { renderPayablesList(); }
 
 function payablesClearFilters() {
-  ['pay-q', 'pay-f-state', 'pay-f-vendor', 'pay-f-prop', 'pay-f-owner', 'pay-f-trade'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
+  ['pay-q', 'pay-f-state', 'pay-f-clear', 'pay-f-vendor', 'pay-f-prop', 'pay-f-owner', 'pay-f-trade'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
   renderPayablesList();
 }
 
@@ -12140,11 +12207,13 @@ function renderPayablesList() {
   var fp = (document.getElementById('pay-f-prop') || {}).value || '';
   var fo = (document.getElementById('pay-f-owner') || {}).value || '';
   var ft = (document.getElementById('pay-f-trade') || {}).value || '';
-  var filterActive = !!(q || fs || fv || fp || fo || ft);
+  var fc = (document.getElementById('pay-f-clear') || {}).value || '';
+  var filterActive = !!(q || fs || fc || fv || fp || fo || ft);
 
   var filtered = rows.filter(function(r) {
     var c = payablesContext(r);
     if (fs && r.state !== fs) return false;
+    if (fc && r.customer_clear_status !== fc) return false;
     if (fv && c.vendor !== fv) return false;
     if (fp && c.propId !== fp) return false;
     if (fo && c.ownerId !== fo) return false;
@@ -12224,6 +12293,7 @@ function renderPayablesList() {
             ' · <a href="' + qbBillLink(r.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info)">open bill in QB</a>'
           : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
       '</div>' +
+      payClearChip(r) +
       dupWarning +
     '</div>';
   }
@@ -12238,6 +12308,9 @@ function renderPayablesList() {
       ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
       ' you have already collected</div>' +
       '<div style="color:var(--muted);font-size:11px;margin-top:3px">The owner has paid these. Pay these first.</div>' +
+      (toPay.filter(function(r) { return r.customer_clear_status === 'clearing'; }).length
+        ? '<div style="color:var(--warn);font-size:11px;margin-top:3px;font-weight:bold">⏳ ' + toPay.filter(function(r) { return r.customer_clear_status === 'clearing'; }).length + ' of these are still clearing — the money may not be in your bank yet. Your call.</div>'
+        : '') +
       '<div style="color:var(--danger);font-size:10.5px;margin-top:4px;font-weight:bold">⚠ The button below only marks a bill PAID IN QUICKBOOKS — it does not send money. Pay the vendor yourself (check/transfer/Zelle/QuickBooks Bill Pay) first, separately.</div>' +
       (toPay.some(function(r){return r.bill_id;})
         ? '<div id="pay-bar" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--accent2);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
