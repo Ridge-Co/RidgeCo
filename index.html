@@ -11798,11 +11798,12 @@ function irBulkApprove() {
   var btn = document.getElementById('ir-bulk-approve-btn');
   var statusEl = document.getElementById('ir-bulk-status');
 
-  var ready = [], belowCost = [], errors = [], alreadyApproved = [];
+  var ready = [], belowCost = [], errors = [], alreadyApproved = [], mismatched = [];
   checks.forEach(function(cb) {
     var i = cb.getAttribute('data-i'), k = 'ir' + i;
     var built = invBuildApprovalPayload(k);
     if (built.error) { errors.push({ i: i, k: k, error: built.error }); return; }
+    if (built.priceMismatch) { mismatched.push({ i: i, k: k, approved: built.approved, typed: built.typed }); return; }   // already approved at another price: never re-approved in bulk
     if (built.alreadyKnownId) { alreadyApproved.push({ i: i, k: k }); irHideCard(k); return; }
     // A below-cost item needs its own explicit "you'd lose money" confirmation — firing N
     // browser confirm() dialogs back to back in a batch is a bad experience and easy to
@@ -11813,7 +11814,8 @@ function irBulkApprove() {
   });
 
   if (!ready.length) {
-    var why = belowCost.length ? (belowCost.length + ' selected bill(s) are priced BELOW cost — approve those individually, they need their own confirmation.')
+    var why = mismatched.length ? (mismatched.length + ' selected bill(s) were already approved at a different price than the price box now shows - open each one and use its own card to resolve it.')
+      : belowCost.length ? (belowCost.length + ' selected bill(s) are priced BELOW cost — approve those individually, they need their own confirmation.')
       : (errors.length ? 'None of the selected bills have a price set yet.' : 'Nothing left to approve — those were already approved.');
     if (statusEl) statusEl.innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:8px">' + esc(why) + '</div>';
     return;
@@ -11822,6 +11824,7 @@ function irBulkApprove() {
   var total = ready.reduce(function(s, r) { return s + (parseFloat(r.built.payload.customer_total) || 0); }, 0);
   var msg = 'Approve ' + ready.length + ' bill' + (ready.length === 1 ? '' : 's') + ' — $' + total.toFixed(2) + ' total?' +
     (belowCost.length ? '\n\n(' + belowCost.length + ' other selected bill(s) are below cost and will be SKIPPED — approve those one at a time.)' : '') +
+    (mismatched.length ? '\n\n(' + mismatched.length + ' other selected bill(s) were already approved at a different price and will be SKIPPED — open each one to resolve it.)' : '') +
     '\n\nThis moves them to "approved, awaiting QuickBooks." Nothing is sent to QuickBooks yet — you still send each one from Send & Track / Send to QB.';
   if (!confirm(msg)) return;
 

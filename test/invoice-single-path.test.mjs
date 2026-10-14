@@ -79,4 +79,11 @@ const typed = v => { els['inv-charge-k1'] = { value: v }; };
   ok(!r.priceMismatch && !r.alreadyKnownId && r.payload && r.payload.customer_total === '150.00', 'a not-yet-approved bill still builds the approval with exactly the typed figure');
 }
 ok(/if \(built\.priceMismatch\)/.test(html) && /invPriceMismatch\(typed, row\.customer_total\)/.test(html), 'both callers (Invoice Builder and the bill-less fallback) use the guard');
+{
+  // third caller: bulk approve must skip a price-mismatched bill visibly, BEFORE it can reach ready.push / built.payload
+  const i = html.indexOf('function irBulkApprove'); const body = html.slice(i, i + 4500);
+  const mm = body.indexOf('built.priceMismatch'), push = body.indexOf('ready.push'), red = body.indexOf('built.payload.customer_total');
+  ok(i > 0 && mm > 0 && mm < push && push < red, 'irBulkApprove handles priceMismatch before ready.push and before reading built.payload');
+  ok(/mismatched\.push/.test(body) && /already approved at a different price/.test(body) && body.split('mismatched.length').length >= 4, 'the skip is reported to Brett in both the no-ready message and the confirm text');
+}
 console.log(`invoice-single-path: ${n}/${n} passing`);
