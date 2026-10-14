@@ -274,3 +274,6 @@ No pending build mid-flight. When Brett's back: confirm the 3 verify-items above
 "how'd it go" is enough — don't re-verify code that's already tested and pushed), then either pick up
 **B-127** (its own focused session) or take whatever new ask he brings, classified under the Session
 Efficiency Protocol as usual.
+
+## Checkpoint Oct 14 2026 — STR cleaning scheduler
+Branch `feat/str-cleaning-scheduler` (rebased on main twice; staging is reset to main on every main push, so a staging test can be wiped mid-run). Built and offline-tested. Live-tested on staging except the offer loop. Open decision for Brett: let the staging test token switch `TWILIO_ENABLED` on (an edit to the test guard; blocked in-session as a security widening) so the offer loop can be live-tested, or accept first live check on prod with Twilio test mode ON. Brett's setup list: enter the 3 cleaners (phones, emails) on the board, share the cleaning calendar with the service account (Make changes to events), re-paste the Apps Script JOBS table, then flip switches in brief order.

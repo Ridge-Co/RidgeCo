@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.12-str-cleaning-scheduler';
+const BUILD_VERSION = '2026-10-14.13-str-cleaning-scheduler';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -31114,10 +31114,12 @@ async function strHandleErr(env, e, where) {
   await strSystemAlert(env, 'handler_' + (where || 'error'), `${where || 'handler'} failed: ${strErrText(e)}`); // a real failure: Brett is told (the old "Brett has been notified" message was a lie)
   return json({ ok: false, error: (e && e.code) || 'internal', message: 'Something went wrong on our side and Brett has been told. Please try again in a few minutes.' }, 500);
 }
-async function strHandlerCtx(env) {
+// fresh=false (read-only public page views) reuses the ~6s tab cache so a burst of cleaners opening their links at once cannot burn the
+// shared Sheets read quota (it is per minute for the whole Hub). Every handler that WRITES keeps fresh=true.
+async function strHandlerCtx(env, fresh) {
   const cfg = await fetchConfig(env), S = strSettings(cfg);
   const ctx = { env, cfg, S, dry: false, now: Date.now(), errors: [], warnings: [], actions: [], detail: {} };
-  await strEnsureTabs(env); await strLoad(ctx, true);
+  await strEnsureTabs(env); await strLoad(ctx, fresh !== false);
   return ctx;
 }
 function strFindCleaner(ctx, k) {
@@ -31131,7 +31133,7 @@ const STR_COMING_SOON = ['Supplies requests', 'Cleaning checklists', 'Recurring 
 // GET /str/c/page?k=TOKEN[&offer=ID][&backup=YYYY-MM-DD]  (public, token-gated)
 async function strCleanerPage(env, url) {
   try {
-    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, url.searchParams.get('k')); if (!c) return STR_BAD_LINK();
+    const ctx = await strHandlerCtx(env, false), c = strFindCleaner(ctx, url.searchParams.get('k')); if (!c) return STR_BAD_LINK();
     const today = inspEtDate(ctx.now), views = strComputeViews(ctx, null).filter(v => strDaysBetween(today, v.date) <= ctx.S.lookahead);
     const tasks = views.map(v => {
       const mine = String(v.assigned) === c.ID && v.status === 'covered';

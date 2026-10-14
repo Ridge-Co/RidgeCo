@@ -89,6 +89,17 @@ Admin:
 - `POST /str/admin/offer-now {task_key, restart?}` → `{ok, result:{action,...}, errors, warnings}`.
 - `POST /str/admin/alert/ack {id}` · `POST /str/admin/run {dry}` → `{ok, dry, errors, warnings, detail}` · `GET /str/admin/preview-messages` → `{ok, previews:[{type,text,length}]}` · `POST /str/admin/digest-run {dry}`.
 
+Contract details the first draft left out (found by the page builders):
+- `offers[].deadline` is an ISO timestamp (UTC); the page shows it in ET and hides it when `late` is true. Offers carry no `kind`; the page looks the task up in `tasks` to say "pre-arrival clean".
+- `coming_soon` is an array of plain strings.
+- Tasks with `status:'new'` (admin state) have no stored row yet, so `/assign` and `/offer-now` would return `not_found`; the admin page hides those actions.
+- `/offer-now` supersedes any offer still pending (the cleaner currently asked loses it). `/run` and `/digest-run` return HTTP 200 with `ok:false` plus `errors[]` when something went wrong; the page shows those as results.
+
+## Live staging test (Oct 14 2026)
+Passed on `maintenance-hub-staging`: tab self-provisioning, TEST- cleaner create (3), cleaner page, marks (persisted, logged), admin assign (text blocked loudly when Twilio is globally OFF, email stub ok), cleaner cancel (urgent + not-covered alerts with backup picture, offer row marked cancelled), dry tick, twilio-off pause (loud, telemetry row), both pages at 412 and 1280 with no horizontal scroll.
+NOT live-tested: the round-robin offer loop itself (offer, decline, expire, accept, filled text), because staging has Twilio switched OFF globally and the test token is not allowed to switch it on. It is covered by 117 offline tests. First real check after merge: turn the switches on in the documented order with Twilio test mode ON (texts go to Brett's phone only).
+Known limit: Google Sheets read quota is per minute for the whole Hub. The public cleaner page now reuses the ~6s tab cache so a burst of link opens cannot burn it.
+
 ## Roadmap — logged, NOT built (room is reserved; the cleaner page already has a "coming soon" strip)
 
 Scheduling was by far the priority. From Brett's Oct 14 message, to build later on the same token page and the same `STR_*` sheet family:

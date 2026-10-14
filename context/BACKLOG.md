@@ -707,3 +707,4 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 - **New idea comes up** → Claude adds it to backlog immediately with a priority
 - **Something breaks** → Claude adds it to FEATURE_LOG regression rules after fixing
 - **Session ends** → Claude updates Completed section with what was done
+| B-200 | 🟢 | STR cleaning roadmap (logged, not built) | Supplies requests, cleaning checklists, recurring tasks, Seam battery-change triggers, deep-clean rotation, 5-point guest-condition report with photos. Room is reserved on the cleaner page ("coming soon"). From Brett Oct 14 2026; see the STR cleaning brief. |
