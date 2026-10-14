@@ -61,7 +61,9 @@ ok(!('foo' in c.map) && Object.keys(c.map).length === 5, 'unknown keys cannot po
 // Payment method classification
 const methods = new Map([['1', { Id: '1', Name: 'Cash', Type: 'NON_CREDIT_CARD' }], ['2', { Id: '2', Name: 'Check', Type: 'NON_CREDIT_CARD' }],
   ['3', { Id: '3', Name: 'Visa', Type: 'CREDIT_CARD' }], ['4', { Id: '4', Name: 'ACH', Type: 'NON_CREDIT_CARD' }], ['5', { Id: '5', Name: 'E-Check', Type: 'NON_CREDIT_CARD' }],
-  ['6', { Id: '6', Name: 'Zelle', Type: 'NON_CREDIT_CARD' }], ['7', { Id: '7', Name: 'Some Custom', Type: 'CREDIT_CARD' }]]);
+  ['6', { Id: '6', Name: 'Zelle', Type: 'NON_CREDIT_CARD' }], ['7', { Id: '7', Name: 'Some Custom', Type: 'CREDIT_CARD' }],
+  ['8', { Id: '8', Name: 'QuickBooks Payments-Bank', Type: 'CREDIT_CARD' }], ['9', { Id: '9', Name: 'QuickBooks Payments-Credit Card', Type: 'CREDIT_CARD' }],
+  ['10', { Id: '10', Name: 'QuickBooks Payments-PayPal', Type: 'CREDIT_CARD' }], ['11', { Id: '11', Name: 'Bank of America Visa', Type: 'CREDIT_CARD' }]]);
 const cls = (p) => H.classifyPaymentMethod(p, methods).cls;
 ok(cls({ PaymentMethodRef: { value: '1' } }) === 'cash', 'Cash -> cash');
 ok(cls({ PaymentMethodRef: { value: '2' } }) === 'check', 'Check -> check');
@@ -73,6 +75,13 @@ ok(cls({ PaymentMethodRef: { value: '7' } }) === 'card', 'a custom-named method 
 ok(cls({ PaymentMethodRef: { value: '99', name: 'Credit Card' } }) === 'card', 'ref carrying only a name still classifies');
 ok(cls({ CreditCardPayment: { CreditChargeResponse: {} } }) === 'card', 'a QuickBooks Payments card payment object -> card');
 ok(cls({}) === 'other' && cls(null) === 'other', 'no method at all -> other');
+// Oct 14 bank-label fix: QuickBooks files "QuickBooks Payments-Bank" under Type CREDIT_CARD, so it used to read as card.
+ok(cls({ PaymentMethodRef: { value: '8' } }) === 'ach', '"QuickBooks Payments-Bank" (Type CREDIT_CARD) -> ach, not card');
+ok(cls({ PaymentMethodRef: { value: '99', name: 'QuickBooks Payments-Bank' } }) === 'ach', 'bank name carried on the ref alone -> ach');
+ok(cls({ PaymentMethodRef: { value: '9' } }) === 'card', '"QuickBooks Payments-Credit Card" stays card');
+ok(cls({ PaymentMethodRef: { value: '10' } }) === 'card', '"QuickBooks Payments-PayPal" stays card (PayPal landed like a card in the statement study)');
+ok(cls({ PaymentMethodRef: { value: '11' } }) === 'card', 'a card whose name contains "Bank" (Bank of America Visa) stays card');
+ok(cls({ PaymentMethodRef: { value: '8' }, CreditCardPayment: { CreditChargeResponse: {} } }) === 'card', 'a real QuickBooks card-charge object still wins -> card');
 
 // summarizeInvoicePayments: clearing vs cleared, today boundary, multiple payments, unknown
 const ctx = (today) => ({ methodsById: methods, clearMap: H.paymentClearDaysMap('').map, holidayMap: hol, today });

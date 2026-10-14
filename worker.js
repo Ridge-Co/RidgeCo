@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.11-sms-delivery-check';
+const BUILD_VERSION = '2026-10-14.12-bank-label-fix';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -23499,6 +23499,9 @@ function classifyPaymentMethod(pay, methodsById) {
   const n = name.toLowerCase();
   let cls = 'other';
   if (pay && pay.CreditCardPayment) cls = 'card';
+  // "QuickBooks Payments-Bank" is a bank (ACH) payment but QuickBooks files its method under Type CREDIT_CARD, so a
+  // plain bank name must be tested BEFORE the Type check (Oct 14 bank-label fix). Names with a card word stay card.
+  else if (/\bbank\b/.test(n) && !/credit|debit|\bcard\b|visa|master ?card|amex|american express|discover|paypal/.test(n)) cls = 'ach';
   else if (pm && pm.Type === 'CREDIT_CARD') cls = 'card';
   else if (/e-?check|\bach\b|\beft\b|\bwire\b|bank transfer|direct (debit|deposit)|bank draft/.test(n)) cls = 'ach';
   else if (/cheque|\bcheck\b/.test(n)) cls = 'check';
