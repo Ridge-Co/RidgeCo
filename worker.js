@@ -22788,6 +22788,7 @@ async function qbPayables(env, url) {
       qbBatchById('Invoice', candidates.map(ir => (ir.QB_Invoice_ID || '').trim())),
       qbBatchById('Bill', candidates.map(ir => (ir.QB_Bill_ID || '').trim())),
     ]);
+    const invPayments = await qbLoadInvoicePayments(env, token, [...invById.values()], warnings, methodsCache);
 
     const rows = [];
     for (const ir of candidates) {
