@@ -173,7 +173,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
 // priority order with everything due
 {
   const names = P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
-  t('priority order when everything is due (Monday 10am ET)', names.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,review_mon,ar_report_mon', names.join());
+  t('priority order when everything is due (Monday 10am ET)', names.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily', names.join());
   const early = P.schedDueJobs(S0(), iso('2026-10-14T09:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 05:00 EDT: only the interval jobs
   t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard', early.join());
   t('only[] restricts', P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, { only: ['sweep'] }).map(d => d.name).join() === 'sweep');
