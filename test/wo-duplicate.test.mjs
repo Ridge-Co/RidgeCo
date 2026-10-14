@@ -999,7 +999,7 @@ function stampSilent(db) { const set = (id, k, v) => { db.Work_Orders.rows.find(
   t('bidCancelNotifyVendor: no quiet-hours bypass, no swallowing catch', !/bypassQuietHours/.test(notifySrc) && !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(notifySrc) && /catch \(e\) \{\s*out\.status = 'failed'/.test(notifySrc));
   t('the cancel path never calls the vendor text for a preview (it returns before the cancel loop)', grab(wsrc, 'async function woBidGroupCancel(').indexOf('return json(result, 200);') < grab(wsrc, 'async function woBidGroupCancel(').indexOf('bidCancelNotifyVendor('));
   t('only one new SMS message type is introduced: vendor_job_cancelled', /const BID_CANCEL_SMS_TYPE = 'vendor_job_cancelled'/.test(wsrc));
-  t('BUILD_VERSION is the .7 follow-up', /const BUILD_VERSION = '2026-10-13\.7-[a-z-]+'/.test(wsrc));
+  t('BUILD_VERSION is the .7 follow-up or later', /const BUILD_VERSION = '2026-10-(13\.([7-9]|\d{2,})|1[4-9]\.\d+)-[a-z-]+'/.test(wsrc));
 }
 
 console.log(`\nwo-duplicate: ${pass} passed, ${fail} failed`);
