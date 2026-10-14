@@ -6840,17 +6840,27 @@ async function ownerRosterApply(env, callerRole, callerSessionId, body) {
       Notes: ('batch=' + batch + ' owner=' + ownerId + ' actor=' + actor + ' in=' + counts.move_in + ' out=' + counts.move_out + ' future=' + counts.future_move_out + ' fixes=' + counts.name_fix + ' failed=' + counts.failed + ' deferred=' + deferred.length + ' calls=' + used() + (bad.length ? ' ' + bad.map(b => 'row' + b.n + ':' + b.error).join('; ') : '')).slice(0, 480) });
   } catch (e) { warnings.push('Telemetry could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
 
-  // ONE heads-up to Brett (admin phone) - never to the owner or any tenant. A failure to alert is reported, not hidden.
-  try {
-    const futureRows = results.filter(r => r.applied && r.future);
-    const txt = 'Roster import (' + ownerLabel + '): ' + counts.move_in + ' in, ' + counts.move_out + ' out' + (counts.future_move_out ? ' (' + counts.future_move_out + ' future)' : '') + ', ' + counts.name_fix + ' name fixes'
-      + (counts.failed ? ', ' + counts.failed + ' FAILED' : '') + '. ' + (counts.move_in ? counts.move_in + ' new tenants flagged for consent/welcome. ' : '')
-      + (futureRows.length ? 'Future move-out: ' + futureRows.map(r => r.label.split(' - ')[0] + ' ' + r.move_out_date).join('; ') + ' - no turnover WOs created; approve when ready. ' : '') + 'Batch ' + batch + '.';
-    const an = await adminNotify(env, { text: txt, source: 'tenant_roster' });
-    if (!an.ok) warnings.push('Heads-up text to Brett was not sent: ' + await respErrText(an));
-  } catch (e) { warnings.push('Heads-up text to Brett was not sent: ' + String((e && e.message) || e).slice(0, 160)); }
+  // ONE heads-up to Brett (admin phone) per batch, sent by the LAST slice only - never to the owner or any tenant. The totals add up the
+  // earlier slices from the Roster_Imports audit rows. A failure to alert (or to read them) is reported, not hidden.
+  if (!partial || bad.length) {
+    try {
+      const tot = { in: counts.move_in, out: counts.move_out, future: counts.future_move_out, fix: counts.name_fix };
+      if (body && body.batch === batch) {
+        try {
+          for (const x of (await fetchTab(env, ROSTER_LOG_TAB)).filter(x => x.Batch === batch && x.Timestamp !== auditTs)) {
+            tot.in += +x.Moved_In || 0; tot.out += +x.Moved_Out || 0; tot.future += +x.Future_Move_Outs || 0; tot.fix += +x.Name_Fixes || 0;
+          }
+        } catch (e) { warnings.push('Could not add up the earlier parts of this import for the heads-up text: ' + String((e && e.message) || e).slice(0, 120)); }
+      }
+      const txt = 'Roster import (' + ownerLabel + '): ' + tot.in + ' in, ' + tot.out + ' out' + (tot.future ? ' (' + tot.future + ' future)' : '') + ', ' + tot.fix + ' name fixes'
+        + (counts.failed ? ', ' + counts.failed + ' FAILED' : '') + '. ' + (tot.in ? tot.in + ' new tenants flagged for consent/welcome. ' : '')
+        + (tot.future ? tot.future + ' future move-out(s) booked - no turnover WOs created; approve when ready. ' : '') + 'Batch ' + batch + '.';
+      const an = await adminNotify(env, { text: txt, source: 'tenant_roster' });
+      if (!an.ok) warnings.push('Heads-up text to Brett was not sent: ' + await respErrText(an));
+    } catch (e) { warnings.push('Heads-up text to Brett was not sent: ' + String((e && e.message) || e).slice(0, 160)); }
+  }
 
-  return json({ ok, applied: true, batch, counts, results, warnings, plan: { counts: plan.counts, rows: plan.rows.map(r => ({ n: r.n, label: r.label, status: r.status, warnings: r.warnings })) } }, ok ? 200 : 207);
+  return json({ ok, applied: true, partial, remaining: deferred.length, subrequests_used: used(), batch, counts, results, warnings, plan: { counts: plan.counts, rows: plan.rows.map(r => ({ n: r.n, label: r.label, status: r.status, warnings: r.warnings })) } }, ok ? 200 : 207);
 }
 
 // Daily scheduler step (rides the existing daily_turnover job - NO new cron, NO new Apps Script row): flips the tenants the
