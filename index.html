@@ -10557,6 +10557,34 @@ function qbInvoiceLink(id){ return 'https://app.qbo.intuit.com/app/invoice?txnId
 // "Schedule payment"/"Make payment" action right on it — same as opening the bill by hand from
 // Expenses > Vendors, just one tap instead of a manual search.
 function qbBillLink(id){ return 'https://app.qbo.intuit.com/app/bill?txnId='+encodeURIComponent(id); }
+// Who To Pay (Oct 14 2026): "YYYY-MM-DD" -> "Thu Oct 16" without a timezone shift (never new Date('YYYY-MM-DD'), which is UTC).
+function payFmtDate(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return '';
+  return new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+// Customer-payment clearing chip for a Who To Pay row. INFORMATIONAL ONLY -- it never disables, hides or reorders anything
+// (Brett decides when to pay the vendor and sometimes pays early). Status comes from the Hub (/qb/payables) so the page and
+// the server can never disagree about today's date or the holiday list.
+function payClearChip(r) {
+  var st = r && r.customer_clear_status;
+  if (!st) return '';
+  var box = 'border-radius:5px;padding:5px 8px;margin-top:6px;font-size:11px;line-height:1.5;';
+  if (st === 'unknown') {
+    return '<div style="' + box + 'background:var(--surface2);border:1px solid var(--border);color:var(--muted)">Customer payment date unavailable — check QuickBooks before relying on whether it has cleared.</div>';
+  }
+  var n = parseInt(r.customer_payment_count, 10) || 0;
+  var lead = r.customer_partial === true ? 'Part-payment ' : 'Paid ';
+  var line = lead + esc(payFmtDate(r.customer_paid_date)) +
+    (r.customer_pay_method_name ? ' by ' + esc(r.customer_pay_method_name) : (r.customer_pay_method && r.customer_pay_method !== 'other' ? ' by ' + esc(r.customer_pay_method) : '')) +
+    (n > 1 ? ' (latest of ' + n + ' payments)' : '');
+  var d = parseInt(r.customer_clear_days, 10);
+  var dayTxt = isNaN(d) ? '' : ' (' + d + ' business day' + (d === 1 ? '' : 's') + ')';
+  if (st === 'clearing') {
+    return '<div style="' + box + 'background:#fff7e0;border:1px solid var(--warn);color:var(--warn)">⏳ ' + line + ' · funds expected to clear <b>' + esc(payFmtDate(r.customer_clears_on)) + '</b>' + dayTxt + '</div>';
+  }
+  return '<div style="' + box + 'background:#eaf6ee;border:1px solid var(--accent2);color:var(--accent2)">✓ ' + line + ' · cleared ' + esc(payFmtDate(r.customer_clears_on)) + '</div>';
+}
 
 // One-invoice version of the qb-invoice-email-backfill.html tool, called right from a "no
 // email" row: resolves the send-to address from the invoice's customer (or the owner above
@@ -12111,6 +12139,7 @@ function payablesBuildFilters() {
       '<input id="pay-q" type="text" placeholder="Search WO#, vendor, address, owner, invoice #, trade…" oninput="payablesApplyFilters()" autocomplete="off" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;border-radius:6px;margin-bottom:8px;box-sizing:border-box">' +
       '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' +
         '<select id="pay-f-state" onchange="payablesApplyFilters()" style="' + ss + '">' + optsState(statesPresent) + '</select>' +
+        '<select id="pay-f-clear" onchange="payablesApplyFilters()" style="' + ss + '"><option value="">Any payment timing</option><option value="clearing">⏳ Still clearing</option><option value="cleared">✓ Cleared</option><option value="unknown">Payment date unknown</option></select>' +
         '<select id="pay-f-vendor" onchange="payablesApplyFilters()" style="' + ss + '">' + opts(vendors, 'All vendors') + '</select>' +
         '<select id="pay-f-prop" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(props, 'All properties') + '</select>' +
         '<select id="pay-f-owner" onchange="payablesApplyFilters()" style="' + ss + '">' + optsPair(owners, 'All owners') + '</select>' +
@@ -12124,7 +12153,7 @@ function payablesBuildFilters() {
 function payablesApplyFilters() { renderPayablesList(); }
 
 function payablesClearFilters() {
-  ['pay-q', 'pay-f-state', 'pay-f-vendor', 'pay-f-prop', 'pay-f-owner', 'pay-f-trade'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
+  ['pay-q', 'pay-f-state', 'pay-f-clear', 'pay-f-vendor', 'pay-f-prop', 'pay-f-owner', 'pay-f-trade'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
   renderPayablesList();
 }
 
@@ -12140,11 +12169,13 @@ function renderPayablesList() {
   var fp = (document.getElementById('pay-f-prop') || {}).value || '';
   var fo = (document.getElementById('pay-f-owner') || {}).value || '';
   var ft = (document.getElementById('pay-f-trade') || {}).value || '';
-  var filterActive = !!(q || fs || fv || fp || fo || ft);
+  var fc = (document.getElementById('pay-f-clear') || {}).value || '';
+  var filterActive = !!(q || fs || fc || fv || fp || fo || ft);
 
   var filtered = rows.filter(function(r) {
     var c = payablesContext(r);
     if (fs && r.state !== fs) return false;
+    if (fc && r.customer_clear_status !== fc) return false;
     if (fv && c.vendor !== fv) return false;
     if (fp && c.propId !== fp) return false;
     if (fo && c.ownerId !== fo) return false;
@@ -12224,6 +12255,7 @@ function renderPayablesList() {
             ' · <a href="' + qbBillLink(r.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info)">open bill in QB</a>'
           : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
       '</div>' +
+      payClearChip(r) +
       dupWarning +
     '</div>';
   }
@@ -12238,6 +12270,9 @@ function renderPayablesList() {
       ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
       ' you have already collected</div>' +
       '<div style="color:var(--muted);font-size:11px;margin-top:3px">The owner has paid these. Pay these first.</div>' +
+      (toPay.filter(function(r) { return r.customer_clear_status === 'clearing'; }).length
+        ? '<div style="color:var(--warn);font-size:11px;margin-top:3px;font-weight:bold">⏳ ' + toPay.filter(function(r) { return r.customer_clear_status === 'clearing'; }).length + ' of these are still clearing — the money may not be in your bank yet. Your call.</div>'
+        : '') +
       '<div style="color:var(--danger);font-size:10.5px;margin-top:4px;font-weight:bold">⚠ The button below only marks a bill PAID IN QUICKBOOKS — it does not send money. Pay the vendor yourself (check/transfer/Zelle/QuickBooks Bill Pay) first, separately.</div>' +
       (toPay.some(function(r){return r.bill_id;})
         ? '<div id="pay-bar" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--accent2);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
