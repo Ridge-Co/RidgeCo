@@ -242,6 +242,7 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
       Payment_Milestones: [{ ID: 'M1', Signature_ID: 'S8', Sequence: '1', QB_Invoice_ID: '7901', QB_Bill_ID: '', Customer_Amount: '500', Vendor_Amount: '300', Active: 'TRUE' }],
     }[tab] || []),
     paymentMilestonesTab: async () => {}, logTelemetry: async () => {},
+    fetchConfig: async () => ({ US_HOLIDAYS: new Date().getFullYear() + '-12-25:Christmas Day' }),
     qbAccessToken: async () => 't',
     qbApi: async (e, path) => (path.includes('from%20Invoice') ? { QueryResponse: { Invoice: [{ Id: '7901', Balance: 0, DocNumber: '1' }] } } : { QueryResponse: {} }),
     qbVendorDisplayName: () => 'V', vendorTermLabel: () => 'x', json: b => b,
