@@ -4526,7 +4526,56 @@ async function proposalRecordHit(env, s, kind, ua) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/' + kind, Success: 'FALSE', Notes: 'scope=' + (s && s.ID) + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
   }
 }
-// @@PROPOSAL_BLOCK_2@@
+// PUBLIC GET /scope-proposal/px?t=<proposal link token> - the tracking pixel. ALWAYS answers with the gif (a broken
+// image in the owner's email would look worse than a missed open); only a valid, current token is recorded.
+async function scopeProposalPixel(env, url, ua, ctx) {
+  try {
+    const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
+    if (auth) await proposalRecordHit(env, auth.s, 'email', ua);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/px', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+  const bin = Uint8Array.from(atob(PROPOSAL_PIXEL_GIF_B64), c => c.charCodeAt(0));
+  return new Response(bin, { status: 200, headers: { 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate, private', 'Pragma': 'no-cache', 'Access-Control-Allow-Origin': '*' } });
+}
+// Stamp the owner-text outcome on the Scope so the Scope Creator can show it. Best-effort + telemetry, never throws.
+async function proposalStampSms(env, scopeId, status) {
+  try {
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const r = await updateRow(env, 'Scopes', scopeId, { Owner_SMS_Status: status, Owner_SMS_Time: new Date().toISOString() });
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) {}
+  }
+}
+// Text the owner "your estimate was emailed". Gated like every owner SMS (global / property / owner toggles, test mode).
+// Quiet window 8pm-8am ET (not the global 7pm-9am); `override` (Brett's per-send choice) sends right now. When held, the
+// Message_Queue row carries Skip_If_Seen so the release sweep drops it if the owner has already opened the proposal.
+// Returns { status, ... } - every outcome (including blocked / failed / no phone) is reported, none swallowed.
+async function proposalOwnerSms(env, { scopeId, prop, owner, addr, ownerName, override }) {
+  let out;
+  try {
+    const cfg = await fetchConfig(env);
+    const first = ((owner && (owner.First_Name || '')) || (ownerName && ownerName !== 'there' ? String(ownerName).split(' ')[0] : '') || 'there');
+    if (!owner || !normalizePhone(owner.Phone)) out = { status: 'no_phone', note: 'Owner has no phone on file - email sent, no text.' };
+    else {
+      const r = await sendTemplatedSms(env, { type: 'owner_proposal_ready', kind: 'owner', owner, property: prop,
+        tokens: { FirstName: first, Address: addr, AssistantName: cfg.ASSISTANT_NAME || 'Riley' },
+        bypassQuietHours: !!override, quietWindow: SCOPE_SMS_QUIET_WINDOW, skip_if_seen: 'scope:' + scopeId });
+      if (r && r.error) out = { status: 'failed', note: String(r.error).slice(0, 200) };
+      else if (r && r.held_for_quiet_hours) out = { status: 'held', send_after: r.send_after, note: 'Held for quiet hours; sends at 8:00am ET unless the owner opens the estimate first.' };
+      else if (r && r.sent) out = { status: 'sent', test_mode: !!r.test_mode, delivered_to: r.delivered_to, note: r.test_mode ? 'TEST MODE: delivered to the test number, not the owner.' : 'Texted the owner.' };
+      else if (r && r.send_ok === false) out = { status: 'blocked', note: 'SMS gates blocked it: ' + String(r.gate_snapshot || '').slice(0, 200) };
+      else if (r && r.reason) out = { status: 'failed', note: String(r.reason).slice(0, 200) };
+      else out = { status: 'failed', note: 'Twilio did not confirm the send.' };
+    }
+  } catch (e) { out = { status: 'failed', note: String((e && e.message) || e).slice(0, 200) }; }
+  await proposalStampSms(env, scopeId, out.status);
+  if (out.status !== 'sent' && out.status !== 'held') {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (_) {}
+  }
+  return out;
+}
 
 // Pure: resolves the CONFIRMED PAYOR for a scope's property — never the Realtor/PM referral
 // source (that's a separate Properties.Source_* field, kept deliberately apart — see
