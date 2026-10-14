@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.11-sms-delivery-check';
+const BUILD_VERSION = '2026-10-14.12-str-cleaning-scheduler';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -211,7 +211,10 @@ const _hubWorkerCore = {
       '/owner-onboard/info','/owner-onboard/check-pin','/owner-onboard/submit',
       // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
       // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
-      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics'];
+      '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics',
+      // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
+      // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
+      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -634,6 +637,10 @@ const _hubWorkerCore = {
         if (path === '/insp-book/status')       return await inspBookStatus(env, url);
         if (path === '/insp-book/mine')         return await inspBookMine(env, url);
         if (path === '/insp-book/ics')          return await inspBookIcs(env, url);
+        if (path === '/str/c/page')             return await strCleanerPage(env, url);
+        if (path === '/str/c/ics')              return await strCleanerIcs(env, url);
+        if (path === '/str/admin/state')        return await strAdminState(env);
+        if (path === '/str/admin/preview-messages') return await strAdminPreview(env);
         if (path === '/insp-book/approval')     return await inspApprovalInfo(env, url);
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
@@ -1040,6 +1047,17 @@ const _hubWorkerCore = {
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
         if (path === '/insp/str-guard/run')        { try { return json(Object.assign({ ok: true }, await inspStrGuardTick(env, { dry: !!(body && body.dry) }))); } catch (e) { return inspHandleErr(e); } }
+        if (path === '/str/c/mark')                return await strCleanerMark(env, body);
+        if (path === '/str/c/offer')               return await strOfferRespond(env, body);
+        if (path === '/str/c/cancel')              return await strCleanerCancel(env, body);
+        if (path === '/str/admin/cleaner/save')    return await strAdminCleanerSave(env, body);
+        if (path === '/str/admin/cleaner/new-link') return await strAdminNewLink(env, body);
+        if (path === '/str/admin/config')          return await strAdminConfig(env, body);
+        if (path === '/str/admin/assign')          return await strAdminAssign(env, body);
+        if (path === '/str/admin/offer-now')       return await strAdminOfferNow(env, body);
+        if (path === '/str/admin/alert/ack')       return await strAdminAlertAck(env, body);
+        if (path === '/str/admin/run')             return await strAdminRun(env, body);
+        if (path === '/str/admin/digest-run')      { try { const r = await strRunDigest(env, { dry: !!(body && body.dry) }); return json(Object.assign({ ok: r.ok }, r)); } catch (e) { return await strHandleErr(env, e, 'digest'); } }
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
         if (path === '/insp-book/request')         return await inspBookRequest(env, body);
         if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
@@ -14458,6 +14476,17 @@ const DEFAULT_MESSAGE_TEMPLATES = [
   // Owner heads-up when a proposal is emailed (Oct 14 2026, FEATURE_LOG rule 209). No link on purpose: it points at the email.
   { Message_Type: 'owner_proposal_ready', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Your estimate for {Address} is ready and was just emailed to you - please check your inbox (and spam folder) to review it. Questions? Just reply to that email." },
+  // Milam Ridge cleaning scheduler (Oct 14 2026). Cleaner texts; editable in Message_Templates.
+  { Message_Type: 'str_offer', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. Can you clean {Property} for the {DateShort} turnover? Checkout is 11 AM{NextLine}. Tap to take it or pass: {Link}" },
+  { Message_Type: 'str_filled_backup', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've just filled the {DateShort} turnover at {Property}. Could you act as the backup on that one? Tap here and I'll add it to your calendar: {Link}" },
+  { Message_Type: 'str_assigned', Channel: 'sms', Subject: '', Body:
+    "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}" },
+  { Message_Type: 'str_checkout_day', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}" },
+  { Message_Type: 'str_task_cancelled', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}" },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
@@ -14974,7 +15003,7 @@ const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
 const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
-const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check'];
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'str_cleaning']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging
 
 // Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
 // Fails closed for a blank/short/missing secret, an empty header, any other method or path.
@@ -15056,6 +15085,7 @@ const SCHED_JOBS = [
   { name: 'sweep_work',         kind: 'interval', every_min: 14, run: (env) => schedRunSweepWork(env) },
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
   { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
+  { name: 'str_cleaning',       kind: 'interval', every_min: 14, run: (env) => schedRunStrCleaning(env) },
   { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
   { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
   { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
@@ -15068,6 +15098,9 @@ const SCHED_JOBS = [
   { name: 'hub_impr_mon',       kind: 'weekly',   dow: 1, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
   { name: 'hub_impr_thu',       kind: 'weekly',   dow: 4, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
   { name: 'hub_impr_daily',     kind: 'daily',    at: '07:30', run: (env) => schedRunHubImprovements(env, false) },
+  { name: 'str_digest_mon',     kind: 'weekly',   dow: 1, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
+  { name: 'str_digest_wed',     kind: 'weekly',   dow: 3, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
+  { name: 'str_digest_fri',     kind: 'weekly',   dow: 5, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
@@ -15612,6 +15645,10 @@ const SCHED_PF_WHAT = {
   hub_impr_mon: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
   hub_impr_thu: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
   hub_impr_daily: 'checks which Hub Improvements items were built (queue item done / PR merged) so Google Tasks can be completed; reports anything stuck',
+  str_cleaning: 'Milam Ridge cleaning scheduler: reads bookings, offers open turnovers to the cleaner queue, updates the cleaning calendar, alerts Brett (idle until STR_ENGINE_ENABLED is TRUE)',
+  str_digest_mon: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
+  str_digest_wed: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
+  str_digest_fri: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
 };
 async function schedPfTab(env, tab) {
   try { return await fetchTab(env, tab); }
@@ -22519,6 +22556,18 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/insp/customer/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/insp/customer/book-link' || path === '/insp/customer/key-pickup') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
+  // STR cleaning scheduler (Oct 14 2026): staging stubs every SMS / email / calendar write, so the only real writes are the STR_* tabs.
+  // Cleaner-scoped writes may only touch TEST- cleaners; the cleaner-save endpoint may only create/edit TEST- cleaners.
+  if (path === '/str/admin/cleaner/save') {
+    if (!String((body && body.name) || '').startsWith('TEST-')) return { ok: false, debug: 'str-guard: cleaner name must start with TEST-' };
+    if (body.id) { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body.id)); if (!_c || !String(_c.Name || '').startsWith('TEST-')) return { ok: false, debug: 'str-guard: target is not a TEST- cleaner' }; }
+    return { ok: true };
+  }
+  if (path === '/str/admin/cleaner/new-link') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
+  if (path === '/str/c/mark' || path === '/str/c/offer' || path === '/str/c/cancel') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => x.Link_Token && x.Link_Token === String((body && body.k) || '')); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
+  if (path === '/str/admin/assign') { if (!body || !body.cleaner_id) return true; const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
+  if (path === '/str/admin/config' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
+  if (path === '/str/admin/digest-run') return !!(body && body.dry);
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
   if (path === '/cron/run') { const _sb = body || {}; return !_sb.force && (_sb.dry === true || _sb.dry_run === true || (typeof _sb.only === 'string' && SCHED_STAGING_SAFE_JOBS.includes(_sb.only))); }   // NB: `_b` (declared further down) is in its TDZ here - use `body`
@@ -29999,7 +30048,7 @@ function inspStrEventDays(ev) {
 function inspStrCleaningKind(title) {
   const t = String(title || '').toLowerCase();
   if (!/clean/.test(t)) return '';
-  if (/n\/a|not available|unavailable|cancel/.test(t)) return '';
+  if (/n\/a|not available|unavailable|cancel|not covered|uncovered|backup/.test(t)) return ''; // the Hub's own red "BOOKING NOT COVERED FOR CLEANING" block (and any backup note) must never count as a cleaner
   if (/\bbrett\b/.test(t)) return 'brett';
   return 'cleaner';
 }
@@ -30293,6 +30342,1106 @@ async function inspStrGuardTick(env, opts) {
   try { await setConfigKey(env, { key: 'STR_GUARD_NOTIFIED', value: JSON.stringify(keep) }); } catch (e) { await inspAlert(env, 'str_guard_state', 'Alert sent but could not remember it (you may get it again): ' + e.message); }
   return out;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// STR CLEANING SCHEDULER — Milam Ridge (Oct 14 2026). See context/STR_CLEANING_SCHEDULER_BUILD_BRIEF_v1.0.md.
+// Keeps every turnover covered for the next 35 days: reads the bookings feed, offers each turnover to the preferred
+// cleaner queue ONE AT A TIME (round robin, with a reply window), assigns on accept, writes "<Name> Cleaning" plus a red
+// "booking not covered" block to the cleaning calendar, tells Brett (SMS + email + admin banner, repeating) when a turnover is
+// uncovered inside STR_ALERT_DAYS or when a cleaner cancels / changes availability close to arrival.
+// Everything ships OFF: STR_ENGINE_ENABLED / STR_SMS_ENABLED / STR_CAL_WRITE_ENABLED / STR_DIGEST_ENABLED default FALSE, and
+// cleaner texts still pass smsGatedSend (TWILIO_ENABLED + TWILIO_TEST_MODE -> Brett's phone). The ONLY clock is the Hub
+// scheduler's `str_cleaning` job (Apps Script). NO cron.
+// NOTHING FAILS SILENTLY: every catch below either pushes to ctx.errors / the response or logs + alerts. Writes are re-read.
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// ═══ STR-BLOCK-BEGIN
+const STR_PROP = 'milam-ridge';
+const STR_BLOCK_TITLE = 'BOOKING NOT COVERED FOR CLEANING';
+const STR_TABS = {
+  STR_Cleaners: ['ID', 'Vendor_ID', 'Name', 'Nickname', 'Language', 'Link_Token', 'Active', 'Digest', 'Created_Date'],
+  STR_Cleaner_Pool: ['ID', 'Property_Key', 'Cleaner_ID', 'Priority', 'Active'],
+  STR_Availability: ['ID', 'Cleaner_ID', 'Property_Key', 'Date', 'Mark', 'Updated_At', 'Source'],
+  STR_Turnovers: ['ID', 'Task_Key', 'Property_Key', 'Kind', 'Date', 'Win_Start', 'Win_End', 'Next_Arrival', 'Guests', 'Status', 'Assigned_Cleaner_ID', 'Assigned_Via', 'Missing_Count', 'Checkout_Text_Sent', 'Created_At', 'Updated_At', 'Note'],
+  STR_Offers: ['ID', 'Task_Key', 'Cleaner_ID', 'Round', 'Created_At', 'Sent_At', 'Deadline_At', 'Status', 'Queue_ID', 'Mode', 'Responded_At', 'Note'],
+  STR_Log: ['ID', 'Timestamp', 'Task_Key', 'Cleaner_ID', 'Event', 'Detail'],
+  STR_Alerts: ['ID', 'Alert_Key', 'Kind', 'Severity', 'Task_Key', 'Message', 'Sms_Text', 'Send_Count', 'Last_Sent_At', 'Next_Send_At', 'Resolved_At', 'Acked_At', 'Created_At'],
+};
+// Config keys the admin page may change (allow-list). Value rules in strConfigSave.
+const STR_CFG_BOOL = ['STR_ENGINE_ENABLED', 'STR_SMS_ENABLED', 'STR_CAL_WRITE_ENABLED', 'STR_DIGEST_ENABLED'];
+const STR_CFG_INT = { STR_ALERT_DAYS: [1, 30], STR_LOOKAHEAD_DAYS: [30, 90], STR_RED_BLOCK_DAYS: [1, 60], STR_REPLY_4H_DAYS: [1, 30], STR_REPLY_2H_DAYS: [0, 30], STR_ALERT_REPEAT_HOURS: [1, 24], STR_MARK_ALERT_DAYS: [1, 30], STR_PREARRIVAL_GAP_DAYS: [0, 30], STR_MAX_PENDING_PER_CLEANER: [1, 10] };
+const STR_OFFER_ACTIVE = ['queued', 'pending'];
+const STR_OFFER_BLOCKS = ['declined', 'expired', 'failed', 'cancelled', 'accepted', 'pending', 'queued']; // a cleaner with one of these on a task is not offered it again
+
+function strErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
+function strErrText(e) { return String((e && e.message) || e).slice(0, 300); }
+function strBool(v, dflt) { const s = String(v == null ? '' : v).trim().toUpperCase(); if (!s) return !!dflt; return s === 'TRUE' || s === '1' || s === 'YES'; }
+function strInt(v, d, lo, hi) { const n = parseInt(String(v == null ? '' : v).trim(), 10); if (!Number.isFinite(n)) return d; return Math.min(hi, Math.max(lo, n)); }
+function strSettings(cfg) {
+  cfg = cfg || {};
+  return {
+    engine: strBool(cfg.STR_ENGINE_ENABLED, false), sms: strBool(cfg.STR_SMS_ENABLED, false),
+    calWrite: strBool(cfg.STR_CAL_WRITE_ENABLED, false), digest: strBool(cfg.STR_DIGEST_ENABLED, false),
+    alertDays: strInt(cfg.STR_ALERT_DAYS, 5, 1, 30), lookahead: strInt(cfg.STR_LOOKAHEAD_DAYS, 35, 30, 90),
+    redDays: strInt(cfg.STR_RED_BLOCK_DAYS, 14, 1, 60),
+    reply4hDays: strInt(cfg.STR_REPLY_4H_DAYS, 5, 1, 30), reply2hDays: strInt(cfg.STR_REPLY_2H_DAYS, 3, 0, 30),
+    alertRepeatH: strInt(cfg.STR_ALERT_REPEAT_HOURS, 6, 1, 24), markAlertDays: strInt(cfg.STR_MARK_ALERT_DAYS, 5, 1, 30),
+    preGap: strInt(cfg.STR_PREARRIVAL_GAP_DAYS, 3, 0, 30), maxPending: strInt(cfg.STR_MAX_PENDING_PER_CLEANER, 2, 1, 10),
+    sendStartMin: 8 * 60, sendEndMin: 21 * 60,
+    cleaningCal: String(cfg.STR_GUARD_CLEANING_CAL || '').trim(),
+    label: String(cfg.STR_GUARD_PROPERTY_LABEL || 'Milam Ridge').slice(0, 40),
+    assistant: String(cfg.ASSISTANT_NAME || 'Riley'),
+  };
+}
+
+// ── Pure date / window helpers ────────────────────────────────────────────────────────────────
+function strDaysBetween(a, b) { return Math.round((Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10)) - Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10))) / 86400000); }
+function strFmtDate(d, long) {
+  const t = new Date(String(d).slice(0, 10) + 'T12:00:00Z'); if (isNaN(t)) return String(d || '');
+  return t.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: long ? 'long' : 'short', month: long ? 'long' : 'short', day: 'numeric' });
+}
+function strInSendWindow(ms, S) { const m = inspEtMinutes(ms); return m >= S.sendStartMin && m < S.sendEndMin; }
+// Brett's own texts: 7am-10pm ET, except when the date is 1 day out or less (then any hour).
+function strBrettSmsOk(ms, daysOut) { if (daysOut <= 1) return true; const m = inspEtMinutes(ms); return m >= 7 * 60 && m < 22 * 60; }
+// How long a cleaner has to answer, by how close the turnover is. Brett Oct 14: overnight when more than 5 days out,
+// 4 hours inside 5 days, 2 hours inside 3 days (thresholds configurable).
+function strReplyWindow(daysOut, S) {
+  if (daysOut > S.reply4hDays) return { kind: 'overnight' };
+  if (daysOut > S.reply2hDays) return { kind: 'hours', hours: 4 };
+  return { kind: 'hours', hours: 2 };
+}
+function strReplyDeadlineMs(nowMs, taskDate, S) {
+  const today = inspEtDate(nowMs), days = strDaysBetween(today, taskDate), w = strReplyWindow(days, S);
+  if (w.kind === 'hours') return nowMs + w.hours * 3600000;
+  // overnight: the next 8:00 AM ET that is at least 10 hours away
+  let d = inspAddDays(today, 1), ms = inspEtWallToMs(d, '08:00');
+  if (ms - nowMs < 10 * 3600000) ms = inspEtWallToMs(inspAddDays(d, 1), '08:00');
+  return ms;
+}
+function strWindowText(daysOut, S) { const w = strReplyWindow(daysOut, S); return w.kind === 'overnight' ? 'overnight' : w.hours + ' hours'; }
+
+// Bookings-feed stays -> the turnovers that need a cleaner. kind 'checkout': the clean after a guest leaves.
+// kind 'prearrival': when the gap to the next guest is longer than preGap days a second clean the day before they arrive.
+function strBuildTasks(stays, today, S) {
+  const maxDate = inspAddDays(today, S.lookahead), starts = [...new Set((stays || []).map(s => s.start))].sort(), byOut = new Map(), out = [], seen = new Set();
+  for (const s of (stays || [])) { if (!s || s.end < today || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
+  for (const [date, list] of [...byOut.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const next = starts.find(d => d >= date) || null, gap = next ? strDaysBetween(date, next) : null;
+    const pre = !!(S.preGap > 0 && next && gap > S.preGap);
+    const guests = [...new Set(list.map(x => x.guest).filter(Boolean))].join(', ');
+    const winEnd = next ? (pre ? inspAddDays(date, 2) : next) : inspAddDays(date, 3);
+    const ck = `${STR_PROP}|checkout|${date}`;
+    if (!seen.has(ck)) { seen.add(ck); out.push({ key: ck, kind: 'checkout', date, winStart: date, winEnd, next, guests }); }
+    if (pre) {
+      const pd = inspAddDays(next, -1), pk = `${STR_PROP}|prearrival|${next}`;
+      if (pd >= today && pd <= maxDate && !seen.has(pk)) { seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' }); }
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
+}
+
+// foreign = calendar events NOT written by this engine. A cleaner-kind event on any day of the task window = covered (by hand).
+function strExternalCover(task, foreignEvents) {
+  const days = new Set(); for (let d = task.winStart, i = 0; d <= task.winEnd && i < 40; d = inspAddDays(d, 1), i++) days.add(d);
+  const by = [];
+  for (const ev of (foreignEvents || [])) {
+    if (!ev || String(ev.status || '').toUpperCase() === 'CANCELLED') continue;
+    if (inspStrCleaningKind(ev.summary) !== 'cleaner') continue;
+    if (inspStrEventDays(ev).some(d => days.has(d))) by.push(String(ev.summary || '').replace(/clean(ing|er|ers)?/ig, '').replace(/\s+/g, ' ').trim() || 'cleaner');
+  }
+  return by;
+}
+
+// Who to ask next. pool rows ordered by Priority; cleaners: id -> {Active, Phone, Name}; marks: 'cid|date' -> 'can'|'out'; offers: all STR_Offers rows.
+function strNextCleaner(a) {
+  const order = (a.pool || []).filter(p => String(p.Active || '').toUpperCase() !== 'FALSE').slice().sort((x, y) => (parseInt(x.Priority, 10) || 999) - (parseInt(y.Priority, 10) || 999) || (parseInt(x.ID, 10) || 0) - (parseInt(y.ID, 10) || 0));
+  const tried = new Set((a.offers || []).filter(o => o.Task_Key === a.task.key && STR_OFFER_BLOCKS.includes(o.Status)).map(o => String(o.Cleaner_ID)));
+  const skipped = [];
+  for (const p of order) {
+    const id = String(p.Cleaner_ID), c = a.cleaners[id];
+    if (!c || String(c.Active || '').toUpperCase() === 'FALSE') { skipped.push({ id, reason: 'inactive' }); continue; }
+    if (!c.Phone) { skipped.push({ id, reason: 'no_phone' }); continue; }
+    if (c.SmsOk === false) { skipped.push({ id, reason: 'sms_opted_out' }); continue; }
+    if (tried.has(id)) { skipped.push({ id, reason: 'already_asked' }); continue; }
+    if ((a.marks || {})[id + '|' + a.task.date] === 'out') { skipped.push({ id, reason: 'marked_out' }); continue; }
+    return { cleaner: c, skipped };
+  }
+  return { cleaner: null, skipped };
+}
+
+// What the cleaning calendar should hold. covered tasks -> "<Name> Cleaning" (all-day); uncovered tasks inside redDays -> red 7a-7p block.
+function strDesiredCalendar(tasks, cleanersById, today, S) {
+  const out = [];
+  for (const t of tasks) {
+    if (t.date < today) continue;
+    if (t.status === 'covered' && t.assigned) {
+      const c = cleanersById[String(t.assigned)] || {}, nm = String(c.Nickname || String(c.Name || '').split(/\s+/)[0] || 'Cleaner').trim();
+      out.push({ key: t.key, kind: 'cover', date: t.date, title: `${nm} Cleaning`, desc: `${S.label} ${t.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub. Checkout 11 AM${t.next ? '; next guest arrives ' + strFmtDate(t.next) : ''}.` });
+    } else if (!t.coveredAny && strDaysBetween(today, t.date) <= S.redDays) {
+      out.push({ key: t.key, kind: 'gap', date: t.date, title: STR_BLOCK_TITLE, desc: `${S.label}: no cleaner is booked for this ${t.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover'}${t.next ? ' (next guest arrives ' + strFmtDate(t.next) + ')' : ''}. The Ridge Co Hub is working the cleaner queue; this block disappears once someone is booked.` });
+    }
+  }
+  return out;
+}
+// existing = [{id, key, kind, date, title, timed}] my own events currently on the calendar. Returns {create, patch, remove}.
+function strPlanCalendar(desired, existing) {
+  const want = new Map(desired.map(d => [d.key + '|' + d.kind, d])), have = new Map(), create = [], patch = [], remove = [];
+  for (const e of existing) {
+    const k = e.key + '|' + e.kind;
+    if (!want.has(k) || have.has(k)) { remove.push(e); continue; } // obsolete, or a duplicate of one already kept
+    have.set(k, e);
+  }
+  for (const [k, d] of want) {
+    const e = have.get(k);
+    if (!e) create.push(d); else if (e.date !== d.date || e.title !== d.title) patch.push({ ev: e, want: d });
+  }
+  return { create, patch, remove };
+}
+function strCalBody(d, tz) {
+  const ext = { private: { ridgecoStr: '1', ridgecoStrKey: d.key, ridgecoStrKind: d.kind } };
+  if (d.kind === 'gap') return { summary: d.title, description: d.desc, colorId: '11', transparency: 'opaque', start: { dateTime: new Date(inspEtWallToMs(d.date, '07:00')).toISOString(), timeZone: tz }, end: { dateTime: new Date(inspEtWallToMs(d.date, '19:00')).toISOString(), timeZone: tz }, extendedProperties: ext };
+  return { summary: d.title, description: d.desc, transparency: 'transparent', start: { date: d.date }, end: { date: inspAddDays(d.date, 1) }, extendedProperties: ext };
+}
+
+// Backup picture for one task: who else is marked available / out. cleaners: list of {ID,Name,Nickname}; marks 'cid|date'.
+function strBackupPicture(task, cleaners, marks, assignedId) {
+  const can = [], out = [], unknown = [];
+  for (const c of cleaners) {
+    if (String(c.ID) === String(assignedId)) continue;
+    const m = marks[c.ID + '|' + task.date], nm = c.Nickname || String(c.Name || '').split(/\s+/)[0];
+    if (m === 'can') can.push(nm); else if (m === 'out') out.push(nm); else unknown.push(nm);
+  }
+  return { can, out, unknown };
+}
+function strBackupLine(pic) {
+  const parts = [];
+  if (pic.can.length) parts.push('available as backup: ' + pic.can.join(', '));
+  if (pic.out.length) parts.push('OUT: ' + pic.out.join(', '));
+  if (pic.unknown.length) parts.push('not marked: ' + pic.unknown.join(', '));
+  return parts.length ? 'Backups - ' + parts.join('; ') : 'No other cleaners in the pool';
+}
+
+// ── iCalendar ─────────────────────────────────────────────────────────────────────────────────
+function strIcsFold(line) { const out = []; let s = line; while (s.length > 74) { out.push(s.slice(0, 74)); s = ' ' + s.slice(74); } out.push(s); return out.join('\r\n'); }
+// events: [{uid, date, summary, description, url, seq}]
+function strIcs(events, nowMs) {
+  const stamp = new Date(nowMs || Date.now()).toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ridge Co//STR Cleaning//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
+  for (const e of events) {
+    L.push('BEGIN:VEVENT', 'UID:' + e.uid, 'DTSTAMP:' + stamp, 'SEQUENCE:' + (e.seq || 0),
+      'DTSTART;VALUE=DATE:' + e.date.replace(/-/g, ''), 'DTEND;VALUE=DATE:' + inspAddDays(e.date, 1).replace(/-/g, ''),
+      'SUMMARY:' + inspIcsEsc(e.summary), 'DESCRIPTION:' + inspIcsEsc(e.description || ''), 'TRANSP:TRANSPARENT');
+    if (e.url) L.push('URL:' + e.url);
+    L.push('END:VEVENT');
+  }
+  L.push('END:VCALENDAR');
+  return L.map(strIcsFold).join('\r\n') + '\r\n';
+}
+
+// ── Message copy (editable in Message_Templates; these are the seeded defaults and the fallback) ──
+const STR_DEFAULT_TEXTS = {
+  str_offer: "Hi {FirstName}, it's {AssistantName} with Ridge Co. Can you clean {Property} for the {DateShort} turnover? Checkout is 11 AM{NextLine}. Tap to take it or pass: {Link}",
+  str_filled_backup: "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've just filled the {DateShort} turnover at {Property}. Could you act as the backup on that one? Tap here and I'll add it to your calendar: {Link}",
+  str_assigned: "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}",
+  str_checkout_day: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}",
+  str_task_cancelled: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}",
+};
+function strNextLine(task) {
+  if (!task.next) return ' (no booking after that yet)';
+  return task.next === task.date ? ' and the next guest arrives the same day' : `; next guest arrives ${strFmtDate(task.next)}`;
+}
+function strTodayLines(task, nowDate, label) {
+  const next = task.next;
+  const todayLine = task.kind === 'prearrival' ? `Today is the pre-arrival clean at ${label}.` : `Checkout is at 11 AM today at ${label}.`;
+  let nextLine2;
+  if (!next) nextLine2 = 'There is no booking after this one yet.';
+  else if (next === nowDate) nextLine2 = 'The next guest arrives TODAY.';
+  else nextLine2 = `The next guest arrives ${strFmtDate(next)}.`;
+  return { todayLine, nextLine2 };
+}
+
+// ── Data layer (every write is re-read; a failure throws a coded error the caller must surface) ──
+let __strTabsReady = false;
+async function strEnsureTabs(env) {
+  if (__strTabsReady) return;
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  const need = Object.keys(STR_TABS).filter(t => !titles.includes(t));
+  if (need.length) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  for (const [tab, headers] of Object.entries(STR_TABS)) await ensureColumns(env, tab, headers);
+  await ensureColumns(env, 'Vendors', ['Service_Area']);
+  __strTabsReady = true;
+}
+async function strAddRows(env, tab, list) {
+  if (!list.length) return [];
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [[]], headers = rows[0] || [];
+  if (!headers.length) throw strErr('sheet_write', `Tab ${tab} has no header row`);
+  const idc = idColIndex(headers); let next = rows.slice(1).reduce((m, r) => Math.max(m, parseInt((r && r[idc]) || '0', 10) || 0), 0);
+  const ids = [], values = list.map(f => { const id = String(++next); ids.push(id); return headers.map(h => h === 'ID' ? id : (f[h] !== undefined && f[h] !== null ? String(f[h]) : '')); });
+  await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW`, { values });
+  invalidateTabCache(tab);
+  const back = await fetchTab(env, tab);
+  for (const id of ids) if (!back.some(r => String(r.ID) === id)) throw strErr('write_not_landed', `A new ${tab} row (#${id}) was not found after saving`);
+  return ids;
+}
+async function strAddRow(env, tab, fields) { return (await strAddRows(env, tab, [fields]))[0]; }
+async function strSetRow(env, tab, id, fields) {
+  const r = await updateRow(env, tab, id, fields); let j = null;
+  try { j = await r.json(); } catch (e) { throw strErr('sheet_write', `Could not update ${tab} #${id}: the save returned an unreadable answer (${strErrText(e)})`); }
+  if (!r.ok || !j || !j.success) throw strErr('sheet_write', `Could not update ${tab} #${id}: ${(j && j.error) || r.status}`);
+  invalidateTabCache(tab);
+  const row = (await fetchTab(env, tab)).find(x => String(x.ID) === String(id));
+  if (!row) throw strErr('write_not_landed', `${tab} #${id} vanished after saving`);
+  for (const [k, v] of Object.entries(fields)) if (String(row[k] == null ? '' : row[k]) !== String(v == null ? '' : v)) throw strErr('write_not_landed', `${tab} #${id}: ${k} did not save`);
+  return row;
+}
+async function strLog(ctx, taskKey, cleanerId, event, detail) {
+  if (ctx.dry) return;
+  try { await strAddRow(ctx.env, 'STR_Log', { Timestamp: new Date(ctx.now).toISOString(), Task_Key: taskKey || '', Cleaner_ID: cleanerId || '', Event: event, Detail: String(detail || '').slice(0, 480) }); }
+  catch (e) { ctx.errors.push({ step: 'audit_log', error: 'Could not write the STR_Log audit row (' + event + '): ' + strErrText(e) }); }
+}
+const __strSysAt = {};
+// Failure Brett must see. Never throws; telemetry row first (Success=FALSE), then throttled SMS + email.
+async function strSystemAlert(env, kind, message) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
+  const now = Date.now();
+  if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
+  __strSysAt[kind] = now;
+  try { const cfg = await fetchConfig(env); await strSendBrett(env, cfg, 'Cleaning scheduler problem: ' + kind, ('Cleaning scheduler problem (' + kind + '): ' + message).slice(0, 300), [message], true); }
+  catch (e) { console.error('str alert: could not tell Brett:', e && e.message, '| original:', kind, message); }
+}
+// SMS + email to Brett. smsOk=false skips the SMS only. Never throws; returns { ok, log }.
+async function strSendBrett(env, cfg, subject, smsText, htmlLines, smsOk) {
+  const log = []; let ok = false;
+  if (smsOk !== false) {
+    try { if (!cfg.admin_phone) log.push('sms: no admin_phone configured'); else { const r = await sendSMS(env, cfg.admin_phone, String(smsText).slice(0, 320)); if (r && r.error) log.push('sms: FAILED ' + r.error); else if (r && r.skipped) log.push('sms: skipped (' + r.reason + ')'); else { log.push('sms: ok'); ok = true; } } } catch (e) { log.push('sms: FAILED ' + e.message); }
+  } else log.push('sms: held (quiet hours)');
+  try {
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const r = await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject, html: htmlLines.map(l => `<p>${esc(l)}</p>`).join('') + `<p><a href="${PORTAL_BASE}/str-cleaning.html">Open the cleaning scheduler</a></p>` });
+    log.push(r && r.staged ? 'email: staged' : 'email: ok'); ok = true;
+  } catch (e) { log.push('email: FAILED ' + e.message); }
+  return { ok, log };
+}
+
+// ── Reading everything the engine needs ──────────────────────────────────────────────────────
+function strCleanerView(c, vendorsById) {
+  const v = vendorsById[String(c.Vendor_ID)] || {};
+  const optOut = String(v.SMS_OptOut || '').toUpperCase() === 'TRUE', smsOn = String(v.SMS_Enabled == null ? '' : v.SMS_Enabled).toUpperCase() !== 'FALSE';
+  return { ID: String(c.ID), Vendor_ID: String(c.Vendor_ID || ''), Name: c.Name || v.Name || '', Nickname: c.Nickname || '', Language: c.Language || v.Language || 'en', Token: c.Link_Token || '', Active: c.Active || 'TRUE', Digest: c.Digest || 'TRUE',
+    Phone: v.Phone || '', Email: v.Email || '', SmsOk: !optOut && smsOn, vendor: v };
+}
+async function strLoad(ctx, fresh) {
+  const env = ctx.env;
+  if (fresh) for (const t of ['STR_Cleaners', 'STR_Cleaner_Pool', 'STR_Availability', 'STR_Turnovers', 'STR_Offers', 'STR_Alerts', 'Vendors']) invalidateTabCache(t);
+  const [cl, pool, av, tr, of, al, vendors] = await fetchTabs(env, ['STR_Cleaners', 'STR_Cleaner_Pool', 'STR_Availability', 'STR_Turnovers', 'STR_Offers', 'STR_Alerts', 'Vendors']);
+  const vById = {}; for (const v of vendors) vById[String(v.ID)] = v;
+  const cleaners = cl.map(c => strCleanerView(c, vById)), cmap = {}; for (const c of cleaners) cmap[c.ID] = c;
+  const marks = {}; for (const a of av) if (a.Property_Key === STR_PROP && (a.Mark === 'can' || a.Mark === 'out')) marks[a.Cleaner_ID + '|' + a.Date] = a.Mark;
+  ctx.st = { cleaners, cmap, pool: pool.filter(p => p.Property_Key === STR_PROP), marks, availRows: av, turnovers: tr.filter(t => t.Property_Key === STR_PROP), offers: of, alerts: al };
+  return ctx.st;
+}
+function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date, winStart: r.Win_Start || r.Date, winEnd: r.Win_End || r.Date, next: r.Next_Arrival || null, guests: r.Guests || '', status: r.Status, assigned: r.Assigned_Cleaner_ID || '' }; }
+
+// Calendar reads/writes against the CLEANING calendar (not the main inspection calendar).
+async function strCalFetch(env, calId, method, pathAndQuery, body) {
+  const token = await getCalendarAccessToken(env);
+  const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}${pathAndQuery}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  if (resp.status === 204) return {};
+  const text = await resp.text();
+  if (!resp.ok) { const err = inspClassifyCalError(resp.status, text); err.message = `Cleaning calendar: ` + err.message; err.httpStatus = resp.status; throw err; }
+  try { return JSON.parse(text); } catch (e) { throw inspErr('calendar_error', 'Google Calendar returned unreadable JSON', 503); }
+}
+async function strReadCleaningCal(env, cfg, calId, fromDay, toDay) {
+  if (inspCalStaged(env, cfg)) return [];
+  const items = []; let pageToken = '';
+  const tMin = inspEtWallToMs(inspAddDays(fromDay, -1), '00:00'), tMax = inspEtWallToMs(inspAddDays(toDay, 2), '00:00');
+  for (let i = 0; i < 6; i++) {
+    const q = `/events?singleEvents=true&maxResults=250&timeMin=${encodeURIComponent(new Date(tMin).toISOString())}&timeMax=${encodeURIComponent(new Date(tMax).toISOString())}&fields=nextPageToken,items(id,status,summary,start,end,extendedProperties(private))` + (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '');
+    const d = await strCalFetch(env, calId, 'GET', q);
+    items.push(...(d.items || []).map(it => Object.assign(inspStrFromApi(it), { id: it.id, ext: (it.extendedProperties && it.extendedProperties.private) || {} })));
+    if (!d.nextPageToken) return items;
+    pageToken = d.nextPageToken;
+  }
+  throw inspErr('calendar_error', 'The cleaning calendar has too many events to read safely.', 503);
+}
+// stays + the cleaning calendar. Throws a coded error when either can't be read (the caller alerts; nothing is guessed).
+async function strReadFeed(ctx) {
+  const { env, cfg, S } = ctx, sc = inspStrConfig(env, cfg);
+  if (sc.problems.length) throw strErr('feed_config', sc.problems.join(' '), 503);
+  if (!sc.fixture && sc.missing.length) throw strErr('feed_not_configured', 'Not set up yet: ' + sc.missing.join(' and ') + ' (Config STR_GUARD_BOOKING_SOURCES / STR_GUARD_CLEANING_CAL).', 503);
+  const today = inspEtDate(ctx.now), fromDay = inspAddDays(today, -1), toDay = inspAddDays(today, S.lookahead + 20);
+  let stayEvents = [], cal = [];
+  if (sc.fixture) {
+    stayEvents = (sc.fixture.stays || []).map(s => ({ summary: s.guest || 'Guest', start: { date: s.start }, end: { date: s.end } }));
+    cal = (sc.fixture.cleaning || []).map(c => ({ summary: c.title, status: '', start: { date: c.date }, end: { date: inspAddDays(c.date, 1) }, id: 'fx', ext: {} }));
+  } else {
+    for (const src of sc.sources) {
+      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, fromDay, toDay));
+      else stayEvents.push(...await inspStrReadGoogle(env, cfg, src, fromDay, toDay));
+    }
+    cal = await strReadCleaningCal(env, cfg, sc.cleaningCal, fromDay, toDay);
+  }
+  return { stays: inspStrStays(stayEvents), cal, calId: sc.cleaningCal, fixture: !!sc.fixture };
+}
+
+// ── Brett alerts (table-driven: STR_Alerts) ──────────────────────────────────────────────────
+function strTriedLine(offers, taskKey, cmap) {
+  const word = { declined: 'declined', expired: 'no reply', failed: 'text failed', cancelled: 'cancelled', accepted: 'accepted', pending: 'waiting', queued: 'sending' };
+  const parts = offers.filter(o => o.Task_Key === taskKey && word[o.Status]).map(o => ((cmap[o.Cleaner_ID] || {}).Nickname || String(((cmap[o.Cleaner_ID] || {}).Name || '?')).split(/\s+/)[0]) + ' (' + word[o.Status] + ')');
+  return parts.length ? 'Asked: ' + parts.join(', ') : 'Nobody has been asked yet';
+}
+// Raise (or refresh) an alert row. Dedupes on Alert_Key among UNRESOLVED rows. Returns the row (or null in dry mode).
+async function strRaiseAlert(ctx, a) {
+  if (ctx.dry) { ctx.actions.push({ alert: a.key, severity: a.severity, sms: a.sms }); return null; }
+  const open = ctx.st.alerts.find(x => x.Alert_Key === a.key && !x.Resolved_At);
+  if (open) {
+    if (open.Message !== a.message || open.Sms_Text !== a.sms || open.Severity !== a.severity) {
+      const patch = { Message: a.message, Sms_Text: a.sms, Severity: a.severity };
+      // A meaningful change (everyone has now been asked, or it just became urgent) is re-sent right away instead of waiting for the repeat timer.
+      if (a.resend && (!/Everyone in the queue/.test(open.Message) || open.Severity !== a.severity) && (parseInt(open.Send_Count, 10) || 0) > 0) patch.Next_Send_At = new Date(ctx.now - 1000).toISOString();
+      Object.assign(open, await strSetRow(ctx.env, 'STR_Alerts', open.ID, patch));
+    }
+    return open;
+  }
+  const fields = { Alert_Key: a.key, Kind: a.kind, Severity: a.severity, Task_Key: a.taskKey || '', Message: a.message, Sms_Text: a.sms, Send_Count: '0', Last_Sent_At: '', Next_Send_At: '', Resolved_At: '', Acked_At: '', Created_At: new Date(ctx.now).toISOString() };
+  const id = await strAddRow(ctx.env, 'STR_Alerts', fields);
+  const row = Object.assign({ ID: id }, fields); ctx.st.alerts.push(row); return row;
+}
+// Send every due alert. uncovered alerts repeat until covered or acked; event alerts (cancel / availability) send once.
+async function strDeliverAlerts(ctx) {
+  if (ctx.dry || !ctx.S.engine) return { sent: 0 };
+  const { env, S } = ctx; let sent = 0;
+  for (const al of ctx.st.alerts) {
+    if (al.Resolved_At || al.Acked_At || al.Kind === 'info') continue;
+    const count = parseInt(al.Send_Count, 10) || 0, oneShot = al.Kind !== 'uncovered';
+    if (oneShot && count > 0) continue;
+    if (!oneShot && count > 0 && Date.parse(al.Next_Send_At || '') > ctx.now) continue;
+    const daysOut = al.Task_Key ? strDaysBetween(inspEtDate(ctx.now), String(al.Task_Key).split('|')[2] || inspEtDate(ctx.now)) : 0;
+    if (!strBrettSmsOk(ctx.now, daysOut)) continue; // wait for 7am (retried next tick); a turnover 1 day out or less never waits
+    const subject = (al.Severity === 'urgent' ? '⚠ ' : '') + String(al.Message).split('\n')[0].slice(0, 90);
+    const res = await strSendBrett(env, ctx.cfg, subject, al.Sms_Text, String(al.Message).split('\n'), true);
+    if (!res.ok) { ctx.errors.push({ step: 'alert_delivery', error: `Could not tell Brett (${al.Alert_Key}): ${res.log.join('; ')}` }); await strSystemAlert(env, 'alert_delivery', `Could not deliver "${al.Alert_Key}" to Brett: ${res.log.join('; ')}`); continue; }
+    const rep = daysOut <= 2 ? 3 : S.alertRepeatH, patch = { Send_Count: String(count + 1), Last_Sent_At: new Date(ctx.now).toISOString(), Next_Send_At: oneShot ? '' : new Date(ctx.now + rep * 3600000).toISOString() };
+    try { Object.assign(al, await strSetRow(env, 'STR_Alerts', al.ID, patch)); sent++; }
+    catch (e) { ctx.errors.push({ step: 'alert_state', error: `Alert sent but its state did not save (you may get it again): ${strErrText(e)}` }); }
+  }
+  return { sent };
+}
+// Evaluate the standing alerts: uncovered inside alertDays -> raise; covered/cancelled/past -> resolve (and say "good news" if Brett was told).
+async function strEvalAlerts(ctx, views) {
+  const { S } = ctx, today = inspEtDate(ctx.now), st = ctx.st, live = new Set();
+  for (const v of views) {
+    if (v.date < today) continue;
+    const days = strDaysBetween(today, v.date), key = 'unc|' + v.key;
+    if (v.coveredAny || v.status === 'cancelled') continue;
+    live.add(key);
+    if (days > S.alertDays) continue; // farther out than Brett wants to hear about: shows on the admin board only
+    const when = strFmtDate(v.date) + (v.kind === 'prearrival' ? ' (pre-arrival clean)' : ''), tried = strTriedLine(st.offers, v.key, st.cmap);
+    const sev = days <= 2 ? 'urgent' : 'high', pic = strBackupLine(strBackupPicture(v, st.cleaners.filter(c => String(c.Active).toUpperCase() !== 'FALSE'), st.marks, ''));
+    const state = v.status === 'exhausted' ? 'Everyone in the queue has been asked.' : (v.status === 'offering' ? 'An offer is out right now.' : 'No offer is out yet.');
+    const head = `NOT COVERED: ${S.label} cleaning ${when} - ${days === 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}`;
+    await strRaiseAlert(ctx, { key, kind: 'uncovered', severity: sev, taskKey: v.key, resend: v.status === 'exhausted' || sev === 'urgent', message: [head, `${tried}. ${state}`, pic + '.', 'Assign someone here: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head}. ${tried}. ${state} ${PORTAL_BASE}/str-cleaning.html` });
+  }
+  if (ctx.dry) return;
+  for (const al of st.alerts) {
+    if (al.Kind !== 'uncovered' || al.Resolved_At || live.has(al.Alert_Key)) continue;
+    const tk = al.Task_Key, v = views.find(x => x.key === tk), gone = !v || v.status === 'cancelled' || v.date < today;
+    try {
+      Object.assign(al, await strSetRow(ctx.env, 'STR_Alerts', al.ID, { Resolved_At: new Date(ctx.now).toISOString() }));
+      if ((parseInt(al.Send_Count, 10) || 0) > 0 && !al.Acked_At && S.engine) {
+        const who = gone ? '' : (v.via === 'calendar' ? 'it is now on the calendar' : 'covered by ' + (v.assignedName || 'a cleaner'));
+        const txt = gone ? `Cleaning alert cleared: ${strFmtDate(String(tk).split('|')[2] || '')} turnover no longer needs a cleaner (booking changed).` : `Good news: ${S.label} ${strFmtDate(v.date)} cleaning is covered - ${who}.`;
+        const r = await strSendBrett(ctx.env, ctx.cfg, 'Cleaning covered: ' + strFmtDate(v.date || ''), txt, [txt], true);
+        if (!r.ok) ctx.errors.push({ step: 'alert_resolve_notice', error: 'Could not send the covered notice: ' + r.log.join('; ') });
+      }
+    } catch (e) { ctx.errors.push({ step: 'alert_resolve', error: `Could not resolve alert ${al.Alert_Key}: ${strErrText(e)}` }); }
+  }
+}
+
+// ── Offers ───────────────────────────────────────────────────────────────────────────────────
+function strTokens(ctx, c, task, extra) {
+  const first = String(c.Nickname || c.Name || '').split(/\s+/)[0] || 'there', now = inspEtDate(ctx.now), t = strTodayLines(task, now, ctx.S.label);
+  return Object.assign({ FirstName: first, AssistantName: ctx.S.assistant, Property: ctx.S.label, DateShort: strFmtDate(task.date), DateLong: strFmtDate(task.date, true), NextLine: strNextLine(task), TodayLine: t.todayLine, NextLine2: t.nextLine2, Link: strCleanerUrl(c.Token) }, extra || {});
+}
+function strCleanerUrl(token, qs) { return `${PORTAL_BASE}/cleaner.html?k=${encodeURIComponent(token)}${qs ? '&' + qs : ''}`; }
+async function strRenderText(ctx, type, tokens) {
+  let tpl = null;
+  try { tpl = await getMessageTemplate(ctx.env, type, 'sms'); } catch (e) { ctx.warnings.push(`Message_Templates unreadable (${strErrText(e)}); used the built-in ${type} wording.`); }
+  if (!tpl) ctx.warnings.push(`No active "${type}" template in Message_Templates; used the built-in wording.`);
+  return renderTemplate(tpl && tpl.Body ? tpl.Body : STR_DEFAULT_TEXTS[type], tokens).replace(/\s+/g, ' ').trim();
+}
+// Text one cleaner through the gated chokepoint. Returns { ok, sent, mode, queueId, detail } and NEVER throws.
+async function strTextCleaner(ctx, c, type, tokens, task) {
+  const text = await strRenderText(ctx, type, tokens);
+  if (!ctx.S.sms) return { ok: false, off: true, text, detail: 'STR_SMS_ENABLED is FALSE - would have sent: ' + text };
+  try {
+    const r = await smsGatedSend(ctx.env, { message_type: type, recipient_type: 'vendor', vendor: c.vendor, message_body: text, property_address: ctx.S.label, bypassQuietHours: true });
+    if (r.sent) return { ok: true, sent: true, mode: r.test_mode ? 'test' : 'live', queueId: r.queued_id, text, detail: r.test_mode ? 'sent to the TEST recipient (Brett), not the cleaner' : 'sent' };
+    return { ok: false, text, queueId: r.queued_id, detail: r.send_ok ? 'the text provider did not accept the message' : 'blocked: ' + r.gate_snapshot, blocked: !r.send_ok };
+  } catch (e) { return { ok: false, text, detail: 'send error: ' + strErrText(e) }; }
+}
+async function strSetOffer(ctx, o, fields) { Object.assign(o, await strSetRow(ctx.env, 'STR_Offers', o.ID, fields)); return o; }
+async function strSetTurnover(ctx, r, fields) { Object.assign(r, await strSetRow(ctx.env, 'STR_Turnovers', r.ID, Object.assign({ Updated_At: new Date(ctx.now).toISOString() }, fields))); return r; }
+
+// Move one open turnover forward: expire stale offers, then ask the next cleaner in the queue (when inside the send window).
+async function strAdvanceTask(ctx, trow) {
+  const { env, S, st } = ctx, now = ctx.now, task = strRowToTask(trow), today = inspEtDate(now), iso = new Date(now).toISOString();
+  const mine = () => st.offers.filter(o => o.Task_Key === trow.Task_Key);
+  for (const o of mine().filter(o => o.Status === 'pending')) {
+    if (Date.parse(o.Deadline_At) <= now) {
+      if (ctx.dry) { ctx.actions.push({ task: trow.Task_Key, expire: o.ID }); continue; }
+      await strSetOffer(ctx, o, { Status: 'expired', Responded_At: iso, Note: 'no reply in time' });
+      await strLog(ctx, trow.Task_Key, o.Cleaner_ID, 'offer_expired', 'No reply by ' + o.Deadline_At);
+    }
+  }
+  for (const o of mine().filter(o => o.Status === 'queued')) {
+    if (now - Date.parse(o.Created_At) > 10 * 60000) { ctx.errors.push({ step: 'stale_offer', error: `Offer #${o.ID} for ${trow.Task_Key} has been "queued" for over 10 minutes - a text may or may not have gone out. It is NOT being resent automatically; open it on the admin board.` }); await strSystemAlert(env, 'stale_offer', `Offer #${o.ID} (${trow.Task_Key}) is stuck "queued" - check the board before anyone is re-asked.`); }
+    return { action: 'waiting_queued' };
+  }
+  if (mine().some(o => o.Status === 'pending')) return { action: 'waiting_reply' };
+  if (trow.Status === 'covered' || trow.Status === 'cancelled' || trow.Status === 'ext_covered') return { action: 'none' };
+  const nx = strNextCleaner({ pool: st.pool, cleaners: st.cmap, marks: st.marks, offers: st.offers, task });
+  for (const s of nx.skipped.filter(s => s.reason === 'sms_opted_out' || s.reason === 'no_phone')) ctx.warnings.push(`${(st.cmap[s.id] || {}).Name || 'Cleaner ' + s.id} is in the queue but cannot be texted (${s.reason === 'no_phone' ? 'no phone number' : 'texts are switched off for them'}).`);
+  if (!nx.cleaner) {
+    if (trow.Status !== 'exhausted' && !ctx.dry) { await strSetTurnover(ctx, trow, { Status: 'exhausted', Note: 'queue exhausted: ' + nx.skipped.map(s => `${(st.cmap[s.id] || {}).Name || s.id}=${s.reason}`).join(', ').slice(0, 300) }); await strLog(ctx, trow.Task_Key, '', 'queue_exhausted', nx.skipped.map(s => `${s.id}:${s.reason}`).join(', ')); }
+    return { action: 'exhausted' };
+  }
+  // A cleaner is never asked about more than maxPending turnovers at once (nearest dates first), so a fresh 35-day backlog does not become a wall of texts.
+  if (st.offers.filter(o => String(o.Cleaner_ID) === nx.cleaner.ID && STR_OFFER_ACTIVE.includes(o.Status)).length >= S.maxPending) return { action: 'waiting_cleaner_busy', next: nx.cleaner.Name };
+  if (!strInSendWindow(now, S)) return { action: 'waiting_send_window', next: nx.cleaner.Name };
+  if (ctx.dry || !S.engine) { ctx.actions.push({ task: trow.Task_Key, would_offer: nx.cleaner.Name, window: strWindowText(strDaysBetween(today, task.date), S) }); if (ctx.dry) st.offers.push({ ID: 'dry', Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Status: 'pending', Deadline_At: '9999-01-01T00:00:00Z' }); return { action: 'would_offer', next: nx.cleaner.Name }; }
+  if (!S.sms) {
+    const note = 'SMS OFF - next up: ' + nx.cleaner.Name;
+    if (trow.Note !== note) await strSetTurnover(ctx, trow, { Note: note });
+    ctx.actions.push({ task: trow.Task_Key, would_text: nx.cleaner.Name });
+    return { action: 'sms_off', next: nx.cleaner.Name };
+  }
+  if (String(ctx.cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE') {
+    ctx.errors.push({ step: 'twilio_off', error: 'STR_SMS_ENABLED is TRUE but Twilio is switched OFF globally (Config TWILIO_ENABLED), so no cleaner can be texted. Offers are paused.' });
+    await strSystemAlert(env, 'twilio_off', 'The cleaning scheduler wants to text a cleaner but Twilio is globally OFF (Config TWILIO_ENABLED). Offers are paused until it is switched on.');
+    return { action: 'twilio_off', next: nx.cleaner.Name };
+  }
+  const round = String(mine().length + 1), deadline = strReplyDeadlineMs(now, task.date, S);
+  const oid = await strAddRow(env, 'STR_Offers', { Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Round: round, Created_At: iso, Deadline_At: new Date(deadline).toISOString(), Status: 'queued', Mode: 'sms' });
+  const orow = { ID: oid, Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Round: round, Created_At: iso, Deadline_At: new Date(deadline).toISOString(), Status: 'queued' }; st.offers.push(orow);
+  const dup = (await fetchTab(env, 'STR_Offers')).filter(o => o.Task_Key === trow.Task_Key && STR_OFFER_ACTIVE.includes(o.Status));
+  if (dup.length > 1 && String(dup.map(d => parseInt(d.ID, 10)).sort((a, b) => a - b)[0]) !== String(oid)) { await strSetOffer(ctx, orow, { Status: 'superseded', Note: 'another run claimed this turnover first' }); return { action: 'lost_claim' }; }
+  const tokens = strTokens(ctx, nx.cleaner, task, { Link: strCleanerUrl(nx.cleaner.Token, 'offer=' + oid) });
+  const r = await strTextCleaner(ctx, nx.cleaner, 'str_offer', tokens, task);
+  if (r.ok) {
+    await strSetOffer(ctx, orow, { Status: 'pending', Sent_At: iso, Queue_ID: r.queueId || '', Mode: r.mode });
+    await strSetTurnover(ctx, trow, { Status: 'offering', Note: '' });
+    await strLog(ctx, trow.Task_Key, nx.cleaner.ID, 'offer_sent', `${r.detail}; reply by ${orow.Deadline_At}`);
+    return { action: 'offered', cleaner: nx.cleaner.Name, deadline: orow.Deadline_At, mode: r.mode };
+  }
+  await strSetOffer(ctx, orow, { Status: 'failed', Queue_ID: r.queueId || '', Note: r.detail.slice(0, 200) });
+  await strLog(ctx, trow.Task_Key, nx.cleaner.ID, 'offer_failed', r.detail);
+  ctx.errors.push({ step: 'offer_text', error: `Could not text ${nx.cleaner.Name} about ${trow.Task_Key}: ${r.detail}` });
+  await strSystemAlert(env, 'offer_text', `Could not text ${nx.cleaner.Name} the ${strFmtDate(task.date)} offer: ${r.detail}`);
+  return { action: 'offer_failed', cleaner: nx.cleaner.Name };
+}
+
+// ── Coverage views ───────────────────────────────────────────────────────────────────────────
+function strFirst(c) { return (c && (c.Nickname || String(c.Name || '').split(/\s+/)[0])) || ''; }
+function strComputeViews(ctx, foreign) {
+  const st = ctx.st, today = inspEtDate(ctx.now), views = [];
+  for (const r of st.turnovers) {
+    if (r.Status === 'cancelled' || r.Date < today) continue;
+    const t = strRowToTask(r), ext = foreign ? strExternalCover(t, foreign) : [], hubC = r.Status === 'covered' && st.cmap[r.Assigned_Cleaner_ID];
+    views.push(Object.assign(t, { row: r, ext, coveredAny: !!hubC || ext.length > 0 || (!foreign && r.Status === 'ext_covered'), via: hubC ? 'hub' : (ext.length || r.Status === 'ext_covered' ? 'calendar' : ''), assignedName: hubC ? strFirst(hubC) : (ext[0] || '') }));
+  }
+  return views.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
+}
+
+// ── Assigning / cancelling ───────────────────────────────────────────────────────────────────
+// Tell the cleaners who were asked but did not get the slot (pending or no-reply), politely, and ask them to act as backup.
+// Outside the 8am-9pm window the notice is parked (Note "filled:unsent") and the next tick inside the window sends it.
+async function strSendFilledText(ctx, o, trow) {
+  const c = ctx.st.cmap[o.Cleaner_ID]; if (!c) return { cleaner: '?', sent: false, note: 'cleaner not found' };
+  if (String(c.Active).toUpperCase() === 'FALSE' || ctx.st.marks[c.ID + '|' + trow.Date] === 'out') { await strSetOffer(ctx, o, { Note: 'slot filled (not notified: inactive or marked out)' }); return { cleaner: c.Name, sent: false, note: 'skipped: inactive or marked out' }; }
+  const r = await strTextCleaner(ctx, c, 'str_filled_backup', strTokens(ctx, c, strRowToTask(trow), { Link: strCleanerUrl(c.Token, 'backup=' + encodeURIComponent(trow.Date)) }), strRowToTask(trow));
+  if (r.ok || r.off) await strSetOffer(ctx, o, { Note: r.ok ? 'slot filled (notified)' : 'slot filled (SMS off - not notified)' });
+  else ctx.errors.push({ step: 'filled_text', error: `Could not send the slot-filled text to ${c.Name}: ${r.detail}` });
+  await strLog(ctx, trow.Task_Key, c.ID, r.ok ? 'filled_text_sent' : 'filled_text_skipped', r.detail);
+  return { cleaner: c.Name, sent: !!r.ok, note: r.detail };
+}
+async function strNotifyFilled(ctx, trow, winnerId) {
+  const out = [];
+  for (const o of ctx.st.offers.filter(o => o.Task_Key === trow.Task_Key && String(o.Cleaner_ID) !== String(winnerId) && ['pending', 'expired', 'queued'].includes(o.Status) && !/^slot filled|^filled:/.test(o.Note || ''))) {
+    try {
+      const wasPending = o.Status === 'pending' || o.Status === 'queued';
+      await strSetOffer(ctx, o, { Status: wasPending ? 'superseded' : o.Status, Responded_At: new Date(ctx.now).toISOString(), Note: 'filled:unsent' });
+      if (strInSendWindow(ctx.now, ctx.S)) out.push(await strSendFilledText(ctx, o, trow));
+      else out.push({ cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name, sent: false, note: 'outside the 8am-9pm send window - will be sent at 8am' });
+    } catch (e) { ctx.errors.push({ step: 'notify_filled', error: strErrText(e) }); }
+  }
+  return out;
+}
+async function strFilledCatchUp(ctx) {
+  if (ctx.dry || !strInSendWindow(ctx.now, ctx.S)) return 0;
+  let n = 0;
+  for (const o of ctx.st.offers.filter(o => o.Note === 'filled:unsent')) {
+    const trow = ctx.st.turnovers.find(t => t.Task_Key === o.Task_Key);
+    try { if (!trow || trow.Status !== 'covered') { await strSetOffer(ctx, o, { Note: 'slot filled (not notified: turnover changed)' }); continue; } await strSendFilledText(ctx, o, trow); n++; }
+    catch (e) { ctx.errors.push({ step: 'filled_catchup', error: strErrText(e) }); }
+  }
+  return n;
+}
+// Assign a cleaner to a turnover (offer accepted, or admin). Re-reads to detect two people grabbing it at once.
+async function strAssign(ctx, trowIn, cleaner, via, offer) {
+  invalidateTabCache('STR_Turnovers');
+  const cur = (await fetchTab(ctx.env, 'STR_Turnovers')).find(r => String(r.ID) === String(trowIn.ID));
+  if (!cur) throw strErr('not_found', 'That turnover no longer exists.', 404);
+  if (cur.Status === 'cancelled') return { ok: false, filled: false, cancelled: true };
+  if (cur.Status === 'covered' && String(cur.Assigned_Cleaner_ID) !== String(cleaner.ID)) return { ok: false, filled: true, by: strFirst(ctx.st.cmap[cur.Assigned_Cleaner_ID]) };
+  Object.assign(trowIn, cur);
+  await strSetTurnover(ctx, trowIn, { Status: 'covered', Assigned_Cleaner_ID: cleaner.ID, Assigned_Via: via, Note: '' });
+  invalidateTabCache('STR_Turnovers');
+  const back = (await fetchTab(ctx.env, 'STR_Turnovers')).find(r => String(r.ID) === String(trowIn.ID));
+  if (!back || String(back.Assigned_Cleaner_ID) !== String(cleaner.ID)) return { ok: false, filled: true, by: strFirst(ctx.st.cmap[back && back.Assigned_Cleaner_ID]) }; // lost the race
+  if (offer) await strSetOffer(ctx, offer, { Status: 'accepted', Responded_At: new Date(ctx.now).toISOString() });
+  await strLog(ctx, trowIn.Task_Key, cleaner.ID, 'assigned', 'via ' + via);
+  return { ok: true };
+}
+// Post-assignment side effects. Every failure is returned in `problems` AND alerts Brett; none stops the others.
+async function strAfterAssign(ctx, trow, cleaner) {
+  const problems = [], task = strRowToTask(trow), res = { texts: [], email: null };
+  const filled = await strNotifyFilled(ctx, trow, cleaner.ID); res.filled = filled;
+  if (strInSendWindow(ctx.now, ctx.S)) {
+    const r = await strTextCleaner(ctx, cleaner, 'str_assigned', strTokens(ctx, cleaner, task), task);
+    res.texts.push({ cleaner: cleaner.Name, kind: 'assigned', ok: !!r.ok, note: r.detail });
+    if (!r.ok && !r.off) problems.push(`Could not text ${cleaner.Name} the confirmation: ${r.detail}`);
+  } else res.texts.push({ cleaner: cleaner.Name, kind: 'assigned', ok: false, note: 'outside the send window - the page shows the assignment; the morning email carries the invite' });
+  if (cleaner.Email && ctx.S.engine) {
+    try {
+      const views = strComputeViews(ctx, null), ics = strIcsForCleaner(ctx, cleaner, views);
+      const html = `<p>Hi ${strEsc(strFirst(cleaner))},</p><p>You're set to clean <b>${strEsc(ctx.S.label)}</b> on <b>${strEsc(strFmtDate(task.date, true))}</b> (checkout 11 AM${task.next ? '; next guest arrives ' + strEsc(strFmtDate(task.next)) : ''}).</p><p>The calendar invite is attached. Your schedule, availability and any changes: <a href="${strCleanerUrl(cleaner.Token)}">open your page</a>.</p><p>Thank you!<br>${strEsc(ctx.S.assistant)} - Ridge Co</p>`;
+      const r = await gmailSendEmailWithAttachment(ctx.env, { to: cleaner.Email, subject: `You're set: ${ctx.S.label} cleaning ${strFmtDate(task.date)}`, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } });
+      res.email = r && r.staged ? 'staged' : 'sent';
+    } catch (e) { problems.push(`Could not email ${cleaner.Name} the calendar invite: ${strErrText(e)}`); res.email = 'failed'; }
+  } else if (!cleaner.Email) problems.push(`${cleaner.Name} has no email on file, so no calendar invite was sent (the page and text still work).`);
+  for (const p of problems) { ctx.errors.push({ step: 'after_assign', error: p }); await strSystemAlert(ctx.env, 'after_assign', p); }
+  res.problems = problems;
+  return res;
+}
+function strB64(text) { const u = _utf8B64url(text); return u.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (u.length % 4)) % 4); }
+function strEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function strIcsForCleaner(ctx, c, views) {
+  const ev = [], url = strCleanerUrl(c.Token), today = inspEtDate(ctx.now);
+  for (const v of views) {
+    if (v.date < today) continue;
+    const mine = String(v.assigned) === String(c.ID) && v.status === 'covered', backup = !mine && ctx.st.marks[c.ID + '|' + v.date] === 'can';
+    if (!mine && !backup) continue;
+    ev.push({ uid: `str-${v.key.replace(/[^a-z0-9]+/gi, '-')}-${c.ID}@ridgeco`, date: v.date, seq: Math.floor(ctx.now / 60000), url,
+      summary: (backup ? 'BACKUP - ' : '') + `${ctx.S.label} cleaning`,
+      description: `${backup ? 'You marked yourself available as the backup cleaner. ' : ''}Checkout 11 AM${v.next ? '. Next guest arrives ' + strFmtDate(v.next) : ''}. Your page: ${url}` });
+  }
+  return strIcs(ev, ctx.now);
+}
+
+// A cleaner gives up a turnover they were assigned. Reopens it, asks the next cleaner, and tells Brett on every channel.
+async function strCancelAssignment(ctx, trow, cleaner, who) {
+  const iso = new Date(ctx.now).toISOString(), task = strRowToTask(trow), days = strDaysBetween(inspEtDate(ctx.now), task.date);
+  await strSetTurnover(ctx, trow, { Status: 'open', Assigned_Cleaner_ID: '', Assigned_Via: '', Checkout_Text_Sent: '', Note: `cancelled by ${cleaner.Name} ${iso}` });
+  await strAddRow(ctx.env, 'STR_Offers', { Task_Key: trow.Task_Key, Cleaner_ID: cleaner.ID, Round: '0', Created_At: iso, Status: 'cancelled', Mode: 'cancel', Responded_At: iso, Note: who });
+  ctx.st.offers.push({ Task_Key: trow.Task_Key, Cleaner_ID: cleaner.ID, Status: 'cancelled' });
+  await strLog(ctx, trow.Task_Key, cleaner.ID, 'assignment_cancelled', who);
+  await strSetMark(ctx, cleaner, trow.Date, 'out', 'cancel');
+  const pic = strBackupLine(strBackupPicture(task, ctx.st.cleaners.filter(c => String(c.Active).toUpperCase() !== 'FALSE'), ctx.st.marks, cleaner.ID));
+  const head = `CLEANER CANCELLED: ${strFirst(cleaner)} cancelled ${ctx.S.label} ${strFmtDate(task.date)}${task.kind === 'prearrival' ? ' (pre-arrival)' : ''} - ${days <= 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}${task.next ? ', next guest ' + strFmtDate(task.next) : ''}`;
+  await strRaiseAlert(ctx, { key: `cancel|${trow.Task_Key}|${cleaner.ID}|${ctx.now}`, kind: 'cancel', severity: days <= ctx.S.alertDays ? 'urgent' : 'high', taskKey: trow.Task_Key, message: [head, pic + '.', 'The queue is being worked now; you will get a separate alert if it is still uncovered.'].join('\n'), sms: `${head}. ${pic}. ${PORTAL_BASE}/str-cleaning.html` });
+  return { days, backups: pic };
+}
+async function strSetMark(ctx, c, date, mark, source) {
+  const existing = ctx.st.availRows.find(a => String(a.Cleaner_ID) === String(c.ID) && a.Property_Key === STR_PROP && a.Date === date), iso = new Date(ctx.now).toISOString(), m = mark || '';
+  if (existing) { if ((existing.Mark || '') === m && !source) return false; Object.assign(existing, await strSetRow(ctx.env, 'STR_Availability', existing.ID, { Mark: m, Updated_At: iso, Source: source || 'cleaner' })); }
+  else { if (!m) return false; const id = await strAddRow(ctx.env, 'STR_Availability', { Cleaner_ID: c.ID, Property_Key: STR_PROP, Date: date, Mark: m, Updated_At: iso, Source: source || 'cleaner' }); ctx.st.availRows.push({ ID: id, Cleaner_ID: c.ID, Property_Key: STR_PROP, Date: date, Mark: m }); }
+  if (m) ctx.st.marks[c.ID + '|' + date] = m; else delete ctx.st.marks[c.ID + '|' + date];
+  return true;
+}
+
+// ── Calendar ─────────────────────────────────────────────────────────────────────────────────
+async function strReconcileCalendar(ctx, feed, views) {
+  const { env, cfg, S } = ctx, today = inspEtDate(ctx.now);
+  const desired = strDesiredCalendar(views.map(v => ({ key: v.key, kind: v.kind, date: v.date, next: v.next, status: v.status, assigned: v.assigned, coveredAny: v.coveredAny })), ctx.st.cmap, today, S);
+  const mine = feed.cal.filter(e => e.ext && e.ext.ridgecoStr && String(e.status || '').toUpperCase() !== 'CANCELLED').map(e => ({ id: e.id, key: e.ext.ridgecoStrKey, kind: e.ext.ridgecoStrKind, date: inspStrEvDay(e.start), title: e.summary || '' }));
+  // Only ever touch events inside the window we manage: past events stay as history.
+  const plan = strPlanCalendar(desired, mine.filter(e => e.date >= today));
+  const d = { create: plan.create.length, patch: plan.patch.length, remove: plan.remove.length, applied: 0 };
+  if (!(plan.create.length + plan.patch.length + plan.remove.length)) return d;
+  if (ctx.dry || !S.calWrite) { d.mode = 'plan only (STR_CAL_WRITE_ENABLED is FALSE)'; return d; }
+  if (feed.fixture || inspCalStaged(env, cfg)) { d.mode = 'staging: calendar writes are stubbed'; return d; }
+  if (!S.cleaningCal) { ctx.errors.push({ step: 'calendar', error: 'No cleaning calendar id is configured (Config STR_GUARD_CLEANING_CAL).' }); return d; }
+  let ops = 0; const MAX = 30, enc = encodeURIComponent;
+  const run = async (label, fn) => {
+    if (ops >= MAX) { d.deferred = (d.deferred || 0) + 1; return; }
+    ops++;
+    try { await fn(); d.applied++; } catch (e) { ctx.errors.push({ step: 'calendar_' + label, error: strErrText(e) }); d.failed = (d.failed || 0) + 1; }
+  };
+  for (const e of plan.remove) await run('delete', async () => { try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(e.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; } });
+  for (const w of plan.create) await run('create', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(w, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id for ' + w.key); });
+  for (const p of plan.patch) await run('patch', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(p.ev.id), strCalBody(p.want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update for ' + p.want.key); });
+  if (d.failed) await strSystemAlert(env, 'calendar_write', `${d.failed} cleaning-calendar change(s) failed: ${ctx.errors.filter(e => /^calendar_/.test(e.step)).map(e => e.error).slice(0, 2).join(' | ')}`);
+  return d;
+}
+
+// ── Checkout-day text (11 AM ET checkout; 9 AM for a pre-arrival clean) ──────────────────────
+async function strCheckoutTexts(ctx, views) {
+  const { S } = ctx, today = inspEtDate(ctx.now), out = [];
+  if (!S.sms || ctx.dry) return out;
+  for (const v of views) {
+    if (v.date !== today || v.status !== 'covered' || !v.assigned) continue;
+    const flag = v.row.Checkout_Text_Sent || '';
+    if (flag && !/^failed:[12]$/.test(flag)) continue;
+    const at = inspEtWallToMs(today, v.kind === 'prearrival' ? '09:00' : '11:00');
+    if (ctx.now < at || !strInSendWindow(ctx.now, S)) continue;
+    const c = ctx.st.cmap[v.assigned]; if (!c) continue;
+    const fm = /^failed:(\d)$/.exec(flag), n = fm ? parseInt(fm[1], 10) : 0;
+    try {
+      await strSetTurnover(ctx, v.row, { Checkout_Text_Sent: 'sending:' + new Date(ctx.now).toISOString() }); // claim first: a crash after sending must not resend
+      const r = await strTextCleaner(ctx, c, 'str_checkout_day', strTokens(ctx, c, v), v);
+      if (r.ok) { await strSetTurnover(ctx, v.row, { Checkout_Text_Sent: new Date(ctx.now).toISOString() }); await strLog(ctx, v.key, c.ID, 'checkout_text_sent', r.detail); out.push({ task: v.key, cleaner: c.Name, ok: true }); }
+      else {
+        await strSetTurnover(ctx, v.row, { Checkout_Text_Sent: 'failed:' + (n + 1) });
+        ctx.errors.push({ step: 'checkout_text', error: `Checkout-day text to ${c.Name} failed (try ${n + 1}/3): ${r.detail}` });
+        if (n + 1 >= 3) await strSystemAlert(ctx.env, 'checkout_text', `The checkout-day text to ${c.Name} for ${v.date} failed 3 times and will not be retried: ${r.detail}`);
+        out.push({ task: v.key, cleaner: c.Name, ok: false });
+      }
+    } catch (e) { ctx.errors.push({ step: 'checkout_text', error: `Checkout-day text for ${v.key}: ${strErrText(e)}` }); }
+  }
+  return out;
+}
+
+// ── The tick (scheduler job `str_cleaning`, every ~14 minutes; also admin "Run now" with dry:true) ──
+async function strTick(env, opts) {
+  opts = opts || {};
+  const cfg = await fetchConfig(env), S = strSettings(cfg);
+  const ctx = { env, cfg, S, dry: !!opts.dry, now: opts.nowMs || Date.now(), errors: [], warnings: [], actions: [], detail: {} };
+  const done = () => ({ ok: !ctx.errors.length, errors: ctx.errors, warnings: ctx.warnings, detail: ctx.detail });
+  if (!S.engine && !ctx.dry) { ctx.detail = { enabled: false, note: 'STR_ENGINE_ENABLED is FALSE - the cleaning scheduler is idle.' }; return done(); }
+  await strEnsureTabs(env);
+  await strLoad(ctx, true);
+  let feed;
+  try { feed = await strReadFeed(ctx); }
+  catch (e) {
+    ctx.errors.push({ step: 'feed', error: strErrText(e) });
+    if (!ctx.dry) await strSystemAlert(env, e.code || 'feed_unreadable', `The cleaning scheduler could not read the bookings feed / cleaning calendar, so coverage is NOT being checked: ${strErrText(e)}`);
+    return done();
+  }
+  const today = inspEtDate(ctx.now), st = ctx.st, iso = new Date(ctx.now).toISOString();
+  const built = strBuildTasks(feed.stays, today, S), builtMap = new Map(built.map(t => [t.key, t]));
+  // 1. upsert turnovers
+  const stored = new Map(st.turnovers.map(r => [r.Task_Key, r])), fresh = built.filter(t => !stored.has(t.key));
+  ctx.detail.feed = { stays: feed.stays.length, tasks: built.length, new_tasks: fresh.length };
+  if (fresh.length && !ctx.dry) {
+    const rows = fresh.map(t => ({ Task_Key: t.key, Property_Key: STR_PROP, Kind: t.kind, Date: t.date, Win_Start: t.winStart, Win_End: t.winEnd, Next_Arrival: t.next || '', Guests: t.guests, Status: 'open', Missing_Count: '0', Created_At: iso, Updated_At: iso }));
+    const ids = await strAddRows(env, 'STR_Turnovers', rows);
+    rows.forEach((r, i) => { const row = Object.assign({ ID: ids[i] }, r); st.turnovers.push(row); stored.set(r.Task_Key, row); });
+  } else if (fresh.length) for (const t of fresh) st.turnovers.push({ ID: 'dry-' + t.key, Task_Key: t.key, Property_Key: STR_PROP, Kind: t.kind, Date: t.date, Win_Start: t.winStart, Win_End: t.winEnd, Next_Arrival: t.next || '', Guests: t.guests, Status: 'open', Missing_Count: '0' });
+  const futureStored = st.turnovers.filter(r => r.Date >= today && r.Status !== 'cancelled' && !String(r.ID).startsWith('dry-'));
+  const anomaly = feed.stays.length === 0 && futureStored.length > 0;
+  if (anomaly) { ctx.errors.push({ step: 'feed_anomaly', error: `The bookings feed returned no stays, but ${futureStored.length} upcoming turnover(s) are on file. Nothing was cancelled or changed - check the feed.` }); if (!ctx.dry) await strSystemAlert(env, 'feed_anomaly', 'The bookings feed returned zero stays while upcoming turnovers exist. No turnovers were cancelled. Check the Uplisting calendar link.'); }
+  if (!ctx.dry) for (const r of st.turnovers) {
+    try {
+      const b = builtMap.get(r.Task_Key);
+      if (b) {
+        const patch = {};
+        if (r.Status === 'cancelled') { patch.Status = 'open'; patch.Note = 'booking restored'; }
+        if ((parseInt(r.Missing_Count, 10) || 0) > 0) patch.Missing_Count = '0';
+        if ((r.Next_Arrival || '') !== (b.next || '')) patch.Next_Arrival = b.next || '';
+        if ((r.Win_End || '') !== b.winEnd) patch.Win_End = b.winEnd;
+        if ((r.Guests || '') !== b.guests) patch.Guests = b.guests;
+        if (Object.keys(patch).length) await strSetTurnover(ctx, r, patch);
+      } else if (!anomaly && r.Date >= today && r.Status !== 'cancelled') {
+        const miss = (parseInt(r.Missing_Count, 10) || 0) + 1;
+        if (miss < 2) { await strSetTurnover(ctx, r, { Missing_Count: String(miss) }); continue; }
+        const was = r.Status, who = st.cmap[r.Assigned_Cleaner_ID];
+        for (const o of st.offers.filter(o => o.Task_Key === r.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'booking cancelled', Responded_At: iso });
+        await strSetTurnover(ctx, r, { Status: 'cancelled', Missing_Count: String(miss), Note: 'booking no longer on the feed' });
+        await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'task_cancelled', 'booking left the feed (was ' + was + ')');
+        if (was === 'covered' && who) {
+          await strRaiseAlert(ctx, { key: `taskgone|${r.Task_Key}|${ctx.now}`, kind: 'event', severity: 'high', taskKey: r.Task_Key, message: [`BOOKING CHANGED: the ${strFmtDate(r.Date)} turnover no longer exists, but ${strFirst(who)} was assigned.`, `${strFirst(who)} is being told. Check Uplisting if that was not expected.`].join('\n'), sms: `Booking changed: ${strFmtDate(r.Date)} turnover is gone; ${strFirst(who)} was assigned and is being told.` });
+          if (strInSendWindow(ctx.now, S)) { const t = await strTextCleaner(ctx, who, 'str_task_cancelled', strTokens(ctx, who, strRowToTask(r)), strRowToTask(r)); if (!t.ok && !t.off) ctx.errors.push({ step: 'cancel_text', error: `Could not tell ${who.Name} the booking was cancelled: ${t.detail}` }); }
+        }
+      }
+    } catch (e) { ctx.errors.push({ step: 'upsert', error: `${r.Task_Key}: ${strErrText(e)}` }); }
+  }
+  // 2. coverage (hub assignments + hand-entered calendar events)
+  const foreign = feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr));
+  let views = strComputeViews(ctx, foreign);
+  if (!ctx.dry) for (const v of views) {
+    try {
+      if (v.row.Status === 'ext_covered' && !v.ext.length) { await strSetTurnover(ctx, v.row, { Status: 'open', Note: 'calendar entry removed' }); v.status = 'open'; v.coveredAny = false; v.via = ''; }
+      else if (v.ext.length && ['open', 'offering', 'exhausted'].includes(v.row.Status)) {
+        for (const o of st.offers.filter(o => o.Task_Key === v.key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'already on the calendar', Responded_At: iso });
+        await strSetTurnover(ctx, v.row, { Status: 'ext_covered', Note: 'on the calendar: ' + v.ext.join(', ') }); v.status = 'ext_covered';
+        await strLog(ctx, v.key, '', 'covered_on_calendar', v.ext.join(', '));
+      }
+    } catch (e) { ctx.errors.push({ step: 'coverage', error: `${v.key}: ${strErrText(e)}` }); }
+  }
+  try { ctx.detail.filled_catchup = await strFilledCatchUp(ctx); } catch (e) { ctx.errors.push({ step: 'filled_catchup', error: strErrText(e) }); }
+  // 3. offers: expire stale ones, ask the next cleaner
+  const offered = [];
+  for (const v of views.filter(v => !v.coveredAny && ['open', 'offering', 'exhausted'].includes(v.row.Status))) {
+    try { const r = await strAdvanceTask(ctx, v.row); offered.push(Object.assign({ task: v.key }, r)); v.status = v.row.Status; }
+    catch (e) { ctx.errors.push({ step: 'offers', error: `${v.key}: ${strErrText(e)}` }); }
+  }
+  ctx.detail.offers = offered.filter(o => o.action !== 'none');
+  // 4. calendar
+  try { ctx.detail.calendar = await strReconcileCalendar(ctx, feed, views); } catch (e) { ctx.errors.push({ step: 'calendar', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'calendar', 'The cleaning calendar could not be updated: ' + strErrText(e)); }
+  // 5. checkout-day texts
+  ctx.detail.checkout_texts = await strCheckoutTexts(ctx, views);
+  // 6. alerts to Brett
+  try { await strEvalAlerts(ctx, views); ctx.detail.alerts_sent = (await strDeliverAlerts(ctx)).sent; } catch (e) { ctx.errors.push({ step: 'alerts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'alerts', 'Cleaning alerts could not be evaluated: ' + strErrText(e)); }
+  const by = {}; for (const v of views) by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] = (by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] || 0) + 1;
+  ctx.detail.summary = { turnovers: views.length, by_status: by, uncovered: views.filter(v => !v.coveredAny).length, next_14_days_uncovered: views.filter(v => !v.coveredAny && strDaysBetween(today, v.date) <= 14).length };
+  if (ctx.actions.length) ctx.detail.actions = ctx.actions.slice(0, 40);
+  return done();
+}
+async function schedRunStrCleaning(env) {
+  const errors = [], warnings = [];
+  const r = await schedStep('str_cleaning', async () => {
+    try { const out = await strTick(env); for (const e of out.errors) errors.push(e); warnings.push(...out.warnings); return Object.assign({ ok: true }, { detail: out.detail }); }
+    catch (e) { try { await strSystemAlert(env, 'tick_failed', schedErrText(e)); } catch (e2) { warnings.push('could not alert about the failure: ' + schedErrText(e2)); } throw e; }
+  }, errors);
+  return { ok: !errors.length, errors, warnings, detail: r && r.detail };
+}
+
+// ── HTTP handlers ────────────────────────────────────────────────────────────────────────────
+async function strHandleErr(env, e, where) {
+  if (e && e.code && e.status && e.status < 500) return json({ ok: false, error: e.code, message: e.message }, e.status);
+  await strSystemAlert(env, 'handler_' + (where || 'error'), `${where || 'handler'} failed: ${strErrText(e)}`); // a real failure: Brett is told (the old "Brett has been notified" message was a lie)
+  return json({ ok: false, error: (e && e.code) || 'internal', message: 'Something went wrong on our side and Brett has been told. Please try again in a few minutes.' }, 500);
+}
+async function strHandlerCtx(env) {
+  const cfg = await fetchConfig(env), S = strSettings(cfg);
+  const ctx = { env, cfg, S, dry: false, now: Date.now(), errors: [], warnings: [], actions: [], detail: {} };
+  await strEnsureTabs(env); await strLoad(ctx, true);
+  return ctx;
+}
+function strFindCleaner(ctx, k) {
+  k = String(k || ''); if (k.length < 24) return null;
+  const c = ctx.st.cleaners.find(x => x.Token && x.Token === k);
+  return c && String(c.Active).toUpperCase() !== 'FALSE' ? c : null;
+}
+const STR_BAD_LINK = () => json({ ok: false, error: 'bad_link', message: 'This link is not valid any more. Ask Brett for a new one.' }, 404);
+const STR_COMING_SOON = ['Supplies requests', 'Cleaning checklists', 'Recurring tasks', 'Guest-condition report'];
+
+// GET /str/c/page?k=TOKEN[&offer=ID][&backup=YYYY-MM-DD]  (public, token-gated)
+async function strCleanerPage(env, url) {
+  try {
+    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, url.searchParams.get('k')); if (!c) return STR_BAD_LINK();
+    const today = inspEtDate(ctx.now), views = strComputeViews(ctx, null).filter(v => strDaysBetween(today, v.date) <= ctx.S.lookahead);
+    const tasks = views.map(v => {
+      const mine = String(v.assigned) === c.ID && v.status === 'covered';
+      return { key: v.key, kind: v.kind, date: v.date, label: strFmtDate(v.date), kind_label: v.kind === 'prearrival' ? 'Pre-arrival clean' : 'Checkout 11 AM', next_arrival: v.next || '', next_label: v.next ? strFmtDate(v.next) : '', days_out: strDaysBetween(today, v.date), covered: v.coveredAny, covered_by: v.via === 'hub' ? v.assignedName : '', mine, can_cancel: mine, my_mark: ctx.st.marks[c.ID + '|' + v.date] || '' };
+    });
+    const offers = ctx.st.offers.filter(o => String(o.Cleaner_ID) === c.ID && (o.Status === 'pending' || o.Status === 'expired')).map(o => {
+      const v = views.find(x => x.key === o.Task_Key); if (!v || v.coveredAny || !['open', 'offering', 'exhausted'].includes(v.status)) return null;
+      return { id: o.ID, task_key: v.key, date: v.date, label: strFmtDate(v.date, true), next_label: v.next ? strFmtDate(v.next) : '', deadline: o.Deadline_At, late: o.Status === 'expired' || Date.parse(o.Deadline_At) < ctx.now };
+    }).filter(Boolean);
+    const bd = String(url.searchParams.get('backup') || ''), bt = /^\d{4}-\d{2}-\d{2}$/.test(bd) ? views.find(v => v.date === bd && v.coveredAny && String(v.assigned) !== c.ID) : null;
+    return json({ ok: true, cleaner: { name: c.Name, first: strFirst(c), language: c.Language }, property: ctx.S.label, today, server_time: new Date(ctx.now).toISOString(), tasks, offers, backup_prompt: bt ? { date: bt.date, label: strFmtDate(bt.date, true) } : null, ics_url: `${new URL(url).origin}/str/c/ics?k=${encodeURIComponent(c.Token)}`, coming_soon: STR_COMING_SOON });
+  } catch (e) { return await strHandleErr(env, e, 'cleaner page'); }
+}
+
+// POST /str/c/offer {k, offer_id, action:'accept'|'decline'}
+// After a handler changes state: re-evaluate the standing alerts and deliver anything due (exhausted queue, covered notice...). Never throws.
+async function strAlertsNow(ctx, warnings, tag) {
+  try { await strEvalAlerts(ctx, strComputeViews(ctx, null)); await strDeliverAlerts(ctx); }
+  catch (e) { warnings.push('Brett could not be sent the latest alert: ' + strErrText(e)); await strSystemAlert(ctx.env, 'alerts_' + tag, strErrText(e)); }
+}
+async function strOfferRespond(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, body.k); if (!c) return STR_BAD_LINK();
+    if (body.action !== 'accept' && body.action !== 'decline') return json({ ok: false, error: 'bad_action', message: 'action must be accept or decline' }, 400);
+    const offer = ctx.st.offers.find(o => String(o.ID) === String(body.offer_id) && String(o.Cleaner_ID) === c.ID);
+    if (!offer) return json({ ok: false, error: 'offer_not_found', message: 'That offer was not found.' }, 404);
+    const trow = ctx.st.turnovers.find(t => t.Task_Key === offer.Task_Key); if (!trow) return json({ ok: false, error: 'task_not_found', message: 'That turnover no longer exists.' }, 404);
+    const task = strRowToTask(trow), label = strFmtDate(task.date, true), taken = trow.Status === 'covered' || trow.Status === 'ext_covered';
+    const filledMsg = `Thank you for being so quick - the ${label} turnover has just been filled. Could you be the backup for that date? Tap "Yes, backup" and it goes on your calendar.`;
+    if (trow.Status === 'cancelled') return json({ ok: true, result: 'cancelled', message: `The ${label} booking was cancelled, so there is nothing to clean that day. Thank you!` });
+    if (body.action === 'decline') {
+      if (taken) return json({ ok: true, result: 'filled', backup_date: task.date, message: filledMsg });
+      if (offer.Status !== 'pending' && offer.Status !== 'expired') return json({ ok: true, result: 'already', message: 'That offer was already closed.' });
+      await strSetOffer(ctx, offer, { Status: 'declined', Responded_At: new Date(ctx.now).toISOString() });
+      await strLog(ctx, trow.Task_Key, c.ID, 'offer_declined', '');
+      const warnings = [];
+      try { await strAdvanceTask(ctx, trow); } catch (e) { warnings.push('The next cleaner could not be asked right away (' + strErrText(e) + '); the scheduler will retry.'); await strSystemAlert(env, 'advance_after_decline', strErrText(e)); }
+      await strAlertsNow(ctx, warnings, 'decline');
+      return json({ ok: true, result: 'declined', message: 'No problem - thank you for letting me know.', warnings });
+    }
+    if (offer.Status === 'accepted' && String(trow.Assigned_Cleaner_ID) === c.ID) return json({ ok: true, result: 'already_yours', message: `You already have the ${label} turnover.` });
+    if (taken || !['pending', 'expired'].includes(offer.Status)) return json({ ok: true, result: 'filled', backup_date: task.date, message: filledMsg });
+    const r = await strAssign(ctx, trow, c, 'offer', offer);
+    if (r.cancelled) return json({ ok: true, result: 'cancelled', message: `The ${label} booking was cancelled, so there is nothing to clean that day. Thank you!` });
+    if (r.filled) return json({ ok: true, result: 'filled', backup_date: task.date, message: filledMsg });
+    const after = await strAfterAssign(ctx, trow, c);
+    const warnings = [...after.problems];
+    await strAlertsNow(ctx, warnings, 'covered_notice');
+    return json({ ok: true, result: 'accepted', date: task.date, message: `You're set for ${label}. Checkout is 11 AM${task.next ? '; the next guest arrives ' + strFmtDate(task.next) : ''}. It will show on the calendar shortly.`, warnings });
+  } catch (e) { return await strHandleErr(env, e, 'offer response'); }
+}
+
+// POST /str/c/mark {k, marks:[{date, mark:'can'|'out'|''}]}  — availability / backup marks, changeable any time
+async function strCleanerMark(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, body.k); if (!c) return STR_BAD_LINK();
+    const items = Array.isArray(body.marks) ? body.marks : [{ date: body.date, mark: body.mark }], today = inspEtDate(ctx.now);
+    if (!items.length || items.length > 60) return json({ ok: false, error: 'bad_marks', message: 'Send between 1 and 60 dates.' }, 400);
+    for (const it of items) {
+      if (!it || !/^\d{4}-\d{2}-\d{2}$/.test(String(it.date || '')) || !['can', 'out', ''].includes(String(it.mark == null ? '' : it.mark))) return json({ ok: false, error: 'bad_marks', message: 'Each item needs a date (YYYY-MM-DD) and a mark of can, out or empty.' }, 400);
+      if (it.date < today || strDaysBetween(today, it.date) > 120) return json({ ok: false, error: 'bad_date', message: `${it.date} is outside the dates you can change.` }, 400);
+      const asg = ctx.st.turnovers.find(t => t.Date === it.date && t.Status === 'covered' && String(t.Assigned_Cleaner_ID) === c.ID);
+      if (asg && it.mark === 'out') return json({ ok: false, error: 'assigned', message: `You are scheduled to clean on ${strFmtDate(it.date)}. Use "Cancel" on that date instead, so Brett is told.` }, 409);
+    }
+    const changes = [], warnings = [];
+    for (const it of items) {
+      const mark = String(it.mark || ''), prev = ctx.st.marks[c.ID + '|' + it.date] || '';
+      if (!(await strSetMark(ctx, c, it.date, mark, 'cleaner'))) continue;
+      changes.push({ date: it.date, from: prev, to: mark });
+      await strLog(ctx, '', c.ID, 'mark', `${it.date}: ${prev || '-'} -> ${mark || 'cleared'}`);
+      if (mark === 'out') for (const o of ctx.st.offers.filter(o => String(o.Cleaner_ID) === c.ID && o.Status === 'pending')) {
+        const tr = ctx.st.turnovers.find(t => t.Task_Key === o.Task_Key && t.Date === it.date); if (!tr) continue;
+        try { await strSetOffer(ctx, o, { Status: 'declined', Responded_At: new Date(ctx.now).toISOString(), Note: 'marked out' }); await strAdvanceTask(ctx, tr); } catch (e) { warnings.push('Marked out, but the next cleaner could not be asked right away: ' + strErrText(e)); await strSystemAlert(env, 'advance_after_mark', strErrText(e)); }
+      }
+    }
+    let notified = false;
+    const near = changes.filter(ch => strDaysBetween(today, ch.date) <= ctx.S.markAlertDays && ctx.st.turnovers.some(t => t.Date === ch.date && t.Status !== 'cancelled'));
+    if (near.length) {
+      const act = ctx.st.cleaners.filter(x => String(x.Active).toUpperCase() !== 'FALSE'); let urgent = false, firstKey = '';
+      const lines = near.map(ch => {
+        const trs = ctx.st.turnovers.filter(t => t.Date === ch.date && t.Status !== 'cancelled'), tr = trs[0]; firstKey = firstKey || tr.Task_Key;
+        const asg = tr.Status === 'covered' ? ctx.st.cmap[tr.Assigned_Cleaner_ID] : null, pic = strBackupPicture(strRowToTask(tr), act, ctx.st.marks, asg ? asg.ID : '');
+        const what = ch.to === 'out' ? 'OUT' : (ch.to === 'can' ? 'AVAILABLE as backup' : 'cleared their mark'), who = asg ? `${strFirst(asg)} is cleaning` : (tr.Status === 'ext_covered' ? 'covered on the calendar' : 'NOT COVERED yet');
+        if (ch.to === 'out' && ((asg && !pic.can.length) || !asg && tr.Status !== 'ext_covered')) urgent = true;
+        return `${strFirst(c)} marked ${what} for ${strFmtDate(ch.date)} (${strDaysBetween(today, ch.date)} day(s) out) - ${who}. ${strBackupLine(pic)}${ch.to === 'out' && asg && !pic.can.length ? '. NO BACKUP AVAILABLE if ' + strFirst(asg) + ' cancels' : ''}.`;
+      });
+      await strRaiseAlert(ctx, { key: `mark|${c.ID}|${ctx.now}`, kind: 'mark', severity: urgent ? 'urgent' : 'normal', taskKey: firstKey, message: ['AVAILABILITY CHANGE: ' + lines[0], ...lines.slice(1), 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: ('Availability change: ' + lines.join(' | ')).slice(0, 300) });
+      try { const d = await strDeliverAlerts(ctx); notified = d.sent > 0; } catch (e) { warnings.push('Brett could not be notified: ' + strErrText(e)); await strSystemAlert(env, 'mark_alert', strErrText(e)); }
+    }
+    return json({ ok: true, saved: changes.length, notified, warnings: warnings.concat(ctx.errors.map(e => e.error)) });
+  } catch (e) { return await strHandleErr(env, e, 'availability'); }
+}
+
+// POST /str/c/cancel {k, task_key}  — the assigned cleaner gives the turnover back
+async function strCleanerCancel(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, body.k); if (!c) return STR_BAD_LINK();
+    const trow = ctx.st.turnovers.find(t => t.Task_Key === body.task_key);
+    if (!trow || trow.Status !== 'covered' || String(trow.Assigned_Cleaner_ID) !== c.ID) return json({ ok: false, error: 'not_yours', message: 'You are not scheduled for that date.' }, 409);
+    const info = await strCancelAssignment(ctx, trow, c, 'cancelled from the cleaner page'), warnings = [];
+    try { await strAdvanceTask(ctx, trow); } catch (e) { warnings.push('The next cleaner could not be asked right away: ' + strErrText(e)); await strSystemAlert(env, 'advance_after_cancel', strErrText(e)); }
+    await strAlertsNow(ctx, warnings, 'cancel');
+    return json({ ok: true, message: `Thank you for letting us know - ${strFmtDate(trow.Date, true)} is released and Brett has been told.`, days_out: info.days, warnings: warnings.concat(ctx.errors.map(e => e.error)) });
+  } catch (e) { return await strHandleErr(env, e, 'cancel'); }
+}
+
+// GET /str/c/ics?k=TOKEN  — calendar file with this cleaner's assigned + backup dates
+async function strCleanerIcs(env, url) {
+  try {
+    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, url.searchParams.get('k')); if (!c) return STR_BAD_LINK();
+    return new Response(strIcsForCleaner(ctx, c, strComputeViews(ctx, null)), { status: 200, headers: { ...CORS, 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': 'attachment; filename="milam-ridge-cleaning.ics"', 'Cache-Control': 'no-store' } });
+  } catch (e) { return await strHandleErr(env, e, 'calendar file'); }
+}
+
+// ── Admin ────────────────────────────────────────────────────────────────────────────────────
+function strSettingsOut(cfg) {
+  const S = strSettings(cfg), g = k => String((cfg && cfg[k]) == null ? '' : cfg[k]);
+  return { engine: S.engine, sms: S.sms, cal_write: S.calWrite, digest: S.digest, alert_days: S.alertDays, lookahead_days: S.lookahead, red_block_days: S.redDays, reply_4h_days: S.reply4hDays, reply_2h_days: S.reply2hDays, alert_repeat_hours: S.alertRepeatH, mark_alert_days: S.markAlertDays, prearrival_gap_days: S.preGap, max_pending_per_cleaner: S.maxPending,
+    twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
+}
+function strCleanerOut(c, pool) {
+  const p = pool.find(x => String(x.Cleaner_ID) === c.ID) || {};
+  return { id: c.ID, vendor_id: c.Vendor_ID, name: c.Name, nickname: c.Nickname, phone: c.Phone, email: c.Email, language: c.Language, active: String(c.Active).toUpperCase() !== 'FALSE', digest: String(c.Digest).toUpperCase() !== 'FALSE', sms_ok: c.SmsOk, priority: parseInt(p.Priority, 10) || null, in_pool: p.ID ? String(p.Active || '').toUpperCase() !== 'FALSE' : false, link: strCleanerUrl(c.Token) };
+}
+async function strAdminState(env) {
+  try {
+    const ctx = await strHandlerCtx(env); let feed = null, feedError = '';
+    try { feed = await strReadFeed(ctx); } catch (e) { feedError = strErrText(e); }
+    const foreign = feed ? feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr)) : null, views = strComputeViews(ctx, foreign), today = inspEtDate(ctx.now), act = ctx.st.cleaners.filter(x => String(x.Active).toUpperCase() !== 'FALSE');
+    const stored = new Set(ctx.st.turnovers.map(t => t.Task_Key));
+    const tasks = views.map(v => ({
+      key: v.key, kind: v.kind, date: v.date, label: strFmtDate(v.date), days_out: strDaysBetween(today, v.date), next_arrival: v.next || '', next_label: v.next ? strFmtDate(v.next) : '', guests: v.guests,
+      status: v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status, covered: v.coveredAny, via: v.via, assigned_id: v.status === 'covered' ? v.assigned : '', assigned_name: v.assignedName, note: v.row.Note || '', checkout_text: v.row.Checkout_Text_Sent || '',
+      offers: ctx.st.offers.filter(o => o.Task_Key === v.key).map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, status: o.Status, sent_at: o.Sent_At || '', deadline: o.Deadline_At || '', note: o.Note || '' })),
+      backups: strBackupPicture(v, act, ctx.st.marks, v.status === 'covered' ? v.assigned : ''), uncovered_alert: !v.coveredAny && strDaysBetween(today, v.date) <= ctx.S.alertDays }));
+    if (feed) for (const t of strBuildTasks(feed.stays, today, ctx.S)) if (!stored.has(t.key)) tasks.push({ key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), days_out: strDaysBetween(today, t.date), next_arrival: t.next || '', next_label: t.next ? strFmtDate(t.next) : '', guests: t.guests, status: 'new', covered: false, via: '', assigned_id: '', assigned_name: '', note: 'not picked up by the scheduler yet', offers: [], backups: { can: [], out: [], unknown: [] }, uncovered_alert: false });
+    tasks.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
+    const log = (await fetchTab(env, 'STR_Log')).slice(-40).reverse();
+    return json({ ok: true, build: BUILD_VERSION, today, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), coming_soon: STR_COMING_SOON });
+  } catch (e) { return await strHandleErr(env, e, 'admin state'); }
+}
+function strPhone10(p) { const n = normalizePhone(p); return /^\+1\d{10}$/.test(n) ? n : ''; }
+// POST /str/admin/cleaner/save {id?, name, nickname, phone, email, language, priority, active, digest, in_pool}
+async function strAdminCleanerSave(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), st = ctx.st, name = String(body.name || '').trim(), lang = body.language === 'es' ? 'es' : 'en';
+    if (!name) return json({ ok: false, error: 'name_required', message: 'A name is required.' }, 400);
+    const phone = body.phone != null && String(body.phone).trim() !== '' ? strPhone10(body.phone) : null;
+    if (body.phone != null && String(body.phone).trim() !== '' && !phone) return json({ ok: false, error: 'bad_phone', message: 'That does not look like a US phone number (10 digits).' }, 400);
+    const email = String(body.email || '').trim(); if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ ok: false, error: 'bad_email', message: 'That email address does not look right.' }, 400);
+    const active = body.active === false || String(body.active).toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE', digest = body.digest === false || String(body.digest).toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE';
+    let cl = body.id ? st.cleaners.find(c => c.ID === String(body.id)) : null;
+    if (body.id && !cl) return json({ ok: false, error: 'not_found', message: 'Cleaner not found.' }, 404);
+    if (phone && st.cleaners.some(c => c.ID !== (cl && cl.ID) && c.Phone && normalizePhone(c.Phone) === phone)) return json({ ok: false, error: 'duplicate_phone', message: 'Another cleaner already has that phone number.' }, 409);
+    let vendorId, cleanerId;
+    if (!cl) {
+      if (!phone) return json({ ok: false, error: 'phone_required', message: 'A phone number is required for a new cleaner.' }, 400);
+      const r = await addRow(env, 'Vendors', { Name: name, Phone: phone, Email: email, Trade: 'Short-Term Rental Cleaner', Service_Area: 'Milam Ridge', Language: lang, Active: active, Notes: 'Created by the STR cleaning scheduler' }), j = await r.json();
+      if (!r.ok || !j.success) throw strErr('vendor_create', 'Could not create the vendor entry: ' + ((j && j.error) || r.status));
+      vendorId = String(j.id);
+      cleanerId = await strAddRow(env, 'STR_Cleaners', { Vendor_ID: vendorId, Name: name, Nickname: String(body.nickname || '').trim(), Language: lang, Link_Token: inspRandToken(24), Active: active, Digest: digest, Created_Date: inspEtDate(ctx.now) });
+    } else {
+      vendorId = cl.Vendor_ID; cleanerId = cl.ID;
+      const vf = { Name: name, Email: email, Language: lang, Active: active, Trade: 'Short-Term Rental Cleaner', Service_Area: 'Milam Ridge' }; if (phone) vf.Phone = phone;
+      await strSetRow(env, 'Vendors', vendorId, vf);
+      await strSetRow(env, 'STR_Cleaners', cleanerId, { Name: name, Nickname: String(body.nickname || '').trim(), Language: lang, Active: active, Digest: digest });
+    }
+    const pool = st.pool.find(p => String(p.Cleaner_ID) === String(cleanerId)), prio = parseInt(body.priority, 10) || (pool ? parseInt(pool.Priority, 10) : 0) || (st.pool.reduce((m, p) => Math.max(m, parseInt(p.Priority, 10) || 0), 0) + 1), inPool = body.in_pool === false || String(body.in_pool).toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE';
+    if (pool) await strSetRow(env, 'STR_Cleaner_Pool', pool.ID, { Priority: String(prio), Active: inPool });
+    else await strAddRow(env, 'STR_Cleaner_Pool', { Property_Key: STR_PROP, Cleaner_ID: cleanerId, Priority: String(prio), Active: inPool });
+    await strLog(ctx, '', cleanerId, cl ? 'cleaner_updated' : 'cleaner_created', name);
+    await strLoad(ctx, true);
+    return json({ ok: true, cleaner: strCleanerOut(ctx.st.cmap[cleanerId], ctx.st.pool) });
+  } catch (e) { return await strHandleErr(env, e, 'save cleaner'); }
+}
+async function strAdminNewLink(env, body) {
+  try {
+    const ctx = await strHandlerCtx(env), c = ctx.st.cmap[String((body || {}).id)]; if (!c) return json({ ok: false, error: 'not_found', message: 'Cleaner not found.' }, 404);
+    await strSetRow(env, 'STR_Cleaners', c.ID, { Link_Token: inspRandToken(24) }); await strLog(ctx, '', c.ID, 'link_rotated', 'old link no longer works');
+    await strLoad(ctx, true);
+    return json({ ok: true, cleaner: strCleanerOut(ctx.st.cmap[c.ID], ctx.st.pool) });
+  } catch (e) { return await strHandleErr(env, e, 'new link'); }
+}
+// POST /str/admin/config {values:{STR_ENGINE_ENABLED:'TRUE', ...}}  — allow-listed keys only
+async function strAdminConfig(env, body) {
+  try {
+    const vals = (body && body.values) || {}, sets = {};
+    for (const [k, v] of Object.entries(vals)) {
+      if (STR_CFG_BOOL.includes(k)) { const s = String(v).toUpperCase(); if (s !== 'TRUE' && s !== 'FALSE') return json({ ok: false, error: 'bad_value', message: `${k} must be TRUE or FALSE.` }, 400); sets[k] = s; }
+      else if (STR_CFG_INT[k]) { const n = parseInt(v, 10), [lo, hi] = STR_CFG_INT[k]; if (!Number.isFinite(n) || n < lo || n > hi) return json({ ok: false, error: 'bad_value', message: `${k} must be a whole number from ${lo} to ${hi}.` }, 400); sets[k] = String(n); }
+      else return json({ ok: false, error: 'not_allowed', message: `${k} cannot be changed here.` }, 400);
+    }
+    if (!Object.keys(sets).length) return json({ ok: false, error: 'nothing_to_save', message: 'No settings were sent.' }, 400);
+    for (const [k, v] of Object.entries(sets)) { const r = await setConfigKey(env, { key: k, value: v }), j = await r.json(); if (!j || !j.success) throw strErr('config_write', `Could not save ${k}`); }
+    invalidateTabCache('Config');
+    const cfg = await fetchConfig(env);
+    for (const [k, v] of Object.entries(sets)) if (String(cfg[k] || '') !== v) throw strErr('config_not_landed', `${k} did not save (it reads back as "${cfg[k] || ''}")`);
+    return json({ ok: true, settings: strSettingsOut(cfg) });
+  } catch (e) { return await strHandleErr(env, e, 'save settings'); }
+}
+// POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
+async function strAdminAssign(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), trow = ctx.st.turnovers.find(t => t.Task_Key === body.task_key);
+    if (!trow) return json({ ok: false, error: 'not_found', message: 'Turnover not found.' }, 404);
+    if (trow.Status === 'cancelled') return json({ ok: false, error: 'cancelled', message: 'That booking was cancelled.' }, 409);
+    if (!body.cleaner_id) {
+      if (trow.Status !== 'covered') return json({ ok: false, error: 'not_assigned', message: 'Nobody is assigned to that turnover.' }, 409);
+      const prev = ctx.st.cmap[trow.Assigned_Cleaner_ID];
+      await strSetTurnover(ctx, trow, { Status: 'open', Assigned_Cleaner_ID: '', Assigned_Via: '', Checkout_Text_Sent: '', Note: 'unassigned by Brett' });
+      await strLog(ctx, trow.Task_Key, prev && prev.ID, 'unassigned', 'by Brett');
+      return json({ ok: true, warnings: prev ? [`${prev.Name} was NOT told - let them know.`] : [] });
+    }
+    const c = ctx.st.cmap[String(body.cleaner_id)]; if (!c) return json({ ok: false, error: 'cleaner_not_found', message: 'Cleaner not found.' }, 404);
+    const warnings = [];
+    if (trow.Status === 'covered' && String(trow.Assigned_Cleaner_ID) !== c.ID) {
+      const prev = ctx.st.cmap[trow.Assigned_Cleaner_ID];
+      await strSetTurnover(ctx, trow, { Status: 'open', Assigned_Cleaner_ID: '', Assigned_Via: '' });
+      if (prev) warnings.push(`${prev.Name} was replaced and was NOT told - let them know.`);
+    }
+    const r = await strAssign(ctx, trow, c, 'admin', null);
+    if (!r.ok) return json({ ok: false, error: 'not_assigned', message: r.filled ? 'Someone else took it at the same moment - reload.' : 'Could not assign.' }, 409);
+    const after = await strAfterAssign(ctx, trow, c);
+    try { await strEvalAlerts(ctx, strComputeViews(ctx, null)); await strDeliverAlerts(ctx); } catch (e) { warnings.push('Covered notice failed: ' + strErrText(e)); await strSystemAlert(env, 'covered_notice', strErrText(e)); }
+    return json({ ok: true, warnings: warnings.concat(after.problems), texts: after.texts, email: after.email, filled: after.filled });
+  } catch (e) { return await strHandleErr(env, e, 'assign'); }
+}
+// POST /str/admin/offer-now {task_key, restart?}  — ask the next cleaner now; restart=true lets earlier decliners be asked again
+async function strAdminOfferNow(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), trow = ctx.st.turnovers.find(t => t.Task_Key === body.task_key), iso = new Date(ctx.now).toISOString();
+    if (!trow) return json({ ok: false, error: 'not_found', message: 'Turnover not found.' }, 404);
+    if (trow.Status === 'covered' || trow.Status === 'cancelled') return json({ ok: false, error: 'not_open', message: 'That turnover is already covered or cancelled.' }, 409);
+    for (const o of ctx.st.offers.filter(o => o.Task_Key === trow.Task_Key)) {
+      if (STR_OFFER_ACTIVE.includes(o.Status)) await strSetOffer(ctx, o, { Status: o.Status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'reset by Brett' });
+      else if (body.restart && ['declined', 'expired', 'failed'].includes(o.Status)) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'queue restarted by Brett' });
+    }
+    if (trow.Status !== 'open') await strSetTurnover(ctx, trow, { Status: 'open', Note: '' });
+    await strLog(ctx, trow.Task_Key, '', 'offer_now', body.restart ? 'queue restarted' : 'asked next');
+    const r = await strAdvanceTask(ctx, trow);
+    return json({ ok: true, result: r, errors: ctx.errors, warnings: ctx.warnings });
+  } catch (e) { return await strHandleErr(env, e, 'offer now'); }
+}
+async function strAdminAlertAck(env, body) {
+  try {
+    const ctx = await strHandlerCtx(env), a = ctx.st.alerts.find(x => String(x.ID) === String((body || {}).id)); if (!a) return json({ ok: false, error: 'not_found', message: 'Alert not found.' }, 404);
+    await strSetRow(env, 'STR_Alerts', a.ID, { Acked_At: new Date(ctx.now).toISOString() }); await strLog(ctx, a.Task_Key, '', 'alert_acked', a.Alert_Key);
+    return json({ ok: true });
+  } catch (e) { return await strHandleErr(env, e, 'ack alert'); }
+}
+// POST /str/admin/run {dry}
+async function strAdminRun(env, body) {
+  try { const r = await strTick(env, { dry: !!(body && body.dry) }); return json(Object.assign({ dry: !!(body && body.dry) }, r)); }
+  catch (e) { return await strHandleErr(env, e, 'run now'); }
+}
+async function strAdminPreview(env) {
+  try {
+    const ctx = await strHandlerCtx(env), c = ctx.st.cleaners[0] || { Name: 'Gina Sample', Nickname: 'Gina', Token: 'SAMPLE-TOKEN-SAMPLE-TOKEN-0000' };
+    const d = inspAddDays(inspEtDate(ctx.now), 9), task = { key: 'sample', kind: 'checkout', date: d, next: inspAddDays(d, 2), winStart: d, winEnd: d };
+    const out = [];
+    for (const type of Object.keys(STR_DEFAULT_TEXTS)) { const text = await strRenderText(ctx, type, strTokens(ctx, c, task)); out.push({ type, text, length: text.length }); }
+    return json({ ok: true, previews: out, warnings: ctx.warnings });
+  } catch (e) { return await strHandleErr(env, e, 'preview'); }
+}
+
+// ── Email digest (replaces the Make.com "3x Weekly Cleaning Email"): inline calendar, links, .ics ──
+function strDigestHtml(ctx, c, views) {
+  const today = inspEtDate(ctx.now), base = c ? strCleanerUrl(c.Token) : `${PORTAL_BASE}/str-cleaning.html`;
+  const rows = views.filter(v => strDaysBetween(today, v.date) <= ctx.S.lookahead).map(v => {
+    const mine = c && String(v.assigned) === c.ID && v.status === 'covered', mk = c ? (ctx.st.marks[c.ID + '|' + v.date] || '') : '';
+    const status = v.coveredAny ? `<span style="color:#1a7f37;font-weight:600">Covered${v.assignedName ? ': ' + strEsc(v.assignedName) : ''}</span>` : `<span style="color:#cf222e;font-weight:700">NOT COVERED</span>`;
+    const you = !c ? '' : (mine ? '<b>You are cleaning</b>' : (mk === 'can' ? 'You: backup available' : (mk === 'out' ? 'You: out' : `<a href="${base}&date=${v.date}">Mark availability</a>`)));
+    return `<tr><td style="padding:6px 8px;border-bottom:1px solid #ddd"><a href="${base}&date=${v.date}">${strEsc(strFmtDate(v.date))}</a></td><td style="padding:6px 8px;border-bottom:1px solid #ddd">${v.kind === 'prearrival' ? 'Pre-arrival clean' : 'Checkout 11 AM'}${v.next ? '<br><small>Next guest ' + strEsc(strFmtDate(v.next)) + '</small>' : ''}</td><td style="padding:6px 8px;border-bottom:1px solid #ddd">${status}</td>${c ? `<td style="padding:6px 8px;border-bottom:1px solid #ddd">${you}</td>` : ''}</tr>`;
+  }).join('');
+  const open = views.filter(v => !v.coveredAny && strDaysBetween(today, v.date) <= ctx.S.lookahead).length;
+  return `<div style="font-family:Arial,sans-serif;max-width:640px"><h2 style="margin:0 0 8px">${strEsc(ctx.S.label)} cleaning schedule</h2><p>${c ? 'Hi ' + strEsc(strFirst(c)) + ', ' : ''}${open ? `<b>${open} turnover${open === 1 ? '' : 's'} still need a cleaner</b> in the next ${ctx.S.lookahead} days.` : 'Every turnover in the next ' + ctx.S.lookahead + ' days is covered.'} <a href="${base}">Open ${c ? 'your page' : 'the board'}</a> to take a date, mark when you're available as a backup, or mark when you're out.</p><table style="border-collapse:collapse;width:100%;font-size:14px"><tr style="background:#f3f3f3;text-align:left"><th style="padding:6px 8px">Date</th><th style="padding:6px 8px">Clean</th><th style="padding:6px 8px">Status</th>${c ? '<th style="padding:6px 8px">You</th>' : ''}</tr>${rows || '<tr><td colspan="4" style="padding:8px">No upcoming turnovers.</td></tr>'}</table>${c ? '<p style="color:#555;font-size:13px">A calendar file (.ics) is attached with the dates you are cleaning or marked as backup.</p>' : ''}<p style="color:#555;font-size:13px">Sent by ${strEsc(ctx.S.assistant)} at Ridge Co.</p></div>`;
+}
+async function strRunDigest(env, opts) {
+  opts = opts || {};
+  const ctx = await strHandlerCtx(env); ctx.dry = !!opts.dry;
+  const done = (extra) => ({ ok: !ctx.errors.length, errors: ctx.errors, warnings: ctx.warnings, no_retry: !!(extra && extra.sent), detail: extra || {} });
+  if (!ctx.S.digest && !ctx.dry) return done({ enabled: false, note: 'STR_DIGEST_ENABLED is FALSE - no cleaning email sent.' });
+  let foreign = null;
+  try { const feed = await strReadFeed(ctx); foreign = feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr)); } catch (e) { ctx.warnings.push('Could not read the calendar for the email (' + strErrText(e) + '); it uses what the scheduler last recorded.'); }
+  const views = strComputeViews(ctx, foreign), recips = ctx.st.cleaners.filter(c => String(c.Active).toUpperCase() !== 'FALSE' && String(c.Digest).toUpperCase() !== 'FALSE');
+  const results = [];
+  for (const c of recips) {
+    if (!c.Email) { ctx.errors.push({ step: 'digest', error: `${c.Name} has no email address, so they did not get the cleaning email.` }); results.push({ to: c.Name, ok: false, note: 'no email' }); continue; }
+    if (ctx.dry) { results.push({ to: c.Name, ok: true, dry: true }); continue; }
+    try {
+      const ics = strIcsForCleaner(ctx, c, views), hasEv = /BEGIN:VEVENT/.test(ics), html = strDigestHtml(ctx, c, views), subject = `${ctx.S.label} cleaning schedule - ${strFmtDate(inspEtDate(ctx.now))}`;
+      const r = hasEv ? await gmailSendEmailWithAttachment(env, { to: c.Email, subject, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } }) : await gmailSendEmail(env, { to: c.Email, subject, html });
+      results.push({ to: c.Name, ok: true, ics: hasEv, staged: !!(r && r.staged) });
+    } catch (e) { ctx.errors.push({ step: 'digest', error: `Could not email ${c.Name}: ${strErrText(e)}` }); results.push({ to: c.Name, ok: false, note: strErrText(e) }); }
+  }
+  if (!ctx.dry) { try { await gmailSendEmail(env, { to: ctx.cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: `[Copy] ${ctx.S.label} cleaning schedule`, html: strDigestHtml(ctx, null, views) }); results.push({ to: 'Brett (copy)', ok: true }); } catch (e) { ctx.errors.push({ step: 'digest_copy', error: 'Could not send the copy to Brett: ' + strErrText(e) }); } }
+  if (ctx.errors.length && !ctx.dry) await strSystemAlert(env, 'digest', ctx.errors.map(e => e.error).join(' | '));
+  return done({ recipients: results, sent: results.some(r => r.ok && !r.dry) });
+}
+async function schedRunStrDigest(env) {
+  const errors = [], warnings = [], r = await schedStep('str_digest', async () => { const o = await strRunDigest(env); errors.push(...o.errors); warnings.push(...o.warnings); return { ok: true, no_retry: o.no_retry, detail: o.detail }; }, errors);
+  return { ok: !errors.length, errors, warnings, no_retry: !!(r && r.no_retry), detail: r && r.detail };
+}
+// ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
 let __inspTabsReady = false;
