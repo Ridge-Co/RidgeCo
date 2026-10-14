@@ -44,7 +44,7 @@ const S = {
   addonLive: grab(wsrc, 'function addonLiveChildren(') + '\n' + grab(wsrc, 'function addonLiveChildrenMessage('),
   isTenantCurrent: grab(wsrc, 'function isTenantCurrent('), currentTenant: grab(wsrc, 'function currentTenantForDispatch('), tenantsFor: grab(wsrc, 'function tenantsForDispatch('),
   isBackground: grab(wsrc, 'function isBackgroundWO('), isNotifiable: grab(wsrc, 'function isTenantNotifiable('),
-  smsGate: grab(wsrc, 'function smsGateDecision('), smsToggle: grabConst(wsrc, 'const smsToggleOn'), normPhone: grab(wsrc, 'function normalizePhone('),
+  tenantMovedOut: grab(wsrc, 'function tenantMovedOut('), smsGate: grab(wsrc, 'function smsGateDecision('), smsToggle: grabConst(wsrc, 'const smsToggleOn'), normPhone: grab(wsrc, 'function normalizePhone('),
   mqTab: grabConst(wsrc, "const MSG_QUEUE_TAB = 'Message_Queue';"), mqCols: grabConst(wsrc, 'const MSG_QUEUE_COLS'),
   smsInfraState: grabRange(wsrc, 'const SMS_TOGGLE_TABS', 'async function ensureSmsInfra'), smsInfra: grab(wsrc, 'async function ensureSmsInfra('),
   etHour: grab(wsrc, 'function etHour('), nyOff: grab(wsrc, 'function nyOffsetMinutes('),
