@@ -1,4 +1,4 @@
-# WO STATUS SINGLE SOURCE OF TRUTH — Oct 14, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/wo-status-ssot-oct14` (cut from main tip f94458d), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.5-wo-status-ssot`. PR number: see the PR list (opened right after this commit).
+# WO STATUS SINGLE SOURCE OF TRUTH — Oct 14, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/wo-status-ssot-oct14` (cut from main tip f94458d), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.5-wo-status-ssot`. PR #259 (base `main`, verified with get_pull_request); staging test-only PR #260.
 
 ## 🟡 Built and tested (141 new assertions + headless-Chromium load of all 5 pages): closes Ops_Build_Queue #140 / #87
 New `wo-status.js` (mirrored byte-for-byte into worker.js) defines every status list once as 28 named groups; 50 hand-written lists across worker.js and 5 pages now use `WOStatus.sets.<NAME>` with identical members (no behaviour change). A test fails if the copies differ or anyone writes a new status array. Found: `Estimate Requested` WOs are in no open group (3 live), reported not changed. See FEATURE_LOG `[FL-20261014-1100-sts]`.
