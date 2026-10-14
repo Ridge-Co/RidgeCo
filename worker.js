@@ -10102,7 +10102,8 @@ async function sendPropertyNotice(env, body) {
   const unit = unitId ? units.find(u => u.ID === unitId) : null;
   if (unitId && !unit) return json({ error: 'Unit not found' }, 404);
   const activeTenants = tenants.filter(t => {
-    if (t.Active === 'FALSE') return false;
+    // Oct 14 2026: isTenantCurrent also drops a tenant whose Move_Out_Date has passed (Active alone missed that).
+    if (!isTenantCurrent(t)) return false;
     if (String(t.Property_ID) !== String(propertyId)) return false;
     if (unitId) return t.Unit_ID === unitId;
     return true;
