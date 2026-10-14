@@ -14975,6 +14975,17 @@ async function schedRunArReport(env) {
   const r = await schedStep('weekly_ar_report', () => runWeeklyArReport(env), errors);
   return { ok: !errors.length, errors, detail: r };
 }
+// Hub Improvements sweep (Oct 14 2026): the pull / reconcile logic lives with the ops queue (hubImpPull, hubImpReconcile); this is just the job wrapper.
+// Order matters: sync the queue's PR states first so a merged build is `done` before the ledger is reconciled.
+async function schedRunHubImprovements(env, pull) {
+  const errors = [], detail = {};
+  if (pull) detail.pull = await schedStep('hub_improvements_pull', () => hubImpPull(env), errors);
+  detail.queue_sync = await schedStep('queue_sync', () => opsQueueSync(env, {}, { ignoreSuppliedPrs: true }), errors);
+  const rec = await schedStep('hub_improvements_reconcile', () => hubImpReconcile(env), errors);
+  detail.reconcile = rec;
+  if (rec && Array.isArray(rec.problems)) for (const p of rec.problems) errors.push({ step: 'hub_improvements_reconcile', error: p });
+  return { ok: !errors.length, errors, detail };
+}
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
 // ── PREFLIGHT (dry run only): plain-English, COUNTS ONLY, strictly read-only (GETs; no claim, no state write, no SMS). ──
