@@ -1,3 +1,9 @@
+# INSPECTION SCHEDULER REOPEN + EXTEND — Oct 14, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/insp-reopen-extend-block-oct14` (cut from main tip 1606ad5), NOT merged (Brett merges). PR #293 (base `main`). BUILD_VERSION `2026-10-14.16-insp-reopen-extend`.
+
+## 🟡 Built and tested (68 handler/pure tests, 35 Playwright UI checks at 412px, full suite green); staging verification pending: `inspect.html` blocks get Close | Reopen | Extend open buttons (greyed by state), a sheet with Until tomorrow 7am / 3h / 6h / 12h / 24h / pick a date, optional email/text to the partner (reopen: email on, text off). After merge: tap Reopen on the Oct 15 10-2 block. Heads-up: it will overlap Premier's manual block 8; texts depend on Config TWILIO_ENABLED. See FEATURE_LOG `[FL-20261014-1800-rop]` and rule 213.
+
+---
+
 # WO STATUS SINGLE SOURCE OF TRUTH — Oct 14, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/wo-status-ssot-oct14` (cut from main tip f94458d), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.5-wo-status-ssot`. PR #259 (base `main`, verified with get_pull_request); staging test-only PR #260.
 
 ## 🟡 Milam Ridge STR cleaning scheduler — Oct 14 2026 — built, 117 offline tests, live on staging except the offer loop (staging Twilio is OFF); PR to `main` awaiting Brett's go/no-go; everything ships OFF (FEATURE_LOG rule 211). Rollout order and required Brett actions are in `context/STR_CLEANING_SCHEDULER_BUILD_BRIEF_v1.0.md`.
