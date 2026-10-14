@@ -275,6 +275,9 @@ No pending build mid-flight. When Brett's back: confirm the 3 verify-items above
 **B-127** (its own focused session) or take whatever new ask he brings, classified under the Session
 Efficiency Protocol as usual.
 
+## Checkpoint Oct 14 2026 — Owner tenant roster + Amanda Ireland (Phoenix) cutover
+PR #290 -> main (head `feat/owner-tenant-roster-oct14b`, cut from main ff8bc5e), not merged. Staging copies #291/#292 merged; BUILD_VERSION `2026-10-14.17-owner-tenant-roster-slices` verified on staging. Staging found the ~50-calls-per-request cap, so apply saves in slices and the page resumes. Brief: `context/OWNER_TENANT_ROSTER_BUILD_BRIEF_v1.0.md`; FEATURE_LOG rule 213; BACKLOG B-201. Project doc: `claude/ridgeco-owner-tenant-roster-oct14.md` (Continuous Improvement). Next: Brett merges #290; then the cutover runs through `tenant-roster-admin.html` (steps in the brief). Waiting on Brett to text Amanda: is Jenelle Floyd (3805 Harlem Ave, 443-990-6662) the same person as Jonelle Floyd (ID 92, 1217 W Mulberry St)? That row is held. The 4 missing Phoenix properties are added first (assumed yes; Brett never answered Q3 explicitly).
+
 ## Checkpoint Oct 14 2026 — STR cleaning scheduler
 Branch `feat/str-cleaning-scheduler` (rebased on main twice; staging is reset to main on every main push, so a staging test can be wiped mid-run). Built and offline-tested. Live-tested on staging except the offer loop. Open decision for Brett: let the staging test token switch `TWILIO_ENABLED` on (an edit to the test guard; blocked in-session as a security widening) so the offer loop can be live-tested, or accept first live check on prod with Twilio test mode ON. Brett's setup list: enter the 3 cleaners (phones, emails) on the board, share the cleaning calendar with the service account (Make changes to events), re-paste the Apps Script JOBS table, then flip switches in brief order.
 
