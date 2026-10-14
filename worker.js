@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.15-str-sms-test-mode';
+const BUILD_VERSION = '2026-10-14.16-insp-reopen-extend';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -1041,6 +1041,7 @@ const _hubWorkerCore = {
         if (path === '/insp/bulk-import')          return await inspBulkImport(env, body);
         if (path === '/insp/open-block/add')       return await inspOpenBlockAdd(env, body);
         if (path === '/insp/open-block/update')    return await updateRow(env, 'Insp_Open_Blocks', body.id, body.fields);
+        if (path === '/insp/open-block/reopen')    return await inspOpenBlockReopen(env, body);
         if (path === '/insp/booking/decide')       return await inspBookingAdminDecide(env, body);
         if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
@@ -22566,6 +22567,12 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/insp/customer/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/insp/customer/book-link' || path === '/insp/customer/key-pickup') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/insp/open-block/add') return !!(body && body.Customer_ID) && await isTestRecord(env, 'Insp_Customers', body.Customer_ID);
+  // Reopen / extend a block: a preview writes nothing; a real call may only touch a block that belongs to a TEST- customer.
+  if (path === '/insp/open-block/reopen') {
+    if (body && body.preview === true) return true;
+    const _bk = (await fetchTab(env, 'Insp_Open_Blocks')).find(x => String(x.ID) === String(body && body.id));
+    return !!_bk && !!_bk.Customer_ID && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
+  }
   // STR cleaning scheduler (Oct 14 2026): staging stubs every SMS / email / calendar write, so the only real writes are the STR_* tabs.
   // Cleaner-scoped writes may only touch TEST- cleaners; the cleaner-save endpoint may only create/edit TEST- cleaners.
   if (path === '/str/admin/cleaner/save') {
@@ -28873,7 +28880,7 @@ const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
-const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start'];
+const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start','Reopen_Log'];
 const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
@@ -31967,9 +31974,12 @@ async function inspOpenBlocksList(env) {
   let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for block list:', e && e.message); }
   const now = Date.now();
   let strSt = null, strErr = ''; try { const st = await inspStrStatus(env, await fetchConfig(env), {}); if (st.enabled) strSt = st; } catch (e) { strErr = e.message; console.error('insp: cleaning guard unavailable for block list:', e && e.message); }
-  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)).map(r => {
+  const todayEt = inspEtDate(now);
+  // Manually closed blocks stay in the list (today onward) so they can be reopened; older closed rows stay hidden.
+  return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' || String(r.Date || '') >= todayEt).sort((a, b) => (a.Date + a.Start_Time).localeCompare(b.Date + b.Start_Time)).map(r => {
     const exp = inspBlockExpiryMs(r, dh);
-    return Object.assign({}, r, { Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: !Number.isFinite(exp) || now >= exp, Str_Closed: !!(strSt && strSt.closed.includes(r.Date)), Str_Text: strSt && strSt.closed.includes(r.Date) ? (inspStrDayInfo(strSt, r.Date) || {}).text || '' : '', Str_Error: strErr });
+    const manual = String(r.Active || '').toUpperCase() === 'FALSE', deadline = !Number.isFinite(exp) || now >= exp;
+    return Object.assign({}, r, { Closed_By: manual ? 'manual' : (deadline ? 'deadline' : ''), Closes_At: Number.isFinite(exp) ? new Date(exp).toISOString() : '', Closes_Label: Number.isFinite(exp) ? inspFmtEt(exp) : 'INVALID cutoff — block is hidden from partners', Is_Closed: deadline, Str_Closed: !!(strSt && strSt.closed.includes(r.Date)), Str_Text: strSt && strSt.closed.includes(r.Date) ? (inspStrDayInfo(strSt, r.Date) || {}).text || '' : '', Str_Error: strErr });
   }));
 }
 async function inspOpenBlockAdd(env, body) {
@@ -32010,6 +32020,148 @@ async function inspOpenBlockAdd(env, body) {
   try { const st = await inspStrStatus(env, cfg, { fresh: true }); if (st.enabled) strWarnings = dates.filter(d => st.closed.includes(d)).map(d => inspStrDayInfo(st, d)).filter(Boolean); }
   catch (e) { strError = e.message; await inspAlert(env, e.code || 'str_guard_unavailable', 'Opened a block but could not check cleaning coverage: ' + e.message); }
   return json({ success: true, count: n, closes, already_closed: alreadyClosed, default_hours: dh, str_warnings: strWarnings, str_error: strError });
+}
+// ── Reopen / extend an open block (Oct 14 2026) ────────────────────────────────────────────
+// A block stops taking bookings at its cutoff (Book_By / Book_By_Hours). Brett can close one by hand (Active=FALSE) or the cutoff
+// passes on its own. REOPEN brings a closed block back; EXTEND pushes the cutoff of a block that is still open. Both do the same
+// thing underneath: set Active=TRUE and an exact Book_By (Eastern wall time) — Book_By wins over the hours, so nothing else changes.
+// The save is read back before anyone is told anything; a message only goes out after the save is confirmed.
+const INSP_REOPEN_PRESETS = [
+  { id: 'tomorrow', label: 'Until tomorrow 7:00 AM' },
+  { id: '3h', hours: 3, label: '3 hours from now' },
+  { id: '6h', hours: 6, label: '6 hours from now' },
+  { id: '12h', hours: 12, label: '12 hours from now' },
+  { id: '24h', hours: 24, label: '24 hours from now' },
+  { id: 'custom', label: 'Pick a date and time' },
+];
+// PURE. o = { nowMs, block, preset, custom }. A close time later than the block's last start is cut back to it (flagged, never silent).
+function inspReopenCloseTime(o) {
+  const now = o.nowMs, b = o.block || {}, preset = String(o.preset || '');
+  const endMs = inspBlockWindowEndMs(b);
+  if (!Number.isFinite(endMs)) return { ok: false, error: 'block_unreadable', message: "This block's date or times can't be read, so it can't be reopened. Close it and open a new one." };
+  if (endMs <= now) return { ok: false, error: 'block_over', message: "This block's window has already ended — nothing can be booked in it. Open a new block instead." };
+  let ms;
+  if (preset === 'tomorrow') ms = inspEtWallToMs(inspAddDays(inspEtDate(now), 1), '07:00');
+  else if (preset === 'custom') {
+    const m = String(o.custom == null ? '' : o.custom).trim().match(/^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}:\d{2})$/);
+    ms = m ? inspEtWallToMs(m[1], m[2]) : NaN;
+    if (!Number.isFinite(ms)) return { ok: false, error: 'bad_custom', message: 'Pick a valid date and time (Eastern).' };
+  } else {
+    const p = INSP_REOPEN_PRESETS.find(x => x.id === preset && x.hours);
+    if (!p) return { ok: false, error: 'bad_preset', message: 'Unknown choice: ' + preset };
+    ms = Math.ceil((now + p.hours * 3600000) / 60000) * 60000;
+  }
+  if (!Number.isFinite(ms)) return { ok: false, error: 'bad_time', message: "That time can't be read." };
+  if (ms <= now) return { ok: false, error: 'in_the_past', message: 'That time has already passed. Pick a time in the future.' };
+  let capped = false;
+  if (ms > endMs) { ms = endMs; capped = true; }
+  const mins = inspEtMinutes(ms), hhmm = String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+  const date = inspEtDate(ms), wall = date + 'T' + hhmm;
+  return { ok: true, closeMs: inspEtWallToMs(date, hhmm), wall, capped, capped_to_label: capped ? inspFmtEt(ms) : '' };
+}
+// PURE. o = { block, closeMs, url, extend } -> the text/email Brett's partner receives.
+function inspReopenMessage(o) {
+  const b = o.block, startMs = inspEtWallToMs(b.Date, b.Start_Time), endMs = inspBlockWindowEndMs(b);
+  const day = new Date(startMs).toLocaleDateString('en-US', { timeZone: INSP_TZ, weekday: 'short', month: 'short', day: 'numeric' });
+  const win = inspFmtEtTime(startMs) + '–' + inspFmtEtTime(endMs), by = inspFmtEt(o.closeMs);
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const lead = o.extend ? `Brett extended booking for ${day}, ${win}.` : `Brett reopened inspection times for ${day}, ${win}.`;
+  const sms = `Ridge Co: ${lead} Book by ${by}: ${o.url}`;
+  const html = `<p>${esc(lead)}</p><p>You can book until <b>${esc(by)}</b>. Times already taken stay taken.</p><p><a href="${esc(o.url)}" style="display:inline-block;padding:10px 16px;background:#1d4ed8;color:#fff;border-radius:6px;text-decoration:none">Pick a time</a></p>`;
+  return { sms, subject: (o.extend ? 'Inspection booking extended: ' : 'Inspection times reopened: ') + day, html };
+}
+// PURE. Who can be told about this block: its own customer, or (for an "any customer" block) every partner with a booking link,
+// with the ones who already have a booking that day pre-ticked. Needs a booking link (Book_Token) — that is what the message sends.
+function inspReopenRecipients(block, customers, bookings) {
+  const live = c => String(c.Active || '').toUpperCase() !== 'FALSE' && !!c.Book_Token;
+  const bookedThatDay = new Set((bookings || []).filter(x => INSP_ACTIVE_BOOKING.includes(x.Status) && String(x.Active || '').toUpperCase() !== 'FALSE' && inspEtDate(Date.parse(x.Start_ISO)) === block.Date).map(x => String(x.Customer_ID)));
+  let list = (customers || []).filter(live);
+  if (block.Customer_ID) list = list.filter(c => String(c.ID) === String(block.Customer_ID));
+  return list.map(c => ({ id: String(c.ID), name: c.Name || ('Customer ' + c.ID), contact: c.Contact_Name || '', has_phone: !!c.Contact_Phone, has_email: !!c.Contact_Email, selected: block.Customer_ID ? true : bookedThatDay.has(String(c.ID)) }));
+}
+async function inspOpenBlockReopen(env, body) {
+  try {
+    const id = body && body.id;
+    if (id === undefined || id === null || id === '') return json({ ok: false, error: 'id_required', message: 'Which block?' }, 400);
+    const preview = body.preview === true;
+    let rows; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { return json({ ok: false, error: 'sheet_unavailable', message: 'Could not read the open blocks: ' + e.message }, 500); }
+    const b = rows.find(r => String(r.ID) === String(id));
+    if (!b) return json({ ok: false, error: 'not_found', message: 'That block no longer exists.' }, 404);
+    const cfg = await fetchConfig(env), dh = inspDefaultBookByHours(cfg), nowMs = Date.now(), warnings = [];
+    const exp = inspBlockExpiryMs(b, dh);
+    const manual = String(b.Active || '').toUpperCase() === 'FALSE', deadline = !Number.isFinite(exp) || nowMs >= exp;
+    const mode = (manual || deadline) ? 'reopen' : 'extend';
+    let strClosed = false, strError = '';
+    try { const st = await inspStrStatus(env, cfg, preview ? {} : { fresh: true }); if (st.enabled) strClosed = st.closed.includes(b.Date); } catch (e) { strError = e.message; }
+    let customers = [], bookings = [], recipErr = '';
+    try { customers = await fetchTab(env, 'Insp_Customers'); } catch (e) { recipErr = 'Could not read your partner list: ' + e.message; }
+    try { bookings = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) warnings.push('Could not read bookings, so partners with a booking that day are not pre-ticked: ' + e.message); }
+    const recipients = inspReopenRecipients(b, customers, bookings);
+    let notifyBlocked = '';
+    if (recipErr) notifyBlocked = recipErr;
+    else if (strError) notifyBlocked = "Your cleaning/booking calendars can't be read right now, so partners are paused and nothing can be sent: " + strError;
+    else if (strClosed) notifyBlocked = 'No cleaner is scheduled for the cabin checkout that day, so that day stays closed to booking and nothing can be sent. It opens by itself once a cleaner is on the cleaning calendar.';
+    else if (!recipients.length) notifyBlocked = 'No partner with a booking link matches this block, so there is nobody to tell.';
+
+    if (preview) {
+      const options = INSP_REOPEN_PRESETS.map(p => {
+        if (p.id === 'custom') return { id: 'custom', label: p.label };
+        const r = inspReopenCloseTime({ nowMs, block: b, preset: p.id });
+        return r.ok ? { id: p.id, label: p.label, closes_label: inspFmtEt(r.closeMs), capped: r.capped } : { id: p.id, label: p.label, error: r.message };
+      });
+      let sample = null, sel = null;
+      if (body.preset) {
+        sel = inspReopenCloseTime({ nowMs, block: b, preset: body.preset, custom: body.custom });
+        if (sel.ok) { const m = inspReopenMessage({ block: b, closeMs: sel.closeMs, url: '[their booking link]', extend: mode === 'extend' }); sample = { sms: m.sms, subject: m.subject, closes_label: inspFmtEt(sel.closeMs), capped: sel.capped, capped_to_label: sel.capped_to_label }; }
+      }
+      return json({ ok: true, mode, block: { id: b.ID, date: b.Date, from: b.Start_Time, to: b.End_Time, last_start: b.Last_Start || '', customer_id: b.Customer_ID || '', note: b.Note || '' }, closed_by: manual ? 'manual' : (deadline ? 'deadline' : ''), closes_label: Number.isFinite(exp) ? inspFmtEt(exp) : '', options, selected: sel ? (sel.ok ? { ok: true } : { ok: false, error: sel.error, message: sel.message }) : null, sample, recipients, str_closed: strClosed, notify_blocked: notifyBlocked, warnings });
+    }
+
+    const sel = inspReopenCloseTime({ nowMs, block: b, preset: body.preset, custom: body.custom });
+    if (!sel.ok) return json({ ok: false, error: sel.error, message: sel.message }, 400);
+    const want = { email: !!(body.notify && body.notify.email), sms: !!(body.notify && body.notify.sms) };
+    const ids = Array.isArray(body.recipients) ? body.recipients.map(String) : [];
+    const unknown = ids.filter(x => !recipients.some(r => r.id === x));
+    if (unknown.length) return json({ ok: false, error: 'bad_recipient', message: 'One of the people to notify is not valid for this block. Close this window and try again.' }, 400);
+    if ((want.email || want.sms) && !ids.length) return json({ ok: false, error: 'no_recipient', message: 'Pick who to notify, or untick email and text.' }, 400);
+    if ((want.email || want.sms) && notifyBlocked) return json({ ok: false, error: 'notify_blocked', message: notifyBlocked + ' Nothing was changed — untick email and text to reopen without telling anyone.' }, 409);
+
+    await ensureInspTabs(env);
+    const wr = await updateRow(env, 'Insp_Open_Blocks', b.ID, { Active: 'TRUE', Book_By: sel.wall, Book_By_Hours: '' });
+    let wj = null; try { wj = await wr.json(); } catch (je) { console.error('insp: reopen save response unreadable:', je && je.message); }
+    if (!wj || !wj.success) { await inspAlert(env, 'reopen_save', `Block #${b.ID} could not be ${mode === 'reopen' ? 'reopened' : 'extended'}: ${(wj && wj.error) || 'save failed'}`); return json({ ok: false, error: 'save_failed', message: 'Could not save — nothing was changed and nobody was notified.' + (wj && wj.error ? ' (' + wj.error + ')' : '') }, 500); }
+    let after = null; try { after = (await fetchTab(env, 'Insp_Open_Blocks')).find(r => String(r.ID) === String(b.ID)); } catch (e) { after = null; }
+    if (!after || String(after.Active || '').toUpperCase() === 'FALSE' || String(after.Book_By || '').trim() !== sel.wall || inspBlockExpiryMs(after, dh) !== sel.closeMs) {
+      await inspAlert(env, 'reopen_verify', `Block #${b.ID}: the ${mode} did not show up when read back (wanted close ${sel.wall}). Nobody was notified.`);
+      return json({ ok: false, error: 'verify_failed', message: "The change didn't show up when I read it back, so nobody was notified. Check the block in the list, then try again." }, 500);
+    }
+
+    const notifyLog = [];
+    for (const rid of ids) {
+      const c = customers.find(x => String(x.ID) === rid);
+      const m = inspReopenMessage({ block: b, closeMs: sel.closeMs, url: inspBookUrl('k=' + encodeURIComponent(c.Book_Token)), extend: mode === 'extend' });
+      if (want.sms) {
+        if (!c.Contact_Phone) notifyLog.push(`${c.Name}: text NOT SENT — no phone number on file`);
+        else { try { const r = await sendSMS(env, c.Contact_Phone, m.sms); notifyLog.push(r && r.skipped ? `${c.Name}: text NOT SENT — skipped (${r.reason})` : (r && (r.sid || r.staged) ? `${c.Name}: text ok${r.staged ? ' (staging stub)' : ''}` : `${c.Name}: text FAILED ${(r && (r.error || r.message)) || 'no confirmation from the text service'}`)); } catch (e) { notifyLog.push(`${c.Name}: text FAILED ${e.message}`); } }
+      }
+      if (want.email) {
+        if (!c.Contact_Email) notifyLog.push(`${c.Name}: email NOT SENT — no email on file`);
+        else { try { const r = await gmailSendEmail(env, { to: c.Contact_Email, subject: m.subject, html: m.html }); notifyLog.push(`${c.Name}: email ${r && r.staged ? 'ok (staging stub)' : 'ok'}`); } catch (e) { notifyLog.push(`${c.Name}: email FAILED ${e.message}`); } }
+      }
+    }
+    const bad = notifyLog.filter(l => /FAILED|NOT SENT/.test(l));
+    if (bad.length) await inspAlert(env, 'reopen_notify', `Block #${b.ID} ${mode === 'reopen' ? 'reopened' : 'extended'}, but not everyone was told: ${bad.join('; ')}`);
+    const summary = `${inspFmtEt(nowMs)}: ${mode === 'reopen' ? 'reopened' : 'extended'} until ${inspFmtEt(sel.closeMs)}; ${notifyLog.join('; ') || 'nobody notified (not requested)'}`;
+    try { const lr = await updateRow(env, 'Insp_Open_Blocks', b.ID, { Reopen_Log: summary.slice(0, 480) }); const lj = await lr.json(); if (!lj || !lj.success) throw new Error((lj && lj.error) || 'not saved'); }
+    catch (e) { console.error('insp: Reopen_Log write failed for block', b.ID, e && e.message); warnings.push('The block was saved, but the activity note on it could not be written: ' + e.message); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-block/' + mode, Success: bad.length ? 'FALSE' : 'TRUE', Notes: `block ${b.ID} ${b.Date} ${mode} until ${sel.wall}; ${notifyLog.join('; ') || 'no notification requested'}`.slice(0, 480) }); }
+    catch (e) { console.error('insp: telemetry write failed for block', b.ID, e && e.message); warnings.push('The block was saved, but the telemetry row could not be written: ' + e.message); }
+    return json({ ok: true, mode, id: String(b.ID), closes_iso: new Date(sel.closeMs).toISOString(), closes_label: inspFmtEt(sel.closeMs), capped: sel.capped, capped_to_label: sel.capped_to_label, notify: notifyLog, warnings });
+  } catch (e) {
+    console.error('insp: reopen/extend failed:', e && e.message);
+    try { await inspAlert(env, 'reopen_unexpected', 'Reopen/extend crashed: ' + (e && e.message)); } catch (ae) { console.error('insp: could not raise the reopen_unexpected alert:', ae && ae.message); }
+    return json({ ok: false, error: 'internal', message: 'Something went wrong, so nobody was notified: ' + (e && e.message) }, 500);
+  }
 }
 async function inspBookingsList(env, url) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Bookings'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read bookings: ' + e.message }, 500); }

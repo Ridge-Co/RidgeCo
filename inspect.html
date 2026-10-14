@@ -40,7 +40,7 @@
   .sheet h2{margin:2px 0 12px;font-size:18px}
   .hide{display:none}
   .banner{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
-  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;pointer-events:none;opacity:0;transition:opacity .2s}
   .toast.show{opacity:1}
   #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
   .seg{display:flex;gap:6px;margin:10px 0}
@@ -54,6 +54,21 @@
   .prop-card:first-child{border-top:none}
   .two-col{display:flex;gap:8px}
   .two-col>div{flex:1}
+  .btn:disabled{opacity:.45;cursor:not-allowed;background:#eef0f3;color:var(--muted)}
+  .ob-card{border-top:1px solid var(--border);padding:12px 0}
+  .ob-card:first-child{border-top:none}
+  .ob-actions{display:flex;gap:8px;margin-top:10px}
+  .ob-actions .btn{flex:1;padding:10px 6px}
+  .ob-state{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:700;margin-left:6px}
+  .ob-state.open{background:#e7f6ec;color:var(--accent2)} .ob-state.closed{background:#f1f3f5;color:var(--muted)}
+  .orm-opt{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;margin:6px 0;cursor:pointer}
+  .orm-opt.sel{border-color:var(--accent);background:#eaf1fd}
+  .orm-opt.bad{opacity:.5;cursor:not-allowed}
+  .orm-opt input{width:auto;margin-top:3px}
+  .orm-chk{display:flex;align-items:center;gap:10px;padding:8px 0}
+  .orm-chk input{width:auto}
+  .orm-msg{background:var(--chip);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px;white-space:pre-wrap;word-break:break-word}
+  .orm-will{background:#eaf1fd;border:1px solid #c7d9f7;border-radius:10px;padding:10px 12px;font-size:14px;margin-top:12px}
 </style>
 <style id="mobile-input-font">
 /* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
@@ -363,6 +378,35 @@
       </div>
     </div>
   </main>
+</div>
+
+<!-- Reopen / extend a block -->
+<div class="modal" id="ob-reopen-modal">
+  <div class="sheet">
+    <h2 id="orm-title">Reopen block</h2>
+    <div id="orm-summary" class="muted"></div>
+    <div id="orm-load" class="muted" style="margin-top:10px">Loading…</div>
+    <div id="orm-body" class="hide">
+      <label class="fld" id="orm-keep-label">Keep bookings open</label>
+      <div id="orm-opts"></div>
+      <div id="orm-custom-wrap" class="hide"><label class="fld">Close at (Eastern)</label><input type="datetime-local" id="orm-custom" onchange="ormPreview()"></div>
+      <div id="orm-pick-err" class="banner hide" style="margin-top:8px"></div>
+      <label class="fld" style="margin-top:14px">Let the partner know</label>
+      <div id="orm-blocked" class="banner hide"></div>
+      <div id="orm-notify">
+        <div class="orm-chk"><input type="checkbox" id="orm-email" onchange="ormRefresh()"><label for="orm-email">Email</label></div>
+        <div class="orm-chk"><input type="checkbox" id="orm-sms" onchange="ormRefresh()"><label for="orm-sms">Text message</label></div>
+        <div id="orm-recips"></div>
+        <div class="muted" style="margin:8px 0 4px">What they will get:</div>
+        <div class="orm-msg" id="orm-msg"></div>
+      </div>
+      <div class="orm-will" id="orm-will"></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeModal('ob-reopen-modal')">Cancel</button>
+      <button class="btn go" style="flex:2" id="orm-go" onclick="ormConfirm(this)" disabled>Confirm</button>
+    </div>
+  </div>
 </div>
 
 <!-- Edit customer sheet -->
@@ -1046,13 +1090,122 @@ function loadBlocks(){
     var up=list.filter(function(b){return b.Date>=today;});
     document.getElementById('ob-list').innerHTML = up.length ? up.map(function(b){
       var c=customers.find(function(x){return x.ID===b.Customer_ID;});
-      return '<div class="unit-row"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+(b.Last_Start?(' <span class="muted">(last start '+esc(b.Last_Start)+')</span>'):'')+'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+(b.Is_Closed?'<b>Booking closed</b> ':'Bookings close ')+esc(b.Closes_Label||'')+'</div>'+(b.Str_Closed?'<div class="muted" style="color:var(--danger)"><b>⛔ Closed — no cleaner for the cabin checkout.</b> '+esc(b.Str_Text||'')+'</div>':'')+'</div><button class="btn sm" onclick="obRemove(\''+b.ID+'\')">Close</button></div>';
+      var closed=!!b.Closed_By;
+      var state = closed ? '<span class="ob-state closed">Closed</span>' : '<span class="ob-state open">Open</span>';
+      var when = b.Closed_By==='manual' ? '<b>Closed by you.</b> Would have closed '+esc(b.Closes_Label||'')
+        : b.Closed_By==='deadline' ? '<b>Booking closed</b> '+esc(b.Closes_Label||'')
+        : 'Bookings close '+esc(b.Closes_Label||'');
+      return '<div class="ob-card"><div><b>'+esc(b.Date)+'</b> '+esc(b.Start_Time)+'–'+esc(b.End_Time)+state+(b.Last_Start?(' <span class="muted">(last start '+esc(b.Last_Start)+')</span>'):'')+'</div>'
+        +'<div class="muted">'+esc(c?c.Name:'Any customer')+(b.Note?(' · '+esc(b.Note)):'')+'</div><div class="muted">'+when+'</div>'
+        +(b.Str_Closed?'<div class="muted" style="color:var(--danger)"><b>⛔ Closed — no cleaner for the cabin checkout.</b> '+esc(b.Str_Text||'')+'</div>':'')
+        +(b.Reopen_Log?'<div class="muted">Last change: '+esc(b.Reopen_Log)+'</div>':'')
+        +'<div class="ob-actions">'
+        +'<button class="btn sm" '+(closed?'disabled title="Already closed"':'')+' onclick="obRemove(\''+b.ID+'\')">Close</button>'
+        +'<button class="btn sm" '+(closed?'':'disabled title="Already open"')+' onclick="ormOpen(\''+b.ID+'\')">Reopen</button>'
+        +'<button class="btn sm" '+(closed?'disabled title="Closed — use Reopen"':'')+' onclick="ormOpen(\''+b.ID+'\')">Extend open</button>'
+        +'</div></div>';
     }).join('') : '<p class="muted">No open blocks. Partners will see no times until you add one.</p>';
   }).catch(function(e){ document.getElementById('ob-list').innerHTML='<div class="banner">Could not load open blocks: '+esc(e.message)+'</div>'; });
 }
 function obRemove(id){
-  if(!confirm('Close this block? Pending bookings inside it are NOT cancelled — decline them in Approvals.')) return;
+  if(!confirm('Close this block? Pending bookings inside it are NOT cancelled — decline them in Approvals. You can reopen it later.')) return;
   api('POST','/insp/open-block/update',{id:id,fields:{Active:'FALSE'}}).then(function(r){ if(r&&r.success){ toast('Closed'); loadBlocks(); } else alert((r&&r.error)||'Could not close'); }).catch(function(e){ alert('Error: '+e.message); });
+}
+
+// ── Reopen / extend a block ──────────────────────────────────
+var orm={id:'',mode:'',data:null,preset:'tomorrow',busy:false};
+function ormOpen(id){
+  orm={id:id,mode:'',data:null,preset:'tomorrow',busy:false};
+  document.getElementById('orm-title').textContent='Loading…';
+  document.getElementById('orm-summary').textContent='';
+  document.getElementById('orm-load').className='muted'; document.getElementById('orm-load').textContent='Loading…';
+  document.getElementById('orm-body').classList.add('hide');
+  document.getElementById('orm-custom').value='';
+  document.getElementById('orm-go').disabled=true;
+  document.getElementById('ob-reopen-modal').classList.add('open');
+  ormFetch(true);
+}
+function ormFetch(first){
+  var seq=(orm.seq=(orm.seq||0)+1);
+  var custom=document.getElementById('orm-custom').value;
+  return api('POST','/insp/open-block/reopen',{id:orm.id,preview:true,preset:orm.preset,custom:custom}).then(function(r){
+    if(seq!==orm.seq) return;
+    if(!r||!r.ok){ document.getElementById('orm-load').className='banner'; document.getElementById('orm-load').textContent=(r&&(r.message||r.error))||'Could not load this block.'; return; }
+    orm.data=r; orm.mode=r.mode;
+    if(first) ormInit();
+    ormRender();
+  }).catch(function(e){ document.getElementById('orm-load').className='banner'; document.getElementById('orm-load').textContent='Error: '+e.message; });
+}
+function ormInit(){
+  var d=orm.data, reopen=d.mode==='reopen';
+  document.getElementById('orm-title').textContent=reopen?'Reopen this block':'Extend this block';
+  document.getElementById('orm-keep-label').textContent=reopen?'Reopen bookings until…':'Keep bookings open until…';
+  document.getElementById('orm-go').textContent=reopen?'Confirm reopen':'Confirm extend';
+  // Reopen: email on, text off. Extend: nobody is told unless you tick it.
+  document.getElementById('orm-email').checked=reopen;
+  document.getElementById('orm-sms').checked=false;
+  orm.picked={}; (d.recipients||[]).forEach(function(r){ orm.picked[r.id]=!!r.selected; });
+}
+function ormRender(){
+  var d=orm.data, b=d.block;
+  var c=customers.find(function(x){return x.ID===b.customer_id;});
+  document.getElementById('orm-summary').innerHTML='<b>'+esc(b.date)+'</b> '+esc(b.from)+'–'+esc(b.to)+(b.last_start?' (last start '+esc(b.last_start)+')':'')+' · '+esc(c?c.Name:'Any customer')+'<br>'+(d.closed_by==='manual'?'Closed by you.':d.closed_by==='deadline'?'Booking closed '+esc(d.closes_label)+'.':'Open — bookings close '+esc(d.closes_label)+'.');
+  document.getElementById('orm-load').className='hide';
+  document.getElementById('orm-body').classList.remove('hide');
+  document.getElementById('orm-opts').innerHTML=d.options.map(function(o){
+    var bad=!!o.error, sel=orm.preset===o.id;
+    var sub=o.id==='custom'?'You choose the exact time':(bad?esc(o.error):'Closes '+esc(o.closes_label)+(o.capped?' (cut back to the block’s last start)':''));
+    return '<label class="orm-opt'+(sel?' sel':'')+(bad?' bad':'')+'"><input type="radio" name="orm-preset" '+(sel?'checked ':'')+(bad?'disabled ':'')+'onchange="ormPick(\''+o.id+'\')"><span><b>'+esc(o.label)+'</b><br><span class="muted">'+sub+'</span></span></label>';
+  }).join('');
+  document.getElementById('orm-custom-wrap').classList.toggle('hide',orm.preset!=='custom');
+  var pe=document.getElementById('orm-pick-err'), bad=d.selected&&d.selected.ok===false;
+  pe.classList.toggle('hide',!bad); pe.textContent=bad?d.selected.message:'';
+  // notify area
+  var blocked=d.notify_blocked||'';
+  var bl=document.getElementById('orm-blocked'); bl.classList.toggle('hide',!blocked); bl.textContent=blocked;
+  document.getElementById('orm-notify').classList.toggle('hide',!!blocked);
+  if(blocked){ document.getElementById('orm-email').checked=false; document.getElementById('orm-sms').checked=false; }
+  document.getElementById('orm-recips').innerHTML=(d.recipients||[]).map(function(r){
+    var ch=[r.has_email?'email':'<b style="color:var(--danger)">no email</b>', r.has_phone?'text':'<b style="color:var(--danger)">no phone</b>'].join(' · ');
+    return '<div class="orm-chk"><input type="checkbox" id="orm-r-'+esc(r.id)+'" '+(orm.picked[r.id]?'checked ':'')+'onchange="orm.picked[\''+esc(r.id)+'\']=this.checked;ormRefresh()"><label for="orm-r-'+esc(r.id)+'"><b>'+esc(r.name)+'</b>'+(r.contact?' ('+esc(r.contact)+')':'')+' <span class="muted">'+ch+'</span></label></div>';
+  }).join('');
+  ormRefresh();
+}
+function ormPick(id){ orm.preset=id; if(id==='custom'&&!document.getElementById('orm-custom').value){ orm.data.selected=null; orm.data.sample=null; ormRender(); return; } ormFetch(false); }
+function ormPreview(){ ormFetch(false); }
+function ormChosen(){ var d=orm.data; return d&&d.selected&&d.selected.ok&&d.sample ? d.sample : null; }
+function ormRefresh(){
+  var d=orm.data; if(!d) return;
+  var s=ormChosen(), em=document.getElementById('orm-email').checked, sm=document.getElementById('orm-sms').checked;
+  var names=(d.recipients||[]).filter(function(r){return orm.picked[r.id];}).map(function(r){return r.name;});
+  var tell=(em||sm)&&!d.notify_blocked;
+  var chan=[em?'an email':'',sm?'a text':''].filter(Boolean).join(' and ');
+  document.getElementById('orm-msg').textContent=s?(sm?s.sms:('Subject: '+s.subject+'\n'+s.sms.replace(/^Ridge Co: /,''))):'Choose a time above to see the message.';
+  var reopen=d.mode==='reopen';
+  var will='Confirming will '+(reopen?'reopen this block':'extend this block')+(s?' so partners can book until <b>'+esc(s.closes_label)+'</b>':'')+'.'
+    +(s&&s.capped?' (That is as late as it can go — the block’s last start, '+esc(s.capped_to_label)+'.)':'')
+    +' '+(tell&&names.length?'It will also send '+chan+' to <b>'+esc(names.join(', '))+'</b>. Nothing is sent until you tap the button.':(d.notify_blocked?'Nobody will be told.':'Nobody will be told.'));
+  if(tell&&!names.length) will+=' <b style="color:var(--danger)">Tick who to tell, or untick email/text.</b>';
+  document.getElementById('orm-will').innerHTML=will;
+  document.getElementById('orm-go').disabled=orm.busy||!s||(tell&&!names.length);
+}
+function ormConfirm(btn){
+  var d=orm.data, s=ormChosen(); if(!d||!s) return;
+  var em=document.getElementById('orm-email').checked, sm=document.getElementById('orm-sms').checked;
+  var tell=(em||sm)&&!d.notify_blocked;
+  var ids=tell?(d.recipients||[]).filter(function(r){return orm.picked[r.id];}).map(function(r){return r.id;}):[];
+  var label=btn.textContent; orm.busy=true; btn.disabled=true; btn.textContent='Saving…';
+  api('POST','/insp/open-block/reopen',{id:orm.id,preset:orm.preset,custom:document.getElementById('orm-custom').value,notify:{email:tell&&em,sms:tell&&sm},recipients:ids}).then(function(r){
+    orm.busy=false; btn.textContent=label;
+    if(!r||!r.ok){ alert((r&&(r.message||r.error))||'Could not save — nothing was changed.'); ormRefresh(); return; }
+    closeModal('ob-reopen-modal'); loadBlocks();
+    var told=(r.notify||[]), fails=told.filter(function(x){return /FAILED|NOT SENT/.test(x);});
+    toast((r.mode==='reopen'?'Reopened':'Extended')+' until '+r.closes_label+(told.length&&!fails.length?' — partner notified':''));
+    var msg=[]; if(fails.length) msg.push('Saved, but not everyone was told:\n'+fails.join('\n'));
+    if(r.capped) msg.push('Heads up: that was later than the block allows, so it closes at '+r.capped_to_label+'.');
+    if(r.warnings&&r.warnings.length) msg.push(r.warnings.join('\n'));
+    if(msg.length) alert(msg.join('\n\n'));
+  }).catch(function(e){ orm.busy=false; btn.textContent=label; alert('Error: '+e.message); ormRefresh(); });
 }
 function blGet(rotate,btn){
   var id=document.getElementById('bl-customer').value; if(!id){ toast('Pick a customer'); return; }
