@@ -9310,6 +9310,11 @@ function invBillThisJob(k) {
   var built = invBuildApprovalPayload(k);
   if (built.error) { if (msg) msg.innerHTML = '<span style="color:var(--danger)">' + esc(built.error) + '</span>'; return; }
 
+  if (built.priceMismatch) {
+    if (msg) msg.innerHTML = invPriceMismatchHtml(built.approved, built.typed, built.id);
+    return;
+  }
+
   // Already approved AND queued — skip straight to the preview-first send modal.
   if (built.alreadyKnownId) {
     var inWOModal0 = (k === built.woId);
