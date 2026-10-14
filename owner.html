@@ -598,10 +598,23 @@ function switchTab(tab) {
   document.getElementById('tabWOs').className = 'tab' + (tab==='wos'?' active':'');
   document.getElementById('tabSubmit').className = 'tab' + (tab==='submit'?' active':'');
   document.getElementById('tabNotify').className = 'tab' + (tab==='notify'?' active':'');
+  document.getElementById('tabTenants').className = 'tab' + (tab==='tenants'?' active':'');
   document.getElementById('panelWOs').style.display = tab==='wos' ? '' : 'none';
   document.getElementById('panelSubmit').style.display = tab==='submit' ? '' : 'none';
   document.getElementById('panelNotify').style.display = tab==='notify' ? '' : 'none';
+  document.getElementById('panelTenants').style.display = tab==='tenants' ? '' : 'none';
   if (tab==='notify') loadNotifyPrefs();
+  if (tab==='tenants') openTenantsTab();
+}
+
+var tenantRosterPanel = null;
+function openTenantsTab() {
+  var el = document.getElementById('panelTenants');
+  if (!window.TenantRoster) { el.innerHTML = '<div style="color:var(--danger);padding:16px">The tenant tool could not load (tenant-roster.js). Refresh the page; if it keeps happening, tell us.</div>'; return; }
+  if (!tenantRosterPanel) {
+    tenantRosterPanel = TenantRoster.mount(el, { admin: false, ownerId: function(){ return ''; }, call: function(method, path, body){ return api(method, path, body); } });
+  }
+  tenantRosterPanel.reload();
 }
 
 function renderWOs() {
