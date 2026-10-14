@@ -6600,9 +6600,14 @@ async function submitMoveIn() {
     });
     if (checkedWOs.length && res.id) {
       msgEl.innerHTML = '<div style="color:var(--muted);font-size:12px">Linking to '+checkedWOs.length+' open WO(s)…</div>';
+      var linkFails = [];
       for (var j = 0; j < checkedWOs.length; j++) {
-        await api('POST', '/wo-tenant/add', { wo_id: checkedWOs[j], tenant_id: res.id, added_by: 'admin-movein' }).catch(function(){});
+        try {
+          var lr = await api('POST', '/wo-tenant/add', { wo_id: checkedWOs[j], tenant_id: res.id, added_by: 'admin-movein' });
+          if (lr && lr.error) linkFails.push(checkedWOs[j] + ': ' + lr.error);
+        } catch (linkErr) { linkFails.push(checkedWOs[j] + ': ' + (linkErr && linkErr.message || linkErr)); }
       }
+      if (linkFails.length) toast('Tenant moved in, but ' + linkFails.length + ' work order link(s) failed: ' + linkFails.join('; '), 'error');
     }
 
     closeModal('modal-move-in');
