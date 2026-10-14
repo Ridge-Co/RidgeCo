@@ -29519,6 +29519,7 @@ async function hubBulkImport(env, body) {
     units_created: unitsCreated, units_matched: unitsMatched,
     tenants_created: tenantsCreated, tenants_skipped_existing: tenantsSkippedExisting,
     tenants_flagged_elsewhere: flaggedTenantsElsewhere,
+    tenants_refused_no_move_in_date: tenantsRefused,
     owners_flagged_no_match: flaggedOwners,
     properties_matched_via_address_normalization: addrFoldedMatches,
   };
