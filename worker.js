@@ -15311,7 +15311,7 @@ async function releaseMessageQueue(env, body) {
     const kind = row.Recipient_Type;
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
+    const tenant = kind === 'tenant' ? tenantForQueuedText(tenants, row.Recipient_Phone, row.Property_ID) : null;
     const vendor = kind === 'vendor' ? vendors.find(v => normalizePhone(v.Phone) === row.Recipient_Phone) : null;
     const propertyOn = smsToggleOn(property && property.SMS_Enabled);
     const ownerOn = smsToggleOn(owner && owner.SMS_Enabled);
@@ -15319,7 +15319,7 @@ async function releaseMessageQueue(env, body) {
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
