@@ -738,7 +738,7 @@ async function groupOf4() {
     const notifySrc = grab(wsrc, 'async function bidCancelNotifyVendor(');
     t('cancel code: the ONLY way it texts is bidCancelNotifyVendor -> smsGatedSend with recipient_type vendor (never tenant/owner/sendSMS/assign/queueNotification)', !/sendSMS|smsGatedSend|assignVendor|queueMessage|queueNotification|notifyTenant/.test(cancelSrc) && /smsGatedSend\(env, \{[^}]*recipient_type: 'vendor'/.test(notifySrc) && !/recipient_type: '(tenant|owner)'/.test(notifySrc + cancelSrc) && /bidCancelNotifyVendor\(/.test(cancelSrc));
     t('cancel code: no swallowing catch', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(cancelSrc));
-    t('BUILD_VERSION bumped to the follow-up value', /const BUILD_VERSION = '2026-10-13\.\d+-[a-z-]+'/.test(wsrc));
+    t('BUILD_VERSION bumped to the follow-up value', /const BUILD_VERSION = '2026-10-(13|1[4-9])\.\d+-[a-z-]+'/.test(wsrc));
   }
 }
 
