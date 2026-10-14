@@ -1,3 +1,10 @@
+# WHO TO PAY BANK LABEL — Oct 14, 2026 — Ridge-Co/RidgeCo PR #281, base `main` (verified with create_pull_request response), head `fix/who-to-pay-bank-label-oct14` (cut from main tip f6d66fe), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.12-bank-label-fix`.
+
+## 🟡 Built and unit-tested (who-to-pay-clearing 80 checks, full offline suite green): follow-up to #253
+QuickBooks files "QuickBooks Payments-Bank" under Type CREDIT_CARD, so `classifyPaymentMethod` read bank payments as `card`. It now tests a plain bank name as `ach` before the Type check (names with a card/visa/credit/paypal word stay card; a real card-charge object still wins). The chip text was never wrong (it prints the QuickBooks method name) and Config PAYMENT_CLEAR_DAYS is ach:2,card:2, so no clear date changes today. Config PAYMENT_CLEAR_DAYS row 39 was set to `ach:2,card:2,check:5,cash:0,other:3` the same day (sheet change, live).
+
+---
+
 # WO STATUS SINGLE SOURCE OF TRUTH — Oct 14, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/wo-status-ssot-oct14` (cut from main tip f94458d), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.5-wo-status-ssot`. PR #259 (base `main`, verified with get_pull_request); staging test-only PR #260.
 
 ## 🟡 Built, tested (141 new assertions + headless-Chromium load of all 5 pages) and verified on staging (Worker `2026-10-14.5-wo-status-ssot`: tenant 86 / vendor 7 portal lists return the same open statuses as before, include_closed adds Cancelled): closes Ops_Build_Queue #140 / #87
