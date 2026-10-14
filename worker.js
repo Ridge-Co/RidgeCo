@@ -15146,11 +15146,15 @@ async function smsGatedSend(env, opts) {
   const kind = opts.recipient_type;
   const propertyOn = smsToggleOn(opts.property && opts.property.SMS_Enabled);
   const ownerOn    = smsToggleOn(opts.owner && opts.owner.SMS_Enabled);
-  const tenantOn   = smsToggleOn(opts.tenant && opts.tenant.SMS_Enabled);
+  // Oct 14 2026: a tenant the owner roster tool added is held at SMS_Enabled FALSE (consent pending). The WELCOME text Brett sends by
+  // hand is the one message allowed through that switch - nothing automatic is.
+  const _welcomeOverride = opts.message_type === 'tenant_welcome' && opts.allowPendingConsent === true && !!opts.tenant && String(opts.tenant.SMS_Consent || '') === 'pending';
+  const tenantOn   = _welcomeOverride || smsToggleOn(opts.tenant && opts.tenant.SMS_Enabled);
   const vendorOn   = smsToggleOn(opts.vendor && opts.vendor.SMS_Enabled);
   const tenantOptOut = String((opts.tenant && opts.tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
   const vendorOptOut = String((opts.vendor && opts.vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
+  const tenantMovedOutFlag = kind === 'tenant' && tenantMovedOut(opts.tenant);
+  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: tenantMovedOutFlag });
 
   const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : kind === 'admin' ? opts.admin : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
