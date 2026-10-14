@@ -503,7 +503,7 @@ const drain = async (L, c, extra) => {
   const s = stateOf(store);
   t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
   t('review_wed (Wednesday job) is not seeded on a Monday', !s.jobs.review_wed);
-  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 7 && !!s.seeded.at);
+  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 9 && !!s.seeded.at);
   const st = L.schedStatus(s, new Date(c.v), L.SCHED_JOBS);
   t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 7 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
   c.v += 20 * 60000;
