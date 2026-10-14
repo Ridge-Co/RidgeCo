@@ -29494,13 +29494,20 @@ async function hubBulkImport(env, body) {
         const spaceIdx = fullName.indexOf(' ');
         const firstName = spaceIdx === -1 ? fullName : fullName.slice(0, spaceIdx);
         const lastName = spaceIdx === -1 ? '' : fullName.slice(spaceIdx + 1);
+        // Oct 14 2026 (Brett): no tenant is created without a real move-in date - it is what keeps them away from the previous
+        // tenant's work orders. A row without one is REFUSED and listed in the result (never silently created with a blank date).
+        const miRaw = String((r && (r.Move_In_Date || r['Move In Date'] || r['Move-In Date'] || r.Move_In)) || '').trim();
+        const dateWhy = tenantDatesError({ Move_In_Date: miRaw });
+        if (dateWhy) tenantsRefused.push({ name: fullName, phone: rawPhone, address: g.address, unit_label: label, reason: dateWhy });
+        else {
         const tid = String(nextTenantId++);
-        const tenantRow = { ID: tid, First_Name: firstName, Last_Name: lastName, Phone: phone, Email: email, Property_ID: prop.ID, Unit_ID: unit.ID, Move_In_Date: '', Active: 'TRUE' };
+        const tenantRow = { ID: tid, First_Name: firstName, Last_Name: lastName, Phone: phone, Email: email, Property_ID: prop.ID, Unit_ID: unit.ID, Move_In_Date: rosterNormDate(miRaw), Active: 'TRUE' };
         newTenantRows.push(tabState.Tenants.headers.map(h => tenantRow[h] !== undefined ? tenantRow[h] : ''));
         if (phone) tenantByPhone[phone] = tenantRow;
         tenantsCreated++;
         unit.Tenant_ID = tid;
         if (!unitIsNew) linkUpdates.push({ tab: 'Units', id: unit.ID, field: 'Tenant_ID', value: tid });
+        }
       }
       if (unitIsNew) newUnitRows.push(tabState.Units.headers.map(h => unit[h] !== undefined ? unit[h] : ''));
     }
