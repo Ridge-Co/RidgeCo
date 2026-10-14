@@ -745,6 +745,8 @@ const _hubWorkerCore = {
         if (path === '/receipt/suggest')          return await receiptSuggest(env, body);
         if (path === '/receipt/delete')           return await updateRow(env, 'Receipts', body.id, { Active: 'FALSE' });
         if (path === '/tenant/move-out')          return await processMoveOut(env, body);
+        if (path === '/owner/tenant-roster/preview') return await ownerRosterPreview(env, callerRole, callerSessionId, body);
+        if (path === '/owner/tenant-roster/apply')   return await ownerRosterApply(env, callerRole, callerSessionId, body);
         if (path === '/assign')                   return await assignVendor(env, body);
         if (path === '/status')                   return await callWithFailureAlert(env, 'wo_status', '/status', () => updateStatus(env, body));
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
