@@ -6452,6 +6452,115 @@ async function processMoveOut(env, body) {
 // - isBackgroundWO); nobody is texted or emailed by this tool, tenant OR owner. The owner is never shown these rules.
 // A future move-out date only records the date + flags the row for the daily scheduler flip (daily_turnover job, no cron);
 // NO turnover work orders are created - Brett is alerted and approves those himself.
+const ROSTER_MAX_ROWS = 200;
+const ROSTER_LOG_TAB = 'Roster_Imports';
+const ROSTER_LOG_COLS = ['ID', 'Timestamp', 'Batch', 'Owner_ID', 'Actor', 'Rows', 'Moved_In', 'Moved_Out', 'Future_Move_Outs', 'Name_Fixes', 'Consent_Attested', 'Result', 'Details_JSON', 'Active'];
+// Tenants columns this tool relies on. SMS_Consent: 'attested' (upload box ticked) | 'pending' (not ticked) | 'welcome_sent'.
+// Welcome_Sent stays blank until Brett sends the welcome, which is what puts the person on his "not yet welcomed" list.
+const ROSTER_TENANT_COLS = ['SMS_Enabled', 'SMS_Consent', 'Roster_Source', 'Roster_Batch', 'Roster_Pending_Flip', 'Welcome_Sent', 'Welcome_Sent_Date', 'Onboarding_Source'];
+
+// '' = blank, null = not a real date, otherwise YYYY-MM-DD. Accepts YYYY-MM-DD, M/D/YYYY, M/D/YY, M-D-YYYY.
+function rosterNormDate(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  let y, m, d, mt;
+  if ((mt = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s))) { y = +mt[1]; m = +mt[2]; d = +mt[3]; }
+  else if ((mt = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2}|\d{4})$/.exec(s))) { m = +mt[1]; d = +mt[2]; y = +mt[3]; if (mt[3].length === 2) y += 2000; }
+  else return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+function rosterUnitKey(label) {
+  return String(label || '').trim().toLowerCase().replace(/^(apartment|apt|unit|suite|ste|#)\s*\.?\s*/, '').replace(/\s+/g, '');
+}
+// Only the name parts the row actually supplies AND that really differ (trimmed, case-sensitive so a capitalisation fix counts).
+// A blank part never blanks what is on file - this tool amends names, it never overwrites them with nothing.
+function rosterNameFields(first, last, t) {
+  const f = {};
+  if (first && first !== String(t.First_Name || '').trim()) f.First_Name = first;
+  if (last && last !== String(t.Last_Name || '').trim()) f.Last_Name = last;
+  return f;
+}
+function rosterNameKey(first, last) {
+  return (String(first || '') + ' ' + String(last || '')).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function rosterSplitName(name) {
+  const s = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!s) return { first: '', last: '' };
+  const m = /^(\S+)\s+(.*)$/.exec(s);
+  return m ? { first: m[1], last: m[2] } : { first: s, last: '' };
+}
+// Match a typed/CSV address to one of the OWNER'S properties only. Exact normalized match first; then the same address
+// without a ", City" tail; then a UNIQUE whole-word prefix ("1599 Ingleside" -> "1599 Ingleside Ave"), which is flagged as a
+// warning so the person sees what it matched. Anything else is an error that names close candidates.
+function rosterFindProperty(ownerProps, row) {
+  const pid = String(row.property_id || '').trim();
+  const addr = String(row.property || row.address || '').trim();
+  if (pid) { const p = ownerProps.find(x => String(x.ID) === pid); return p ? { prop: p } : { error: 'Property id ' + pid + ' is not one of your properties.' }; }
+  if (!addr) return { error: 'Property is required.' };
+  const k = qbNormAddress(addr);
+  const k0 = qbNormAddress(addr.split(',')[0]);
+  const street = x => qbNormAddress(String(x.Address || '').split(',')[0]);
+  let hit = ownerProps.filter(p => qbNormAddress(p.Address) === k);
+  if (!hit.length) hit = ownerProps.filter(p => street(p) === k0);
+  if (hit.length === 1) return { prop: hit[0] };
+  if (hit.length > 1) return { error: '"' + addr + '" matches more than one of your properties - add the city or use the property picker.' };
+  const pre = ownerProps.filter(p => { const s = street(p); return k0 && (s.startsWith(k0 + ' ') || k0.startsWith(s + ' ')); });
+  if (pre.length === 1) return { prop: pre[0], warning: 'Matched "' + addr + '" to ' + pre[0].Address + '.' };
+  const near = ownerProps.filter(p => { const s = street(p); const num = k0.split(' ')[0]; return num && s.split(' ')[0] === num; }).slice(0, 3).map(p => p.Address);
+  return { error: 'Property "' + addr + '" is not one of your properties.' + (near.length ? ' Did you mean: ' + near.join(' / ') + '?' : '') };
+}
+
+// PURE. Everything the apply step does is decided here, from data passed in, so it is unit-testable and the preview and
+// the apply can never disagree. inp: { ownerId, today:'YYYY-MM-DD'(ET), rows, properties, units, tenants, consent, batch }
+// Returns { ok, rows:[{n,label,status,errors,warnings,property_id,unit_id,tenant_id,write}], counts, errors }.
+//   status: move_in | move_out | name_fix | backfill | unchanged | already_done | error
+function rosterPlan(inp) {
+  const today = String(inp.today || '');
+  const tenants = inp.tenants || [], units = inp.units || [];
+  const ownerProps = (inp.properties || []).filter(p => String(p.Owner_ID || '') === String(inp.ownerId) && p.Active !== 'FALSE');
+  const consent = inp.consent === true;
+  const rowsIn = Array.isArray(inp.rows) ? inp.rows : [];
+  const out = { ok: false, rows: [], counts: { move_in: 0, move_out: 0, future_move_out: 0, name_fix: 0, backfill: 0, unchanged: 0, already_done: 0, error: 0 }, errors: [] };
+  if (!rowsIn.length) { out.errors.push('No rows to import.'); return out; }
+  if (rowsIn.length > ROSTER_MAX_ROWS) { out.errors.push('Too many rows (' + rowsIn.length + '). Maximum ' + ROSTER_MAX_ROWS + ' per upload - split the file.'); return out; }
+  const maxDate = String(+today.slice(0, 4) + 1) + today.slice(4);   // a year ahead: catches 2062-style typos
+  const MIN_DATE = '2000-01-01';
+  const departingIds = new Set();
+  const claimed = new Map();   // tenant id -> row n that already targets it
+
+  // ---- pass 1: resolve + classify each row on its own ----
+  rowsIn.forEach((r, i) => {
+    r = r || {};
+    const res = { n: i + 1, label: '', status: 'error', errors: [], warnings: [], property_id: '', unit_id: '', tenant_id: '', phone: '', write: null, _prop: null, _unit: null, _match: null, _former: null, _mi: '', _mo: '' };
+    const err = m => res.errors.push(m);
+    let first = String(r.first_name || '').trim(), last = String(r.last_name || '').trim();
+    if (!first && !last && r.name) { const sp = rosterSplitName(r.name); first = sp.first; last = sp.last; }
+    const email = String(r.email || '').trim();
+    const rawPhone = String(r.phone || '').trim();
+    const phone = rawPhone ? normalizePhone(firstPhone(rawPhone)) : '';
+    res.phone = phone;
+    if (rawPhone && !/^\+1\d{10}$/.test(phone)) err('Phone "' + rawPhone + '" is not a valid 10-digit US number.');
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) res.warnings.push('Email "' + email + '" does not look valid - it will be ignored.');
+    const mi = rosterNormDate(r.move_in_date), mo = rosterNormDate(r.move_out_date);
+    if (mi === null) err('Move-in date "' + r.move_in_date + '" is not a real date (use YYYY-MM-DD or M/D/YYYY).');
+    if (mo === null) err('Move-out date "' + r.move_out_date + '" is not a real date (use YYYY-MM-DD or M/D/YYYY).');
+    if (mi && (mi < MIN_DATE || mi > maxDate)) err('Move-in date ' + mi + ' is out of range - check the year.');
+    if (mo && (mo < MIN_DATE || mo > maxDate)) err('Move-out date ' + mo + ' is out of range - check the year.');
+    res._mi = mi || ''; res._mo = mo || '';
+
+    const pf = rosterFindProperty(ownerProps, r);
+    if (pf.error) err(pf.error);
+    const prop = pf.prop || null;
+    if (pf.warning) res.warnings.push(pf.warning);
+    res.label = ((prop && prop.Address) || String(r.property || r.address || r.property_id || '?')) + ' - ' + ((first + ' ' + last).trim() || '(no name)');
+    if (!prop) { out.rows.push(res); return; }
+    res.property_id = String(prop.ID); res._prop = prop;
+
+    const propUnits = units.filter(u => String(u.Property_ID) === String(prop.ID) && u.Active !== 'FALSE');
+    let unit = null;
+    if (propUnits.length) {
 //__RM__
 }
 
