@@ -21540,7 +21540,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
         if (u.status === 'tenant') {
           const tr = await addRow(env, 'Tenants', {
             First_Name: u.tenant.first, Last_Name: u.tenant.last, Phone: u.tenant.phone, Email: u.tenant.email,
-            Property_ID: propertyId, Unit_ID: unitId, Move_In_Date: '', Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
+            Property_ID: propertyId, Unit_ID: unitId, Move_In_Date: u.tenant.move_in, Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
           });
           const tid = String((await tr.clone().json()).id || '');
           if (tid) { rec.tenant_ids.push(tid); if (unitId) await updateRow(env, 'Units', unitId, { Tenant_ID: tid }); }
