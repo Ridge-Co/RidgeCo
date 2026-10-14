@@ -14,7 +14,7 @@ function grab(name, kind = 'function') {
 }
 const H = new Function(
   ['OWNER_ONBOARD_TYPES','OWNER_ONBOARD_SUBTYPES','OWNER_ONBOARD_MAX_PROPERTIES','OWNER_ONBOARD_MAX_UNITS','OWNER_ONBOARD_STATES'].map(n => grab(n, 'const')).join('\n') + '\n' +
-  ['ooClean','ooDigits','ooPhoneOk','ooEmailOk','ownerOnboardPinCheck','ownerOnboardInferMarket','ownerOnboardValidate','ooInviteState','ooInviteProblem'].map(n => grab(n)).join('\n') +
+  ['ooClean','ooDigits','ooPhoneOk','ooEmailOk','ownerOnboardPinCheck','ownerOnboardInferMarket','ownerOnboardValidate','ooInviteState','ooInviteProblem','rosterNormDate','tenantDatesError'].map(n => grab(n)).join('\n') +
   '\nreturn { ooClean, ooPhoneOk, ooEmailOk, ownerOnboardPinCheck, ownerOnboardInferMarket, ownerOnboardValidate, ooInviteState, ooInviteProblem };'
 )();
 
@@ -23,7 +23,7 @@ const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n,
 
 const owner = () => ({ first: 'Pat', last: 'Lee', business_choice: 'name', business_name: '', phone: '(410) 555-0142', billing_email: 'Pat@Example.com',
   billing_address: { street: '12 Main St', city: 'Baltimore', state: 'md', zip: '21201' }, pin: 'pat48213' });
-const tenantUnit = (label = '') => ({ label, status: 'tenant', tenant: { first: 'Sam', last: 'Doe', phone: '410-555-0199', email: '' } });
+const tenantUnit = (label = '') => ({ label, status: 'tenant', tenant: { first: 'Sam', last: 'Doe', phone: '410-555-0199', email: '', move_in: '2026-01-01' } });
 const house = (units) => ({ address: '5 Oak Ave', city: 'Baltimore', type: 'house', units: units || [tenantUnit()] });
 const good = () => ({ owner: owner(), properties: [house()], sms_consent: true });
 const errFields = (r) => r.errors.map(e => e.field);
@@ -98,6 +98,11 @@ const mk = (u) => { const g = good(); g.properties = [house([u])]; return H.owne
 t('unit status is required', errFields(mk({ label: '' })).includes('properties[0].units[0].status'));
 t('tenant: first name + phone required', ['tenant.first','tenant.phone'].every(f => errFields(mk({ status: 'tenant', tenant: {} })).includes('properties[0].units[0].' + f)));
 t('tenant: email optional but validated if present', errFields(mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: 'bad' } })).includes('properties[0].units[0].tenant.email'));
+// Oct 14 2026 (Brett): no tenant without a move-in date.
+t('tenant: move-in date is required', errFields(mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: '' } })).includes('properties[0].units[0].tenant.move_in'));
+t('tenant: junk move-in date refused', errFields(mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: '', move_in: '2026-02-31' } })).includes('properties[0].units[0].tenant.move_in'));
+r = mk({ status: 'tenant', tenant: { first: 'A', phone: '4105550111', email: '', move_in: '10/1/2026' } });
+t('tenant: a real move-in date is accepted and normalised', r.ok && r.clean.properties[0].units[0].tenant.move_in === '2026-10-01', r.errors);
 t('vacant: must choose lockbox or none', errFields(mk({ status: 'vacant', access: {} })).includes('properties[0].units[0].access.method'));
 t('vacant + lockbox: code required', errFields(mk({ status: 'vacant', access: { method: 'lockbox', code: '' } })).includes('properties[0].units[0].access.code'));
 r = mk({ status: 'vacant', access: { method: 'lockbox', code: '4421', location: 'left of door' } });

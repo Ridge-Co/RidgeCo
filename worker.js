@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.15-str-sms-test-mode';
+const BUILD_VERSION = '2026-10-14.17-owner-tenant-roster-slices';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -545,6 +545,7 @@ const _hubWorkerCore = {
         if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
+        if (path === '/owner/tenant-roster')    return await ownerRosterList(env, callerRole, callerSessionId, url);   // owner session (own id) or admin ?owner_id=
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/tenant-workorders')      return await tenantWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/owner-workorders')       return await ownerWorkorders(env, url, callerRole, callerSessionId);
@@ -744,6 +745,8 @@ const _hubWorkerCore = {
         if (path === '/receipt/suggest')          return await receiptSuggest(env, body);
         if (path === '/receipt/delete')           return await updateRow(env, 'Receipts', body.id, { Active: 'FALSE' });
         if (path === '/tenant/move-out')          return await processMoveOut(env, body);
+        if (path === '/owner/tenant-roster/preview') return await ownerRosterPreview(env, callerRole, callerSessionId, body);
+        if (path === '/owner/tenant-roster/apply')   return await ownerRosterApply(env, callerRole, callerSessionId, body);
         if (path === '/assign')                   return await assignVendor(env, body);
         if (path === '/status')                   return await callWithFailureAlert(env, 'wo_status', '/status', () => updateStatus(env, body));
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
@@ -764,8 +767,8 @@ const _hubWorkerCore = {
         if (path === '/property/update')          return await propertyUpdate(env, body);
         if (path === '/unit/add')                 return await unitAddWithDupeCheck(env, body);
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
-        if (path === '/tenant/add')               return await addRow(env, 'Tenants', body);
-        if (path === '/tenant/update')            return await updateRow(env, 'Tenants', body.id, body.fields);
+        if (path === '/tenant/add')               return await tenantAddGuarded(env, body);
+        if (path === '/tenant/update')            return await tenantUpdateGuarded(env, body);
         // Billing_* already exist on the live sheet; ensureColumns keeps a fresh/staging sheet from silently dropping them (addRow/updateRow map by existing header only).
         if (path === '/owner/add')                { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await addOwnerWithQBSync(env, body); }
         if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
@@ -1915,8 +1918,16 @@ function isTenantCurrent(t) {
   if (!t || !t.ID) return false;
   if (String(t.Active || '').toUpperCase() === 'FALSE') return false;
   if (t.Move_Out_Date) {
-    const out = new Date(t.Move_Out_Date + 'T23:59:59');
-    if (!isNaN(out) && out < new Date()) return false;
+    // Oct 14 2026 (owner tenant roster): a plain YYYY-MM-DD move-out date means "lives there through the END of
+    // that day, Eastern". The old check read 23:59:59 in the Worker's own clock (UTC), so a tenant leaving on the
+    // 14th counted as gone from 7:59pm ET on the 14th. Anything that is not a plain date keeps the old reading.
+    const mo = String(t.Move_Out_Date).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(mo)) {
+      if (new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) > mo) return false;
+    } else {
+      const out = new Date(t.Move_Out_Date + 'T23:59:59');
+      if (!isNaN(out) && out < new Date()) return false;
+    }
   }
   return true;
 }
@@ -1997,6 +2008,16 @@ function tenantsForDispatch(tenants, unit, wo) {
 // St Apt 2 could see a turnover-cleaning WO opened right around his move-in date.
 function isBackgroundWO(tenant, wo) {
   if (!tenant || !tenant.Move_In_Date || !wo || !wo.Created_Date) return false;
+  // Oct 14 2026 (owner tenant roster): compare Eastern CALENDAR DAYS. A plain date parses as midnight UTC, which is
+  // 8pm ET the evening before, so a work order created at 9pm ET on Sep 30 (01:00 UTC Oct 1) used to count as
+  // created AFTER an Oct 1 move-in and was shown / texted to the new tenant. Rule: a WO created on or after the
+  // move-in day (ET) belongs to the tenant; anything created on an earlier ET day is background.
+  const mi = String(tenant.Move_In_Date).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(mi)) {
+    const cr = String(wo.Created_Date).trim();
+    const crDay = /^\d{4}-\d{2}-\d{2}$/.test(cr) ? cr : (isNaN(new Date(cr)) ? '' : new Date(cr).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }));
+    if (crDay) return crDay < mi;
+  }
   return new Date(tenant.Move_In_Date) > new Date(wo.Created_Date);
 }
 
@@ -6324,7 +6345,11 @@ async function addTenantToWO(env, body) {
   const tenants = await fetchTab(env, 'Tenants');
   const tenant = tenants.find(t => t.ID === tenant_id);
   if (!tenant) return json({ error: 'Tenant not found' }, 404);
-  try { const existing = await fetchTab(env, 'WO_Tenants'); const already = existing.find(r => r.WO_ID === wo_id && r.Tenant_ID === tenant_id && r.Active !== 'FALSE'); if (already) return json({ success: true, id: already.ID, already_linked: true }); } catch(e) {}
+  // Oct 14 2026 (Brett): a tenant is only ever linked to work created on/after their move-in day. No override.
+  const _wo = findWO(await fetchTab(env, 'Work_Orders'), String(wo_id));
+  if (_wo && isBackgroundWO(tenant, _wo)) return json({ error: 'Not linked: ' + wo_id + ' was created before this tenant moved in (' + tenant.Move_In_Date + ').', code: 'wo_predates_move_in' }, 409);
+  try { const existing = await fetchTab(env, 'WO_Tenants'); const already = existing.find(r => r.WO_ID === wo_id && r.Tenant_ID === tenant_id && r.Active !== 'FALSE'); if (already) return json({ success: true, id: already.ID, already_linked: true }); }
+  catch (e) { return json({ error: 'Could not check existing links (' + String((e && e.message) || e).slice(0, 160) + ') - nothing was linked.' }, 500); }
   await addRow(env, 'WO_Tenants', { WO_ID: wo_id, Tenant_ID: tenant_id, Tenant_Name: ((tenant.First_Name||'')+' '+(tenant.Last_Name||'')).trim(), Tenant_Phone: tenant.Phone||'', Added_By: added_by||'system', Added_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true });
 }
@@ -6336,46 +6361,578 @@ async function removeTenantFromWO(env, body) {
   catch(e) { return json({ error: e.message }, 500); }
 }
 
+// Oct 14 2026: the ONE implementation of "this tenant has moved out", shared by the admin Move Out button
+// (processMoveOut), the owner tenant roster tool and the daily scheduled flip. Returns { errors, ... }: every step that
+// can fail is reported back to the caller and logged to Ops_Telemetry, never swallowed. The caller decides how loud to be.
+async function respErrText(res) {
+  try { const j = await res.json(); return String((j && (j.error || j.message)) || ('HTTP ' + res.status)); }
+  catch (e) { return 'HTTP ' + res.status + ' (unreadable body: ' + ((e && e.message) || e) + ')'; }
+}
+async function tenantMarkMovedOut(env, tenantId, moveOutDate) {
+  const out = { errors: [], units_cleared: [], retro_wos_cleaned: 0, verified: false };
+  const fail = (step, msg) => { out.errors.push({ step, error: String(msg).slice(0, 240) }); };
+  try {
+    await ensureColumns(env, 'Tenants', ['SMS_Enabled', 'Roster_Pending_Flip']);
+    // The tenant's own row is left intact on purpose - same ID, same Unit_ID and Property_ID, now carrying a
+    // move-out date. That row IS the history: their work orders, their contact record, everything logged while they
+    // lived there stays attached to it. A new tenant gets a new row and a new ID; nothing is reused.
+    // SMS_Enabled goes FALSE (Oct 14 2026) so a moved-out tenant is also switched off at the tenant toggle, not only
+    // by the moved-out check in the SMS gate. SMS_OptOut is NOT touched: that is the tenant's own STOP record.
+    const res = await updateRow(env, 'Tenants', tenantId, { Active: 'FALSE', Move_Out_Date: moveOutDate, PIN: '', SMS_Enabled: 'FALSE', Roster_Pending_Flip: '' });
+    if (!res.ok) fail('tenant_row', await respErrText(res));
+    else {
+      // Verified write: re-read and confirm the row really changed (success:true with an unchanged cell is a failure).
+      const back = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(tenantId));
+      if (!back || String(back.Active).toUpperCase() !== 'FALSE' || back.Move_Out_Date !== moveOutDate) fail('tenant_row_verify', 'read-back does not show the move-out');
+      else out.verified = true;
+    }
+  } catch (e) { fail('tenant_row', (e && e.message) || e); }
+
+  // What DOES have to change is the unit's pointer to its CURRENT tenant. Move-out never cleared it, so the unit went
+  // on naming someone who had left - and vendors were being texted a former tenant's name and phone number.
+  try {
+    const units = await fetchTab(env, 'Units');
+    for (const u of units.filter(x => String(x.Tenant_ID || '') === String(tenantId))) {
+      const r = await updateRow(env, 'Units', u.ID, { Tenant_ID: '' });
+      if (!r.ok) fail('unit_pointer', 'unit ' + (u.Unit_Label || u.ID) + ': ' + await respErrText(r));
+      else out.units_cleared.push(u.Unit_Label || u.ID);
+    }
+  } catch (e) { fail('unit_pointer', (e && e.message) || e); }
+
+  // Links to work orders created AFTER the move-out date do not belong to this tenant.
+  try {
+    const [wos, woTenants] = await fetchTabs(env, ['Work_Orders', 'WO_Tenants']);
+    for (const link of woTenants.filter(r => String(r.Tenant_ID) === String(tenantId) && r.Active !== 'FALSE')) {
+      const wo = wos.find(w => w.ID === link.WO_ID);
+      if (!wo || !wo.Created_Date) continue;
+      const cr = String(wo.Created_Date).trim();
+      const crDay = /^\d{4}-\d{2}-\d{2}$/.test(cr) ? cr : (isNaN(new Date(cr)) ? '' : new Date(cr).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }));
+      if (crDay && crDay > moveOutDate) {
+        const r = await updateRow(env, 'WO_Tenants', link.ID, { Active: 'FALSE' });
+        if (!r.ok) fail('wo_link', 'link ' + link.ID + ': ' + await respErrText(r));
+        else out.retro_wos_cleaned++;
+      }
+    }
+  } catch (e) { fail('wo_links', (e && e.message) || e); }
+
+  if (out.errors.length) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_move_out_incomplete', Skill_Or_Endpoint: 'tenantMarkMovedOut', Success: 'FALSE', Notes: ('tenant=' + tenantId + ' ' + JSON.stringify(out.errors)).slice(0, 480) }); }
+    catch (e) { out.errors.push({ step: 'telemetry', error: String((e && e.message) || e).slice(0, 160) }); }
+  }
+  return out;
+}
+
 async function processMoveOut(env, body) {
   const { tenant_id, move_out_date } = body;
   if (!tenant_id) return json({ error: 'tenant_id required' }, 400);
-  const moveOutDate = move_out_date || new Date().toISOString().split('T')[0];
-  const moveOutDt = new Date(moveOutDate + 'T23:59:59');
-
-  // The tenant's own row is left intact on purpose — same ID, same Unit_ID and
-  // Property_ID, now carrying a move-out date. That row IS the history: their work
-  // orders, their contact record, everything logged while they lived there stays
-  // attached to it. A new tenant gets a new row and a new ID; nothing is reused.
-  await updateRow(env, 'Tenants', tenant_id, { Active: 'FALSE', Move_Out_Date: moveOutDate, PIN: '' });
-
-  // What DOES have to change is the unit's pointer to its CURRENT tenant. Move-out
-  // never cleared it, so the unit went on naming someone who had left — and because
-  // vendor dispatch reads the unit's tenant, vendors were being texted a former
-  // tenant's name and phone number when they took a new job at that address.
-  let unitsCleared = [], unitsFailed = false;
-  try {
-    const units = await fetchTab(env, 'Units');
-    for (const u of units.filter(x => String(x.Tenant_ID || '') === String(tenant_id))) {
-      await updateRow(env, 'Units', u.ID, { Tenant_ID: '' });
-      unitsCleared.push(u.Unit_Label || u.ID);
-    }
-  } catch (e) { unitsFailed = true; }
-
-  let retroCount = 0;
-  try {
-    const [wos, woTenants] = await fetchTabs(env, ['Work_Orders','WO_Tenants']);
-    for (const link of woTenants.filter(r => r.Tenant_ID === tenant_id && r.Active !== 'FALSE')) {
-      const wo = wos.find(w => w.ID === link.WO_ID);
-      if (!wo || !wo.Created_Date) continue;
-      if (new Date(wo.Created_Date) > moveOutDt) { await updateRow(env, 'WO_Tenants', link.ID, { Active: 'FALSE' }); retroCount++; }
-    }
-  } catch(e) {}
-  return json({ success: true, move_out_date: moveOutDate, retro_wos_cleaned: retroCount,
-                units_unlinked: unitsCleared.length, units: unitsCleared,
+  const moveOutDate = move_out_date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const r = await tenantMarkMovedOut(env, tenant_id, moveOutDate);
+  const unitsFailed = r.errors.some(e => e.step === 'unit_pointer');
+  const rowFailed = r.errors.some(e => e.step === 'tenant_row' || e.step === 'tenant_row_verify');
+  if (rowFailed) return json({ error: 'Move-out did NOT save: ' + r.errors.map(e => e.error).join('; '), errors: r.errors }, 500);
+  return json({ success: true, move_out_date: moveOutDate, retro_wos_cleaned: r.retro_wos_cleaned,
+                units_unlinked: r.units_cleared.length, units: r.units_cleared,
                 // Say so loudly. A half-cleared pointer means a former tenant's number is
                 // still reachable, which is the whole thing this is meant to prevent.
-                units_incomplete: unitsFailed,
-                warning: unitsFailed ? 'Some unit links could not be cleared — run "Check units naming moved-out tenants" in Dev tools.' : '' });
+                units_incomplete: unitsFailed, errors: r.errors,
+                warning: r.errors.length ? ('Move-out saved but some follow-up steps failed (' + r.errors.map(e => e.step).join(', ') + ') - run "Check units naming moved-out tenants" in Dev tools.') : '' });
+}
+
+// ══ OWNER TENANT ROSTER - importer / updater (Oct 14 2026, Brett) ═══════════════════════════════════════════════════
+// Why: tenants kept entering the Hub with a BLANK Move_In_Date (bulk importer, owner onboarding, admin Add Tenant), and a
+// blank date switches off the only protection a new tenant has from the previous tenant's work orders (isBackgroundWO
+// hides + never texts a WO created before Move_In_Date). Amanda Ireland's Oct 2026 list was the trigger. This tool makes
+// the dates impossible to skip, on a screen the owner can use herself:
+//   GET  /owner/tenant-roster          the owner's properties/units/current tenants (for the manual form + the CSV check)
+//   POST /owner/tenant-roster/preview  {rows, consent?}  validates EVERYTHING, writes NOTHING
+//   POST /owner/tenant-roster/apply    {rows, consent?}  same validation; refuses the whole file if any row is bad
+// Owner sessions are bound to their own id (callerSessionId, never a client-sent owner_id). Admin (Brett) may pass owner_id.
+// DEFAULTS BAKED IN, NO SWITCHES (Brett's explicit call): a departing tenant is deactivated, PIN cleared, SMS_Enabled FALSE;
+// an arriving tenant is linked to NO work order (so only work created on/after the move-in day, Eastern, ever reaches them
+// - isBackgroundWO); nobody is texted or emailed by this tool, tenant OR owner. The owner is never shown these rules.
+// A future move-out date only records the date + flags the row for the daily scheduler flip (daily_turnover job, no cron);
+// NO turnover work orders are created - Brett is alerted and approves those himself.
+const ROSTER_MAX_ROWS = 200;
+// Cloudflare allows ~50 outbound calls per request on this plan. A big roster file therefore applies in SLICES: each call does as
+// many rows as fit in the budget, then answers { partial:true, remaining:N }; the page re-sends the same file until remaining is 0.
+// Safe to repeat because the plan is recomputed every call and finished rows then plan as unchanged / already_done.
+const ROSTER_SUBREQ_LIMIT = 44, ROSTER_TAIL_RESERVE = 10;
+const ROSTER_COST = { move_out: 13, move_out_future: 5, update: 5, insert: 10 };
+const ROSTER_LOG_TAB = 'Roster_Imports';
+const ROSTER_LOG_COLS = ['ID', 'Timestamp', 'Batch', 'Owner_ID', 'Actor', 'Rows', 'Moved_In', 'Moved_Out', 'Future_Move_Outs', 'Name_Fixes', 'Consent_Attested', 'Result', 'Details_JSON', 'Active'];
+// Tenants columns this tool relies on. SMS_Consent: 'attested' (upload box ticked) | 'pending' (not ticked) | 'welcome_sent'.
+// Welcome_Sent stays blank until Brett sends the welcome, which is what puts the person on his "not yet welcomed" list.
+const ROSTER_TENANT_COLS = ['SMS_Enabled', 'SMS_Consent', 'Roster_Source', 'Roster_Batch', 'Roster_Pending_Flip', 'Welcome_Sent', 'Welcome_Sent_Date', 'Onboarding_Source'];
+
+// '' = blank, null = not a real date, otherwise YYYY-MM-DD. Accepts YYYY-MM-DD, M/D/YYYY, M/D/YY, M-D-YYYY.
+function rosterNormDate(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  let y, m, d, mt;
+  if ((mt = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s))) { y = +mt[1]; m = +mt[2]; d = +mt[3]; }
+  else if ((mt = /^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2}|\d{4})$/.exec(s))) { m = +mt[1]; d = +mt[2]; y = +mt[3]; if (mt[3].length === 2) y += 2000; }
+  else return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+  return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+function rosterUnitKey(label) {
+  return String(label || '').trim().toLowerCase().replace(/^(apartment|apt|unit|suite|ste|#)\s*\.?\s*/, '').replace(/\s+/g, '');
+}
+// Only the name parts the row actually supplies AND that really differ (trimmed, case-sensitive so a capitalisation fix counts).
+// A blank part never blanks what is on file - this tool amends names, it never overwrites them with nothing.
+function rosterNameFields(first, last, t) {
+  const f = {};
+  if (first && first !== String(t.First_Name || '').trim()) f.First_Name = first;
+  if (last && last !== String(t.Last_Name || '').trim()) f.Last_Name = last;
+  return f;
+}
+function rosterNameKey(first, last) {
+  return (String(first || '') + ' ' + String(last || '')).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function rosterSplitName(name) {
+  const s = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!s) return { first: '', last: '' };
+  const m = /^(\S+)\s+(.*)$/.exec(s);
+  return m ? { first: m[1], last: m[2] } : { first: s, last: '' };
+}
+// Match a typed/CSV address to one of the OWNER'S properties only. Exact normalized match first; then the same address
+// without a ", City" tail; then a UNIQUE whole-word prefix ("1599 Ingleside" -> "1599 Ingleside Ave"), which is flagged as a
+// warning so the person sees what it matched. Anything else is an error that names close candidates.
+function rosterFindProperty(ownerProps, row) {
+  const pid = String(row.property_id || '').trim();
+  const addr = String(row.property || row.address || '').trim();
+  if (pid) { const p = ownerProps.find(x => String(x.ID) === pid); return p ? { prop: p } : { error: 'Property id ' + pid + ' is not one of your properties.' }; }
+  if (!addr) return { error: 'Property is required.' };
+  const k = qbNormAddress(addr);
+  const k0 = qbNormAddress(addr.split(',')[0]);
+  const street = x => qbNormAddress(String(x.Address || '').split(',')[0]);
+  let hit = ownerProps.filter(p => qbNormAddress(p.Address) === k);
+  if (!hit.length) hit = ownerProps.filter(p => street(p) === k0);
+  if (hit.length === 1) return { prop: hit[0] };
+  if (hit.length > 1) return { error: '"' + addr + '" matches more than one of your properties - add the city or use the property picker.' };
+  const pre = ownerProps.filter(p => { const s = street(p); return k0 && (s.startsWith(k0 + ' ') || k0.startsWith(s + ' ')); });
+  if (pre.length === 1) return { prop: pre[0], warning: 'Matched "' + addr + '" to ' + pre[0].Address + '.' };
+  const near = ownerProps.filter(p => { const s = street(p); const num = k0.split(' ')[0]; return num && s.split(' ')[0] === num; }).slice(0, 3).map(p => p.Address);
+  return { error: 'Property "' + addr + '" is not one of your properties.' + (near.length ? ' Did you mean: ' + near.join(' / ') + '?' : '') };
+}
+
+// PURE. Everything the apply step does is decided here, from data passed in, so it is unit-testable and the preview and
+// the apply can never disagree. inp: { ownerId, today:'YYYY-MM-DD'(ET), rows, properties, units, tenants, consent, batch }
+// Returns { ok, rows:[{n,label,status,errors,warnings,property_id,unit_id,tenant_id,write}], counts, errors }.
+//   status: move_in | move_out | name_fix | backfill | unchanged | already_done | error
+function rosterPlan(inp) {
+  const today = String(inp.today || '');
+  const tenants = inp.tenants || [], units = inp.units || [];
+  const ownerProps = (inp.properties || []).filter(p => String(p.Owner_ID || '') === String(inp.ownerId) && p.Active !== 'FALSE');
+  const consent = inp.consent === true;
+  const rowsIn = Array.isArray(inp.rows) ? inp.rows : [];
+  const out = { ok: false, rows: [], counts: { move_in: 0, move_out: 0, future_move_out: 0, name_fix: 0, backfill: 0, unchanged: 0, already_done: 0, error: 0 }, errors: [] };
+  if (!rowsIn.length) { out.errors.push('No rows to import.'); return out; }
+  if (rowsIn.length > ROSTER_MAX_ROWS) { out.errors.push('Too many rows (' + rowsIn.length + '). Maximum ' + ROSTER_MAX_ROWS + ' per upload - split the file.'); return out; }
+  const maxDate = String(+today.slice(0, 4) + 1) + today.slice(4);   // a year ahead: catches 2062-style typos
+  const MIN_DATE = '2000-01-01';
+  const departingIds = new Set();
+  const claimed = new Map();   // tenant id -> row n that already targets it
+
+  // ---- pass 1: resolve + classify each row on its own ----
+  rowsIn.forEach((r, i) => {
+    r = r || {};
+    const res = { n: i + 1, label: '', status: 'error', errors: [], warnings: [], property_id: '', unit_id: '', tenant_id: '', phone: '', write: null, _prop: null, _unit: null, _match: null, _former: null, _mi: '', _mo: '' };
+    const err = m => res.errors.push(m);
+    let first = String(r.first_name || '').trim(), last = String(r.last_name || '').trim();
+    if (!first && !last && r.name) { const sp = rosterSplitName(r.name); first = sp.first; last = sp.last; }
+    const email = String(r.email || '').trim();
+    const rawPhone = String(r.phone || '').trim();
+    const phone = rawPhone ? normalizePhone(firstPhone(rawPhone)) : '';
+    res.phone = phone;
+    if (rawPhone && !/^\+1\d{10}$/.test(phone)) err('Phone "' + rawPhone + '" is not a valid 10-digit US number.');
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) res.warnings.push('Email "' + email + '" does not look valid - it will be ignored.');
+    const mi = rosterNormDate(r.move_in_date), mo = rosterNormDate(r.move_out_date);
+    if (mi === null) err('Move-in date "' + r.move_in_date + '" is not a real date (use YYYY-MM-DD or M/D/YYYY).');
+    if (mo === null) err('Move-out date "' + r.move_out_date + '" is not a real date (use YYYY-MM-DD or M/D/YYYY).');
+    if (mi && (mi < MIN_DATE || mi > maxDate)) err('Move-in date ' + mi + ' is out of range - check the year.');
+    if (mo && (mo < MIN_DATE || mo > maxDate)) err('Move-out date ' + mo + ' is out of range - check the year.');
+    res._mi = mi || ''; res._mo = mo || '';
+
+    const pf = rosterFindProperty(ownerProps, r);
+    if (pf.error) err(pf.error);
+    const prop = pf.prop || null;
+    if (pf.warning) res.warnings.push(pf.warning);
+    res.label = ((prop && prop.Address) || String(r.property || r.address || r.property_id || '?')) + ' - ' + ((first + ' ' + last).trim() || '(no name)');
+    if (!prop) { out.rows.push(res); return; }
+    res.property_id = String(prop.ID); res._prop = prop;
+
+    const propUnits = units.filter(u => String(u.Property_ID) === String(prop.ID) && u.Active !== 'FALSE');
+    let unit = null;
+    if (propUnits.length) {
+      const uid = String(r.unit_id || '').trim(), ul = String(r.unit || '').trim();
+      if (uid) unit = propUnits.find(u => String(u.ID) === uid) || null;
+      else if (ul) { const k = rosterUnitKey(ul); unit = propUnits.find(u => rosterUnitKey(u.Unit_Label) === k) || null; }
+      if (!uid && !ul) err('This property has units - enter the unit for this tenant.');
+      else if (!unit) err('Unit "' + (ul || uid) + '" was not found at ' + prop.Address + ' (units: ' + propUnits.map(u => u.Unit_Label).slice(0, 8).join(', ') + ').');
+    } else if (String(r.unit || r.unit_id || '').trim()) {
+      res.warnings.push('This property has no units, so the unit was ignored.');
+    }
+    if (unit) { res.unit_id = String(unit.ID); res._unit = unit; res.label += ' (' + unit.Unit_Label + ')'; }
+
+    // ---- match an existing tenant at THIS property: by phone, else (no phone given) by exact name ----
+    const atProp = tenants.filter(t => String(t.Property_ID) === String(prop.ID));
+    let cands = [];
+    if (phone) cands = atProp.filter(t => normalizePhone(t.Phone) === phone);
+    else if (first || last) { const nk = rosterNameKey(first, last); cands = atProp.filter(t => rosterNameKey(t.First_Name, t.Last_Name) === nk && (!unit || String(t.Unit_ID || '') === String(unit.ID))); }
+    const live = cands.filter(t => !tenantMovedOut(t));
+    let match = null;
+    if (live.length > 1) err('More than one current tenant at this address has that ' + (phone ? 'phone number' : 'name') + ' - fix the duplicate in the Hub first.');
+    else if (live.length === 1) match = live[0];
+    const former = !match && cands.length ? cands[0] : null;
+    res._match = match; res._former = former;
+    if (match && unit && String(match.Unit_ID || '') !== String(unit.ID)) err('This person is already on file at this address under a different unit.');
+    if (match) { res.tenant_id = String(match.ID); if (claimed.has(String(match.ID))) err('Row ' + claimed.get(String(match.ID)) + ' already covers the same tenant.'); else claimed.set(String(match.ID), res.n); }
+    if (res.errors.length) { out.rows.push(res); return; }
+
+    const nameFix = match ? rosterNameFields(first, last, match) : {};
+    const nameDiffers = Object.keys(nameFix).length > 0;
+
+    if (match) {
+      const mMi = String(match.Move_In_Date || '').trim();
+      if (mo) {
+        if (mMi && /^\d{4}-\d{2}-\d{2}$/.test(mMi) && mo < mMi) { err('Move-out ' + mo + ' is before this tenant\'s move-in ' + mMi + '.'); }
+        else if (mi && mMi && mi !== mMi) res.warnings.push('Move-in date ignored: this tenant is already on file with move-in ' + mMi + '.');
+        if (!res.errors.length) {
+          if (String(match.Move_Out_Date || '').trim() === mo && String(match.Roster_Pending_Flip || '').toUpperCase() === 'TRUE') res.status = 'already_done';
+          else { res.status = 'move_out'; res.write = { type: 'move_out', tenant_id: String(match.ID), move_out_date: mo, future: mo > today }; departingIds.add(String(match.ID)); }
+        }
+        if (nameDiffers) res.warnings.push('Name on the row differs from the tenant on file; it was not changed because this row is a move-out.');
+      } else if (mi) {
+        if (mMi && mMi !== mi) err('This tenant is already on file with move-in ' + mMi + '. Move-in dates are not rewritten from here - leave the date blank to keep it, or add a move-out row.');
+        else {
+          const fields = {};
+          if (!mMi) fields.Move_In_Date = mi;
+          Object.assign(fields, nameFix);
+          if (email && !String(match.Email || '').trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fields.Email = email;
+          if (Object.keys(fields).length) { res.status = fields.Move_In_Date ? 'backfill' : 'name_fix'; res.write = { type: 'update', tenant_id: String(match.ID), fields }; }
+          else res.status = 'unchanged';
+        }
+      } else {
+        const fields = {};
+        Object.assign(fields, nameFix);
+        if (email && !String(match.Email || '').trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fields.Email = email;
+        if (Object.keys(fields).length) { res.status = 'name_fix'; res.write = { type: 'update', tenant_id: String(match.ID), fields }; }
+        else res.status = 'unchanged';
+        if (!String(match.Move_In_Date || '').trim()) res.warnings.push('This tenant has no move-in date on file. Add one to protect them from the previous tenant\'s work orders.');
+      }
+    } else {
+      // ---- no current tenant matched: this must be an ARRIVAL ----
+      if (former && mo && !mi) {
+        // Re-running a file that was already applied: the tenant is gone, on the date asked for = nothing to do.
+        if (String(former.Move_Out_Date || '').trim() === mo) res.status = 'already_done';
+        else err('This tenant already moved out' + (former.Move_Out_Date ? ' on ' + former.Move_Out_Date : '') + ' - the move-out date on the row (' + mo + ') does not match.');
+      }
+      else if (former) { err('This ' + (phone ? 'phone number' : 'name') + ' belongs to a former tenant at this address (record ' + former.ID + '). The Hub keeps one record per phone number, so this cannot be added as new - contact support.'); }
+      else if (mo && !mi) err('No tenant at this address matches this row, so there is nobody to move out. Check the phone number or name.');
+      else if (!mi) err('Move-in date is required for a new tenant.');
+      else if (mo) err('A new tenant gets a move-in date only. Add the move-out later, when it is known.');
+      else if (!first && !last) err('Tenant name is required.');
+      else if (!phone) err('Phone number is required for a new tenant.');
+      if (!res.errors.length && res.status !== 'already_done') {
+        res.status = 'move_in';
+        res.write = { type: 'insert', fields: {
+          First_Name: first, Last_Name: last, Phone: phone, Email: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : '',
+          Property_ID: String(prop.ID), Unit_ID: unit ? String(unit.ID) : '', Active: 'TRUE',
+          Move_In_Date: mi, Move_Out_Date: '',
+          // SMS stays OFF until the upload box says the tenants agreed (or Brett sends the welcome himself). Either way the row
+          // is flagged (SMS_Consent + blank Welcome_Sent) so it shows up for Brett. SMS_OptOut is the tenant's own STOP record - never set here.
+          SMS_Enabled: consent ? 'TRUE' : 'FALSE', SMS_Consent: consent ? 'attested' : 'pending',
+          Roster_Source: 'owner_roster', Roster_Batch: String(inp.batch || ''), Roster_Pending_Flip: '', Welcome_Sent: '', Welcome_Sent_Date: '',
+        } };
+      }
+    }
+    out.rows.push(res);
+  });
+
+  // ---- pass 2: checks that need the whole file ----
+  const seenArrival = new Set();
+  const livePhoneOwner = t => { const p = (inp.properties || []).find(x => String(x.ID) === String(t.Property_ID)); return p ? String(p.Owner_ID || '') : ''; };
+  for (const res of out.rows) {
+    if (res.status !== 'move_in') continue;
+    const err = m => { res.errors.push(m); res.status = 'error'; res.write = null; };
+    const prop = res._prop, unit = res._unit, phone = res.phone;
+    const key = prop.ID + '|' + (unit ? unit.ID : '') + '|' + phone;
+    if (seenArrival.has(key)) { err('This phone number appears twice for the same address in this file.'); continue; }
+    seenArrival.add(key);
+    // the number must not already be a CURRENT tenant somewhere else (unless that tenant is leaving in this same file)
+    const elsewhere = tenants.filter(t => normalizePhone(t.Phone) === phone && String(t.Property_ID) !== String(prop.ID) && !tenantMovedOut(t) && !departingIds.has(String(t.ID)));
+    if (elsewhere.length) {
+      const t = elsewhere[0];
+      const mine = livePhoneOwner(t) === String(inp.ownerId);
+      const where = mine ? ((inp.properties || []).find(x => String(x.ID) === String(t.Property_ID)) || {}).Address : '';
+      err('This phone number is already a current tenant' + (where ? ' at ' + where : ' at another address') + '. Add a move-out row for that tenant first (same file), or check the number.');
+      continue;
+    }
+    const formerElsewhere = tenants.filter(t => normalizePhone(t.Phone) === phone && String(t.Property_ID) !== String(prop.ID) && tenantMovedOut(t));
+    if (formerElsewhere.length) res.warnings.push('This number is also on a former tenant record elsewhere.');
+    // a new tenant cannot start before the previous tenant left (backdating would link them to the old tenant's work orders)
+    const scope = tenants.filter(t => String(t.Property_ID) === String(prop.ID) && (unit ? String(t.Unit_ID || '') === String(unit.ID) : true));
+    let blocker = '', blockerWho = '';
+    for (const t of scope) {
+      const leaving = out.rows.find(x => x.status === 'move_out' && x.tenant_id === String(t.ID));
+      const d = leaving ? leaving._mo : String(t.Move_Out_Date || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d > blocker) { blocker = d; blockerWho = ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim(); }
+    }
+    if (blocker && res._mi < blocker) { err('Move-in ' + res._mi + ' is before the previous tenant' + (blockerWho ? ' (' + blockerWho + ')' : '') + ' left on ' + blocker + '. A new tenant cannot start before the old one leaves.'); continue; }
+    const stay = scope.filter(t => !tenantMovedOut(t) && !departingIds.has(String(t.ID)));
+    if (stay.length) res.warnings.push(stay.length + ' other current tenant' + (stay.length > 1 ? 's' : '') + ' stay' + (stay.length > 1 ? '' : 's') + ' on file at this address (' + stay.slice(0, 3).map(t => ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim()).join(', ') + '). If someone has left, add a move-out row.');
+  }
+
+  for (const res of out.rows) {
+    out.counts[res.status === 'error' ? 'error' : res.status]++;
+    if (res.status === 'move_out' && res.write.future) out.counts.future_move_out++;
+    delete res._prop; delete res._unit; delete res._match; delete res._former; delete res._mi; delete res._mo;
+  }
+  out.ok = out.counts.error === 0;
+  return out;
+}
+
+// Verified-write helpers ------------------------------------------------------------------------------------------
+async function rosterWriteTenant(env, tenantId, fields) {
+  const r = await updateRow(env, 'Tenants', tenantId, fields);
+  if (!r.ok) throw new Error(await respErrText(r));
+  const back = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(tenantId));
+  if (!back) throw new Error('tenant ' + tenantId + ' not found after the write');
+  for (const [k, v] of Object.entries(fields)) {
+    if (String(back[k] == null ? '' : back[k]) !== String(v)) throw new Error('read-back mismatch on ' + k + ' (wanted "' + v + '", sheet has "' + (back[k] || '') + '")');
+  }
+  return back;
+}
+
+// owner_id for the roster routes: an owner session is bound to its own id; admin must name one.
+function rosterOwnerId(callerRole, callerSessionId, body, url) {
+  if (callerRole === 'owner') return String(callerSessionId || '');
+  return String((body && body.owner_id) || (url && url.searchParams && url.searchParams.get('owner_id')) || '');
+}
+
+// GET /owner/tenant-roster - what the manual form and the CSV check need. No PINs, no SMS/consent state (owners are not shown those rules).
+async function ownerRosterList(env, callerRole, callerSessionId, url) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, null, url);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const [properties, units, tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+  const props = properties.filter(p => String(p.Owner_ID || '') === ownerId && p.Active !== 'FALSE');
+  const ids = new Set(props.map(p => String(p.ID)));
+  return json({
+    owner_id: ownerId,
+    max_rows: ROSTER_MAX_ROWS,
+    properties: props.map(p => ({ id: String(p.ID), address: p.Address || '', units: units.filter(u => String(u.Property_ID) === String(p.ID) && u.Active !== 'FALSE').map(u => ({ id: String(u.ID), label: u.Unit_Label || '' })) })),
+    tenants: tenants.filter(t => ids.has(String(t.Property_ID))).map(t => ({
+      id: String(t.ID), property_id: String(t.Property_ID), unit_id: String(t.Unit_ID || ''),
+      name: ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim(), phone: t.Phone || '', email: t.Email || '',
+      move_in_date: t.Move_In_Date || '', move_out_date: t.Move_Out_Date || '', current: !tenantMovedOut(t),
+    })),
+  });
+}
+
+async function rosterLoadPlan(env, ownerId, body, batch) {
+  const [owners, properties, units, tenants] = await fetchTabs(env, ['Owners', 'Properties', 'Units', 'Tenants']);
+  const owner = owners.find(o => String(o.ID) === String(ownerId) && o.Active !== 'FALSE');
+  if (!owner) return { error: 'Owner not found', status: 404 };
+  const rows = body && Array.isArray(body.rows) ? body.rows : null;
+  if (!rows) return { error: 'rows (array) required', status: 400 };
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  // ONLY rows + the consent box are read from the client. No other option exists (no SMS switch, no notify, no override).
+  const plan = rosterPlan({ ownerId, today, rows, properties, units, tenants, consent: !!(body && body.consent === true), batch });
+  return { owner, plan, units, tenants, today };
+}
+
+// POST /owner/tenant-roster/preview - validate only. Writes NOTHING.
+async function ownerRosterPreview(env, callerRole, callerSessionId, body) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, body);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const L = await rosterLoadPlan(env, ownerId, body, '');
+  if (L.error) return json({ error: L.error }, L.status);
+  return json({ ok: L.plan.ok, mode: 'preview', plan: L.plan, writes: false });
+}
+
+// POST /owner/tenant-roster/apply - all-or-nothing validation, then ordered writes (move-outs, fixes, arrivals), each verified.
+async function ownerRosterApply(env, callerRole, callerSessionId, body) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, body);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const actor = callerRole === 'owner' ? 'owner:' + ownerId : 'admin';
+  const startCalls = __sheetsFetchCount;
+  const used = () => __sheetsFetchCount - startCalls;
+  // A continuation call (the page re-sends the same file until nothing remains) carries the batch id from the first call.
+  const batch = /^RB-\d{8}-[A-Z0-9]{4}$/.test(String((body && body.batch) || '')) ? String(body.batch)
+    : 'RB-' + new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const L = await rosterLoadPlan(env, ownerId, body, batch);
+  if (L.error) return json({ error: L.error }, L.status);
+  const plan = L.plan;
+  if (!plan.ok) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_refused', Skill_Or_Endpoint: '/owner/tenant-roster/apply', Success: 'FALSE', Notes: ('owner=' + ownerId + ' actor=' + actor + ' rows=' + plan.rows.length + ' errors=' + plan.counts.error + ' ' + plan.errors.join('; ')).slice(0, 480) }); }
+    catch (e) { plan.errors.push('Could not record the refusal in telemetry: ' + String((e && e.message) || e).slice(0, 120)); }
+    return json({ ok: false, applied: false, refused: true, plan, error: 'Nothing was imported. Fix the rows marked in red and try again.' }, 422);
+  }
+  const results = [], warnings = [];
+  const today = L.today;
+  try { await ensureColumns(env, 'Tenants', ROSTER_TENANT_COLS); await ensureTab(env, ROSTER_LOG_TAB, ROSTER_LOG_COLS); }
+  catch (e) { return json({ ok: false, applied: false, error: 'Could not prepare the Tenants sheet columns - nothing was imported: ' + String((e && e.message) || e).slice(0, 200) }, 500); }
+  const done = (row, extra) => results.push(Object.assign({ n: row.n, label: row.label, status: row.status, applied: true }, extra || {}));
+  const failed = (row, e) => results.push({ n: row.n, label: row.label, status: row.status, applied: false, error: String((e && e.message) || e).slice(0, 240) });
+  // Budget: always attempt the first row (so every call makes progress); after that only start a row if it fits.
+  const deferred = [];
+  const fits = est => results.length === 0 || used() + est + ROSTER_TAIL_RESERVE <= ROSTER_SUBREQ_LIMIT;
+
+  // 1. departures
+  for (const row of plan.rows.filter(r => r.status === 'move_out')) {
+    const w = row.write;
+    if (!fits(w.future ? ROSTER_COST.move_out_future : ROSTER_COST.move_out)) { deferred.push(row); continue; }
+    try {
+      if (w.future) { await rosterWriteTenant(env, w.tenant_id, { Move_Out_Date: w.move_out_date, Roster_Pending_Flip: 'TRUE' }); done(row, { future: true, move_out_date: w.move_out_date }); }
+      else {
+        const r = await tenantMarkMovedOut(env, w.tenant_id, w.move_out_date);
+        if (r.errors.length) failed(row, new Error(r.errors.map(e => e.step + ': ' + e.error).join('; '))); else done(row, { move_out_date: w.move_out_date });
+      }
+    } catch (e) { failed(row, e); }
+  }
+  // 2. name fixes / move-in backfills (amend only - the update carries just the changed fields)
+  for (const row of plan.rows.filter(r => r.status === 'name_fix' || r.status === 'backfill')) {
+    if (!fits(ROSTER_COST.update)) { deferred.push(row); continue; }
+    try { await rosterWriteTenant(env, row.write.tenant_id, row.write.fields); done(row); } catch (e) { failed(row, e); }
+  }
+  // 3. arrivals
+  for (const row of plan.rows.filter(r => r.status === 'move_in')) {
+    if (!fits(ROSTER_COST.insert)) { deferred.push(row); continue; }
+    try {
+      const add = await addRow(env, 'Tenants', Object.assign({}, row.write.fields));
+      const addJ = await add.json();
+      if (!add.ok || !addJ.id) throw new Error(addJ.error || ('HTTP ' + add.status));
+      const back = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(addJ.id));
+      if (!back || back.Move_In_Date !== row.write.fields.Move_In_Date || String(back.Active).toUpperCase() !== 'TRUE' || normalizePhone(back.Phone) !== row.write.fields.Phone) throw new Error('new tenant row did not read back correctly (id ' + addJ.id + ')');
+      let unitLinked = '';
+      if (row.unit_id) {
+        const u = (await fetchTab(env, 'Units')).find(x => String(x.ID) === String(row.unit_id));
+        if (u && !String(u.Tenant_ID || '').trim()) {
+          const ur = await updateRow(env, 'Units', u.ID, { Tenant_ID: String(addJ.id) });
+          if (!ur.ok) warnings.push(row.label + ': tenant added but the unit pointer could not be set (' + await respErrText(ur) + ').'); else unitLinked = u.Unit_Label || u.ID;
+        }
+      }
+      done(row, { tenant_id: String(addJ.id), unit_linked: unitLinked });
+    } catch (e) { failed(row, e); }
+  }
+
+  const bad = results.filter(r => !r.applied);
+  const counts = { move_in: results.filter(r => r.applied && r.status === 'move_in').length, move_out: results.filter(r => r.applied && r.status === 'move_out').length,
+    future_move_out: results.filter(r => r.applied && r.future).length, name_fix: results.filter(r => r.applied && (r.status === 'name_fix' || r.status === 'backfill')).length,
+    unchanged: plan.counts.unchanged + plan.counts.already_done, failed: bad.length };
+  const ok = bad.length === 0;
+  const partial = deferred.length > 0;   // more rows still to do: the page re-sends the same file (same batch) until this is false
+  const owner = L.owner;
+  const ownerLabel = (owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim() || 'owner ' + ownerId);
+
+  // audit row + telemetry (failures here are reported, never swallowed)
+  const auditTs = new Date().toISOString();
+  try {
+    const lr = await addRow(env, ROSTER_LOG_TAB, { Timestamp: auditTs, Batch: batch, Owner_ID: ownerId, Actor: actor, Rows: String(plan.rows.length), Moved_In: String(counts.move_in), Moved_Out: String(counts.move_out),
+      Future_Move_Outs: String(counts.future_move_out), Name_Fixes: String(counts.name_fix), Consent_Attested: body.consent === true ? 'TRUE' : 'FALSE', Result: !ok ? 'partial_failure' : (partial ? 'in_progress' : 'ok'),
+      Details_JSON: JSON.stringify(results.map(r => ({ n: r.n, s: r.status, ok: r.applied, id: r.tenant_id || '', e: r.error || '' }))).slice(0, 40000), Active: 'TRUE' });
+    if (!lr.ok) warnings.push('The audit log row could not be written (' + await respErrText(lr) + ').');
+  } catch (e) { warnings.push('The audit log row could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
+  try {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_apply', Skill_Or_Endpoint: '/owner/tenant-roster/apply', Success: ok ? 'TRUE' : 'FALSE',
+      Notes: ('batch=' + batch + ' owner=' + ownerId + ' actor=' + actor + ' in=' + counts.move_in + ' out=' + counts.move_out + ' future=' + counts.future_move_out + ' fixes=' + counts.name_fix + ' failed=' + counts.failed + ' deferred=' + deferred.length + ' calls=' + used() + (bad.length ? ' ' + bad.map(b => 'row' + b.n + ':' + b.error).join('; ') : '')).slice(0, 480) });
+  } catch (e) { warnings.push('Telemetry could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
+
+  // ONE heads-up to Brett (admin phone) per batch, sent by the LAST slice only - never to the owner or any tenant. The totals add up the
+  // earlier slices from the Roster_Imports audit rows. A failure to alert (or to read them) is reported, not hidden.
+  if (!partial || bad.length) {
+    try {
+      const tot = { in: counts.move_in, out: counts.move_out, future: counts.future_move_out, fix: counts.name_fix };
+      if (body && body.batch === batch) {
+        try {
+          for (const x of (await fetchTab(env, ROSTER_LOG_TAB)).filter(x => x.Batch === batch && x.Timestamp !== auditTs)) {
+            tot.in += +x.Moved_In || 0; tot.out += +x.Moved_Out || 0; tot.future += +x.Future_Move_Outs || 0; tot.fix += +x.Name_Fixes || 0;
+          }
+        } catch (e) { warnings.push('Could not add up the earlier parts of this import for the heads-up text: ' + String((e && e.message) || e).slice(0, 120)); }
+      }
+      const txt = 'Roster import (' + ownerLabel + '): ' + tot.in + ' in, ' + tot.out + ' out' + (tot.future ? ' (' + tot.future + ' future)' : '') + ', ' + tot.fix + ' name fixes'
+        + (counts.failed ? ', ' + counts.failed + ' FAILED' : '') + '. ' + (tot.in ? tot.in + ' new tenants flagged for consent/welcome. ' : '')
+        + (tot.future ? tot.future + ' future move-out(s) booked - no turnover WOs created; approve when ready. ' : '') + 'Batch ' + batch + '.';
+      const an = await adminNotify(env, { text: txt, source: 'tenant_roster' });
+      if (!an.ok) warnings.push('Heads-up text to Brett was not sent: ' + await respErrText(an));
+    } catch (e) { warnings.push('Heads-up text to Brett was not sent: ' + String((e && e.message) || e).slice(0, 160)); }
+  }
+
+  return json({ ok, applied: true, partial, remaining: deferred.length, subrequests_used: used(), batch, counts, results, warnings, plan: { counts: plan.counts, rows: plan.rows.map(r => ({ n: r.n, label: r.label, status: r.status, warnings: r.warnings })) } }, ok ? 200 : 207);
+}
+
+// Daily scheduler step (rides the existing daily_turnover job - NO new cron, NO new Apps Script row): flips the tenants the
+// roster tool booked a FUTURE move-out for, once that date has passed (Eastern). Scoped by Roster_Pending_Flip so it can never
+// touch a tenant it did not book. Reports failures loudly (throws after trying all) so /cron/status and the alert path see them.
+async function rosterFlipDueMoveOuts(env) {
+  const tenants = await fetchTab(env, 'Tenants');
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const due = tenants.filter(t => String(t.Roster_Pending_Flip || '').toUpperCase() === 'TRUE' && String(t.Active).toUpperCase() !== 'FALSE' && /^\d{4}-\d{2}-\d{2}$/.test(String(t.Move_Out_Date || '').trim()) && today > String(t.Move_Out_Date).trim());
+  const flipped = [], problems = [], deferred = [];
+  const startCalls = __sheetsFetchCount;
+  for (const t of due) {
+    // Same ~50-call request cap as the roster apply: flip what fits, leave the rest for tomorrow's run (counted in the telemetry row).
+    if (flipped.length + problems.length > 0 && (__sheetsFetchCount - startCalls) + ROSTER_COST.move_out + ROSTER_TAIL_RESERVE > ROSTER_SUBREQ_LIMIT) { deferred.push(String(t.ID)); continue; }
+    try {
+      const r = await tenantMarkMovedOut(env, t.ID, String(t.Move_Out_Date).trim());
+      if (r.errors.length) problems.push('tenant ' + t.ID + ': ' + r.errors.map(e => e.step + ' ' + e.error).join('; '));
+      else flipped.push(String(t.ID));
+    } catch (e) { problems.push('tenant ' + t.ID + ': ' + String((e && e.message) || e)); }
+  }
+  if (due.length) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_flip', Skill_Or_Endpoint: 'daily_turnover', Success: problems.length ? 'FALSE' : 'TRUE', Notes: ('flipped=' + flipped.join(',') + (deferred.length ? ' deferred_to_next_run=' + deferred.join(',') : '') + (problems.length ? ' problems=' + problems.join(' | ') : '')).slice(0, 480) }); }
+    catch (e) { problems.push('telemetry: ' + String((e && e.message) || e)); }
+  }
+  if (problems.length) throw new Error('roster move-out flip had problems: ' + problems.join(' | ').slice(0, 400));
+  return { due: due.length, flipped, deferred };
+}
+
+// Oct 14 2026 (Brett: "yes to all refusing without move-in/move-out dates"): the dates are what keep a new tenant away from the
+// previous tenant's work orders, so NO path may create a tenant without them. One rule, used by /tenant/add (admin Hub, every
+// importer page), the bulk importer and owner onboarding: a tenant needs a real Move_In_Date; a tenant created as already gone
+// (Active FALSE) also needs a Move_Out_Date that is not before the move-in. Returns '' when fine, otherwise the plain-English reason.
+function tenantDatesError(f) {
+  f = f || {};
+  const mi = rosterNormDate(f.Move_In_Date);
+  if (mi === null) return 'Move-in date "' + f.Move_In_Date + '" is not a real date (use YYYY-MM-DD).';
+  if (!mi) return 'Move-in date is required. Without it the tenant would see - and be texted about - the previous tenant\'s work orders.';
+  if (String(f.Active == null ? '' : f.Active).toUpperCase() === 'FALSE') {
+    const mo = rosterNormDate(f.Move_Out_Date);
+    if (mo === null) return 'Move-out date "' + f.Move_Out_Date + '" is not a real date (use YYYY-MM-DD).';
+    if (!mo) return 'Move-out date is required for a tenant who has already left.';
+    if (mo < mi) return 'Move-out date is before the move-in date.';
+  } else if (String(f.Move_Out_Date || '').trim()) {
+    const mo = rosterNormDate(f.Move_Out_Date);
+    if (mo === null) return 'Move-out date "' + f.Move_Out_Date + '" is not a real date (use YYYY-MM-DD).';
+    if (mo < mi) return 'Move-out date is before the move-in date.';
+  }
+  return '';
+}
+async function tenantAddGuarded(env, body) {
+  body = body || {};
+  const why = tenantDatesError(body);
+  if (why) {
+    const out = { error: why, code: 'tenant_dates_required' };
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_add_refused', Skill_Or_Endpoint: '/tenant/add', Success: 'FALSE', Notes: ('property=' + (body.Property_ID || '') + ' unit=' + (body.Unit_ID || '') + ' ' + why).slice(0, 480) }); }
+    catch (e) { out.telemetry_error = String((e && e.message) || e).slice(0, 160); }
+    return json(out, 400);
+  }
+  body.Move_In_Date = rosterNormDate(body.Move_In_Date);
+  if (String(body.Move_Out_Date || '').trim()) body.Move_Out_Date = rosterNormDate(body.Move_Out_Date);
+  return await addRow(env, 'Tenants', body);
+}
+// /tenant/update must not be a back door: it can change a date but never blank the move-in of a tenant.
+async function tenantUpdateGuarded(env, body) {
+  const f = body && body.fields;
+  if (f && Object.prototype.hasOwnProperty.call(f, 'Move_In_Date')) {
+    const mi = rosterNormDate(f.Move_In_Date);
+    if (mi === null) return json({ error: 'Move-in date "' + f.Move_In_Date + '" is not a real date (use YYYY-MM-DD).', code: 'tenant_dates_required' }, 400);
+    if (!mi) return json({ error: 'The move-in date cannot be cleared. Without it the tenant would see the previous tenant\'s work orders.', code: 'tenant_dates_required' }, 400);
+    f.Move_In_Date = mi;
+  }
+  return await updateRow(env, 'Tenants', body && body.id, f);
 }
 
 // ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
@@ -9528,7 +10085,7 @@ async function welcomeSend(env, body) {
   // that came from (or still contains) the live template's tokens, e.g. a bulk send.
   const finalMsg = body.message ? renderTemplate(String(body.message), tokens) : defaultMsg;
   const sendOpts = type === 'tenant'
-    ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg }
+    ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg, allowPendingConsent: true }
     : { wo_id: '', message_type: 'vendor_welcome', recipient_type: 'vendor', vendor: recipient, message_body: finalMsg };
   const r = await smsGatedSend(env, sendOpts);
   // Sep 15 2026 — same fix as createVendorRequest/processVendorNudges (found live-testing
@@ -9539,8 +10096,14 @@ async function welcomeSend(env, body) {
   // returned before reaching the Welcome_Sent write below, a person with a legitimately queued
   // welcome message would still show as "not yet welcomed" in the Hub's own filter.
   if (!r.sent && !r.held_for_quiet_hours) return json({ error: r.send_ok ? 'Send failed' : ('Blocked: ' + r.gate_snapshot), name: firstName }, r.send_ok ? 502 : 400);
-  try { await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']); } catch (_) {}
-  await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() });
+  await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']);
+  const _wf = { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() };
+  // Oct 14 2026: Brett sending the welcome to a roster-added tenant (consent pending) IS the go-ahead: switch their texts on and
+  // record it. The tenant can still reply STOP (SMS_OptOut, which this never touches).
+  const _consentFlip = type === 'tenant' && String(recipient.SMS_Consent || '') === 'pending';
+  if (_consentFlip) { await ensureColumns(env, 'Tenants', ['SMS_Consent', 'SMS_Enabled']); _wf.SMS_Consent = 'welcome_sent'; _wf.SMS_Enabled = 'TRUE'; }
+  const _wr = await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, _wf);
+  if (!_wr.ok) return json({ success: true, sent_to: phone, name: firstName, warning: 'The welcome text WAS sent/queued, but the "welcomed" mark could not be saved: ' + await respErrText(_wr) + ' - it will still show as not welcomed.' }, 200);
   return json({ success: true, sent_to: r.held_for_quiet_hours ? '(queued — held for quiet hours)' : (r.test_mode ? '(test mode)' : phone), held_for_quiet_hours: !!r.held_for_quiet_hours, name: firstName });
 }
 
@@ -9569,7 +10132,8 @@ async function sendPropertyNotice(env, body) {
   const unit = unitId ? units.find(u => u.ID === unitId) : null;
   if (unitId && !unit) return json({ error: 'Unit not found' }, 404);
   const activeTenants = tenants.filter(t => {
-    if (t.Active === 'FALSE') return false;
+    // Oct 14 2026: isTenantCurrent also drops a tenant whose Move_Out_Date has passed (Active alone missed that).
+    if (!isTenantCurrent(t)) return false;
     if (String(t.Property_ID) !== String(propertyId)) return false;
     if (unitId) return t.Unit_ID === unitId;
     return true;
@@ -14561,6 +15125,10 @@ function smsGateDecision(o) {
     if (!o.ownerOn) fails.push('Customer OFF');
     if (!o.tenantOn) fails.push('Tenant OFF');
     if (o.tenantOptOut) fails.push('Tenant opted out');
+    // Oct 14 2026 (owner tenant roster): a tenant who has MOVED OUT is never texted, whatever path got us here
+    // (welcome, a held message released later, a property notice). Before this the gate only looked at the
+    // toggles, so an old tenant row with SMS still ON kept receiving texts after the new roster went in.
+    if (o.tenantMovedOut) fails.push('Tenant moved out');
   } else if (o.kind === 'vendor') {
     if (!o.vendorOn) fails.push('Vendor OFF');
     if (o.vendorOptOut) fails.push('Vendor opted out');
@@ -14571,6 +15139,22 @@ function smsGateDecision(o) {
   return { sendOk: fails.length === 0, gateSnapshot: fails.length ? fails.join(', ') : 'all gates open' };
 }
 const smsToggleOn = v => String(v == null ? '' : v).toUpperCase() !== 'FALSE';
+// True when the Tenants row says this person no longer lives there (Active FALSE, or a Move_Out_Date that has passed,
+// Eastern). Deliberately NOT isTenantCurrent: a synthetic/partial tenant object with no Active or Move_Out_Date field
+// (tests, one-off sends) must keep working exactly as before.
+function tenantMovedOut(t) {
+  if (!t) return false;
+  if (String(t.Active == null ? '' : t.Active).toUpperCase() === 'FALSE') return true;
+  const mo = String(t.Move_Out_Date || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(mo) && new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) > mo;
+}
+// Phone-based re-resolution of the tenant behind a queued text (releaseMessageQueue / processQuietHoursQueue). When
+// the same number is on more than one row at a property (a returning tenant, a re-keyed record) the CURRENT row wins;
+// before this the first row in the sheet won, which could be the old, switched-off one.
+function tenantForQueuedText(tenants, phone, propertyId) {
+  const m = (tenants || []).filter(t => normalizePhone(t.Phone) === phone && (!propertyId || t.Property_ID === propertyId));
+  return m.find(t => !tenantMovedOut(t)) || m[0] || null;
+}
 
 // The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types. Always writes a
 // Message_Queue row first (queue-write-first, per the brief's Build Order step 3), regardless
@@ -14592,11 +15176,15 @@ async function smsGatedSend(env, opts) {
   const kind = opts.recipient_type;
   const propertyOn = smsToggleOn(opts.property && opts.property.SMS_Enabled);
   const ownerOn    = smsToggleOn(opts.owner && opts.owner.SMS_Enabled);
-  const tenantOn   = smsToggleOn(opts.tenant && opts.tenant.SMS_Enabled);
+  // Oct 14 2026: a tenant the owner roster tool added is held at SMS_Enabled FALSE (consent pending). The WELCOME text Brett sends by
+  // hand is the one message allowed through that switch - nothing automatic is.
+  const _welcomeOverride = opts.message_type === 'tenant_welcome' && opts.allowPendingConsent === true && !!opts.tenant && String(opts.tenant.SMS_Consent || '') === 'pending';
+  const tenantOn   = _welcomeOverride || smsToggleOn(opts.tenant && opts.tenant.SMS_Enabled);
   const vendorOn   = smsToggleOn(opts.vendor && opts.vendor.SMS_Enabled);
   const tenantOptOut = String((opts.tenant && opts.tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
   const vendorOptOut = String((opts.vendor && opts.vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
+  const tenantMovedOutFlag = kind === 'tenant' && tenantMovedOut(opts.tenant);
+  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: tenantMovedOutFlag });
 
   const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : kind === 'admin' ? opts.admin : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
@@ -14753,7 +15341,7 @@ async function releaseMessageQueue(env, body) {
     const kind = row.Recipient_Type;
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
+    const tenant = kind === 'tenant' ? tenantForQueuedText(tenants, row.Recipient_Phone, row.Property_ID) : null;
     const vendor = kind === 'vendor' ? vendors.find(v => normalizePhone(v.Phone) === row.Recipient_Phone) : null;
     const propertyOn = smsToggleOn(property && property.SMS_Enabled);
     const ownerOn = smsToggleOn(owner && owner.SMS_Enabled);
@@ -14761,7 +15349,7 @@ async function releaseMessageQueue(env, body) {
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
@@ -14816,7 +15404,7 @@ async function processQuietHoursQueue(env) {
     }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
-    const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
+    const tenant = kind === 'tenant' ? tenantForQueuedText(tenants, row.Recipient_Phone, row.Property_ID) : null;
     const vendor = kind === 'vendor' ? vendors.find(v => normalizePhone(v.Phone) === row.Recipient_Phone) : null;
     const propertyOn = smsToggleOn(property && property.SMS_Enabled);
     const ownerOn = smsToggleOn(owner && owner.SMS_Enabled);
@@ -14824,7 +15412,7 @@ async function processQuietHoursQueue(env) {
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
@@ -15373,7 +15961,10 @@ async function schedRunDailyReceiptsPost(env) {
 async function schedRunDailyTurnover(env) {
   const errors = [];
   const r = await schedStep('release_turnover_by_date', () => releaseTurnoverByDate(env), errors);
-  return { ok: !errors.length, errors, detail: r };
+  // Oct 14 2026: also flips tenants the owner roster tool booked a FUTURE move-out for (SMS off, PIN cleared, unit unlinked).
+  // Rides this existing daily job on purpose - no new cron, no new scheduler row.
+  const f = await schedStep('roster_move_out_flip', () => rosterFlipDueMoveOuts(env), errors);
+  return { ok: !errors.length, errors, detail: { turnover: r, roster_flip: f } };
 }
 async function schedRunDailyQbSync(env) {
   const errors = [], detail = {};
@@ -20746,7 +21337,11 @@ function ownerOnboardValidate(input) {
         if (!tf) err(uf('tenant.first'), 'Enter the tenant\'s first name.');
         if (!ooPhoneOk(t.phone)) err(uf('tenant.phone'), 'Enter the tenant\'s 10-digit phone number.');
         if (te && !ooEmailOk(te)) err(uf('tenant.email'), 'That tenant email doesn\'t look right.');
-        cu.tenant = { first: tf, last: tl, phone: ooDigits(t.phone).slice(-10), email: te };
+        // Oct 14 2026 (Brett): a tenant cannot be saved without a move-in date. An approximate date is fine (the 1st of the month).
+        const tmiRaw = ooClean(t.move_in, 20);
+        const tmiWhy = tenantDatesError({ Move_In_Date: tmiRaw });
+        if (tmiWhy) err(uf('tenant.move_in'), tmiRaw ? 'That move-in date doesn\'t look right - use the calendar.' : 'Enter the date this tenant moved in (an approximate date is fine).');
+        cu.tenant = { first: tf, last: tl, phone: ooDigits(t.phone).slice(-10), email: te, move_in: tmiWhy ? '' : rosterNormDate(tmiRaw) };
         resolvedUnits++;
       } else if (status === 'vacant') {
         const a = (u.access && typeof u.access === 'object') ? u.access : {};
@@ -20975,7 +21570,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
         if (u.status === 'tenant') {
           const tr = await addRow(env, 'Tenants', {
             First_Name: u.tenant.first, Last_Name: u.tenant.last, Phone: u.tenant.phone, Email: u.tenant.email,
-            Property_ID: propertyId, Unit_ID: unitId, Move_In_Date: '', Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
+            Property_ID: propertyId, Unit_ID: unitId, Move_In_Date: u.tenant.move_in, Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'self_serve_link',
           });
           const tid = String((await tr.clone().json()).id || '');
           if (tid) { rec.tenant_ids.push(tid); if (unitId) await updateRow(env, 'Units', unitId, { Tenant_ID: tid }); }
@@ -21665,7 +22260,7 @@ const ROLE_SCOPES = {
     // session already sees via /owner-properties.
     '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties'],
   tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
-  owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view'],
+  owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply'],
 };
 function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
 
@@ -21728,6 +22323,9 @@ async function signRS256(input, key) {
 // zero duplicate reads globally.
 const __tabCache = new Map(); // tabName -> { data, exp }
 const TAB_CACHE_MS = 6000;
+// Real outbound Google Sheets calls made by this isolate (Oct 14 2026). Cloudflare caps a single request at 50 outbound calls on
+// this plan, and the tenant roster apply must stop and resume rather than hit it, so it reads the delta of this counter.
+let __sheetsFetchCount = 0;
 // Last-resort fallback for READ-ONLY portal lists (opt-in via {stale:true}): when Google is
 // still refusing reads after every retry, serve the last good copy of the tab if it is at
 // most this old rather than failing the whole page. Never used by any write path.
@@ -21815,6 +22413,7 @@ async function sheetsRequest(env, method, path, body, readOpts) {
     const token=await getAccessToken(env);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
     if(body) opts.body=JSON.stringify(body);
+    __sheetsFetchCount++;
     const res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts);
     const data=await res.json();
     if(data.error){
@@ -22477,6 +23076,9 @@ async function hubTestWriteAllowed(env, path, body) {
     return !!_r && String(_r.Title || '').startsWith('TEST-');
   }
   if (path === '/ops-queue/sync') return !!body && body.title_prefix === 'TEST-'; // staging token may only sync TEST- rows (opsQueueSync honours title_prefix)
+  // Oct 14 2026 (owner tenant roster): preview writes nothing; apply may only run for a TEST- owner (it can only ever touch that owner's own properties' tenants).
+  if (path === '/owner/tenant-roster/preview') return true;
+  if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
   if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
@@ -29239,6 +29841,7 @@ async function hubBulkImport(env, body) {
   let propertiesCreated = 0, propertiesMatched = 0, unitsCreated = 0, unitsMatched = 0;
   let tenantsCreated = 0, tenantsSkippedExisting = 0;
   const flaggedTenantsElsewhere = [], flaggedOwners = [], addrFoldedMatches = [];
+  const tenantsRefused = [];   // Oct 14 2026: new tenants refused because the row has no usable move-in date
   const createdDate = new Date().toISOString().slice(0, 10);
 
   for (const key of order) {
@@ -29310,13 +29913,20 @@ async function hubBulkImport(env, body) {
         const spaceIdx = fullName.indexOf(' ');
         const firstName = spaceIdx === -1 ? fullName : fullName.slice(0, spaceIdx);
         const lastName = spaceIdx === -1 ? '' : fullName.slice(spaceIdx + 1);
+        // Oct 14 2026 (Brett): no tenant is created without a real move-in date - it is what keeps them away from the previous
+        // tenant's work orders. A row without one is REFUSED and listed in the result (never silently created with a blank date).
+        const miRaw = String((r && (r.Move_In_Date || r['Move In Date'] || r['Move-In Date'] || r.Move_In)) || '').trim();
+        const dateWhy = tenantDatesError({ Move_In_Date: miRaw });
+        if (dateWhy) tenantsRefused.push({ name: fullName, phone: rawPhone, address: g.address, unit_label: label, reason: dateWhy });
+        else {
         const tid = String(nextTenantId++);
-        const tenantRow = { ID: tid, First_Name: firstName, Last_Name: lastName, Phone: phone, Email: email, Property_ID: prop.ID, Unit_ID: unit.ID, Move_In_Date: '', Active: 'TRUE' };
+        const tenantRow = { ID: tid, First_Name: firstName, Last_Name: lastName, Phone: phone, Email: email, Property_ID: prop.ID, Unit_ID: unit.ID, Move_In_Date: rosterNormDate(miRaw), Active: 'TRUE' };
         newTenantRows.push(tabState.Tenants.headers.map(h => tenantRow[h] !== undefined ? tenantRow[h] : ''));
         if (phone) tenantByPhone[phone] = tenantRow;
         tenantsCreated++;
         unit.Tenant_ID = tid;
         if (!unitIsNew) linkUpdates.push({ tab: 'Units', id: unit.ID, field: 'Tenant_ID', value: tid });
+        }
       }
       if (unitIsNew) newUnitRows.push(tabState.Units.headers.map(h => unit[h] !== undefined ? unit[h] : ''));
     }
@@ -29328,6 +29938,7 @@ async function hubBulkImport(env, body) {
     units_created: unitsCreated, units_matched: unitsMatched,
     tenants_created: tenantsCreated, tenants_skipped_existing: tenantsSkippedExisting,
     tenants_flagged_elsewhere: flaggedTenantsElsewhere,
+    tenants_refused_no_move_in_date: tenantsRefused,
     owners_flagged_no_match: flaggedOwners,
     properties_matched_via_address_normalization: addrFoldedMatches,
   };
