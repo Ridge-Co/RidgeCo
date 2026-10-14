@@ -6870,8 +6870,11 @@ async function rosterFlipDueMoveOuts(env) {
   const tenants = await fetchTab(env, 'Tenants');
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const due = tenants.filter(t => String(t.Roster_Pending_Flip || '').toUpperCase() === 'TRUE' && String(t.Active).toUpperCase() !== 'FALSE' && /^\d{4}-\d{2}-\d{2}$/.test(String(t.Move_Out_Date || '').trim()) && today > String(t.Move_Out_Date).trim());
-  const flipped = [], problems = [];
+  const flipped = [], problems = [], deferred = [];
+  const startCalls = __sheetsFetchCount;
   for (const t of due) {
+    // Same ~50-call request cap as the roster apply: flip what fits, leave the rest for tomorrow's run (counted in the telemetry row).
+    if (flipped.length + problems.length > 0 && (__sheetsFetchCount - startCalls) + ROSTER_COST.move_out + ROSTER_TAIL_RESERVE > ROSTER_SUBREQ_LIMIT) { deferred.push(String(t.ID)); continue; }
     try {
       const r = await tenantMarkMovedOut(env, t.ID, String(t.Move_Out_Date).trim());
       if (r.errors.length) problems.push('tenant ' + t.ID + ': ' + r.errors.map(e => e.step + ' ' + e.error).join('; '));
