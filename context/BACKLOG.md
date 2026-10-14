@@ -27,6 +27,10 @@ findable by grep even though they never share a number. Example:
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
 
+**Oct 14, 2026 update (queue #100)**
+- ✅ B-20261014-0900-inv · 🔴 **[invoices] [money]** Collapse 3 invoice/QB paths into one (Ops_Build_Queue #100) — built, PR #256 awaiting Brett's merge. Log Invoice retired, price-mismatch guard, cents compare. See FEATURE_LOG `[FL-20261014-0900-inv]`.
+- ▶ B-20261014-0910-inv2 · 🟡 **[invoices]** Remaining invoice creators with their own pricing, not a typed charge: `scopeProposalBook*`, `scopeProposalBillMilestones`, `trashInvoice`, legacy `proposalBook`. Candidates to fold into the Review Bills path later; needs Brett's call.
+
 ---
 
 <!-- QUICK-INDEX:START — always-loadable map; full entries below; grep an ID to jump to detail -->
