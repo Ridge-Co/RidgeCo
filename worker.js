@@ -6561,6 +6561,135 @@ function rosterPlan(inp) {
     const propUnits = units.filter(u => String(u.Property_ID) === String(prop.ID) && u.Active !== 'FALSE');
     let unit = null;
     if (propUnits.length) {
+      const uid = String(r.unit_id || '').trim(), ul = String(r.unit || '').trim();
+      if (uid) unit = propUnits.find(u => String(u.ID) === uid) || null;
+      else if (ul) { const k = rosterUnitKey(ul); unit = propUnits.find(u => rosterUnitKey(u.Unit_Label) === k) || null; }
+      if (!uid && !ul) err('This property has units - enter the unit for this tenant.');
+      else if (!unit) err('Unit "' + (ul || uid) + '" was not found at ' + prop.Address + ' (units: ' + propUnits.map(u => u.Unit_Label).slice(0, 8).join(', ') + ').');
+    } else if (String(r.unit || r.unit_id || '').trim()) {
+      res.warnings.push('This property has no units, so the unit was ignored.');
+    }
+    if (unit) { res.unit_id = String(unit.ID); res._unit = unit; res.label += ' (' + unit.Unit_Label + ')'; }
+
+    // ---- match an existing tenant at THIS property: by phone, else (no phone given) by exact name ----
+    const atProp = tenants.filter(t => String(t.Property_ID) === String(prop.ID));
+    let cands = [];
+    if (phone) cands = atProp.filter(t => normalizePhone(t.Phone) === phone);
+    else if (first || last) { const nk = rosterNameKey(first, last); cands = atProp.filter(t => rosterNameKey(t.First_Name, t.Last_Name) === nk && (!unit || String(t.Unit_ID || '') === String(unit.ID))); }
+    const live = cands.filter(t => !tenantMovedOut(t));
+    let match = null;
+    if (live.length > 1) err('More than one current tenant at this address has that ' + (phone ? 'phone number' : 'name') + ' - fix the duplicate in the Hub first.');
+    else if (live.length === 1) match = live[0];
+    const former = !match && cands.length ? cands[0] : null;
+    res._match = match; res._former = former;
+    if (match && unit && String(match.Unit_ID || '') !== String(unit.ID)) err('This person is already on file at this address under a different unit.');
+    if (match) { res.tenant_id = String(match.ID); if (claimed.has(String(match.ID))) err('Row ' + claimed.get(String(match.ID)) + ' already covers the same tenant.'); else claimed.set(String(match.ID), res.n); }
+    if (res.errors.length) { out.rows.push(res); return; }
+
+    const nameFix = match ? rosterNameFields(first, last, match) : {};
+    const nameDiffers = Object.keys(nameFix).length > 0;
+
+    if (match) {
+      const mMi = String(match.Move_In_Date || '').trim();
+      if (mo) {
+        if (mMi && /^\d{4}-\d{2}-\d{2}$/.test(mMi) && mo < mMi) { err('Move-out ' + mo + ' is before this tenant\'s move-in ' + mMi + '.'); }
+        else if (mi && mMi && mi !== mMi) res.warnings.push('Move-in date ignored: this tenant is already on file with move-in ' + mMi + '.');
+        if (!res.errors.length) {
+          if (String(match.Move_Out_Date || '').trim() === mo && String(match.Roster_Pending_Flip || '').toUpperCase() === 'TRUE') res.status = 'already_done';
+          else { res.status = 'move_out'; res.write = { type: 'move_out', tenant_id: String(match.ID), move_out_date: mo, future: mo > today }; departingIds.add(String(match.ID)); }
+        }
+        if (nameDiffers) res.warnings.push('Name on the row differs from the tenant on file; it was not changed because this row is a move-out.');
+      } else if (mi) {
+        if (mMi && mMi !== mi) err('This tenant is already on file with move-in ' + mMi + '. Move-in dates are not rewritten from here - leave the date blank to keep it, or add a move-out row.');
+        else {
+          const fields = {};
+          if (!mMi) fields.Move_In_Date = mi;
+          Object.assign(fields, nameFix);
+          if (email && !String(match.Email || '').trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fields.Email = email;
+          if (Object.keys(fields).length) { res.status = fields.Move_In_Date ? 'backfill' : 'name_fix'; res.write = { type: 'update', tenant_id: String(match.ID), fields }; }
+          else res.status = 'unchanged';
+        }
+      } else {
+        const fields = {};
+        Object.assign(fields, nameFix);
+        if (email && !String(match.Email || '').trim() && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) fields.Email = email;
+        if (Object.keys(fields).length) { res.status = 'name_fix'; res.write = { type: 'update', tenant_id: String(match.ID), fields }; }
+        else res.status = 'unchanged';
+        if (!String(match.Move_In_Date || '').trim()) res.warnings.push('This tenant has no move-in date on file. Add one to protect them from the previous tenant\'s work orders.');
+      }
+    } else {
+      // ---- no current tenant matched: this must be an ARRIVAL ----
+      if (former && mo && !mi) {
+        // Re-running a file that was already applied: the tenant is gone, on the date asked for = nothing to do.
+        if (String(former.Move_Out_Date || '').trim() === mo) res.status = 'already_done';
+        else err('This tenant already moved out' + (former.Move_Out_Date ? ' on ' + former.Move_Out_Date : '') + ' - the move-out date on the row (' + mo + ') does not match.');
+      }
+      else if (former) { err('This ' + (phone ? 'phone number' : 'name') + ' belongs to a former tenant at this address (record ' + former.ID + '). The Hub keeps one record per phone number, so this cannot be added as new - contact support.'); }
+      else if (mo && !mi) err('No tenant at this address matches this row, so there is nobody to move out. Check the phone number or name.');
+      else if (!mi) err('Move-in date is required for a new tenant.');
+      else if (mo) err('A new tenant gets a move-in date only. Add the move-out later, when it is known.');
+      else if (!first && !last) err('Tenant name is required.');
+      else if (!phone) err('Phone number is required for a new tenant.');
+      if (!res.errors.length && res.status !== 'already_done') {
+        res.status = 'move_in';
+        res.write = { type: 'insert', fields: {
+          First_Name: first, Last_Name: last, Phone: phone, Email: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email : '',
+          Property_ID: String(prop.ID), Unit_ID: unit ? String(unit.ID) : '', Active: 'TRUE',
+          Move_In_Date: mi, Move_Out_Date: '',
+          // SMS stays OFF until the upload box says the tenants agreed (or Brett sends the welcome himself). Either way the row
+          // is flagged (SMS_Consent + blank Welcome_Sent) so it shows up for Brett. SMS_OptOut is the tenant's own STOP record - never set here.
+          SMS_Enabled: consent ? 'TRUE' : 'FALSE', SMS_Consent: consent ? 'attested' : 'pending',
+          Roster_Source: 'owner_roster', Roster_Batch: String(inp.batch || ''), Roster_Pending_Flip: '', Welcome_Sent: '', Welcome_Sent_Date: '',
+        } };
+      }
+    }
+    out.rows.push(res);
+  });
+
+  // ---- pass 2: checks that need the whole file ----
+  const seenArrival = new Set();
+  const livePhoneOwner = t => { const p = (inp.properties || []).find(x => String(x.ID) === String(t.Property_ID)); return p ? String(p.Owner_ID || '') : ''; };
+  for (const res of out.rows) {
+    if (res.status !== 'move_in') continue;
+    const err = m => { res.errors.push(m); res.status = 'error'; res.write = null; };
+    const prop = res._prop, unit = res._unit, phone = res.phone;
+    const key = prop.ID + '|' + (unit ? unit.ID : '') + '|' + phone;
+    if (seenArrival.has(key)) { err('This phone number appears twice for the same address in this file.'); continue; }
+    seenArrival.add(key);
+    // the number must not already be a CURRENT tenant somewhere else (unless that tenant is leaving in this same file)
+    const elsewhere = tenants.filter(t => normalizePhone(t.Phone) === phone && String(t.Property_ID) !== String(prop.ID) && !tenantMovedOut(t) && !departingIds.has(String(t.ID)));
+    if (elsewhere.length) {
+      const t = elsewhere[0];
+      const mine = livePhoneOwner(t) === String(inp.ownerId);
+      const where = mine ? ((inp.properties || []).find(x => String(x.ID) === String(t.Property_ID)) || {}).Address : '';
+      err('This phone number is already a current tenant' + (where ? ' at ' + where : ' at another address') + '. Add a move-out row for that tenant first (same file), or check the number.');
+      continue;
+    }
+    const formerElsewhere = tenants.filter(t => normalizePhone(t.Phone) === phone && String(t.Property_ID) !== String(prop.ID) && tenantMovedOut(t));
+    if (formerElsewhere.length) res.warnings.push('This number is also on a former tenant record elsewhere.');
+    // a new tenant cannot start before the previous tenant left (backdating would link them to the old tenant's work orders)
+    const scope = tenants.filter(t => String(t.Property_ID) === String(prop.ID) && (unit ? String(t.Unit_ID || '') === String(unit.ID) : true));
+    let blocker = '', blockerWho = '';
+    for (const t of scope) {
+      const leaving = out.rows.find(x => x.status === 'move_out' && x.tenant_id === String(t.ID));
+      const d = leaving ? leaving._mo : String(t.Move_Out_Date || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d > blocker) { blocker = d; blockerWho = ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim(); }
+    }
+    if (blocker && res._mi < blocker) { err('Move-in ' + res._mi + ' is before the previous tenant' + (blockerWho ? ' (' + blockerWho + ')' : '') + ' left on ' + blocker + '. A new tenant cannot start before the old one leaves.'); continue; }
+    const stay = scope.filter(t => !tenantMovedOut(t) && !departingIds.has(String(t.ID)));
+    if (stay.length) res.warnings.push(stay.length + ' other current tenant' + (stay.length > 1 ? 's' : '') + ' stay' + (stay.length > 1 ? '' : 's') + ' on file at this address (' + stay.slice(0, 3).map(t => ((t.First_Name || '') + ' ' + (t.Last_Name || '')).trim()).join(', ') + '). If someone has left, add a move-out row.');
+  }
+
+  for (const res of out.rows) {
+    out.counts[res.status === 'error' ? 'error' : res.status]++;
+    if (res.status === 'move_out' && res.write.future) out.counts.future_move_out++;
+    delete res._prop; delete res._unit; delete res._match; delete res._former; delete res._mi; delete res._mo;
+  }
+  out.ok = out.counts.error === 0;
+  return out;
+}
+
+// Verified-write helpers ------------------------------------------------------------------------------------------
 //__RM__
 }
 
