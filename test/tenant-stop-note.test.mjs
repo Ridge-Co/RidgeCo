@@ -27,8 +27,18 @@ ok(withTenantStopNote('').trim() === NOTE, 'empty message gets just the note');
 ok(withTenantStopNote(null).trim() === NOTE && withTenantStopNote(undefined).trim() === NOTE, 'null/undefined safe');
 
 // wiring: each tenant first-touch send site uses it
-ok(src.includes("if (type === 'tenant') defaultMsg = withTenantStopNote(defaultMsg);"), 'tenant welcome preview/default gets the note');
-ok(src.includes("const finalMsg = (m => type === 'tenant' ? withTenantStopNote(m) : m)("), 'tenant welcome final send (incl. custom text) gets the note');
+ok(src.includes("if (type === 'tenant') defaultMsg = withTenantStopNote(withWelcomeRatesNote(defaultMsg));"), 'tenant welcome preview/default gets rates + STOP notes');
+ok(src.includes("const finalMsg = (m => type === 'tenant' ? withTenantStopNote(withWelcomeRatesNote(m)) : m)("), 'tenant welcome final send (incl. custom text) gets rates + STOP notes');
+// rates note (Oct 14 2026): welcome only, idempotent, comes before the STOP note
+const ratesFn = /function withWelcomeRatesNote\(msg\) \{[\s\S]*?\n\}/.exec(src);
+ok(!!ratesFn, 'withWelcomeRatesNote helper exists');
+const withWelcomeRatesNote = new Function(`${ratesFn[0]}; return withWelcomeRatesNote;`)();
+ok(withWelcomeRatesNote('Hi Sam.  ') === 'Hi Sam. Msg&data rates may apply.', 'rates note appended once');
+ok(withWelcomeRatesNote(withWelcomeRatesNote('Hi Sam.')) === 'Hi Sam. Msg&data rates may apply.', 'rates note idempotent');
+ok(withWelcomeRatesNote('Msg & data rates apply.') === 'Msg & data rates apply.', 'existing rates wording left alone');
+ok(withTenantStopNote(withWelcomeRatesNote('Hi Sam.')) === 'Hi Sam. Msg&data rates may apply. ' + NOTE, 'welcome order: rates then STOP');
+ok(!/withWelcomeRatesNote/.test(src.slice(src.indexOf("const message = (m => type === 'tenant'"), src.indexOf("const message = (m => type === 'tenant'") + 200)), 'PIN text does not get the rates note');
+ok(/BUILD_VERSION = '2026-10-14\.\d+-[a-z-]+'/.test(src), 'BUILD_VERSION format');
 ok(src.includes("const message = (m => type === 'tenant' ? withTenantStopNote(m) : m)("), 'tenant PIN text gets the note');
 ok(/Ref: \$\{woId\}\. \$\{TENANT_STOP_NOTE\}`;/.test(src), 'tenant job-received text gets the note');
 // vendors/owners are untouched

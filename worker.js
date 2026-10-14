@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.26-tenant-stop-note';
+const BUILD_VERSION = '2026-10-14.27-welcome-rates-note';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -114,6 +114,12 @@ const TENANT_STOP_NOTE = "Reply STOP to opt out - you'd no longer get repair, sc
 function withTenantStopNote(msg) {
   const m = String(msg == null ? '' : msg);
   return /\bSTOP\b/i.test(m) ? m : (m.replace(/\s+$/, '') + ' ' + TENANT_STOP_NOTE);
+}
+// Oct 14 2026 (Brett): the tenant WELCOME (first message a tenant ever gets) also says message and data rates
+// may apply, which Twilio's A2P review looks for. Same send-time, idempotent approach as the STOP note.
+function withWelcomeRatesNote(msg) {
+  const m = String(msg == null ? '' : msg);
+  return /\brates\b/i.test(m) ? m : (m.replace(/\s+$/, '') + ' Msg&data rates may apply.');
 }
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
@@ -10089,12 +10095,12 @@ async function welcomeSend(env, body) {
   } else {
     return json({ error: 'Invalid type. Use: tenant or vendor' }, 400);
   }
-  if (type === 'tenant') defaultMsg = withTenantStopNote(defaultMsg);
+  if (type === 'tenant') defaultMsg = withTenantStopNote(withWelcomeRatesNote(defaultMsg));
   if (body.preview_only) return json({ preview: defaultMsg, phone, name: firstName });
   // Apply the same token substitution to a custom/edited message as the template default gets
   // — a no-op for plain text with no {Token} in it, correct per-recipient fill-in for anything
   // that came from (or still contains) the live template's tokens, e.g. a bulk send.
-  const finalMsg = (m => type === 'tenant' ? withTenantStopNote(m) : m)(body.message ? renderTemplate(String(body.message), tokens) : defaultMsg);
+  const finalMsg = (m => type === 'tenant' ? withTenantStopNote(withWelcomeRatesNote(m)) : m)(body.message ? renderTemplate(String(body.message), tokens) : defaultMsg);
   const sendOpts = type === 'tenant'
     ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg, allowPendingConsent: true }
     : { wo_id: '', message_type: 'vendor_welcome', recipient_type: 'vendor', vendor: recipient, message_body: finalMsg };
