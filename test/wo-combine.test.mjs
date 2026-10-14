@@ -277,7 +277,7 @@ function build(db, fetchOpts) {
     vendorBillLockSrc, findLockedVendorBillSrc,
     combineFieldsConstSrc, combineMergeConstSrc, mergeTextFieldSrc, resolveCombineSrc, woCombineSrc,
     isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
-    smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc,
+    smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
     etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
     getWorkOrdersListSrc,

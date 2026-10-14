@@ -102,7 +102,7 @@ var pinTimer = null;
 var submitting = false;
 var topMsg = '';
 
-function newUnit(){ return { label:'', status:'', tenant:{first:'',last:'',phone:'',email:''}, access:{method:'',code:'',location:'',note:''} }; }
+function newUnit(){ return { label:'', status:'', tenant:{first:'',last:'',phone:'',email:'',move_in:''}, access:{method:'',code:'',location:'',note:''} }; }
 function newProperty(){ return { address:'', city:'', type:'', subtype:'', unit_count:'', units:[ newUnit() ] }; }
 function isSingle(p){ return p.type === 'house' || p.type === 'rowhome'; }
 
@@ -175,6 +175,7 @@ function validate(scope){
           need(u.tenant.first.trim(), uf+'.tenant.first', 'Enter the tenant\'s first name.');
           need(phoneOk(u.tenant.phone), uf+'.tenant.phone', 'Enter the tenant\'s 10-digit phone number.');
           if (u.tenant.email.trim()) need(emailOk(u.tenant.email), uf+'.tenant.email', 'That email doesn\'t look right.');
+          need(/^\d{4}-\d{2}-\d{2}$/.test(String(u.tenant.move_in||'').trim()), uf+'.tenant.move_in', 'Enter the date this tenant moved in (an approximate date is fine).');
           resolved++;
         } else if (u.status === 'vacant') {
           need(u.access.method, uf+'.access.method', 'Choose a lockbox, or "No lockbox".');
@@ -256,7 +257,8 @@ function renderUnit(p, pi, u, j){
   if (u.status === 'tenant') {
     h += '<div class="row2"><div>'+field(uf+'.tenant.first','Tenant first name',{ac:'off'})+'</div><div>'+field(uf+'.tenant.last','Tenant last name',{optional:true})+'</div></div>' +
       field(uf+'.tenant.phone','Tenant phone',{type:'tel',im:'tel',placeholder:'(410) 555-0123'}) +
-      field(uf+'.tenant.email','Tenant email',{type:'email',im:'email',optional:true});
+      field(uf+'.tenant.email','Tenant email',{type:'email',im:'email',optional:true}) +
+      field(uf+'.tenant.move_in','Date this tenant moved in',{type:'date',ac:'off'});
   } else if (u.status === 'vacant') {
     h += '<label class="f">How do we get in?</label>' +
       choice(uf+'.access.method','lockbox','There\'s a lockbox') +
