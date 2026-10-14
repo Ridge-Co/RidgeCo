@@ -29807,6 +29807,7 @@ async function hubBulkImport(env, body) {
   let propertiesCreated = 0, propertiesMatched = 0, unitsCreated = 0, unitsMatched = 0;
   let tenantsCreated = 0, tenantsSkippedExisting = 0;
   const flaggedTenantsElsewhere = [], flaggedOwners = [], addrFoldedMatches = [];
+  const tenantsRefused = [];   // Oct 14 2026: new tenants refused because the row has no usable move-in date
   const createdDate = new Date().toISOString().slice(0, 10);
 
   for (const key of order) {
