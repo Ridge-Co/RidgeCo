@@ -421,6 +421,24 @@ for (const N of [2, 5, 8]) {
   const stf = stateOf(store);
   t('both jobs recorded ok, no claim left behind', stf.jobs.hang.last_status === 'ok' && stf.jobs.next.last_status === 'ok' && stf.claim_id === '', stf);
 }
+// 2k-c Oct 14 2026 REGRESSION (daily-first exposed it): a DAILY job that times out has no last_key yet, so it stayed due and the very
+// next call of the same tick picked it again (up to 25 times). It must be left alone for the retry gap, counted as an attempt, and
+// capped at SCHED_MAX_ATTEMPTS per day - and the jobs behind it must still run.
+{
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  const waits = [];
+  const jobs = mkJobs(log, [['dhang', 'daily', { run: async () => { await tick(400); log.push('dhang'); return { ok: false, errors: [{ step: 'x', error: 'never finishes in time' }] }; } }], ['next', 'interval']]);
+  const r = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 30 }));
+  t('timed-out daily job: the first call ran it, timed out, and counted attempt 1', r.body.ran === 'dhang' && r.body.timed_out === true && stateOf(store).jobs.dhang.attempts.n === 1, r.body);
+  t('timed-out daily job: more=true and it is NOT in its own due list', r.body.more === true && JSON.stringify(r.body.due) === JSON.stringify(['next']), r.body);
+  const r2 = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 2000 }));
+  t('the very next call runs the job behind it and does NOT start the daily job again', r2.body.ran === 'next' && !log.includes('dhang') && stateOf(store).jobs.dhang.attempts.n === 1, r2.body);
+  await Promise.all(waits);
+  t('a daily job that failed after timing out keeps its single counted attempt (no double count)', stateOf(store).jobs.dhang.attempts.n === 1 && stateOf(store).jobs.dhang.last_status === 'failed', stateOf(store).jobs.dhang);
+  c.v += 31 * 60000;
+  const r3 = await L.schedRunNext({}, { waitUntil: (p) => waits.push(p) }, fast(c, { jobs, budgetMs: 30 }));
+  t('after the 30 min retry gap the daily job is tried again (attempt 2)', r3.body.ran === 'dhang' && stateOf(store).jobs.dhang.attempts.n === 2, r3.body);
+}
 {
   // if the claim cannot be released the old behaviour holds AND it is loud (warning in the result + telemetry row)
   const store = makeStore(), L = load(store), c = clock(T0), log = [];
