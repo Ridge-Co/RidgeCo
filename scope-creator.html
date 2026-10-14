@@ -1322,7 +1322,7 @@ function renderSendStatus(){
   var s=state.current;
   if(!s || !(s.Sent_Date||'').trim()){ el.innerHTML=''; return; }
   var n=parseInt(s.Send_Count||'1',10)||1;
-  el.innerHTML='<div class="owner-note ok" style="margin-top:8px;">✅ Sent to <b>'+esc(s.Sent_To||'')+'</b> on '+esc(new Date(s.Sent_Date).toLocaleString())+(n>1?(' · sent '+n+'x total'):'')+'.</div>';
+  el.innerHTML='<div class="owner-note ok" style="margin-top:8px;">✅ Sent to <b>'+esc(s.Sent_To||'')+'</b> on '+esc(new Date(s.Sent_Date).toLocaleString())+(n>1?(' · sent '+n+'x total'):'')+'.'+smsStatusLine(s)+readStatusLines(s)+'<div style="margin-top:6px;"><button class="btn small secondary" onclick="refreshReadStatus()">🔄 Refresh read status</button></div></div>';
 }
 
 boot();
