@@ -17081,7 +17081,7 @@ async function opsQueueScoutSubmit(env, body) {
   const shipped = items.length ? await getShippedIndex() : { ok: true, index: [] };
   for (const it of items) {
     const same = findQueueMatch(it, pool, 'same');
-    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status }); continue; }
+    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status, source_task_id: (it && it.source_task_id) ? String(it.source_task_id) : undefined }); continue; }
     const rowObj = buildScoutQueueRow(it, now, reviewTs);
     const ov = findQueueMatch(it, pool, 'overlap');
     if (ov) {
