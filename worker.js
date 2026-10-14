@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.10-invoice-single-path';
+const BUILD_VERSION = '2026-10-14.11-sms-delivery-check';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -14974,7 +14974,7 @@ const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
 const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
-const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard'];
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check'];
 
 // Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
 // Fails closed for a blank/short/missing secret, an empty header, any other method or path.
@@ -15061,6 +15061,7 @@ const SCHED_JOBS = [
   { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
   { name: 'daily_turnover',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyTurnover(env) },
   { name: 'daily_qb_sync',      kind: 'daily',    at: '07:00', run: (env) => schedRunDailyQbSync(env) },
+  { name: 'sms_delivery_check', kind: 'daily',    at: '07:00', run: (env) => schedRunSmsDeliveryCheck(env) },
   { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
   { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
   { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
@@ -15387,6 +15388,210 @@ async function schedRunHubImprovements(env, pull) {
   return { ok: !errors.length, errors, detail };
 }
 
+// ── SMS delivery check (Oct 13 2026) ─────────────────────────────────────────────────────────────────────────────
+// WHY: the notifications number (+1 410 888 0328) is registered under an A2P campaign that was declared "no embedded
+// links", yet vendor texts carry links. Carriers can filter or silently drop such texts. Brett asked for a DAILY check
+// that runs until we know it is not a problem. Runs as the scheduler job `sms_delivery_check` (Apps Script clock, daily,
+// NO cron). It reads the last ~26h of OUTBOUND messages from Twilio's Messages API (read-only, same API-key pair as
+// sendSMSRaw) and classifies them:
+//   - filter hits  : failed/undelivered with Twilio error 30007 (carrier filtered), 30034 (number not A2P-registered),
+//                    30032 (toll-free not verified)  -> ALERT
+//   - link vs no-link: the same counts split by "body contains a link", so we can see whether links are the trigger
+//   - stuck 'sent'   : still 'sent'/'queued'/'sending' >3h after the last update (carrier never returned a receipt; some
+//                    carriers never do, so this is reported, and only alerts if the LINK texts fail/stick >=20% of >=5)
+//   - everything else (30003 handset off, 21610 opted-out, 21408 region ...) is reported as information only.
+// DELIVERY IS BY EMAIL (gmailSendEmail), never by SMS - a filtered number cannot be trusted to deliver its own alert.
+// Recipient: Config admin_email, else brett@bmoremanagement.com. Config sms_delivery_check_quiet_when_clean=TRUE mutes
+// the "all clear" email (alerts always go out). State = ONE Config row (sms_delivery_check_state): consecutive clean
+// days + link texts seen while clean; after 14 clean days with >=30 link texts the email says the check can be retired.
+// A finding is delivered by the email itself (like the selftest); only a run that CANNOT execute (Twilio unreachable /
+// unconfigured, Config unreadable, email send failed) is a job failure, so /cron/status shows it overdue and the Apps
+// Script failure email fires. Nothing is logged with a phone number (last 4 digits of the recipient only) or a body.
+const SMS_DC_JOB = 'sms_delivery_check';
+const SMS_DC_STATE_KEY = 'sms_delivery_check_state';
+const SMS_DC_LOOKBACK_MS = 26 * 3600000;
+const SMS_DC_MAX_PAGES = 6;
+const SMS_DC_STUCK_MS = 3 * 3600000;
+const SMS_DC_FILTER_CODES = {
+  '30007': 'carrier filtered the message (spam / content rules)',
+  '30034': 'sent from a number that is not registered for A2P 10DLC',
+  '30032': 'toll-free number is not verified',
+};
+const SMS_DC_LINK_MIN_SENT = 5;
+const SMS_DC_LINK_BAD_RATIO = 0.2;
+const SMS_DC_RETIRE_CLEAN_DAYS = 14;
+const SMS_DC_RETIRE_LINK_TEXTS = 30;
+const SMS_DC_DEFAULT_TO = 'brett@bmoremanagement.com';
+
+// Pure.
+function smsDcHasLink(body) { return /https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|app|co|us)\/\S/i.test(String(body == null ? '' : body)); }
+function smsDcBucket() { return { sent: 0, delivered: 0, failed: 0, filtered: 0, stuck: 0 }; }
+function smsDcLast4(n) { const d = String(n == null ? '' : n).replace(/\D/g, ''); return d.length >= 4 ? d.slice(-4) : ''; }
+
+// Pure. `messages` = Twilio Message resources (JSON). Only OUTBOUND messages sent in the lookback window are counted.
+function smsDcClassify(messages, nowMs) {
+  const since = nowMs - SMS_DC_LOOKBACK_MS;
+  const out = { total: 0, delivered: 0, failed: 0, in_flight: 0, stuck: 0, filter_hits: [], other_errors: {}, with_link: smsDcBucket(), no_link: smsDcBucket(), by_from: {} };
+  for (const m of (Array.isArray(messages) ? messages : [])) {
+    if (!m || typeof m !== 'object') continue;
+    if (!/^outbound/i.test(String(m.direction || ''))) continue;
+    const ts = Date.parse(m.date_sent || m.date_created || '');
+    if (isNaN(ts) || ts < since) continue;
+    const link = smsDcHasLink(m.body), b = link ? out.with_link : out.no_link;
+    const from = String(m.from || 'unknown'), fb = out.by_from[from] || (out.by_from[from] = smsDcBucket());
+    const status = String(m.status || '').toLowerCase();
+    const code = m.error_code == null ? '' : String(m.error_code);
+    out.total++; b.sent++; fb.sent++;
+    if (status === 'delivered' || status === 'read') { out.delivered++; b.delivered++; fb.delivered++; continue; }
+    if (status === 'failed' || status === 'undelivered') {
+      out.failed++; b.failed++; fb.failed++;
+      if (SMS_DC_FILTER_CODES[code]) {
+        b.filtered++; fb.filtered++;
+        out.filter_hits.push({ sid: String(m.sid || ''), when: new Date(ts).toISOString(), from, to_last4: smsDcLast4(m.to), code, why: SMS_DC_FILTER_CODES[code], has_link: link });
+      } else {
+        const k = code ? `${code}${m.error_message ? ' ' + String(m.error_message).slice(0, 60) : ''}` : (status === 'failed' ? 'failed (no code)' : 'undelivered (no code)');
+        out.other_errors[k] = (out.other_errors[k] || 0) + 1;
+      }
+      continue;
+    }
+    // sent / queued / sending / accepted / scheduled / anything else: in flight, or stuck if it has not moved for a while
+    const upd = Date.parse(m.date_updated || m.date_sent || m.date_created || '');
+    if (!isNaN(upd) && nowMs - upd > SMS_DC_STUCK_MS) { out.stuck++; b.stuck++; fb.stuck++; } else out.in_flight++;
+  }
+  return out;
+}
+
+// Pure. level: 'alert' (filtering / links failing) | 'clean'. `notes` = plain-English reasons (alert) or observations (clean).
+function smsDcEvaluate(s) {
+  const reasons = [], notes = [];
+  if (s.filter_hits.length) reasons.push(`${s.filter_hits.length} text(s) were blocked or filtered by carriers (error ${[...new Set(s.filter_hits.map(h => h.code))].join(', ')}).`);
+  const wl = s.with_link;
+  if (wl.sent >= SMS_DC_LINK_MIN_SENT) {
+    const bad = (wl.failed + wl.stuck) / wl.sent;
+    if (bad >= SMS_DC_LINK_BAD_RATIO) reasons.push(`${wl.failed + wl.stuck} of ${wl.sent} texts WITH LINKS failed or never got a delivery receipt (${Math.round(bad * 100)}%).`);
+  }
+  if (s.stuck > 0) notes.push(`${s.stuck} text(s) are still "sent" with no delivery receipt after 3+ hours (some carriers never return one).`);
+  const oe = Object.keys(s.other_errors);
+  if (oe.length) notes.push('Other failures (not carrier filtering): ' + oe.map(k => `${s.other_errors[k]}x ${k}`).join('; ') + '.');
+  return { level: reasons.length ? 'alert' : 'clean', reasons, notes };
+}
+
+// Pure. State is { v:1, last_date, clean_days, clean_link_texts }. Corrupt/blank -> fresh state (and says so).
+function smsDcParseState(raw) {
+  const fresh = { v: 1, last_date: '', clean_days: 0, clean_link_texts: 0 };
+  if (raw == null || String(raw).trim() === '') return { state: fresh, corrupt: false };
+  try {
+    const p = JSON.parse(String(raw));
+    if (!p || typeof p !== 'object' || Array.isArray(p)) return { state: fresh, corrupt: true };
+    return { state: { v: 1, last_date: String(p.last_date || ''), clean_days: Math.max(0, parseInt(p.clean_days, 10) || 0), clean_link_texts: Math.max(0, parseInt(p.clean_link_texts, 10) || 0) }, corrupt: false };
+  } catch (e) { return { state: fresh, corrupt: true }; }
+}
+// Pure. One update per ET date (a retry the same day does not double-count a clean day).
+function smsDcNextState(state, level, etDate, linkSent) {
+  const s = Object.assign({}, state);
+  if (s.last_date === etDate) return s;
+  s.last_date = etDate;
+  if (level === 'clean') { s.clean_days += 1; s.clean_link_texts += (linkSent || 0); } else { s.clean_days = 0; s.clean_link_texts = 0; }
+  return s;
+}
+function smsDcCanRetire(state) { return state.clean_days >= SMS_DC_RETIRE_CLEAN_DAYS && state.clean_link_texts >= SMS_DC_RETIRE_LINK_TEXTS; }
+
+// Pure. { subject, html }.
+function smsDcCompose(s, ev, state, etDate, truncated) {
+  const alert = ev.level === 'alert';
+  const wl = s.with_link, nl = s.no_link;
+  const subject = alert ? `⚠️ SMS delivery problem: ${s.filter_hits.length ? s.filter_hits.length + ' filtered' : 'link texts failing'} (${etDate})`
+                        : `✅ SMS delivery check clean: ${s.total} texts, ${wl.sent} with links (${etDate})`;
+  const row = (label, b) => `<tr><td>${_escHtml(label)}</td><td>${b.sent}</td><td>${b.delivered}</td><td>${b.failed}</td><td>${b.filtered}</td><td>${b.stuck}</td></tr>`;
+  const parts = [];
+  parts.push(`<p><b>${alert ? 'Problem found' : 'No carrier filtering found'}</b> in the last ~26 hours of outbound texts from Ridge Co's Twilio account (${etDate}).</p>`);
+  if (ev.reasons.length) parts.push('<ul>' + ev.reasons.map(r => `<li><b>${_escHtml(r)}</b></li>`).join('') + '</ul>');
+  parts.push('<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse"><tr><th></th><th>sent</th><th>delivered</th><th>failed</th><th>filtered</th><th>stuck</th></tr>' +
+    row('texts WITH links', wl) + row('texts without links', nl) +
+    Object.keys(s.by_from).sort().map(f => row('from ' + f, s.by_from[f])).join('') + '</table>');
+  if (s.filter_hits.length) {
+    parts.push('<p>Filtered texts (newest first; recipient shown as last 4 digits only):</p><ul>' +
+      s.filter_hits.slice().sort((a, b) => b.when.localeCompare(a.when)).slice(0, 15).map(h => `<li>${_escHtml(h.when)} — from ${_escHtml(h.from)} to …${_escHtml(h.to_last4)} — error ${_escHtml(h.code)} (${_escHtml(h.why)}) — ${h.has_link ? 'contained a link' : 'no link'} — ${_escHtml(h.sid)}</li>`).join('') + '</ul>');
+    parts.push('<p><b>What to do:</b> tell Claude. The fix is to move this number onto the new campaign that allows links (and to send vendor links through bmoremanagement.com), and meanwhile to stop sending link texts from it.</p>');
+  }
+  if (ev.notes.length) parts.push('<ul>' + ev.notes.map(n => `<li>${_escHtml(n)}</li>`).join('') + '</ul>');
+  if (truncated) parts.push('<p><i>Note: Twilio returned more messages than this check reads in one run; counts may be incomplete.</i></p>');
+  parts.push(`<p>Clean-day streak: ${state.clean_days}. ${smsDcCanRetire(state) ? `<b>${state.clean_days} clean days with ${state.clean_link_texts} link texts: this looks resolved. Tell Claude to turn this check off (or set enabled:false on the sms_delivery_check row of the Apps Script JOBS table).</b>` : `The check keeps running daily until it has ${SMS_DC_RETIRE_CLEAN_DAYS} clean days and ${SMS_DC_RETIRE_LINK_TEXTS} link texts.`}</p>`);
+  return { subject, html: parts.join('\n') };
+}
+
+// IO. Reads the outbound message window from Twilio, paging up to SMS_DC_MAX_PAGES x 1000. Throws on any failure.
+async function smsDcFetchMessages(env, nowMs, fetchFn) {
+  fetchFn = fetchFn || fetch;
+  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY) throw new Error('Twilio not configured (missing TWILIO_SID/TWILIO_API_SID/TWILIO_API_KEY)');
+  const auth = 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`);
+  const sinceDay = new Date(nowMs - SMS_DC_LOOKBACK_MS - 24 * 3600000).toISOString().slice(0, 10);   // Twilio filters by UTC date; the 26h window is applied in smsDcClassify
+  let url = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json?` + new URLSearchParams({ 'DateSent>': sinceDay, PageSize: '1000' }).toString();
+  const messages = []; let pages = 0, truncated = false;
+  while (url) {
+    if (pages >= SMS_DC_MAX_PAGES) { truncated = true; break; }
+    const resp = await fetchFn(url, { headers: { Authorization: auth } });
+    pages++;
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`Twilio Messages API HTTP ${resp.status}: ${text.slice(0, 200)}`);
+    let j; try { j = JSON.parse(text); } catch (e) { throw new Error('Twilio Messages API returned non-JSON: ' + text.slice(0, 120)); }
+    if (!j || !Array.isArray(j.messages)) throw new Error('Twilio Messages API response has no messages array');
+    for (const m of j.messages) messages.push(m);
+    url = j.next_page_uri ? 'https://api.twilio.com' + j.next_page_uri : '';
+  }
+  return { messages, pages, truncated };
+}
+
+// IO. The whole pass. Never throws; returns { ok, errors, warnings, no_retry, detail }. deps = test seams.
+async function smsDeliveryCheckPass(env, deps) {
+  deps = deps || {};
+  const errors = [], warnings = []; let no_retry = false;
+  const nowMs = deps.nowMs || Date.now(), t0 = Date.now();
+  const readCfg = deps.readConfigRows || ((fresh) => schedReadConfigRows(env, fresh));
+  const fail = (step, e) => { errors.push({ step, error: schedErrText(e) }); };
+  let rows, cfg, st, summary, ev, fetched;
+  try { rows = await readCfg(true); cfg = configFromValues(rows); } catch (e) { fail('read_config', e); return { ok: false, errors, warnings, no_retry, detail: {} }; }
+  const ps = smsDcParseState(cfg[SMS_DC_STATE_KEY]);
+  if (ps.corrupt) warnings.push('stored sms_delivery_check_state was not valid JSON; starting a fresh clean-day streak');
+  const etDate = schedEtParts(new Date(nowMs)).date;
+  try { fetched = await (deps.fetchMessages || smsDcFetchMessages)(env, nowMs, deps.fetchFn); } catch (e) { fail('fetch_twilio_messages', e); fetched = null; }
+  if (!fetched) {
+    try { await (deps.logTelemetry || logTelemetry)(env, { Source: 'worker', Job_Type: SMS_DC_JOB, Skill_Or_Endpoint: 'scheduler/sms_delivery_check', Success: 'FALSE', Latency_ms: Date.now() - t0, Notes: errors.map(x => x.error).join('; ').slice(0, 400) }); }
+    catch (e) { warnings.push('failure telemetry row failed: ' + schedErrText(e)); }
+    return { ok: false, errors, warnings, no_retry, detail: {} };
+  }
+  summary = smsDcClassify(fetched.messages, nowMs);
+  ev = smsDcEvaluate(summary);
+  const nextState = smsDcNextState(ps.state, ev.level, etDate, summary.with_link.sent);
+  const quiet = String(cfg.sms_delivery_check_quiet_when_clean || '').toUpperCase() === 'TRUE';
+  let emailed = false;
+  if (ev.level === 'alert' || !quiet) {
+    const to = cfg.admin_email || SMS_DC_DEFAULT_TO;
+    const c = smsDcCompose(summary, ev, nextState, etDate, fetched.truncated);
+    try {
+      const r = await (deps.sendEmail || gmailSendEmail)(env, { to, subject: c.subject, html: c.html });
+      emailed = !!(r && (r.sent || r.staged));
+      if (!emailed) fail('send_email', 'email send returned no confirmation');
+      else no_retry = true;                                 // a message went out - a retry must not send it twice
+    } catch (e) { fail('send_email', e); }
+  }
+  if (!errors.length) {
+    try {
+      const w = await (deps.setConfigKey || setConfigKey)(env, { key: SMS_DC_STATE_KEY, value: JSON.stringify(nextState) });
+      if (w && typeof w.status === 'number' && w.status >= 400) throw new Error('setConfigKey returned HTTP ' + w.status);
+      const back = configFromValues(await readCfg(true));
+      if (smsDcParseState(back[SMS_DC_STATE_KEY]).state.last_date !== nextState.last_date) throw new Error('state write did not stick (re-read shows a different value)');
+    } catch (e) { warnings.push('could not save the clean-day streak: ' + schedErrText(e)); }
+  }
+  try {
+    await (deps.logTelemetry || logTelemetry)(env, { Source: 'worker', Job_Type: SMS_DC_JOB, Skill_Or_Endpoint: 'scheduler/sms_delivery_check', Success: errors.length ? 'FALSE' : 'TRUE', Latency_ms: Date.now() - t0,
+      Notes: `${ev.level}: ${summary.total} texts (${summary.with_link.sent} with links), ${summary.delivered} delivered, ${summary.failed} failed, ${summary.filter_hits.length} filtered, ${summary.stuck} stuck; clean_days=${nextState.clean_days}; emailed=${emailed}` });
+  } catch (e) { warnings.push('heartbeat telemetry row failed: ' + schedErrText(e)); }
+  return { ok: !errors.length, errors, warnings, no_retry, detail: { level: ev.level, total: summary.total, delivered: summary.delivered, failed: summary.failed, filtered: summary.filter_hits.length, stuck: summary.stuck, with_link: summary.with_link, no_link: summary.no_link, clean_days: nextState.clean_days, emailed, truncated: fetched.truncated, pages: fetched.pages } };
+}
+async function schedRunSmsDeliveryCheck(env) { return smsDeliveryCheckPass(env); }
+// ── END SMS delivery check ───────────────────────────────────────────────────────────────────────────────────────
+
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
 // ── PREFLIGHT (dry run only): plain-English, COUNTS ONLY, strictly read-only (GETs; no claim, no state write, no SMS). ──
 const SCHED_PF_WHAT = {
@@ -15400,6 +15605,7 @@ const SCHED_PF_WHAT = {
   daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
+  sms_delivery_check: 'reads the last day of outbound texts from Twilio, flags carrier-filtered / unregistered / link texts that fail, and emails Brett the result',
   review_mon: 'runs the Monday weekly review and delivers it',
   review_wed: 'runs the Wednesday weekly review (logged only)',
   ar_report_mon: 'builds and delivers the Monday AR aging report',

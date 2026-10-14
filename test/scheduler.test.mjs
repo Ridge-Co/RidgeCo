@@ -111,7 +111,7 @@ const primeState = (store) => { store.tabs.get('Config').push(['Scheduler_State'
 // registry shape
 {
   const names = P.SCHED_JOBS.map(j => j.name);
-  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily']), names);
+  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily']), names);
   t('registry names unique', new Set(names).size === names.length);
   const dw = P.SCHED_JOBS.find(j => j.name === 'door_watchdog'), sw = P.SCHED_JOBS.find(j => j.name === 'sweep');
   t('15-minute jobs gate at >=14 min', dw.every_min === 14 && sw.every_min === 14);
@@ -173,7 +173,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
 // priority order with everything due
 {
   const names = P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
-  t('priority order when everything is due (Monday 10am ET)', names.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily', names.join());
+  t('priority order when everything is due (Monday 10am ET)', names.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,sms_delivery_check,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily', names.join());
   const early = P.schedDueJobs(S0(), iso('2026-10-14T09:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 05:00 EDT: only the interval jobs
   t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard', early.join());
   t('only[] restricts', P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, { only: ['sweep'] }).map(d => d.name).join() === 'sweep');
@@ -184,7 +184,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
   const mins = (m) => new Date(now.getTime() - m * 60000).toISOString();
   const fresh = S0(); fresh.last_tick = mins(3);
   for (const n of ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard']) fresh.jobs[n] = { last_start: mins(5), last_end: mins(4), last_ok: mins(4), last_status: 'ok' };
-  for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync']) fresh.jobs[n] = { last_start: mins(300), last_end: mins(299), last_ok: mins(299), last_key: '2026-10-12', last_status: 'ok' };
+  for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check']) fresh.jobs[n] = { last_start: mins(300), last_end: mins(299), last_ok: mins(299), last_key: '2026-10-12', last_status: 'ok' };
   for (const n of ['review_mon', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_daily']) fresh.jobs[n] = { last_end: mins(200), last_ok: mins(200), last_key: '2026-10-12', last_status: 'ok' };
   const s = P.schedStatus(fresh, now, P.SCHED_JOBS);
   t('status: healthy scheduler has no overdue jobs', s.overdue.length === 0 && s.tick_age_min === 3, s.overdue);
@@ -481,7 +481,7 @@ for (const N of [2, 5, 8]) {
 
 // 2o FIRST-EVER TICK: no duplicates. With a blank Scheduler_State, daily/weekly jobs whose slot already passed today (ET) are
 // SEEDED as done (the old crons / a person already ran them), 15-minute jobs run at once, and later slots run normally.
-const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync'];
+const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check'];   // (name kept; it is now six dailies, all at 07:00 ET)
 const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard'];
 // Drain one "tick" the way the Apps Script does: call until more=false. Returns { ran, first } (first = the first response).
 const drain = async (L, c, extra) => {
@@ -503,9 +503,9 @@ const drain = async (L, c, extra) => {
   const s = stateOf(store);
   t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
   t('review_wed (Wednesday job) is not seeded on a Monday', !s.jobs.review_wed);
-  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 9 && !!s.seeded.at);
+  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 10 && !!s.seeded.at);
   const st = L.schedStatus(s, new Date(c.v), L.SCHED_JOBS);
-  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 9 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
+  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 10 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
   c.v += 20 * 60000;
   const b = await drain(L, c);
   t('second tick does NOT reseed (no seeded / first_run fields) and the dailies stay quiet', b.first.body.seeded === undefined && b.first.body.first_run === undefined && b.ran.every(n => INTERVAL5.includes(n)), b);
@@ -562,7 +562,7 @@ const drain = async (L, c, extra) => {
   const a = await drain(L, c);
   t('DST (spring-forward day): first tick 06:59 EDT seeds nothing', a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join());
   c.v = Date.parse('2026-03-08T11:00:00Z');
-  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 5);
+  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 6);
   const store2 = makeStore(), L2 = load(store2);
   t('DST (spring-forward day): a first tick at 07:30 EDT seeds the five dailies + the 07:30 Hub Improvements check', (await drain(L2, clock(Date.parse('2026-03-08T11:30:00Z')))).first.body.seeded.join() === [...DAILY5, 'hub_impr_daily'].join());
 }
@@ -571,7 +571,7 @@ const drain = async (L, c, extra) => {
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   store.tabs.get('Config').push(['Scheduler_State', '   ']);
   const a = await drain(L, c);
-  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 9);
+  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 10);
 }
 {
   // jobs added to the registry LATER keep catch-up: existing state, no entry for the new job -> it runs
@@ -587,7 +587,7 @@ const drain = async (L, c, extra) => {
   // dry run on a blank state: reports first_run + would_seed, writes NOTHING, claims NOTHING
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   const r = await L.schedRunNext({}, null, fast(c, { dry: true }));
-  t('dry run on blank state: first_run true, would_seed lists the seven, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 9 && r.body.due.join() === INTERVAL5.join(), r.body);
+  t('dry run on blank state: first_run true, would_seed lists the ten, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 10 && r.body.due.join() === INTERVAL5.join(), r.body);
   t('dry run wrote nothing (no POST, no Scheduler_State) and a real tick afterwards is still a first run', !store.calls.some(x => x.startsWith('POST')) && !store.cfg().Scheduler_State && (await L.schedRunNext({}, null, fast(c, {}))).body.first_run === true);
 }
 {
@@ -887,7 +887,7 @@ globalThis.setTimeout = _realSetTimeout;
   t('no leftover cronSweepLogged / cron-branch dispatch in worker.js', !/cronSweepLogged/.test(wsrc) && !/cron === '/.test(wsrc));
   // every registry job points at a real function
   const names = [...blockSrc.matchAll(/run: \(env(?:[^)]*)\) => (\w+)\(/g)].map(m => m[1]);
-  t('every registry entry maps to a defined job function', names.length === 16 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
+  t('every registry entry maps to a defined job function', names.length === 17 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
   // the scheduler block never swallows
   t('scheduler block has no empty/underscore catch', !/catch\s*\(\s*_?\s*\)\s*\{\s*\}/.test(blockSrc) && !/catch\s*\(\s*_\s*\)/.test(blockSrc) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(blockSrc));
   const ver = /const BUILD_VERSION = '([^']+)'/.exec(wsrc)[1];
