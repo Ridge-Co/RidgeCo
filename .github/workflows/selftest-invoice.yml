@@ -25,11 +25,17 @@ on:
         required: false
         default: ''
   push:
+    branches: [main]           # main ONLY (Oct 14 2026): every push to ANY branch used to make a paid, real Claude call against
+                               # production - a session pushing 10 small commits made 10+ calls and 10 red/green runs of noise.
     paths:                     # re-verify whenever the extractor or its fixtures change
       - 'worker.js'
       - 'test/fixtures/**'
       - 'scripts/selftest-invoice.mjs'
       - '.github/workflows/selftest-invoice.yml'
+
+concurrency:
+  group: invoice-ocr-canary
+  cancel-in-progress: false   # one live canary at a time; never two real vision calls racing each other
 
 jobs:
   canary:
