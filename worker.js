@@ -15437,7 +15437,10 @@ async function schedRunDailyReceiptsPost(env) {
 async function schedRunDailyTurnover(env) {
   const errors = [];
   const r = await schedStep('release_turnover_by_date', () => releaseTurnoverByDate(env), errors);
-  return { ok: !errors.length, errors, detail: r };
+  // Oct 14 2026: also flips tenants the owner roster tool booked a FUTURE move-out for (SMS off, PIN cleared, unit unlinked).
+  // Rides this existing daily job on purpose - no new cron, no new scheduler row.
+  const f = await schedStep('roster_move_out_flip', () => rosterFlipDueMoveOuts(env), errors);
+  return { ok: !errors.length, errors, detail: { turnover: r, roster_flip: f } };
 }
 async function schedRunDailyQbSync(env) {
   const errors = [], detail = {};
