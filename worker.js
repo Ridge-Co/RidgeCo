@@ -18835,6 +18835,7 @@ function buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl }) {
     <p>Your estimate for the work at <strong>${addr}</strong> is ready to review. Tap below to see the full breakdown and sign off whenever you're ready to move forward.</p>
     <p style="text-align:center;margin:24px 0;"><a href="${url}" style="background:#1d4ed8;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">View &amp; Sign Estimate</a></p>
     <p style="color:#66707c;font-size:12px;">Questions about anything in the estimate? Just reply to this email. — Ridge Co</p>
+    ${pixelUrl ? `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">` : ''}
   </div>`;
 }
 
