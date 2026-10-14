@@ -22955,6 +22955,7 @@ async function qbPayables(env, url) {
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
             customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
+            ...clearFields(c.sc.WO_ID + ' (' + c.phase + ')', q, customerPaid === true || customerPartial, sigPayments),
             bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
             vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
             bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
