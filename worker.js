@@ -4633,12 +4633,20 @@ async function scopeProposalSend(env, body) {
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount });
   } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
 
+  // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
+  // Email already went; the text is held/skipped/blocked on its own rules and its outcome is always reported.
+  let sms;
+  if ((parseInt(s.Send_Count || '0', 10) || 0) === 0 || body.sms_again === true) {
+    sms = await proposalOwnerSms(env, { scopeId: String(id), prop, owner, addr, ownerName, override: body.override_quiet_hours === true });
+  } else sms = { status: 'not_attempted', note: 'Resend: the owner was already texted on the first send.' };
+
   try {
     await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
-    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent' });
+    await ensureColumns(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
+    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent', SMS_Result: sms.status + (sms.note ? ' - ' + sms.note : '') });
   } catch (_) { /* audit log best-effort; the send already happened */ }
 
-  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url });
+  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms });
 }
 
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
