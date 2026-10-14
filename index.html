@@ -187,7 +187,9 @@ window.addEventListener('pageshow', function(e){
   .copy-hint{color:var(--muted);font-size:10px;}
 
   /* Native select dark theme — make selection visible */
-  select[size] option:checked, select[size] option:hover { background: var(--accent) !important; color: #1b1f24 !important; }
+  /* Hub Improvements (Oct 14 2026): selected row was black text on blue until the pick was accepted. White on --accent is readable; hover only on real hover devices so touch doesn't leave a stuck highlight. */
+  select[size] option:checked { background: var(--accent) !important; color: #fff !important; }
+  @media (hover: hover) { select[size] option:hover { background: var(--accent) !important; color: #fff !important; } }
   select[size] option { padding: 6px 10px; }
   @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } .stats-row { grid-template-columns: repeat(2, 1fr); } .wo-right { flex-direction: column; gap: 4px; } }
 </style>
