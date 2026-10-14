@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.7-proposal-read-status-owner-sms';
+const BUILD_VERSION = '2026-10-14.8-hub-improvements-sweep';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -14981,6 +14981,9 @@ const SCHED_JOBS = [
   { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
   { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
   { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
+  { name: 'hub_impr_mon',       kind: 'weekly',   dow: 1, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
+  { name: 'hub_impr_thu',       kind: 'weekly',   dow: 4, at: '07:15', run: (env) => schedRunHubImprovements(env, true) },
+  { name: 'hub_impr_daily',     kind: 'daily',    at: '07:30', run: (env) => schedRunHubImprovements(env, false) },
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
@@ -15289,6 +15292,17 @@ async function schedRunArReport(env) {
   const r = await schedStep('weekly_ar_report', () => runWeeklyArReport(env), errors);
   return { ok: !errors.length, errors, detail: r };
 }
+// Hub Improvements sweep (Oct 14 2026): the pull / reconcile logic lives with the ops queue (hubImpPull, hubImpReconcile); this is just the job wrapper.
+// Order matters: sync the queue's PR states first so a merged build is `done` before the ledger is reconciled.
+async function schedRunHubImprovements(env, pull) {
+  const errors = [], detail = {};
+  if (pull) detail.pull = await schedStep('hub_improvements_pull', () => hubImpPull(env), errors);
+  detail.queue_sync = await schedStep('queue_sync', () => opsQueueSync(env, {}, { ignoreSuppliedPrs: true }), errors);
+  const rec = await schedStep('hub_improvements_reconcile', () => hubImpReconcile(env), errors);
+  detail.reconcile = rec;
+  if (rec && Array.isArray(rec.problems)) for (const p of rec.problems) errors.push({ step: 'hub_improvements_reconcile', error: p });
+  return { ok: !errors.length, errors, detail };
+}
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
 // ── PREFLIGHT (dry run only): plain-English, COUNTS ONLY, strictly read-only (GETs; no claim, no state write, no SMS). ──
@@ -15306,6 +15320,9 @@ const SCHED_PF_WHAT = {
   review_mon: 'runs the Monday weekly review and delivers it',
   review_wed: 'runs the Wednesday weekly review (logged only)',
   ar_report_mon: 'builds and delivers the Monday AR aging report',
+  hub_impr_mon: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
+  hub_impr_thu: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
+  hub_impr_daily: 'checks which Hub Improvements items were built (queue item done / PR merged) so Google Tasks can be completed; reports anything stuck',
 };
 async function schedPfTab(env, tab) {
   try { return await fetchTab(env, tab); }
@@ -16842,7 +16859,7 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // sync (building → pr_open → live | pr_closed [flagged] | abandoned); Dup_Of = "may overlap
 // row #N"; Shipped_Match = "looks already built: <FEATURE_LOG ref>"; Scout_Verdict/Scout_Note/
 // Scout_Reviewed = the Scout's re-check of a snoozed item against builds shipped since.
-const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed'];
+const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed','Source_Task_ID'];
 // 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
 // awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
 // approved it to build. The ONLY status opsQueueScoutSubmit can ever write (see
@@ -17378,7 +17395,7 @@ async function opsQueueScoutSubmit(env, body) {
   const now = new Date().toISOString();
   const reviewTs = String((body && body.review_ts) || now);
   let queued = 0;
-  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [];
+  const skipped_duplicates = [], flagged_overlaps = [], recheck_errors = [], queued_items = [];
   let rechecked = 0;
   // Oct 13 2026: the old loop inserted blindly, so every Optimizer round re-proposed ideas that were
   // already queued, dropped or built. Now: read the WHOLE queue (all statuses) first; skip a
@@ -17394,8 +17411,11 @@ async function opsQueueScoutSubmit(env, body) {
   const shipped = items.length ? await getShippedIndex() : { ok: true, index: [] };
   for (const it of items) {
     const same = findQueueMatch(it, pool, 'same');
-    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status }); continue; }
+    if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status, source_task_id: (it && it.source_task_id) ? String(it.source_task_id) : undefined }); continue; }
     const rowObj = buildScoutQueueRow(it, now, reviewTs);
+    // Oct 14 2026: an item pulled from Brett's Google Tasks list (hub-improvements sweep) carries its task id so the
+    // queue row and the ledger can always be re-linked; still Status 'proposed' (buildScoutQueueRow hardcodes it).
+    if (it && it.source_task_id) { rowObj.Source_Task_ID = String(it.source_task_id).slice(0, 80); rowObj.Approved_By = 'hub-improvements-sweep'; }
     const ov = findQueueMatch(it, pool, 'overlap');
     if (ov) {
       rowObj.Dup_Of = String(ov.row.ID);
@@ -17407,7 +17427,14 @@ async function opsQueueScoutSubmit(env, body) {
       const sm = findShippedMatch(rowObj.Title, shipped.index);
       if (sm) rowObj.Shipped_Match = 'Looks already built: ' + sm.ref;
     }
-    await addRow(env, OPS_QUEUE_TAB, rowObj);
+    const addRes = await addRow(env, OPS_QUEUE_TAB, rowObj);
+    let newId = '';
+    if (it && it.source_task_id) {
+      if (addRes && typeof addRes.status === 'number' && addRes.status >= 400) throw new Error('queue row for "' + rowObj.Title.slice(0, 60) + '" could not be saved (HTTP ' + addRes.status + ')');
+      try { newId = String((await addRes.clone().json()).id || ''); } catch (_) { newId = ''; }
+      if (!newId) throw new Error('queue row for "' + rowObj.Title.slice(0, 60) + '" saved but its id was not returned');
+      queued_items.push({ source_task_id: String(it.source_task_id), queue_id: newId, shipped_match: rowObj.Shipped_Match || '', overlaps: rowObj.Dup_Of || '' });
+    }
     pool.push({ ID: 'new-' + queued, Title: rowObj.Title, Problem: rowObj.Problem, First_Step: rowObj.First_Step, Status: 'proposed' });
     queued++;
   }
@@ -17435,10 +17462,10 @@ async function opsQueueScoutSubmit(env, body) {
       Human_Corrected: '', Est_Cost: '', Stuck_Patterns: '',
       Proposal: String((body && body.summary) || '').slice(0, 2000),
       Proposal_JSON: JSON.stringify(items),
-      Trigger: 'scout_reuse_radar', Delivered: 'no',
+      Trigger: String((body && body.trigger) || 'scout_reuse_radar').slice(0, 60), Delivered: 'no',
     });
   } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
-  return json({ ok: true, queued, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
+  return json({ ok: true, queued, queued_items, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
 }
 
 // ── Ops queue upgrade (Oct 13 2026): duplicate guard, shipped-index flag, snooze, PR sync ────────
@@ -17657,6 +17684,255 @@ async function opsQueueSync(env, body, opts) {
     } catch (e) { errors.push({ id: r.ID, error: String((e && e.message) || e) }); }
   }
   return json({ ok: errors.length === 0, checked: inflight.length, changed, errors });
+}
+
+// ── RidgeCo Hub Improvements sweep (Oct 14 2026) ─────────────────────────────────────────────────
+// Brett keeps a Google Tasks list called "RidgeCo Hub Improvements". Twice a week (Mon + Thu, Hub scheduler -
+// never a cron) this pulls every NEW open item from that list into the Optimizer queue as a `proposed` row, so
+// nothing sits forgotten in the phone list. A ledger tab (Hub_Improvements, in the Hub sheet) remembers each
+// item: pulled -> (queue) -> done. The Hub only READS the BrettOS sheet (task-linking decision #1: the Hub never
+// writes it). Telling Google Tasks ("In progress" note line, then complete) is the BrettOS TasksSync.js applier's
+// job - it reads this ledger. Nothing here fails silently: every problem comes back as a job error, and a ledger
+// change the applier has not applied within 24h is itself reported.
+const HUBIMP_TAB = 'Hub_Improvements';
+const HUBIMP_LIST = 'RidgeCo Hub Improvements';
+const HUBIMP_COLS = ['ID', 'Task_ID', 'List_ID', 'Title', 'Status', 'Status_Changed_At', 'Queue_ID', 'Queue_Status', 'PR', 'Note', 'First_Seen', 'Applied_Status', 'Applied_At', 'Apply_Error', 'Link_Kind'];
+// Link_Kind: '' = this sweep's own queue item; 'duplicate' / 'shipped_match' = the task points at a queue item that
+// already existed (or may already be built). Those are NEVER auto-completed - a human confirms they cover the task.
+const HUBIMP_REVIEW_KINDS = ['duplicate', 'shipped_match'];
+const HUBIMP_APPLY_STALE_MS = 24 * 3600 * 1000;
+const HUBIMP_ACTIVE = ['pulled', 'building'];       // still open: waiting on the queue or on a PR
+const HUBIMP_TRACKED = ['pulled', 'building', 'done', 'dropped'];
+
+function hubImpObjs(values) {
+  const v = values || [];
+  if (v.length < 2) return [];
+  return v.slice(1).map(r => { const o = {}; v[0].forEach((h, i) => { o[h] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+}
+
+// PURE — which Tasks_Sync rows are NEW work for the sweep. `fresh` = not yet in the ledger or the queue;
+// `adopt` = already in the queue (a previous run crashed after queueing but before writing the ledger) so we
+// record the link instead of queueing a second copy.
+function hubImpPickNew(taskRows, ledgerRows, queueRows) {
+  const seen = new Set((ledgerRows || []).map(r => String(r.Task_ID || '')));
+  const bySource = {};
+  for (const q of (queueRows || [])) if (q && q.Source_Task_ID) bySource[String(q.Source_Task_ID)] = q;
+  const fresh = [], adopt = [];
+  for (const t of (taskRows || [])) {
+    if (String(t.Category || '').trim() !== HUBIMP_LIST) continue;
+    if (String(t.Status || '') !== 'needsAction') continue;
+    const id = String(t.Task_ID || '');
+    if (!id || seen.has(id) || !String(t.Title || '').trim()) continue;
+    seen.add(id);
+    if (bySource[id]) adopt.push({ task: t, queue: bySource[id] }); else fresh.push(t);
+  }
+  return { fresh, adopt };
+}
+
+// PURE — one Google Task -> the item shape opsQueueScoutSubmit takes. Status stays `proposed` (that endpoint can
+// never produce a greenlit row); Brett still approves each one on the Proposals page.
+function hubImpQueueItem(t) {
+  const notes = String((t && t.Notes) || '').trim();
+  return {
+    title: String((t && t.Title) || '').trim().slice(0, 200),
+    problem: ('From Brett\'s Google Tasks list "' + HUBIMP_LIST + '"' + (notes ? ': ' + notes : '.')).slice(0, 600),
+    first_step: 'Check FEATURE_LOG.md and the code first - this may already be built. If not, build it, test it, and open a PR.',
+    tag: 'hub-improvement',
+    lens: 'brett-task-list',
+    source_task_id: String((t && t.Task_ID) || ''),
+  };
+}
+
+// PURE — the ledger changes for this moment. `queue` = Ops_Build_Queue rows, `prStates` = { '262': 'live'|'pr_open'|
+// 'pr_closed'|'error: ...' } for ledger rows that track a PR directly. Returns { updates:[{id,fields}], problems:[text] }.
+function hubImpPlan(ledger, queue, prStates, nowMs) {
+  const nowIso = new Date(nowMs).toISOString();
+  const updates = [], problems = [];
+  const qById = {};
+  for (const q of (queue || [])) qById[String(q.ID)] = q;
+  for (const r of (ledger || [])) {
+    const st = String(r.Status || '').toLowerCase();
+    if (!HUBIMP_ACTIVE.includes(st)) continue;      // done / dropped rows are final
+    const label = 'ledger #' + r.ID + ' "' + String(r.Title || '').slice(0, 60) + '"';
+    const f = {};
+    {
+      if (r.Queue_ID) {
+        const q = qById[String(r.Queue_ID)];
+        if (!q) problems.push(label + ': queue item #' + r.Queue_ID + ' no longer exists');
+        else {
+          const qs = String(q.Status || '').toLowerCase();
+          if (String(r.Queue_Status || '') !== qs) f.Queue_Status = qs;
+          const bs = String(q.Build_State || '').toLowerCase();
+          const needsReview = HUBIMP_REVIEW_KINDS.includes(String(r.Link_Kind || ''));
+          const reviewMarked = /Needs your review/.test(String(r.Note || ''));
+          if (qs === 'done' || qs === 'dropped') {
+            if (needsReview) {
+              // Duplicate / shipped-match links never auto-complete: the queue item may not be what this task asked for.
+              if (!reviewMarked && (qs === 'dropped' || bs === 'live')) {
+                f.Note = (String(r.Note || '') + ' Needs your review: linked queue item #' + r.Queue_ID + ' is ' + (qs === 'dropped' ? 'dropped' : 'live') + ' (' + r.Link_Kind.replace('_', ' ') + ') - confirm it covers this task, then finish it in Google Tasks.').trim();
+                problems.push(label + ': ' + r.Link_Kind.replace('_', ' ') + ' link to queue item #' + r.Queue_ID + ' is now ' + (qs === 'dropped' ? 'dropped' : 'live') + ' - needs your review, not auto-completed');
+              }
+            } else if (qs === 'dropped') {
+              f.Status = 'dropped'; f.Status_Changed_At = nowIso;
+              f.Note = (String(r.Note || '') + ' Dropped from the queue' + (q.Drop_Reason ? ': ' + q.Drop_Reason : '') + '.').trim();
+            } else if (bs === 'live') {
+              // Done means "PR opened" in the queue; only Build_State live (PR merged, main deployed) completes the task.
+              f.Status = 'done'; f.Status_Changed_At = nowIso; f.PR = String(q.PR_Number || r.PR || '');
+              f.Note = (String(r.Note || '') + ' Built and live (queue #' + r.Queue_ID + (q.PR_Number ? ', PR #' + q.PR_Number : '') + ').').trim();
+            } else if (bs === 'pr_closed') {
+              problems.push(label + ': PR ' + (q.PR_Number ? '#' + q.PR_Number : '') + ' for queue item #' + r.Queue_ID + ' was closed without merging');
+            } else if (!q.PR_Number) {
+              problems.push(label + ': queue item #' + r.Queue_ID + ' is marked done but has no PR to confirm it shipped');
+            } else {
+              // PR open (or build state not synced yet): keep waiting, but show the PR on the ledger row.
+              if (String(r.Status || '').toLowerCase() !== 'building') { f.Status = 'building'; f.Status_Changed_At = nowIso; }
+              if (String(r.PR || '') !== String(q.PR_Number)) f.PR = String(q.PR_Number);
+            }
+          }
+        }
+      } else if (r.PR) {
+        const n = cleanPrNumber(r.PR), ps = n ? prStates && prStates[n] : null;
+        if (!n) problems.push(label + ': PR "' + r.PR + '" is not a number');
+        else if (ps === 'live') { f.Status = 'done'; f.Status_Changed_At = nowIso; f.Note = (String(r.Note || '') + ' PR #' + n + ' merged.').trim(); }
+        else if (ps === 'pr_closed') problems.push(label + ': PR #' + n + ' was closed without merging');
+        else if (ps && String(ps).startsWith('error')) problems.push(label + ': could not check PR #' + n + ' (' + ps + ')');
+      } else {
+        problems.push(label + ' is ' + st + ' but has neither a queue item nor a PR to watch');
+      }
+    }
+    if (Object.keys(f).length) updates.push({ id: r.ID, fields: f });
+  }
+  // The applier (BrettOS Apps Script) copies Status into Applied_Status once Google Tasks is updated. Anything it has
+  // not applied for a day, or any error it recorded, is reported - a stuck applier must never be silent.
+  for (const r of (ledger || [])) {
+    const st = String(r.Status || '').toLowerCase();
+    if (!HUBIMP_TRACKED.includes(st)) continue;
+    const label = 'ledger #' + r.ID + ' "' + String(r.Title || '').slice(0, 60) + '"';
+    if (r.Apply_Error) problems.push(label + ': Google Tasks update failed: ' + String(r.Apply_Error).slice(0, 200));
+    else if (String(r.Applied_Status || '') !== st) {
+      const since = Date.parse(r.Status_Changed_At || r.First_Seen || '');
+      if (!isNaN(since) && nowMs - since > HUBIMP_APPLY_STALE_MS) problems.push(label + ': "' + st + '" has not reached Google Tasks for over 24h (is the BrettOS tasks-sync applier running and authorised?)');
+    }
+  }
+  return { updates, problems };
+}
+
+async function hubImpUpdate(env, id, fields) {
+  const r = await updateRow(env, HUBIMP_TAB, id, fields);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('ledger row #' + id + ' could not be updated (HTTP ' + r.status + ')');
+}
+async function hubImpAdd(env, obj) {
+  const r = await addRow(env, HUBIMP_TAB, obj);
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('ledger row for "' + String(obj.Title || '').slice(0, 60) + '" could not be saved (HTTP ' + r.status + ')');
+}
+
+// Read-only look at a BrettOS tab (the Hub NEVER writes that sheet). Returns { rows, hdr }; { missing:true } if the tab does not exist.
+async function hubImpReadBrettos(env, tab) {
+  if (!env.BRETTOS_TASKS_SHEET_ID) throw new Error('BRETTOS_TASKS_SHEET_ID is not set, so the Hub cannot read the BrettOS sheet');
+  const token = await getAccessToken(env);
+  const resp = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + env.BRETTOS_TASKS_SHEET_ID + '/values/' + tab, { headers: { 'Authorization': 'Bearer ' + token } });
+  const data = await resp.json();
+  if (data.error) {
+    const m = String(data.error.message || JSON.stringify(data.error));
+    if (/unable to parse range|not found/i.test(m)) return { rows: [], hdr: [], missing: true };
+    throw new Error('could not read the BrettOS ' + tab + ' tab: ' + m.slice(0, 200));
+  }
+  return { rows: hubImpObjs(data.values), hdr: (data.values && data.values[0]) || [] };
+}
+async function hubImpReadTasks(env) {
+  const r = await hubImpReadBrettos(env, 'Tasks_Sync');
+  if (r.missing) throw new Error('the BrettOS sheet has no Tasks_Sync tab');
+  if (!r.hdr.includes('Task_ID') || !r.hdr.includes('Category') || !r.hdr.includes('Status')) throw new Error('Tasks_Sync has unexpected columns (' + r.hdr.join(',') + ') - the sweep needs Task_ID, Category and Status');
+  return r.rows;
+}
+// What the BrettOS applier says it has already done in Google Tasks (its own Hub_Applied tab: Task_ID, Applied_Status, Applied_At, Error).
+async function hubImpReadApplied(env) {
+  const r = await hubImpReadBrettos(env, 'Hub_Applied');
+  if (r.missing) return [];
+  if (!r.hdr.includes('Task_ID') || !r.hdr.includes('Applied_Status')) throw new Error('Hub_Applied has unexpected columns (' + r.hdr.join(',') + ')');
+  return r.rows;
+}
+
+// Pull new "RidgeCo Hub Improvements" items into the queue (as proposed) and record each in the ledger.
+async function hubImpPull(env) {
+  await ensureTab(env, HUBIMP_TAB, HUBIMP_COLS); await ensureColumns(env, HUBIMP_TAB, HUBIMP_COLS);
+  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const tasks = await hubImpReadTasks(env);
+  const [ledger, queue] = [await fetchTab(env, HUBIMP_TAB), await fetchTab(env, OPS_QUEUE_TAB)];
+  const { fresh, adopt } = hubImpPickNew(tasks, ledger, queue);
+  const now = new Date().toISOString();
+  const out = { list_items_open: tasks.filter(t => String(t.Category || '').trim() === HUBIMP_LIST && t.Status === 'needsAction').length, new: fresh.length, adopted: adopt.length, queued: [], skipped_duplicates: [], possibly_already_built: [] };
+  for (const a of adopt) {
+    await hubImpAdd(env, { Task_ID: a.task.Task_ID, List_ID: a.task.List_ID || '', Title: String(a.task.Title).slice(0, 200), Status: 'pulled', Status_Changed_At: now, Queue_ID: a.queue.ID, Queue_Status: String(a.queue.Status || '').toLowerCase(), First_Seen: now, Note: 'Linked to existing queue item #' + a.queue.ID + '.' });
+    out.queued.push({ task_id: a.task.Task_ID, queue_id: a.queue.ID, adopted: true });
+  }
+  for (let i = 0; i < fresh.length; i += 20) {
+    const chunk = fresh.slice(i, i + 20);
+    const resp = await opsQueueScoutSubmit(env, { items: chunk.map(hubImpQueueItem), review_ts: now, trigger: 'hub_improvements_sweep', summary: 'Hub Improvements sweep: ' + chunk.length + ' new item(s) from the Google Tasks list' });
+    const body = await resp.json();
+    if (resp.status >= 400 || body.ok !== true) throw new Error('queue submit failed: ' + String((body && body.error) || ('HTTP ' + resp.status)).slice(0, 200));
+    const byTask = {};
+    for (const q of (body.queued_items || [])) byTask[String(q.source_task_id)] = { kind: 'queued', q };
+    for (const s of (body.skipped_duplicates || [])) if (s.source_task_id) byTask[String(s.source_task_id)] = { kind: 'dup', s };
+    for (const t of chunk) {
+      const hit = byTask[String(t.Task_ID)];
+      if (!hit) throw new Error('queue submit did not report what happened to "' + String(t.Title).slice(0, 60) + '" (task ' + t.Task_ID + ')');
+      const base = { Task_ID: t.Task_ID, List_ID: t.List_ID || '', Title: String(t.Title).slice(0, 200), Status: 'pulled', Status_Changed_At: now, First_Seen: now };
+      if (hit.kind === 'queued') {
+        const note = hit.q.shipped_match ? 'Queue says: ' + hit.q.shipped_match + ' - check before building.' : (hit.q.overlaps ? 'May overlap queue item #' + hit.q.overlaps + '.' : '');
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: hit.q.queue_id, Queue_Status: 'proposed', Note: note, Link_Kind: hit.q.shipped_match ? 'shipped_match' : '' }));
+        out.queued.push({ task_id: t.Task_ID, queue_id: hit.q.queue_id, title: base.Title });
+        if (hit.q.shipped_match) out.possibly_already_built.push({ title: base.Title, queue_id: hit.q.queue_id, match: hit.q.shipped_match });
+      } else {
+        // Two tasks with the same title in ONE batch: the second is "a duplicate of new-N" (the Nth row queued by this
+        // call, which has no real id yet). Resolve it to the real queue id so the ledger link is not left dangling.
+        let dupOf = String(hit.s.duplicate_of || '');
+        const mm = /^new-(\d+)$/.exec(dupOf);
+        if (mm) { const real = (body.queued_items || [])[Number(mm[1])]; if (real && real.queue_id) dupOf = String(real.queue_id); }
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: dupOf, Queue_Status: String(hit.s.status || '').toLowerCase() || 'proposed', Link_Kind: 'duplicate', Note: 'Same as existing queue item #' + dupOf + ' (' + (hit.s.status || 'proposed') + ').' }));
+        out.skipped_duplicates.push({ title: base.Title, duplicate_of: dupOf, status: hit.s.status });
+      }
+    }
+  }
+  return out;
+}
+
+// Move ledger rows forward (queue item done/dropped, or a tracked PR merged) and report anything stuck.
+async function hubImpReconcile(env) {
+  await ensureTab(env, HUBIMP_TAB, HUBIMP_COLS); await ensureColumns(env, HUBIMP_TAB, HUBIMP_COLS);
+  const ledger = await fetchTab(env, HUBIMP_TAB);
+  if (!ledger.length) return { rows: 0, updated: 0, completed_now: [], problems: [] };
+  const queue = await fetchTab(env, OPS_QUEUE_TAB);
+  const problems = [];
+  // Copy what the applier reported (BrettOS Hub_Applied tab, read-only) into the ledger so the ledger shows it.
+  const appliedSync = [];
+  try {
+    const applied = await hubImpReadApplied(env), byTask = {};
+    for (const a of applied) if (a.Task_ID) byTask[String(a.Task_ID)] = a;
+    for (const r of ledger) {
+      const a = byTask[String(r.Task_ID)]; if (!a) continue;
+      const f = {};
+      if (String(r.Applied_Status || '') !== String(a.Applied_Status || '')) f.Applied_Status = a.Applied_Status || '';
+      if (String(r.Applied_At || '') !== String(a.Applied_At || '')) f.Applied_At = a.Applied_At || '';
+      if (String(r.Apply_Error || '') !== String(a.Error || '')) f.Apply_Error = a.Error || '';
+      if (Object.keys(f).length) { Object.assign(r, f); appliedSync.push({ id: r.ID, fields: f }); }
+    }
+  } catch (e) { problems.push('could not read what the Google Tasks applier has done: ' + String((e && e.message) || e).slice(0, 200)); }
+  const prStates = {};
+  for (const r of ledger) {
+    if (!HUBIMP_ACTIVE.includes(String(r.Status || '').toLowerCase()) || r.Queue_ID || !r.PR) continue;
+    const n = cleanPrNumber(r.PR); if (!n || prStates[n]) continue;
+    try { prStates[n] = prStateToBuildState(await ghPublicJson('/pulls/' + n, env)) || 'error: no PR data'; }
+    catch (e) { prStates[n] = 'error: ' + String((e && e.message) || e).slice(0, 120); }
+  }
+  const plan = hubImpPlan(ledger, queue, prStates, Date.now());
+  problems.push(...plan.problems);
+  const completed_now = [];
+  for (const u of appliedSync.concat(plan.updates)) {
+    try { await hubImpUpdate(env, u.id, u.fields); if (u.fields.Status === 'done') completed_now.push(u.id); }
+    catch (e) { problems.push('could not save ledger row #' + u.id + ': ' + String((e && e.message) || e).slice(0, 160)); }
+  }
+  return { rows: ledger.length, updated: plan.updates.length, completed_now, problems };
 }
 
 // Standing rules every build brief carries (Brett, Oct 13 2026).
