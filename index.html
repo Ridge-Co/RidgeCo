@@ -12255,6 +12255,7 @@ function renderPayablesList() {
             ' · <a href="' + qbBillLink(r.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info)">open bill in QB</a>'
           : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
       '</div>' +
+      payClearChip(r) +
       dupWarning +
     '</div>';
   }
