@@ -123,7 +123,7 @@ const _hubWorkerCore = {
       // Scope-creator customer proposal link (Aug 18 session, rule 113): same pattern — public
       // at the gate, but scopeProposalView self-verifies a signed scope-proposal share token.
       // /scope-proposal/sign (Aug 19, e-sign): same token, self-verified inside scopeProposalSign.
-      '/scope-proposal/view','/scope-proposal/sign',
+      '/scope-proposal/view','/scope-proposal/sign','/scope-proposal/px',
       // vendor-setup.html self-service link (Sept 2 2026): a NEW vendor with no PIN/login yet
       // fills their own contact info from a shared link. Both handlers are read-only-or-review:
       // /vendor-setup/contact-extract never writes; /vendor-setup/submit only ever creates a
