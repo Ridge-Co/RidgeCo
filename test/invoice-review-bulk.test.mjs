@@ -106,7 +106,7 @@ function makeFetch(db, callLog) {
 function build(db, callLog) {
   const src = [
     'const CORS = {};', // json() spreads this into response headers; irrelevant to these assertions
-    cacheSrc, srSrc, ensureSrc, colSrc, idcSrc, nextIdSrc, jsonSrc, bulkSrc,
+    cacheSrc, srSrc, ensureSrc, colSrc, idcSrc, nextIdSrc, jsonSrc, centsSrc, bulkSrc,
     'return { approveInvoiceReviewBulk };',
   ].join('\n');
   return new Function('getAccessToken', 'fetch', 'setTimeout',
