@@ -13,6 +13,14 @@
 
 ---
 
+# SESSION IDENTITY BINDING — Oct 14, 2026 — Ridge-Co/RidgeCo PR #268, base `main`, head `fix/session-scope-oct14` (stacked on #251: merge #251 first), NOT merged (Brett merges). Staging test copy #269 merged. BUILD_VERSION `2026-10-14.6-session-scope`.
+
+## 🟢 Built, unit-tested (44 assertions on the real router) and verified live on staging with real tenant/owner/vendor sessions. Closes B-20261014-0700-ats2.
+Every tenant/owner/vendor request is now bound to the id in its signed token (query or POST body mismatch = 403 + failed telemetry; GET forces the session id), wo_id reads and `/vendor-file/view` need the same job access as `/attachments`, and the 500 handler no longer returns error text or stacks to anyone but the admin secret (it logs every 500 with a ref). Details: FEATURE_LOG `[FL-20261014-1300-sid]`. **Open after merge:** per-record checks on role-session WRITES (B-20261014-1305-wr) and the remaining handler-level `e.message` 500s (B-20261014-1310-e500).
+
+# THE 9 FAILING TESTS ON MAIN — Oct 14, 2026 — PR #265, base `main`, test-only
+Fixed at the cause (stale assertions after deliberate changes, one harness gap, and wo-combine/wo-split depending on the time of day because the worker holds texts 7pm-9am ET). Full suite (148 files) green on the real clock and at 3am/noon/7:30pm ET. FEATURE_LOG `[FL-20261014-1210-tst]`.
+
 # /ATTACHMENTS PER-RECORD ACCESS CHECK — Oct 14, 2026 — Ridge-Co/RidgeCo PR #251, base `main`, head `feat/attachments-scope-oct14` (cut from main tip 22f91ee), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.1-attachments-scope`.
 
 ## 🟡 Built, unit-tested (38 new assertions) and verified on staging (test-only PR #252): ready for Brett's merge. Closes Ops_Build_Queue #150. Staging live checks Oct 14: tenant 86 gets only its own job's photos (receipt row filtered) and 404 on other jobs; owner 25 gets 404 on a job that is not on their property; vendor 7 gets 200 + all rows on its assigned job. Not live-tested: owner positive path (staging TEST- write guard blocks creating a WO on an owner-25 property); covered by unit tests only.
