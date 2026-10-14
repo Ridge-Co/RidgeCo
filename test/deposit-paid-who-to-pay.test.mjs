@@ -232,7 +232,7 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
 
 // ── qbPayables: milestone deposit with vendor cost but no vendor bill -> 'vendor bill missing' ──
 {
-  const qbpSrc = ['function qbEscape(', 'async function qbFindLikelyUnlinkedPayment(', 'function depositMilestoneForSignature(', 'function firstMilestoneForSignature(', 'async function logAndCollectError(', 'async function qbPayables(']
+  const qbpSrc = ['function qbEscape(', 'async function qbFindLikelyUnlinkedPayment(', 'function depositMilestoneForSignature(', 'function firstMilestoneForSignature(', 'async function logAndCollectError(', 'function parseHolidayMap(', 'function nextBusinessDay(', 'function etDateString(', 'function paymentClearDaysMap(', 'function classifyPaymentMethod(', 'function addBusinessDays(', 'function summarizeInvoicePayments(', 'async function qbLoadInvoicePayments(', 'async function qbPayables(']
     .map(sg => { try { return grab(wsrc, sg); } catch (e) { return grab(wsrc, sg.replace('async ', '')); } }).join('\n');
   const stubs = {
     fetchTabs: async (e, tabs) => tabs.map(x => (x === 'Invoice_Review' ? [] : [])),
