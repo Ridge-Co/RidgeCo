@@ -4693,10 +4693,13 @@ async function scopeProposalPhotos(env, s) {
 // price was derived, or any vendor-facing commentary may ever reach a customer-facing surface —
 // only the job description and the final price. If a genuinely customer-safe note is ever
 // needed, it must be a SEPARATE, explicitly-labeled field — never this one.
-async function scopeProposalView(env, url) {
+async function scopeProposalView(env, url, ua, ctx) {
   const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
   if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
   const s = auth.s;
+  // Read status (Oct 14 2026): the owner opening the proposal page is the reliable "they looked" signal.
+  // Awaited (short) so a failed log is never lost; append &preview=1 to the link to look without counting.
+  if (url.searchParams.get('preview') !== '1') await proposalRecordHit(env, s, 'page', ua);
   let addr = await scopeAddr(env, s);
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
