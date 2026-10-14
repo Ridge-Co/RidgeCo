@@ -75,7 +75,7 @@ const code = [grabConst('QUEUE_STOPWORDS')].join('\n') + '\n' + [
   'validateScoutSubmitItems', 'buildScoutQueueRow', 'opsQueueScoutSubmit',
   'hubImpObjs', 'hubImpPickNew', 'hubImpQueueItem', 'hubImpPlan', 'hubImpUpdate', 'hubImpAdd', 'hubImpReadBrettos', 'hubImpReadTasks', 'hubImpReadApplied', 'hubImpPull', 'hubImpReconcile',
   'schedErrText', 'schedUnwrap', 'schedBadness', 'schedStep', 'schedRunHubImprovements',
-].map(grab).join('\n') + '\n' + ['HUBIMP_TAB', 'HUBIMP_LIST', 'HUBIMP_COLS', 'HUBIMP_APPLY_STALE_MS', 'HUBIMP_ACTIVE', 'HUBIMP_TRACKED'].map(grabConst).join('\n') + `
+].map(grab).join('\n') + '\n' + ['HUBIMP_TAB', 'HUBIMP_LIST', 'HUBIMP_COLS', 'HUBIMP_APPLY_STALE_MS', 'HUBIMP_ACTIVE', 'HUBIMP_TRACKED', 'HUBIMP_REVIEW_KINDS'].map(grabConst).join('\n') + `
 const OPS_QUEUE_TAB = 'Ops_Build_Queue', OPS_REVIEW_TAB = 'Ops_Review_Log', OPS_REVIEW_COLS = [];
 const OPS_QUEUE_COLS = __QCOLS;
 async function getShippedIndex() { return globalThis.__shipped; }
@@ -111,10 +111,10 @@ const T = (id, title, over) => Object.assign({ Task_ID: id, Title: title, Notes:
     { ID: '8', Title: 'nothing to watch', Status: 'building' },
     { ID: '9', Title: 'final', Status: 'done', Applied_Status: 'done' },
   ];
-  const Q = [{ ID: '10', Status: 'done', PR_Number: '250' }, { ID: '11', Status: 'dropped', Drop_Reason: 'not needed' }, { ID: '12', Status: 'greenlit' }];
+  const Q = [{ ID: '10', Status: 'done', PR_Number: '250', Build_State: 'live' }, { ID: '11', Status: 'dropped', Drop_Reason: 'not needed' }, { ID: '12', Status: 'greenlit' }];
   const p = L.hubImpPlan(L1, Q, { '262': 'live', '300': 'pr_closed', '301': 'error: HTTP 403' }, now);
   const u = Object.fromEntries(p.updates.map(x => [x.id, x.fields]));
-  ok(u['1'].Status === 'done' && u['1'].PR === '250' && /PR #250/.test(u['1'].Note), 'queue item done -> ledger done with its PR');
+  ok(u['1'].Status === 'done' && u['1'].PR === '250' && /PR #250/.test(u['1'].Note), 'queue item done AND live -> ledger done with its PR');
   ok(u['2'].Status === 'dropped' && /not needed/.test(u['2'].Note), 'queue item dropped -> ledger dropped (task stays open, noted)');
   eq(u['3'], { Queue_Status: 'greenlit' }, 'queue status mirrored, ledger stays pulled');
   ok(u['5'].Status === 'done', 'merged PR -> done');
@@ -155,16 +155,20 @@ const T = (id, title, over) => Object.assign({ Task_ID: id, Title: title, Notes:
   const before = TABS.Ops_Build_Queue.length, lb = TABS.Hub_Improvements.length;
   const r2 = await L.hubImpPull(env);
   ok(r2.new === 0 && TABS.Ops_Build_Queue.length === before && TABS.Hub_Improvements.length === lb, 'second sweep adds nothing');
-  // reconcile: t2 links to a done queue item -> done; t1 stays pulled
+  // reconcile: t2 duplicates an already-built item -> flagged for review, NEVER auto-completed; t1 stays pulled
   const rec = await L.hubImpReconcile(env);
   const led2 = Object.fromEntries(TABS.Hub_Improvements.map(x => [x.Task_ID, x]));
-  ok(led2.t2.Status === 'done' && led2.t2.PR === '261', 'built queue item completes its ledger row (PR copied)');
+  ok(led2.t2.Link_Kind === 'duplicate', 'duplicate link is recorded as such');
+  ok(led2.t2.Status === 'pulled', 'duplicate of a built item is not auto-completed');
   ok(led2.t1.Status === 'pulled', 'unbuilt item stays pulled');
-  eq(rec.completed_now.length, 1, 'reports what completed');
-  // queue row built later
-  TABS.Ops_Build_Queue.find(x => x.Source_Task_ID === 't1').Status = 'done'; TABS.Ops_Build_Queue.find(x => x.Source_Task_ID === 't1').PR_Number = '270';
+  eq(rec.completed_now.length, 0, 'nothing auto-completed');
+  // queue row built later: PR opened (done, pr_open) -> building; merged (live) -> done
+  const q1 = TABS.Ops_Build_Queue.find(x => x.Source_Task_ID === 't1'); q1.Status = 'done'; q1.PR_Number = '270'; q1.Build_State = 'pr_open';
   await L.hubImpReconcile(env);
-  ok(TABS.Hub_Improvements.find(x => x.Task_ID === 't1').Status === 'done', 'done once the queue item is built');
+  ok(TABS.Hub_Improvements.find(x => x.Task_ID === 't1').Status === 'building', 'PR open: building, not done');
+  q1.Build_State = 'live';
+  await L.hubImpReconcile(env);
+  ok(TABS.Hub_Improvements.find(x => x.Task_ID === 't1').Status === 'done' && TABS.Hub_Improvements.find(x => x.Task_ID === 't1').PR === '270', 'done once the PR is live');
 }
 
 // ── pull: crash recovery (queued but ledger write failed) ───────────────────────────────────
@@ -242,4 +246,56 @@ const gs = fs.readFileSync(new URL('../apps-script/hub-scheduler/HubScheduler.gs
 ok(/name: 'hub_impr_mon',\s+run: 'hub', day: 'Mon', at: '07:15'/.test(gs) && /name: 'hub_impr_thu',\s+run: 'hub', day: 'Thu', at: '07:15'/.test(gs) && /name: 'hub_impr_daily',\s+run: 'hub', at: '07:30'/.test(gs), 'matching rows in the HubScheduler.gs JOBS table');
 ok(!/cron\s*[:=]/i.test(src.slice(src.indexOf('// ── RidgeCo Hub Improvements sweep'), src.indexOf('// Standing rules every build brief carries'))), 'no cron in the sweep');
 
+
+// ── Oct 14 review fixes: done != live; duplicate / shipped-match links never auto-complete ──
+{
+  const now = Date.parse('2026-10-15T12:00:00Z');
+  const plan = (ledger, queue) => L.hubImpPlan(ledger, queue, {}, now);
+  const row = (over) => Object.assign({ ID: '1', Title: 'x', Status: 'pulled', Queue_ID: '10', Queue_Status: 'done', Note: '' }, over);
+  // queue 'done' with the PR still open = NOT built yet
+  let p = plan([row({})], [{ ID: '10', Status: 'done', PR_Number: '300', Build_State: 'pr_open' }]);
+  ok(p.updates.length === 1 && p.updates[0].fields.Status === 'building' && p.updates[0].fields.PR === '300', 'queue done + PR open -> ledger "building" with the PR, NOT done');
+  ok(!p.updates.some(u => u.fields.Status === 'done'), 'PR open never completes the task');
+  // already building + same PR: nothing to do
+  p = plan([row({ Status: 'building', PR: '300' })], [{ ID: '10', Status: 'done', PR_Number: '300', Build_State: 'pr_open' }]);
+  ok(p.updates.length === 0 && p.problems.length === 0, 'still waiting on the open PR: no churn, no noise');
+  // build state not synced yet (blank) behaves like open
+  p = plan([row({})], [{ ID: '10', Status: 'done', PR_Number: '300', Build_State: '' }]);
+  ok(p.updates[0].fields.Status === 'building', 'blank Build_State is not live');
+  // merged -> done
+  p = plan([row({ Status: 'building', PR: '300' })], [{ ID: '10', Status: 'done', PR_Number: '300', Build_State: 'live' }]);
+  ok(p.updates[0].fields.Status === 'done' && p.updates[0].fields.PR === '300', 'Build_State live -> done');
+  // closed PR / done with no PR: reported, not completed
+  p = plan([row({})], [{ ID: '10', Status: 'done', PR_Number: '300', Build_State: 'pr_closed' }]);
+  ok(p.problems.some(x => /closed without merging/.test(x)) && !p.updates.some(u => u.fields.Status), 'closed PR is reported and not completed');
+  p = plan([row({})], [{ ID: '10', Status: 'done', PR_Number: '', Build_State: 'pr_open' }]);
+  ok(p.problems.some(x => /no PR to confirm/.test(x)) && !p.updates.some(u => u.fields.Status), 'done with no PR is reported and not completed');
+  // duplicate / shipped match: never auto-completed, even when the old item is live
+  for (const kind of ['duplicate', 'shipped_match']) {
+    p = plan([row({ Link_Kind: kind })], [{ ID: '10', Status: 'done', PR_Number: '250', Build_State: 'live' }]);
+    const f = (p.updates[0] || { fields: {} }).fields;
+    ok(!f.Status && /Needs your review/.test(f.Note || '') && p.problems.some(x => /needs your review/.test(x)), kind + ' link to a live item: flagged for review, status untouched');
+    p = plan([row({ Link_Kind: kind, Note: 'x Needs your review: y' })], [{ ID: '10', Status: 'done', PR_Number: '250', Build_State: 'live' }]);
+    ok(p.problems.length === 0 && p.updates.length === 0, kind + ': already flagged -> reported once, not on every run');
+    p = plan([row({ Link_Kind: kind })], [{ ID: '10', Status: 'dropped', Drop_Reason: 'no' }]);
+    ok(!((p.updates[0] || { fields: {} }).fields.Status), kind + ': a dropped existing item does not drop the task');
+  }
+  // own link that is dropped still drops
+  p = plan([row({})], [{ ID: '10', Status: 'dropped', Drop_Reason: 'no' }]);
+  ok(p.updates[0].fields.Status === 'dropped', 'own queue item dropped -> ledger dropped');
+}
+
+// ── same-title tasks in ONE batch: the second links to the REAL queue id, not "new-N" ───────
+{
+  TABS.Ops_Build_Queue = []; TABS.Hub_Improvements = [];
+  TASKS = [T('d1', 'Add a hot tub temperature log to the cabin checklist'), T('d2', 'Add a hot tub temperature log to the cabin checklist')];
+  globalThis.__shipped = { ok: true, index: [] };
+  const r = await L.hubImpPull(env);
+  const led = Object.fromEntries(TABS.Hub_Improvements.map(x => [x.Task_ID, x]));
+  const q1 = TABS.Ops_Build_Queue.find(x => x.Source_Task_ID === 'd1');
+  ok(q1 && TABS.Ops_Build_Queue.length === 1, 'only one queue row for two identical tasks');
+  ok(led.d2 && led.d2.Link_Kind === 'duplicate' && String(led.d2.Queue_ID) === String(q1.ID) && !/new-/.test(led.d2.Queue_ID + led.d2.Note), 'second task links to the real queue id (no "new-N" leaks)');
+  const rec = await L.hubImpReconcile(env);
+  ok(!rec.problems.some(x => /no longer exists/.test(x)), 'no dangling-link problem on reconcile');
+}
 console.log('hub-improvements-sweep: ' + n + '/' + n + ' passing');

@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.2-hub-improvements-sweep';
+const BUILD_VERSION = '2026-10-14.8-hub-improvements-sweep';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -123,7 +123,7 @@ const _hubWorkerCore = {
       // Scope-creator customer proposal link (Aug 18 session, rule 113): same pattern — public
       // at the gate, but scopeProposalView self-verifies a signed scope-proposal share token.
       // /scope-proposal/sign (Aug 19, e-sign): same token, self-verified inside scopeProposalSign.
-      '/scope-proposal/view','/scope-proposal/sign',
+      '/scope-proposal/view','/scope-proposal/sign','/scope-proposal/px',
       // vendor-setup.html self-service link (Sept 2 2026): a NEW vendor with no PIN/login yet
       // fills their own contact info from a shared link. Both handlers are read-only-or-review:
       // /vendor-setup/contact-extract never writes; /vendor-setup/submit only ever creates a
@@ -394,6 +394,17 @@ const _hubWorkerCore = {
       }
     }
     try {
+      if (callerRole) {
+        const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
+        if (_mm) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mm);
+        if (request.method === 'GET') {
+          url.searchParams.set(SESSION_IDENTITY_PARAM[callerRole], String(callerSessionId));
+          if (WO_KEYED_READ_PATHS.includes(path)) {
+            const _denied = await woKeyedReadDenied(env, path, url, callerRole, callerSessionId);
+            if (_denied) return _denied;
+          }
+        }
+      }
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
         if (path === '/cron/status')            return await schedStatusHandler(env);
@@ -436,8 +447,8 @@ const _hubWorkerCore = {
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
-        if (path === '/attachments')            return await getAttachments(env, url);
-        if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
+        if (path === '/attachments')            return await getAttachments(env, url, callerRole, callerSessionId);
+        if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
@@ -457,9 +468,9 @@ const _hubWorkerCore = {
         if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
-        if (path === '/vendor-workorders')      return await vendorWorkorders(env, url);
-        if (path === '/tenant-workorders')      return await tenantWorkorders(env, url);
-        if (path === '/owner-workorders')       return await ownerWorkorders(env, url);
+        if (path === '/vendor-workorders')      return await vendorWorkorders(env, url, callerRole, callerSessionId);
+        if (path === '/tenant-workorders')      return await tenantWorkorders(env, url, callerRole, callerSessionId);
+        if (path === '/owner-workorders')       return await ownerWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/owner-notifications')    return await getOwnerNotifications(env, url);
         if (path === '/owner-users')            return await getOwnerUsers(env, url);
         if (path === '/notifications/pending') {
@@ -533,7 +544,8 @@ const _hubWorkerCore = {
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
         if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
-        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url);
+        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url, request.headers.get('User-Agent') || '', ctx);
+        if (path === '/scope-proposal/px')      return await scopeProposalPixel(env, url, request.headers.get('User-Agent') || '', ctx);
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
@@ -571,6 +583,10 @@ const _hubWorkerCore = {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        if (callerRole) {
+          const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
+          if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
+        }
         // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
         // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
         // actual DATA being touched is too. Runs only for requests authenticated via
@@ -959,7 +975,25 @@ const _hubWorkerCore = {
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
-      return json({ error: err.message, stack: err.stack, type: err.constructor.name }, 500);
+      // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
+      // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
+      //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
+      //     with a short ref the caller can quote;
+      //   - only the admin secret / the staging test token get the detail back; everyone else gets a
+      //     generic message plus the ref. If the telemetry write itself fails the admin response says
+      //     so (telemetry_error) and the failure goes to the Worker log - it is never swallowed.
+      const _ref = crypto.randomUUID().slice(0, 8);
+      const _tokHdr = request.headers.get('X-Auth-Token') || '';
+      const _detailOk = _viaHubTestToken || (!!env.WORKER_SECRET && _tokHdr === env.WORKER_SECRET);
+      let _telemetryError = '';
+      try {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'unhandled_500', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `ref=${_ref} role=${callerRole || 'none'} ${String((err && err.message) || err)}`.slice(0, 480) });
+      } catch (te) {
+        _telemetryError = String((te && te.message) || te);
+        console.error('[unhandled_500] could not log to Ops_Telemetry', _ref, path, _telemetryError, err && err.stack);
+      }
+      if (_detailOk) return json({ error: err.message, stack: err.stack, type: err.constructor.name, ref: _ref, telemetry_error: _telemetryError || undefined }, 500);
+      return json({ error: 'Something went wrong on our side. Please try again; if it keeps happening, tell Ridge Co and quote ref ' + _ref + '.', ref: _ref }, 500);
     }
   },
 
@@ -1451,12 +1485,121 @@ async function updateKeyWithHistory(env, body) {
 
 // ── ATTACHMENTS ──────────────────────────────────────────────
 
-async function getAttachments(env, url) {
+// GET /attachments?wo_id= | ?invoice_id= — per-record scope (Oct 14 2026, queue #150).
+// Before this, ANY signed-in tenant/owner/vendor session token could list ANY job's attachments
+// (cross-account leak of photos, Drive links and receipt file names). Now:
+//   - Admin secret / internal tokens (callerRole null): unchanged, full access.
+//   - A role session may only see attachments on a WO it could already see in its own portal list
+//     (attachmentScopeAllows below mirrors vendorWorkorders / tenantWorkorders / ownerWorkorders).
+//   - Tenants never receive receipt/bill/invoice rows (vendor cost docs) even on their own jobs.
+//   - Asking for a WO the session may not see is a generic 404 (same for "missing" and "not yours",
+//     like /owner-file/view) and is logged to Ops_Telemetry as a failure so a probe or a real
+//     regression is visible. A telemetry failure propagates (loud 500) instead of being swallowed.
+//   - Unknown roles fail closed.
+const ATTACHMENT_COST_DOC_TYPES = ['receipt', 'bill', 'invoice'];
+
+// Shared with tenantWorkorders so "what a tenant can see" has ONE definition. Status/include_closed
+// filtering stays in the list endpoint (a tenant may view photos on a closed job they can see).
+function tenantCanSeeWO(tenant, w) {
+  if (!tenant || !w) return false;
+  if (w.Voided === 'TRUE') return false;
+  if (w.Tenant_Visible === 'FALSE') return false;
+  if (w.Property_ID !== tenant.Property_ID) return false;
+  if (isBackgroundWO(tenant, w)) return false;
+  if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenant.ID;
+  return true;
+}
+
+function attachmentScopeAllows(role, sessionId, wo, tenants, properties) {
+  if (!wo || !role || !sessionId) return false;
+  const sid = String(sessionId);
+  if (role === 'vendor') {
+    // Assigned vendor only. A voided WO is still theirs: additional-work drafts are stored as voided
+    // children and the vendor attaches photos to them before submitting.
+    return String(wo.Vendor_ID || '') !== '' && String(wo.Vendor_ID) === sid;
+  }
+  if (role === 'tenant') {
+    const tenant = (tenants || []).find(t => t.ID === sid && t.Active !== 'FALSE');
+    return tenantCanSeeWO(tenant, wo);
+  }
+  if (role === 'owner') {
+    const prop = (properties || []).find(p => p.ID === wo.Property_ID);
+    if (!prop || String(prop.Owner_ID || '') !== sid) return false;
+    return wo.Voided !== 'TRUE' && String(wo.Type || '') !== 'addon' && !isHiddenBidCopy(wo);
+  }
+  return false;
+}
+
+// ── SESSION IDENTITY BINDING (Oct 14 2026, Brett: "fix them") ──────────────────────────────────
+// Before this, every tenant/owner/vendor endpoint trusted the id the PAGE sent (?tenant_id=,
+// ?owner_id=, ?vendor_id=, body.vendor_id ...) instead of the id baked into the signed session
+// token, so any signed-in account could read another account's job list, bills, receipts or
+// notification settings by changing one number in the URL. One central rule, enforced in the
+// router for every role session (admin secret and internal tokens never reach it):
+//   - The id param for the caller's role (vendor_id / owner_id / tenant_id), when supplied in the
+//     query string OR the POST body, must equal the verified session id. A mismatch is a 403 and a
+//     failed Ops_Telemetry row (`session_identity_mismatch`) - never silently "corrected".
+//   - On GET the session id is then FORCED into the query, so a request that simply omits the param
+//     (e.g. /vendor-bills?status=submitted, which used to return every vendor's bills) is scoped to
+//     the caller instead of falling through to "everything".
+//   - GETs that name a work order (wo_id) must be for a job this session may see (the same
+//     attachmentScopeAllows used by /attachments - one definition). Generic 404 otherwise.
+// POST bodies are validated when the id is present; per-record write checks (e.g. /status on a WO id)
+// are a separate layer and are listed in BACKLOG.
+const SESSION_IDENTITY_PARAM = { vendor: 'vendor_id', owner: 'owner_id', tenant: 'tenant_id' };
+const WO_KEYED_READ_PATHS = ['/estimates', '/time-entries', '/receipts', '/vendor-bills', '/nearby-wos', '/wo-audit'];
+
+function sessionIdentityMismatch(role, sessionId, url, body) {
+  if (!role) return null;                                   // admin secret / internal token
+  const param = SESSION_IDENTITY_PARAM[role];
+  if (!param) return { param: '(role)', supplied: String(role) };   // unknown role fails closed
+  const sid = String(sessionId || '');
+  const supplied = [];
+  if (url && url.searchParams) supplied.push(url.searchParams.get(param));
+  if (body && typeof body === 'object') supplied.push(body[param]);
+  for (const v of supplied) {
+    if (v === null || v === undefined || v === '') continue;
+    if (!sid || String(v) !== sid) return { param, supplied: String(v).slice(0, 60) };
+  }
+  return null;
+}
+
+async function denySessionIdentity(env, path, role, sessionId, mm) {
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'session_identity_mismatch', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${role} session=${sessionId} sent ${mm.param}=${mm.supplied}` });
+  return json({ error: 'Forbidden' }, 403);
+}
+
+// Returns a Response when the session may NOT read this wo_id, otherwise null.
+async function woKeyedReadDenied(env, path, url, role, sessionId) {
+  const woId = url.searchParams.get('wo_id') || '';
+  if (!woId) return null;                                   // handlers that need a wo_id 400 on their own
+  const [workorders, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+  if (attachmentScopeAllows(role, sessionId, findWO(workorders, woId), tenants, properties)) return null;
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_scope_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${role} session=${sessionId} wo=${woId}` });
+  return json({ error: 'Not found' }, 404);
+}
+
+async function getAttachments(env, url, callerRole, callerSessionId) {
   const woId = url.searchParams.get('wo_id') || '';
   const invoiceId = url.searchParams.get('invoice_id') || '';
   if (!woId && !invoiceId) return json({ error: 'Missing wo_id or invoice_id' }, 400);
   const attachments = await fetchTab(env, 'Attachments');
-  return json(attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; }));
+  const rows = attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; });
+  if (!callerRole) return json(rows);   // admin secret / internal token: full access, as before
+  const [workorders, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+  const allowedWO = new Map();
+  const woAllowed = (id) => {
+    if (!id) return false;
+    if (!allowedWO.has(id)) allowedWO.set(id, attachmentScopeAllows(callerRole, callerSessionId, findWO(workorders, id), tenants, properties));
+    return allowedWO.get(id);
+  };
+  if (woId && !woAllowed(woId)) {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'attachments_scope_denied', Skill_Or_Endpoint: '/attachments', Success: 'FALSE', Notes: `role=${callerRole} session=${callerSessionId} wo=${woId}` });
+    return json({ error: 'Not found' }, 404);
+  }
+  let visible = rows.filter(a => woAllowed(a.WO_ID));
+  if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
+  return json(visible);
 }
 
 // Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
@@ -1468,7 +1611,7 @@ async function getAttachments(env, url) {
 // correctly kept private. This does NOT change the sharing policy (the file is still never
 // public); it only lets an already-authenticated vendor session read the bytes of a file that's
 // logged against a WO_ID they have legitimate access to, same trust boundary as GET /attachments.
-async function viewInternalFile(env, url) {
+async function viewInternalFile(env, url, callerRole, callerSessionId) {
   const woId = url.searchParams.get('wo_id') || '';
   const fileId = url.searchParams.get('file_id') || '';
   if (!woId || !fileId) return json({ error: 'wo_id and file_id required' }, 400);
@@ -1476,6 +1619,18 @@ async function viewInternalFile(env, url) {
     const attachments = await fetchTab(env, 'Attachments');
     const row = attachments.find(a => a.Active !== 'FALSE' && a.WO_ID === woId && a.Drive_File_ID === fileId);
     if (!row) return json({ error: 'File not found for this work order' }, 404);
+    // Oct 14 2026: any signed-in session could stream any job's receipt/bill/invoice bytes by
+    // guessing wo_id + file_id. A role session now needs the same access to the WO as /attachments
+    // (the assigned vendor; a tenant/owner can never reach cost documents through this route since
+    // it is not in their scope list, and attachmentScopeAllows fails closed on anything else).
+    // Admin secret / internal token (callerRole null) is unchanged. Same generic 404 as "no such file".
+    if (callerRole) {
+      const [wos, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+      if (!attachmentScopeAllows(callerRole, callerSessionId, findWO(wos, woId), tenants, properties)) {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_file_scope_denied', Skill_Or_Endpoint: '/vendor-file/view', Success: 'FALSE', Notes: `role=${callerRole} session=${callerSessionId} wo=${woId} file=${fileId}` });
+        return json({ error: 'File not found for this work order' }, 404);
+      }
+    }
     const token = await getAccessToken(env);
     const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -1488,8 +1643,17 @@ async function viewInternalFile(env, url) {
       headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
     });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return await fileViewError(env, '/vendor-file/view', e, callerRole, callerSessionId);
   }
+}
+
+// Shared by the two file streamers (Oct 14 2026): a role session never sees raw Drive/Sheets error
+// text, but the failure is always logged with a ref (a telemetry failure propagates to the router's
+// own 500 handler, so it is never swallowed). Admin/internal callers (callerRole null) keep the detail.
+async function fileViewError(env, path, e, callerRole, callerSessionId) {
+  const ref = crypto.randomUUID().slice(0, 8);
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'file_view_error', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `ref=${ref} role=${callerRole || 'none'} session=${callerSessionId || ''} ${String((e && e.message) || e)}`.slice(0, 480) });
+  return json({ error: callerRole ? 'Could not load this file. Please try again; if it keeps happening, tell Ridge Co and quote ref ' + ref + '.' : ((e && e.message) || String(e)), ref }, 500);
 }
 
 // GET /owner-file/view?wo_id=&file_id=&t= — owner-scoped receipt viewer (rule 177, Sep 16 2026).
@@ -1535,7 +1699,7 @@ async function viewOwnerReceiptFile(env, url, callerRole, callerSessionId) {
       headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
     });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return await fileViewError(env, '/owner-file/view', e, callerRole, callerSessionId);
   }
 }
 
@@ -4486,7 +4650,105 @@ async function scopeProposalLinkRevoke(env, body) {
 }
 
 const PROPOSAL_SEND_LOG_TAB = 'Proposal_Send_Log';
-const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result'];
+const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owner_Name', 'Email', 'Address', 'Link', 'Result', 'SMS_Result'];
+
+// ── Proposal read status + owner heads-up text (Hub Improvements, Oct 14 2026; FEATURE_LOG rule 209) ──
+// Two read signals, both written onto the Scopes row:
+//   * Page_*  = the owner opened scope-proposal.html (reliable; a real click-through).
+//   * Email_* = the 1x1 tracking pixel in the proposal email loaded (the owner's mail app showed images). Gmail and
+//     Apple Mail prefetch images through proxies, so a hit within PROPOSAL_OPEN_AUTO_WINDOW_MS of the send is counted
+//     as Email_Auto_Opens (a machine, not a person) and does NOT mark the email "opened". Treat Email_* as "probably".
+// Either signal counts as "seen" - that is what cancels a held owner text (processQuietHoursQueue) .
+const PROPOSAL_TRACK_COLS = ['Email_First_Opened', 'Email_Last_Opened', 'Email_Open_Count', 'Email_Auto_Opens', 'Page_First_Viewed', 'Page_Last_Viewed', 'Page_View_Count', 'Owner_SMS_Status', 'Owner_SMS_Time'];
+const PROPOSAL_OPEN_AUTO_WINDOW_MS = 120000;
+const PROPOSAL_RESEND_GUARD_MS = 60000;
+const PROPOSAL_BOT_UA = /bot|crawl|spider|slurp|facebookexternalhit|whatsapp|slackbot|twitterbot|curl\/|python-requests|headless|linkpreview|link preview/i;
+const SCOPE_SMS_QUIET_WINDOW = { start: 20, end: 8 };   // owner proposal text: fine until 8pm ET, held until 8am ET
+const PROPOSAL_PIXEL_GIF_B64 = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+// Pure: how to treat one hit. 'ignore' = obvious bot; 'auto' = email image fetched right after send (prefetch); 'real' = count it.
+function classifyProposalHit({ kind, ua, sentDate, now }) {
+  if (PROPOSAL_BOT_UA.test(String(ua || ''))) return 'ignore';
+  if (kind === 'email') { const sent = Date.parse(sentDate || ''); if (sent && (now - sent) < PROPOSAL_OPEN_AUTO_WINDOW_MS) return 'auto'; }
+  return 'real';
+}
+// Pure: has the owner (probably) seen this proposal?
+// `sinceIso` (the send that queued the text = the scope's Sent_Date): only a view AT OR AFTER it counts, so an
+// open from an earlier send/preview cannot cancel the text for a later resend. Compares the LAST view stamps
+// (they move on every hit). With no usable sinceIso it falls back to "any view ever" (legacy rows).
+function proposalSeenByOwner(s, sinceIso) {
+  if (!s) return false;
+  const since = Date.parse(sinceIso || '');
+  if (!since) return !!(String(s.Page_First_Viewed || '').trim() || String(s.Email_First_Opened || '').trim());
+  const at = (v) => { const t = Date.parse(String(v || '').trim()); return t ? t : 0; };
+  return at(s.Page_Last_Viewed || s.Page_First_Viewed) >= since || at(s.Email_Last_Opened || s.Email_First_Opened) >= since;
+}
+// Never silent: a failed log lands in Ops_Telemetry; the public page/pixel still works.
+async function proposalRecordHit(env, s, kind, ua) {
+  try {
+    const verdict = classifyProposalHit({ kind, ua, sentDate: s.Sent_Date, now: Date.now() });
+    if (verdict === 'ignore') return;
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const nowIso = new Date().toISOString();
+    let f;
+    if (kind === 'email' && verdict === 'auto') f = { Email_Auto_Opens: String((parseInt(s.Email_Auto_Opens || '0', 10) || 0) + 1) };
+    else if (kind === 'email') f = { Email_First_Opened: s.Email_First_Opened || nowIso, Email_Last_Opened: nowIso, Email_Open_Count: String((parseInt(s.Email_Open_Count || '0', 10) || 0) + 1) };
+    else f = { Page_First_Viewed: s.Page_First_Viewed || nowIso, Page_Last_Viewed: nowIso, Page_View_Count: String((parseInt(s.Page_View_Count || '0', 10) || 0) + 1) };
+    const r = await updateRow(env, 'Scopes', s.ID, f);
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/' + kind, Success: 'FALSE', Notes: 'scope=' + (s && s.ID) + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+}
+// PUBLIC GET /scope-proposal/px?t=<proposal link token> - the tracking pixel. ALWAYS answers with the gif (a broken
+// image in the owner's email would look worse than a missed open); only a valid, current token is recorded.
+async function scopeProposalPixel(env, url, ua, ctx) {
+  try {
+    const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
+    if (auth) await proposalRecordHit(env, auth.s, 'email', ua);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/px', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+  }
+  const bin = Uint8Array.from(atob(PROPOSAL_PIXEL_GIF_B64), c => c.charCodeAt(0));
+  return new Response(bin, { status: 200, headers: { 'Content-Type': 'image/gif', 'Cache-Control': 'no-store, no-cache, must-revalidate, private', 'Pragma': 'no-cache', 'Access-Control-Allow-Origin': '*' } });
+}
+// Stamp the owner-text outcome on the Scope so the Scope Creator can show it. Best-effort + telemetry, never throws.
+async function proposalStampSms(env, scopeId, status) {
+  try {
+    await ensureColumns(env, 'Scopes', PROPOSAL_TRACK_COLS);
+    const r = await updateRow(env, 'Scopes', scopeId, { Owner_SMS_Status: status, Owner_SMS_Time: new Date().toISOString() });
+    if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) {}
+  }
+}
+// Text the owner "your estimate was emailed". Gated like every owner SMS (global / property / owner toggles, test mode).
+// Quiet window 8pm-8am ET (not the global 7pm-9am); `override` (Brett's per-send choice) sends right now. When held, the
+// Message_Queue row carries Skip_If_Seen so the release sweep drops it if the owner has already opened the proposal.
+// Returns { status, ... } - every outcome (including blocked / failed / no phone) is reported, none swallowed.
+async function proposalOwnerSms(env, { scopeId, prop, owner, addr, ownerName, override }) {
+  let out;
+  try {
+    const cfg = await fetchConfig(env);
+    const first = ((owner && (owner.First_Name || '')) || (ownerName && ownerName !== 'there' ? String(ownerName).split(' ')[0] : '') || 'there');
+    if (!owner || !normalizePhone(owner.Phone)) out = { status: 'no_phone', note: 'Owner has no phone on file - email sent, no text.' };
+    else {
+      const r = await sendTemplatedSms(env, { type: 'owner_proposal_ready', kind: 'owner', owner, property: prop,
+        tokens: { FirstName: first, Address: addr, AssistantName: cfg.ASSISTANT_NAME || 'Riley' },
+        bypassQuietHours: !!override, quietWindow: SCOPE_SMS_QUIET_WINDOW, skip_if_seen: 'scope:' + scopeId });
+      if (r && r.error) out = { status: 'failed', note: String(r.error).slice(0, 200) };
+      else if (r && r.held_for_quiet_hours) out = { status: 'held', send_after: r.send_after, note: 'Held for quiet hours; sends at 8:00am ET unless the owner opens the estimate first.' };
+      else if (r && r.sent) out = { status: 'sent', test_mode: !!r.test_mode, delivered_to: r.delivered_to, note: r.test_mode ? 'TEST MODE: delivered to the test number, not the owner.' : 'Texted the owner.' };
+      else if (r && r.send_ok === false) out = { status: 'blocked', note: 'SMS gates blocked it: ' + String(r.gate_snapshot || '').slice(0, 200) };
+      else if (r && r.reason) out = { status: 'failed', note: String(r.reason).slice(0, 200) };
+      else out = { status: 'failed', note: 'Twilio did not confirm the send.' };
+    }
+  } catch (e) { out = { status: 'failed', note: String((e && e.message) || e).slice(0, 200) }; }
+  await proposalStampSms(env, scopeId, out.status);
+  if (out.status !== 'sent' && out.status !== 'held') {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (_) {}
+  }
+  return out;
+}
 
 // Pure: resolves the CONFIRMED PAYOR for a scope's property — never the Realtor/PM referral
 // source (that's a separate Properties.Source_* field, kept deliberately apart — see
@@ -4512,6 +4774,12 @@ async function scopeProposalSend(env, body) {
   const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   if (!(s.Proposal_Text || '').trim()) return json({ error: 'Generate the proposal first (Generate proposal), then send.' }, 400);
+  // Double-send guard (Oct 14 2026): a double tap / retry within PROPOSAL_RESEND_GUARD_MS of the last send is refused
+  // BEFORE any email or text goes out (409, nothing sent). A deliberate resend after that still works.
+  const lastSent = Date.parse(s.Sent_Date || '');
+  if (lastSent && (Date.now() - lastSent) < PROPOSAL_RESEND_GUARD_MS && (Date.now() - lastSent) >= 0) {
+    return json({ error: 'This estimate was just sent ' + Math.max(1, Math.round((Date.now() - lastSent) / 1000)) + 's ago - nothing was sent again. Wait a minute if you really want to resend.', code: 'just_sent' }, 409);
+  }
 
   const [props, owners] = await fetchTabs(env, ['Properties', 'Owners']);
   const prop = props.find(p => p.ID === String(s.Property_ID)) || null;
@@ -4524,7 +4792,8 @@ async function scopeProposalSend(env, body) {
   const token = await scopeProposalLinkToken(env, id);
   if (!token) return json({ error: 'Could not create the proposal link.' }, 500);
   const url = `${PORTAL_BASE}/scope-proposal.html?t=${encodeURIComponent(token)}`;
-  const html = buildScopeProposalEmailHtml({ ownerName, addr, url });
+  const pixelUrl = `${String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '')}/scope-proposal/px?t=${encodeURIComponent(token)}`;
+  const html = buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl });
   const subject = `Ridge Co — your estimate for ${addr}`;
 
   try {
@@ -4543,12 +4812,20 @@ async function scopeProposalSend(env, body) {
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount });
   } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
 
+  // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
+  // Email already went; the text is held/skipped/blocked on its own rules and its outcome is always reported.
+  let sms;
+  if ((parseInt(s.Send_Count || '0', 10) || 0) === 0 || body.sms_again === true) {
+    sms = await proposalOwnerSms(env, { scopeId: String(id), prop, owner, addr, ownerName, override: body.override_quiet_hours === true });
+  } else sms = { status: 'not_attempted', note: 'Resend: the owner was already texted on the first send.' };
+
   try {
     await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
-    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent' });
+    await ensureColumns(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
+    await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent', SMS_Result: sms.status + (sms.note ? ' - ' + sms.note : '') });
   } catch (_) { /* audit log best-effort; the send already happened */ }
 
-  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url });
+  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms });
 }
 
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
@@ -4595,10 +4872,13 @@ async function scopeProposalPhotos(env, s) {
 // price was derived, or any vendor-facing commentary may ever reach a customer-facing surface —
 // only the job description and the final price. If a genuinely customer-safe note is ever
 // needed, it must be a SEPARATE, explicitly-labeled field — never this one.
-async function scopeProposalView(env, url) {
+async function scopeProposalView(env, url, ua, ctx) {
   const auth = await scopeProposalLinkAuth(env, url.searchParams.get('t'));
   if (!auth) return json({ error: 'invalid_link', message: 'This link is invalid or has expired. Please contact Ridge Co for a current proposal.' }, 401);
   const s = auth.s;
+  // Read status (Oct 14 2026): the owner opening the proposal page is the reliable "they looked" signal.
+  // Awaited (short) so a failed log is never lost; append &preview=1 to the link to look without counting.
+  if (url.searchParams.get('preview') !== '1') await proposalRecordHit(env, s, 'page', ua);
   let addr = await scopeAddr(env, s);
   let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
   const items = rawItems.map(it => ({
@@ -8721,8 +9001,9 @@ async function createInvoice(env, body) {
 
 // ── PORTAL VIEWS ─────────────────────────────────────────────
 
-async function vendorWorkorders(env, url) {
-  const vendorId = url.searchParams.get('vendor_id');
+async function vendorWorkorders(env, url, callerRole, callerSessionId) {
+  // A vendor session is always scoped to ITS OWN id from the signed token, never the query string.
+  const vendorId = callerRole === 'vendor' ? String(callerSessionId || '') : url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   // ONE batchGet for everything (was 3 separate Sheets reads per call: tabs + Config + Master_Key_Holders).
@@ -8758,8 +9039,9 @@ async function vendorWorkorders(env, url) {
   return json(enriched);
 }
 
-async function tenantWorkorders(env, url) {
-  const tenantId = url.searchParams.get('tenant_id');
+async function tenantWorkorders(env, url, callerRole, callerSessionId) {
+  // A tenant session is always scoped to ITS OWN id from the signed token, never the query string.
+  const tenantId = callerRole === 'tenant' ? String(callerSessionId || '') : url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors, owners] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Owners']);
@@ -8767,7 +9049,7 @@ async function tenantWorkorders(env, url) {
   // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
   // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
   // it in their portal" stay in sync instead of drifting apart (see isBackgroundWO comment).
-  const wos = workorders.filter(w => { if (w.Voided === 'TRUE') return false; if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (isBackgroundWO(tenant, w)) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
+  const wos = workorders.filter(w => { if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; return tenantCanSeeWO(tenant, w); });
   // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
   // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
   // owner.html both had a "Technician: —" row wired up with nothing to fill it). No
@@ -8800,8 +9082,9 @@ async function tenantWorkorders(env, url) {
   return json(enriched);
 }
 
-async function ownerWorkorders(env, url) {
-  const ownerId = url.searchParams.get('owner_id');
+async function ownerWorkorders(env, url, callerRole, callerSessionId) {
+  // An owner session is always scoped to ITS OWN id from the signed token, never the query string.
+  const ownerId = callerRole === 'owner' ? String(callerSessionId || '') : url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
@@ -9916,8 +10199,12 @@ async function listVendorBills(env, url) {
     const bills = await fetchTab(env, 'Vendor_Bills', { stale: !!vendorId });
     let results = bills.filter(b => b.Active !== 'FALSE');
     if (statusFilter && !woId) {
-      // Admin view: Invoice Review screen — return all bills matching this status
-      return json(results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase()));
+      // Admin view: Invoice Review screen — return all bills matching this status.
+      // Oct 14 2026: this branch used to ignore vendor_id, so a vendor session calling
+      // /vendor-bills?status=submitted got EVERY vendor's bills. A vendor session now always carries
+      // its own vendor_id here (forced by the router), so the filter applies; admin calls send none.
+      const byStatus = results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase());
+      return json(vendorId ? byStatus.filter(b => b.Vendor_ID === vendorId) : byStatus);
     }
     if (woId)     results = results.filter(b => b.WO_ID     === woId);
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
@@ -10623,7 +10910,9 @@ async function sendTemplatedSms(env, o) {
     const body = renderTemplate(tpl ? tpl.Body : (def ? def.Body : ''), Object.assign({ HubUrl: HUB_URL }, o.tokens || {})).replace(/\s+/g, ' ').trim();
     if (!body) return { sent: false, reason: 'no template for ' + o.type };
     const opts = { wo_id: o.wo_id || '', message_type: o.type, recipient_type: o.kind, message_body: body, property: o.property, bypassQuietHours: !!o.bypassQuietHours };
-    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else opts.vendor = o.vendor;
+    if (o.quietWindow) opts.quietWindow = o.quietWindow;
+    if (o.skip_if_seen) opts.skip_if_seen = o.skip_if_seen;
+    if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else if (o.kind === 'owner') opts.owner = o.owner; else opts.vendor = o.vendor;
     return await smsGatedSend(env, opts);
   } catch (e) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
@@ -14021,7 +14310,7 @@ async function doorWatchdogTest(env, url, body) {
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
 // Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
 const MSG_QUEUE_TAB = 'Message_Queue';
-const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To'];
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To','Skip_If_Seen'];
 const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
 let _msgQueueTabReady = false, _smsTogglesReady = false;
 
@@ -14083,6 +14372,9 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, the owner has signed the proposal for {Job}. Pending deposit payment - we'll text you when it's paid." },
   { Message_Type: 'vendor_deposit_paid', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, proposal approved for {Job}: the DEPOSIT for {Job} has been paid to RidgeCo. (This is the deposit only - not your final invoice payment.)" },
+  // Owner heads-up when a proposal is emailed (Oct 14 2026, FEATURE_LOG rule 209). No link on purpose: it points at the email.
+  { Message_Type: 'owner_proposal_ready', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. Your estimate for {Address} is ready and was just emailed to you - please check your inbox (and spam folder) to review it. Questions? Just reply to that email." },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
@@ -14224,7 +14516,7 @@ async function smsGatedSend(env, opts) {
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
     Message_Body: messageBody, Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
-    Original_Body: originalBody, Translated_To: translatedTo,
+    Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
   const newRow = headers.map(h => rowObj[h] ?? '');
   await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
@@ -14243,8 +14535,12 @@ async function smsGatedSend(env, opts) {
     // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
     // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
     const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
-    if (isQuietHoursNow(new Date()) && !opts.bypassQuietHours && !_earlyMorningOk) {
-      const sendAfter = nextQuietHoursEnd(new Date()).toISOString();
+    // opts.quietWindow {start,end} (Oct 14 2026): a caller may use its own ET window instead of the
+    // global 7pm-9am (owner proposal heads-up text: 8pm-8am). Default path is unchanged.
+    const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
+    const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+    if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
+      const sendAfter = _holdUntil.toISOString();
       await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
@@ -14374,8 +14670,28 @@ async function processQuietHoursQueue(env) {
   ]);
   const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
   const results = [];
+  let _scopesForSkip = null;   // loaded lazily, only when a due row carries Skip_If_Seen
   for (const row of due) {
     const id = row.ID, kind = row.Recipient_Type;
+    // Skip-if-seen (Oct 14 2026): a held "your estimate was emailed" text is pointless once the owner has already
+    // opened the email or the proposal page - sending it next morning would only confuse. Visible, never silent:
+    // the row becomes Status 'skipped' with the reason, and the Scope's Owner_SMS_Status says so. If the lookup
+    // itself fails we SEND (and log) rather than quietly drop a text.
+    if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) {
+      try {
+        if (!_scopesForSkip) _scopesForSkip = await fetchTab(env, 'Scopes');
+        const sid = String(row.Skip_If_Seen).slice(6);
+        const sc = _scopesForSkip.find(x => x.ID === sid);
+        if (sc && proposalSeenByOwner(sc, sc.Sent_Date)) {
+          await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: 'skipped at release: owner already opened the proposal email/page', Send_After: '' });
+          await proposalStampSms(env, sid, 'skipped_seen');
+          results.push({ id, sent: false, skipped: 'owner_already_seen' });
+          continue;
+        }
+      } catch (e) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
+      }
+    }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const tenant = kind === 'tenant' ? tenants.find(t => normalizePhone(t.Phone) === row.Recipient_Phone && (!row.Property_ID || t.Property_ID === row.Property_ID)) : null;
@@ -14387,11 +14703,12 @@ async function processQuietHoursQueue(env) {
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
-    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
+    if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
     const sent = !!(result && result.sid);
     await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
+    if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), sent ? 'sent' : 'failed');
     results.push({ id, sent, failed: !sent, gate_snapshot: gateSnapshot });
   }
   return { checked: due.length, results };
@@ -15766,6 +16083,19 @@ function nextQuietHoursEnd(date) {
   let y = +p.year, mo = +p.month - 1, d = +p.day;
   if (h >= QUIET_HOURS_START_ET) d += 1;
   return new Date(Date.UTC(y, mo, d, QUIET_HOURS_END_ET, 0, 0) - offsetMin * 60000);
+}
+// Custom quiet window (Oct 14 2026, owner proposal text: ok until 8pm ET, held until 8am ET).
+// Returns the real UTC Date the window ends if `date` is inside [startH, 24) U [0, endH) Eastern, else null.
+function quietHoldUntil(date, startH, endH) {
+  date = date || new Date();
+  const h = etHour(date);
+  if (!(h >= startH || h < endH)) return null;
+  const offsetMin = nyOffsetMinutes(date);
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date).map(x => [x.type, x.value]));
+  let d = +p.day; if (h >= startH) d += 1;
+  return new Date(Date.UTC(+p.year, +p.month - 1, d, endH, 0, 0) - offsetMin * 60000);
 }
 // General "next 9am ET after this instant" — unlike nextQuietHoursEnd (only meaningful when
 // already inside quiet hours), this works from ANY starting time. Used by the vendor nudge
@@ -17366,7 +17696,10 @@ async function opsQueueSync(env, body, opts) {
 // change the applier has not applied within 24h is itself reported.
 const HUBIMP_TAB = 'Hub_Improvements';
 const HUBIMP_LIST = 'RidgeCo Hub Improvements';
-const HUBIMP_COLS = ['ID', 'Task_ID', 'List_ID', 'Title', 'Status', 'Status_Changed_At', 'Queue_ID', 'Queue_Status', 'PR', 'Note', 'First_Seen', 'Applied_Status', 'Applied_At', 'Apply_Error'];
+const HUBIMP_COLS = ['ID', 'Task_ID', 'List_ID', 'Title', 'Status', 'Status_Changed_At', 'Queue_ID', 'Queue_Status', 'PR', 'Note', 'First_Seen', 'Applied_Status', 'Applied_At', 'Apply_Error', 'Link_Kind'];
+// Link_Kind: '' = this sweep's own queue item; 'duplicate' / 'shipped_match' = the task points at a queue item that
+// already existed (or may already be built). Those are NEVER auto-completed - a human confirms they cover the task.
+const HUBIMP_REVIEW_KINDS = ['duplicate', 'shipped_match'];
 const HUBIMP_APPLY_STALE_MS = 24 * 3600 * 1000;
 const HUBIMP_ACTIVE = ['pulled', 'building'];       // still open: waiting on the queue or on a PR
 const HUBIMP_TRACKED = ['pulled', 'building', 'done', 'dropped'];
@@ -17429,12 +17762,32 @@ function hubImpPlan(ledger, queue, prStates, nowMs) {
         else {
           const qs = String(q.Status || '').toLowerCase();
           if (String(r.Queue_Status || '') !== qs) f.Queue_Status = qs;
-          if (qs === 'done') {
-            f.Status = 'done'; f.Status_Changed_At = nowIso; f.PR = String(q.PR_Number || r.PR || '');
-            f.Note = (String(r.Note || '') + ' Built (queue #' + r.Queue_ID + (q.PR_Number ? ', PR #' + q.PR_Number : '') + ').').trim();
-          } else if (qs === 'dropped') {
-            f.Status = 'dropped'; f.Status_Changed_At = nowIso;
-            f.Note = (String(r.Note || '') + ' Dropped from the queue' + (q.Drop_Reason ? ': ' + q.Drop_Reason : '') + '.').trim();
+          const bs = String(q.Build_State || '').toLowerCase();
+          const needsReview = HUBIMP_REVIEW_KINDS.includes(String(r.Link_Kind || ''));
+          const reviewMarked = /Needs your review/.test(String(r.Note || ''));
+          if (qs === 'done' || qs === 'dropped') {
+            if (needsReview) {
+              // Duplicate / shipped-match links never auto-complete: the queue item may not be what this task asked for.
+              if (!reviewMarked && (qs === 'dropped' || bs === 'live')) {
+                f.Note = (String(r.Note || '') + ' Needs your review: linked queue item #' + r.Queue_ID + ' is ' + (qs === 'dropped' ? 'dropped' : 'live') + ' (' + r.Link_Kind.replace('_', ' ') + ') - confirm it covers this task, then finish it in Google Tasks.').trim();
+                problems.push(label + ': ' + r.Link_Kind.replace('_', ' ') + ' link to queue item #' + r.Queue_ID + ' is now ' + (qs === 'dropped' ? 'dropped' : 'live') + ' - needs your review, not auto-completed');
+              }
+            } else if (qs === 'dropped') {
+              f.Status = 'dropped'; f.Status_Changed_At = nowIso;
+              f.Note = (String(r.Note || '') + ' Dropped from the queue' + (q.Drop_Reason ? ': ' + q.Drop_Reason : '') + '.').trim();
+            } else if (bs === 'live') {
+              // Done means "PR opened" in the queue; only Build_State live (PR merged, main deployed) completes the task.
+              f.Status = 'done'; f.Status_Changed_At = nowIso; f.PR = String(q.PR_Number || r.PR || '');
+              f.Note = (String(r.Note || '') + ' Built and live (queue #' + r.Queue_ID + (q.PR_Number ? ', PR #' + q.PR_Number : '') + ').').trim();
+            } else if (bs === 'pr_closed') {
+              problems.push(label + ': PR ' + (q.PR_Number ? '#' + q.PR_Number : '') + ' for queue item #' + r.Queue_ID + ' was closed without merging');
+            } else if (!q.PR_Number) {
+              problems.push(label + ': queue item #' + r.Queue_ID + ' is marked done but has no PR to confirm it shipped');
+            } else {
+              // PR open (or build state not synced yet): keep waiting, but show the PR on the ledger row.
+              if (String(r.Status || '').toLowerCase() !== 'building') { f.Status = 'building'; f.Status_Changed_At = nowIso; }
+              if (String(r.PR || '') !== String(q.PR_Number)) f.PR = String(q.PR_Number);
+            }
           }
         }
       } else if (r.PR) {
@@ -17527,12 +17880,17 @@ async function hubImpPull(env) {
       const base = { Task_ID: t.Task_ID, List_ID: t.List_ID || '', Title: String(t.Title).slice(0, 200), Status: 'pulled', Status_Changed_At: now, First_Seen: now };
       if (hit.kind === 'queued') {
         const note = hit.q.shipped_match ? 'Queue says: ' + hit.q.shipped_match + ' - check before building.' : (hit.q.overlaps ? 'May overlap queue item #' + hit.q.overlaps + '.' : '');
-        await hubImpAdd(env, Object.assign(base, { Queue_ID: hit.q.queue_id, Queue_Status: 'proposed', Note: note }));
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: hit.q.queue_id, Queue_Status: 'proposed', Note: note, Link_Kind: hit.q.shipped_match ? 'shipped_match' : '' }));
         out.queued.push({ task_id: t.Task_ID, queue_id: hit.q.queue_id, title: base.Title });
         if (hit.q.shipped_match) out.possibly_already_built.push({ title: base.Title, queue_id: hit.q.queue_id, match: hit.q.shipped_match });
       } else {
-        await hubImpAdd(env, Object.assign(base, { Queue_ID: hit.s.duplicate_of, Queue_Status: String(hit.s.status || '').toLowerCase(), Note: 'Same as existing queue item #' + hit.s.duplicate_of + ' (' + hit.s.status + ').' }));
-        out.skipped_duplicates.push({ title: base.Title, duplicate_of: hit.s.duplicate_of, status: hit.s.status });
+        // Two tasks with the same title in ONE batch: the second is "a duplicate of new-N" (the Nth row queued by this
+        // call, which has no real id yet). Resolve it to the real queue id so the ledger link is not left dangling.
+        let dupOf = String(hit.s.duplicate_of || '');
+        const mm = /^new-(\d+)$/.exec(dupOf);
+        if (mm) { const real = (body.queued_items || [])[Number(mm[1])]; if (real && real.queue_id) dupOf = String(real.queue_id); }
+        await hubImpAdd(env, Object.assign(base, { Queue_ID: dupOf, Queue_Status: String(hit.s.status || '').toLowerCase() || 'proposed', Link_Kind: 'duplicate', Note: 'Same as existing queue item #' + dupOf + ' (' + (hit.s.status || 'proposed') + ').' }));
+        out.skipped_duplicates.push({ title: base.Title, duplicate_of: dupOf, status: hit.s.status });
       }
     }
   }
@@ -18932,13 +19290,14 @@ function buildArReportEmailHtml(group, link) {
 }
 
 // House-style mirror of buildArReportEmailHtml, for scopeProposalSend (B-210 follow-on).
-function buildScopeProposalEmailHtml({ ownerName, addr, url }) {
+function buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl }) {
   return `<div style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1b1f24;">
     <h2 style="color:#1d4ed8;">Ridge Co — Estimate for ${addr}</h2>
     <p>Hi ${ownerName || 'there'},</p>
     <p>Your estimate for the work at <strong>${addr}</strong> is ready to review. Tap below to see the full breakdown and sign off whenever you're ready to move forward.</p>
     <p style="text-align:center;margin:24px 0;"><a href="${url}" style="background:#1d4ed8;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">View &amp; Sign Estimate</a></p>
     <p style="color:#66707c;font-size:12px;">Questions about anything in the estimate? Just reply to this email. — Ridge Co</p>
+    ${pixelUrl ? `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;">` : ''}
   </div>`;
 }
 

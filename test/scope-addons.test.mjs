@@ -70,7 +70,7 @@ const viewStubs = {
   scopeParsePaymentSchedule: () => [{ label: 'Deposit', percent: 40, trigger: 'upfront' }, { label: 'Final', percent: 60, trigger: 'completion' }],
   scopeValidatePaymentSchedule: (m) => ({ schedule: m }), scopeMaxUpfrontPct: async () => 33.34,
   scopeComputeMilestoneAmounts: H.scopeComputeMilestoneAmounts, scopeDefaultPaymentSchedule: () => [],
-  scopeSigTab: async () => {}, fetchTab: async () => [], paymentMilestonesTab: async () => {}, json: (o) => o,
+  scopeSigTab: async () => {}, fetchTab: async () => [], paymentMilestonesTab: async () => {}, json: (o) => o, proposalRecordHit: async () => {},
 };
 {
   const view = new Function(...Object.keys(viewStubs), grab('scopeProposalView', true) + '\nreturn scopeProposalView;')(...Object.values(viewStubs));
