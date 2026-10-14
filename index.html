@@ -6444,9 +6444,15 @@ function loadMoveInWOPanel(propId, unitId) {
   var list  = document.getElementById('mi-wo-list');
   if (!panel || !list) return;
   var OPEN = WOStatus.sets.FIELD_OPEN;
-  var openWOs = safeArray(state.workorders).filter(function(w) {
+  // Oct 14 2026: a new tenant is only ever linked to work created on/after their move-in day (Eastern). Until a move-in date is
+  // chosen nothing is offered; WOs from before it are not listed at all (the server refuses to link them too).
+  var miDay = (document.getElementById('mi-date') || {}).value || '';
+  var openWOs = !miDay ? [] : safeArray(state.workorders).filter(function(w) {
     if (!OPEN.includes(w.Status)) return false;
     if (w.Voided === 'TRUE') return false;
+    var cr = String(w.Created_Date || '');
+    var crDay = /^\d{4}-\d{2}-\d{2}$/.test(cr) ? cr : (cr && !isNaN(new Date(cr)) ? new Date(cr).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) : '');
+    if (!crDay || crDay < miDay) return false;
     if (unitId) return w.Unit_ID === unitId;
     if (propId) return String(w.Property_ID) === String(propId);
     return false;
