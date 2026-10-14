@@ -15003,6 +15003,9 @@ const SCHED_PF_WHAT = {
   review_mon: 'runs the Monday weekly review and delivers it',
   review_wed: 'runs the Wednesday weekly review (logged only)',
   ar_report_mon: 'builds and delivers the Monday AR aging report',
+  hub_impr_mon: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
+  hub_impr_thu: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
+  hub_impr_daily: 'checks which Hub Improvements items were built (queue item done / PR merged) so Google Tasks can be completed; reports anything stuck',
 };
 async function schedPfTab(env, tab) {
   try { return await fetchTab(env, tab); }
