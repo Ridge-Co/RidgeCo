@@ -133,6 +133,7 @@ function makeGate(overrides) {
     sendSMSRaw: async (e, to, msg) => { state.raw.push({ to, msg }); return { sid: 'SM1' }; },
     logMessageAudit: async (e, a) => { state.audit.push(a); },
     smsGateDecision: new Function(grab('smsGateDecision') + '\nreturn smsGateDecision;')(),
+    tenantMovedOut: new Function(grab('tenantMovedOut') + '\nreturn tenantMovedOut;')(),
     smsToggleOn: v => String(v == null ? '' : v).toUpperCase() !== 'FALSE',
     translateForVendorDetailed: H.translateForVendorDetailed,
     MSG_QUEUE_TAB: 'Message_Queue',
