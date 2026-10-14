@@ -449,6 +449,45 @@ for (const N of [2, 5, 8]) {
   t('claim release failing is logged to telemetry (Success FALSE, dispatcher)', L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dispatcher' && /could NOT be released/.test(x.Notes)), L.telemetry);
   await Promise.all(waits);
 }
+// 2k-d Oct 14 2026: a daily job may return {ok:true, partial:true} (one time-slice done, more to do - daily_qb_sync). It is NOT done for the
+// day, is not re-picked for SCHED_PARTIAL_GAP_MS (so it never hogs one tick), resumes later, is done only on its final slice, and is a
+// FAILURE (loud) after SCHED_MAX_PARTIALS slices in one ET day.
+{
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  let slicesLeft = 2;
+  const jobs = mkJobs(log, [['dq', 'daily', { run: async () => { log.push('dq'); return slicesLeft-- > 0 ? { ok: true, partial: true, errors: [] } : { ok: true, errors: [] }; } }], ['next', 'interval']]);
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  const s1 = stateOf(store).jobs.dq;
+  t('partial slice: job_ok, flagged partial, status "partial", NOT marked done for the day', r1.body.ran === 'dq' && r1.body.job_ok === true && r1.body.partial === true && s1.last_status === 'partial' && !s1.last_key && s1.partials.n === 1 && !!s1.last_ok && s1.attempts === null, { r: r1.body, s1 });
+  t('partial slice: not offered again in the same tick (the job behind it runs)', JSON.stringify(r1.body.due) === JSON.stringify(['next']) && r1.body.more === true, r1.body);
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('partial slice: the very next call runs the job behind it, not the partial job again', r2.body.ran === 'next' && log.filter(x => x === 'dq').length === 1, r2.body);
+  c.v += 6 * 60000;
+  const r3 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('partial slice: resumes after the partial gap (slice 2)', r3.body.ran === 'dq' && r3.body.partial === true && stateOf(store).jobs.dq.partials.n === 2, r3.body);
+  c.v += 6 * 60000;
+  const r4 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  const s4 = stateOf(store).jobs.dq;
+  t('final slice marks the day done and clears the partial bookkeeping', r4.body.ran === 'dq' && !r4.body.partial && s4.last_status === 'ok' && !!s4.last_key && s4.partials === null && s4.partial_at === null && s4.attempts === null, { r: r4.body, s4 });
+  c.v += 6 * 60000;
+  const r5 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('after the final slice the job is not run again that day', r5.body.ran !== 'dq' && log.filter(x => x === 'dq').length === 3, r5.body);
+}
+{
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['dq', 'daily', { run: async () => { log.push('dq'); return { ok: true, partial: true, errors: [] }; } }]]);
+  let last = null;
+  for (let i = 0; i < 14; i++) { last = await L.schedRunNext({}, null, fast(c, { jobs })); c.v += 6 * 60000; if (last.body.ran !== 'dq') break; }
+  const s = stateOf(store).jobs.dq;
+  t('a job that never finishes becomes a loud FAILURE on slice 13 (not a forever-green "partial")', log.length === 13 && s.last_status === 'failed' && /after 12 slices/.test(s.last_error || '') && L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dq'), { n: log.length, s });
+}
+{
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['dq', 'daily', { run: async () => { log.push('dq'); return { ok: false, partial: true, errors: [{ step: 'x', error: 'boom' }] }; } }]]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  const s = stateOf(store).jobs.dq;
+  t('a partial slice that ALSO reported an error is a failure (counted attempt, retry gap), never "partial"', r.body.job_ok === false && !r.body.partial && s.last_status === 'failed' && s.attempts.n === 1 && !s.partial_at, { r: r.body, s });
+}
 // 2k-c a failed job says WHY (the deposit sweep failed 70+ times as "ok:false []")
 {
   const msg = P.schedBadness(200, { ok: false, errors: [], not_found: [{ scope: '4', wo_id: 'WO-1180', reason: 'no deposit invoice on the signature' }] });

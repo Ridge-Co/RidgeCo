@@ -280,14 +280,14 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
 // ── wiring tripwires on the real source ─────────────────────────────────────────
 // Oct 12 2026: scheduled() is a loud no-op; the daily jobs are scheduler jobs (daily_qb_sync), not cron branches.
 const sched0 = grab(wsrc, 'async function schedRunDailyQbSync(');
+const qbs = grab(wsrc, 'async function qbSyncPayments(');
 const qbp = grab(wsrc, 'async function qbPayables(');
 t('qbPayables uses milestone fallback', qbp.includes('depositMilestoneForSignature(r, allMilestones)') && qbp.includes('warnings,'));
-t('daily_qb_sync job does not run the sweep twice', sched0.includes('if (!sweepRanInSync) {') && sched0.includes('processDepositPaidSweep(env)'));
+t('daily_qb_sync job does not run the sweep itself (qbSyncPayments runs it once, in its last slice)', !sched0.includes('processDepositPaidSweep(env)') && qbs.includes('if (sync) sync.sweep_done = true') && qbs.includes('processDepositPaidSweep(env)'));
 t('banner resets on a failed payables read', isrc.includes("errors = [{ stage: 'payables_read'") && isrc.includes('awaiting_invoice'));
 t('qbPayables has no bare swallow in signed-proposal block', !/never break the Invoice_Review-based rows above \*\/ \}/.test(qbp));
-const qbs = grab(wsrc, 'async function qbSyncPayments(');
 t('qbSyncPayments logs + returns errors and runs sweep', qbs.includes('errors: syncErrors') && qbs.includes('processDepositPaidSweep(env)') && !qbs.includes('/* non-fatal */'));
-t('daily_qb_sync job runs processDepositPaidSweep daily (also in sweep_work every ~15 min)', sched0.includes('processDepositPaidSweep(env)') && /name: 'daily_qb_sync',\s+kind: 'daily'/.test(wsrc) && grab(wsrc, 'async function schedRunSweepWork(').includes('processDepositPaidSweep(env)'));
+t('daily_qb_sync job runs the deposit-paid sweep daily via qbSyncPayments (also in sweep_work every ~15 min)', sched0.includes('qbSyncPayments(env') && /name: 'daily_qb_sync',\s+kind: 'daily'/.test(wsrc) && grab(wsrc, 'async function schedRunSweepWork(').includes('processDepositPaidSweep(env)'));
 t('route POST /scope-deposit/sweep wired', /path === '\/scope-deposit\/sweep'\)\s+return json\(await processDepositPaidSweep\(env\)\)/.test(wsrc));
 t('hubTestWriteAllowed allows /scope-deposit/sweep', wsrc.includes("if (path === '/scope-deposit/sweep') return true;"));
 t('index.html fires sweep on Who To Pay open + renders banner', isrc.includes("loadPayables(false); payablesDepositSweep();") && isrc.includes('id="payables-alerts"') && isrc.includes("api('POST', '/scope-deposit/sweep'"));

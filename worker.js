@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.24-sched-no-repick';
+const BUILD_VERSION = '2026-10-14.25-qb-sync-sliced';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -15607,6 +15607,8 @@ const SCHED_CLAIM_TTL_MS = 4 * 60 * 1000;
 const SCHED_JOB_BUDGET_MS = 50 * 1000;      // Apps Script UrlFetch gives up around 60s; a longer job finishes in the background (ctx.waitUntil) and records its result in state
 const SCHED_VERIFY_DELAY_MS = 700;
 const SCHED_RETRY_GAP_MS = 30 * 60 * 1000;  // failed daily/weekly job: retry no sooner than this ...
+const SCHED_PARTIAL_GAP_MS = 5 * 60 * 1000;  // a job that returned {partial:true} (finished a slice, more to do) resumes no sooner than this ...
+const SCHED_MAX_PARTIALS = 12;              // ... and a daily/weekly job may take at most this many slices per ET day before it counts as FAILED
 const SCHED_MAX_ATTEMPTS = 3;               // ... and at most this many tries per ET day
 const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
@@ -15726,6 +15728,7 @@ function schedJobDue(job, js, nowDate) {
   if (job.kind === 'weekly' && et.dow !== job.dow) return null;
   if (et.minutes < schedAtMinutes(job.at)) return null;
   if (js.last_key === et.date) return null;                       // already done (or deliberately not retried) for this ET day
+  if (js.partial_at && nowMs - (Date.parse(js.partial_at) || 0) < SCHED_PARTIAL_GAP_MS) return null;   // finished a slice a moment ago; resume on a later tick, not this one
   const at = js.attempts;
   if (at && at.key === et.date && at.n > 0) {
     if (at.n >= SCHED_MAX_ATTEMPTS) return null;                  // gave up for today; /cron/status shows it overdue
@@ -15990,37 +15993,63 @@ async function schedRunDailyTurnover(env) {
   const f = await schedStep('roster_move_out_flip', () => rosterFlipDueMoveOuts(env), errors);
   return { ok: !errors.length, errors, detail: { turnover: r, roster_flip: f } };
 }
-async function schedRunDailyQbSync(env) {
+// Oct 14 2026: runs in resumable slices (like the daily self-test). Progress lives in the Config row `qb_sync_progress`
+// ({date, done:[row keys], ir_done, loop_done, sweep_done, complete}); a slice that runs out of time returns {ok:true, partial:true}
+// and the dispatcher resumes it on a later tick, marking the job done for the day only when the whole pass (incl. the deposit-paid sweep)
+// finished. A progress read/write failure is a job failure, never a silent restart.
+const QB_SYNC_PROGRESS_KEY = 'qb_sync_progress';
+async function qbSyncReadProgress(env) {
+  const raw = schedCell(await schedReadConfigRows(env, true), QB_SYNC_PROGRESS_KEY).trim();
+  if (!raw) return null;
+  try { return JSON.parse(raw); }
+  catch (e) { throw new Error(`Config row ${QB_SYNC_PROGRESS_KEY} is not valid JSON (${schedErrText(e)}); delete that row to restart today's QuickBooks sync`); }
+}
+async function qbSyncWriteProgress(env, prog) {
+  const value = JSON.stringify(prog);
+  if (value.length > 40000) throw new Error('qb_sync_progress grew past 40000 chars - refusing to write');
+  const rows = await schedReadConfigRows(env, true);
+  const idx = schedFindRow(rows, QB_SYNC_PROGRESS_KEY);
+  if (idx >= 0) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `Config!B${idx + 1}`, values: [[value]] }] });
+  else await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: [[QB_SYNC_PROGRESS_KEY, value]] });
+  if (schedCell(await schedReadConfigRows(env, true), QB_SYNC_PROGRESS_KEY) !== value) throw new Error('the QuickBooks sync progress write did not land (the Config cell does not hold what was written)');
+}
+// opts (tests): sliceMs, today, progress { read, write }
+async function schedRunDailyQbSync(env, jobCtx, opts) {
+  opts = opts || {};
   const errors = [], detail = {};
-  let sweepRanInSync = false;
+  const today = opts.today || schedEtParts(new Date()).date;
+  const read = (opts.progress && opts.progress.read) || (() => qbSyncReadProgress(env));
+  const write = (opts.progress && opts.progress.write) || ((p) => qbSyncWriteProgress(env, p));
+  let prog;
+  try { prog = await read(); }
+  catch (e) { return { ok: false, errors: [{ step: 'qb_sync_progress', error: schedErrText(e) }], detail }; }
+  if (!prog || prog.date !== today) prog = { date: today, started: new Date().toISOString(), done: [], ir_done: false, loop_done: false, sweep_done: false, complete: false, slices: 0, totals: { written: 0, failed: 0, closed: 0, closed_wos: [] } };
+  if (prog.complete) return { ok: true, errors, detail: { skipped: `already finished today (${today})` } };
+  let partial = false;
   try {
-    const res = await qbSyncPayments(env, {});
+    const res = await qbSyncPayments(env, {}, { state: prog, sliceMs: opts.sliceMs, now: opts.now });
     const u = await schedUnwrap(res);
-    sweepRanInSync = !!(u.body && u.body.deposit_sweep);
-    // Same condition scheduled() always used (ok:false or a non-empty errors list), plus a non-2xx status.
     const b = u.body;
+    // Same condition scheduled() always used (ok:false or a non-empty errors list), plus a non-2xx status.
     const bad = u.status >= 400 ? `HTTP ${u.status}` : (b && (b.ok === false || (b.errors && b.errors.length))) ? String(JSON.stringify((b.errors || b.error || 'ok:false'))).slice(0, 300) : null;
     if (bad) {
       errors.push({ step: 'qb_sync_payments', error: bad });
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify((u.body && (u.body.errors || u.body.error)) || 'ok:false')).slice(0, 480) }); }
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: String(JSON.stringify((b && (b.errors || b.error)) || 'ok:false')).slice(0, 480) }); }
       catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
     }
-    detail.qb_sync = { status: u.status, deposit_sweep: sweepRanInSync };
+    partial = !!(b && b.partial);
+    detail.qb_sync = { status: u.status, slice: prog.slices, partial, done_rows: prog.done.length, timings_ms: b && b.timings_ms, deposit_sweep: !!prog.sweep_done };
   } catch (e) {
     errors.push({ step: 'qb_sync_payments', error: schedErrText(e) });
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: schedErrText(e) }); }
     catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
   }
-  // qbSyncPayments already runs the deposit-paid sweep (and logs its findings) - only run it here if that did not happen.
-  if (!sweepRanInSync) {
-    try { detail.deposit_paid = await processDepositPaidSweep(env); }
-    catch (e) {
-      errors.push({ step: 'deposit_paid_sweep', error: schedErrText(e) });
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_deposit_paid_sweep', Skill_Or_Endpoint: 'scheduler/deposit-paid-sweep', Success: 'FALSE', Notes: schedErrText(e) }); }
-      catch (e2) { errors.push({ step: 'deposit_paid_sweep_telemetry', error: schedErrText(e2) }); }
-    }
-  }
-  return { ok: !errors.length, errors, detail };
+  // Mark the whole pass finished only when nothing is left (rows done AND the sweep ran) and this slice raised no error.
+  if (!partial && prog.loop_done && prog.sweep_done && !errors.length) { prog.complete = true; prog.finished = new Date().toISOString(); }
+  try { await write(prog); }
+  catch (e) { errors.push({ step: 'qb_sync_progress', error: 'could not save progress' + (prog.complete ? ' (the pass finished but is not marked done, so it may run again)' : '') + ': ' + schedErrText(e) }); }
+  if (errors.length) return { ok: false, errors, detail };
+  return partial ? { ok: true, partial: true, errors, detail } : { ok: true, errors, detail };
 }
 async function schedRunWeeklyReview(env, deliver) {
   const errors = [];
@@ -16453,10 +16482,18 @@ async function schedRunNext(env, ctx, opts) {
     try { jobRes = await job.run(jobEnv, { now }); }
     catch (e) { jobRes = { ok: false, errors: [{ step: 'job', error: schedErrText(e) }], threw: true }; }
     if (!jobRes || typeof jobRes !== 'object') jobRes = { ok: false, errors: [{ step: 'job', error: 'job returned no result' }] };
+    // Oct 14 2026: a daily/weekly job may return {ok:true, partial:true} = "finished one time-slice, more to do" (daily_qb_sync). It is NOT
+    // marked done for the day (no last_key); it resumes after SCHED_PARTIAL_GAP_MS. Taking more than SCHED_MAX_PARTIALS slices in one ET day
+    // is a failure (loud), so a job that can never finish cannot look healthy forever.
+    const etDayP = force ? schedEtParts(new Date(nowMs())).date : key;
+    const partialN = (jobRes.partial === true && job.kind !== 'interval') ? ((prev.partials && prev.partials.key === etDayP ? prev.partials.n : 0) + 1) : 0;
+    if (partialN > SCHED_MAX_PARTIALS) { jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${SCHED_MAX_PARTIALS} slices today (it needs a person to look)` }] }; }
+    const isPartial = partialN > 0 && partialN <= SCHED_MAX_PARTIALS;
     const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
     const jobOk = jobRes.ok !== false && errors.length === 0;
     const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
     const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
+    if (isPartial && jobOk) out.partial = true;
     if (errors.length) out.errors = errors;
     if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
     if (!jobOk) {
@@ -16475,14 +16512,17 @@ async function schedRunNext(env, ctx, opts) {
         const cur = p2.state;
         const rec = Object.assign({}, cur.jobs[job.name] || {});
         delete rec.last_seeded; delete rec.seeded_at;   // a real run replaces the first-run seed marker
-        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? 'ok' : 'failed';
+        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? (isPartial ? 'partial' : 'ok') : 'failed';
         rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
         if (jobOk) rec.last_ok = rec.last_end;
         if (job.kind !== 'interval') {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
-          if (jobOk || finalFail) {
-            rec.last_key = etDay; rec.attempts = null;
+          rec.partial_at = null;
+          if (jobOk && isPartial) {
+            rec.partials = { key: etDay, n: partialN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
+          } else if (jobOk || finalFail) {
+            rec.last_key = etDay; rec.attempts = null; rec.partials = null;
             rec.last_failed_final = finalFail ? etDay : null;
           } else if (force) {
             const a = rec.attempts && rec.attempts.key === etDay ? rec.attempts.n : 0;
@@ -24675,85 +24715,161 @@ async function qbPayables(env, url) {
 // POST /qb/sync-payments { days? }
 // Writes what QuickBooks says back onto the Hub's own rows, so the payable state is
 // visible without going and asking QuickBooks every time.
-async function qbSyncPayments(env, body) {
+//
+// Oct 14 2026: the stored-copy write used to be ONE read-the-whole-tab + ONE write PER payable row (108 rows = ~6 minutes over HTTP),
+// so the scheduled daily run never finished inside a tick. It is now one verified batch write for all rows (qbSyncWriteInvoiceReview), and
+// the scheduler runs this in resumable slices: opts.state (progress, mutated) + opts.sliceMs. With no opts it is the same one-pass call it
+// always was (Who To Pay "sync", manual POST). A row that could not be written is now reported (before, updateRow's 404 was ignored).
+const QB_SYNC_SLICE_MS = 30 * 1000;
+function qbSyncRowKey(r) { return r.source === 'scope_signature' ? ['sig', r.signature_id || '', r.phase || '', r.milestone_id || ''].join(':') : 'ir:' + (r.ir_id || ''); }
+async function qbSyncWriteInvoiceReview(env, rows, nowISO) {
+  const targets = rows.filter(r => r.source !== 'scope_signature');   // Signed-Proposal rows have no Invoice_Review row (QuickBooks' own Balance is their source of truth)
+  const out = { written: 0, failed: 0, errors: [] };
+  if (!targets.length) return out;
+  invalidateTabCache('Invoice_Review');
+  const data = await sheetsRequest(env, 'GET', '/values/Invoice_Review');
+  const values = (data && data.values) || [];
+  if (!values.length) throw new Error('Invoice_Review came back empty (no header row)');
+  const headers = values[0], idc = idColIndex(headers);
+  const names = ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked'];
+  const cols = names.map(n => headers.indexOf(n));
+  const missing = names.filter((n, i) => cols[i] < 0);
+  if (missing.length) throw new Error('Invoice_Review is missing column(s) ' + missing.join(', ') + ' (ensureColumns did not create them)');
+  const rowOf = new Map();
+  values.slice(1).forEach((r, i) => { const id = String(r[idc] == null ? '' : r[idc]); if (id && !rowOf.has(id)) rowOf.set(id, i + 2); });
+  const writes = [], expect = [];
+  for (const r of targets) {
+    const sr = r.ir_id ? rowOf.get(String(r.ir_id)) : null;
+    if (!sr) { out.failed++; out.errors.push({ ir_id: r.ir_id || '', wo_id: r.wo_id || '', error: r.ir_id ? 'Invoice_Review row not found' : 'payable row has no ir_id' }); continue; }
+    const f = [r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'), r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'), r.state, nowISO];
+    names.forEach((n, i) => writes.push({ range: `Invoice_Review!${col(cols[i])}${sr}`, values: [[f[i]]] }));
+    expect.push({ ir_id: r.ir_id, wo_id: r.wo_id || '', sr, f });
+  }
+  if (!writes.length) return out;
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: writes });
+  // Verify: a write that returned success but left the cell unchanged is a failure (silent-failure rule 3).
+  invalidateTabCache('Invoice_Review');
+  const after = ((await sheetsRequest(env, 'GET', '/values/Invoice_Review')) || {}).values || [];
+  for (const e of expect) {
+    const row = after[e.sr - 1] || [];
+    const bad = names.filter((n, i) => String(row[cols[i]] == null ? '' : row[cols[i]]) !== String(e.f[i] == null ? '' : e.f[i]));
+    if (bad.length || String(row[idc]) !== String(e.ir_id)) { out.failed++; out.errors.push({ ir_id: e.ir_id, wo_id: e.wo_id, error: 'write did not land (' + (bad.join(', ') || 'row moved') + ')' }); }
+    else out.written++;
+  }
+  return out;
+}
+async function qbSyncPayments(env, body, opts) {
+  opts = opts || {};
+  const sync = opts.state || null;   // scheduler slices only: resumable progress, mutated here
+  const clock = opts.now || (() => Date.now());
+  const t0 = clock();
+  const deadline = sync ? t0 + (opts.sliceMs != null ? opts.sliceMs : QB_SYNC_SLICE_MS) : Infinity;
   const url = { searchParams: { get: (k) => (k === 'days' ? String((body && body.days) || 90) : null) } };
-  const res = await qbPayables(env, url);
-  const data = await res.clone().json();
-  if (!data.ok) return res;
-  // Oct 1 2026: nothing may fail silently -- every problem below is logged to Ops_Telemetry and returned in
+  // Oct 1 2026: nothing below may fail silently -- every problem is logged to Ops_Telemetry and returned in
   // `errors` (+ the payables `warnings`), which the Who To Pay page shows in its banner.
   const syncErrors = [];
-
-  try { await ensureColumns(env, 'Invoice_Review', ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked']); }
-  catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_ensure_columns', '/qb/sync-payments', 'Invoice_Review columns (stored copy may be stale)', e); }
-
-  const now = new Date().toISOString();
-  // Auto-close needs the current WO status so we never overwrite one already finished.
-  const WO_DONE = WOStatus.sets.CLOSED_FINAL;
-  let workorders = [];
-  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
-
-  let written = 0, failed = 0, closed = 0;
+  const timings = {};
+  let data = null, written = 0, failed = 0, closed = 0;
   const closedWOs = [];
-  for (const r of data.rows) {
-    // Signed-Proposal rows (Sep 18 2026, see qbPayables) have no Invoice_Review row to write
-    // back to — ir_id is deliberately blank for them. Nothing to persist there; QuickBooks' own
-    // live Balance is already the source of truth for these every time this page loads.
-    if (r.source !== 'scope_signature') {
+  const doneKeys = new Set(sync && Array.isArray(sync.done) ? sync.done : []);
+  let stoppedEarly = false;
+
+  if (!(sync && sync.loop_done)) {
+    const tp = clock();
+    const res = await qbPayables(env, url);
+    data = await res.clone().json();
+    timings.payables_ms = clock() - tp;
+    if (!data.ok) return res;
+    const now = new Date().toISOString();
+
+    // Stored copy on Invoice_Review: once per run (a later slice does not repeat it).
+    if (!(sync && sync.ir_done)) {
+      const tw = clock();
+      try { await ensureColumns(env, 'Invoice_Review', ['Customer_Paid', 'Vendor_Paid', 'Payable_State', 'Payment_Checked']); }
+      catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_ensure_columns', '/qb/sync-payments', 'Invoice_Review columns (stored copy may be stale)', e); }
       try {
-        await updateRow(env, 'Invoice_Review', r.ir_id, {
-          Customer_Paid: r.customer_paid === null ? '' : (r.customer_paid ? 'TRUE' : 'FALSE'),
-          Vendor_Paid:   r.vendor_paid === null ? '' : (r.vendor_paid ? 'TRUE' : 'FALSE'),
-          Payable_State: r.state,
-          Payment_Checked: now,
-        });
-        written++;
-      } catch (e) { failed++; await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'ir=' + r.ir_id + ' wo=' + (r.wo_id || ''), e); }
+        const w = await qbSyncWriteInvoiceReview(env, data.rows, now);
+        written += w.written; failed += w.failed;
+        for (const er of w.errors.slice(0, 20)) await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'ir=' + er.ir_id + ' wo=' + er.wo_id, new Error(er.error));
+        if (w.errors.length > 20) syncErrors.push({ step: 'qb_sync_write_invoice_review', error: (w.errors.length - 20) + ' more row(s) failed (see Ops_Telemetry)' });
+        if (sync) sync.ir_done = true;
+      } catch (e) { failed += data.rows.length; await logAndCollectError(env, syncErrors, 'qb_sync_write_invoice_review', '/qb/sync-payments', 'batch write of ' + data.rows.length + ' row(s) failed', e); }
+      timings.write_ms = clock() - tw;
     }
 
-    // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
-    // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
-    if (r.source === 'scope_signature' && r.phase === 'deposit' && r.customer_paid === true && r.signature_id) {
-      try {
-        const sigs = await fetchTab(env, 'Scope_Signatures');
-        const sig = sigs.find(x => x.ID === r.signature_id);
-        if (sig && sig.Scope_ID) {
-          let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (_) {}
-          const _tr = await scopeDepositPaidTransition(env, sig.Scope_ID, cfgS.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
-          if (_tr && _tr.text_errors && _tr.text_errors.length) syncErrors.push(..._tr.text_errors);
-        }
-      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_transition', '/qb/sync-payments', 'sig=' + r.signature_id + ' wo=' + (r.wo_id || '') + (r.milestone_id ? ' milestone=' + r.milestone_id : ''), e); }
+    // Auto-close needs the current WO status so we never overwrite one already finished.
+    const WO_DONE = WOStatus.sets.CLOSED_FINAL;
+    let workorders = [];
+    try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
+
+    const tl = clock();
+    for (const r of data.rows) {
+      const rk = qbSyncRowKey(r);
+      if (doneKeys.has(rk)) continue;
+      // Time-slice: stop BEFORE starting a row's side effects when the slice is spent; the next tick carries on from the saved keys.
+      if (clock() >= deadline) { stoppedEarly = true; break; }
+
+      // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
+      // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
+      if (r.source === 'scope_signature' && r.phase === 'deposit' && r.customer_paid === true && r.signature_id) {
+        try {
+          const sigs = await fetchTab(env, 'Scope_Signatures');
+          const sig = sigs.find(x => x.ID === r.signature_id);
+          if (sig && sig.Scope_ID) {
+            let cfgS = {}; try { cfgS = await fetchConfig(env); } catch (e0) { await logAndCollectError(env, syncErrors, 'qb_sync_read_config', '/qb/sync-payments', 'Config (estimate_sms_since default used)', e0); }
+            const _tr = await scopeDepositPaidTransition(env, sig.Scope_ID, cfgS.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
+            if (_tr && _tr.text_errors && _tr.text_errors.length) syncErrors.push(..._tr.text_errors);
+          }
+        } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_transition', '/qb/sync-payments', 'sig=' + r.signature_id + ' wo=' + (r.wo_id || '') + (r.milestone_id ? ' milestone=' + r.milestone_id : ''), e); }
+      }
+      // When QuickBooks POSITIVELY reports the vendor bill paid, mark the work order Paid so it
+      // drops off the active work list. Strictly === true (never on an unknown/null read), and
+      // never over a WO already in a done state — so re-running is a safe no-op. For a Signed-
+      // Proposal row this is deliberately restricted to the FINAL phase only: the deposit's vendor
+      // bill gets paid early in the job, long before the work — or the invoicing — is done, and
+      // closing the WO then would be flatly wrong. This is also the concrete answer to Brett's "tie
+      // it to a WO, so I can mark complete if the vendor did not, but this final will serve as the
+      // vendor invoice" ask: the final vendor bill IS the completion signal now, exactly like every
+      // other job's vendor bill already works — no separate Vendor Bill entry needed.
+      if (r.vendor_paid === true && r.wo_id && !(r.source === 'scope_signature' && r.phase !== 'final')) {
+        try {
+          const wo = findWO(workorders, r.wo_id);
+          const cur = wo ? String(wo.Status || '') : '';
+          if (wo && !WO_DONE.includes(cur)) {
+            await updateWOFields(env, r.wo_id, { Status: 'Paid' });
+            try { await logWOAudit(env, r.wo_id, 'system-qb', 'system', 'Status', cur, 'Paid',
+              'Vendor bill paid in QuickBooks (' + (r.vendor_ref || ('bill ' + r.bill_id)) + ')'); }
+            catch (e2) { await logAndCollectError(env, syncErrors, 'qb_sync_wo_audit', '/qb/sync-payments', 'wo=' + r.wo_id + ' (status set to Paid but the audit row did not save)', e2); }
+            closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
+          }
+        } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'wo=' + r.wo_id, e); /* the payable state still saved above */ }
+      }
+      doneKeys.add(rk);
     }
-    // When QuickBooks POSITIVELY reports the vendor bill paid, mark the work order Paid so it
-    // drops off the active work list. Strictly === true (never on an unknown/null read), and
-    // never over a WO already in a done state — so re-running is a safe no-op. For a Signed-
-    // Proposal row this is deliberately restricted to the FINAL phase only: the deposit's vendor
-    // bill gets paid early in the job, long before the work — or the invoicing — is done, and
-    // closing the WO then would be flatly wrong. This is also the concrete answer to Brett's "tie
-    // it to a WO, so I can mark complete if the vendor did not, but this final will serve as the
-    // vendor invoice" ask: the final vendor bill IS the completion signal now, exactly like every
-    // other job's vendor bill already works — no separate Vendor Bill entry needed.
-    if (r.vendor_paid === true && r.wo_id && !(r.source === 'scope_signature' && r.phase !== 'final')) {
-      try {
-        const wo = findWO(workorders, r.wo_id);
-        const cur = wo ? String(wo.Status || '') : '';
-        if (wo && !WO_DONE.includes(cur)) {
-          await updateWOFields(env, r.wo_id, { Status: 'Paid' });
-          try { await logWOAudit(env, r.wo_id, 'system-qb', 'system', 'Status', cur, 'Paid',
-            'Vendor bill paid in QuickBooks (' + (r.vendor_ref || ('bill ' + r.bill_id)) + ')'); } catch (e2) {}
-          closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
-        }
-      } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'wo=' + r.wo_id, e); /* the payable state still saved above */ }
-    }
+    timings.rows_ms = clock() - tl;
+    if (sync) { sync.done = [...doneKeys]; if (!stoppedEarly) sync.loop_done = true; }
   }
+
   // Same sweep the Who To Pay page-open and the cron run: covers Pre-approved scopes whose deposit invoice is on a
   // milestone, and reports (not_found / errors) any scope whose deposit invoice cannot be resolved. Idempotent.
   let depositSweep = null;
-  try { depositSweep = await processDepositPaidSweep(env); }
-  catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_sweep', '/qb/sync-payments', 'processDepositPaidSweep', e); }
-  return json({ ok: true, checked: data.count, written, failed, closed, closed_wos: closedWOs,
-                owed_now: data.owed_now, owed_total: data.owed_total, warnings: data.warnings || [], errors: syncErrors,
-                deposit_sweep: depositSweep, rows: data.rows });
+  if (!stoppedEarly) {
+    const ts = clock();
+    try { depositSweep = await processDepositPaidSweep(env); if (sync) sync.sweep_done = true; }
+    catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_deposit_sweep', '/qb/sync-payments', 'processDepositPaidSweep', e); }
+    timings.sweep_ms = clock() - ts;
+  }
+  if (sync) {
+    const T = sync.totals = sync.totals || { written: 0, failed: 0, closed: 0, closed_wos: [] };
+    T.written += written; T.failed += failed; T.closed += closed; T.closed_wos = T.closed_wos.concat(closedWOs).slice(0, 50);
+    if (data) T.checked = data.count;
+    sync.slices = (sync.slices || 0) + 1;
+  }
+  const T2 = sync ? sync.totals : null;
+  return json({ ok: true, partial: !!(sync && (stoppedEarly || !sync.sweep_done)), timings_ms: timings, slice: sync ? sync.slices : undefined,
+                checked: T2 ? T2.checked : (data ? data.count : 0), written: T2 ? T2.written : written, failed: T2 ? T2.failed : failed, closed: T2 ? T2.closed : closed, closed_wos: T2 ? T2.closed_wos : closedWOs,
+                owed_now: data ? data.owed_now : undefined, owed_total: data ? data.owed_total : undefined, warnings: data ? (data.warnings || []) : [], errors: syncErrors,
+                deposit_sweep: depositSweep, rows: sync ? undefined : (data ? data.rows : []) });
 }
 
 async function qbTradeMap(env) {
