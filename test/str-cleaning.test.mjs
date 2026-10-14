@@ -23,7 +23,7 @@ const realConsts = ['INSP_TZ'].map(n => grab(n, 'const')).join('\n');
 
 function makeWorld(opts) {
   opts = opts || {};
-  const tabs = new Map(), W = { tabs, sms: [], brett: [], emails: [], attach: [], cal: [], telemetry: [], gated: [], now: 0, failSms: false, failBrett: false, failCal: false, failEmail: false, queue: 0 };
+  const tabs = new Map(), W = { tabs, sms: [], brett: [], emails: [], attach: [], cal: [], telemetry: [], gated: [], now: 0, failSms: false, smsAdvanceMs: 0, failBrett: false, failCal: false, failEmail: false, queue: 0 };
   const hdr = tab => tabs.get(tab)[0];
   const objs = tab => { if (!tabs.has(tab)) { const e = new Error('Unable to parse range: ' + tab); throw e; } const [h, ...rows] = tabs.get(tab); return rows.map(r => { const o = {}; h.forEach((k, i) => o[k] = r[i] == null ? '' : r[i]); return o; }); };
   const json = (b, s) => ({ ok: !s || s < 400, status: s || 200, json: async () => b });
@@ -44,7 +44,7 @@ function makeWorld(opts) {
     setConfigKey: async (env, b) => { W.cfg[b.key] = b.value; return json({ success: true }); },
     logTelemetry: async (env, rec) => { W.telemetry.push(rec); },
     getMessageTemplate: async () => null,
-    smsGatedSend: async (env, o) => { W.gated.push(o); if (W.failSms) return { send_ok: true, sent: false, queued_id: 'q' + (++W.queue), gate_snapshot: 'ok' }; W.sms.push({ to: o.vendor && o.vendor.Name, type: o.message_type, text: o.message_body, bypass: o.bypassQuietHours }); return { send_ok: true, sent: true, queued_id: 'q' + (++W.queue), test_mode: true }; },
+    smsGatedSend: async (env, o) => { W.gated.push(o); if (W.failSms) return { send_ok: true, sent: false, queued_id: 'q' + (++W.queue), gate_snapshot: 'ok' }; W.sms.push({ to: o.vendor && o.vendor.Name, type: o.message_type, text: o.message_body, bypass: o.bypassQuietHours }); clock += W.smsAdvanceMs; return { send_ok: true, sent: true, queued_id: 'q' + (++W.queue), test_mode: true }; },
     sendSMS: async (env, to, text) => { if (W.failBrett) return { error: 'twilio down' }; W.brett.push({ to, text }); return { sid: 'x' }; },
     gmailSendEmail: async (env, e) => { if (W.failEmail) throw new Error('gmail down'); W.emails.push(e); return { staged: true }; },
     gmailSendEmailWithAttachment: async (env, e) => { if (W.failEmail) throw new Error('gmail down'); W.attach.push(e); return { staged: true }; },
@@ -402,6 +402,21 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   t('config: STR_SMS_TEST_MODE can be switched and reads back in settings', so.ok && so.settings.sms_test_mode === false && W.cfg.STR_SMS_TEST_MODE === 'FALSE', so);
   const st2 = await resJson(E.strAdminState({}));
   t('admin state exposes sms_test_mode', st2.ok && typeof st2.settings.sms_test_mode === 'boolean');
+}
+{
+  // ── time budget (Oct 14 2026): a slow tick stops STARTING new work, says so, and the next tick finishes it ──
+  const W = makeWorld(); seed(W); W.smsAdvanceMs = 45000; const E = build(W); clock = at(E, '2026-10-14', '10:00');
+  let r = await E.strTick({}, {});
+  t('budget: first offer goes out, the second turnover is deferred (not cut off mid-write)', rowsOf(W, 'STR_Offers').length === 1 && W.sms.length === 1, rowsOf(W, 'STR_Offers'));
+  t('budget: the deferral is a visible warning + detail, not silent', r.warnings.some(w => /wait for the next tick/.test(w)) && r.detail.deferred && r.detail.deferred['turnover(s) to check for offers'] >= 1 && r.detail.elapsed_ms >= 45000, { w: r.warnings, d: r.detail.deferred });
+  t('budget: under the tail mark the alert check still runs', !r.detail.deferred['alert check(s)'], r.detail.deferred);
+  W.smsAdvanceMs = 0; clock += 15 * 60000; r = await E.strTick({}, {});
+  t('budget: the next (fast) tick completes the deferred offer, no warning, no duplicates', r.ok && rowsOf(W, 'STR_Offers').length === 2 && W.sms.length === 2 && !r.warnings.some(w => /wait for the next tick/.test(w)), { offers: rowsOf(W, 'STR_Offers').length, w: r.warnings });
+}
+{
+  const W = makeWorld(); seed(W); W.smsAdvanceMs = 70000; const E = build(W); clock = at(E, '2026-10-14', '10:00');
+  const r = await E.strTick({}, {});
+  t('budget: past the tail mark the checkout-text and alert checks are deferred AND reported', r.detail.deferred['alert check(s)'] === 1 && r.detail.deferred['checkout-day text check(s)'] === 1 && r.warnings.some(w => /alert check/.test(w)), r.detail.deferred);
 }
 Date.now = realNow;
 console.log(`\nstr-cleaning: ${pass} passed, ${fail} failed`);
