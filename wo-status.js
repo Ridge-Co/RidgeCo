@@ -43,6 +43,7 @@ function __makeWOStatus() {
     INVOICED_OR_PAYMENT: ['Invoiced', 'Paid', 'Pending Payment'],
     // --- ended / closed (they differ on purpose; see each use) ---
     DEAD: ['Cancelled', 'Declined'],
+    CLOSED_OUT_FOLD: ['Cancelled', 'Paid', 'Invoiced'],                   // admin WO list, "Not Assigned" filter: folded into the collapsed Closed-out group
     CLOSED_TERMINAL: ['Paid', 'Cancelled'],
     CLOSED_FINAL: ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'],
     ADDON_PARENT_BLOCKED: ['Cancelled', 'Canceled', 'Paid', 'Invoiced', 'Closed'],

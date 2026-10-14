@@ -56,6 +56,7 @@ const LEGACY = {
   INVOICED_OR_LATER: ['Invoiced', 'Paid'],
   INVOICED_OR_PAYMENT: ['Invoiced', 'Paid', 'Pending Payment'],
   DEAD: ['Cancelled', 'Declined'],
+  CLOSED_OUT_FOLD: ['Cancelled', 'Paid', 'Invoiced'],
   CLOSED_TERMINAL: ['Paid', 'Cancelled'],
   CLOSED_FINAL: ['Paid', 'Cancelled', 'Canceled', 'Closed', 'Void'],
   ADDON_PARENT_BLOCKED: ['Cancelled', 'Canceled', 'Paid', 'Invoiced', 'Closed'],
