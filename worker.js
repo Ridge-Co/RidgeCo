@@ -6794,10 +6794,12 @@ async function ownerRosterApply(env, callerRole, callerSessionId, body) {
   }
   // 2. name fixes / move-in backfills (amend only - the update carries just the changed fields)
   for (const row of plan.rows.filter(r => r.status === 'name_fix' || r.status === 'backfill')) {
+    if (!fits(ROSTER_COST.update)) { deferred.push(row); continue; }
     try { await rosterWriteTenant(env, row.write.tenant_id, row.write.fields); done(row); } catch (e) { failed(row, e); }
   }
   // 3. arrivals
   for (const row of plan.rows.filter(r => r.status === 'move_in')) {
+    if (!fits(ROSTER_COST.insert)) { deferred.push(row); continue; }
     try {
       const add = await addRow(env, 'Tenants', Object.assign({}, row.write.fields));
       const addJ = await add.json();
