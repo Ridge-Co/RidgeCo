@@ -87,7 +87,7 @@
     <div class="card">
       <div class="card-title">Step 2 — Paste your spreadsheet</div>
       <p class="muted">Paste rows copied from a CSV or spreadsheet (first row = column headers). One row per unit/tenant — multiple rows with the same address become one multi-unit property automatically.</p>
-      <p class="muted" style="margin-top:6px">Recognized columns (any order, case-insensitive): <code>Property</code>/<code>Address</code>, <code>Unit</code>/<code>Units</code>, <code>Renter Name</code>/<code>Tenant Name</code>, <code>Phone</code>, <code>Email</code>/<code>Email Address</code><span id="owner-cols-hint">, and optionally <code>Owner Name</code>, <code>Owner Email</code>, <code>Owner Phone</code> (matched to an existing owner only — never auto-created)</span>.</p>
+      <p class="muted" style="margin-top:6px">Recognized columns (any order, case-insensitive): <code>Property</code>/<code>Address</code>, <code>Unit</code>/<code>Units</code>, <code>Renter Name</code>/<code>Tenant Name</code>, <code>Phone</code>, <code>Email</code>/<code>Email Address</code>, and <b><code>Move In Date</code> (required for every tenant — a tenant row without one is refused)</b><span id="owner-cols-hint">, and optionally <code>Owner Name</code>, <code>Owner Email</code>, <code>Owner Phone</code> (matched to an existing owner only — never auto-created)</span>.</p>
       <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
         <button class="btn ghost" style="flex:1" onclick="document.getElementById('csv-file-input').click()">📄 Choose CSV file…</button>
         <input type="file" id="csv-file-input" accept=".csv,.tsv,text/csv,text/tab-separated-values,text/plain" style="display:none" onchange="loadCsvFile(this.files[0])">
