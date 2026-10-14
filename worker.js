@@ -17463,6 +17463,7 @@ function hubImpPlan(ledger, queue, prStates, nowMs) {
   }
   return { updates, problems };
 }
+
 async function hubImpUpdate(env, id, fields) {
   const r = await updateRow(env, HUBIMP_TAB, id, fields);
   if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('ledger row #' + id + ' could not be updated (HTTP ' + r.status + ')');
