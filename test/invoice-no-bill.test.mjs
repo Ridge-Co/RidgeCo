@@ -46,9 +46,16 @@ t('a synthetic ZERO-cost bill anchors it, so vendor payable comes out $0 (send s
 
 // ── Front-end: the button enables/approves correctly with no bill ──
 const loadStatus = grab(hsrc, 'function invLoadStatus(');
-t('no bill + nothing priceable stays disabled', /if \(!invPricing\(k\)\) \{ invRenderStatus\(k, null\)/.test(loadStatus));
-t('no bill + nothing approved yet offers APPROVE, not a broken state',
-  /bill \? \{ state: 'reviewed_no_row' \} : \{ state: 'unapproved' \}/.test(loadStatus));
+// Sep 28 2026 (undo-send follow-up): a bill-less job with nothing ticked no longer short-circuits to
+// "disabled" — a materials/time send CONSUMES its lines, so an already-invoiced job looks identical to
+// a never-billed one. It falls through to the QuickBooks queue check and only goes blank if THAT
+// finds nothing either.
+t('no bill + nothing priceable does NOT bail before consulting the QuickBooks queue',
+  /if \(!invPricing\(k\)\) \{ nothingTicked = true; \}/.test(loadStatus) && !/if \(!invPricing\(k\)\) \{ invRenderStatus\(k, null\)/.test(loadStatus));
+t('no bill + nothing ticked + nothing queued goes blank (genuinely nothing to show)',
+  /nothingTicked \? null : \{ state: 'unapproved' \}/.test(loadStatus));
+t('no bill + something ticked + nothing approved yet offers APPROVE, not a broken state',
+  /bill \? \{ state: 'reviewed_no_row' \} : \(nothingTicked \? null : \{ state: 'unapproved' \}\)/.test(loadStatus));
 t('a bill-less sent invoice reads DONE, never "partly sent" (mirrors the Worker billNotOwed rule)',
   /var noVendorBill = !String\(row\.bill_id \|\| ''\)/.test(loadStatus) &&
   /row\.qb_invoice_id && \(row\.qb_bill_id \|\| noVendorBill\)/.test(loadStatus));
