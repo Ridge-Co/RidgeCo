@@ -17083,6 +17083,9 @@ async function opsQueueScoutSubmit(env, body) {
     const same = findQueueMatch(it, pool, 'same');
     if (same) { skipped_duplicates.push({ title: String((it && it.title) || '').slice(0, 120), duplicate_of: same.row.ID, status: same.row.Status, source_task_id: (it && it.source_task_id) ? String(it.source_task_id) : undefined }); continue; }
     const rowObj = buildScoutQueueRow(it, now, reviewTs);
+    // Oct 14 2026: an item pulled from Brett's Google Tasks list (hub-improvements sweep) carries its task id so the
+    // queue row and the ledger can always be re-linked; still Status 'proposed' (buildScoutQueueRow hardcodes it).
+    if (it && it.source_task_id) { rowObj.Source_Task_ID = String(it.source_task_id).slice(0, 80); rowObj.Approved_By = 'hub-improvements-sweep'; }
     const ov = findQueueMatch(it, pool, 'overlap');
     if (ov) {
       rowObj.Dup_Of = String(ov.row.ID);
