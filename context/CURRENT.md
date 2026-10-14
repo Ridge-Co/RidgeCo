@@ -13,6 +13,9 @@
 
 ---
 
+## 🟡 Built, awaiting staging verification + Brett's merge (Oct 14): Proposal read status + owner "estimate emailed" text — BUILD_VERSION `2026-10-14.3-proposal-read-status-owner-sms` (FEATURE_LOG rule 209)
+Brett's Hub Improvements items 1 and 5. Proposal email gets a tracking pixel; owner page views are logged; Scope Creator shows opened/viewed and the text outcome. Owner is texted "your estimate was emailed" on the first send: fine until 8pm ET, held until 8am ET after that, dropped if the owner opens the estimate first; a "text right now" checkbox overrides the hold. Email always goes. Tests: 55 unit + 15 Playwright (412px). **After merge:** nothing to configure; first real send is the live check (owner SMS follows Global/property/owner toggles + TWILIO_TEST_MODE). Open: email-open is "probably" (Apple/Gmail image proxies); page view is the reliable signal.
+
 # WHO TO PAY CLEARING INDICATOR — Oct 14, 2026 — Ridge-Co/RidgeCo PR #253 -> main (verified with get_pull_request), head `feat/who-to-pay-clearing-indicator-oct14` cut from main tip 22f91ee4, NOT merged (Brett merges)
 
 ## 🟢 Tested: 74 unit checks + 17 Playwright checks (412px and 1280px) + staging smoke on a test copy — BUILD_VERSION `2026-10-14.1-who-to-pay-clearing-indicator` (staging copy runs `2026-10-14.2-who-to-pay-clearing-test`; staging's Intuit sandbox has no paid invoice, so the paid-invoice path is unit-tested with a fake QuickBooks only)
