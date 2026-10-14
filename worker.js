@@ -10417,7 +10417,7 @@ async function approveInvoiceReview(env, body) {
       // original amount quietly stood.
       return json({ success: true, already_approved: true, id: String(already.ID),
         approved_total: already.Customer_Total || '',
-        differs: String(already.Customer_Total || '') !== String(customer_total || ''),
+        differs: !sameCents(already.Customer_Total, customer_total),
         qb_status: already.QB_Invoice_Status || 'pending' });
     }
   } catch (e) { /* tab unreadable — fall through and let the append surface the real error */ }
