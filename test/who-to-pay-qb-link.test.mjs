@@ -41,7 +41,13 @@ const stateLabelStart = src.indexOf('var stateLabel = ');
 if (stateLabelStart === -1) throw new Error('stateLabel not found in index.html — did loadPayables get refactored?');
 const stateLabelSrc = src.slice(stateLabelStart, src.indexOf(';', stateLabelStart) + 1);
 
-const card = new Function(`${escSrc}\n${qbBillLinkSrc}\n${stateLabelSrc}\nreturn (${cardSrc});`)();
+// Oct 14 2026: card(r) now also renders the customer-payment clearing chip -- extract its two real helpers too.
+const payFmtDateStart = src.indexOf('function payFmtDate(');
+const payClearChipStart = src.indexOf('function payClearChip(');
+if (payFmtDateStart === -1 || payClearChipStart === -1) throw new Error('payFmtDate/payClearChip not found in index.html');
+const payHelpersSrc = extractBraced(payFmtDateStart) + '\n' + extractBraced(payClearChipStart);
+
+const card = new Function(`${escSrc}\n${qbBillLinkSrc}\n${stateLabelSrc}\n${payHelpersSrc}\nreturn (${cardSrc});`)();
 
 console.log('Who To Pay — QB bill link — offline tests\n');
 
