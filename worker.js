@@ -8827,7 +8827,7 @@ async function tenantWorkorders(env, url) {
   // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
   // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
   // it in their portal" stay in sync instead of drifting apart (see isBackgroundWO comment).
-  const wos = workorders.filter(w => { if (w.Voided === 'TRUE') return false; if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (isBackgroundWO(tenant, w)) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
+  const wos = workorders.filter(w => { if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; return tenantCanSeeWO(tenant, w); });
   // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
   // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
   // owner.html both had a "Technician: —" row wired up with nothing to fill it). No
