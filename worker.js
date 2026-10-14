@@ -22495,6 +22495,9 @@ async function hubTestWriteAllowed(env, path, body) {
     return !!_r && String(_r.Title || '').startsWith('TEST-');
   }
   if (path === '/ops-queue/sync') return !!body && body.title_prefix === 'TEST-'; // staging token may only sync TEST- rows (opsQueueSync honours title_prefix)
+  // Oct 14 2026 (owner tenant roster): preview writes nothing; apply may only run for a TEST- owner (it can only ever touch that owner's own properties' tenants).
+  if (path === '/owner/tenant-roster/preview') return true;
+  if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
   if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
