@@ -6550,7 +6550,10 @@ async function submitMoveIn() {
   btn.removeAttribute('data-confirmed');
   btn.disabled = true; btn.textContent = 'Moving in…';
   console.log('[submitMoveIn] Starting move-in for', first, last, '| propId:', propId, '| unitId:', unitId, '| toMoveOut:', toMoveOut.length);
-  var today = new Date().toISOString().split('T')[0];
+  var today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  // The old tenants leave on the new tenant's move-in day when that is today or earlier (so new move-in >= old move-out, never
+  // before it); a future move-in means the old tenants are out as of today.
+  var moveOutDate = moveIn <= today ? moveIn : today;
 
   try {
     // Step 1: Move out selected tenants
