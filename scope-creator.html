@@ -1311,7 +1311,8 @@ async function sendEstimateEmail(){
     if(r.sms&&r.sms.status&&r.sms.status!=='not_attempted'){ s.Owner_SMS_Status=r.sms.status; s.Owner_SMS_Time=new Date().toISOString(); s._smsNote=r.sms.note||''; }
     document.getElementById('link-out').classList.remove('hide');
     document.getElementById('link-text').value=r.url;
-    setStatus('send-status','✅ sent to '+r.sent_to,'ok');
+    var smsBad=r.sms&&['blocked','failed','no_phone'].indexOf(r.sms.status)>=0;
+    setStatus('send-status','✅ emailed '+r.sent_to+(r.sms&&r.sms.note?' · '+(smsBad?'⚠ ':'')+r.sms.note:''),smsBad?'err':'ok');
     showGmailReconnect(false);
     renderSendStatus();
   }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
