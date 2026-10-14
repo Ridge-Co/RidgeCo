@@ -6346,7 +6346,11 @@ async function addTenantToWO(env, body) {
   const tenants = await fetchTab(env, 'Tenants');
   const tenant = tenants.find(t => t.ID === tenant_id);
   if (!tenant) return json({ error: 'Tenant not found' }, 404);
-  try { const existing = await fetchTab(env, 'WO_Tenants'); const already = existing.find(r => r.WO_ID === wo_id && r.Tenant_ID === tenant_id && r.Active !== 'FALSE'); if (already) return json({ success: true, id: already.ID, already_linked: true }); } catch(e) {}
+  // Oct 14 2026 (Brett): a tenant is only ever linked to work created on/after their move-in day. No override.
+  const _wo = findWO(await fetchTab(env, 'Work_Orders'), String(wo_id));
+  if (_wo && isBackgroundWO(tenant, _wo)) return json({ error: 'Not linked: ' + wo_id + ' was created before this tenant moved in (' + tenant.Move_In_Date + ').', code: 'wo_predates_move_in' }, 409);
+  try { const existing = await fetchTab(env, 'WO_Tenants'); const already = existing.find(r => r.WO_ID === wo_id && r.Tenant_ID === tenant_id && r.Active !== 'FALSE'); if (already) return json({ success: true, id: already.ID, already_linked: true }); }
+  catch (e) { return json({ error: 'Could not check existing links (' + String((e && e.message) || e).slice(0, 160) + ') - nothing was linked.' }, 500); }
   await addRow(env, 'WO_Tenants', { WO_ID: wo_id, Tenant_ID: tenant_id, Tenant_Name: ((tenant.First_Name||'')+' '+(tenant.Last_Name||'')).trim(), Tenant_Phone: tenant.Phone||'', Added_By: added_by||'system', Added_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true });
 }
