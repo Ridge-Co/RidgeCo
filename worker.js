@@ -10055,7 +10055,7 @@ async function welcomeSend(env, body) {
   // that came from (or still contains) the live template's tokens, e.g. a bulk send.
   const finalMsg = body.message ? renderTemplate(String(body.message), tokens) : defaultMsg;
   const sendOpts = type === 'tenant'
-    ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg }
+    ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg, allowPendingConsent: true }
     : { wo_id: '', message_type: 'vendor_welcome', recipient_type: 'vendor', vendor: recipient, message_body: finalMsg };
   const r = await smsGatedSend(env, sendOpts);
   // Sep 15 2026 — same fix as createVendorRequest/processVendorNudges (found live-testing
