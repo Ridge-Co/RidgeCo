@@ -277,3 +277,8 @@ Efficiency Protocol as usual.
 
 ## Checkpoint Oct 14 2026 — STR cleaning scheduler
 Branch `feat/str-cleaning-scheduler` (rebased on main twice; staging is reset to main on every main push, so a staging test can be wiped mid-run). Built and offline-tested. Live-tested on staging except the offer loop. Open decision for Brett: let the staging test token switch `TWILIO_ENABLED` on (an edit to the test guard; blocked in-session as a security widening) so the offer loop can be live-tested, or accept first live check on prod with Twilio test mode ON. Brett's setup list: enter the 3 cleaners (phones, emails) on the board, share the cleaning calendar with the service account (Make changes to events), re-paste the Apps Script JOBS table, then flip switches in brief order.
+
+### Oct 14 2026 (afternoon) — STR scheduler on prod, test-mode PR
+- Pages + Worker `.14` live. Cleaners added on prod through the board (Vendors 19-21, Trade "Short-Term Rental Cleaner", Service_Area "Milam Ridge"); Gina's email is the one the Make digest uses; Kayla has no email on file; Rachel is Rachel Twigg. Phones/emails are NOT recorded here (public repo).
+- Preview on prod: 10 turnovers, 7 already on the calendar, 3 uncovered, nothing sent.
+- Prod `TWILIO_TEST_MODE` is FALSE, so turning on cleaner texts would have texted real cleaners. Built `STR_SMS_TEST_MODE` (PR #285, staging-verified) as the cleaning-only safety. NEXT: Brett's go on the main PR, then turn Scheduler + Texts ON (test mode stays ON), tap the test links, then build the calendar sync on the existing calendar (Apps Script as Brett; Google blocks the service account).
