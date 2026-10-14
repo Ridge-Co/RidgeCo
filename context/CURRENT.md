@@ -13,6 +13,13 @@
 
 ---
 
+# WHO TO PAY CLEARING INDICATOR — Oct 14, 2026 — Ridge-Co/RidgeCo PR #253 -> main (verified with get_pull_request), head `feat/who-to-pay-clearing-indicator-oct14` cut from main tip 22f91ee4, NOT merged (Brett merges)
+
+## 🟡 Built and unit-tested; staging verification status below — BUILD_VERSION `2026-10-14.1-who-to-pay-clearing-indicator`
+Who To Pay rows show when the customer paid and whether the funds should have cleared (day 0 = payment date, business days only, Config.US_HOLIDAYS skipped, days per payment method from Config.PAYMENT_CLEAR_DAYS, defaults ach 3 / card 3 / check 5 / cash 0 / other 3). Informational only: nothing is blocked or hidden. See FEATURE_LOG rule 207. Test-only staging PR: #254 (staging-test-only, not the path to main). Open: confirm on Brett's real QuickBooks that Invoice.LinkedTxn lists Payments and what his payment methods are called (unknown names count as 3 days).
+
+---
+
 # SCOPE ADD-ONS + MILESTONE REBALANCE + MESSAGE QUEUE ENGLISH — Oct 13, 2026 — Ridge-Co/RidgeCo PR #241, base `main`, head `feat/scope-addons-milestone-rebalance-queue-english` (cut from main tip e13be066), NOT merged (Brett merges)
 
 ## 🟡 Tested on staging, Brett approved merge (Oct 13 1:26pm ET: "merge 241 or change it as needed"): Scope add-ons vs. alternatives — BUILD_VERSION `2026-10-13.5-scope-addons-flat` (flat-$ milestones: flat rows fixed, last % row absorbs; impossible schedules refused at generate/sign; customer page now honors flat rows — see FEATURE_LOG `[FL-20261013-1500-ao]`; staging-only PRs #242, #243, #244, #245)
