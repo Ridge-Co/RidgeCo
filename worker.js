@@ -22854,6 +22854,7 @@ async function qbPayables(env, url) {
         invoice_id: invId, invoice_number: invNumber,
         customer_total: Number(ir.Customer_Total) || 0, customer_balance: customerBalance, customer_paid: customerPaid,
         customer_partial: customerPartial,
+        ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
         vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
         bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
