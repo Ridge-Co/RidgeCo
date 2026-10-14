@@ -541,7 +541,7 @@ const drain = async (L, c, extra) => {
   // mid-morning first tick (Mon 08:45 ET): dailies + review_mon seeded, ar_report_mon (09:00) still to come
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T12:45:00Z'));
   const a = await drain(L, c);
-  t('first tick Mon 08:45 ET: seeds the dailies + review_mon but NOT ar_report_mon', a.first.body.seeded.join() === [...DAILY5, 'review_mon'].join(), a.first.body.seeded);
+  t('first tick Mon 08:45 ET: seeds the dailies + review_mon but NOT ar_report_mon', a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'hub_impr_mon', 'hub_impr_daily'].join(), a.first.body.seeded);
   c.v = Date.parse('2026-10-12T13:00:00Z');
   const b = await drain(L, c);
   t('...and ar_report_mon then runs at 09:00 ET while the seeded ones stay quiet', b.ran.includes('ar_report_mon') && !b.ran.includes('review_mon') && !b.ran.some(n => DAILY5.includes(n)), b.ran);
