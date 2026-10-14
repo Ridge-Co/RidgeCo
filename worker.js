@@ -6361,47 +6361,83 @@ async function removeTenantFromWO(env, body) {
   catch(e) { return json({ error: e.message }, 500); }
 }
 
+// Oct 14 2026: the ONE implementation of "this tenant has moved out", shared by the admin Move Out button
+// (processMoveOut), the owner tenant roster tool and the daily scheduled flip. Returns { errors, ... }: every step that
+// can fail is reported back to the caller and logged to Ops_Telemetry, never swallowed. The caller decides how loud to be.
+async function respErrText(res) {
+  try { const j = await res.json(); return String((j && (j.error || j.message)) || ('HTTP ' + res.status)); }
+  catch (e) { return 'HTTP ' + res.status + ' (unreadable body: ' + ((e && e.message) || e) + ')'; }
+}
+async function tenantMarkMovedOut(env, tenantId, moveOutDate) {
+  const out = { errors: [], units_cleared: [], retro_wos_cleaned: 0, verified: false };
+  const fail = (step, msg) => { out.errors.push({ step, error: String(msg).slice(0, 240) }); };
+  try {
+    await ensureColumns(env, 'Tenants', ['SMS_Enabled', 'Roster_Pending_Flip']);
+    // The tenant's own row is left intact on purpose - same ID, same Unit_ID and Property_ID, now carrying a
+    // move-out date. That row IS the history: their work orders, their contact record, everything logged while they
+    // lived there stays attached to it. A new tenant gets a new row and a new ID; nothing is reused.
+    // SMS_Enabled goes FALSE (Oct 14 2026) so a moved-out tenant is also switched off at the tenant toggle, not only
+    // by the moved-out check in the SMS gate. SMS_OptOut is NOT touched: that is the tenant's own STOP record.
+    const res = await updateRow(env, 'Tenants', tenantId, { Active: 'FALSE', Move_Out_Date: moveOutDate, PIN: '', SMS_Enabled: 'FALSE', Roster_Pending_Flip: '' });
+    if (!res.ok) fail('tenant_row', await respErrText(res));
+    else {
+      // Verified write: re-read and confirm the row really changed (success:true with an unchanged cell is a failure).
+      const back = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(tenantId));
+      if (!back || String(back.Active).toUpperCase() !== 'FALSE' || back.Move_Out_Date !== moveOutDate) fail('tenant_row_verify', 'read-back does not show the move-out');
+      else out.verified = true;
+    }
+  } catch (e) { fail('tenant_row', (e && e.message) || e); }
+
+  // What DOES have to change is the unit's pointer to its CURRENT tenant. Move-out never cleared it, so the unit went
+  // on naming someone who had left - and vendors were being texted a former tenant's name and phone number.
+  try {
+    const units = await fetchTab(env, 'Units');
+    for (const u of units.filter(x => String(x.Tenant_ID || '') === String(tenantId))) {
+      const r = await updateRow(env, 'Units', u.ID, { Tenant_ID: '' });
+      if (!r.ok) fail('unit_pointer', 'unit ' + (u.Unit_Label || u.ID) + ': ' + await respErrText(r));
+      else out.units_cleared.push(u.Unit_Label || u.ID);
+    }
+  } catch (e) { fail('unit_pointer', (e && e.message) || e); }
+
+  // Links to work orders created AFTER the move-out date do not belong to this tenant.
+  try {
+    const [wos, woTenants] = await fetchTabs(env, ['Work_Orders', 'WO_Tenants']);
+    for (const link of woTenants.filter(r => String(r.Tenant_ID) === String(tenantId) && r.Active !== 'FALSE')) {
+      const wo = wos.find(w => w.ID === link.WO_ID);
+      if (!wo || !wo.Created_Date) continue;
+      const cr = String(wo.Created_Date).trim();
+      const crDay = /^\d{4}-\d{2}-\d{2}$/.test(cr) ? cr : (isNaN(new Date(cr)) ? '' : new Date(cr).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }));
+      if (crDay && crDay > moveOutDate) {
+        const r = await updateRow(env, 'WO_Tenants', link.ID, { Active: 'FALSE' });
+        if (!r.ok) fail('wo_link', 'link ' + link.ID + ': ' + await respErrText(r));
+        else out.retro_wos_cleaned++;
+      }
+    }
+  } catch (e) { fail('wo_links', (e && e.message) || e); }
+
+  if (out.errors.length) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_move_out_incomplete', Skill_Or_Endpoint: 'tenantMarkMovedOut', Success: 'FALSE', Notes: ('tenant=' + tenantId + ' ' + JSON.stringify(out.errors)).slice(0, 480) }); }
+    catch (e) { out.errors.push({ step: 'telemetry', error: String((e && e.message) || e).slice(0, 160) }); }
+  }
+  return out;
+}
+
 async function processMoveOut(env, body) {
   const { tenant_id, move_out_date } = body;
   if (!tenant_id) return json({ error: 'tenant_id required' }, 400);
-  const moveOutDate = move_out_date || new Date().toISOString().split('T')[0];
-  const moveOutDt = new Date(moveOutDate + 'T23:59:59');
-
-  // The tenant's own row is left intact on purpose — same ID, same Unit_ID and
-  // Property_ID, now carrying a move-out date. That row IS the history: their work
-  // orders, their contact record, everything logged while they lived there stays
-  // attached to it. A new tenant gets a new row and a new ID; nothing is reused.
-  await updateRow(env, 'Tenants', tenant_id, { Active: 'FALSE', Move_Out_Date: moveOutDate, PIN: '' });
-
-  // What DOES have to change is the unit's pointer to its CURRENT tenant. Move-out
-  // never cleared it, so the unit went on naming someone who had left — and because
-  // vendor dispatch reads the unit's tenant, vendors were being texted a former
-  // tenant's name and phone number when they took a new job at that address.
-  let unitsCleared = [], unitsFailed = false;
-  try {
-    const units = await fetchTab(env, 'Units');
-    for (const u of units.filter(x => String(x.Tenant_ID || '') === String(tenant_id))) {
-      await updateRow(env, 'Units', u.ID, { Tenant_ID: '' });
-      unitsCleared.push(u.Unit_Label || u.ID);
-    }
-  } catch (e) { unitsFailed = true; }
-
-  let retroCount = 0;
-  try {
-    const [wos, woTenants] = await fetchTabs(env, ['Work_Orders','WO_Tenants']);
-    for (const link of woTenants.filter(r => r.Tenant_ID === tenant_id && r.Active !== 'FALSE')) {
-      const wo = wos.find(w => w.ID === link.WO_ID);
-      if (!wo || !wo.Created_Date) continue;
-      if (new Date(wo.Created_Date) > moveOutDt) { await updateRow(env, 'WO_Tenants', link.ID, { Active: 'FALSE' }); retroCount++; }
-    }
-  } catch(e) {}
-  return json({ success: true, move_out_date: moveOutDate, retro_wos_cleaned: retroCount,
-                units_unlinked: unitsCleared.length, units: unitsCleared,
+  const moveOutDate = move_out_date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const r = await tenantMarkMovedOut(env, tenant_id, moveOutDate);
+  const unitsFailed = r.errors.some(e => e.step === 'unit_pointer');
+  const rowFailed = r.errors.some(e => e.step === 'tenant_row' || e.step === 'tenant_row_verify');
+  if (rowFailed) return json({ error: 'Move-out did NOT save: ' + r.errors.map(e => e.error).join('; '), errors: r.errors }, 500);
+  return json({ success: true, move_out_date: moveOutDate, retro_wos_cleaned: r.retro_wos_cleaned,
+                units_unlinked: r.units_cleared.length, units: r.units_cleared,
                 // Say so loudly. A half-cleared pointer means a former tenant's number is
                 // still reachable, which is the whole thing this is meant to prevent.
-                units_incomplete: unitsFailed,
-                warning: unitsFailed ? 'Some unit links could not be cleared — run "Check units naming moved-out tenants" in Dev tools.' : '' });
+                units_incomplete: unitsFailed, errors: r.errors,
+                warning: r.errors.length ? ('Move-out saved but some follow-up steps failed (' + r.errors.map(e => e.step).join(', ') + ') - run "Check units naming moved-out tenants" in Dev tools.') : '' });
 }
+//@@ROSTER_NEXT@@
 
 // ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
 // Brett's ask: turn tenants' ability to submit their own work orders on/off, settable at the
