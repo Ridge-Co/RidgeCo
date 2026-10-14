@@ -13,6 +13,13 @@
 
 ---
 
+# ONE INVOICE PATH — Oct 14, 2026 — Ridge-Co/RidgeCo PR #256, base `main`, head `feat/invoice-single-path-oct14` (cut from main tip 22f91ee), NOT merged (Brett merges). BUILD_VERSION `2026-10-14.2-invoice-single-path`. Staging test-only PR #258 (worker half, re-cut on staging because the real branch conflicts on BUILD_VERSION).
+
+## 🟡 Built and unit-tested (22 new assertions): closes Ops_Build_Queue #100
+Log Invoice (`POST /invoice`, sheet-only, flipped WO to Invoiced with no QuickBooks invoice) is retired: 410 + `legacy_invoice_blocked` telemetry, button/modal/functions removed. The Invoice Builder and the bill-less fallback no longer preview the old approved figure when the price box has changed: they stop, name both amounts, change nothing, and offer the approved preview. Approve / approve-bulk `differs` compares whole cents. Not touched: scope-proposal booking, trashInvoice, legacy proposalBook. Merge note: BUILD_VERSION line conflicts with PR #251 (`2026-10-14.1-attachments-scope`), whichever merges second. See FEATURE_LOG `[FL-20261014-0900-inv]`.
+
+---
+
 # SCOPE ADD-ONS + MILESTONE REBALANCE + MESSAGE QUEUE ENGLISH — Oct 13, 2026 — Ridge-Co/RidgeCo PR #241, base `main`, head `feat/scope-addons-milestone-rebalance-queue-english` (cut from main tip e13be066), NOT merged (Brett merges)
 
 ## 🟡 Tested on staging, Brett approved merge (Oct 13 1:26pm ET: "merge 241 or change it as needed"): Scope add-ons vs. alternatives — BUILD_VERSION `2026-10-13.5-scope-addons-flat` (flat-$ milestones: flat rows fixed, last % row absorbs; impossible schedules refused at generate/sign; customer page now honors flat rows — see FEATURE_LOG `[FL-20261013-1500-ao]`; staging-only PRs #242, #243, #244, #245)
