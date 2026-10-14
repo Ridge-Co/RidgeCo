@@ -6757,7 +6757,11 @@ async function ownerRosterApply(env, callerRole, callerSessionId, body) {
   const ownerId = rosterOwnerId(callerRole, callerSessionId, body);
   if (!ownerId) return json({ error: 'owner_id required' }, 400);
   const actor = callerRole === 'owner' ? 'owner:' + ownerId : 'admin';
-  const batch = 'RB-' + new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const startCalls = __sheetsFetchCount;
+  const used = () => __sheetsFetchCount - startCalls;
+  // A continuation call (the page re-sends the same file until nothing remains) carries the batch id from the first call.
+  const batch = /^RB-\d{8}-[A-Z0-9]{4}$/.test(String((body && body.batch) || '')) ? String(body.batch)
+    : 'RB-' + new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
   const L = await rosterLoadPlan(env, ownerId, body, batch);
   if (L.error) return json({ error: L.error }, L.status);
   const plan = L.plan;
