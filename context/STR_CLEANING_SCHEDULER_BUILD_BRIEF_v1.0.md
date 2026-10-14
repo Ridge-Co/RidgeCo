@@ -44,7 +44,7 @@ Owner request (Oct 13–14, 2026): keep every Milam Ridge (1864 Kerns School Rd,
 | `STR_SMS_ENABLED` | FALSE | Texts to cleaners. FALSE = nothing texted; the board shows who would be asked next. Still goes through `smsGatedSend` (global `TWILIO_ENABLED`, `TWILIO_TEST_MODE` → Brett's phone). |
 | `STR_CAL_WRITE_ENABLED` | FALSE | Hub writes the cleaning calendar. FALSE = plan only. Needs the service account to have "Make changes to events" on that calendar. |
 | `STR_DIGEST_ENABLED` | FALSE | Mon/Wed/Fri cleaning email. |
-| `STR_ALERT_DAYS` 5 · `STR_LOOKAHEAD_DAYS` 35 · `STR_RED_BLOCK_DAYS` 14 · `STR_REPLY_4H_DAYS` 5 · `STR_REPLY_2H_DAYS` 3 · `STR_ALERT_REPEAT_HOURS` 6 · `STR_MARK_ALERT_DAYS` 5 · `STR_PREARRIVAL_GAP_DAYS` 3 · `STR_MAX_PENDING_PER_CLEANER` 2 | | tuning |
+| `STR_ALERT_DAYS` 7 · `STR_LOOKAHEAD_DAYS` 35 · `STR_RED_BLOCK_DAYS` 14 · `STR_REPLY_4H_DAYS` 5 · `STR_REPLY_2H_DAYS` 3 · `STR_ALERT_REPEAT_HOURS` 6 · `STR_MARK_ALERT_DAYS` 5 · `STR_PREARRIVAL_GAP_DAYS` 3 · `STR_MAX_PENDING_PER_CLEANER` 2 | | tuning |
 
 Rollout order: (1) add cleaners on the board (creates Vendors rows: Trade "Short-Term Rental Cleaner", Service_Area "Milam Ridge"); (2) "Run now (preview)";
 (3) `STR_ENGINE_ENABLED` TRUE with SMS off → alerts + board only; (4) `STR_SMS_ENABLED` TRUE while `TWILIO_TEST_MODE` is TRUE → every cleaner text goes to Brett's phone

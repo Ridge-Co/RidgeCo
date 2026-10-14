@@ -80,7 +80,7 @@ const at = (E, d, hm) => E.inspEtWallToMs(d, hm);
 {
   const W0 = makeWorld(); const E = build(W0), S = E.strSettings({});
   t('defaults are OFF', !S.engine && !S.sms && !S.calWrite && !S.digest);
-  t('defaults: alert 5d, lookahead 35d', S.alertDays === 5 && S.lookahead === 35 && S.redDays === 14);
+  t('defaults: alert 7d, lookahead 35d', S.alertDays === 7 && S.lookahead === 35 && S.redDays === 14);
   t('reply window: 8 days out = overnight', E.strReplyWindow(8, S).kind === 'overnight');
   t('reply window: 6 days = overnight', E.strReplyWindow(6, S).kind === 'overnight');
   t('reply window: 5 days = 4 hours', E.strReplyWindow(5, S).hours === 4);

@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.13-str-cleaning-scheduler';
+const BUILD_VERSION = '2026-10-14.14-str-cleaning-scheduler';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -30381,7 +30381,7 @@ function strSettings(cfg) {
   return {
     engine: strBool(cfg.STR_ENGINE_ENABLED, false), sms: strBool(cfg.STR_SMS_ENABLED, false),
     calWrite: strBool(cfg.STR_CAL_WRITE_ENABLED, false), digest: strBool(cfg.STR_DIGEST_ENABLED, false),
-    alertDays: strInt(cfg.STR_ALERT_DAYS, 5, 1, 30), lookahead: strInt(cfg.STR_LOOKAHEAD_DAYS, 35, 30, 90),
+    alertDays: strInt(cfg.STR_ALERT_DAYS, 7, 1, 30), lookahead: strInt(cfg.STR_LOOKAHEAD_DAYS, 35, 30, 90),
     redDays: strInt(cfg.STR_RED_BLOCK_DAYS, 14, 1, 60),
     reply4hDays: strInt(cfg.STR_REPLY_4H_DAYS, 5, 1, 30), reply2hDays: strInt(cfg.STR_REPLY_2H_DAYS, 3, 0, 30),
     alertRepeatH: strInt(cfg.STR_ALERT_REPEAT_HOURS, 6, 1, 24), markAlertDays: strInt(cfg.STR_MARK_ALERT_DAYS, 5, 1, 30),
