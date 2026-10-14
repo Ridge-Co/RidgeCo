@@ -533,7 +533,8 @@ const _hubWorkerCore = {
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
         if (path === '/scope/drive-list')       return await scopeDriveList(env, url);
-        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url);
+        if (path === '/scope-proposal/view')    return await scopeProposalView(env, url, request.headers.get('User-Agent') || '', ctx);
+        if (path === '/scope-proposal/px')      return await scopeProposalPixel(env, url, request.headers.get('User-Agent') || '', ctx);
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
