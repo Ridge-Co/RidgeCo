@@ -3,6 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <script src="wo-status.js"></script>
+<script src="tenant-roster.js"></script>
 <script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -218,6 +219,7 @@ textarea{resize:vertical;min-height:70px;}
       <div class="tab active" id="tabWOs" onclick="switchTab('wos')">WORK ORDERS</div>
       <div class="tab" id="tabSubmit" onclick="switchTab('submit')">SUBMIT REQUEST</div>
       <div class="tab" id="tabNotify" onclick="switchTab('notify')">NOTIFICATIONS</div>
+      <div class="tab" id="tabTenants" onclick="switchTab('tenants')">TENANTS</div>
     </div>
 
     <!-- WORK ORDERS TAB -->
@@ -308,6 +310,9 @@ textarea{resize:vertical;min-height:70px;}
     </div>
   </div>
 </div>
+
+    <!-- TENANTS TAB (Oct 14 2026): tenant importer/updater - the panel itself lives in tenant-roster.js, shared with the admin page -->
+    <div id="panelTenants" style="display:none"></div>
 
     <!-- NOTIFICATIONS TAB -->
     <div id="panelNotify" style="display:none">
@@ -593,10 +598,23 @@ function switchTab(tab) {
   document.getElementById('tabWOs').className = 'tab' + (tab==='wos'?' active':'');
   document.getElementById('tabSubmit').className = 'tab' + (tab==='submit'?' active':'');
   document.getElementById('tabNotify').className = 'tab' + (tab==='notify'?' active':'');
+  document.getElementById('tabTenants').className = 'tab' + (tab==='tenants'?' active':'');
   document.getElementById('panelWOs').style.display = tab==='wos' ? '' : 'none';
   document.getElementById('panelSubmit').style.display = tab==='submit' ? '' : 'none';
   document.getElementById('panelNotify').style.display = tab==='notify' ? '' : 'none';
+  document.getElementById('panelTenants').style.display = tab==='tenants' ? '' : 'none';
   if (tab==='notify') loadNotifyPrefs();
+  if (tab==='tenants') openTenantsTab();
+}
+
+var tenantRosterPanel = null;
+function openTenantsTab() {
+  var el = document.getElementById('panelTenants');
+  if (!window.TenantRoster) { el.innerHTML = '<div style="color:var(--danger);padding:16px">The tenant tool could not load (tenant-roster.js). Refresh the page; if it keeps happening, tell us.</div>'; return; }
+  if (!tenantRosterPanel) {
+    tenantRosterPanel = TenantRoster.mount(el, { admin: false, ownerId: function(){ return ''; }, call: function(method, path, body){ return api(method, path, body); } });
+  }
+  tenantRosterPanel.reload();
 }
 
 function renderWOs() {

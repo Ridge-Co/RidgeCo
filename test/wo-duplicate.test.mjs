@@ -44,7 +44,7 @@ const S = {
   addonLive: grab(wsrc, 'function addonLiveChildren(') + '\n' + grab(wsrc, 'function addonLiveChildrenMessage('),
   isTenantCurrent: grab(wsrc, 'function isTenantCurrent('), currentTenant: grab(wsrc, 'function currentTenantForDispatch('), tenantsFor: grab(wsrc, 'function tenantsForDispatch('),
   isBackground: grab(wsrc, 'function isBackgroundWO('), isNotifiable: grab(wsrc, 'function isTenantNotifiable('),
-  smsGate: grab(wsrc, 'function smsGateDecision('), smsToggle: grabConst(wsrc, 'const smsToggleOn'), normPhone: grab(wsrc, 'function normalizePhone('),
+  tenantMovedOut: grab(wsrc, 'function tenantMovedOut('), smsGate: grab(wsrc, 'function smsGateDecision('), smsToggle: grabConst(wsrc, 'const smsToggleOn'), normPhone: grab(wsrc, 'function normalizePhone('),
   mqTab: grabConst(wsrc, "const MSG_QUEUE_TAB = 'Message_Queue';"), mqCols: grabConst(wsrc, 'const MSG_QUEUE_COLS'),
   smsInfraState: grabRange(wsrc, 'const SMS_TOGGLE_TABS', 'async function ensureSmsInfra'), smsInfra: grab(wsrc, 'async function ensureSmsInfra('),
   etHour: grab(wsrc, 'function etHour('), nyOff: grab(wsrc, 'function nyOffsetMinutes('),
@@ -149,7 +149,7 @@ function build(db, o = {}) {
   const src = [
     'const CORS = {};', S.cache, S.isMissing, S.sr, S.ensureInner, S.ensure, S.ensureTab, S.idc, S.col, S.json, S.fetchTab, S.fetchTabs, S.findWO,
     S.updateWOFields, S.nextSafeId, S.logAudit, S.logAuditMany, S.logMsgAudit, S.auditCols, S.addRow, S.invalidate, S.telemetry, S.nonShare, S.block,
-    S.addonLive, S.isTenantCurrent, S.currentTenant, S.tenantsFor, S.isBackground, S.isNotifiable, S.smsGate, S.smsToggle, S.normPhone, S.mqTab, S.mqCols,
+    S.addonLive, S.isTenantCurrent, S.currentTenant, S.tenantsFor, S.isBackground, S.isNotifiable, S.tenantMovedOut, S.smsGate, S.smsToggle, S.normPhone, S.mqTab, S.mqCols,
     S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, S.sendRaw, S.updMq, S.fetchConfig, S.smsGated,
     'async function smsGatedSend(env, o) { __spy.push({ wo_id: o.wo_id, message_type: o.message_type, recipient_type: o.recipient_type, vendor_id: o.vendor && o.vendor.ID, vendor_name: o.vendor && o.vendor.Name, body: o.message_body, already_localized: o.already_localized, original_body: o.original_body, bypassQuietHours: o.bypassQuietHours === true }); return await __realSmsGatedSend(env, o); }',
     S.quietQueue, S.portalLink, S.unitLabel, S.phoneDisp, S.jobLabel, S.voidCols, S.splitMax, S.splitFields, S.testMarker, S.openStatuses,
