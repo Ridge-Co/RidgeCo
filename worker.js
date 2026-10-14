@@ -115,6 +115,12 @@ function withTenantStopNote(msg) {
   const m = String(msg == null ? '' : msg);
   return /\bSTOP\b/i.test(m) ? m : (m.replace(/\s+$/, '') + ' ' + TENANT_STOP_NOTE);
 }
+// Oct 14 2026 (Brett): the tenant WELCOME (first message a tenant ever gets) also says message and data rates
+// may apply, which Twilio's A2P review looks for. Same send-time, idempotent approach as the STOP note.
+function withWelcomeRatesNote(msg) {
+  const m = String(msg == null ? '' : msg);
+  return /\brates\b/i.test(m) ? m : (m.replace(/\s+$/, '') + ' Msg&data rates may apply.');
+}
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
