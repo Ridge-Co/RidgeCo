@@ -101,6 +101,15 @@ Passed on `maintenance-hub-staging`: tab self-provisioning, TEST- cleaner create
 NOT live-tested: the round-robin offer loop itself (offer, decline, expire, accept, filled text), because staging has Twilio switched OFF globally and the test token is not allowed to switch it on. It is covered by 117 offline tests. First real check after merge: turn the switches on in the documented order with Twilio test mode ON (texts go to Brett's phone only).
 Known limit: Google Sheets read quota is per minute for the whole Hub. The public cleaner page now reuses the ~6s tab cache so a burst of link opens cannot burn it.
 
+## Live rollout log (Oct 14 2026)
+
+- **Turned on** (Scheduler + Texts, test mode ON). No texts at first: the daily self-test (`sweep_checks`) hung every tick, kept its claim and returned no `more`, so the Apps Script loop stopped before `insp_guard` / `str_cleaning`. Fixed by the dispatcher change (a timed-out job releases its claim and signals `more`) and by running the self-test in slices (FEATURE_LOG 214, PRs #295/#298); the canary fixture/trigger fix is PR #297. Brett switched `sweep_checks` off and on by hand in the Apps Script JOBS table (the permission system blocks me from editing the live script).
+- **First live tick:** 7 turnovers (Oct 16 – Nov 3) were already on the cleaning calendar (Gina/Kayla), so they became `ext_covered` with no offers; Nov 8, Nov 11/12 pre-arrival and Nov 15 were open.
+- **Tick time budget** (FEATURE_LOG 215): cron Sheets reads are paced 2.5 s apart and every write is re-read, so one offer costs ~25 s and the tick was killed mid-write. Past 40 s the tick stops starting new coverage/offer work; past 62 s it skips the checkout-text and alert checks; everything deferred is a warning + `detail.deferred` + `detail.elapsed_ms`, and the next tick finishes it.
+- **Next-guest wording:** when the next guest is more than 1 day after the clean, every text/email/calendar note/page says "(subject to change with new bookings)" (`strNextDate`); same-day and next-day stay flat.
+- **Brett's phone test passed:** `[TEST - for Gina]` offer for Nov 8 -> accepted -> turnover `covered` (via offer); the Nov 11/12 pre-arrival offer -> declined -> Kayla asked at once.
+- **Open:** `sweep_work` fails every tick because scopes 4 and 6 (WO-1180, WO-1183) have no deposit invoice (Brett's call: create the invoices or exclude); two near-simultaneous cleaner taps wrote two STR_Log rows with the same ID (read-max+1; cosmetic, fix queued); first `Selftest_Results` row should appear once the sliced self-test finishes; calendar sync, Mon/Wed/Fri digest and going live (test mode OFF, Brett's approval) are still ahead.
+
 ## Roadmap — logged, NOT built (room is reserved; the cleaner page already has a "coming soon" strip)
 
 Scheduling was by far the priority. From Brett's Oct 14 message, to build later on the same token page and the same `STR_*` sheet family:
