@@ -76,6 +76,9 @@ var JOBS = [
   { name: 'review_mon',          run: 'hub', day: 'Mon', at: '08:30',         enabled: true, what: 'Runs the Monday weekly review and delivers it.' },
   { name: 'review_wed',          run: 'hub', day: 'Wed', at: '08:00',         enabled: true, what: 'Runs the Wednesday weekly review (logged only).' },
   { name: 'ar_report_mon',       run: 'hub', day: 'Mon', at: '09:00',         enabled: true, what: 'Builds and delivers the Monday AR aging report.' },
+  { name: 'hub_impr_mon',        run: 'hub', day: 'Mon', at: '07:15',         enabled: true, what: 'Pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue (as proposed).' },
+  { name: 'hub_impr_thu',        run: 'hub', day: 'Thu', at: '07:15',         enabled: true, what: 'Same sweep, Thursday.' },
+  { name: 'hub_impr_daily',      run: 'hub', at: '07:30',                      enabled: true, what: 'Marks Hub Improvements items done once built (queue item done / PR merged) and reports any that are stuck.' },
 
   // ── Other Workers (this script calls them; secrets live in Script properties, never in this file) ──
   { name: 'pinterest_sync',      run: 'pinterest',      day: 'Sun', at: '09:00', enabled: true,  what: 'BarrelCo: copies new Pinterest pins into the Google Drive folders (was a weekly GitHub Action).' },
