@@ -12270,6 +12270,9 @@ function renderPayablesList() {
       ' vendor' + (toPay.length === 1 ? '' : 's') + ' waiting on $' + (parseFloat(res.owed_total) || 0).toFixed(2) +
       ' you have already collected</div>' +
       '<div style="color:var(--muted);font-size:11px;margin-top:3px">The owner has paid these. Pay these first.</div>' +
+      (toPay.filter(function(r) { return r.customer_clear_status === 'clearing'; }).length
+        ? '<div style="color:var(--warn);font-size:11px;margin-top:3px;font-weight:bold">⏳ ' + toPay.filter(function(r) { return r.customer_clear_status === 'clearing'; }).length + ' of these are still clearing — the money may not be in your bank yet. Your call.</div>'
+        : '') +
       '<div style="color:var(--danger);font-size:10.5px;margin-top:4px;font-weight:bold">⚠ The button below only marks a bill PAID IN QUICKBOOKS — it does not send money. Pay the vendor yourself (check/transfer/Zelle/QuickBooks Bill Pay) first, separately.</div>' +
       (toPay.some(function(r){return r.bill_id;})
         ? '<div id="pay-bar" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--accent2);display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
