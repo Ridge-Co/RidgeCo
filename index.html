@@ -6575,7 +6575,7 @@ async function submitMoveIn() {
     var newTenantBody = {
       First_Name: first, Last_Name: last, Phone: phone, Email: email,
       Property_ID: propId, Unit_ID: unitId||'',
-      Move_In_Date: moveIn || today,
+      Move_In_Date: moveIn,
       Active: 'TRUE',
     };
     var res = await apiWithTimeout(api('POST', '/tenant/add', newTenantBody), 10000);
