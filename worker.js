@@ -1919,8 +1919,16 @@ function isTenantCurrent(t) {
   if (!t || !t.ID) return false;
   if (String(t.Active || '').toUpperCase() === 'FALSE') return false;
   if (t.Move_Out_Date) {
-    const out = new Date(t.Move_Out_Date + 'T23:59:59');
-    if (!isNaN(out) && out < new Date()) return false;
+    // Oct 14 2026 (owner tenant roster): a plain YYYY-MM-DD move-out date means "lives there through the END of
+    // that day, Eastern". The old check read 23:59:59 in the Worker's own clock (UTC), so a tenant leaving on the
+    // 14th counted as gone from 7:59pm ET on the 14th. Anything that is not a plain date keeps the old reading.
+    const mo = String(t.Move_Out_Date).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(mo)) {
+      if (new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) > mo) return false;
+    } else {
+      const out = new Date(t.Move_Out_Date + 'T23:59:59');
+      if (!isNaN(out) && out < new Date()) return false;
+    }
   }
   return true;
 }
