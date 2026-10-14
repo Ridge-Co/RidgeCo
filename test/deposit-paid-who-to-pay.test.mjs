@@ -232,7 +232,7 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
 
 // ── qbPayables: milestone deposit with vendor cost but no vendor bill -> 'vendor bill missing' ──
 {
-  const qbpSrc = ['function qbEscape(', 'async function qbFindLikelyUnlinkedPayment(', 'function depositMilestoneForSignature(', 'function firstMilestoneForSignature(', 'async function logAndCollectError(', 'async function qbPayables(']
+  const qbpSrc = ['function qbEscape(', 'async function qbFindLikelyUnlinkedPayment(', 'function depositMilestoneForSignature(', 'function firstMilestoneForSignature(', 'async function logAndCollectError(', 'function parseHolidayMap(', 'function nextBusinessDay(', 'function etDateString(', 'function paymentClearDaysMap(', 'function classifyPaymentMethod(', 'function addBusinessDays(', 'function summarizeInvoicePayments(', 'async function qbLoadInvoicePayments(', 'async function qbPayables(']
     .map(sg => { try { return grab(wsrc, sg); } catch (e) { return grab(wsrc, sg.replace('async ', '')); } }).join('\n');
   const stubs = {
     fetchTabs: async (e, tabs) => tabs.map(x => (x === 'Invoice_Review' ? [] : [])),
@@ -242,6 +242,7 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
       Payment_Milestones: [{ ID: 'M1', Signature_ID: 'S8', Sequence: '1', QB_Invoice_ID: '7901', QB_Bill_ID: '', Customer_Amount: '500', Vendor_Amount: '300', Active: 'TRUE' }],
     }[tab] || []),
     paymentMilestonesTab: async () => {}, logTelemetry: async () => {},
+    fetchConfig: async () => ({ US_HOLIDAYS: new Date().getFullYear() + '-12-25:Christmas Day' }),
     qbAccessToken: async () => 't',
     qbApi: async (e, path) => (path.includes('from%20Invoice') ? { QueryResponse: { Invoice: [{ Id: '7901', Balance: 0, DocNumber: '1' }] } } : { QueryResponse: {} }),
     qbVendorDisplayName: () => 'V', vendorTermLabel: () => 'x', json: b => b,

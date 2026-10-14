@@ -87,6 +87,9 @@ ok(match7 === null, 'a QuickBooks API failure fails open (no warning shown) rath
 // ═══════════════════ Part 2: full qbPayables state-machine integration ═══════════════════
 console.log('\nqbPayables — state machine integration — offline tests\n');
 
+// Config the clearing indicator reads (current-year holiday present so older assertions see no 'holidays missing' noise).
+const TEST_FETCH_CONFIG = async () => ({ US_HOLIDAYS: new Date().getFullYear() + '-12-25:Christmas Day' });
+
 function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, irs, vendors }) {
   const fetchTabs = async (env, tabs) => tabs.map(t => (t === 'Invoice_Review' ? irs : t === 'Vendors' ? vendors : []));
   const qbAccessToken = async () => 'FAKE_TOKEN';
@@ -106,9 +109,9 @@ function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, ir
   const fetchTab = async () => [];
   const paymentMilestonesTab = async () => {};
   const logTelemetry = async () => {};
-  const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
-  return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', src)
-    (fetchTabs, fetchTab, paymentMilestonesTab, logTelemetry, qbAccessToken, qbApi, qbVendorDisplayName, vendorTermLabel, json);
+  const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('parseHolidayMap', false)}\n${extractFn('nextBusinessDay', false)}\n${extractFn('etDateString', false)}\n${extractFn('paymentClearDaysMap', false)}\n${extractFn('classifyPaymentMethod', false)}\n${extractFn('addBusinessDays', false)}\n${extractFn('summarizeInvoicePayments', false)}\n${extractFn('qbLoadInvoicePayments', true)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
+  return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', src)
+    (fetchTabs, fetchTab, paymentMilestonesTab, logTelemetry, qbAccessToken, qbApi, qbVendorDisplayName, vendorTermLabel, json, TEST_FETCH_CONFIG);
 }
 
 // Brett's exact WO-1025 / Alex Busey scenario: owner (customer) paid in full ($495, invoice
@@ -153,9 +156,9 @@ const qbApiPaid = async (env, path) => {
   if (path.startsWith('query?') && path.includes('from%20Purchase')) { purchaseQueried = true; return { QueryResponse: { Purchase: [] } }; }
   return {};
 };
-const srcPaid = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
-const qbPayablesAlreadyPaid = new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', srcPaid)
-  (fetchTabsPaid, async () => [], async () => {}, async () => {}, async () => 'x', qbApiPaid, (v) => (v && v.Company) || 'Vendor', () => 'Due on receipt', (b) => b);
+const srcPaid = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('parseHolidayMap', false)}\n${extractFn('nextBusinessDay', false)}\n${extractFn('etDateString', false)}\n${extractFn('paymentClearDaysMap', false)}\n${extractFn('classifyPaymentMethod', false)}\n${extractFn('addBusinessDays', false)}\n${extractFn('summarizeInvoicePayments', false)}\n${extractFn('qbLoadInvoicePayments', true)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
+const qbPayablesAlreadyPaid = new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', srcPaid)
+  (fetchTabsPaid, async () => [], async () => {}, async () => {}, async () => 'x', qbApiPaid, (v) => (v && v.Company) || 'Vendor', () => 'Due on receipt', (b) => b, TEST_FETCH_CONFIG);
 const resPaid = await qbPayablesAlreadyPaid({}, new URL('http://x/?days=90'));
 ok(resPaid.rows[0].state === 'vendor paid', 'a genuinely already-paid vendor bill still says vendor paid');
 ok(purchaseQueried === false, 'the Purchase cross-check is never run for rows that are not about to say PAY THE VENDOR (no wasted QB API calls)');

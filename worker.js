@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-13.7-bid-cancel-tells-vendor';
+const BUILD_VERSION = '2026-10-14.1-who-to-pay-clearing-indicator';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -22571,6 +22571,144 @@ async function qbFindLikelyUnlinkedPayment(env, token, vendorQboId, amountOwed) 
   } catch (_) { return null; }
 }
 
+// ── Who To Pay: "customer paid on" + funds-clearing indicator (Oct 14 2026) ──────────────────────
+// Brett decides when to pay a vendor off whether the customer's money has actually cleared his bank. This only
+// INFORMS that call -- it never blocks, hides, reorders or auto-pays anything (he sometimes pays early on purpose).
+// The clock starts on the QuickBooks Payment's TxnDate (day 0); weekends and every date in Config.US_HOLIDAYS are
+// skipped. Days-to-clear depends on how the customer paid; Config.PAYMENT_CLEAR_DAYS ("ach:3,card:3,check:5,cash:0,
+// other:3") overrides the defaults below so Brett can tune it without a deploy.
+function paymentClearDaysMap(raw) {
+  const map = { ach: 3, card: 3, check: 5, cash: 0, other: 3 };
+  const bad = [];
+  String(raw || '').split(',').forEach(pair => {
+    const s = pair.trim();
+    if (!s) return;
+    const parts = s.split(':');
+    const k = parts.length === 2 ? parts[0].trim().toLowerCase() : '';
+    const n = parts.length === 2 && /^\d+$/.test(parts[1].trim()) ? parseInt(parts[1].trim(), 10) : NaN;
+    if (Object.prototype.hasOwnProperty.call(map, k) && Number.isInteger(n) && n >= 0 && n <= 30) map[k] = n;
+    else bad.push(s);
+  });
+  return { map, bad };
+}
+
+// QuickBooks has no fixed "method" enum: PaymentMethodRef points at a company-defined PaymentMethod (Name + Type
+// CREDIT_CARD / NON_CREDIT_CARD). Classify by the card flag/Type first, then by name. e-check/ACH is tested BEFORE
+// "check" because "E-Check" contains the word check. Anything unrecognised is 'other' (default 3 business days).
+function classifyPaymentMethod(pay, methodsById) {
+  const ref = (pay && pay.PaymentMethodRef) || null;
+  const id = ref && ref.value != null ? String(ref.value) : '';
+  const pm = id && methodsById && typeof methodsById.get === 'function' ? methodsById.get(id) : null;
+  const name = String((ref && ref.name) || (pm && pm.Name) || '').trim();
+  const n = name.toLowerCase();
+  let cls = 'other';
+  if (pay && pay.CreditCardPayment) cls = 'card';
+  else if (pm && pm.Type === 'CREDIT_CARD') cls = 'card';
+  else if (/e-?check|\bach\b|\beft\b|\bwire\b|bank transfer|direct (debit|deposit)|bank draft/.test(n)) cls = 'ach';
+  else if (/cheque|\bcheck\b/.test(n)) cls = 'check';
+  else if (/\bcash\b/.test(n)) cls = 'cash';
+  else if (/credit|debit|\bcard\b|visa|master ?card|amex|american express|discover/.test(n)) cls = 'card';
+  return { cls, name };
+}
+
+// dateStr itself is day 0; returns the date n business days later ('' on a bad date / tripped guard -- never a guess).
+function addBusinessDays(dateStr, n, holidayMap) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr || ''))) return '';
+  let cur = dateStr;
+  for (let i = 0; i < n; i++) {
+    const r = nextBusinessDay(cur, holidayMap);
+    if (!r.date) return '';
+    cur = r.date;
+  }
+  return cur;
+}
+
+// Collapses all QuickBooks Payments applied to ONE invoice into the fields the page shows. paid_date = latest payment;
+// clears_on = the LAST date any of its payments clears (the whole amount isn't in the bank until then). status:
+// 'clearing' (today before clears_on), 'cleared', or 'unknown' (no payment with a usable date -- never silently blank).
+function summarizeInvoicePayments(payments, ctx) {
+  const list = Array.isArray(payments) ? payments : [];
+  let best = null, latestDate = '';
+  for (const p of list) {
+    const date = String((p && p.TxnDate) || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const m = classifyPaymentMethod(p, ctx.methodsById);
+    const days = Object.prototype.hasOwnProperty.call(ctx.clearMap, m.cls) ? ctx.clearMap[m.cls] : ctx.clearMap.other;
+    const clearsOn = addBusinessDays(date, days, ctx.holidayMap);
+    if (!clearsOn) continue;
+    if (date > latestDate) latestDate = date;
+    if (!best || clearsOn > best.clearsOn) best = { date, clearsOn, days, cls: m.cls, name: m.name };
+  }
+  if (!best) return { count: list.length, paid_date: '', method: '', method_name: '', clear_days: null, clears_on: '', status: 'unknown' };
+  return {
+    count: list.length, paid_date: latestDate, method: best.cls, method_name: best.name,
+    clear_days: best.days, clears_on: best.clearsOn, status: ctx.today >= best.clearsOn ? 'cleared' : 'clearing',
+  };
+}
+
+// Finds the QuickBooks Payments applied to a set of already-fetched Invoice objects. Primary path: Invoice.LinkedTxn
+// entries of TxnType 'Payment'. Fallback (only for invoices that clearly had money applied but expose no linked Payment):
+// query Payments per customer and match Payment.Line[].LinkedTxn back to the invoice id. Every failure is collected into
+// `warnings` + Ops_Telemetry via logAndCollectError -- a lookup problem must never look like "no payment".
+async function qbLoadInvoicePayments(env, token, invoices, warnings, methodsCache) {
+  const byInvoice = new Map();
+  const invList = (invoices || []).filter(Boolean);
+  const idsByInv = new Map();
+  const allIds = new Set();
+  for (const inv of invList) {
+    const ids = (Array.isArray(inv.LinkedTxn) ? inv.LinkedTxn : []).filter(t => t && t.TxnType === 'Payment' && t.TxnId != null).map(t => String(t.TxnId));
+    idsByInv.set(String(inv.Id), ids);
+    ids.forEach(i => allIds.add(i));
+  }
+  const payById = new Map();
+  const idArr = [...allIds];
+  for (let i = 0; i < idArr.length; i += 200) {
+    const chunk = idArr.slice(i, i + 200);
+    const idList = chunk.map(id => `'${qbEscape(id)}'`).join(',');
+    const q = encodeURIComponent(`select * from Payment where Id in (${idList}) maxresults 1000`);
+    try {
+      const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+      for (const p of ((r && r.QueryResponse && r.QueryResponse.Payment) || [])) payById.set(String(p.Id), p);
+    } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_payment_fetch', '/qb/payables', `Payment ids=${chunk.length}`, e); }
+  }
+  for (const inv of invList) {
+    const got = (idsByInv.get(String(inv.Id)) || []).map(id => payById.get(id)).filter(Boolean);
+    if (got.length) byInvoice.set(String(inv.Id), got);
+  }
+  // Fallback: money was applied (Balance below the total) but no linked Payment could be resolved.
+  const needFallback = invList.filter(inv => !byInvoice.has(String(inv.Id)) && Number(inv.TotalAmt) > 0 && Number(inv.Balance) < Number(inv.TotalAmt) - 0.005
+    && inv.CustomerRef && inv.CustomerRef.value != null);
+  if (needFallback.length) {
+    const customers = [...new Set(needFallback.map(inv => String(inv.CustomerRef.value)))];
+    const MAX_FALLBACK_CUSTOMERS = 25;
+    if (customers.length > MAX_FALLBACK_CUSTOMERS) {
+      await logAndCollectError(env, warnings, 'qb_payables_payment_fallback_capped', '/qb/payables', `customers=${customers.length}`,
+        new Error(`payment-date fallback looked at only ${MAX_FALLBACK_CUSTOMERS} of ${customers.length} customers; the rest show "payment date unavailable"`));
+    }
+    for (const cust of customers.slice(0, MAX_FALLBACK_CUSTOMERS)) {
+      try {
+        const q = encodeURIComponent(`select * from Payment where CustomerRef = '${qbEscape(cust)}' maxresults 1000`);
+        const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+        const pays = (r && r.QueryResponse && r.QueryResponse.Payment) || [];
+        for (const inv of needFallback.filter(x => String(x.CustomerRef.value) === cust)) {
+          const hit = pays.filter(p => (Array.isArray(p.Line) ? p.Line : []).some(l => (Array.isArray(l.LinkedTxn) ? l.LinkedTxn : []).some(t => t && t.TxnType === 'Invoice' && String(t.TxnId) === String(inv.Id))));
+          if (hit.length) byInvoice.set(String(inv.Id), hit);
+        }
+      } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_payment_fallback', '/qb/payables', `customer=${cust}`, e); }
+    }
+  }
+  // PaymentMethod names/types (once per page load): only needed when at least one payment was found.
+  if (byInvoice.size && methodsCache && !methodsCache.loaded) {
+    methodsCache.loaded = true;
+    try {
+      const q = encodeURIComponent('select * from PaymentMethod maxresults 200');
+      const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
+      for (const pm of ((r && r.QueryResponse && r.QueryResponse.PaymentMethod) || [])) methodsCache.map.set(String(pm.Id), pm);
+    } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_paymentmethod_fetch', '/qb/payables', 'PaymentMethod', e); }
+  }
+  return byInvoice;
+}
+
 async function qbPayables(env, url) {
   try {
     const days = Math.max(1, Math.min(365, parseInt(url && url.searchParams.get('days')) || 90));
@@ -22580,6 +22718,37 @@ async function qbPayables(env, url) {
     // Oct 1 2026: nothing here may fail silently -- problems are returned as `warnings` (the Who To Pay page
     // shows them in its banner) and logged to Ops_Telemetry instead of being swallowed.
     const warnings = [];
+
+    // Oct 14 2026: customer-payment clearing indicator context (see paymentClearDaysMap above). fetchConfig() itself returns {}
+    // on a Sheets failure, so an empty/short result is reported below instead of quietly dropping bank holidays.
+    const cfg = await fetchConfig(env);
+    const holidayMap = parseHolidayMap(cfg.US_HOLIDAYS);
+    const today = etDateString(new Date());
+    if (!holidayMap.size) {
+      await logAndCollectError(env, warnings, 'qb_payables_holidays_missing', '/qb/payables', 'Config.US_HOLIDAYS',
+        new Error('Config.US_HOLIDAYS is empty or unreadable: clearing dates skip weekends only, NOT bank holidays'));
+    } else if (![...holidayMap.keys()].some(d => d.startsWith(String(today).slice(0, 4)))) {
+      await logAndCollectError(env, warnings, 'qb_payables_holidays_stale', '/qb/payables', 'Config.US_HOLIDAYS',
+        new Error('Config.US_HOLIDAYS has no dates for ' + String(today).slice(0, 4) + ': clearing dates may land on bank holidays'));
+    }
+    const clearCfg = paymentClearDaysMap(cfg.PAYMENT_CLEAR_DAYS);
+    if (clearCfg.bad.length) {
+      await logAndCollectError(env, warnings, 'qb_payables_clear_days_config', '/qb/payables', 'Config.PAYMENT_CLEAR_DAYS',
+        new Error('ignored invalid PAYMENT_CLEAR_DAYS entries (using defaults for them): ' + clearCfg.bad.join(' | ')));
+    }
+    const methodsCache = { loaded: false, map: new Map() };
+    const payCtx = { methodsById: methodsCache.map, clearMap: clearCfg.map, holidayMap, today };
+    const paymentDateMissing = [];
+    // The fields one row gets. `''` status = not applicable (nothing paid yet). Money applied but no usable Payment date
+    // = 'unknown' and is listed in ONE aggregated warning below -- never a blank that looks like "no payment".
+    function clearFields(woId, inv, paidOrPartial, payMap) {
+      const none = { customer_paid_date: '', customer_pay_method: '', customer_pay_method_name: '', customer_clear_days: null, customer_clears_on: '', customer_clear_status: '', customer_payment_count: 0 };
+      if (!paidOrPartial || !inv) return none;
+      const s = summarizeInvoicePayments(payMap.get(String(inv.Id)) || [], payCtx);
+      if (s.status === 'unknown') paymentDateMissing.push(woId || ('invoice ' + inv.Id));
+      return { customer_paid_date: s.paid_date, customer_pay_method: s.method, customer_pay_method_name: s.method_name,
+        customer_clear_days: s.clear_days, customer_clears_on: s.clears_on, customer_clear_status: s.status, customer_payment_count: s.count };
+    }
 
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
@@ -22619,6 +22788,7 @@ async function qbPayables(env, url) {
       qbBatchById('Invoice', candidates.map(ir => (ir.QB_Invoice_ID || '').trim())),
       qbBatchById('Bill', candidates.map(ir => (ir.QB_Bill_ID || '').trim())),
     ]);
+    const invPayments = await qbLoadInvoicePayments(env, token, [...invById.values()], warnings, methodsCache);
 
     const rows = [];
     for (const ir of candidates) {
@@ -22684,6 +22854,7 @@ async function qbPayables(env, url) {
         invoice_id: invId, invoice_number: invNumber,
         customer_total: Number(ir.Customer_Total) || 0, customer_balance: customerBalance, customer_paid: customerPaid,
         customer_partial: customerPartial,
+        ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
         vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
         bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
@@ -22736,6 +22907,7 @@ async function qbPayables(env, url) {
           qbBatchById('Invoice', sigCandidates.map(c => c.invId)),
           qbBatchById('Bill', sigCandidates.map(c => c.billId)),
         ]);
+        const sigPayments = await qbLoadInvoicePayments(env, token, [...sigInvById.values()], warnings, methodsCache);
         for (const c of sigCandidates) {
           let customerPaid = null, customerBalance = null, invNumber = '';
           const q = sigInvById.get(c.invId);
@@ -22783,6 +22955,7 @@ async function qbPayables(env, url) {
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
             customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
+            ...clearFields(c.sc.WO_ID + ' (' + c.phase + ')', q, customerPaid === true || customerPartial, sigPayments),
             bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
             vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
             bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
@@ -22791,9 +22964,14 @@ async function qbPayables(env, url) {
       }
     } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
+    if (paymentDateMissing.length) {
+      await logAndCollectError(env, warnings, 'qb_payables_payment_date_missing', '/qb/payables', paymentDateMissing.slice(0, 20).join(', '),
+        new Error(paymentDateMissing.length + ' paid/part-paid invoice(s) have no QuickBooks Payment with a usable date (credit memo, journal entry or lookup problem) -- shown as "payment date unavailable": ' + paymentDateMissing.slice(0, 20).join(', ')));
+    }
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
     return json({
       ok: true, count: rows.length,
+      as_of: today, clear_days: clearCfg.map,
       owed_now: owed.length,
       owed_total: +owed.reduce((n, r) => n + (r.vendor_balance != null ? r.vendor_balance : r.vendor_cost), 0).toFixed(2),
       warnings,
