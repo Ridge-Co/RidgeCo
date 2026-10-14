@@ -887,7 +887,7 @@ globalThis.setTimeout = _realSetTimeout;
   t('no leftover cronSweepLogged / cron-branch dispatch in worker.js', !/cronSweepLogged/.test(wsrc) && !/cron === '/.test(wsrc));
   // every registry job points at a real function
   const names = [...blockSrc.matchAll(/run: \(env(?:[^)]*)\) => (\w+)\(/g)].map(m => m[1]);
-  t('every registry entry maps to a defined job function', names.length === 13 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
+  t('every registry entry maps to a defined job function', names.length === 16 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
   // the scheduler block never swallows
   t('scheduler block has no empty/underscore catch', !/catch\s*\(\s*_?\s*\)\s*\{\s*\}/.test(blockSrc) && !/catch\s*\(\s*_\s*\)/.test(blockSrc) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(blockSrc));
   const ver = /const BUILD_VERSION = '([^']+)'/.exec(wsrc)[1];
