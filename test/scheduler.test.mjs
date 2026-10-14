@@ -499,7 +499,7 @@ const drain = async (L, c, extra) => {
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   const a = await drain(L, c);
   t('first tick Mon 21:00 ET runs ONLY the five 15-minute jobs', a.ran.join() === INTERVAL5.join(), a.ran);
-  t('first tick reports first_run + seeded:[the 5 dailies and the two Monday weeklies]', a.first.body.first_run === true && a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'ar_report_mon'].join(), a.first.body);
+  t('first tick reports first_run + seeded:[the 5 dailies and the two Monday weeklies]', a.first.body.first_run === true && a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_daily'].join(), a.first.body);
   const s = stateOf(store);
   t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
   t('review_wed (Wednesday job) is not seeded on a Monday', !s.jobs.review_wed);
