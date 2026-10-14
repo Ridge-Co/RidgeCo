@@ -930,19 +930,6 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
-<!-- INVOICE MODAL -->
-<div class="modal-overlay" id="modal-invoice">
-  <div class="modal">
-    <div class="modal-header"><div class="modal-title">LOG INVOICE</div><button class="modal-close" onclick="closeModal('modal-invoice')">✕</button></div>
-    <div class="form-grid">
-      <div class="form-group full"><label>Amount ($)</label><input type="number" id="inv-amount" placeholder="0.00" step="0.01"></div>
-      <div class="form-group full"><label>QB Reference # (optional)</label><input type="text" id="inv-qb" placeholder="QuickBooks ref"></div>
-      <div class="form-group full"><label>Notes</label><textarea id="inv-notes" placeholder="Invoice notes..."></textarea></div>
-    </div>
-    <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-invoice')">Cancel</button><button class="btn" onclick="submitInvoice()">Log Invoice</button></div>
-  </div>
-</div>
-
 <!-- VOID / HIDE WORK ORDER MODAL -->
 <div class="modal-overlay" id="modal-void-wo">
   <div class="modal">
