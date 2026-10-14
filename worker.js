@@ -14881,7 +14881,7 @@ async function processQuietHoursQueue(env) {
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind });
+    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
