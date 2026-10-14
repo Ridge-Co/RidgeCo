@@ -550,7 +550,7 @@ const drain = async (L, c, extra) => {
   // DST: fall-back day, Monday Nov 2 2026 is EST (UTC-5): 13:29Z = 08:29 EST
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-11-02T13:29:00Z'));
   const a = await drain(L, c);
-  t('DST (EST): first tick 08:29 EST seeds the dailies only (review_mon is 08:30 EST)', a.first.body.seeded.join() === DAILY5.join() && a.ran.join() === INTERVAL5.join(), a.first.body.seeded);
+  t('DST (EST): first tick 08:29 EST seeds the dailies only (review_mon is 08:30 EST)', a.first.body.seeded.join() === [...DAILY5, 'hub_impr_mon', 'hub_impr_daily'].join() && a.ran.join() === INTERVAL5.join(), a.first.body.seeded);
   c.v = Date.parse('2026-11-02T13:30:00Z');
   t('DST (EST): review_mon runs at 13:30Z = 08:30 EST', (await drain(L, c)).ran.includes('review_mon'));
   c.v = Date.parse('2026-11-02T14:00:00Z');
