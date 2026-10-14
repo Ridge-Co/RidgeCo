@@ -6746,6 +6746,95 @@ async function ownerRosterPreview(env, callerRole, callerSessionId, body) {
   if (L.error) return json({ error: L.error }, L.status);
   return json({ ok: L.plan.ok, mode: 'preview', plan: L.plan, writes: false });
 }
+
+// POST /owner/tenant-roster/apply - all-or-nothing validation, then ordered writes (move-outs, fixes, arrivals), each verified.
+async function ownerRosterApply(env, callerRole, callerSessionId, body) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, body);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const actor = callerRole === 'owner' ? 'owner:' + ownerId : 'admin';
+  const batch = 'RB-' + new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).replace(/-/g, '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const L = await rosterLoadPlan(env, ownerId, body, batch);
+  if (L.error) return json({ error: L.error }, L.status);
+  const plan = L.plan;
+  if (!plan.ok) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_refused', Skill_Or_Endpoint: '/owner/tenant-roster/apply', Success: 'FALSE', Notes: ('owner=' + ownerId + ' actor=' + actor + ' rows=' + plan.rows.length + ' errors=' + plan.counts.error + ' ' + plan.errors.join('; ')).slice(0, 480) }); }
+    catch (e) { plan.errors.push('Could not record the refusal in telemetry: ' + String((e && e.message) || e).slice(0, 120)); }
+    return json({ ok: false, applied: false, refused: true, plan, error: 'Nothing was imported. Fix the rows marked in red and try again.' }, 422);
+  }
+  const results = [], warnings = [];
+  const today = L.today;
+  try { await ensureColumns(env, 'Tenants', ROSTER_TENANT_COLS); await ensureTab(env, ROSTER_LOG_TAB, ROSTER_LOG_COLS); }
+  catch (e) { return json({ ok: false, applied: false, error: 'Could not prepare the Tenants sheet columns - nothing was imported: ' + String((e && e.message) || e).slice(0, 200) }, 500); }
+  const done = (row, extra) => results.push(Object.assign({ n: row.n, label: row.label, status: row.status, applied: true }, extra || {}));
+  const failed = (row, e) => results.push({ n: row.n, label: row.label, status: row.status, applied: false, error: String((e && e.message) || e).slice(0, 240) });
+
+  // 1. departures
+  for (const row of plan.rows.filter(r => r.status === 'move_out')) {
+    const w = row.write;
+    try {
+      if (w.future) { await rosterWriteTenant(env, w.tenant_id, { Move_Out_Date: w.move_out_date, Roster_Pending_Flip: 'TRUE' }); done(row, { future: true, move_out_date: w.move_out_date }); }
+      else {
+        const r = await tenantMarkMovedOut(env, w.tenant_id, w.move_out_date);
+        if (r.errors.length) failed(row, new Error(r.errors.map(e => e.step + ': ' + e.error).join('; '))); else done(row, { move_out_date: w.move_out_date });
+      }
+    } catch (e) { failed(row, e); }
+  }
+  // 2. name fixes / move-in backfills (amend only - the update carries just the changed fields)
+  for (const row of plan.rows.filter(r => r.status === 'name_fix' || r.status === 'backfill')) {
+    try { await rosterWriteTenant(env, row.write.tenant_id, row.write.fields); done(row); } catch (e) { failed(row, e); }
+  }
+  // 3. arrivals
+  for (const row of plan.rows.filter(r => r.status === 'move_in')) {
+    try {
+      const add = await addRow(env, 'Tenants', Object.assign({}, row.write.fields));
+      const addJ = await add.json();
+      if (!add.ok || !addJ.id) throw new Error(addJ.error || ('HTTP ' + add.status));
+      const back = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(addJ.id));
+      if (!back || back.Move_In_Date !== row.write.fields.Move_In_Date || String(back.Active).toUpperCase() !== 'TRUE' || normalizePhone(back.Phone) !== row.write.fields.Phone) throw new Error('new tenant row did not read back correctly (id ' + addJ.id + ')');
+      let unitLinked = '';
+      if (row.unit_id) {
+        const u = (await fetchTab(env, 'Units')).find(x => String(x.ID) === String(row.unit_id));
+        if (u && !String(u.Tenant_ID || '').trim()) {
+          const ur = await updateRow(env, 'Units', u.ID, { Tenant_ID: String(addJ.id) });
+          if (!ur.ok) warnings.push(row.label + ': tenant added but the unit pointer could not be set (' + await respErrText(ur) + ').'); else unitLinked = u.Unit_Label || u.ID;
+        }
+      }
+      done(row, { tenant_id: String(addJ.id), unit_linked: unitLinked });
+    } catch (e) { failed(row, e); }
+  }
+
+  const bad = results.filter(r => !r.applied);
+  const counts = { move_in: results.filter(r => r.applied && r.status === 'move_in').length, move_out: results.filter(r => r.applied && r.status === 'move_out').length,
+    future_move_out: results.filter(r => r.applied && r.future).length, name_fix: results.filter(r => r.applied && (r.status === 'name_fix' || r.status === 'backfill')).length,
+    unchanged: plan.counts.unchanged + plan.counts.already_done, failed: bad.length };
+  const ok = bad.length === 0;
+  const owner = L.owner;
+  const ownerLabel = (owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim() || 'owner ' + ownerId);
+
+  // audit row + telemetry (failures here are reported, never swallowed)
+  try {
+    const lr = await addRow(env, ROSTER_LOG_TAB, { Timestamp: new Date().toISOString(), Batch: batch, Owner_ID: ownerId, Actor: actor, Rows: String(plan.rows.length), Moved_In: String(counts.move_in), Moved_Out: String(counts.move_out),
+      Future_Move_Outs: String(counts.future_move_out), Name_Fixes: String(counts.name_fix), Consent_Attested: body.consent === true ? 'TRUE' : 'FALSE', Result: ok ? 'ok' : 'partial_failure',
+      Details_JSON: JSON.stringify(results.map(r => ({ n: r.n, s: r.status, ok: r.applied, id: r.tenant_id || '', e: r.error || '' }))).slice(0, 40000), Active: 'TRUE' });
+    if (!lr.ok) warnings.push('The audit log row could not be written (' + await respErrText(lr) + ').');
+  } catch (e) { warnings.push('The audit log row could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
+  try {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_apply', Skill_Or_Endpoint: '/owner/tenant-roster/apply', Success: ok ? 'TRUE' : 'FALSE',
+      Notes: ('batch=' + batch + ' owner=' + ownerId + ' actor=' + actor + ' in=' + counts.move_in + ' out=' + counts.move_out + ' future=' + counts.future_move_out + ' fixes=' + counts.name_fix + ' failed=' + counts.failed + (bad.length ? ' ' + bad.map(b => 'row' + b.n + ':' + b.error).join('; ') : '')).slice(0, 480) });
+  } catch (e) { warnings.push('Telemetry could not be written: ' + String((e && e.message) || e).slice(0, 160)); }
+
+  // ONE heads-up to Brett (admin phone) - never to the owner or any tenant. A failure to alert is reported, not hidden.
+  try {
+    const futureRows = results.filter(r => r.applied && r.future);
+    const txt = 'Roster import (' + ownerLabel + '): ' + counts.move_in + ' in, ' + counts.move_out + ' out' + (counts.future_move_out ? ' (' + counts.future_move_out + ' future)' : '') + ', ' + counts.name_fix + ' name fixes'
+      + (counts.failed ? ', ' + counts.failed + ' FAILED' : '') + '. ' + (counts.move_in ? counts.move_in + ' new tenants flagged for consent/welcome. ' : '')
+      + (futureRows.length ? 'Future move-out: ' + futureRows.map(r => r.label.split(' - ')[0] + ' ' + r.move_out_date).join('; ') + ' - no turnover WOs created; approve when ready. ' : '') + 'Batch ' + batch + '.';
+    const an = await adminNotify(env, { text: txt, source: 'tenant_roster' });
+    if (!an.ok) warnings.push('Heads-up text to Brett was not sent: ' + await respErrText(an));
+  } catch (e) { warnings.push('Heads-up text to Brett was not sent: ' + String((e && e.message) || e).slice(0, 160)); }
+
+  return json({ ok, applied: true, batch, counts, results, warnings, plan: { counts: plan.counts, rows: plan.rows.map(r => ({ n: r.n, label: r.label, status: r.status, warnings: r.warnings })) } }, ok ? 200 : 207);
+}
 //@@ROSTER_NEXT@@
 
 // ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
