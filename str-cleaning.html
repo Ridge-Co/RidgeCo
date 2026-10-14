@@ -485,8 +485,11 @@ var SWITCHES = [
     on: function(){ return 'ON: the scheduler runs every 15 minutes, asks cleaners in order, and alerts you.'; },
     off: function(){ return 'OFF: nothing happens (you can still preview).'; } },
   { k:'STR_SMS_ENABLED', f:'sms', title:'Texts to cleaners',
-    on: function(s){ return 'ON: cleaners get texts. ' + (s.twilio_test_mode ? 'Right now texts go to YOUR phone only (test mode is on)' : 'Test mode is OFF, so texts go to the REAL cleaners') + ' - Twilio is ' + (s.twilio_enabled ? 'on' : 'off') + '.'; },
+    on: function(s){ return 'ON: cleaners get texts. ' + ((s.sms_test_mode || s.twilio_test_mode) ? 'Right now texts go to YOUR phone only (test mode is on)' : 'Test mode is OFF, so texts go to the REAL cleaners') + ' - Twilio is ' + (s.twilio_enabled ? 'on' : 'off') + '.'; },
     off: function(){ return 'OFF: nobody is texted. The board shows who would be asked next.'; } },
+  { k:'STR_SMS_TEST_MODE', f:'sms_test_mode', title:'Cleaning test mode',
+    on: function(){ return "ON (safe): every cleaning text goes to YOUR phone only, marked [TEST - for <name>]. No cleaner is texted. Other Hub texts are not affected."; },
+    off: function(){ return 'OFF: cleaning texts go to the REAL cleaners.'; } },
   { k:'STR_CAL_WRITE_ENABLED', f:'cal_write', title:'Cleaning calendar',
     on: function(){ return "ON: the Hub writes '<Name> Cleaning' and the red 'not covered' block to the cleaning calendar."; },
     off: function(){ return 'OFF: the Hub only plans calendar changes and writes nothing to the calendar.'; } },
@@ -508,7 +511,7 @@ var NUMS = [
 function renderSwitches(){
   var s = S.settings || {}, h = '';
   var onCount = SWITCHES.filter(function(x){ return s[x.f]; }).length;
-  $('m-sw').textContent = onCount + ' of 4 ON';
+  $('m-sw').textContent = onCount + ' of ' + SWITCHES.length + ' ON';
   if(s.bookings_set === false) h += '<div class="msg warn"><b>Not set up yet: bookings feed.</b>The scheduler has no guest bookings to read. Add the feed link on the <a href="inspect.html" style="color:inherit">Inspection Scheduler</a> page (Open blocks tab, "Cabin cleaning protection").</div>';
   if(s.cleaning_cal_set === false) h += '<div class="msg warn"><b>Not set up yet: cleaning calendar.</b>There is no cleaning calendar to read or write. Add it on the <a href="inspect.html" style="color:inherit">Inspection Scheduler</a> page (Open blocks tab, "Cabin cleaning protection").</div>';
   if(s.sms && !s.twilio_enabled) h += '<div class="msg err" role="alert"><b>Texts are paused because Twilio is switched off globally.</b>Texts to cleaners are ON here, but nothing can be sent until Twilio is switched on.</div>';
@@ -525,9 +528,10 @@ function openSwitch(key){
   var x = SWITCHES.filter(function(z){ return z.k === key; })[0], s = S.settings || {}, now = !!s[x.f], target = !now;
   var say = (target ? x.on(s) : x.off(s));
   if(key === 'STR_SMS_ENABLED' && target && !s.twilio_enabled) say += ' WARNING: Twilio is switched off globally, so no text will actually go out yet.';
-  if(key === 'STR_SMS_ENABLED' && target && !s.twilio_test_mode) say += ' WARNING: real cleaners will be texted.';
+  if(key === 'STR_SMS_ENABLED' && target && !s.twilio_test_mode && !s.sms_test_mode) say += ' WARNING: real cleaners will be texted.';
+  if(key === 'STR_SMS_TEST_MODE' && !target) say += ' WARNING: from now on real cleaners get the texts.';
   openAction({
-    title: 'Turn "' + x.title + '" ' + (target ? 'ON' : 'OFF') + '?', say: say, go: 'Yes, turn it ' + (target ? 'ON' : 'OFF'), danger: false,
+    title: 'Turn "' + x.title + '" ' + (target ? 'ON' : 'OFF') + '?', say: say, go: 'Yes, turn it ' + (target ? 'ON' : 'OFF'), danger: (key === 'STR_SMS_TEST_MODE' && !target),
     run: function(){
       var v = {}; v[key] = target ? 'TRUE' : 'FALSE';
       return api('POST', '/str/admin/config', { values: v }).then(function(r){
