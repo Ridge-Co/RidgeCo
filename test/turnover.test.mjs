@@ -17,6 +17,7 @@
 //      Active/PIN (unlike the destructive /tenant/move-out), and starts the turnover.
 import fs from 'fs';
 import assert from 'node:assert';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 
 function grab(src, sig) {

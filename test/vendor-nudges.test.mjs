@@ -3,6 +3,7 @@
 // against Brett's own stated examples, plus structural checks on the sweep/reset logic.
 import fs from 'fs';
 import assert from 'node:assert';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 function grab(name) {
   const i = src.indexOf('function ' + name + '(');
@@ -73,7 +74,7 @@ const sweepBody = grabAsync('processVendorNudges');
   ok(sweepBody.includes('hasOpenInvoiceReq'), 'the auto-started invoice chase checks for an already-open one first, so it never duplicates a row for the same WO+vendor');
 }
 {
-  ok(sweepBody.includes("['Cancelled','Declined']"), 'Cancelled/Declined still short-circuit both request types before either satisfied-check runs, per Brett\'s "cancelled stops all nudges" rule');
+  ok(sweepBody.includes('WOStatus.sets.DEAD'), 'Cancelled/Declined (the DEAD status group) still short-circuit both request types before either satisfied-check runs, per Brett\'s "cancelled stops all nudges" rule');
 }
 {
   ok(sweepBody.includes('Scheduled_Date'), 'the sweep respects a future Scheduled_Date to go quiet, per Brett\'s stated rule');
