@@ -6835,7 +6835,75 @@ async function ownerRosterApply(env, callerRole, callerSessionId, body) {
 
   return json({ ok, applied: true, batch, counts, results, warnings, plan: { counts: plan.counts, rows: plan.rows.map(r => ({ n: r.n, label: r.label, status: r.status, warnings: r.warnings })) } }, ok ? 200 : 207);
 }
-//@@ROSTER_NEXT@@
+
+// Daily scheduler step (rides the existing daily_turnover job - NO new cron, NO new Apps Script row): flips the tenants the
+// roster tool booked a FUTURE move-out for, once that date has passed (Eastern). Scoped by Roster_Pending_Flip so it can never
+// touch a tenant it did not book. Reports failures loudly (throws after trying all) so /cron/status and the alert path see them.
+async function rosterFlipDueMoveOuts(env) {
+  const tenants = await fetchTab(env, 'Tenants');
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const due = tenants.filter(t => String(t.Roster_Pending_Flip || '').toUpperCase() === 'TRUE' && String(t.Active).toUpperCase() !== 'FALSE' && /^\d{4}-\d{2}-\d{2}$/.test(String(t.Move_Out_Date || '').trim()) && today > String(t.Move_Out_Date).trim());
+  const flipped = [], problems = [];
+  for (const t of due) {
+    try {
+      const r = await tenantMarkMovedOut(env, t.ID, String(t.Move_Out_Date).trim());
+      if (r.errors.length) problems.push('tenant ' + t.ID + ': ' + r.errors.map(e => e.step + ' ' + e.error).join('; '));
+      else flipped.push(String(t.ID));
+    } catch (e) { problems.push('tenant ' + t.ID + ': ' + String((e && e.message) || e)); }
+  }
+  if (due.length) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_flip', Skill_Or_Endpoint: 'daily_turnover', Success: problems.length ? 'FALSE' : 'TRUE', Notes: ('flipped=' + flipped.join(',') + (problems.length ? ' problems=' + problems.join(' | ') : '')).slice(0, 480) }); }
+    catch (e) { problems.push('telemetry: ' + String((e && e.message) || e)); }
+  }
+  if (problems.length) throw new Error('roster move-out flip had problems: ' + problems.join(' | ').slice(0, 400));
+  return { due: due.length, flipped };
+}
+
+// Oct 14 2026 (Brett: "yes to all refusing without move-in/move-out dates"): the dates are what keep a new tenant away from the
+// previous tenant's work orders, so NO path may create a tenant without them. One rule, used by /tenant/add (admin Hub, every
+// importer page), the bulk importer and owner onboarding: a tenant needs a real Move_In_Date; a tenant created as already gone
+// (Active FALSE) also needs a Move_Out_Date that is not before the move-in. Returns '' when fine, otherwise the plain-English reason.
+function tenantDatesError(f) {
+  f = f || {};
+  const mi = rosterNormDate(f.Move_In_Date);
+  if (mi === null) return 'Move-in date "' + f.Move_In_Date + '" is not a real date (use YYYY-MM-DD).';
+  if (!mi) return 'Move-in date is required. Without it the tenant would see - and be texted about - the previous tenant\'s work orders.';
+  if (String(f.Active == null ? '' : f.Active).toUpperCase() === 'FALSE') {
+    const mo = rosterNormDate(f.Move_Out_Date);
+    if (mo === null) return 'Move-out date "' + f.Move_Out_Date + '" is not a real date (use YYYY-MM-DD).';
+    if (!mo) return 'Move-out date is required for a tenant who has already left.';
+    if (mo < mi) return 'Move-out date is before the move-in date.';
+  } else if (String(f.Move_Out_Date || '').trim()) {
+    const mo = rosterNormDate(f.Move_Out_Date);
+    if (mo === null) return 'Move-out date "' + f.Move_Out_Date + '" is not a real date (use YYYY-MM-DD).';
+    if (mo < mi) return 'Move-out date is before the move-in date.';
+  }
+  return '';
+}
+async function tenantAddGuarded(env, body) {
+  body = body || {};
+  const why = tenantDatesError(body);
+  if (why) {
+    const out = { error: why, code: 'tenant_dates_required' };
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_add_refused', Skill_Or_Endpoint: '/tenant/add', Success: 'FALSE', Notes: ('property=' + (body.Property_ID || '') + ' unit=' + (body.Unit_ID || '') + ' ' + why).slice(0, 480) }); }
+    catch (e) { out.telemetry_error = String((e && e.message) || e).slice(0, 160); }
+    return json(out, 400);
+  }
+  body.Move_In_Date = rosterNormDate(body.Move_In_Date);
+  if (String(body.Move_Out_Date || '').trim()) body.Move_Out_Date = rosterNormDate(body.Move_Out_Date);
+  return await addRow(env, 'Tenants', body);
+}
+// /tenant/update must not be a back door: it can change a date but never blank the move-in of a tenant.
+async function tenantUpdateGuarded(env, body) {
+  const f = body && body.fields;
+  if (f && Object.prototype.hasOwnProperty.call(f, 'Move_In_Date')) {
+    const mi = rosterNormDate(f.Move_In_Date);
+    if (mi === null) return json({ error: 'Move-in date "' + f.Move_In_Date + '" is not a real date (use YYYY-MM-DD).', code: 'tenant_dates_required' }, 400);
+    if (!mi) return json({ error: 'The move-in date cannot be cleared. Without it the tenant would see the previous tenant\'s work orders.', code: 'tenant_dates_required' }, 400);
+    f.Move_In_Date = mi;
+  }
+  return await updateRow(env, 'Tenants', body && body.id, f);
+}
 
 // ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
 // Brett's ask: turn tenants' ability to submit their own work orders on/off, settable at the
