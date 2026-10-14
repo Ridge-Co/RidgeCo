@@ -95,6 +95,7 @@ function load(store, over) {
     estimatesAwaitingDecision: () => [], ESTIMATE_SMS_DEFAULT_SINCE: '2026-09-29T00:00:00.000Z', RECUR_POST_START_HOUR_ET: 8, QUIET_HOURS_START_ET: 19,
     recurIsTrue: (v) => String(v).toUpperCase() === 'TRUE', recurEtDateISO: (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d),
     recurLatestDue: () => null, recurTargets: () => [], recurTargetKey: (x) => x.p + '|' + (x.u || ''), recurWOIsOpen: () => false,
+    hubImpPull: async () => ({ new: 0 }), hubImpReconcile: async () => ({ rows: 0, updated: 0, completed_now: [], problems: [] }), opsQueueSync: async () => ({ ok: true, checked: 0, changed: [], errors: [] }),
     qbSyncPayments: async () => ({ ok: true }), runWeeklyReview: async () => ({ ok: true, logged: true, delivery: null }), runWeeklyArReport: async () => ({ delivered: false }),
   };
   Object.assign(stubs, over.stubs || {});
