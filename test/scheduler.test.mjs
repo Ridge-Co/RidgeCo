@@ -571,7 +571,7 @@ const drain = async (L, c, extra) => {
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   store.tabs.get('Config').push(['Scheduler_State', '   ']);
   const a = await drain(L, c);
-  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 7);
+  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 9);
 }
 {
   // jobs added to the registry LATER keep catch-up: existing state, no entry for the new job -> it runs
