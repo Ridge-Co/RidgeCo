@@ -178,4 +178,33 @@ ok(/path === '\/scope-proposal\/px'\)\s+return await scopeProposalPixel/.test(sr
 ok(/Skip_If_Seen: opts\.skip_if_seen/.test(src) && /if \(o\.skip_if_seen\) opts\.skip_if_seen/.test(src) && /else if \(o\.kind === 'owner'\) opts\.owner = o\.owner/.test(src), 'sendTemplatedSms passes owner / window / skip through');
 ok(/sms_again === true/.test(src) && /override_quiet_hours === true/.test(src), 'send endpoint reads override_quiet_hours and sms_again');
 ok(/preview'\) !== '1'\) await proposalRecordHit/.test(src), 'view logging is skipped with &preview=1');
+
+// ── Oct 14 review fixes: skip-if-seen only counts views AT/AFTER the latest send; double-send guard ──
+{
+  const { proposalSeenByOwner } = H;
+  const sent = '2026-10-14T15:00:00Z';
+  ok(!proposalSeenByOwner({ Page_First_Viewed: '2026-10-13T12:00:00Z', Page_Last_Viewed: '2026-10-13T12:00:00Z' }, sent), 'a view from BEFORE the latest send does not cancel the text');
+  ok(!proposalSeenByOwner({ Email_First_Opened: '2026-10-13T12:00:00Z', Email_Last_Opened: '2026-10-14T14:59:59Z' }, sent), 'an email open 1s before the send does not count');
+  ok(proposalSeenByOwner({ Page_First_Viewed: '2026-10-13T12:00:00Z', Page_Last_Viewed: '2026-10-14T16:00:00Z' }, sent), 'an older first view + a fresh last view after the send = seen');
+  ok(proposalSeenByOwner({ Email_First_Opened: '2026-10-14T15:00:00Z', Email_Last_Opened: '2026-10-14T15:00:00Z' }, sent), 'a view exactly at Sent_Date counts (at or after)');
+  ok(proposalSeenByOwner({ Page_First_Viewed: '2026-10-13T12:00:00Z' }, ''), 'no Sent_Date: legacy any-view rule still applies');
+  ok(!proposalSeenByOwner({ Email_Auto_Opens: '2' }, sent), 'auto opens never count');
+}
+ok(/proposalSeenByOwner\(sc, sc\.Sent_Date\)/.test(src), 'the release sweep passes the scope Sent_Date to proposalSeenByOwner');
+{
+  const body = src.slice(src.indexOf('async function scopeProposalSend('), src.indexOf('async function scopeProposalSend(') + 2500);
+  const guardAt = body.indexOf('PROPOSAL_RESEND_GUARD_MS'), emailAt = body.indexOf('gmailSendEmail');
+  ok(guardAt > 0 && emailAt > guardAt, 'the double-send guard runs BEFORE the email is sent');
+  ok(/code: 'just_sent' \}, 409/.test(body), 'a too-soon repeat is refused with 409 just_sent');
+  const m = /const PROPOSAL_RESEND_GUARD_MS = (\d+);/.exec(src);
+  ok(m && +m[1] >= 30000 && +m[1] <= 300000, 'guard window is 30s-5min');
+  // behavioural: run the real guard lines against fake clocks
+  const guard = (Sent_Date, now) => { const lastSent = Date.parse(Sent_Date || ''); return !!(lastSent && (now - lastSent) < +m[1] && (now - lastSent) >= 0); };
+  const t0 = Date.parse('2026-10-14T15:00:00Z');
+  ok(guard('2026-10-14T15:00:00Z', t0 + 5000) && !guard('2026-10-14T15:00:00Z', t0 + 61000) && !guard('', t0) && !guard('garbage', t0), 'guard blocks within the window only; first send and bad stamps pass');
+}
+{
+  const c = fs.readFileSync(new URL('../scope-creator.html', import.meta.url), 'utf8');
+  ok(/window\._proposalSending/.test(c) && /_sb\.disabled=true/.test(c) && /finally\{ window\._proposalSending=false/.test(c), 'the Send button disables while a send is in flight and re-enables in finally');
+}
 console.log(`proposal-read-status-owner-sms: ${n} checks passed`);

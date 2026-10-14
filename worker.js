@@ -31,7 +31,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.3-proposal-read-status-owner-sms';
+const BUILD_VERSION = '2026-10-14.7-proposal-read-status-owner-sms';
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -394,6 +394,17 @@ const _hubWorkerCore = {
       }
     }
     try {
+      if (callerRole) {
+        const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
+        if (_mm) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mm);
+        if (request.method === 'GET') {
+          url.searchParams.set(SESSION_IDENTITY_PARAM[callerRole], String(callerSessionId));
+          if (WO_KEYED_READ_PATHS.includes(path)) {
+            const _denied = await woKeyedReadDenied(env, path, url, callerRole, callerSessionId);
+            if (_denied) return _denied;
+          }
+        }
+      }
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
         if (path === '/cron/status')            return await schedStatusHandler(env);
@@ -436,8 +447,8 @@ const _hubWorkerCore = {
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
-        if (path === '/attachments')            return await getAttachments(env, url);
-        if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
+        if (path === '/attachments')            return await getAttachments(env, url, callerRole, callerSessionId);
+        if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url);
@@ -457,9 +468,9 @@ const _hubWorkerCore = {
         if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url);
-        if (path === '/vendor-workorders')      return await vendorWorkorders(env, url);
-        if (path === '/tenant-workorders')      return await tenantWorkorders(env, url);
-        if (path === '/owner-workorders')       return await ownerWorkorders(env, url);
+        if (path === '/vendor-workorders')      return await vendorWorkorders(env, url, callerRole, callerSessionId);
+        if (path === '/tenant-workorders')      return await tenantWorkorders(env, url, callerRole, callerSessionId);
+        if (path === '/owner-workorders')       return await ownerWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/owner-notifications')    return await getOwnerNotifications(env, url);
         if (path === '/owner-users')            return await getOwnerUsers(env, url);
         if (path === '/notifications/pending') {
@@ -572,6 +583,10 @@ const _hubWorkerCore = {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        if (callerRole) {
+          const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
+          if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
+        }
         // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
         // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
         // actual DATA being touched is too. Runs only for requests authenticated via
@@ -960,7 +975,25 @@ const _hubWorkerCore = {
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
-      return json({ error: err.message, stack: err.stack, type: err.constructor.name }, 500);
+      // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
+      // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
+      //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
+      //     with a short ref the caller can quote;
+      //   - only the admin secret / the staging test token get the detail back; everyone else gets a
+      //     generic message plus the ref. If the telemetry write itself fails the admin response says
+      //     so (telemetry_error) and the failure goes to the Worker log - it is never swallowed.
+      const _ref = crypto.randomUUID().slice(0, 8);
+      const _tokHdr = request.headers.get('X-Auth-Token') || '';
+      const _detailOk = _viaHubTestToken || (!!env.WORKER_SECRET && _tokHdr === env.WORKER_SECRET);
+      let _telemetryError = '';
+      try {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'unhandled_500', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `ref=${_ref} role=${callerRole || 'none'} ${String((err && err.message) || err)}`.slice(0, 480) });
+      } catch (te) {
+        _telemetryError = String((te && te.message) || te);
+        console.error('[unhandled_500] could not log to Ops_Telemetry', _ref, path, _telemetryError, err && err.stack);
+      }
+      if (_detailOk) return json({ error: err.message, stack: err.stack, type: err.constructor.name, ref: _ref, telemetry_error: _telemetryError || undefined }, 500);
+      return json({ error: 'Something went wrong on our side. Please try again; if it keeps happening, tell Ridge Co and quote ref ' + _ref + '.', ref: _ref }, 500);
     }
   },
 
@@ -1452,12 +1485,121 @@ async function updateKeyWithHistory(env, body) {
 
 // ── ATTACHMENTS ──────────────────────────────────────────────
 
-async function getAttachments(env, url) {
+// GET /attachments?wo_id= | ?invoice_id= — per-record scope (Oct 14 2026, queue #150).
+// Before this, ANY signed-in tenant/owner/vendor session token could list ANY job's attachments
+// (cross-account leak of photos, Drive links and receipt file names). Now:
+//   - Admin secret / internal tokens (callerRole null): unchanged, full access.
+//   - A role session may only see attachments on a WO it could already see in its own portal list
+//     (attachmentScopeAllows below mirrors vendorWorkorders / tenantWorkorders / ownerWorkorders).
+//   - Tenants never receive receipt/bill/invoice rows (vendor cost docs) even on their own jobs.
+//   - Asking for a WO the session may not see is a generic 404 (same for "missing" and "not yours",
+//     like /owner-file/view) and is logged to Ops_Telemetry as a failure so a probe or a real
+//     regression is visible. A telemetry failure propagates (loud 500) instead of being swallowed.
+//   - Unknown roles fail closed.
+const ATTACHMENT_COST_DOC_TYPES = ['receipt', 'bill', 'invoice'];
+
+// Shared with tenantWorkorders so "what a tenant can see" has ONE definition. Status/include_closed
+// filtering stays in the list endpoint (a tenant may view photos on a closed job they can see).
+function tenantCanSeeWO(tenant, w) {
+  if (!tenant || !w) return false;
+  if (w.Voided === 'TRUE') return false;
+  if (w.Tenant_Visible === 'FALSE') return false;
+  if (w.Property_ID !== tenant.Property_ID) return false;
+  if (isBackgroundWO(tenant, w)) return false;
+  if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenant.ID;
+  return true;
+}
+
+function attachmentScopeAllows(role, sessionId, wo, tenants, properties) {
+  if (!wo || !role || !sessionId) return false;
+  const sid = String(sessionId);
+  if (role === 'vendor') {
+    // Assigned vendor only. A voided WO is still theirs: additional-work drafts are stored as voided
+    // children and the vendor attaches photos to them before submitting.
+    return String(wo.Vendor_ID || '') !== '' && String(wo.Vendor_ID) === sid;
+  }
+  if (role === 'tenant') {
+    const tenant = (tenants || []).find(t => t.ID === sid && t.Active !== 'FALSE');
+    return tenantCanSeeWO(tenant, wo);
+  }
+  if (role === 'owner') {
+    const prop = (properties || []).find(p => p.ID === wo.Property_ID);
+    if (!prop || String(prop.Owner_ID || '') !== sid) return false;
+    return wo.Voided !== 'TRUE' && String(wo.Type || '') !== 'addon' && !isHiddenBidCopy(wo);
+  }
+  return false;
+}
+
+// ── SESSION IDENTITY BINDING (Oct 14 2026, Brett: "fix them") ──────────────────────────────────
+// Before this, every tenant/owner/vendor endpoint trusted the id the PAGE sent (?tenant_id=,
+// ?owner_id=, ?vendor_id=, body.vendor_id ...) instead of the id baked into the signed session
+// token, so any signed-in account could read another account's job list, bills, receipts or
+// notification settings by changing one number in the URL. One central rule, enforced in the
+// router for every role session (admin secret and internal tokens never reach it):
+//   - The id param for the caller's role (vendor_id / owner_id / tenant_id), when supplied in the
+//     query string OR the POST body, must equal the verified session id. A mismatch is a 403 and a
+//     failed Ops_Telemetry row (`session_identity_mismatch`) - never silently "corrected".
+//   - On GET the session id is then FORCED into the query, so a request that simply omits the param
+//     (e.g. /vendor-bills?status=submitted, which used to return every vendor's bills) is scoped to
+//     the caller instead of falling through to "everything".
+//   - GETs that name a work order (wo_id) must be for a job this session may see (the same
+//     attachmentScopeAllows used by /attachments - one definition). Generic 404 otherwise.
+// POST bodies are validated when the id is present; per-record write checks (e.g. /status on a WO id)
+// are a separate layer and are listed in BACKLOG.
+const SESSION_IDENTITY_PARAM = { vendor: 'vendor_id', owner: 'owner_id', tenant: 'tenant_id' };
+const WO_KEYED_READ_PATHS = ['/estimates', '/time-entries', '/receipts', '/vendor-bills', '/nearby-wos', '/wo-audit'];
+
+function sessionIdentityMismatch(role, sessionId, url, body) {
+  if (!role) return null;                                   // admin secret / internal token
+  const param = SESSION_IDENTITY_PARAM[role];
+  if (!param) return { param: '(role)', supplied: String(role) };   // unknown role fails closed
+  const sid = String(sessionId || '');
+  const supplied = [];
+  if (url && url.searchParams) supplied.push(url.searchParams.get(param));
+  if (body && typeof body === 'object') supplied.push(body[param]);
+  for (const v of supplied) {
+    if (v === null || v === undefined || v === '') continue;
+    if (!sid || String(v) !== sid) return { param, supplied: String(v).slice(0, 60) };
+  }
+  return null;
+}
+
+async function denySessionIdentity(env, path, role, sessionId, mm) {
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'session_identity_mismatch', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${role} session=${sessionId} sent ${mm.param}=${mm.supplied}` });
+  return json({ error: 'Forbidden' }, 403);
+}
+
+// Returns a Response when the session may NOT read this wo_id, otherwise null.
+async function woKeyedReadDenied(env, path, url, role, sessionId) {
+  const woId = url.searchParams.get('wo_id') || '';
+  if (!woId) return null;                                   // handlers that need a wo_id 400 on their own
+  const [workorders, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+  if (attachmentScopeAllows(role, sessionId, findWO(workorders, woId), tenants, properties)) return null;
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_scope_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${role} session=${sessionId} wo=${woId}` });
+  return json({ error: 'Not found' }, 404);
+}
+
+async function getAttachments(env, url, callerRole, callerSessionId) {
   const woId = url.searchParams.get('wo_id') || '';
   const invoiceId = url.searchParams.get('invoice_id') || '';
   if (!woId && !invoiceId) return json({ error: 'Missing wo_id or invoice_id' }, 400);
   const attachments = await fetchTab(env, 'Attachments');
-  return json(attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; }));
+  const rows = attachments.filter(a => { if (a.Active === 'FALSE') return false; if (woId && a.WO_ID === woId) return true; if (invoiceId && a.Invoice_ID === invoiceId) return true; return false; });
+  if (!callerRole) return json(rows);   // admin secret / internal token: full access, as before
+  const [workorders, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+  const allowedWO = new Map();
+  const woAllowed = (id) => {
+    if (!id) return false;
+    if (!allowedWO.has(id)) allowedWO.set(id, attachmentScopeAllows(callerRole, callerSessionId, findWO(workorders, id), tenants, properties));
+    return allowedWO.get(id);
+  };
+  if (woId && !woAllowed(woId)) {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'attachments_scope_denied', Skill_Or_Endpoint: '/attachments', Success: 'FALSE', Notes: `role=${callerRole} session=${callerSessionId} wo=${woId}` });
+    return json({ error: 'Not found' }, 404);
+  }
+  let visible = rows.filter(a => woAllowed(a.WO_ID));
+  if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
+  return json(visible);
 }
 
 // Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
@@ -1469,7 +1611,7 @@ async function getAttachments(env, url) {
 // correctly kept private. This does NOT change the sharing policy (the file is still never
 // public); it only lets an already-authenticated vendor session read the bytes of a file that's
 // logged against a WO_ID they have legitimate access to, same trust boundary as GET /attachments.
-async function viewInternalFile(env, url) {
+async function viewInternalFile(env, url, callerRole, callerSessionId) {
   const woId = url.searchParams.get('wo_id') || '';
   const fileId = url.searchParams.get('file_id') || '';
   if (!woId || !fileId) return json({ error: 'wo_id and file_id required' }, 400);
@@ -1477,6 +1619,18 @@ async function viewInternalFile(env, url) {
     const attachments = await fetchTab(env, 'Attachments');
     const row = attachments.find(a => a.Active !== 'FALSE' && a.WO_ID === woId && a.Drive_File_ID === fileId);
     if (!row) return json({ error: 'File not found for this work order' }, 404);
+    // Oct 14 2026: any signed-in session could stream any job's receipt/bill/invoice bytes by
+    // guessing wo_id + file_id. A role session now needs the same access to the WO as /attachments
+    // (the assigned vendor; a tenant/owner can never reach cost documents through this route since
+    // it is not in their scope list, and attachmentScopeAllows fails closed on anything else).
+    // Admin secret / internal token (callerRole null) is unchanged. Same generic 404 as "no such file".
+    if (callerRole) {
+      const [wos, tenants, properties] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties']);
+      if (!attachmentScopeAllows(callerRole, callerSessionId, findWO(wos, woId), tenants, properties)) {
+        await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_file_scope_denied', Skill_Or_Endpoint: '/vendor-file/view', Success: 'FALSE', Notes: `role=${callerRole} session=${callerSessionId} wo=${woId} file=${fileId}` });
+        return json({ error: 'File not found for this work order' }, 404);
+      }
+    }
     const token = await getAccessToken(env);
     const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -1489,8 +1643,17 @@ async function viewInternalFile(env, url) {
       headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
     });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return await fileViewError(env, '/vendor-file/view', e, callerRole, callerSessionId);
   }
+}
+
+// Shared by the two file streamers (Oct 14 2026): a role session never sees raw Drive/Sheets error
+// text, but the failure is always logged with a ref (a telemetry failure propagates to the router's
+// own 500 handler, so it is never swallowed). Admin/internal callers (callerRole null) keep the detail.
+async function fileViewError(env, path, e, callerRole, callerSessionId) {
+  const ref = crypto.randomUUID().slice(0, 8);
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'file_view_error', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `ref=${ref} role=${callerRole || 'none'} session=${callerSessionId || ''} ${String((e && e.message) || e)}`.slice(0, 480) });
+  return json({ error: callerRole ? 'Could not load this file. Please try again; if it keeps happening, tell Ridge Co and quote ref ' + ref + '.' : ((e && e.message) || String(e)), ref }, 500);
 }
 
 // GET /owner-file/view?wo_id=&file_id=&t= — owner-scoped receipt viewer (rule 177, Sep 16 2026).
@@ -1536,7 +1699,7 @@ async function viewOwnerReceiptFile(env, url, callerRole, callerSessionId) {
       headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': `inline; filename="${safeName}"` },
     });
   } catch (e) {
-    return json({ error: e.message }, 500);
+    return await fileViewError(env, '/owner-file/view', e, callerRole, callerSessionId);
   }
 }
 
@@ -4498,6 +4661,7 @@ const PROPOSAL_SEND_LOG_COLS = ['ID', 'Timestamp', 'Scope_ID', 'Owner_ID', 'Owne
 // Either signal counts as "seen" - that is what cancels a held owner text (processQuietHoursQueue) .
 const PROPOSAL_TRACK_COLS = ['Email_First_Opened', 'Email_Last_Opened', 'Email_Open_Count', 'Email_Auto_Opens', 'Page_First_Viewed', 'Page_Last_Viewed', 'Page_View_Count', 'Owner_SMS_Status', 'Owner_SMS_Time'];
 const PROPOSAL_OPEN_AUTO_WINDOW_MS = 120000;
+const PROPOSAL_RESEND_GUARD_MS = 60000;
 const PROPOSAL_BOT_UA = /bot|crawl|spider|slurp|facebookexternalhit|whatsapp|slackbot|twitterbot|curl\/|python-requests|headless|linkpreview|link preview/i;
 const SCOPE_SMS_QUIET_WINDOW = { start: 20, end: 8 };   // owner proposal text: fine until 8pm ET, held until 8am ET
 const PROPOSAL_PIXEL_GIF_B64 = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
@@ -4508,7 +4672,16 @@ function classifyProposalHit({ kind, ua, sentDate, now }) {
   return 'real';
 }
 // Pure: has the owner (probably) seen this proposal?
-function proposalSeenByOwner(s) { return !!(s && (String(s.Page_First_Viewed || '').trim() || String(s.Email_First_Opened || '').trim())); }
+// `sinceIso` (the send that queued the text = the scope's Sent_Date): only a view AT OR AFTER it counts, so an
+// open from an earlier send/preview cannot cancel the text for a later resend. Compares the LAST view stamps
+// (they move on every hit). With no usable sinceIso it falls back to "any view ever" (legacy rows).
+function proposalSeenByOwner(s, sinceIso) {
+  if (!s) return false;
+  const since = Date.parse(sinceIso || '');
+  if (!since) return !!(String(s.Page_First_Viewed || '').trim() || String(s.Email_First_Opened || '').trim());
+  const at = (v) => { const t = Date.parse(String(v || '').trim()); return t ? t : 0; };
+  return at(s.Page_Last_Viewed || s.Page_First_Viewed) >= since || at(s.Email_Last_Opened || s.Email_First_Opened) >= since;
+}
 // Never silent: a failed log lands in Ops_Telemetry; the public page/pixel still works.
 async function proposalRecordHit(env, s, kind, ua) {
   try {
@@ -4601,6 +4774,12 @@ async function scopeProposalSend(env, body) {
   const id = body && body.scope_id; if (!id) return json({ error: 'scope_id required' }, 400);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   if (!(s.Proposal_Text || '').trim()) return json({ error: 'Generate the proposal first (Generate proposal), then send.' }, 400);
+  // Double-send guard (Oct 14 2026): a double tap / retry within PROPOSAL_RESEND_GUARD_MS of the last send is refused
+  // BEFORE any email or text goes out (409, nothing sent). A deliberate resend after that still works.
+  const lastSent = Date.parse(s.Sent_Date || '');
+  if (lastSent && (Date.now() - lastSent) < PROPOSAL_RESEND_GUARD_MS && (Date.now() - lastSent) >= 0) {
+    return json({ error: 'This estimate was just sent ' + Math.max(1, Math.round((Date.now() - lastSent) / 1000)) + 's ago - nothing was sent again. Wait a minute if you really want to resend.', code: 'just_sent' }, 409);
+  }
 
   const [props, owners] = await fetchTabs(env, ['Properties', 'Owners']);
   const prop = props.find(p => p.ID === String(s.Property_ID)) || null;
@@ -8822,8 +9001,9 @@ async function createInvoice(env, body) {
 
 // ── PORTAL VIEWS ─────────────────────────────────────────────
 
-async function vendorWorkorders(env, url) {
-  const vendorId = url.searchParams.get('vendor_id');
+async function vendorWorkorders(env, url, callerRole, callerSessionId) {
+  // A vendor session is always scoped to ITS OWN id from the signed token, never the query string.
+  const vendorId = callerRole === 'vendor' ? String(callerSessionId || '') : url.searchParams.get('vendor_id');
   if (!vendorId) return json({ error: 'Missing vendor_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   // ONE batchGet for everything (was 3 separate Sheets reads per call: tabs + Config + Master_Key_Holders).
@@ -8859,8 +9039,9 @@ async function vendorWorkorders(env, url) {
   return json(enriched);
 }
 
-async function tenantWorkorders(env, url) {
-  const tenantId = url.searchParams.get('tenant_id');
+async function tenantWorkorders(env, url, callerRole, callerSessionId) {
+  // A tenant session is always scoped to ITS OWN id from the signed token, never the query string.
+  const tenantId = callerRole === 'tenant' ? String(callerSessionId || '') : url.searchParams.get('tenant_id');
   if (!tenantId) return json({ error: 'Missing tenant_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors, owners] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors','Owners']);
@@ -8868,7 +9049,7 @@ async function tenantWorkorders(env, url) {
   // isBackgroundWO: don't show a WO opened before this tenant moved in — matches the rule
   // isTenantNotifiable already applies to SMS, so "won't text them about it" and "won't show
   // it in their portal" stay in sync instead of drifting apart (see isBackgroundWO comment).
-  const wos = workorders.filter(w => { if (w.Voided === 'TRUE') return false; if (w.Tenant_Visible === 'FALSE') return false; if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; if (w.Property_ID !== tenant.Property_ID) return false; if (isBackgroundWO(tenant, w)) return false; if (tenant.Unit_ID) return w.Unit_ID === tenant.Unit_ID || w.Tenant_ID === tenantId; return true; });
+  const wos = workorders.filter(w => { if (!includeClosed && !OPEN_WO_STATUSES.includes(w.Status)) return false; return tenantCanSeeWO(tenant, w); });
   // tenants get the assigned vendor's name/phone/trade so they can coordinate access —
   // enrichWO never resolved Vendor_ID -> a name/phone at all before this (tenant.html and
   // owner.html both had a "Technician: —" row wired up with nothing to fill it). No
@@ -8901,8 +9082,9 @@ async function tenantWorkorders(env, url) {
   return json(enriched);
 }
 
-async function ownerWorkorders(env, url) {
-  const ownerId = url.searchParams.get('owner_id');
+async function ownerWorkorders(env, url, callerRole, callerSessionId) {
+  // An owner session is always scoped to ITS OWN id from the signed token, never the query string.
+  const ownerId = callerRole === 'owner' ? String(callerSessionId || '') : url.searchParams.get('owner_id');
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const includeClosed = url.searchParams.get('include_closed') === 'true';
   const [workorders, properties, units, tenants, keys, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Tenants','Keys','Vendors']);
@@ -10017,8 +10199,12 @@ async function listVendorBills(env, url) {
     const bills = await fetchTab(env, 'Vendor_Bills', { stale: !!vendorId });
     let results = bills.filter(b => b.Active !== 'FALSE');
     if (statusFilter && !woId) {
-      // Admin view: Invoice Review screen — return all bills matching this status
-      return json(results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase()));
+      // Admin view: Invoice Review screen — return all bills matching this status.
+      // Oct 14 2026: this branch used to ignore vendor_id, so a vendor session calling
+      // /vendor-bills?status=submitted got EVERY vendor's bills. A vendor session now always carries
+      // its own vendor_id here (forced by the router), so the filter applies; admin calls send none.
+      const byStatus = results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase());
+      return json(vendorId ? byStatus.filter(b => b.Vendor_ID === vendorId) : byStatus);
     }
     if (woId)     results = results.filter(b => b.WO_ID     === woId);
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
@@ -14496,7 +14682,7 @@ async function processQuietHoursQueue(env) {
         if (!_scopesForSkip) _scopesForSkip = await fetchTab(env, 'Scopes');
         const sid = String(row.Skip_If_Seen).slice(6);
         const sc = _scopesForSkip.find(x => x.ID === sid);
-        if (sc && proposalSeenByOwner(sc)) {
+        if (sc && proposalSeenByOwner(sc, sc.Sent_Date)) {
           await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: 'skipped at release: owner already opened the proposal email/page', Send_After: '' });
           await proposalStampSms(env, sid, 'skipped_seen');
           results.push({ id, sent: false, skipped: 'owner_already_seen' });

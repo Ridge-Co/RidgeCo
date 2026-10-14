@@ -1303,6 +1303,9 @@ async function sendEstimateEmail(){
     ? 'This was already sent to '+email+' on '+new Date(already).toLocaleDateString()+'. Send it again?'
     : 'Send this estimate to '+email+'? (The owner also gets a short text saying it was emailed.)';
   if(!confirm(confirmMsg)) return;
+  if(window._proposalSending) return;   // double-tap guard; the server also refuses a re-send within a minute
+  window._proposalSending=true;
+  var _sb=document.querySelector('[onclick*="sendEstimateEmail"]'); if(_sb) _sb.disabled=true;
   setStatus('send-status','Sending…');
   try{
     var ov=document.getElementById('send-override-quiet');
@@ -1316,6 +1319,7 @@ async function sendEstimateEmail(){
     showGmailReconnect(false);
     renderSendStatus();
   }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
+  finally{ window._proposalSending=false; if(_sb) _sb.disabled=false; }
 }
 function smsStatusLine(s){
   var st=(s.Owner_SMS_Status||'').trim(); if(!st) return '';

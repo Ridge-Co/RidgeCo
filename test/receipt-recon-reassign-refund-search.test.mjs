@@ -48,7 +48,11 @@ ok(/if \(path === '\/receipt-recon\/search'\)\s+return await receiptReconSearch\
 {
   const body = grab('receiptReconMarkRefundConfirmed');
   ok(/\['confirmed', 'attached_only'\]\.includes\(row\.Status\)/.test(body), 'mark-refund-confirmed only accepts a confirmed or attached_only row');
-  ok(/QB_Email_Sent \|\| ''\)\.toUpperCase\(\) === 'TRUE'/.test(body), 'mark-refund-confirmed checks the same QB_Email_Sent guard as reassign');
+  // Sep 28 2026: the guard moved into voidConfirmedReceiptForQueueRow, shared with /receipt-recon/undo,
+  // so both reversal routes get the identical not-yet-emailed-to-QuickBooks check.
+  const core = grab('voidConfirmedReceiptForQueueRow');
+  ok(/voidConfirmedReceiptForQueueRow\(env, row,/.test(body) && /if \(result\.error\) return json\(\{ error: result\.error \}, result\.status\)/.test(body), 'mark-refund-confirmed runs the shared reversal core and surfaces its error');
+  ok(/QB_Email_Sent \|\| ''\)\.toUpperCase\(\) === 'TRUE'/.test(core), 'the shared reversal core checks the same QB_Email_Sent guard as reassign');
   ok(/Status: 'pending', Manual_Refund: 'TRUE'/.test(body), 'mark-refund-confirmed drops the row back to Pending with Manual_Refund set — reuses the existing refund UI rather than a second posting path');
   ok(/Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: ''/.test(body), 'mark-refund-confirmed clears the stale Confirmed_* fields so the row reads as a fresh pending refund');
 }

@@ -55,8 +55,15 @@ t('silent once the property is linked',
   qbBillToNote(qbResolveBillTo(owner, { ...prop, QBO_Customer_ID: '55' }, null), prop, null) === '');
 t('silent once the unit is linked',
   qbBillToNote(qbResolveBillTo(owner, prop, { ...unit, QBO_Customer_ID: '56' }), prop, unit) === '');
-t('silent at property level even with an unlinked unit — unit nesting is optional',
-  qbBillToNote(qbResolveBillTo(owner, { ...prop, QBO_Customer_ID: '55' }, unit), prop, unit) === '');
+// Sep 24 2026: a property-level fallback WITH a real, unlinked unit is the same silent-forever
+// failure one level down, so it now warns (and the preview offers "Create it now"). A flat
+// property with no unit on the job stays silent.
+const unitWarn = qbBillToNote(qbResolveBillTo(owner, { ...prop, QBO_Customer_ID: '55' }, unit), prop, unit);
+t('warns at property level when the unit on the job is not linked',
+  unitWarn.includes('no QuickBooks sub-customer yet') && unitWarn.includes('shared ledger'));
+t('and names the unit so he knows what to create', unitWarn.includes('3R'));
+t('silent at property level when the job has no unit',
+  qbBillToNote(qbResolveBillTo(owner, { ...prop, QBO_Customer_ID: '55' }, null), prop, null) === '');
 
 // No address means nothing to nest under; a warning there would be noise he can't act on.
 t('silent when the property has no address', qbBillToNote(qbResolveBillTo(owner, {}, null), {}, null) === '');
@@ -65,8 +72,11 @@ t('survives a missing owner', typeof qbBillToNote(qbResolveBillTo(null, prop, nu
 
 // It has to reach both paths — the preview AND the confirm response share one array.
 t('the note is pushed into the shared warnings array', /if \(billToNote\) warnings\.push\(billToNote\)/.test(src));
+// The first `return json({ preview: {` in worker.js belongs to an unrelated function, so look for
+// the preview return AFTER the note is computed, not anywhere in the file.
+const noteAt = src.indexOf('const billToNote = qbBillToNote');
 t('and is computed before the preview returns',
-  src.indexOf('const billToNote = qbBillToNote') < src.indexOf('return json({ preview: {'));
+  noteAt > 0 && src.indexOf('return json({ preview: {', noteAt) > noteAt);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
