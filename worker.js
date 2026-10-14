@@ -436,7 +436,7 @@ const _hubWorkerCore = {
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
-        if (path === '/attachments')            return await getAttachments(env, url);
+        if (path === '/attachments')            return await getAttachments(env, url, callerRole, callerSessionId);
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url);
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
