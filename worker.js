@@ -4613,7 +4613,8 @@ async function scopeProposalSend(env, body) {
   const token = await scopeProposalLinkToken(env, id);
   if (!token) return json({ error: 'Could not create the proposal link.' }, 500);
   const url = `${PORTAL_BASE}/scope-proposal.html?t=${encodeURIComponent(token)}`;
-  const html = buildScopeProposalEmailHtml({ ownerName, addr, url });
+  const pixelUrl = `${String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '')}/scope-proposal/px?t=${encodeURIComponent(token)}`;
+  const html = buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl });
   const subject = `Ridge Co — your estimate for ${addr}`;
 
   try {
