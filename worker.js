@@ -105,7 +105,16 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.25-qb-sync-sliced';
+const BUILD_VERSION = '2026-10-14.26-tenant-stop-note';
+// Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
+// line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
+// the editable template) so an edited template or custom message can't drop it. A message that already
+// says STOP is left alone, so this is safe to run twice.
+const TENANT_STOP_NOTE = "Reply STOP to opt out - you'd no longer get repair, scheduling or other maintenance updates by text.";
+function withTenantStopNote(msg) {
+  const m = String(msg == null ? '' : msg);
+  return /\bSTOP\b/i.test(m) ? m : (m.replace(/\s+$/, '') + ' ' + TENANT_STOP_NOTE);
+}
 
 // ── STAGING-MODE GATE (staging deploy gate, Sept 2026) ──────────────────────
 // `maintenance-hub-staging` (B-140) is a SEPARATE Cloudflare Worker service —
@@ -7191,7 +7200,7 @@ async function createWorkOrder(env, body) {
     if (tenantNotifyCreated) for (const tenant of tenantsForDispatch(tenants, unit, woLike)) {
       if (!isTenantNotifiable(tenant, woLike)) continue;
       const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
-      const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}.`;
+      const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}. ${TENANT_STOP_NOTE}`;
       const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
     }
@@ -10002,7 +10011,7 @@ async function sendPinMessage(env, body) {
     owner:      `Hi ${firstName}! This is ${assistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: ${portalUrl} PIN: ${pin}. Log in to check on your work orders, submit requests, and manage your notification settings.`,
     owner_user: `Hi ${firstName}! This is ${assistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: ${portalUrl} PIN: ${pin}. Log in to check on your work orders, submit requests, and manage your notification settings.`,
   };
-  const message = tpl ? renderTemplate(tpl.Body, tokens) : fallback[type];
+  const message = (m => type === 'tenant' ? withTenantStopNote(m) : m)(tpl ? renderTemplate(tpl.Body, tokens) : fallback[type]);
   if (body.preview_only) return json({ preview: message, phone, name: firstName, pin, will_translate_to: vendorRec && vendorWantsSpanish(vendorRec) ? 'es' : '' });
   // Vendor language (Sep 28 2026): the PIN text goes out in Spanish for a Spanish vendor. The
   // PIN, portal link and amounts are verified intact or the English original is sent.
@@ -10080,11 +10089,12 @@ async function welcomeSend(env, body) {
   } else {
     return json({ error: 'Invalid type. Use: tenant or vendor' }, 400);
   }
+  if (type === 'tenant') defaultMsg = withTenantStopNote(defaultMsg);
   if (body.preview_only) return json({ preview: defaultMsg, phone, name: firstName });
   // Apply the same token substitution to a custom/edited message as the template default gets
   // — a no-op for plain text with no {Token} in it, correct per-recipient fill-in for anything
   // that came from (or still contains) the live template's tokens, e.g. a bulk send.
-  const finalMsg = body.message ? renderTemplate(String(body.message), tokens) : defaultMsg;
+  const finalMsg = (m => type === 'tenant' ? withTenantStopNote(m) : m)(body.message ? renderTemplate(String(body.message), tokens) : defaultMsg);
   const sendOpts = type === 'tenant'
     ? { wo_id: '', message_type: 'tenant_welcome', recipient_type: 'tenant', tenant: recipient, property, owner, message_body: finalMsg, allowPendingConsent: true }
     : { wo_id: '', message_type: 'vendor_welcome', recipient_type: 'vendor', vendor: recipient, message_body: finalMsg };
