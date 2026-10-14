@@ -22323,6 +22323,9 @@ async function signRS256(input, key) {
 // zero duplicate reads globally.
 const __tabCache = new Map(); // tabName -> { data, exp }
 const TAB_CACHE_MS = 6000;
+// Real outbound Google Sheets calls made by this isolate (Oct 14 2026). Cloudflare caps a single request at 50 outbound calls on
+// this plan, and the tenant roster apply must stop and resume rather than hit it, so it reads the delta of this counter.
+let __sheetsFetchCount = 0;
 // Last-resort fallback for READ-ONLY portal lists (opt-in via {stale:true}): when Google is
 // still refusing reads after every retry, serve the last good copy of the tab if it is at
 // most this old rather than failing the whole page. Never used by any write path.
