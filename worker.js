@@ -6882,11 +6882,11 @@ async function rosterFlipDueMoveOuts(env) {
     } catch (e) { problems.push('tenant ' + t.ID + ': ' + String((e && e.message) || e)); }
   }
   if (due.length) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_flip', Skill_Or_Endpoint: 'daily_turnover', Success: problems.length ? 'FALSE' : 'TRUE', Notes: ('flipped=' + flipped.join(',') + (problems.length ? ' problems=' + problems.join(' | ') : '')).slice(0, 480) }); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_roster_flip', Skill_Or_Endpoint: 'daily_turnover', Success: problems.length ? 'FALSE' : 'TRUE', Notes: ('flipped=' + flipped.join(',') + (deferred.length ? ' deferred_to_next_run=' + deferred.join(',') : '') + (problems.length ? ' problems=' + problems.join(' | ') : '')).slice(0, 480) }); }
     catch (e) { problems.push('telemetry: ' + String((e && e.message) || e)); }
   }
   if (problems.length) throw new Error('roster move-out flip had problems: ' + problems.join(' | ').slice(0, 400));
-  return { due: due.length, flipped };
+  return { due: due.length, flipped, deferred };
 }
 
 // Oct 14 2026 (Brett: "yes to all refusing without move-in/move-out dates"): the dates are what keep a new tenant away from the
