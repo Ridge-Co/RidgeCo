@@ -109,7 +109,14 @@ const env = { SHEET_ID: 'S' };
   const lb = grab(wsrc, 'async function listVendorBills(');
   t('listVendorBills opts in only for a vendor_id call', /fetchTab\(env, 'Vendor_Bills', \{ stale: !!vendorId \}\)/.test(lb));
   const optIns = (wsrc.match(/stale: true|stale: !!vendorId/g) || []).length;
-  t('exactly the 4 intended opt-in call sites exist (vendorWorkorders batched + fallback x2, listVendorBills)', optIns === 4);
+  // Oct 5 2026: the AR board's Hub-context enrichment (arInvoices) is the fifth, deliberate opt-in. It is
+  // display-only (labels next to QuickBooks invoices), reads at most 15 min stale, and a failed join is
+  // reported as enrich_error rather than hidden. Keep this a closed list: any new site must be named here.
+  t('exactly the 5 intended opt-in call sites exist (vendorWorkorders batched + fallback x2, listVendorBills, arInvoices enrichment)', optIns === 5);
+  const ar = grab(wsrc, 'async function arInvoices(');
+  t('arInvoices opts in only for its read-only Hub join', /fetchTabs\(env,\s*\[[^\]]*'Invoice_Review'[^\]]*\],\s*\{ stale: true \}\)/.test(ar));
+  t('arInvoices never writes (stale data can only ever be displayed, never saved)', !/updateRow\(|addRow\(|appendRow\(|setConfigKey\(/.test(ar));
+  t('and a failed join is surfaced, not swallowed (enrich_error)', /enrich_error/.test(ar));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
