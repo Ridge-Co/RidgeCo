@@ -2008,6 +2008,16 @@ function tenantsForDispatch(tenants, unit, wo) {
 // St Apt 2 could see a turnover-cleaning WO opened right around his move-in date.
 function isBackgroundWO(tenant, wo) {
   if (!tenant || !tenant.Move_In_Date || !wo || !wo.Created_Date) return false;
+  // Oct 14 2026 (owner tenant roster): compare Eastern CALENDAR DAYS. A plain date parses as midnight UTC, which is
+  // 8pm ET the evening before, so a work order created at 9pm ET on Sep 30 (01:00 UTC Oct 1) used to count as
+  // created AFTER an Oct 1 move-in and was shown / texted to the new tenant. Rule: a WO created on or after the
+  // move-in day (ET) belongs to the tenant; anything created on an earlier ET day is background.
+  const mi = String(tenant.Move_In_Date).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(mi)) {
+    const cr = String(wo.Created_Date).trim();
+    const crDay = /^\d{4}-\d{2}-\d{2}$/.test(cr) ? cr : (isNaN(new Date(cr)) ? '' : new Date(cr).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }));
+    if (crDay) return crDay < mi;
+  }
   return new Date(tenant.Move_In_Date) > new Date(wo.Created_Date);
 }
 
