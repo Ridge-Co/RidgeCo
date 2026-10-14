@@ -4,6 +4,7 @@
 // cannot quietly drift from what ships. woCombine() itself calls the real woVoid()/woUnvoid()
 // (grabbed alongside it) so the Notes-merge/audit/rollback behavior under test is exactly what
 // the endpoint actually runs, not a re-implementation.
+import './_midday-clock.mjs';
 import fs from 'fs';
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 
