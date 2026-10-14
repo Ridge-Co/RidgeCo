@@ -321,6 +321,7 @@
         <button class="btn" onclick="sendEstimateEmail()">📧 Send estimate to owner</button>
         <button class="btn secondary hide" id="gmail-reconnect-btn" onclick="reconnectGmail()">🔑 Reconnect Gmail</button>
       </div>
+      <label class="sub" style="display:block;margin-top:6px;"><input type="checkbox" id="send-override-quiet"> Also text the owner right now even if it's after 8pm (overrides quiet hours). The email always goes either way; the text is held until 8am if this is unchecked and it's late.</label>
       <div id="send-status" class="status"></div>
       <div id="gmail-reconnect-note" class="sub hide" style="margin-top:4px;">Opens Google in a new tab — sign in as the Ridge Co sender, allow sending, then come back and tap Send again.</div>
       <div id="send-sent-note"></div>
