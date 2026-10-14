@@ -17356,6 +17356,115 @@ async function opsQueueSync(env, body, opts) {
   return json({ ok: errors.length === 0, checked: inflight.length, changed, errors });
 }
 
+// ── RidgeCo Hub Improvements sweep (Oct 14 2026) ─────────────────────────────────────────────────
+// Brett keeps a Google Tasks list called "RidgeCo Hub Improvements". Twice a week (Mon + Thu, Hub scheduler -
+// never a cron) this pulls every NEW open item from that list into the Optimizer queue as a `proposed` row, so
+// nothing sits forgotten in the phone list. A ledger tab (Hub_Improvements, in the Hub sheet) remembers each
+// item: pulled -> (queue) -> done. The Hub only READS the BrettOS sheet (task-linking decision #1: the Hub never
+// writes it). Telling Google Tasks ("In progress" note line, then complete) is the BrettOS TasksSync.js applier's
+// job - it reads this ledger. Nothing here fails silently: every problem comes back as a job error, and a ledger
+// change the applier has not applied within 24h is itself reported.
+const HUBIMP_TAB = 'Hub_Improvements';
+const HUBIMP_LIST = 'RidgeCo Hub Improvements';
+const HUBIMP_COLS = ['ID', 'Task_ID', 'List_ID', 'Title', 'Status', 'Status_Changed_At', 'Queue_ID', 'Queue_Status', 'PR', 'Note', 'First_Seen', 'Applied_Status', 'Applied_At', 'Apply_Error'];
+const HUBIMP_APPLY_STALE_MS = 24 * 3600 * 1000;
+const HUBIMP_ACTIVE = ['pulled', 'building'];       // still open: waiting on the queue or on a PR
+const HUBIMP_TRACKED = ['pulled', 'building', 'done', 'dropped'];
+
+function hubImpObjs(values) {
+  const v = values || [];
+  if (v.length < 2) return [];
+  return v.slice(1).map(r => { const o = {}; v[0].forEach((h, i) => { o[h] = (r[i] !== undefined) ? r[i] : ''; }); return o; });
+}
+
+// PURE — which Tasks_Sync rows are NEW work for the sweep. `fresh` = not yet in the ledger or the queue;
+// `adopt` = already in the queue (a previous run crashed after queueing but before writing the ledger) so we
+// record the link instead of queueing a second copy.
+function hubImpPickNew(taskRows, ledgerRows, queueRows) {
+  const seen = new Set((ledgerRows || []).map(r => String(r.Task_ID || '')));
+  const bySource = {};
+  for (const q of (queueRows || [])) if (q && q.Source_Task_ID) bySource[String(q.Source_Task_ID)] = q;
+  const fresh = [], adopt = [];
+  for (const t of (taskRows || [])) {
+    if (String(t.Category || '').trim() !== HUBIMP_LIST) continue;
+    if (String(t.Status || '') !== 'needsAction') continue;
+    const id = String(t.Task_ID || '');
+    if (!id || seen.has(id) || !String(t.Title || '').trim()) continue;
+    seen.add(id);
+    if (bySource[id]) adopt.push({ task: t, queue: bySource[id] }); else fresh.push(t);
+  }
+  return { fresh, adopt };
+}
+
+// PURE — one Google Task -> the item shape opsQueueScoutSubmit takes. Status stays `proposed` (that endpoint can
+// never produce a greenlit row); Brett still approves each one on the Proposals page.
+function hubImpQueueItem(t) {
+  const notes = String((t && t.Notes) || '').trim();
+  return {
+    title: String((t && t.Title) || '').trim().slice(0, 200),
+    problem: ('From Brett\'s Google Tasks list "' + HUBIMP_LIST + '"' + (notes ? ': ' + notes : '.')).slice(0, 600),
+    first_step: 'Check FEATURE_LOG.md and the code first - this may already be built. If not, build it, test it, and open a PR.',
+    tag: 'hub-improvement',
+    lens: 'brett-task-list',
+    source_task_id: String((t && t.Task_ID) || ''),
+  };
+}
+
+// PURE — the ledger changes for this moment. `queue` = Ops_Build_Queue rows, `prStates` = { '262': 'live'|'pr_open'|
+// 'pr_closed'|'error: ...' } for ledger rows that track a PR directly. Returns { updates:[{id,fields}], problems:[text] }.
+function hubImpPlan(ledger, queue, prStates, nowMs) {
+  const nowIso = new Date(nowMs).toISOString();
+  const updates = [], problems = [];
+  const qById = {};
+  for (const q of (queue || [])) qById[String(q.ID)] = q;
+  for (const r of (ledger || [])) {
+    const st = String(r.Status || '').toLowerCase();
+    if (!HUBIMP_ACTIVE.includes(st)) continue;      // done / dropped rows are final
+    const label = 'ledger #' + r.ID + ' "' + String(r.Title || '').slice(0, 60) + '"';
+    const f = {};
+    {
+      if (r.Queue_ID) {
+        const q = qById[String(r.Queue_ID)];
+        if (!q) problems.push(label + ': queue item #' + r.Queue_ID + ' no longer exists');
+        else {
+          const qs = String(q.Status || '').toLowerCase();
+          if (String(r.Queue_Status || '') !== qs) f.Queue_Status = qs;
+          if (qs === 'done') {
+            f.Status = 'done'; f.Status_Changed_At = nowIso; f.PR = String(q.PR_Number || r.PR || '');
+            f.Note = (String(r.Note || '') + ' Built (queue #' + r.Queue_ID + (q.PR_Number ? ', PR #' + q.PR_Number : '') + ').').trim();
+          } else if (qs === 'dropped') {
+            f.Status = 'dropped'; f.Status_Changed_At = nowIso;
+            f.Note = (String(r.Note || '') + ' Dropped from the queue' + (q.Drop_Reason ? ': ' + q.Drop_Reason : '') + '.').trim();
+          }
+        }
+      } else if (r.PR) {
+        const n = cleanPrNumber(r.PR), ps = n ? prStates && prStates[n] : null;
+        if (!n) problems.push(label + ': PR "' + r.PR + '" is not a number');
+        else if (ps === 'live') { f.Status = 'done'; f.Status_Changed_At = nowIso; f.Note = (String(r.Note || '') + ' PR #' + n + ' merged.').trim(); }
+        else if (ps === 'pr_closed') problems.push(label + ': PR #' + n + ' was closed without merging');
+        else if (ps && String(ps).startsWith('error')) problems.push(label + ': could not check PR #' + n + ' (' + ps + ')');
+      } else {
+        problems.push(label + ' is ' + st + ' but has neither a queue item nor a PR to watch');
+      }
+    }
+    if (Object.keys(f).length) updates.push({ id: r.ID, fields: f });
+  }
+  // The applier (BrettOS Apps Script) copies Status into Applied_Status once Google Tasks is updated. Anything it has
+  // not applied for a day, or any error it recorded, is reported - a stuck applier must never be silent.
+  for (const r of (ledger || [])) {
+    const st = String(r.Status || '').toLowerCase();
+    if (!HUBIMP_TRACKED.includes(st)) continue;
+    const label = 'ledger #' + r.ID + ' "' + String(r.Title || '').slice(0, 60) + '"';
+    if (r.Apply_Error) problems.push(label + ': Google Tasks update failed: ' + String(r.Apply_Error).slice(0, 200));
+    else if (String(r.Applied_Status || '') !== st) {
+      const since = Date.parse(r.Status_Changed_At || r.First_Seen || '');
+      if (!isNaN(since) && nowMs - since > HUBIMP_APPLY_STALE_MS) problems.push(label + ': "' + st + '" has not reached Google Tasks for over 24h (is the BrettOS tasks-sync applier running and authorised?)');
+    }
+  }
+  return { updates, problems };
+}
+// @@HUBIMP-CONT@@
+
 // Standing rules every build brief carries (Brett, Oct 13 2026).
 const QUEUE_STANDING_RULES = [
   'STANDING RULES (Brett, Oct 13 2026) — apply to every item below:',
