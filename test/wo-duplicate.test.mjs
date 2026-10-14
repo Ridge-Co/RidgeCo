@@ -4,6 +4,7 @@
 // The clock is PINNED (a fake Date is injected into the evaluated code) so the quiet-hours cases do
 // not depend on what time of day the suite runs.
 import fs from 'fs';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(src, sig) {

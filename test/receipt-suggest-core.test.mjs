@@ -4,6 +4,7 @@
 // ranking, and duplicate/already-invoiced flagging. No I/O, so it's fully testable here.
 import fs from 'fs';
 import assert from 'node:assert';
+import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 function grab(name){
   const i = src.indexOf('function ' + name + '(');

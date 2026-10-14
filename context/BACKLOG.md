@@ -27,6 +27,11 @@ findable by grep even though they never share a number. Example:
 
 Priority levels: 🔴 Urgent | 🟠 High | 🟡 Medium | 🟢 Low | ⏳ Blocked (waiting on something)
 
+**Oct 14, 2026 update (queue #140)**
+- ✅ B-20261014-1100-sts · 🟠 **[wo-status] [refactor]** WO status single source of truth (Ops_Build_Queue #140 + #87) — built, awaiting Brett's merge. See FEATURE_LOG `[FL-20261014-1100-sts]`.
+- ▶ B-20261014-1110-sts2 · 🟠 **[wo-status]** `Estimate Requested` WOs (set by /scope/to-wo; 3 live) appear in no open group, so they are missing from portal lists and open counts. Needs Brett's call: show them as open?
+- ▶ B-20261014-1115-sts3 · 🟡 **[wo-status]** Not done: per-status label / color / badge map, role-aware labels (owner mask Pending Invoice→Complete), `canTransition`, and the new `Pending Payment` / `Paid by Customer` statuses (Brett: existing statuses only for now).
+
 ---
 
 <!-- QUICK-INDEX:START — always-loadable map; full entries below; grep an ID to jump to detail -->

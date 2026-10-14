@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <script src="test-login.js"></script>
+<script src="wo-status.js"></script>
+<script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Receipt Reconciler</title>
@@ -206,7 +208,7 @@
 const STATUSES = [ ['pending','Pending'], ['confirmed','Confirmed'], ['attached_only','📎 Attached only'], ['duplicate_confirmed','Duplicates'], ['skipped','Skipped'], ['all','All'], ['trucks','🚚 Truck Stock'], ['audit','🔍 Audit older'], ['search','🔎 Search'] ];
 // Mirrors worker.js's OPEN_WO_STATUSES/RECEIPT_OPEN_STATUSES exactly — keep in sync if that
 // list ever changes server-side. Used only to split the WO picker into open vs closed/past.
-const OPEN_WO_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];
+const OPEN_WO_STATUSES = WOStatus.sets.ACTIVE;
 let curStatus = 'pending';
 let allWOs = [];
 let allProperties = [];

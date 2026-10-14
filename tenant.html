@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <script src="test-login.js"></script>
+<script src="wo-status.js"></script>
+<script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Tenant Portal</title>
@@ -269,13 +271,13 @@ var session = null;
 var allWOs = [];
 var activeNoteWOId = null;
 
-var OPEN_STATUSES = ['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice'];
+var OPEN_STATUSES = WOStatus.sets.TENANT_OPEN;
 // Sep 17 2026 (Brett): tenants don't need or want billing-lifecycle stages exposed — Completed
 // is the last stage a tenant should ever see. STATUS_TIMELINE stops there (kept only for the
 // STATUS_LABELS lookup below; the per-WO detail view computes its own steps in buildDetail).
 // Pending Invoice/Invoiced/Paid all fold into a plain "Completed" label rather than surfacing
 // "Invoice submitted" / "Closed" / billing jargon a tenant has no reason to parse.
-var STATUS_TIMELINE = ['New','Assigned','Accepted','In Progress','Complete'];
+var STATUS_TIMELINE = WOStatus.sets.TENANT_TIMELINE;
 var STATUS_LABELS = {
   'New':'Request received',
   'Assigned':'Technician assigned',
@@ -420,7 +422,7 @@ function loadWOs() {
       }
       allWOs = data;
       var open = allWOs.filter(function(w){ return OPEN_STATUSES.includes(w.Status); });
-      var done = allWOs.filter(function(w){ return ['Complete','Invoiced','Paid'].includes(w.Status); });
+      var done = allWOs.filter(function(w){ return WOStatus.sets.COMPLETE_INVOICED_PAID.includes(w.Status); });
       document.getElementById('statOpen').textContent = open.length;
       document.getElementById('statDone').textContent = done.length;
       renderWOs();
@@ -485,7 +487,7 @@ function renderWOs() {
   if (status === 'open') wos = wos.filter(function(w){ return OPEN_STATUSES.includes(w.Status) || w.Status==='Complete'; });
   // "Completed" is the only done-state filter tenants see — folds Pending Invoice/Invoiced/Paid
   // in too, so nothing quietly disappears now that the separate Closed/Paid filter is gone.
-  else if (status === 'Complete') wos = wos.filter(function(w){ return ['Complete','Pending Invoice','Invoiced','Paid'].includes(w.Status); });
+  else if (status === 'Complete') wos = wos.filter(function(w){ return WOStatus.sets.DONE_THROUGH_PAID.includes(w.Status); });
   else if (status !== 'all') wos = wos.filter(function(w){ return w.Status === status; });
   if (search) wos = wos.filter(function(w){
     return (w.ID||'').toLowerCase().includes(search) ||
@@ -564,12 +566,12 @@ function buildDetail(wo, idx) {
   html += '<div class="detail-section">';
   html += '<div class="detail-section-title">STATUS TIMELINE</div>';
   html += '<div class="timeline">';
-  var tlSteps = ['New','Assigned','In Progress','Complete'];
+  var tlSteps = WOStatus.sets.TENANT_TIMELINE_STEPS;
   var curIdx = tlSteps.indexOf(wo.Status);
   if (['Accepted'].includes(wo.Status)) curIdx = 2; // In Progress equivalent
   // Completed is the last stage a tenant sees — any later billing status (Pending Invoice,
   // Invoiced, Paid) just lands on the same final "Complete" step, not a step of its own.
-  if (['Pending Invoice','Invoiced','Paid'].includes(wo.Status)) curIdx = 3;
+  if (WOStatus.sets.BILLING_STAGE.includes(wo.Status)) curIdx = 3;
   tlSteps.forEach(function(s, i) {
     var cls = i < curIdx ? 'done' : i === curIdx ? 'current' : 'future';
     var labels = {New:'Request received',Assigned:'Technician assigned','In Progress':'Work in progress',Complete:'Work complete'};
