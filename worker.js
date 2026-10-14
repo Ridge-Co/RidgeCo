@@ -662,8 +662,7 @@ const _hubWorkerCore = {
         if (path === '/message-queue/release')    return await releaseMessageQueue(env, body);
         if (path === '/message-queue/skip')       return await skipMessageQueue(env, body);
         if (path === '/message-queue/translate')  return await translateMessageQueue(env, body);
-        if (path === '/invoice')                  return await createInvoice(env, body);
-        if (path === '/invoice/update')           return await updateRow(env, 'Invoices', body.id, body.fields);
+        if (path === '/invoice' || path === '/invoice/update') return await retiredLogInvoice(env, body, path, callerRole);
         if (path === '/property/add')             { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); return await propertyAddWithDupeCheck(env, body); }
         if (path === '/property/update')          return await propertyUpdate(env, body);
         if (path === '/unit/add')                 return await unitAddWithDupeCheck(env, body);
