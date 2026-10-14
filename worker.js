@@ -8768,14 +8768,24 @@ async function saveChecklist(env, body) {
   return json({ success: true });
 }
 
-async function createInvoice(env, body) {
-  const data = await sheetsRequest(env, 'GET', `/values/Invoices`);
-  const rows = data.values || [[]], headers = rows[0], invoiceId = String(nextSafeId(rows)), now = new Date().toISOString().split('T')[0];
-  const newRow = headers.map(h => ({ ID: invoiceId, WO_ID: body.wo_id||'', Vendor_ID: body.vendor_id||'', Amount: body.amount||'', Date_Submitted: now, Date_Paid: '', Status: 'Submitted', QB_Ref: body.qb_ref||'', Notes: body.notes||'' }[h] ?? ''));
-  await sheetsRequest(env, 'POST', `/values/Invoices:append?valueInputOption=RAW`, { values: [newRow] });
-  await updateStatus(env, { wo_id: body.wo_id, status: 'Invoiced' });
-  await updateWOFields(env, body.wo_id, { Invoice_ID: invoiceId });
-  return json({ success: true, id: invoiceId });
+// RETIRED Oct 14 2026 (Ops_Build_Queue #100, collapse 3 invoice/QB paths into one).
+// "Log Invoice" wrote a typed amount to the sheet-only Invoices tab and flipped the WO to
+// Invoiced WITHOUT creating a QuickBooks invoice or touching Invoice_Review, so a job could leave
+// every needs-billing view with nothing billed. The ONE invoice path is Invoice Builder ->
+// /invoice-review/approve -> /qb/send-invoice. A stale cached page that still posts here gets a
+// loud 410 plus a telemetry failure row instead of a quiet sheet-only "invoice".
+async function retiredLogInvoice(env, body, path, callerRole) {
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'legacy_invoice_blocked', Skill_Or_Endpoint: path, Success: 'FALSE',
+    Notes: `wo=${(body && body.wo_id) || ''} amount=${(body && body.amount) || ''} role=${callerRole || 'admin'}` });
+  return json({ error: 'Log Invoice has been retired because it never created a QuickBooks invoice. Open the job and use the Invoice Builder (or Review Bills) instead. Nothing was saved.', retired: true }, 410);
+}
+
+// Dollar amounts compare by whole cents, never by string ("150" and "150.00" are the same price).
+// Anything that is not a number falls back to exact string equality so it can only ever read as
+// "different", never as a false match.
+function sameCents(a, b) {
+  const x = Math.round(parseFloat(a) * 100), y = Math.round(parseFloat(b) * 100);
+  return Number.isFinite(x) && Number.isFinite(y) ? x === y : String(a == null ? '' : a) === String(b == null ? '' : b);
 }
 
 // ── PORTAL VIEWS ─────────────────────────────────────────────
