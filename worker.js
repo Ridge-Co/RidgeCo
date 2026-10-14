@@ -10089,6 +10089,7 @@ async function welcomeSend(env, body) {
   } else {
     return json({ error: 'Invalid type. Use: tenant or vendor' }, 400);
   }
+  if (type === 'tenant') defaultMsg = withTenantStopNote(defaultMsg);
   if (body.preview_only) return json({ preview: defaultMsg, phone, name: firstName });
   // Apply the same token substitution to a custom/edited message as the template default gets
   // — a no-op for plain text with no {Token} in it, correct per-recipient fill-in for anything
