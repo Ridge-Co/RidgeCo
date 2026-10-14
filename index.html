@@ -9219,6 +9219,26 @@ function invRenderStatus(k, s) {
 // with allowBelowCost:true; bulk mode just excludes it and says so), { alreadyKnownId, woId }
 // if this job is already approved and queued, or { payload, memo, charge, woId, bill } when
 // clear to send.
+// True when a price was typed (> 0) and it is not the same whole-cent amount as the approved one.
+// A blank or zero box is "nothing typed", not a mismatch. Unreadable approved figure counts as a
+// mismatch so it can never silently pass.
+function invPriceMismatch(typed, approvedRaw) {
+  var t = parseFloat(typed);
+  if (!(t > 0)) return false;
+  var a = parseFloat(approvedRaw);
+  if (!isFinite(a)) return true;
+  return Math.round(t * 100) !== Math.round(a * 100);
+}
+// The plain-language message + the two safe choices, shared by the Invoice Builder and the
+// bill-less fallback so they cannot word it differently.
+function invPriceMismatchHtml(approved, typed, id) {
+  return '<div style="color:var(--warn);font-size:12px;line-height:1.5">' +
+    '⚠ This job is already approved at <b>$' + approved.toFixed(2) + '</b>, but the price box says <b>$' + typed.toFixed(2) + '</b>. ' +
+    'QuickBooks would get $' + approved.toFixed(2) + ' — nothing has been changed.<br>' +
+    '<button onclick="previewQBSend(\'' + esc(String(id)) + '\')" style="margin-top:6px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;padding:8px 12px;cursor:pointer">Preview the approved $' + approved.toFixed(2) + '</button>' +
+    '<div style="color:var(--muted);margin-top:6px">To use $' + typed.toFixed(2) + ' instead, withdraw the approval on the Send to QB screen, then price it again.</div></div>';
+}
+
 function invBuildApprovalPayload(k, opts) {
   opts = opts || {};
   var woId = _invWO[k] || k;
