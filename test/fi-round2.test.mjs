@@ -78,7 +78,10 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('no colors -> empty picks (not a crash)', w.fiPickBrandColors([]).primary === '');
   const bare = w.fiParseBrandHtml('<html><title>Home | Acme Roofing</title></html>', 'https://acmeroofing.com/');
   t('name falls back to title segment matching the domain', bare.name === 'Acme Roofing', bare.name);
-  t('malformed JSON-LD ignored', w.fiParseBrandHtml('<script type="application/ld+json">{bad</script><title>X</title>', 'https://x.com').name === 'X');
+  const bs = w.fiParseBrandHtml('<html><title>Home \\ Acme Roofing</title><meta name="description" content="We&#x27;re the best &amp; fastest"></html>', 'https://www.acmeroofing.com/');
+  t('backslash title separator handled', bs.name === 'Acme Roofing', bs.name);
+  t('hex entity decoded in meta description', bs.tagline === "We're the best & fastest", bs.tagline);
+  t('malformed JSON-LD ignored',w.fiParseBrandHtml('<script type="application/ld+json">{bad</script><title>X</title>', 'https://x.com').name === 'X');
   t('sniff png', w.fiSniffImage(PNG) === 'image/png' && w.fiSniffImage(enc('<html>')) === '' && w.fiSniffImage(enc('<svg xmlns=')) === 'image/svg+xml');
 }
 
@@ -144,6 +147,7 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   r = await w.fiTranscribe(env, req('audio/mp4', 15 * 1024 * 1024), U()); t('too big -> 413 with advice', r.status === 413 && /Split/.test(r.body.message), r);
   r = await w.fiTranscribe(env, req('text/html', 50), new URL('https://x/fi/transcribe')); t('not audio -> 415', r.status === 415, r);
   r = await w.fiTranscribe(w.env, req('audio/mp4', 50), U()); t('no key -> visible 500 not_configured', r.status === 500 && r.body.error === 'not_configured', r);
+  t('transcribe prompt forbids inventing content on tones/noise', /NEVER make up/.test(w.FI_TRANSCRIBE_SYSTEM || ''), 'prompt');
   w.h.net = gem('[no speech]'); r = await w.fiTranscribe(env, req('audio/mp4', 50), U()); t('silence -> 422 no_speech', r.status === 422 && r.body.error === 'no_speech', r);
   w.h.net = gem('long text', { candidates: [{ content: { parts: [{ text: 'cut off' }] }, finishReason: 'MAX_TOKENS' }] }); r = await w.fiTranscribe(env, req('audio/mp4', 50), U()); t('truncated flag passed on', r.body.ok && r.body.truncated === true, r);
   seen.length = 0; let calls = 0;

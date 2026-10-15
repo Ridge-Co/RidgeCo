@@ -33787,7 +33787,7 @@ function fiSafeUrl(input) {
   return { ok: true, url: u.toString(), host: h };
 }
 function fiDecodeEntities(s) {
-  return String(s || '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#(\d{1,5});/g, (m, d) => { const n = Number(d); return n > 31 && n < 65536 ? String.fromCharCode(n) : ' '; });
+  return String(s || '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x([0-9a-fA-F]{1,4});/g, (m, h) => { const n = parseInt(h, 16); return n > 31 && n < 65536 ? String.fromCharCode(n) : ' '; }).replace(/&#(\d{1,5});/g, (m, d) => { const n = Number(d); return n > 31 && n < 65536 ? String.fromCharCode(n) : ' '; });
 }
 function fiAttrs(tag) {
   const out = {}; const re = /([a-zA-Z:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g; let m;
@@ -33824,7 +33824,7 @@ function fiParseBrandHtml(html, baseUrl) {
   let host = ''; try { host = new URL(baseUrl).hostname.replace(/^www\./, '').split('.')[0].toLowerCase(); } catch (_) { host = ''; }
   const pickFromTitle = () => {
     if (!title) return '';
-    const segs = title.split(/\s+[|\-–—·•:]\s+/).map(s => s.trim()).filter(Boolean);
+    const segs = title.split(/\s+[|\\\/\-–—·•:»]\s+/).map(s => s.trim()).filter(Boolean);
     const generic = /^(home|homepage|welcome|index|official site|official website)$/i;
     const hostKey = host.replace(/[^a-z0-9]/g, '');
     const hit = segs.find(s => hostKey && s.toLowerCase().replace(/[^a-z0-9]/g, '').includes(hostKey.slice(0, Math.max(4, Math.min(hostKey.length, 6)))));
@@ -34121,7 +34121,7 @@ async function fiTypesTouch(env, body) {
 // ── Voice notes: audio -> transcript (Gemini hears audio; Claude cannot), then transcript -> proposed issues per area (Claude). Nothing is added to the inspection until the inspector approves it. ──
 const FI_MAX_AUDIO_BYTES = 14 * 1024 * 1024;
 const FI_TRANSCRIBE_MODEL = 'gemini-3.5-flash-lite';
-const FI_TRANSCRIBE_SYSTEM = `You transcribe a property inspector's spoken field notes recorded while walking a rental property. Transcribe EXACTLY what is said, in order, as plain text. Do not summarize, reorder, correct facts or add anything. Keep brand names, model and serial numbers, room names and floor names exactly as spoken; write numbers as digits. Where a word cannot be understood write [unclear]. Start a new paragraph whenever the inspector moves to a different room, floor or topic. If there is no speech, output exactly: [no speech]`;
+const FI_TRANSCRIBE_SYSTEM = `You transcribe a property inspector's spoken field notes recorded while walking a rental property. Transcribe EXACTLY what is said, in order, as plain text. Do not summarize, reorder, correct facts or add anything. Keep brand names, model and serial numbers, room names and floor names exactly as spoken; write numbers as digits. Where a word cannot be understood write [unclear]. Start a new paragraph whenever the inspector moves to a different room, floor or topic. Only transcribe words a person actually spoke in the recording. NEVER make up, guess or complete content: if the recording is silent, only a tone, beep, music or background noise, or you cannot make out real spoken words, output exactly: [no speech]. If only part of it is intelligible, transcribe just that part and mark the rest [unclear].`;
 function fiAudioMime(contentType, name) {
   const ct = String(contentType || '').split(';')[0].trim().toLowerCase();
   const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]{2,5})$/);
