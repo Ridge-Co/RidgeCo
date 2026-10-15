@@ -32,4 +32,23 @@ GET `/fi/list`, `/fi/inspection?id=`; POST `/fi/save` (id, base_rev, doc, meta, 
 ## Known limits / next
 No PDF generation on the Worker — "Download PDF" opens the report with print dialog (Save as PDF). Emails carry the link, not an attachment, and send from the fixed Ridge Co Gmail sender. "Add new property" is saved with the inspection only, NOT written to the Hub Properties tab (decision needed). Next phases: templates, carry-forward comparison, WO conversion, cheaper models.
 
+## Round 2 (Oct 15 2026, after Brett's first field use) — BUILD_VERSION `2026-10-15.02-field-inspection-update`
+Brett inspected 122 S Gilmor before the app existed to him: photos in wrong areas, notes as separate disjointed voice recordings. Added:
+- **Areas in walk-through order** (flat list, ▲▼ reorder mode, "Auto-order" = outside -> ground floor -> basement/systems -> upstairs -> attic -> detectors; `walkKey` in field-inspect.html). Report follows doc order.
+- **Photo Select mode** per area: bulk **Move to another area** or **Remove**; viewer has prev/next + Move/Remove. Removal detaches from issues/equipment and purges orphaned blobs from phone IndexedDB (Drive copy stays).
+- **Equipment & model info** per area (`area.equipment[]`: furnace incl. filter_size, boiler, A/C, heat pump, water heater, appliances; server `FI_EQUIP_KINDS` is the source of truth, a unit test asserts the phone list matches). **Read label from photo** = `POST /fi/read-label` (Claude vision on an already-uploaded photo; fills blank fields only, shows differences). Report has an "Equipment & model information" section.
+- **Brand capture**: manual Website/Phone/Email/Address (new FI_Brands columns) or `POST /fi/brand/scrape` (cursory: name, tagline, theme/CSS colors, logo candidates, phone/email/address; SSRF-guarded: https/http only, public hostnames, manual redirects re-validated, size/time caps). Nothing saved until the inspector applies + saves. Brand save keeps any field the caller omits.
+- **Voice notes**: phone uploads audio -> raw-body `POST /fi/transcribe` (Gemini audio, <=14 MB; m4a retried as aac) -> `doc.voice_notes[]` (transcripts, never in the public report) -> `POST /fi/route` (Claude: issues/equipment/conditions per area, `unassigned` + `new_areas`, nothing dropped) -> review screen (change area, edit, Add selected). Unplaced items must be placed/dismissed first. `POST /fi/transcribe/json` (admin/test: drive_file_id or small base64).
+- **Issue types database**: tab `FI_Issue_Types` (seeded once with 64 common rental issue types; grows: types typed in the editor or accepted from AI are added as `learned`; `Uses` counts). Endpoints GET `/fi/issue-types`, POST `/fi/issue-types/save`, `/fi/issue-types/touch`. Issue editor has a type picker (area-relevant types first) that fills trade/severity/likely cause/fix; issues store `issue_type`.
+- Staging token limits (hubTestWriteAllowed): scrape/route/transcribe-json allowed (no writes); read-label + raw transcribe only for TEST- inspections; issue-type writes only TEST- names.
+- Tests: `test/fi-round2.test.mjs` (141) + 8 new Playwright checks (23 total).
+- Known limit: no in-app recording yet (Gemini audio does not list webm); recordings come from the phone's recorder via the file picker. Transcription of Brett's 12 recordings (Drive folder 1hVg7nkggLvVstQEx3ieInFBkUr90pjpg, ~14 MB m4a) must run through the app/server, not the Claude sandbox (files private, no Gemini key in sandbox).
+
 <!-- pages redeploy retry Oct 15 2026 -->
+
+### Round 2 staging verification (Oct 15, 2026)
+- Verified on staging: `/fi/issue-types` seeds 64 types; `/fi/issue-types/save` and `/touch` (touch body is `{items:[{name}]}`, names must start TEST-); `/fi/brand/scrape` on a real site; `/fi/route` places kitchen/bath/hallway items in the right areas; `/fi/transcribe/json` accepts `audio/mp4` (m4a) directly.
+- The worker's Google account CANNOT open Brett's private Drive folder (`drive_no_access`). Recordings must be uploaded through the app (Voice notes > Add recordings).
+- Found and fixed: Gemini invented a full plausible inspection transcript from a pure 440 Hz tone. The transcription prompt now says NEVER make up content and to output `[no speech]` for tones/noise; staging now returns 422 `no_speech` for the same clip. Transcripts are still shown to the human before routing; never auto-accept.
+- Found and fixed: brand scrape left `&#x27;` undecoded in the tagline and used the `\` title separator wrongly ("Home \ Anthropic").
+- Still unverified live: label reading on a real photo (`/fi/read-label`), real speech transcription quality.

@@ -75,6 +75,25 @@
   .check{display:flex;gap:8px;align-items:flex-start;font-size:14px;margin:6px 0}
   .linkbox{word-break:break-all;background:var(--chip);border-radius:8px;padding:8px 10px;font-size:13px;margin:6px 0}
   .propcard{border:1px solid var(--accent);background:#eaf1fd}
+  .thumb.chk{border-color:var(--accent)}
+  .thumb.chk::after{content:"✓";position:absolute;left:4px;top:4px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .thumbs.big .thumb{width:104px;height:104px}
+  .selbar{position:sticky;top:0;z-index:5;border-color:var(--accent);background:#eaf1fd}
+  .mv{display:flex;gap:8px;flex:none}
+  .mv button{width:44px;height:44px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:18px;font-weight:700;cursor:pointer;color:var(--text)}
+  .mv button:disabled{opacity:.3;cursor:not-allowed}
+  .eqgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
+  .eqgrid .full{grid-column:1 / -1}
+  .pill.type{background:#f0eafd;color:#5b3fa8}
+  .rt-item{border-top:1px solid var(--border);margin-top:10px;padding-top:8px}
+  .quote{font-size:13px;color:var(--muted);font-style:italic;margin:2px 0 6px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+  .chips .btn{min-height:40px}
+  .logo-opt{display:inline-block;width:92px;height:62px;border:2px solid var(--border);border-radius:8px;background:#fff;padding:3px;margin:0 8px 8px 0;cursor:pointer;vertical-align:top}
+  .logo-opt img{width:100%;height:100%;object-fit:contain;display:block}
+  .logo-opt.sel{border-color:var(--accent)}
+  .swatch{display:inline-block;width:40px;height:40px;border-radius:8px;border:2px solid var(--border);margin:0 8px 8px 0;cursor:pointer;vertical-align:top;padding:0}
+  .swatch.sel{border-color:var(--text);box-shadow:0 0 0 2px #fff inset}
 </style>
 </head>
 <body>
@@ -98,6 +117,7 @@
   <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
   <input type="file" id="photo-in" accept="image/*" multiple class="hide">
   <input type="file" id="logo-in" accept="image/png,image/jpeg,image/webp" class="hide">
+  <input type="file" id="audio-in" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.amr,.3gp" multiple class="hide">
 </div>
 
 <script>
@@ -116,7 +136,7 @@ var INSP_TYPES = [['periodic','Periodic'],['move_in','Move-in'],['move_out','Mov
 // ── state ───────────────────────────────────────────────────────────────────
 var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], propsErr:'', propQ:'', newProp:null,
   sync:{ state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null, lastErr:'' },
-  photoMsg:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null };
+  photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null };
 var blobUrl = {};           // photo id -> object URL (local copy)
 var photoState = {};        // photo id -> {state, err}
 var localOnly = {};         // id -> record for inspections only on this phone
@@ -201,7 +221,7 @@ function enterApp(d, err){
     (rows||[]).forEach(function(r){ localOnly[r.id] = r; });
     render(); setSync(); pumpPhotos();
   }).catch(function(e){ S.noIdb = true; render(); toast('Phone storage problem: '+e.message); });
-  render(); setSync();
+  render(); setSync(); loadTypes();
 }
 function applyList(d){ S.list = d.inspections || []; S.brands = d.brands || []; S.reportBase = d.report_base || S.reportBase; S.listErr=''; }
 function refreshList(){ return api('GET','/fi/list').then(function(d){ applyList(d); }).catch(function(e){ S.listErr = 'Could not refresh the server list: '+e.message; }); }
@@ -371,22 +391,6 @@ function retryPhotos(){
 
 // ── model ───────────────────────────────────────────────────────────────────
 function findArea(doc, id){ for (var i=0;i<doc.areas.length;i++) if (doc.areas[i].id===id) return doc.areas[i]; return null; }
-function mkArea(name, group){ return { id:'ar_'+rid(8), name:name, group:group, condition:'not_inspected', excluded:false, issues:[], photo_ids:[], notes:'', pending_text:'', dictation:[] }; }
-function buildAreas(o){
-  var a = [];
-  a.push(mkArea('Exterior Front','exterior'));
-  if (o.sides){ a.push(mkArea('Exterior Side (Left)','exterior')); a.push(mkArea('Exterior Side (Right)','exterior')); }
-  a.push(mkArea('Exterior Rear','exterior')); a.push(mkArea('Roof & Gutters','exterior'));
-  a.push(mkArea('Living Room','interior')); a.push(mkArea('Dining Room','interior')); a.push(mkArea('Kitchen','interior'));
-  for (var b=1;b<=o.beds;b++) a.push(mkArea('Bedroom '+b,'interior'));
-  for (var t=1;t<=o.baths;t++) a.push(mkArea(o.baths>1?'Bathroom '+t:'Bathroom','interior'));
-  a.push(mkArea('Hallway & Stairs','interior'));
-  if (o.laundry) a.push(mkArea('Laundry','interior'));
-  if (o.basement) a.push(mkArea('Basement','interior'));
-  if (o.attic) a.push(mkArea('Attic','interior'));
-  a.push(mkArea('Heating / HVAC','systems')); a.push(mkArea('Water Heater','systems')); a.push(mkArea('Electrical Panel','systems')); a.push(mkArea('Smoke & CO Detectors','systems'));
-  return a;
-}
 function issueCount(a){ return (a.issues||[]).length; }
 function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return a.condition && a.condition!=='not_inspected'; }).length, total: act.length }; }
 
@@ -399,6 +403,8 @@ function render(){
   else if (S.view==='area') h = viewArea();
   else if (S.view==='review') h = viewReview();
   else if (S.view==='brands') h = viewBrands();
+  else if (S.view==='voice') h = viewVoice();
+  else if (S.view==='route') h = viewRoute();
   var y = window.scrollY, key = S.view + ':' + (S.areaId||'');
   v.innerHTML = h; window.scrollTo(0, render._key === key ? y : 0); render._key = key;
   if (S.view==='new' && !S.newProp) renderPropList();
@@ -521,29 +527,8 @@ function openInspection(id){
 }
 
 // ---- inspection (area list) ----
-function viewInsp(){
-  var rec = S.rec, doc = rec.doc, c = inspectedCount(doc);
-  var b = brandById(rec.meta.brand_id) || defaultBrand();
-  var h = '<div class="row"><button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div>';
-  h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
-  h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
-  var groups = [['exterior','Exterior'],['interior','Interior'],['systems','Systems'],['other','Other']];
-  groups.forEach(function(g){
-    var as = doc.areas.filter(function(a){ return (a.group||'other')===g[0] && !a.excluded; });
-    if (!as.length) return;
-    h += '<h2>'+g[1]+'</h2><div class="card" style="padding:4px 12px">';
-    as.forEach(function(a){ h += areaRow(a); });
-    h += '</div>';
-  });
-  var ex = doc.areas.filter(function(a){return a.excluded;});
-  if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
-  h += '<button class="btn block" onclick="addAreaSheet()">＋ Add an area (bedroom, bathroom, garage…)</button>';
-  h += '<button class="btn primary block" style="margin-top:10px;min-height:52px" onclick="openReview()">Review &amp; report ›</button>';
-  return h;
-}
 function typeLabel(t){ for (var i=0;i<INSP_TYPES.length;i++) if (INSP_TYPES[i][0]===t) return INSP_TYPES[i][1]; return t||''; }
 function condPill(c){ var cls = c==='good'||c==='nothing_to_do' ? 'ok' : c==='poor' ? 'bad' : c==='fair' ? 'warn' : ''; return '<span class="pill '+cls+'">'+esc(COND_LABEL[c]||'Not inspected')+'</span>'; }
-function areaRow(a){ var n = issueCount(a), ph = (a.photo_ids||[]).length; return '<div class="area-row" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+(n?n+' issue'+(n>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'')+'</div></span>'+condPill(a.condition)+'</div>'; }
 function leaveInsp(){
   var go2 = function(){ S.rec=null; S.areaId=null; S.view='home'; refreshList().then(render); render(); };
   if (S.rec && S.rec.dirty){ syncNow(true).then(function(){ if (S.rec && S.rec.dirty){ toast('Not saved to the server yet — it is kept on this phone'); } go2(); }); } else go2();
@@ -557,43 +542,7 @@ function addAreaPreset(name,group){ var nm = nextNameFor(name); var a = mkArea(n
 function addAreaCustom(){ var nm = $('aa-name').value.trim(); if(!nm){ toast('Type a name'); return; } var a = mkArea(nm, $('aa-group').value); mut(function(doc){ doc.areas.push(a); }); closeSheet(); openArea(a.id); }
 
 // ---- area ----
-function openArea(id){
-  var a = findArea(S.rec.doc, id);
-  if (a.excluded){ mut(function(){ a.excluded = false; }); }
-  S.areaId = id; S.proposals = null; S.dictErr=''; S.interim=''; stopDictation(); S.view='area'; render();
-}
 function curArea(){ return findArea(S.rec.doc, S.areaId); }
-function viewArea(){
-  var a = curArea(); var doc = S.rec.doc, idx = doc.areas.filter(function(x){return !x.excluded;}).map(function(x){return x.id;}).indexOf(a.id);
-  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
-  h += '<h1>'+esc(a.name)+'</h1>';
-  h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
-  h += '<div class="card"><button class="mic'+(S.listening?' live':'')+'" id="mic-btn" onclick="toggleDictation()">'+(S.listening?'⏹ Stop (listening…)':'🎤 Dictate')+'</button>';
-  if (S.dictErr) h += '<div class="banner err" style="margin-top:8px">'+esc(S.dictErr)+'</div>';
-  h += '<div class="muted" id="interim" style="min-height:18px;margin-top:6px">'+esc(S.interim)+'</div>';
-  h += '<textarea id="pending" placeholder="Speak or type what you see: e.g. “Leak under the kitchen sink, looks like the P-trap, recommend replacing it.”">'+esc(a.pending_text||'')+'</textarea>';
-  h += '<div class="btns"><button class="btn primary" id="struct-btn" onclick="structureNow()"'+(S.structuring?' disabled':'')+'>'+(S.structuring?'Working…':'✨ Turn into issues')+'</button><button class="btn" onclick="clearPending()">Clear</button></div>';
-  h += '<div class="muted" style="margin-top:6px">The AI only tidies what you said and suggests a fix when you didn’t give one. You review every issue before it is added.</div></div>';
-  if (S.proposals && S.proposals.areaId===a.id) h += proposalsHtml();
-  h += '<h2>Issues in this area ('+issueCount(a)+')</h2>';
-  if (!issueCount(a)) h += '<div class="card muted">'+(a.condition==='nothing_to_do'||a.condition==='good'?'Nothing to repair here.':'No issues recorded yet.')+'</div>';
-  (a.issues||[]).forEach(function(is){ h += issueCard(is); });
-  h += '<button class="btn block" onclick="editIssue(\'\')">＋ Add an issue by hand</button>';
-  h += '<h2>Photos</h2><div class="thumbs">'+(a.photo_ids||[]).map(function(p){ return thumbHtml(p, 'viewPhoto(\''+p+'\')'); }).join('')+'</div>';
-  h += '<button class="btn block" onclick="pickPhotos(\''+a.id+'\')">📷 Add photos</button><div class="muted" style="margin-top:4px">Pick from the camera or gallery. Photos upload in the background and keep trying if the signal drops.</div>';
-  h += '<label class="fld">Area notes (shown in the report)</label><textarea id="anotes" style="min-height:70px" oninput="areaNotes(this.value)">'+esc(a.notes||'')+'</textarea>';
-  var all = S.rec.doc.areas.filter(function(x){return !x.excluded;}), nx = all[idx+1], pv = all[idx-1];
-  h += '<div class="btns" style="margin-top:14px">'+(pv?'<button class="btn" onclick="openArea(\''+pv.id+'\')">‹ '+esc(pv.name)+'</button>':'')+(nx?'<button class="btn primary" style="margin-left:auto" onclick="openArea(\''+nx.id+'\')">'+esc(nx.name)+' ›</button>':'<button class="btn go" style="margin-left:auto" onclick="openReview()">Finish — review ›</button>')+'</div>';
-  return h;
-}
-function thumbHtml(id, onclick){
-  var src = photoSrc(id), st = photoState[id];
-  return '<button class="thumb" onclick="'+onclick+'">'+(src?'<img src="'+esc(src)+'" alt="photo" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">':'')+(st&&st.state!=='done'?'<span class="b">'+(st.state==='error'?'⚠ retry':'⏳')+'</span>':'')+'</button>';
-}
-function issueCard(is){
-  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.wo?' <span class="pill new">work order</span>':'')+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
-}
-function backToInsp(){ stopDictation(); S.view='insp'; render(); }
 function bindArea(){
   var ta = $('pending'); if (!ta) return;
   ta.addEventListener('input', function(){ var a = curArea(); mut(function(){ a.pending_text = ta.value; }); });
@@ -651,69 +600,9 @@ function structureNow(){
   }).catch(function(e){ S.proposals = { areaId:a.id, issues:[], err:e.message, source:text }; })
     .then(function(){ S.structuring=false; release('struct'); if (S.view==='area' && S.areaId===a.id) render(); });
 }
-function proposalsHtml(){
-  var p = S.proposals;
-  if (p.err) return '<div class="banner err"><b>AI could not process this.</b> '+esc(p.err)+'<div class="btns"><button class="btn sm" onclick="structureNow()">Try again</button><button class="btn sm" onclick="S.proposals=null;render()">Dismiss</button></div></div>';
-  var h = '<div class="card" style="border-color:var(--accent)"><b>Review before adding</b><div class="muted">'+p.issues.length+' issue'+(p.issues.length===1?'':'s')+' found'+(p.summary?' — '+esc(p.summary):'')+'. Edit anything that’s off.</div>';
-  if (!p.issues.length) h += '<div class="banner info" style="margin-top:8px">The AI found no problems in that dictation. You can still clear the text and mark the area “Nothing to do”.</div>';
-  p.issues.forEach(function(is,i){
-    h += '<div style="border-top:1px solid var(--border);margin-top:10px;padding-top:8px"><label class="check"><input type="checkbox" style="width:22px;height:22px" '+(is.keep?'checked':'')+' onchange="S.proposals.issues['+i+'].keep=this.checked"> <b>Add this issue</b></label>'
-      +'<input value="'+esc(is.title)+'" oninput="S.proposals.issues['+i+'].title=this.value" placeholder="Title">'
-      +'<div class="row" style="gap:6px;margin-top:6px"><select onchange="S.proposals.issues['+i+'].trade=this.value">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(is.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select><select onchange="S.proposals.issues['+i+'].severity=this.value">'+SEVS.map(function(t){return '<option value="'+t[0]+'"'+(is.severity===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select></div>'
-      +'<textarea style="min-height:60px;margin-top:6px" oninput="S.proposals.issues['+i+'].detail=this.value" placeholder="Detail">'+esc(is.detail)+'</textarea>'
-      +'<input style="margin-top:6px" value="'+esc(is.likely_cause)+'" oninput="S.proposals.issues['+i+'].likely_cause=this.value" placeholder="Likely cause (optional)">'
-      +'<textarea style="min-height:60px;margin-top:6px" oninput="S.proposals.issues['+i+'].recommended_fix=this.value" placeholder="Recommended fix">'+esc(is.recommended_fix)+'</textarea>'
-      +(is.fix_source==='suggested' && is.recommended_fix ? '<div class="muted">Fix suggested by AI — you didn’t state one.</div>':'')+(is.possible_duplicate_of?'<div class="muted" style="color:var(--warn)">May duplicate: '+esc(is.possible_duplicate_of)+'</div>':'')+'</div>';
-  });
-  h += '<div class="btns"><button class="btn go" id="accept-btn" onclick="acceptProposals()">Add selected to '+esc(curArea().name)+'</button><button class="btn" onclick="S.proposals=null;render()">Discard</button></div></div>';
-  return h;
-}
-function acceptProposals(){
-  if (!claim('accept')) return; var p = S.proposals, a = curArea();
-  var keep = p.issues.filter(function(i){ return i.keep && String(i.title||'').trim(); });
-  mut(function(){
-    keep.forEach(function(i){ var o = { id:'is_'+rid(8), title:i.title.trim(), trade:i.trade, severity:i.severity, detail:i.detail||'', likely_cause:i.likely_cause||'', recommended_fix:i.recommended_fix||'', fix_source:i.fix_source||'inspector', ai:true, wo:false, photo_ids:[] }; if (o.trade==='tenant_action') o.tenant_action=true; a.issues.push(o); });
-    (a.dictation = a.dictation||[]).push({ at:new Date().toISOString(), text:p.source });
-    a.pending_text = '';
-    if ((!a.condition || a.condition==='not_inspected') && p.cond) a.condition = p.cond;
-    if ((!a.condition || a.condition==='not_inspected')) a.condition = keep.length ? 'fair' : 'nothing_to_do';
-  });
-  S.proposals=null; release('accept'); render(); toast(keep.length+' issue'+(keep.length===1?'':'s')+' added');
-}
-
 // ---- issue editor ----
-var editing = null;
-function editIssue(id){
-  var a = curArea(), is = id ? JSON.parse(JSON.stringify((a.issues||[]).filter(function(x){return x.id===id;})[0])) : { id:'is_'+rid(8), title:'', trade:'general', severity:'medium', detail:'', likely_cause:'', recommended_fix:'', fix_source:'inspector', wo:false, photo_ids:[], isNew:true };
-  editing = is; renderIssueSheet();
-}
-function renderIssueSheet(){
-  var is = editing, a = curArea();
-  var h = '<h2>'+(is.isNew?'Add issue':'Edit issue')+'</h2><label class="fld" style="margin-top:0">Title</label><input id="ie-title" value="'+esc(is.title)+'" oninput="editing.title=this.value">'
-    +'<label class="fld">Trade</label><select onchange="editing.trade=this.value;editing.tenant_action=(this.value===\'tenant_action\')">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(is.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select>'
-    +'<label class="fld">Severity</label><div class="seg">'+SEVS.map(function(s){ return '<button class="'+(is.severity===s[0]?'sel':'')+'" onclick="editing.severity=\''+s[0]+'\';renderIssueSheet()">'+s[1]+'</button>'; }).join('')+'</div>'
-    +'<label class="fld">Detail</label><textarea style="min-height:70px" oninput="editing.detail=this.value">'+esc(is.detail)+'</textarea>'
-    +'<label class="fld">Likely cause</label><input value="'+esc(is.likely_cause)+'" oninput="editing.likely_cause=this.value">'
-    +'<label class="fld">Recommended fix</label><textarea style="min-height:70px" oninput="editing.recommended_fix=this.value">'+esc(is.recommended_fix)+'</textarea>'
-    +'<div class="toggle"><span>Flag for a work order<div class="muted">Just a flag for now — nothing is created</div></span><input type="checkbox"'+(is.wo?' checked':'')+' onchange="editing.wo=this.checked"></div>';
-  if ((a.photo_ids||[]).length){ h += '<label class="fld">Photos for this issue (tap to attach)</label><div class="thumbs">'+a.photo_ids.map(function(p){ var on = (is.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleIssuePhoto(\''+p+'\')">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>'; }
-  h += '<div class="btns"><button class="btn primary" onclick="saveIssue()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(is.isNew?'':'<button class="btn danger" id="ie-del" onclick="deleteIssueStep()">Delete</button>')+'</div>';
-  openSheet(h);
-}
 function toggleIssuePhoto(p){ var l = editing.photo_ids = editing.photo_ids||[]; var i = l.indexOf(p); if (i>-1) l.splice(i,1); else l.push(p); renderIssueSheet(); }
-function saveIssue(){
-  var is = editing; if (!String(is.title||'').trim()){ toast('Give the issue a title'); return; }
-  var a = curArea(); var isNew = is.isNew; delete is.isNew; is.title = is.title.trim(); if (is.trade==='tenant_action') is.tenant_action = true; else delete is.tenant_action;
-  mut(function(){ if (isNew) a.issues.push(is); else for (var i=0;i<a.issues.length;i++) if (a.issues[i].id===is.id) a.issues[i]=is; if ((!a.condition||a.condition==='not_inspected')) a.condition='fair'; });
-  closeSheet(); render();
-}
 function deleteIssueStep(){ var b=$('ie-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to delete'; return; } var a=curArea(), id=editing.id; mut(function(){ a.issues = a.issues.filter(function(x){return x.id!==id;}); }); closeSheet(); render(); }
-function viewPhoto(id){
-  var a = curArea();
-  openSheet('<h2>Photo</h2><img src="'+esc(photoSrc(id))+'" alt="photo" style="width:100%;border-radius:10px"><div class="btns"><button class="btn danger" id="ph-del" onclick="deletePhotoStep(\''+id+'\')">Remove from this area</button><button class="btn" onclick="closeSheet()">Close</button></div>');
-}
-function deletePhotoStep(id){ var b=$('ph-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to remove'; return; } var a=curArea(); mut(function(){ a.photo_ids = a.photo_ids.filter(function(x){return x!==id;}); (a.issues||[]).forEach(function(is){ is.photo_ids = (is.photo_ids||[]).filter(function(x){return x!==id;}); }); }); closeSheet(); render(); }
-
 // ---- sheet helpers ----
 function openSheet(html){ $('sheet').innerHTML = html; $('modal').classList.add('open'); }
 function closeSheet(){ $('modal').classList.remove('open'); }
@@ -727,6 +616,7 @@ function localChecks(doc){
   if (!doc.overall || !doc.overall.condition || doc.overall.condition==='not_inspected') blocks.push('Set the overall condition');
   active.forEach(function(a){ if ((a.pending_text||'').trim()) blocks.push('“'+a.name+'” has dictation not turned into issues (or cleared)'); });
   var sk = active.filter(function(a){ return !a.condition || a.condition==='not_inspected'; }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
+  var uns = (doc.voice_notes||[]).filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length; if (uns) warns.push(uns+' voice note'+(uns>1?'s have':' has')+' not been sorted into areas yet');
   if (S.rec.dirty) blocks.push('Changes are not saved to the server yet');
   var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
   if (sm && !sm.accepted) warns.push('The AI summary has not been approved and will be left out of the report');
@@ -839,53 +729,704 @@ function viewBrands(){
   });
   return h;
 }
+function deactivateBrand(){
+  var b = brandEdit; if (!b.id) return; if (!claim('brdel')) return;
+  api('POST','/fi/brand/save',{ id:b.id, name:b.name, primary_color:b.primary_color, accent_color:b.accent_color, active:false }).then(function(){ return refreshList(); }).then(function(){ release('brdel'); closeSheet(); toast('Removed'); render(); })
+    .catch(function(e){ release('brdel'); toast('Not removed: '+e.message); });
+}
+
+// ── Round 2 (Oct 15 2026, after field use): walk-through order, photo select/move, equipment info, issue types, brand capture, voice notes ──
+var EQUIP_KINDS = {
+  furnace:{label:'Furnace',extra:['fuel','filter_size']}, boiler:{label:'Boiler',extra:['fuel']}, central_ac:{label:'Central A/C',extra:['tonnage','filter_size']},
+  heat_pump:{label:'Heat pump',extra:['tonnage','filter_size']}, water_heater:{label:'Water heater',extra:['fuel','capacity']}, refrigerator:{label:'Refrigerator',extra:[]},
+  range:{label:'Range / oven',extra:['fuel']}, dishwasher:{label:'Dishwasher',extra:[]}, microwave:{label:'Microwave',extra:[]}, washer:{label:'Washer',extra:[]},
+  dryer:{label:'Dryer',extra:['fuel']}, disposal:{label:'Garbage disposal',extra:[]}, other:{label:'Other equipment',extra:[]}
+};
+var EQUIP_LABEL = {name:'Label (optional, e.g. “Upstairs unit”)',brand:'Brand',model:'Model number',serial:'Serial number',year:'Year / date made',notes:'Notes',fuel:'Fuel type',filter_size:'Filter size',tonnage:'Tonnage',capacity:'Capacity'};
+var EQUIP_HINT = {filter_size:'e.g. 16x25x1', fuel:'gas, electric, oil', capacity:'gallons, e.g. 40', tonnage:'e.g. 3 ton', year:'e.g. 2008', model:'as printed on the label', serial:'as printed on the label'};
+function equipKeys(kind){ return ['brand','model','serial','year'].concat((EQUIP_KINDS[kind]||EQUIP_KINDS.other).extra); }
+function equipSuggest(areaName){
+  var n = String(areaName||'').toLowerCase(), out = [];
+  if (/water heater/.test(n)) out = ['water_heater'];
+  else if (/hvac|heat|furnace|boiler|mechanical|utility|cooling/.test(n)) out = ['furnace','boiler','central_ac','heat_pump'];
+  else if (/kitchen/.test(n)) out = ['refrigerator','range','dishwasher','microwave','disposal'];
+  else if (/laundry/.test(n)) out = ['washer','dryer'];
+  else if (/basement|cellar/.test(n)) out = ['furnace','boiler','water_heater','washer','dryer'];
+  return out;
+}
+function equipTitle(e){ var k = EQUIP_KINDS[e.kind] || EQUIP_KINDS.other; return (e.name ? e.name + ' · ' : '') + k.label; }
+function equipSummary(e){
+  var bits = [];
+  ['brand','model','serial','year'].forEach(function(f){ if (e[f]) bits.push((f==='serial'?'S/N ':f==='model'?'Model ':'')+e[f]); });
+  ['filter_size','fuel','tonnage','capacity'].forEach(function(f){ if (e[f]) bits.push((f==='filter_size'?'filter ':'')+e[f]); });
+  return bits.join(' · ');
+}
+
+// ---- walk-through order ----
+function walkKey(a, idx){
+  var n = String(a.name||'').toLowerCase(), numM = n.match(/\d+/), num = numM ? Number(numM[0]) : 0;
+  if (a.group==='exterior' || /exterior|roof|gutter|porch|deck|yard|fence|garage|shed|driveway|walkway|sidewalk/.test(n)){
+    var r = /front/.test(n) ? 0 : /side|left|right/.test(n) ? 1 : /rear|back/.test(n) ? 2 : /roof|gutter/.test(n) ? 4 : 3;
+    return [0,0,r,num,idx];
+  }
+  if (/smoke|\bco\b|carbon/.test(n)) return [3,0,0,num,idx];
+  var isSys = /hvac|heat|furnace|boiler|mechanical|utility|cooling|water heater|electric|panel/.test(n);
+  var isBed = /bedroom/.test(n), isBath = /bath|powder|restroom|toilet/.test(n), isHalf = /half|powder/.test(n);
+  var fl = /basement|cellar/.test(n) ? 1 : /attic/.test(n) ? 4 : /third|3rd/.test(n) ? 3 : /second|2nd|upstairs/.test(n) ? 2 : null;
+  if (fl === null) fl = isSys ? 1 : isBed ? 2 : (isBath && !isHalf) ? 2 : 0;
+  var kind;
+  if (/basement|cellar/.test(n)) kind = 0;
+  else if (/hvac|heat|furnace|boiler|mechanical|utility|cooling/.test(n)) kind = 1;
+  else if (/water heater/.test(n)) kind = 2;
+  else if (/electric|panel/.test(n)) kind = 3;
+  else if (/living|family|great room|front room/.test(n)) kind = 0;
+  else if (/dining/.test(n)) kind = 1;
+  else if (/kitchen/.test(n)) kind = 2;
+  else if (isHalf) kind = 3;
+  else if (/laundry/.test(n)) kind = 4;
+  else if (/hall|stair|landing|foyer|entry/.test(n)) kind = 5;
+  else if (isBed) kind = 6;
+  else if (isBath) kind = 7;
+  else kind = 8;
+  return [1, fl, kind, num, idx];
+}
+function sortWalk(list){
+  var keyed = list.map(function(a,i){ return { a:a, k:walkKey(a,i) }; });
+  keyed.sort(function(x,y){ for (var i=0;i<5;i++){ if (x.k[i]!==y.k[i]) return x.k[i]-y.k[i]; } return 0; });
+  return keyed.map(function(x){ return x.a; });
+}
+function mkArea(name, group){ return { id:'ar_'+rid(8), name:name, group:group, condition:'not_inspected', excluded:false, issues:[], photo_ids:[], equipment:[], notes:'', pending_text:'', dictation:[] }; }
+function buildAreas(o){
+  var a = [];
+  a.push(mkArea('Exterior Front','exterior'));
+  if (o.sides){ a.push(mkArea('Exterior Side (Left)','exterior')); a.push(mkArea('Exterior Side (Right)','exterior')); }
+  a.push(mkArea('Exterior Rear','exterior')); a.push(mkArea('Roof & Gutters','exterior'));
+  a.push(mkArea('Living Room','interior')); a.push(mkArea('Dining Room','interior')); a.push(mkArea('Kitchen','interior'));
+  for (var b=1;b<=o.beds;b++) a.push(mkArea('Bedroom '+b,'interior'));
+  for (var t=1;t<=o.baths;t++) a.push(mkArea(o.baths>1?'Bathroom '+t:'Bathroom','interior'));
+  a.push(mkArea('Hallway & Stairs','interior'));
+  if (o.laundry) a.push(mkArea('Laundry','interior'));
+  if (o.basement) a.push(mkArea('Basement','interior'));
+  if (o.attic) a.push(mkArea('Attic','interior'));
+  a.push(mkArea('Heating / HVAC','systems')); a.push(mkArea('Water Heater','systems')); a.push(mkArea('Electrical Panel','systems')); a.push(mkArea('Smoke & CO Detectors','systems'));
+  return sortWalk(a);
+}
+function groupLabel(g){ return g==='exterior' ? 'Exterior' : g==='interior' ? 'Interior' : g==='systems' ? 'Systems' : ''; }
+function toggleReorder(){ S.reorder = !S.reorder; render(); }
+function moveArea(id, dir){
+  mut(function(doc){
+    var vis = doc.areas.filter(function(a){ return !a.excluded; }), i = vis.map(function(a){return a.id;}).indexOf(id), j = i + dir;
+    if (i < 0 || j < 0 || j >= vis.length) return;
+    var ai = doc.areas.indexOf(vis[i]), aj = doc.areas.indexOf(vis[j]), tmp = doc.areas[ai]; doc.areas[ai] = doc.areas[aj]; doc.areas[aj] = tmp;
+  });
+  render();
+}
+function autoOrderSheet(){
+  openSheet('<h2>Auto-order for a walk-through</h2><p>This re-sorts every area into this path: <b>outside</b> (front, sides, rear, roof) → <b>ground floor</b> (living, dining, kitchen, laundry, hallway) → <b>basement &amp; systems</b> → <b>upstairs</b> (bedrooms, bathrooms) → <b>attic</b> → detectors. Numbers in names (Bedroom 2, 3rd floor) are respected. You can still fine-tune with ▲ ▼ afterwards.</p><div class="btns"><button class="btn primary" id="ao-go" onclick="autoOrderApply()">Re-order the areas</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function autoOrderApply(){ if (!claim('ao')) return; mut(function(doc){ doc.areas = sortWalk(doc.areas); }); release('ao'); closeSheet(); render(); toast('Areas re-ordered'); }
+
+// ---- inspection (area list) ----
+function viewInsp(){
+  var rec = S.rec, doc = rec.doc, c = inspectedCount(doc);
+  var b = brandById(rec.meta.brand_id) || defaultBrand();
+  var h = '<div class="row"><button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div>';
+  h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
+  h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
+  var vn = doc.voice_notes||[], unsorted = vn.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length;
+  h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
+  var vis = doc.areas.filter(function(a){ return !a.excluded; });
+  h += '<div class="row" style="margin-top:6px"><h2 style="margin:8px 0">Areas in walk-through order</h2><button class="btn sm" onclick="toggleReorder()">'+(S.reorder?'Done':'↕ Reorder')+'</button></div>';
+  if (S.reorder) h += '<div class="card"><div class="muted">Tap ▲ or ▼ to move an area up or down the list. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
+  h += '<div class="card" style="padding:4px 12px">'+vis.map(function(a,i){ return areaRow(a, i, vis.length); }).join('')+'</div>';
+  var ex = doc.areas.filter(function(a){return a.excluded;});
+  if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
+  h += '<button class="btn block" onclick="addAreaSheet()">＋ Add an area (bedroom, bathroom, garage…)</button>';
+  h += '<button class="btn primary block" style="margin-top:10px;min-height:52px" onclick="openReview()">Review &amp; report ›</button>';
+  return h;
+}
+function areaRow(a, i, n){
+  var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length;
+  var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'');
+  if (S.reorder) return '<div class="area-row" style="cursor:default"><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
+  return '<div class="area-row" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+condPill(a.condition)+'</div>';
+}
+function openArea(id){
+  var a = findArea(S.rec.doc, id);
+  if (a.excluded){ mut(function(){ a.excluded = false; }); }
+  S.areaId = id; S.proposals = null; S.dictErr=''; S.interim=''; S.selMode=false; S.sel={}; stopDictation(); S.view='area'; render();
+}
+function backToInsp(){ stopDictation(); S.selMode=false; S.sel={}; S.view='insp'; render(); }
+
+// ---- area ----
+function viewArea(){
+  var a = curArea(); var doc = S.rec.doc, idx = doc.areas.filter(function(x){return !x.excluded;}).map(function(x){return x.id;}).indexOf(a.id);
+  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
+  h += '<h1>'+esc(a.name)+'</h1>';
+  h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
+  h += '<div class="card"><button class="mic'+(S.listening?' live':'')+'" id="mic-btn" onclick="toggleDictation()">'+(S.listening?'⏹ Stop (listening…)':'🎤 Dictate')+'</button>';
+  if (S.dictErr) h += '<div class="banner err" style="margin-top:8px">'+esc(S.dictErr)+'</div>';
+  h += '<div class="muted" id="interim" style="min-height:18px;margin-top:6px">'+esc(S.interim)+'</div>';
+  h += '<textarea id="pending" placeholder="Speak or type what you see: e.g. “Leak under the kitchen sink, looks like the P-trap, recommend replacing it.”">'+esc(a.pending_text||'')+'</textarea>';
+  h += '<div class="btns"><button class="btn primary" id="struct-btn" onclick="structureNow()"'+(S.structuring?' disabled':'')+'>'+(S.structuring?'Working…':'✨ Turn into issues')+'</button><button class="btn" onclick="clearPending()">Clear</button></div>';
+  h += '<div class="muted" style="margin-top:6px">The AI only tidies what you said and suggests a fix when you didn’t give one. You review every issue before it is added.</div></div>';
+  if (S.proposals && S.proposals.areaId===a.id) h += proposalsHtml();
+  h += '<h2>Issues in this area ('+issueCount(a)+')</h2>';
+  if (!issueCount(a)) h += '<div class="card muted">'+(a.condition==='nothing_to_do'||a.condition==='good'?'Nothing to repair here.':'No issues recorded yet.')+'</div>';
+  (a.issues||[]).forEach(function(is){ h += issueCard(is); });
+  h += '<button class="btn block" onclick="editIssue(\'\')">＋ Add an issue by hand</button>';
+  // equipment & model info
+  var eqs = a.equipment||[], sug = equipSuggest(a.name);
+  h += '<h2>Equipment &amp; model info ('+eqs.length+')</h2>';
+  eqs.forEach(function(e){ h += '<div class="issue info" onclick="editEquip(\''+e.id+'\')"><div class="t">'+esc(equipTitle(e))+'</div>'+(equipSummary(e)?'<div class="f">'+esc(equipSummary(e))+'</div>':'')+((e.photo_ids||[]).length?'<div class="f">📷 '+e.photo_ids.length+' label photo'+(e.photo_ids.length>1?'s':'')+'</div>':'')+'</div>'; });
+  if (!eqs.length) h += '<div class="card muted">'+(sug.length?'Record the brand, model, serial number and filter size from the label.':'Furnace, water heater and appliance details go here.')+'</div>';
+  h += '<div class="chips">'+sug.map(function(k){ return '<button class="btn sm" onclick="editEquip(\'\',\''+k+'\')">＋ '+esc(EQUIP_KINDS[k].label)+'</button>'; }).join('')+'<button class="btn sm" onclick="equipKindSheet()">＋ '+(sug.length?'Other…':'Add equipment')+'</button></div>';
+  // photos
+  var photos = a.photo_ids||[], n = selCount();
+  h += '<div class="row"><h2 style="margin:14px 0 8px">Photos ('+photos.length+')</h2>'+(photos.length?'<button class="btn sm" onclick="toggleSelMode()">'+(S.selMode?'Done':'Select')+'</button>':'')+'</div>';
+  if (S.selMode){
+    h += '<div class="card selbar"><b>'+n+' selected</b><div class="muted">Tap photos to select them, then move them to another area or remove them.</div><div class="btns"><button class="btn sm" onclick="selAll()">'+(n===photos.length?'Select none':'Select all')+'</button><button class="btn sm primary" onclick="moveSelected()"'+(n?'':' disabled')+'>Move…</button><button class="btn sm danger" onclick="removeSelected()"'+(n?'':' disabled')+'>Remove</button></div></div>';
+  }
+  h += '<div class="thumbs'+(S.selMode?' big':'')+'">'+photos.map(function(p){ return thumbHtml(p, S.selMode ? 'togglePhotoSel(\''+p+'\')' : 'viewPhoto(\''+p+'\')', S.selMode && S.sel[p]); }).join('')+'</div>';
+  h += '<button class="btn block" onclick="pickPhotos(\''+a.id+'\')">📷 Add photos</button><div class="muted" style="margin-top:4px">Pick from the camera or gallery. Photos upload in the background and keep trying if the signal drops.</div>';
+  h += '<label class="fld">Area notes (shown in the report)</label><textarea id="anotes" style="min-height:70px" oninput="areaNotes(this.value)">'+esc(a.notes||'')+'</textarea>';
+  var all = S.rec.doc.areas.filter(function(x){return !x.excluded;}), nx = all[idx+1], pv = all[idx-1];
+  h += '<div class="btns" style="margin-top:14px">'+(pv?'<button class="btn" onclick="openArea(\''+pv.id+'\')">‹ '+esc(pv.name)+'</button>':'')+(nx?'<button class="btn primary" style="margin-left:auto" onclick="openArea(\''+nx.id+'\')">'+esc(nx.name)+' ›</button>':'<button class="btn go" style="margin-left:auto" onclick="openReview()">Finish — review ›</button>')+'</div>';
+  return h;
+}
+function thumbHtml(id, onclick, selected){
+  var src = photoSrc(id), st = photoState[id];
+  return '<button class="thumb'+(selected?' chk':'')+'" onclick="'+onclick+'" aria-label="photo">'+(src?'<img src="'+esc(src)+'" alt="photo" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">':'')+(st&&st.state!=='done'?'<span class="b">'+(st.state==='error'?'⚠ retry':'⏳')+'</span>':'')+'</button>';
+}
+function issueCard(is){
+  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
+}
+
+// ---- photos: select, move, remove ----
+function selCount(){ var n=0; for (var k in S.sel) if (S.sel[k]) n++; return n; }
+function selIds(){ var a = curArea(); return (a.photo_ids||[]).filter(function(p){ return S.sel[p]; }); }
+function toggleSelMode(){ S.selMode = !S.selMode; S.sel = {}; render(); }
+function togglePhotoSel(id){ if (S.sel[id]) delete S.sel[id]; else S.sel[id] = true; render(); }
+function selAll(){ var a = curArea(); if (selCount()===(a.photo_ids||[]).length) S.sel = {}; else { S.sel = {}; (a.photo_ids||[]).forEach(function(p){ S.sel[p]=true; }); } render(); }
+function moveSelected(){ var ids = selIds(); if (!ids.length) return; movePhotosSheet(ids); }
+function removeSelected(){ var ids = selIds(); if (!ids.length) return; removePhotosSheet(ids); }
+function photosOnIssues(a, ids){ var n = 0; (a.issues||[]).forEach(function(is){ (is.photo_ids||[]).forEach(function(p){ if (ids.indexOf(p)>-1) n++; }); }); (a.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(p){ if (ids.indexOf(p)>-1) n++; }); }); return n; }
+function movePhotosSheet(ids){
+  var a = curArea(), doc = S.rec.doc; S.moveIds = ids;
+  var att = photosOnIssues(a, ids);
+  var rows = doc.areas.filter(function(x){ return !x.excluded && x.id!==a.id; }).map(function(x){ var ph=(x.photo_ids||[]).length; return '<div class="area-row" onclick="movePhotosTo(\''+x.id+'\')"><span><b>'+esc(x.name)+'</b><div class="muted">'+esc(groupLabel(x.group))+(groupLabel(x.group)?' · ':'')+ph+' photo'+(ph===1?'':'s')+'</div></span><span class="pill new">Move here</span></div>'; }).join('');
+  openSheet('<h2>Move '+ids.length+' photo'+(ids.length===1?'':'s')+' to…</h2><div class="muted">Pick the area they belong in.'+(att?' '+att+' attachment'+(att===1?'':'s')+' to issues/equipment here will be detached.':'')+'</div><div style="margin-top:6px">'+rows+'</div><div class="btns"><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function movePhotosTo(areaId){
+  if (!claim('mvph')) return;
+  var ids = S.moveIds||[], a = curArea(), target = findArea(S.rec.doc, areaId);
+  if (!target || !ids.length){ release('mvph'); closeSheet(); return; }
+  mut(function(){
+    a.photo_ids = (a.photo_ids||[]).filter(function(p){ return ids.indexOf(p)<0; });
+    (a.issues||[]).forEach(function(is){ is.photo_ids = (is.photo_ids||[]).filter(function(p){ return ids.indexOf(p)<0; }); });
+    (a.equipment||[]).forEach(function(e){ e.photo_ids = (e.photo_ids||[]).filter(function(p){ return ids.indexOf(p)<0; }); });
+    target.photo_ids = target.photo_ids||[];
+    ids.forEach(function(p){ if (target.photo_ids.indexOf(p)<0) target.photo_ids.push(p); });
+  });
+  S.sel = {}; S.moveIds = []; release('mvph'); closeSheet(); render(); toast(ids.length+' photo'+(ids.length===1?'':'s')+' moved to '+target.name);
+}
+function removePhotosSheet(ids){
+  S.moveIds = ids;
+  openSheet('<h2>Remove '+ids.length+' photo'+(ids.length===1?'':'s')+'?</h2><p>They are taken out of this area and the report. (Use “Move…” instead if they belong in another area.)</p><div class="btns"><button class="btn danger" id="rm-go" onclick="removePhotosNow()">Remove '+ids.length+' photo'+(ids.length===1?'':'s')+'</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function removePhotosNow(){
+  if (!claim('rmph')) return; $('rm-go').disabled = true;
+  var ids = S.moveIds||[], a = curArea();
+  mut(function(){
+    a.photo_ids = (a.photo_ids||[]).filter(function(p){ return ids.indexOf(p)<0; });
+    (a.issues||[]).forEach(function(is){ is.photo_ids = (is.photo_ids||[]).filter(function(p){ return ids.indexOf(p)<0; }); });
+    (a.equipment||[]).forEach(function(e){ e.photo_ids = (e.photo_ids||[]).filter(function(p){ return ids.indexOf(p)<0; }); });
+  });
+  S.sel = {}; S.moveIds = [];
+  purgeOrphanPhotos(ids).then(function(){ release('rmph'); closeSheet(); render(); toast(ids.length+' photo'+(ids.length===1?'':'s')+' removed'); })
+    .catch(function(e){ release('rmph'); closeSheet(); render(); toast('Removed from the report, but the phone copy could not be cleaned up: '+e.message); });
+}
+// A removed photo that is no longer used anywhere is dropped from this phone too, so it is not uploaded later and does not fill the phone's storage.
+function purgeOrphanPhotos(ids){
+  var used = {}; S.rec.doc.areas.forEach(function(a){ (a.photo_ids||[]).forEach(function(p){ used[p]=1; }); (a.issues||[]).forEach(function(is){ (is.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); (a.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); });
+  var chain = Promise.resolve();
+  ids.forEach(function(id){ if (used[id]) return; chain = chain.then(function(){ return dbDel('photos', id); }).then(function(){ if (blobUrl[id]){ try{ URL.revokeObjectURL(blobUrl[id]); }catch(e){ /* url already released */ } delete blobUrl[id]; } delete photoState[id]; }); });
+  return chain.then(function(){ setSync(); });
+}
+function viewPhoto(id){
+  var a = curArea(); S.vp = id; var list = a.photo_ids||[], i = list.indexOf(id);
+  openSheet('<h2>Photo '+(i+1)+' of '+list.length+'</h2><img src="'+esc(photoSrc(id))+'" alt="photo" style="width:100%;border-radius:10px">'
+    +'<div class="btns"><button class="btn" onclick="viewPhotoStep(-1)"'+(i<=0?' disabled':'')+'>‹ Previous</button><button class="btn" onclick="viewPhotoStep(1)"'+(i>=list.length-1?' disabled':'')+'>Next ›</button></div>'
+    +'<div class="btns"><button class="btn primary" onclick="movePhotosSheet([\''+id+'\'])">Move to another area…</button><button class="btn danger" onclick="removePhotosSheet([\''+id+'\'])">Remove</button><button class="btn" onclick="closeSheet()">Close</button></div>');
+}
+function viewPhotoStep(d){ var a = curArea(), list = a.photo_ids||[], i = list.indexOf(S.vp)+d; if (i>=0 && i<list.length) viewPhoto(list[i]); }
+
+// ---- equipment & model info ----
+var eqEdit = null, eqRead = { busy:false, msg:'', diff:null };
+function equipKindSheet(){
+  var sug = equipSuggest(curArea().name), keys = Object.keys(EQUIP_KINDS);
+  var order = sug.concat(keys.filter(function(k){ return sug.indexOf(k)<0; }));
+  openSheet('<h2>What kind of equipment?</h2><div class="seg">'+order.map(function(k){ return '<button onclick="closeSheet();editEquip(\'\',\''+k+'\')">'+esc(EQUIP_KINDS[k].label)+'</button>'; }).join('')+'</div><div class="btns"><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function editEquip(id, kind){
+  var a = curArea(), e;
+  if (id){ var src = (a.equipment||[]).filter(function(x){return x.id===id;})[0]; if (!src) return; e = JSON.parse(JSON.stringify(src)); }
+  else e = { id:'eq_'+rid(8), kind:kind, photo_ids:[], isNew:true };
+  eqEdit = e; eqRead = { busy:false, msg:'', diff:null }; renderEquipSheet();
+}
+function eqField(f, full){
+  var e = eqEdit, ph = EQUIP_HINT[f] ? ' placeholder="'+esc(EQUIP_HINT[f])+'"' : '';
+  return '<div class="'+(full?'full':'')+'"><label class="fld">'+esc(EQUIP_LABEL[f]||f)+'</label><input id="eqf-'+f+'" value="'+esc(e[f]||'')+'"'+ph+' autocomplete="off" oninput="eqEdit.'+f+'=this.value"></div>';
+}
+function renderEquipSheet(){
+  var e = eqEdit, a = curArea(), k = EQUIP_KINDS[e.kind] || EQUIP_KINDS.other;
+  var h = '<h2>'+esc(k.label)+(e.isNew?'':' details')+'</h2><div class="muted">'+esc(a.name)+'</div>';
+  h += '<div class="eqgrid">'+eqField('name', true)+eqField('brand')+eqField('model')+eqField('serial')+eqField('year');
+  k.extra.forEach(function(f){ h += eqField(f); });
+  h += '<div class="full"><label class="fld">'+esc(EQUIP_LABEL.notes)+'</label><textarea id="eqf-notes" style="min-height:70px" oninput="eqEdit.notes=this.value">'+esc(e.notes||'')+'</textarea></div></div>';
+  var ph = a.photo_ids||[];
+  if (ph.length){
+    h += '<label class="fld">Photo of the label / data plate (tap to attach)</label><div class="thumbs">'+ph.map(function(p){ var on=(e.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleEquipPhoto(\''+p+'\')" aria-label="photo">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>';
+    if ((e.photo_ids||[]).length) h += '<div class="btns"><button class="btn" id="eq-read" onclick="readLabel()"'+(eqRead.busy?' disabled':'')+'>'+(eqRead.busy?'Reading the label…':'🔍 Read the label from the photo')+'</button></div><div class="muted">The AI reads what is printed and fills only the blank boxes. Always check model and serial numbers against the label.</div>';
+  } else h += '<div class="muted" style="margin-top:8px">Add a photo of the label to this area first, then attach it here and the app can read it for you.</div>';
+  if (eqRead.msg) h += '<div class="banner info" style="margin-top:8px">'+esc(eqRead.msg)+'</div>';
+  if (eqRead.diff && Object.keys(eqRead.diff).length) h += '<div class="banner warn" style="margin-top:8px">The label shows different values: '+Object.keys(eqRead.diff).map(function(f){ return esc((EQUIP_LABEL[f]||f).replace(/ \(.*/,''))+' “'+esc(eqRead.diff[f])+'” (you have “'+esc(e[f])+'”)'; }).join('; ')+'.<div class="btns"><button class="btn sm" onclick="useLabelValues()">Use the label values</button></div></div>';
+  h += '<div class="btns"><button class="btn primary" onclick="saveEquip()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(e.isNew?'':'<button class="btn danger" id="eq-del" onclick="deleteEquipStep()">Delete</button>')+'</div>';
+  openSheet(h);
+}
+function toggleEquipPhoto(p){ var l = eqEdit.photo_ids = eqEdit.photo_ids||[]; var i = l.indexOf(p); if (i>-1) l.splice(i,1); else l.push(p); renderEquipSheet(); }
+function saveEquip(){
+  var e = eqEdit, any = equipKeys(e.kind).concat(['notes']).some(function(f){ return String(e[f]||'').trim(); });
+  if (!any){ toast('Fill in at least one detail (brand, model, serial…)'); return; }
+  var a = curArea(), isNew = e.isNew; delete e.isNew;
+  ['name','brand','model','serial','year','notes','fuel','filter_size','tonnage','capacity'].forEach(function(f){ if (e[f]===undefined) return; e[f] = String(e[f]).trim(); if (!e[f]) delete e[f]; });
+  mut(function(){ a.equipment = a.equipment||[]; if (isNew) a.equipment.push(e); else for (var i=0;i<a.equipment.length;i++) if (a.equipment[i].id===e.id) a.equipment[i]=e; });
+  closeSheet(); render(); toast('Equipment saved');
+}
+function deleteEquipStep(){ var b=$('eq-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to delete'; return; } var a=curArea(), id=eqEdit.id; mut(function(){ a.equipment = (a.equipment||[]).filter(function(x){return x.id!==id;}); }); closeSheet(); render(); }
+function readLabel(){
+  var e = eqEdit; if (!(e.photo_ids||[]).length){ toast('Attach a photo of the label first'); return; }
+  if (!S.rec.base_rev){ toast('Wait for the first save to the server, then try again'); return; }
+  if (!claim('readlabel')) return; eqRead = { busy:true, msg:'', diff:null }; renderEquipSheet();
+  var found = null, errs = [], chain = Promise.resolve();
+  e.photo_ids.slice().forEach(function(pid){
+    chain = chain.then(function(){
+      if (found) return;
+      if (photoState[pid] && photoState[pid].state!=='done'){ errs.push('A photo is still uploading — try again in a moment.'); return; }
+      return api('POST','/fi/read-label',{ inspection_id:S.rec.id, photo_id:pid, kind:e.kind }).then(function(r){ if (r.found) found = r.equipment; else errs.push(r.message||'Nothing readable in that photo.'); }).catch(function(er){ errs.push(er.message); });
+    });
+  });
+  chain.then(function(){
+    release('readlabel'); eqRead = { busy:false, msg:'', diff:null };
+    if (!found){ eqRead.msg = 'Could not read a label: '+(errs.filter(function(x,i,arr){return arr.indexOf(x)===i;}).join(' ')||'nothing was found')+' You can type the details instead.'; renderEquipSheet(); return; }
+    var filled = [], diff = {};
+    Object.keys(found).forEach(function(f){ if (f==='kind'||f==='name'||!found[f]) return; if (!e[f] || !String(e[f]).trim()){ e[f] = found[f]; filled.push((EQUIP_LABEL[f]||f).replace(/ \(.*/,'').toLowerCase()); } else if (String(e[f]).trim()!==found[f]) diff[f] = found[f]; });
+    eqRead.msg = filled.length ? 'Filled from the label: '+filled.join(', ')+'. Please check them against the label.' : (Object.keys(diff).length ? 'The label was read; your entries already differ from it.' : 'The label was read; nothing new to fill in.');
+    eqRead.diff = diff; renderEquipSheet();
+  });
+}
+function useLabelValues(){ Object.keys(eqRead.diff||{}).forEach(function(f){ eqEdit[f] = eqRead.diff[f]; }); eqRead = { busy:false, msg:'Label values applied.', diff:null }; renderEquipSheet(); }
+
+// ---- issue types (a growing list, so a type can be picked instead of typed) ----
+function loadTypes(){
+  return api('GET','/fi/issue-types').then(function(d){ S.types = d.types||[]; S.typesErr = ''; lsSet('fi_types', JSON.stringify(S.types)); return flushTypeQueue(); })
+    .catch(function(e){ S.typesErr = 'Could not load the issue-type list ('+e.message+').'; if (!S.types.length){ try{ S.types = JSON.parse(lsGet('fi_types','[]')); }catch(x){ S.types = []; } } });
+}
+function typeMatchesArea(t, areaName){ var n = String(areaName||'').toLowerCase(); return (t.areas||[]).some(function(k){ return n.indexOf(k)>-1; }); }
+var typeShown = [];
+function typePickerSheet(){
+  var a = curArea();
+  openSheet('<h2>Issue type</h2><input id="tp-q" placeholder="Search types (leak, smoke detector, gutter…)" oninput="renderTypeList()" autocomplete="off">'
+    +(S.typesErr?'<div class="banner warn" style="margin-top:8px">'+esc(S.typesErr)+' <button class="btn sm" onclick="loadTypes().then(typePickerSheet)">Retry</button></div>':'')
+    +'<div id="tp-list" style="margin-top:6px"></div>'
+    +'<label class="fld">Not in the list? Type a new type name</label><div class="row" style="gap:8px"><input id="tp-new" placeholder="e.g. Failed attic hatch seal" autocomplete="off"><button class="btn" style="flex:none" onclick="pickNewType()">Use</button></div><div class="muted">New types are added to the list when you save the issue.</div>'
+    +'<div class="btns"><button class="btn" onclick="renderIssueSheet()">Back</button></div>');
+  renderTypeList();
+}
+function renderTypeList(){
+  var el = $('tp-list'); if (!el) return;
+  var q = ($('tp-q').value||'').toLowerCase().trim(), a = curArea(), list = (S.types||[]).slice();
+  if (q) list = list.filter(function(t){ return t.name.toLowerCase().indexOf(q)>-1 || (TRADE_LABEL[t.trade]||'').toLowerCase().indexOf(q)>-1; });
+  list.sort(function(x,y){ var ax = typeMatchesArea(x,a.name)?0:1, ay = typeMatchesArea(y,a.name)?0:1; return ax-ay || y.uses-x.uses || x.name.localeCompare(y.name); });
+  typeShown = list.slice(0,40);
+  el.innerHTML = typeShown.map(function(t,i){ return '<div class="area-row" onclick="pickType('+i+')"><span><b>'+esc(t.name)+'</b><div class="muted">'+esc(TRADE_LABEL[t.trade]||t.trade)+' · '+esc(SEV_LABEL[t.severity]||t.severity)+(typeMatchesArea(t,a.name)?' · common here':'')+'</div></span></div>'; }).join('') + (!typeShown.length ? '<div class="muted" style="padding:10px 0">No matching type. Type a new name below.</div>' : '') + (list.length>40 ? '<div class="muted" style="padding:6px 0">'+(list.length-40)+' more — keep typing to narrow</div>' : '');
+}
+function pickType(i){
+  var t = typeShown[i]; if (!t) return;
+  editing.issue_type = t.name; editing.type_id = t.id;
+  if (!String(editing.title||'').trim()) editing.title = t.name;
+  if (editing.isNew){ editing.trade = t.trade; editing.severity = t.severity; editing.tenant_action = (t.trade==='tenant_action'); }
+  if (!String(editing.likely_cause||'').trim()) editing.likely_cause = t.likely_cause||'';
+  if (!String(editing.recommended_fix||'').trim() && t.recommended_fix){ editing.recommended_fix = t.recommended_fix; editing.fix_source = 'suggested'; }
+  renderIssueSheet();
+}
+function pickNewType(){ var v = $('tp-new').value.trim(); if (v.length<3){ toast('Type at least 3 characters'); return; } editing.issue_type = v; delete editing.type_id; renderIssueSheet(); }
+function clearIssueType(){ delete editing.issue_type; delete editing.type_id; renderIssueSheet(); }
+// Counts uses and teaches the list new types. Failures are shown and retried later — never silent.
+function touchTypes(issues){
+  var items = (issues||[]).filter(function(i){ return i.issue_type; }).map(function(i){ return { type_id:i.type_id||undefined, name:i.issue_type, trade:i.trade, severity:i.severity, likely_cause:i.likely_cause||'', recommended_fix:i.recommended_fix||'' }; });
+  if (!items.length) return Promise.resolve();
+  return api('POST','/fi/issue-types/touch',{ items:items }).then(function(){ return loadTypes(); }).catch(function(e){
+    var q = []; try{ q = JSON.parse(lsGet('fi_type_q','[]')); }catch(x){ q = []; }
+    lsSet('fi_type_q', JSON.stringify(q.concat(items).slice(-200)));
+    toast('Issue-type list not updated yet ('+e.message+') — will retry');
+  });
+}
+function flushTypeQueue(){
+  var q = []; try{ q = JSON.parse(lsGet('fi_type_q','[]')); }catch(x){ q = []; }
+  if (!q.length) return Promise.resolve();
+  return api('POST','/fi/issue-types/touch',{ items:q }).then(function(){ lsSet('fi_type_q','[]'); return api('GET','/fi/issue-types').then(function(d){ S.types = d.types||[]; lsSet('fi_types', JSON.stringify(S.types)); }); })
+    .catch(function(e){ S.typesErr = 'Some issue types are waiting to be added to the list ('+e.message+').'; });
+}
+
+// ---- AI proposals (dictation) ----
+function typeDatalist(){ return '<datalist id="type-dl">'+(S.types||[]).slice(0,200).map(function(t){ return '<option value="'+esc(t.name)+'">'; }).join('')+'</datalist>'; }
+function proposalsHtml(){
+  var p = S.proposals;
+  if (p.err) return '<div class="banner err"><b>AI could not process this.</b> '+esc(p.err)+'<div class="btns"><button class="btn sm" onclick="structureNow()">Try again</button><button class="btn sm" onclick="S.proposals=null;render()">Dismiss</button></div></div>';
+  var h = '<div class="card" style="border-color:var(--accent)">'+typeDatalist()+'<b>Review before adding</b><div class="muted">'+p.issues.length+' issue'+(p.issues.length===1?'':'s')+' found'+(p.summary?' — '+esc(p.summary):'')+'. Edit anything that’s off.</div>';
+  if (!p.issues.length) h += '<div class="banner info" style="margin-top:8px">The AI found no problems in that dictation. You can still clear the text and mark the area “Nothing to do”.</div>';
+  p.issues.forEach(function(is,i){
+    h += '<div style="border-top:1px solid var(--border);margin-top:10px;padding-top:8px"><label class="check"><input type="checkbox" style="width:22px;height:22px" '+(is.keep?'checked':'')+' onchange="S.proposals.issues['+i+'].keep=this.checked"> <b>Add this issue</b></label>'
+      +'<input value="'+esc(is.title)+'" oninput="S.proposals.issues['+i+'].title=this.value" placeholder="Title">'
+      +'<div class="row" style="gap:6px;margin-top:6px"><select onchange="S.proposals.issues['+i+'].trade=this.value">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(is.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select><select onchange="S.proposals.issues['+i+'].severity=this.value">'+SEVS.map(function(t){return '<option value="'+t[0]+'"'+(is.severity===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select></div>'
+      +'<input style="margin-top:6px" list="type-dl" value="'+esc(is.issue_type||'')+'" oninput="S.proposals.issues['+i+'].issue_type=this.value" placeholder="Issue type (optional — pick or type)">'
+      +'<textarea style="min-height:60px;margin-top:6px" oninput="S.proposals.issues['+i+'].detail=this.value" placeholder="Detail">'+esc(is.detail)+'</textarea>'
+      +'<input style="margin-top:6px" value="'+esc(is.likely_cause)+'" oninput="S.proposals.issues['+i+'].likely_cause=this.value" placeholder="Likely cause (optional)">'
+      +'<textarea style="min-height:60px;margin-top:6px" oninput="S.proposals.issues['+i+'].recommended_fix=this.value" placeholder="Recommended fix">'+esc(is.recommended_fix)+'</textarea>'
+      +(is.fix_source==='suggested' && is.recommended_fix ? '<div class="muted">Fix suggested by AI — you didn’t state one.</div>':'')+(is.possible_duplicate_of?'<div class="muted" style="color:var(--warn)">May duplicate: '+esc(is.possible_duplicate_of)+'</div>':'')+'</div>';
+  });
+  h += '<div class="btns"><button class="btn go" id="accept-btn" onclick="acceptProposals()">Add selected to '+esc(curArea().name)+'</button><button class="btn" onclick="S.proposals=null;render()">Discard</button></div></div>';
+  return h;
+}
+function acceptProposals(){
+  if (!claim('accept')) return; var p = S.proposals, a = curArea();
+  var keep = p.issues.filter(function(i){ return i.keep && String(i.title||'').trim(); }), added = [];
+  mut(function(){
+    keep.forEach(function(i){ var o = { id:'is_'+rid(8), title:i.title.trim(), trade:i.trade, severity:i.severity, detail:i.detail||'', likely_cause:i.likely_cause||'', recommended_fix:i.recommended_fix||'', fix_source:i.fix_source||'inspector', ai:true, wo:false, photo_ids:[] }; if (String(i.issue_type||'').trim()) o.issue_type = i.issue_type.trim(); if (o.trade==='tenant_action') o.tenant_action=true; a.issues.push(o); added.push(o); });
+    (a.dictation = a.dictation||[]).push({ at:new Date().toISOString(), text:p.source });
+    a.pending_text = '';
+    if ((!a.condition || a.condition==='not_inspected') && p.cond) a.condition = p.cond;
+    if ((!a.condition || a.condition==='not_inspected')) a.condition = keep.length ? 'fair' : 'nothing_to_do';
+  });
+  S.proposals=null; release('accept'); render(); toast(keep.length+' issue'+(keep.length===1?'':'s')+' added'); touchTypes(added);
+}
+
+// ---- issue editor ----
+var editing = null;
+function editIssue(id){
+  var a = curArea(), is = id ? JSON.parse(JSON.stringify((a.issues||[]).filter(function(x){return x.id===id;})[0])) : { id:'is_'+rid(8), title:'', trade:'general', severity:'medium', detail:'', likely_cause:'', recommended_fix:'', fix_source:'inspector', wo:false, photo_ids:[], isNew:true };
+  editing = is; renderIssueSheet();
+}
+function renderIssueSheet(){
+  var is = editing, a = curArea();
+  var h = '<h2>'+(is.isNew?'Add issue':'Edit issue')+'</h2>'
+    +'<label class="fld" style="margin-top:0">Issue type</label><div class="row" style="gap:8px"><span>'+(is.issue_type?'<span class="pill type">'+esc(is.issue_type)+'</span> <button class="btn sm ghost" onclick="clearIssueType()">✕ clear</button>':'<span class="muted">None chosen</span>')+'</span><button class="btn sm" onclick="typePickerSheet()">'+(is.issue_type?'Change type':'Choose a type…')+'</button></div>'
+    +'<label class="fld">Title</label><input id="ie-title" value="'+esc(is.title)+'" oninput="editing.title=this.value">'
+    +'<label class="fld">Trade</label><select onchange="editing.trade=this.value;editing.tenant_action=(this.value===\'tenant_action\')">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(is.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select>'
+    +'<label class="fld">Severity</label><div class="seg">'+SEVS.map(function(s){ return '<button class="'+(is.severity===s[0]?'sel':'')+'" onclick="editing.severity=\''+s[0]+'\';renderIssueSheet()">'+s[1]+'</button>'; }).join('')+'</div>'
+    +'<label class="fld">Detail</label><textarea style="min-height:70px" oninput="editing.detail=this.value">'+esc(is.detail)+'</textarea>'
+    +'<label class="fld">Likely cause</label><input value="'+esc(is.likely_cause)+'" oninput="editing.likely_cause=this.value">'
+    +'<label class="fld">Recommended fix</label><textarea style="min-height:70px" oninput="editing.recommended_fix=this.value">'+esc(is.recommended_fix)+'</textarea>'
+    +'<div class="toggle"><span>Flag for a work order<div class="muted">Just a flag for now — nothing is created</div></span><input type="checkbox"'+(is.wo?' checked':'')+' onchange="editing.wo=this.checked"></div>';
+  if ((a.photo_ids||[]).length){ h += '<label class="fld">Photos for this issue (tap to attach)</label><div class="thumbs">'+a.photo_ids.map(function(p){ var on = (is.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleIssuePhoto(\''+p+'\')" aria-label="photo">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>'; }
+  h += '<div class="btns"><button class="btn primary" onclick="saveIssue()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(is.isNew?'':'<button class="btn danger" id="ie-del" onclick="deleteIssueStep()">Delete</button>')+'</div>';
+  openSheet(h);
+}
+function saveIssue(){
+  var is = editing; if (!String(is.title||'').trim()){ toast('Give the issue a title'); return; }
+  var a = curArea(); var isNew = is.isNew; delete is.isNew; is.title = is.title.trim(); if (is.trade==='tenant_action') is.tenant_action = true; else delete is.tenant_action;
+  var oldType = ''; if (!isNew) for (var k=0;k<a.issues.length;k++) if (a.issues[k].id===is.id) oldType = a.issues[k].issue_type||'';
+  mut(function(){ if (isNew) a.issues.push(is); else for (var i=0;i<a.issues.length;i++) if (a.issues[i].id===is.id) a.issues[i]=is; if ((!a.condition||a.condition==='not_inspected')) a.condition='fair'; });
+  closeSheet(); render(); if (isNew || (is.issue_type && is.issue_type!==oldType)) touchTypes([is]);
+}
+
+// ---- brands ----
 var brandEdit = null;
 function editBrand(id){
-  var b = id ? JSON.parse(JSON.stringify(brandById(id))) : { id:'', name:'', primary_color:'#1d4ed8', accent_color:'#166534', tagline:'', contact_line:'', footer_text:'', logo_data:'', is_default:false };
+  var b = id ? JSON.parse(JSON.stringify(brandById(id))) : { id:'', name:'', primary_color:'#1d4ed8', accent_color:'#166534', tagline:'', contact_line:'', footer_text:'', website:'', phone:'', email:'', address:'', logo_data:'', is_default:false };
+  ['website','phone','email','address'].forEach(function(f){ if (b[f]===undefined) b[f] = ''; });
   brandEdit = b; renderBrandSheet();
 }
 function renderBrandSheet(){
-  var b = brandEdit;
-  openSheet('<h2>'+(b.id?'Edit company':'Add company')+'</h2><label class="fld" style="margin-top:0">Company name *</label><input value="'+esc(b.name)+'" oninput="brandEdit.name=this.value">'
+  var b = brandEdit, sc = b.scrape;
+  var h = '<h2>'+(b.id?'Edit company':'Add company')+'</h2>';
+  h += '<div class="card" style="background:#f7f9fc"><b>Capture from a website</b><div class="muted">Reads the company’s home page for its name, logo, colors and contact details. You review everything before it is used.</div>'
+    +'<div class="row" style="gap:8px;margin-top:8px"><input id="br-web" inputmode="url" autocapitalize="off" placeholder="company website, e.g. premierpm.com" value="'+esc(b.website)+'" oninput="brandEdit.website=this.value"><button class="btn primary" style="flex:none" id="br-cap" onclick="captureBrand()"'+(b.scraping?' disabled':'')+'>'+(b.scraping?'Reading…':'Capture')+'</button></div>';
+  if (b.scrapeErr) h += '<div class="banner err" style="margin-top:8px">'+esc(b.scrapeErr)+'</div>';
+  if (sc){
+    h += '<div class="banner ok" style="margin-top:8px"><b>Found on '+esc(sc.website.replace(/^https?:\/\//,''))+'</b><div>'+[sc.name?'Name: '+esc(sc.name):'', sc.phone?'Phone: '+esc(sc.phone):'', sc.email?'Email: '+esc(sc.email):'', sc.address?'Address: '+esc(sc.address):''].filter(Boolean).join('<br>')+'</div></div>';
+    if ((sc.colors||[]).length){
+      h += '<div class="muted" style="margin-top:8px">Main color — tap to choose</div><div>'+sc.colors.map(function(c){ return '<button class="swatch'+(b.primary_color.toLowerCase()===c.hex?' sel':'')+'" style="background:'+esc(c.hex)+'" aria-label="main color '+esc(c.hex)+'" onclick="brandEdit.primary_color=\''+esc(c.hex)+'\';renderBrandSheet()"></button>'; }).join('')+'</div>'
+        +'<div class="muted">Accent color — tap to choose</div><div>'+sc.colors.map(function(c){ return '<button class="swatch'+(b.accent_color.toLowerCase()===c.hex?' sel':'')+'" style="background:'+esc(c.hex)+'" aria-label="accent color '+esc(c.hex)+'" onclick="brandEdit.accent_color=\''+esc(c.hex)+'\';renderBrandSheet()"></button>'; }).join('')+'</div>';
+    }
+    if ((sc.logos||[]).length) h += '<div class="muted">Logo — tap one to use it</div><div>'+sc.logos.map(function(l,i){ return '<button class="logo-opt" aria-label="logo option '+(i+1)+'" onclick="useScrapedLogo('+i+')"><img src="'+esc(l.data_uri)+'" alt="logo option"></button>'; }).join('')+'</div>';
+    (sc.notes||[]).forEach(function(n){ h += '<div class="muted" style="color:var(--warn)">• '+esc(n)+'</div>'; });
+    h += '<div class="btns"><button class="btn go" onclick="applyScrape()">Fill the form from the website</button></div>';
+  }
+  h += '</div>';
+  h += '<label class="fld" style="margin-top:0">Company name *</label><input value="'+esc(b.name)+'" oninput="brandEdit.name=this.value">'
     +'<div class="row" style="gap:10px"><div style="flex:1"><label class="fld">Main color</label><input type="color" style="height:48px;padding:4px" value="'+esc(b.primary_color)+'" oninput="brandEdit.primary_color=this.value"></div><div style="flex:1"><label class="fld">Accent color</label><input type="color" style="height:48px;padding:4px" value="'+esc(b.accent_color)+'" oninput="brandEdit.accent_color=this.value"></div></div>'
     +'<label class="fld">Tagline</label><input value="'+esc(b.tagline)+'" oninput="brandEdit.tagline=this.value">'
-    +'<label class="fld">Contact line (phone / email / website)</label><input value="'+esc(b.contact_line)+'" oninput="brandEdit.contact_line=this.value">'
+    +'<label class="fld">Phone</label><input type="tel" value="'+esc(b.phone)+'" oninput="brandEdit.phone=this.value">'
+    +'<label class="fld">Email</label><input type="email" value="'+esc(b.email)+'" oninput="brandEdit.email=this.value">'
+    +'<label class="fld">Address</label><input value="'+esc(b.address)+'" oninput="brandEdit.address=this.value">'
+    +'<label class="fld">Contact line (optional — replaces the phone / email / website line in the report footer)</label><input value="'+esc(b.contact_line)+'" oninput="brandEdit.contact_line=this.value">'
     +'<label class="fld">Report footer text</label><textarea style="min-height:60px" oninput="brandEdit.footer_text=this.value">'+esc(b.footer_text)+'</textarea>'
     +'<label class="fld">Logo</label>'+(b.logo_data?'<div style="background:#f4f5f7;border-radius:8px;padding:8px;margin-bottom:6px"><img src="'+esc(b.logo_data)+'" alt="logo" style="max-height:60px;max-width:100%"></div>':'<div class="muted">No logo yet.</div>')
     +'<div class="btns"><button class="btn" onclick="$(\'logo-in\').value=\'\';$(\'logo-in\').click()">Choose logo image</button>'+(b.logo_data?'<button class="btn" onclick="brandEdit.logo_data=\'\';brandEdit.remove_logo=true;renderBrandSheet()">Remove logo</button>':'')+'</div>'
     +'<div class="toggle"><span>Use as the default brand</span><input type="checkbox"'+(b.is_default?' checked disabled':'')+' onchange="brandEdit.is_default=this.checked"></div>'
-    +'<div class="btns"><button class="btn primary" id="br-save" onclick="saveBrand()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(b.id&&!b.is_default?'<button class="btn danger" onclick="deactivateBrand()">Remove company</button>':'')+'</div>');
+    +'<div class="btns"><button class="btn primary" id="br-save" onclick="saveBrand()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(b.id&&!b.is_default?'<button class="btn danger" onclick="deactivateBrand()">Remove company</button>':'')+'</div>';
+  openSheet(h);
+}
+function captureBrand(){
+  var b = brandEdit, url = String(b.website||'').trim();
+  if (!url){ toast('Enter the company’s website address first'); return; }
+  if (!claim('brscrape')) return; b.scraping = true; b.scrapeErr = ''; renderBrandSheet();
+  api('POST','/fi/brand/scrape',{ url:url }).then(function(r){ b.scrape = r; b.scraping = false; b.website = r.website||b.website; release('brscrape'); renderBrandSheet(); })
+    .catch(function(e){ b.scraping = false; b.scrapeErr = e.message; release('brscrape'); renderBrandSheet(); });
+}
+// Fills blank fields from what was found (never overwrites something already typed), and picks the first logo.
+function applyScrape(){
+  var b = brandEdit, sc = b.scrape; if (!sc) return;
+  var filled = [];
+  [['name','name'],['tagline','tagline'],['phone','phone'],['email','email'],['address','address']].forEach(function(p){ if (sc[p[0]] && !String(b[p[1]]||'').trim()){ b[p[1]] = sc[p[0]]; filled.push(p[1]); } });
+  if (sc.website) b.website = sc.website.replace(/\/$/, '');
+  if (sc.primary_color){ b.primary_color = sc.primary_color; filled.push('colors'); }
+  if (sc.accent_color) b.accent_color = sc.accent_color;
+  var pr = (sc.logos||[]).length ? useScrapedLogo(0, true) : Promise.resolve();
+  pr.then(function(){ renderBrandSheet(); toast(filled.length ? 'Filled in: '+filled.join(', ')+' — check and adjust' : 'Nothing new to fill in'); });
+}
+function useScrapedLogo(i, quiet){
+  var l = (brandEdit.scrape.logos||[])[i]; if (!l) return Promise.resolve();
+  return shrinkLogo(l.data_uri).then(function(out){ brandEdit.logo_data = out; delete brandEdit.remove_logo; if (!quiet) renderBrandSheet(); })
+    .catch(function(e){ toast('That logo could not be used: '+e.message); if (!quiet) renderBrandSheet(); });
+}
+// Shrinks any image (data/object URL) under the ~30 KB the server stores for a logo.
+function shrinkLogo(src){
+  return new Promise(function(resolve, reject){
+    var img = new Image();
+    img.onload = function(){
+      var tries = [[260,'image/png',0],[200,'image/png',0],[320,'image/jpeg',0.85],[240,'image/jpeg',0.7],[160,'image/jpeg',0.6]], out = '', nw = img.naturalWidth||300, nh = img.naturalHeight||100;
+      for (var i=0;i<tries.length && !out;i++){
+        var sc = Math.min(1, tries[i][0]/nw), c = document.createElement('canvas'); c.width = Math.max(1,Math.round(nw*sc)); c.height = Math.max(1,Math.round(nh*sc));
+        var ctx = c.getContext('2d'); if (tries[i][1]==='image/jpeg'){ ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height); } ctx.drawImage(img,0,0,c.width,c.height);
+        var d = c.toDataURL(tries[i][1], tries[i][2]); if (d.length <= 40000) out = d;
+      }
+      if (!out) reject(new Error('it is too detailed to shrink small enough — try a simpler image')); else resolve(out);
+    };
+    img.onerror = function(){ reject(new Error('the image could not be read')); };
+    img.src = src;
+  });
 }
 $('logo-in').addEventListener('change', function(ev){
   var f = ev.target.files && ev.target.files[0]; if (!f || !brandEdit) return;
-  var url = URL.createObjectURL(f), img = new Image();
-  img.onload = function(){
-    var tries = [[260,'image/png',0],[200,'image/png',0],[320,'image/jpeg',0.85],[240,'image/jpeg',0.7],[160,'image/jpeg',0.6]], out = '';
-    for (var i=0;i<tries.length && !out;i++){
-      var sc = Math.min(1, tries[i][0]/img.naturalWidth), c = document.createElement('canvas'); c.width = Math.max(1,Math.round(img.naturalWidth*sc)); c.height = Math.max(1,Math.round(img.naturalHeight*sc));
-      var ctx = c.getContext('2d'); if (tries[i][1]==='image/jpeg'){ ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height); } ctx.drawImage(img,0,0,c.width,c.height);
-      var d = c.toDataURL(tries[i][1], tries[i][2]); if (d.length <= 40000) out = d;
-    }
-    URL.revokeObjectURL(url);
-    if (!out){ toast('That logo is too detailed to shrink small enough — try a simpler image'); return; }
-    brandEdit.logo_data = out; delete brandEdit.remove_logo; renderBrandSheet();
-  };
-  img.onerror = function(){ URL.revokeObjectURL(url); toast('That image could not be read'); };
-  img.src = url;
+  var url = URL.createObjectURL(f);
+  shrinkLogo(url).then(function(out){ URL.revokeObjectURL(url); brandEdit.logo_data = out; delete brandEdit.remove_logo; renderBrandSheet(); })
+    .catch(function(e){ URL.revokeObjectURL(url); toast('Logo not used: '+e.message); });
 });
 function saveBrand(){
   var b = brandEdit; if (!String(b.name||'').trim()){ toast('Enter the company name'); return; }
   if (!claim('brsave')) return; $('br-save').disabled = true;
-  var body = { id:b.id||undefined, name:b.name, primary_color:b.primary_color, accent_color:b.accent_color, tagline:b.tagline, contact_line:b.contact_line, footer_text:b.footer_text, is_default:!!b.is_default };
+  var body = { id:b.id||undefined, name:b.name, primary_color:b.primary_color, accent_color:b.accent_color, tagline:b.tagline, contact_line:b.contact_line, footer_text:b.footer_text, website:b.website, phone:b.phone, email:b.email, address:b.address, is_default:!!b.is_default };
   if (b.logo_data && b.logo_data !== (brandById(b.id)||{}).logo_data) body.logo_data = b.logo_data;
   if (b.remove_logo) body.remove_logo = true;
   api('POST','/fi/brand/save',body).then(function(){ return refreshList(); }).then(function(){ release('brsave'); closeSheet(); toast('Saved'); if (S.view==='brands'||S.view==='review'||S.view==='new') render(); })
     .catch(function(e){ release('brsave'); $('br-save').disabled=false; toast('Not saved: '+e.message); });
 }
-function deactivateBrand(){
-  var b = brandEdit; if (!b.id) return; if (!claim('brdel')) return;
-  api('POST','/fi/brand/save',{ id:b.id, name:b.name, primary_color:b.primary_color, accent_color:b.accent_color, active:false }).then(function(){ return refreshList(); }).then(function(){ release('brdel'); closeSheet(); toast('Removed'); render(); })
-    .catch(function(e){ release('brdel'); toast('Not removed: '+e.message); });
+
+// ---- voice notes: recordings -> transcript -> sorted into the right areas (you review before anything is added) ----
+var voiceFiles = {}, voiceState = {}, voiceQueue = [], voicePumping = false;
+function openVoice(){ S.view='voice'; S.routeErr=''; render(); }
+function voiceItems(){ return (S.rec.doc.voice_notes||[]); }
+function pickAudio(){ var i = $('audio-in'); i.value=''; i.click(); }
+$('audio-in').addEventListener('change', function(ev){
+  var files = Array.prototype.slice.call(ev.target.files||[]); if (!files.length || !S.rec) return;
+  files.forEach(function(f){
+    if (!f.size){ toast(f.name+' is empty'); return; }
+    if (f.size > 14*1024*1024){ toast(f.name+' is larger than 14 MB — too long for one upload. Trim it or split it.'); return; }
+    var id = 'vn_'+rid(8); voiceFiles[id] = f; voiceState[id] = { state:'queued', err:'', name:f.name, bytes:f.size, rec:S.rec }; voiceQueue.push(id);
+  });
+  render(); pumpVoice();
+});
+function mutRec(rec, fn){
+  if (rec === S.rec){ mut(fn); return Promise.resolve(); }
+  fn(rec.doc); rec.dirty = true; rec.ver = (rec.ver||0)+1; rec.doc.updated = new Date().toISOString(); return dbPut('docs', rec);
+}
+function pumpVoice(){
+  if (voicePumping) return; var id = voiceQueue.shift(); if (!id) return;
+  var f = voiceFiles[id], st = voiceState[id], rec = st.rec; voicePumping = true; st.state = 'working'; st.err = ''; if (S.view==='voice') safeRender();
+  fetch(WORKER+'/fi/transcribe?inspection_id='+encodeURIComponent(rec.id)+'&name='+encodeURIComponent(f.name), { method:'POST', headers:{ 'X-Auth-Token':AUTH_TOKEN, 'Content-Type': f.type || 'application/octet-stream' }, body:f })
+    .then(function(res){ return res.text().then(function(t){ var j; try{ j = JSON.parse(t); }catch(e){ j = { ok:false, message:'The server sent an unreadable answer (HTTP '+res.status+')' }; } if (!res.ok || j.ok===false){ var er = new Error(j.message || ('HTTP '+res.status)); er.code = j.error; throw er; } return j; }); })
+    .then(function(r){
+      return mutRec(rec, function(doc){ (doc.voice_notes = doc.voice_notes||[]).push({ id:id, name:f.name, bytes:f.size, transcript:r.transcript, at:new Date().toISOString(), source:'audio', routed:false, truncated:!!r.truncated }); }).then(function(){ delete voiceState[id]; delete voiceFiles[id]; if (r.truncated) toast(f.name+': the transcript may be cut off at the end (very long recording)'); });
+    })
+    .catch(function(e){ st.state = 'error'; st.err = e.message || 'unknown error'; })
+    .then(function(){ voicePumping = false; if (S.view==='voice') safeRender(); setSync(); pumpVoice(); });
+}
+function retryVoice(id){ var st = voiceState[id]; if (!st || !voiceFiles[id]) return; st.state='queued'; st.err=''; voiceQueue.push(id); render(); pumpVoice(); }
+function dropVoice(id){ delete voiceState[id]; delete voiceFiles[id]; voiceQueue = voiceQueue.filter(function(x){return x!==id;}); render(); }
+function typedNoteSheet(){
+  openSheet('<h2>Type or paste notes</h2><div class="muted">Paste text from a voice-to-text app, or type notes that jump between rooms — they get sorted into areas the same way.</div><label class="fld">Label (optional)</label><input id="tn-label" placeholder="e.g. Second-floor notes"><label class="fld">Notes</label><textarea id="tn-text" style="min-height:160px"></textarea><div class="btns"><button class="btn primary" onclick="saveTypedNote()">Add</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function saveTypedNote(){
+  var t = $('tn-text').value.trim(); if (!t){ toast('Type or paste something first'); return; }
+  var label = $('tn-label').value.trim() || 'Typed notes';
+  mut(function(doc){ (doc.voice_notes = doc.voice_notes||[]).push({ id:'vn_'+rid(8), name:label, bytes:0, transcript:t, at:new Date().toISOString(), source:'typed', routed:false }); });
+  closeSheet(); render(); toast('Notes added');
+}
+var voiceOpen = {};
+function toggleVoiceText(id){ voiceOpen[id] = !voiceOpen[id]; render(); }
+function setVoiceText(id, v){ mut(function(doc){ (doc.voice_notes||[]).forEach(function(n){ if (n.id===id){ n.transcript = v; } }); }); }
+function removeVoiceStep(id, btn){ if (btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent='Tap again to remove'; return; } mut(function(doc){ doc.voice_notes = (doc.voice_notes||[]).filter(function(n){ return n.id!==id; }); }); render(); }
+function markUnrouted(id){ mut(function(doc){ (doc.voice_notes||[]).forEach(function(n){ if (n.id===id){ n.routed=false; delete n.routed_at; } }); }); render(); }
+function viewVoice(){
+  var doc = S.rec.doc, notes = voiceItems(), pending = Object.keys(voiceState).filter(function(k){ return voiceState[k].rec===S.rec; });
+  var unsorted = notes.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); });
+  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button></div><h1>Voice notes</h1>';
+  h += '<div class="muted">Upload the recordings of your inspection notes. Each one is turned into text, then sorted into the right areas — even when you jumped between rooms and floors. You review everything before it is added.</div>';
+  h += '<div class="btns"><button class="btn primary" onclick="pickAudio()">🎙 Add recordings</button><button class="btn" onclick="typedNoteSheet()">✍ Type or paste notes</button></div>';
+  if (S.routeErr) h += '<div class="banner err" style="margin-top:10px">'+esc(S.routeErr)+'</div>';
+  if (S.routeBusy) h += '<div class="banner info" style="margin-top:10px">⏳ '+esc(S.routeBusy)+'</div>';
+  pending.forEach(function(id){ var st = voiceState[id]; h += '<div class="card"><div class="row"><b>'+esc(st.name)+'</b>'+(st.state==='error'?'<span class="pill bad">Failed</span>':st.state==='working'?'<span class="pill new">Transcribing…</span>':'<span class="pill">Waiting</span>')+'</div><div class="muted">'+Math.round(st.bytes/1024)+' KB</div>'+(st.err?'<div class="banner err" style="margin-top:8px">'+esc(st.err)+'</div>':'')+(st.state==='error'?'<div class="btns"><button class="btn sm" onclick="retryVoice(\''+id+'\')">Try again</button><button class="btn sm danger" onclick="dropVoice(\''+id+'\')">Remove</button></div>':'')+'</div>'; });
+  if (!notes.length && !pending.length) h += '<div class="card muted" style="margin-top:10px">Nothing yet. Tap “Add recordings” and pick the audio files from your phone or Google Drive.</div>';
+  notes.forEach(function(n){
+    h += '<div class="card"><div class="row"><b>'+esc(n.name||'Recording')+'</b>'+(n.routed?'<span class="pill ok">Sorted</span>':'<span class="pill warn">Not sorted yet</span>')+'</div><div class="muted">'+(n.source==='typed'?'Typed notes':'Recording'+(n.bytes?' · '+Math.round(n.bytes/1024)+' KB':''))+' · '+String(n.transcript||'').length+' characters'+(n.truncated?' · <span style="color:var(--warn)">may be cut off at the end</span>':'')+'</div>';
+    h += '<div class="btns"><button class="btn sm" onclick="toggleVoiceText(\''+n.id+'\')">'+(voiceOpen[n.id]?'Hide text':'Show / fix text')+'</button>'+(n.routed?'<button class="btn sm" onclick="markUnrouted(\''+n.id+'\')">Sort again</button>':'')+'<button class="btn sm danger" onclick="removeVoiceStep(\''+n.id+'\',this)">Remove</button></div>';
+    if (voiceOpen[n.id]) h += '<textarea style="min-height:160px;margin-top:8px" oninput="setVoiceText(\''+n.id+'\',this.value)">'+esc(n.transcript||'')+'</textarea><div class="muted">Fix any mis-heard words before sorting. Brand, model and serial numbers are worth double-checking.</div>';
+    h += '</div>';
+  });
+  if (unsorted.length) h += '<button class="btn go block" style="min-height:56px;font-size:17px;margin-top:6px" id="route-btn" onclick="startRoute()"'+(S.routeBusy?' disabled':'')+'>✨ Sort '+unsorted.length+' note'+(unsorted.length===1?'':'s')+' into areas</button>';
+  return h;
+}
+function routeAreas(){ return S.rec.doc.areas.filter(function(a){ return !a.excluded; }).map(function(a){ return { id:a.id, name:a.name, group:a.group, issues:(a.issues||[]).map(function(i){return i.title;}) }; }); }
+function chunkText(t){
+  var out = [], cur = '', parts = String(t).split(/\n\s*\n/);
+  parts.forEach(function(p){ while (p.length > 24000){ if (cur){ out.push(cur); cur=''; } out.push(p.slice(0,24000)); p = p.slice(24000); } if (cur.length + p.length + 2 > 24000){ out.push(cur); cur=''; } cur += (cur?'\n\n':'') + p; });
+  if (cur.trim()) out.push(cur);
+  return out;
+}
+function startRoute(){
+  var doc = S.rec.doc, notes = voiceItems().filter(function(n){ return !n.routed && String(n.transcript||'').trim(); });
+  if (!notes.length){ toast('Nothing to sort'); return; }
+  if (!claim('route')) return;
+  var chunks = []; notes.forEach(function(n){ chunkText(n.transcript).forEach(function(t,i){ chunks.push({ noteId:n.id, id:n.id+(i?'_'+i:''), label:n.name||'Recording', text:t }); }); });
+  S.route = { issues:[], equipment:[], conditions:[], new_areas:[], unassigned:[], errors:[], noteIds:notes.map(function(n){return n.id;}), chunks:chunks };
+  S.routeErr = ''; runChunks(chunks.slice(), 0, chunks.length).then(function(){
+    release('route'); S.routeBusy = '';
+    var r = S.route, any = r.issues.length || r.equipment.length || r.conditions.length || r.new_areas.length || r.unassigned.length;
+    if (any || r.errors.length){ S.view='route'; render(); }
+    else { S.routeErr = 'The notes were read but no problems or equipment details were found in them.'; S.route = null; render(); }
+  });
+}
+function runChunks(list, done, total){
+  var chain = Promise.resolve();
+  list.forEach(function(ch){
+    chain = chain.then(function(){
+      S.routeBusy = 'Sorting '+(done+1)+' of '+total+': '+ch.label+'…'; if (S.view==='voice') safeRender();
+      var doc = S.rec.doc, r = S.route;
+      var proposed = r.issues.map(function(i){return i.title;});
+      return api('POST','/fi/route',{ address:doc.property.address, pre1978:!!doc.pre1978, inspection_type:doc.type, areas:routeAreas(), notes:[{ id:ch.noteId, label:ch.label, text:ch.text }], proposed:proposed }).then(function(res){
+        res.issues.forEach(function(i){ i.keep = true; r.issues.push(i); });
+        res.equipment.forEach(function(e){ e.keep = true; r.equipment.push(e); });
+        res.conditions.forEach(function(c){ var a = findArea(doc, c.area_id); c.keep = !!a && (!a.condition || a.condition==='not_inspected'); r.conditions.push(c); });
+        res.new_areas.forEach(function(n){ r.new_areas.push(n); });
+        res.unassigned.forEach(function(u){ r.unassigned.push(u); });
+      }).catch(function(e){ r.errors.push({ chunk:ch, msg:e.message }); }).then(function(){ done++; });
+    });
+  });
+  return chain;
+}
+function retryRouteErrors(){
+  if (!claim('route')) return; var r = S.route, list = r.errors.map(function(e){return e.chunk;}); r.errors = [];
+  runChunks(list, 0, list.length).then(function(){ release('route'); S.routeBusy=''; render(); });
+}
+// ---- route review ----
+function areaOpts(sel){ return S.rec.doc.areas.filter(function(a){return !a.excluded;}).map(function(a){ return '<option value="'+a.id+'"'+(a.id===sel?' selected':'')+'>'+esc(a.name)+'</option>'; }).join(''); }
+function areaName(id){ var a = findArea(S.rec.doc, id); return a ? a.name : '(unknown area)'; }
+function viewRoute(){
+  var r = S.route, doc = S.rec.doc;
+  var h = '<div class="row"><button class="btn sm ghost" onclick="S.view=\'voice\';render()">‹ Voice notes</button></div><h1>Review sorted notes</h1>'+typeDatalist();
+  h += '<div class="muted">Nothing is added until you tap “Add selected”. Each item shows the words it came from. If something landed in the wrong area, change the area before adding.</div>';
+  r.errors.forEach(function(e){ h += '<div class="banner err" style="margin-top:10px"><b>“'+esc(e.chunk.label)+'” could not be sorted.</b> '+esc(e.msg)+'</div>'; });
+  if (r.errors.length) h += '<div class="btns"><button class="btn" onclick="retryRouteErrors()"'+(S.routeBusy?' disabled':'')+'>'+(S.routeBusy?'Working…':'Try the failed part(s) again')+'</button></div>';
+  if (r.unassigned.length){
+    h += '<h2>Could not tell where these belong ('+r.unassigned.length+')</h2><div class="muted">Choose an area to add the text to that area’s notes (you can then tap “Turn into issues”), or dismiss it.</div>';
+    r.unassigned.forEach(function(u,i){ h += '<div class="card"><div style="white-space:pre-wrap">'+esc(u.text)+'</div><div class="muted">'+esc(u.why||'')+'</div><select id="ua-'+i+'" style="margin-top:6px"><option value="">Choose an area…</option>'+areaOpts('')+'</select><div class="btns"><button class="btn sm primary" onclick="unassignedSend('+i+')">Add to that area’s notes</button><button class="btn sm" onclick="unassignedDismiss('+i+')">Dismiss</button></div></div>'; });
+  }
+  if (r.new_areas.length){
+    h += '<h2>Possible new areas</h2>';
+    r.new_areas.forEach(function(n,i){ h += '<div class="card"><b>'+esc(n.name)+'</b>'+(n.quote?'<div class="quote">“'+esc(n.quote)+'”</div>':'')+'<div class="btns"><button class="btn sm primary" onclick="routeCreateArea('+i+')">Create this area</button><button class="btn sm" onclick="S.route.new_areas.splice('+i+',1);render()">Skip</button></div><div class="muted">After creating it, change the area on the items that belong there.</div></div>'; });
+  }
+  var byArea = {}; r.issues.forEach(function(it,i){ (byArea[it.area_id] = byArea[it.area_id]||[]).push(i); });
+  var n = r.issues.length;
+  h += '<h2>Issues found ('+n+')</h2>';
+  if (!n) h += '<div class="card muted">No issues were found in these notes.</div>';
+  doc.areas.forEach(function(a){
+    var idxs = byArea[a.id]; if (!idxs) return;
+    h += '<h3>'+esc(a.name)+'</h3><div class="card">';
+    idxs.forEach(function(i,k){ var it = r.issues[i];
+      h += '<div class="'+(k?'rt-item':'')+'"><label class="check"><input type="checkbox" style="width:22px;height:22px" '+(it.keep?'checked':'')+' onchange="S.route.issues['+i+'].keep=this.checked"> <b>Add this issue</b></label>'
+        +(it.quote?'<div class="quote">“'+esc(it.quote)+'”</div>':'')
+        +'<select onchange="routeSetArea('+i+',this.value)">'+areaOpts(it.area_id)+'</select>'
+        +'<input style="margin-top:6px" value="'+esc(it.title)+'" oninput="S.route.issues['+i+'].title=this.value" placeholder="Title">'
+        +'<div class="row" style="gap:6px;margin-top:6px"><select onchange="S.route.issues['+i+'].trade=this.value">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(it.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select><select onchange="S.route.issues['+i+'].severity=this.value">'+SEVS.map(function(t){return '<option value="'+t[0]+'"'+(it.severity===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select></div>'
+        +'<input style="margin-top:6px" list="type-dl" value="'+esc(it.issue_type||'')+'" oninput="S.route.issues['+i+'].issue_type=this.value" placeholder="Issue type (optional — pick or type)">'
+        +'<textarea style="min-height:60px;margin-top:6px" oninput="S.route.issues['+i+'].detail=this.value" placeholder="Detail">'+esc(it.detail)+'</textarea>'
+        +'<textarea style="min-height:60px;margin-top:6px" oninput="S.route.issues['+i+'].recommended_fix=this.value" placeholder="Recommended fix">'+esc(it.recommended_fix)+'</textarea>'
+        +(it.fix_source==='suggested' && it.recommended_fix ? '<div class="muted">Fix suggested by AI — you didn’t state one.</div>':'')+(it.possible_duplicate_of?'<div class="muted" style="color:var(--warn)">May duplicate: '+esc(it.possible_duplicate_of)+'</div>':'')+'</div>';
+    });
+    h += '</div>';
+  });
+  if (r.equipment.length){
+    h += '<h2>Equipment details ('+r.equipment.length+')</h2>';
+    r.equipment.forEach(function(e,i){
+      h += '<div class="card"><label class="check"><input type="checkbox" style="width:22px;height:22px" '+(e.keep?'checked':'')+' onchange="S.route.equipment['+i+'].keep=this.checked"> <b>Add '+esc((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).label)+'</b></label>'+(e.quote?'<div class="quote">“'+esc(e.quote)+'”</div>':'')
+        +'<select onchange="S.route.equipment['+i+'].area_id=this.value">'+areaOpts(e.area_id)+'</select><div class="eqgrid">'
+        +['brand','model','serial','year'].concat((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).extra).map(function(f){ return '<div><label class="fld">'+esc(EQUIP_LABEL[f]||f)+'</label><input value="'+esc(e[f]||'')+'" oninput="S.route.equipment['+i+'].'+f+'=this.value" autocomplete="off"></div>'; }).join('')
+        +'<div class="full"><label class="fld">Notes</label><input value="'+esc(e.notes||'')+'" oninput="S.route.equipment['+i+'].notes=this.value"></div></div><div class="muted">Heard from a recording — check numbers against the label.</div></div>';
+    });
+  }
+  if (r.conditions.length){
+    h += '<h2>Area conditions</h2><div class="card">';
+    r.conditions.forEach(function(c,i){ var a = findArea(doc, c.area_id); h += '<label class="check"><input type="checkbox" style="width:22px;height:22px" '+(c.keep?'checked':'')+' onchange="S.route.conditions['+i+'].keep=this.checked"> <span>Mark <b>'+esc(a?a.name:'?')+'</b> as <b>'+esc(COND_LABEL[c.condition])+'</b>'+(a && a.condition && a.condition!=='not_inspected' ? ' <span class="muted">(now '+esc(COND_LABEL[a.condition])+')</span>' : '')+'</span></label>'; });
+    h += '</div>';
+  }
+  var kept = r.issues.filter(function(i){return i.keep && String(i.title||'').trim();}).length + r.equipment.filter(function(e){return e.keep;}).length + r.conditions.filter(function(c){return c.keep;}).length;
+  h += '<div class="card selbar"><div class="muted">'+(r.unassigned.length?'Place or dismiss the '+r.unassigned.length+' item'+(r.unassigned.length===1?'':'s')+' above first.':kept+' item'+(kept===1?'':'s')+' selected.')+'</div><div class="btns"><button class="btn go" id="racc-btn" onclick="acceptRoute()"'+(r.unassigned.length||S.routeBusy?' disabled':'')+'>Add selected</button><button class="btn" onclick="discardRoute()">Discard all</button></div></div>';
+  return h;
+}
+function routeSetArea(i, areaId){ S.route.issues[i].area_id = areaId; render(); }
+function routeCreateArea(i){ var n = S.route.new_areas[i]; if (!n) return; var a = mkArea(n.name, 'interior'); mut(function(doc){ doc.areas.push(a); }); S.route.new_areas.splice(i,1); render(); toast('Area “'+a.name+'” created'); }
+function unassignedSend(i){
+  var u = S.route.unassigned[i], sel = $('ua-'+i); if (!u || !sel || !sel.value) return; var a = findArea(S.rec.doc, sel.value); if (!a) return;
+  mut(function(){ a.pending_text = (a.pending_text ? a.pending_text.replace(/\s*$/,'')+'\n' : '') + u.text; });
+  S.route.unassigned.splice(i,1); render(); toast('Added to '+a.name+' — open it and tap “Turn into issues”');
+}
+function unassignedDismiss(i){ S.route.unassigned.splice(i,1); render(); }
+function discardRoute(){ S.route = null; S.view = 'voice'; render(); }
+function acceptRoute(){
+  if (!claim('racc')) return; var r = S.route, added = [], eqN = 0, condN = 0, now = new Date().toISOString();
+  var failedNotes = {}; r.errors.forEach(function(e){ failedNotes[e.chunk.noteId] = true; });
+  mut(function(doc){
+    r.issues.forEach(function(i){
+      if (!i.keep || !String(i.title||'').trim()) return; var a = findArea(doc, i.area_id); if (!a) return;
+      var o = { id:'is_'+rid(8), title:i.title.trim(), trade:i.trade, severity:i.severity, detail:i.detail||'', likely_cause:i.likely_cause||'', recommended_fix:i.recommended_fix||'', fix_source:i.fix_source||'inspector', ai:true, wo:false, photo_ids:[], src:'voice' };
+      if (String(i.issue_type||'').trim()) o.issue_type = i.issue_type.trim(); if (o.trade==='tenant_action') o.tenant_action = true;
+      a.issues.push(o); added.push(o); if (!a.condition || a.condition==='not_inspected') a.condition = 'fair';
+    });
+    r.equipment.forEach(function(e){
+      if (!e.keep) return; var a = findArea(doc, e.area_id); if (!a) return;
+      var o = { id:'eq_'+rid(8), kind:e.kind, photo_ids:[] }; var any = false;
+      ['name','brand','model','serial','year','notes'].concat((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).extra).forEach(function(f){ var v = String(e[f]||'').trim(); if (v){ o[f] = v; if (f!=='name') any = true; } });
+      if (!any) return; (a.equipment = a.equipment||[]).push(o); eqN++;
+    });
+    r.conditions.forEach(function(c){ if (!c.keep) return; var a = findArea(doc, c.area_id); if (a){ a.condition = c.condition; condN++; } });
+    (doc.voice_notes||[]).forEach(function(n){ if (r.noteIds.indexOf(n.id)>-1 && !failedNotes[n.id]){ n.routed = true; n.routed_at = now; } });
+  });
+  S.route = null; S.view = 'insp'; release('racc'); render();
+  toast(added.length+' issue'+(added.length===1?'':'s')+(eqN?', '+eqN+' equipment':'')+(condN?', '+condN+' condition'+(condN===1?'':'s'):'')+' added');
+  touchTypes(added);
 }
 </script>
 </body>
