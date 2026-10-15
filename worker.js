@@ -34181,10 +34181,14 @@ async function fiTranscribeFinish(env, bytes, mime, label, fetchImpl) {
   if (bytes.byteLength > FI_MAX_AUDIO_BYTES) return fiErr(413, 'too_large', 'This recording is larger than 14 MB. Split it into shorter recordings and upload them one by one.');
   if (!mime) return fiErr(415, 'bad_type', 'Unsupported audio type. Use an m4a, mp3, wav, aac, ogg, flac or webm recording.');
   const t0 = Date.now();
-  const r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime, fetchImpl);
+  let r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime, fetchImpl);
+  // Quiet or noisy recordings sometimes come back as "no speech" on the first try and transcribe fine on the second (seen in the field): try once more, using the alternate container label for m4a.
+  const silent = (x) => x.ok && (!x.text || /^\[no speech\]$/i.test(x.text));
+  let retried = false;
+  if (silent(r)) { retried = true; r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime === 'audio/mp4' ? 'audio/aac' : mime, fetchImpl); }
   try { await logTelemetry(env, { Source: 'field-inspect', Job_Type: 'fi_transcribe', Skill_Or_Endpoint: '/fi/transcribe', Tier_Requested: 'CHEAP', Model_Used: FI_TRANSCRIBE_MODEL, Tokens_In: r.tokens_in || 0, Tokens_Out: r.tokens_out || 0, Latency_ms: Date.now() - t0, Success: r.ok ? 'TRUE' : 'FALSE', Notes: (r.ok ? '' : String(r.message || '').slice(0, 150)) + ' bytes=' + bytes.byteLength }); } catch (_) { /* telemetry is best-effort; the result below is what the caller sees */ }
   if (!r.ok) return fiErr(r.status || 502, r.error || 'transcribe_failed', r.message);
-  if (!r.text || /^\[no speech\]$/i.test(r.text)) return fiErr(422, 'no_speech', 'No speech could be heard in that recording.');
+  if (!r.text || /^\[no speech\]$/i.test(r.text)) return fiErr(422, 'no_speech', 'No speech could be heard in that recording' + (retried ? ' (tried twice)' : '') + '. If you can hear speech in it, tap Retry once more — quiet recordings sometimes fail.');
   return json({ ok: true, transcript: r.text, truncated: r.truncated, label: fiStr(label, 120), bytes: bytes.byteLength, model: FI_TRANSCRIBE_MODEL, mime_used: r.mime_used });
 }
 // Phone upload: the raw audio is the request body.
@@ -34223,7 +34227,7 @@ Assign each finding to the area where the DEFECT PHYSICALLY IS, using the exact 
 Rules:
 - Report only what the inspector said. Never invent defects, measurements, quantities or costs. Fix obvious speech-recognition slips but not facts.
 - One distinct problem = one issue. Title is short and specific (max ~80 chars). Detail = what and where in 1-2 sentences.
-- "type": use the EXACT name of an issue type from the provided list when one fits; otherwise a short new Title Case type name (3-6 words) describing the kind of problem.
+- "type": use the EXACT name of an issue type from the provided list (name only, no trade in brackets) ONLY when it genuinely describes this problem. Never stretch a type to fit (a drain taped together is not "Active leak under sink"; a kinked copper line is not "Corroded supply valve"). Otherwise give a short new Title Case type name (3-6 words) describing the kind of problem.
 - likely_cause: the inspector's stated cause; if only implied, hedge ("Likely ...") in one sentence; otherwise empty.
 - recommended_fix: the inspector's recommendation, fix_source "inspector"; if none was given, one reasonable standard repair and fix_source "suggested".
 - severity: urgent = safety hazard or active damage needing action now; high = fix soon, will worsen; medium = next opportunity; low = cosmetic/minor; info = observation only.
@@ -34236,7 +34240,7 @@ Rules:
 Output a single JSON object and nothing else.`;
 function fiBuildRoutePrompt(b, catalog) {
   const areas = (b.areas || []).slice(0, 80).map(a => `- ${fiStr(a.id, 64)} = ${fiStr(a.name, 80)}${a.group ? ' [' + fiStr(a.group, 30) + ']' : ''}${(a.issues && a.issues.length) ? ' (already recorded: ' + a.issues.slice(0, 12).map(t => fiStr(t, 60)).join('; ') + ')' : ''}`).join('\n');
-  const types = catalog.slice(0, 90).map(t => `${t.name} (${t.trade})`).join('; ');
+  const types = catalog.slice(0, 90).map(t => t.name).join('; ');
   const notes = (b.notes || []).map(n => `=== NOTE ${fiStr(n.id, 40)}${n.label ? ' (' + fiStr(n.label, 80) + ')' : ''} ===\n${fiStr(n.text, 30000)}`).join('\n\n');
   const proposed = (b.proposed || []).slice(0, 80).map(t => `- ${fiStr(t, 80)}`).join('\n') || '(none)';
   return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
@@ -34252,6 +34256,7 @@ function fiNormalizeRoute(parsed, areaIds) {
     const areaId = fiStr(r.area_id, 64);
     const quote = fiStr(r.quote, 200).trim(), noteId = fiStr(r.note_id, 40);
     if (!ids.has(areaId)) { lost(n.title + (n.detail ? ' - ' + n.detail : ''), 'Area not recognised - choose where it belongs', noteId); continue; }
+    if (n.issue_type) n.issue_type = n.issue_type.replace(/\s*\(([a-z_]+)\)\s*$/i, (m, t) => (FI_TRADES.includes(t.toLowerCase()) ? '' : m));
     out.issues.push(Object.assign(n, { area_id: areaId, note_id: noteId, quote }));
   }
   for (const r of (Array.isArray(parsed.equipment) ? parsed.equipment : []).slice(0, 30)) {

@@ -149,6 +149,7 @@ function rid(n){ var a=new Uint8Array(n||8); crypto.getRandomValues(a); var s=''
 function newId(){ return ID_PREFIX + rid(12); }
 function todayStr(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
 function lsGet(k,d){ try{ var v=localStorage.getItem(k); return v==null?d:v; }catch(e){ return d; } }
+function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){ /* private mode: nothing was stored */ } }
 function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){ /* private mode: preference just isn't remembered */ } }
 // Synchronous double-tap guard (claimSubmit pattern): true = you own the action, false = already running.
 function claim(key){ if(S.busy[key]) return false; S.busy[key]=true; return true; }
@@ -407,6 +408,7 @@ function render(){
   else if (S.view==='route') h = viewRoute();
   var y = window.scrollY, key = S.view + ':' + (S.areaId||'');
   v.innerHTML = h; window.scrollTo(0, render._key === key ? y : 0); render._key = key;
+  if (S.view==='route') saveRouteDraft();
   if (S.view==='new' && !S.newProp) renderPropList();
   if (S.view==='area') bindArea();
   setSync();
@@ -715,7 +717,7 @@ function createInspection(){
   if (!claim('create')) return; $('start-btn').disabled = true;
   var o = S.newOpts, p = S.newProp;
   lsSet('fi_inspector', o.inspector);
-  var id = newId();
+  var id = newId(); S.route = null;
   var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address, street:p.street||String(p.address||'').split(',')[0].trim(), unit_id:String(p.unit_id||''), unit_label:p.unit_label||'' }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
   if (S.newOwner && S.newOwner.name) doc.owner = { id:String(S.newOwner.id||''), name:S.newOwner.name, source:S.newOwner.source||'hub' };
   var rec = { id:id, doc:doc, meta:{ brand_id:o.brand, client_name:o.client, client_email:o.email, inspector:o.inspector, inspection_date:o.date, inspection_type:o.type }, base_rev:0, token:'', status:'draft', dirty:true, ver:1 };
@@ -728,7 +730,7 @@ function openInspection(id){
   var local = localOnly[id];
   var srv = S.list.filter(function(x){return x.id===id;})[0];
   if (local && !local.dirty && srv && srv.rev > (local.base_rev||0)) local = null; // another device saved a newer version — take the server copy
-  var finish = function(rec){ S.rec = rec; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.proposals=null; S.publishInfo=null; loadPhotoBlobs(rec.id).then(function(){ return allPhotoStates(); }).then(function(){ S.view='insp'; render(); if (rec.dirty) syncNow(true); pumpPhotos(); }); };
+  var finish = function(rec){ S.rec = rec; loadRouteDraft(); S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.proposals=null; S.publishInfo=null; loadPhotoBlobs(rec.id).then(function(){ return allPhotoStates(); }).then(function(){ S.view='insp'; render(); if (rec.dirty) syncNow(true); pumpPhotos(); }); };
   if (local){ finish(local); return; }
   api('GET','/fi/inspection?id='+encodeURIComponent(id)).then(function(d){
     var rec = { id:id, doc:d.doc, meta:metaFrom(d.inspection), base_rev:d.inspection.rev, token:d.inspection.report_token, status:d.inspection.status, driveUrl:d.drive_folder_url||'', dirty:false, ver:1 };
@@ -1046,6 +1048,7 @@ function viewInsp(){
   h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+(doc.property.unit_label?' · '+esc(unitText(doc.property.unit_label)):'')+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
   h += ownerCardHtml(doc);
+  h += routeResumeHtml();
   var vn = doc.voice_notes||[], unsorted = vn.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length;
   h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
@@ -1499,6 +1502,7 @@ function viewVoice(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button></div><h1>Voice notes</h1>';
   h += '<div class="muted">Upload the recordings of your inspection notes. Each one is turned into text, then sorted into the right areas — even when you jumped between rooms and floors. You review everything before it is added.</div>';
   h += '<div class="btns"><button class="btn primary" onclick="pickAudio()">🎙 Add recordings</button><button class="btn" onclick="typedNoteSheet()">✍ Type or paste notes</button></div>';
+  h += routeResumeHtml();
   if (S.routeErr) h += '<div class="banner err" style="margin-top:10px">'+esc(S.routeErr)+'</div>';
   if (S.routeBusy) h += '<div class="banner info" style="margin-top:10px">⏳ '+esc(S.routeBusy)+'</div>';
   pending.forEach(function(id){ var st = voiceState[id]; h += '<div class="card"><div class="row"><b>'+esc(st.name)+'</b>'+(st.state==='error'?'<span class="pill bad">Failed</span>':st.state==='working'?'<span class="pill new">Transcribing…</span>':'<span class="pill">Waiting</span>')+'</div><div class="muted">'+Math.round(st.bytes/1024)+' KB</div>'+(st.err?'<div class="banner err" style="margin-top:8px">'+esc(st.err)+'</div>':'')+(st.state==='error'?'<div class="btns"><button class="btn sm" onclick="retryVoice(\''+id+'\')">Try again</button><button class="btn sm danger" onclick="dropVoice(\''+id+'\')">Remove</button></div>':'')+'</div>'; });
@@ -1512,6 +1516,20 @@ function viewVoice(){
   if (unsorted.length) h += '<button class="btn go block" style="min-height:56px;font-size:17px;margin-top:6px" id="route-btn" onclick="startRoute()"'+(S.routeBusy?' disabled':'')+'>✨ Sort '+unsorted.length+' note'+(unsorted.length===1?'':'s')+' into areas</button>';
   return h;
 }
+// The sorted-notes review is kept on the phone until it is added or discarded, so leaving the screen or reloading never loses the AI's work.
+function routeKey(){ return 'fi_route_'+S.rec.id; }
+function saveRouteDraft(){ if (S.rec && S.route){ S.route.recId = S.rec.id; lsSet(routeKey(), JSON.stringify(S.route)); } }
+function dropRouteDraft(){ if (S.rec) lsDel(routeKey()); }
+function loadRouteDraft(){
+  S.route = null; if (!S.rec) return;
+  var raw = lsGet(routeKey(), ''); if (!raw) return;
+  try{ var r = JSON.parse(raw); if (r && r.recId===S.rec.id && r.issues) S.route = r; }catch(e){ lsDel(routeKey()); }
+}
+function routeCount(r){ return r ? r.issues.length + r.equipment.length + r.conditions.length + r.new_areas.length + r.unassigned.length : 0; }
+function routeResumeHtml(){
+  if (!S.route || (S.rec && S.route.recId && S.route.recId!==S.rec.id)) return '';
+  return '<div class="banner warn" style="margin-top:10px"><b>Sorted notes are waiting for your review</b> ('+routeCount(S.route)+' item'+(routeCount(S.route)===1?'':'s')+'). Nothing has been added yet.<div class="btns"><button class="btn sm primary" onclick="S.view=\'route\';render()">Resume review</button><button class="btn sm" onclick="discardRoute()">Discard</button></div></div>';
+}
 function routeAreas(){ return S.rec.doc.areas.filter(function(a){ return !a.excluded; }).map(function(a){ return { id:a.id, name:a.name, group:a.group, issues:(a.issues||[]).map(function(i){return i.title;}) }; }); }
 function chunkText(t){
   var out = [], cur = '', parts = String(t).split(/\n\s*\n/);
@@ -1524,12 +1542,12 @@ function startRoute(){
   if (!notes.length){ toast('Nothing to sort'); return; }
   if (!claim('route')) return;
   var chunks = []; notes.forEach(function(n){ chunkText(n.transcript).forEach(function(t,i){ chunks.push({ noteId:n.id, id:n.id+(i?'_'+i:''), label:n.name||'Recording', text:t }); }); });
-  S.route = { issues:[], equipment:[], conditions:[], new_areas:[], unassigned:[], errors:[], noteIds:notes.map(function(n){return n.id;}), chunks:chunks };
+  S.route = { recId:S.rec.id, issues:[], equipment:[], conditions:[], new_areas:[], unassigned:[], errors:[], noteIds:notes.map(function(n){return n.id;}), chunks:chunks };
   S.routeErr = ''; runChunks(chunks.slice(), 0, chunks.length).then(function(){
     release('route'); S.routeBusy = '';
     var r = S.route, any = r.issues.length || r.equipment.length || r.conditions.length || r.new_areas.length || r.unassigned.length;
-    if (any || r.errors.length){ S.view='route'; render(); }
-    else { S.routeErr = 'The notes were read but no problems or equipment details were found in them.'; S.route = null; render(); }
+    if (any || r.errors.length){ saveRouteDraft(); S.view='route'; render(); }
+    else { S.routeErr = 'The notes were read but no problems or equipment details were found in them.'; S.route = null; dropRouteDraft(); render(); }
   });
 }
 function runChunks(list, done, total){
@@ -1617,7 +1635,7 @@ function unassignedSend(i){
   S.route.unassigned.splice(i,1); render(); toast('Added to '+a.name+' — open it and tap “Turn into issues”');
 }
 function unassignedDismiss(i){ S.route.unassigned.splice(i,1); render(); }
-function discardRoute(){ S.route = null; S.view = 'voice'; render(); }
+function discardRoute(){ S.route = null; dropRouteDraft(); S.view = 'voice'; render(); }
 function acceptRoute(){
   if (!claim('racc')) return; var r = S.route, added = [], eqN = 0, condN = 0, now = new Date().toISOString();
   var failedNotes = {}; r.errors.forEach(function(e){ failedNotes[e.chunk.noteId] = true; });
@@ -1637,7 +1655,7 @@ function acceptRoute(){
     r.conditions.forEach(function(c){ if (!c.keep) return; var a = findArea(doc, c.area_id); if (a){ a.condition = c.condition; condN++; } });
     (doc.voice_notes||[]).forEach(function(n){ if (r.noteIds.indexOf(n.id)>-1 && !failedNotes[n.id]){ n.routed = true; n.routed_at = now; } });
   });
-  S.route = null; S.view = 'insp'; release('racc'); render();
+  S.route = null; dropRouteDraft(); S.view = 'insp'; release('racc'); render();
   toast(added.length+' issue'+(added.length===1?'':'s')+(eqN?', '+eqN+' equipment':'')+(condN?', '+condN+' condition'+(condN===1?'':'s'):'')+' added');
   touchTypes(added);
 }

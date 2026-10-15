@@ -400,6 +400,25 @@ await t('report shows equipment + brand contact; transcripts never leave the app
   await noHScroll(pg, 'report r2'); await shot(pg, 'report-r2', true); await pg.close();
 });
 
+await t('sorted-notes review survives leaving the screen and a reload (Resume / Discard)', async () => {
+  const ids = await areaIds();
+  await page.click('button:has-text("‹ Areas")').catch(() => {});
+  await page.click('.card:has-text("Voice notes") button:has-text("Open")'); await page.waitForSelector('button:has-text("Add recordings")');
+  await page.click('button:has-text("Type or paste notes")'); await page.fill('#tn-text', 'Sleeping porch shows signs of roof leak. Recommend sealing the ceiling around the door.'); await page.click('.sheet .btn.primary');
+  await page.waitForSelector('#route-btn');
+  w.h.ai = JSON.stringify({ issues: [{ area_id: ids['Kitchen'], note_id: 'x', quote: 'roof leak', title: 'Roof leak at sleeping porch', trade: 'roofing', severity: 'high', detail: 'Leak.', recommended_fix: 'Seal ceiling', fix_source: 'inspector' }], equipment: [], conditions: [], new_areas: [], unassigned: [] });
+  await page.click('#route-btn'); await page.waitForSelector('text=Review sorted notes');
+  await page.click('button:has-text("‹ Voice notes")'); await page.waitForSelector('text=Sorted notes are waiting for your review');
+  await noHScroll(page, 'resume banner');
+  await waitSaved(); await page.reload(); await page.waitForSelector('.card:has-text("122 S Gilmor")'); await page.click('.card[onclick*="' + (await page.evaluate(() => Object.keys(localOnly)[0])) + '"]').catch(async () => { await page.click('.card:has-text("122 S Gilmor") >> nth=0'); });
+  await page.waitForSelector('text=areas done'); assert.ok((await page.locator('#view').innerText()).includes('Sorted notes are waiting for your review'), 'banner on the inspection screen after reload');
+  await page.click('.btn:has-text("Resume review")'); await page.waitForSelector('text=Review sorted notes');
+  assert.ok((await page.locator('#view').evaluate(el => Array.from(el.querySelectorAll('input')).map(i => i.value).join('|'))).includes('Roof leak at sleeping porch'), 'proposal restored');
+  { const vn = (await docOnPhone()).voice_notes; assert.ok(vn.some(n => /roof leak/.test(n.transcript) && !n.routed), 'the new note is still unsorted - nothing was added: ' + JSON.stringify(vn.map(n => [n.name, n.routed]))); }
+  await page.click('button:has-text("‹ Voice notes")'); await page.click('.banner button:has-text("Discard")'); await page.waitForFunction(() => !/Sorted notes are waiting/.test(document.getElementById('view').innerText));
+  assert.equal(await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('fi_route_')).length), 0, 'draft removed');
+});
+
 // ════════ Round 3 (Oct 15 2026): Hub picker, owners, add-property, Drive folders ════════
 const home = async () => { await page.goto(BASE + 'field-inspect.html'); await page.waitForSelector('text=New inspection'); };
 await t('picker: Add-new at the TOP and BOTTOM; type-to-search by address, owner and unit; multi-unit asks which unit', async () => {
