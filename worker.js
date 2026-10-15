@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-15.01-field-inspection';
+const BUILD_VERSION = '2026-10-15.02-field-inspection-update';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -645,6 +645,7 @@ const _hubWorkerCore = {
         if (path === '/fi/inspection')          return await fiRoute(env, 'inspection', () => fiGetInspection(env, url));
         if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
+        if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
@@ -680,6 +681,11 @@ const _hubWorkerCore = {
           // Raw image body (not JSON), so it runs before body parsing — the test-token guard is applied here: a staging-token upload may only target a TEST- inspection.
           if (_viaHubTestToken && !String(url.searchParams.get('inspection_id') || '').startsWith('TEST-')) return json({ ok: false, error: 'HUB_TEST_TOKEN: photo must target a TEST- inspection, refusing' }, 403);
           return await fiRoute(env, 'photo', () => fiPhotoUpload(env, request, url));
+        }
+        if (path === '/fi/transcribe') {
+          // Raw audio body (not JSON), so it runs before body parsing. Staging-token calls may only transcribe for a TEST- inspection.
+          if (_viaHubTestToken && !String(url.searchParams.get('inspection_id') || '').startsWith('TEST-')) return json({ ok: false, error: 'HUB_TEST_TOKEN: transcription must target a TEST- inspection, refusing' }, 403);
+          return await fiRoute(env, 'transcribe', () => fiTranscribe(env, request, url));
         }
         // Body parsing is now tolerant of an empty/missing body (POST /cron/sweep and any
         // future no-payload POST route don't need to send one) — previously this threw a raw
@@ -1061,6 +1067,12 @@ const _hubWorkerCore = {
         if (path === '/fi/summarize')             return await fiRoute(env, 'summarize', () => fiSummarize(env, body));
         if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
         if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
+        if (path === '/fi/route')                 return await fiRoute(env, 'route', () => fiRouteNotes(env, body));
+        if (path === '/fi/brand/scrape')          return await fiRoute(env, 'brand-scrape', () => fiBrandScrape(env, body));
+        if (path === '/fi/read-label')            return await fiRoute(env, 'read-label', () => fiReadLabel(env, body));
+        if (path === '/fi/transcribe/json')       return await fiRoute(env, 'transcribe-json', () => fiTranscribeJson(env, body));
+        if (path === '/fi/issue-types/save')      return await fiRoute(env, 'issue-types-save', () => fiTypesSave(env, body));
+        if (path === '/fi/issue-types/touch')     return await fiRoute(env, 'issue-types-touch', () => fiTypesTouch(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -23281,7 +23293,14 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
   if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
-  if (path === '/fi/structure' || path === '/fi/summarize') return true;
+  if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
+  if (path === '/fi/read-label') return String((body && body.inspection_id) || '').startsWith('TEST-'); // reads a private photo: TEST- inspections only
+  if (path === '/fi/issue-types/save') {
+    if (!String((body && body.name) || '').startsWith('TEST-')) return false;
+    if (body && body.id) { const _tt = await fetchTab(env, 'FI_Issue_Types'); const _tr = _tt.find(r => String(r.ID) === String(body.id)); return !!_tr && String(_tr.Name || '').startsWith('TEST-'); }
+    return true;
+  }
+  if (path === '/fi/issue-types/touch') return Array.isArray(body && body.items) && body.items.length > 0 && body.items.every(i => String((i && i.name) || '').startsWith('TEST-'));
   if (path === '/fi/brand/save') {
     if (!String((body && body.name) || '').startsWith('TEST-') || (body && body.is_default === true)) return false;
     if (body && body.id) { const _bt = await fetchTab(env, 'FI_Brands'); const _br = _bt.find(r => String(r.ID) === String(body.id)); return !!_br && String(_br.Name || '').startsWith('TEST-'); }
@@ -33171,11 +33190,12 @@ async function inspCalendarTest(env, url) {
 //  • Brand is resolved at VIEW time (Brand_ID on the inspection), so switching brand re-skins without touching the inspection.
 //  • NO CRON. New tabs are created with addSheet only when missing, columns via ensureColumns, columns resolved by header name.
 const FI_DATA_COLS = 8, FI_DATA_CHUNK = 45000, FI_MAX_DOC_CHARS = FI_DATA_COLS * FI_DATA_CHUNK;
-const FI_BRAND_HEADERS = ['ID','Name','Primary_Color','Accent_Color','Tagline','Contact_Line','Footer_Text','Logo_Data','Is_Default','Active','Created_At','Updated_At'];
+const FI_BRAND_HEADERS = ['ID','Name','Primary_Color','Accent_Color','Tagline','Contact_Line','Footer_Text','Logo_Data','Is_Default','Active','Created_At','Updated_At','Website','Phone','Email','Address'];
 const FI_INSP_HEADERS = ['ID','Property_ID','Address','Inspection_Type','Status','Brand_ID','Client_Name','Client_Email','Inspector','Inspection_Date','Report_Token','Published_At','Published_Rev','Rev','Doc_Hash','Issue_Count','Photo_Count','Created_At','Updated_At','Active'].concat(Array.from({ length: FI_DATA_COLS }, (_, i) => 'Data_' + (i + 1)));
 const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active'];
 const FI_EMAIL_HEADERS = ['ID','Inspection_ID','To_Email','Subject','Result','Sent_At'];
-const FI_TABS = { FI_Brands: FI_BRAND_HEADERS, FI_Inspections: FI_INSP_HEADERS, FI_Photos: FI_PHOTO_HEADERS, FI_Email_Log: FI_EMAIL_HEADERS };
+const FI_TYPE_TAB_HEADERS = ['ID','Name','Trade','Default_Severity','Areas','Detail','Likely_Cause','Recommended_Fix','Uses','Source','Active','Created_At','Updated_At'];
+const FI_TABS = { FI_Brands: FI_BRAND_HEADERS, FI_Inspections: FI_INSP_HEADERS, FI_Photos: FI_PHOTO_HEADERS, FI_Email_Log: FI_EMAIL_HEADERS, FI_Issue_Types: FI_TYPE_TAB_HEADERS };
 const FI_TRADES = ['plumbing','electrical','hvac','roofing','structural','carpentry','drywall_paint','flooring','windows_doors','appliances','pest','safety','exterior_site','cleaning','general','tenant_action'];
 const FI_SEVERITIES = ['urgent','high','medium','low','info'];
 const FI_CONDITIONS = ['good','fair','poor','nothing_to_do','not_inspected','na'];
@@ -33227,6 +33247,8 @@ function fiNormalizeIssue(raw) {
     fix_source: raw.fix_source === 'inspector' ? 'inspector' : 'suggested',
   };
   if (raw.possible_duplicate_of) out.possible_duplicate_of = fiStr(raw.possible_duplicate_of, 120);
+  const itype = fiStr(raw.issue_type || raw.type, 80).trim();
+  if (itype) out.issue_type = itype;
   if (trade === 'tenant_action') out.tenant_action = true;
   return out;
 }
@@ -33256,6 +33278,7 @@ function fiValidateDoc(doc) {
       if (!a.id || typeof a.id !== 'string') errors.push(`areas[${i}].id missing`); else { if (seen.has(a.id)) errors.push(`duplicate area id ${a.id}`); seen.add(a.id); }
       if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
       if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
+      fiValidateEquipment(a.equipment, `areas[${i}]`, errors);
       if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
       else (a.issues || []).forEach((is, j) => {
@@ -33264,6 +33287,7 @@ function fiValidateDoc(doc) {
       });
     });
   }
+  fiValidateVoiceNotes(doc.voice_notes, errors);
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
   return { ok: errors.length === 0, errors: errors.slice(0, 10) };
 }
@@ -33271,6 +33295,7 @@ function fiPhotoIds(doc) {
   const ids = new Set();
   for (const a of (doc.areas || [])) {
     for (const p of (a.photo_ids || [])) ids.add(String(p));
+    for (const e of (a.equipment || [])) for (const p of (e.photo_ids || [])) ids.add(String(p));
     for (const is of (a.issues || [])) for (const p of (is.photo_ids || [])) ids.add(String(p));
   }
   return Array.from(ids);
@@ -33349,10 +33374,14 @@ function fiNormalizeSummary(parsed, rollup) {
   return { overall, trades, priorities };
 }
 function fiHtmlEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function fiBrandContactLine(b) {
+  if (b.Contact_Line) return b.Contact_Line;
+  return [b.Phone, b.Email, b.Website ? String(b.Website).replace(/^https?:\/\//, '') : ''].filter(Boolean).join(' · ');
+}
 function fiBuildEmail(brand, insp, link, note) {
   const c = /^#[0-9a-fA-F]{6}$/.test(brand.Primary_Color || '') ? brand.Primary_Color : '#1d4ed8';
   const subject = `${brand.Name || 'Inspection'}: Property inspection report — ${insp.Address}`;
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:${c};color:#fff;padding:16px 20px;font-size:18px;font-weight:700">${fiHtmlEsc(brand.Name)}</div><div style="padding:20px;border:1px solid #dfe3e8;border-top:none"><p style="margin:0 0 12px">Your property inspection report for <b>${fiHtmlEsc(insp.Address)}</b> is ready.</p>${note ? `<p style="margin:0 0 12px;white-space:pre-wrap">${fiHtmlEsc(note)}</p>` : ''}<p style="margin:18px 0"><a href="${fiHtmlEsc(link)}" style="background:${c};color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700">View inspection report</a></p><p style="font-size:13px;color:#6b7684;margin:0">You can print the report or save it as a PDF from that page.${brand.Contact_Line ? '<br>' + fiHtmlEsc(brand.Contact_Line) : ''}</p></div></div>`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:${c};color:#fff;padding:16px 20px;font-size:18px;font-weight:700">${fiHtmlEsc(brand.Name)}</div><div style="padding:20px;border:1px solid #dfe3e8;border-top:none"><p style="margin:0 0 12px">Your property inspection report for <b>${fiHtmlEsc(insp.Address)}</b> is ready.</p>${note ? `<p style="margin:0 0 12px;white-space:pre-wrap">${fiHtmlEsc(note)}</p>` : ''}<p style="margin:18px 0"><a href="${fiHtmlEsc(link)}" style="background:${c};color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700">View inspection report</a></p><p style="font-size:13px;color:#6b7684;margin:0">You can print the report or save it as a PDF from that page.${fiBrandContactLine(brand) ? '<br>' + fiHtmlEsc(fiBrandContactLine(brand)) : ''}</p></div></div>`;
   return { subject, html };
 }
 
@@ -33402,7 +33431,7 @@ async function fiFindInspection(env, id) {
   return { headers: t.headers, row: hits[0] || null, dupes: hits.length };
 }
 function fiBrandOut(o, withLogo) {
-  const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
+  const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', website: o.Website || '', phone: o.Phone || '', email: o.Email || '', address: o.Address || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
   if (withLogo) b.logo_data = o.Logo_Data || '';
   return b;
 }
@@ -33412,7 +33441,7 @@ async function fiResolveBrand(env, brandId) {
   let hit = brandId ? live.find(r => r.o.ID === brandId) : null;
   let fallback = false;
   if (!hit) { fallback = !!brandId; hit = live.find(r => r.o.Is_Default === 'TRUE') || live[0] || null; }
-  if (!hit) return { brand: { id: 'builtin', name: 'Inspection Report', primary_color: '#1d4ed8', accent_color: '#166534', tagline: '', contact_line: '', footer_text: '', is_default: true, has_logo: false, logo_data: '' }, fallback: true, raw: { Name: 'Inspection Report' } };
+  if (!hit) return { brand: { id: 'builtin', name: 'Inspection Report', primary_color: '#1d4ed8', accent_color: '#166534', tagline: '', contact_line: '', footer_text: '', website: '', phone: '', email: '', address: '', is_default: true, has_logo: false, logo_data: '' }, fallback: true, raw: { Name: 'Inspection Report' } };
   return { brand: fiBrandOut(hit.o, true), fallback, raw: hit.o };
 }
 function fiInspHeaderOut(o) {
@@ -33555,6 +33584,7 @@ async function fiReport(env, request, url) {
   const summaryOk = !!(doc.summary && doc.summary.accepted && doc.summary.fp === fiFingerprint(doc));
   if (!summaryOk) delete doc.summary;
   delete doc.dictation_log;
+  delete doc.voice_notes;
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
   return json({ ok: true, preview: !published, inspection: fiInspHeaderOut(insp.o), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
 }
@@ -33632,8 +33662,15 @@ async function fiBrandSave(env, body) {
   if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Brand id is malformed.');
   const ex = t.rows.find(r => r.o.ID === id);
   if (body.id && !ex) return fiErr(404, 'not_found', 'That brand does not exist.');
+  // A field the caller leaves out keeps its saved value (e.g. "remove company" only sends name/colors) - nothing is blanked by omission.
+  const keep = (k, max) => (body[k] !== undefined ? fiStr(body[k], max).trim() : (ex ? ex.o[{ tagline: 'Tagline', contact_line: 'Contact_Line', footer_text: 'Footer_Text', website: 'Website', phone: 'Phone', email: 'Email', address: 'Address' }[k]] || '' : ''));
+  let website = keep('website', 300);
+  if (website && body.website !== undefined) { const sw = fiSafeUrl(website); if (!sw.ok) return fiErr(400, 'bad_website', sw.error); website = sw.url.replace(/\/$/, ''); }
+  const email = keep('email', 120);
+  if (email && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(email)) return fiErr(400, 'bad_email', 'The brand email address does not look right.');
+  const phone = keep('phone', 40), address = keep('address', 200), tagline = keep('tagline', 160), contactLine = keep('contact_line', 240), footerText = keep('footer_text', 300);
   const now = new Date().toISOString();
-  const o = Object.assign({}, ex ? ex.o : {}, { ID: id, Name: name, Primary_Color: pc, Accent_Color: ac, Tagline: fiStr(body.tagline, 160), Contact_Line: fiStr(body.contact_line, 240), Footer_Text: fiStr(body.footer_text, 300),
+  const o = Object.assign({}, ex ? ex.o : {}, { ID: id, Name: name, Primary_Color: pc, Accent_Color: ac, Tagline: tagline, Contact_Line: contactLine, Footer_Text: footerText, Website: website, Phone: phone, Email: email, Address: address,
     Logo_Data: body.remove_logo === true ? '' : (logo !== undefined ? logo : (ex ? ex.o.Logo_Data : '')), Active: body.active === false ? 'FALSE' : 'TRUE', Created_At: ex ? ex.o.Created_At : now, Updated_At: now });
   const wantDefault = body.is_default === true;
   o.Is_Default = wantDefault ? 'TRUE' : (ex ? ex.o.Is_Default : 'FALSE');
@@ -33646,7 +33683,7 @@ async function fiBrandSave(env, body) {
   const chk = await fiReadFresh(env, 'FI_Brands');
   const hits = chk.rows.filter(r => r.o.ID === id);
   const defaults = chk.rows.filter(r => r.o.Is_Default === 'TRUE' && r.o.Active !== 'FALSE').length;
-  if (hits.length !== 1 || hits[0].o.Name !== name || hits[0].o.Logo_Data !== o.Logo_Data || defaults !== 1) return fiErr(500, 'verify_failed', 'The brand could not be verified after saving. Retry.');
+  if (hits.length !== 1 || hits[0].o.Name !== name || hits[0].o.Logo_Data !== o.Logo_Data || hits[0].o.Website !== website || hits[0].o.Phone !== phone || hits[0].o.Email !== email || hits[0].o.Address !== address || defaults !== 1) return fiErr(500, 'verify_failed', 'The brand could not be verified after saving. Retry.');
   return json({ ok: true, brand: fiBrandOut(hits[0].o, true) });
 }
 async function fiEmailReport(env, request, body) {
@@ -33670,4 +33707,592 @@ async function fiEmailReport(env, request, body) {
   await fiWriteRow(env, 'FI_Email_Log', lt.headers, { ID: 'em_' + inspRandToken(9), Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: res && res.staged ? 'staged' : 'sent', Sent_At: new Date().toISOString() }, 0);
   return json({ ok: true, sent: !(res && res.staged), staged: !!(res && res.staged), to, subject: mail.subject });
 }
+// ═══ Part 2 (Oct 15 2026, after field use): equipment info, brand capture from a website, voice-file transcription + routing, label reading ═══
+// Equipment kinds the phone offers. Keep field lists in sync with field-inspect.html (a unit test compares them).
+const FI_EQUIP_COMMON = ['brand', 'model', 'serial', 'year', 'notes'];
+const FI_EQUIP_KINDS = {
+  furnace: { label: 'Furnace', extra: ['fuel', 'filter_size'] },
+  boiler: { label: 'Boiler', extra: ['fuel'] },
+  central_ac: { label: 'Central A/C', extra: ['tonnage', 'filter_size'] },
+  heat_pump: { label: 'Heat pump', extra: ['tonnage', 'filter_size'] },
+  water_heater: { label: 'Water heater', extra: ['fuel', 'capacity'] },
+  refrigerator: { label: 'Refrigerator', extra: [] },
+  range: { label: 'Range / oven', extra: ['fuel'] },
+  dishwasher: { label: 'Dishwasher', extra: [] },
+  microwave: { label: 'Microwave', extra: [] },
+  washer: { label: 'Washer', extra: [] },
+  dryer: { label: 'Dryer', extra: ['fuel'] },
+  disposal: { label: 'Garbage disposal', extra: [] },
+  other: { label: 'Other equipment', extra: [] },
+};
+function fiEquipFields(kind) { const k = FI_EQUIP_KINDS[kind]; return k ? ['name'].concat(FI_EQUIP_COMMON, k.extra) : []; }
+function fiEquipMax(field) { return field === 'notes' ? 600 : field === 'name' ? 60 : field === 'year' ? 12 : 120; }
+// Normalizes AI/loose equipment input to the stored shape. Returns null when there is nothing worth keeping.
+function fiNormalizeEquipment(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  let kind = String(raw.kind || '').toLowerCase().trim().replace(/[\s/&-]+/g, '_');
+  if (kind === 'ac' || kind === 'a_c' || kind === 'air_conditioner' || kind === 'air_conditioning') kind = 'central_ac';
+  if (kind === 'stove' || kind === 'oven' || kind === 'range_oven' || kind === 'stove_oven') kind = 'range';
+  if (kind === 'fridge') kind = 'refrigerator';
+  if (kind === 'hot_water_heater' || kind === 'waterheater') kind = 'water_heater';
+  if (!FI_EQUIP_KINDS[kind]) kind = 'other';
+  const out = { kind };
+  let any = false;
+  for (const f of fiEquipFields(kind)) {
+    const v = fiStr(raw[f], fiEquipMax(f)).trim();
+    if (v) { out[f] = v; if (f !== 'name') any = true; }
+  }
+  return any ? out : null;
+}
+function fiValidateEquipment(list, where, errors) {
+  if (list === undefined) return;
+  if (!Array.isArray(list)) { errors.push(`${where}.equipment must be an array`); return; }
+  if (list.length > 30) { errors.push(`${where} has too many equipment items (max 30)`); return; }
+  list.forEach((e, j) => {
+    const w = `${where}.equipment[${j}]`;
+    if (!e || typeof e !== 'object' || Array.isArray(e)) { errors.push(`${w} invalid`); return; }
+    if (!e.id || typeof e.id !== 'string') errors.push(`${w}.id missing`);
+    if (!FI_EQUIP_KINDS[e.kind]) { errors.push(`${w}.kind invalid`); return; }
+    const allowed = new Set(['id', 'kind', 'photo_ids'].concat(fiEquipFields(e.kind)));
+    for (const k of Object.keys(e)) {
+      if (!allowed.has(k)) { errors.push(`${w}.${k} is not a field of ${e.kind}`); continue; }
+      if (k === 'photo_ids') { if (!Array.isArray(e.photo_ids) || e.photo_ids.length > 12 || e.photo_ids.some(p => typeof p !== 'string')) errors.push(`${w}.photo_ids invalid`); }
+      else if (k !== 'id' && k !== 'kind' && (typeof e[k] !== 'string' || e[k].length > fiEquipMax(k))) errors.push(`${w}.${k} must be text up to ${fiEquipMax(k)} characters`);
+    }
+  });
+}
+function fiValidateVoiceNotes(list, errors) {
+  if (list === undefined) return;
+  if (!Array.isArray(list)) { errors.push('doc.voice_notes must be an array'); return; }
+  if (list.length > 40) { errors.push('too many voice notes (max 40)'); return; }
+  list.forEach((n, i) => {
+    if (!n || typeof n !== 'object' || !n.id || typeof n.id !== 'string') errors.push(`voice_notes[${i}].id missing`);
+    else if (typeof n.transcript !== 'string' || n.transcript.length > 80000) errors.push(`voice_notes[${i}].transcript must be text up to 80000 characters`);
+  });
+}
+
+// ── Brand capture from a website (cursory scrape: name, colors, logo, contact). Nothing is saved here — the phone reviews it first. ──
+const FI_SCRAPE_MAX_HTML = 1500000, FI_SCRAPE_MAX_CSS = 400000, FI_SCRAPE_MAX_LOGO = 350000;
+function fiSafeUrl(input) {
+  let s = String(input || '').trim();
+  if (!s) return { ok: false, error: 'Enter the company website address.' };
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = 'https://' + s;
+  let u;
+  try { u = new URL(s); } catch (_) { return { ok: false, error: 'That does not look like a web address.' }; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return { ok: false, error: 'Only http/https web addresses can be captured.' };
+  if (u.username || u.password) return { ok: false, error: 'Web addresses with a login in them are not allowed.' };
+  if (u.port && u.port !== '80' && u.port !== '443') return { ok: false, error: 'Only standard web ports are allowed.' };
+  const h = u.hostname.toLowerCase();
+  if (!h.includes('.') || h.length > 253 || h.includes(':') || h.startsWith('[') || /^\d+\.\d+\.\d+\.\d+$/.test(h) || h === 'localhost' || /\.(local|localhost|internal|lan|home|corp|intranet)$/.test(h)) return { ok: false, error: 'That address points to a private or non-public host and cannot be captured.' };
+  return { ok: true, url: u.toString(), host: h };
+}
+function fiDecodeEntities(s) {
+  return String(s || '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#(\d{1,5});/g, (m, d) => { const n = Number(d); return n > 31 && n < 65536 ? String.fromCharCode(n) : ' '; });
+}
+function fiAttrs(tag) {
+  const out = {}; const re = /([a-zA-Z:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g; let m;
+  while ((m = re.exec(tag))) out[m[1].toLowerCase()] = fiDecodeEntities(m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4]);
+  return out;
+}
+function fiNormHex(c) {
+  const s = String(c || '').trim().toLowerCase();
+  let m = s.match(/^#([0-9a-f]{6})\b/); if (m) return '#' + m[1];
+  m = s.match(/^#([0-9a-f]{3})\b/); if (m) return '#' + m[1].split('').map(x => x + x).join('');
+  m = s.match(/^rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})/);
+  if (m) { const v = [m[1], m[2], m[3]].map(x => Math.min(255, Number(x))); return '#' + v.map(x => x.toString(16).padStart(2, '0')).join(''); }
+  return null;
+}
+function fiRgb(hex) { return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)); }
+function fiLuminance(hex) { const c = fiRgb(hex).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
+function fiIsNeutral(hex) { const c = fiRgb(hex); return Math.max(...c) - Math.min(...c) < 28; }
+function fiColorDist(a, b) { const x = fiRgb(a), y = fiRgb(b); return Math.abs(x[0] - y[0]) + Math.abs(x[1] - y[1]) + Math.abs(x[2] - y[2]); }
+function fiResolveUrl(href, base) { try { const u = new URL(String(href || '').trim(), base); return (u.protocol === 'http:' || u.protocol === 'https:') ? u.toString() : ''; } catch (_) { return ''; } }
+function fiLdNodes(html) {
+  const nodes = []; const re = /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi; let m;
+  const walk = (v, depth) => { if (!v || depth > 6) return; if (Array.isArray(v)) { v.forEach(x => walk(x, depth + 1)); return; } if (typeof v !== 'object') return; nodes.push(v); if (v['@graph']) walk(v['@graph'], depth + 1); };
+  while ((m = re.exec(html))) { try { walk(JSON.parse(m[1].trim()), 0); } catch (_) { /* a malformed JSON-LD block is simply skipped; other signals are still used */ } }
+  return nodes;
+}
+// Pure: HTML text -> what we could find. No network.
+function fiParseBrandHtml(html, baseUrl) {
+  html = String(html || '');
+  const metas = {}; (html.match(/<meta\b[^>]*>/gi) || []).forEach(t => { const a = fiAttrs(t); const k = (a.property || a.name || '').toLowerCase(); if (k && a.content !== undefined && metas[k] === undefined) metas[k] = a.content; });
+  const links = (html.match(/<link\b[^>]*>/gi) || []).map(fiAttrs);
+  const ld = fiLdNodes(html);
+  const org = ld.find(n => /Organization|LocalBusiness|Corporation|Store|RealEstate|ProfessionalService|HomeAndConstructionBusiness/i.test(String([].concat(n['@type'] || []).join(' '))));
+  const titleM = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i); const title = titleM ? fiDecodeEntities(titleM[1]).replace(/\s+/g, ' ').trim() : '';
+  let host = ''; try { host = new URL(baseUrl).hostname.replace(/^www\./, '').split('.')[0].toLowerCase(); } catch (_) { host = ''; }
+  const pickFromTitle = () => {
+    if (!title) return '';
+    const segs = title.split(/\s+[|\-–—·•:]\s+/).map(s => s.trim()).filter(Boolean);
+    const generic = /^(home|homepage|welcome|index|official site|official website)$/i;
+    const hostKey = host.replace(/[^a-z0-9]/g, '');
+    const hit = segs.find(s => hostKey && s.toLowerCase().replace(/[^a-z0-9]/g, '').includes(hostKey.slice(0, Math.max(4, Math.min(hostKey.length, 6)))));
+    return (hit || segs.find(s => !generic.test(s)) || title).slice(0, 80);
+  };
+  const name = fiStr((metas['og:site_name'] || (org && typeof org.name === 'string' && org.name) || metas['application-name'] || pickFromTitle()), 80).trim();
+  const tagline = fiStr(metas['og:description'] || metas['description'] || (org && typeof org.description === 'string' && org.description) || '', 160).trim();
+  // logos, best first
+  const logo = [];
+  const addLogo = (href, why) => { const u = fiResolveUrl(href, baseUrl); if (u && !logo.some(l => l.url === u)) logo.push({ url: u, why }); };
+  if (org && org.logo) addLogo(typeof org.logo === 'string' ? org.logo : (org.logo.url || org.logo.contentUrl || ''), 'structured data');
+  (html.match(/<img\b[^>]*>/gi) || []).slice(0, 80).forEach(t => { const a = fiAttrs(t); if (/logo/i.test([a.src, a['data-src'], a.alt, a.class, a.id].join(' '))) addLogo(a.src || a['data-src'], 'page image'); });
+  links.filter(l => /apple-touch-icon/i.test(l.rel || '')).sort((x, y) => (parseInt(String(y.sizes || '0').split('x')[0], 10) || 0) - (parseInt(String(x.sizes || '0').split('x')[0], 10) || 0)).forEach(l => addLogo(l.href, 'app icon'));
+  if (metas['og:image']) addLogo(metas['og:image'], 'share image');
+  links.filter(l => /(^|\s)(shortcut )?icon(\s|$)/i.test(l.rel || '') && !/\.ico(\?|$)/i.test(l.href || '')).forEach(l => addLogo(l.href, 'site icon'));
+  // colors
+  const colors = []; const addColor = (hex, source) => { const h = fiNormHex(hex); if (h && !colors.some(c => c.hex === h)) colors.push({ hex: h, source }); };
+  if (metas['theme-color']) addColor(metas['theme-color'], 'theme-color');
+  if (metas['msapplication-tilecolor']) addColor(metas['msapplication-tilecolor'], 'tile color');
+  const styleText = (html.match(/<style\b[^>]*>[\s\S]*?<\/style>/gi) || []).join('\n') + '\n' + (html.match(/style\s*=\s*"[^"]*"/gi) || []).join('\n');
+  // contact
+  const tel = []; (html.match(/href\s*=\s*["']tel:[^"']+["']/gi) || []).forEach(h => { const v = fiDecodeEntities(h.replace(/^[^:]*tel:/i, '').replace(/["']$/, '')).replace(/%20|\s+/g, ' ').trim(); if (v && !tel.includes(v)) tel.push(v); });
+  const mail = []; (html.match(/href\s*=\s*["']mailto:[^"'?]+/gi) || []).forEach(h => { const v = fiDecodeEntities(h.replace(/^[^:]*mailto:/i, '')).trim(); if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) && !/\.(png|jpe?g|gif|webp)$/i.test(v) && !mail.includes(v)) mail.push(v); });
+  const visible = fiDecodeEntities(html.replace(/<script\b[\s\S]*?<\/script>/gi, ' ').replace(/<style\b[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ');
+  if (!tel.length) { const pm = visible.match(/\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b/); if (pm) tel.push(pm[0]); }
+  let address = '';
+  const pa = org && org.address && typeof org.address === 'object' ? org.address : null;
+  if (pa) address = [pa.streetAddress, pa.addressLocality, [pa.addressRegion, pa.postalCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  if (!address) { const am = html.match(/<address\b[^>]*>([\s\S]*?)<\/address>/i); if (am) address = fiDecodeEntities(am[1].replace(/<br\s*\/?>/gi, ', ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').replace(/\s+,/g, ',').trim(); }
+  const phone = fiStr((org && typeof org.telephone === 'string' && org.telephone) || tel[0] || '', 40).trim();
+  const email = fiStr((org && typeof org.email === 'string' && org.email.replace(/^mailto:/i, '')) || mail[0] || '', 120).trim();
+  const sheets = links.filter(l => /stylesheet/i.test(l.rel || '') && l.href && !/fonts\.(googleapis|gstatic)\.com/i.test(l.href)).map(l => fiResolveUrl(l.href, baseUrl)).filter(Boolean).slice(0, 3);
+  return { name, tagline, logo, colors, styleText, phone, email, address: fiStr(address, 200), sheets };
+}
+// Pure: gather color candidates from CSS text (variables named like primary/brand first, then the most frequent saturated colors).
+function fiColorsFromCss(cssText, existing) {
+  const out = existing.slice(); const have = h => out.some(c => c.hex === h);
+  const named = /--[\w-]*(primary|brand|main|accent|secondary|theme)[\w-]*\s*:\s*(#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\))/gi; let m;
+  while ((m = named.exec(cssText))) { const h = fiNormHex(m[2]); if (h && !fiIsNeutral(h) && !have(h)) out.push({ hex: h, source: 'site color variable' }); }
+  const count = {}; const re = /#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\(\s*\d{1,3}[\s,]+\d{1,3}[\s,]+\d{1,3}[^)]*\)/g;
+  while ((m = re.exec(cssText))) { const h = fiNormHex(m[0]); if (h && !fiIsNeutral(h)) count[h] = (count[h] || 0) + 1; }
+  Object.keys(count).sort((a, b) => count[b] - count[a]).slice(0, 8).forEach(h => { if (!have(h)) out.push({ hex: h, source: 'most used on the site' }); });
+  return out.slice(0, 8);
+}
+// Picks a primary (dark enough for white text) and an accent that is clearly different.
+function fiPickBrandColors(colors) {
+  const readable = colors.filter(c => fiLuminance(c.hex) < 0.35);
+  const primary = (readable[0] || colors[0] || {}).hex || '';
+  const accent = (colors.find(c => primary && fiColorDist(c.hex, primary) > 120 && fiLuminance(c.hex) < 0.5) || colors.find(c => c.hex !== primary) || {}).hex || '';
+  return { primary, accent };
+}
+function fiSniffImage(bytes) {
+  const b = bytes; const s = (i, n) => String.fromCharCode.apply(null, Array.from(b.subarray(i, i + n)));
+  if (b.length > 8 && b[0] === 0x89 && s(1, 3) === 'PNG') return 'image/png';
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length > 12 && s(0, 4) === 'RIFF' && s(8, 4) === 'WEBP') return 'image/webp';
+  if (b.length > 6 && s(0, 3) === 'GIF') return 'image/gif';
+  const head = s(0, Math.min(200, b.length)).toLowerCase();
+  if (head.includes('<svg') || (head.includes('<?xml') && head.includes('svg'))) return 'image/svg+xml';
+  return '';
+}
+// Network helper: manual redirects (each hop re-validated), size cap, timeout. fetchImpl is injectable for tests.
+async function fiFetchLimited(startUrl, opts, fetchImpl) {
+  const f = fetchImpl || fetch; let url = startUrl;
+  for (let hop = 0; hop < 5; hop++) {
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null; const timer = ctl ? setTimeout(() => ctl.abort(), opts.timeoutMs || 8000) : null;
+    let resp;
+    try { resp = await f(url, { method: 'GET', redirect: 'manual', signal: ctl ? ctl.signal : undefined, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RidgeCoBrandCapture/1.0)', 'Accept': opts.accept || '*/*' } }); }
+    catch (e) { if (timer) clearTimeout(timer); return { ok: false, error: (e && e.name === 'AbortError') ? 'the site took too long to answer' : 'could not connect (' + String((e && e.message) || e).slice(0, 80) + ')' }; }
+    if (timer) clearTimeout(timer);
+    if (resp.status >= 300 && resp.status < 400) {
+      const loc = resp.headers && resp.headers.get ? resp.headers.get('Location') : '';
+      const next = fiResolveUrl(loc, url); const safe = next ? fiSafeUrl(next) : { ok: false };
+      if (!safe.ok) return { ok: false, error: 'the site redirected somewhere that is not allowed' };
+      url = safe.url; continue;
+    }
+    if (!resp.ok) return { ok: false, status: resp.status, error: 'the site answered with HTTP ' + resp.status + (resp.status === 403 || resp.status === 429 ? ' (it may block automated visits)' : '') };
+    let bytes;
+    if (resp.body && resp.body.getReader) {
+      const rd = resp.body.getReader(); const parts = []; let total = 0;
+      for (;;) { const r = await rd.read(); if (r.done) break; parts.push(r.value); total += r.value.length; if (total > opts.maxBytes) { try { await rd.cancel(); } catch (_) { /* body already closed */ } break; } }
+      bytes = new Uint8Array(Math.min(total, opts.maxBytes)); let off = 0; for (const p of parts) { const take = Math.min(p.length, bytes.length - off); if (take <= 0) break; bytes.set(p.subarray(0, take), off); off += take; }
+      return { ok: true, url, bytes, truncated: total > opts.maxBytes, ctype: (resp.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() };
+    }
+    const ab = new Uint8Array(await resp.arrayBuffer());
+    return { ok: true, url, bytes: ab.length > opts.maxBytes ? ab.subarray(0, opts.maxBytes) : ab, truncated: ab.length > opts.maxBytes, ctype: ((resp.headers && resp.headers.get && resp.headers.get('Content-Type')) || '').split(';')[0].trim().toLowerCase() };
+  }
+  return { ok: false, error: 'too many redirects' };
+}
+async function fiBrandScrape(env, body, fetchImpl) {
+  body = body || {};
+  const safe = fiSafeUrl(body.url);
+  if (!safe.ok) return fiErr(400, 'bad_url', safe.error);
+  const page = await fiFetchLimited(safe.url, { maxBytes: FI_SCRAPE_MAX_HTML, accept: 'text/html,application/xhtml+xml', timeoutMs: 9000 }, fetchImpl);
+  if (!page.ok) return fiErr(502, 'fetch_failed', 'Could not read that website: ' + page.error + '. You can enter the details by hand instead.');
+  if (page.ctype && !/html|xml/.test(page.ctype)) return fiErr(502, 'not_html', 'That address did not return a web page (' + page.ctype + ').');
+  const html = new TextDecoder('utf-8', { fatal: false }).decode(page.bytes);
+  const p = fiParseBrandHtml(html, page.url);
+  const notes = [];
+  if (page.truncated) notes.push('The page was very large; only the first part was read.');
+  let cssText = p.styleText;
+  for (const sheet of p.sheets) {
+    const sg = fiSafeUrl(sheet); if (!sg.ok) continue;
+    const r = await fiFetchLimited(sg.url, { maxBytes: FI_SCRAPE_MAX_CSS, accept: 'text/css,*/*', timeoutMs: 6000 }, fetchImpl);
+    if (r.ok) cssText += '\n' + new TextDecoder('utf-8', { fatal: false }).decode(r.bytes);
+  }
+  const colors = fiColorsFromCss(cssText, p.colors);
+  const picked = fiPickBrandColors(colors);
+  const logos = [];
+  for (const cand of p.logo.slice(0, 5)) {
+    if (logos.length >= 3) break;
+    const sg = fiSafeUrl(cand.url); if (!sg.ok) continue;
+    const r = await fiFetchLimited(sg.url, { maxBytes: FI_SCRAPE_MAX_LOGO, accept: 'image/*', timeoutMs: 6000 }, fetchImpl);
+    if (!r.ok || r.truncated || !r.bytes.length) continue;
+    const mime = fiSniffImage(r.bytes) || '';
+    if (!mime) continue;
+    logos.push({ url: cand.url, why: cand.why, mime, bytes: r.bytes.length, data_uri: 'data:' + mime + ';base64,' + bytesToB64(r.bytes) });
+  }
+  if (!p.name) notes.push('Could not find the company name.');
+  if (!colors.length) notes.push('Could not find brand colors (the site may draw its colors with scripts). Pick them by hand.');
+  if (!logos.length) notes.push('Could not find a usable logo image. You can choose a logo file from your phone.');
+  if (!p.phone && !p.email && !p.address) notes.push('No phone, email or address found on the home page.');
+  if (!html.trim() || html.length < 400) notes.push('The home page had almost no content — it may be built with scripts that cannot be read here.');
+  return json({ ok: true, website: page.url, name: p.name, tagline: p.tagline, phone: p.phone, email: p.email, address: p.address, colors, primary_color: picked.primary, accent_color: picked.accent, logos, notes });
+}
+
+// ── Issue-type catalog: a growing list of the kinds of problems seen on inspections, so a type can be picked instead of typed. ──
+// Tab FI_Issue_Types (seeded once from the list below when empty; grows from types the inspector adds/accepts; editable; never auto-deleted).
+// name | trade | severity | area keywords (blank = anywhere) | likely cause | recommended fix
+const FI_TYPE_SEED = [
+  'Active leak under sink|plumbing|high|kitchen,bath,laundry|Failed supply line, drain connection or P-trap|Tighten or replace the leaking fitting or supply line; check the cabinet floor for water damage',
+  'Slow or clogged drain|plumbing|medium|kitchen,bath,laundry|Hair, grease or debris buildup|Clear the drain; replace the stopper or strainer if worn',
+  'Running toilet|plumbing|medium|bath|Worn flapper or fill valve|Replace the flapper and/or fill valve',
+  'Loose toilet (rocks at base)|plumbing|medium|bath|Loose closet bolts or failed wax ring|Reset the toilet with a new wax ring and tighten the bolts',
+  'Dripping faucet|plumbing|low|kitchen,bath,laundry|Worn cartridge or washer|Replace the cartridge/washer or the faucet',
+  'Low water pressure|plumbing|medium|kitchen,bath|Clogged aerator or partly closed valve|Clean the aerator; check shutoff valves and supply lines',
+  'No hot water|plumbing|high|bath,kitchen,water heater|Water heater failure, pilot out or tripped breaker|Diagnose the water heater; repair or replace',
+  'Water heater leaking or past service life|plumbing|high|water heater,basement,utility|Age or tank corrosion|Replace the water heater',
+  'Water heater relief valve discharge pipe missing or wrong|plumbing|high|water heater,basement,utility|Never installed or cut short|Install a proper discharge pipe on the T&P relief valve',
+  'Corroded supply or shutoff valve|plumbing|medium|basement,bath,kitchen,laundry,utility|Age and mineral buildup|Replace the valve',
+  'Caulk missing or failing at tub/shower|plumbing|medium|bath|Aged or poorly applied caulk|Remove old caulk and re-caulk',
+  'Water stain on ceiling|general|high||Leak from above (roof, plumbing or condensation) - source not yet confirmed|Find and fix the source of the leak, then repair and repaint the ceiling',
+  'Non-working outlet|electrical|medium||Tripped GFCI, loose connection or failed receptacle|Test the circuit; reset GFCI or replace the receptacle',
+  'Missing GFCI protection near water|electrical|high|kitchen,bath,laundry,exterior,basement|Older wiring not updated|Install GFCI outlets or a GFCI breaker',
+  'Missing or non-working smoke detector|safety|urgent|hall,bed,living,basement,stair|Removed, dead battery or expired unit|Install or replace the smoke detector (sealed 10-year battery type)',
+  'Missing or non-working CO detector|safety|urgent|hall,bed,basement,hvac|Never installed, dead battery or expired unit|Install or replace the carbon monoxide detector',
+  'Light fixture not working|electrical|low||Burned-out bulb or failed fixture or switch|Replace the bulb; if still dead, replace the fixture or switch',
+  'Missing cover plate or exposed wiring|electrical|high||Cover removed or never installed|Install a cover plate and make sure all wiring is inside a covered box',
+  'Loose or damaged switch or outlet|electrical|medium||Wear or loose mounting|Secure or replace the device',
+  'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an electrician correct the panel and label the circuits',
+  'Furnace filter dirty or missing|hvac|medium|hvac,furnace,basement,utility|Not changed on schedule|Replace the filter with the correct size and set a change schedule',
+  'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an HVAC contractor evaluate it and budget for replacement',
+  'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an HVAC contractor diagnose and repair',
+  'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an HVAC contractor diagnose and repair',
+  'Condensate drain clogged or missing|hvac|medium|hvac,basement,attic,utility|Algae or debris in the drain line|Clear the condensate line and install a proper drain',
+  'Flue or vent pipe disconnected or corroded|safety|urgent|hvac,furnace,water heater,basement,utility|Age, corrosion or loose joints|Reconnect or replace the vent pipe; check for backdrafting',
+  'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an HVAC contractor inspect the blower and motor',
+  'Thermostat not working|hvac|medium|hall,living|Dead batteries or failed unit|Replace batteries; replace the thermostat if needed',
+  'Damaged or missing shingles|roofing|high|roof|Wind, age or storm damage|Repair or replace the damaged shingles',
+  'Failed roof flashing or penetration seal|roofing|high|roof|Cracked sealant or loose flashing|Reseal or replace the flashing',
+  'Clogged or damaged gutters and downspouts|exterior_site|medium|roof,exterior,front,rear,side|Debris or loose hangers|Clean, re-hang or replace; direct water away from the foundation',
+  'Chimney masonry deterioration|roofing|medium|roof,chimney|Weathering of mortar and brick|Tuckpoint or repair the chimney; add a cap if missing',
+  'Siding damage or rot|exterior_site|medium|exterior,front,rear,side|Moisture or impact|Repair or replace the damaged siding or trim',
+  'Peeling or chipping exterior paint|drywall_paint|medium|exterior,front,rear,side,porch|Age and weathering|Scrape, prime and repaint (use lead-safe practices on pre-1978 homes)',
+  'Cracked or uneven walkway or steps (trip hazard)|exterior_site|high|exterior,front,rear,side,porch,yard|Settling or freeze damage|Repair or replace the damaged section',
+  'Missing or loose handrail or guardrail|safety|high|stair,porch,exterior,basement|Never installed or loose fasteners|Install or secure the rail',
+  'Grading slopes toward the foundation|exterior_site|medium|exterior,rear,side,yard,basement|Soil settling|Regrade so water flows away from the house',
+  'Vegetation touching the building|exterior_site|low|exterior,front,rear,side,yard|Overgrowth|Trim back from siding and roof',
+  'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have a structural professional evaluate and seal',
+  'Water intrusion or efflorescence in basement|structural|high|basement|Poor drainage or hydrostatic pressure|Find the water source; improve drainage; seal as needed',
+  'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have a qualified contractor evaluate and repair',
+  'Rotted trim, sill or framing|carpentry|medium||Long-term moisture|Replace rotted wood and fix the moisture source',
+  'Cracked drywall or ceiling|drywall_paint|low||Settling or moisture|Patch, prime and paint',
+  'Hole in wall or door|drywall_paint|low||Impact damage|Patch, prime and paint',
+  'Peeling or chipping paint (interior)|drywall_paint|medium||Age or moisture (lead-safe practices if pre-1978)|Scrape, prime and repaint using lead-safe practices where applicable',
+  'Damaged or worn flooring|flooring|medium||Wear or moisture|Repair or replace the damaged flooring',
+  'Loose tile or failing grout|flooring|medium|bath,kitchen,hall|Movement or moisture|Re-set tile and re-grout',
+  'Mold or mildew|safety|high|bath,basement,kitchen,laundry,attic|Ongoing moisture or poor ventilation|Clean with an appropriate treatment and fix the moisture source',
+  'Door will not latch, sticks or is damaged|windows_doors|low||Settling, worn hardware|Adjust or replace hinges, strike or door',
+  'Missing or broken lock or deadbolt|windows_doors|high|front,exterior,rear,side|Worn or broken hardware|Repair or replace the lock',
+  'Window will not open, close or lock; cracked pane|windows_doors|medium||Worn hardware or glass damage|Repair or replace the hardware or window',
+  'Missing or damaged window screen|windows_doors|low||Wear or removal|Repair or replace the screen',
+  'Weatherstripping or door sweep missing|windows_doors|low|front,exterior,rear,side||Install new weatherstripping or a door sweep',
+  'Appliance not working|appliances|high|kitchen,laundry|Failed component or no power|Diagnose; repair or replace the appliance',
+  'Range or oven fault (burner, igniter, element)|appliances|medium|kitchen|Worn igniter or element|Repair or replace the failed part',
+  'Dishwasher leaking or not draining|appliances|medium|kitchen|Clogged drain, failed hose or door seal|Clear the drain; replace the hose or seal',
+  'Refrigerator not cooling or door seal worn|appliances|medium|kitchen|Failed seal, dirty coils or cooling fault|Replace the gasket; clean coils; service or replace the unit',
+  'Dryer vent clogged or improperly vented|safety|high|laundry|Lint buildup or flexible foil duct|Clean the vent and use rigid metal duct to the outside',
+  'Exhaust fan missing, noisy or not working|hvac|low|bath,kitchen,laundry|Worn motor or blocked duct|Clean, repair or replace the exhaust fan',
+  'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call pest control; clean up droppings safely',
+  'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have pest control inspect',
+  'Clutter or trash needing tenant action|tenant_action|medium||Tenant storage habits|Ask the tenant to clear and dispose of the items by a set date',
+  'Tenant-caused damage|tenant_action|medium||Misuse or neglect|Document and review for tenant charge-back under the lease',
+  'Blocked access to panel, heater or exit|tenant_action|high||Items stored in front of required clearances|Ask the tenant to clear the area immediately',
+];
+function fiTypeSlug(name) { return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48); }
+function fiTypeSeedRecords(now) {
+  return FI_TYPE_SEED.map(line => {
+    const [name, trade, sev, areas, cause, fix] = line.split('|');
+    return { ID: 'type_' + fiTypeSlug(name), Name: name, Trade: trade, Default_Severity: sev, Areas: areas, Detail: '', Likely_Cause: cause, Recommended_Fix: fix, Uses: '0', Source: 'seed', Active: 'TRUE', Created_At: now, Updated_At: now };
+  });
+}
+function fiTypeAreas(v) {
+  const arr = Array.isArray(v) ? v : String(v || '').split(',');
+  const out = []; for (const a of arr) { const s = fiStr(a, 24).toLowerCase().trim(); if (s && !out.includes(s)) out.push(s); }
+  return out.slice(0, 12);
+}
+function fiTypeOut(o) {
+  return { id: o.ID, name: o.Name, trade: o.Trade || 'general', severity: o.Default_Severity || 'medium', areas: fiTypeAreas(o.Areas), detail: o.Detail || '', likely_cause: o.Likely_Cause || '', recommended_fix: o.Recommended_Fix || '', uses: Number(o.Uses) || 0, source: o.Source || 'seed' };
+}
+// Validates a type definition coming from the phone/AI. Returns {ok, rec} or {ok:false, message}.
+function fiTypeClean(b) {
+  const name = fiStr(b && b.name, 80).trim();
+  if (name.length < 3) return { ok: false, message: 'Issue type name must be at least 3 characters.' };
+  let trade = String((b && b.trade) || '').toLowerCase().trim().replace(/[\s/&-]+/g, '_');
+  if (!FI_TRADES.includes(trade)) trade = 'general';
+  let severity = String((b && (b.severity || b.default_severity)) || '').toLowerCase().trim();
+  if (!FI_SEVERITIES.includes(severity)) severity = 'medium';
+  return { ok: true, rec: { name, trade, severity, areas: fiTypeAreas(b && b.areas).join(','), detail: fiStr(b && b.detail, 300).trim(), likely_cause: fiStr(b && b.likely_cause, 300).trim(), recommended_fix: fiStr(b && b.recommended_fix, 500).trim() } };
+}
+async function fiTypesLoad(env) {
+  await fiEnsureTabs(env);
+  let t = await fiReadFresh(env, 'FI_Issue_Types');
+  if (!t.rows.length) {
+    const recs = fiTypeSeedRecords(new Date().toISOString());
+    await sheetsRequest(env, 'POST', '/values/FI_Issue_Types:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS', { values: recs.map(r => t.headers.map(h => (r[h] === undefined ? '' : String(r[h])))) });
+    t = await fiReadFresh(env, 'FI_Issue_Types');
+    if (t.rows.length < recs.length) throw new Error('FI: issue-type list seed did not persist (' + t.rows.length + '/' + recs.length + ')');
+  }
+  return t;
+}
+async function fiTypesList(env) {
+  const t = await fiTypesLoad(env);
+  const types = t.rows.filter(r => r.o.Active !== 'FALSE' && r.o.Name).map(r => fiTypeOut(r.o)).sort((a, b) => b.uses - a.uses || a.name.localeCompare(b.name));
+  return json({ ok: true, types });
+}
+async function fiTypesSave(env, body) {
+  body = body || {};
+  const c = fiTypeClean(body);
+  if (!c.ok) return fiErr(400, 'bad_type', c.message);
+  const t = await fiTypesLoad(env);
+  const ex = body.id ? t.rows.find(r => r.o.ID === String(body.id)) : null;
+  if (body.id && !ex) return fiErr(404, 'not_found', 'That issue type does not exist.');
+  const lower = c.rec.name.toLowerCase();
+  const dupe = t.rows.find(r => r.o.Active !== 'FALSE' && String(r.o.Name).toLowerCase() === lower && (!ex || r.o.ID !== ex.o.ID));
+  if (dupe) return fiErr(409, 'duplicate', 'An issue type with that name already exists.', { existing: fiTypeOut(dupe.o) });
+  const now = new Date().toISOString();
+  let id = ex ? ex.o.ID : 'type_' + (fiTypeSlug(c.rec.name) || inspRandToken(6));
+  if (!ex && t.rows.some(r => r.o.ID === id)) id += '_' + inspRandToken(4);
+  const o = Object.assign({}, ex ? ex.o : { Uses: '0', Source: 'custom', Created_At: now }, { ID: id, Name: c.rec.name, Trade: c.rec.trade, Default_Severity: c.rec.severity, Areas: c.rec.areas, Detail: c.rec.detail, Likely_Cause: c.rec.likely_cause, Recommended_Fix: c.rec.recommended_fix, Active: body.active === false ? 'FALSE' : 'TRUE', Updated_At: now });
+  await fiWriteRow(env, 'FI_Issue_Types', t.headers, o, ex ? ex.rowNum : 0);
+  const chk = await fiReadFresh(env, 'FI_Issue_Types');
+  const hits = chk.rows.filter(r => r.o.ID === id);
+  if (hits.length !== 1 || hits[0].o.Name !== c.rec.name || hits[0].o.Active !== o.Active || hits[0].o.Recommended_Fix !== c.rec.recommended_fix) return fiErr(500, 'verify_failed', 'The issue type could not be verified after saving. Retry.');
+  return json({ ok: true, type: fiTypeOut(hits[0].o) });
+}
+// Counts uses of types (by id or name) and creates 'learned' types for names not in the list yet. One call per batch of newly added issues.
+async function fiTypesTouch(env, body) {
+  const items = Array.isArray(body && body.items) ? body.items.slice(0, 60) : [];
+  if (!items.length) return fiErr(400, 'empty', 'No issue types were provided.');
+  const t = await fiTypesLoad(env);
+  const agg = new Map();
+  for (const it of items) {
+    const c = fiTypeClean(it); if (!c.ok) continue;
+    const key = c.rec.name.toLowerCase();
+    const cur = agg.get(key);
+    if (cur) cur.n++; else agg.set(key, { n: 1, id: it && it.type_id ? String(it.type_id) : '', rec: c.rec });
+  }
+  if (!agg.size) return fiErr(400, 'bad_type', 'None of the issue types had a usable name.');
+  const now = new Date().toISOString();
+  const expect = new Map(); let created = 0, skippedInactive = 0;
+  for (const [key, a] of agg) {
+    const hit = t.rows.find(r => (a.id && r.o.ID === a.id) || String(r.o.Name).toLowerCase() === key);
+    if (hit) {
+      if (hit.o.Active === 'FALSE') { skippedInactive++; continue; }
+      const uses = (Number(hit.o.Uses) || 0) + a.n;
+      await fiWriteRow(env, 'FI_Issue_Types', t.headers, Object.assign({}, hit.o, { Uses: uses, Updated_At: now }), hit.rowNum);
+      expect.set(hit.o.ID, uses);
+    } else {
+      let id = 'type_' + (fiTypeSlug(a.rec.name) || inspRandToken(6));
+      if (t.rows.some(r => r.o.ID === id)) id += '_' + inspRandToken(4);
+      await fiWriteRow(env, 'FI_Issue_Types', t.headers, { ID: id, Name: a.rec.name, Trade: a.rec.trade, Default_Severity: a.rec.severity, Areas: a.rec.areas, Detail: a.rec.detail, Likely_Cause: a.rec.likely_cause, Recommended_Fix: a.rec.recommended_fix, Uses: a.n, Source: 'learned', Active: 'TRUE', Created_At: now, Updated_At: now }, 0);
+      expect.set(id, a.n); created++;
+    }
+  }
+  const chk = await fiReadFresh(env, 'FI_Issue_Types');
+  for (const [id, uses] of expect) {
+    const hits = chk.rows.filter(r => r.o.ID === id);
+    if (hits.length !== 1 || (Number(hits[0].o.Uses) || 0) !== uses) return fiErr(500, 'verify_failed', 'Issue-type usage could not be verified after saving. Your inspection is not affected.');
+  }
+  return json({ ok: true, updated: expect.size - created, created, skipped_inactive: skippedInactive });
+}
+
+// ── Voice notes: audio -> transcript (Gemini hears audio; Claude cannot), then transcript -> proposed issues per area (Claude). Nothing is added to the inspection until the inspector approves it. ──
+const FI_MAX_AUDIO_BYTES = 14 * 1024 * 1024;
+const FI_TRANSCRIBE_MODEL = 'gemini-3.5-flash-lite';
+const FI_TRANSCRIBE_SYSTEM = `You transcribe a property inspector's spoken field notes recorded while walking a rental property. Transcribe EXACTLY what is said, in order, as plain text. Do not summarize, reorder, correct facts or add anything. Keep brand names, model and serial numbers, room names and floor names exactly as spoken; write numbers as digits. Where a word cannot be understood write [unclear]. Start a new paragraph whenever the inspector moves to a different room, floor or topic. If there is no speech, output exactly: [no speech]`;
+function fiAudioMime(contentType, name) {
+  const ct = String(contentType || '').split(';')[0].trim().toLowerCase();
+  const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+  const e = ext ? ext[1] : '';
+  if (ct === 'audio/mp4' || ct === 'audio/m4a' || ct === 'audio/x-m4a' || ct === 'video/mp4' || e === 'm4a' || e === 'mp4') return 'audio/mp4';
+  if (ct === 'audio/mpeg' || ct === 'audio/mp3' || e === 'mp3') return 'audio/mp3';
+  if (ct === 'audio/wav' || ct === 'audio/x-wav' || ct === 'audio/wave' || e === 'wav') return 'audio/wav';
+  if (ct === 'audio/aac' || e === 'aac') return 'audio/aac';
+  if (ct === 'audio/ogg' || ct === 'audio/opus' || e === 'ogg' || e === 'opus') return 'audio/ogg';
+  if (ct === 'audio/flac' || e === 'flac') return 'audio/flac';
+  if (ct === 'audio/webm' || e === 'webm') return 'audio/webm';
+  if (ct === 'audio/amr' || e === 'amr' || e === '3gp') return 'audio/aac';
+  return '';
+}
+async function fiGeminiTranscribe(env, bytes, mime, fetchImpl) {
+  if (!env.GEMINI_API_KEY) return { ok: false, status: 500, error: 'not_configured', message: 'The transcription service key (GEMINI_API_KEY) is not configured.' };
+  const f = fetchImpl || fetch;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${FI_TRANSCRIBE_MODEL}:generateContent?key=${env.GEMINI_API_KEY}`;
+  const b64 = bytesToB64(bytes);
+  const tries = mime === 'audio/mp4' ? ['audio/mp4', 'audio/aac'] : [mime];
+  let last = '';
+  for (const m of tries) {
+    const reqBody = { systemInstruction: { parts: [{ text: FI_TRANSCRIBE_SYSTEM }] }, contents: [{ parts: [{ inline_data: { mime_type: m, data: b64 } }, { text: 'Transcribe this recording.' }] }], generationConfig: { temperature: 0, maxOutputTokens: 16000 } };
+    const resp = await f(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody) });
+    let data = null; try { data = await resp.json(); } catch (_) { data = null; }
+    if (!resp.ok) { last = (data && data.error && data.error.message) || ('HTTP ' + resp.status); if (resp.status === 400) continue; break; }
+    const cand = data && data.candidates && data.candidates[0];
+    const text = ((cand && cand.content && cand.content.parts) || []).map(p => p.text || '').join('').trim();
+    const usage = (data && data.usageMetadata) || {};
+    if (!cand) return { ok: false, status: 502, error: 'blocked', message: 'The transcription service returned no result' + (data && data.promptFeedback && data.promptFeedback.blockReason ? ' (' + data.promptFeedback.blockReason + ')' : '') + '.' };
+    return { ok: true, text, truncated: cand.finishReason === 'MAX_TOKENS', mime_used: m, tokens_in: usage.promptTokenCount || 0, tokens_out: usage.candidatesTokenCount || 0 };
+  }
+  return { ok: false, status: 502, error: 'transcribe_failed', message: 'The recording could not be transcribed: ' + String(last).slice(0, 200) };
+}
+async function fiTranscribeFinish(env, bytes, mime, label, fetchImpl) {
+  if (!bytes.byteLength) return fiErr(400, 'empty', 'The recording was empty.');
+  if (bytes.byteLength > FI_MAX_AUDIO_BYTES) return fiErr(413, 'too_large', 'This recording is larger than 14 MB. Split it into shorter recordings and upload them one by one.');
+  if (!mime) return fiErr(415, 'bad_type', 'Unsupported audio type. Use an m4a, mp3, wav, aac, ogg, flac or webm recording.');
+  const t0 = Date.now();
+  const r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime, fetchImpl);
+  try { await logTelemetry(env, { Source: 'field-inspect', Job_Type: 'fi_transcribe', Skill_Or_Endpoint: '/fi/transcribe', Tier_Requested: 'CHEAP', Model_Used: FI_TRANSCRIBE_MODEL, Tokens_In: r.tokens_in || 0, Tokens_Out: r.tokens_out || 0, Latency_ms: Date.now() - t0, Success: r.ok ? 'TRUE' : 'FALSE', Notes: (r.ok ? '' : String(r.message || '').slice(0, 150)) + ' bytes=' + bytes.byteLength }); } catch (_) { /* telemetry is best-effort; the result below is what the caller sees */ }
+  if (!r.ok) return fiErr(r.status || 502, r.error || 'transcribe_failed', r.message);
+  if (!r.text || /^\[no speech\]$/i.test(r.text)) return fiErr(422, 'no_speech', 'No speech could be heard in that recording.');
+  return json({ ok: true, transcript: r.text, truncated: r.truncated, label: fiStr(label, 120), bytes: bytes.byteLength, model: FI_TRANSCRIBE_MODEL, mime_used: r.mime_used });
+}
+// Phone upload: the raw audio is the request body.
+async function fiTranscribe(env, request, url, fetchImpl) {
+  const mime = fiAudioMime(request.headers.get('Content-Type'), url.searchParams.get('name'));
+  const buf = await request.arrayBuffer();
+  return fiTranscribeFinish(env, buf, mime, url.searchParams.get('name') || '', fetchImpl);
+}
+// Admin/test convenience: transcribe a Drive file the app's Google account can open, or a small base64 clip.
+async function fiTranscribeJson(env, body, fetchImpl) {
+  body = body || {};
+  if (body.audio_b64) {
+    const s = String(body.audio_b64);
+    if (s.length > 1500000 || !/^[A-Za-z0-9+/=]+$/.test(s)) return fiErr(400, 'bad_audio', 'audio_b64 must be base64 and under about 1 MB.');
+    const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    return fiTranscribeFinish(env, u.buffer, fiAudioMime(body.mime, body.name), body.name || 'clip', fetchImpl);
+  }
+  const fileId = String(body.drive_file_id || '');
+  if (!/^[A-Za-z0-9_-]{10,80}$/.test(fileId)) return fiErr(400, 'bad_id', 'Provide drive_file_id or audio_b64.');
+  const token = await getAccessToken(env);
+  const f = fetchImpl || fetch;
+  const mr = await f(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,size&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!mr.ok) return fiErr(mr.status === 404 || mr.status === 403 ? 404 : 502, 'drive_no_access', "The app's Google account cannot open that Drive file. Upload the recording in the app instead (Voice notes > Add recording).");
+  const meta = await mr.json();
+  const mime = fiAudioMime(meta.mimeType, meta.name);
+  if (!mime) return fiErr(415, 'bad_type', 'That Drive file is not a supported audio file (' + fiStr(meta.mimeType, 60) + ').');
+  if (Number(meta.size) > FI_MAX_AUDIO_BYTES) return fiErr(413, 'too_large', 'That recording is larger than 14 MB.');
+  const dr = await f(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!dr.ok) return fiErr(502, 'drive_read', 'Drive would not return that recording.');
+  return fiTranscribeFinish(env, await dr.arrayBuffer(), mime, meta.name, fetchImpl);
+}
+
+// ── Routing disjointed notes to the right areas ──
+const FI_ROUTE_SYSTEM = `You turn a rental-property inspector's spoken field notes into proposed inspection records. The notes were recorded while walking the property and are disjointed: the inspector skips between rooms and floors, comes back to places, and sometimes talks about one area while standing in another (e.g. mentions a second-floor bathroom problem while in the first-floor hallway).
+Assign each finding to the area where the DEFECT PHYSICALLY IS, using the exact area_id from the list provided. Use the floor, room and ordinal words ("upstairs", "second floor", "back bedroom", "bedroom two") to choose between similar areas. If you cannot tell which area, do not guess: put the text in "unassigned" with a short reason.
+Rules:
+- Report only what the inspector said. Never invent defects, measurements, quantities or costs. Fix obvious speech-recognition slips but not facts.
+- One distinct problem = one issue. Title is short and specific (max ~80 chars). Detail = what and where in 1-2 sentences.
+- "type": use the EXACT name of an issue type from the provided list when one fits; otherwise a short new Title Case type name (3-6 words) describing the kind of problem.
+- likely_cause: the inspector's stated cause; if only implied, hedge ("Likely ...") in one sentence; otherwise empty.
+- recommended_fix: the inspector's recommendation, fix_source "inspector"; if none was given, one reasonable standard repair and fix_source "suggested".
+- severity: urgent = safety hazard or active damage needing action now; high = fix soon, will worsen; medium = next opportunity; low = cosmetic/minor; info = observation only.
+- Anything only the TENANT can address (debris, clutter, trash, pet or yard issues, blocked access) uses trade "tenant_action" and the fix is the request to the tenant.
+- If the property was built before 1978 and the notes mention peeling, chipping or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
+- Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage) go in "equipment" for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
+- "conditions": only when the inspector clearly states an area is good/fair/poor or has nothing to do.
+- "new_areas": only when the notes clearly describe a space that is not in the area list at all.
+- Do not repeat issues already recorded or already proposed. "quote" is a short verbatim excerpt (max 200 chars) of the transcript that backs the item, and "note_id" is the id of the note it came from.
+Output a single JSON object and nothing else.`;
+function fiBuildRoutePrompt(b, catalog) {
+  const areas = (b.areas || []).slice(0, 80).map(a => `- ${fiStr(a.id, 64)} = ${fiStr(a.name, 80)}${a.group ? ' [' + fiStr(a.group, 30) + ']' : ''}${(a.issues && a.issues.length) ? ' (already recorded: ' + a.issues.slice(0, 12).map(t => fiStr(t, 60)).join('; ') + ')' : ''}`).join('\n');
+  const types = catalog.slice(0, 90).map(t => `${t.name} (${t.trade})`).join('; ');
+  const notes = (b.notes || []).map(n => `=== NOTE ${fiStr(n.id, 40)}${n.label ? ' (' + fiStr(n.label, 80) + ')' : ''} ===\n${fiStr(n.text, 30000)}`).join('\n\n');
+  const proposed = (b.proposed || []).slice(0, 80).map(t => `- ${fiStr(t, 80)}`).join('\n') || '(none)';
+  return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
+}
+// Pure: validates/normalizes the AI routing output against the real area list. Anything that cannot be placed safely goes to "unassigned" - nothing is dropped.
+function fiNormalizeRoute(parsed, areaIds) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const ids = new Set(areaIds);
+  const out = { issues: [], equipment: [], conditions: [], new_areas: [], unassigned: [] };
+  const lost = (text, why, noteId) => { const t = fiStr(text, 400).trim(); if (t) out.unassigned.push({ note_id: fiStr(noteId, 40), text: t, why: fiStr(why, 200) }); };
+  for (const r of (Array.isArray(parsed.issues) ? parsed.issues : []).slice(0, 80)) {
+    const n = fiNormalizeIssue(r); if (!n) continue;
+    const areaId = fiStr(r.area_id, 64);
+    const quote = fiStr(r.quote, 200).trim(), noteId = fiStr(r.note_id, 40);
+    if (!ids.has(areaId)) { lost(n.title + (n.detail ? ' - ' + n.detail : ''), 'Area not recognised - choose where it belongs', noteId); continue; }
+    out.issues.push(Object.assign(n, { area_id: areaId, note_id: noteId, quote }));
+  }
+  for (const r of (Array.isArray(parsed.equipment) ? parsed.equipment : []).slice(0, 30)) {
+    const e = fiNormalizeEquipment(r); if (!e) continue;
+    const areaId = fiStr(r && r.area_id, 64);
+    if (!ids.has(areaId)) { lost('Equipment: ' + Object.keys(e).filter(k => k !== 'kind').map(k => k + ' ' + e[k]).join(', '), 'Area not recognised - choose where it belongs', r && r.note_id); continue; }
+    out.equipment.push(Object.assign(e, { area_id: areaId, note_id: fiStr(r.note_id, 40), quote: fiStr(r.quote, 200).trim() }));
+  }
+  for (const r of (Array.isArray(parsed.conditions) ? parsed.conditions : []).slice(0, 80)) {
+    const areaId = fiStr(r && r.area_id, 64), c = String(r && r.condition || '');
+    if (ids.has(areaId) && ['good', 'fair', 'poor', 'nothing_to_do'].includes(c)) out.conditions.push({ area_id: areaId, condition: c, note_id: fiStr(r.note_id, 40) });
+  }
+  for (const r of (Array.isArray(parsed.new_areas) ? parsed.new_areas : []).slice(0, 10)) {
+    const name = fiStr(r && r.name, 60).trim(); if (name) out.new_areas.push({ name, note_id: fiStr(r.note_id, 40), quote: fiStr(r.quote, 200).trim() });
+  }
+  for (const r of (Array.isArray(parsed.unassigned) ? parsed.unassigned : []).slice(0, 40)) lost(r && r.text, (r && r.why) || 'Could not tell where this belongs', r && r.note_id);
+  return out;
+}
+async function fiRouteNotes(env, body) {
+  body = body || {};
+  const areas = Array.isArray(body.areas) ? body.areas.filter(a => a && typeof a.id === 'string' && a.name).slice(0, 80) : [];
+  const notes = Array.isArray(body.notes) ? body.notes.filter(n => n && n.id && String(n.text || '').trim()) : [];
+  if (!areas.length) return fiErr(400, 'bad_request', 'The area list is required.');
+  if (!notes.length) return fiErr(400, 'empty', 'There are no notes to sort.');
+  if (notes.reduce((n, x) => n + String(x.text).length, 0) > 40000) return fiErr(413, 'too_large', 'Too much text at once - sort a few recordings at a time.');
+  const tl = await fiTypesLoad(env);
+  const catalog = tl.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiTypeOut(r.o)).sort((a, b) => b.uses - a.uses);
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_route', customerFacing: true, schema: true, system: FI_ROUTE_SYSTEM, prompt: fiBuildRoutePrompt(Object.assign({}, body, { areas, notes }), catalog), maxTokens: 8000, source: 'field-inspect' }); }
+  catch (e) { return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const norm = fiNormalizeRoute(fiExtractJson(ai.result), areas.map(a => a.id));
+  if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your transcripts are kept - retry.');
+  return json(Object.assign({ ok: true, model_used: ai.model_used }, norm));
+}
+
+// ── Read a manufacturer label / data plate from a photo already uploaded to the inspection (Claude vision). Proposes values only; the inspector confirms. ──
+const FI_LABEL_SYSTEM = `You read the manufacturer's data plate / rating label in a photo of home equipment (furnace, boiler, air conditioner, water heater, appliance). Report ONLY text that is actually printed and legible. Never guess, never decode a serial number into a date unless a manufacture date is printed, never invent a model number. If a field is not visible, leave it empty. Copy model and serial numbers character for character. Output a single JSON object and nothing else.`;
+async function fiReadLabel(env, body) {
+  body = body || {};
+  const inspId = String(body.inspection_id || ''), photoId = String(body.photo_id || '');
+  if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
+  await fiEnsureTabs(env);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const ph = pt.rows.find(x => x.o.ID === photoId && x.o.Inspection_ID === inspId && x.o.Active !== 'FALSE');
+  if (!ph) return fiErr(404, 'photo_not_found', 'That photo has not finished uploading to the server yet. Wait for the upload, then retry.');
+  if (Number(ph.o.Bytes) > 4.5 * 1024 * 1024) return fiErr(413, 'photo_too_large', 'That photo is too large to read automatically. Type the details by hand.');
+  const token = await getAccessToken(env);
+  const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.o.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!dr.ok) return fiErr(502, 'drive_read', 'Could not load the photo from storage.');
+  const bytes = new Uint8Array(await dr.arrayBuffer());
+  const mime = ph.o.Mime || 'image/jpeg';
+  const kind = FI_EQUIP_KINDS[body.kind] ? body.kind : '';
+  const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. Set readable false if no label text can be read.`;
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_read_label', tier: 'REASON', schema: true, system: FI_LABEL_SYSTEM, prompt, media: { type: 'image', source: { type: 'base64', media_type: mime, data: bytesToB64(bytes) } }, maxTokens: 600, source: 'field-inspect' }); }
+  catch (e) { return fiErr(502, 'ai_failed', 'The AI could not read this photo. Type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const parsed = fiExtractJson(ai.result);
+  if (!parsed || typeof parsed !== 'object') return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry or type the details by hand.');
+  const eq = fiNormalizeEquipment(Object.assign({}, parsed, { kind: kind || parsed.kind }));
+  if (parsed.readable === false || !eq) return json({ ok: true, found: false, message: 'No readable label text was found in that photo.' });
+  return json({ ok: true, found: true, equipment: eq, model_used: ai.model_used });
+}
+
 // ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════
