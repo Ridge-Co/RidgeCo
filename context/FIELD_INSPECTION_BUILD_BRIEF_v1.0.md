@@ -45,3 +45,10 @@ Brett inspected 122 S Gilmor before the app existed to him: photos in wrong area
 - Known limit: no in-app recording yet (Gemini audio does not list webm); recordings come from the phone's recorder via the file picker. Transcription of Brett's 12 recordings (Drive folder 1hVg7nkggLvVstQEx3ieInFBkUr90pjpg, ~14 MB m4a) must run through the app/server, not the Claude sandbox (files private, no Gemini key in sandbox).
 
 <!-- pages redeploy retry Oct 15 2026 -->
+
+### Round 2 staging verification (Oct 15, 2026)
+- Verified on staging: `/fi/issue-types` seeds 64 types; `/fi/issue-types/save` and `/touch` (touch body is `{items:[{name}]}`, names must start TEST-); `/fi/brand/scrape` on a real site; `/fi/route` places kitchen/bath/hallway items in the right areas; `/fi/transcribe/json` accepts `audio/mp4` (m4a) directly.
+- The worker's Google account CANNOT open Brett's private Drive folder (`drive_no_access`). Recordings must be uploaded through the app (Voice notes > Add recordings).
+- Found and fixed: Gemini invented a full plausible inspection transcript from a pure 440 Hz tone. The transcription prompt now says NEVER make up content and to output `[no speech]` for tones/noise; staging now returns 422 `no_speech` for the same clip. Transcripts are still shown to the human before routing; never auto-accept.
+- Found and fixed: brand scrape left `&#x27;` undecoded in the tagline and used the `\` title separator wrongly ("Home \ Anthropic").
+- Still unverified live: label reading on a real photo (`/fi/read-label`), real speech transcription quality.
