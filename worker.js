@@ -33205,7 +33205,7 @@ async function fiSha256(s) {
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 // ASCII-only JSON: every non-ASCII char becomes \uXXXX, so cell chunks can be cut anywhere and re-joined byte-exactly.
-function fiSerialize(doc) { return JSON.stringify(doc).replace(/[\u007f-￿]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); }
+function fiSerialize(doc) { return JSON.stringify(doc).replace(/[^\u0000-~]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); }
 function fiChunk(s) { const out = []; for (let i = 0; i < s.length; i += FI_DATA_CHUNK) out.push(s.slice(i, i + FI_DATA_CHUNK)); return out; }
 function fiJoinRow(o) { let s = ''; for (let i = 1; i <= FI_DATA_COLS; i++) s += (o['Data_' + i] || ''); return s; }
 function fiSeverityRank(s) { const i = FI_SEVERITIES.indexOf(s); return i < 0 ? 99 : i; }
