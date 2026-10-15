@@ -33155,3 +33155,204 @@ async function inspCalendarTest(env, url) {
   add('Notify Brett by text', !!cfg.admin_phone, cfg.admin_phone ? 'Config admin_phone set (sends only while Config TWILIO_ENABLED=TRUE)' : 'Config admin_phone missing', 'Add Config key admin_phone.');
   return json({ ok: steps.every(s => s.ok), steps });
 }
+
+// ═══ FI-BLOCK-START — Field Inspection (Oct 15 2026) ═══════════════════════════════════════════
+// Z-Inspector-style on-site inspection workflow: field-inspect.html (phone, admin) + inspection-report.html (public,
+// branded, print-to-PDF). Build brief: context/FIELD_INSPECTION_BUILD_BRIEF_v1.0.md.
+//
+// DESIGN RULES (every one is a past-incident class — see the brief):
+//  • The inspection is ONE JSON document owned by the phone (offline-first). The server stores it in ONE Sheets row
+//    (split across Data_1..Data_8, ASCII-only so a chunk can never split a character) so a save is atomic.
+//  • Every write is read back from a FRESH (uncached) read and compared by hash; any mismatch is a visible 500, never a silent "ok".
+//  • Optimistic concurrency: Rev. A save with a stale base_rev is a 409 `stale` unless force:true — never a silent overwrite.
+//  • Editing a published report's content un-publishes it (the customer link then says "being updated") — unreviewed text never
+//    reaches a customer silently. AI output only enters the document when the inspector taps Add/Use (human review gate).
+//  • Public routes (/fi/report, /fi/photo/view) self-verify a random per-inspection Report_Token; photos are proxied (Drive stays private).
+//  • Brand is resolved at VIEW time (Brand_ID on the inspection), so switching brand re-skins without touching the inspection.
+//  • NO CRON. New tabs are created with addSheet only when missing, columns via ensureColumns, columns resolved by header name.
+const FI_DATA_COLS = 8, FI_DATA_CHUNK = 45000, FI_MAX_DOC_CHARS = FI_DATA_COLS * FI_DATA_CHUNK;
+const FI_BRAND_HEADERS = ['ID','Name','Primary_Color','Accent_Color','Tagline','Contact_Line','Footer_Text','Logo_Data','Is_Default','Active','Created_At','Updated_At'];
+const FI_INSP_HEADERS = ['ID','Property_ID','Address','Inspection_Type','Status','Brand_ID','Client_Name','Client_Email','Inspector','Inspection_Date','Report_Token','Published_At','Published_Rev','Rev','Doc_Hash','Issue_Count','Photo_Count','Created_At','Updated_At','Active'].concat(Array.from({ length: FI_DATA_COLS }, (_, i) => 'Data_' + (i + 1)));
+const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active'];
+const FI_EMAIL_HEADERS = ['ID','Inspection_ID','To_Email','Subject','Result','Sent_At'];
+const FI_TABS = { FI_Brands: FI_BRAND_HEADERS, FI_Inspections: FI_INSP_HEADERS, FI_Photos: FI_PHOTO_HEADERS, FI_Email_Log: FI_EMAIL_HEADERS };
+const FI_TRADES = ['plumbing','electrical','hvac','roofing','structural','carpentry','drywall_paint','flooring','windows_doors','appliances','pest','safety','exterior_site','cleaning','general','tenant_action'];
+const FI_SEVERITIES = ['urgent','high','medium','low','info'];
+const FI_CONDITIONS = ['good','fair','poor','nothing_to_do','not_inspected','na'];
+const FI_PAGE_BASE = 'https://ridge-co.github.io/RidgeCo';
+const FI_MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const FI_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+
+let __fiTabsReady = false;
+async function fiRoute(env, label, fn) {
+  try { return await fn(); }
+  catch (e) {
+    console.error('fi/' + label + ' failed:', e && e.message);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* telemetry is best-effort; the error itself is returned below */ }
+    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', { detail: String((e && e.message) || e).slice(0, 160) });
+  }
+}
+function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
+function fiStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max); }
+function fiIsAdmin(env, request, url) {
+  const t = request.headers.get('X-Auth-Token') || '';
+  if (!t) return false;
+  if (t === env.WORKER_SECRET) return true;
+  return !!env.HUB_TEST_TOKEN && t === env.HUB_TEST_TOKEN && isStaging(env, url);
+}
+async function fiSha256(s) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+// ASCII-only JSON: every non-ASCII char becomes \uXXXX, so cell chunks can be cut anywhere and re-joined byte-exactly.
+function fiSerialize(doc) { return JSON.stringify(doc).replace(/[\u007f-￿]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); }
+function fiChunk(s) { const out = []; for (let i = 0; i < s.length; i += FI_DATA_CHUNK) out.push(s.slice(i, i + FI_DATA_CHUNK)); return out; }
+function fiJoinRow(o) { let s = ''; for (let i = 1; i <= FI_DATA_COLS; i++) s += (o['Data_' + i] || ''); return s; }
+function fiSeverityRank(s) { const i = FI_SEVERITIES.indexOf(s); return i < 0 ? 99 : i; }
+
+// ── Pure helpers (unit-tested by extracting them from this file) ────────────────────────────
+function fiNormalizeIssue(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = fiStr(raw.title, 120).trim();
+  if (!title) return null;
+  let trade = String(raw.trade || '').toLowerCase().trim().replace(/[\s/&-]+/g, '_');
+  if (!FI_TRADES.includes(trade)) trade = 'general';
+  let severity = String(raw.severity || '').toLowerCase().trim();
+  if (!FI_SEVERITIES.includes(severity)) severity = 'medium';
+  const out = {
+    title, trade, severity,
+    detail: fiStr(raw.detail, 600).trim(),
+    likely_cause: fiStr(raw.likely_cause, 300).trim(),
+    recommended_fix: fiStr(raw.recommended_fix, 500).trim(),
+    fix_source: raw.fix_source === 'inspector' ? 'inspector' : 'suggested',
+  };
+  if (raw.possible_duplicate_of) out.possible_duplicate_of = fiStr(raw.possible_duplicate_of, 120);
+  if (trade === 'tenant_action') out.tenant_action = true;
+  return out;
+}
+function fiNormalizeIssues(arr) {
+  if (!Array.isArray(arr)) return null;
+  const out = [];
+  for (const r of arr.slice(0, 40)) { const n = fiNormalizeIssue(r); if (n) out.push(n); }
+  return out;
+}
+function fiExtractJson(text) {
+  const s = String(text || '').replace(/^```json?/i, '').replace(/```\s*$/, '').trim();
+  try { return JSON.parse(s); } catch (_) { /* fall through to brace scan */ }
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
+  return null;
+}
+function fiValidateDoc(doc) {
+  const errors = [];
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, errors: ['doc must be an object'] };
+  if (doc.v !== 1) errors.push('doc.v must be 1');
+  if (!Array.isArray(doc.areas)) errors.push('doc.areas must be an array');
+  else {
+    if (doc.areas.length > 80) errors.push('too many areas (max 80)');
+    const seen = new Set();
+    doc.areas.forEach((a, i) => {
+      if (!a || typeof a !== 'object') { errors.push(`areas[${i}] invalid`); return; }
+      if (!a.id || typeof a.id !== 'string') errors.push(`areas[${i}].id missing`); else { if (seen.has(a.id)) errors.push(`duplicate area id ${a.id}`); seen.add(a.id); }
+      if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
+      if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
+      if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
+      else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
+      else (a.issues || []).forEach((is, j) => {
+        if (!is || typeof is !== 'object' || !is.id || !is.title) errors.push(`areas[${i}].issues[${j}] needs id and title`);
+        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`); }
+      });
+    });
+  }
+  if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
+  return { ok: errors.length === 0, errors: errors.slice(0, 10) };
+}
+function fiPhotoIds(doc) {
+  const ids = new Set();
+  for (const a of (doc.areas || [])) {
+    for (const p of (a.photo_ids || [])) ids.add(String(p));
+    for (const is of (a.issues || [])) for (const p of (is.photo_ids || [])) ids.add(String(p));
+  }
+  return Array.from(ids);
+}
+function fiFingerprint(doc) {
+  let h = 2166136261 >>> 0;
+  const feed = s => { for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } };
+  for (const a of (doc.areas || [])) for (const is of (a.issues || [])) feed([is.id, is.title, is.trade, is.severity, is.recommended_fix || ''].join('|') + '\n');
+  return h.toString(36);
+}
+function fiTradeRollup(doc) {
+  const by = {};
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) {
+      const t = is.trade || 'general';
+      (by[t] = by[t] || { trade: t, count: 0, worst: 'info', items: [] });
+      by[t].count++;
+      if (fiSeverityRank(is.severity) < fiSeverityRank(by[t].worst)) by[t].worst = is.severity;
+      by[t].items.push({ area: a.name, issue_id: is.id, title: is.title, severity: is.severity });
+    }
+  }
+  return Object.values(by).sort((x, y) => fiSeverityRank(x.worst) - fiSeverityRank(y.worst) || y.count - x.count);
+}
+// Returns {blocks:[...], warnings:[...]} — blocks stop publishing; warnings need an explicit ack.
+function fiPublishChecks(doc, serverPhotoIds) {
+  const blocks = [], warnings = [];
+  const have = new Set(serverPhotoIds || []);
+  const missing = fiPhotoIds(doc).filter(p => !have.has(p));
+  if (missing.length) blocks.push({ code: 'photos_missing', message: `${missing.length} photo(s) have not finished uploading`, ids: missing.slice(0, 20) });
+  const active = (doc.areas || []).filter(a => !a.excluded);
+  if (!active.length) blocks.push({ code: 'no_areas', message: 'No areas to report' });
+  if (!doc.overall || !FI_CONDITIONS.includes(doc.overall.condition) || doc.overall.condition === 'not_inspected') blocks.push({ code: 'overall_missing', message: 'Set the overall condition first' });
+  for (const a of active) {
+    if (String(a.pending_text || '').trim()) blocks.push({ code: 'dictation_pending', message: `"${a.name}" has dictation not yet turned into issues (or cleared)`, area: a.name });
+  }
+  const skipped = active.filter(a => !a.condition || a.condition === 'not_inspected').map(a => a.name);
+  if (skipped.length) warnings.push({ code: 'areas_not_inspected', message: `Not marked inspected: ${skipped.slice(0, 12).join(', ')}`, areas: skipped });
+  const sm = doc.summary;
+  if (sm && sm.fp && sm.fp !== fiFingerprint(doc)) warnings.push({ code: 'summary_stale', message: 'The AI summary is out of date and will be left out of the report' });
+  return { blocks, warnings };
+}
+function fiBuildStructurePrompt(b) {
+  const existing = (b.existing_issues || []).slice(0, 40).map(i => `- ${fiStr(i.title, 100)} (${fiStr(i.trade, 30)})`).join('\n') || '(none yet)';
+  return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' — BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\nArea: ${fiStr(b.area_name, 80)}\nIssues already recorded in this area (do not repeat):\n${existing}\n\nInspector's dictation (may contain speech-recognition errors):\n"""\n${fiStr(b.dictation, 8000)}\n"""\n\nReturn JSON only: {"issues":[{"title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"area_condition":"good|fair|poor|nothing_to_do","area_summary":""}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}.`;
+}
+const FI_STRUCTURE_SYSTEM = `You turn a rental-property inspector's spoken notes for ONE area into concise, actionable inspection findings for the property manager/owner.
+Rules:
+- Report only what the inspector said. Never invent defects, measurements, quantities or costs. Fix obvious speech-to-text slips (e.g. "p trap" heard as "pee trap") but not facts.
+- One distinct problem = one issue. Title is short and specific (max ~80 chars, e.g. "Active leak under kitchen sink"). Detail = what/where in 1-2 sentences.
+- likely_cause: use the inspector's stated cause; if they only implied one, hedge ("Likely ...") in one sentence; otherwise leave it empty. Do not speculate beyond that.
+- recommended_fix: use the inspector's recommendation verbatim-in-spirit and set fix_source "inspector". If they gave none, give a reasonable standard repair in one sentence and set fix_source "suggested".
+- severity: urgent = safety hazard or active damage needing action now; high = fix soon, will worsen; medium = fix at next opportunity; low = cosmetic/minor; info = observation only.
+- Anything only the TENANT can address (debris, cleaning, trash storage, clutter, pet issues, yard upkeep, blocked egress items) uses trade "tenant_action" and the fix is the request to the tenant.
+- If the property was built before 1978 and the notes mention peeling, chipping, flaking or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
+- If nothing is wrong, return an empty issues array and area_condition "nothing_to_do" (or "good").
+- Do not repeat issues already recorded; if the dictation updates one, still output it and set "possible_duplicate_of" to the existing title.
+Output a single JSON object and nothing else.`;
+function fiBuildSummaryPrompt(doc, rollup) {
+  const lines = [];
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) lines.push(`[${is.trade}|${is.severity}] ${a.name}: ${fiStr(is.title, 100)} — fix: ${fiStr(is.recommended_fix, 160)}`);
+  }
+  return `Property: ${fiStr(doc.property && doc.property.address, 160)}${doc.pre1978 ? ' (built before 1978)' : ''}\nOverall condition set by inspector: ${fiStr(doc.overall && doc.overall.condition, 20)}\nInspector's overall notes: ${fiStr(doc.overall && doc.overall.notes, 800) || '(none)'}\n\nAll issues:\n${lines.join('\n') || '(none)'}\n\nTrades with issues: ${rollup.map(r => r.trade).join(', ') || '(none)'}\n\nReturn JSON only: {"overall":"3-5 plain-English sentences summarising the condition and what matters most","trades":{"<trade>":"2-3 sentences: group related issues ACROSS areas (e.g. several plumbing issues in different rooms), say what one contractor visit should cover and the priority order"},"priorities":[{"title":"","why":""}]}\nOnly include trades listed above. At most 5 priorities, most urgent first.`;
+}
+const FI_SUMMARY_SYSTEM = `You write the summary page of a rental property inspection report that the property manager will hand to the owner or tenant. Be factual, plain, and actionable. Use only the issues provided; never add defects, costs or timelines not in the data. Tenant-action items are requests to the tenant, not landlord repairs. Output a single JSON object and nothing else.`;
+function fiNormalizeSummary(parsed, rollup) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const overall = fiStr(parsed.overall, 1200).trim();
+  if (!overall) return null;
+  const have = new Set(rollup.map(r => r.trade));
+  const trades = {};
+  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiStr(v, 700).trim(); }
+  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiStr(p && p.title, 120).trim(), why: fiStr(p && p.why, 300).trim() })).filter(p => p.title);
+  return { overall, trades, priorities };
+}
+function fiHtmlEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function fiBuildEmail(brand, insp, link, note) {
+  const c = /^#[0-9a-fA-F]{6}$/.test(brand.Primary_Color || '') ? brand.Primary_Color : '#1d4ed8';
+  const subject = `${brand.Name || 'Inspection'}: Property inspection report — ${insp.Address}`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:${c};color:#fff;padding:16px 20px;font-size:18px;font-weight:700">${fiHtmlEsc(brand.Name)}</div><div style="padding:20px;border:1px solid #dfe3e8;border-top:none"><p style="margin:0 0 12px">Your property inspection report for <b>${fiHtmlEsc(insp.Address)}</b> is ready.</p>${note ? `<p style="margin:0 0 12px;white-space:pre-wrap">${fiHtmlEsc(note)}</p>` : ''}<p style="margin:18px 0"><a href="${fiHtmlEsc(link)}" style="background:${c};color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700">View inspection report</a></p><p style="font-size:13px;color:#6b7684;margin:0">You can print the report or save it as a PDF from that page.${brand.Contact_Line ? '<br>' + fiHtmlEsc(brand.Contact_Line) : ''}</p></div></div>`;
+  return { subject, html };
+}
+// __FI_NEXT__
