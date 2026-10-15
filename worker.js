@@ -676,6 +676,11 @@ const _hubWorkerCore = {
           return await handlePhotoUploadClean(env, request);
         }
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
+        if (path === '/fi/photo') {
+          // Raw image body (not JSON), so it runs before body parsing — the test-token guard is applied here: a staging-token upload may only target a TEST- inspection.
+          if (_viaHubTestToken && !String(url.searchParams.get('inspection_id') || '').startsWith('TEST-')) return json({ ok: false, error: 'HUB_TEST_TOKEN: photo must target a TEST- inspection, refusing' }, 403);
+          return await fiRoute(env, 'photo', () => fiPhotoUpload(env, request, url));
+        }
         // Body parsing is now tolerant of an empty/missing body (POST /cron/sweep and any
         // future no-payload POST route don't need to send one) — previously this threw a raw
         // "Unexpected end of JSON input" 500 for ANY POST with no body at all, which is exactly
