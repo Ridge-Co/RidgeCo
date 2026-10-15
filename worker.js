@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-15.02-field-inspection-update';
+const BUILD_VERSION = '2026-10-15.03-field-inspection-owners';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -646,6 +646,7 @@ const _hubWorkerCore = {
         if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
+        if (path === '/fi/directory')           return await fiRoute(env, 'directory', () => fiDirectory(env));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
@@ -1073,6 +1074,8 @@ const _hubWorkerCore = {
         if (path === '/fi/transcribe/json')       return await fiRoute(env, 'transcribe-json', () => fiTranscribeJson(env, body));
         if (path === '/fi/issue-types/save')      return await fiRoute(env, 'issue-types-save', () => fiTypesSave(env, body));
         if (path === '/fi/issue-types/touch')     return await fiRoute(env, 'issue-types-touch', () => fiTypesTouch(env, body));
+        if (path === '/fi/property/create')       return await fiRoute(env, 'property-create', () => fiPropertyCreate(env, body));
+        if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -23295,6 +23298,13 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/read-label') return String((body && body.inspection_id) || '').startsWith('TEST-'); // reads a private photo: TEST- inspections only
+  if (path === '/fi/folder/organize') return String((body && body.inspection_id) || '').startsWith('TEST-');
+  if (path === '/fi/property/create') { // staging may only create a TEST- address owned by a TEST- owner (new TEST- company, or an existing TEST- owner)
+    if (!String((body && body.address) || '').startsWith('TEST-')) return false;
+    const _oo = (body && body.owner) || {}, _oid = _oo.id || (body && body.use_owner_id);
+    if (_oid) return await isTestRecord(env, 'Owners', _oid);
+    return String(_oo.company || '').startsWith('TEST-');
+  }
   if (path === '/fi/issue-types/save') {
     if (!String((body && body.name) || '').startsWith('TEST-')) return false;
     if (body && body.id) { const _tt = await fetchTab(env, 'FI_Issue_Types'); const _tr = _tt.find(r => String(r.ID) === String(body.id)); return !!_tr && String(_tr.Name || '').startsWith('TEST-'); }
@@ -33191,7 +33201,7 @@ async function inspCalendarTest(env, url) {
 //  • NO CRON. New tabs are created with addSheet only when missing, columns via ensureColumns, columns resolved by header name.
 const FI_DATA_COLS = 8, FI_DATA_CHUNK = 45000, FI_MAX_DOC_CHARS = FI_DATA_COLS * FI_DATA_CHUNK;
 const FI_BRAND_HEADERS = ['ID','Name','Primary_Color','Accent_Color','Tagline','Contact_Line','Footer_Text','Logo_Data','Is_Default','Active','Created_At','Updated_At','Website','Phone','Email','Address'];
-const FI_INSP_HEADERS = ['ID','Property_ID','Address','Inspection_Type','Status','Brand_ID','Client_Name','Client_Email','Inspector','Inspection_Date','Report_Token','Published_At','Published_Rev','Rev','Doc_Hash','Issue_Count','Photo_Count','Created_At','Updated_At','Active'].concat(Array.from({ length: FI_DATA_COLS }, (_, i) => 'Data_' + (i + 1)));
+const FI_INSP_HEADERS = ['ID','Property_ID','Address','Inspection_Type','Status','Brand_ID','Client_Name','Client_Email','Inspector','Inspection_Date','Report_Token','Published_At','Published_Rev','Rev','Doc_Hash','Issue_Count','Photo_Count','Created_At','Updated_At','Active'].concat(Array.from({ length: FI_DATA_COLS }, (_, i) => 'Data_' + (i + 1)), ['Owner_ID','Owner_Name','Drive_Folder_ID','Drive_Folder_URL']);
 const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active'];
 const FI_EMAIL_HEADERS = ['ID','Inspection_ID','To_Email','Subject','Result','Sent_At'];
 const FI_TYPE_TAB_HEADERS = ['ID','Name','Trade','Default_Severity','Areas','Detail','Likely_Cause','Recommended_Fix','Uses','Source','Active','Created_At','Updated_At'];
@@ -33289,6 +33299,7 @@ function fiValidateDoc(doc) {
   }
   fiValidateVoiceNotes(doc.voice_notes, errors);
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
+  if (doc.owner !== undefined && (!doc.owner || typeof doc.owner !== 'object' || Array.isArray(doc.owner) || String(doc.owner.name || '').length > 160)) errors.push('doc.owner must be an object with a name under 160 characters');
   return { ok: errors.length === 0, errors: errors.slice(0, 10) };
 }
 function fiPhotoIds(doc) {
@@ -33328,6 +33339,7 @@ function fiPublishChecks(doc, serverPhotoIds) {
   if (missing.length) blocks.push({ code: 'photos_missing', message: `${missing.length} photo(s) have not finished uploading`, ids: missing.slice(0, 20) });
   const active = (doc.areas || []).filter(a => !a.excluded);
   if (!active.length) blocks.push({ code: 'no_areas', message: 'No areas to report' });
+  if (!doc.owner || !String(doc.owner.name || '').trim()) blocks.push({ code: 'owner_missing', message: 'Choose who this inspection is on behalf of (the owner)' });
   if (!doc.overall || !FI_CONDITIONS.includes(doc.overall.condition) || doc.overall.condition === 'not_inspected') blocks.push({ code: 'overall_missing', message: 'Set the overall condition first' });
   for (const a of active) {
     if (String(a.pending_text || '').trim()) blocks.push({ code: 'dictation_pending', message: `"${a.name}" has dictation not yet turned into issues (or cleared)`, area: a.name });
@@ -33445,7 +33457,7 @@ async function fiResolveBrand(env, brandId) {
   return { brand: fiBrandOut(hit.o, true), fallback, raw: hit.o };
 }
 function fiInspHeaderOut(o) {
-  return { id: o.ID, property_id: o.Property_ID, address: o.Address, type: o.Inspection_Type, status: o.Status || 'draft', brand_id: o.Brand_ID, client_name: o.Client_Name, client_email: o.Client_Email, inspector: o.Inspector, date: o.Inspection_Date, rev: Number(o.Rev) || 0, issue_count: Number(o.Issue_Count) || 0, photo_count: Number(o.Photo_Count) || 0, published_at: o.Published_At || '', published_rev: Number(o.Published_Rev) || 0, updated_at: o.Updated_At, report_token: o.Report_Token };
+  return { id: o.ID, property_id: o.Property_ID, address: o.Address, type: o.Inspection_Type, status: o.Status || 'draft', brand_id: o.Brand_ID, client_name: o.Client_Name, client_email: o.Client_Email, inspector: o.Inspector, date: o.Inspection_Date, rev: Number(o.Rev) || 0, issue_count: Number(o.Issue_Count) || 0, photo_count: Number(o.Photo_Count) || 0, published_at: o.Published_At || '', published_rev: Number(o.Published_Rev) || 0, updated_at: o.Updated_At, report_token: o.Report_Token, owner_name: o.Owner_Name || '' };
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────────────────────────────
@@ -33464,7 +33476,7 @@ async function fiGetInspection(env, url) {
   if (!row) return fiErr(404, 'not_found', 'No saved inspection with that id.');
   let doc;
   try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
-  return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc });
+  return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc, drive_folder_url: row.o.Drive_Folder_URL || '' });
 }
 async function fiSave(env, body) {
   body = body || {};
@@ -33502,6 +33514,7 @@ async function fiSave(env, body) {
     Report_Token: row ? row.o.Report_Token : inspRandToken(18), Published_At: unpublish ? '' : (row ? row.o.Published_At : ''), Published_Rev: unpublish ? '' : (row ? row.o.Published_Rev : ''),
     Rev: newRev, Doc_Hash: hash, Issue_Count: (doc.areas || []).reduce((n, a) => n + ((a.issues || []).length), 0), Photo_Count: fiPhotoIds(doc).length,
     Created_At: row ? row.o.Created_At : now, Updated_At: now, Active: 'TRUE',
+    Owner_ID: fiStr(doc.owner && doc.owner.id, 60), Owner_Name: fiStr(doc.owner && doc.owner.name, 160),
   });
   for (let i = 1; i <= FI_DATA_COLS; i++) o['Data_' + i] = chunks[i - 1] || '';
   await fiWriteRow(env, 'FI_Inspections', headers, o, row ? row.rowNum : 0);
@@ -33536,13 +33549,18 @@ async function fiPhotoUpload(env, request, url) {
   const root = env.DRIVE_PROPERTIES_ROOT;
   if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
   const token = await getAccessToken(env);
-  const fold = s => String(s).replace(/['"\\]/g, ' ').trim().slice(0, 80) || 'Unknown';
-  const top = await findOrCreateFolder(token, 'Field Inspections', root, root);
-  if (!top || !top.id) return fiErr(502, 'drive_folder', 'Could not create the Field Inspections folder in Drive.');
-  const sub = await findOrCreateFolder(token, `${fold(row.o.Address)} — ${inspId}`, top.id, root);
-  if (!sub || !sub.id) return fiErr(502, 'drive_folder', 'Could not create the inspection folder in Drive.');
+  let folder;
+  try { folder = await fiInspectionFolder(env, token, row, (await fiFindInspection(env, inspId)).headers, false); }
+  catch (e) { return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
-  const up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, sub.id, root);
+  let shared;
+  try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  let up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared);
+  if ((!up || !up.id) && row.o.Drive_Folder_ID) {
+    // The remembered folder may have been deleted or moved: look it up again once, then retry.
+    try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared); }
+    catch (e) { return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
+  }
   if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
   if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
   await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
@@ -33585,8 +33603,10 @@ async function fiReport(env, request, url) {
   if (!summaryOk) delete doc.summary;
   delete doc.dictation_log;
   delete doc.voice_notes;
+  if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
+  if (doc.owner) delete doc.owner.id;
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
-  return json({ ok: true, preview: !published, inspection: fiInspHeaderOut(insp.o), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
+  return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
 }
 async function fiStructure(env, body) {
   body = body || {};
@@ -34161,10 +34181,14 @@ async function fiTranscribeFinish(env, bytes, mime, label, fetchImpl) {
   if (bytes.byteLength > FI_MAX_AUDIO_BYTES) return fiErr(413, 'too_large', 'This recording is larger than 14 MB. Split it into shorter recordings and upload them one by one.');
   if (!mime) return fiErr(415, 'bad_type', 'Unsupported audio type. Use an m4a, mp3, wav, aac, ogg, flac or webm recording.');
   const t0 = Date.now();
-  const r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime, fetchImpl);
+  let r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime, fetchImpl);
+  // Quiet or noisy recordings sometimes come back as "no speech" on the first try and transcribe fine on the second (seen in the field): try once more, using the alternate container label for m4a.
+  const silent = (x) => x.ok && (!x.text || /^\[no speech\]$/i.test(x.text));
+  let retried = false;
+  if (silent(r)) { retried = true; r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime === 'audio/mp4' ? 'audio/aac' : mime, fetchImpl); }
   try { await logTelemetry(env, { Source: 'field-inspect', Job_Type: 'fi_transcribe', Skill_Or_Endpoint: '/fi/transcribe', Tier_Requested: 'CHEAP', Model_Used: FI_TRANSCRIBE_MODEL, Tokens_In: r.tokens_in || 0, Tokens_Out: r.tokens_out || 0, Latency_ms: Date.now() - t0, Success: r.ok ? 'TRUE' : 'FALSE', Notes: (r.ok ? '' : String(r.message || '').slice(0, 150)) + ' bytes=' + bytes.byteLength }); } catch (_) { /* telemetry is best-effort; the result below is what the caller sees */ }
   if (!r.ok) return fiErr(r.status || 502, r.error || 'transcribe_failed', r.message);
-  if (!r.text || /^\[no speech\]$/i.test(r.text)) return fiErr(422, 'no_speech', 'No speech could be heard in that recording.');
+  if (!r.text || /^\[no speech\]$/i.test(r.text)) return fiErr(422, 'no_speech', 'No speech could be heard in that recording' + (retried ? ' (tried twice)' : '') + '. If you can hear speech in it, tap Retry once more — quiet recordings sometimes fail.');
   return json({ ok: true, transcript: r.text, truncated: r.truncated, label: fiStr(label, 120), bytes: bytes.byteLength, model: FI_TRANSCRIBE_MODEL, mime_used: r.mime_used });
 }
 // Phone upload: the raw audio is the request body.
@@ -34203,7 +34227,7 @@ Assign each finding to the area where the DEFECT PHYSICALLY IS, using the exact 
 Rules:
 - Report only what the inspector said. Never invent defects, measurements, quantities or costs. Fix obvious speech-recognition slips but not facts.
 - One distinct problem = one issue. Title is short and specific (max ~80 chars). Detail = what and where in 1-2 sentences.
-- "type": use the EXACT name of an issue type from the provided list when one fits; otherwise a short new Title Case type name (3-6 words) describing the kind of problem.
+- "type": use the EXACT name of an issue type from the provided list (name only, no trade in brackets) ONLY when it genuinely describes this problem. Never stretch a type to fit (a drain taped together is not "Active leak under sink"; a kinked copper line is not "Corroded supply valve"). Otherwise give a short new Title Case type name (3-6 words) describing the kind of problem.
 - likely_cause: the inspector's stated cause; if only implied, hedge ("Likely ...") in one sentence; otherwise empty.
 - recommended_fix: the inspector's recommendation, fix_source "inspector"; if none was given, one reasonable standard repair and fix_source "suggested".
 - severity: urgent = safety hazard or active damage needing action now; high = fix soon, will worsen; medium = next opportunity; low = cosmetic/minor; info = observation only.
@@ -34216,7 +34240,7 @@ Rules:
 Output a single JSON object and nothing else.`;
 function fiBuildRoutePrompt(b, catalog) {
   const areas = (b.areas || []).slice(0, 80).map(a => `- ${fiStr(a.id, 64)} = ${fiStr(a.name, 80)}${a.group ? ' [' + fiStr(a.group, 30) + ']' : ''}${(a.issues && a.issues.length) ? ' (already recorded: ' + a.issues.slice(0, 12).map(t => fiStr(t, 60)).join('; ') + ')' : ''}`).join('\n');
-  const types = catalog.slice(0, 90).map(t => `${t.name} (${t.trade})`).join('; ');
+  const types = catalog.slice(0, 90).map(t => t.name).join('; ');
   const notes = (b.notes || []).map(n => `=== NOTE ${fiStr(n.id, 40)}${n.label ? ' (' + fiStr(n.label, 80) + ')' : ''} ===\n${fiStr(n.text, 30000)}`).join('\n\n');
   const proposed = (b.proposed || []).slice(0, 80).map(t => `- ${fiStr(t, 80)}`).join('\n') || '(none)';
   return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
@@ -34232,6 +34256,7 @@ function fiNormalizeRoute(parsed, areaIds) {
     const areaId = fiStr(r.area_id, 64);
     const quote = fiStr(r.quote, 200).trim(), noteId = fiStr(r.note_id, 40);
     if (!ids.has(areaId)) { lost(n.title + (n.detail ? ' - ' + n.detail : ''), 'Area not recognised - choose where it belongs', noteId); continue; }
+    if (n.issue_type) n.issue_type = n.issue_type.replace(/\s*\(([a-z_]+)\)\s*$/i, (m, t) => (FI_TRADES.includes(t.toLowerCase()) ? '' : m));
     out.issues.push(Object.assign(n, { area_id: areaId, note_id: noteId, quote }));
   }
   for (const r of (Array.isArray(parsed.equipment) ? parsed.equipment : []).slice(0, 30)) {
@@ -34293,6 +34318,206 @@ async function fiReadLabel(env, body) {
   const eq = fiNormalizeEquipment(Object.assign({}, parsed, { kind: kind || parsed.kind }));
   if (parsed.readable === false || !eq) return json({ ok: true, found: false, message: 'No readable label text was found in that photo.' });
   return json({ ok: true, found: true, equipment: eq, model_used: ai.model_used });
+}
+
+// ── Round 3 (Oct 15 2026): Hub directory, property + owner creation, Drive folders per property ──
+// Owner shown on a report = the owner's COMPANY name; the person's name only when there is no company.
+function fiOwnerName(o) {
+  const co = String((o && o.Company) || '').trim();
+  const person = [o && o.First_Name, o && o.Last_Name].map(s => String(s || '').trim()).filter(Boolean).join(' ');
+  return co || person;
+}
+function fiNormName(s) {
+  return String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9 ]/g, ' ').replace(/\b(llc|inc|corp|co|company|ltd|the|and)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function fiStreetOf(address) { return String(address || '').split(',')[0].trim().slice(0, 120); }
+function fiFolderSafe(s) { return String(s || '').replace(/['"\\\/]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) || 'Unknown Property'; }
+// Brett's own convention: "<property address>" / "Inspection MMDDYYYY" (work orders sit beside it as "WO-1234").
+function fiInspFolderName(dateStr, n) {
+  const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const base = m ? `Inspection ${m[2]}${m[3]}${m[1]}` : 'Inspection';
+  return n > 1 ? `${base} (${n})` : base;
+}
+// Slim, PIN-free copy of the Hub's property / unit / owner lists for the phone's search.
+async function fiDirectory(env) {
+  const props = await fetchTab(env, 'Properties'), units = await fetchTab(env, 'Units'), owners = await fetchTab(env, 'Owners');
+  const firstById = (rows) => { const seen = new Set(); return rows.filter(r => { const k = String(r.ID); if (seen.has(k)) return false; seen.add(k); return true; }); };
+  const liveOwners = firstById(owners.filter(o => o.Active !== 'FALSE'));
+  const nameById = {}; liveOwners.forEach(o => { const n = fiOwnerName(o); if (n) nameById[String(o.ID)] = n; });
+  const liveProps = firstById(props.filter(p => p.Active !== 'FALSE' && String(p.Address || '').trim()));
+  const pids = new Set(liveProps.map(p => String(p.ID)));
+  return json({
+    ok: true,
+    properties: liveProps.map(p => ({ id: String(p.ID), address: p.Address, city: p.City || '', type: p.Type || '', unit_count: Number(p.Unit_Count) || 0, owner_id: nameById[String(p.Owner_ID)] ? String(p.Owner_ID) : '', owner_name: nameById[String(p.Owner_ID)] || '' })),
+    units: firstById(units.filter(u => u.Active !== 'FALSE')).filter(u => pids.has(String(u.Property_ID)) && String(u.Unit_Label || '').trim()).map(u => ({ id: String(u.ID), property_id: String(u.Property_ID), label: u.Unit_Label })),
+    owners: liveOwners.filter(o => fiOwnerName(o)).map(o => ({ id: String(o.ID), name: fiOwnerName(o) })),
+  });
+}
+// Creates the owner (if new) and the Hub property together, then READS BOTH BACK. Never half-reports success.
+async function fiPropertyCreate(env, body) {
+  body = body || {};
+  const address = fiStr(body.address, 120).trim(), city = fiStr(body.city, 60).trim();
+  if (!address) return fiErr(400, 'address_required', 'Enter the street address.');
+  const type = ['house', 'rowhome', 'multi', 'condo', 'commercial'].includes(body.type) ? body.type : 'house';
+  const labels = (Array.isArray(body.unit_labels) ? body.unit_labels : []).map(s => fiStr(s, 40).trim()).filter(Boolean).slice(0, 60);
+  const o = body.owner && typeof body.owner === 'object' ? body.owner : {};
+  const ownerId = String(o.id || body.use_owner_id || '').trim();
+  const company = fiStr(o.company, 120).trim(), first = fiStr(o.first, 60).trim(), last = fiStr(o.last, 60).trim();
+  if (!ownerId && !company && !(first && last)) return fiErr(400, 'owner_required', 'Choose the owner, or enter the owner’s company name (the property manager can be the owner).');
+  if (!body.force) {
+    const matches = await findSimilarProperties(env, address, city);
+    if (matches.length) return fiErr(409, 'duplicate_property', `“${address}” is already in the Hub. Use that property instead, or create it anyway.`, { matches });
+  }
+  const owners = await fetchTab(env, 'Owners');
+  let owner = null, createdOwner = false;
+  if (ownerId) {
+    owner = owners.find(r => String(r.ID) === ownerId && r.Active !== 'FALSE');
+    if (!owner) return fiErr(404, 'owner_not_found', 'That owner is not in the Hub (or was deactivated). Pick the owner again.');
+  } else {
+    const want = fiNormName(company || (first + ' ' + last));
+    const same = want ? owners.filter(r => r.Active !== 'FALSE' && fiNormName(fiOwnerName(r)) === want) : [];
+    if (same.length) return fiErr(409, 'owner_exists', `An owner named “${fiOwnerName(same[0])}” already exists. Use it, or the property will be linked to a duplicate.`, { matches: same.slice(0, 5).map(r => ({ id: String(r.ID), name: fiOwnerName(r) })) });
+    await ensureColumns(env, 'Owners', ['Onboarding_Source', 'Onboarding_Date']);
+    const orr = await addOwnerWithQBSync(env, { Company: company, First_Name: first, Last_Name: last, Phone: fiStr(o.phone, 40), Email: fiStr(o.email, 120), Active: 'TRUE', Onboarding_Source: 'field_inspection', Onboarding_Date: new Date().toISOString() });
+    const od = await orr.clone().json();
+    const newId = od && od.id ? String(od.id) : '';
+    const back = newId ? (await fiReadFresh(env, 'Owners')).rows.find(r => String(r.o.ID) === newId) : null;
+    if (!back) return fiErr(500, 'owner_not_saved', 'The owner could not be saved to the Hub, so nothing was created. Retry.');
+    owner = back.o; createdOwner = true;
+  }
+  const ownerName = fiOwnerName(owner);
+  await ensureColumns(env, 'Properties', ['Commercial_Subtype', 'Onboarding_Source']);
+  const single = type === 'house' || type === 'rowhome';
+  const pr = await addRow(env, 'Properties', { Address: address, City: city, Market: ownerOnboardInferMarket(city), Type: type, Unit_Count: String(single ? 1 : Math.max(labels.length, Number(body.unit_count) || 0, 1)), Owner_ID: String(owner.ID), Active: 'TRUE', SMS_Enabled: 'FALSE', Onboarding_Source: 'field_inspection' });
+  const pd = await pr.clone().json();
+  const propId = pd && pd.id ? String(pd.id) : '';
+  const pback = propId ? (await fiReadFresh(env, 'Properties')).rows.find(r => String(r.o.ID) === propId) : null;
+  if (!pback || pback.o.Address !== address || String(pback.o.Owner_ID) !== String(owner.ID)) {
+    return fiErr(500, 'property_not_saved', 'The property could not be verified in the Hub' + (createdOwner ? ` (the owner “${ownerName}” WAS saved — retry and pick it from the owner list)` : '') + '. Retry.', { owner_id: String(owner.ID), owner_created: createdOwner });
+  }
+  const unitsOut = [];
+  if (!single) {
+    for (const label of labels) {
+      const ur = await unitAddWithDupeCheck(env, { Property_ID: propId, Unit_Label: label, Tenant_ID: '', Active: 'TRUE', Property_Address: address });
+      const ud = await ur.clone().json();
+      if (!ud || !ud.id) return fiErr(500, 'unit_not_saved', `The property was created but unit “${label}” could not be saved. Add the units in the Hub.`, { property_id: propId, owner_id: String(owner.ID) });
+      unitsOut.push({ id: String(ud.id), label });
+    }
+    if (unitsOut.length) {
+      const uback = (await fiReadFresh(env, 'Units')).rows.filter(r => String(r.o.Property_ID) === propId);
+      if (uback.length < unitsOut.length) return fiErr(500, 'unit_not_saved', 'The units could not be verified. Add them in the Hub.', { property_id: propId, owner_id: String(owner.ID) });
+    }
+  }
+  return json({ ok: true, property: { id: propId, address, city, type, unit_count: Number(pback.o.Unit_Count) || 1, owner_id: String(owner.ID), owner_name: ownerName }, owner: { id: String(owner.ID), name: ownerName, created: createdOwner }, units: unitsOut });
+}
+
+// ── Drive: Properties root / <address> / Inspection MMDDYYYY ──
+// The Properties root is a shared drive on prod but a plain folder on staging; only pass driveId/corpora when it really is a shared drive.
+const fiSharedCache = {};
+async function fiDriveSharedRoot(token, root) {
+  if (Object.prototype.hasOwnProperty.call(fiSharedCache, root)) return fiSharedCache[root];
+  const res = await fetch(`https://www.googleapis.com/drive/v3/drives/${encodeURIComponent(root)}?fields=id`, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.ok) return (fiSharedCache[root] = root);
+  if (res.status === 404) return (fiSharedCache[root] = '');
+  throw new Error('FI: could not tell whether the Drive root is a shared drive (HTTP ' + res.status + ')');
+}
+async function fiDriveFindFolders(token, name, parentId, root) {
+  const q = `name=${JSON.stringify(name)} and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
+  const params = new URLSearchParams({ q, fields: 'files(id,name,webViewLink,createdTime)', orderBy: 'createdTime', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', ...(root ? { driveId: root, corpora: 'drive' } : {}) });
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error('FI: Drive folder search failed: ' + ((data.error && data.error.message) || res.status));
+  return data.files || [];
+}
+// Find-or-create that converges on the OLDEST match, so two simultaneous first uploads end up in one folder.
+async function fiDriveEnsureFolder(token, name, parentId, root) {
+  const first = await fiDriveFindFolders(token, name, parentId, root);
+  if (first.length) return first[0];
+  const res = await fetch('https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,webViewLink', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] }) });
+  const made = await res.json();
+  if (!res.ok || !made.id) throw new Error('FI: Drive would not create the folder “' + name + '”: ' + ((made.error && made.error.message) || res.status));
+  const again = await fiDriveFindFolders(token, name, parentId, root);
+  return again[0] || made;
+}
+async function fiDriveChildIds(token, folderId, root) {
+  const ids = new Set(); let pageToken = '';
+  for (let i = 0; i < 20; i++) {
+    const params = new URLSearchParams({ q: `'${folderId}' in parents and trashed=false`, fields: 'nextPageToken,files(id)', pageSize: '1000', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', ...(root ? { driveId: root, corpora: 'drive' } : {}), ...(pageToken ? { pageToken } : {}) });
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error('FI: Drive folder listing failed: ' + ((data.error && data.error.message) || res.status));
+    (data.files || []).forEach(f => ids.add(f.id));
+    pageToken = data.nextPageToken || ''; if (!pageToken) return ids;
+  }
+  throw new Error('FI: Drive folder has too many files to list.');
+}
+async function fiWriteCells(env, tab, headers, rowNum, cells) {
+  for (const [name, val] of Object.entries(cells)) {
+    const i = headers.indexOf(name);
+    if (i < 0) throw new Error(`FI: column ${name} missing on ${tab}`);
+    await sheetsRequest(env, 'PUT', `/values/${tab}!${col(i)}${rowNum}?valueInputOption=RAW`, { values: [[val == null ? '' : String(val)]] });
+  }
+}
+// The inspection's own Drive folder (created once, remembered on its row, verified by read-back).
+async function fiInspectionFolder(env, token, row, headers, forceFresh) {
+  if (row.o.Drive_Folder_ID && !forceFresh) return { id: row.o.Drive_Folder_ID, url: row.o.Drive_Folder_URL || '' };
+  const root = env.DRIVE_PROPERTIES_ROOT;
+  if (!root) throw new Error('DRIVE_PROPERTIES_ROOT is not configured.');
+  let doc = {}; try { doc = JSON.parse(fiJoinRow(row.o)); } catch (_) { doc = {}; }
+  const street = fiFolderSafe((doc.property && (doc.property.street || fiStreetOf(doc.property.address))) || fiStreetOf(row.o.Address));
+  const shared = await fiDriveSharedRoot(token, root);
+  const prop = await fiDriveEnsureFolder(token, street, root, shared);
+  const all = await fiReadFresh(env, 'FI_Inspections');
+  const owned = new Set(all.rows.filter(r => r.o.ID !== row.o.ID && r.o.Active !== 'FALSE' && r.o.Drive_Folder_ID).map(r => r.o.Drive_Folder_ID));
+  const date = row.o.Inspection_Date || doc.date || '';
+  let pick = null;
+  for (let n = 1; n <= 10 && !pick; n++) {
+    const nm = fiInspFolderName(date, n);
+    const found = await fiDriveFindFolders(token, nm, prop.id, shared);
+    const free = found.find(f => !owned.has(f.id));
+    if (free) pick = free; else if (!found.length) pick = await fiDriveEnsureFolder(token, nm, prop.id, shared);
+  }
+  if (!pick || !pick.id) throw new Error('FI: could not find a free inspection folder name.');
+  const url = pick.webViewLink || `https://drive.google.com/drive/folders/${pick.id}`;
+  await fiWriteCells(env, 'FI_Inspections', headers, row.rowNum, { Drive_Folder_ID: pick.id, Drive_Folder_URL: url });
+  const chk = await fiFindInspection(env, row.o.ID);
+  if (!chk.row || chk.row.o.Drive_Folder_ID !== pick.id) throw new Error('FI: the Drive folder could not be recorded on the inspection.');
+  return { id: pick.id, url };
+}
+// Moves photos uploaded before round 3 (old "Field Inspections" folder) into the property's inspection folder, in slices.
+async function fiFolderOrganize(env, body) {
+  body = body || {};
+  const id = String(body.inspection_id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'inspection_id is required.');
+  await fiEnsureTabs(env);
+  const { headers, row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Save the inspection to the server first.');
+  const token = await getAccessToken(env);
+  let folder;
+  try { folder = await fiInspectionFolder(env, token, row, headers, false); } catch (e) { return fiErr(502, 'drive_folder', 'Could not set up the Drive folder: ' + String((e && e.message) || e).slice(0, 160)); }
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const mine = pt.rows.filter(r => r.o.Inspection_ID === id && r.o.Active !== 'FALSE' && r.o.Drive_File_ID);
+  const limit = Math.max(5, Math.min(60, Number(body.limit) || 20));
+  // One listing tells us which photos are already in the folder, so finished ones cost nothing and every run makes progress.
+  let inFolder;
+  try { inFolder = await fiDriveChildIds(token, folder.id, await fiDriveSharedRoot(token, env.DRIVE_PROPERTIES_ROOT)); } catch (e) { return fiErr(502, 'drive_folder', 'Could not list the Drive folder: ' + String((e && e.message) || e).slice(0, 160)); }
+  let moved = 0, already = 0, work = 0, remaining = 0; const failed = [];
+  for (const p of mine) {
+    if (inFolder.has(p.o.Drive_File_ID)) { already++; continue; }
+    if (work >= limit) { remaining++; continue; }
+    work++;
+    const fid = encodeURIComponent(p.o.Drive_File_ID);
+    const mr = await fetch(`https://www.googleapis.com/drive/v3/files/${fid}?fields=id,parents&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!mr.ok) { failed.push({ photo_id: p.o.ID, error: 'Drive could not find the file (HTTP ' + mr.status + ')' }); continue; }
+    const meta = await mr.json();
+    const rm = (meta.parents || []).filter(x => x !== folder.id);
+    const pr = await fetch(`https://www.googleapis.com/drive/v3/files/${fid}?addParents=${encodeURIComponent(folder.id)}${rm.length ? '&removeParents=' + encodeURIComponent(rm.join(',')) : ''}&supportsAllDrives=true&fields=id,parents`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' });
+    const pd = pr.ok ? await pr.json() : null;
+    if (pd && (pd.parents || []).includes(folder.id) && (pd.parents || []).length === 1) moved++;
+    else failed.push({ photo_id: p.o.ID, error: 'Drive did not move the file (HTTP ' + pr.status + ')' });
+  }
+  const done = !remaining && !failed.length;
+  return json({ ok: failed.length === 0, done, moved, already, remaining, failed: failed.slice(0, 10), failed_count: failed.length, folder, message: failed.length ? `${failed.length} photo(s) could not be moved. Retry; if it repeats, tell Brett.` : (remaining ? `${remaining} photo(s) still to move — run it again.` : 'All photos are in the property’s Drive folder.') }, failed.length ? 502 : 200);
 }
 
 // ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════

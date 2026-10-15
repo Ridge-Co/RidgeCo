@@ -105,6 +105,7 @@ function contactLine(b){
   if (b.contact_line) return b.contact_line;
   return [b.phone, b.email, (b.website||'').replace(/^https?:\/\//,'')].filter(Boolean).join(' · ');
 }
+function ownerOf(doc, insp){ return String((doc.owner && doc.owner.name) || (insp && insp.owner_name) || '').trim(); }
 function draw(d){
   var doc = d.doc, b = d.brand || {}, insp = d.inspection, have = {};
   (d.photo_ids||[]).forEach(function(p){ have[p] = true; });
@@ -116,7 +117,7 @@ function draw(d){
   if (d.brand_fallback) h += '<div class="preview no-print"><b>Brand missing.</b> The brand chosen for this inspection is no longer available, so the default brand is shown.</div>';
   h += '<div class="toolbar no-print"><button class="btn" onclick="window.print()">Print / Save as PDF</button><button class="btn alt" onclick="copyLink()" id="cp">Copy link</button></div>';
   h += '<div class="doc-title">Property Inspection Report</div><div class="muted">'+esc(TYPE_LABEL[doc.type]||'Inspection')+'</div>';
-  h += '<div class="meta"><div><span>Property</span>'+esc(doc.property.address)+'</div><div><span>Inspection date</span>'+esc(insp.date||doc.date||'')+'</div><div><span>Inspector</span>'+esc(insp.inspector||doc.inspector||'')+'</div>'+(insp.client_name?'<div><span>Prepared for</span>'+esc(insp.client_name)+'</div>':'')+'<div><span>Overall condition</span><span class="pill '+esc(doc.overall.condition)+'" style="display:inline-block;font-size:13px;color:inherit;text-transform:none;letter-spacing:0">'+esc(COND_LABEL[doc.overall.condition]||'')+'</span></div></div>';
+  h += '<div class="meta"><div><span>Property</span>'+esc(doc.property.address)+(doc.property.unit_label?' — '+esc(/^unit\b/i.test(doc.property.unit_label)?doc.property.unit_label:'Unit '+doc.property.unit_label):'')+'</div><div><span>Inspection date</span>'+esc(insp.date||doc.date||'')+'</div><div><span>Inspector</span>'+esc(insp.inspector||doc.inspector||'')+'</div>'+(insp.client_name?'<div><span>Prepared for</span>'+esc(insp.client_name)+'</div>':'')+(ownerOf(doc,insp)&&ownerOf(doc,insp)!==insp.client_name?'<div><span>On behalf of</span>'+esc(ownerOf(doc,insp))+'</div>':'')+'<div><span>Overall condition</span><span class="pill '+esc(doc.overall.condition)+'" style="display:inline-block;font-size:13px;color:inherit;text-transform:none;letter-spacing:0">'+esc(COND_LABEL[doc.overall.condition]||'')+'</span></div></div>';
   if (doc.pre1978) h += '<div class="card" style="border-color:#f0d9a8;background:#fdf9ee"><b>Built before 1978.</b> Paint in homes of this age may contain lead. Any repair that disturbs painted surfaces should follow lead-safe work practices.</div>';
   if (doc.overall.notes) h += '<div class="card"><h3>Inspector’s overall notes</h3><div style="white-space:pre-wrap">'+esc(doc.overall.notes)+'</div></div>';
   var sm = doc.summary;

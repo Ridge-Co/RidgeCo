@@ -11,7 +11,7 @@ const R = (status, body, ctype = 'text/html', loc = '') => {
   return { ok: status >= 200 && status < 300, status, headers: { get: k => (k === 'Content-Type' ? ctype : k === 'Location' ? loc : '') }, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), json: async () => JSON.parse(typeof body === 'string' ? body : new TextDecoder().decode(bytes)) };
 };
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]);
-const mkDoc = (over = {}) => Object.assign({ v: 1, property: { id: '12', address: '122 S Gilmor St, Baltimore, MD 21223' }, pre1978: true, overall: { condition: 'fair' }, areas: [
+const mkDoc = (over = {}) => Object.assign({ v: 1, property: { id: '12', address: '122 S Gilmor St, Baltimore, MD 21223' }, owner: { id: 'O1', name: 'Premier Property Management LLC' }, pre1978: true, overall: { condition: 'fair' }, areas: [
   { id: 'a1', name: 'Kitchen', condition: 'poor', issues: [] }, { id: 'a2', name: 'Heating / HVAC', issues: [] }, { id: 'a3', name: 'Bedroom 2 (3rd floor)', issues: [] }] }, over);
 
 // ── equipment ──
@@ -149,6 +149,9 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   r = await w.fiTranscribe(w.env, req('audio/mp4', 50), U()); t('no key -> visible 500 not_configured', r.status === 500 && r.body.error === 'not_configured', r);
   t('transcribe prompt forbids inventing content on tones/noise', /NEVER make up/.test(w.FI_TRANSCRIBE_SYSTEM || ''), 'prompt');
   w.h.net = gem('[no speech]'); r = await w.fiTranscribe(env, req('audio/mp4', 50), U()); t('silence -> 422 no_speech', r.status === 422 && r.body.error === 'no_speech', r);
+  { let n = 0; w.h.net = async (url, opts) => { if (!String(url).includes('generativelanguage')) return null; n++; return (await gem(n === 1 ? '[no speech]' : 'Sleeping porch shows a roof leak.')(url, opts)); };
+    r = await w.fiTranscribe(env, req('audio/mp4', 50), U()); t('"no speech" first try is retried once and the second answer is used', r.status === 200 && r.body.ok && /roof leak/.test(r.body.transcript) && n === 2, [r, n]);
+    w.h.net = gem('[no speech]'); r = await w.fiTranscribe(env, req('audio/mp4', 50), U()); t('still silent after the retry -> 422 that says so and tells you to retry', r.status === 422 && /tried twice/.test(r.body.message) && /Retry/.test(r.body.message), r); }
   w.h.net = gem('long text', { candidates: [{ content: { parts: [{ text: 'cut off' }] }, finishReason: 'MAX_TOKENS' }] }); r = await w.fiTranscribe(env, req('audio/mp4', 50), U()); t('truncated flag passed on', r.body.ok && r.body.truncated === true, r);
   seen.length = 0; let calls = 0;
   w.h.net = async (url, opts) => { if (!String(url).includes('generativelanguage')) return null; calls++; const m = JSON.parse(opts.body).contents[0].parts[0].inline_data.mime_type; seen.push(m); if (m === 'audio/mp4') return R(400, JSON.stringify({ error: { message: 'Unsupported MIME type: audio/mp4' } }), 'application/json'); return R(200, JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok via aac' }] } }] }), 'application/json'); };
@@ -281,6 +284,17 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('report page knows every equipment kind', Object.keys(w.FI_EQUIP_KINDS).filter(k => k !== 'other').every(k => rep.includes(k + ':')));
 }
 
+// ── route: issue types come back clean ──
+{
+  const w = world();
+  const out = w.fiNormalizeRoute({ issues: [{ area_id: 'a1', title: 'Chipping paint', trade: 'drywall_paint', severity: 'low', type: 'Peeling or chipping paint (interior) (drywall_paint)' }, { area_id: 'a1', title: 'Odd', trade: 'general', severity: 'low', type: 'Sunroom leak (maybe)' }] }, ['a1']);
+  t('trade suffix copied from the catalog is stripped from the type', out.issues[0].issue_type === 'Peeling or chipping paint (interior)', out.issues);
+  t('a real bracket in a type name is kept', out.issues[1].issue_type === 'Sunroom leak (maybe)', out.issues);
+  const p = w.fiBuildRoutePrompt({ areas: [{ id: 'a1', name: 'Kitchen' }], notes: [{ id: 'n', text: 'x' }] }, [{ name: 'Active leak under sink', trade: 'plumbing' }]);
+  t('catalog is sent as names only', p.includes('Active leak under sink') && !p.includes('Active leak under sink (plumbing)'), p.slice(0, 400));
+  t('prompt forbids stretching a type to fit', /Never stretch a type/.test(src));
+}
+
 // ── wiring / staging guards ──
 {
   for (const p of ['/fi/route', '/fi/brand/scrape', '/fi/read-label', '/fi/transcribe/json', '/fi/issue-types/save', '/fi/issue-types/touch', '/fi/issue-types', '/fi/transcribe'])
@@ -288,7 +302,7 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('staging token: transcribe raw route guarded to TEST- inspections', /path === '\/fi\/transcribe'[\s\S]{0,400}startsWith\('TEST-'\)/.test(src));
   t('staging token: read-label limited to TEST- inspections', /path === '\/fi\/read-label'\) return String\(\(body && body\.inspection_id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
   t('staging token: issue-type writes limited to TEST- names', src.includes("path === '/fi/issue-types/save'") && src.includes("path === '/fi/issue-types/touch'") && /touch'\) return Array\.isArray[\s\S]{0,200}startsWith\('TEST-'\)/.test(src));
-  t('BUILD_VERSION bumped', src.includes("BUILD_VERSION = '2026-10-15.02-field-inspection-update'"));
+  t('BUILD_VERSION valid and not older than round 2', /BUILD_VERSION = '2026-10-15\.0[2-9]-[a-z-]+'/.test(src));
 }
 
 console.log(`fi-round2: ${pass} passed, ${fail} failed`);
