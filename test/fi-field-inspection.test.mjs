@@ -9,7 +9,7 @@ let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? 'got ' + JSON.stringify(got).slice(0, 300) : ''); } };
 
 const mkDoc = (over = {}) => Object.assign({
-  v: 1, property: { id: '12', address: '122 S Gilmor St, Baltimore, MD 21223' }, pre1978: true, overall: { condition: 'fair', notes: 'ok' },
+  v: 1, property: { id: '12', address: '122 S Gilmor St, Baltimore, MD 21223' }, owner: { id: 'O1', name: 'Premier Property Management LLC' }, pre1978: true, overall: { condition: 'fair', notes: 'ok' },
   areas: [
     { id: 'a1', name: 'Kitchen', condition: 'poor', issues: [{ id: 'i1', title: 'Leak under sink', trade: 'plumbing', severity: 'urgent', recommended_fix: 'Replace trap', photo_ids: ['ph_aaaaaa'] }] },
     { id: 'a2', name: 'Living Room', condition: 'nothing_to_do', issues: [] },

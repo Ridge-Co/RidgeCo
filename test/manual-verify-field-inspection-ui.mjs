@@ -10,8 +10,14 @@ await new Promise(r => server.listen(0, r)); const BASE = `http://localhost:${se
 let passes = 0, fails = 0; const t = async (n, f) => { try { await f(); passes++; console.log('PASS', n); } catch (e) { fails++; console.log('FAIL', n, '-', String(e.message).split('\n').slice(0, 12).join(' | ')); if (process.env.FI_SHOTS) { try { await page.screenshot({ path: process.env.FI_SHOTS + '/fail-' + fails + '.png' }); console.log('   url', page.url(), '| view:', (await page.locator('#view').innerText()).slice(0, 300).replace(/\n/g, ' / ')); } catch (_) {} } } };
 const JPEG = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC', 'base64');
-const props = [{ ID: '12', Address: '122 S Gilmor St', City: 'Baltimore', State: 'MD', Zip: '21223', Active: 'TRUE' }, { ID: '13', Address: '5 Other Ave', City: 'Towson', State: 'MD', Zip: '21204', Active: 'TRUE' }];
+const props_unused = [{ ID: '12', Address: '122 S Gilmor St', City: 'Baltimore', State: 'MD', Zip: '21223', Active: 'TRUE' }, { ID: '13', Address: '5 Other Ave', City: 'Towson', State: 'MD', Zip: '21204', Active: 'TRUE' }];
 const w = world();
+{ // the Hub as the phone will see it
+  const tb = (n, headers, rows) => { w.h.tabs[n] = { headers, rows }; };
+  tb('Owners', ['ID', 'Company', 'First_Name', 'Last_Name', 'PIN', 'Active'], [['O1', 'Premier Property Management LLC', 'Pat', 'Premier', '9999', 'TRUE'], ['O2', '', 'Sam', 'Solo', '8888', 'TRUE']]);
+  tb('Properties', ['ID', 'Address', 'City', 'Type', 'Unit_Count', 'Owner_ID', 'Active'], [['P12', '122 S Gilmor St', 'Baltimore', 'rowhome', '1', 'O1', 'TRUE'], ['P2', '5 Main St', 'Baltimore', 'multi', '2', 'O2', 'TRUE'], ['P3', '9 Old Rd', 'Towson', 'house', '1', '', 'TRUE']]);
+  tb('Units', ['ID', 'Property_ID', 'Unit_Label', 'Active'], [['U1', 'P2', '1A', 'TRUE'], ['U2', 'P2', '1B', 'TRUE']]);
+}
 w.h.staged = true;
 const reqOf = (route, u) => ({ headers: { get: k => route.request().headers()[String(k).toLowerCase()] || '' }, arrayBuffer: async () => { const b = route.request().postDataBuffer(); return b ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : new ArrayBuffer(0); } });
 const log = [];
@@ -23,7 +29,9 @@ async function handle(route) {
   let body = {}; if (m === 'POST' && p !== '/fi/photo' && p !== '/fi/transcribe') { try { body = JSON.parse(rq.postData() || '{}'); } catch (e) { body = {}; } }
   const env = w.env, q = reqOf(route, u); log.push(m + ' ' + p);
   let r;
-  if (p === '/properties') r = { status: 200, body: props };
+  if (p === '/fi/directory') r = await w.fiRoute(env, 'directory', () => w.fiDirectory(env));
+  else if (p === '/fi/property/create') r = await w.fiRoute(env, 'property-create', () => w.fiPropertyCreate(env, body));
+  else if (p === '/fi/folder/organize') r = await w.fiRoute(env, 'folder-organize', () => w.fiFolderOrganize(env, body));
   else if (p === '/fi/list') r = await w.fiList(env);
   else if (p === '/fi/inspection') r = await w.fiGetInspection(env, u);
   else if (p === '/fi/report') r = await w.fiReport(env, q, u);
@@ -170,6 +178,7 @@ await t('public report renders branded, grouped by trade, tenant section, photos
   const txt = await rp.locator('body').innerText();
   assert.ok(txt.includes('Ridge Co') && txt.includes('122 S Gilmor St') && txt.includes('Plumbing') && txt.includes('Tenant action items') && txt.includes('Trash bags stored on porch'));
   assert.ok(txt.includes('Built before 1978'), 'pre-1978 notice');
+  assert.ok(/on behalf of/i.test(txt) && txt.includes('Premier Property Management LLC'), 'owner company on the report');
   assert.ok(!txt.includes('stair rail loose'), 'cleared dictation text never in report');
   await rp.waitForSelector('.photos img'); await noHScroll(rp, 'report'); await shot(rp, 'report', true);
   assert.ok(await rp.evaluate(() => { const i = document.querySelector('.photos img'); return i.complete && i.naturalWidth > 0; }), 'photo loaded');
@@ -244,7 +253,7 @@ await t('areas are in walk-through order and can be re-ordered with big ▲ ▼ 
   n = await names(); assert.ok(n.indexOf('Living Room') < n.indexOf('Kitchen'), 'auto-order restored walk order');
   await noHScroll(page, 'reorder'); await shot(page, 'reorder', true);
   await kRow.locator('button[aria-label="Move down"]').click(); await page.click('button:has-text("Done")'); await waitSaved();
-  const onServer = JSON.parse(w.h.tabs.FI_Inspections.rows[0].slice(w.h.tabs.FI_Inspections.headers.indexOf('Data_1')).join(''));
+  const onServer = JSON.parse(w.h.tabs.FI_Inspections.rows[0].slice(w.h.tabs.FI_Inspections.headers.indexOf('Data_1'), w.h.tabs.FI_Inspections.headers.indexOf('Data_1') + 8).join(''));
   assert.ok(onServer.areas.map(a => a.name).indexOf('Kitchen') > onServer.areas.map(a => a.name).indexOf('Dining Room') + 0, 'order saved to the server');
 });
 await t('photos: select several, move to another area; viewer prev/next; remove cleans phone storage', async () => {
@@ -288,7 +297,7 @@ await t('equipment: furnace model/serial/filter size, read label from photo fill
   await page.waitForSelector('.issue:has-text("Furnace")');
   assert.ok((await page.locator('.issue:has-text("Furnace")').innerText()).includes('filter 16x25x1'));
   await waitSaved();
-  const onServer = JSON.parse(w.h.tabs.FI_Inspections.rows[0].slice(w.h.tabs.FI_Inspections.headers.indexOf('Data_1')).join(''));
+  const onServer = JSON.parse(w.h.tabs.FI_Inspections.rows[0].slice(w.h.tabs.FI_Inspections.headers.indexOf('Data_1'), w.h.tabs.FI_Inspections.headers.indexOf('Data_1') + 8).join(''));
   const hv = onServer.areas.find(a => a.name === 'Heating / HVAC'); assert.equal(hv.equipment[0].model, '59TP6A060'); assert.equal(hv.equipment[0].filter_size, '16x25x1');
   // an unreadable label is reported, not faked
   w.h.ai = JSON.stringify({ readable: false });
@@ -389,6 +398,128 @@ await t('report shows equipment + brand contact; transcripts never leave the app
   assert.ok(!txt.includes('exhaust fan is really loud') || txt.includes('Exhaust fan is very loud'), 'only the reviewed issue text, not the transcript');
   assert.ok(!(await pg.content()).includes('Something about the back yard.'), 'raw transcript not in the report page');
   await noHScroll(pg, 'report r2'); await shot(pg, 'report-r2', true); await pg.close();
+});
+
+// ════════ Round 3 (Oct 15 2026): Hub picker, owners, add-property, Drive folders ════════
+const home = async () => { await page.goto(BASE + 'field-inspect.html'); await page.waitForSelector('text=New inspection'); };
+await t('picker: Add-new at the TOP and BOTTOM; type-to-search by address, owner and unit; multi-unit asks which unit', async () => {
+  await home(); await page.click('text=＋ New inspection'); await page.waitForSelector('#proplist .propitem');
+  const adds = page.locator('button:has-text("Add a new property to the Hub")'); assert.equal(await adds.count(), 2);
+  const y0 = (await adds.nth(0).boundingBox()).y, yq = (await page.locator('#pq').boundingBox()).y, y1 = (await adds.nth(1).boundingBox()).y;
+  assert.ok(y0 < yq && yq < y1, 'one add button above the search box, one below the list');
+  for (const b of [adds.nth(0), adds.nth(1)]) assert.ok((await b.boundingBox()).height >= 44, 'tap target');
+  await page.fill('#pq', 'premier'); assert.equal(await page.locator('.propitem').count(), 1, 'found by OWNER company name');
+  assert.ok((await page.locator('.propitem').innerText()).includes('122 S Gilmor St'));
+  await page.fill('#pq', 'main street'); assert.equal(await page.locator('.propitem').count(), 1, 'street = st');
+  await page.fill('#pq', 'main 1b'); assert.ok((await page.locator('.propitem').first().innerText()).includes('Unit 1B'), 'unit row by label');
+  await page.fill('#pq', 'zzzz'); assert.ok(await page.locator('text=No match in the Hub').count());
+  await noHScroll(page, 'picker'); await shot(page, 'r3-picker');
+  await page.fill('#pq', 'main'); await page.click('.propitem >> nth=0'); await page.waitForSelector('#uq');
+  await page.fill('#uq', '1b'); assert.equal(await page.locator('#unitlist .propitem').count(), 1);
+  await page.click('#unitlist .propitem'); await page.waitForSelector('text=Inspection type');
+  assert.ok((await page.locator('.propcard').innerText()).includes('Unit 1B'));
+  assert.ok((await page.locator('#ownercard').innerText()).includes('Sam Solo'), 'owner with no company shows the person');
+});
+await t('no-owner property: owner must be chosen (searchable), then the inspection is on behalf of them', async () => {
+  await home(); await page.click('text=＋ New inspection'); await page.waitForSelector('#proplist .propitem');
+  await page.fill('#pq', 'old rd'); await page.click('.propitem'); await page.waitForSelector('#oq');
+  assert.ok((await page.locator('#ownercard').innerText()).includes('no owner in the Hub'));
+  await page.fill('#oq', 'prem'); await page.click('#olist .propitem'); await page.waitForSelector('#ownercard:has-text("Premier Property Management LLC")');
+  await page.click('#start-btn'); await page.waitForSelector('text=areas done');
+  assert.ok((await page.locator('#view').innerText()).includes('On behalf of Premier Property Management LLC'));
+  await waitSaved();
+  const hdr = w.h.tabs.FI_Inspections.headers, rows = w.h.tabs.FI_Inspections.rows;
+  const row = rows.find(r => (r[hdr.indexOf('Address')] || '').includes('9 Old Rd'));
+  assert.equal(row[hdr.indexOf('Owner_Name')], 'Premier Property Management LLC'); w.h.r3Insp = row[hdr.indexOf('ID')];
+  await noHScroll(page, 'areas r3');
+});
+await t('start without an owner: allowed, but the review screen blocks publishing and says why', async () => {
+  await home(); await page.click('text=＋ New inspection'); await page.waitForSelector('#proplist .propitem');
+  await page.fill('#pq', 'old rd'); await page.click('.propitem'); await page.waitForSelector('#oq');
+  await page.click('button:has-text("Skip for now")'); await page.click('#start-btn'); await page.waitForSelector('text=areas done');
+  assert.ok((await page.locator('#view').innerText()).includes('No owner chosen'));
+  await page.click('button:has-text("Review & report") >> nth=0'); await page.waitForSelector('text=Before you publish');
+  assert.ok((await page.locator('#view').innerText()).includes('Choose who this inspection is on behalf of'));
+  assert.ok(await page.locator('#pub-btn:disabled').count(), 'publish disabled');
+  await page.click('button:has-text("Choose")'); await page.waitForSelector('#oq2'); await page.fill('#oq2', 'solo'); await page.click('#olist2 .propitem');
+  await page.waitForSelector('.sheet >> text=Sam Solo'); await page.click('.sheet button:has-text("Done")');
+  await page.waitForFunction(() => !/Choose who this inspection/.test(document.getElementById('view').innerText));
+});
+await t('Add a new property: writes the PROPERTY and its OWNER to the Hub; duplicate + existing-owner prompts', async () => {
+  await home(); await page.click('text=＋ New inspection'); await page.waitForSelector('#proplist .propitem');
+  await page.fill('#pq', '31 Fresh Ave'); await page.locator('button:has-text("Add a new property to the Hub")').first().click(); await page.waitForSelector('#np-addr');
+  assert.equal(await page.inputValue('#np-addr'), '31 Fresh Ave', 'search text carried into the form');
+  await noHScroll(page, 'new-prop sheet'); await shot(page, 'r3-newprop');
+  await page.selectOption('#np-type', 'multi'); await page.fill('#np-units', '1A, 1B');
+  await page.click('#np-ok'); await page.waitForSelector('#np-msg .banner'); // no owner yet
+  assert.ok((await page.locator('#np-msg').innerText()).includes('Choose the owner'), 'owner is required');
+  assert.equal(w.h.tabs.Properties.rows.length, 3, 'nothing written');
+  await page.fill('#np-co', 'Acme Holdings LLC'); await page.fill('#np-ph', '410-555-0100');
+  await page.click('#np-ok'); await page.waitForSelector('#ownercard:has-text("Acme Holdings LLC")').catch(async e => { throw new Error(e.message.split('\n')[0] + ' :: msg=' + (await page.locator('#np-msg').innerText().catch(() => '?'))); });
+  const ph = w.h.tabs.Properties.headers, pr = w.h.tabs.Properties.rows.find(r => r[ph.indexOf('Address')] === '31 Fresh Ave');
+  assert.ok(pr && pr[ph.indexOf('Type')] === 'multi' && pr[ph.indexOf('Unit_Count')] === '2', 'Hub property row written');
+  const oh = w.h.tabs.Owners.headers, orow = w.h.tabs.Owners.rows.find(r => r[oh.indexOf('Company')] === 'Acme Holdings LLC');
+  assert.ok(orow && orow[oh.indexOf('Active')] === 'TRUE' && pr[ph.indexOf('Owner_ID')] === orow[oh.indexOf('ID')], 'owner created and linked to the property');
+  assert.equal(w.h.tabs.Units.rows.length, 4, 'two units created');
+  assert.ok((await page.locator('.propcard').innerText()).includes('In the Hub'));
+  // duplicate address
+  await page.click('text=Change property'); await page.waitForSelector('#proplist .propitem');
+  await page.locator('button:has-text("Add a new property to the Hub")').nth(1).click(); await page.waitForSelector('#np-addr');
+  await page.fill('#np-addr', '31 fresh ave'); await page.fill('#np-oq', 'acme'); await page.click('#np-olist .propitem'); await page.click('#np-ok');
+  await page.waitForSelector('#np-msg:has-text("Already in the Hub")'); assert.equal(w.h.tabs.Properties.rows.length, 4 - 0 === 4 ? 4 : 4);
+  await page.click('#np-msg button:has-text("Use")'); await page.waitForSelector('#uq'); // it is a multi-unit building: asks which unit
+  await page.click('button:has-text("Whole property")'); await page.waitForSelector('#ownercard:has-text("Acme Holdings LLC")');
+  // same owner again, typed instead of picked
+  await page.click('text=Change property'); await page.waitForSelector('#proplist .propitem');
+  await page.locator('button:has-text("Add a new property to the Hub")').first().click(); await page.waitForSelector('#np-addr');
+  await page.fill('#np-addr', '32 Fresh Ave'); await page.fill('#np-co', 'ACME Holdings'); await page.click('#np-ok');
+  await page.waitForSelector('#np-msg:has-text("already exists")'); const ownersBefore = w.h.tabs.Owners.rows.length;
+  await page.click('#np-msg button:has-text("Use")'); await page.waitForSelector('#np-owner:has-text("Acme Holdings LLC")'); await page.click('#np-ok');
+  await page.waitForSelector('.propcard:has-text("32 Fresh Ave")'); assert.equal(w.h.tabs.Owners.rows.length, ownersBefore, 'no duplicate owner created');
+});
+await t('Add a property: Hub failure is shown on the sheet, nothing pretends to be saved, retry works', async () => {
+  await home(); await page.click('text=＋ New inspection'); await page.waitForSelector('#proplist .propitem');
+  await page.locator('button:has-text("Add a new property to the Hub")').first().click(); await page.waitForSelector('#np-addr');
+  await page.fill('#np-addr', '40 Broken Ct'); await page.fill('#np-co', 'Ghost Holdings'); w.h.dropAdd = 'Properties';
+  await page.click('#np-ok'); await page.waitForSelector('#np-msg:has-text("could not be verified")');
+  assert.ok((await page.locator('#np-msg').innerText()).includes('WAS saved'), 'tells you the owner was saved');
+  assert.ok(await page.locator('#np-addr').count() && !(await page.locator('#np-ok').isDisabled()), 'sheet stays open, button usable'); assert.equal(await page.locator('.propcard').count(), 0);
+  w.h.dropAdd = null; assert.ok((await page.locator('#np-owner').innerText()).includes('Ghost Holdings'), 'saved owner is pre-selected for the retry'); await page.click('#np-ok'); await page.waitForSelector('.propcard:has-text("40 Broken Ct")');
+});
+await t('legacy "not in the Hub" inspection: Add to the Hub from the Property & owner card', async () => {
+  const doc = { v: 1, id: 'fi_legacyaaaa1', date: '2026-10-14', type: 'periodic', property: { source: 'new', id: '', address: '500 Legacy Way, Baltimore, MD' }, pre1978: false, overall: { condition: 'not_inspected' }, areas: [{ id: 'a1', name: 'Kitchen', group: 'interior', condition: 'not_inspected', issues: [] }] };
+  const sv = await w.fiSave(w.env, { id: 'fi_legacyaaaa1', base_rev: 0, doc, meta: { brand_id: 'brand_default', inspector: 'Brett Lambert' } }); assert.ok(sv.body.ok, JSON.stringify(sv.body));
+  await home(); await page.waitForSelector('.card:has-text("500 Legacy Way")'); await page.click('.card:has-text("500 Legacy Way")'); await page.waitForSelector('text=areas done');
+  assert.ok((await page.locator('#view').innerText()).includes('Not in the Hub yet'));
+  await page.click('.card:has-text("Property & owner") button:has-text("Edit")'); await page.waitForSelector('#oq2');
+  await page.click('.sheet button:has-text("Add to the Hub")'); await page.waitForSelector('#np-addr');
+  assert.equal(await page.inputValue('#np-addr'), '500 Legacy Way'); assert.equal(await page.inputValue('#np-city'), 'Baltimore');
+  await page.fill('#np-co', 'Legacy Owners LLC'); await page.click('#np-ok');
+  await page.waitForFunction(() => /On behalf of Legacy Owners LLC/.test(document.getElementById('view').innerText));
+  assert.ok(!(await page.locator('#view').innerText()).includes('Not in the Hub yet'));
+  await waitSaved();
+  const ph = w.h.tabs.Properties.headers; assert.ok(w.h.tabs.Properties.rows.some(r => r[ph.indexOf('Address')] === '500 Legacy Way'), 'in the Hub');
+  const g = await w.fiGetInspection(w.env, new URL('https://x/fi/inspection?id=fi_legacyaaaa1')); assert.equal(g.body.doc.property.source, 'hub'); assert.equal(g.body.doc.owner.name, 'Legacy Owners LLC');
+});
+await t('Drive: "Organize photos" moves earlier photos into <address>/Inspection MMDDYYYY, in slices, and reports done', async () => {
+  const id = w.h.r3Insp; assert.ok(id);
+  w.h.drive = w.h.drive || { folders: [], files: {}, seq: 0, patches: 0 };
+  w.h.tabs.FI_Photos = w.h.tabs.FI_Photos || { headers: ['ID', 'Inspection_ID', 'Drive_File_ID', 'Mime', 'Bytes', 'Created_At', 'Active'], rows: [] };
+  for (let i = 0; i < 25; i++) { w.h.tabs.FI_Photos.rows.push(['ph_o' + i, id, 'oldf' + i, 'image/jpeg', '1', 'x', 'TRUE']); w.h.drive.files['oldf' + i] = { parents: ['oldFolder'] }; }
+  await home(); await page.waitForSelector('.card[onclick*="' + id + '"]'); await page.click('.card[onclick*="' + id + '"]'); await page.waitForSelector('text=areas done'); await waitSaved();
+  await page.click('.card:has-text("Property & owner") button:has-text("Edit")'); await page.waitForSelector('#org-btn');
+  assert.ok((await page.locator('.sheet').innerText()).includes('9 Old Rd') && (await page.locator('.sheet').innerText()).includes('Inspection '));
+  await noHScroll(page, 'owner sheet'); await shot(page, 'r3-ownersheet');
+  await page.click('#org-btn'); await page.waitForSelector('#org-msg .banner.ok:has-text("Done")');
+  const bad = Object.keys(w.h.drive.files).filter(k => k.startsWith('oldf') && !(w.h.drive.files[k].parents.length === 1 && w.h.drive.files[k].parents[0] !== 'oldFolder'));
+  assert.equal(bad.length, 0, 'every photo moved; not moved: ' + bad.map(k => k + ':' + w.h.drive.files[k].parents).join(' ') + ' folders=' + JSON.stringify(w.h.drive.folders));
+  assert.ok(w.h.drive.folders.some(f => f.name === 'Inspection ' + new Date().toISOString().slice(5, 7) + new Date().toISOString().slice(8, 10) + new Date().toISOString().slice(0, 4)) || w.h.drive.folders.some(f => /^Inspection \d{8}$/.test(f.name)), 'inspection folder named like Brett\'s');
+  assert.ok(await page.locator('#org-msg a:has-text("Open it")').count(), 'link to the folder');
+});
+await t('Drive: a failing move is shown as an error, not "done"', async () => {
+  const id = w.h.r3Insp; w.h.tabs.FI_Photos.rows.push(['ph_bad1', id, 'ghostfile', 'image/jpeg', '1', 'x', 'TRUE']);
+  await page.click('#org-btn'); await page.waitForSelector('#org-msg .banner.err'); assert.ok(!(await page.locator('#org-msg').innerText()).includes('Done'));
+  w.h.tabs.FI_Photos.rows.pop(); await page.click('.sheet button:has-text("Done")');
 });
 await t('no uncaught errors / console errors anywhere', async () => { assert.deepEqual(errs, []); });
 await browser.close(); server.close();

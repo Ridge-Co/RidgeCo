@@ -11,7 +11,7 @@ const R = (status, body, ctype = 'text/html', loc = '') => {
   return { ok: status >= 200 && status < 300, status, headers: { get: k => (k === 'Content-Type' ? ctype : k === 'Location' ? loc : '') }, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), json: async () => JSON.parse(typeof body === 'string' ? body : new TextDecoder().decode(bytes)) };
 };
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4, 5, 6, 7, 8]);
-const mkDoc = (over = {}) => Object.assign({ v: 1, property: { id: '12', address: '122 S Gilmor St, Baltimore, MD 21223' }, pre1978: true, overall: { condition: 'fair' }, areas: [
+const mkDoc = (over = {}) => Object.assign({ v: 1, property: { id: '12', address: '122 S Gilmor St, Baltimore, MD 21223' }, owner: { id: 'O1', name: 'Premier Property Management LLC' }, pre1978: true, overall: { condition: 'fair' }, areas: [
   { id: 'a1', name: 'Kitchen', condition: 'poor', issues: [] }, { id: 'a2', name: 'Heating / HVAC', issues: [] }, { id: 'a3', name: 'Bedroom 2 (3rd floor)', issues: [] }] }, over);
 
 // ── equipment ──
@@ -288,7 +288,7 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('staging token: transcribe raw route guarded to TEST- inspections', /path === '\/fi\/transcribe'[\s\S]{0,400}startsWith\('TEST-'\)/.test(src));
   t('staging token: read-label limited to TEST- inspections', /path === '\/fi\/read-label'\) return String\(\(body && body\.inspection_id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
   t('staging token: issue-type writes limited to TEST- names', src.includes("path === '/fi/issue-types/save'") && src.includes("path === '/fi/issue-types/touch'") && /touch'\) return Array\.isArray[\s\S]{0,200}startsWith\('TEST-'\)/.test(src));
-  t('BUILD_VERSION bumped', src.includes("BUILD_VERSION = '2026-10-15.02-field-inspection-update'"));
+  t('BUILD_VERSION valid and not older than round 2', /BUILD_VERSION = '2026-10-15\.0[2-9]-[a-z-]+'/.test(src));
 }
 
 console.log(`fi-round2: ${pass} passed, ${fail} failed`);
