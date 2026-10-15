@@ -641,6 +641,7 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/px')      return await scopeProposalPixel(env, url, request.headers.get('User-Agent') || '', ctx);
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
+        if (path === '/fi/list')                return await fiRoute(env, 'list', () => fiList(env));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
