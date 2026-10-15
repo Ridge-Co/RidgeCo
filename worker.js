@@ -33522,4 +33522,152 @@ async function fiPhotoUpload(env, request, url) {
   if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
   return json({ ok: true, photo_id: photoId, bytes: buf.byteLength });
 }
-// __FI_NEXT__
+async function fiPhotoView(env, url) {
+  const r = url.searchParams.get('r') || '', p = url.searchParams.get('p') || '';
+  if (!r || !FI_ID_RE.test(p)) return fiErr(404, 'not_found', 'Not found.');
+  const it = await fiReadFresh(env, 'FI_Inspections');
+  const insp = it.rows.find(x => x.o.Report_Token === r && x.o.Active !== 'FALSE');
+  if (!insp) return fiErr(404, 'not_found', 'Not found.');
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const ph = pt.rows.find(x => x.o.ID === p && x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE');
+  if (!ph) return fiErr(404, 'not_found', 'Not found.');
+  const token = await getAccessToken(env);
+  const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.o.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!dr.ok || !dr.body) return fiErr(502, 'drive_read', 'Could not load the photo.');
+  return new Response(dr.body, { status: 200, headers: { ...CORS, 'Content-Type': ph.o.Mime || 'image/jpeg', 'Cache-Control': 'private, max-age=3600' } });
+}
+async function fiReport(env, request, url) {
+  const r = url.searchParams.get('r') || '';
+  if (!r || r.length < 10) return fiErr(404, 'not_found', 'This report link is not valid.');
+  await fiEnsureTabs(env);
+  const it = await fiReadFresh(env, 'FI_Inspections');
+  const insp = it.rows.find(x => x.o.Report_Token === r && x.o.Active !== 'FALSE');
+  if (!insp) return fiErr(404, 'not_found', 'This report link is not valid.');
+  const admin = fiIsAdmin(env, request, url);
+  const published = insp.o.Status === 'published';
+  if (!published && !admin) return fiErr(403, 'not_published', 'This report is being updated and is not available right now. Please check back soon.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(insp.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'This report could not be loaded.'); }
+  const br = await fiResolveBrand(env, insp.o.Brand_ID);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const have = new Set(pt.rows.filter(x => x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE').map(x => x.o.ID));
+  const photoIds = fiPhotoIds(doc).filter(p => have.has(p));
+  const summaryOk = !!(doc.summary && doc.summary.accepted && doc.summary.fp === fiFingerprint(doc));
+  if (!summaryOk) delete doc.summary;
+  delete doc.dictation_log;
+  for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
+  return json({ ok: true, preview: !published, inspection: fiInspHeaderOut(insp.o), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
+}
+async function fiStructure(env, body) {
+  body = body || {};
+  const dictation = fiStr(body.dictation, 8000).trim();
+  if (!dictation) return fiErr(400, 'empty', 'There is no dictation to process.');
+  if (!body.area_name) return fiErr(400, 'bad_request', 'area_name is required.');
+  let ai;
+  try {
+    ai = await routeAI(env, { type: 'fi_structure', customerFacing: true, schema: true, system: FI_STRUCTURE_SYSTEM, prompt: fiBuildStructurePrompt(Object.assign({}, body, { dictation })), maxTokens: 2200, source: 'field-inspect' });
+  } catch (e) { return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const parsed = fiExtractJson(ai.result);
+  const issues = parsed && fiNormalizeIssues(parsed.issues);
+  if (!issues) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your text is kept — retry, or add the issues by hand.');
+  const cond = FI_CONDITIONS.includes(parsed.area_condition) ? parsed.area_condition : '';
+  return json({ ok: true, issues, area_condition: cond, area_summary: fiStr(parsed.area_summary, 300), model_used: ai.model_used });
+}
+async function fiSummarize(env, body) {
+  body = body || {};
+  const v = fiValidateDoc(body.doc);
+  if (!v.ok) return fiErr(400, 'invalid_doc', 'The inspection data is not valid: ' + v.errors.join('; '));
+  const doc = body.doc, rollup = fiTradeRollup(doc);
+  if (!rollup.length) return json({ ok: true, summary: { overall: 'No repair items were recorded during this inspection.', trades: {}, priorities: [], fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: 'none' }, rollup });
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_summary', customerFacing: true, schema: true, system: FI_SUMMARY_SYSTEM, prompt: fiBuildSummaryPrompt(doc, rollup), maxTokens: 2500, source: 'field-inspect' }); }
+  catch (e) { return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const norm = fiNormalizeSummary(fiExtractJson(ai.result), rollup);
+  if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry.');
+  return json({ ok: true, summary: Object.assign(norm, { fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: ai.model_used }), rollup });
+}
+async function fiPublish(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  await fiEnsureTabs(env);
+  const { headers, row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Save the inspection to the server first.');
+  if (body.unpublish === true) {
+    await fiWriteRow(env, 'FI_Inspections', headers, Object.assign({}, row.o, { Status: 'draft', Published_At: '', Published_Rev: '', Updated_At: new Date().toISOString() }), row.rowNum);
+    const c = await fiFindInspection(env, id);
+    if (!c.row || c.row.o.Status !== 'draft') return fiErr(500, 'verify_failed', 'Un-publish could not be verified.');
+    return json({ ok: true, status: 'draft' });
+  }
+  if (Number(row.o.Rev) !== Number(body.rev)) return fiErr(409, 'stale', 'The saved version changed since you reviewed it. Reload and review again.', { server_rev: Number(row.o.Rev) || 0 });
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection could not be read.'); }
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const have = pt.rows.filter(x => x.o.Inspection_ID === id && x.o.Active !== 'FALSE').map(x => x.o.ID);
+  const checks = fiPublishChecks(doc, have);
+  if (checks.blocks.length) return fiErr(409, 'blocked', 'Fix these before publishing: ' + checks.blocks.map(b => b.message).join('; '), { blocks: checks.blocks, warnings: checks.warnings });
+  if (checks.warnings.length && body.ack_warnings !== true) return fiErr(409, 'needs_ack', 'Please confirm these warnings: ' + checks.warnings.map(b => b.message).join('; '), { warnings: checks.warnings });
+  const now = new Date().toISOString();
+  await fiWriteRow(env, 'FI_Inspections', headers, Object.assign({}, row.o, { Status: 'published', Published_At: now, Published_Rev: row.o.Rev, Updated_At: now }), row.rowNum);
+  const c = await fiFindInspection(env, id);
+  if (!c.row || c.row.o.Status !== 'published' || c.row.o.Published_Rev !== row.o.Rev) return fiErr(500, 'verify_failed', 'Publishing could not be verified.');
+  return json({ ok: true, status: 'published', published_at: now, report_token: row.o.Report_Token, report_url: `${FI_PAGE_BASE}/inspection-report.html?r=${row.o.Report_Token}` });
+}
+async function fiBrandSave(env, body) {
+  body = body || {};
+  const name = fiStr(body.name, 80).trim();
+  if (!name) return fiErr(400, 'name_required', 'Brand name is required.');
+  const hex = v => (/^#[0-9a-fA-F]{6}$/.test(String(v || '')) ? String(v) : null);
+  const pc = hex(body.primary_color), ac = hex(body.accent_color || '#166534');
+  if (!pc || !ac) return fiErr(400, 'bad_color', 'Colors must look like #1d4ed8.');
+  let logo;
+  if (body.logo_data !== undefined && body.logo_data !== null && body.logo_data !== '') {
+    logo = String(body.logo_data);
+    if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(logo)) return fiErr(400, 'bad_logo', 'Logo must be a PNG, JPEG or WebP image.');
+    if (logo.length > 42000) return fiErr(413, 'logo_too_large', 'Logo is too large (keep it under about 30 KB — the app resizes it for you).');
+  }
+  await fiEnsureTabs(env);
+  const t = await fiReadFresh(env, 'FI_Brands');
+  const id = body.id ? String(body.id) : 'brand_' + inspRandToken(9);
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Brand id is malformed.');
+  const ex = t.rows.find(r => r.o.ID === id);
+  if (body.id && !ex) return fiErr(404, 'not_found', 'That brand does not exist.');
+  const now = new Date().toISOString();
+  const o = Object.assign({}, ex ? ex.o : {}, { ID: id, Name: name, Primary_Color: pc, Accent_Color: ac, Tagline: fiStr(body.tagline, 160), Contact_Line: fiStr(body.contact_line, 240), Footer_Text: fiStr(body.footer_text, 300),
+    Logo_Data: body.remove_logo === true ? '' : (logo !== undefined ? logo : (ex ? ex.o.Logo_Data : '')), Active: body.active === false ? 'FALSE' : 'TRUE', Created_At: ex ? ex.o.Created_At : now, Updated_At: now });
+  const wantDefault = body.is_default === true;
+  o.Is_Default = wantDefault ? 'TRUE' : (ex ? ex.o.Is_Default : 'FALSE');
+  if (o.Active === 'FALSE' && o.Is_Default === 'TRUE') return fiErr(400, 'default_inactive', 'The default brand cannot be deactivated. Make another brand the default first.');
+  await fiWriteRow(env, 'FI_Brands', t.headers, o, ex ? ex.rowNum : 0);
+  if (wantDefault) {
+    const t2 = await fiReadFresh(env, 'FI_Brands');
+    for (const r of t2.rows) if (r.o.ID !== id && r.o.Is_Default === 'TRUE') await fiWriteRow(env, 'FI_Brands', t2.headers, Object.assign({}, r.o, { Is_Default: 'FALSE' }), r.rowNum);
+  }
+  const chk = await fiReadFresh(env, 'FI_Brands');
+  const hits = chk.rows.filter(r => r.o.ID === id);
+  const defaults = chk.rows.filter(r => r.o.Is_Default === 'TRUE' && r.o.Active !== 'FALSE').length;
+  if (hits.length !== 1 || hits[0].o.Name !== name || hits[0].o.Logo_Data !== o.Logo_Data || defaults !== 1) return fiErr(500, 'verify_failed', 'The brand could not be verified after saving. Retry.');
+  return json({ ok: true, brand: fiBrandOut(hits[0].o, true) });
+}
+async function fiEmailReport(env, request, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const to = String(body.to || '').trim();
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(to)) return fiErr(400, 'bad_email', 'Enter one valid email address.');
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Inspection not found on the server.');
+  if (row.o.Status !== 'published') return fiErr(409, 'not_published', 'Publish the report before emailing it.');
+  const br = await fiResolveBrand(env, row.o.Brand_ID);
+  const link = `${FI_PAGE_BASE}/inspection-report.html?r=${row.o.Report_Token}`;
+  const mail = fiBuildEmail(br.raw, row.o, link, fiStr(body.message, 1000));
+  if (body.preview !== false) return json({ ok: true, preview: true, to, subject: mail.subject, html: mail.html });
+  let res;
+  try { res = await gmailSendEmail(env, { to, subject: mail.subject, html: mail.html }); }
+  catch (e) { return fiErr(502, 'send_failed', 'The email could not be sent: ' + String((e && e.message) || e).slice(0, 160)); }
+  const lt = await fiReadFresh(env, 'FI_Email_Log');
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, { ID: 'em_' + inspRandToken(9), Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: res && res.staged ? 'staged' : 'sent', Sent_At: new Date().toISOString() }, 0);
+  return json({ ok: true, sent: !(res && res.staged), staged: !!(res && res.staged), to, subject: mail.subject });
+}
+// ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════
