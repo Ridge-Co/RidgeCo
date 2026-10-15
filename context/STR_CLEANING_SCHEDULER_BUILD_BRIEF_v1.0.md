@@ -110,6 +110,19 @@ Known limit: Google Sheets read quota is per minute for the whole Hub. The publi
 - **Brett's phone test passed:** `[TEST - for Gina]` offer for Nov 8 -> accepted -> turnover `covered` (via offer); the Nov 11/12 pre-arrival offer -> declined -> Kayla asked at once.
 - **Open:** `sweep_work` fails every tick because scopes 4 and 6 (WO-1180, WO-1183) have no deposit invoice (Brett's call: create the invoices or exclude); two near-simultaneous cleaner taps wrote two STR_Log rows with the same ID (read-max+1; cosmetic, fix queued); first `Selftest_Results` row should appear once the sliced self-test finishes; calendar sync, Mon/Wed/Fri digest and going live (test mode OFF, Brett's approval) are still ahead.
 
+## Live rollout log (Oct 15 2026) — WENT LIVE
+
+- **Test mode turned OFF ~4:00 pm ET** (`STR_SMS_TEST_MODE` = FALSE via the board's red confirmation, Brett's explicit request). Cleaning texts now go to the real cleaners. Brett's rule: no test messages to anyone; every text must be for a real need.
+- **Friday Oct 16 verified covered by Gina** (`on_calendar`, via the hand-typed "Gina Cleaning" entry) before the switch; no offers out for it.
+- **Test-era offer state reset.** The Nov 11 pre-arrival and Nov 15 checkout queues still held decline/expiry/pending rows that came from Brett's test taps (texts went to his phone only). Both were reset with the board's "Restart the queue": old offers marked `superseded` (silent, no texts to Kayla or Rachel), Gina asked first with a real text (offers 7 and 8, reply by Fri Oct 16 8 AM ET).
+- **Deleted the recurring "Kayla N/A" series** (Mon-Fri) from TURNOVER COVERAGE MILAM RIDGE. Brett: those were Kayla's *base* availability and she has repeatedly taken jobs on those days, so she is always asked. "Kayla Cleaning" coverage entries, "Michele N/A" and Gina's "Gina Not Available" entries were left alone.
+- **Calendar policy (Brett):** the cleaning calendar should show *actual responses* going forward ("X said not available on this date"), not base availability. Gina's "Not Available" entries are real responses she gave him and stand as if she had responded.
+- Correction to earlier notes: overnight-window offer deadlines are Fri 8:00 AM ET (12:00 UTC), not noon ET.
+
+## Backlog items added Oct 15 (logged, NOT built)
+
+See roadmap items 8-10 below.
+
 ## Roadmap — logged, NOT built (room is reserved; the cleaner page already has a "coming soon" strip)
 
 Scheduling was by far the priority. From Brett's Oct 14 message, to build later on the same token page and the same `STR_*` sheet family:
@@ -120,6 +133,11 @@ Scheduling was by far the priority. From Brett's Oct 14 message, to build later 
 5. **Deep-clean rotation** — kitchen → bathrooms → bedrooms, one per turnover window.
 6. **5-star guest-condition report** (1 absolutely terrible … 5 excellent) with a short checklist and photos, **internal only**.
 7. **Make.com migration**: retire the 3x weekly email once `STR_DIGEST_ENABLED` has run clean for a week.
+8. **Calendar shows actual responses (Brett, Oct 15).** When a cleaner says she is not available for a date (marks Out on the page, or declines for that date), the Hub writes an all-day "<Name> Not Available" event to TURNOVER COVERAGE MILAM RIDGE (needs `STR_CAL_WRITE_ENABLED`; Hub-written events carry `ridgecoStr`). No base-availability entries (the Kayla N/A series was deleted Oct 15 because she regularly takes jobs on those days; she is always asked).
+9. **Honor hand-typed "Gina Not Available" entries (Brett, Oct 15).** They are real dates she told Brett, so the Hub should treat them as if she had responded Out (today the Hub does not read them; admin state shows every cleaner as "hasn't said"). Brett: she can still be sent a message as a backup. Design question to confirm when building: ask her anyway as "backup only" on those dates (my reading), or skip her entirely.
+10. **Day-after cleaning fallback + check-in blocking (Brett, Oct 15; needs research and a test before building).**
+    - Today an uncovered checkout day is "uncovered". Add a check of the bookings feed: if the next guest arrives at least a day after checkout (e.g. checkout Monday, next arrival Tuesday), a Tuesday-morning clean still works, so nobody being available Monday does not mean the turnover is uncovered. Offer the day-after window (or ask for it) before alerting.
+    - But the open gap day must not allow a single-night instant booking that lands on a day we know has no cleaning coverage. Block check-ins on that uncovered day. Research: can this be done through Uplisting (blocked dates, min-stay or check-in restrictions via API/MCP) or only with a simple calendar entry? The Uplisting feed is iCal read-only (calendar blocking was previously "out of scope"), so test with one real date before building.
 Open questions with defaults used: Gina = Regina Seville; Sierra is not in the pool (add her with "in queue" off to get the email only); a cleaner pre-marked "available" is **not** auto-assigned
 (marks mean backup only); alert threshold 5 days (Brett said both 7 and 5 — 5 stuck, configurable); Uplisting calendar blocking is out of scope.
 
