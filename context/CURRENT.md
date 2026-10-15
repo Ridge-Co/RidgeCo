@@ -1,3 +1,9 @@
+# FIELD INSPECTION APP — Oct 15, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/field-inspection`, NOT merged (Brett merges). BUILD_VERSION `2026-10-15.01-field-inspection`.
+
+## 🟡 Built and tested (108 worker assertions, 15 Playwright phone checks, full suite green); staging verification + Brett go/no-go pending: `field-inspect.html` (phone inspection: Hub property picker or add-new, standard areas + bedrooms/bathrooms + excludable exterior sides, per-area dictation -> Claude turns it into trade/severity issues with cause + fix, tenant-action category, photos, offline-safe sync, review gate, publish) and `inspection-report.html` (public branded report grouped by trade + area, print-to-PDF, optional email, static link). Brand switch (Ridge Co default, Premier addable) re-skins the report instantly. Dev Log launcher added. Brief: `context/FIELD_INSPECTION_BUILD_BRIEF_v1.0.md`. Later: templates, carry-forward, WO conversion.
+
+---
+
 # INSPECTION SCHEDULER REOPEN + EXTEND — Oct 14, 2026 — Ridge-Co/RidgeCo, base `main`, head `feat/insp-reopen-extend-block-oct14` (cut from main tip 1606ad5), NOT merged (Brett merges). PR #293 (base `main`). BUILD_VERSION `2026-10-14.16-insp-reopen-extend`.
 
 ## 🟡 Built and tested (68 handler/pure tests, 35 Playwright UI checks at 412px, full suite green); staging verification pending: `inspect.html` blocks get Close | Reopen | Extend open buttons (greyed by state), a sheet with Until tomorrow 7am / 3h / 6h / 12h / 24h / pick a date, optional email/text to the partner (reopen: email on, text off). After merge: tap Reopen on the Oct 15 10-2 block. Heads-up: it will overlap Premier's manual block 8; texts depend on Config TWILIO_ENABLED. See FEATURE_LOG `[FL-20261014-1800-rop]` and rule 213.

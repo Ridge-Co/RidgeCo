@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Inspection — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --surface:#fff; --border:#dfe3e8; --text:#1c2430; --muted:#6b7684;
+    --accent:#1d4ed8; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
+    --sev-urgent:#c0392b; --sev-high:#d9622b; --sev-medium:#c99a06; --sev-low:#4a7bd0; --sev-info:#8a94a3;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
+  .hide{display:none!important}
+  main{padding:12px 12px 90px;max-width:680px;margin:0 auto}
+  h1{font-size:20px;margin:6px 0 10px} h2{font-size:17px;margin:14px 0 8px} h3{font-size:15px;margin:10px 0 6px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .muted{color:var(--muted);font-size:13px}
+  .btn{min-height:44px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  .btn.danger{background:#fff;color:var(--danger);border-color:var(--danger)}
+  .btn.ghost{background:transparent}
+  .btn.sm{min-height:36px;padding:6px 11px;font-size:13px}
+  .btn.block{display:block;width:100%}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
+  .pill.ok{background:#e7f6ec;color:var(--accent2)} .pill.warn{background:#fdf3e0;color:var(--warn)} .pill.bad{background:#fdecea;color:var(--danger)} .pill.new{background:#eaf1fd;color:var(--accent)}
+  input,select,textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text);font-family:inherit}
+  textarea{min-height:110px;resize:vertical}
+  label.fld{display:block;margin:12px 0 4px;font-size:13px;color:var(--muted);font-weight:600}
+  .seg{display:flex;gap:6px;margin:6px 0;flex-wrap:wrap}
+  .seg button{flex:1 1 0;min-width:72px;min-height:44px;padding:8px 6px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:14px;font-weight:600;cursor:pointer;color:var(--text)}
+  .seg button.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .seg button.sel.good{background:var(--accent2);border-color:var(--accent2)} .seg button.sel.poor{background:var(--danger);border-color:var(--danger)} .seg button.sel.fair{background:var(--warn);border-color:var(--warn)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:50}
+  .modal.open{display:flex}
+  .sheet{background:var(--surface);width:100%;max-width:680px;border-radius:16px 16px 0 0;padding:16px;max-height:92vh;overflow:auto}
+  .sheet h2{margin:2px 0 10px}
+  .toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;pointer-events:none;opacity:0;transition:opacity .2s;max-width:90vw}
+  .toast.show{opacity:1}
+  .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+  .banner.warn{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12} .banner.err{background:#fdecea;border:1px solid #f1b9b3;color:#8e281d} .banner.ok{background:#e7f6ec;border:1px solid #b5e0c4;color:#14623a} .banner.info{background:#eaf1fd;border:1px solid #bcd0f5;color:#1a3f94}
+  #login{max-width:360px;margin:60px auto;padding:20px;text-align:center}
+  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px}
+  #syncbar .st{font-weight:700}
+  #syncbar.ok .st{color:var(--accent2)} #syncbar.work .st{color:var(--accent)} #syncbar.off .st{color:var(--warn)} #syncbar.err .st{color:var(--danger)}
+  .area-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px;border-top:1px solid var(--border);cursor:pointer;min-height:52px}
+  .area-row:first-child{border-top:none}
+  .area-row.ex{opacity:.5}
+  .issue{border-left:5px solid var(--sev-medium);padding:10px 10px 10px 12px;margin:8px 0;background:#fafbfc;border-radius:8px;cursor:pointer}
+  .issue.urgent{border-color:var(--sev-urgent)} .issue.high{border-color:var(--sev-high)} .issue.medium{border-color:var(--sev-medium)} .issue.low{border-color:var(--sev-low)} .issue.info{border-color:var(--sev-info)}
+  .issue .t{font-weight:700} .issue .f{font-size:13px;color:var(--muted);margin-top:3px}
+  .thumbs{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}
+  .thumb{position:relative;width:84px;height:84px;border-radius:8px;overflow:hidden;border:2px solid var(--border);background:#e9edf2;cursor:pointer;padding:0}
+  .thumb.sel{border-color:var(--accent)}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .b{position:absolute;right:2px;bottom:2px;font-size:10px;background:rgba(0,0,0,.65);color:#fff;border-radius:6px;padding:1px 5px}
+  .mic{width:100%;min-height:60px;font-size:17px;border-radius:14px;border:none;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
+  .mic.live{background:var(--danger);animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.75}}
+  .step{display:flex;align-items:center;gap:10px}
+  .step button{width:44px;height:44px;border-radius:10px;border:1px solid var(--border);background:var(--surface);font-size:22px;font-weight:700;cursor:pointer}
+  .step .n{min-width:34px;text-align:center;font-size:20px;font-weight:700}
+  .toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--border);min-height:48px}
+  .toggle input{width:26px;height:26px;flex:none}
+  .sw{display:inline-block;width:18px;height:18px;border-radius:5px;vertical-align:middle;border:1px solid var(--border)}
+  .propitem{padding:12px 4px;border-top:1px solid var(--border);cursor:pointer;min-height:48px}
+  .propitem:first-child{border-top:none}
+  .tradehead{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-weight:700}
+  .check{display:flex;gap:8px;align-items:flex-start;font-size:14px;margin:6px 0}
+  .linkbox{word-break:break-all;background:var(--chip);border-radius:8px;padding:8px 10px;font-size:13px;margin:6px 0}
+  .propcard{border:1px solid var(--accent);background:#eaf1fd}
+</style>
+</head>
+<body>
+<div id="rc-navbar" style="background:#1d4ed8;color:#fff;display:flex;align-items:center;gap:8px;padding:6px 10px;font:600 12px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
+  <a href="index.html" style="color:#fff;text-decoration:none">← Hub</a>
+  <span style="margin-left:auto" id="nav-ver">Field Inspection</span>
+</div>
+
+<div id="login">
+  <h1>Field Inspection</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized — try again.</p>
+  <button class="btn primary block" style="margin-top:12px" id="login-btn" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+  <main id="view"></main>
+  <div id="syncbar" class="ok"><span class="st" id="sync-st">Ready</span><span id="sync-act"></span></div>
+  <div class="toast" id="toast"></div>
+  <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+  <input type="file" id="photo-in" accept="image/*" multiple class="hide">
+  <input type="file" id="logo-in" accept="image/png,image/jpeg,image/webp" class="hide">
+</div>
+
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY = 'mh_auth';
+var AUTH_TOKEN = '';
+var ID_PREFIX = window.__testmode ? 'TEST-' : 'fi_';
+var TRADES = [['plumbing','Plumbing'],['electrical','Electrical'],['hvac','HVAC / Heating'],['roofing','Roofing / Gutters'],['structural','Structural'],['carpentry','Carpentry'],['drywall_paint','Drywall / Paint'],['flooring','Flooring'],['windows_doors','Windows / Doors'],['appliances','Appliances'],['pest','Pest'],['safety','Safety'],['exterior_site','Exterior / Site'],['cleaning','Cleaning'],['general','General'],['tenant_action','Tenant action']];
+var SEVS = [['urgent','Urgent'],['high','High'],['medium','Medium'],['low','Low'],['info','Note']];
+var CONDS = [['good','Good','good'],['fair','Fair','fair'],['poor','Poor','poor'],['nothing_to_do','Nothing to do','']];
+var TRADE_LABEL = {}; TRADES.forEach(function(t){ TRADE_LABEL[t[0]] = t[1]; });
+var SEV_LABEL = {}; SEVS.forEach(function(t){ SEV_LABEL[t[0]] = t[1]; });
+var COND_LABEL = {good:'Good',fair:'Fair',poor:'Poor',nothing_to_do:'Nothing to do',not_inspected:'Not inspected',na:'N/A'};
+var INSP_TYPES = [['periodic','Periodic'],['move_in','Move-in'],['move_out','Move-out'],['pre_listing','Pre-listing'],['other','Other']];
+
+// ── state ───────────────────────────────────────────────────────────────────
+var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], propsErr:'', propQ:'', newProp:null,
+  sync:{ state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null, lastErr:'' },
+  photoMsg:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null };
+var blobUrl = {};           // photo id -> object URL (local copy)
+var photoState = {};        // photo id -> {state, err}
+var localOnly = {};         // id -> record for inspections only on this phone
+
+// ── tiny utils ──────────────────────────────────────────────────────────────
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function $(id){ return document.getElementById(id); }
+function toast(m){ var t=$('toast'); t.textContent=m; t.className='toast show'; clearTimeout(toast._t); toast._t=setTimeout(function(){t.className='toast';},3200); }
+function rid(n){ var a=new Uint8Array(n||8); crypto.getRandomValues(a); var s=''; for(var i=0;i<a.length;i++) s+=(a[i]%36).toString(36); return s; }
+function newId(){ return ID_PREFIX + rid(12); }
+function todayStr(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+function lsGet(k,d){ try{ var v=localStorage.getItem(k); return v==null?d:v; }catch(e){ return d; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){ /* private mode: preference just isn't remembered */ } }
+// Synchronous double-tap guard (claimSubmit pattern): true = you own the action, false = already running.
+function claim(key){ if(S.busy[key]) return false; S.busy[key]=true; return true; }
+function release(key){ delete S.busy[key]; }
+function fpOf(doc){
+  var h = 2166136261 >>> 0;
+  function feed(s){ for (var i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } }
+  (doc.areas||[]).forEach(function(a){ (a.issues||[]).forEach(function(is){ feed([is.id,is.title,is.trade,is.severity,is.recommended_fix||''].join('|')+'\n'); }); });
+  return h.toString(36);
+}
+function api(method, path, body){
+  var opts = { method:method, headers:{'X-Auth-Token':AUTH_TOKEN} };
+  if (body !== undefined){ opts.headers['Content-Type']='application/json'; opts.body = JSON.stringify(body); }
+  return fetch(WORKER + path, opts).then(function(res){
+    return res.text().then(function(txt){
+      var data; try{ data = JSON.parse(txt); }catch(e){ var er = new Error('Server returned an unreadable answer (HTTP '+res.status+')'); er.status = res.status; er.code='bad_response'; throw er; }
+      if (res.status === 401 || (data && data.error === 'Unauthorized')){ var ue = new Error('Unauthorized'); ue.status=401; ue.code='unauthorized'; throw ue; }
+      if (!res.ok || (data && data.ok === false)){ var e2 = new Error((data && (data.message || data.error)) || ('HTTP '+res.status)); e2.status = res.status; e2.code = data && data.error; e2.data = data; throw e2; }
+      return data;
+    });
+  });
+}
+
+// ── IndexedDB (offline store). If it is unavailable we say so loudly and keep working in memory. ──
+var _db = null, mem = { docs:{}, photos:{} };
+function idbOpen(){
+  if (_db) return Promise.resolve(_db);
+  return new Promise(function(resolve){
+    try{
+      var rq = indexedDB.open('rc_field_inspect', 1);
+      rq.onupgradeneeded = function(){ var d = rq.result; d.createObjectStore('docs',{keyPath:'id'}); var p = d.createObjectStore('photos',{keyPath:'id'}); p.createIndex('insp','insp'); };
+      rq.onsuccess = function(){ _db = rq.result; resolve(_db); };
+      rq.onerror = function(){ S.noIdb = true; resolve(null); };
+      rq.onblocked = function(){ S.noIdb = true; resolve(null); };
+    }catch(e){ S.noIdb = true; resolve(null); }
+  });
+}
+function idbDo(store, mode, fn){
+  return idbOpen().then(function(db){
+    if (!db){ var o0 = fn(null); return (o0 && o0.result !== undefined) ? o0.result : o0; }
+    return new Promise(function(resolve, reject){
+      var tx = db.transaction(store, mode), st = tx.objectStore(store), out;
+      try{ out = fn(st); }catch(e){ reject(e); return; }
+      tx.oncomplete = function(){ resolve(out && out.result !== undefined ? out.result : out); };
+      tx.onerror = function(){ reject(tx.error || new Error('Local storage error')); };
+      tx.onabort = function(){ reject(tx.error || new Error('Local storage aborted (is the phone out of space?)')); };
+    });
+  });
+}
+function dbPut(store, val){ if (_db === null && S.noIdb){ mem[store][val.id] = val; return Promise.resolve(); } return idbDo(store,'readwrite',function(st){ if(!st){ mem[store][val.id]=val; return; } return st.put(val); }); }
+function dbGet(store, id){ return idbDo(store,'readonly',function(st){ if(!st) return {result: mem[store][id]}; return st.get(id); }); }
+function dbAll(store){ return idbDo(store,'readonly',function(st){ if(!st) return {result: Object.keys(mem[store]).map(function(k){return mem[store][k];})}; return st.getAll(); }); }
+function dbDel(store, id){ return idbDo(store,'readwrite',function(st){ if(!st){ delete mem[store][id]; return; } return st.delete(id); }); }
+
+// ── login ───────────────────────────────────────────────────────────────────
+function doLogin(){
+  var v = $('login-input').value.trim(); AUTH_TOKEN = v;
+  api('GET','/fi/list').then(function(d){ lsSet(SECRET_KEY, v); enterApp(d); })
+    .catch(function(e){ AUTH_TOKEN=''; var el=$('login-error'); el.textContent = (e.code==='unauthorized') ? 'Not recognized — try again.' : ('Could not reach the server: '+e.message); el.classList.remove('hide'); });
+}
+$('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored = lsGet(SECRET_KEY,'');
+  if (stored){ AUTH_TOKEN = stored; api('GET','/fi/list').then(enterApp).catch(function(e){ if (e.code==='unauthorized'){ AUTH_TOKEN=''; } else { enterApp(null, e); } }); }
+})();
+function enterApp(d, err){
+  $('login').classList.add('hide'); $('app').classList.remove('hide');
+  if (d) applyList(d); else { S.listErr = 'Could not load the server list: ' + (err && err.message) + ' — showing what is on this phone.'; }
+  idbOpen().then(function(){ return dbAll('docs'); }).then(function(rows){
+    (rows||[]).forEach(function(r){ localOnly[r.id] = r; });
+    render(); setSync(); pumpPhotos();
+  }).catch(function(e){ S.noIdb = true; render(); toast('Phone storage problem: '+e.message); });
+  render(); setSync();
+}
+function applyList(d){ S.list = d.inspections || []; S.brands = d.brands || []; S.reportBase = d.report_base || S.reportBase; S.listErr=''; }
+function refreshList(){ return api('GET','/fi/list').then(function(d){ applyList(d); }).catch(function(e){ S.listErr = 'Could not refresh the server list: '+e.message; }); }
+
+// ── sync engine ─────────────────────────────────────────────────────────────
+function setSync(){
+  var bar = $('syncbar'), st = $('sync-st'), act = $('sync-act');
+  var rec = S.rec, ss = S.sync, np = pendingPhotoCount();
+  var cls='ok', txt='', a='';
+  if (!rec){ txt = S.noIdb ? '⚠ Phone storage unavailable — keep this page open' : 'Ready'; cls = S.noIdb ? 'err' : 'ok'; }
+  else if (ss.conflict){ cls='err'; txt='⚠ Newer version on the server'; a='<button class="btn sm" onclick="showConflict()">Resolve</button>'; }
+  else if (ss.state==='error'){ cls='err'; txt='⚠ Not saved to server: '+esc(ss.msg); a='<button class="btn sm" onclick="syncNow(true)">Retry</button>'; }
+  else if (!navigator.onLine && rec.dirty){ cls='off'; txt='📴 Offline — saved on this phone'; }
+  else if (ss.syncing){ cls='work'; txt='⏳ Saving…'; }
+  else if (rec.dirty){ cls='work'; txt='⏳ Changes waiting to save'; }
+  else { cls='ok'; txt='✓ Saved to server' + (rec.base_rev ? ' (v'+rec.base_rev+')' : ''); }
+  if (np){ txt += ' · 📷 '+np+' photo'+(np>1?'s':'')+' waiting'; if (S.photoMsg){ cls = cls==='ok'?'err':cls; txt += ' ⚠'; a = '<button class="btn sm" onclick="retryPhotos()">Retry photos</button>'; } }
+  bar.className = cls; st.innerHTML = txt; act.innerHTML = a;
+}
+function pendingPhotoCount(){ var n=0; for (var k in photoState){ if (photoState[k].state!=='done') n++; } return n; }
+window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(); setSync(); });
+window.addEventListener('offline', setSync);
+window.addEventListener('beforeunload', function(e){ if ((S.rec && S.rec.dirty) || pendingPhotoCount()){ e.preventDefault(); e.returnValue=''; return ''; } });
+function mut(fn){
+  var rec = S.rec; if (!rec) return;
+  fn(rec.doc); rec.dirty = true; rec.ver = (rec.ver||0)+1; rec.doc.updated = new Date().toISOString();
+  clearTimeout(S.sync.persistTimer);
+  S.sync.persistTimer = setTimeout(persistLocal, 350);
+  scheduleSync(); setSync();
+}
+function mutMeta(fn){ var rec=S.rec; if(!rec) return; fn(rec.meta); rec.dirty=true; rec.ver=(rec.ver||0)+1; clearTimeout(S.sync.persistTimer); S.sync.persistTimer=setTimeout(persistLocal,350); scheduleSync(); setSync(); }
+function persistLocal(){
+  var rec = S.rec; if (!rec) return Promise.resolve();
+  return dbPut('docs', rec).then(function(){ localOnly[rec.id] = rec; }).catch(function(e){ S.sync.state='error'; S.sync.msg='Could not save on this phone: '+e.message; setSync(); });
+}
+function scheduleSync(){ clearTimeout(S.sync.timer); S.sync.timer = setTimeout(function(){ syncNow(false); }, 1800); }
+function syncNow(manual){
+  var rec = S.rec, ss = S.sync; if (!rec) return Promise.resolve();
+  clearTimeout(ss.timer);
+  if (ss.syncing){ ss.again = true; return Promise.resolve(); }
+  if (ss.conflict) return Promise.resolve();
+  if (!rec.dirty && !manual && rec.base_rev) return Promise.resolve();
+  if (!navigator.onLine){ setSync(); return Promise.resolve(); }
+  ss.syncing = true; ss.state='syncing'; setSync();
+  var ver = rec.ver, sentDoc = JSON.parse(JSON.stringify(rec.doc)), sentMeta = JSON.parse(JSON.stringify(rec.meta));
+  return persistLocal().then(function(){
+    return api('POST','/fi/save',{ id:rec.id, base_rev:rec.base_rev||0, doc:sentDoc, meta:sentMeta, force: ss.forceNext===true });
+  }).then(function(r){
+    ss.forceNext = false;
+    rec.base_rev = r.rev; rec.token = r.report_token; rec.status = r.status;
+    if (r.unpublished){ toast('Edited after publishing — the public report is hidden until you publish again'); }
+    if (rec.ver === ver) rec.dirty = false;
+    ss.state='ok'; ss.msg='';
+    return persistLocal();
+  }).then(function(){
+    ss.syncing=false; setSync(); refreshList().then(function(){ if (S.view==='home') render(); }); pumpPhotos();
+    if (ss.again || rec.dirty){ ss.again=false; scheduleSync(); }
+    if (S.view==='review') safeRender();
+  }).catch(function(e){
+    ss.syncing=false;
+    if (e.code==='stale'){ ss.conflict = { server_rev:(e.data&&e.data.server_rev)||0, at:(e.data&&e.data.server_updated_at)||'' }; ss.state='error'; ss.msg='newer version on server'; setSync(); showConflict(); return; }
+    if (e.code==='unauthorized'){ ss.state='error'; ss.msg='Session expired — reload and enter the code again'; setSync(); return; }
+    ss.state='error'; ss.msg = e.message || 'unknown error'; setSync();
+    if (e.status && e.status>=400 && e.status<500 && e.code!=='bad_response'){ return; } // validation-type error: do not hammer; user sees it + Retry
+    clearTimeout(ss.timer); ss.timer = setTimeout(function(){ syncNow(false); }, 15000);
+  });
+}
+function showConflict(){
+  var c = S.sync.conflict; if (!c) return;
+  openSheet('<h2>Newer version on the server</h2><p>The server has version <b>'+c.server_rev+'</b> of this inspection'+(c.at?' (saved '+esc(c.at.replace('T',' ').slice(0,16))+' UTC)':'')+', but this phone started from version <b>'+(S.rec.base_rev||0)+'</b>. This usually means it was edited on another device. <b>Nothing has been overwritten.</b></p>'
+    +'<div class="btns"><button class="btn primary block" id="cf-load" onclick="conflictLoadServer()">Load the server version (discard this phone\'s unsaved changes)</button>'
+    +'<button class="btn danger block" id="cf-force" onclick="conflictForce()">Keep this phone\'s version and overwrite the server</button>'
+    +'<button class="btn block" onclick="closeSheet()">Decide later</button></div>');
+}
+function conflictLoadServer(){
+  if (!claim('cf')) return; var rec = S.rec;
+  api('GET','/fi/inspection?id='+encodeURIComponent(rec.id)).then(function(d){
+    rec.doc = d.doc; rec.base_rev = d.inspection.rev; rec.token = d.inspection.report_token; rec.status = d.inspection.status; rec.meta = metaFrom(d.inspection, rec.meta); rec.dirty=false; S.sync.conflict=null; S.sync.state='ok';
+    return persistLocal();
+  }).then(function(){ release('cf'); closeSheet(); setSync(); render(); toast('Loaded the server version'); }).catch(function(e){ release('cf'); toast('Could not load: '+e.message); });
+}
+function conflictForce(){ S.sync.conflict=null; S.sync.forceNext=true; closeSheet(); syncNow(true); }
+function metaFrom(h, old){ return { brand_id:h.brand_id||(old&&old.brand_id)||'', client_name:h.client_name||'', client_email:h.client_email||'', inspector:h.inspector||'', inspection_date:h.date||'', inspection_type:h.type||'periodic' }; }
+
+// ── photos ──────────────────────────────────────────────────────────────────
+function photoSrc(id){
+  if (blobUrl[id]) return blobUrl[id];
+  if (S.rec && S.rec.token) return WORKER+'/fi/photo/view?r='+encodeURIComponent(S.rec.token)+'&p='+encodeURIComponent(id);
+  return '';
+}
+function loadPhotoBlobs(inspId){
+  return dbAll('photos').then(function(rows){
+    (rows||[]).forEach(function(p){
+      if (p.insp !== inspId) return;
+      if (p.blob && !blobUrl[p.id]) blobUrl[p.id] = URL.createObjectURL(p.blob);
+    });
+  });
+}
+function allPhotoStates(){
+  return dbAll('photos').then(function(rows){
+    photoState = {};
+    (rows||[]).forEach(function(p){ if (p.state!=='done') photoState[p.id] = { state:p.state, err:p.err||'' }; });
+    setSync();
+  });
+}
+function compressImage(file){
+  return new Promise(function(resolve, reject){
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function(){
+      try{
+        var max = 1600, w = img.naturalWidth, h = img.naturalHeight, sc = Math.min(1, max/Math.max(w,h));
+        var c = document.createElement('canvas'); c.width = Math.round(w*sc); c.height = Math.round(h*sc);
+        c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+        c.toBlob(function(b){ URL.revokeObjectURL(url); if(b) resolve(b); else reject(new Error('Could not compress the photo')); }, 'image/jpeg', 0.82);
+      }catch(e){ URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('This photo could not be read ('+(file.type||'unknown type')+')')); };
+    img.src = url;
+  });
+}
+var photoTarget = null; // {areaId}
+function pickPhotos(areaId){ photoTarget = { areaId:areaId }; var inp = $('photo-in'); inp.value=''; inp.click(); }
+$('photo-in').addEventListener('change', function(ev){
+  var files = Array.prototype.slice.call(ev.target.files||[]); var tg = photoTarget; if (!files.length || !tg || !S.rec) return;
+  var rec = S.rec, fails = 0, chain = Promise.resolve();
+  files.forEach(function(f){
+    chain = chain.then(function(){ return compressImage(f); }).then(function(blob){
+      var id = 'ph_' + rid(10);
+      var row = { id:id, insp:rec.id, blob:blob, state:'pending', err:'', at:Date.now() };
+      return dbPut('photos', row).then(function(){
+        blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
+        mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); });
+      });
+    }).catch(function(e){ fails++; toast('Photo not added: '+e.message); });
+  });
+  chain.then(function(){ render(); pumpPhotos(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
+});
+function pumpPhotos(){
+  if (S.pumping) return Promise.resolve(); if (!navigator.onLine) { setSync(); return Promise.resolve(); }
+  S.pumping = true; S.photoMsg='';
+  return dbAll('photos').then(function(rows){
+    var todo = (rows||[]).filter(function(p){ return p.state!=='done'; });
+    photoState = {}; todo.forEach(function(p){ photoState[p.id] = { state:p.state, err:p.err||'' }; });
+    setSync();
+    var chain = Promise.resolve();
+    todo.forEach(function(p){
+      chain = chain.then(function(){
+        return dbGet('docs', p.insp).then(function(d){
+          if (!d || !d.base_rev){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; return; }
+          return fetch(WORKER+'/fi/photo?inspection_id='+encodeURIComponent(p.insp)+'&photo_id='+encodeURIComponent(p.id), { method:'POST', headers:{'X-Auth-Token':AUTH_TOKEN,'Content-Type':'image/jpeg'}, body:p.blob })
+            .then(function(res){ return res.text().then(function(t){ var j; try{ j=JSON.parse(t); }catch(e){ j={ok:false,message:'HTTP '+res.status}; } if (!res.ok || j.ok===false){ var er=new Error(j.message||('HTTP '+res.status)); er.code=j.error; throw er; } return j; }); })
+            .then(function(){ p.state='done'; p.err=''; delete photoState[p.id]; return dbPut('photos', p); })
+            .catch(function(e){
+              if (e.code==='inspection_not_saved'){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; if (S.rec && S.rec.id===p.insp){ S.rec.dirty=true; scheduleSync(); } return; }
+              p.err = e.message; p.state='error'; photoState[p.id] = { state:'error', err:e.message }; S.photoMsg = e.message; return dbPut('photos', p);
+            });
+        });
+      });
+    });
+    return chain;
+  }).then(function(){ S.pumping=false; setSync(); if (S.view==='review'||S.view==='area') safeRender(); var stuck = Object.keys(photoState).some(function(k){ return photoState[k].state==='pending'; }); if (stuck) setTimeout(pumpPhotos, 20000); })
+    .catch(function(e){ S.pumping=false; S.photoMsg = e.message; setSync(); });
+}
+function retryPhotos(){
+  dbAll('photos').then(function(rows){ var ps=[]; (rows||[]).forEach(function(p){ if (p.state==='error'){ p.state='pending'; ps.push(dbPut('photos',p)); } }); return Promise.all(ps); }).then(function(){ S.photoMsg=''; pumpPhotos(); });
+}
+
+// ── model ───────────────────────────────────────────────────────────────────
+function findArea(doc, id){ for (var i=0;i<doc.areas.length;i++) if (doc.areas[i].id===id) return doc.areas[i]; return null; }
+function mkArea(name, group){ return { id:'ar_'+rid(8), name:name, group:group, condition:'not_inspected', excluded:false, issues:[], photo_ids:[], notes:'', pending_text:'', dictation:[] }; }
+function buildAreas(o){
+  var a = [];
+  a.push(mkArea('Exterior Front','exterior'));
+  if (o.sides){ a.push(mkArea('Exterior Side (Left)','exterior')); a.push(mkArea('Exterior Side (Right)','exterior')); }
+  a.push(mkArea('Exterior Rear','exterior')); a.push(mkArea('Roof & Gutters','exterior'));
+  a.push(mkArea('Living Room','interior')); a.push(mkArea('Dining Room','interior')); a.push(mkArea('Kitchen','interior'));
+  for (var b=1;b<=o.beds;b++) a.push(mkArea('Bedroom '+b,'interior'));
+  for (var t=1;t<=o.baths;t++) a.push(mkArea(o.baths>1?'Bathroom '+t:'Bathroom','interior'));
+  a.push(mkArea('Hallway & Stairs','interior'));
+  if (o.laundry) a.push(mkArea('Laundry','interior'));
+  if (o.basement) a.push(mkArea('Basement','interior'));
+  if (o.attic) a.push(mkArea('Attic','interior'));
+  a.push(mkArea('Heating / HVAC','systems')); a.push(mkArea('Water Heater','systems')); a.push(mkArea('Electrical Panel','systems')); a.push(mkArea('Smoke & CO Detectors','systems'));
+  return a;
+}
+function issueCount(a){ return (a.issues||[]).length; }
+function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return a.condition && a.condition!=='not_inspected'; }).length, total: act.length }; }
+
+// ── views ───────────────────────────────────────────────────────────────────
+function render(){
+  var v = $('view'), h = '';
+  if (S.view==='home') h = viewHome();
+  else if (S.view==='new') h = viewNew();
+  else if (S.view==='insp') h = viewInsp();
+  else if (S.view==='area') h = viewArea();
+  else if (S.view==='review') h = viewReview();
+  else if (S.view==='brands') h = viewBrands();
+  var y = window.scrollY, key = S.view + ':' + (S.areaId||'');
+  v.innerHTML = h; window.scrollTo(0, render._key === key ? y : 0); render._key = key;
+  if (S.view==='new' && !S.newProp) renderPropList();
+  if (S.view==='area') bindArea();
+  setSync();
+}
+// Re-render only when the user is not typing — a background sync/upload must never steal focus or close the keyboard.
+function safeRender(){ var el = document.activeElement; if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && $('view').contains(el)) return false; render(); return true; }
+function go(view, extra){ S.view = view; if (extra) for (var k in extra) S[k]=extra[k]; render(); }
+function brandById(id){ for (var i=0;i<S.brands.length;i++) if (S.brands[i].id===id) return S.brands[i]; return null; }
+function defaultBrand(){ for (var i=0;i<S.brands.length;i++) if (S.brands[i].is_default) return S.brands[i]; return S.brands[0] || null; }
+
+function viewHome(){
+  var h = '<h1>Field Inspection</h1>';
+  if (S.noIdb) h += '<div class="banner err">This browser is not letting the app store data on the phone, so offline saving is off. Keep this page open until everything shows “Saved to server”.</div>';
+  if (S.listErr) h += '<div class="banner warn">'+esc(S.listErr)+'</div>';
+  h += '<button class="btn primary block" style="min-height:56px;font-size:17px" onclick="startNew()">＋ New inspection</button>';
+  h += '<div class="btns"><button class="btn" onclick="openBrands()">🎨 Brands (Ridge Co, Premier…)</button></div>';
+  var items = {};
+  S.list.forEach(function(i){ items[i.id] = { id:i.id, address:i.address, date:i.date, status:i.status, issues:i.issue_count, server:true, rev:i.rev, brand:i.brand_id, updated:i.updated_at }; });
+  Object.keys(localOnly).forEach(function(id){ var r = localOnly[id]; var it = items[id] || { id:id, server:false }; it.address = r.doc.property.address; it.date = r.meta.inspection_date; it.local = true; it.dirty = r.dirty; it.issues = r.doc.areas.reduce(function(n,a){return n+(a.issues||[]).length;},0); it.status = it.status || 'draft'; it.updated = r.doc.updated || it.updated; items[id]=it; });
+  var arr = Object.keys(items).map(function(k){return items[k];}).sort(function(a,b){ return String(b.updated||'').localeCompare(String(a.updated||'')); });
+  h += '<h2>Inspections</h2>';
+  if (!arr.length) h += '<div class="card muted">None yet. Tap “New inspection” to start one.</div>';
+  arr.forEach(function(it){
+    var pill = it.status==='published' ? '<span class="pill ok">Published</span>' : '<span class="pill">Draft</span>';
+    var sync = it.dirty ? ' <span class="pill warn">unsaved changes</span>' : (!it.server ? ' <span class="pill bad">only on this phone</span>' : '');
+    h += '<div class="card" style="cursor:pointer" onclick="openInspection(\''+esc(it.id)+'\')"><div class="row"><b>'+esc(it.address||'(no address)')+'</b>'+pill+'</div><div class="muted">'+esc(it.date||'')+' · '+(it.issues||0)+' issue'+((it.issues||0)===1?'':'s')+sync+'</div></div>';
+  });
+  return h;
+}
+
+// ---- new inspection ----
+function startNew(){
+  S.newProp = null; S.propQ=''; S.view='new';
+  var d = defaultBrand();
+  S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false };
+  render(); loadProps();
+}
+function loadProps(){
+  if (S.props.length) return;
+  var cached = lsGet('fi_props','');
+  if (cached){ try{ S.props = JSON.parse(cached); }catch(e){ S.props=[]; } }
+  api('GET','/properties').then(function(rows){
+    S.props = (rows||[]).filter(function(p){ return p.Active!=='FALSE' && p.Address; }).map(function(p){ return { id:p.ID, address:p.Address, city:p.City||'', state:p.State||'', zip:p.Zip||'' }; });
+    S.propsErr=''; lsSet('fi_props', JSON.stringify(S.props));
+    if (S.view==='new' && !S.newProp) renderPropList();
+  }).catch(function(e){ S.propsErr = 'Could not load the Hub property list ('+e.message+')' + (S.props.length?' — using the copy saved on this phone.':'. You can still add the property by hand.'); if (S.view==='new') render(); });
+}
+function propLabel(p){ return p.address + (p.city?', '+p.city:'') + (p.state?', '+p.state:'') + (p.zip?' '+p.zip:''); }
+function viewNew(){
+  var h = '<div class="row"><h1>New inspection</h1><button class="btn sm ghost" onclick="go(\'home\')">Cancel</button></div>';
+  if (!S.newProp){
+    h += '<div class="card"><label class="fld" style="margin-top:0">1 · Which property?</label><input id="pq" placeholder="Search Hub properties by address…" value="'+esc(S.propQ)+'" oninput="S.propQ=this.value;renderPropList()">';
+    if (S.propsErr) h += '<div class="banner warn" style="margin-top:8px">'+esc(S.propsErr)+'</div>';
+    h += '<div id="proplist"></div>';
+    h += '<button class="btn block" style="margin-top:10px" onclick="manualProp()">＋ Add a new property (not in the Hub)</button></div>';
+    return h;
+  }
+  var o = S.newOpts, p = S.newProp;
+  h += '<div class="card propcard"><b>'+esc(propLabel(p))+'</b><div class="muted">'+(p.id?'From the Hub':'New — saved with this inspection')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;render()">Change property</button></div>';
+  h += '<div class="card"><label class="fld" style="margin-top:0">Inspection type</label><select onchange="S.newOpts.type=this.value">'+INSP_TYPES.map(function(t){return '<option value="'+t[0]+'"'+(o.type===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select>'
+    +'<label class="fld">Date</label><input type="date" value="'+esc(o.date)+'" onchange="S.newOpts.date=this.value">'
+    +'<label class="fld">Inspector</label><input value="'+esc(o.inspector)+'" oninput="S.newOpts.inspector=this.value">'
+    +'<label class="fld">Prepared for (client name — optional)</label><input value="'+esc(o.client)+'" oninput="S.newOpts.client=this.value" placeholder="e.g. Premier Property Management">'
+    +'<label class="fld">Client email (optional)</label><input type="email" value="'+esc(o.email)+'" oninput="S.newOpts.email=this.value">'
+    +'<label class="fld">Brand for the report</label><select onchange="S.newOpts.brand=this.value">'+S.brands.map(function(b){return '<option value="'+esc(b.id)+'"'+(o.brand===b.id?' selected':'')+'>'+esc(b.name)+(b.is_default?' (default)':'')+'</option>';}).join('')+'</select>'
+    +'<div class="toggle"><span>Built before 1978<div class="muted">Adds lead-paint awareness to the notes</div></span><input type="checkbox"'+(o.pre1978?' checked':'')+' onchange="S.newOpts.pre1978=this.checked"></div></div>';
+  h += '<div class="card"><b>Layout</b><div class="muted">You can add, rename or exclude areas any time.</div>'
+    +'<div class="toggle"><span>Bedrooms</span><span class="step"><button onclick="stepOpt(\'beds\',-1)">−</button><span class="n" id="n-beds">'+o.beds+'</span><button onclick="stepOpt(\'beds\',1)">＋</button></span></div>'
+    +'<div class="toggle"><span>Bathrooms</span><span class="step"><button onclick="stepOpt(\'baths\',-1)">−</button><span class="n" id="n-baths">'+o.baths+'</span><button onclick="stepOpt(\'baths\',1)">＋</button></span></div>'
+    +tgl('sides','Exterior sides (left &amp; right)','Turn off for rowhomes — front and rear only')+tgl('laundry','Laundry')+tgl('basement','Basement')+tgl('attic','Attic')+'</div>';
+  h += '<button class="btn go block" style="min-height:56px;font-size:17px" id="start-btn" onclick="createInspection()">Start inspection</button>';
+  return h;
+}
+function tgl(k,label,sub){ return '<div class="toggle"><span>'+label+(sub?'<div class="muted">'+sub+'</div>':'')+'</span><input type="checkbox"'+(S.newOpts[k]?' checked':'')+' onchange="S.newOpts.'+k+'=this.checked"></div>'; }
+function stepOpt(k,d){ var v = Math.max(0, Math.min(12, S.newOpts[k]+d)); if (k==='baths' && v<1) v=1; S.newOpts[k]=v; $('n-'+k).textContent=v; }
+function renderPropList(){
+  var el = $('proplist'); if (!el) return;
+  var q = (S.propQ||'').toLowerCase().trim(), list = S.props;
+  if (q) list = list.filter(function(p){ return propLabel(p).toLowerCase().indexOf(q)>-1; });
+  if (!S.props.length && !S.propsErr){ el.innerHTML = '<div class="muted" style="padding:10px 0">Loading Hub properties…</div>'; return; }
+  var shown = list.slice(0,25);
+  el.innerHTML = shown.map(function(p,i){ return '<div class="propitem" onclick="pickProp(\''+esc(p.id)+'\')">'+esc(propLabel(p))+'</div>'; }).join('') + (list.length>25 ? '<div class="muted" style="padding:8px 0">'+(list.length-25)+' more — keep typing to narrow</div>' : '') + (!list.length ? '<div class="muted" style="padding:10px 0">No match in the Hub. Use “Add a new property” below.</div>' : '');
+}
+function pickProp(id){ for (var i=0;i<S.props.length;i++) if (String(S.props[i].id)===String(id)){ S.newProp = { id:S.props[i].id, address:propLabel(S.props[i]), source:'hub' }; render(); return; } }
+function manualProp(){
+  openSheet('<h2>Add a new property</h2><label class="fld" style="margin-top:0">Street address *</label><input id="mp-addr" placeholder="122 S Gilmor St">'
+    +'<div class="row" style="gap:8px"><div style="flex:2"><label class="fld">City</label><input id="mp-city" value="Baltimore"></div><div style="flex:1"><label class="fld">State</label><input id="mp-state" value="MD"></div><div style="flex:1"><label class="fld">Zip</label><input id="mp-zip" inputmode="numeric"></div></div>'
+    +'<p class="muted">This is saved with the inspection. It is not added to the Hub property list.</p>'
+    +'<div class="btns"><button class="btn primary" id="mp-ok" onclick="saveManualProp()">Use this property</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function saveManualProp(){
+  var a = $('mp-addr').value.trim(); if (!a){ toast('Enter the street address'); return; }
+  var c=$('mp-city').value.trim(), s=$('mp-state').value.trim(), z=$('mp-zip').value.trim();
+  S.newProp = { id:'', address:a+(c?', '+c:'')+(s?', '+s:'')+(z?' '+z:''), source:'new' }; closeSheet(); render();
+}
+function createInspection(){
+  if (!claim('create')) return; $('start-btn').disabled = true;
+  var o = S.newOpts, p = S.newProp;
+  lsSet('fi_inspector', o.inspector);
+  var id = newId();
+  var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
+  var rec = { id:id, doc:doc, meta:{ brand_id:o.brand, client_name:o.client, client_email:o.email, inspector:o.inspector, inspection_date:o.date, inspection_type:o.type }, base_rev:0, token:'', status:'draft', dirty:true, ver:1 };
+  S.rec = rec; S.areaId = null; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.publishInfo=null;
+  persistLocal().then(function(){ release('create'); S.view='insp'; render(); syncNow(true); });
+}
+
+// ---- open existing ----
+function openInspection(id){
+  var local = localOnly[id];
+  var srv = S.list.filter(function(x){return x.id===id;})[0];
+  if (local && !local.dirty && srv && srv.rev > (local.base_rev||0)) local = null; // another device saved a newer version — take the server copy
+  var finish = function(rec){ S.rec = rec; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.proposals=null; S.publishInfo=null; loadPhotoBlobs(rec.id).then(function(){ return allPhotoStates(); }).then(function(){ S.view='insp'; render(); if (rec.dirty) syncNow(true); pumpPhotos(); }); };
+  if (local){ finish(local); return; }
+  api('GET','/fi/inspection?id='+encodeURIComponent(id)).then(function(d){
+    var rec = { id:id, doc:d.doc, meta:metaFrom(d.inspection), base_rev:d.inspection.rev, token:d.inspection.report_token, status:d.inspection.status, dirty:false, ver:1 };
+    return dbPut('docs', rec).then(function(){ localOnly[id]=rec; finish(rec); });
+  }).catch(function(e){ toast('Could not open: '+e.message); });
+}
+
+// ---- inspection (area list) ----
+function viewInsp(){
+  var rec = S.rec, doc = rec.doc, c = inspectedCount(doc);
+  var b = brandById(rec.meta.brand_id) || defaultBrand();
+  var h = '<div class="row"><button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div>';
+  h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
+  h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
+  var groups = [['exterior','Exterior'],['interior','Interior'],['systems','Systems'],['other','Other']];
+  groups.forEach(function(g){
+    var as = doc.areas.filter(function(a){ return (a.group||'other')===g[0] && !a.excluded; });
+    if (!as.length) return;
+    h += '<h2>'+g[1]+'</h2><div class="card" style="padding:4px 12px">';
+    as.forEach(function(a){ h += areaRow(a); });
+    h += '</div>';
+  });
+  var ex = doc.areas.filter(function(a){return a.excluded;});
+  if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
+  h += '<button class="btn block" onclick="addAreaSheet()">＋ Add an area (bedroom, bathroom, garage…)</button>';
+  h += '<button class="btn primary block" style="margin-top:10px;min-height:52px" onclick="openReview()">Review &amp; report ›</button>';
+  return h;
+}
+function typeLabel(t){ for (var i=0;i<INSP_TYPES.length;i++) if (INSP_TYPES[i][0]===t) return INSP_TYPES[i][1]; return t||''; }
+function condPill(c){ var cls = c==='good'||c==='nothing_to_do' ? 'ok' : c==='poor' ? 'bad' : c==='fair' ? 'warn' : ''; return '<span class="pill '+cls+'">'+esc(COND_LABEL[c]||'Not inspected')+'</span>'; }
+function areaRow(a){ var n = issueCount(a), ph = (a.photo_ids||[]).length; return '<div class="area-row" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+(n?n+' issue'+(n>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'')+'</div></span>'+condPill(a.condition)+'</div>'; }
+function leaveInsp(){
+  var go2 = function(){ S.rec=null; S.areaId=null; S.view='home'; refreshList().then(render); render(); };
+  if (S.rec && S.rec.dirty){ syncNow(true).then(function(){ if (S.rec && S.rec.dirty){ toast('Not saved to the server yet — it is kept on this phone'); } go2(); }); } else go2();
+}
+function addAreaSheet(){
+  var presets = [['Bedroom','interior'],['Bathroom','interior'],['Half Bath','interior'],['Garage','exterior'],['Porch / Deck','exterior'],['Shed','exterior'],['Yard / Fence','exterior'],['Basement','interior'],['Attic','interior'],['Other','other']];
+  openSheet('<h2>Add an area</h2><div class="seg">'+presets.map(function(p){ return '<button onclick="addAreaPreset(\''+p[0]+'\',\''+p[1]+'\')">'+p[0]+'</button>'; }).join('')+'</div><label class="fld">Or type a name</label><input id="aa-name" placeholder="e.g. Sunroom"><label class="fld">Group</label><select id="aa-group"><option value="interior">Interior</option><option value="exterior">Exterior</option><option value="systems">Systems</option><option value="other">Other</option></select><div class="btns"><button class="btn primary" onclick="addAreaCustom()">Add</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function nextNameFor(base){ var names = S.rec.doc.areas.map(function(a){return a.name;}); if (names.indexOf(base)<0 && base!=='Bedroom' && base!=='Bathroom') return base; var n=1; while (names.indexOf(base+' '+n)>-1) n++; return base+' '+n; }
+function addAreaPreset(name,group){ var nm = nextNameFor(name); var a = mkArea(nm,group); mut(function(doc){ doc.areas.push(a); }); closeSheet(); openArea(a.id); }
+function addAreaCustom(){ var nm = $('aa-name').value.trim(); if(!nm){ toast('Type a name'); return; } var a = mkArea(nm, $('aa-group').value); mut(function(doc){ doc.areas.push(a); }); closeSheet(); openArea(a.id); }
+
+// ---- area ----
+function openArea(id){
+  var a = findArea(S.rec.doc, id);
+  if (a.excluded){ mut(function(){ a.excluded = false; }); }
+  S.areaId = id; S.proposals = null; S.dictErr=''; S.interim=''; stopDictation(); S.view='area'; render();
+}
+function curArea(){ return findArea(S.rec.doc, S.areaId); }
+function viewArea(){
+  var a = curArea(); var doc = S.rec.doc, idx = doc.areas.filter(function(x){return !x.excluded;}).map(function(x){return x.id;}).indexOf(a.id);
+  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
+  h += '<h1>'+esc(a.name)+'</h1>';
+  h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
+  h += '<div class="card"><button class="mic'+(S.listening?' live':'')+'" id="mic-btn" onclick="toggleDictation()">'+(S.listening?'⏹ Stop (listening…)':'🎤 Dictate')+'</button>';
+  if (S.dictErr) h += '<div class="banner err" style="margin-top:8px">'+esc(S.dictErr)+'</div>';
+  h += '<div class="muted" id="interim" style="min-height:18px;margin-top:6px">'+esc(S.interim)+'</div>';
+  h += '<textarea id="pending" placeholder="Speak or type what you see: e.g. “Leak under the kitchen sink, looks like the P-trap, recommend replacing it.”">'+esc(a.pending_text||'')+'</textarea>';
+  h += '<div class="btns"><button class="btn primary" id="struct-btn" onclick="structureNow()"'+(S.structuring?' disabled':'')+'>'+(S.structuring?'Working…':'✨ Turn into issues')+'</button><button class="btn" onclick="clearPending()">Clear</button></div>';
+  h += '<div class="muted" style="margin-top:6px">The AI only tidies what you said and suggests a fix when you didn’t give one. You review every issue before it is added.</div></div>';
+  if (S.proposals && S.proposals.areaId===a.id) h += proposalsHtml();
+  h += '<h2>Issues in this area ('+issueCount(a)+')</h2>';
+  if (!issueCount(a)) h += '<div class="card muted">'+(a.condition==='nothing_to_do'||a.condition==='good'?'Nothing to repair here.':'No issues recorded yet.')+'</div>';
+  (a.issues||[]).forEach(function(is){ h += issueCard(is); });
+  h += '<button class="btn block" onclick="editIssue(\'\')">＋ Add an issue by hand</button>';
+  h += '<h2>Photos</h2><div class="thumbs">'+(a.photo_ids||[]).map(function(p){ return thumbHtml(p, 'viewPhoto(\''+p+'\')'); }).join('')+'</div>';
+  h += '<button class="btn block" onclick="pickPhotos(\''+a.id+'\')">📷 Add photos</button><div class="muted" style="margin-top:4px">Pick from the camera or gallery. Photos upload in the background and keep trying if the signal drops.</div>';
+  h += '<label class="fld">Area notes (shown in the report)</label><textarea id="anotes" style="min-height:70px" oninput="areaNotes(this.value)">'+esc(a.notes||'')+'</textarea>';
+  var all = S.rec.doc.areas.filter(function(x){return !x.excluded;}), nx = all[idx+1], pv = all[idx-1];
+  h += '<div class="btns" style="margin-top:14px">'+(pv?'<button class="btn" onclick="openArea(\''+pv.id+'\')">‹ '+esc(pv.name)+'</button>':'')+(nx?'<button class="btn primary" style="margin-left:auto" onclick="openArea(\''+nx.id+'\')">'+esc(nx.name)+' ›</button>':'<button class="btn go" style="margin-left:auto" onclick="openReview()">Finish — review ›</button>')+'</div>';
+  return h;
+}
+function thumbHtml(id, onclick){
+  var src = photoSrc(id), st = photoState[id];
+  return '<button class="thumb" onclick="'+onclick+'">'+(src?'<img src="'+esc(src)+'" alt="photo" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">':'')+(st&&st.state!=='done'?'<span class="b">'+(st.state==='error'?'⚠ retry':'⏳')+'</span>':'')+'</button>';
+}
+function issueCard(is){
+  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.wo?' <span class="pill new">work order</span>':'')+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
+}
+function backToInsp(){ stopDictation(); S.view='insp'; render(); }
+function bindArea(){
+  var ta = $('pending'); if (!ta) return;
+  ta.addEventListener('input', function(){ var a = curArea(); mut(function(){ a.pending_text = ta.value; }); });
+}
+function areaNotes(v){ var a = curArea(); mut(function(){ a.notes = v; }); }
+function setCond(c){ var a = curArea(); mut(function(){ a.condition = c; }); var seg=$('cond-seg'); if (seg) seg.innerHTML = CONDS.map(function(x){ return '<button class="'+(a.condition===x[0]?'sel '+x[2]:'')+'" onclick="setCond(\''+x[0]+'\')">'+x[1]+'</button>'; }).join(''); }
+function clearPending(){ var a = curArea(); if (!(a.pending_text||'').trim()){ return; } mut(function(){ a.pending_text=''; }); $('pending').value=''; toast('Cleared'); }
+function areaMenu(){
+  var a = curArea();
+  openSheet('<h2>'+esc(a.name)+'</h2><label class="fld" style="margin-top:0">Rename</label><input id="am-name" value="'+esc(a.name)+'"><div class="btns"><button class="btn primary" onclick="renameArea()">Save name</button></div>'
+    +'<div class="btns"><button class="btn" onclick="excludeArea()">Exclude from this inspection</button><button class="btn danger" id="am-del" onclick="deleteAreaStep()">Delete area…</button><button class="btn" onclick="closeSheet()">Close</button></div>');
+}
+function renameArea(){ var n = $('am-name').value.trim(); if (!n){ toast('Name cannot be empty'); return; } var a = curArea(); mut(function(){ a.name = n; }); closeSheet(); render(); }
+function excludeArea(){ var a = curArea(); mut(function(){ a.excluded = true; }); closeSheet(); backToInsp(); toast('Excluded — it will not appear in the report'); }
+function deleteAreaStep(){
+  var a = curArea(), btn = $('am-del');
+  if ((a.issues||[]).length || (a.photo_ids||[]).length){ btn.textContent = 'This area has issues/photos — use Exclude instead'; btn.disabled = true; return; }
+  if (btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent='Tap again to delete'; return; }
+  mut(function(doc){ doc.areas = doc.areas.filter(function(x){ return x.id!==a.id; }); }); closeSheet(); backToInsp();
+}
+
+// ---- dictation ----
+var recog = null;
+function toggleDictation(){ if (S.listening) stopDictation(); else startDictation(); render(); }
+function startDictation(){
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  S.dictErr='';
+  if (!SR){ S.dictErr = 'Voice typing is not available in this browser. Tap the text box and use the microphone key on your keyboard instead — it works the same.'; var t=$('pending'); if (t) t.focus(); return; }
+  try{
+    recog = new SR(); recog.continuous = true; recog.interimResults = true; recog.lang = 'en-US';
+    recog.onresult = function(ev){
+      var fin = '', inter = '';
+      for (var i=ev.resultIndex;i<ev.results.length;i++){ var tr = ev.results[i][0].transcript; if (ev.results[i].isFinal) fin += tr; else inter += tr; }
+      if (fin){ var a = curArea(); var cur = a.pending_text||''; var nv = (cur && !/\s$/.test(cur) ? cur+' ' : cur) + fin.trim(); mut(function(){ a.pending_text = nv; }); var ta=$('pending'); if (ta) ta.value = nv; }
+      S.interim = inter; var el=$('interim'); if (el) el.textContent = inter ? '… '+inter : '';
+    };
+    recog.onerror = function(ev){
+      if (ev.error==='no-speech' || ev.error==='aborted') return;
+      S.listening=false; S.dictErr = ev.error==='not-allowed' || ev.error==='service-not-allowed' ? 'Microphone is blocked. Allow the microphone for this site in Chrome (lock icon in the address bar), or use your keyboard’s mic key.' : ('Voice typing stopped: '+ev.error+'. Use your keyboard’s mic key if this keeps happening.'); render();
+    };
+    recog.onend = function(){ if (S.listening){ try{ recog.start(); }catch(e){ S.listening=false; S.dictErr='Voice typing stopped unexpectedly.'; render(); } } };
+    S.listening = true; recog.start();
+  }catch(e){ S.listening=false; S.dictErr='Could not start voice typing: '+e.message; }
+}
+function stopDictation(){ S.listening=false; S.interim=''; if (recog){ try{ recog.onend=null; recog.stop(); }catch(e){ /* already stopped */ } recog=null; } }
+
+// ---- AI structure ----
+function structureNow(){
+  var a = curArea(), text = (a.pending_text||'').trim();
+  if (!text){ toast('Dictate or type something first'); return; }
+  if (!claim('struct')) return; stopDictation(); S.structuring = true; S.proposals = null; render();
+  var doc = S.rec.doc;
+  api('POST','/fi/structure',{ area_name:a.name, dictation:text, address:doc.property.address, pre1978:!!doc.pre1978, inspection_type:doc.type, existing_issues:(a.issues||[]).map(function(i){return {title:i.title,trade:i.trade};}) }).then(function(r){
+    S.proposals = { areaId:a.id, issues:r.issues.map(function(i){ i.keep=true; return i; }), cond:r.area_condition, summary:r.area_summary, source:text, err:'' };
+  }).catch(function(e){ S.proposals = { areaId:a.id, issues:[], err:e.message, source:text }; })
+    .then(function(){ S.structuring=false; release('struct'); if (S.view==='area' && S.areaId===a.id) render(); });
+}
+function proposalsHtml(){
+  var p = S.proposals;
+  if (p.err) return '<div class="banner err"><b>AI could not process this.</b> '+esc(p.err)+'<div class="btns"><button class="btn sm" onclick="structureNow()">Try again</button><button class="btn sm" onclick="S.proposals=null;render()">Dismiss</button></div></div>';
+  var h = '<div class="card" style="border-color:var(--accent)"><b>Review before adding</b><div class="muted">'+p.issues.length+' issue'+(p.issues.length===1?'':'s')+' found'+(p.summary?' — '+esc(p.summary):'')+'. Edit anything that’s off.</div>';
+  if (!p.issues.length) h += '<div class="banner info" style="margin-top:8px">The AI found no problems in that dictation. You can still clear the text and mark the area “Nothing to do”.</div>';
+  p.issues.forEach(function(is,i){
+    h += '<div style="border-top:1px solid var(--border);margin-top:10px;padding-top:8px"><label class="check"><input type="checkbox" style="width:22px;height:22px" '+(is.keep?'checked':'')+' onchange="S.proposals.issues['+i+'].keep=this.checked"> <b>Add this issue</b></label>'
+      +'<input value="'+esc(is.title)+'" oninput="S.proposals.issues['+i+'].title=this.value" placeholder="Title">'
+      +'<div class="row" style="gap:6px;margin-top:6px"><select onchange="S.proposals.issues['+i+'].trade=this.value">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(is.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select><select onchange="S.proposals.issues['+i+'].severity=this.value">'+SEVS.map(function(t){return '<option value="'+t[0]+'"'+(is.severity===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select></div>'
+      +'<textarea style="min-height:60px;margin-top:6px" oninput="S.proposals.issues['+i+'].detail=this.value" placeholder="Detail">'+esc(is.detail)+'</textarea>'
+      +'<input style="margin-top:6px" value="'+esc(is.likely_cause)+'" oninput="S.proposals.issues['+i+'].likely_cause=this.value" placeholder="Likely cause (optional)">'
+      +'<textarea style="min-height:60px;margin-top:6px" oninput="S.proposals.issues['+i+'].recommended_fix=this.value" placeholder="Recommended fix">'+esc(is.recommended_fix)+'</textarea>'
+      +(is.fix_source==='suggested' && is.recommended_fix ? '<div class="muted">Fix suggested by AI — you didn’t state one.</div>':'')+(is.possible_duplicate_of?'<div class="muted" style="color:var(--warn)">May duplicate: '+esc(is.possible_duplicate_of)+'</div>':'')+'</div>';
+  });
+  h += '<div class="btns"><button class="btn go" id="accept-btn" onclick="acceptProposals()">Add selected to '+esc(curArea().name)+'</button><button class="btn" onclick="S.proposals=null;render()">Discard</button></div></div>';
+  return h;
+}
+function acceptProposals(){
+  if (!claim('accept')) return; var p = S.proposals, a = curArea();
+  var keep = p.issues.filter(function(i){ return i.keep && String(i.title||'').trim(); });
+  mut(function(){
+    keep.forEach(function(i){ var o = { id:'is_'+rid(8), title:i.title.trim(), trade:i.trade, severity:i.severity, detail:i.detail||'', likely_cause:i.likely_cause||'', recommended_fix:i.recommended_fix||'', fix_source:i.fix_source||'inspector', ai:true, wo:false, photo_ids:[] }; if (o.trade==='tenant_action') o.tenant_action=true; a.issues.push(o); });
+    (a.dictation = a.dictation||[]).push({ at:new Date().toISOString(), text:p.source });
+    a.pending_text = '';
+    if ((!a.condition || a.condition==='not_inspected') && p.cond) a.condition = p.cond;
+    if ((!a.condition || a.condition==='not_inspected')) a.condition = keep.length ? 'fair' : 'nothing_to_do';
+  });
+  S.proposals=null; release('accept'); render(); toast(keep.length+' issue'+(keep.length===1?'':'s')+' added');
+}
+
+// ---- issue editor ----
+var editing = null;
+function editIssue(id){
+  var a = curArea(), is = id ? JSON.parse(JSON.stringify((a.issues||[]).filter(function(x){return x.id===id;})[0])) : { id:'is_'+rid(8), title:'', trade:'general', severity:'medium', detail:'', likely_cause:'', recommended_fix:'', fix_source:'inspector', wo:false, photo_ids:[], isNew:true };
+  editing = is; renderIssueSheet();
+}
+function renderIssueSheet(){
+  var is = editing, a = curArea();
+  var h = '<h2>'+(is.isNew?'Add issue':'Edit issue')+'</h2><label class="fld" style="margin-top:0">Title</label><input id="ie-title" value="'+esc(is.title)+'" oninput="editing.title=this.value">'
+    +'<label class="fld">Trade</label><select onchange="editing.trade=this.value;editing.tenant_action=(this.value===\'tenant_action\')">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(is.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select>'
+    +'<label class="fld">Severity</label><div class="seg">'+SEVS.map(function(s){ return '<button class="'+(is.severity===s[0]?'sel':'')+'" onclick="editing.severity=\''+s[0]+'\';renderIssueSheet()">'+s[1]+'</button>'; }).join('')+'</div>'
+    +'<label class="fld">Detail</label><textarea style="min-height:70px" oninput="editing.detail=this.value">'+esc(is.detail)+'</textarea>'
+    +'<label class="fld">Likely cause</label><input value="'+esc(is.likely_cause)+'" oninput="editing.likely_cause=this.value">'
+    +'<label class="fld">Recommended fix</label><textarea style="min-height:70px" oninput="editing.recommended_fix=this.value">'+esc(is.recommended_fix)+'</textarea>'
+    +'<div class="toggle"><span>Flag for a work order<div class="muted">Just a flag for now — nothing is created</div></span><input type="checkbox"'+(is.wo?' checked':'')+' onchange="editing.wo=this.checked"></div>';
+  if ((a.photo_ids||[]).length){ h += '<label class="fld">Photos for this issue (tap to attach)</label><div class="thumbs">'+a.photo_ids.map(function(p){ var on = (is.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleIssuePhoto(\''+p+'\')">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>'; }
+  h += '<div class="btns"><button class="btn primary" onclick="saveIssue()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(is.isNew?'':'<button class="btn danger" id="ie-del" onclick="deleteIssueStep()">Delete</button>')+'</div>';
+  openSheet(h);
+}
+function toggleIssuePhoto(p){ var l = editing.photo_ids = editing.photo_ids||[]; var i = l.indexOf(p); if (i>-1) l.splice(i,1); else l.push(p); renderIssueSheet(); }
+function saveIssue(){
+  var is = editing; if (!String(is.title||'').trim()){ toast('Give the issue a title'); return; }
+  var a = curArea(); var isNew = is.isNew; delete is.isNew; is.title = is.title.trim(); if (is.trade==='tenant_action') is.tenant_action = true; else delete is.tenant_action;
+  mut(function(){ if (isNew) a.issues.push(is); else for (var i=0;i<a.issues.length;i++) if (a.issues[i].id===is.id) a.issues[i]=is; if ((!a.condition||a.condition==='not_inspected')) a.condition='fair'; });
+  closeSheet(); render();
+}
+function deleteIssueStep(){ var b=$('ie-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to delete'; return; } var a=curArea(), id=editing.id; mut(function(){ a.issues = a.issues.filter(function(x){return x.id!==id;}); }); closeSheet(); render(); }
+function viewPhoto(id){
+  var a = curArea();
+  openSheet('<h2>Photo</h2><img src="'+esc(photoSrc(id))+'" alt="photo" style="width:100%;border-radius:10px"><div class="btns"><button class="btn danger" id="ph-del" onclick="deletePhotoStep(\''+id+'\')">Remove from this area</button><button class="btn" onclick="closeSheet()">Close</button></div>');
+}
+function deletePhotoStep(id){ var b=$('ph-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to remove'; return; } var a=curArea(); mut(function(){ a.photo_ids = a.photo_ids.filter(function(x){return x!==id;}); (a.issues||[]).forEach(function(is){ is.photo_ids = (is.photo_ids||[]).filter(function(x){return x!==id;}); }); }); closeSheet(); render(); }
+
+// ---- sheet helpers ----
+function openSheet(html){ $('sheet').innerHTML = html; $('modal').classList.add('open'); }
+function closeSheet(){ $('modal').classList.remove('open'); }
+$('modal').addEventListener('click', function(e){ if (e.target === $('modal')) closeSheet(); });
+
+// ---- review & publish ----
+function localChecks(doc){
+  var blocks=[], warns=[], active = doc.areas.filter(function(a){return !a.excluded;});
+  var pend = pendingPhotoCount(); if (pend) blocks.push(pend+' photo'+(pend>1?'s are':' is')+' still uploading');
+  if (!active.length) blocks.push('No areas to report');
+  if (!doc.overall || !doc.overall.condition || doc.overall.condition==='not_inspected') blocks.push('Set the overall condition');
+  active.forEach(function(a){ if ((a.pending_text||'').trim()) blocks.push('“'+a.name+'” has dictation not turned into issues (or cleared)'); });
+  var sk = active.filter(function(a){ return !a.condition || a.condition==='not_inspected'; }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
+  if (S.rec.dirty) blocks.push('Changes are not saved to the server yet');
+  var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
+  if (sm && !sm.accepted) warns.push('The AI summary has not been approved and will be left out of the report');
+  return { blocks:blocks, warns:warns };
+}
+function rollup(doc){
+  var by = {}, order = ['urgent','high','medium','low','info'];
+  doc.areas.forEach(function(a){ if (a.excluded) return; (a.issues||[]).forEach(function(is){ var t = is.trade||'general'; var g = by[t] = by[t] || { trade:t, items:[], worst:'info' }; g.items.push({ area:a.name, title:is.title, severity:is.severity }); if (order.indexOf(is.severity) < order.indexOf(g.worst)) g.worst = is.severity; }); });
+  return Object.keys(by).map(function(k){return by[k];}).sort(function(x,y){ return order.indexOf(x.worst)-order.indexOf(y.worst) || y.items.length-x.items.length; });
+}
+function openReview(){ stopDictation(); S.view='review'; S.emailPreview=null; render(); }
+function viewReview(){
+  var rec = S.rec, doc = rec.doc, chk = localChecks(doc), ro = rollup(doc), b = brandById(rec.meta.brand_id) || defaultBrand();
+  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div><h1>Review &amp; report</h1><div class="muted">'+esc(doc.property.address)+'</div>';
+  h += '<div class="card"><b>Overall condition</b><div class="seg">'+[['good','Good','good'],['fair','Fair','fair'],['poor','Poor','poor']].map(function(c){ return '<button class="'+(doc.overall.condition===c[0]?'sel '+c[2]:'')+'" onclick="setOverall(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div><label class="fld">Overall notes (in the report)</label><textarea id="ov-notes" style="min-height:80px" oninput="mut(function(d){d.overall.notes=this.value}.bind(this))">'+esc(doc.overall.notes||'')+'</textarea></div>';
+  h += '<div class="card"><b>Report details</b><label class="fld">Brand</label><div class="row"><span>'+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'—')+'</span><button class="btn sm" onclick="brandSheet()">Switch brand</button></div><div class="muted">Switching re-skins the whole report instantly — nothing is rebuilt.</div>'
+    +'<label class="fld">Prepared for</label><input value="'+esc(rec.meta.client_name||'')+'" oninput="mutMeta(function(m){m.client_name=this.value}.bind(this))">'
+    +'<label class="fld">Client email</label><input type="email" value="'+esc(rec.meta.client_email||'')+'" oninput="mutMeta(function(m){m.client_email=this.value}.bind(this))"></div>';
+  h += '<div class="card"><b>Summary by trade</b>';
+  if (!ro.length) h += '<div class="muted">No issues recorded.</div>';
+  ro.forEach(function(g){ h += '<div class="tradehead"><span>'+esc(TRADE_LABEL[g.trade]||g.trade)+'</span><span class="pill">'+g.items.length+'</span></div>'+g.items.map(function(it){ return '<div class="muted">• '+esc(it.area)+': '+esc(it.title)+' <span class="pill">'+esc(SEV_LABEL[it.severity]||'')+'</span></div>'; }).join(''); });
+  h += '</div>';
+  h += summaryCard(doc);
+  h += '<div class="card"><b>Before you publish</b>';
+  if (!chk.blocks.length && !chk.warns.length) h += '<div class="check">✅ Everything looks ready.</div>';
+  chk.blocks.forEach(function(m){ h += '<div class="check">⛔ '+esc(m)+'</div>'; });
+  chk.warns.forEach(function(m){ h += '<div class="check">⚠️ '+esc(m)+'</div>'; });
+  var woN = doc.areas.reduce(function(n,a){ return n + (a.issues||[]).filter(function(i){return i.wo;}).length; },0);
+  if (woN) h += '<div class="muted" style="margin-top:6px">'+woN+' issue'+(woN>1?'s are':' is')+' flagged for work orders (conversion comes in a later update).</div>';
+  h += '<div class="btns"><button class="btn go" id="pub-btn" onclick="publishNow()"'+(chk.blocks.length?' disabled':'')+'>'+(rec.status==='published'?'Re-publish report':'Publish report')+'</button>'+(rec.status==='published'?'<button class="btn danger" onclick="unpublishNow()">Un-publish</button>':'')+'</div></div>';
+  if (rec.status==='published') h += publishedCard();
+  return h;
+}
+function setOverall(c){ mut(function(d){ d.overall.condition = c; }); render(); }
+function summaryCard(doc){
+  var sm = doc.summary, stale = sm && sm.fp !== fpOf(doc);
+  var h = '<div class="card"><b>AI summary (optional)</b><div class="muted">A short narrative that groups related issues across areas. It only appears in the report after you approve it.</div>';
+  if (sm){
+    h += (stale?'<div class="banner warn" style="margin-top:8px">Issues changed since this was written — regenerate it.</div>':'')+'<label class="fld">Overall</label><textarea style="min-height:90px" oninput="mut(function(d){d.summary.overall=this.value;d.summary.accepted=false}.bind(this))">'+esc(sm.overall)+'</textarea>';
+    Object.keys(sm.trades||{}).forEach(function(k){ h += '<label class="fld">'+esc(TRADE_LABEL[k]||k)+'</label><textarea style="min-height:70px" oninput="mut(function(d){d.summary.trades[\''+k+'\']=this.value;d.summary.accepted=false}.bind(this))">'+esc(sm.trades[k])+'</textarea>'; });
+    if ((sm.priorities||[]).length) h += '<label class="fld">Priorities</label>'+sm.priorities.map(function(p){ return '<div class="muted">• <b>'+esc(p.title)+'</b> — '+esc(p.why)+'</div>'; }).join('');
+    h += '<div class="btns"><button class="btn '+(sm.accepted&&!stale?'':'go')+'" onclick="acceptSummary()">'+(sm.accepted&&!stale?'✓ Approved for the report':'Approve for the report')+'</button><button class="btn" onclick="genSummary()">Regenerate</button><button class="btn danger" onclick="mut(function(d){delete d.summary});render()">Remove</button></div>';
+  } else h += '<div class="btns"><button class="btn primary" id="sum-btn" onclick="genSummary()"'+(S.summarizing?' disabled':'')+'>'+(S.summarizing?'Working…':'✨ Generate summary')+'</button></div>';
+  return h + '</div>';
+}
+function genSummary(){
+  if (!claim('sum')) return; S.summarizing = true; render();
+  api('POST','/fi/summarize',{ doc:S.rec.doc }).then(function(r){ mut(function(d){ d.summary = { overall:r.summary.overall, trades:r.summary.trades, priorities:r.summary.priorities, fp:r.summary.fp, generated_at:r.summary.generated_at, accepted:false }; }); toast('Summary ready — read it, then approve it'); })
+    .catch(function(e){ toast('AI summary failed: '+e.message); }).then(function(){ S.summarizing=false; release('sum'); render(); });
+}
+function acceptSummary(){ mut(function(d){ if (d.summary){ d.summary.accepted = true; d.summary.fp = fpOf(d); } }); render(); }
+function brandSheet(){
+  openSheet('<h2>Switch brand</h2><div>'+S.brands.map(function(b){ return '<div class="area-row" onclick="setBrand(\''+esc(b.id)+'\')"><span><span class="sw" style="background:'+esc(b.primary_color)+'"></span> <b>'+esc(b.name)+'</b>'+(b.is_default?' <span class="pill">default</span>':'')+'</span>'+(S.rec.meta.brand_id===b.id?'<span class="pill ok">current</span>':'')+'</div>'; }).join('')+'</div><div class="btns"><button class="btn" onclick="closeSheet();openBrands()">Manage brands</button><button class="btn" onclick="closeSheet()">Close</button></div>');
+}
+function setBrand(id){ mutMeta(function(m){ m.brand_id = id; }); closeSheet(); render(); toast('Brand switched'); }
+function publishNow(ack){
+  if (!claim('pub')) return; var btn=$('pub-btn'); if (btn) btn.disabled=true;
+  var rec = S.rec;
+  (rec.dirty ? syncNow(true) : Promise.resolve()).then(function(){
+    if (rec.dirty || S.sync.state==='error') throw new Error('Could not save the latest changes to the server first.');
+    return api('POST','/fi/publish',{ id:rec.id, rev:rec.base_rev, ack_warnings: ack===true });
+  }).then(function(r){ rec.status='published'; return persistLocal().then(function(){ release('pub'); S.publishInfo = r; refreshList(); toast('Published'); render(); }); })
+    .catch(function(e){
+      release('pub');
+      if (e.code==='needs_ack'){ openSheet('<h2>Publish anyway?</h2>'+((e.data&&e.data.warnings)||[]).map(function(w){ return '<div class="check">⚠️ '+esc(w.message)+'</div>'; }).join('')+'<div class="btns"><button class="btn go" onclick="closeSheet();publishNow(true)">Yes, publish</button><button class="btn" onclick="closeSheet();render()">Go back</button></div>'); return; }
+      if (e.code==='blocked'){ openSheet('<h2>Can’t publish yet</h2>'+((e.data&&e.data.blocks)||[]).map(function(w){ return '<div class="check">⛔ '+esc(w.message)+'</div>'; }).join('')+'<div class="btns"><button class="btn" onclick="closeSheet();render()">OK</button></div>'); return; }
+      toast('Publish failed: '+e.message); render();
+    });
+}
+function unpublishNow(){
+  if (!claim('unpub')) return;
+  api('POST','/fi/publish',{ id:S.rec.id, unpublish:true }).then(function(){ S.rec.status='draft'; return persistLocal(); }).then(function(){ release('unpub'); refreshList(); toast('Un-published — the public link now shows “being updated”'); render(); })
+    .catch(function(e){ release('unpub'); toast('Un-publish failed: '+e.message); });
+}
+function reportUrl(){ return S.reportBase + '/inspection-report.html?r=' + encodeURIComponent(S.rec.token) + (window.__testmode ? '&testmode=1' : ''); }
+function publishedCard(){
+  var url = reportUrl();
+  return '<div class="card" style="border-color:var(--accent2)"><b>✅ Published</b><div class="linkbox" id="rep-link">'+esc(url)+'</div>'
+    +'<div class="btns"><button class="btn primary" onclick="window.open(\''+esc(url)+'\',\'_blank\')">Open report</button><button class="btn" onclick="copyLink()">Copy link</button><button class="btn" onclick="window.open(\''+esc(url)+'&print=1\',\'_blank\')">Download PDF</button></div>'
+    +'<div class="muted" style="margin-top:6px">“Download PDF” opens the report and the print dialog — choose “Save as PDF”.</div>'
+    +'<h3>Email the report (optional)</h3><input type="email" id="em-to" placeholder="recipient@example.com" value="'+esc(S.rec.meta.client_email||'')+'"><textarea id="em-msg" style="min-height:60px;margin-top:6px" placeholder="Optional note to include"></textarea>'
+    +'<div class="btns"><button class="btn" id="em-prev" onclick="emailPreview()">Preview email</button></div></div>';
+}
+function copyLink(){
+  var url = reportUrl();
+  if (navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(url).then(function(){ toast('Link copied'); }).catch(function(){ toast('Could not copy — press and hold the link to copy it'); }); }
+  else toast('Press and hold the link to copy it');
+}
+function emailPreview(){
+  var to = $('em-to').value.trim(), msg = $('em-msg').value; if (!claim('emprev')) return;
+  api('POST','/fi/email-report',{ id:S.rec.id, to:to, message:msg, preview:true }).then(function(r){
+    release('emprev');
+    openSheet('<h2>Email preview</h2><div class="muted">To: '+esc(r.to)+'<br>Subject: '+esc(r.subject)+'</div><div style="border:1px solid var(--border);border-radius:10px;margin:10px 0;overflow:hidden">'+r.html+'</div><div class="btns"><button class="btn go" id="em-send" onclick="emailSend()">Send now</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+    S.emailMsg = msg; S.emailTo = to;
+  }).catch(function(e){ release('emprev'); toast('Preview failed: '+e.message); });
+}
+function emailSend(){
+  var to = S.emailTo;
+  if (!claim('emsend')) return; $('em-send').disabled = true;
+  api('POST','/fi/email-report',{ id:S.rec.id, to:to, message:S.emailMsg||'', preview:false }).then(function(r){ release('emsend'); closeSheet(); toast(r.staged ? 'Staging: email NOT really sent (test mode)' : 'Email sent to '+r.to); })
+    .catch(function(e){ release('emsend'); $('em-send').disabled=false; toast('Send failed: '+e.message); });
+}
+
+// ---- brands ----
+function openBrands(){ S.view='brands'; render(); refreshList().then(function(){ if (S.view==='brands') render(); }); }
+function viewBrands(){
+  var h = '<div class="row"><button class="btn sm ghost" onclick="S.view=S.rec?\'insp\':\'home\';render()">‹ Back</button><button class="btn sm primary" onclick="editBrand(\'\')">＋ Add company</button></div><h1>Brands</h1><div class="muted">The default brand is used unless an inspection is switched to another one. Switching an inspection to another brand re-skins its report instantly.</div>';
+  S.brands.forEach(function(b){
+    h += '<div class="card" onclick="editBrand(\''+esc(b.id)+'\')" style="cursor:pointer"><div class="row"><span><span class="sw" style="background:'+esc(b.primary_color)+'"></span> <span class="sw" style="background:'+esc(b.accent_color)+'"></span> <b>'+esc(b.name)+'</b></span>'+(b.is_default?'<span class="pill ok">default</span>':'')+'</div><div class="muted">'+esc(b.tagline||'')+(b.has_logo||b.logo_data?' · logo set':' · no logo')+'</div></div>';
+  });
+  return h;
+}
+var brandEdit = null;
+function editBrand(id){
+  var b = id ? JSON.parse(JSON.stringify(brandById(id))) : { id:'', name:'', primary_color:'#1d4ed8', accent_color:'#166534', tagline:'', contact_line:'', footer_text:'', logo_data:'', is_default:false };
+  brandEdit = b; renderBrandSheet();
+}
+function renderBrandSheet(){
+  var b = brandEdit;
+  openSheet('<h2>'+(b.id?'Edit company':'Add company')+'</h2><label class="fld" style="margin-top:0">Company name *</label><input value="'+esc(b.name)+'" oninput="brandEdit.name=this.value">'
+    +'<div class="row" style="gap:10px"><div style="flex:1"><label class="fld">Main color</label><input type="color" style="height:48px;padding:4px" value="'+esc(b.primary_color)+'" oninput="brandEdit.primary_color=this.value"></div><div style="flex:1"><label class="fld">Accent color</label><input type="color" style="height:48px;padding:4px" value="'+esc(b.accent_color)+'" oninput="brandEdit.accent_color=this.value"></div></div>'
+    +'<label class="fld">Tagline</label><input value="'+esc(b.tagline)+'" oninput="brandEdit.tagline=this.value">'
+    +'<label class="fld">Contact line (phone / email / website)</label><input value="'+esc(b.contact_line)+'" oninput="brandEdit.contact_line=this.value">'
+    +'<label class="fld">Report footer text</label><textarea style="min-height:60px" oninput="brandEdit.footer_text=this.value">'+esc(b.footer_text)+'</textarea>'
+    +'<label class="fld">Logo</label>'+(b.logo_data?'<div style="background:#f4f5f7;border-radius:8px;padding:8px;margin-bottom:6px"><img src="'+esc(b.logo_data)+'" alt="logo" style="max-height:60px;max-width:100%"></div>':'<div class="muted">No logo yet.</div>')
+    +'<div class="btns"><button class="btn" onclick="$(\'logo-in\').value=\'\';$(\'logo-in\').click()">Choose logo image</button>'+(b.logo_data?'<button class="btn" onclick="brandEdit.logo_data=\'\';brandEdit.remove_logo=true;renderBrandSheet()">Remove logo</button>':'')+'</div>'
+    +'<div class="toggle"><span>Use as the default brand</span><input type="checkbox"'+(b.is_default?' checked disabled':'')+' onchange="brandEdit.is_default=this.checked"></div>'
+    +'<div class="btns"><button class="btn primary" id="br-save" onclick="saveBrand()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(b.id&&!b.is_default?'<button class="btn danger" onclick="deactivateBrand()">Remove company</button>':'')+'</div>');
+}
+$('logo-in').addEventListener('change', function(ev){
+  var f = ev.target.files && ev.target.files[0]; if (!f || !brandEdit) return;
+  var url = URL.createObjectURL(f), img = new Image();
+  img.onload = function(){
+    var tries = [[260,'image/png',0],[200,'image/png',0],[320,'image/jpeg',0.85],[240,'image/jpeg',0.7],[160,'image/jpeg',0.6]], out = '';
+    for (var i=0;i<tries.length && !out;i++){
+      var sc = Math.min(1, tries[i][0]/img.naturalWidth), c = document.createElement('canvas'); c.width = Math.max(1,Math.round(img.naturalWidth*sc)); c.height = Math.max(1,Math.round(img.naturalHeight*sc));
+      var ctx = c.getContext('2d'); if (tries[i][1]==='image/jpeg'){ ctx.fillStyle='#fff'; ctx.fillRect(0,0,c.width,c.height); } ctx.drawImage(img,0,0,c.width,c.height);
+      var d = c.toDataURL(tries[i][1], tries[i][2]); if (d.length <= 40000) out = d;
+    }
+    URL.revokeObjectURL(url);
+    if (!out){ toast('That logo is too detailed to shrink small enough — try a simpler image'); return; }
+    brandEdit.logo_data = out; delete brandEdit.remove_logo; renderBrandSheet();
+  };
+  img.onerror = function(){ URL.revokeObjectURL(url); toast('That image could not be read'); };
+  img.src = url;
+});
+function saveBrand(){
+  var b = brandEdit; if (!String(b.name||'').trim()){ toast('Enter the company name'); return; }
+  if (!claim('brsave')) return; $('br-save').disabled = true;
+  var body = { id:b.id||undefined, name:b.name, primary_color:b.primary_color, accent_color:b.accent_color, tagline:b.tagline, contact_line:b.contact_line, footer_text:b.footer_text, is_default:!!b.is_default };
+  if (b.logo_data && b.logo_data !== (brandById(b.id)||{}).logo_data) body.logo_data = b.logo_data;
+  if (b.remove_logo) body.remove_logo = true;
+  api('POST','/fi/brand/save',body).then(function(){ return refreshList(); }).then(function(){ release('brsave'); closeSheet(); toast('Saved'); if (S.view==='brands'||S.view==='review'||S.view==='new') render(); })
+    .catch(function(e){ release('brsave'); $('br-save').disabled=false; toast('Not saved: '+e.message); });
+}
+function deactivateBrand(){
+  var b = brandEdit; if (!b.id) return; if (!claim('brdel')) return;
+  api('POST','/fi/brand/save',{ id:b.id, name:b.name, primary_color:b.primary_color, accent_color:b.accent_color, active:false }).then(function(){ return refreshList(); }).then(function(){ release('brdel'); closeSheet(); toast('Removed'); render(); })
+    .catch(function(e){ release('brdel'); toast('Not removed: '+e.message); });
+}
+</script>
+</body>
+</html>
