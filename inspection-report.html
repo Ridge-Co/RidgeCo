@@ -95,6 +95,16 @@ function issueHtml(is, area, have, showArea){
     + (is.recommended_fix ? '<div class="lbl">'+(is.trade==='tenant_action'?'Requested of tenant':'Recommended action')+'</div><div>'+esc(is.recommended_fix)+'</div>' : '')
     + photoGrid(is.photo_ids, have) + '</div>';
 }
+var EQ_KIND = {furnace:'Furnace',boiler:'Boiler',central_ac:'Central A/C',heat_pump:'Heat pump',water_heater:'Water heater',refrigerator:'Refrigerator',range:'Range / oven',dishwasher:'Dishwasher',microwave:'Microwave',washer:'Washer',dryer:'Dryer',disposal:'Garbage disposal',other:'Equipment'};
+var EQ_FIELD = [['brand','Brand'],['model','Model'],['serial','Serial'],['year','Made'],['filter_size','Filter size'],['fuel','Fuel'],['tonnage','Tonnage'],['capacity','Capacity']];
+function equipHtml(e, area, have){
+  var bits = EQ_FIELD.filter(function(f){ return e[f[0]]; }).map(function(f){ return '<div><span class="lbl" style="display:inline;margin:0 4px 0 0">'+esc(f[1])+'</span>'+esc(e[f[0]])+'</div>'; }).join('');
+  return '<div class="issue info" style="border-color:#8a94a3"><div class="t">'+esc((e.name?e.name+' · ':'')+(EQ_KIND[e.kind]||'Equipment'))+' <span class="muted">— '+esc(area)+'</span></div>'+bits+(e.notes?'<div class="muted">'+esc(e.notes)+'</div>':'')+photoGrid(e.photo_ids, have)+'</div>';
+}
+function contactLine(b){
+  if (b.contact_line) return b.contact_line;
+  return [b.phone, b.email, (b.website||'').replace(/^https?:\/\//,'')].filter(Boolean).join(' · ');
+}
 function draw(d){
   var doc = d.doc, b = d.brand || {}, insp = d.inspection, have = {};
   (d.photo_ids||[]).forEach(function(p){ have[p] = true; });
@@ -131,6 +141,13 @@ function draw(d){
     tenant.items.forEach(function(it){ var r = byId[it.issue_id]; if (r) h += issueHtml(r.is, r.area, have, true); });
     h += '</div>';
   }
+  var eqRows = [];
+  (doc.areas||[]).filter(function(a){ return !a.excluded; }).forEach(function(a){ (a.equipment||[]).forEach(function(e){ eqRows.push({ area:a.name, e:e }); }); });
+  if (eqRows.length){
+    h += '<h2>Equipment &amp; model information</h2><div class="card">';
+    eqRows.forEach(function(r){ h += equipHtml(r.e, r.area, have); });
+    h += '</div>';
+  }
   h += '<h2>Area by area</h2>';
   (doc.areas||[]).filter(function(a){ return !a.excluded; }).forEach(function(a){
     var n = (a.issues||[]).length;
@@ -140,7 +157,7 @@ function draw(d){
     (a.issues||[]).forEach(function(is){ h += issueHtml(is, a.name, have, false); });
     h += photoGrid(a.photo_ids, have) + '</div>';
   });
-  h += '<div class="foot">'+(b.footer_text?'<div style="white-space:pre-wrap">'+esc(b.footer_text)+'</div>':'')+(b.contact_line?'<div>'+esc(b.contact_line)+'</div>':'')+'<div style="margin-top:6px">Observations reflect conditions visible on the inspection date and are not a guarantee of future condition.</div></div></div>';
+  h += '<div class="foot">'+(b.footer_text?'<div style="white-space:pre-wrap">'+esc(b.footer_text)+'</div>':'')+(contactLine(b)?'<div>'+esc(contactLine(b))+'</div>':'')+(b.address?'<div>'+esc(b.address)+'</div>':'')+'<div style="margin-top:6px">Observations reflect conditions visible on the inspection date and are not a guarantee of future condition.</div></div></div>';
   show(h);
   if (Q.get('print') === '1') waitImagesThenPrint();
 }

@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-15.02-field-inspection-round2';
+const BUILD_VERSION = '2026-10-15.02-field-inspection-update';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -33656,19 +33656,21 @@ async function fiBrandSave(env, body) {
     if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(logo)) return fiErr(400, 'bad_logo', 'Logo must be a PNG, JPEG or WebP image.');
     if (logo.length > 42000) return fiErr(413, 'logo_too_large', 'Logo is too large (keep it under about 30 KB — the app resizes it for you).');
   }
-  let website = '';
-  if (body.website) { const sw = fiSafeUrl(body.website); if (!sw.ok) return fiErr(400, 'bad_website', sw.error); website = sw.url.replace(/\/$/, ''); }
-  const email = fiStr(body.email, 120).trim();
-  if (email && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(email)) return fiErr(400, 'bad_email', 'The brand email address does not look right.');
-  const phone = fiStr(body.phone, 40).trim(), address = fiStr(body.address, 200).trim();
   await fiEnsureTabs(env);
   const t = await fiReadFresh(env, 'FI_Brands');
   const id = body.id ? String(body.id) : 'brand_' + inspRandToken(9);
   if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Brand id is malformed.');
   const ex = t.rows.find(r => r.o.ID === id);
   if (body.id && !ex) return fiErr(404, 'not_found', 'That brand does not exist.');
+  // A field the caller leaves out keeps its saved value (e.g. "remove company" only sends name/colors) - nothing is blanked by omission.
+  const keep = (k, max) => (body[k] !== undefined ? fiStr(body[k], max).trim() : (ex ? ex.o[{ tagline: 'Tagline', contact_line: 'Contact_Line', footer_text: 'Footer_Text', website: 'Website', phone: 'Phone', email: 'Email', address: 'Address' }[k]] || '' : ''));
+  let website = keep('website', 300);
+  if (website && body.website !== undefined) { const sw = fiSafeUrl(website); if (!sw.ok) return fiErr(400, 'bad_website', sw.error); website = sw.url.replace(/\/$/, ''); }
+  const email = keep('email', 120);
+  if (email && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(email)) return fiErr(400, 'bad_email', 'The brand email address does not look right.');
+  const phone = keep('phone', 40), address = keep('address', 200), tagline = keep('tagline', 160), contactLine = keep('contact_line', 240), footerText = keep('footer_text', 300);
   const now = new Date().toISOString();
-  const o = Object.assign({}, ex ? ex.o : {}, { ID: id, Name: name, Primary_Color: pc, Accent_Color: ac, Tagline: fiStr(body.tagline, 160), Contact_Line: fiStr(body.contact_line, 240), Footer_Text: fiStr(body.footer_text, 300), Website: website, Phone: phone, Email: email, Address: address,
+  const o = Object.assign({}, ex ? ex.o : {}, { ID: id, Name: name, Primary_Color: pc, Accent_Color: ac, Tagline: tagline, Contact_Line: contactLine, Footer_Text: footerText, Website: website, Phone: phone, Email: email, Address: address,
     Logo_Data: body.remove_logo === true ? '' : (logo !== undefined ? logo : (ex ? ex.o.Logo_Data : '')), Active: body.active === false ? 'FALSE' : 'TRUE', Created_At: ex ? ex.o.Created_At : now, Updated_At: now });
   const wantDefault = body.is_default === true;
   o.Is_Default = wantDefault ? 'TRUE' : (ex ? ex.o.Is_Default : 'FALSE');

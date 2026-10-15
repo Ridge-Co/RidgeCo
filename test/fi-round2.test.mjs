@@ -119,6 +119,8 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('private website refused', r.status === 400 && r.body.error === 'bad_website', r);
   r = await w.fiBrandSave(w.env, { name: 'TEST-B', primary_color: '#0b3d91', email: 'nope' });
   t('bad email refused', r.status === 400 && r.body.error === 'bad_email', r);
+  r = await w.fiBrandSave(w.env, { id: (await w.fiList(w.env)).body.brands.find(x => x.name === 'TEST-Premier').id, name: 'TEST-Premier', primary_color: '#0b3d91', active: false });
+  t('omitting contact fields keeps them (remove-company does not blank details)', r.status === 200 && r.body.brand.phone === '410-555-0100' && r.body.brand.website === 'https://premierpm.com' && r.body.brand.address.startsWith('1 Main'), r);
   t('brand headers include contact columns', ['Website', 'Phone', 'Email', 'Address'].every(c => w.FI_BRAND_HEADERS.includes(c)));
   t('contact line falls back to phone/email/site', w.fiBrandContactLine({ Phone: '1', Email: 'a@b.co', Website: 'https://b.co' }) === '1 · a@b.co · b.co' && w.fiBrandContactLine({ Contact_Line: 'Call us', Phone: '1' }) === 'Call us');
   const m = w.fiBuildEmail({ Name: 'Premier', Primary_Color: '#0b3d91', Phone: '410-555-0100' }, { Address: '1 A St' }, 'https://x/y', '');
@@ -263,6 +265,18 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('transcript text absent from the whole public payload', !JSON.stringify(rep.body).includes('private rambling'));
 }
 
+// ── phone page and server agree on equipment kinds/fields ──
+{
+  const w = world();
+  const html = fs.readFileSync(new URL('../field-inspect.html', import.meta.url), 'utf8');
+  const m = html.match(/var EQUIP_KINDS = (\{[\s\S]*?\n\});/);
+  const phone = new Function('return ' + m[1])();
+  t('phone and server list the same equipment kinds', JSON.stringify(Object.keys(phone)) === JSON.stringify(Object.keys(w.FI_EQUIP_KINDS)), Object.keys(phone));
+  t('phone and server agree on the extra fields and labels of every kind', Object.keys(phone).every(k => JSON.stringify(phone[k].extra) === JSON.stringify(w.FI_EQUIP_KINDS[k].extra) && phone[k].label === w.FI_EQUIP_KINDS[k].label));
+  const rep = fs.readFileSync(new URL('../inspection-report.html', import.meta.url), 'utf8');
+  t('report page knows every equipment kind', Object.keys(w.FI_EQUIP_KINDS).filter(k => k !== 'other').every(k => rep.includes(k + ':')));
+}
+
 // ── wiring / staging guards ──
 {
   for (const p of ['/fi/route', '/fi/brand/scrape', '/fi/read-label', '/fi/transcribe/json', '/fi/issue-types/save', '/fi/issue-types/touch', '/fi/issue-types', '/fi/transcribe'])
@@ -270,7 +284,7 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('staging token: transcribe raw route guarded to TEST- inspections', /path === '\/fi\/transcribe'[\s\S]{0,400}startsWith\('TEST-'\)/.test(src));
   t('staging token: read-label limited to TEST- inspections', /path === '\/fi\/read-label'\) return String\(\(body && body\.inspection_id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
   t('staging token: issue-type writes limited to TEST- names', src.includes("path === '/fi/issue-types/save'") && src.includes("path === '/fi/issue-types/touch'") && /touch'\) return Array\.isArray[\s\S]{0,200}startsWith\('TEST-'\)/.test(src));
-  t('BUILD_VERSION bumped', src.includes("BUILD_VERSION = '2026-10-15.02-field-inspection-round2'"));
+  t('BUILD_VERSION bumped', src.includes("BUILD_VERSION = '2026-10-15.02-field-inspection-update'"));
 }
 
 console.log(`fi-round2: ${pass} passed, ${fail} failed`);
