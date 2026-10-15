@@ -110,6 +110,19 @@ Known limit: Google Sheets read quota is per minute for the whole Hub. The publi
 - **Brett's phone test passed:** `[TEST - for Gina]` offer for Nov 8 -> accepted -> turnover `covered` (via offer); the Nov 11/12 pre-arrival offer -> declined -> Kayla asked at once.
 - **Open:** `sweep_work` fails every tick because scopes 4 and 6 (WO-1180, WO-1183) have no deposit invoice (Brett's call: create the invoices or exclude); two near-simultaneous cleaner taps wrote two STR_Log rows with the same ID (read-max+1; cosmetic, fix queued); first `Selftest_Results` row should appear once the sliced self-test finishes; calendar sync, Mon/Wed/Fri digest and going live (test mode OFF, Brett's approval) are still ahead.
 
+## Live rollout log (Oct 15 2026) — WENT LIVE
+
+- **Test mode turned OFF ~4:00 pm ET** (`STR_SMS_TEST_MODE` = FALSE via the board's red confirmation, Brett's explicit request). Cleaning texts now go to the real cleaners. Brett's rule: no test messages to anyone; every text must be for a real need.
+- **Friday Oct 16 verified covered by Gina** (`on_calendar`, via the hand-typed "Gina Cleaning" entry) before the switch; no offers out for it.
+- **Test-era offer state reset.** The Nov 11 pre-arrival and Nov 15 checkout queues still held decline/expiry/pending rows that came from Brett's test taps (texts went to his phone only). Both were reset with the board's "Restart the queue": old offers marked `superseded` (silent, no texts to Kayla or Rachel), Gina asked first with a real text (offers 7 and 8, reply by Fri Oct 16 8 AM ET).
+- **Deleted the recurring "Kayla N/A" series** (Mon-Fri) from TURNOVER COVERAGE MILAM RIDGE. Brett: those were Kayla's *base* availability and she has repeatedly taken jobs on those days, so she is always asked. "Kayla Cleaning" coverage entries, "Michele N/A" and Gina's "Gina Not Available" entries were left alone.
+- **Calendar policy (Brett):** the cleaning calendar should show *actual responses* going forward ("X said not available on this date"), not base availability. Gina's "Not Available" entries are real responses she gave him and stand as if she had responded.
+- Correction to earlier notes: overnight-window offer deadlines are Fri 8:00 AM ET (12:00 UTC), not noon ET.
+
+## Backlog items added Oct 15 (logged, NOT built)
+
+See roadmap items 8-10 below.
+
 ## Roadmap — logged, NOT built (room is reserved; the cleaner page already has a "coming soon" strip)
 
 Scheduling was by far the priority. From Brett's Oct 14 message, to build later on the same token page and the same `STR_*` sheet family:
