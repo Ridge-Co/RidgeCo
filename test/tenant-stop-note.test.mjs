@@ -38,7 +38,7 @@ ok(withWelcomeRatesNote(withWelcomeRatesNote('Hi Sam.')) === 'Hi Sam. Msg&data r
 ok(withWelcomeRatesNote('Msg & data rates apply.') === 'Msg & data rates apply.', 'existing rates wording left alone');
 ok(withTenantStopNote(withWelcomeRatesNote('Hi Sam.')) === 'Hi Sam. Msg&data rates may apply. ' + NOTE, 'welcome order: rates then STOP');
 ok(!/withWelcomeRatesNote/.test(src.slice(src.indexOf("const message = (m => type === 'tenant'"), src.indexOf("const message = (m => type === 'tenant'") + 200)), 'PIN text does not get the rates note');
-ok(/BUILD_VERSION = '2026-10-14\.\d+-[a-z-]+'/.test(src), 'BUILD_VERSION format');
+ok(/BUILD_VERSION = '2026-10-\d\d\.\d+-[a-z-]+'/.test(src), 'BUILD_VERSION format');
 ok(src.includes("const message = (m => type === 'tenant' ? withTenantStopNote(m) : m)("), 'tenant PIN text gets the note');
 ok(/Ref: \$\{woId\}\. \$\{TENANT_STOP_NOTE\}`;/.test(src), 'tenant job-received text gets the note');
 // vendors/owners are untouched

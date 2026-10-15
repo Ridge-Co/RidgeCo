@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Property Inspection Report</title>
+<style>
+  :root{ --brand:#1d4ed8; --accent:#166534; --text:#1c2430; --muted:#6b7684; --border:#dfe3e8; --bg:#f4f5f7; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .wrap{max-width:820px;margin:0 auto;padding:0 14px 60px}
+  .band{background:var(--brand);color:#fff;padding:18px 20px;display:flex;align-items:center;gap:14px}
+  .band img{max-height:56px;max-width:180px;background:#fff;border-radius:8px;padding:4px;display:block}
+  .band .nm{font-size:22px;font-weight:800;line-height:1.1} .band .tg{font-size:13px;opacity:.9}
+  .doc-title{margin:18px 0 4px;font-size:26px;font-weight:800}
+  .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px;margin:12px 0}
+  .meta div span{display:block;font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.03em}
+  .card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px;margin:14px 0}
+  h2{font-size:19px;margin:22px 0 8px;color:var(--brand);border-bottom:2px solid var(--brand);padding-bottom:4px}
+  h3{font-size:16px;margin:0 0 6px}
+  .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700;background:#eef2f7;color:#445}
+  .pill.good{background:#e7f6ec;color:#14623a} .pill.fair{background:#fdf3e0;color:#7a5b12} .pill.poor{background:#fdecea;color:#8e281d}
+  .sev{display:inline-block;padding:2px 9px;border-radius:6px;font-size:11px;font-weight:800;color:#fff;text-transform:uppercase;background:#8a94a3}
+  .sev.urgent{background:#c0392b} .sev.high{background:#d9622b} .sev.medium{background:#c99a06} .sev.low{background:#4a7bd0}
+  .issue{border-left:5px solid #c99a06;padding:8px 12px;margin:10px 0;background:#fafbfc;border-radius:6px;page-break-inside:avoid;break-inside:avoid}
+  .issue.urgent{border-color:#c0392b} .issue.high{border-color:#d9622b} .issue.medium{border-color:#c99a06} .issue.low{border-color:#4a7bd0} .issue.info{border-color:#8a94a3}
+  .issue .t{font-weight:700} .lbl{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-top:6px}
+  .photos{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .photos img{width:150px;height:112px;object-fit:cover;border-radius:6px;border:1px solid var(--border);background:#e9edf2;cursor:zoom-in}
+  .photos .miss{width:150px;height:112px;border:1px dashed #c0392b;color:#c0392b;font-size:12px;display:flex;align-items:center;justify-content:center;text-align:center;border-radius:6px;padding:4px}
+  .area{page-break-inside:avoid;break-inside:avoid-page}
+  .tenant{border:2px solid var(--accent);background:#f3faf5}
+  .muted{color:var(--muted);font-size:13px}
+  .msg{background:#fff;border:1px solid var(--border);border-radius:12px;padding:24px;margin:40px auto;max-width:520px;text-align:center}
+  .msg.err{border-color:#f1b9b3;background:#fdecea;color:#8e281d}
+  .preview{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12;border-radius:10px;padding:10px 14px;margin:12px 0;font-size:14px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+  .btn{min-height:44px;padding:10px 16px;border:1px solid var(--brand);border-radius:10px;background:var(--brand);color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+  .btn.alt{background:#fff;color:var(--brand)}
+  .foot{margin-top:26px;padding-top:12px;border-top:2px solid var(--brand);font-size:13px;color:var(--muted)}
+  #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;z-index:99}
+  #lightbox.open{display:flex} #lightbox img{max-width:96vw;max-height:92vh}
+  .tradeline{display:flex;justify-content:space-between;align-items:center}
+  @media print{
+    body{background:#fff} .no-print{display:none!important} .wrap{max-width:none;padding:0}
+    .card,.meta{border-color:#ccc} h2{page-break-after:avoid} .photos img{width:130px;height:97px}
+  }
+</style>
+</head>
+<body>
+<div id="root"><div class="msg">Loading report…</div></div>
+<div id="lightbox" onclick="this.classList.remove('open')"><img id="lb-img" alt="photo"></div>
+<script>
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var Q = new URLSearchParams(location.search), TOKEN = Q.get('r') || '';
+var TRADE_LABEL = {plumbing:'Plumbing',electrical:'Electrical',hvac:'HVAC / Heating',roofing:'Roofing / Gutters',structural:'Structural',carpentry:'Carpentry',drywall_paint:'Drywall / Paint',flooring:'Flooring',windows_doors:'Windows / Doors',appliances:'Appliances',pest:'Pest',safety:'Safety',exterior_site:'Exterior / Site',cleaning:'Cleaning',general:'General',tenant_action:'Tenant action'};
+var SEV_LABEL = {urgent:'Urgent',high:'High',medium:'Medium',low:'Low',info:'Note'};
+var COND_LABEL = {good:'Good',fair:'Fair',poor:'Poor',nothing_to_do:'Nothing to do',not_inspected:'Not inspected'};
+var TYPE_LABEL = {periodic:'Periodic inspection',move_in:'Move-in inspection',move_out:'Move-out inspection',pre_listing:'Pre-listing inspection',other:'Inspection'};
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function safeColor(c, d){ return /^#[0-9a-fA-F]{6}$/.test(c||'') ? c : d; }
+function show(html){ document.getElementById('root').innerHTML = html; }
+function fail(title, msg, cls){ show('<div class="msg '+(cls||'')+'"><h2 style="border:none;color:inherit">'+esc(title)+'</h2><p>'+esc(msg)+'</p></div>'); }
+
+if (!TOKEN){ fail('Report link incomplete', 'This link is missing its access code. Please use the link you were sent.', 'err'); }
+else {
+  var headers = {}; try{ var a = localStorage.getItem('mh_auth'); if (a) headers['X-Auth-Token'] = a; }catch(e){ /* no stored admin code — public view */ }
+  fetch(WORKER + '/fi/report?r=' + encodeURIComponent(TOKEN), { headers: headers }).then(function(res){
+    return res.text().then(function(t){ var d; try{ d = JSON.parse(t); }catch(e){ throw new Error('The server sent an unreadable answer (HTTP '+res.status+').'); } return { ok:res.ok && d.ok !== false, d:d, status:res.status }; });
+  }).then(function(r){
+    if (!r.ok){
+      if (r.d.error === 'not_published') return fail('This report is being updated', r.d.message || 'Please check back soon.');
+      if (r.d.error === 'not_found') return fail('Report not found', 'This link is not valid. Please ask for a new link.', 'err');
+      return fail('Could not load the report', r.d.message || 'Please try again in a moment.', 'err');
+    }
+    draw(r.d);
+  }).catch(function(e){ fail('Could not load the report', e.message + ' Check your connection and reload.', 'err'); });
+}
+
+function imgUrl(id){ return WORKER + '/fi/photo/view?r=' + encodeURIComponent(TOKEN) + '&p=' + encodeURIComponent(id); }
+function photoGrid(ids, have){
+  var list = (ids||[]).filter(function(p){ return have[p]; });
+  var missing = (ids||[]).length - list.length;
+  if (!list.length && !missing) return '';
+  return '<div class="photos">' + list.map(function(p){ return '<img src="'+esc(imgUrl(p))+'" alt="Inspection photo" onclick="lb(this.src)" onerror="this.outerHTML=\'<div class=miss>Photo could not be loaded</div>\'">'; }).join('') + (missing ? '<div class="miss">'+missing+' photo'+(missing>1?'s':'')+' not available</div>' : '') + '</div>';
+}
+function lb(src){ document.getElementById('lb-img').src = src; document.getElementById('lightbox').classList.add('open'); }
+function issueHtml(is, area, have, showArea){
+  return '<div class="issue '+esc(is.severity)+'"><div class="t"><span class="sev '+esc(is.severity)+'">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span> '+esc(is.title)+'</div>'
+    + (showArea ? '<div class="muted">'+esc(area)+'</div>' : '')
+    + (is.detail ? '<div>'+esc(is.detail)+'</div>' : '')
+    + (is.likely_cause ? '<div class="lbl">Likely cause</div><div>'+esc(is.likely_cause)+'</div>' : '')
+    + (is.recommended_fix ? '<div class="lbl">'+(is.trade==='tenant_action'?'Requested of tenant':'Recommended action')+'</div><div>'+esc(is.recommended_fix)+'</div>' : '')
+    + photoGrid(is.photo_ids, have) + '</div>';
+}
+function draw(d){
+  var doc = d.doc, b = d.brand || {}, insp = d.inspection, have = {};
+  (d.photo_ids||[]).forEach(function(p){ have[p] = true; });
+  document.documentElement.style.setProperty('--brand', safeColor(b.primary_color, '#1d4ed8'));
+  document.documentElement.style.setProperty('--accent', safeColor(b.accent_color, '#166534'));
+  document.title = 'Inspection Report — ' + (doc.property && doc.property.address || '');
+  var h = '<div class="band">' + (b.logo_data ? '<img src="'+esc(b.logo_data)+'" alt="'+esc(b.name)+' logo">' : '') + '<div><div class="nm">'+esc(b.name)+'</div>'+(b.tagline?'<div class="tg">'+esc(b.tagline)+'</div>':'')+'</div></div><div class="wrap">';
+  if (d.preview) h += '<div class="preview no-print"><b>Preview — not published.</b> Only you can see this. Publish it from the Field Inspection app to share the link.</div>';
+  if (d.brand_fallback) h += '<div class="preview no-print"><b>Brand missing.</b> The brand chosen for this inspection is no longer available, so the default brand is shown.</div>';
+  h += '<div class="toolbar no-print"><button class="btn" onclick="window.print()">Print / Save as PDF</button><button class="btn alt" onclick="copyLink()" id="cp">Copy link</button></div>';
+  h += '<div class="doc-title">Property Inspection Report</div><div class="muted">'+esc(TYPE_LABEL[doc.type]||'Inspection')+'</div>';
+  h += '<div class="meta"><div><span>Property</span>'+esc(doc.property.address)+'</div><div><span>Inspection date</span>'+esc(insp.date||doc.date||'')+'</div><div><span>Inspector</span>'+esc(insp.inspector||doc.inspector||'')+'</div>'+(insp.client_name?'<div><span>Prepared for</span>'+esc(insp.client_name)+'</div>':'')+'<div><span>Overall condition</span><span class="pill '+esc(doc.overall.condition)+'" style="display:inline-block;font-size:13px;color:inherit;text-transform:none;letter-spacing:0">'+esc(COND_LABEL[doc.overall.condition]||'')+'</span></div></div>';
+  if (doc.pre1978) h += '<div class="card" style="border-color:#f0d9a8;background:#fdf9ee"><b>Built before 1978.</b> Paint in homes of this age may contain lead. Any repair that disturbs painted surfaces should follow lead-safe work practices.</div>';
+  if (doc.overall.notes) h += '<div class="card"><h3>Inspector’s overall notes</h3><div style="white-space:pre-wrap">'+esc(doc.overall.notes)+'</div></div>';
+  var sm = doc.summary;
+  if (sm && sm.overall){
+    h += '<h2>Summary</h2><div class="card"><div style="white-space:pre-wrap">'+esc(sm.overall)+'</div>';
+    if ((sm.priorities||[]).length) h += '<div class="lbl">Priorities</div><ol style="margin:4px 0 0 18px;padding:0">'+sm.priorities.map(function(p){ return '<li><b>'+esc(p.title)+'</b>'+(p.why?' — '+esc(p.why):'')+'</li>'; }).join('')+'</ol>';
+    h += '</div>';
+  }
+  var ro = d.rollup || [], tenant = null;
+  var repairs = ro.filter(function(g){ if (g.trade==='tenant_action'){ tenant = g; return false; } return true; });
+  var byId = {}; (doc.areas||[]).forEach(function(a){ (a.issues||[]).forEach(function(is){ byId[is.id] = { is:is, area:a.name }; }); });
+  h += '<h2>Repairs by trade</h2>';
+  if (!repairs.length) h += '<div class="card">No repair items were recorded.</div>';
+  repairs.forEach(function(g){
+    h += '<div class="card"><div class="tradeline"><h3>'+esc(TRADE_LABEL[g.trade]||g.trade)+'</h3><span class="pill">'+g.count+' item'+(g.count>1?'s':'')+'</span></div>';
+    if (sm && sm.trades && sm.trades[g.trade]) h += '<div style="white-space:pre-wrap;margin-bottom:6px">'+esc(sm.trades[g.trade])+'</div>';
+    g.items.forEach(function(it){ var r = byId[it.issue_id]; if (r) h += issueHtml(r.is, r.area, have, true); });
+    h += '</div>';
+  });
+  if (tenant){
+    h += '<h2>Tenant action items</h2><div class="card tenant"><div class="muted" style="margin-bottom:6px">These items are the tenant’s responsibility. They are requests, not landlord repairs.</div>';
+    tenant.items.forEach(function(it){ var r = byId[it.issue_id]; if (r) h += issueHtml(r.is, r.area, have, true); });
+    h += '</div>';
+  }
+  h += '<h2>Area by area</h2>';
+  (doc.areas||[]).filter(function(a){ return !a.excluded; }).forEach(function(a){
+    var n = (a.issues||[]).length;
+    h += '<div class="card area"><div class="tradeline"><h3>'+esc(a.name)+'</h3><span class="pill '+esc(a.condition)+'">'+esc(COND_LABEL[a.condition]||'Not inspected')+'</span></div>';
+    if (a.notes) h += '<div style="white-space:pre-wrap">'+esc(a.notes)+'</div>';
+    if (!n) h += '<div class="muted">'+(a.condition==='not_inspected'?'Not inspected.':'Nothing requiring action.')+'</div>';
+    (a.issues||[]).forEach(function(is){ h += issueHtml(is, a.name, have, false); });
+    h += photoGrid(a.photo_ids, have) + '</div>';
+  });
+  h += '<div class="foot">'+(b.footer_text?'<div style="white-space:pre-wrap">'+esc(b.footer_text)+'</div>':'')+(b.contact_line?'<div>'+esc(b.contact_line)+'</div>':'')+'<div style="margin-top:6px">Observations reflect conditions visible on the inspection date and are not a guarantee of future condition.</div></div></div>';
+  show(h);
+  if (Q.get('print') === '1') waitImagesThenPrint();
+}
+function copyLink(){
+  var u = location.href.replace(/[?&]print=1/, '');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(function(){ var b = document.getElementById('cp'); b.textContent = 'Copied ✓'; }).catch(function(){ alert('Could not copy — copy the address from your browser.'); });
+  else alert('Copy the address from your browser.');
+}
+function waitImagesThenPrint(){
+  var imgs = Array.prototype.slice.call(document.images);
+  Promise.all(imgs.map(function(i){ return i.complete ? 1 : new Promise(function(r){ i.onload = i.onerror = r; }); })).then(function(){ setTimeout(function(){ window.print(); }, 300); });
+}
+</script>
+</body>
+</html>

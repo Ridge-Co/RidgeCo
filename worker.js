@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-14.27-welcome-rates-note';
+const BUILD_VERSION = '2026-10-15.01-field-inspection';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -229,7 +229,7 @@ const _hubWorkerCore = {
       '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
-      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics'];
+      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -641,6 +641,10 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/px')      return await scopeProposalPixel(env, url, request.headers.get('User-Agent') || '', ctx);
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
+        if (path === '/fi/list')                return await fiRoute(env, 'list', () => fiList(env));
+        if (path === '/fi/inspection')          return await fiRoute(env, 'inspection', () => fiGetInspection(env, url));
+        if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
+        if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
@@ -672,6 +676,11 @@ const _hubWorkerCore = {
           return await handlePhotoUploadClean(env, request);
         }
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
+        if (path === '/fi/photo') {
+          // Raw image body (not JSON), so it runs before body parsing — the test-token guard is applied here: a staging-token upload may only target a TEST- inspection.
+          if (_viaHubTestToken && !String(url.searchParams.get('inspection_id') || '').startsWith('TEST-')) return json({ ok: false, error: 'HUB_TEST_TOKEN: photo must target a TEST- inspection, refusing' }, 403);
+          return await fiRoute(env, 'photo', () => fiPhotoUpload(env, request, url));
+        }
         // Body parsing is now tolerant of an empty/missing body (POST /cron/sweep and any
         // future no-payload POST route don't need to send one) — previously this threw a raw
         // "Unexpected end of JSON input" 500 for ANY POST with no body at all, which is exactly
@@ -1046,6 +1055,12 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/bill-milestones') return await scopeProposalBillMilestones(env, body);
         if (path === '/scope-proposal/milestone/set-pending-info') return await setMilestonePendingInfo(env, body);
         if (path === '/scope-proposal/adjust-bill') return await scopeProposalAdjustBill(env, body);
+        if (path === '/fi/save')                  return await fiRoute(env, 'save', () => fiSave(env, body));
+        if (path === '/fi/publish')               return await fiRoute(env, 'publish', () => fiPublish(env, body));
+        if (path === '/fi/structure')             return await fiRoute(env, 'structure', () => fiStructure(env, body));
+        if (path === '/fi/summarize')             return await fiRoute(env, 'summarize', () => fiSummarize(env, body));
+        if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
+        if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
@@ -23264,6 +23279,14 @@ async function hubTestWriteAllowed(env, path, body) {
   // Oct 14 2026 (owner tenant roster): preview writes nothing; apply may only run for a TEST- owner (it can only ever touch that owner's own properties' tenants).
   if (path === '/owner/tenant-roster/preview') return true;
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
+  // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
+  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
+  if (path === '/fi/structure' || path === '/fi/summarize') return true;
+  if (path === '/fi/brand/save') {
+    if (!String((body && body.name) || '').startsWith('TEST-') || (body && body.is_default === true)) return false;
+    if (body && body.id) { const _bt = await fetchTab(env, 'FI_Brands'); const _br = _bt.find(r => String(r.ID) === String(body.id)); return !!_br && String(_br.Name || '').startsWith('TEST-'); }
+    return true;
+  }
   if (path === '/staging/ui-test-window') return true; // handler re-verifies staging + HUB_TEST_TOKEN/WORKER_SECRET; only writes one Config key
   if (path === '/watchdog/door-system/test') return true; // handler is staging-only (404 elsewhere); writes only the door_watchdog_state Config row + [test] Ops_Telemetry rows; SMS is the staging stub
   if (path === '/admin-notify') return true; // staging-only (HUB_TEST_TOKEN needs isStaging); recipient is Config admin_phone, never the body; sendSMSRaw only logs on staging; writes one Config cap counter row
@@ -33132,3 +33155,519 @@ async function inspCalendarTest(env, url) {
   add('Notify Brett by text', !!cfg.admin_phone, cfg.admin_phone ? 'Config admin_phone set (sends only while Config TWILIO_ENABLED=TRUE)' : 'Config admin_phone missing', 'Add Config key admin_phone.');
   return json({ ok: steps.every(s => s.ok), steps });
 }
+
+// ═══ FI-BLOCK-START — Field Inspection (Oct 15 2026) ═══════════════════════════════════════════
+// Z-Inspector-style on-site inspection workflow: field-inspect.html (phone, admin) + inspection-report.html (public,
+// branded, print-to-PDF). Build brief: context/FIELD_INSPECTION_BUILD_BRIEF_v1.0.md.
+//
+// DESIGN RULES (every one is a past-incident class — see the brief):
+//  • The inspection is ONE JSON document owned by the phone (offline-first). The server stores it in ONE Sheets row
+//    (split across Data_1..Data_8, ASCII-only so a chunk can never split a character) so a save is atomic.
+//  • Every write is read back from a FRESH (uncached) read and compared by hash; any mismatch is a visible 500, never a silent "ok".
+//  • Optimistic concurrency: Rev. A save with a stale base_rev is a 409 `stale` unless force:true — never a silent overwrite.
+//  • Editing a published report's content un-publishes it (the customer link then says "being updated") — unreviewed text never
+//    reaches a customer silently. AI output only enters the document when the inspector taps Add/Use (human review gate).
+//  • Public routes (/fi/report, /fi/photo/view) self-verify a random per-inspection Report_Token; photos are proxied (Drive stays private).
+//  • Brand is resolved at VIEW time (Brand_ID on the inspection), so switching brand re-skins without touching the inspection.
+//  • NO CRON. New tabs are created with addSheet only when missing, columns via ensureColumns, columns resolved by header name.
+const FI_DATA_COLS = 8, FI_DATA_CHUNK = 45000, FI_MAX_DOC_CHARS = FI_DATA_COLS * FI_DATA_CHUNK;
+const FI_BRAND_HEADERS = ['ID','Name','Primary_Color','Accent_Color','Tagline','Contact_Line','Footer_Text','Logo_Data','Is_Default','Active','Created_At','Updated_At'];
+const FI_INSP_HEADERS = ['ID','Property_ID','Address','Inspection_Type','Status','Brand_ID','Client_Name','Client_Email','Inspector','Inspection_Date','Report_Token','Published_At','Published_Rev','Rev','Doc_Hash','Issue_Count','Photo_Count','Created_At','Updated_At','Active'].concat(Array.from({ length: FI_DATA_COLS }, (_, i) => 'Data_' + (i + 1)));
+const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active'];
+const FI_EMAIL_HEADERS = ['ID','Inspection_ID','To_Email','Subject','Result','Sent_At'];
+const FI_TABS = { FI_Brands: FI_BRAND_HEADERS, FI_Inspections: FI_INSP_HEADERS, FI_Photos: FI_PHOTO_HEADERS, FI_Email_Log: FI_EMAIL_HEADERS };
+const FI_TRADES = ['plumbing','electrical','hvac','roofing','structural','carpentry','drywall_paint','flooring','windows_doors','appliances','pest','safety','exterior_site','cleaning','general','tenant_action'];
+const FI_SEVERITIES = ['urgent','high','medium','low','info'];
+const FI_CONDITIONS = ['good','fair','poor','nothing_to_do','not_inspected','na'];
+const FI_PAGE_BASE = 'https://ridge-co.github.io/RidgeCo';
+const FI_MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const FI_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+
+let __fiTabsReady = false;
+async function fiRoute(env, label, fn) {
+  try { return await fn(); }
+  catch (e) {
+    console.error('fi/' + label + ' failed:', e && e.message);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* telemetry is best-effort; the error itself is returned below */ }
+    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', { detail: String((e && e.message) || e).slice(0, 160) });
+  }
+}
+function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
+function fiStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max); }
+function fiIsAdmin(env, request, url) {
+  const t = request.headers.get('X-Auth-Token') || '';
+  if (!t) return false;
+  if (t === env.WORKER_SECRET) return true;
+  return !!env.HUB_TEST_TOKEN && t === env.HUB_TEST_TOKEN && isStaging(env, url);
+}
+async function fiSha256(s) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+// ASCII-only JSON: every non-ASCII char becomes \uXXXX, so cell chunks can be cut anywhere and re-joined byte-exactly.
+function fiSerialize(doc) { return JSON.stringify(doc).replace(/[^\u0000-~]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); }
+function fiChunk(s) { const out = []; for (let i = 0; i < s.length; i += FI_DATA_CHUNK) out.push(s.slice(i, i + FI_DATA_CHUNK)); return out; }
+function fiJoinRow(o) { let s = ''; for (let i = 1; i <= FI_DATA_COLS; i++) s += (o['Data_' + i] || ''); return s; }
+function fiSeverityRank(s) { const i = FI_SEVERITIES.indexOf(s); return i < 0 ? 99 : i; }
+
+// ── Pure helpers (unit-tested by extracting them from this file) ────────────────────────────
+function fiNormalizeIssue(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const title = fiStr(raw.title, 120).trim();
+  if (!title) return null;
+  let trade = String(raw.trade || '').toLowerCase().trim().replace(/[\s/&-]+/g, '_');
+  if (!FI_TRADES.includes(trade)) trade = 'general';
+  let severity = String(raw.severity || '').toLowerCase().trim();
+  if (!FI_SEVERITIES.includes(severity)) severity = 'medium';
+  const out = {
+    title, trade, severity,
+    detail: fiStr(raw.detail, 600).trim(),
+    likely_cause: fiStr(raw.likely_cause, 300).trim(),
+    recommended_fix: fiStr(raw.recommended_fix, 500).trim(),
+    fix_source: raw.fix_source === 'inspector' ? 'inspector' : 'suggested',
+  };
+  if (raw.possible_duplicate_of) out.possible_duplicate_of = fiStr(raw.possible_duplicate_of, 120);
+  if (trade === 'tenant_action') out.tenant_action = true;
+  return out;
+}
+function fiNormalizeIssues(arr) {
+  if (!Array.isArray(arr)) return null;
+  const out = [];
+  for (const r of arr.slice(0, 40)) { const n = fiNormalizeIssue(r); if (n) out.push(n); }
+  return out;
+}
+function fiExtractJson(text) {
+  const s = String(text || '').replace(/^```json?/i, '').replace(/```\s*$/, '').trim();
+  try { return JSON.parse(s); } catch (_) { /* fall through to brace scan */ }
+  const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
+  return null;
+}
+function fiValidateDoc(doc) {
+  const errors = [];
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, errors: ['doc must be an object'] };
+  if (doc.v !== 1) errors.push('doc.v must be 1');
+  if (!Array.isArray(doc.areas)) errors.push('doc.areas must be an array');
+  else {
+    if (doc.areas.length > 80) errors.push('too many areas (max 80)');
+    const seen = new Set();
+    doc.areas.forEach((a, i) => {
+      if (!a || typeof a !== 'object') { errors.push(`areas[${i}] invalid`); return; }
+      if (!a.id || typeof a.id !== 'string') errors.push(`areas[${i}].id missing`); else { if (seen.has(a.id)) errors.push(`duplicate area id ${a.id}`); seen.add(a.id); }
+      if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
+      if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
+      if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
+      else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
+      else (a.issues || []).forEach((is, j) => {
+        if (!is || typeof is !== 'object' || !is.id || !is.title) errors.push(`areas[${i}].issues[${j}] needs id and title`);
+        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`); }
+      });
+    });
+  }
+  if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
+  return { ok: errors.length === 0, errors: errors.slice(0, 10) };
+}
+function fiPhotoIds(doc) {
+  const ids = new Set();
+  for (const a of (doc.areas || [])) {
+    for (const p of (a.photo_ids || [])) ids.add(String(p));
+    for (const is of (a.issues || [])) for (const p of (is.photo_ids || [])) ids.add(String(p));
+  }
+  return Array.from(ids);
+}
+function fiFingerprint(doc) {
+  let h = 2166136261 >>> 0;
+  const feed = s => { for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } };
+  for (const a of (doc.areas || [])) for (const is of (a.issues || [])) feed([is.id, is.title, is.trade, is.severity, is.recommended_fix || ''].join('|') + '\n');
+  return h.toString(36);
+}
+function fiTradeRollup(doc) {
+  const by = {};
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) {
+      const t = is.trade || 'general';
+      (by[t] = by[t] || { trade: t, count: 0, worst: 'info', items: [] });
+      by[t].count++;
+      if (fiSeverityRank(is.severity) < fiSeverityRank(by[t].worst)) by[t].worst = is.severity;
+      by[t].items.push({ area: a.name, issue_id: is.id, title: is.title, severity: is.severity });
+    }
+  }
+  return Object.values(by).sort((x, y) => fiSeverityRank(x.worst) - fiSeverityRank(y.worst) || y.count - x.count);
+}
+// Returns {blocks:[...], warnings:[...]} — blocks stop publishing; warnings need an explicit ack.
+function fiPublishChecks(doc, serverPhotoIds) {
+  const blocks = [], warnings = [];
+  const have = new Set(serverPhotoIds || []);
+  const missing = fiPhotoIds(doc).filter(p => !have.has(p));
+  if (missing.length) blocks.push({ code: 'photos_missing', message: `${missing.length} photo(s) have not finished uploading`, ids: missing.slice(0, 20) });
+  const active = (doc.areas || []).filter(a => !a.excluded);
+  if (!active.length) blocks.push({ code: 'no_areas', message: 'No areas to report' });
+  if (!doc.overall || !FI_CONDITIONS.includes(doc.overall.condition) || doc.overall.condition === 'not_inspected') blocks.push({ code: 'overall_missing', message: 'Set the overall condition first' });
+  for (const a of active) {
+    if (String(a.pending_text || '').trim()) blocks.push({ code: 'dictation_pending', message: `"${a.name}" has dictation not yet turned into issues (or cleared)`, area: a.name });
+  }
+  const skipped = active.filter(a => !a.condition || a.condition === 'not_inspected').map(a => a.name);
+  if (skipped.length) warnings.push({ code: 'areas_not_inspected', message: `Not marked inspected: ${skipped.slice(0, 12).join(', ')}`, areas: skipped });
+  const sm = doc.summary;
+  if (sm && sm.fp && sm.fp !== fiFingerprint(doc)) warnings.push({ code: 'summary_stale', message: 'The AI summary is out of date and will be left out of the report' });
+  return { blocks, warnings };
+}
+function fiBuildStructurePrompt(b) {
+  const existing = (b.existing_issues || []).slice(0, 40).map(i => `- ${fiStr(i.title, 100)} (${fiStr(i.trade, 30)})`).join('\n') || '(none yet)';
+  return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' — BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\nArea: ${fiStr(b.area_name, 80)}\nIssues already recorded in this area (do not repeat):\n${existing}\n\nInspector's dictation (may contain speech-recognition errors):\n"""\n${fiStr(b.dictation, 8000)}\n"""\n\nReturn JSON only: {"issues":[{"title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"area_condition":"good|fair|poor|nothing_to_do","area_summary":""}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}.`;
+}
+const FI_STRUCTURE_SYSTEM = `You turn a rental-property inspector's spoken notes for ONE area into concise, actionable inspection findings for the property manager/owner.
+Rules:
+- Report only what the inspector said. Never invent defects, measurements, quantities or costs. Fix obvious speech-to-text slips (e.g. "p trap" heard as "pee trap") but not facts.
+- One distinct problem = one issue. Title is short and specific (max ~80 chars, e.g. "Active leak under kitchen sink"). Detail = what/where in 1-2 sentences.
+- likely_cause: use the inspector's stated cause; if they only implied one, hedge ("Likely ...") in one sentence; otherwise leave it empty. Do not speculate beyond that.
+- recommended_fix: use the inspector's recommendation verbatim-in-spirit and set fix_source "inspector". If they gave none, give a reasonable standard repair in one sentence and set fix_source "suggested".
+- severity: urgent = safety hazard or active damage needing action now; high = fix soon, will worsen; medium = fix at next opportunity; low = cosmetic/minor; info = observation only.
+- Anything only the TENANT can address (debris, cleaning, trash storage, clutter, pet issues, yard upkeep, blocked egress items) uses trade "tenant_action" and the fix is the request to the tenant.
+- If the property was built before 1978 and the notes mention peeling, chipping, flaking or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
+- If nothing is wrong, return an empty issues array and area_condition "nothing_to_do" (or "good").
+- Do not repeat issues already recorded; if the dictation updates one, still output it and set "possible_duplicate_of" to the existing title.
+Output a single JSON object and nothing else.`;
+function fiBuildSummaryPrompt(doc, rollup) {
+  const lines = [];
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) lines.push(`[${is.trade}|${is.severity}] ${a.name}: ${fiStr(is.title, 100)} — fix: ${fiStr(is.recommended_fix, 160)}`);
+  }
+  return `Property: ${fiStr(doc.property && doc.property.address, 160)}${doc.pre1978 ? ' (built before 1978)' : ''}\nOverall condition set by inspector: ${fiStr(doc.overall && doc.overall.condition, 20)}\nInspector's overall notes: ${fiStr(doc.overall && doc.overall.notes, 800) || '(none)'}\n\nAll issues:\n${lines.join('\n') || '(none)'}\n\nTrades with issues: ${rollup.map(r => r.trade).join(', ') || '(none)'}\n\nReturn JSON only: {"overall":"3-5 plain-English sentences summarising the condition and what matters most","trades":{"<trade>":"2-3 sentences: group related issues ACROSS areas (e.g. several plumbing issues in different rooms), say what one contractor visit should cover and the priority order"},"priorities":[{"title":"","why":""}]}\nOnly include trades listed above. At most 5 priorities, most urgent first.`;
+}
+const FI_SUMMARY_SYSTEM = `You write the summary page of a rental property inspection report that the property manager will hand to the owner or tenant. Be factual, plain, and actionable. Use only the issues provided; never add defects, costs or timelines not in the data. Tenant-action items are requests to the tenant, not landlord repairs. Output a single JSON object and nothing else.`;
+function fiNormalizeSummary(parsed, rollup) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  const overall = fiStr(parsed.overall, 1200).trim();
+  if (!overall) return null;
+  const have = new Set(rollup.map(r => r.trade));
+  const trades = {};
+  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiStr(v, 700).trim(); }
+  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiStr(p && p.title, 120).trim(), why: fiStr(p && p.why, 300).trim() })).filter(p => p.title);
+  return { overall, trades, priorities };
+}
+function fiHtmlEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function fiBuildEmail(brand, insp, link, note) {
+  const c = /^#[0-9a-fA-F]{6}$/.test(brand.Primary_Color || '') ? brand.Primary_Color : '#1d4ed8';
+  const subject = `${brand.Name || 'Inspection'}: Property inspection report — ${insp.Address}`;
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:${c};color:#fff;padding:16px 20px;font-size:18px;font-weight:700">${fiHtmlEsc(brand.Name)}</div><div style="padding:20px;border:1px solid #dfe3e8;border-top:none"><p style="margin:0 0 12px">Your property inspection report for <b>${fiHtmlEsc(insp.Address)}</b> is ready.</p>${note ? `<p style="margin:0 0 12px;white-space:pre-wrap">${fiHtmlEsc(note)}</p>` : ''}<p style="margin:18px 0"><a href="${fiHtmlEsc(link)}" style="background:${c};color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700">View inspection report</a></p><p style="font-size:13px;color:#6b7684;margin:0">You can print the report or save it as a PDF from that page.${brand.Contact_Line ? '<br>' + fiHtmlEsc(brand.Contact_Line) : ''}</p></div></div>`;
+  return { subject, html };
+}
+
+// ── Sheets plumbing ─────────────────────────────────────────────────────────────────────────
+async function fiEnsureTabs(env) {
+  if (__fiTabsReady) return;
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  const need = Object.keys(FI_TABS).filter(t => !titles.includes(t));
+  if (need.length) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  for (const [tab, headers] of Object.entries(FI_TABS)) await ensureColumns(env, tab, headers);
+  const brands = await fiReadFresh(env, 'FI_Brands');
+  if (!brands.rows.length) {
+    const now = new Date().toISOString();
+    await fiWriteRow(env, 'FI_Brands', brands.headers, { ID: 'brand_default', Name: 'Ridge Co', Primary_Color: '#1d4ed8', Accent_Color: '#166534', Tagline: 'Property maintenance & inspections', Contact_Line: '', Footer_Text: '', Logo_Data: '', Is_Default: 'TRUE', Active: 'TRUE', Created_At: now, Updated_At: now }, 0);
+    const chk = await fiReadFresh(env, 'FI_Brands');
+    if (!chk.rows.some(r => r.o.ID === 'brand_default')) throw new Error('FI: default brand seed did not persist');
+  }
+  __fiTabsReady = true;
+}
+// Uncached read (a read-modify-write or verify must never see a stale 6s-cached copy).
+async function fiReadFresh(env, tab) {
+  for (let attempt = 1; ; attempt++) {
+    const token = await getAccessToken(env);
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}/values/${tab}`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (data.error) {
+      const code = data.error.code || res.status;
+      if ((code === 429 || code >= 500) && attempt < 4) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
+      throw new Error(`FI: Sheets read of ${tab} failed: ${data.error.message || code}`);
+    }
+    const vals = data.values || [];
+    const headers = vals[0] || [];
+    const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
+    return { headers, rows };
+  }
+}
+async function fiWriteRow(env, tab, headers, obj, rowNum) {
+  if (!headers.length) throw new Error(`FI: ${tab} has no header row`);
+  const vals = headers.map(h => (obj[h] === undefined || obj[h] === null) ? '' : String(obj[h]));
+  if (rowNum) await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
+  else await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
+}
+async function fiFindInspection(env, id) {
+  const t = await fiReadFresh(env, 'FI_Inspections');
+  const hits = t.rows.filter(r => r.o.ID === id && r.o.Active !== 'FALSE');
+  return { headers: t.headers, row: hits[0] || null, dupes: hits.length };
+}
+function fiBrandOut(o, withLogo) {
+  const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
+  if (withLogo) b.logo_data = o.Logo_Data || '';
+  return b;
+}
+async function fiResolveBrand(env, brandId) {
+  const t = await fiReadFresh(env, 'FI_Brands');
+  const live = t.rows.filter(r => r.o.Active !== 'FALSE');
+  let hit = brandId ? live.find(r => r.o.ID === brandId) : null;
+  let fallback = false;
+  if (!hit) { fallback = !!brandId; hit = live.find(r => r.o.Is_Default === 'TRUE') || live[0] || null; }
+  if (!hit) return { brand: { id: 'builtin', name: 'Inspection Report', primary_color: '#1d4ed8', accent_color: '#166534', tagline: '', contact_line: '', footer_text: '', is_default: true, has_logo: false, logo_data: '' }, fallback: true, raw: { Name: 'Inspection Report' } };
+  return { brand: fiBrandOut(hit.o, true), fallback, raw: hit.o };
+}
+function fiInspHeaderOut(o) {
+  return { id: o.ID, property_id: o.Property_ID, address: o.Address, type: o.Inspection_Type, status: o.Status || 'draft', brand_id: o.Brand_ID, client_name: o.Client_Name, client_email: o.Client_Email, inspector: o.Inspector, date: o.Inspection_Date, rev: Number(o.Rev) || 0, issue_count: Number(o.Issue_Count) || 0, photo_count: Number(o.Photo_Count) || 0, published_at: o.Published_At || '', published_rev: Number(o.Published_Rev) || 0, updated_at: o.Updated_At, report_token: o.Report_Token };
+}
+
+// ── Endpoints ───────────────────────────────────────────────────────────────────────────────
+async function fiList(env) {
+  await fiEnsureTabs(env);
+  const [t, bt] = [await fiReadFresh(env, 'FI_Inspections'), await fiReadFresh(env, 'FI_Brands')];
+  const items = t.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiInspHeaderOut(r.o)).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 100);
+  const brands = bt.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiBrandOut(r.o, true));
+  return json({ ok: true, inspections: items, brands, report_base: FI_PAGE_BASE });
+}
+async function fiGetInspection(env, url) {
+  const id = url.searchParams.get('id') || '';
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'No saved inspection with that id.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
+  return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc });
+}
+async function fiSave(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const v = fiValidateDoc(body.doc);
+  if (!v.ok) return fiErr(400, 'invalid_doc', 'The inspection data is not valid: ' + v.errors.join('; '), { errors: v.errors });
+  const doc = body.doc, meta = body.meta || {};
+  const serialized = fiSerialize(doc);
+  if (serialized.length > FI_MAX_DOC_CHARS) return fiErr(413, 'too_large', 'This inspection is too large to store. Split off photos/notes or contact Brett.');
+  await fiEnsureTabs(env);
+  const { headers, row, dupes } = await fiFindInspection(env, id);
+  if (dupes > 1) return fiErr(500, 'duplicate_rows', 'Duplicate saved rows exist for this inspection; refusing to write. Contact Brett.');
+  const baseRev = Number(body.base_rev) || 0;
+  if (row && Number(row.o.Rev) !== baseRev && body.force !== true) {
+    return fiErr(409, 'stale', 'A newer version of this inspection is saved on the server (another device?). Nothing was overwritten.', { server_rev: Number(row.o.Rev) || 0, server_updated_at: row.o.Updated_At });
+  }
+  let brandId = fiStr(meta.brand_id, 60);
+  if (brandId) {
+    const bt = await fiReadFresh(env, 'FI_Brands');
+    if (!bt.rows.some(r => r.o.ID === brandId && r.o.Active !== 'FALSE')) return fiErr(400, 'bad_brand', 'That brand does not exist or is inactive.');
+  } else brandId = row ? row.o.Brand_ID : '';
+  const hash = await fiSha256(serialized);
+  const changed = !row || row.o.Doc_Hash !== hash;
+  const wasPublished = !!row && row.o.Status === 'published';
+  const unpublish = wasPublished && changed;
+  const now = new Date().toISOString();
+  const newRev = (row ? Number(row.o.Rev) || 0 : 0) + 1;
+  const chunks = fiChunk(serialized);
+  const o = Object.assign({}, row ? row.o : {}, {
+    ID: id, Property_ID: fiStr(doc.property.id || '', 60), Address: fiStr(doc.property.address, 200), Inspection_Type: fiStr(meta.inspection_type || doc.type || (row && row.o.Inspection_Type) || 'periodic', 40),
+    Status: unpublish ? 'draft' : (row ? row.o.Status || 'draft' : 'draft'), Brand_ID: brandId,
+    Client_Name: fiStr(meta.client_name != null ? meta.client_name : (row && row.o.Client_Name), 120), Client_Email: fiStr(meta.client_email != null ? meta.client_email : (row && row.o.Client_Email), 200),
+    Inspector: fiStr(meta.inspector != null ? meta.inspector : (row && row.o.Inspector), 120), Inspection_Date: fiStr(meta.inspection_date || doc.date || (row && row.o.Inspection_Date) || now.slice(0, 10), 20),
+    Report_Token: row ? row.o.Report_Token : inspRandToken(18), Published_At: unpublish ? '' : (row ? row.o.Published_At : ''), Published_Rev: unpublish ? '' : (row ? row.o.Published_Rev : ''),
+    Rev: newRev, Doc_Hash: hash, Issue_Count: (doc.areas || []).reduce((n, a) => n + ((a.issues || []).length), 0), Photo_Count: fiPhotoIds(doc).length,
+    Created_At: row ? row.o.Created_At : now, Updated_At: now, Active: 'TRUE',
+  });
+  for (let i = 1; i <= FI_DATA_COLS; i++) o['Data_' + i] = chunks[i - 1] || '';
+  await fiWriteRow(env, 'FI_Inspections', headers, o, row ? row.rowNum : 0);
+  // READ-BACK: fresh read, exactly one row, same rev, same bytes.
+  const chk = await fiFindInspection(env, id);
+  if (!chk.row || chk.dupes !== 1 || Number(chk.row.o.Rev) !== newRev || chk.row.o.Doc_Hash !== hash || fiJoinRow(chk.row.o) !== serialized) {
+    // Roll the row back to what it was (or deactivate a failed create) so the phone's retry with the SAME base_rev still works.
+    let rolled = true;
+    try {
+      const cur = await fiFindInspection(env, id);
+      const target = cur.row;
+      if (target) await fiWriteRow(env, 'FI_Inspections', cur.headers, row ? row.o : Object.assign({}, target.o, { Active: 'FALSE' }), target.rowNum);
+    } catch (e) { rolled = false; console.error('fi/save rollback failed:', e && e.message); }
+    return fiErr(500, 'verify_failed', 'The save could not be verified on the server' + (rolled ? '' : ' and could not be rolled back — contact Brett') + '. Your work is still safe on this phone — retry.', { expected_rev: newRev, rolled_back: rolled });
+  }
+  return json({ ok: true, rev: newRev, hash, report_token: o.Report_Token, status: o.Status, unpublished: unpublish, updated_at: now, recreated: !row && baseRev > 0 });
+}
+async function fiPhotoUpload(env, request, url) {
+  const inspId = url.searchParams.get('inspection_id') || '', photoId = url.searchParams.get('photo_id') || '';
+  if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
+  const mime = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return fiErr(415, 'bad_type', 'Only JPEG, PNG or WebP photos are accepted.');
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, inspId);
+  if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const ex = pt.rows.find(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+  if (ex) return json({ ok: true, existing: true, photo_id: photoId });
+  const buf = await request.arrayBuffer();
+  if (!buf.byteLength) return fiErr(400, 'empty', 'The photo was empty.');
+  if (buf.byteLength > FI_MAX_PHOTO_BYTES) return fiErr(413, 'too_large', 'Photo is larger than 8 MB.');
+  const root = env.DRIVE_PROPERTIES_ROOT;
+  if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
+  const token = await getAccessToken(env);
+  const fold = s => String(s).replace(/['"\\]/g, ' ').trim().slice(0, 80) || 'Unknown';
+  const top = await findOrCreateFolder(token, 'Field Inspections', root, root);
+  if (!top || !top.id) return fiErr(502, 'drive_folder', 'Could not create the Field Inspections folder in Drive.');
+  const sub = await findOrCreateFolder(token, `${fold(row.o.Address)} — ${inspId}`, top.id, root);
+  if (!sub || !sub.id) return fiErr(502, 'drive_folder', 'Could not create the inspection folder in Drive.');
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  const up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, sub.id, root);
+  if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
+  if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
+  await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
+  const chk = await fiReadFresh(env, 'FI_Photos');
+  const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+  if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  return json({ ok: true, photo_id: photoId, bytes: buf.byteLength });
+}
+async function fiPhotoView(env, url) {
+  const r = url.searchParams.get('r') || '', p = url.searchParams.get('p') || '';
+  if (!r || !FI_ID_RE.test(p)) return fiErr(404, 'not_found', 'Not found.');
+  const it = await fiReadFresh(env, 'FI_Inspections');
+  const insp = it.rows.find(x => x.o.Report_Token === r && x.o.Active !== 'FALSE');
+  if (!insp) return fiErr(404, 'not_found', 'Not found.');
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const ph = pt.rows.find(x => x.o.ID === p && x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE');
+  if (!ph) return fiErr(404, 'not_found', 'Not found.');
+  const token = await getAccessToken(env);
+  const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.o.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!dr.ok || !dr.body) return fiErr(502, 'drive_read', 'Could not load the photo.');
+  return new Response(dr.body, { status: 200, headers: { ...CORS, 'Content-Type': ph.o.Mime || 'image/jpeg', 'Cache-Control': 'private, max-age=3600' } });
+}
+async function fiReport(env, request, url) {
+  const r = url.searchParams.get('r') || '';
+  if (!r || r.length < 10) return fiErr(404, 'not_found', 'This report link is not valid.');
+  await fiEnsureTabs(env);
+  const it = await fiReadFresh(env, 'FI_Inspections');
+  const insp = it.rows.find(x => x.o.Report_Token === r && x.o.Active !== 'FALSE');
+  if (!insp) return fiErr(404, 'not_found', 'This report link is not valid.');
+  const admin = fiIsAdmin(env, request, url);
+  const published = insp.o.Status === 'published';
+  if (!published && !admin) return fiErr(403, 'not_published', 'This report is being updated and is not available right now. Please check back soon.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(insp.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'This report could not be loaded.'); }
+  const br = await fiResolveBrand(env, insp.o.Brand_ID);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const have = new Set(pt.rows.filter(x => x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE').map(x => x.o.ID));
+  const photoIds = fiPhotoIds(doc).filter(p => have.has(p));
+  const summaryOk = !!(doc.summary && doc.summary.accepted && doc.summary.fp === fiFingerprint(doc));
+  if (!summaryOk) delete doc.summary;
+  delete doc.dictation_log;
+  for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
+  return json({ ok: true, preview: !published, inspection: fiInspHeaderOut(insp.o), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
+}
+async function fiStructure(env, body) {
+  body = body || {};
+  const dictation = fiStr(body.dictation, 8000).trim();
+  if (!dictation) return fiErr(400, 'empty', 'There is no dictation to process.');
+  if (!body.area_name) return fiErr(400, 'bad_request', 'area_name is required.');
+  let ai;
+  try {
+    ai = await routeAI(env, { type: 'fi_structure', customerFacing: true, schema: true, system: FI_STRUCTURE_SYSTEM, prompt: fiBuildStructurePrompt(Object.assign({}, body, { dictation })), maxTokens: 2200, source: 'field-inspect' });
+  } catch (e) { return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const parsed = fiExtractJson(ai.result);
+  const issues = parsed && fiNormalizeIssues(parsed.issues);
+  if (!issues) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your text is kept — retry, or add the issues by hand.');
+  const cond = FI_CONDITIONS.includes(parsed.area_condition) ? parsed.area_condition : '';
+  return json({ ok: true, issues, area_condition: cond, area_summary: fiStr(parsed.area_summary, 300), model_used: ai.model_used });
+}
+async function fiSummarize(env, body) {
+  body = body || {};
+  const v = fiValidateDoc(body.doc);
+  if (!v.ok) return fiErr(400, 'invalid_doc', 'The inspection data is not valid: ' + v.errors.join('; '));
+  const doc = body.doc, rollup = fiTradeRollup(doc);
+  if (!rollup.length) return json({ ok: true, summary: { overall: 'No repair items were recorded during this inspection.', trades: {}, priorities: [], fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: 'none' }, rollup });
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_summary', customerFacing: true, schema: true, system: FI_SUMMARY_SYSTEM, prompt: fiBuildSummaryPrompt(doc, rollup), maxTokens: 2500, source: 'field-inspect' }); }
+  catch (e) { return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const norm = fiNormalizeSummary(fiExtractJson(ai.result), rollup);
+  if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry.');
+  return json({ ok: true, summary: Object.assign(norm, { fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: ai.model_used }), rollup });
+}
+async function fiPublish(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  await fiEnsureTabs(env);
+  const { headers, row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Save the inspection to the server first.');
+  if (body.unpublish === true) {
+    await fiWriteRow(env, 'FI_Inspections', headers, Object.assign({}, row.o, { Status: 'draft', Published_At: '', Published_Rev: '', Updated_At: new Date().toISOString() }), row.rowNum);
+    const c = await fiFindInspection(env, id);
+    if (!c.row || c.row.o.Status !== 'draft') return fiErr(500, 'verify_failed', 'Un-publish could not be verified.');
+    return json({ ok: true, status: 'draft' });
+  }
+  if (Number(row.o.Rev) !== Number(body.rev)) return fiErr(409, 'stale', 'The saved version changed since you reviewed it. Reload and review again.', { server_rev: Number(row.o.Rev) || 0 });
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection could not be read.'); }
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const have = pt.rows.filter(x => x.o.Inspection_ID === id && x.o.Active !== 'FALSE').map(x => x.o.ID);
+  const checks = fiPublishChecks(doc, have);
+  if (checks.blocks.length) return fiErr(409, 'blocked', 'Fix these before publishing: ' + checks.blocks.map(b => b.message).join('; '), { blocks: checks.blocks, warnings: checks.warnings });
+  if (checks.warnings.length && body.ack_warnings !== true) return fiErr(409, 'needs_ack', 'Please confirm these warnings: ' + checks.warnings.map(b => b.message).join('; '), { warnings: checks.warnings });
+  const now = new Date().toISOString();
+  await fiWriteRow(env, 'FI_Inspections', headers, Object.assign({}, row.o, { Status: 'published', Published_At: now, Published_Rev: row.o.Rev, Updated_At: now }), row.rowNum);
+  const c = await fiFindInspection(env, id);
+  if (!c.row || c.row.o.Status !== 'published' || c.row.o.Published_Rev !== row.o.Rev) return fiErr(500, 'verify_failed', 'Publishing could not be verified.');
+  return json({ ok: true, status: 'published', published_at: now, report_token: row.o.Report_Token, report_url: `${FI_PAGE_BASE}/inspection-report.html?r=${row.o.Report_Token}` });
+}
+async function fiBrandSave(env, body) {
+  body = body || {};
+  const name = fiStr(body.name, 80).trim();
+  if (!name) return fiErr(400, 'name_required', 'Brand name is required.');
+  const hex = v => (/^#[0-9a-fA-F]{6}$/.test(String(v || '')) ? String(v) : null);
+  const pc = hex(body.primary_color), ac = hex(body.accent_color || '#166534');
+  if (!pc || !ac) return fiErr(400, 'bad_color', 'Colors must look like #1d4ed8.');
+  let logo;
+  if (body.logo_data !== undefined && body.logo_data !== null && body.logo_data !== '') {
+    logo = String(body.logo_data);
+    if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(logo)) return fiErr(400, 'bad_logo', 'Logo must be a PNG, JPEG or WebP image.');
+    if (logo.length > 42000) return fiErr(413, 'logo_too_large', 'Logo is too large (keep it under about 30 KB — the app resizes it for you).');
+  }
+  await fiEnsureTabs(env);
+  const t = await fiReadFresh(env, 'FI_Brands');
+  const id = body.id ? String(body.id) : 'brand_' + inspRandToken(9);
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Brand id is malformed.');
+  const ex = t.rows.find(r => r.o.ID === id);
+  if (body.id && !ex) return fiErr(404, 'not_found', 'That brand does not exist.');
+  const now = new Date().toISOString();
+  const o = Object.assign({}, ex ? ex.o : {}, { ID: id, Name: name, Primary_Color: pc, Accent_Color: ac, Tagline: fiStr(body.tagline, 160), Contact_Line: fiStr(body.contact_line, 240), Footer_Text: fiStr(body.footer_text, 300),
+    Logo_Data: body.remove_logo === true ? '' : (logo !== undefined ? logo : (ex ? ex.o.Logo_Data : '')), Active: body.active === false ? 'FALSE' : 'TRUE', Created_At: ex ? ex.o.Created_At : now, Updated_At: now });
+  const wantDefault = body.is_default === true;
+  o.Is_Default = wantDefault ? 'TRUE' : (ex ? ex.o.Is_Default : 'FALSE');
+  if (o.Active === 'FALSE' && o.Is_Default === 'TRUE') return fiErr(400, 'default_inactive', 'The default brand cannot be deactivated. Make another brand the default first.');
+  await fiWriteRow(env, 'FI_Brands', t.headers, o, ex ? ex.rowNum : 0);
+  if (wantDefault) {
+    const t2 = await fiReadFresh(env, 'FI_Brands');
+    for (const r of t2.rows) if (r.o.ID !== id && r.o.Is_Default === 'TRUE') await fiWriteRow(env, 'FI_Brands', t2.headers, Object.assign({}, r.o, { Is_Default: 'FALSE' }), r.rowNum);
+  }
+  const chk = await fiReadFresh(env, 'FI_Brands');
+  const hits = chk.rows.filter(r => r.o.ID === id);
+  const defaults = chk.rows.filter(r => r.o.Is_Default === 'TRUE' && r.o.Active !== 'FALSE').length;
+  if (hits.length !== 1 || hits[0].o.Name !== name || hits[0].o.Logo_Data !== o.Logo_Data || defaults !== 1) return fiErr(500, 'verify_failed', 'The brand could not be verified after saving. Retry.');
+  return json({ ok: true, brand: fiBrandOut(hits[0].o, true) });
+}
+async function fiEmailReport(env, request, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const to = String(body.to || '').trim();
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(to)) return fiErr(400, 'bad_email', 'Enter one valid email address.');
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Inspection not found on the server.');
+  if (row.o.Status !== 'published') return fiErr(409, 'not_published', 'Publish the report before emailing it.');
+  const br = await fiResolveBrand(env, row.o.Brand_ID);
+  const link = `${FI_PAGE_BASE}/inspection-report.html?r=${row.o.Report_Token}`;
+  const mail = fiBuildEmail(br.raw, row.o, link, fiStr(body.message, 1000));
+  if (body.preview !== false) return json({ ok: true, preview: true, to, subject: mail.subject, html: mail.html });
+  let res;
+  try { res = await gmailSendEmail(env, { to, subject: mail.subject, html: mail.html }); }
+  catch (e) { return fiErr(502, 'send_failed', 'The email could not be sent: ' + String((e && e.message) || e).slice(0, 160)); }
+  const lt = await fiReadFresh(env, 'FI_Email_Log');
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, { ID: 'em_' + inspRandToken(9), Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: res && res.staged ? 'staged' : 'sent', Sent_At: new Date().toISOString() }, 0);
+  return json({ ok: true, sent: !(res && res.staged), staged: !!(res && res.staged), to, subject: mail.subject });
+}
+// ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════
