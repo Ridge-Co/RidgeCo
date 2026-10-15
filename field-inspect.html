@@ -134,7 +134,7 @@ var COND_LABEL = {good:'Good',fair:'Fair',poor:'Poor',nothing_to_do:'Nothing to 
 var INSP_TYPES = [['periodic','Periodic'],['move_in','Move-in'],['move_out','Move-out'],['pre_listing','Pre-listing'],['other','Other']];
 
 // ── state ───────────────────────────────────────────────────────────────────
-var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], propsErr:'', propQ:'', newProp:null,
+var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], dir:null, propsErr:'', propQ:'', newProp:null, newOwner:null, ownerQ:'', pickUnitFor:'', unitQ:'', hits:[], ownerHits:{},
   sync:{ state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null, lastErr:'' },
   photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null };
 var blobUrl = {};           // photo id -> object URL (local copy)
@@ -439,39 +439,64 @@ function viewHome(){
 
 // ---- new inspection ----
 function startNew(){
-  S.newProp = null; S.propQ=''; S.view='new';
+  S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new';
   var d = defaultBrand();
   S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false };
   render(); loadProps();
 }
+// ---- Hub directory: properties, units, owners (searchable) ----
+function nz(s){
+  var m = { street:'st', avenue:'ave', road:'rd', drive:'dr', lane:'ln', court:'ct', boulevard:'blvd', place:'pl', apartment:'apt' };
+  return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim().split(' ').map(function(w){ return m[w]||w; }).join(' ');
+}
 function loadProps(){
-  if (S.props.length) return;
-  var cached = lsGet('fi_props','');
-  if (cached){ try{ S.props = JSON.parse(cached); }catch(e){ S.props=[]; } }
-  api('GET','/properties').then(function(rows){
-    S.props = (rows||[]).filter(function(p){ return p.Active!=='FALSE' && p.Address; }).map(function(p){ return { id:p.ID, address:p.Address, city:p.City||'', state:p.State||'', zip:p.Zip||'' }; });
-    S.propsErr=''; lsSet('fi_props', JSON.stringify(S.props));
-    if (S.view==='new' && !S.newProp) renderPropList();
-  }).catch(function(e){ S.propsErr = 'Could not load the Hub property list ('+e.message+')' + (S.props.length?' — using the copy saved on this phone.':'. You can still add the property by hand.'); if (S.view==='new') render(); });
+  var cached = S.dir ? '' : lsGet('fi_dir','');
+  if (cached){ try{ S.dir = JSON.parse(cached); }catch(e){ S.dir = null; } }
+  api('GET','/fi/directory').then(function(d){
+    S.dir = { properties:d.properties||[], units:d.units||[], owners:d.owners||[] }; S.propsErr='';
+    lsSet('fi_dir', JSON.stringify(S.dir));
+    if (S.view==='new' && !S.newProp && !S.pickUnitFor) renderPropList();
+  }).catch(function(e){ S.propsErr = 'Could not load the Hub list ('+e.message+')' + (S.dir?' — using the copy saved on this phone.':'. You can still add the property by hand.'); if (S.view==='new' && !S.pickUnitFor) render(); });
 }
 function propLabel(p){ return p.address + (p.city?', '+p.city:'') + (p.state?', '+p.state:'') + (p.zip?' '+p.zip:''); }
+function unitText(l){ l = String(l||'').trim(); return !l ? '' : (/^(unit|apt|suite|ste|#)/i.test(l) ? l : 'Unit '+l); }
+function unitsOf(pid){ return ((S.dir&&S.dir.units)||[]).filter(function(u){ return String(u.property_id)===String(pid); }); }
+function propById(id){ var l=(S.dir&&S.dir.properties)||[]; for (var i=0;i<l.length;i++) if (String(l[i].id)===String(id)) return l[i]; return null; }
+function addBtn(){ return '<button class="btn block" onclick="newPropSheet()">＋ Add a new property to the Hub</button>'; }
 function viewNew(){
   var h = '<div class="row"><h1>New inspection</h1><button class="btn sm ghost" onclick="go(\'home\')">Cancel</button></div>';
-  if (!S.newProp){
-    h += '<div class="card"><label class="fld" style="margin-top:0">1 · Which property?</label><input id="pq" placeholder="Search Hub properties by address…" value="'+esc(S.propQ)+'" oninput="S.propQ=this.value;renderPropList()">';
-    if (S.propsErr) h += '<div class="banner warn" style="margin-top:8px">'+esc(S.propsErr)+'</div>';
-    h += '<div id="proplist"></div>';
-    h += '<button class="btn block" style="margin-top:10px" onclick="manualProp()">＋ Add a new property (not in the Hub)</button></div>';
+  if (!S.newProp && S.pickUnitFor){
+    var pp = propById(S.pickUnitFor), us = unitsOf(S.pickUnitFor);
+    h += '<div class="card"><b>'+esc(pp?pp.address:'')+'</b><div class="muted">Which unit?</div>'
+      +'<input id="uq" placeholder="Type to find a unit…" value="'+esc(S.unitQ)+'" oninput="S.unitQ=this.value;renderUnitList()" style="margin-top:8px"><div id="unitlist"></div>'
+      +'<div class="btns"><button class="btn" onclick="pickProp(\''+esc(S.pickUnitFor)+'\',\'\',true)">Whole property / no specific unit</button><button class="btn ghost" onclick="S.pickUnitFor=\'\';render()">‹ Back</button></div></div>';
     return h;
   }
-  var o = S.newOpts, p = S.newProp;
-  h += '<div class="card propcard"><b>'+esc(propLabel(p))+'</b><div class="muted">'+(p.id?'From the Hub':'New — saved with this inspection')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;render()">Change property</button></div>';
+  if (!S.newProp){
+    h += '<div class="card"><label class="fld" style="margin-top:0">1 · Which property?</label>'+addBtn()+'<input id="pq" style="margin-top:10px" placeholder="Type to search address, unit, city or owner…" value="'+esc(S.propQ)+'" oninput="S.propQ=this.value;renderPropList()" autocomplete="off">';
+    if (S.propsErr) h += '<div class="banner warn" style="margin-top:8px">'+esc(S.propsErr)+'</div>';
+    h += '<div id="proplist"></div>';
+    h += '<div style="margin-top:10px">'+addBtn()+'</div></div>';
+    return h;
+  }
+  var o = S.newOpts, p = S.newProp, ow = S.newOwner;
+  h += '<div class="card propcard"><b>'+esc(propLabel(p))+(p.unit_label?' · '+esc(unitText(p.unit_label)):'')+'</b><div class="muted">'+(p.id?'In the Hub':'Not in the Hub — saved with this inspection only (you can add it later)')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;S.newOwner=null;S.pickUnitFor=\'\';render()">Change property</button></div>';
+  h += '<div class="card" id="ownercard"><label class="fld" style="margin-top:0">On behalf of (owner)</label>';
+  if (ow){ h += '<div class="row"><b>'+esc(ow.name)+'</b><button class="btn sm" onclick="S.newOwner=null;S.ownerQ=\'\';render()">Change</button></div><div class="muted">Appears on the report as “On behalf of”.</div>'; }
+  else {
+    h += '<div class="banner warn" style="margin:6px 0 8px">'+(p.id?'This property has no owner in the Hub.':'Who owns this property?')+' Choose the owner so the report says who it was done for.</div>'
+      +'<input id="oq" placeholder="Type to search owners (company name)…" value="'+esc(S.ownerQ)+'" oninput="S.ownerQ=this.value;renderOwnerList(\'olist\',S.ownerQ,\'pickNewOwner\',\'typedNewOwner\')" autocomplete="off"><div id="olist"></div>'
+      +'<div class="btns"><button class="btn ghost" onclick="S.newOwner={id:\'\',name:\'\',skip:true};render()">Skip for now</button></div><div class="muted">You can’t publish the report until an owner is chosen.</div>';
+  }
+  if (ow && ow.skip) {}
+  h += '</div>';
   h += '<div class="card"><label class="fld" style="margin-top:0">Inspection type</label><select onchange="S.newOpts.type=this.value">'+INSP_TYPES.map(function(t){return '<option value="'+t[0]+'"'+(o.type===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select>'
     +'<label class="fld">Date</label><input type="date" value="'+esc(o.date)+'" onchange="S.newOpts.date=this.value">'
     +'<label class="fld">Inspector</label><input value="'+esc(o.inspector)+'" oninput="S.newOpts.inspector=this.value">'
-    +'<label class="fld">Prepared for (client name — optional)</label><input value="'+esc(o.client)+'" oninput="S.newOpts.client=this.value" placeholder="e.g. Premier Property Management">'
+    +'<label class="fld">Prepared for (client name — optional)</label><input value="'+esc(o.client)+'" oninput="S.newOpts.client=this.value" placeholder="e.g. the person who asked for it">'
     +'<label class="fld">Client email (optional)</label><input type="email" value="'+esc(o.email)+'" oninput="S.newOpts.email=this.value">'
-    +'<label class="fld">Brand for the report</label><select onchange="S.newOpts.brand=this.value">'+S.brands.map(function(b){return '<option value="'+esc(b.id)+'"'+(o.brand===b.id?' selected':'')+'>'+esc(b.name)+(b.is_default?' (default)':'')+'</option>';}).join('')+'</select>'
+    +'<label class="fld">Brand for the report</label><select onchange="S.newOpts.brand=this.value;render()">'+S.brands.map(function(b){return '<option value="'+esc(b.id)+'"'+(o.brand===b.id?' selected':'')+'>'+esc(b.name)+(b.is_default?' (default)':'')+'</option>';}).join('')+'</select>'
+    +logoNudge(brandById(o.brand))
     +'<div class="toggle"><span>Built before 1978<div class="muted">Adds lead-paint awareness to the notes</div></span><input type="checkbox"'+(o.pre1978?' checked':'')+' onchange="S.newOpts.pre1978=this.checked"></div></div>';
   h += '<div class="card"><b>Layout</b><div class="muted">You can add, rename or exclude areas any time.</div>'
     +'<div class="toggle"><span>Bedrooms</span><span class="step"><button onclick="stepOpt(\'beds\',-1)">−</button><span class="n" id="n-beds">'+o.beds+'</span><button onclick="stepOpt(\'beds\',1)">＋</button></span></div>'
@@ -480,34 +505,219 @@ function viewNew(){
   h += '<button class="btn go block" style="min-height:56px;font-size:17px" id="start-btn" onclick="createInspection()">Start inspection</button>';
   return h;
 }
+function logoNudge(b){
+  if (!b || b.has_logo || b.logo_data) return '';
+  return '<div class="banner info" style="margin:8px 0 0">“'+esc(b.name)+'” has no logo yet, so the report header shows text only. <a href="#" onclick="openBrands();return false">Add the logo</a> once and every report uses it.</div>';
+}
 function tgl(k,label,sub){ return '<div class="toggle"><span>'+label+(sub?'<div class="muted">'+sub+'</div>':'')+'</span><input type="checkbox"'+(S.newOpts[k]?' checked':'')+' onchange="S.newOpts.'+k+'=this.checked"></div>'; }
 function stepOpt(k,d){ var v = Math.max(0, Math.min(12, S.newOpts[k]+d)); if (k==='baths' && v<1) v=1; S.newOpts[k]=v; $('n-'+k).textContent=v; }
+// Tokenised search: every word typed must appear in the address / city / owner (or the unit label for unit rows).
+function searchProps(q){
+  var d = S.dir; if (!d) return [];
+  var toks = nz(q).split(' ').filter(Boolean), out = [];
+  d.properties.forEach(function(p){
+    var hay = nz(p.address+' '+p.city+' '+p.owner_name), units = unitsOf(p.id);
+    if (!toks.length || toks.every(function(t){ return hay.indexOf(t)>-1; })) out.push({ p:p, u:null, n:units.length });
+    if (toks.length) units.forEach(function(u){
+      var ul = nz(unitText(u.label)), all = hay+' '+ul;
+      if (toks.every(function(t){ return all.indexOf(t)>-1; }) && toks.some(function(t){ return ul.indexOf(t)>-1; })) out.push({ p:p, u:u, n:0 });
+    });
+  });
+  out.sort(function(a,b){ return String(a.p.address).localeCompare(String(b.p.address), undefined, {numeric:true}) || (a.u?1:0)-(b.u?1:0); });
+  return out;
+}
 function renderPropList(){
   var el = $('proplist'); if (!el) return;
-  var q = (S.propQ||'').toLowerCase().trim(), list = S.props;
-  if (q) list = list.filter(function(p){ return propLabel(p).toLowerCase().indexOf(q)>-1; });
-  if (!S.props.length && !S.propsErr){ el.innerHTML = '<div class="muted" style="padding:10px 0">Loading Hub properties…</div>'; return; }
-  var shown = list.slice(0,25);
-  el.innerHTML = shown.map(function(p,i){ return '<div class="propitem" onclick="pickProp(\''+esc(p.id)+'\')">'+esc(propLabel(p))+'</div>'; }).join('') + (list.length>25 ? '<div class="muted" style="padding:8px 0">'+(list.length-25)+' more — keep typing to narrow</div>' : '') + (!list.length ? '<div class="muted" style="padding:10px 0">No match in the Hub. Use “Add a new property” below.</div>' : '');
+  if (!S.dir && !S.propsErr){ el.innerHTML = '<div class="muted" style="padding:10px 0">Loading Hub properties…</div>'; return; }
+  var list = searchProps(S.propQ); S.hits = list.slice(0,30);
+  el.innerHTML = S.hits.map(function(r,i){
+    var sub = (r.p.owner_name ? esc(r.p.owner_name) : '<span style="color:var(--warn)">no owner in the Hub</span>') + (r.n>1 ? ' · '+r.n+' units' : '');
+    return '<div class="propitem" onclick="pickHit('+i+')"><b>'+esc(propLabel(r.p))+'</b>'+(r.u?' · '+esc(unitText(r.u.label)):'')+'<div class="muted">'+sub+'</div></div>';
+  }).join('') + (list.length>30 ? '<div class="muted" style="padding:8px 0">'+(list.length-30)+' more — keep typing to narrow</div>' : '') + (!list.length ? '<div class="muted" style="padding:10px 0">No match in the Hub. Use “Add a new property” to add it now.</div>' : '');
 }
-function pickProp(id){ for (var i=0;i<S.props.length;i++) if (String(S.props[i].id)===String(id)){ S.newProp = { id:S.props[i].id, address:propLabel(S.props[i]), source:'hub' }; render(); return; } }
-function manualProp(){
-  openSheet('<h2>Add a new property</h2><label class="fld" style="margin-top:0">Street address *</label><input id="mp-addr" placeholder="122 S Gilmor St">'
-    +'<div class="row" style="gap:8px"><div style="flex:2"><label class="fld">City</label><input id="mp-city" value="Baltimore"></div><div style="flex:1"><label class="fld">State</label><input id="mp-state" value="MD"></div><div style="flex:1"><label class="fld">Zip</label><input id="mp-zip" inputmode="numeric"></div></div>'
-    +'<p class="muted">This is saved with the inspection. It is not added to the Hub property list.</p>'
-    +'<div class="btns"><button class="btn primary" id="mp-ok" onclick="saveManualProp()">Use this property</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+function pickHit(i){ var r = S.hits[i]; if (!r) return; pickProp(r.p.id, r.u ? r.u.id : '', !!r.u); }
+function renderUnitList(){
+  var el = $('unitlist'); if (!el) return;
+  var toks = nz(S.unitQ).split(' ').filter(Boolean), us = unitsOf(S.pickUnitFor).filter(function(u){ var l = nz(unitText(u.label)); return toks.every(function(t){ return l.indexOf(t)>-1; }); });
+  S.unitHits = us.slice(0,40);
+  el.innerHTML = S.unitHits.map(function(u,i){ return '<div class="propitem" onclick="pickProp(\''+esc(S.pickUnitFor)+'\',\''+esc(u.id)+'\',true)">'+esc(unitText(u.label))+'</div>'; }).join('') + (!us.length ? '<div class="muted" style="padding:10px 0">No unit matches.</div>' : '');
 }
-function saveManualProp(){
-  var a = $('mp-addr').value.trim(); if (!a){ toast('Enter the street address'); return; }
-  var c=$('mp-city').value.trim(), s=$('mp-state').value.trim(), z=$('mp-zip').value.trim();
-  S.newProp = { id:'', address:a+(c?', '+c:'')+(s?', '+s:'')+(z?' '+z:''), source:'new' }; closeSheet(); render();
+function pickProp(id, unitId, chosen){
+  var p = propById(id); if (!p){ toast('That property is not in the list on this phone — reloading the list'); loadProps(); return; }
+  if (!unitId && !chosen && unitsOf(id).length > 1){ S.pickUnitFor = id; S.unitQ=''; render(); renderUnitList(); return; }
+  var u = null; if (unitId) unitsOf(id).forEach(function(x){ if (String(x.id)===String(unitId)) u = x; });
+  S.pickUnitFor = '';
+  S.newProp = { id:p.id, address:propLabel(p), street:p.address, source:'hub', unit_id:u?u.id:'', unit_label:u?u.label:'' };
+  S.newOwner = p.owner_id ? { id:p.owner_id, name:p.owner_name, source:'hub' } : null; S.ownerQ='';
+  render();
+}
+// ---- owners ----
+function ownerMatches(q){
+  var toks = nz(q).split(' ').filter(Boolean), l = (S.dir&&S.dir.owners)||[];
+  return l.filter(function(o){ var h = nz(o.name); return toks.every(function(t){ return h.indexOf(t)>-1; }); }).sort(function(a,b){ return a.name.localeCompare(b.name); });
+}
+function renderOwnerList(elId, q, pickFn, typedFn){
+  var el = $(elId); if (!el) return;
+  var m = ownerMatches(q), t = String(q||'').trim(), exact = m.some(function(o){ return nz(o.name)===nz(t); });
+  S.ownerHits = S.ownerHits || {}; S.ownerHits[elId] = m.slice(0,8);
+  el.innerHTML = S.ownerHits[elId].map(function(o,i){ return '<div class="propitem" onclick="'+pickFn+'('+i+')">'+esc(o.name)+'</div>'; }).join('')
+    + (m.length>8 ? '<div class="muted" style="padding:8px 0">'+(m.length-8)+' more — keep typing</div>' : '')
+    + (typedFn && t && !exact ? '<div class="propitem" onclick="'+typedFn+'()">Use “'+esc(t)+'” <span class="muted">(not in the Hub — saved on this inspection only)</span></div>' : '')
+    + (!m.length && !t ? '<div class="muted" style="padding:10px 0">'+(S.dir?'Start typing the owner’s company name.':'The owner list has not loaded.')+'</div>' : '');
+}
+function pickNewOwner(i){ var o = (S.ownerHits.olist||[])[i]; if (!o) return; S.newOwner = { id:o.id, name:o.name, source:'hub' }; render(); }
+function typedNewOwner(){ var t = String(S.ownerQ||'').trim(); if (!t) return; S.newOwner = { id:'', name:t, source:'typed' }; render(); }
+
+// ---- add a property (and its owner) to the Hub ----
+var NP = null;
+function newPropSheet(prefill, attach){
+  prefill = prefill || {};
+  var q = String(S.propQ||'').trim();
+  NP = { owner:null, attach:!!attach, force:false, dup:null, ownerQ:'' };
+  var addr = prefill.address !== undefined ? prefill.address : (/[a-z]/i.test(q) && /\d/.test(q) ? q : '');
+  openSheet('<h2>Add a new property</h2><div class="muted">Saved straight to the Hub’s Properties list together with its owner, so you never have to enter it twice.</div>'
+    +'<label class="fld">Street address *</label><input id="np-addr" placeholder="122 S Gilmor St" value="'+esc(addr)+'" autocomplete="off">'
+    +'<div class="row" style="gap:8px;align-items:flex-end"><div style="flex:2"><label class="fld">City</label><input id="np-city" value="'+esc(prefill.city!==undefined?prefill.city:'Baltimore')+'"></div><div style="flex:1"><label class="fld">State</label><input id="np-state" value="MD"></div><div style="flex:1"><label class="fld">Zip</label><input id="np-zip" inputmode="numeric"></div></div>'
+    +'<div class="muted">State and zip only appear on the report address; the Hub keeps street and city.</div>'
+    +'<label class="fld">Type</label><select id="np-type" onchange="npType()"><option value="rowhome">Rowhome</option><option value="house">House</option><option value="multi">Multi-unit building</option><option value="condo">Condo</option><option value="commercial">Commercial</option></select>'
+    +'<div id="np-unitsbox" style="display:none"><label class="fld">Units (separate with commas)</label><input id="np-units" placeholder="1A, 1B, 2A"></div>'
+    +'<label class="fld">Owner * <span style="font-weight:400">— the property manager can be the owner</span></label><div id="np-owner"></div>'
+    +'<div id="np-msg"></div>'
+    +'<div class="btns"><button class="btn primary" id="np-ok" onclick="npSubmit()">Add property &amp; owner</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+  npOwnerPaint();
+}
+function npType(){ var m = $('np-type').value==='multi'; $('np-unitsbox').style.display = m ? 'block' : 'none'; }
+function npOwnerPaint(){
+  var el = $('np-owner'); if (!el) return;
+  if (NP.owner){ el.innerHTML = '<div class="row"><b>'+esc(NP.owner.name)+'</b><button class="btn sm" onclick="NP.owner=null;npOwnerPaint()">Change</button></div><div class="muted">Existing owner in the Hub.</div>'; return; }
+  el.innerHTML = '<input id="np-oq" placeholder="Type to find an existing owner…" value="'+esc(NP.ownerQ)+'" oninput="NP.ownerQ=this.value;renderOwnerList(\'np-olist\',NP.ownerQ,\'npPickOwner\',\'\')" autocomplete="off"><div id="np-olist"></div>'
+    +'<div class="muted" style="margin-top:8px"><b>Not in the list?</b> Create the owner right now (company name, not the person, unless they are the same):</div>'
+    +'<label class="fld">Owner company name</label><input id="np-co" placeholder="e.g. Premier Property Management LLC" autocomplete="off">'
+    +'<div class="row" style="gap:8px"><div style="flex:1"><label class="fld">Contact first name</label><input id="np-of"></div><div style="flex:1"><label class="fld">Last name</label><input id="np-ol"></div></div>'
+    +'<div class="row" style="gap:8px"><div style="flex:1"><label class="fld">Phone</label><input id="np-ph" inputmode="tel"></div><div style="flex:1"><label class="fld">Email</label><input id="np-em" type="email"></div></div>'
+    +'<div class="muted">Phone and email are optional — add them later in the Hub.</div>';
+  renderOwnerList('np-olist', NP.ownerQ, 'npPickOwner', '');
+}
+function npPickOwner(i){ var o = (S.ownerHits['np-olist']||[])[i]; if (!o) return; NP.owner = { id:o.id, name:o.name }; npOwnerPaint(); }
+function npMsg(html, cls){ var el = $('np-msg'); if (el) el.innerHTML = html ? '<div class="banner '+(cls||'err')+'" style="margin-top:10px">'+html+'</div>' : ''; }
+function npSubmit(force){
+  if (!claim('npsave')) return;
+  var addr = $('np-addr').value.trim(); if (!addr){ release('npsave'); toast('Enter the street address'); return; }
+  var city = $('np-city').value.trim(), state = $('np-state').value.trim(), zip = $('np-zip').value.trim(), type = $('np-type').value;
+  var body = { address:addr, city:city, type:type, force:!!force };
+  if (type==='multi') body.unit_labels = $('np-units').value.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  if (NP.owner) body.owner = { id:NP.owner.id };
+  else {
+    var co = ($('np-co')||{value:''}).value.trim(), f = $('np-of').value.trim(), l = $('np-ol').value.trim();
+    if (!co && !(f && l)){ release('npsave'); npMsg('Choose the owner, or type the owner’s company name.'); return; }
+    body.owner = { company:co, first:f, last:l, phone:$('np-ph').value.trim(), email:$('np-em').value.trim() };
+  }
+  $('np-ok').disabled = true; npMsg('Saving to the Hub…', 'info');
+  api('POST','/fi/property/create', body).then(function(r){
+    release('npsave');
+    var np = r.property, ow = r.owner;
+    S.dir = S.dir || { properties:[], units:[], owners:[] };
+    S.dir.properties.push({ id:np.id, address:np.address, city:np.city, type:np.type, unit_count:np.unit_count, owner_id:np.owner_id, owner_name:np.owner_name });
+    (r.units||[]).forEach(function(u){ S.dir.units.push({ id:u.id, property_id:np.id, label:u.label }); });
+    if (ow.created) S.dir.owners.push({ id:ow.id, name:ow.name });
+    lsSet('fi_dir', JSON.stringify(S.dir));
+    var label = np.address + (np.city?', '+np.city:'') + (state?', '+state:'') + (zip?' '+zip:'');
+    var prop = { id:np.id, address:label, street:np.address, source:'hub', unit_id:'', unit_label:'' };
+    closeSheet();
+    if (NP && NP.attach && S.rec){
+      mut(function(doc){ doc.property = Object.assign({}, doc.property, prop); doc.owner = doc.owner && doc.owner.name ? doc.owner : { id:ow.id, name:ow.name, source:'hub' }; });
+      toast('Added to the Hub'+(ow.created?' with a new owner':'')); render(); return;
+    }
+    S.newProp = prop; S.newOwner = { id:ow.id, name:ow.name, source:'hub' }; S.pickUnitFor=''; render();
+    toast('Added to the Hub'+(ow.created?' with a new owner':''));
+  }).catch(function(e){
+    release('npsave'); var b = $('np-ok'); if (b) b.disabled = false;
+    var d = e.data || {};
+    if (e.code === 'duplicate_property'){
+      S.dupHits = d.matches || [];
+      npMsg('<b>Already in the Hub.</b> '+esc(e.message)+S.dupHits.map(function(m,i){ return '<div class="btns"><button class="btn sm" onclick="npUseDup('+i+')">Use “'+esc(m.address+(m.city?', '+m.city:''))+'”</button></div>'; }).join('')+'<div class="btns"><button class="btn sm" onclick="npSubmit(true)">Create it anyway</button></div>');
+    } else if (e.code === 'owner_exists'){
+      S.ownDup = d.matches || [];
+      npMsg('<b>That owner already exists.</b> '+esc(e.message)+S.ownDup.map(function(m,i){ return '<div class="btns"><button class="btn sm" onclick="npUseOwner('+i+')">Use “'+esc(m.name)+'”</button></div>'; }).join(''));
+    } else {
+      if (d.owner_created && d.owner_id){ // the owner WAS written: select it so a retry cannot create a second one
+        var cn = ($('np-co')||{value:''}).value.trim() || 'the new owner';
+        S.dir.owners.push({ id:d.owner_id, name:cn }); lsSet('fi_dir', JSON.stringify(S.dir)); NP.owner = { id:d.owner_id, name:cn }; npOwnerPaint();
+      }
+      npMsg(esc(e.message || 'Could not save to the Hub')+' Nothing was lost — fix it and tap Add again.');
+    }
+  });
+}
+function npUseDup(i){
+  var m = (S.dupHits||[])[i]; if (!m) return;
+  if (!propById(m.id)){ toast('Reloading the Hub list — tap it again in a moment'); loadProps(); return; }
+  closeSheet(); if (NP && NP.attach) { toast('That property is already in the Hub — start a new inspection from it, or pick it with “Change property”.'); return; }
+  pickProp(m.id, '', false);
+}
+function npUseOwner(i){ var m = (S.ownDup||[])[i]; if (!m) return; NP.owner = { id:m.id, name:m.name }; npMsg(''); npOwnerPaint(); toast('Using the existing owner — tap Add again'); }
+
+// ---- inspection: property & owner card, change owner, Drive folder ----
+function ownerCardHtml(doc){
+  var ow = doc.owner && doc.owner.name;
+  return '<div class="card"><div class="row"><b>Property &amp; owner</b><button class="btn sm" onclick="propOwnerSheet()">Edit</button></div>'
+    +'<div class="muted">'+(ow ? 'On behalf of <b>'+esc(doc.owner.name)+'</b>' : '<span style="color:var(--warn)">No owner chosen — needed before you can publish</span>')+(doc.property.source==='new' ? '<br><span style="color:var(--warn)">Not in the Hub yet</span>' : '')+(doc.property.unit_label ? '<br>'+esc(unitText(doc.property.unit_label)) : '')+'</div></div>';
+}
+function propOwnerSheet(){
+  var doc = S.rec.doc, ow = doc.owner && doc.owner.name; S.ownerQ2='';
+  openSheet('<h2>Property &amp; owner</h2><div class="muted">'+esc(doc.property.address)+'</div>'
+    +'<label class="fld">On behalf of (owner)</label><div class="row"><b>'+(ow?esc(doc.owner.name):'<span style="color:var(--warn)">none</span>')+'</b>'+(ow?'<button class="btn sm" onclick="inspSetOwner(-1)">Clear</button>':'')+'</div>'
+    +'<input id="oq2" style="margin-top:8px" placeholder="Type to search owners…" oninput="S.ownerQ2=this.value;renderOwnerList(\'olist2\',S.ownerQ2,\'inspSetOwner\',\'inspTypedOwner\')" autocomplete="off"><div id="olist2"></div>'
+    +(doc.property.source==='new' ? '<div class="banner warn" style="margin-top:10px">This property is only on this inspection. Add it to the Hub so it can be found next time.<div class="btns"><button class="btn sm" onclick="addToHub()">Add to the Hub…</button></div></div>' : '')
+    +'<label class="fld">Drive folder</label><div class="muted">Photos are filed under the property’s folder in Drive: <b>'+esc(fiStreet(doc))+'</b> / <b>Inspection '+esc(dateFolder(doc.date))+'</b>.</div>'
+    +'<div class="btns">'+(S.rec.driveUrl?'<a class="btn" href="'+esc(S.rec.driveUrl)+'" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;text-align:center">Open Drive folder</a>':'')+'<button class="btn" id="org-btn" onclick="organizeDrive()">Organize photos in Drive</button></div><div id="org-msg"></div>'
+    +'<div class="btns"><button class="btn" onclick="closeSheet();render()">Done</button></div>');
+  renderOwnerList('olist2', '', 'inspSetOwner', 'inspTypedOwner');
+  if (!S.rec.driveUrl && S.rec.base_rev){
+    var rid0 = S.rec.id;
+    api('GET','/fi/inspection?id='+encodeURIComponent(rid0)).then(function(d){
+      if (S.rec && S.rec.id===rid0 && d.drive_folder_url){ S.rec.driveUrl = d.drive_folder_url; var el=$('org-msg'); if (el && !el.innerHTML) el.innerHTML = '<div class="muted" style="margin-top:8px"><a href="'+esc(d.drive_folder_url)+'" target="_blank" rel="noopener">Open this inspection’s Drive folder</a></div>'; }
+    }).catch(function(e){ var el=$('org-msg'); if (el && !el.innerHTML) el.innerHTML = '<div class="muted" style="margin-top:8px">Could not check for the Drive folder link ('+esc(e.message)+').</div>'; });
+  }
+}
+function fiStreet(doc){ return (doc.property && (doc.property.street || String(doc.property.address||'').split(',')[0])) || ''; }
+function dateFolder(d){ var m = String(d||'').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[2]+m[3]+m[1] : ''; }
+function inspSetOwner(i){
+  if (i === -1){ mut(function(doc){ delete doc.owner; }); propOwnerSheet(); return; }
+  var o = (S.ownerHits.olist2||[])[i]; if (!o) return;
+  mut(function(doc){ doc.owner = { id:o.id, name:o.name, source:'hub' }; }); propOwnerSheet(); toast('Owner set');
+}
+function inspTypedOwner(){ var t = String(S.ownerQ2||'').trim(); if (!t) return; mut(function(doc){ doc.owner = { id:'', name:t, source:'typed' }; }); propOwnerSheet(); }
+function addToHub(){
+  var a = String(S.rec.doc.property.address||'').split(',').map(function(s){ return s.trim(); });
+  newPropSheet({ address:a[0]||'', city:a[1]||'Baltimore' }, true);
+}
+function organizeDrive(){
+  if (!claim('org')) return;
+  var b = $('org-btn'); if (b) b.disabled = true;
+  function msg(t, cls){ var el = $('org-msg'); if (el) el.innerHTML = t ? '<div class="banner '+(cls||'info')+'" style="margin-top:10px">'+t+'</div>' : ''; }
+  var rec = S.rec, moved = 0, n = 0;
+  if (rec.dirty){ release('org'); if (b) b.disabled = false; msg('Wait for “Saved to server” first, then tap again.', 'warn'); return; }
+  msg('Setting up the folder…');
+  function step(){
+    return api('POST','/fi/folder/organize',{ inspection_id:rec.id, limit:20 }).then(function(r){
+      moved += r.moved||0; if (r.folder && r.folder.url) rec.driveUrl = r.folder.url;
+      if (!r.done && r.remaining > 0 && ++n < 40){ msg('Moved '+moved+' photo'+(moved===1?'':'s')+'… '+r.remaining+' to go'); return step(); }
+      return r;
+    });
+  }
+  step().then(function(r){
+    release('org'); if (b) b.disabled = false;
+    if (!r.done) msg(esc(r.message||'Not finished — tap again.'), 'warn');
+    else { msg('Done — '+(moved?moved+' photo'+(moved===1?'':'s')+' moved. ':'')+'All photos are in the property’s Drive folder.'+(rec.driveUrl?' <a href="'+esc(rec.driveUrl)+'" target="_blank" rel="noopener">Open it</a>':''), 'ok'); }
+  }).catch(function(e){ release('org'); if (b) b.disabled = false; msg('Could not finish: '+esc(e.message||e)+' Tap again to continue where it stopped.', 'err'); });
 }
 function createInspection(){
   if (!claim('create')) return; $('start-btn').disabled = true;
   var o = S.newOpts, p = S.newProp;
   lsSet('fi_inspector', o.inspector);
   var id = newId();
-  var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
+  var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address, street:p.street||String(p.address||'').split(',')[0].trim(), unit_id:String(p.unit_id||''), unit_label:p.unit_label||'' }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
+  if (S.newOwner && S.newOwner.name) doc.owner = { id:String(S.newOwner.id||''), name:S.newOwner.name, source:S.newOwner.source||'hub' };
   var rec = { id:id, doc:doc, meta:{ brand_id:o.brand, client_name:o.client, client_email:o.email, inspector:o.inspector, inspection_date:o.date, inspection_type:o.type }, base_rev:0, token:'', status:'draft', dirty:true, ver:1 };
   S.rec = rec; S.areaId = null; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.publishInfo=null;
   persistLocal().then(function(){ release('create'); S.view='insp'; render(); syncNow(true); });
@@ -521,7 +731,7 @@ function openInspection(id){
   var finish = function(rec){ S.rec = rec; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.proposals=null; S.publishInfo=null; loadPhotoBlobs(rec.id).then(function(){ return allPhotoStates(); }).then(function(){ S.view='insp'; render(); if (rec.dirty) syncNow(true); pumpPhotos(); }); };
   if (local){ finish(local); return; }
   api('GET','/fi/inspection?id='+encodeURIComponent(id)).then(function(d){
-    var rec = { id:id, doc:d.doc, meta:metaFrom(d.inspection), base_rev:d.inspection.rev, token:d.inspection.report_token, status:d.inspection.status, dirty:false, ver:1 };
+    var rec = { id:id, doc:d.doc, meta:metaFrom(d.inspection), base_rev:d.inspection.rev, token:d.inspection.report_token, status:d.inspection.status, driveUrl:d.drive_folder_url||'', dirty:false, ver:1 };
     return dbPut('docs', rec).then(function(){ localOnly[id]=rec; finish(rec); });
   }).catch(function(e){ toast('Could not open: '+e.message); });
 }
@@ -613,6 +823,7 @@ function localChecks(doc){
   var blocks=[], warns=[], active = doc.areas.filter(function(a){return !a.excluded;});
   var pend = pendingPhotoCount(); if (pend) blocks.push(pend+' photo'+(pend>1?'s are':' is')+' still uploading');
   if (!active.length) blocks.push('No areas to report');
+  if (!(doc.owner && String(doc.owner.name||'').trim())) blocks.push('Choose who this inspection is on behalf of (the owner)');
   if (!doc.overall || !doc.overall.condition || doc.overall.condition==='not_inspected') blocks.push('Set the overall condition');
   active.forEach(function(a){ if ((a.pending_text||'').trim()) blocks.push('“'+a.name+'” has dictation not turned into issues (or cleared)'); });
   var sk = active.filter(function(a){ return !a.condition || a.condition==='not_inspected'; }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
@@ -633,6 +844,7 @@ function viewReview(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div><h1>Review &amp; report</h1><div class="muted">'+esc(doc.property.address)+'</div>';
   h += '<div class="card"><b>Overall condition</b><div class="seg">'+[['good','Good','good'],['fair','Fair','fair'],['poor','Poor','poor']].map(function(c){ return '<button class="'+(doc.overall.condition===c[0]?'sel '+c[2]:'')+'" onclick="setOverall(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div><label class="fld">Overall notes (in the report)</label><textarea id="ov-notes" style="min-height:80px" oninput="mut(function(d){d.overall.notes=this.value}.bind(this))">'+esc(doc.overall.notes||'')+'</textarea></div>';
   h += '<div class="card"><b>Report details</b><label class="fld">Brand</label><div class="row"><span>'+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'—')+'</span><button class="btn sm" onclick="brandSheet()">Switch brand</button></div><div class="muted">Switching re-skins the whole report instantly — nothing is rebuilt.</div>'
+    +'<label class="fld">On behalf of (owner)</label><div class="row"><span>'+(doc.owner&&doc.owner.name?esc(doc.owner.name):'<span style="color:var(--warn)">not chosen — required to publish</span>')+'</span><button class="btn sm" onclick="propOwnerSheet()">'+(doc.owner&&doc.owner.name?'Change':'Choose')+'</button></div>'
     +'<label class="fld">Prepared for</label><input value="'+esc(rec.meta.client_name||'')+'" oninput="mutMeta(function(m){m.client_name=this.value}.bind(this))">'
     +'<label class="fld">Client email</label><input type="email" value="'+esc(rec.meta.client_email||'')+'" oninput="mutMeta(function(m){m.client_email=this.value}.bind(this))"></div>';
   h += '<div class="card"><b>Summary by trade</b>';
@@ -831,8 +1043,9 @@ function viewInsp(){
   var rec = S.rec, doc = rec.doc, c = inspectedCount(doc);
   var b = brandById(rec.meta.brand_id) || defaultBrand();
   var h = '<div class="row"><button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div>';
-  h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
+  h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+(doc.property.unit_label?' · '+esc(unitText(doc.property.unit_label)):'')+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
+  h += ownerCardHtml(doc);
   var vn = doc.voice_notes||[], unsorted = vn.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length;
   h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
