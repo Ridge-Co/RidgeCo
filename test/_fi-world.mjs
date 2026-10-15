@@ -40,8 +40,9 @@ export function world() {
     if (h.net) { const r = await h.net(url, opts); if (r) return r; }
     const m = String(url).match(/\/values\/([A-Za-z_]+)$/);
     if (m) { const tb = T(m[1]); return { status: 200, json: async () => ({ values: tb.headers.length ? [tb.headers].concat(tb.rows.filter(Boolean)) : [] }) }; }
+    if (String(url).includes('/drive/v3/drives/')) return { ok: !h.notShared, status: h.notShared ? 404 : 200, json: async () => ({}) };
     if (String(url).startsWith('https://www.googleapis.com/drive/v3/files') && !String(url).includes('alt=media')) {
-      const u = new URL(url), d = (h.drive = h.drive || { folders: [], files: {}, seq: 0, patches: 0 });
+      const u = new URL(url), d = (h.drive = h.drive || { folders: [], files: {}, seq: 0, patches: 0 }); (h.driveIdSeen = h.driveIdSeen || []).push(new URL(url).searchParams.get('driveId') || '');
       const R = (status, data) => ({ ok: status < 300, status, json: async () => data });
       const mid = u.pathname.match(/\/drive\/v3\/files\/([^/]+)$/);
       if (h.driveListFail && !mid && (!opts || !opts.method)) return R(500, { error: { message: 'drive list down' } });
@@ -73,7 +74,7 @@ export function world() {
     const isStaging = () => true;
     const getAccessToken = async () => 'tok';
     const findOrCreateFolder = async () => ({ id: 'folder1' });
-    const uploadFileToDrive = async (tok, buf, name, mime, folderId) => { (h.uploads = h.uploads || []).push({ name, folderId }); if (h.driveFail || (h.driveFailFolder && folderId === h.driveFailFolder)) return {}; const id = 'drv' + (++h.tok); (h.drive = h.drive || { folders: [], files: {}, seq: 0, patches: 0 }).files[id] = { parents: [folderId] }; return { id, size: h.driveSize != null ? h.driveSize : buf.byteLength }; };
+    const uploadFileToDrive = async (tok, buf, name, mime, folderId, sharedId) => { (h.uploads = h.uploads || []).push({ name, folderId, sharedId }); if (h.driveFail || (h.driveFailFolder && folderId === h.driveFailFolder)) return {}; const id = 'drv' + (++h.tok); (h.drive = h.drive || { folders: [], files: {}, seq: 0, patches: 0 }).files[id] = { parents: [folderId] }; return { id, size: h.driveSize != null ? h.driveSize : buf.byteLength }; };
     const resp = (o, status = 200) => ({ status, ok: status < 300, clone() { return this; }, json: async () => o });
     const addObj = (tab, obj) => { const tb = h.tabs[tab] = h.tabs[tab] || { headers: [], rows: [] }; for (const k of Object.keys(obj)) if (!tb.headers.includes(k)) tb.headers.push(k); tb.rows.push(tb.headers.map(k => obj[k] == null ? '' : String(obj[k]))); };
     const rowsOf = (tab) => { const tb = h.tabs[tab] || { headers: [], rows: [] }; return tb.rows.filter(Boolean).map(r => { const o = {}; tb.headers.forEach((k, i) => { o[k] = r[i] == null ? '' : String(r[i]); }); return o; }); };

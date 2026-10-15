@@ -33553,10 +33553,12 @@ async function fiPhotoUpload(env, request, url) {
   try { folder = await fiInspectionFolder(env, token, row, (await fiFindInspection(env, inspId)).headers, false); }
   catch (e) { return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
-  let up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, root);
+  let shared;
+  try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  let up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared);
   if ((!up || !up.id) && row.o.Drive_Folder_ID) {
     // The remembered folder may have been deleted or moved: look it up again once, then retry.
-    try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, root); }
+    try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared); }
     catch (e) { return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
   }
   if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
@@ -34334,14 +34336,15 @@ function fiInspFolderName(dateStr, n) {
 // Slim, PIN-free copy of the Hub's property / unit / owner lists for the phone's search.
 async function fiDirectory(env) {
   const props = await fetchTab(env, 'Properties'), units = await fetchTab(env, 'Units'), owners = await fetchTab(env, 'Owners');
-  const liveOwners = owners.filter(o => o.Active !== 'FALSE');
+  const firstById = (rows) => { const seen = new Set(); return rows.filter(r => { const k = String(r.ID); if (seen.has(k)) return false; seen.add(k); return true; }); };
+  const liveOwners = firstById(owners.filter(o => o.Active !== 'FALSE'));
   const nameById = {}; liveOwners.forEach(o => { const n = fiOwnerName(o); if (n) nameById[String(o.ID)] = n; });
-  const liveProps = props.filter(p => p.Active !== 'FALSE' && String(p.Address || '').trim());
+  const liveProps = firstById(props.filter(p => p.Active !== 'FALSE' && String(p.Address || '').trim()));
   const pids = new Set(liveProps.map(p => String(p.ID)));
   return json({
     ok: true,
     properties: liveProps.map(p => ({ id: String(p.ID), address: p.Address, city: p.City || '', type: p.Type || '', unit_count: Number(p.Unit_Count) || 0, owner_id: nameById[String(p.Owner_ID)] ? String(p.Owner_ID) : '', owner_name: nameById[String(p.Owner_ID)] || '' })),
-    units: units.filter(u => u.Active !== 'FALSE' && pids.has(String(u.Property_ID)) && String(u.Unit_Label || '').trim()).map(u => ({ id: String(u.ID), property_id: String(u.Property_ID), label: u.Unit_Label })),
+    units: firstById(units.filter(u => u.Active !== 'FALSE')).filter(u => pids.has(String(u.Property_ID)) && String(u.Unit_Label || '').trim()).map(u => ({ id: String(u.ID), property_id: String(u.Property_ID), label: u.Unit_Label })),
     owners: liveOwners.filter(o => fiOwnerName(o)).map(o => ({ id: String(o.ID), name: fiOwnerName(o) })),
   });
 }
@@ -34404,6 +34407,15 @@ async function fiPropertyCreate(env, body) {
 }
 
 // ── Drive: Properties root / <address> / Inspection MMDDYYYY ──
+// The Properties root is a shared drive on prod but a plain folder on staging; only pass driveId/corpora when it really is a shared drive.
+const fiSharedCache = {};
+async function fiDriveSharedRoot(token, root) {
+  if (Object.prototype.hasOwnProperty.call(fiSharedCache, root)) return fiSharedCache[root];
+  const res = await fetch(`https://www.googleapis.com/drive/v3/drives/${encodeURIComponent(root)}?fields=id`, { headers: { Authorization: `Bearer ${token}` } });
+  if (res.ok) return (fiSharedCache[root] = root);
+  if (res.status === 404) return (fiSharedCache[root] = '');
+  throw new Error('FI: could not tell whether the Drive root is a shared drive (HTTP ' + res.status + ')');
+}
 async function fiDriveFindFolders(token, name, parentId, root) {
   const q = `name=${JSON.stringify(name)} and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
   const params = new URLSearchParams({ q, fields: 'files(id,name,webViewLink,createdTime)', orderBy: 'createdTime', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', ...(root ? { driveId: root, corpora: 'drive' } : {}) });
@@ -34448,16 +34460,17 @@ async function fiInspectionFolder(env, token, row, headers, forceFresh) {
   if (!root) throw new Error('DRIVE_PROPERTIES_ROOT is not configured.');
   let doc = {}; try { doc = JSON.parse(fiJoinRow(row.o)); } catch (_) { doc = {}; }
   const street = fiFolderSafe((doc.property && (doc.property.street || fiStreetOf(doc.property.address))) || fiStreetOf(row.o.Address));
-  const prop = await fiDriveEnsureFolder(token, street, root, root);
+  const shared = await fiDriveSharedRoot(token, root);
+  const prop = await fiDriveEnsureFolder(token, street, root, shared);
   const all = await fiReadFresh(env, 'FI_Inspections');
   const owned = new Set(all.rows.filter(r => r.o.ID !== row.o.ID && r.o.Active !== 'FALSE' && r.o.Drive_Folder_ID).map(r => r.o.Drive_Folder_ID));
   const date = row.o.Inspection_Date || doc.date || '';
   let pick = null;
   for (let n = 1; n <= 10 && !pick; n++) {
     const nm = fiInspFolderName(date, n);
-    const found = await fiDriveFindFolders(token, nm, prop.id, root);
+    const found = await fiDriveFindFolders(token, nm, prop.id, shared);
     const free = found.find(f => !owned.has(f.id));
-    if (free) pick = free; else if (!found.length) pick = await fiDriveEnsureFolder(token, nm, prop.id, root);
+    if (free) pick = free; else if (!found.length) pick = await fiDriveEnsureFolder(token, nm, prop.id, shared);
   }
   if (!pick || !pick.id) throw new Error('FI: could not find a free inspection folder name.');
   const url = pick.webViewLink || `https://drive.google.com/drive/folders/${pick.id}`;
@@ -34482,7 +34495,7 @@ async function fiFolderOrganize(env, body) {
   const limit = Math.max(5, Math.min(60, Number(body.limit) || 20));
   // One listing tells us which photos are already in the folder, so finished ones cost nothing and every run makes progress.
   let inFolder;
-  try { inFolder = await fiDriveChildIds(token, folder.id, env.DRIVE_PROPERTIES_ROOT); } catch (e) { return fiErr(502, 'drive_folder', 'Could not list the Drive folder: ' + String((e && e.message) || e).slice(0, 160)); }
+  try { inFolder = await fiDriveChildIds(token, folder.id, await fiDriveSharedRoot(token, env.DRIVE_PROPERTIES_ROOT)); } catch (e) { return fiErr(502, 'drive_folder', 'Could not list the Drive folder: ' + String((e && e.message) || e).slice(0, 160)); }
   let moved = 0, already = 0, work = 0, remaining = 0; const failed = [];
   for (const p of mine) {
     if (inFolder.has(p.o.Drive_File_ID)) { already++; continue; }

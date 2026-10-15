@@ -164,6 +164,21 @@ const seed = (w) => {
   t('Drive that ignores the move is caught by read-back', r.status === 502 && r.body.failed_count === 1, r.body);
 }
 
+{ // staging's Properties root is a plain folder, prod's is a shared drive
+  const pr = (n) => ({ headers: { get: () => 'image/jpeg' }, arrayBuffer: async () => new ArrayBuffer(n) });
+  const w = world(); seed(w); w.h.notShared = true;
+  await w.fiSave(w.env, { id: 'fi_r3_plain', base_rev: 0, doc: mkDoc() });
+  const up = await w.fiPhotoUpload(w.env, pr(10), new URL('https://x/fi/photo?inspection_id=fi_r3_plain&photo_id=ph_plain1'));
+  t('plain-folder root: works, never sends driveId', up.status === 200 && w.h.driveIdSeen.every(x => x === '') && w.h.uploads[0].sharedId === '', [up, w.h.driveIdSeen, w.h.uploads]);
+  const w2 = world(); seed(w2);
+  await w2.fiSave(w2.env, { id: 'fi_r3_shared', base_rev: 0, doc: mkDoc() });
+  await w2.fiPhotoUpload(w2.env, pr(10), new URL('https://x/fi/photo?inspection_id=fi_r3_shared&photo_id=ph_shr001'));
+  t('shared-drive root: driveId is sent', w2.h.driveIdSeen.includes('root') && w2.h.uploads[0].sharedId === 'root', [w2.h.driveIdSeen, w2.h.uploads]);
+  const w3 = world(); seed(w3); w3.h.tabs.Owners.rows.push(['O1', 'Premier Property Management LLC', 'Pat', 'Premier', '9999', 'TRUE']); w3.h.tabs.Properties.rows.push(['P1', '122 S Gilmor St', 'Baltimore', 'rowhome', '1', 'O1', 'TRUE']);
+  const d = (await w3.fiDirectory(w3.env)).body;
+  t('directory lists each owner/property once even if the sheet repeats an ID', d.owners.filter(o => o.id === 'O1').length === 1 && d.properties.filter(p => p.id === 'P1').length === 1, d.owners);
+}
+
 // ── wiring / staging guards ──
 {
   for (const p of ['/fi/directory', '/fi/property/create', '/fi/folder/organize']) t('route wired: ' + p, src.includes("path === '" + p + "'"));
