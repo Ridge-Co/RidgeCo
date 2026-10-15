@@ -1055,6 +1055,12 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/bill-milestones') return await scopeProposalBillMilestones(env, body);
         if (path === '/scope-proposal/milestone/set-pending-info') return await setMilestonePendingInfo(env, body);
         if (path === '/scope-proposal/adjust-bill') return await scopeProposalAdjustBill(env, body);
+        if (path === '/fi/save')                  return await fiRoute(env, 'save', () => fiSave(env, body));
+        if (path === '/fi/publish')               return await fiRoute(env, 'publish', () => fiPublish(env, body));
+        if (path === '/fi/structure')             return await fiRoute(env, 'structure', () => fiStructure(env, body));
+        if (path === '/fi/summarize')             return await fiRoute(env, 'summarize', () => fiSummarize(env, body));
+        if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
+        if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
