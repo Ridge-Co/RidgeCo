@@ -31,3 +31,5 @@ GET `/fi/list`, `/fi/inspection?id=`; POST `/fi/save` (id, base_rev, doc, meta, 
 
 ## Known limits / next
 No PDF generation on the Worker — "Download PDF" opens the report with print dialog (Save as PDF). Emails carry the link, not an attachment, and send from the fixed Ridge Co Gmail sender. "Add new property" is saved with the inspection only, NOT written to the Hub Properties tab (decision needed). Next phases: templates, carry-forward comparison, WO conversion, cheaper models.
+
+<!-- pages redeploy retry Oct 15 2026 -->
