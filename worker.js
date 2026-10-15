@@ -33355,4 +33355,171 @@ function fiBuildEmail(brand, insp, link, note) {
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:${c};color:#fff;padding:16px 20px;font-size:18px;font-weight:700">${fiHtmlEsc(brand.Name)}</div><div style="padding:20px;border:1px solid #dfe3e8;border-top:none"><p style="margin:0 0 12px">Your property inspection report for <b>${fiHtmlEsc(insp.Address)}</b> is ready.</p>${note ? `<p style="margin:0 0 12px;white-space:pre-wrap">${fiHtmlEsc(note)}</p>` : ''}<p style="margin:18px 0"><a href="${fiHtmlEsc(link)}" style="background:${c};color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:700">View inspection report</a></p><p style="font-size:13px;color:#6b7684;margin:0">You can print the report or save it as a PDF from that page.${brand.Contact_Line ? '<br>' + fiHtmlEsc(brand.Contact_Line) : ''}</p></div></div>`;
   return { subject, html };
 }
+
+// ── Sheets plumbing ─────────────────────────────────────────────────────────────────────────
+async function fiEnsureTabs(env) {
+  if (__fiTabsReady) return;
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  const need = Object.keys(FI_TABS).filter(t => !titles.includes(t));
+  if (need.length) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  for (const [tab, headers] of Object.entries(FI_TABS)) await ensureColumns(env, tab, headers);
+  const brands = await fiReadFresh(env, 'FI_Brands');
+  if (!brands.rows.length) {
+    const now = new Date().toISOString();
+    await fiWriteRow(env, 'FI_Brands', brands.headers, { ID: 'brand_default', Name: 'Ridge Co', Primary_Color: '#1d4ed8', Accent_Color: '#166534', Tagline: 'Property maintenance & inspections', Contact_Line: '', Footer_Text: '', Logo_Data: '', Is_Default: 'TRUE', Active: 'TRUE', Created_At: now, Updated_At: now }, 0);
+    const chk = await fiReadFresh(env, 'FI_Brands');
+    if (!chk.rows.some(r => r.o.ID === 'brand_default')) throw new Error('FI: default brand seed did not persist');
+  }
+  __fiTabsReady = true;
+}
+// Uncached read (a read-modify-write or verify must never see a stale 6s-cached copy).
+async function fiReadFresh(env, tab) {
+  for (let attempt = 1; ; attempt++) {
+    const token = await getAccessToken(env);
+    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}/values/${tab}`, { headers: { Authorization: `Bearer ${token}` } });
+    const data = await res.json();
+    if (data.error) {
+      const code = data.error.code || res.status;
+      if ((code === 429 || code >= 500) && attempt < 4) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
+      throw new Error(`FI: Sheets read of ${tab} failed: ${data.error.message || code}`);
+    }
+    const vals = data.values || [];
+    const headers = vals[0] || [];
+    const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
+    return { headers, rows };
+  }
+}
+async function fiWriteRow(env, tab, headers, obj, rowNum) {
+  if (!headers.length) throw new Error(`FI: ${tab} has no header row`);
+  const vals = headers.map(h => (obj[h] === undefined || obj[h] === null) ? '' : String(obj[h]));
+  if (rowNum) await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
+  else await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
+}
+async function fiFindInspection(env, id) {
+  const t = await fiReadFresh(env, 'FI_Inspections');
+  const hits = t.rows.filter(r => r.o.ID === id && r.o.Active !== 'FALSE');
+  return { headers: t.headers, row: hits[0] || null, dupes: hits.length };
+}
+function fiBrandOut(o, withLogo) {
+  const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
+  if (withLogo) b.logo_data = o.Logo_Data || '';
+  return b;
+}
+async function fiResolveBrand(env, brandId) {
+  const t = await fiReadFresh(env, 'FI_Brands');
+  const live = t.rows.filter(r => r.o.Active !== 'FALSE');
+  let hit = brandId ? live.find(r => r.o.ID === brandId) : null;
+  let fallback = false;
+  if (!hit) { fallback = !!brandId; hit = live.find(r => r.o.Is_Default === 'TRUE') || live[0] || null; }
+  if (!hit) return { brand: { id: 'builtin', name: 'Inspection Report', primary_color: '#1d4ed8', accent_color: '#166534', tagline: '', contact_line: '', footer_text: '', is_default: true, has_logo: false, logo_data: '' }, fallback: true, raw: { Name: 'Inspection Report' } };
+  return { brand: fiBrandOut(hit.o, true), fallback, raw: hit.o };
+}
+function fiInspHeaderOut(o) {
+  return { id: o.ID, property_id: o.Property_ID, address: o.Address, type: o.Inspection_Type, status: o.Status || 'draft', brand_id: o.Brand_ID, client_name: o.Client_Name, client_email: o.Client_Email, inspector: o.Inspector, date: o.Inspection_Date, rev: Number(o.Rev) || 0, issue_count: Number(o.Issue_Count) || 0, photo_count: Number(o.Photo_Count) || 0, published_at: o.Published_At || '', published_rev: Number(o.Published_Rev) || 0, updated_at: o.Updated_At, report_token: o.Report_Token };
+}
+
+// ── Endpoints ───────────────────────────────────────────────────────────────────────────────
+async function fiList(env) {
+  await fiEnsureTabs(env);
+  const [t, bt] = [await fiReadFresh(env, 'FI_Inspections'), await fiReadFresh(env, 'FI_Brands')];
+  const items = t.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiInspHeaderOut(r.o)).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 100);
+  const brands = bt.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiBrandOut(r.o, true));
+  return json({ ok: true, inspections: items, brands, report_base: FI_PAGE_BASE });
+}
+async function fiGetInspection(env, url) {
+  const id = url.searchParams.get('id') || '';
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'No saved inspection with that id.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
+  return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc });
+}
+async function fiSave(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const v = fiValidateDoc(body.doc);
+  if (!v.ok) return fiErr(400, 'invalid_doc', 'The inspection data is not valid: ' + v.errors.join('; '), { errors: v.errors });
+  const doc = body.doc, meta = body.meta || {};
+  const serialized = fiSerialize(doc);
+  if (serialized.length > FI_MAX_DOC_CHARS) return fiErr(413, 'too_large', 'This inspection is too large to store. Split off photos/notes or contact Brett.');
+  await fiEnsureTabs(env);
+  const { headers, row, dupes } = await fiFindInspection(env, id);
+  if (dupes > 1) return fiErr(500, 'duplicate_rows', 'Duplicate saved rows exist for this inspection; refusing to write. Contact Brett.');
+  const baseRev = Number(body.base_rev) || 0;
+  if (row && Number(row.o.Rev) !== baseRev && body.force !== true) {
+    return fiErr(409, 'stale', 'A newer version of this inspection is saved on the server (another device?). Nothing was overwritten.', { server_rev: Number(row.o.Rev) || 0, server_updated_at: row.o.Updated_At });
+  }
+  let brandId = fiStr(meta.brand_id, 60);
+  if (brandId) {
+    const bt = await fiReadFresh(env, 'FI_Brands');
+    if (!bt.rows.some(r => r.o.ID === brandId && r.o.Active !== 'FALSE')) return fiErr(400, 'bad_brand', 'That brand does not exist or is inactive.');
+  } else brandId = row ? row.o.Brand_ID : '';
+  const hash = await fiSha256(serialized);
+  const changed = !row || row.o.Doc_Hash !== hash;
+  const wasPublished = !!row && row.o.Status === 'published';
+  const unpublish = wasPublished && changed;
+  const now = new Date().toISOString();
+  const newRev = (row ? Number(row.o.Rev) || 0 : 0) + 1;
+  const chunks = fiChunk(serialized);
+  const o = Object.assign({}, row ? row.o : {}, {
+    ID: id, Property_ID: fiStr(doc.property.id || '', 60), Address: fiStr(doc.property.address, 200), Inspection_Type: fiStr(meta.inspection_type || doc.type || (row && row.o.Inspection_Type) || 'periodic', 40),
+    Status: unpublish ? 'draft' : (row ? row.o.Status || 'draft' : 'draft'), Brand_ID: brandId,
+    Client_Name: fiStr(meta.client_name != null ? meta.client_name : (row && row.o.Client_Name), 120), Client_Email: fiStr(meta.client_email != null ? meta.client_email : (row && row.o.Client_Email), 200),
+    Inspector: fiStr(meta.inspector != null ? meta.inspector : (row && row.o.Inspector), 120), Inspection_Date: fiStr(meta.inspection_date || doc.date || (row && row.o.Inspection_Date) || now.slice(0, 10), 20),
+    Report_Token: row ? row.o.Report_Token : inspRandToken(18), Published_At: unpublish ? '' : (row ? row.o.Published_At : ''), Published_Rev: unpublish ? '' : (row ? row.o.Published_Rev : ''),
+    Rev: newRev, Doc_Hash: hash, Issue_Count: (doc.areas || []).reduce((n, a) => n + ((a.issues || []).length), 0), Photo_Count: fiPhotoIds(doc).length,
+    Created_At: row ? row.o.Created_At : now, Updated_At: now, Active: 'TRUE',
+  });
+  for (let i = 1; i <= FI_DATA_COLS; i++) o['Data_' + i] = chunks[i - 1] || '';
+  await fiWriteRow(env, 'FI_Inspections', headers, o, row ? row.rowNum : 0);
+  // READ-BACK: fresh read, exactly one row, same rev, same bytes.
+  const chk = await fiFindInspection(env, id);
+  if (!chk.row || chk.dupes !== 1 || Number(chk.row.o.Rev) !== newRev || chk.row.o.Doc_Hash !== hash || fiJoinRow(chk.row.o) !== serialized) {
+    // Roll the row back to what it was (or deactivate a failed create) so the phone's retry with the SAME base_rev still works.
+    let rolled = true;
+    try {
+      const cur = await fiFindInspection(env, id);
+      const target = cur.row;
+      if (target) await fiWriteRow(env, 'FI_Inspections', cur.headers, row ? row.o : Object.assign({}, target.o, { Active: 'FALSE' }), target.rowNum);
+    } catch (e) { rolled = false; console.error('fi/save rollback failed:', e && e.message); }
+    return fiErr(500, 'verify_failed', 'The save could not be verified on the server' + (rolled ? '' : ' and could not be rolled back — contact Brett') + '. Your work is still safe on this phone — retry.', { expected_rev: newRev, rolled_back: rolled });
+  }
+  return json({ ok: true, rev: newRev, hash, report_token: o.Report_Token, status: o.Status, unpublished: unpublish, updated_at: now, recreated: !row && baseRev > 0 });
+}
+async function fiPhotoUpload(env, request, url) {
+  const inspId = url.searchParams.get('inspection_id') || '', photoId = url.searchParams.get('photo_id') || '';
+  if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
+  const mime = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return fiErr(415, 'bad_type', 'Only JPEG, PNG or WebP photos are accepted.');
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, inspId);
+  if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const ex = pt.rows.find(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+  if (ex) return json({ ok: true, existing: true, photo_id: photoId });
+  const buf = await request.arrayBuffer();
+  if (!buf.byteLength) return fiErr(400, 'empty', 'The photo was empty.');
+  if (buf.byteLength > FI_MAX_PHOTO_BYTES) return fiErr(413, 'too_large', 'Photo is larger than 8 MB.');
+  const root = env.DRIVE_PROPERTIES_ROOT;
+  if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
+  const token = await getAccessToken(env);
+  const fold = s => String(s).replace(/['"\\]/g, ' ').trim().slice(0, 80) || 'Unknown';
+  const top = await findOrCreateFolder(token, 'Field Inspections', root, root);
+  if (!top || !top.id) return fiErr(502, 'drive_folder', 'Could not create the Field Inspections folder in Drive.');
+  const sub = await findOrCreateFolder(token, `${fold(row.o.Address)} — ${inspId}`, top.id, root);
+  if (!sub || !sub.id) return fiErr(502, 'drive_folder', 'Could not create the inspection folder in Drive.');
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  const up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, sub.id, root);
+  if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
+  if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
+  await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
+  const chk = await fiReadFresh(env, 'FI_Photos');
+  const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+  if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  return json({ ok: true, photo_id: photoId, bytes: buf.byteLength });
+}
 // __FI_NEXT__
