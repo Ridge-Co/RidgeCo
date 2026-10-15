@@ -307,3 +307,9 @@ Branch `feat/str-cleaning-scheduler` (rebased on main twice; staging is reset to
 - If it ever stays partial: Config row `qb_sync_progress` holds today's progress (delete the row to restart the day). 13th slice in a day = loud failure.
 - `hub_impr_daily` went OK at 21:01 UTC (the GitHub 403 was transient). Overdue list now only `daily_qb_sync`.
 - Still open: STR_Log duplicate ID race (cosmetic), calendar sync, Mon/Wed/Fri digest, going live (Cleaning test mode OFF - Brett's approval only), first `Selftest_Results` row check.
+
+## Checkpoint - Oct 14 2026 (8:45 pm ET) daily_qb_sync finished
+- Brett: "clear the tries, do a run now, and close this out". Cleared `attempts` for daily_qb_sync in Scheduler_State (Config row 36, one cell, verified), the next tick ran it on `.25-qb-sync-sliced`.
+- Result: COMPLETE in exactly 12 slices (the daily cap) at 00:31 UTC; 108 stored rows written + verified, 0 failed, 46 WOs auto-closed Invoiced -> Paid (backlog from the job never completing since the cron move; each has a WO audit row), deposit-paid sweep ran. `/cron/status` overdue list is EMPTY.
+- Why so slow: about 4 WO closes per slice (each close = paced Sheets reads + write), and the 30 s slice includes the QuickBooks payables read. Tomorrow's run should be 1-2 slices. If a backlog ever returns: raise `QB_SYNC_SLICE_MS` or batch the WO status writes (not built).
+- Progress row `qb_sync_progress` (Config row 45) holds Oct 14's finished pass; a new ET day starts fresh automatically.
