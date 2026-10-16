@@ -23520,7 +23520,7 @@ async function fixAnswer(env, body) {
     const wos = await fetchTab(env, 'Work_Orders'); const wo = findWO(wos, fuS(row.WO_ID));
     const word = { persists: 'is still happening', worse: 'is WORSE', different_location: 'is happening in a DIFFERENT spot', safety: 'has a SAFETY problem' }[c.answer];
     const text = c.answer === 'safety'
-      ? `URGENT fix-check: ${row.Tenant_Name} (WO-${row.WO_ID}) reports a SAFETY problem with ${row.Problem_Label}. Call them now.${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`
+      ? `URGENT fix-check: ${row.Tenant_Name} (${fuWoLabel(row.WO_ID)}) reports a SAFETY problem with ${row.Problem_Label}. Call them now.${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`
       : `Fix-check: ${row.Tenant_Name} says ${row.Problem_Label} ${word} (WO-${row.WO_ID}${wo && wo.Property_Address ? ', ' + wo.Property_Address : ''}).${c.location ? ' Where: ' + c.location.slice(0, 60) + '.' : ''}${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`;
     alert = await fuAdminAlert(env, row, text, c.answer);
     try { await fuWrite(env, row.ID, { Alerted_Answer: c.answer, Alert_Result: alert.sent ? (alert.held ? 'held for quiet hours' : 'sent') : ('NOT sent: ' + (alert.reason || 'unknown')), Suggested_Next: suggestion ? suggestion.action : '' }); }
