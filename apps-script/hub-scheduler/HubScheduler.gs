@@ -69,6 +69,7 @@ var JOBS = [
   { name: 'sweep_checks',        run: 'hub', every_min: 15,                    enabled: true, what: 'Runs the daily self-test and the dead-man check (alerts if there is no telemetry for 24h).' },
   { name: 'insp_guard',          run: 'hub', every_min: 15,                    enabled: true, what: 'Checks inspection bookings against the STR calendar (does nothing until that module is set up).' },
   { name: 'str_cleaning',        run: 'hub', every_min: 15,                    enabled: true, what: 'Milam Ridge cleaning scheduler: keeps 35 days of turnovers covered, texts the cleaner queue, writes the cleaning calendar, alerts Brett (does nothing until STR_ENGINE_ENABLED is TRUE).' },
+  { name: 'ai_credit_probe',    run: 'hub', every_min: 60,                    enabled: true, what: 'ONLY while AI reading is paused (Anthropic credit out): once an hour makes one tiny test call; when it works, un-pauses AI and texts/emails "AI is back". Does nothing and costs nothing when AI is not paused.' },
   { name: 'daily_digest',        run: 'hub', at: '07:00',                      enabled: true, what: 'Builds the morning digest and texts it to the admin phone.' },
   { name: 'daily_receipts',      run: 'hub', at: '07:00',                      enabled: true, what: 'Scans the receipt inbox.' },
   { name: 'daily_receipts_post', run: 'hub', at: '07:00',                      enabled: true, what: 'Emails newly scanned receipts to QuickBooks.' },
