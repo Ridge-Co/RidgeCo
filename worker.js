@@ -16719,6 +16719,7 @@ const SCHED_PF_WHAT = {
   sweep_work: 'posts due recurring work orders, sends the once-a-day estimate reminder, and moves paid-deposit scopes forward',
   sweep_checks: 'runs the daily self-test (once a day) and the dead-man check (alerts if no telemetry for 24h)',
   insp_guard: 'checks inspection bookings against the STR calendar (does nothing until the inspection module is configured)',
+  followup_sweep: 'sends the tenant ONE reminder (9am-7pm ET) for any fix-check text with no answer after 2 days, and texts Brett "no answer - call them"',
   daily_digest: 'builds the morning digest and texts it to the admin phone',
   daily_receipts: 'scans the receipt inbox',
   daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
