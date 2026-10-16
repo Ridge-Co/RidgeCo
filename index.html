@@ -3770,6 +3770,153 @@ function submitNewWO() {
   }).catch(function(e){logError('Create WO',e.message);toast('Error: '+e.message,'error');});
 }
 
+// ── Tenant fix-check (Oct 16 2026) ───────────────────────────────────────────────────────────────────────────
+// "Follow up with tenant" on a work order: opens a PREVIEW (nothing is sent by opening it), Brett taps Send. The tenant
+// answers on fix-check.html. Answers come back as a card on the WO, a badge, and the "Fix-checks" list. SUGGESTIONS ONLY:
+// nothing here ever creates a work order or texts a vendor without Brett tapping the button for it.
+state.followups = []; state.followupsError = ''; state.followupsLoaded = false;
+var _fu = { pv: null, woId: '', repairWoId: '', busy: false, rows: {}, tab: 'action' };
+function fuJs(s) { return String(s == null ? '' : s).replace(/[^\w.\-]/g, ''); }
+function fuDate(iso) { if (!iso) return ''; var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+// A failure is shown on screen (persistent text where the user is looking), written to the error log, and reported to the ledger if it exists.
+function fuFail(ctx, msg, hostId) {
+  logError(ctx, msg);
+  try { if (typeof window.reportFailure === 'function') window.reportFailure(ctx, msg); } catch (e) { logError('reportFailure', (e && e.message) || e); }
+  var host = hostId && document.getElementById(hostId);
+  if (host) host.innerHTML = '<div style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);border-radius:6px;padding:10px 12px;font-size:12px;line-height:1.5"><b>Problem:</b> ' + esc(msg) + '</div>';
+  toast(ctx + ': ' + msg, 'error');
+}
+var FU_ANSWER_TEXT = { resolved: 'Says it is fixed', persists: 'Still happening', worse: 'WORSE', different_location: 'Different spot', not_sure: 'Not sure', safety: 'SAFETY problem' };
+var FU_STATUS_COLOR = { Sent: 'var(--info)', Answered: 'var(--accent2)', Overdue: 'var(--warn)', Blocked: 'var(--danger)', Draft: 'var(--danger)', Closed: 'var(--muted)' };
+
+function fuLoadList() {
+  return api('GET', '/followup/list?open=1&_=' + Date.now()).then(function (res) {
+    if (!res || res.ok === false) throw new Error((res && res.error) || 'bad response');
+    state.followups = safeArray(res.followups); state.followupsError = ''; state.followupsLoaded = true;
+    fuRefreshChrome();
+  }).catch(function (e) {
+    state.followupsError = (e && e.message) || String(e);
+    logError('Fix-checks list', state.followupsError);
+    try { if (typeof window.reportFailure === 'function') window.reportFailure('Fix-checks list', state.followupsError); } catch (e2) { logError('reportFailure', (e2 && e2.message) || e2); }
+    fuRefreshChrome();
+  });
+}
+function fuNeedsActionCount() { return state.followups.filter(function (r) { return r.needs_action; }).length; }
+function fuRefreshChrome() {
+  var b = document.getElementById('fuListBtn'); if (b) {
+    if (state.followupsError) { b.innerHTML = '🔎 Fix-checks <span style="background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px">!</span>'; b.title = 'Could not load the fix-check list: ' + state.followupsError; }
+    else { var n = fuNeedsActionCount(); b.innerHTML = '🔎 Fix-checks' + (n ? ' <span style="background:var(--accent);color:#fff;border-radius:10px;padding:0 6px;font-size:10px">' + n + '</span>' : ' <span style="opacity:.7">(' + state.followups.length + ')</span>'); b.title = n + ' need your attention'; }
+  }
+  if (document.getElementById('page-workorders') && document.getElementById('page-workorders').classList.contains('active') && typeof renderWOPage === 'function') renderWOPage();
+  if (document.getElementById('modal-followups') && document.getElementById('modal-followups').classList.contains('open')) fuRenderList();
+}
+// Small badge on a work order card (a fix-check is out, answered, overdue ...).
+function fuBadgeHTML(woId) {
+  var rows = state.followups.filter(function (r) { return String(r.WO_ID) === String(woId) && r.Status !== 'Closed'; });
+  if (!rows.length) return '';
+  var r = rows[0], txt, col;
+  if (r.Status === 'Answered') { var sug = r.suggestion && r.suggestion.action !== 'done'; txt = (r.Answer === 'resolved' ? 'Fix-check: dry' : 'Fix-check: ' + (FU_ANSWER_TEXT[r.Answer] || r.Answer)) + (sug ? ' - act' : ''); col = (r.Answer === 'resolved') ? 'var(--accent2)' : 'var(--danger)'; }
+  else if (r.Status === 'Overdue') { txt = 'Fix-check: no answer'; col = 'var(--warn)'; }
+  else if (r.Status === 'Blocked' || r.Status === 'Draft') { txt = 'Fix-check: NOT sent'; col = 'var(--danger)'; }
+  else { txt = 'Fix-check sent'; col = 'var(--info)'; }
+  return '<span class="badge" style="border:1px solid ' + col + ';color:' + col + ';background:transparent;margin-left:4px">🔎 ' + esc(txt) + '</span>';
+}
+
+// ── the preview ─────────────────────────────────────────────────────────────────────────────────────────────
+function fuOpenPreview(woId, repairWoId, replace) {
+  _fu.woId = String(woId); _fu.repairWoId = repairWoId ? String(repairWoId) : ''; _fu.pv = null; _fu.busy = false; _fu.replace = !!replace;
+  var body = document.getElementById('fu-pv-body'); body.innerHTML = '<div class="loading">Reading the work order…</div>';
+  document.getElementById('fu-pv-title').textContent = '🔎 FOLLOW UP WITH TENANT — WO-' + _fu.woId;
+  document.getElementById('fu-pv-result').innerHTML = '';
+  fuSetButtons(false);
+  openModal('modal-followup');
+  fuFetchPreview({}, true);
+}
+function fuSetButtons(disabled, label) {
+  var s = document.getElementById('fu-send-btn'), c = document.getElementById('fu-copy-btn');
+  if (s) { s.disabled = disabled; s.textContent = label || 'Send text to tenant'; }
+  if (c) c.disabled = disabled;
+}
+function fuFetchPreview(over, rebuild) {
+  var q = ['wo_id=' + encodeURIComponent(_fu.woId)];
+  if (_fu.repairWoId) q.push('repair_wo_id=' + encodeURIComponent(_fu.repairWoId));
+  Object.keys(over || {}).forEach(function (k) { q.push(encodeURIComponent(k) + '=' + encodeURIComponent(over[k])); });
+  return api('GET', '/followup/preview?' + q.join('&') + '&_=' + Date.now()).then(function (res) {
+    if (!res || res.ok === false) throw new Error((res && res.error) || 'bad response');
+    _fu.pv = res; if (!_fu.repairWoId) _fu.repairWoId = String(res.repair_wo.id);
+    if (rebuild) fuRenderPreview(); else fuRenderDynamic();
+  }).catch(function (e) { fuFail('Follow-up preview', (e && e.message) || String(e), 'fu-pv-body'); });
+}
+function fuVendorOpts(sel) {
+  return '<option value="">— none —</option>' + safeArray(_fu.pv.vendors).map(function (v) { return '<option value="' + esc(v.id) + '"' + (String(v.id) === String(sel) ? ' selected' : '') + '>' + esc(v.name) + (v.trade ? ' — ' + esc(v.trade) : '') + '</option>'; }).join('');
+}
+function fuRenderPreview() {
+  var p = _fu.pv, c = p.classification, t = p.tenants, lab = 'font-size:11px;color:var(--muted);display:block;margin:10px 0 3px';
+  var inp = 'width:100%;font-size:16px;min-height:40px';
+  var tenantHtml;
+  if (t.candidates.length > 1 || t.needs_pick) {
+    tenantHtml = '<select id="fu-tenant" style="' + inp + '" onchange="fuChanged()"><option value="">— pick the tenant —</option>' + t.candidates.map(function (x) { return '<option value="' + esc(x.id) + '"' + (String(x.id) === String(t.chosen_id) ? ' selected' : '') + '>' + esc(x.name) + (x.phone ? ' · ' + esc(x.phone) : '') + '</option>'; }).join('') + '</select>';
+  } else if (t.candidates.length === 1) {
+    tenantHtml = '<input type="hidden" id="fu-tenant" value="' + esc(t.candidates[0].id) + '"><div style="font-size:14px"><b>' + esc(t.candidates[0].name) + '</b>' + (t.candidates[0].phone ? ' · ' + esc(t.candidates[0].phone) : '') + '</div>';
+  } else tenantHtml = '<input type="hidden" id="fu-tenant" value=""><div style="color:var(--danger);font-size:13px">' + esc(t.note || 'No tenant found.') + '</div>';
+  var types = safeArray(c.check_types).map(function (k) { return '<option value="' + esc(k) + '"' + (k === c.check_type ? ' selected' : '') + '>' + esc(k.replace(/_/g, ' ')) + (k === c.auto_check_type ? ' (auto)' : '') + '</option>'; }).join('');
+  var existing = safeArray(p.existing_followups);
+  document.getElementById('fu-pv-body').innerHTML =
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:12px;color:var(--muted);margin-bottom:8px"><b style="color:var(--text)">Nothing has been sent.</b> Check the details, then tap Send. ' + esc(p.wo.address) + ' · ' + esc(p.wo.trade || '') + '</div>' +
+    (existing.length ? '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:8px 12px;font-size:12px;margin-bottom:8px">A fix-check is already open on this work order (#' + esc(existing[0].id) + ', ' + esc(existing[0].status) + ', ' + esc(existing[0].tenant_name) + '). <label style="cursor:pointer"><input type="checkbox" id="fu-replace" ' + (_fu.replace ? 'checked' : '') + ' style="width:auto"> Replace it with this one</label></div>' : '') +
+    '<label style="' + lab + '">WHO GETS IT</label>' + tenantHtml + (t.note ? '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + esc(t.note) + '</div>' : '') +
+    '<div id="fu-gate"></div>' +
+    '<label style="' + lab + '">WHAT WE\'RE CHECKING <span style="font-weight:normal">(the tenant sees this exact wording: "…finished the repair work on <i>this</i>")</span></label><input type="text" id="fu-label" style="' + inp + '" value="' + esc(c.problem_label) + '" onchange="fuChanged()">' +
+    '<label style="' + lab + '">SPANISH WORDING <span style="font-weight:normal">(used if the tenant is Spanish-speaking)</span></label><input type="text" id="fu-label-es" style="' + inp + '" value="' + esc(c.problem_label_es) + '" onchange="fuChanged()">' +
+    '<label style="' + lab + '">TYPE OF CHECK <span style="font-weight:normal">(' + esc(c.confidence) + ' confidence — changes the questions)</span></label><select id="fu-type" style="' + inp + '" onchange="fuTypeChanged()">' + types + '</select>' +
+    '<label style="' + lab + '">REPAIR WORK WAS DONE UNDER WO #</label><input type="text" id="fu-repair-wo" style="' + inp + '" value="' + esc(p.repair_wo.id) + '" onchange="fuRepairChanged()">' +
+    '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + (p.repair_wo.completed_date ? 'Marked complete ' + esc(p.repair_wo.completed_date) + ' — the question asks "Since that date…". ' : 'No completion date on that work order, so the question just says "the spot we repaired". ') + (p.repair_wo.status ? 'Status: ' + esc(p.repair_wo.status) + '.' : '') + '</div>' +
+    '<label style="' + lab + '">THE REPAIR PART <span style="font-weight:normal">(the only thing we ask about)</span></label><input type="text" id="fu-repair" style="' + inp + '" value="' + esc(c.repair_part) + '" onchange="fuChanged()">' +
+    '<label style="' + lab + '">NOT ASKING ABOUT <span style="font-weight:normal">(cosmetic — kept for the follow-on work order, never shown to the tenant)</span></label><input type="text" id="fu-cosmetic" style="' + inp + '" value="' + esc(c.cosmetic_part) + '" onchange="fuChanged()">' +
+    (safeArray(c.also_mentioned).length ? '<div style="font-size:11px;color:var(--muted);margin-top:3px">Also on this work order, not asked about: ' + c.also_mentioned.map(esc).join('; ') + '</div>' : '') +
+    safeArray(c.warnings).map(function (w) { return '<div style="font-size:11px;color:var(--warn);margin-top:3px">⚠ ' + esc(w) + '</div>'; }).join('') +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><div><label style="' + lab + '">VENDOR FOR THE COSMETIC WO</label><select id="fu-cvendor" style="' + inp + '">' + fuVendorOpts(p.vendor_defaults.cosmetic_vendor_id) + '</select></div><div><label style="' + lab + '">VENDOR TO SEND BACK IF IT LEAKS</label><select id="fu-rvendor" style="' + inp + '">' + fuVendorOpts(p.vendor_defaults.rework_vendor_id) + '</select></div></div>' +
+    '<div style="font-size:11px;color:var(--muted);margin-top:3px">Vendors are only used to pre-fill a suggestion later. Nobody is assigned or texted automatically.</div>' +
+    '<label style="' + lab + '">LANGUAGE</label><select id="fu-lang" style="' + inp + '" onchange="fuChanged()"><option value="en"' + (p.language === 'en' ? ' selected' : '') + '>English</option><option value="es"' + (p.language === 'es' ? ' selected' : '') + '>Español</option></select>' +
+    '<div id="fu-dyn"></div>';
+  fuRenderDynamic();
+}
+function fuRenderDynamic() {
+  var p = _fu.pv, g = p.gate;
+  var gh;
+  if (g.blocked) gh = '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:6px;padding:8px 12px;margin-top:8px;font-size:12px;line-height:1.5"><b style="color:var(--danger)">This text cannot be sent right now:</b><ul style="margin:4px 0 4px 16px;padding:0">' + g.reasons.map(function (r) { return '<li>' + esc(r.text) + '</li>'; }).join('') + '</ul>You can still use <b>Copy link</b> below and send it yourself.</div>';
+  else gh = '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 12px;margin-top:8px;font-size:12px">✓ Every text switch is on for this tenant.' + safeArray(g.notes).map(function (n) { return '<div style="color:var(--muted);margin-top:2px">' + esc(n) + '</div>'; }).join('') + '</div>';
+  var gateEl = document.getElementById('fu-gate'); if (gateEl) gateEl.innerHTML = gh;
+  var sb = document.getElementById('fu-send-btn'); if (sb && !_fu.busy) { sb.disabled = !!g.blocked; sb.textContent = g.blocked ? 'Text blocked — use Copy link' : 'Send text to tenant'; }
+  var qs = p.questions;
+  var dyn = document.getElementById('fu-dyn'); if (!dyn) return;
+  dyn.innerHTML =
+    '<label style="font-size:11px;color:var(--muted);display:block;margin:12px 0 3px">THE EXACT TEXT MESSAGE</label><div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.5;white-space:pre-wrap">' + esc(p.message.text) + '</div>' +
+    '<label style="font-size:11px;color:var(--muted);display:block;margin:12px 0 3px">THE EXACT QUESTIONS THE TENANT SEES (' + esc(p.language.toUpperCase()) + ')</label><div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.5"><div style="font-weight:bold;margin-bottom:6px">' + esc(qs.question[p.language] || qs.question.en) + '</div>' +
+    qs.options.map(function (o) { return '<div style="padding:3px 0">○ ' + esc(o.label[p.language] || o.label.en) + (safeArray(o.fields).length ? ' <span style="color:var(--muted)">(then asks: ' + o.fields.map(function (f) { return esc(f.replace(/_/g, ' ')); }).join(', ') + ')</span>' : '') + '</div>'; }).join('') +
+    (qs.safety ? '<div style="padding:6px 0 0;color:var(--danger)">⚠ ' + esc(qs.safety[p.language] || qs.safety.en) + ' <span style="color:var(--muted)">(sends you an urgent alert)</span></div>' : '') + '</div>';
+}
+function fuTypeChanged() { // a new type means new default wording and new questions
+  var tn = document.getElementById('fu-tenant');
+  fuFetchPreview({ check_type: document.getElementById('fu-type').value, tenant_id: tn ? tn.value : '', lang: document.getElementById('fu-lang').value, repair_part: document.getElementById('fu-repair').value, cosmetic_part: document.getElementById('fu-cosmetic').value }, false).then(function () {
+    var c = _fu.pv.classification; document.getElementById('fu-label').value = c.problem_label; document.getElementById('fu-label-es').value = c.problem_label_es;
+  });
+}
+function fuRepairChanged() { _fu.repairWoId = document.getElementById('fu-repair-wo').value.trim(); fuChanged(true); }
+function fuChanged(rebuild) {
+  var g = function (id) { var e = document.getElementById(id); return e ? e.value : ''; };
+  var over = { tenant_id: g('fu-tenant'), check_type: g('fu-type'), lang: g('fu-lang'), problem_label: g('fu-label'), problem_label_es: g('fu-label-es'), repair_part: g('fu-repair'), cosmetic_part: g('fu-cosmetic') };
+  _fu.replace = !!(document.getElementById('fu-replace') && document.getElementById('fu-replace').checked);
+  var keepV = { c: g('fu-cvendor'), r: g('fu-rvendor') };
+  fuFetchPreview(over, !!rebuild || over.tenant_id !== _fu.pv.tenants.chosen_id).then(function () {
+    var c = document.getElementById('fu-cvendor'), r = document.getElementById('fu-rvendor');
+    if (c && keepV.c) c.value = keepV.c; if (r && keepV.r) r.value = keepV.r;
+    var set = function (id, v) { var e = document.getElementById(id); if (e && v !== undefined) e.value = v; };
+    if (rebuild || over.tenant_id !== '') { set('fu-label', over.problem_label); set('fu-label-es', over.problem_label_es); set('fu-repair', over.repair_part); set('fu-cosmetic', over.cosmetic_part); set('fu-type', over.check_type); set('fu-lang', over.lang); }
+  });
+}
+// FU_UI_CONT
+
 // ── Add photos/receipts right after creating a WO (same buttons as the detail view) ──
 function showNewWOPhotoStep(woId, propId){
   try {
