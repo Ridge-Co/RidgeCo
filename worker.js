@@ -12546,9 +12546,9 @@ async function translateText(env, text, fromLabel, toLabel, opts) {
   if (!env.ANTHROPIC_API_KEY || !text || !String(text).trim()) return text;
   try {
     const extra = (opts && opts.preserve ? ' ' + VENDOR_TRANSLATE_PRESERVE : '') + (opts && opts.html ? ' The input is HTML: keep every tag, attribute and link exactly as-is and translate only the visible text.' : '');
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }) });
-    const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
-  } catch(e) { return text; }
+    const { data } = await anthropicMessages(env, { model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }, { source:'translateText' });
+    return data.content?.[0]?.text?.trim() || text;
+  } catch(e) { await aiFailOpenNote(env, 'translateText', e); return text; }
 }
 
 // ── VENDOR TRANSLATION (Sep 28 2026, feat/vendor-translation-send-to-vendor) ────────────────────
