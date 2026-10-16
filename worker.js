@@ -17085,8 +17085,10 @@ async function schedStatusHandler(env) {
   catch (e) { return json({ ok: false, error: 'could not read Config (scheduler state): ' + schedErrText(e) }, 503); }
   if (parsed.error) return json({ ok: false, error: parsed.error }, 503);
   const eff = schedEffective(parsed.state);
-  const s = schedStatus(parsed.state, new Date(), eff.jobs);
+  const aiState = aiCreditStateFromRows(rows);
+  const s = schedStatus(parsed.state, new Date(), eff.jobs, aiState.paused ? (aiState.at || 'paused') : '');
   if (eff.schedule_error) s.schedule_error = eff.schedule_error;
+  s.ai_credit = Object.assign({ paused: !!aiState.paused, since: aiState.paused ? (aiState.at || null) : null, kind: aiState.paused ? aiState.kind : null }, aiState.paused ? { reason: aiCreditSchedPaused(aiState).reason, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) } : {});
   const claimUntil = Date.parse(parsed.state.claim_until || '');
   return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
 }
