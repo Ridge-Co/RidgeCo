@@ -3751,6 +3751,7 @@ function submitNewWO() {
   }).then(function(res){
     if (res.error){logError('Create WO',res.error);toast('WO Error: '+res.error,'error');return;}
     var woId = res.id;
+    if (window._fuPendingLink) { var _fuId = window._fuPendingLink; window._fuPendingLink = null; fuLinkNextWO(_fuId, woId); }   // fix-check follow-on: link the new WO to the check and close it
     var vendorId = (document.getElementById('wo-vendor-opt')||{}).value||'';
     var notifyOnAssign = document.getElementById('wo-vendor-notify') ? document.getElementById('wo-vendor-notify').checked : true;
     var schedDate = (document.getElementById('wo-sched-date-opt')||{}).value||'';
