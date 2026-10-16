@@ -23472,7 +23472,172 @@ async function fuAuth(env, token) {
   return { ok: true, row, payload: chk.payload };
 }
 const fuRowSpec = row => fuQuestionSpec({ check_type: row.Check_Type, problem_label: row.Problem_Label, problem_label_es: row.Problem_Label_Es, object_label: row.Object_Label, object_label_es: row.Object_Label_Es, repair_date: row.Repair_Date });
-/* FIX_CHECK:CONT */
+// GET /fix/page?t=<token>. Tenant-safe: first name, their own street address, the question. Nothing about vendors, money, access codes, owners or other tenants.
+async function fixPage(env, url) {
+  const a = await fuAuth(env, url.searchParams.get('t'));
+  if (!a.ok) {
+    // Expired / closed / invalid: still show the office number so the tenant is never stuck. A config read failure is logged, not hidden.
+    let callPhone = '';
+    try { const cfg0 = await fetchConfig(env); callPhone = fuS(cfg0.followup_call_phone) || fuS(cfg0.admin_phone); }
+    catch (e) { await fuTelemetry(env, { Job_Type: 'fix_check_page', Skill_Or_Endpoint: '/fix/page', Success: 'FALSE', Notes: ('could not read the office phone: ' + ((e && e.message) || e)).slice(0, 300) }); }
+    return json({ ok: false, state: a.state, call_phone: callPhone, language: a.row && a.row.Language === 'es' ? 'es' : 'en' }, a.status === 200 ? 200 : a.status);
+  }
+  const row = a.row;
+  const [props, units, tenants, cfg] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'), fetchConfig(env)]);
+  const prop = props.find(p => String(p.ID) === fuS(row.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(row.Unit_ID)) || null;
+  const tenant = tenants.find(t => String(t.ID) === fuS(row.Tenant_ID)) || null;
+  const photos = fuS(row.Answer_Photo_IDs).split(',').filter(Boolean).length;
+  const phone = fuS(cfg.followup_call_phone) || fuS(cfg.admin_phone);
+  return json({ ok: true, state: row.Answer ? 'answered' : 'open', language: row.Language === 'es' ? 'es' : 'en', first_name: fuFirstName(tenant), address: fuAddress(prop, unit),
+    spec: fuRowSpec(row), call_phone: phone, window_ends: row.Token_Expires_At, photos_used: photos, photos_max: FU_MAX_PHOTOS,
+    previous: row.Answer ? { choice: row.Answer_Choice, location: row.Answer_Location, note: row.Answer_Detail, extra: fuParseJson(row.Answer_Extra, {}), answered_at: row.Answered_At } : null });
+}
+// POST /fix/answer { t, choice, location?, rain_since?, trigger?, when?, note? }
+async function fixAnswer(env, body) {
+  body = body || {};
+  const a = await fuAuth(env, body.t);
+  if (!a.ok) return json({ ok: false, state: a.state, error: a.state === 'closed' ? 'This check is already closed.' : 'This link is not valid any more.' }, a.status);
+  const row = a.row, spec = fuRowSpec(row);
+  const v = fuValidateAnswer(spec, body);
+  if (!v.ok) return json({ ok: false, error: v.error, field: v.field || '' }, 400);
+  const c = v.clean, now = new Date().toISOString(), warnings = [];
+  const history = fuParseJson(row.Answer_History, []); if (row.Answer) history.push({ answer: row.Answer, choice: row.Answer_Choice, at: row.Answered_At });
+  const fields = { Answer: c.answer, Answer_Choice: c.choice, Answer_Detail: c.detail, Answer_Location: c.location, Answer_Extra: JSON.stringify(c.extra), Answered_At: now, Answer_History: JSON.stringify(history.slice(-5)), Status: 'Answered' };
+  let saved;
+  try { saved = await fuWrite(env, row.ID, fields); }
+  catch (e) {
+    const msg = String((e && e.message) || e);
+    await fuTelemetry(env, { Job_Type: 'fix_check_answer', Skill_Or_Endpoint: '/fix/answer', Success: 'FALSE', Notes: `followup=${row.ID} ${msg}`.slice(0, 480) });
+    const al = await fuAdminAlert(env, row, `FIX-CHECK PROBLEM: a tenant answered the check on WO-${row.WO_ID} but it could NOT be saved (${msg.slice(0, 120)}). Please call them.`, 'save_failed');
+    return json({ ok: false, error: 'We could not save your answer. Please try again in a minute, or call us.', alerted: al.sent }, 500);
+  }
+  const suggestion = fuSuggestNext(saved, null, null);
+  // Alert Brett right away for anything that needs him; once per distinct answer (changing it to the same alert answer does not re-page).
+  let alert = { sent: false, skipped: true };
+  if (FU_ALERT_ANSWERS.includes(c.answer) && fuS(saved.Alerted_Answer) !== c.answer) {
+    const wos = await fetchTab(env, 'Work_Orders'); const wo = findWO(wos, fuS(row.WO_ID));
+    const word = { persists: 'is still happening', worse: 'is WORSE', different_location: 'is happening in a DIFFERENT spot', safety: 'has a SAFETY problem' }[c.answer];
+    const text = c.answer === 'safety'
+      ? `URGENT fix-check: ${row.Tenant_Name} (WO-${row.WO_ID}) reports a SAFETY problem with ${row.Problem_Label}. Call them now.${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`
+      : `Fix-check: ${row.Tenant_Name} says ${row.Problem_Label} ${word} (WO-${row.WO_ID}${wo && wo.Property_Address ? ', ' + wo.Property_Address : ''}).${c.location ? ' Where: ' + c.location.slice(0, 60) + '.' : ''}${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`;
+    alert = await fuAdminAlert(env, row, text, c.answer);
+    try { await fuWrite(env, row.ID, { Alerted_Answer: c.answer, Alert_Result: alert.sent ? (alert.held ? 'held for quiet hours' : 'sent') : ('NOT sent: ' + (alert.reason || 'unknown')), Suggested_Next: suggestion ? suggestion.action : '' }); }
+    catch (e) { warnings.push('could not record the alert: ' + ((e && e.message) || e)); }
+  } else {
+    try { await fuWrite(env, row.ID, { Suggested_Next: suggestion ? suggestion.action : '' }); } catch (e) { warnings.push('could not record the suggestion: ' + ((e && e.message) || e)); }
+  }
+  try { await logWOAudit(env, row.WO_ID, `Tenant ${row.Tenant_Name}`, 'tenant', 'Fix-check answer', row.Answer || '', c.answer, `#${row.ID} ${c.choice}${c.location ? ' @ ' + c.location : ''}`); } catch (e) { warnings.push('could not add the work order history line: ' + ((e && e.message) || e)); }
+  await fuTelemetry(env, { Job_Type: 'fix_check_answer', Skill_Or_Endpoint: '/fix/answer', Success: 'TRUE', Notes: `followup=${row.ID} wo=${row.WO_ID} answer=${c.answer} alert=${alert.skipped ? 'none' : (alert.sent ? 'sent' : 'NOT sent')}` }, warnings);
+  return json({ ok: true, answer: c.answer, safety: c.answer === 'safety', can_change_until: row.Token_Expires_At, warnings: warnings.length ? ['a background step failed - the office has been told'] : [] });
+}
+
+// Photos: the SAME Drive upload path the vendor share page uses. The folder comes from the follow-up's WO, never from the client; image files only; capped.
+async function fixUploadSession(env, body) {
+  body = body || {};
+  const a = await fuAuth(env, body.t); if (!a.ok) return json({ ok: false, state: a.state }, a.status);
+  const row = a.row, mime = fuS(body.mime_type).toLowerCase();
+  if (!/^image\/(jpeg|jpg|png|heic|heif|webp|gif)$/.test(mime)) return json({ ok: false, error: 'Only photos can be added here.' }, 400);
+  if (fuS(row.Answer_Photo_IDs).split(',').filter(Boolean).length >= FU_MAX_PHOTOS) return json({ ok: false, error: `You can add up to ${FU_MAX_PHOTOS} photos.` }, 400);
+  const [wos, props] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties')]);
+  const wo = findWO(wos, fuS(row.WO_ID)); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
+  const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || {};
+  return await createUploadSession(env, { wo_id: fuS(row.WO_ID), property: prop.Address || 'Unknown Property', file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80).replace(/[^\w.\- ]/g, '_'), mime_type: mime, file_type: 'photo', origin: body.origin });
+}
+async function fixLogAttachment(env, body) {
+  body = body || {};
+  const a = await fuAuth(env, body.t); if (!a.ok) return json({ ok: false, state: a.state }, a.status);
+  const row = a.row, fileId = fuClip(body.file_id, 200);
+  if (!fileId) return json({ ok: false, error: 'file_id required' }, 400);
+  const ids = fuS(row.Answer_Photo_IDs).split(',').filter(Boolean);
+  if (ids.length >= FU_MAX_PHOTOS) return json({ ok: false, error: `You can add up to ${FU_MAX_PHOTOS} photos.` }, 400);
+  const r = await logAttachment(env, { wo_id: fuS(row.WO_ID), file_id: fileId, file_url: fuClip(body.file_url, 500), file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80), file_type: 'photo', mime_type: fuClip(body.mime_type, 60), wo_folder_id: fuClip(body.wo_folder_id, 200), wo_folder_url: fuClip(body.wo_folder_url, 500) });
+  if (r.status && r.status >= 400) return r;
+  ids.push(fileId);
+  await fuWrite(env, row.ID, { Answer_Photo_IDs: ids.join(',') });
+  return json({ ok: true, photos_used: ids.length });
+}
+
+// ── 13. THE REMINDER SWEEP (scheduler job `followup_sweep`, every 60 minutes; NO cron) ───────────
+// Pure: which rows are due a reminder right now? Status Sent, Due_At passed, never reminded, link window still open.
+function fuSweepDue(rows, now) {
+  const t = (now instanceof Date ? now : new Date(now)).getTime();
+  return (rows || []).filter(r => r.Active !== 'FALSE' && r.Status === 'Sent' && !fuS(r.Reminder_Sent_At) && !fuS(r.Answer) && fuS(r.Due_At) && Date.parse(r.Due_At) <= t);
+}
+function fuInReminderWindow(now) { const h = etHour(now instanceof Date ? now : new Date(now)); return h >= FU_REMINDER_START_ET && h < FU_REMINDER_END_ET; }
+async function followupSweep(env, opts) {
+  opts = opts || {};
+  const errors = [], detail = { due: 0, reminded: 0, alerted: 0, texts_blocked: 0, skipped_outside_hours: false };
+  const now = opts.now || new Date();
+  let rows;
+  try { rows = await fuReadAll(env); } catch (e) { return { ok: false, errors: [{ step: 'read', error: String((e && e.message) || e).slice(0, 300) }], detail }; }
+  const due = fuSweepDue(rows, now); detail.due = due.length;
+  if (!due.length) return { ok: true, errors, detail };
+  if (!fuInReminderWindow(now)) { detail.skipped_outside_hours = true; return { ok: true, errors, detail }; }       // not 9am-7pm ET: wait for a later tick, change nothing
+  const [props, units, tenants, owners, cfg] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'), fetchTab(env, 'Owners'), fetchConfig(env)]);
+  for (const row of due) {
+    try {
+      const stamp = now.toISOString();
+      // CLAIM FIRST (one reminder, ever): mark it before anything can be sent, so an overlapping tick or a retry can never text twice.
+      await fuWrite(env, row.ID, { Status: 'Overdue', Reminder_Sent_At: stamp, Reminder_Result: 'claimed' });
+      const prop = props.find(p => String(p.ID) === fuS(row.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(row.Unit_ID)) || null;
+      const tenant = tenants.find(t => String(t.ID) === fuS(row.Tenant_ID)) || null, owner = prop ? (owners.find(o => String(o.ID) === fuS(prop.Owner_ID)) || null) : null;
+      let result = '';
+      const windowOpen = !fuS(row.Token_Expires_At) || Date.parse(row.Token_Expires_At) > now.getTime();
+      if (fuS(row.Send_Method) === 'copied_link') result = 'not texted (the link was copied and sent by hand)';
+      else if (!windowOpen) result = 'not texted (the link has expired)';
+      else if (!tenant) result = 'not texted (tenant not found)';
+      else {
+        const gate = fuGateVerdict({ cfg, tenant, property: prop, owner, now });
+        if (gate.blocked) { result = 'not texted: ' + gate.reasons.map(r => r.text).join(' '); detail.texts_blocked++; }
+        else {
+          const token = await fuMintToken(env, row, row.Token_Expires_At);
+          const link = fuLinkFor(env, null, token, FU_PAGE_BASE);
+          await fuWrite(env, row.ID, { Token_Hash: fuAddHash(row.Token_Hash, await fuSha256(token)) });
+          const text = fuOutgoing(fuMessage('reminder', { lang: row.Language === 'es' ? 'es' : 'en', first: fuFirstName(tenant), label: fuS(row.Problem_Label), label_es: fuS(row.Problem_Label_Es), address: fuAddress(prop, unit), link }));
+          const r = await smsGatedSend(env, { wo_id: fuS(row.WO_ID), message_type: FU_MSG_TYPE + '_reminder', recipient_type: 'tenant', tenant, owner, property: prop, message_body: text });
+          const o = fuSendOutcome(r, !!env.__STAGING__);
+          result = o.ok ? (o.held ? 'text held for quiet hours' : (o.staged ? 'text sent (staging stub)' : 'text sent')) : ('text FAILED: ' + o.reason);
+          if (!o.ok) { detail.texts_blocked++; errors.push({ step: 'reminder_sms', error: `followup #${row.ID}: ${o.reason}` }); }
+          else detail.reminded++;
+        }
+      }
+      await fuWrite(env, row.ID, { Reminder_Result: result.slice(0, 300) });
+      const al = await fuAdminAlert(env, row, `No answer after ${FU_DUE_DAYS} days: ${fuS(row.Tenant_Name)} (WO-${row.WO_ID}) has not answered the check on ${fuS(row.Problem_Label)}. Call them. Reminder: ${result.slice(0, 120)}. ${HUB_URL}?wo=${row.WO_ID}`, 'no_answer');
+      if (al.sent) detail.alerted++; else errors.push({ step: 'admin_alert', error: `followup #${row.ID}: ${al.reason || 'not sent'}` });
+      await fuTelemetry(env, { Job_Type: 'fix_check_reminder', Skill_Or_Endpoint: 'scheduler/followup_sweep', Success: 'TRUE', Notes: `followup=${row.ID} ${result.slice(0, 150)}` }, null);
+    } catch (e) {
+      const msg = String((e && e.message) || e).slice(0, 300);
+      errors.push({ step: 'followup_' + row.ID, error: msg });
+      await fuTelemetry(env, { Job_Type: 'fix_check_reminder', Skill_Or_Endpoint: 'scheduler/followup_sweep', Success: 'FALSE', Notes: `followup=${row.ID} ${msg}`.slice(0, 480) }, null);
+    }
+  }
+  return { ok: errors.length === 0, errors, detail };
+}
+async function schedRunFollowupSweep(env) {
+  const r = await followupSweep(env, {});
+  return { ok: r.ok, errors: r.errors, detail: r.detail };
+}
+// Daily digest lines: answers waiting for Brett + checks nobody answered. Never throws; an unreadable list is reported IN the digest.
+async function fuDigestLines(env) {
+  try {
+    const rows = (await fuReadAll(env)).filter(r => r.Active !== 'FALSE' && r.Status !== 'Closed');
+    const wos = rows.length ? await fetchTab(env, 'Work_Orders') : [];
+    const lines = [];
+    for (const r of rows) {
+      if (r.Status === 'Answered') {
+        const s = fuSuggestNext(r, findWO(wos, fuS(r.WO_ID)), findWO(wos, fuS(r.Repair_WO_ID) || fuS(r.WO_ID)));
+        lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: ${(FU_ANSWER_WORDS[r.Answer] || r.Answer)}${s ? ' -> ' + s.label : ''}`);
+      } else if (r.Status === 'Overdue') lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: no answer yet - call them`);
+      else if (r.Status === 'Blocked' || r.Status === 'Draft') lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: fix-check was never sent (${fuS(r.Blocked_Reason) || 'unfinished'})`);
+    }
+    return { lines, error: '' };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    await fuTelemetry(env, { Job_Type: 'fix_check_digest', Skill_Or_Endpoint: 'buildDigest', Success: 'FALSE', Notes: msg });
+    return { lines: [], error: msg };
+  }
+}
+/* FIX_CHECK:END */
 
 const ROLE_SCOPES = {
   vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
