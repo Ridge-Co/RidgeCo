@@ -28,7 +28,10 @@ globalThis.fetch = async (url, init) => {
   const arr = JSON.parse(prompt.slice(prompt.indexOf('[')));
   return { json: async () => ({ content: [{ text: JSON.stringify(arr.map(t => DICT[t] || t)) }] }) };
 };
-const H = new Function(
+// Oct 16 2026: the Claude calls go through the AI-credit guard (anthropicMessages); run the REAL guard block over an unpaused Config.
+const GUARD = src.slice(src.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), src.indexOf('// ═══ AI-CREDIT-GUARD-END'));
+Object.assign(globalThis, { schedReadConfigRows: async () => [], schedCell: () => '', schedFindRow: () => -1, schedErrText: (e) => String((e && e.message) || e), sheetsRequest: async () => ({}), logTelemetry: async () => {}, MODEL_REGISTRY: { REASON: { model: 'm' } } });
+const H = new Function(GUARD + '\n' +
   ['plausiblyNonEnglish', 'englishOnly', 'translateBatchToEnglish', 'estimateEnglishFields', 'estimateLinesEnglish', 'vendorWantsSpanish', 'estimateLineItemsCanonical', 'findRecentDuplicate', 'scopeItemsFromEstimate', 'buildLaborDescription', 'buildInvoiceLines', 'invoiceInputsEnglish'].map(grab).join('\n') +
   '\nreturn { plausiblyNonEnglish, englishOnly, translateBatchToEnglish, estimateEnglishFields, estimateLinesEnglish, vendorWantsSpanish, estimateLineItemsCanonical, findRecentDuplicate, scopeItemsFromEstimate, buildLaborDescription, buildInvoiceLines, invoiceInputsEnglish };'
 )();
