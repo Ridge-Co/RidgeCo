@@ -63,6 +63,15 @@ window.addEventListener('pageshow', function(e){
   /* legacy alias: any stray btn-green renders as primary blue, not accidental green */
   .btn-green { background: var(--accent); color: #fff; }
   #login-error { color: var(--danger); font-size: 0.8rem; text-align: center; display: none; }
+  /* AI-credit pause banner (Oct 16 2026): red = Anthropic credit is out / key refused (AI reading is OFF); amber = could not even check. Sits under the header, above every page. */
+  #ai-credit-banner { display: none; background: #fdecea; border: 1px solid var(--danger); border-left-width: 5px; color: var(--text); padding: 10px 16px; font-size: 13px; line-height: 1.4; }
+  #ai-credit-banner.amber { background: #fdf2e2; border-color: var(--warn); }
+  #ai-credit-banner .aic-title { font-weight: bold; color: var(--danger); }
+  #ai-credit-banner.amber .aic-title { color: var(--warn); }
+  #ai-credit-banner .aic-detail, #ai-credit-banner .aic-error { font-size: 12px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+  #ai-credit-banner .aic-error { color: var(--danger); }
+  #ai-credit-banner .aic-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  #ai-credit-banner .btn { min-height: 44px; }
   #app { display: none; }
   header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
   .logo { color: var(--accent); font-size: 1rem; letter-spacing: 0.15em; font-weight: bold; }
