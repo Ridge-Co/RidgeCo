@@ -23159,7 +23159,7 @@ function fuSuggestNext(row, wo, repairWo) {
     const trade = /paint|drywall|dry wall|plaster|spackl|mud\b|texture|patch/i.test(cosmetic) ? 'Painting' : fuS(wo && wo.Trade);
     return { action: 'create_cosmetic_wo', label: `Create the ${cosmetic.length > 40 ? 'cosmetic' : cosmetic} work order`, severity: caution ? 'caution' : 'ok', detail: caution || `Tenant ${FU_ANSWER_WORDS.resolved}. The repair held, so the cosmetic work can go ahead.`,
       vendor_id: fuS(row.Cosmetic_Vendor_ID),
-      prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade, type: 'manual', vendor_id: fuS(row.Cosmetic_Vendor_ID), description: `${cosmetic} (follow-up to WO-${fuS(row.WO_ID)}: the tenant confirmed ${label} is fixed - cosmetic work only)` } };
+      prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade, type: 'manual', vendor_id: fuS(row.Cosmetic_Vendor_ID), description: `${cosmetic} (follow-up to ${fuWoLabel(fuS(row.WO_ID))}: the tenant confirmed ${label} is fixed - cosmetic work only)` } };
   }
   if (ans === 'safety') return { action: 'call_now', label: 'Call the tenant now', severity: 'urgent', detail: 'The tenant reported a safety problem. Call them, then decide whether to send a vendor.' };
   if (ans === 'not_sure') return { action: 'call_tenant', label: 'Call the tenant to clarify', severity: 'caution', detail: `Tenant ${FU_ANSWER_WORDS.not_sure}${fuS(row.Answer_Detail) ? ': "' + fuS(row.Answer_Detail) + '"' : '.'}` };
