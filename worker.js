@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-16.01-str-backup-promotion';
+const BUILD_VERSION = '2026-10-16.02-append-id-race-guard';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -7181,7 +7181,7 @@ async function createWorkOrder(env, body) {
     const existingNums = rows.slice(1).map(r => parseInt(String(r[idCol]||'').replace(/\D/g,'')) || 0).filter(n => Number.isFinite(n) && n > 0);
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
-  const woId = `WO-${nextWONum}`, now = new Date().toISOString();
+  let woId = `WO-${nextWONum}`; const now = new Date().toISOString();
   const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'',
     // Self-Serve Work Orders ("One-Off Job", Sep 24 2026 build brief §4b) — blank/no-op for
     // every other caller (tenant submit.html, the Hub's New WO modal, etc.); only
@@ -7193,7 +7193,9 @@ async function createWorkOrder(env, body) {
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
     Parent_WO_ID: body.parent_wo_id||''
   }[h] ?? ''));
-  await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
+  const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
+  // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
+  woId = (await guardAppendedIds(env, 'Work_Orders', _woAppend, rows.length, idCol, [woId], (v, c) => 'WO-' + mintNextNumericId(v, c))).ids[0];
   try {
     const tenants = await fetchTab(env, 'Tenants');
     const activeTenants = tenants.filter(t => { if (t.Active === 'FALSE') return false; if (body.unit_id) return t.Unit_ID === body.unit_id; if (body.property_id) return !t.Unit_ID && String(t.Property_ID) === String(body.property_id); return false; });
@@ -15267,7 +15269,7 @@ async function smsGatedSend(env, opts) {
   const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
   const rows = data.values || [];
   const headers = rows[0] && rows[0].length ? rows[0] : MSG_QUEUE_COLS;
-  const id = String(nextSafeId(rows));
+  let id = String(nextSafeId(rows));
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
@@ -15278,7 +15280,15 @@ async function smsGatedSend(env, opts) {
     Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
   const newRow = headers.map(h => rowObj[h] ?? '');
-  await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
+  const _mqAppend = await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
+  // Oct 16 2026: two texts sent at the same moment used to get the SAME queue id (see guardAppendedIds). Make ours unique, and from here on
+  // address our own row by its row number so a duplicate id can never make us edit someone else's message.
+  let mqRow = appendedRowNumber(_mqAppend);
+  try {
+    const _g = await guardAppendedIds(env, MSG_QUEUE_TAB, _mqAppend, rows.length, headers.indexOf('ID') >= 0 ? headers.indexOf('ID') : 0, [id]);
+    id = _g.ids[0]; mqRow = _g.row || mqRow;
+  } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
+  const mqOpts = mqRow ? { sheetRow: mqRow } : undefined;
 
   let sent = false, deliveredTo = '', outcome = 'blocked';
   if (sendOk && recipientPhone) {
@@ -15300,7 +15310,7 @@ async function smsGatedSend(env, opts) {
     const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
     if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
       const sendAfter = _holdUntil.toISOString();
-      await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` });
+      await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
       return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
@@ -15311,7 +15321,7 @@ async function smsGatedSend(env, opts) {
     const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
     if (opts.redirectTo && !_redirect) {
       outcome = 'failed';
-      await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' });
+      await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' }, mqOpts);
       return { queued_id: id, send_ok: sendOk, sent: false, test_mode: true, gate_snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent', delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
     deliveredTo = _redirect || (testMode ? testRecipient : recipientPhone);
@@ -15323,10 +15333,10 @@ async function smsGatedSend(env, opts) {
       Delivered_To: deliveredTo,
       Sent_Date: new Date().toISOString(),
       Twilio_Message_SID: (result && result.sid) || '',
-    });
+    }, mqOpts);
   } else if (sendOk && !recipientPhone) {
     outcome = 'failed_no_phone';
-    await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' });
+    await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' }, mqOpts);
   }
   // Per-WO communication audit (Sep 20 2026) — every outbound SMS tied to a work order lands in
   // that WO's own audit trail (WO_Audit), the same place status/field edits already log to, so
@@ -15348,19 +15358,40 @@ async function smsGatedSend(env, opts) {
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
 // processPendingNotifications already uses (not the HTTP-response-returning updateRow), since
 // this is called from inside another handler, not directly off a route.
-async function updateMessageQueueRow(env, id, fields) {
+// A queue update that cannot land is a real problem (a sent text left "pending", a skip that did nothing). It used to be swallowed
+// ("best-effort"); now it is logged to Ops_Telemetry (Success=FALSE) and returned as false so the caller can say so. It still never
+// throws: this runs right after a text has really gone out, and crashing there would hide that from the caller.
+async function mqReportFailure(env, id, msg) {
+  console.error('Message_Queue update problem (#' + id + '): ' + msg);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (_) {}
+  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (_) {}
+}
+// opts.sheetRow: edit exactly this sheet row (used right after our own append). Otherwise find the row by id; if an old duplicate id
+// exists, prefer the one still "pending" (the one a person is waiting to act on). Returns true when every field landed.
+async function updateMessageQueueRow(env, id, fields, opts) {
   try {
     const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
     const [headers, ...rows] = data.values || [[]];
-    const rowIndex = rows.findIndex(r => r[0] === String(id));
-    if (rowIndex === -1) return;
-    const sheetRow = rowIndex + 2, updates = [];
+    const idCol = Math.max(0, headers.indexOf('ID'));
+    const isPending = r => r[headers.indexOf('Status')] === 'pending';   // -1 (no Status column) -> undefined -> not pending
+    let sheetRow = opts && opts.sheetRow ? opts.sheetRow : 0;
+    if (!sheetRow) {
+      const hits = []; rows.forEach((r, i) => { if (String(r[idCol]) === String(id)) hits.push(i); });
+      if (!hits.length) { await mqReportFailure(env, id, 'row not found, so ' + Object.keys(fields).join('/') + ' was not saved'); return false; }
+      const pick = hits.find(i => isPending(rows[i]));
+      if (hits.length > 1) await mqReportFailure(env, id, 'the id is on ' + hits.length + ' rows (duplicate); edited the ' + (pick !== undefined ? 'pending' : 'first') + ' one');
+      sheetRow = (pick !== undefined ? pick : hits[0]) + 2;
+    }
+    const updates = [];
     for (const [field, value] of Object.entries(fields)) {
       const colIndex = headers.indexOf(field);
       if (colIndex !== -1) updates.push({ range: `${MSG_QUEUE_TAB}!${col(colIndex)}${sheetRow}`, values: [[value]] });
     }
-    if (updates.length) await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
-  } catch (e) { /* best-effort — the queue row staying 'pending' after a real send is a visible discrepancy, not a crash */ }
+    if (!updates.length) return true;
+    const res = await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
+    if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < updates.length) { await mqReportFailure(env, id, 'only ' + res.totalUpdatedCells + ' of ' + updates.length + ' cells saved'); return false; }
+    return true;
+  } catch (e) { await mqReportFailure(env, id, String((e && e.message) || e)); return false; }
 }
 
 // GET /message-queue?status=pending — backs the review/release screen. Small tab at this
@@ -15394,7 +15425,7 @@ async function releaseMessageQueue(env, body) {
   ]);
   const results = [];
   for (const id of ids) {
-    const row = rows.find(r => String(r.ID) === id);
+    const row = rows.find(r => String(r.ID) === id && r.Status === 'pending') || rows.find(r => String(r.ID) === id);
     if (!row) { results.push({ id, error: 'not found' }); continue; }
     if (row.Status !== 'pending') { results.push({ id, skipped: true, reason: 'not pending (' + row.Status + ')' }); continue; }
     const kind = row.Recipient_Type;
@@ -16998,7 +17029,12 @@ async function skipMessageQueue(env, body) {
   const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
   if (!ids.length) return json({ error: 'ids required' }, 400);
   const results = [];
-  for (const id of ids) { await updateMessageQueueRow(env, id, { Status: 'skipped' }); results.push({ id }); }
+  for (const id of ids) {
+    const done = await updateMessageQueueRow(env, id, { Status: 'skipped' });
+    results.push(done ? { id } : { id, error: 'could not be skipped' });
+  }
+  const bad = results.filter(r => r.error);
+  if (bad.length) return json({ ok: false, error: bad.length + ' of ' + ids.length + ' message(s) could not be skipped (#' + bad.map(r => r.id).join(', #') + '). Brett has been told; nothing was sent.', results });
   return json({ ok: true, results });
 }
 
@@ -23022,6 +23058,47 @@ function nextSafeId(rows) {
   return ids.length>0?Math.max(...ids)+1:1;
 }
 
+// ── Append-race guard (Oct 16 2026) ──────────────────────────────────────────────────────────────────────────────
+// "Read the tab, take max(ID)+1, append" leaves a gap between the read and the append. Two requests inside that gap
+// (separate Worker isolates, or a cached read) mint the SAME id, both rows land, and every later update-by-id edits the
+// first one. Oct 14 2026: Message_Queue #298 existed twice, so Skip kept editing the wrong row and the Kayla offer could
+// never be skipped. A delay cannot fix this (separate isolates cannot wait for each other). The append response says exactly
+// which row ours landed on: if that is not the row right after the rows we read, someone slipped in, so re-read the id column
+// and, if our id is now on more than one row, give OUR row (addressed by row number) a fresh unique id. Costs nothing
+// on the normal path (no extra read). A repair is logged to Ops_Telemetry; a failed repair throws (never silent).
+function appendedRowNumber(resp) {
+  const m = /!([A-Z]+)(\d+)(?::[A-Z]+(\d+))?$/.exec(String((resp && resp.updates && resp.updates.updatedRange) || ''));
+  return m ? parseInt(m[2], 10) : 0;
+}
+function mintNextNumericId(vals, idCol) {
+  let max = 0;
+  for (const r of vals) { const n = parseInt(String((r && r[idCol]) || '').replace(/\D/g, ''), 10); if (Number.isFinite(n) && n > max) max = n; }
+  return String(max + 1);
+}
+// resp: the :append response. rowsAtRead: rows (header included) in the read the ids were minted from. ids: the ids we wrote, in row order.
+async function guardAppendedIds(env, tab, resp, rowsAtRead, idCol, ids, mint) {
+  const first = appendedRowNumber(resp), out = ids.map(String);
+  if (first && first === rowsAtRead + 1) return { ids: out, row: first, repaired: false };
+  invalidateTabCache(tab);
+  const vals = ((await sheetsRequest(env, 'GET', `/values/${tab}`)).values || []).slice(1);
+  const count = id => vals.filter(r => String((r && r[idCol]) || '') === id).length;
+  const dup = out.map((id, i) => ({ id, i })).filter(x => count(x.id) > 1);
+  if (!dup.length) return { ids: out, row: first, repaired: false };
+  if (!first) throw new Error(`${tab}: a new row's id (${dup[0].id}) is on more than one row and the append response did not say where it landed - fix the duplicate by hand`);
+  const mintFn = mint || mintNextNumericId, extra = [];
+  const updates = dup.map(x => {
+    const newId = String(mintFn(vals.concat(extra.map(e => { const a = []; a[idCol] = e; return a; })), idCol));
+    extra.push(newId); out[x.i] = newId;
+    return { range: `${tab}!${col(idCol)}${first + x.i}`, values: [[newId]] };
+  });
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+  invalidateTabCache(tab);
+  const after = ((await sheetsRequest(env, 'GET', `/values/${tab}`)).values || []).slice(1);
+  for (const id of out) if (after.filter(r => String((r && r[idCol]) || '') === id).length !== 1) throw new Error(`${tab}: could not settle on a unique id (${id}) after an append race - check the tab for a duplicate row`);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'append_id_race_repaired', Skill_Or_Endpoint: tab, Success: 'TRUE', Notes: `two rows were given the same id; this row was renumbered ${dup.map(x => ids[x.i] + '->' + out[x.i]).join(', ')}`.slice(0, 480) }); } catch (_) { console.warn('append race repaired but telemetry failed'); }
+  return { ids: out, row: first, repaired: true };
+}
+
 // PAT-014: a missing tab must surface as a clean, actionable 404 — never a raw
 // Sheets stack trace. Reads already swallow this (returning []), which is exactly
 // what hid the missing Receipts tab for weeks: /receipts looked healthy while every
@@ -23184,8 +23261,9 @@ async function addRow(env, tab, body) {
   const PHONE_TABS=['Vendors','Owner_Users','Tenants','Owners']; if(PHONE_TABS.includes(tab)&&body.Phone) body.Phone=normalizePhone(body.Phone);
   const PIN_TABS=['Vendors','Owner_Users','Tenants']; if(PIN_TABS.includes(tab)&&!body.PIN&&body.Phone) body.PIN=generatePIN(body.Phone);
   const newRow=headers.map(h=>{if(h==='ID')return String(nextId);if(h==='Active'&&body[h]===undefined)return 'TRUE';return body[h]!==undefined?String(body[h]):'';});
-  await sheetsRequest(env,'POST',`/values/${tab}:append?valueInputOption=RAW`,{values:[newRow]});
-  return json({success:true,id:String(nextId),pin:body.PIN||null});
+  const _appendResp = await sheetsRequest(env,'POST',`/values/${tab}:append?valueInputOption=RAW`,{values:[newRow]});
+  const _g = await guardAppendedIds(env, tab, _appendResp, rows.length, _idc, [String(nextId)]);
+  return json({success:true,id:_g.ids[0],pin:body.PIN||null});
 }
 
 // ── Test-infrastructure build (Sep 19 2026) ─────────────────────────────────
@@ -31534,7 +31612,9 @@ async function strAddRows(env, tab, list) {
   if (!headers.length) throw strErr('sheet_write', `Tab ${tab} has no header row`);
   const idc = idColIndex(headers); let next = rows.slice(1).reduce((m, r) => Math.max(m, parseInt((r && r[idc]) || '0', 10) || 0), 0);
   const ids = [], values = list.map(f => { const id = String(++next); ids.push(id); return headers.map(h => h === 'ID' ? id : (f[h] !== undefined && f[h] !== null ? String(f[h]) : '')); });
-  await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW`, { values });
+  const appendResp = await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW`, { values });
+  try { const g = await guardAppendedIds(env, tab, appendResp, rows.length, idc, ids); for (let i = 0; i < ids.length; i++) ids[i] = g.ids[i]; }
+  catch (e) { throw strErr('write_not_landed', `A new ${tab} row may share its id with another row: ${strErrText(e)}`); }
   invalidateTabCache(tab);
   const back = await fetchTab(env, tab);
   for (const id of ids) if (!back.some(r => String(r.ID) === id)) throw strErr('write_not_landed', `A new ${tab} row (#${id}) was not found after saving`);

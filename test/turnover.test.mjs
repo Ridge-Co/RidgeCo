@@ -144,8 +144,8 @@ function makeFetch(db, callLog) {
     let m2 = /^\/values\/([^!:?]+):append/.exec(path);
     if (method === 'POST' && m2) {
       const body = JSON.parse(opts.body);
-      db[m2[1]].rows.push(...body.values);
-      return { json: async () => ({}) };
+      const __first = db[m2[1]].rows.length + 2; db[m2[1]].rows.push(...body.values);
+      return { json: async () => ({ updates: { updatedRange: m2[1] + '!A' + __first } }) };
     }
     throw new Error('unhandled mock path: ' + method + ' ' + path);
   };
@@ -153,7 +153,7 @@ function makeFetch(db, callLog) {
 
 function build(db, callLog) {
   const src = [
-    'const CORS = {};',
+    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
     "const TELEMETRY_TAB = 'Ops_Telemetry';",
     'async function logTelemetry(){ /* no-op in tests */ }',
     cacheSrc, srSrc, ensureInnerSrc, ensureSrc, colSrc, idcSrc, jsonSrc, fetchTabSrc, fetchTabsSrc,

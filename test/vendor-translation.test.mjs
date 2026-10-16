@@ -128,7 +128,7 @@ function makeGate(overrides) {
     ensureSmsInfra: async () => {}, fetchConfig: async () => ({ TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' }),
     normalizePhone: p => String(p || '').replace(/\D/g, '') ? '+1' + String(p).replace(/\D/g, '').slice(-10) : '',
     sheetsRequest: async (e, method, path, body) => { if (method === 'GET') return { values: [QCOLS] }; state.sheetsPosts.push(body); return {}; },
-    nextSafeId: () => 7, isQuietHoursNow: () => false, nextQuietHoursEnd: () => new Date('2026-09-29T13:00:00Z'),
+    nextSafeId: () => 7, appendedRowNumber: () => 0, guardAppendedIds: async (e, t, r, n, c, ids) => ({ ids: ids.map(String), row: 0, repaired: false }), mqReportFailure: async () => {}, isQuietHoursNow: () => false, nextQuietHoursEnd: () => new Date('2026-09-29T13:00:00Z'),
     updateMessageQueueRow: async (e, id, f) => { state.updates.push({ id, f }); },
     sendSMSRaw: async (e, to, msg) => { state.raw.push({ to, msg }); return { sid: 'SM1' }; },
     logMessageAudit: async (e, a) => { state.audit.push(a); },

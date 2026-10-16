@@ -132,8 +132,8 @@ function makeFetch(db) {
     if (method === 'POST' && m2) {
       const body = JSON.parse(opts.body);
       if (!db[m2[1]]) db[m2[1]] = { headers: [], rows: [] };
-      db[m2[1]].rows.push(...body.values);
-      return { json: async () => ({}) };
+      const __first = db[m2[1]].rows.length + 2; db[m2[1]].rows.push(...body.values);
+      return { json: async () => ({ updates: { updatedRange: m2[1] + '!A' + __first } }) };
     }
     // ensureColumnsInner's best-effort grid-metadata GET — never hit by these tests since no new
     // column is ever actually missing on our fake tabs, but throw the same generic "unhandled"
@@ -144,7 +144,7 @@ function makeFetch(db) {
 
 function build(db) {
   const src = [
-    'const CORS = {};',
+    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(s)).join('\n'),
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,
     updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, grab('function englishOnly('), grab('function estimateLinesEnglish('), grab('function plausiblyNonEnglish('), grab('async function translateBatchToEnglish('), scopeItemsFromEstimateSrc, scopesTabSrc,

@@ -130,9 +130,9 @@ function makeFetch(db, opts, log) {
     if (method === 'POST' && m2) {
       const body = JSON.parse(fopts.body);
       if (!db[m2[1]]) db[m2[1]] = { headers: [], rows: [] };
-      db[m2[1]].rows.push(...body.values);
+      const __first = db[m2[1]].rows.length + 2; db[m2[1]].rows.push(...body.values);
       if (opts.onAppend) opts.onAppend(m2[1], body.values, db);
-      return { json: async () => ({}) };
+      return { json: async () => ({ updates: { updatedRange: m2[1] + '!A' + __first } }) };
     }
     if (method === 'GET' && path.startsWith('?fields=')) return { json: async () => ({ sheets: [] }) };
     throw new Error('unhandled mock path: ' + method + ' ' + path);
@@ -147,7 +147,7 @@ function build(db, o = {}) {
   const log = { twilio: [], sms: [] };   // sms = every smsGatedSend call (the gate), recorded by the spy wrapper below
   const fixed = o.now || NOON_ET;
   const src = [
-    'const CORS = {};', S.cache, S.isMissing, S.sr, S.ensureInner, S.ensure, S.ensureTab, S.idc, S.col, S.json, S.fetchTab, S.fetchTabs, S.findWO,
+    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'), S.cache, S.isMissing, S.sr, S.ensureInner, S.ensure, S.ensureTab, S.idc, S.col, S.json, S.fetchTab, S.fetchTabs, S.findWO,
     S.updateWOFields, S.nextSafeId, S.logAudit, S.logAuditMany, S.logMsgAudit, S.auditCols, S.addRow, S.invalidate, S.telemetry, S.nonShare, S.block,
     S.addonLive, S.isTenantCurrent, S.currentTenant, S.tenantsFor, S.isBackground, S.isNotifiable, S.tenantMovedOut, S.smsGate, S.smsToggle, S.normPhone, S.mqTab, S.mqCols,
     S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, S.sendRaw, S.updMq, S.fetchConfig, S.smsGated,
