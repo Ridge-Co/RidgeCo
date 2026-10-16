@@ -3777,6 +3777,7 @@ function submitNewWO() {
 state.followups = []; state.followupsError = ''; state.followupsLoaded = false;
 var _fu = { pv: null, woId: '', repairWoId: '', busy: false, rows: {}, tab: 'action' };
 function fuJs(s) { return String(s == null ? '' : s).replace(/[^\w.\-]/g, ''); }
+function fuWo(id) { return 'WO-' + String(id == null ? '' : id).trim().replace(/^WO-/i, ''); }   // ids are stored as '1152' or 'WO-1152'; never show 'WO-WO-1152'
 function fuDate(iso) { if (!iso) return ''; var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
 // A failure is shown on screen (persistent text where the user is looking), written to the error log, and reported to the ledger if it exists.
 function fuFail(ctx, msg, hostId) {
