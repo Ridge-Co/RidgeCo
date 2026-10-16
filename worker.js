@@ -639,6 +639,9 @@ const _hubWorkerCore = {
         if (path === '/trash/qb-items')         return await trashQbItems(env);
         if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
+        if (path === '/fix/page')               return await fixPage(env, url);                // PUBLIC, token-verified (tenant fix-check)
+        if (path === '/followup/preview')       return await followupPreview(env, url);        // ADMIN-ONLY: no ROLE_SCOPES entry; read-only, never sends
+        if (path === '/followup/list')          return await followupList(env, url);           // ADMIN-ONLY
         if (path === '/proposal/signatures')    return await proposalList(env, url);
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
