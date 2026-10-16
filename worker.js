@@ -17032,7 +17032,7 @@ async function schedRunNext(env, ctx, opts) {
       try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Notes: ('could not record the result of this run in Scheduler_State (the job may run again early): ' + stateErr).slice(0, 480) }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: state write failed and telemetry write failed:', stateErr, out.telemetry_error); }
     } else if (finalState) {
-      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only }).map(d => d.name);
+      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only, aiPausedAt: aiPausedFinal }).map(d => d.name);
       out.due = stillDue; out.more = stillDue.length > 0 && !force;
     }
     return out;
