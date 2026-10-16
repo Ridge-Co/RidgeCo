@@ -17907,6 +17907,87 @@ function aiCreditClassify(status, data) {
   if (status === 401 || (status === 403 && (type === 'permission_error' || type === 'authentication_error'))) return { kind: 'auth', status, type, message: msg || ('Anthropic refused the API key / account (HTTP ' + status + ')') };
   return null;
 }
+// PURE. Config rows -> the pause state.
+function aiCreditStateFromRows(rows) {
+  const g = (k) => schedCell(rows || [], k).trim();
+  return { paused: g(AI_CREDIT_KEYS.paused).toUpperCase() === 'TRUE', at: g(AI_CREDIT_KEYS.at), err: g(AI_CREDIT_KEYS.err), kind: g(AI_CREDIT_KEYS.kind) || 'credit', by: g(AI_CREDIT_KEYS.by), alerted_at: g(AI_CREDIT_KEYS.alerted), resumed_at: g(AI_CREDIT_KEYS.resumed) };
+}
+// PURE. The id of the pause episode in force ('' = not paused). The scheduler remembers "paused for today during THIS episode".
+function aiCreditPausedAtFromRows(rows) { const s = aiCreditStateFromRows(rows); return s.paused ? (s.at || 'paused') : ''; }
+// PURE. '' | 'first' | 'reminder' - should an alert go out now? One per pause, then at most one reminder per 24 h while still paused.
+function aiCreditAlertDue(state, nowMs) {
+  if (!state || !state.paused) return '';
+  const last = Date.parse(state.alerted_at || '');
+  if (isNaN(last)) return 'first';
+  const since = Date.parse(state.at || '');
+  if (!isNaN(since) && last < since) return 'first';          // that alert was for an earlier pause
+  return (nowMs - last >= AI_CREDIT_REMINDER_MS) ? 'reminder' : '';
+}
+// PURE. The words of the alert (text + email).
+function aiCreditAlertText(state, due) {
+  const auth = state && state.kind === 'auth';
+  const head = (due === 'reminder' ? 'STILL PAUSED (24h reminder): ' : '') + (auth ? 'Anthropic is refusing the Hub\'s API key / account.' : 'Anthropic AI credit is OUT.');
+  const err = String((state && state.err) || '').slice(0, 160);
+  const sms = `RidgeCo Hub: ${head} AI reading is PAUSED and will not keep retrying: receipt scanning, vendor invoice auto-read, field-inspection AI, scope-notes AI. Typing things in by hand still works. FIX: ${AI_CREDIT_FIX}. Then tap Resume on the red banner in the Hub (it also checks by itself about once an hour).${err ? ' Error: ' + err : ''}`;
+  const li = AI_CREDIT_AFFECTED.map(x => `<li>${x.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</li>`).join('');
+  const html = `<p><b>${head.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</b></p><p>Affected while paused (nothing is retried, nothing is lost):</p><ul>${li}</ul><p><b>Fix:</b> ${AI_CREDIT_FIX.replace(/&/g, '&amp;').replace(/</g, '&lt;')}.<br>Then open the Hub and tap <b>Resume</b> on the red banner. If you do nothing, the Hub checks about once an hour and resumes by itself once credit works.</p>`
+    + (err ? `<p>Anthropic said: <i>${err.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</i></p>` : '') + `<p>Paused since: ${String((state && state.at) || '?')}</p>`;
+  return { sms, subject: (due === 'reminder' ? 'STILL PAUSED: ' : 'ACTION NEEDED: ') + (auth ? 'Anthropic is refusing the Hub - AI reading paused' : 'Anthropic credit is out - AI reading paused'), html };
+}
+
+// Read the flag (cached 30 s per instance). NEVER throws: if Config cannot be read the call is allowed through (the Sheets failure
+// surfaces everywhere else) but it is logged to the Worker log and, at most every 10 min, to Ops_Telemetry.
+async function aiCreditCheck(env, opts) {
+  opts = opts || {};
+  const now = Date.now();
+  if (!opts.fresh && _aiCreditCache && now - _aiCreditCache.at < AI_CREDIT_CACHE_MS) return _aiCreditCache.state;
+  let state;
+  try { state = aiCreditStateFromRows(await schedReadConfigRows(env, !!opts.fresh)); }
+  catch (e) {
+    const msg = schedErrText(e);
+    console.error('ai-credit: could not read the pause flag (AI calls are allowed through):', msg);
+    if (now - _aiCreditReadFailMs > 10 * 60 * 1000) {
+      _aiCreditReadFailMs = now;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+      catch (te) { console.error('ai-credit: flag-read failure and its telemetry write both failed:', msg, schedErrText(te)); }
+    }
+    return { paused: false, read_error: msg };
+  }
+  _aiCreditCache = { at: now, state };
+  return state;
+}
+// Writes Config keys in ONE batchUpdate (+ one append for keys not there yet) and verifies by re-reading. -> { ok, error? }
+async function aiCreditWriteKeys(env, kv) {
+  const rows = await schedReadConfigRows(env, true);
+  const updates = [], appends = [];
+  for (const k of Object.keys(kv)) {
+    const idx = schedFindRow(rows, k);
+    if (idx >= 0) updates.push({ range: `Config!B${idx + 1}`, values: [[kv[k]]] }); else appends.push([k, kv[k]]);
+  }
+  if (updates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+  if (appends.length) await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: appends });
+  const back = await schedReadConfigRows(env, true);
+  const bad = Object.keys(kv).filter(k => schedCell(back, k) !== String(kv[k]));
+  return bad.length ? { ok: false, error: 'the Config write did not land for: ' + bad.join(', ') } : { ok: true };
+}
+function aiCreditPausedMessage(state) {
+  return `AI is paused (${state && state.kind === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}${state && state.at ? ' since ' + state.at : ''}); no call was made. Fix: ${AI_CREDIT_FIX}, then tap Resume in the Hub.`;
+}
+// The typed answer for an endpoint that cannot do its AI step. 503 + ok:false + code + a plain message.
+function aiCreditPausedJson(extra) {
+  const message = (extra && extra.message) || AI_PAUSED_USER_MSG;
+  return json(Object.assign({ ok: false, error: message, code: AI_CREDIT_CODE, message, paused: true }, extra || {}, { message }), 503);
+}
+// Fail-open call sites (translators) must not swallow a REAL failure: the pause is the designed, already-alerted path; anything
+// else is logged to the Worker log and Ops_Telemetry before the original text is used.
+async function aiFailOpenNote(env, where, e) {
+  if (aiCreditIsPausedError(e)) return;
+  const msg = schedErrText(e);
+  console.error('ai fail-open (' + where + '):', msg);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_fail_open', Skill_Or_Endpoint: where, Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+  catch (te) { console.error('ai fail-open: telemetry write failed:', where, msg, schedErrText(te)); }
+}
+
 // ═══ AI-CREDIT-GUARD-END ══════════════════════════════════════════════════════════════════════
 
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
