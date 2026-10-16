@@ -21825,6 +21825,8 @@ async function contactExtract(env, bytes, mime) {
       return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _raw: txt.slice(0, 300), _parse_error: true };
     }
   } catch (e) {
+    if (aiCreditIsPausedError(e)) return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'contactExtract', e);
     return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
   }
 }
