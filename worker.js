@@ -31770,10 +31770,13 @@ async function strAdvanceTask(ctx, trow) {
     if (trow.Status !== 'exhausted' && !ctx.dry) { await strSetTurnover(ctx, trow, { Status: 'exhausted', Note: 'queue exhausted: ' + nx.skipped.map(s => `${(st.cmap[s.id] || {}).Name || s.id}=${s.reason}`).join(', ').slice(0, 300) }); await strLog(ctx, trow.Task_Key, '', 'queue_exhausted', nx.skipped.map(s => `${s.id}:${s.reason}`).join(', ')); }
     return { action: 'exhausted' };
   }
+  // A promotion (a staged backup moves up because the earlier cleaner cancelled / passed / did not reply) is a priority: it ignores the
+  // per-cleaner pending cap and is sent right away, even outside the 8am-9pm window (Brett Oct 16 2026: "send now, don't wait for 8am").
+  const promo = !!nx.staged;
   // A cleaner is never asked about more than maxPending turnovers at once (nearest dates first), so a fresh 35-day backlog does not become a wall of texts.
-  if (st.offers.filter(o => String(o.Cleaner_ID) === nx.cleaner.ID && STR_OFFER_ACTIVE.includes(o.Status)).length >= S.maxPending) return { action: 'waiting_cleaner_busy', next: nx.cleaner.Name };
-  if (!strInSendWindow(now, S)) return { action: 'waiting_send_window', next: nx.cleaner.Name };
-  if (ctx.dry || !S.engine) { ctx.actions.push({ task: trow.Task_Key, would_offer: nx.cleaner.Name, window: strWindowText(strDaysBetween(today, task.date), S) }); if (ctx.dry) st.offers.push({ ID: 'dry', Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Status: 'pending', Deadline_At: '9999-01-01T00:00:00Z' }); return { action: 'would_offer', next: nx.cleaner.Name }; }
+  if (!promo && st.offers.filter(o => String(o.Cleaner_ID) === nx.cleaner.ID && STR_OFFER_ACTIVE.includes(o.Status)).length >= S.maxPending) return { action: 'waiting_cleaner_busy', next: nx.cleaner.Name };
+  if (!promo && !strInSendWindow(now, S)) return { action: 'waiting_send_window', next: nx.cleaner.Name };
+  if (ctx.dry || !S.engine) { ctx.actions.push({ task: trow.Task_Key, would_offer: nx.cleaner.Name, promotion: promo, window: strWindowText(strDaysBetween(today, task.date), S) }); if (ctx.dry) st.offers.push({ ID: 'dry', Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Status: 'pending', Deadline_At: '9999-01-01T00:00:00Z' }); return { action: 'would_offer', next: nx.cleaner.Name }; }
   if (!S.sms) {
     const note = 'SMS OFF - next up: ' + nx.cleaner.Name;
     if (trow.Note !== note) await strSetTurnover(ctx, trow, { Note: note });
