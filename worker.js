@@ -16157,6 +16157,7 @@ function schedJobDue(job, js, nowDate, aiPausedAt) {
   js = js || {};
   const nowMs = +nowDate;
   if (job.disabled) return null;                                  // turned off in the Apps Script JOBS table (enabled:false)
+  if (job.gate === 'ai_paused' && !aiPausedAt) return null;       // gated job: costs nothing and writes nothing unless AI is paused
   if (job.kind === 'interval') {
     const last = Date.parse(js.last_start || '');
     if (!isNaN(last) && last <= nowMs + 5 * 60000 && nowMs - last < job.every_min * 60000) return null;
