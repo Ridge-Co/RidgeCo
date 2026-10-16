@@ -3827,7 +3827,7 @@ function fuBadgeHTML(woId) {
 function fuOpenPreview(woId, repairWoId, replace) {
   _fu.woId = String(woId); _fu.repairWoId = repairWoId ? String(repairWoId) : ''; _fu.pv = null; _fu.busy = false; _fu.replace = !!replace;
   var body = document.getElementById('fu-pv-body'); body.innerHTML = '<div class="loading">Reading the work order…</div>';
-  document.getElementById('fu-pv-title').textContent = '🔎 FOLLOW UP WITH TENANT — WO-' + _fu.woId;
+  document.getElementById('fu-pv-title').textContent = '🔎 FOLLOW UP WITH TENANT — ' + fuWo(_fu.woId);
   document.getElementById('fu-pv-result').innerHTML = '';
   fuSetButtons(false);
   openModal('modal-followup');
