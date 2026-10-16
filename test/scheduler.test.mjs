@@ -173,7 +173,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
 // priority order with everything due
 {
   const names = P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
-  t('priority order when everything is due (Monday 10am ET): daily/weekly jobs first, then the 15-minute jobs, array order inside each', names.join() === 'daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,sms_delivery_check,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily,str_digest_mon,door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning', names.join());
+  t('priority order when everything is due (Monday 10am ET): daily/weekly jobs first, then the 15-minute jobs, array order inside each', names.join() === 'daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,sms_delivery_check,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily,str_digest_mon,door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep', names.join());
   // Oct 14 2026 incident: the six 15-minute jobs filled every tick's time share, so no daily/weekly job ever ran. A due daily
   // job must now come BEFORE every due interval job, and interval jobs still run once the dailies are done or backing off.
   const wed = P.schedDueJobs(S0(), iso('2026-10-14T19:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 3pm ET, nothing has ever run
