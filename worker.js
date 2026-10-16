@@ -15671,6 +15671,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^selftest/, 'P1'],
   [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
   [/^failure_ledger/, 'P1'],
+  [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
+  [/^ai_credit_(exhausted|resume)/, 'P2'],                // the event record; the urgent row is the auto-clearing "ai_credit_paused" condition (failConditions)
 ];
 
 // ── pure helpers (unit-tested) ──────────────────────────────────────────────────────────────────────────────────
