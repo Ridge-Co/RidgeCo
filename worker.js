@@ -22996,6 +22996,179 @@ function fuLabelFor(type, text) {
     const t = fuS(text).toLowerCase(); const k = /roach/.test(t) ? ['roach', 'cucarachas'] : /mice|mouse|rat|rodent/.test(t) ? ['mouse', 'ratones'] : /bed ?bug/.test(t) ? ['bed bug', 'chinches'] : /\bant/.test(t) ? ['ant', 'hormigas'] : /termite/.test(t) ? ['termite', 'termitas'] : /wasp|bee/.test(t) ? ['wasp/bee', 'avispas o abejas'] : null;
     return k ? { problem_label: `the ${k[0]} problem`, problem_label_es: `el problema de ${k[1]}`, object_label: `the ${k[0]} problem`, object_label_es: `el problema de ${k[1]}` } : { problem_label: 'the pest problem', problem_label_es: 'el problema de plagas', object_label: 'the pest problem', object_label_es: 'el problema de plagas' };
   }
+  const fb = fuFallbackLabel(text);
+  return { problem_label: fb || 'the repair', problem_label_es: fb ? ('la reparación (' + fb.replace(/^the /, '') + ')') : 'la reparación', object_label: fb || 'the repair', object_label_es: 'la reparación' };
+}
+// classifyIssue(wo) -> { check_type, problem_label, problem_label_es, object_label, object_label_es, repair_part, cosmetic_part,
+//                        also_mentioned[], confidence, cosmetic_only, warnings[] }
+// Pure. wo = { Description, Trade, Type }. When unsure: check_type 'other' with a generic question; Brett edits everything in the preview.
+function classifyIssue(wo) {
+  const desc = fuS(wo && wo.Description), trade = fuS(wo && wo.Trade).toLowerCase();
+  const segs = fuSplitSegments(desc).map(text => { const scores = fuSegmentScores(text); return { text, scores, type: fuBestType(scores), cosmetic: FU_COSMETIC_RE.test(text) }; });
+  // cosmetic = looks-only: matches the cosmetic list and names no physical subject.
+  segs.forEach(s => { s.isCosmetic = s.cosmetic && !s.type; });
+  const repairSegs = segs.filter(s => !s.isCosmetic);
+  const cosmeticSegs = segs.filter(s => s.isCosmetic);
+  const primary = repairSegs.find(s => s.type) || null;
+  let check_type = primary ? primary.type : null, confidence = primary ? 'high' : 'low';
+  const warnings = [];
+  if (!check_type) {                                           // no subject in the words: let the trade pick, else 'other'
+    const hint = Object.prototype.hasOwnProperty.call(FU_TRADE_HINT, trade) ? FU_TRADE_HINT[trade] : null;
+    if (hint && repairSegs.length) { check_type = hint; confidence = 'medium'; } else check_type = 'other';
+  }
+  // Repair part = the primary subject's segments + the neutral ones ("Need repaired", "Not sure what happened..."); a DIFFERENT physical job
+  // (e.g. "Change unit door locks" next to a drain) is listed separately, not asked about.
+  const repairKeep = [], also = [];
+  for (const s of repairSegs) { if (s.type && s.type !== check_type && check_type !== 'other') also.push(s.text); else repairKeep.push(s.text); }
+  const repair_part = repairKeep.join('. ');
+  const cosmetic_part = cosmeticSegs.map(s => s.text).join('. ');
+  const cosmetic_only = !repair_part && !!cosmetic_part;
+  if (cosmetic_only) warnings.push('This work order reads as cosmetic only (paint / drywall / finish), so there is no repair to check on. Type what you want to ask about, or skip the follow-up.');
+  const basis = check_type === 'other' ? (repairKeep[0] || desc) : ((primary ? primary.text : '') + ' ' + repair_part);   // an unrecognised problem is named from its first phrase only
+  const lab = fuLabelFor(check_type, basis.trim() || desc);
+  return { check_type, problem_label: lab.problem_label, problem_label_es: lab.problem_label_es, object_label: lab.object_label, object_label_es: lab.object_label_es,
+    repair_part, cosmetic_part, also_mentioned: also, confidence, cosmetic_only, warnings };
+}
+
+// ── 2. QUESTIONS (the single source of truth: the tenant page renders this, the server validates against it) ────────────
+// Every field a tenant can fill in. choice fields only accept their listed values.
+const FU_FIELD_DEFS = {
+  rain_since: { type: 'choice', label: fuT('Has it rained (or has the water been running) since the repair?', '¿Ha llovido (o ha estado corriendo el agua) desde la reparación?'),
+    choices: [{ value: 'yes', label: fuT('Yes', 'Sí') }, { value: 'no', label: fuT('No', 'No') }, { value: 'unsure', label: fuT('Not sure', 'No sé') }] },
+  trigger: { type: 'choice', label: fuT('When does it happen?', '¿Cuándo ocurre?'),
+    choices: [{ value: 'during_rain', label: fuT('When it rains', 'Cuando llueve') }, { value: 'water_running', label: fuT('When water is running (sink, shower, washer)', 'Cuando corre el agua (fregadero, ducha, lavadora)') }, { value: 'all_the_time', label: fuT('All the time', 'Todo el tiempo') }, { value: 'not_sure', label: fuT('Not sure', 'No sé') }] },
+  location: { type: 'chips', label: fuT('Where is it?', '¿Dónde está?'), max: 120,
+    choices: [{ value: 'Kitchen', label: fuT('Kitchen', 'Cocina') }, { value: 'Bathroom', label: fuT('Bathroom', 'Baño') }, { value: 'Bedroom', label: fuT('Bedroom', 'Dormitorio') }, { value: 'Living room', label: fuT('Living room', 'Sala') }, { value: 'Basement', label: fuT('Basement', 'Sótano') }, { value: 'Other', label: fuT('Other', 'Otro') }],
+    placeholder: fuT('Which room, and where in the room?', '¿En qué cuarto, y en qué parte del cuarto?') },
+  when: { type: 'text', label: fuT('When did you first notice it?', '¿Cuándo lo notó por primera vez?'), max: 80, placeholder: fuT('For example: Tuesday night', 'Por ejemplo: el martes por la noche') },
+  note: { type: 'textarea', label: fuT('Anything else we should know? (optional)', '¿Algo más que debamos saber? (opcional)'), max: 1000 },
+  photo: { type: 'photo', label: fuT('Add a photo (optional)', 'Agregue una foto (opcional)') },
+};
+function fuOpt(value, answer, tone, en, es, fields, required) { return { value, answer, tone, label: fuT(en, es), fields: fields || [], required: required || [] }; }
+function fuSafety(en, es, msgEn, msgEs) { return { label: fuT(en, es), message: fuT(msgEn, msgEs) }; }
+// Builds the question for one follow-up row (or a draft). ctx: { check_type, problem_label(_es), object_label(_es), repair_date }
+function fuQuestionSpec(ctx) {
+  const type = FU_CHECK_TYPES.includes(ctx.check_type) ? ctx.check_type : 'other';
+  const L = fuT(fuS(ctx.problem_label) || 'the repair', fuS(ctx.problem_label_es) || 'la reparación');
+  const O = fuT(fuS(ctx.object_label) || 'the spot we repaired', fuS(ctx.object_label_es) || 'el lugar que reparamos');
+  const dEn = fuDateLabel(ctx.repair_date, 'en'), dEs = fuDateLabel(ctx.repair_date, 'es');
+  const since = fuT(dEn ? `Since ${dEn}, ` : '', dEs ? `Desde el ${dEs}, ` : '');
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const fire = fuSafety('There is a safety danger', 'Hay un peligro de seguridad', '', '');
+  const common = { check_type: type, title: fuT(`Quick check on ${L.en}`, `Revisión rápida de ${L.es}`), fields: FU_FIELD_DEFS, safety: null, options: [] };
+  const callMsg = (en, es) => fuSafety(en, es, 'Please keep away from it. If it is safe to do so, turn off the power or gas to that area. Call us right away at {phone}. If anyone is in danger, call 911.', 'Por favor aléjese. Si es seguro, corte la electricidad o el gas de esa área. Llámenos de inmediato al {phone}. Si alguien está en peligro, llame al 911.');
+  if (type === 'leak') {
+    return Object.assign(common, {
+      question: fuT(fuCap(`${since.en}have you seen water come in at ${O.en}?`), fuCap(`${since.es}¿ha visto entrar agua en ${O.es}?`)),
+      options: [
+        fuOpt('dry', 'resolved', 'good', "No, it's dry", 'No, está seco', ['rain_since', 'note']),
+        fuOpt('same_spot', 'persists', 'bad', 'Yes, the same spot', 'Sí, en el mismo lugar', ['trigger', 'when', 'photo', 'note']),
+        fuOpt('worse', 'worse', 'bad', "Yes, and it's worse", 'Sí, y está peor', ['trigger', 'when', 'photo', 'note']),
+        fuOpt('different_spot', 'different_location', 'bad', 'Yes, a different spot', 'Sí, en otro lugar', ['location', 'trigger', 'when', 'photo', 'note'], ['location']),
+        fuOpt('not_sure', 'not_sure', 'neutral', 'Not sure', 'No estoy seguro', ['note']),
+      ],
+      safety: callMsg('Water is near lights or outlets, or the ceiling is sagging', 'Hay agua cerca de luces o enchufes, o el techo se está hundiendo'),
+    });
+  }
+  const working = (qEn, qEs, safetyObj) => Object.assign(common, {
+    question: fuT(qEn, qEs),
+    options: [
+      fuOpt('working', 'resolved', 'good', 'Yes, working fine', 'Sí, funciona bien', ['note']),
+      fuOpt('still_not_working', 'persists', 'bad', "No, it's still not working", 'No, todavía no funciona', ['when', 'photo', 'note']),
+      fuOpt('on_and_off', 'persists', 'bad', 'It works on and off', 'Funciona a ratos', ['when', 'photo', 'note']),
+      fuOpt('something_else', 'not_sure', 'neutral', 'Something else', 'Otra cosa', ['note'], ['note']),
+    ],
+    safety: safetyObj,
+  });
+  if (type === 'electrical') return working(`Is ${L.en} working now?`, `¿Funciona ahora ${L.es}?`, callMsg('I see sparks, smell burning, or got a shock', 'Veo chispas, huele a quemado o sentí una descarga'));
+  if (type === 'hvac') return working(`Is ${L.en} working now?`, `¿Funciona ahora ${L.es}?`, callMsg('I smell gas or burning, or see smoke', 'Huele a gas o a quemado, o veo humo'));
+  if (type === 'appliance') return working(`Is ${L.en} working now?`, `¿Funciona ahora ${L.es}?`, callMsg('I see sparks, smell burning or gas, or see smoke', 'Veo chispas, huele a quemado o a gas, o veo humo'));
+  if (type === 'plumbing_flow') return Object.assign(common, {
+    question: fuT(`Is ${L.en} working properly now?`, `¿Funciona bien ahora ${L.es}?`),
+    options: [
+      fuOpt('working', 'resolved', 'good', 'Yes, working fine', 'Sí, funciona bien', ['note']),
+      fuOpt('still_bad', 'persists', 'bad', "No, it's still slow or blocked", 'No, todavía está lento o tapado', ['when', 'photo', 'note']),
+      fuOpt('worse', 'worse', 'bad', "It's worse (or water is backing up)", 'Está peor (o el agua se está regresando)', ['when', 'photo', 'note']),
+      fuOpt('something_else', 'not_sure', 'neutral', 'Something else', 'Otra cosa', ['note'], ['note']),
+    ],
+  });
+  if (type === 'lock_door') return Object.assign(common, {
+    question: fuT(`Is ${L.en} working properly now?`, `¿Funciona bien ahora ${L.es}?`),
+    options: [
+      fuOpt('working', 'resolved', 'good', 'Yes, works fine', 'Sí, funciona bien', ['note']),
+      fuOpt('still_bad', 'persists', 'bad', "No, it's still a problem", 'No, todavía hay un problema', ['when', 'photo', 'note']),
+      fuOpt('something_else', 'not_sure', 'neutral', 'Something else', 'Otra cosa', ['note'], ['note']),
+    ],
+  });
+  if (type === 'pest') return Object.assign(common, {
+    question: fuT(fuCap(`${since.en}have you seen any more bugs or pests in your home?`), fuCap(`${since.es}¿ha visto más plagas en su hogar?`)),
+    options: [
+      fuOpt('none', 'resolved', 'good', 'No, none', 'No, ninguno', ['note']),
+      fuOpt('still_seeing', 'persists', 'bad', 'Yes, still seeing them', 'Sí, todavía los veo', ['location', 'photo', 'note']),
+      fuOpt('more', 'worse', 'bad', 'Yes, more than before', 'Sí, más que antes', ['location', 'photo', 'note']),
+      fuOpt('different_area', 'different_location', 'bad', 'Yes, in a different area', 'Sí, en otra área', ['location', 'photo', 'note'], ['location']),
+    ],
+  });
+  return Object.assign(common, {                                  // generic 'other'
+    question: fuT(`Is ${L.en} fixed now?`, `¿Quedó arreglado ${L.es}?`),
+    options: [
+      fuOpt('fixed', 'resolved', 'good', 'Yes, fixed', 'Sí, arreglado', ['note']),
+      fuOpt('not_fixed', 'persists', 'bad', 'No, not fixed', 'No, no está arreglado', ['photo', 'note']),
+      fuOpt('partly', 'persists', 'bad', 'Partly fixed', 'Arreglado en parte', ['photo', 'note']),
+    ],
+    safety: callMsg('I smell gas or smoke, or I feel unsafe', 'Huele a gas o a humo, o me siento en peligro'),
+  });
+}
+// Validates a tenant's answer against the spec. -> { ok, error?, clean? }. Unknown fields are ignored; unknown choices are refused.
+function fuValidateAnswer(spec, body) {
+  body = body || {};
+  const choice = fuS(body.choice);
+  if (choice === 'safety') {
+    if (!spec.safety) return { ok: false, error: 'bad_choice' };
+    return { ok: true, clean: { choice: 'safety', answer: 'safety', detail: fuClip(body.note, 1000), location: '', extra: {} } };
+  }
+  const opt = spec.options.find(o => o.value === choice);
+  if (!opt) return { ok: false, error: 'bad_choice' };
+  const clean = { choice: opt.value, answer: opt.answer, detail: '', location: '', extra: {} };
+  for (const f of opt.fields) {
+    const def = spec.fields[f]; if (!def || def.type === 'photo') continue;
+    const raw = body[f === 'note' ? 'note' : f];
+    const v = def.type === 'choice' ? fuS(raw) : fuClip(raw, def.max || 200);
+    if (def.type === 'choice' && v && !def.choices.some(c => c.value === v)) return { ok: false, error: 'bad_value', field: f };
+    if (opt.required.includes(f) && !v) return { ok: false, error: 'missing_field', field: f };
+    if (!v) continue;
+    if (f === 'note') clean.detail = v; else if (f === 'location') clean.location = v; else clean.extra[f] = v;
+  }
+  return { ok: true, clean };
+}
+
+// ── 3. SUGGESTED NEXT ACTION (never executed automatically) ──────────────────────────────────────
+const FU_ANSWER_WORDS = { resolved: 'says it is fixed', persists: 'says the problem is still happening', worse: 'says it is WORSE', different_location: 'says it is happening in a DIFFERENT spot', not_sure: 'is not sure', safety: 'reports a SAFETY problem' };
+// row = a WO_Followups row (+ optional wo = the origin WO, repairWo = the WO the repair was done under). Pure.
+function fuSuggestNext(row, wo, repairWo) {
+  const ans = fuS(row && row.Answer); if (!ans) return null;
+  if (fuS(row.Next_WO_ID) || fuS(row.Status) === 'Closed') return { action: 'done', label: 'Handled', severity: 'ok', detail: fuS(row.Next_WO_ID) ? `Follow-on work order ${fuS(row.Next_WO_ID)} created.` : (fuS(row.Closed_Reason) || 'Closed.') };
+  const extra = fuParseJson(row.Answer_Extra, {});
+  const label = fuS(row.Problem_Label) || 'the repair';
+  if (ans === 'resolved') {
+    const cosmetic = fuS(row.Cosmetic_Part);
+    const caution = extra.rain_since === 'no' ? 'The tenant says it is dry, but it has not rained since the repair, so this is not a real test yet - consider waiting for rain before the cosmetic work.' : '';
+    if (!cosmetic) return { action: 'close', label: 'Nothing more to do - close this check', severity: 'ok', detail: caution || `Tenant ${FU_ANSWER_WORDS.resolved}; no cosmetic work was listed.` };
+    const trade = /paint|drywall|dry wall|plaster|spackl|mud\b|texture|patch/i.test(cosmetic) ? 'Painting' : fuS(wo && wo.Trade);
+    return { action: 'create_cosmetic_wo', label: `Create the ${cosmetic.length > 40 ? 'cosmetic' : cosmetic} work order`, severity: caution ? 'caution' : 'ok', detail: caution || `Tenant ${FU_ANSWER_WORDS.resolved}. The repair held, so the cosmetic work can go ahead.`,
+      vendor_id: fuS(row.Cosmetic_Vendor_ID),
+      prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade, type: 'manual', vendor_id: fuS(row.Cosmetic_Vendor_ID), description: `${cosmetic} (follow-up to WO-${fuS(row.WO_ID)}: the tenant confirmed ${label} is fixed - cosmetic work only)` } };
+  }
+  if (ans === 'safety') return { action: 'call_now', label: 'Call the tenant now', severity: 'urgent', detail: 'The tenant reported a safety problem. Call them, then decide whether to send a vendor.' };
+  if (ans === 'not_sure') return { action: 'call_tenant', label: 'Call the tenant to clarify', severity: 'caution', detail: `Tenant ${FU_ANSWER_WORDS.not_sure}${fuS(row.Answer_Detail) ? ': "' + fuS(row.Answer_Detail) + '"' : '.'}` };
+  const where = [fuS(row.Answer_Location) ? `where: ${fuS(row.Answer_Location)}` : '', extra.trigger ? `when: ${String(extra.trigger).replace(/_/g, ' ')}` : '', fuS(row.Answer_Detail) ? `"${fuS(row.Answer_Detail)}"` : ''].filter(Boolean).join('; ');
+  const vendorId = fuS(row.Rework_Vendor_ID) || fuS(repairWo && repairWo.Vendor_ID) || fuS(wo && wo.Vendor_ID);
+  return { action: 'send_vendor_back', label: 'Send the vendor back', severity: ans === 'persists' ? 'caution' : 'urgent', vendor_id: vendorId,
+    detail: `Tenant ${FU_ANSWER_WORDS[ans] || ans}${where ? ' (' + where + ')' : ''}.`,
+    prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade: fuS((repairWo && repairWo.Trade) || (wo && wo.Trade)), type: 'manual', vendor_id: vendorId,
+      description: `Re-check ${label} (WO-${fuS(row.Repair_WO_ID) || fuS(row.WO_ID)}): the tenant ${FU_ANSWER_WORDS[ans] || ans}.${where ? ' ' + where + '.' : ''}` } };
+}
+function fuParseJson(s, dflt) { if (!fuS(s)) return dflt; try { const v = JSON.parse(s); return v == null ? dflt : v; } catch (e) { return dflt; } }
 /* FIX_CHECK:CONT */
 
 const ROLE_SCOPES = {
