@@ -17401,6 +17401,11 @@ let _telemetryTabReady = false;
 
 async function logTelemetry(env, rec) {
   rec = rec || {};
+  // Oct 16 2026 (no-silent-failures A1): every Success=FALSE row is ALSO a failure-ledger event, so all existing "failed" call sites
+  // reach the Needs Attention list and Brett's alerts without being edited. reportFailure never throws and never calls back in here.
+  if (String(rec.Success == null ? '' : rec.Success).toUpperCase() === 'FALSE') {
+    await reportFailure(env, { system: 'hub', source: rec.Source || 'worker', where: rec.Job_Type || rec.Skill_Or_Endpoint || 'telemetry', ref: rec.Skill_Or_Endpoint || '', message: rec.Notes || '(no details recorded)' });
+  }
   // Self-provision the tab (behind an isolate flag), then ensureColumns on EVERY write —
   // FEATURE_LOG rule 37: ensureTab only writes a header to an EMPTY tab, so a pre-existing
   // tab with a drifted/partial header would silently drop fields on append. ensureColumns
