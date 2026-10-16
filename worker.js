@@ -34975,7 +34975,7 @@ async function fiSummarize(env, body) {
   if (!rollup.length) return json({ ok: true, summary: { overall: 'No repair items were recorded during this inspection.', trades: {}, priorities: [], fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: 'none' }, rollup });
   let ai;
   try { ai = await routeAI(env, { type: 'fi_summary', customerFacing: true, schema: true, system: FI_SUMMARY_SYSTEM, prompt: fiBuildSummaryPrompt(doc, rollup), maxTokens: 2500, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'The AI summary is paused (AI credit) - the grouped issue list still works.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const norm = fiNormalizeSummary(fiExtractJson(ai.result), rollup);
   if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry.');
   return json({ ok: true, summary: Object.assign(norm, { fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: ai.model_used }), rollup });
