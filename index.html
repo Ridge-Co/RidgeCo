@@ -2024,6 +2024,7 @@ function _loadAllFinish(loaded) {
   renderDashboard(); renderWOPage(); renderPropertiesPage();
   renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
   loadWishlist();
+  loadAiCreditStatus();       // red banner + Resume button when Anthropic credit is out (AI reading paused)
   loadVendorAccessRequests(); // keeps the Dashboard tile + Dev Log nav badge populated from app load, not only when Dev Log is opened
   setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
   processNotificationsBackground();
