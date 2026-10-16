@@ -23303,6 +23303,175 @@ async function fuAdminAlert(env, row, text, kind) {
   }
 }
 const fuAddress = (prop, unit) => (fuS(prop && prop.Address) || 'the property') + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '');
+
+// ── 8. ADMIN: PREVIEW (read-only; never sends, never writes) ─────────────────────────────────────
+// GET /followup/preview?wo_id=&tenant_id=&lang=&check_type=&problem_label=&repair_part=&cosmetic_part=&repair_wo_id=
+async function followupPreview(env, url) {
+  const q = k => fuS(url.searchParams.get(k));
+  const woId = q('wo_id'); if (!woId) return json({ ok: false, error: 'wo_id required' }, 400);
+  const [wos, props, units, tenants, owners, vendors] = await fetchTabs(env, ['Work_Orders', 'Properties', 'Units', 'Tenants', 'Owners', 'Vendors']);
+  const wo = findWO(wos, woId); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
+  const repairWoId = q('repair_wo_id') || woId;
+  const repairWo = repairWoId === woId ? wo : findWO(wos, repairWoId);
+  if (!repairWo) return json({ ok: false, error: `Repair work order ${repairWoId} not found` }, 404);
+  const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(wo.Unit_ID)) || null;
+  const owner = prop ? (owners.find(o => String(o.ID) === fuS(prop.Owner_ID)) || null) : null;
+  const res = fuResolveTenants(wo, tenants, units, q('tenant_id'));
+  const cls = classifyIssue(wo);
+  // Brett's edits (re-posting the preview with his changes) override the rule-based guess.
+  const typ = FU_CHECK_TYPES.includes(q('check_type')) ? q('check_type') : cls.check_type;
+  const edited = (k, dflt) => (url.searchParams.has(k) ? fuClip(url.searchParams.get(k), 400) : dflt);
+  const typeChanged = typ !== cls.check_type;
+  const lab = typeChanged ? fuLabelFor(typ, cls.repair_part || wo.Description) : null;
+  const label = edited('problem_label', lab ? lab.problem_label : cls.problem_label), labelEs = edited('problem_label_es', lab ? lab.problem_label_es : cls.problem_label_es);
+  const objLabel = lab ? lab.object_label : cls.object_label, objLabelEs = lab ? lab.object_label_es : cls.object_label_es;
+  const repairPart = edited('repair_part', cls.repair_part), cosmeticPart = edited('cosmetic_part', cls.cosmetic_part);
+  const repairDate = fuS(repairWo.Completed_Date).slice(0, 10) || '';
+  const tenant = res.chosen;
+  const lang = q('lang') === 'es' ? 'es' : q('lang') === 'en' ? 'en' : (tenant && fuS(tenant.Language).toLowerCase() === 'es' ? 'es' : 'en');
+  const cfg = await fetchConfig(env);
+  const gate = tenant ? fuGateVerdict({ cfg, tenant, property: prop, owner, now: new Date() }) : { blocked: true, reasons: [{ code: 'no_tenant', text: res.candidates.length ? 'Pick which tenant should get the check.' : 'No current tenant was found for this work order.' }], notes: [], test_mode: false };
+  const spec = fuQuestionSpec({ check_type: typ, problem_label: label, problem_label_es: labelEs, object_label: objLabel, object_label_es: objLabelEs, repair_date: repairDate });
+  const addr = fuAddress(prop, unit);
+  const msgCtx = { lang, first: fuFirstName(tenant), label, label_es: labelEs, address: addr, link: '(the private link is added here when you send)' };
+  const existing = (await fuReadAll(env)).filter(r => fuS(r.WO_ID) === woId && r.Active !== 'FALSE' && r.Status !== 'Closed')
+    .map(r => ({ id: r.ID, status: r.Status, tenant_id: r.Tenant_ID, tenant_name: r.Tenant_Name, sent_at: r.Sent_At, answer: r.Answer, check_type: r.Check_Type }));
+  return json({ ok: true,
+    wo: { id: wo.ID, address: addr, status: wo.Status, trade: wo.Trade, description: wo.Description, vendor_id: wo.Vendor_ID || '' },
+    repair_wo: { id: repairWo.ID, status: repairWo.Status, completed_date: repairDate, vendor_id: repairWo.Vendor_ID || '', trade: repairWo.Trade || '', description: repairWo.Description || '' },
+    classification: { check_type: typ, auto_check_type: cls.check_type, check_types: FU_CHECK_TYPES, problem_label: label, problem_label_es: labelEs, object_label: objLabel, object_label_es: objLabelEs, repair_part: repairPart, cosmetic_part: cosmeticPart, also_mentioned: cls.also_mentioned, confidence: cls.confidence, cosmetic_only: cls.cosmetic_only, warnings: cls.warnings },
+    tenants: { source: res.source, note: res.note, needs_pick: !tenant && res.candidates.length > 1, candidates: res.candidates.map(t => ({ id: t.ID, name: `${fuS(t.First_Name)} ${fuS(t.Last_Name)}`.trim() || fuS(t.Name), phone: t.Phone || '', unit_id: t.Unit_ID || '', language: fuS(t.Language).toLowerCase() === 'es' ? 'es' : 'en' })), chosen_id: tenant ? String(tenant.ID) : '' },
+    language: lang, gate,
+    message: { text: fuOutgoing(fuMessage('send', msgCtx)), lang },
+    questions: { question: spec.question, options: spec.options.map(o => ({ value: o.value, answer: o.answer, label: o.label, fields: o.fields, required: o.required })), safety: spec.safety ? spec.safety.label : null },
+    vendor_defaults: { cosmetic_vendor_id: fuS(wo.Vendor_ID), rework_vendor_id: fuS(repairWo.Vendor_ID) || fuS(wo.Vendor_ID) },
+    vendors: vendors.filter(v => v.Active !== 'FALSE').map(v => ({ id: v.ID, name: v.Name, trade: v.Trade || '' })),
+    existing_followups: existing });
+}
+
+// ── 9. ADMIN: SEND (Brett's tap on Send in the preview is the approval for THIS one send) ────────
+// POST /followup/send { wo_id, tenant_id, check_type, problem_label, problem_label_es, repair_part, cosmetic_part, repair_wo_id?, cosmetic_vendor_id?,
+//                       rework_vendor_id?, lang?, mode:'sms'|'copy_link', replace?, page_base? }
+async function followupSend(env, body, url) {
+  body = body || {};
+  const warnings = [];
+  const woId = fuS(body.wo_id), mode = body.mode === 'copy_link' ? 'copy_link' : 'sms';
+  if (!woId) return json({ ok: false, error: 'wo_id required' }, 400);
+  if (!FU_CHECK_TYPES.includes(fuS(body.check_type))) return json({ ok: false, error: 'check_type must be one of ' + FU_CHECK_TYPES.join(', ') }, 400);
+  const label = fuClip(body.problem_label, 120); if (!label) return json({ ok: false, error: 'Fill in "What we\'re checking" first (the tenant needs a plain-English name for the problem).' }, 400);
+  const [wos, props, units, tenants, owners] = await fetchTabs(env, ['Work_Orders', 'Properties', 'Units', 'Tenants', 'Owners']);
+  const wo = findWO(wos, woId); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
+  const repairWoId = fuS(body.repair_wo_id) || woId;
+  const repairWo = repairWoId === woId ? wo : findWO(wos, repairWoId);
+  if (!repairWo) return json({ ok: false, error: `Repair work order ${repairWoId} not found` }, 404);
+  const res = fuResolveTenants(wo, tenants, units, fuS(body.tenant_id));
+  const tenant = res.chosen;
+  if (!tenant) return json({ ok: false, error: res.note || 'Pick the tenant first.', code: 'no_tenant' }, 400);
+  const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(wo.Unit_ID)) || null;
+  const owner = prop ? (owners.find(o => String(o.ID) === fuS(prop.Owner_ID)) || null) : null;
+  const cfg = await fetchConfig(env);
+  const gate = fuGateVerdict({ cfg, tenant, property: prop, owner, now: new Date() });
+  if (mode === 'sms' && gate.blocked) return json({ ok: false, blocked: true, code: 'sms_blocked', reasons: gate.reasons, error: 'The text cannot be sent: ' + gate.reasons.map(r => r.text).join(' '), hint: 'Use "Copy link" and send it yourself.' }, 409);
+  await fuEnsureTab(env);
+  // Double-tap / duplicate guard: an open check for the same WO + tenant must be replaced on purpose.
+  const all = await fuReadAll(env);
+  const open = all.filter(r => fuS(r.WO_ID) === woId && fuS(r.Tenant_ID) === String(tenant.ID) && r.Active !== 'FALSE' && ['Sent', 'Overdue', 'Answered', 'Blocked', 'Draft'].includes(r.Status));
+  if (open.length && body.replace !== true) return json({ ok: false, code: 'already_open', error: `There is already an open fix-check for this tenant on WO-${woId} (#${open[0].ID}, ${open[0].Status}). Send a new one only if you mean to replace it.`, existing: { id: open[0].ID, status: open[0].Status, sent_at: open[0].Sent_At } }, 409);
+  const now = new Date().toISOString(), lang = body.lang === 'es' ? 'es' : 'en';
+  const repairDate = fuS(repairWo.Completed_Date).slice(0, 10);
+  const id = await fuCreate(env, { WO_ID: woId, Repair_WO_ID: repairWoId, Property_ID: fuS(wo.Property_ID), Unit_ID: fuS(wo.Unit_ID) || fuS(tenant.Unit_ID), Tenant_ID: String(tenant.ID),
+    Tenant_Name: `${fuS(tenant.First_Name)} ${fuS(tenant.Last_Name)}`.trim() || fuS(tenant.Name), Check_Type: fuS(body.check_type), Problem_Label: label, Problem_Label_Es: fuClip(body.problem_label_es, 120),
+    Object_Label: fuClip(body.object_label, 120), Object_Label_Es: fuClip(body.object_label_es, 120), Repair_Part: fuClip(body.repair_part, 600), Cosmetic_Part: fuClip(body.cosmetic_part, 600), Repair_Date: repairDate,
+    Cosmetic_Vendor_ID: fuS(body.cosmetic_vendor_id), Rework_Vendor_ID: fuS(body.rework_vendor_id), Language: lang, Status: 'Draft', Created_At: now, Created_By: 'admin', Active: 'TRUE' });
+  try {
+    if (open.length && body.replace === true) for (const o of open) await fuWrite(env, o.ID, { Status: 'Closed', Closed_At: now, Closed_Reason: `Replaced by #${id}` });
+    const expires = fuAddDays(now, FU_WINDOW_DAYS);
+    const fresh = { ID: id, Tenant_ID: String(tenant.ID) };
+    const token = await fuMintToken(env, fresh, expires);
+    const link = fuLinkFor(env, url, token, body.page_base);
+    const hash = await fuSha256(token);
+    const base = { Token_Hash: hash, Token_Expires_At: expires };
+    let out = { sent: false, held: false, outcome: '', reason: '' }, status = 'Sent', blocked = '', method = 'copied_link', queueId = '', sentAt = now, dueFrom = now;
+    if (mode === 'sms') {
+      const text = fuOutgoing(fuMessage('send', { lang, first: fuFirstName(tenant), label, label_es: fuS(body.problem_label_es) || label, address: fuAddress(prop, unit), link }));
+      const r = await smsGatedSend(env, { wo_id: woId, message_type: FU_MSG_TYPE, recipient_type: 'tenant', tenant, owner, property: prop, message_body: text });
+      out = fuSendOutcome(r, !!(env.__STAGING__));
+      queueId = fuS(r && r.queued_id);
+      if (out.ok) { method = out.held ? 'sms_held' : (out.staged ? 'sms_staging_stub' : 'sms'); if (out.held && r.send_after) dueFrom = r.send_after; }
+      else { status = 'Blocked'; blocked = out.reason; method = 'sms_failed'; }
+    }
+    const saved = await fuWrite(env, id, Object.assign(base, { Status: status, Blocked_Reason: blocked, Sent_At: sentAt, Send_Method: method, Queue_ID: queueId, Due_At: status === 'Blocked' ? '' : fuAddDays(dueFrom, FU_DUE_DAYS) }));
+    try { await logWOAudit(env, woId, 'admin', 'admin', 'Fix-check follow-up', '', `#${id} ${status}: ${label} (${method})`, `tenant ${saved.Tenant_Name}`); } catch (e) { warnings.push('could not add the work order history line: ' + ((e && e.message) || e)); }
+    await fuTelemetry(env, { Job_Type: 'fix_check_send', Skill_Or_Endpoint: '/followup/send', Success: status === 'Blocked' ? 'FALSE' : 'TRUE', Notes: `followup=${id} wo=${woId} tenant=${tenant.ID} mode=${mode} method=${method}${blocked ? ' ' + blocked.slice(0, 120) : ''}` }, warnings);
+    return json({ ok: status !== 'Blocked', followup_id: id, status, method, link, expires_at: expires, due_at: saved.Due_At, held_for_quiet_hours: !!out.held, staged: !!out.staged, test_mode: gate.test_mode, notes: gate.notes, error: status === 'Blocked' ? `The text did not go through (${blocked}). Use the link below and send it yourself.` : undefined, warnings });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    await fuTelemetry(env, { Job_Type: 'fix_check_send', Skill_Or_Endpoint: '/followup/send', Success: 'FALSE', Notes: `followup=${id} wo=${woId} ${msg}`.slice(0, 480) }, warnings);
+    return json({ ok: false, followup_id: id, error: `The fix-check was created (#${id}) but could not be finished: ${msg}. It stays in the list as a draft.`, warnings }, 500);
+  }
+}
+// Pure: reads what smsGatedSend returned. staging stubs return send_ok without a Twilio sid - that is a success there, never in production.
+function fuSendOutcome(r, staging) {
+  if (!r) return { ok: false, reason: 'no response from the text sender' };
+  if (r.held_for_quiet_hours) return { ok: true, held: true };
+  if (r.sent) return { ok: true };
+  if (r.send_ok && staging) return { ok: true, staged: true };
+  if (!r.send_ok) return { ok: false, reason: 'blocked: ' + (r.gate_snapshot || 'SMS settings') };
+  return { ok: false, reason: 'Twilio did not accept the text' };
+}
+
+// ── 10. ADMIN: COPY LINK AGAIN / CLOSE ───────────────────────────────────────────────────────────
+// POST /followup/link { id, page_base? } - mints another link for an open follow-up (older links keep working until the same window ends).
+async function followupLink(env, body, url) {
+  const id = fuS(body && body.id); if (!id) return json({ ok: false, error: 'id required' }, 400);
+  const row = (await fuReadAll(env)).find(r => String(r.ID) === id && r.Active !== 'FALSE'); if (!row) return json({ ok: false, error: 'Follow-up not found' }, 404);
+  if (row.Status === 'Closed') return json({ ok: false, error: 'This follow-up is closed.' }, 409);
+  const now = new Date().toISOString();
+  let expires = fuS(row.Token_Expires_At);
+  if (!expires || Date.parse(expires) < Date.now() + 3600000) expires = fuAddDays(now, FU_WINDOW_DAYS);     // an expired/near-expired window is reopened for a fresh 14 days on purpose
+  const token = await fuMintToken(env, row, expires);
+  await fuWrite(env, id, { Token_Hash: fuAddHash(row.Token_Hash, await fuSha256(token)), Token_Expires_At: expires });
+  return json({ ok: true, followup_id: id, link: fuLinkFor(env, url, token, body.page_base), expires_at: expires });
+}
+// POST /followup/close { id, reason?, next_wo_id? } - Brett handled it (created the follow-on WO) or is dismissing the suggestion.
+async function followupClose(env, body) {
+  const id = fuS(body && body.id); if (!id) return json({ ok: false, error: 'id required' }, 400);
+  const row = (await fuReadAll(env)).find(r => String(r.ID) === id && r.Active !== 'FALSE'); if (!row) return json({ ok: false, error: 'Follow-up not found' }, 404);
+  const now = new Date().toISOString(), warnings = [];
+  const next = fuS(body.next_wo_id);
+  await fuWrite(env, id, { Status: 'Closed', Closed_At: now, Closed_Reason: fuClip(body.reason, 200) || (next ? `Follow-on work order ${next} created` : 'Closed by admin'), Next_WO_ID: next, Suggested_Next: next ? 'done' : fuS(row.Suggested_Next) });
+  try { await logWOAudit(env, row.WO_ID, 'admin', 'admin', 'Fix-check follow-up', row.Status, 'Closed', next ? `follow-on WO ${next}` : fuClip(body.reason, 100)); } catch (e) { warnings.push('could not add the work order history line: ' + ((e && e.message) || e)); }
+  return json({ ok: true, followup_id: id, status: 'Closed', warnings });
+}
+
+// ── 11. ADMIN: LIST (open follow-ups panel + the WO row badge) ───────────────────────────────────
+// GET /followup/list?wo_id=&open=1 -> rows with a computed `needs_action` and `suggestion`. Never returns Token_Hash.
+async function followupList(env, url) {
+  const woFilter = fuS(url.searchParams.get('wo_id')), onlyOpen = url.searchParams.get('open') === '1';
+  const [rows, wos] = await Promise.all([fuReadAll(env), fetchTab(env, 'Work_Orders')]);
+  const out = rows.filter(r => r.Active !== 'FALSE' && (!woFilter || fuS(r.WO_ID) === woFilter) && (!onlyOpen || r.Status !== 'Closed')).map(r => {
+    const wo = findWO(wos, fuS(r.WO_ID)), repairWo = findWO(wos, fuS(r.Repair_WO_ID) || fuS(r.WO_ID));
+    const suggestion = fuSuggestNext(r, wo, repairWo);
+    const needs = r.Status === 'Answered' && !!suggestion && suggestion.action !== 'done';
+    const o = Object.assign({}, r); delete o.Token_Hash;
+    return Object.assign(o, { suggestion, needs_action: needs || r.Status === 'Overdue' || r.Status === 'Blocked' || r.Status === 'Draft', extra: fuParseJson(r.Answer_Extra, {}) });
+  }).sort((a, b) => (Date.parse(b.Created_At) || 0) - (Date.parse(a.Created_At) || 0));
+  return json({ ok: true, count: out.length, followups: out });
+}
+
+// ── 12. PUBLIC: THE TENANT PAGE ──────────────────────────────────────────────────────────────────
+// Verifies the link for ONE follow-up and ONE tenant. -> { ok, row, payload } | { ok:false, state, status }.
+async function fuAuth(env, token) {
+  const chk = await fuTokenCheck(fuS(token), env.WORKER_SECRET);
+  if (!chk.ok) return { ok: false, state: chk.reason === 'expired' ? 'expired' : 'invalid', status: chk.reason === 'expired' ? 410 : 401 };
+  const row = (await fuReadAll(env)).find(r => String(r.ID) === String(chk.payload.f) && r.Active !== 'FALSE');
+  if (!row || String(row.Tenant_ID) !== String(chk.payload.t) || !fuHashMatches(row.Token_Hash, await fuSha256(token))) return { ok: false, state: 'invalid', status: 401 };
+  if (row.Token_Expires_At && Date.parse(row.Token_Expires_At) < Date.now()) return { ok: false, state: 'expired', status: 410 };
+  if (row.Status === 'Closed') return { ok: false, state: 'closed', status: 200, row };
+  if (row.Status === 'Draft') return { ok: false, state: 'invalid', status: 401 };
+  return { ok: true, row, payload: chk.payload };
+}
+const fuRowSpec = row => fuQuestionSpec({ check_type: row.Check_Type, problem_label: row.Problem_Label, problem_label_es: row.Problem_Label_Es, object_label: row.Object_Label, object_label_es: row.Object_Label_Es, repair_date: row.Repair_Date });
 /* FIX_CHECK:CONT */
 
 const ROLE_SCOPES = {
