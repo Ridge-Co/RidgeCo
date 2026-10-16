@@ -21414,8 +21414,12 @@ async function backfillItemsSummary(env, opts) {
       const summary = await summarizeItemsCheap(env, items);
       if (summary.length) { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Items_Summary: JSON.stringify(summary) }); updated++; }
       else failed.push({ id: r.ID, error: 'empty summary returned' });
-    } catch (e) { failed.push({ id: r.ID, error: String(e && e.message || e) }); }
+    } catch (e) {
+      if (aiCreditIsPausedError(e)) { paused = true; break; }   // stop at once - no more calls while AI is paused
+      failed.push({ id: r.ID, error: String(e && e.message || e) });
+    }
   }
+  if (paused) return json({ ok: false, error: AI_PAUSED_USER_MSG, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG, paused: true, updated, failed, remaining: pending.length - updated }, 503);
   return json({ ok: true, updated, failed, remaining: pending.length - batch.length });
 }
 
