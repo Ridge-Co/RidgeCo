@@ -959,6 +959,8 @@ const _hubWorkerCore = {
         // never become a backdoor generic config setter, whatever the caller sends.
         if (path === '/admin/set-alert-flags')    return await setAlertFlags(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
+        if (path === '/failure/update')           return await failUpdate(env, body);
+        if (path === '/failure/report')           return await failReportEndpoint(env, request, body);
         if (path === '/judge')                    return await judgeRun(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
         if (path === '/ar/report/send')           return await arReportSend(env, body);
