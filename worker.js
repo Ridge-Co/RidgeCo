@@ -31794,12 +31794,22 @@ async function strAdvanceTask(ctx, trow) {
   const dup = (await fetchTab(env, 'STR_Offers')).filter(o => o.Task_Key === trow.Task_Key && STR_OFFER_ACTIVE.includes(o.Status));
   if (dup.length > 1 && String(dup.map(d => parseInt(d.ID, 10)).sort((a, b) => a - b)[0]) !== String(oid)) { await strSetOffer(ctx, orow, { Status: 'superseded', Note: 'another run claimed this turnover first' }); return { action: 'lost_claim' }; }
   const tokens = strTokens(ctx, nx.cleaner, task, { Link: strCleanerUrl(nx.cleaner.Token, 'offer=' + oid) });
-  const r = await strTextCleaner(ctx, nx.cleaner, 'str_offer', tokens, task);
+  const r = await strTextCleaner(ctx, nx.cleaner, promo ? 'str_promote' : 'str_offer', tokens, task);
   if (r.ok) {
-    await strSetOffer(ctx, orow, { Status: 'pending', Sent_At: iso, Queue_ID: r.queueId || '', Mode: r.mode });
+    await strSetOffer(ctx, orow, Object.assign({ Status: 'pending', Sent_At: iso, Queue_ID: r.queueId || '', Mode: r.mode }, promo ? { Note: 'promotion' } : {}));
     await strSetTurnover(ctx, trow, { Status: 'offering', Note: '' });
-    await strLog(ctx, trow.Task_Key, nx.cleaner.ID, 'offer_sent', `${r.detail}; reply by ${orow.Deadline_At}`);
-    return { action: 'offered', cleaner: nx.cleaner.Name, deadline: orow.Deadline_At, mode: r.mode };
+    await strLog(ctx, trow.Task_Key, nx.cleaner.ID, promo ? 'promotion_sent' : 'offer_sent', `${r.detail}; reply by ${orow.Deadline_At}`);
+    if (promo) {
+      // Brett hears about it immediately (kind 'promote' is exempt from his 7am-10pm quiet hours) so he can plan.
+      try {
+        const prev = st.offers.filter(o => o.Task_Key === trow.Task_Key && ['declined', 'expired', 'cancelled'].includes(o.Status)).sort((x, y) => (parseInt(y.ID, 10) || 0) - (parseInt(x.ID, 10) || 0))[0];
+        const pc = prev ? st.cmap[prev.Cleaner_ID] : null, pn = pc ? strFirst(pc) : 'The earlier cleaner';
+        const why = !prev ? 'the earlier request did not work out' : (prev.Status === 'cancelled' ? pn + ' cancelled' : (prev.Status === 'declined' ? pn + ' passed' : pn + ' did not reply in time'));
+        const days = strDaysBetween(today, task.date), head = `HANDOFF: ${strFirst(nx.cleaner)} was asked to cover ${strFmtDate(task.date)} (${days === 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}) - ${why}.`;
+        await strRaiseAlert(ctx, { key: `promote|${trow.Task_Key}|${oid}`, kind: 'promote', severity: days <= 3 ? 'urgent' : 'normal', taskKey: trow.Task_Key, message: [head, `${strFirst(nx.cleaner)} had said they could be the backup. Reply by ${orow.Deadline_At}.`, 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head} ${PORTAL_BASE}/str-cleaning.html` });
+      } catch (e) { ctx.errors.push({ step: 'promote_alert', error: 'The handoff text went out but Brett could not be told: ' + strErrText(e) }); await strSystemAlert(env, 'promote_alert', strErrText(e)); }
+    }
+    return { action: promo ? 'promoted' : 'offered', cleaner: nx.cleaner.Name, deadline: orow.Deadline_At, mode: r.mode };
   }
   await strSetOffer(ctx, orow, { Status: 'failed', Queue_ID: r.queueId || '', Note: r.detail.slice(0, 200) });
   await strLog(ctx, trow.Task_Key, nx.cleaner.ID, 'offer_failed', r.detail);
