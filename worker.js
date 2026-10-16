@@ -18061,6 +18061,38 @@ async function aiCreditMaybeAlert(env, state, errors) {
   return res;
 }
 
+// Credit exhausted (or key refused) was just seen. Runs once per pause; concurrent failing calls share one run.
+function aiCreditTrip(env, cls, source) {
+  if (_aiCreditTripP) return _aiCreditTripP;
+  _aiCreditTripP = aiCreditTripRun(env, cls, source).finally(() => { _aiCreditTripP = null; });
+  return _aiCreditTripP;
+}
+async function aiCreditTripRun(env, cls, source) {
+  const out = { newly_paused: false, errors: [], alert: null };
+  const nowIso = new Date().toISOString();
+  const errText = String(cls.message || '').slice(0, 300);
+  // In-memory pause FIRST: every other call in this instance short-circuits from now on, whatever happens to Config below.
+  _aiCreditCache = { at: Date.now(), state: { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' } };
+  let sheetState = null;
+  try { sheetState = aiCreditStateFromRows(await schedReadConfigRows(env, true)); }
+  catch (e) { out.errors.push('could not read Config: ' + schedErrText(e)); }
+  if (sheetState && sheetState.paused) {                       // another request/instance already paused it
+    _aiCreditCache = { at: Date.now(), state: sheetState };
+    out.alert = await aiCreditMaybeAlert(env, sheetState, out.errors);
+    return out;
+  }
+  let flagSaved = false;
+  try {
+    const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'TRUE', [AI_CREDIT_KEYS.at]: nowIso, [AI_CREDIT_KEYS.err]: errText, [AI_CREDIT_KEYS.kind]: cls.kind, [AI_CREDIT_KEYS.by]: String(source || '').slice(0, 80), [AI_CREDIT_KEYS.alerted]: '' });
+    flagSaved = w.ok; if (!w.ok) out.errors.push('the pause flag was not saved: ' + w.error);
+  } catch (e) { out.errors.push('the pause flag was not saved: ' + schedErrText(e)); }
+  out.newly_paused = true;
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_exhausted', Skill_Or_Endpoint: String(source || 'anthropicMessages').slice(0, 80), Success: 'FALSE', Notes: `AI paused (kind=${cls.kind}); pause flag saved: ${flagSaved ? 'yes' : 'NO'}; the exact Anthropic message is in Config ${AI_CREDIT_KEYS.err} and on the Needs Attention screen` }); }   // wording kept free of billing/401 keywords on purpose: the failure ledger's urgent row is the auto-clearing "ai_credit_paused" condition, not this event
+  catch (te) { out.errors.push('telemetry row not written: ' + schedErrText(te)); console.error('ai-credit: could not log ai_credit_exhausted:', schedErrText(te)); }
+  out.alert = await aiCreditMaybeAlert(env, { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' }, out.errors);
+  return out;
+}
+
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
 // Secure, self-owned multi-model router. Calls each provider directly from THIS
 // Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
