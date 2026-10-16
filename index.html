@@ -4711,8 +4711,9 @@ function bindContactCardFields(fields){
       data = data || {};
       if (data.error) throw new Error(data.error);
       applyContactCardFields(fields, data);
-      if (statusEl) statusEl.textContent = (data._error||data._parse_error) ? 'Could not read the card — enter details manually' : 'Filled from contact card — double-check before saving';
+      if (statusEl) statusEl.textContent = data._paused ? 'Automatic reading is paused - enter it by hand.' : ((data._error||data._parse_error) ? 'Could not read the card — enter details manually' : 'Filled from contact card — double-check before saving');
     }).catch(function(e){
+      logError('Contact card read', (e && e.message) || 'Failed');
       if (statusEl) statusEl.textContent = 'Could not read the card — enter details manually';
     }).finally(function(){ fileInput.value=''; });
   };
