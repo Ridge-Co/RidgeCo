@@ -3915,7 +3915,149 @@ function fuChanged(rebuild) {
     if (rebuild || over.tenant_id !== '') { set('fu-label', over.problem_label); set('fu-label-es', over.problem_label_es); set('fu-repair', over.repair_part); set('fu-cosmetic', over.cosmetic_part); set('fu-type', over.check_type); set('fu-lang', over.lang); }
   });
 }
-// FU_UI_CONT
+function fuSendBody(mode) {
+  var g = function (id) { var e = document.getElementById(id); return e ? e.value : ''; }, c = _fu.pv.classification;
+  var base = location.origin + location.pathname.replace(/[^\/]*$/, '');
+  return { wo_id: _fu.woId, repair_wo_id: g('fu-repair-wo') || _fu.repairWoId, tenant_id: g('fu-tenant'), check_type: g('fu-type'), problem_label: g('fu-label'), problem_label_es: g('fu-label-es'),
+    object_label: c.object_label || '', object_label_es: c.object_label_es || '', repair_part: g('fu-repair'), cosmetic_part: g('fu-cosmetic'), cosmetic_vendor_id: g('fu-cvendor'), rework_vendor_id: g('fu-rvendor'),
+    lang: g('fu-lang') || 'en', mode: mode, replace: !!(document.getElementById('fu-replace') && document.getElementById('fu-replace').checked), page_base: base };
+}
+function fuSend(mode) {
+  if (_fu.busy || !_fu.pv) return;
+  var b = fuSendBody(mode), res = document.getElementById('fu-pv-result');
+  if (!b.tenant_id) { res.innerHTML = '<div style="color:var(--danger);font-size:12px">Pick the tenant first.</div>'; return; }
+  if (!b.problem_label.trim()) { res.innerHTML = '<div style="color:var(--danger);font-size:12px">Fill in "What we\'re checking" first.</div>'; return; }
+  _fu.busy = true; fuSetButtons(true, mode === 'sms' ? 'Sending…' : 'Working…'); res.innerHTML = '';
+  api('POST', '/followup/send', b, 30000).then(function (r) {
+    _fu.busy = false; fuSetButtons(false); if (_fu.pv) fuRenderDynamic();
+    if (r && r.ok) {
+      fuLoadList().then(function () { if (document.getElementById('modal-wo-detail').classList.contains('open')) fuRenderCard(_fu.woId); });
+      if (mode === 'copy_link') { fuCopy(r.link, 'Link copied — nothing was texted. Send it to the tenant yourself.'); res.innerHTML = fuLinkBox(r.link); return; }
+      closeModal('modal-followup');
+      toast(r.held_for_quiet_hours ? 'Check queued — it goes out at 9am (quiet hours). Reminder is set.' : (r.staged ? 'Check recorded (staging: the text itself is stubbed).' : 'Check texted to the tenant. Tracking it on the work order.'), 'success');
+      return;
+    }
+    if (r && r.code === 'sms_blocked') { res.innerHTML = '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:6px;padding:8px 12px;font-size:12px"><b style="color:var(--danger)">Not sent.</b> ' + esc(r.error) + '<br>Tap <b>Copy link</b> to send it yourself.</div>'; fuChanged(); return; }
+    if (r && r.code === 'already_open') { res.innerHTML = '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:8px 12px;font-size:12px">' + esc(r.error) + '</div>'; return; }
+    if (r && r.link) { res.innerHTML = '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:6px;padding:8px 12px;font-size:12px"><b style="color:var(--danger)">The text did not go out.</b> ' + esc(r.error || '') + '</div>' + fuLinkBox(r.link); logError('Fix-check send', r.error || 'text did not go out'); fuLoadList(); return; }
+    fuFail('Fix-check send', (r && r.error) || 'unknown error', 'fu-pv-result');
+  }).catch(function (e) { _fu.busy = false; fuSetButtons(false); fuFail('Fix-check send', ((e && e.message) || String(e)) + ' — check "Fix-checks" before trying again, so it is not sent twice.', 'fu-pv-result'); fuLoadList(); });
+}
+function fuLinkBox(link) { return '<div style="margin-top:8px;font-size:12px;color:var(--muted)">The tenant\'s private link (valid 14 days):</div><input type="text" readonly value="' + esc(link) + '" onclick="this.select()" style="width:100%;font-size:12px"><button class="btn small secondary" style="margin-top:6px;min-height:40px" onclick="fuCopy(this.previousElementSibling.value,\'Link copied\')">Copy again</button>'; }
+function fuCopy(text, okMsg) {
+  var done = function () { toast(okMsg || 'Copied', 'success'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(function () { window.prompt('Copy this link:', text); });
+  else window.prompt('Copy this link:', text);
+}
+
+// ── card on the work order ──────────────────────────────────────────────────────────────────────────────────
+function fuRenderCard(woId) {
+  _fu.woId = String(woId);
+  var host = document.getElementById('fu-card'); if (!host) return;
+  host.innerHTML = '';
+  api('GET', '/followup/list?wo_id=' + encodeURIComponent(woId) + '&_=' + Date.now()).then(function (res) {
+    if (!res || res.ok === false) throw new Error((res && res.error) || 'bad response');
+    var rows = safeArray(res.followups); rows.forEach(function (r) { _fu.rows[r.ID] = r; });
+    host = document.getElementById('fu-card'); if (!host) return;
+    host.innerHTML = rows.slice(0, 4).map(fuCardHTML).join('');
+  }).catch(function (e) { fuFail('Fix-check card', (e && e.message) || String(e), 'fu-card'); });
+}
+function fuCardHTML(r) {
+  var col = FU_STATUS_COLOR[r.Status] || 'var(--muted)', closed = r.Status === 'Closed', id = fuJs(r.ID);
+  var s = r.suggestion, tenant = safeArray(state.tenants).find(function (t) { return String(t.ID) === String(r.Tenant_ID); });
+  var h = '<div style="border:1px solid ' + col + ';border-left:4px solid ' + col + ';border-radius:8px;padding:10px 12px;margin-bottom:12px;background:var(--surface)' + (closed ? ';opacity:.7' : '') + '">' +
+    '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div style="font-weight:bold;font-size:13px">🔎 Fix-check #' + esc(r.ID) + ' · ' + esc(r.Problem_Label) + '</div><span style="font-size:11px;color:' + col + ';font-weight:bold">' + esc(r.Status.toUpperCase()) + '</span></div>' +
+    '<div style="font-size:12px;color:var(--muted);margin-top:3px">' + esc(r.Tenant_Name) + ' · ' + (r.Sent_At ? 'sent ' + esc(fuDate(r.Sent_At)) + ' (' + esc((r.Send_Method || '').replace(/_/g, ' ')) + ')' : 'not sent') + (r.Due_At && !r.Answer && !closed ? ' · answer due ' + esc(fuDate(r.Due_At)) : '') + (r.Reminder_Sent_At ? ' · reminder ' + esc(fuDate(r.Reminder_Sent_At)) : '') + '</div>';
+  if (r.Blocked_Reason) h += '<div style="color:var(--danger);font-size:12px;margin-top:4px"><b>Not sent:</b> ' + esc(r.Blocked_Reason) + '</div>';
+  if (r.Reminder_Result && /not texted|FAILED|by hand/i.test(r.Reminder_Result)) h += '<div style="color:var(--warn);font-size:12px;margin-top:4px">Reminder: ' + esc(r.Reminder_Result) + '</div>';
+  if (r.Alert_Result && /^NOT sent/.test(r.Alert_Result)) h += '<div style="color:var(--danger);font-size:12px;margin-top:4px"><b>The alert text to you did not go out:</b> ' + esc(r.Alert_Result) + '</div>';
+  if (r.Answer) {
+    var ex = r.extra || {}, bits = [];
+    if (r.Answer_Location) bits.push('Where: ' + r.Answer_Location);
+    if (ex.trigger) bits.push('When: ' + String(ex.trigger).replace(/_/g, ' '));
+    if (ex.when) bits.push('First noticed: ' + ex.when);
+    if (ex.rain_since) bits.push('Rain since repair: ' + ex.rain_since);
+    var photos = String(r.Answer_Photo_IDs || '').split(',').filter(Boolean).length;
+    h += '<div style="margin-top:6px;font-size:13px"><b style="color:' + (r.Answer === 'resolved' ? 'var(--accent2)' : 'var(--danger)') + '">' + esc(FU_ANSWER_TEXT[r.Answer] || r.Answer) + '</b> <span style="color:var(--muted);font-size:11px">(' + esc(String(r.Answer_Choice || '').replace(/_/g, ' ')) + ' · ' + esc(fuDate(r.Answered_At)) + ')</span>' +
+      (bits.length ? '<div style="font-size:12px">' + bits.map(esc).join(' · ') + '</div>' : '') + (r.Answer_Detail ? '<div style="font-size:12px;font-style:italic">"' + esc(r.Answer_Detail) + '"</div>' : '') + (photos ? '<div style="font-size:12px">📷 ' + photos + ' photo' + (photos > 1 ? 's' : '') + ' added (see the photos on this work order)</div>' : '') + '</div>';
+  }
+  if (s && s.action !== 'done') {
+    var sc = s.severity === 'urgent' ? 'var(--danger)' : (s.severity === 'caution' ? 'var(--warn)' : 'var(--accent2)');
+    h += '<div style="margin-top:8px;border:1px dashed ' + sc + ';border-radius:6px;padding:8px 10px"><div style="font-size:11px;color:var(--muted);letter-spacing:.06em">SUGGESTED NEXT STEP — your call, nothing happens until you tap</div><div style="font-size:13px;font-weight:bold;color:' + sc + '">' + esc(s.label) + '</div><div style="font-size:12px">' + esc(s.detail) + '</div><div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">';
+    if (s.action === 'create_cosmetic_wo' || s.action === 'send_vendor_back') h += '<button class="btn small" style="min-height:40px" onclick="fuStartNextWO(\'' + id + '\')">' + (s.action === 'send_vendor_back' ? 'Prepare the re-check work order…' : 'Prepare the follow-on work order…') + '</button>';
+    if ((s.action === 'call_now' || s.action === 'call_tenant') && tenant && tenant.Phone) h += '<a class="btn small" style="min-height:40px;display:inline-flex;align-items:center" href="tel:' + esc(tenant.Phone) + '">📞 Call ' + esc(tenant.First_Name || 'tenant') + '</a>';
+    if (s.action === 'send_vendor_back' && s.prefill && s.prefill.vendor_id) { var v = safeArray(state.vendors).find(function (x) { return String(x.ID) === String(s.prefill.vendor_id); }); if (v) h += '<span style="font-size:11px;color:var(--muted);align-self:center">Vendor: ' + esc(v.Name) + '</span>'; }
+    h += '</div></div>';
+  } else if (s && s.action === 'done') h += '<div style="margin-top:6px;font-size:12px;color:var(--accent2)">✓ ' + esc(s.detail) + '</div>';
+  if (!closed) {
+    h += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+      '<button class="btn small secondary" style="min-height:40px" onclick="fuCopyLink(\'' + id + '\')">Copy link</button>' +
+      (r.Status === 'Blocked' || r.Status === 'Draft' ? '<button class="btn small secondary" style="min-height:40px" onclick="fuOpenPreview(\'' + fuJs(r.WO_ID) + '\',\'' + fuJs(r.Repair_WO_ID) + '\',true)">Try again…</button>' : '') +
+      '<button class="btn small secondary" style="min-height:40px" onclick="fuClose(\'' + id + '\')">Close this check</button></div>';
+  }
+  return h + '</div>';
+}
+function fuCopyLink(id) {
+  api('POST', '/followup/link', { id: id, page_base: location.origin + location.pathname.replace(/[^\/]*$/, '') }).then(function (r) {
+    if (!r || !r.ok) throw new Error((r && r.error) || 'could not make a link');
+    fuCopy(r.link, 'Link copied — send it to the tenant yourself.');
+  }).catch(function (e) { fuFail('Fix-check link', (e && e.message) || String(e)); });
+}
+function fuClose(id, nextWo, reason) {
+  if (!nextWo && !confirm('Close this fix-check? The tenant\'s link stops accepting answers.')) return;
+  return api('POST', '/followup/close', { id: id, next_wo_id: nextWo || '', reason: reason || '' }).then(function (r) {
+    if (!r || !r.ok) throw new Error((r && r.error) || 'could not close');
+    toast('Fix-check closed', 'success');
+    return fuLoadList().then(function () { if (_fu.woId && document.getElementById('modal-wo-detail').classList.contains('open')) fuRenderCard(_fu.woId); });
+  }).catch(function (e) { fuFail('Close fix-check', (e && e.message) || String(e)); });
+}
+
+// ── turn a suggestion into a PRE-FILLED New Work Order form (Brett still taps Create) ───────────────────────
+function fuStartNextWO(id) {
+  var r = _fu.rows[id] || state.followups.find(function (x) { return String(x.ID) === String(id); });
+  if (!r || !r.suggestion || !r.suggestion.prefill) { fuFail('Fix-check', 'Could not find the suggestion for #' + id + '. Reload the page.'); return; }
+  var pf = r.suggestion.prefill, notes = [];
+  closeModal('modal-followups'); closeModal('modal-wo-detail');
+  openNewWOModal();
+  var set = function (elId, v) { var e = document.getElementById(elId); if (e) e.value = v; return e; };
+  set('wo-property', String(pf.property_id)); if (document.getElementById('wo-property').value !== String(pf.property_id)) notes.push('property'); else woPropertySelected();
+  if (pf.unit_id) { set('wo-unit', String(pf.unit_id)); }
+  var tr = set('wo-trade', pf.trade || ''); if (pf.trade && tr && tr.value !== pf.trade) notes.push('trade "' + pf.trade + '"');
+  var d = set('wo-desc', pf.description || ''); growDescArea(d);
+  if (pf.vendor_id) { set('wo-vendor-opt', String(pf.vendor_id)); if (document.getElementById('wo-vendor-opt').value !== String(pf.vendor_id)) notes.push('vendor'); woVendorOptChanged(); }
+  var v = pf.vendor_id ? safeArray(state.vendors).find(function (x) { return String(x.ID) === String(pf.vendor_id); }) : null;
+  window._fuPendingLink = String(id);
+  var ban = document.getElementById('fu-newwo-banner');
+  if (ban) { ban.style.display = 'block'; ban.innerHTML = '🔎 Pre-filled from fix-check #' + esc(id) + '. <b>Nothing is created or sent until you tap Create.</b>' + (v ? ' ' + esc(v.Name) + ' will be texted when you create it — untick "Notify" below to skip that.' : ' No vendor chosen.') + (notes.length ? ' <span style="color:var(--danger)">Could not pre-select: ' + esc(notes.join(', ')) + ' — please pick it.</span>' : ''); }
+}
+function fuLinkNextWO(fuId, woId) {
+  fuClose(fuId, String(woId), 'Follow-on work order ' + woId + ' created').then(function () { /* fuClose reports its own failure on screen */ });
+}
+
+// ── "Open follow-ups" list ──────────────────────────────────────────────────────────────────────────────────
+function fuOpenList() { _fu.tab = 'action'; openModal('modal-followups'); fuLoadList().then(fuRenderList); fuRenderList(); }
+function fuTab(t) { _fu.tab = t; fuRenderList(); }
+function fuRenderList() {
+  var host = document.getElementById('fu-list-body'); if (!host) return;
+  if (state.followupsError) { host.innerHTML = '<div style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);border-radius:6px;padding:10px 12px;font-size:12px"><b>Could not load the fix-check list:</b> ' + esc(state.followupsError) + '</div>'; return; }
+  var all = state.followups, tabs = {
+    action: all.filter(function (r) { return r.needs_action; }),
+    waiting: all.filter(function (r) { return r.Status === 'Sent'; }),
+    overdue: all.filter(function (r) { return r.Status === 'Overdue'; }),
+    all: all };
+  var names = { action: 'Needs action', waiting: 'Waiting', overdue: 'No answer', all: 'All open' };
+  var h = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">' + Object.keys(names).map(function (k) { return '<button class="btn small ' + (k === _fu.tab ? '' : 'secondary') + '" style="min-height:40px" onclick="fuTab(\'' + k + '\')">' + names[k] + ' (' + tabs[k].length + ')</button>'; }).join('') + '</div>';
+  var rows = tabs[_fu.tab];
+  if (!rows.length) h += '<div style="color:var(--muted);font-size:13px;padding:12px 0">' + (state.followupsLoaded ? 'Nothing here.' : 'Loading…') + '</div>';
+  else h += rows.map(function (r) {
+    var col = FU_STATUS_COLOR[r.Status] || 'var(--muted)', prop = safeArray(state.properties).find(function (p) { return String(p.ID) === String(r.Property_ID); });
+    return '<div onclick="closeModal(\'modal-followups\');openWODetail(\'' + fuJs(r.WO_ID) + '\')" style="border:1px solid var(--border);border-left:4px solid ' + col + ';border-radius:8px;padding:9px 12px;margin-bottom:8px;cursor:pointer;background:var(--surface)">' +
+      '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">WO-' + esc(r.WO_ID) + ' · ' + esc(r.Problem_Label) + '</b><span style="font-size:11px;color:' + col + ';font-weight:bold">' + esc(r.Status.toUpperCase()) + '</span></div>' +
+      '<div style="font-size:12px;color:var(--muted)">' + esc(prop ? prop.Address : '') + ' · ' + esc(r.Tenant_Name) + '</div>' +
+      (r.Answer ? '<div style="font-size:12px"><b>' + esc(FU_ANSWER_TEXT[r.Answer] || r.Answer) + '</b>' + (r.suggestion && r.suggestion.action !== 'done' ? ' → ' + esc(r.suggestion.label) : '') + '</div>' : '<div style="font-size:12px;color:var(--muted)">' + (r.Blocked_Reason ? 'Not sent: ' + esc(r.Blocked_Reason) : (r.Due_At ? 'Answer due ' + esc(fuDate(r.Due_At)) : '')) + '</div>') + '</div>';
+  }).join('');
+  host.innerHTML = h;
+}
 
 // ── Add photos/receipts right after creating a WO (same buttons as the detail view) ──
 function showNewWOPhotoStep(woId, propId){
