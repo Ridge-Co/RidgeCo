@@ -24166,6 +24166,8 @@ async function health(env, url) {
   // Apps Script scheduler heartbeat (Oct 12 2026): coarse and public - the age of the last tick and the NAMES of any
   // overdue jobs; no detail. Detail is GET /cron/status (Scheduler_Token).
   out.scheduler = await schedHealthSummary(env);
+  // AI-credit pause (Oct 16 2026): coarse and public - paused yes/no and since when. No error text. Detail: GET /ai-credit/status.
+  out.ai_credit = await aiCreditHealthSummary(env);
   return json(out);
 }
 
