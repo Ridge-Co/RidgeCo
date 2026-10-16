@@ -15615,6 +15615,81 @@ async function checkDeadManSwitch(env) {
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
 
+// ═══ FAILURE-LEDGER-BEGIN ══════════════════════════════════════════════════════════════════════════════════════════
+// Oct 16 2026 (Brett: "nothing fails silently, ever, anywhere"; design: claude/no-silent-failures-program-oct16.md, phase A1).
+// ONE place every failure lands, so it can be logged, texted, shown on screen and handed to a build session:
+//   reportFailure()   -> appends one row to Failure_Events (append only, NO read first: Sheets read quota is itself a top failure cause).
+//   logTelemetry()    -> every Success=FALSE row is mirrored here automatically, so every existing "failed" call site is covered.
+//   failRollupRun()   -> runs in the sweep_checks job (every ~15 min): folds events into the deduplicated Failures ledger,
+//                        raises "conditions" (scheduler overdue, alerts switched off), texts Brett (P0 now, P1 once a morning).
+//   GET /failures/open, POST /failure/update, POST /failure/report -> the Needs Attention screen and other apps/pages.
+// Severity: P0 money / SMS / auth / scheduler / billing-credits (text now) · P1 data writes and integrity (8 AM digest) · P2 the rest (badge, Monday digest).
+// reportFailure NEVER throws and never recurses into logTelemetry. If the sheet itself is down it can only console.error; the Apps Script
+// watcher (it mails Brett on any unreachable Worker or overdue job) is the net for that case.
+const FAIL_EVENTS_TAB = 'Failure_Events';
+const FAIL_LEDGER_TAB = 'Failures';
+const FAIL_EVENT_COLS = ['ID', 'Timestamp', 'System', 'Source', 'Where', 'Ref', 'Severity', 'Message', 'Context'];
+const FAIL_LEDGER_COLS = ['ID', 'Fingerprint', 'Severity', 'System', 'Where', 'Message', 'Source', 'First_Seen', 'Last_Seen', 'Count', 'Status', 'Notified_At', 'Notified_Count', 'Last_Event_ID', 'Fixed_In', 'Notes'];
+const FAIL_OPEN = ['open', 'acknowledged'];
+const FAIL_STATUSES = ['open', 'acknowledged', 'fixed', 'wontfix'];
+const FAIL_P0_REPEAT_MS = 6 * 3600000;      // a P0 whose count keeps growing is re-texted at most this often
+const FAIL_P0_REMIND_MS = 24 * 3600000;     // an unacknowledged P0 is re-texted once a day even if it stopped growing
+const FAIL_LEGACY_ALERT_MS = 90 * 60000;    // alertAdminOnFailure already texted about this job this recently: do not text twice
+const FAIL_MAX_EVENTS_PER_MIN = 60;         // per isolate; a runaway loop collapses into one counted row instead of flooding the sheet
+const FAIL_CURSOR_KEY = 'failure_rollup_cursor';
+const FAIL_DIGEST_KEY = 'failure_digest_last_date';
+// Where-patterns whose severity is fixed on purpose (checked after the billing/auth escalation, before the area rules).
+const FAIL_SEVERITY_BY_WHERE = [
+  [/^door_watchdog/, 'P2'],                 // the watchdog texts Brett itself; this row is the on-screen record
+  [/^deposit_sweep_not_found/, 'P1'],
+  [/^selftest/, 'P1'],
+  [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
+  [/^failure_ledger/, 'P1'],
+];
+
+// ── pure helpers (unit-tested) ──────────────────────────────────────────────────────────────────────────────────
+function failSevRank(s) { return s === 'P0' ? 0 : s === 'P1' ? 1 : 2; }
+function failNormalizeMessage(m) {
+  return String(m == null ? '' : m).replace(/https?:\/\/\S+/g, '<url>').replace(/\b[0-9a-f]{8,}\b/gi, '<id>')
+    .replace(/"[^"]{0,80}"/g, '"?"').replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 90);
+}
+function failFingerprint(system, where, message) { return `${system || 'hub'}|${where || '?'}|${failNormalizeMessage(message)}`.slice(0, 220); }
+// explicit P0/P1/P2 wins; then billing/auth wording (always urgent); then the fixed table; then the area rules.
+function failSeverity(where, message, explicit) {
+  if (explicit === 'P0' || explicit === 'P1' || explicit === 'P2') return explicit;
+  const m = String(message || ''), w = String(where || '');
+  if (/credit balance|billing|payment required|insufficient (funds|balance|quota)|account (is )?suspended|invalid_grant|token (has )?(expired|been revoked)|unauthori[sz]ed|\b401\b|authentication (failed|error)/i.test(m)) return 'P0';
+  for (const [re, sev] of FAIL_SEVERITY_BY_WHERE) if (re.test(w)) return sev;
+  if (/sms|twilio|text_|qb|quickbooks|payment|scheduler|dead_man|auth|pin_|deposit_paid|cron|invoice_send|message_queue/i.test(w)) return 'P0';
+  if (/write|append|update|queue|duplicate|sheet|integrity|sweep|id_race/i.test(w) || /quota exceeded|did not land|not found after|duplicate/i.test(m)) return 'P1';
+  return 'P2';
+}
+// Builds one Failure_Events row from whatever a caller has. Never throws.
+function failBuildEvent(f, nowMs, rand) {
+  f = f || {};
+  const err = f.err;
+  const rawMsg = f.message != null ? f.message : (err && err.message) ? err.message : (err != null ? err : '');
+  const system = String(f.system || 'hub').toLowerCase().replace(/[^a-z0-9._:-]/g, '').slice(0, 40) || 'hub';
+  const where = String(f.where || 'unknown').replace(/[\r\n]+/g, ' ').slice(0, 80);
+  const message = String(rawMsg || '(no details)').replace(/[\r\n]+/g, ' ').slice(0, 400);
+  let ctx = '';
+  if (f.context != null) { try { ctx = JSON.stringify(f.context).slice(0, 600); } catch (e) { ctx = '(context not serialisable)'; } }
+  return { ID: String(nowMs) + '-' + rand, Timestamp: new Date(nowMs).toISOString(), System: system, Source: String(f.source || '').slice(0, 40), Where: where, Ref: String(f.ref || '').slice(0, 80), Severity: failSeverity(where, message, f.severity), Message: message, Context: ctx };
+}
+function failRowsToObjects(values, cols, firstSheetRow) {
+  const out = []; const rows = values || [];
+  for (let i = 0; i < rows.length; i++) { const o = {}; cols.forEach((c, j) => { o[c] = rows[i][j] == null ? '' : String(rows[i][j]); }); o._row = (firstSheetRow || 1) + i; out.push(o); }
+  return out;
+}
+function failLegacyAlerted(cfg, where, nowMs) {
+  for (const k of Object.keys(cfg || {})) {
+    if (k.indexOf('failure_alert_last_sent_') !== 0) continue;
+    const job = k.slice('failure_alert_last_sent_'.length); const t = Date.parse(cfg[k] || '');
+    if (isNaN(t) || nowMs - t > FAIL_LEGACY_ALERT_MS) continue;
+    if (job === where || String(where).indexOf(job) === 0 || job.indexOf(String(where)) === 0) return true;
+  }
+  return false;
+}
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
 // independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
 // `schedule:` and the Cloudflare Cron Trigger in scheduled(). (Oct 12 2026: BOTH are now gone - cron-sweep.yml is deleted,
