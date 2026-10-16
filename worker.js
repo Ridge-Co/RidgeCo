@@ -16307,6 +16307,14 @@ function schedStatus(state, now, jobs, aiPausedAt) {
       out.jobs[job.name] = { expected: schedExpected(job), enabled: false, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue: false, overdue_reason: '' };
       continue;
     }
+    if (job.gate === 'ai_paused') {   // Oct 16 2026: runs only while AI is paused - never "overdue" when nothing is paused, or in the first hours of a pause
+      const pausedAge = ageMin(aiPausedAt);
+      const okAge = ageMin(js.last_ok);
+      const od = !!aiPausedAt && pausedAge !== null && pausedAge > schedOverdueLimitMin(job) && (okAge === null || okAge > schedOverdueLimitMin(job));
+      out.jobs[job.name] = { expected: 'hourly, only while AI is paused (otherwise it does nothing and costs nothing)', enabled: true, gated: true, active: !!aiPausedAt, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: false, overdue: od, overdue_reason: od ? `AI has been paused for ${pausedAge} min and the recovery check has not completed in ${schedOverdueLimitMin(job)} min` : '' };
+      if (od) out.overdue.push(job.name);
+      continue;
+    }
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
     let overdue = false, reason = '';
     if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
