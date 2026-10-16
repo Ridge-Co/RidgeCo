@@ -21747,6 +21747,8 @@ async function receiptImageExtractMultiple(env, bytes, mime) {
     })) : [];
     return { receipt_count: receipts.length, receipts };
   } catch (e) {
+    if (aiCreditIsPausedError(e)) return { receipt_count: 0, receipts: [], _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'receiptImageExtractMultiple', e);
     return { receipt_count: 0, receipts: [], _error: true, _error_message: String((e && e.message) || e) };
   }
 }
