@@ -17029,7 +17029,12 @@ async function skipMessageQueue(env, body) {
   const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
   if (!ids.length) return json({ error: 'ids required' }, 400);
   const results = [];
-  for (const id of ids) { await updateMessageQueueRow(env, id, { Status: 'skipped' }); results.push({ id }); }
+  for (const id of ids) {
+    const done = await updateMessageQueueRow(env, id, { Status: 'skipped' });
+    results.push(done ? { id } : { id, error: 'could not be skipped' });
+  }
+  const bad = results.filter(r => r.error);
+  if (bad.length) return json({ ok: false, error: bad.length + ' of ' + ids.length + ' message(s) could not be skipped (#' + bad.map(r => r.id).join(', #') + '). Brett has been told; nothing was sent.', results });
   return json({ ok: true, results });
 }
 
