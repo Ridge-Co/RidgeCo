@@ -181,7 +181,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
   t('Wed 3pm, nothing ever run: every daily/weekly job is ahead of every interval job', firstInterval === wed.length - 7 && wed.slice(0, firstInterval).every(n => !['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep'].includes(n)) && wed.includes('review_wed') && wed.includes('str_digest_wed'), wed.join());
   const done = S0(); for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'hub_impr_daily', 'review_wed', 'str_digest_wed']) done.jobs[n] = { last_key: '2026-10-14', last_status: 'ok', last_ok: '2026-10-14T19:00:00.000Z', last_end: '2026-10-14T19:00:00.000Z' };
   const after = P.schedDueJobs(done, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
-  t('once the daily/weekly jobs are done the interval jobs run in their usual order', after.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning', after.join());
+  t('once the daily/weekly jobs are done the interval jobs run in their usual order', after.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep', after.join());
   const backoff = S0(); backoff.jobs.daily_qb_sync = { attempts: { key: '2026-10-14', n: 1 }, last_end: '2026-10-14T19:00:00.000Z', last_start: '2026-10-14T18:59:00.000Z', last_status: 'failed' };
   const bo = P.schedDueJobs(backoff, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
   t('a failed daily job in its retry back-off does not block anything (not due until the gap passes)', !bo.includes('daily_qb_sync') && bo.includes('str_cleaning'), bo.join());
