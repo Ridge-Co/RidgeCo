@@ -21740,6 +21740,9 @@ async function invoiceExtract(env, bytes, mime) {
   } catch (e) {
     // routeAI threw (missing key, network) or bytesToB64/media-build failed — fail open with a
     // clearly-empty suggestion rather than surfacing a 500 to a vendor mid-submit.
+    // Oct 16 2026: AI credit paused -> _paused:true + a plain "enter it by hand" message (no Anthropic call was made, Brett was already alerted).
+    if (aiCreditIsPausedError(e)) return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'invoiceExtract', e);
     return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
   }
 }
