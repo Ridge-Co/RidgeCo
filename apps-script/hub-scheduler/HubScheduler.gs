@@ -229,7 +229,8 @@ function runScheduler() {
       if (!r.ok) { infraFailed = true; problem = r.problem; infraFailure_(r.problem); break; }
       var b = r.body;
       if (b.ran) {
-        ran.push(b.ran + (b.job_ok === false ? ' (FAILED)' : b.timed_out ? ' (still running)' : ''));
+        ran.push(b.ran + (b.job_ok === false ? ' (FAILED)' : b.paused ? ' (paused: AI credit)' : b.timed_out ? ' (still running)' : ''));
+        if (b.paused) Logger.log(b.ran + ' was skipped on purpose: ' + (b.paused_reason || 'paused: AI credit') + ' (Brett was alerted once; Resume button in the Hub, or it resumes by itself within an hour of credit being added).');
         if (b.job_ok === false) jobFailure_(b);
         else if (b.timed_out) Logger.log(b.ran + ' is taking longer than 50 s; it continues in the background (see statusReport).');
       }
