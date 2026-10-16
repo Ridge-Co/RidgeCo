@@ -23,10 +23,17 @@ let SHEET, SMS, SMS_RESULT, OVERDUE, FAIL_APPEND, ERR;
 const colIdx = L => L.split('').reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1;
 async function sheetsRequest(env, method, path, body) {
   let m;
-  if (method === 'GET' && (m = /^\/values\/([^!:?]+)(?:!A(\d+):[A-Z]+(\d+)?)?$/.exec(path))) {
+  if (method === 'GET' && (m = /^\/values\/([^!:?]+)(?:!(.+))?$/.exec(path))) {
     if (!SHEET[m[1]]) { const e = new Error('Unable to parse range: ' + m[1]); throw e; }
-    const rows = SHEET[m[1]]; const from = m[2] ? parseInt(m[2], 10) - 1 : 0;
-    return { values: rows.slice(from, m[3] ? parseInt(m[3], 10) : undefined).map(r => r.slice()) };
+    const rows = SHEET[m[1]]; let from = 0, to;
+    if (m[2]) {
+      let r;
+      if ((r = /^A(\d+):[A-Z]+(\d+)?$/.exec(m[2]))) { from = parseInt(r[1], 10) - 1; to = r[2] ? parseInt(r[2], 10) : undefined; }
+      else if ((r = /^1:1$/.exec(m[2]))) { return { values: rows.slice(0, 1).map(x => x.slice()) }; }
+      else if ((r = /^([A-Z]+)2:([A-Z]+)$/.exec(m[2]))) { const ci = colIdx(r[1]); return { values: rows.slice(1).map(x => [x[ci] === undefined ? '' : x[ci]]) }; }
+      else throw new Error('unhandled range ' + m[2]);
+    }
+    return { values: rows.slice(from, to).map(r => r.slice()) };
   }
   if (method === 'POST' && (m = /^\/values\/([^!:?]+):append/.exec(path))) {
     if (FAIL_APPEND) throw new Error('Sheets 503');
@@ -46,17 +53,22 @@ const sendSMS = async (env, to, text) => { SMS.push({ to, text }); return SMS_RE
 const setConfigKey = async (env, { key, value }) => { const t = SHEET.Config; const r = t.find(x => x[0] === key); if (r) r[1] = value; else t.push([key, value]); return json({ success: true }); };
 const schedReadConfigRows = async () => SHEET.Config;
 const schedParseState = () => ({ state: {} });
-const schedCell = () => '';
+const SCHED_TOKEN_MIN_LEN = 24, SCHED_TOKEN_KEY = 'Scheduler_Token';
 const schedEffective = () => ({ jobs: [] });
 const schedStatus = () => ({ overdue: OVERDUE.map(o => o.name), jobs: Object.fromEntries(OVERDUE.map(o => [o.name, { overdue_reason: o.reason }])), tick_age_min: 3 });
 const SCHED_STATE_KEY = 'Scheduler_State';
-const pieces = [grab('col'), grab('configFromValues'), grab('appendedRowNumber'), grab('schedEtParts')].join('\n');
-const L = new Function('sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedCell', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY',
-  pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, __reset: () => { _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
-  sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedCell, schedEffective, schedStatus, SCHED_STATE_KEY);
+const OPS_QUEUE_TAB = 'Ops_Build_Queue', OPS_QUEUE_COLS = ['ID', 'Timestamp', 'Title', 'Rank', 'Problem', 'Impact', 'Effort', 'Tag', 'First_Step', 'Review_TS', 'Status', 'Approved_By', 'Risk_Class', 'Lens', 'Requires_Spend', 'Spend_Note', 'Workaround'];
+let TWILIO, QUEUE_FAIL;
+const fetch = async (url) => { if (TWILIO instanceof Error) throw TWILIO; return { ok: TWILIO.status === undefined ? true : TWILIO.status < 400, status: TWILIO.status || 200, text: async () => JSON.stringify(TWILIO.body) }; };
+const ensureColumns = async () => {};
+const addRow = async (env, tab, obj) => { if (QUEUE_FAIL) return { status: 500, clone() { return this; }, async json() { return {}; } }; const t = SHEET[tab] || (SHEET[tab] = [OPS_QUEUE_COLS.slice()]); const id = String(t.length); t.push(OPS_QUEUE_COLS.map(c => c === 'ID' ? id : (obj[c] === undefined ? '' : String(obj[c])))); return { status: 200, clone() { return this; }, async json() { return { id }; } }; };
+const pieces = [grab('schedTokenOk'), grab('schedFindRow'), grab('schedCell'), grab('buildScoutQueueRow'), grab('col'), grab('configFromValues'), grab('appendedRowNumber'), grab('schedEtParts')].join('\n');
+const L = new Function('SCHED_TOKEN_MIN_LEN', 'SCHED_TOKEN_KEY', 'MSG_QUEUE_TAB', 'fetch', 'ensureColumns', 'addRow', 'OPS_QUEUE_TAB', 'OPS_QUEUE_COLS', 'sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY',
+  pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, failInvariantItems, failDuplicateIds, failMessageQueueStats, failInvariantConditions, failQueuePlan, failQueueItem, __reset: () => { _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
+  SCHED_TOKEN_MIN_LEN, SCHED_TOKEN_KEY, 'Message_Queue', fetch, ensureColumns, addRow, OPS_QUEUE_TAB, OPS_QUEUE_COLS, sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedEffective, schedStatus, SCHED_STATE_KEY);
 const reset = (cfg) => {
   SHEET = { Config: [['failure_alert_enabled', 'TRUE'], ['admin_phone', '+15550001111'], ['dead_man_switch_enabled', 'TRUE']].concat(cfg || []) };
-  L.__reset(); SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
+  L.__reset(); TWILIO = new Error('no twilio'); QUEUE_FAIL = false; SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
 };
 const origErr = console.error; console.error = (...a) => { ERR.push(a.join(' ')); };
 const T0 = Date.UTC(2026, 9, 16, 12, 5);      // 8:05 AM ET
@@ -219,6 +231,79 @@ FAIL_APPEND = false;
 reset(); for (let i = 0; i < 25; i++) { a = mk('', { where: 'spam', message: 'm' + i }); r = await L.failReportEndpoint(env, a.request, a.body); }
 ok(r.status === 429, 'anonymous spam is rate limited (429)');
 reset(); r = await L.reportFailure(env, { where: 'real', message: 'important' }); ok(r.ok, 'real reports still get through while anonymous spam is capped');
+
+console.log('\nA3a: daily checks');
+ok(JSON.stringify(L.failDuplicateIds(['1', '2', '2', ' 3', '3', '', '4'])) === '["2","3"]', 'duplicate ids found, blanks ignored');
+const NOW = T0;
+let st = L.failMessageQueueStats([
+  { Status: 'pending', Active: 'TRUE', Send_After: new Date(NOW - 8 * 3600000).toISOString() },
+  { Status: 'pending', Active: 'TRUE', Send_After: new Date(NOW - 1 * 3600000).toISOString() },
+  { Status: 'pending', Active: 'FALSE', Send_After: new Date(NOW - 9 * 3600000).toISOString() },
+  { Status: 'pending', Active: 'TRUE', Send_After: '' },
+  { Status: 'failed', Created_Date: new Date(NOW - 2 * 3600000).toISOString() },
+  { Status: 'failed', Created_Date: new Date(NOW - 50 * 3600000).toISOString() },
+  { Status: 'sent' }], NOW);
+ok(st.stuck === 1 && st.oldest_hours === 8 && st.failed24 === 1, 'stuck = active pending text >6 h past its send time; failed counted for 24 h only; held/inactive/old rows ignored');
+let it = L.failInvariantItems({ dup: [{ tab: 'Message_Queue', ids: ['298'] }, { tab: 'Work_Orders', ids: [] }], mq: { stuck: 2, oldest_hours: 9, failed24: 0 }, twilio: { balance: 8.5 }, errors: [{ check: 'message_queue', error: 'boom' }] });
+ok(it.length === 4 && it.find(x => x.key === 'inv:dup:Message_Queue').severity === 'P1' && it.find(x => x.key === 'inv:twilio_balance').severity === 'P0' && it.find(x => x.key === 'inv:check_failed:message_queue'), 'items: duplicates P1, Twilio under $10 P0, and a check that could not run is itself an item');
+ok(L.failInvariantItems({ twilio: { balance: 18 } })[0].severity === 'P1' && L.failInvariantItems({ twilio: { balance: 80 } }).length === 0, 'Twilio $10-$25 is P1; healthy balance raises nothing');
+// full run against fake sheet
+reset();
+SHEET.Message_Queue = [['ID', 'Status', 'Active', 'Send_After', 'Created_Date'], ['1', 'pending', 'TRUE', new Date(T0 - 9 * 3600000).toISOString(), ''], ['2', 'sent', 'TRUE', '', ''], ['2', 'sent', 'TRUE', '', '']];
+SHEET.Work_Orders = [['Vendor_Needs_Access', 'ID'], ['', 'WO-1'], ['', 'WO-2']];
+const envT = { TWILIO_SID: 'AC1', TWILIO_API_SID: 'SK1', TWILIO_API_KEY: 'k' }; TWILIO = { body: { balance: '7.10' } };
+res = await L.failRollupRun(envT, { nowMs: T0 });
+const rowsA = SHEET.Failures.slice(1).map(x => x[1]);
+ok(rowsA.includes('cond|inv:dup:Message_Queue') && rowsA.includes('cond|inv:mq_stuck') && rowsA.includes('cond|inv:twilio_balance') && !rowsA.includes('cond|inv:dup:Work_Orders'), 'the daily checks put duplicate IDs, a stuck text and a low Twilio balance on the ledger (WO header is not column A: found by name)');
+ok(SMS.length >= 1 && /Twilio balance|Hub problem/.test(SMS[0].text), 'a low Twilio balance (P0) texts');
+const storedCfg = SHEET.Config.find(x => x[0] === 'failure_invariants_json');
+ok(storedCfg && JSON.parse(storedCfg[1]).items.length >= 3, 'the result is stored in Config so the next 15-minute runs do not re-read every tab');
+const reads = []; const origSR = sheetsRequest;
+SHEET.Message_Queue.splice(2, 1);                                // fix the duplicate; the stored result is still fresh, so nothing changes yet
+res = await L.failRollupRun(envT, { nowMs: T0 + 900000 });
+ok(SHEET.Failures.slice(1).find(x => x[1] === 'cond|inv:dup:Message_Queue')[10] === 'open', 'within 20 h the stored result is used (no re-read)');
+res = await L.failRollupRun(envT, { nowMs: T0 + 21 * 3600000 });
+ok(SHEET.Failures.slice(1).find(x => x[1] === 'cond|inv:dup:Message_Queue')[10] === 'fixed', 'after 20 h the checks re-run and a repaired problem clears itself');
+reset(); TWILIO = new Error('Twilio down');
+res = await L.failRollupRun(envT, { nowMs: T0 });
+ok(SHEET.Failures.slice(1).some(x => x[1] === 'cond|inv:check_failed:twilio_balance' && x[2] === 'P1'), 'if the Twilio check cannot run, that is itself a visible problem (never silent)');
+reset(); TWILIO = { body: { balance: '50' } };
+const storedBad = JSON.parse(JSON.stringify([['failure_invariants_json', '{not json']])); SHEET.Config.push(storedBad[0]);
+res = await L.failRollupRun(envT, { nowMs: T0 });
+ok(res.ok !== undefined && !SHEET.Failures.slice(1).some(x => /inv:run_failed/.test(x[1])), 'a corrupt stored result is simply recomputed');
+
+console.log('\nA3a: auto-queue of problems left open > 24 h');
+const lrow = (o) => Object.assign({ ID: 'F1', Fingerprint: 'hub|x|y', Severity: 'P0', System: 'hub', Where: 'receipt_parse', Message: 'credit balance too low', Count: '19', Status: 'open', First_Seen: new Date(T0 - 30 * 3600000).toISOString(), Last_Seen: new Date(T0).toISOString(), Notes: '', _row: 2 }, o);
+ok(L.failQueuePlan([lrow({})], T0).length === 1, 'P0 open 30 h is queued');
+ok(L.failQueuePlan([lrow({ First_Seen: new Date(T0 - 5 * 3600000).toISOString() })], T0).length === 0, 'not before 24 h');
+ok(L.failQueuePlan([lrow({ Severity: 'P2' })], T0).length === 0 && L.failQueuePlan([lrow({ Status: 'fixed' })], T0).length === 0 && L.failQueuePlan([lrow({ Status: 'wontfix' })], T0).length === 0, 'minor, fixed and won\'t-fix problems are never queued');
+ok(L.failQueuePlan([lrow({ Notes: '2026-10-16 queued: Ops_Build_Queue #77' })], T0).length === 0, 'already queued: never twice');
+ok(L.failQueuePlan([lrow({ Fingerprint: 'cond|alerts_off' })], T0).length === 0, 'switches Brett flips himself are not build work');
+ok(L.failQueuePlan([1, 2, 3, 4, 5].map(i => lrow({ ID: 'F' + i, _row: i + 1 })), T0).length === 3, 'at most 3 per run (a pile-up cannot flood the queue)');
+ok(/^Fix: receipt_parse/.test(L.failQueueItem(lrow({})).title) && /Needs Attention ID F1/.test(L.failQueueItem(lrow({})).problem), 'queue item names the place and the ledger ID');
+const R0 = Date.now();
+reset(); await L.reportFailure(env, { where: 'receipt_parse', message: 'credit balance too low' });
+await L.failRollupRun(env, { nowMs: R0 });
+res = await L.failRollupRun(env, { nowMs: R0 + 30 * 3600000 });
+const q = SHEET.Ops_Build_Queue;
+ok(res.queued === 1 && q && q.length === 2 && q[1][10] === 'proposed' && q[1][11] === 'failure-ledger' && /Fix: receipt_parse/.test(q[1][2]), 'after 24 h an open P0 lands in Ops_Build_Queue as "proposed" (Brett still decides)');
+ok(/queued: Ops_Build_Queue #1/.test(SHEET.Failures.slice(1).find(x => x[4] === 'receipt_parse')[15]), 'the ledger row records which queue item it became');
+res = await L.failRollupRun(env, { nowMs: R0 + 31 * 3600000 });
+ok(res.queued === 0 && SHEET.Ops_Build_Queue.length === 2, 'and the next run does not queue it again');
+reset(); await L.reportFailure(env, { where: 'receipt_parse', message: 'credit balance too low' });
+await L.failRollupRun(env, { nowMs: R0 }); QUEUE_FAIL = true;
+res = await L.failRollupRun(env, { nowMs: R0 + 30 * 3600000 });
+ok(res.ok === false && res.errors.some(e => e.step === 'queue_item') && !/queued:/.test(SHEET.Failures.slice(1).find(x => x[4] === 'receipt_parse')[15]), 'if the queue write fails the job reports it and the ledger is not marked queued (it retries)');
+
+console.log('\nA3a: the Apps Script scheduler token may report with real severities');
+reset(); SHEET.Config.push(['Scheduler_Token', 'sched-secret-token-0123456789abcdef0123456789']);
+env.WORKER_SECRET = 'adm'; env.FAILURE_INGEST_TOKEN = '';
+a = mk('sched-secret-token-0123456789abcdef0123456789', { system: 'scheduler', source: 'apps-script', where: 'worker_probe:barrel-co', message: 'barrel-co /health HTTP 502', severity: 'P1' });
+r = await L.failReportEndpoint(env, a.request, a.body);
+ok(r.status === 200 && SHEET.Failure_Events[1][2] === 'scheduler' && SHEET.Failure_Events[1][6] === 'P1', 'the scheduler token is trusted: system and severity are kept');
+a = mk('wrong-token', { system: 'scheduler', where: 'x', message: 'm', severity: 'P0' });
+r = await L.failReportEndpoint(env, a.request, a.body);
+ok(r.status === 200 && SHEET.Failure_Events[2][6] === 'P2' && SHEET.Failure_Events[2][2] === 'page:scheduler', 'a wrong token is treated as anonymous (P2, tagged page:)');
 
 console.log('\nWiring (static) + telemetry bridge');
 const lt = grab('logTelemetry', 'async');
