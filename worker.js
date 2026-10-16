@@ -16177,6 +16177,7 @@ function schedJobDue(job, js, nowDate, aiPausedAt) {
   if (job.kind === 'weekly' && et.dow !== job.dow) return null;
   if (et.minutes < schedAtMinutes(job.at)) return null;
   if (js.last_key === et.date) return null;                       // already done (or deliberately not retried) for this ET day
+  if (aiPausedAt && js.paused_key === et.date && js.paused_ep === aiPausedAt) return null;   // Oct 16 2026: skipped today BECAUSE AI is paused (same pause episode) - not retried every 30 min; re-armed when the pause clears
   if (js.partial_at && nowMs - (Date.parse(js.partial_at) || 0) < SCHED_PARTIAL_GAP_MS) return null;   // finished a slice a moment ago; resume on a later tick, not this one
   const at = js.attempts;
   if (at && at.key === et.date && at.n > 0) {
