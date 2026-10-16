@@ -901,6 +901,10 @@ const _hubWorkerCore = {
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
+        // Oct 16 2026 (AI-credit pause). ADMIN ONLY by construction: neither path is in ROLE_SCOPES, PUBLIC_PATHS or HUB_PROD_WRITE_PATHS, so only
+        // WORKER_SECRET (the Hub admin login) reaches them - plus HUB_TEST_TOKEN on STAGING (hubTestWriteAllowed). Tenant/vendor/owner sessions get 401.
+        if (path === '/admin/ai-credit-resume')   return await aiCreditResumeHandler(env);
+        if (path === '/admin/ai-credit-simulate') return await aiCreditSimulateHandler(env, body);   // 404 unless staging
         if (path === '/wo/additional-work/start')    return await addonStart(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/submit')   return await addonSubmit(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/withdraw') return await addonWithdraw(env, body, callerRole, callerSessionId);
