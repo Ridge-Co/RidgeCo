@@ -31404,7 +31404,7 @@ function strExternalCover(task, foreignEvents) {
 function strNextCleaner(a) {
   const order = (a.pool || []).filter(p => String(p.Active || '').toUpperCase() !== 'FALSE').slice().sort((x, y) => (parseInt(x.Priority, 10) || 999) - (parseInt(y.Priority, 10) || 999) || (parseInt(x.ID, 10) || 0) - (parseInt(y.ID, 10) || 0));
   const tried = new Set((a.offers || []).filter(o => o.Task_Key === a.task.key && STR_OFFER_BLOCKS.includes(o.Status)).map(o => String(o.Cleaner_ID)));
-  const skipped = [];
+  const skipped = [], eligible = [];
   for (const p of order) {
     const id = String(p.Cleaner_ID), c = a.cleaners[id];
     if (!c || String(c.Active || '').toUpperCase() === 'FALSE') { skipped.push({ id, reason: 'inactive' }); continue; }
@@ -31412,9 +31412,14 @@ function strNextCleaner(a) {
     if (c.SmsOk === false) { skipped.push({ id, reason: 'sms_opted_out' }); continue; }
     if (tried.has(id)) { skipped.push({ id, reason: 'already_asked' }); continue; }
     if ((a.marks || {})[id + '|' + a.task.date] === 'out') { skipped.push({ id, reason: 'marked_out' }); continue; }
-    return { cleaner: c, skipped };
+    eligible.push({ c, id });
   }
-  return { cleaner: null, skipped };
+  if (!eligible.length) return { cleaner: null, skipped };
+  // Oct 16 2026: the FIRST ask always follows queue order (nobody jumps ahead of Gina). Once someone has already been asked and passed /
+  // cancelled / not replied, a cleaner who volunteered as backup ('can') for that date is asked before one who never answered; queue order within each group.
+  const reround = (a.offers || []).some(o => o.Task_Key === a.task.key && ['declined', 'expired', 'cancelled', 'accepted'].includes(o.Status));
+  const staged = reround ? eligible.find(e => (a.marks || {})[e.id + '|' + a.task.date] === 'can') : null;
+  return { cleaner: (staged || eligible[0]).c, skipped, staged: !!staged };
 }
 
 // What the cleaning calendar should hold. covered tasks -> "<Name> Cleaning" (all-day); uncovered tasks inside redDays -> red 7a-7p block.
