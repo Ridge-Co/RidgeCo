@@ -34151,7 +34151,7 @@ async function fiStructure(env, body) {
   let ai;
   try {
     ai = await routeAI(env, { type: 'fi_structure', customerFacing: true, schema: true, system: FI_STRUCTURE_SYSTEM, prompt: fiBuildStructurePrompt(Object.assign({}, body, { dictation })), maxTokens: 2200, source: 'field-inspect' });
-  } catch (e) { return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  } catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic sorting is paused (AI credit) - add the issues by hand. Your text is kept.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const parsed = fiExtractJson(ai.result);
   const issues = parsed && fiNormalizeIssues(parsed.issues);
   if (!issues) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your text is kept — retry, or add the issues by hand.');
