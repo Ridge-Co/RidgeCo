@@ -559,7 +559,7 @@ function runScriptJobs_(started) {
     }
     if (job.run === 'github' && js.pending) {
       var v = verifyGithubRun_(job, js, now);
-      if (v.alert) jobFailure_({ ran: job.name, error: v.alert });
+      if (v.alert) { jobFailure_({ ran: job.name, error: v.alert }); ledgerThrottled_('gh_' + job.name, JOB_ALERT_MS, 'github_workflow:' + job.name, 'P1', job.name + ': ' + v.alert); }
       saveJobState_(st);
     }
     var due = scriptJobDue_(job, js, now);
