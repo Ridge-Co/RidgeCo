@@ -21367,7 +21367,11 @@ async function summarizeItemsCheap(env, items) {
     const r = await routeAI(env, { type: 'items_summarize', prompt, maxTokens: 300, schema: true, source: 'summarizeItemsCheap' });
     const parsed = JSON.parse(String(r.result || '[]').replace(/^```json?/i, '').replace(/```$/, '').trim());
     return Array.isArray(parsed) ? parsed.filter(x => typeof x === 'string' && x.trim()).slice(0, 15) : [];
-  } catch (e) { return []; }
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) throw e;        // AI is paused: the caller stops and says so (no call was made, nothing to retry)
+    await aiFailOpenNote(env, 'summarizeItemsCheap', e);   // logged + Ops_Telemetry; the display wording is simply left blank
+    return [];
+  }
 }
 
 // GET|POST /admin/items-summarize-test — read-only diagnostic (Ops_Build_Queue #24, Sep 19
