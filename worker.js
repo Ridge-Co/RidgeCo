@@ -16894,8 +16894,10 @@ async function schedRunNext(env, ctx, opts) {
   const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
   const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
   if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
-  const dueNow = schedDueJobs(st, now, jobs, { only });
+  const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
+  const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
+  if (aiPausedAt) base.ai_paused = true;
 
   // DRY RUN / PREFLIGHT: no claim, no state write, no SMS, no job code. Lists what is due and (counts only) what it would do.
   if (opts.dry) {
