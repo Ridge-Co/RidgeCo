@@ -18016,6 +18016,51 @@ function aiCreditErrorTextIsOutage(text) {
   return /credit balance|purchase credits|plans\s*(&|and)\s*billing|AI is paused|ai_credit_paused|billing_error/i.test(String(text || ''));
 }
 
+// Sends ONE alert by text (admin-notify path: daily cap, verified counter) AND email. Delivered = either channel got through.
+async function aiCreditNotify(env, subject, smsText, html, warnings) {
+  const res = { sms: null, email: null, delivered: false };
+  try {
+    const r = await adminNotify(env, { text: smsText.slice(0, ADMIN_NOTIFY_MAX_TEXT), source: 'ai_credit' });
+    let j = null; try { j = await r.clone().json(); } catch (je) { j = { ok: false, error: 'unreadable admin-notify answer: ' + schedErrText(je) }; }
+    res.sms = { ok: !!(j && j.ok), sent: !!(j && j.ok && (j.sent || j.staged)), skipped: !!(j && j.skipped), error: (j && j.ok) ? undefined : String((j && j.error) || 'HTTP ' + r.status).slice(0, 200), reason: (j && j.reason) || undefined };
+    if (res.sms.ok === false) warnings.push('text to Brett not sent: ' + res.sms.error);
+  } catch (e) { res.sms = { ok: false, sent: false, error: schedErrText(e) }; warnings.push('text to Brett failed: ' + res.sms.error); }
+  try {
+    let to = AI_CREDIT_EMAIL_DEFAULT;
+    try { const c = schedCell(await schedReadConfigRows(env, false), 'INSP_NOTIFY_EMAIL').trim(); if (c) to = c; } catch (ce) { warnings.push('could not read the notify email from Config (used the default): ' + schedErrText(ce)); }
+    const r = await gmailSendEmail(env, { to, subject, html });
+    res.email = { ok: !!(r && (r.sent || r.staged)), to };
+    if (!res.email.ok) warnings.push('email to Brett not sent');
+  } catch (e) { res.email = { ok: false, error: schedErrText(e) }; warnings.push('email to Brett failed: ' + res.email.error); }
+  res.delivered = !!((res.sms && res.sms.sent) || (res.email && res.email.ok));
+  return res;
+}
+// The once-per-pause alert (+ the 24 h reminder). Stamps AI_CREDIT_ALERT_LAST_SENT BEFORE sending (so a second failing call cannot
+// double-send); if neither channel got through the stamp is removed again and a telemetry row says so - it is retried, never dropped.
+async function aiCreditMaybeAlert(env, state, errors) {
+  const due = aiCreditAlertDue(state, Date.now());
+  if (!due) return { skipped: 'already alerted for this pause' };
+  if (Date.now() - _aiCreditAlertTryMs < AI_CREDIT_ALERT_RETRY_MS) return { skipped: 'an alert was attempted a moment ago' };
+  _aiCreditAlertTryMs = Date.now();
+  const stamp = new Date().toISOString();
+  let stamped = false;
+  // The two failure_alert_last_sent_* keys tell the failure ledger (failLegacyAlerted) that Brett was JUST texted about this, so it records
+  // the same problem on the Needs Attention screen without sending him a second, less helpful text.
+  try { const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: stamp, failure_alert_last_sent_ai_credit_paused: stamp, failure_alert_last_sent_ai_credit_exhausted: stamp }); stamped = w.ok; if (!w.ok) errors.push('alert stamp not saved: ' + w.error); }
+  catch (e) { errors.push('alert stamp not saved: ' + schedErrText(e)); }
+  const t = aiCreditAlertText(state, due);
+  const warnings = [];
+  const res = await aiCreditNotify(env, t.subject, t.sms, t.html, warnings);
+  res.reason = due; res.stamped = stamped; res.warnings = warnings;
+  if (!res.delivered) {
+    errors.push('NEITHER the text nor the email reached Brett - it will be retried on the next detection: ' + warnings.join('; ').slice(0, 300));
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_alert_failed', Skill_Or_Endpoint: 'aiCreditMaybeAlert', Success: 'FALSE', Notes: JSON.stringify({ sms: res.sms, email: res.email }).slice(0, 450) }); }
+    catch (te) { console.error('ai-credit: alert undeliverable and its telemetry write failed:', schedErrText(te)); }
+    if (stamped) { try { await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: '', failure_alert_last_sent_ai_credit_paused: '', failure_alert_last_sent_ai_credit_exhausted: '' }); } catch (e) { errors.push('could not clear the alert stamp: ' + schedErrText(e)); } }
+  }
+  return res;
+}
+
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
 // Secure, self-owned multi-model router. Calls each provider directly from THIS
 // Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
