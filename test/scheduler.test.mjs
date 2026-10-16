@@ -581,7 +581,7 @@ for (const N of [2, 5, 8]) {
 // 2o FIRST-EVER TICK: no duplicates. With a blank Scheduler_State, daily/weekly jobs whose slot already passed today (ET) are
 // SEEDED as done (the old crons / a person already ran them), 15-minute jobs run at once, and later slots run normally.
 const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check'];   // (name kept; it is now six dailies, all at 07:00 ET)
-const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning'];
+const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep'];
 // Drain one "tick" the way the Apps Script does: call until more=false. Returns { ran, first } (first = the first response).
 const drain = async (L, c, extra) => {
   const ran = []; let first = null;
