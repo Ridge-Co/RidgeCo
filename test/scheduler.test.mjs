@@ -63,7 +63,10 @@ function makeStore() {
 // ───────────────────────────── 1. scheduler block, sliced out of worker.js ─────────────────────────────
 const bi = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-BEGIN'), be = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-END');
 t('scheduler block markers exist', bi > 0 && be > bi);
-const blockSrc = wsrc.slice(bi, be);
+// Oct 16 2026: the scheduler now consults the AI-credit pause (aiCreditCheck / aiCreditPausedAtFromRows / schedAiStep), which lives in the guard block just before MODEL ROUTING.
+const gi = wsrc.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), ge = wsrc.indexOf('// ═══ AI-CREDIT-GUARD-END');
+t('ai-credit guard block markers exist', gi > 0 && ge > gi);
+const blockSrc = wsrc.slice(gi, ge) + '\n' + wsrc.slice(bi, be);
 function load(store, over) {
   over = over || {};
   const telemetry = [], alerts = [];
