@@ -119,6 +119,22 @@ Known limit: Google Sheets read quota is per minute for the whole Hub. The publi
 - **Calendar policy (Brett):** the cleaning calendar should show *actual responses* going forward ("X said not available on this date"), not base availability. Gina's "Not Available" entries are real responses she gave him and stand as if she had responded.
 - Correction to earlier notes: overnight-window offer deadlines are Fri 8:00 AM ET (12:00 UTC), not noon ET.
 
+## Backup promotion + staged backups (Brett, Oct 16 2026) — design LOCKED; Phase 1 BUILT (PR pending), Phase 2 NOT built
+
+Internal jargon only (never in a cleaner text): **primary** = the cleaner doing the clean; **backup 1 / backup 2** = staged fallbacks. Goal: every turnover out to the 35-day horizon has one primary + two backups (the 3-person pool exactly: Gina primary -> Kayla, Rachel; Rachel stays #3 for now, Brett handles her personally because she is a neighbor).
+
+**Phase 1 (built, branch `feat/str-backup-promotion-oct16`, BUILD_VERSION `2026-10-16.01-str-backup-promotion`)**
+- New text `str_promote` (also seeded in Message_Templates): "...The {DateShort} turnover at {Property} still needs a cleaner. Can you still cover it? ..." Friendly confirm, no rank words, decline = next in line.
+- `strNextCleaner`: the FIRST ask is always queue order. Once anyone has been asked and passed / cancelled / not replied, a cleaner who marked `can` (volunteered backup) for that date is asked before one who never answered (queue order inside each group). Returns `staged`.
+- A staged ask is a **promotion**: sends `str_promote`, ignores the 2-pending cap, is sent immediately even outside 8 AM-9 PM (offer row Note `promotion`), and raises a `promote` alert to Brett ("HANDOFF: Kayla was asked to cover Fri, Nov 20 ... - Gina passed") that is exempt from his 7 AM-10 PM quiet hours.
+- Non-staged next cleaners keep the normal offer text and the normal send-window / cap rules.
+
+**Phase 2 (design agreed, NOT built; behind `STR_BACKUP_DRIP_ENABLED`, default FALSE, with a dry-run preview of exact texts and order before anything real is sent)**
+- Backup asks go on every turnover, **closest date first** out to the 35-day horizon, **at most one backup ask per cleaner per day** (~9 AM ET default), one at a time: Gina primary -> ask Kayla; if she declines or is silent 48h (stays answerable) -> Rachel. Backup 2 is asked after backup 1 says yes. If Kayla marks 2-3 dates out at once, Rachel gets ONE grouped text for those dates.
+- Catch-up is about 10-12 days from today's state; afterwards the drip only handles new bookings and changes. New booking primary requests and cancellations still go out immediately; the daily backup slot goes to the soonest date; nothing is dropped, only re-timed.
+- **Combined message (Brett, Oct 16):** when a primary/promotion text is going to a cleaner and that cleaner is also due their daily backup ask, ONE text carries both ("Can you cover Oct 31? Also, could you be our backup for Nov 3?"). The page already renders an offer card plus a `backup=DATE` prompt together, so the link carries `offer=ID&backup=DATE`; each is answered separately. Works both directions, including promotions. The combined backup ask uses up that day's backup ask for that cleaner; only one backup date rides along (grouped case excepted); never the same date as the primary request; nothing urgent is ever held for it; the existing slot-filled text counts as a backup ask; backup asks sit outside the pending-offer cap.
+- Interim: until Phase 2, only Phase 1 behavior exists; backups arrive through the existing slot-filled text and the page's "Available as backup" marks.
+
 ## Backlog items added Oct 15 (logged, NOT built)
 
 See roadmap items 8-10 below.
