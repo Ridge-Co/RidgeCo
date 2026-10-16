@@ -22477,6 +22477,7 @@ async function receiptScan(env) {
       n++;
       if (prior) { delete failures[f.id]; failuresChanged = true; } // succeeded on a later retry — clear the record
     } catch (e) {
+      if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out DURING the scan: stop now, do not count an attempt against this file or the rest
       errs.push(f.name + ': ' + (e.message || 'err'));
       failures[f.id] = { name: f.name, error: String(e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
       failuresChanged = true;
