@@ -17988,6 +17988,88 @@ async function aiFailOpenNote(env, where, e) {
   catch (te) { console.error('ai fail-open: telemetry write failed:', where, msg, schedErrText(te)); }
 }
 
+// PURE. Does a stored per-file failure message look like it was caused by the credit outage / pause (not by the file)?
+function aiCreditErrorTextIsOutage(text) {
+  return /credit balance|purchase credits|plans\s*(&|and)\s*billing|AI is paused|ai_credit_paused|billing_error/i.test(String(text || ''));
+}
+
+// Sends ONE alert by text (admin-notify path: daily cap, verified counter) AND email. Delivered = either channel got through.
+async function aiCreditNotify(env, subject, smsText, html, warnings) {
+  const res = { sms: null, email: null, delivered: false };
+  try {
+    const r = await adminNotify(env, { text: smsText.slice(0, ADMIN_NOTIFY_MAX_TEXT), source: 'ai_credit' });
+    let j = null; try { j = await r.clone().json(); } catch (je) { j = { ok: false, error: 'unreadable admin-notify answer: ' + schedErrText(je) }; }
+    res.sms = { ok: !!(j && j.ok), sent: !!(j && j.ok && (j.sent || j.staged)), skipped: !!(j && j.skipped), error: (j && j.ok) ? undefined : String((j && j.error) || 'HTTP ' + r.status).slice(0, 200), reason: (j && j.reason) || undefined };
+    if (res.sms.ok === false) warnings.push('text to Brett not sent: ' + res.sms.error);
+  } catch (e) { res.sms = { ok: false, sent: false, error: schedErrText(e) }; warnings.push('text to Brett failed: ' + res.sms.error); }
+  try {
+    let to = AI_CREDIT_EMAIL_DEFAULT;
+    try { const c = schedCell(await schedReadConfigRows(env, false), 'INSP_NOTIFY_EMAIL').trim(); if (c) to = c; } catch (ce) { warnings.push('could not read the notify email from Config (used the default): ' + schedErrText(ce)); }
+    const r = await gmailSendEmail(env, { to, subject, html });
+    res.email = { ok: !!(r && (r.sent || r.staged)), to };
+    if (!res.email.ok) warnings.push('email to Brett not sent');
+  } catch (e) { res.email = { ok: false, error: schedErrText(e) }; warnings.push('email to Brett failed: ' + res.email.error); }
+  res.delivered = !!((res.sms && res.sms.sent) || (res.email && res.email.ok));
+  return res;
+}
+// The once-per-pause alert (+ the 24 h reminder). Stamps AI_CREDIT_ALERT_LAST_SENT BEFORE sending (so a second failing call cannot
+// double-send); if neither channel got through the stamp is removed again and a telemetry row says so - it is retried, never dropped.
+async function aiCreditMaybeAlert(env, state, errors) {
+  const due = aiCreditAlertDue(state, Date.now());
+  if (!due) return { skipped: 'already alerted for this pause' };
+  if (Date.now() - _aiCreditAlertTryMs < AI_CREDIT_ALERT_RETRY_MS) return { skipped: 'an alert was attempted a moment ago' };
+  _aiCreditAlertTryMs = Date.now();
+  const stamp = new Date().toISOString();
+  let stamped = false;
+  // The two failure_alert_last_sent_* keys tell the failure ledger (failLegacyAlerted) that Brett was JUST texted about this, so it records
+  // the same problem on the Needs Attention screen without sending him a second, less helpful text.
+  try { const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: stamp, failure_alert_last_sent_ai_credit_paused: stamp, failure_alert_last_sent_ai_credit_exhausted: stamp }); stamped = w.ok; if (!w.ok) errors.push('alert stamp not saved: ' + w.error); }
+  catch (e) { errors.push('alert stamp not saved: ' + schedErrText(e)); }
+  const t = aiCreditAlertText(state, due);
+  const warnings = [];
+  const res = await aiCreditNotify(env, t.subject, t.sms, t.html, warnings);
+  res.reason = due; res.stamped = stamped; res.warnings = warnings;
+  if (!res.delivered) {
+    errors.push('NEITHER the text nor the email reached Brett - it will be retried on the next detection: ' + warnings.join('; ').slice(0, 300));
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_alert_failed', Skill_Or_Endpoint: 'aiCreditMaybeAlert', Success: 'FALSE', Notes: JSON.stringify({ sms: res.sms, email: res.email }).slice(0, 450) }); }
+    catch (te) { console.error('ai-credit: alert undeliverable and its telemetry write failed:', schedErrText(te)); }
+    if (stamped) { try { await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: '', failure_alert_last_sent_ai_credit_paused: '', failure_alert_last_sent_ai_credit_exhausted: '' }); } catch (e) { errors.push('could not clear the alert stamp: ' + schedErrText(e)); } }
+  }
+  return res;
+}
+
+// Credit exhausted (or key refused) was just seen. Runs once per pause; concurrent failing calls share one run.
+function aiCreditTrip(env, cls, source) {
+  if (_aiCreditTripP) return _aiCreditTripP;
+  _aiCreditTripP = aiCreditTripRun(env, cls, source).finally(() => { _aiCreditTripP = null; });
+  return _aiCreditTripP;
+}
+async function aiCreditTripRun(env, cls, source) {
+  const out = { newly_paused: false, errors: [], alert: null };
+  const nowIso = new Date().toISOString();
+  const errText = String(cls.message || '').slice(0, 300);
+  // In-memory pause FIRST: every other call in this instance short-circuits from now on, whatever happens to Config below.
+  _aiCreditCache = { at: Date.now(), state: { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' } };
+  let sheetState = null;
+  try { sheetState = aiCreditStateFromRows(await schedReadConfigRows(env, true)); }
+  catch (e) { out.errors.push('could not read Config: ' + schedErrText(e)); }
+  if (sheetState && sheetState.paused) {                       // another request/instance already paused it
+    _aiCreditCache = { at: Date.now(), state: sheetState };
+    out.alert = await aiCreditMaybeAlert(env, sheetState, out.errors);
+    return out;
+  }
+  let flagSaved = false;
+  try {
+    const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'TRUE', [AI_CREDIT_KEYS.at]: nowIso, [AI_CREDIT_KEYS.err]: errText, [AI_CREDIT_KEYS.kind]: cls.kind, [AI_CREDIT_KEYS.by]: String(source || '').slice(0, 80), [AI_CREDIT_KEYS.alerted]: '' });
+    flagSaved = w.ok; if (!w.ok) out.errors.push('the pause flag was not saved: ' + w.error);
+  } catch (e) { out.errors.push('the pause flag was not saved: ' + schedErrText(e)); }
+  out.newly_paused = true;
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_exhausted', Skill_Or_Endpoint: String(source || 'anthropicMessages').slice(0, 80), Success: 'FALSE', Notes: `AI paused (kind=${cls.kind}); pause flag saved: ${flagSaved ? 'yes' : 'NO'}; the exact Anthropic message is in Config ${AI_CREDIT_KEYS.err} and on the Needs Attention screen` }); }   // wording kept free of billing/401 keywords on purpose: the failure ledger's urgent row is the auto-clearing "ai_credit_paused" condition, not this event
+  catch (te) { out.errors.push('telemetry row not written: ' + schedErrText(te)); console.error('ai-credit: could not log ai_credit_exhausted:', schedErrText(te)); }
+  out.alert = await aiCreditMaybeAlert(env, { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' }, out.errors);
+  return out;
+}
+
 // ═══ AI-CREDIT-GUARD-END ══════════════════════════════════════════════════════════════════════
 
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
