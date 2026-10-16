@@ -73,7 +73,7 @@ const gate = (over) => { const st = { updates: [], raw: [], posts: [] }; const d
   ensureSmsInfra: async () => {}, fetchConfig: async () => ({ TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' }),
   normalizePhone: p => String(p || '').replace(/\D/g, '') ? '+1' + String(p).replace(/\D/g, '').slice(-10) : '',
   sheetsRequest: async (e, m, p, b) => { if (m === 'GET') return { values: [QCOLS] }; st.posts.push(b); return {}; },
-  nextSafeId: () => 7, isQuietHoursNow: () => false, nextQuietHoursEnd: () => new Date('2026-10-15T13:00:00Z'),
+  nextSafeId: () => 7, appendedRowNumber: () => 0, guardAppendedIds: async (e, t, r, n, c, ids) => ({ ids: ids.map(String), row: 0, repaired: false }), mqReportFailure: async () => {}, isQuietHoursNow: () => false, nextQuietHoursEnd: () => new Date('2026-10-15T13:00:00Z'),
   quietHoldUntil: () => null,
   updateMessageQueueRow: async (e, id, f) => { st.updates.push({ id, f }); }, sendSMSRaw: async (e, to, msg) => { st.raw.push({ to, msg }); return { sid: 'SM1' }; },
   logMessageAudit: async () => {}, smsGateDecision: new Function(grab('smsGateDecision') + '\nreturn smsGateDecision;')(),
