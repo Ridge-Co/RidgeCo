@@ -15358,19 +15358,40 @@ async function smsGatedSend(env, opts) {
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
 // processPendingNotifications already uses (not the HTTP-response-returning updateRow), since
 // this is called from inside another handler, not directly off a route.
-async function updateMessageQueueRow(env, id, fields) {
+// A queue update that cannot land is a real problem (a sent text left "pending", a skip that did nothing). It used to be swallowed
+// ("best-effort"); now it is logged to Ops_Telemetry (Success=FALSE) and returned as false so the caller can say so. It still never
+// throws: this runs right after a text has really gone out, and crashing there would hide that from the caller.
+async function mqReportFailure(env, id, msg) {
+  console.error('Message_Queue update problem (#' + id + '): ' + msg);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (_) {}
+  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (_) {}
+}
+// opts.sheetRow: edit exactly this sheet row (used right after our own append). Otherwise find the row by id; if an old duplicate id
+// exists, prefer the one still "pending" (the one a person is waiting to act on). Returns true when every field landed.
+async function updateMessageQueueRow(env, id, fields, opts) {
   try {
     const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
     const [headers, ...rows] = data.values || [[]];
-    const rowIndex = rows.findIndex(r => r[0] === String(id));
-    if (rowIndex === -1) return;
-    const sheetRow = rowIndex + 2, updates = [];
+    const idCol = Math.max(0, headers.indexOf('ID'));
+    const isPending = r => r[headers.indexOf('Status')] === 'pending';   // -1 (no Status column) -> undefined -> not pending
+    let sheetRow = opts && opts.sheetRow ? opts.sheetRow : 0;
+    if (!sheetRow) {
+      const hits = []; rows.forEach((r, i) => { if (String(r[idCol]) === String(id)) hits.push(i); });
+      if (!hits.length) { await mqReportFailure(env, id, 'row not found, so ' + Object.keys(fields).join('/') + ' was not saved'); return false; }
+      const pick = hits.find(i => isPending(rows[i]));
+      if (hits.length > 1) await mqReportFailure(env, id, 'the id is on ' + hits.length + ' rows (duplicate); edited the ' + (pick !== undefined ? 'pending' : 'first') + ' one');
+      sheetRow = (pick !== undefined ? pick : hits[0]) + 2;
+    }
+    const updates = [];
     for (const [field, value] of Object.entries(fields)) {
       const colIndex = headers.indexOf(field);
       if (colIndex !== -1) updates.push({ range: `${MSG_QUEUE_TAB}!${col(colIndex)}${sheetRow}`, values: [[value]] });
     }
-    if (updates.length) await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
-  } catch (e) { /* best-effort — the queue row staying 'pending' after a real send is a visible discrepancy, not a crash */ }
+    if (!updates.length) return true;
+    const res = await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
+    if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < updates.length) { await mqReportFailure(env, id, 'only ' + res.totalUpdatedCells + ' of ' + updates.length + ' cells saved'); return false; }
+    return true;
+  } catch (e) { await mqReportFailure(env, id, String((e && e.message) || e)); return false; }
 }
 
 // GET /message-queue?status=pending — backs the review/release screen. Small tab at this
