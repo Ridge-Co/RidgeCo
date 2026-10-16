@@ -23,10 +23,17 @@ let SHEET, SMS, SMS_RESULT, OVERDUE, FAIL_APPEND, ERR;
 const colIdx = L => L.split('').reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0) - 1;
 async function sheetsRequest(env, method, path, body) {
   let m;
-  if (method === 'GET' && (m = /^\/values\/([^!:?]+)(?:!A(\d+):[A-Z]+(\d+)?)?$/.exec(path))) {
+  if (method === 'GET' && (m = /^\/values\/([^!:?]+)(?:!(.+))?$/.exec(path))) {
     if (!SHEET[m[1]]) { const e = new Error('Unable to parse range: ' + m[1]); throw e; }
-    const rows = SHEET[m[1]]; const from = m[2] ? parseInt(m[2], 10) - 1 : 0;
-    return { values: rows.slice(from, m[3] ? parseInt(m[3], 10) : undefined).map(r => r.slice()) };
+    const rows = SHEET[m[1]]; let from = 0, to;
+    if (m[2]) {
+      let r;
+      if ((r = /^A(\d+):[A-Z]+(\d+)?$/.exec(m[2]))) { from = parseInt(r[1], 10) - 1; to = r[2] ? parseInt(r[2], 10) : undefined; }
+      else if ((r = /^1:1$/.exec(m[2]))) { return { values: rows.slice(0, 1).map(x => x.slice()) }; }
+      else if ((r = /^([A-Z]+)2:([A-Z]+)$/.exec(m[2]))) { const ci = colIdx(r[1]); return { values: rows.slice(1).map(x => [x[ci] === undefined ? '' : x[ci]]) }; }
+      else throw new Error('unhandled range ' + m[2]);
+    }
+    return { values: rows.slice(from, to).map(r => r.slice()) };
   }
   if (method === 'POST' && (m = /^\/values\/([^!:?]+):append/.exec(path))) {
     if (FAIL_APPEND) throw new Error('Sheets 503');
