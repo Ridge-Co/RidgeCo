@@ -4053,7 +4053,7 @@ function fuRenderList() {
   else h += rows.map(function (r) {
     var col = FU_STATUS_COLOR[r.Status] || 'var(--muted)', prop = safeArray(state.properties).find(function (p) { return String(p.ID) === String(r.Property_ID); });
     return '<div onclick="closeModal(\'modal-followups\');openWODetail(\'' + fuJs(r.WO_ID) + '\')" style="border:1px solid var(--border);border-left:4px solid ' + col + ';border-radius:8px;padding:9px 12px;margin-bottom:8px;cursor:pointer;background:var(--surface)">' +
-      '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">WO-' + esc(r.WO_ID) + ' · ' + esc(r.Problem_Label) + '</b><span style="font-size:11px;color:' + col + ';font-weight:bold">' + esc(r.Status.toUpperCase()) + '</span></div>' +
+      '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">' + esc(fuWo(r.WO_ID)) + ' · ' + esc(r.Problem_Label) + '</b><span style="font-size:11px;color:' + col + ';font-weight:bold">' + esc(r.Status.toUpperCase()) + '</span></div>' +
       '<div style="font-size:12px;color:var(--muted)">' + esc(prop ? prop.Address : '') + ' · ' + esc(r.Tenant_Name) + '</div>' +
       (r.Answer ? '<div style="font-size:12px"><b>' + esc(FU_ANSWER_TEXT[r.Answer] || r.Answer) + '</b>' + (r.suggestion && r.suggestion.action !== 'done' ? ' → ' + esc(r.suggestion.label) : '') + '</div>' : '<div style="font-size:12px;color:var(--muted)">' + (r.Blocked_Reason ? 'Not sent: ' + esc(r.Blocked_Reason) : (r.Due_At ? 'Answer due ' + esc(fuDate(r.Due_At)) : '')) + '</div>') + '</div>';
   }).join('');
