@@ -128,6 +128,15 @@ const at = (E, d, hm) => E.inspEtWallToMs(d, hm);
   t('queue: skips inactive / no phone / sms opted out', E.strNextCleaner({ pool, cleaners: Object.assign({}, cl, { g: { ID: 'g', Active: 'FALSE', Phone: '+1' }, k: { ID: 'k', Phone: '', Active: 'TRUE' } }), marks: {}, offers: [], task: tk }).cleaner.ID === 'r');
   t('queue: opted-out cleaner skipped', E.strNextCleaner({ pool, cleaners: Object.assign({}, cl, { g: Object.assign({}, cl.g, { SmsOk: false }) }), marks: {}, offers: [], task: tk }).cleaner.ID === 'k');
   t('queue: everyone tried -> null', E.strNextCleaner({ pool, cleaners: cl, marks: {}, offers: ['g', 'k', 'r'].map(c => ({ Task_Key: 'x', Cleaner_ID: c, Status: 'declined' })), task: tk }).cleaner === null);
+  // Oct 16 2026: staged backups ('can') move up only AFTER someone has already been asked; the first ask is always queue order.
+  const gOut = [{ Task_Key: 'x', Cleaner_ID: 'g', Status: 'expired' }];
+  t('staged: a volunteer backup never jumps ahead of Gina on the FIRST ask', (() => { const n = E.strNextCleaner({ pool, cleaners: cl, marks: { 'k|2026-10-21': 'can' }, offers: [], task: tk }); return n.cleaner.ID === 'g' && !n.staged; })());
+  t('staged: after Gina passed, a volunteer (Rachel) is asked before Kayla who never answered, flagged staged', (() => { const n = E.strNextCleaner({ pool, cleaners: cl, marks: { 'r|2026-10-21': 'can' }, offers: gOut, task: tk }); return n.cleaner.ID === 'r' && n.staged === true; })());
+  t('staged: two volunteers keep queue order (Kayla before Rachel)', (() => { const n = E.strNextCleaner({ pool, cleaners: cl, marks: { 'r|2026-10-21': 'can', 'k|2026-10-21': 'can' }, offers: gOut, task: tk }); return n.cleaner.ID === 'k' && n.staged === true; })());
+  t('staged: nobody volunteered -> plain queue order, not flagged', (() => { const n = E.strNextCleaner({ pool, cleaners: cl, marks: {}, offers: gOut, task: tk }); return n.cleaner.ID === 'k' && !n.staged; })());
+  t('staged: a volunteer for a DIFFERENT date does not count', (() => { const n = E.strNextCleaner({ pool, cleaners: cl, marks: { 'r|2026-10-22': 'can' }, offers: gOut, task: tk }); return n.cleaner.ID === 'k' && !n.staged; })());
+  t('staged: a cancelled earlier assignment counts as already asked', (() => { const n = E.strNextCleaner({ pool, cleaners: cl, marks: { 'k|2026-10-21': 'can', 'g|2026-10-21': 'out' }, offers: [{ Task_Key: 'x', Cleaner_ID: 'g', Status: 'cancelled' }], task: tk }); return n.cleaner.ID === 'k' && n.staged === true; })());
+  t('staged: a cleaner marked out is never staged', (() => { const n = E.strNextCleaner({ pool, cleaners: cl, marks: { 'k|2026-10-21': 'out', 'r|2026-10-21': 'can' }, offers: gOut, task: tk }); return n.cleaner.ID === 'r' && n.staged === true; })());
   t('queue: honours Priority not row order', E.strNextCleaner({ pool: [{ ID: '1', Cleaner_ID: 'k', Priority: '2', Active: 'TRUE' }, { ID: '2', Cleaner_ID: 'g', Priority: '1', Active: 'TRUE' }], cleaners: cl, marks: {}, offers: [], task: tk }).cleaner.ID === 'g');
   t('queue: pool-inactive cleaner never asked', E.strNextCleaner({ pool: [{ ID: '1', Cleaner_ID: 'g', Priority: '1', Active: 'FALSE' }, { ID: '2', Cleaner_ID: 'k', Priority: '2', Active: 'TRUE' }], cleaners: cl, marks: {}, offers: [], task: tk }).cleaner.ID === 'k');
   // calendar plan
@@ -358,7 +367,7 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   const on = await resJson(E.strAdminOfferNow({}, { task_key: st.tasks.find(x => x.date === '2026-10-21').key, restart: true }));
   t('offer-now restarts the queue', on.ok, on);
   const pv = await resJson(E.strAdminPreview({}));
-  t('preview renders all 5 texts under 320 chars with no leftover {tokens}', pv.ok && pv.previews.length === 5 && pv.previews.every(p => p.length < 320 && !/\{/.test(p.text)), pv.previews);
+  t('preview renders all 6 texts under 320 chars with no leftover {tokens}', pv.ok && pv.previews.length === 6 && pv.previews.every(p => p.length < 320 && !/\{/.test(p.text)), pv.previews);
   const sv = await resJson(E.strAdminCleanerSave({}, { name: 'TEST-Cleaner', phone: '3045550142', email: 'a@b.co', nickname: 'T' }));
   t('save cleaner creates vendor (Short-Term Rental Cleaner / Milam Ridge), cleaner, pool entry with a link', sv.ok && rowsOf(W, 'Vendors').some(v => v.Name === 'TEST-Cleaner' && v.Trade === 'Short-Term Rental Cleaner' && v.Service_Area === 'Milam Ridge') && rowsOf(W, 'STR_Cleaner_Pool').length === 4 && /cleaner\.html\?k=/.test(sv.cleaner.link) && sv.cleaner.priority === 4, sv);
   const dup = await resJson(E.strAdminCleanerSave({}, { name: 'TEST-Dup', phone: '304-555-0142' }));
@@ -429,6 +438,40 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   const texts = W.sms.map(x => x.text), offs = rowsOf(W, 'STR_Offers'), trs = rowsOf(W, 'STR_Turnovers');
   const withGap = trs.filter(x => x.Next_Arrival && E.strDaysBetween(x.Date, x.Next_Arrival) > 1), flat = trs.filter(x => x.Next_Arrival && E.strDaysBetween(x.Date, x.Next_Arrival) <= 1);
   t('next-guest: offer text for a >1-day gap carries the note, a flat one does not (live tick)', texts.length > 0 && withGap.length > 0 && texts.some((tx, i) => { const o = offs[i], tr = trs.find(x => x.Task_Key === o.Task_Key); return tr.Next_Arrival && E.strDaysBetween(tr.Date, tr.Next_Arrival) > 1; }) && texts.every((tx, i) => { const o = offs[i], tr = trs.find(x => x.Task_Key === o.Task_Key); const gap = tr.Next_Arrival && E.strDaysBetween(tr.Date, tr.Next_Arrival) > 1; return gap ? tx.includes(NOTE.trim()) : !tx.includes('subject to change'); }), { texts, withGap: withGap.length, flat: flat.length });
+}
+{
+  // ── Oct 16 2026: backup promotion — friendly "can you still cover it?", sent right away even after hours, Brett told immediately ──
+  const W = makeWorld(); seed(W); const E = build(W); clock = at(E, '2026-10-14', '10:00');
+  let r = await E.strTick({}, {});
+  const o21 = rowsOf(W, 'STR_Offers').find(o => o.Task_Key.endsWith('checkout|2026-10-21') && o.Cleaner_ID === '1');
+  const o16 = rowsOf(W, 'STR_Offers').find(o => o.Task_Key.endsWith('checkout|2026-10-16') && o.Cleaner_ID === '1');
+  t('promo setup: Gina holds both offers', !!o21 && !!o16);
+  let m = await resJson(E.strCleanerMark({}, { k: KAYLA, marks: [{ date: '2026-10-21', mark: 'can' }] }));
+  t('promo setup: Kayla volunteers as backup for Oct 21', m.ok && m.saved === 1, m);
+  // 11:30 PM — outside the 8am-9pm send window
+  clock = at(E, '2026-10-14', '23:30'); W.sms.length = 0; const bn = W.brett.length;
+  let d = await resJson(E.strOfferRespond({}, { k: GINA, offer_id: o21.ID, action: 'decline' }));
+  t('promo: decline ok', d.ok && d.result === 'declined', d);
+  const promo = W.sms.filter(x => x.type === 'str_promote');
+  t('promo: Kayla (staged backup) gets the promotion text immediately, even at 11:30 PM', promo.length === 1 && promo[0].to === 'Kayla K' && promo[0].bypass === true, W.sms);
+  t('promo wording: friendly confirm, links to the offer, no rank words, no "primary"', /Can you still cover it/.test(promo[0].text) && /offer=/.test(promo[0].text) && !/primary|backup|#\d|priority|need you to/i.test(promo[0].text), promo[0].text);
+  const po = rowsOf(W, 'STR_Offers').find(o => o.Task_Key === o21.Task_Key && o.Cleaner_ID === '2');
+  t('promo: offer row is pending, noted as a promotion, with a reply deadline', po && po.Status === 'pending' && po.Note === 'promotion' && !!po.Deadline_At, po);
+  const hand = W.brett.slice(bn).filter(b => /HANDOFF/.test(b.text));
+  t('promo: Brett is told immediately (even at 11:30 PM), names who, which date, and why', hand.length === 1 && /Kayla was asked to cover/.test(hand[0].text) && /Oct 21/.test(hand[0].text) && /Gina passed/.test(hand[0].text), W.brett.slice(bn));
+  await E.strTick({}, {});
+  t('promo: a later tick does not repeat the handoff text', W.brett.slice(bn).filter(b => /HANDOFF/.test(b.text)).length === 1);
+  // A NON-staged next cleaner after hours still waits for 8 AM (normal rule unchanged)
+  W.sms.length = 0;
+  d = await resJson(E.strOfferRespond({}, { k: GINA, offer_id: o16.ID, action: 'decline' }));
+  t('no promo for a cleaner who never volunteered: nothing sent after hours', d.ok && !W.sms.length, W.sms);
+  clock = at(E, '2026-10-15', '08:05'); r = await E.strTick({}, {});
+  t('next morning: Kayla gets the normal offer text for Oct 16 (not a promotion)', W.sms.some(x => x.type === 'str_offer' && x.to === 'Kayla K') && !W.sms.some(x => x.type === 'str_promote'), W.sms);
+  // The promotion is answerable on the cleaner page and accepting it assigns her
+  const pg = await resJson(E.strCleanerPage({}, new URL('https://x/str/c/page?k=' + KAYLA)));
+  t("promo: the offer shows on Kayla's page", pg.ok && pg.offers.some(o => String(o.id) === String(po.ID)), pg.offers);
+  d = await resJson(E.strOfferRespond({}, { k: KAYLA, offer_id: po.ID, action: 'accept' }));
+  t('promo: Kayla accepts and is assigned', d.ok && d.result === 'accepted' && rowsOf(W, 'STR_Turnovers').find(x => x.Task_Key === o21.Task_Key).Assigned_Cleaner_ID === '2', d);
 }
 Date.now = realNow;
 console.log(`\nstr-cleaning: ${pass} passed, ${fail} failed`);

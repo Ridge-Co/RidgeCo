@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-15.03-field-inspection-owners';
+const BUILD_VERSION = '2026-10-16.01-str-backup-promotion';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -15102,6 +15102,8 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Can you clean {Property} for the {DateShort} turnover? Checkout is 11 AM{NextLine}. Tap to take it or pass: {Link}" },
   { Message_Type: 'str_filled_backup', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've just filled the {DateShort} turnover at {Property}. Could you act as the backup on that one? Tap here and I'll add it to your calendar: {Link}" },
+  { Message_Type: 'str_promote', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} turnover at {Property} still needs a cleaner. Can you still cover it? Checkout is 11 AM{NextLine}. Tap to say yes or pass: {Link}" },
   { Message_Type: 'str_assigned', Channel: 'sms', Subject: '', Body:
     "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}" },
   { Message_Type: 'str_checkout_day', Channel: 'sms', Subject: '', Body:
@@ -31402,7 +31404,7 @@ function strExternalCover(task, foreignEvents) {
 function strNextCleaner(a) {
   const order = (a.pool || []).filter(p => String(p.Active || '').toUpperCase() !== 'FALSE').slice().sort((x, y) => (parseInt(x.Priority, 10) || 999) - (parseInt(y.Priority, 10) || 999) || (parseInt(x.ID, 10) || 0) - (parseInt(y.ID, 10) || 0));
   const tried = new Set((a.offers || []).filter(o => o.Task_Key === a.task.key && STR_OFFER_BLOCKS.includes(o.Status)).map(o => String(o.Cleaner_ID)));
-  const skipped = [];
+  const skipped = [], eligible = [];
   for (const p of order) {
     const id = String(p.Cleaner_ID), c = a.cleaners[id];
     if (!c || String(c.Active || '').toUpperCase() === 'FALSE') { skipped.push({ id, reason: 'inactive' }); continue; }
@@ -31410,9 +31412,14 @@ function strNextCleaner(a) {
     if (c.SmsOk === false) { skipped.push({ id, reason: 'sms_opted_out' }); continue; }
     if (tried.has(id)) { skipped.push({ id, reason: 'already_asked' }); continue; }
     if ((a.marks || {})[id + '|' + a.task.date] === 'out') { skipped.push({ id, reason: 'marked_out' }); continue; }
-    return { cleaner: c, skipped };
+    eligible.push({ c, id });
   }
-  return { cleaner: null, skipped };
+  if (!eligible.length) return { cleaner: null, skipped };
+  // Oct 16 2026: the FIRST ask always follows queue order (nobody jumps ahead of Gina). Once someone has already been asked and passed /
+  // cancelled / not replied, a cleaner who volunteered as backup ('can') for that date is asked before one who never answered; queue order within each group.
+  const reround = (a.offers || []).some(o => o.Task_Key === a.task.key && ['declined', 'expired', 'cancelled', 'accepted'].includes(o.Status));
+  const staged = reround ? eligible.find(e => (a.marks || {})[e.id + '|' + a.task.date] === 'can') : null;
+  return { cleaner: (staged || eligible[0]).c, skipped, staged: !!staged };
 }
 
 // What the cleaning calendar should hold. covered tasks -> "<Name> Cleaning" (all-day); uncovered tasks inside redDays -> red 7a-7p block.
@@ -31488,6 +31495,8 @@ function strIcs(events, nowMs) {
 const STR_DEFAULT_TEXTS = {
   str_offer: "Hi {FirstName}, it's {AssistantName} with Ridge Co. Can you clean {Property} for the {DateShort} turnover? Checkout is 11 AM{NextLine}. Tap to take it or pass: {Link}",
   str_filled_backup: "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've just filled the {DateShort} turnover at {Property}. Could you act as the backup on that one? Tap here and I'll add it to your calendar: {Link}",
+  // Oct 16 2026: a staged backup moves up because the earlier cleaner cancelled / passed / did not reply. Friendly confirm, never an order; no rank words.
+  str_promote: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} turnover at {Property} still needs a cleaner. Can you still cover it? Checkout is 11 AM{NextLine}. Tap to say yes or pass: {Link}",
   str_assigned: "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}",
   str_checkout_day: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}",
   str_task_cancelled: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}",
@@ -31665,7 +31674,7 @@ async function strDeliverAlerts(ctx) {
     if (oneShot && count > 0) continue;
     if (!oneShot && count > 0 && Date.parse(al.Next_Send_At || '') > ctx.now) continue;
     const daysOut = al.Task_Key ? strDaysBetween(inspEtDate(ctx.now), String(al.Task_Key).split('|')[2] || inspEtDate(ctx.now)) : 0;
-    if (!strBrettSmsOk(ctx.now, daysOut)) continue; // wait for 7am (retried next tick); a turnover 1 day out or less never waits
+    if (al.Kind !== 'promote' && !strBrettSmsOk(ctx.now, daysOut)) continue; // wait for 7am (retried next tick); a turnover 1 day out or less never waits
     const subject = (al.Severity === 'urgent' ? '⚠ ' : '') + String(al.Message).split('\n')[0].slice(0, 90);
     const res = await strSendBrett(env, ctx.cfg, subject, al.Sms_Text, String(al.Message).split('\n'), true);
     if (!res.ok) { ctx.errors.push({ step: 'alert_delivery', error: `Could not tell Brett (${al.Alert_Key}): ${res.log.join('; ')}` }); await strSystemAlert(env, 'alert_delivery', `Could not deliver "${al.Alert_Key}" to Brett: ${res.log.join('; ')}`); continue; }
@@ -31761,10 +31770,13 @@ async function strAdvanceTask(ctx, trow) {
     if (trow.Status !== 'exhausted' && !ctx.dry) { await strSetTurnover(ctx, trow, { Status: 'exhausted', Note: 'queue exhausted: ' + nx.skipped.map(s => `${(st.cmap[s.id] || {}).Name || s.id}=${s.reason}`).join(', ').slice(0, 300) }); await strLog(ctx, trow.Task_Key, '', 'queue_exhausted', nx.skipped.map(s => `${s.id}:${s.reason}`).join(', ')); }
     return { action: 'exhausted' };
   }
+  // A promotion (a staged backup moves up because the earlier cleaner cancelled / passed / did not reply) is a priority: it ignores the
+  // per-cleaner pending cap and is sent right away, even outside the 8am-9pm window (Brett Oct 16 2026: "send now, don't wait for 8am").
+  const promo = !!nx.staged;
   // A cleaner is never asked about more than maxPending turnovers at once (nearest dates first), so a fresh 35-day backlog does not become a wall of texts.
-  if (st.offers.filter(o => String(o.Cleaner_ID) === nx.cleaner.ID && STR_OFFER_ACTIVE.includes(o.Status)).length >= S.maxPending) return { action: 'waiting_cleaner_busy', next: nx.cleaner.Name };
-  if (!strInSendWindow(now, S)) return { action: 'waiting_send_window', next: nx.cleaner.Name };
-  if (ctx.dry || !S.engine) { ctx.actions.push({ task: trow.Task_Key, would_offer: nx.cleaner.Name, window: strWindowText(strDaysBetween(today, task.date), S) }); if (ctx.dry) st.offers.push({ ID: 'dry', Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Status: 'pending', Deadline_At: '9999-01-01T00:00:00Z' }); return { action: 'would_offer', next: nx.cleaner.Name }; }
+  if (!promo && st.offers.filter(o => String(o.Cleaner_ID) === nx.cleaner.ID && STR_OFFER_ACTIVE.includes(o.Status)).length >= S.maxPending) return { action: 'waiting_cleaner_busy', next: nx.cleaner.Name };
+  if (!promo && !strInSendWindow(now, S)) return { action: 'waiting_send_window', next: nx.cleaner.Name };
+  if (ctx.dry || !S.engine) { ctx.actions.push({ task: trow.Task_Key, would_offer: nx.cleaner.Name, promotion: promo, window: strWindowText(strDaysBetween(today, task.date), S) }); if (ctx.dry) st.offers.push({ ID: 'dry', Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Status: 'pending', Deadline_At: '9999-01-01T00:00:00Z' }); return { action: 'would_offer', next: nx.cleaner.Name }; }
   if (!S.sms) {
     const note = 'SMS OFF - next up: ' + nx.cleaner.Name;
     if (trow.Note !== note) await strSetTurnover(ctx, trow, { Note: note });
@@ -31782,12 +31794,22 @@ async function strAdvanceTask(ctx, trow) {
   const dup = (await fetchTab(env, 'STR_Offers')).filter(o => o.Task_Key === trow.Task_Key && STR_OFFER_ACTIVE.includes(o.Status));
   if (dup.length > 1 && String(dup.map(d => parseInt(d.ID, 10)).sort((a, b) => a - b)[0]) !== String(oid)) { await strSetOffer(ctx, orow, { Status: 'superseded', Note: 'another run claimed this turnover first' }); return { action: 'lost_claim' }; }
   const tokens = strTokens(ctx, nx.cleaner, task, { Link: strCleanerUrl(nx.cleaner.Token, 'offer=' + oid) });
-  const r = await strTextCleaner(ctx, nx.cleaner, 'str_offer', tokens, task);
+  const r = await strTextCleaner(ctx, nx.cleaner, promo ? 'str_promote' : 'str_offer', tokens, task);
   if (r.ok) {
-    await strSetOffer(ctx, orow, { Status: 'pending', Sent_At: iso, Queue_ID: r.queueId || '', Mode: r.mode });
+    await strSetOffer(ctx, orow, Object.assign({ Status: 'pending', Sent_At: iso, Queue_ID: r.queueId || '', Mode: r.mode }, promo ? { Note: 'promotion' } : {}));
     await strSetTurnover(ctx, trow, { Status: 'offering', Note: '' });
-    await strLog(ctx, trow.Task_Key, nx.cleaner.ID, 'offer_sent', `${r.detail}; reply by ${orow.Deadline_At}`);
-    return { action: 'offered', cleaner: nx.cleaner.Name, deadline: orow.Deadline_At, mode: r.mode };
+    await strLog(ctx, trow.Task_Key, nx.cleaner.ID, promo ? 'promotion_sent' : 'offer_sent', `${r.detail}; reply by ${orow.Deadline_At}`);
+    if (promo) {
+      // Brett hears about it immediately (kind 'promote' is exempt from his 7am-10pm quiet hours) so he can plan.
+      try {
+        const prev = st.offers.filter(o => o.Task_Key === trow.Task_Key && ['declined', 'expired', 'cancelled'].includes(o.Status)).sort((x, y) => (parseInt(y.ID, 10) || 0) - (parseInt(x.ID, 10) || 0))[0];
+        const pc = prev ? st.cmap[prev.Cleaner_ID] : null, pn = pc ? strFirst(pc) : 'The earlier cleaner';
+        const why = !prev ? 'the earlier request did not work out' : (prev.Status === 'cancelled' ? pn + ' cancelled' : (prev.Status === 'declined' ? pn + ' passed' : pn + ' did not reply in time'));
+        const days = strDaysBetween(today, task.date), head = `HANDOFF: ${strFirst(nx.cleaner)} was asked to cover ${strFmtDate(task.date)} (${days === 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}) - ${why}.`;
+        await strRaiseAlert(ctx, { key: `promote|${trow.Task_Key}|${oid}`, kind: 'promote', severity: days <= 3 ? 'urgent' : 'normal', taskKey: trow.Task_Key, message: [head, `${strFirst(nx.cleaner)} had said they could be the backup. Reply by ${orow.Deadline_At}.`, 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head} ${PORTAL_BASE}/str-cleaning.html` });
+      } catch (e) { ctx.errors.push({ step: 'promote_alert', error: 'The handoff text went out but Brett could not be told: ' + strErrText(e) }); await strSystemAlert(env, 'promote_alert', strErrText(e)); }
+    }
+    return { action: promo ? 'promoted' : 'offered', cleaner: nx.cleaner.Name, deadline: orow.Deadline_At, mode: r.mode };
   }
   await strSetOffer(ctx, orow, { Status: 'failed', Queue_ID: r.queueId || '', Note: r.detail.slice(0, 200) });
   await strLog(ctx, trow.Task_Key, nx.cleaner.ID, 'offer_failed', r.detail);
