@@ -63,6 +63,15 @@ window.addEventListener('pageshow', function(e){
   /* legacy alias: any stray btn-green renders as primary blue, not accidental green */
   .btn-green { background: var(--accent); color: #fff; }
   #login-error { color: var(--danger); font-size: 0.8rem; text-align: center; display: none; }
+  /* AI-credit pause banner (Oct 16 2026): red = Anthropic credit is out / key refused (AI reading is OFF); amber = could not even check. Sits under the header, above every page. */
+  #ai-credit-banner { display: none; background: #fdecea; border: 1px solid var(--danger); border-left-width: 5px; color: var(--text); padding: 10px 16px; font-size: 13px; line-height: 1.4; }
+  #ai-credit-banner.amber { background: #fdf2e2; border-color: var(--warn); }
+  #ai-credit-banner .aic-title { font-weight: bold; color: var(--danger); }
+  #ai-credit-banner.amber .aic-title { color: var(--warn); }
+  #ai-credit-banner .aic-detail, #ai-credit-banner .aic-error { font-size: 12px; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+  #ai-credit-banner .aic-error { color: var(--danger); }
+  #ai-credit-banner .aic-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  #ai-credit-banner .btn { min-height: 44px; }
   #app { display: none; }
   header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
   .logo { color: var(--accent); font-size: 1rem; letter-spacing: 0.15em; font-weight: bold; }
@@ -238,6 +247,17 @@ window.addEventListener('pageshow', function(e){
     </nav>
     <div><span class="status-dot"></span><span style="color:var(--muted);font-size:11px">LIVE</span></div>
   </header>
+
+  <!-- AI-credit pause banner (Oct 16 2026). Hidden unless GET /ai-credit/status says paused (or the check itself failed). -->
+  <div id="ai-credit-banner" role="alert" aria-live="polite">
+    <div><span class="aic-title" id="ai-credit-title"></span> <span id="ai-credit-msg"></span></div>
+    <div class="aic-detail" id="ai-credit-detail"></div>
+    <div class="aic-actions">
+      <button class="btn danger" id="ai-credit-resume-btn" type="button" onclick="aiCreditResume()">Resume</button>
+      <a class="btn secondary" id="ai-credit-console-link" href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener">Open Anthropic billing</a>
+    </div>
+    <div class="aic-error" id="ai-credit-error"></div>
+  </div>
 
   <div class="page active" id="page-dashboard">
     <div class="stats-row">
@@ -1945,6 +1965,55 @@ var KEY_TYPE_LABEL = {
 };
 function keyTypeLabel(type) { return KEY_TYPE_LABEL[type] || (type || 'Key'); }
 
+// ── AI-credit pause banner (Oct 16 2026) ─────────────────────────────────────────────────────
+// When Anthropic credit runs out the Worker pauses every AI step (receipt scanning, invoice auto-read, field-inspection AI...) and texts/emails
+// Brett ONCE. This banner is the standing, on-screen version: red while paused, with a Resume button that makes ONE real 1-token call and only
+// clears the pause if it works (otherwise it shows Anthropic's own error here). It also clears by itself within about an hour of credit being added.
+var _aiCreditTimer = null;
+function aiCreditSetBanner(mode, title, msg, detail) {
+  var b = document.getElementById('ai-credit-banner'); if (!b) return;
+  if (!mode) { b.style.display = 'none'; return; }
+  b.className = mode === 'amber' ? 'amber' : '';
+  b.style.display = 'block';
+  document.getElementById('ai-credit-title').textContent = title;
+  document.getElementById('ai-credit-msg').textContent = msg;
+  document.getElementById('ai-credit-detail').textContent = detail || '';
+  document.getElementById('ai-credit-resume-btn').textContent = mode === 'amber' ? 'Check again' : 'Resume';
+}
+function loadAiCreditStatus() {
+  if (!_aiCreditTimer) _aiCreditTimer = setInterval(loadAiCreditStatus, 5 * 60 * 1000);   // re-check while the Hub stays open
+  return api('GET', '/ai-credit/status', null, 15000).then(function(r) {
+    if (!r || r.ok === false) throw new Error((r && (r.error || r.message)) || 'bad response');
+    if (!r.paused) { aiCreditSetBanner(null); return; }
+    var auth = r.kind === 'auth';
+    aiCreditSetBanner('red', 'AI reading is paused -',
+      auth ? 'Anthropic is refusing the Hub\'s API key. Fix the key or account in the Anthropic Console, then tap Resume.'
+           : 'Anthropic credit is out. Add credits in the Anthropic Console, then tap Resume.',
+      'Paused since ' + (r.since ? new Date(r.since).toLocaleString() : '?') + '. Receipts wait in Drive and nothing is retried; typing things in by hand still works.' + (r.last_error ? ' Anthropic said: ' + r.last_error : ''));
+    document.getElementById('ai-credit-error').textContent = '';
+  }).catch(function(e) {
+    // A failed check must not look like "all fine": say so, and keep a record in the Dev Log error list.
+    logError('ai-credit-status', (e && e.message) || 'Failed');
+    aiCreditSetBanner('amber', 'Could not check AI status -', 'The Hub could not tell whether AI reading is paused (' + ((e && e.message) || 'error') + '). Tap Check again.', '');
+  });
+}
+function aiCreditResume() {
+  var btn = document.getElementById('ai-credit-resume-btn'), err = document.getElementById('ai-credit-error');
+  if (btn.textContent === 'Check again') { loadAiCreditStatus(); return; }
+  btn.disabled = true; btn.textContent = 'Checking...'; err.textContent = '';
+  api('POST', '/admin/ai-credit-resume', {}, 30000).then(function(r) {
+    if (r && r.ok) {
+      toast(r.resumed ? 'AI reading is back on' : 'AI was not paused', 'success');
+      return loadAiCreditStatus();
+    }
+    // Still paused: show Anthropic's own reason right on the banner.
+    err.textContent = 'Still paused: ' + ((r && (r.error || r.message)) || 'Anthropic did not accept the test call') + '. Add credits (Anthropic Console > Settings > Billing), then tap Resume again.';
+  }).catch(function(e) {
+    logError('ai-credit-resume', (e && e.message) || 'Failed');
+    err.textContent = 'Could not reach the Hub to check: ' + ((e && e.message) || 'error') + '. Tap Resume to try again.';
+  }).then(function() { btn.disabled = false; if (btn.textContent === 'Checking...') btn.textContent = 'Resume'; });
+}
+
 function processNotificationsBackground() {
   api('GET','/notifications/pending').catch(function(){});
 }
@@ -1955,6 +2024,7 @@ function _loadAllFinish(loaded) {
   renderDashboard(); renderWOPage(); renderPropertiesPage();
   renderVendorsPage(); renderTenantsPage(); renderInvoicesPage(); renderOwnersPage();
   loadWishlist();
+  loadAiCreditStatus();       // red banner + Resume button when Anthropic credit is out (AI reading paused)
   loadVendorAccessRequests(); // keeps the Dashboard tile + Dev Log nav badge populated from app load, not only when Dev Log is opened
   setTimeout(function(){ initWOClicks(); initStatClicks(); }, 100);
   processNotificationsBackground();
@@ -4641,8 +4711,9 @@ function bindContactCardFields(fields){
       data = data || {};
       if (data.error) throw new Error(data.error);
       applyContactCardFields(fields, data);
-      if (statusEl) statusEl.textContent = (data._error||data._parse_error) ? 'Could not read the card — enter details manually' : 'Filled from contact card — double-check before saving';
+      if (statusEl) statusEl.textContent = data._paused ? 'Automatic reading is paused - enter it by hand.' : ((data._error||data._parse_error) ? 'Could not read the card — enter details manually' : 'Filled from contact card — double-check before saving');
     }).catch(function(e){
+      logError('Contact card read', (e && e.message) || 'Failed');
       if (statusEl) statusEl.textContent = 'Could not read the card — enter details manually';
     }).finally(function(){ fileInput.value=''; });
   };

@@ -176,6 +176,7 @@ var ES_EXTRA = {
 "Confirm & Submit": "Confirmar y enviar",
 "Reading invoice…": "Leyendo factura…",
 "Couldn’t read that one — just fill it in below": "No pudimos leer esa — llénela abajo",
+"Automatic reading is paused - enter it by hand.": "La lectura automática está en pausa - ingréselo a mano.",
 "attaching file…": "adjuntando archivo…",
 "file attached": "archivo adjunto",
 "Invoice photo attached": "Foto de factura adjunta",

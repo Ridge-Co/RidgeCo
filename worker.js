@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-16.03-failure-ledger';
+const BUILD_VERSION = '2026-10-16.04-ai-credit-pause';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -502,6 +502,7 @@ const _hubWorkerCore = {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
         if (path === '/cron/status')            return await schedStatusHandler(env);
+        if (path === '/ai-credit/status')       return await aiCreditStatusHandler(env);   // Oct 16 2026: is AI reading paused? (admin; GET + secret-free, so the read-only prod token may read it)
         if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
@@ -888,6 +889,10 @@ const _hubWorkerCore = {
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
+        // Oct 16 2026 (AI-credit pause). ADMIN ONLY by construction: neither path is in ROLE_SCOPES, PUBLIC_PATHS or HUB_PROD_WRITE_PATHS, so only
+        // WORKER_SECRET (the Hub admin login) reaches them - plus HUB_TEST_TOKEN on STAGING (hubTestWriteAllowed). Tenant/vendor/owner sessions get 401.
+        if (path === '/admin/ai-credit-resume')   return await aiCreditResumeHandler(env);
+        if (path === '/admin/ai-credit-simulate') return await aiCreditSimulateHandler(env, body);   // 404 unless staging
         if (path === '/wo/additional-work/start')    return await addonStart(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/submit')   return await addonSubmit(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/withdraw') return await addonWithdraw(env, body, callerRole, callerSessionId);
@@ -1120,6 +1125,9 @@ const _hubWorkerCore = {
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
+      // Oct 16 2026: an AI step reached while Anthropic credit is out / paused is a DESIGNED, already-alerted state, not a bug: a typed 503
+      // with a plain message (no unhandled_500 row per request, no stack) so every page can say "automatic reading is paused - enter it by hand".
+      if (aiCreditIsPausedError(err)) return aiCreditPausedJson({});
       // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
       // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
       //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
@@ -2691,6 +2699,8 @@ function statementLineMatch(line, existingReceipts, existingQueueRows) {
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
+  // Oct 16 2026: AI credit paused -> touch nothing (no Drive listing, no OCR call, no attempt counted); files wait in the folder.
+  { const st = await aiCreditCheck(env); if (st.paused) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: 0, remaining: 0, paused_since: st.at || null, reason: 'paused: AI credit - receipts stay in the Drive folder and are scanned automatically after AI resumes' }); }
   const cfg = await fetchConfig(env).catch(() => ({}));
   // Per-call cap on NEW files (Sep 22 2026). Each file costs ~4 subrequests (Drive download, OCR,
   // Sheets append); uncapped, a big drop (e.g. an email backfill) blew Cloudflare's per-invocation
@@ -2725,9 +2735,9 @@ async function receiptReconScan(env, body) {
   // outage are retried automatically the next scan.
   let healed = false;
   for (const id of Object.keys(failures)) {
-    if (receiptReconIsConfigError(failures[id] && failures[id].error)) { delete failures[id]; healed = true; }
+    if (receiptReconIsConfigError(failures[id] && failures[id].error) || aiCreditErrorTextIsOutage(failures[id] && failures[id].error)) { delete failures[id]; healed = true; }   // + Oct 16 2026: attempts burned by the credit outage
   }
-  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { console.error('receiptReconScan: could not save the healed tracker:', schedErrText(e)); await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_recon_tracker_write_failed', Skill_Or_Endpoint: 'receiptReconScan', Success: 'FALSE', Notes: schedErrText(e).slice(0, 300) }).catch(te => console.error('telemetry failed:', schedErrText(te))); } }
   const allNew = files.filter(f => !seen.has(f.id) && !(failures[f.id] && failures[f.id].attempts >= 3));
   const stuck = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
@@ -2735,7 +2745,7 @@ async function receiptReconScan(env, body) {
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = '';
+  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = ''; let pausedMid = false;
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
@@ -2770,6 +2780,7 @@ async function receiptReconScan(env, body) {
       n++;
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
     } catch (e) {
+      if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out mid-scan: stop, no attempt counted, nothing retried
       errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
       if (receiptReconIsConfigError(e && e.message)) { configError = String(e.message).slice(0, 200); break; }
       const prior = failures[f.id];
@@ -2777,8 +2788,9 @@ async function receiptReconScan(env, body) {
       failuresChanged = true;
     }
   }
-  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptReconScan: tracker write failed:', schedErrText(e)); } }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, remaining: allNew.length - n, errors: errs, stuck: stuckNow, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
   return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
 }
 
@@ -2823,6 +2835,7 @@ async function receiptReconImportStatement(env, body) {
       return json({ error: 'Could not download the file: ' + (e && e.message || e) }, 500);
     }
     const ex = await statementExtract(env, dl.bytes, dl.mime);
+    if (ex && ex._paused) return aiCreditPausedJson({ message: 'Automatic statement reading is paused - enter the statement lines by hand (or paste the CSV).' });
     detectedVendor = ex.vendor_detected || '';
     // statementExtract's own lines already use `amount`; documented here in case an older/altered
     // extractor response ever returns `total` instead — mapped defensively, never silently dropped.
@@ -3873,8 +3886,7 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
 async function scopeClaude(env, prompt, media, maxTokens) {
   if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
   const content = media ? [media, { type: 'text', text: prompt }] : prompt;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1200, messages: [{ role: 'user', content }] }) });
-  const data = await resp.json();
+  const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1200, messages: [{ role: 'user', content }] }, { source: 'scopeClaude' });   // Oct 16 2026: guarded call (credit pause); throws AiCreditPausedError
   return (data.content && data.content[0] && data.content[0].text || '').trim();
 }
 function scopeParseJSON(txt) { try { return JSON.parse(String(txt).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return null; } }
@@ -4008,7 +4020,10 @@ async function scopeIngest(env, body) {
     else if (body.drive_file_id) { const tok = await getAccessToken(env); const dl = await driveDownload(tok, body.drive_file_id); added = await scopeOcr(env, dl.bytes, dl.mime); type = 'drive'; label = label || ('drive:' + body.drive_file_id); }
     else if (body.image_b64) { const raw = String(body.image_b64).replace(/^data:[^,]+,/, ''); const bin = Uint8Array.from(atob(raw), c => c.charCodeAt(0)); added = await scopeOcr(env, bin.buffer, body.mime || 'image/jpeg'); type = 'upload'; label = label || 'upload'; }
     else return json({ error: 'text, drive_file_id, or image_b64 required' }, 400);
-  } catch (e) { return json({ error: 'ingest failed: ' + (e.message || e) }, 500); }
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) return aiCreditPausedJson({ message: 'Automatic reading of the photo is paused - type the notes in by hand.' });
+    return json({ error: 'ingest failed: ' + (e.message || e) }, 500);
+  }
   const raw = s.Raw_Input ? (s.Raw_Input + '\n\n' + added) : added;
   let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
   srcs.push({ type, label, ts: new Date().toISOString(), chars: added.length });
@@ -12435,11 +12450,11 @@ async function generateEstimateText(env, body) {
   const partialScopeClauseText='\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn\'t get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.';
   const prompt=`You are a property maintenance estimate writer. Rewrite the following raw, messy scope-of-work items into a polished, professional, scannable bulleted list. Correct all typos, slang, and grammar. The output is for an English-speaking property owner: if any item or the issue description is in Spanish, write it in English. Group related items under bold category headers where it makes sense.\n\nProperty: ${property_address}\nRaw issue description: ${issues}\nRaw line items:\n${itemsList}\n\nReturn ONLY the rewritten "Scope of Work:" bulleted section — clean Markdown, no emojis, no preamble, no other sections. Do not include any dollar amounts or pricing.`;
   try {
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:800, messages:[{role:'user',content:prompt}] }) });
-    const data=await resp.json(); const scopeText=data.content?.[0]?.text?.trim()||''; if (!scopeText) return json({ error:'Claude returned empty response',detail:data }, 500);
+    const { data }=await anthropicMessages(env,{ model:'claude-sonnet-4-6', max_tokens:800, messages:[{role:'user',content:prompt}] },{ source:'generateEstimateText' });
+    const scopeText=data.content?.[0]?.text?.trim()||''; if (!scopeText) return json({ error:'Claude returned empty response',detail:data }, 500);
     const doc=`${property_address}\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.`+partialScopeClauseText+integrityClauseText;
     return json({ success:true, text:doc, pricing:{ finalPrice:pricing.finalPrice, deposit:pricing.deposit } });
-  } catch(e) { return json({ error:e.message }, 500); }
+  } catch(e) { if (aiCreditIsPausedError(e)) return aiCreditPausedJson({ message: 'Automatic estimate wording is paused - type the scope text by hand.' }); return json({ error:e.message }, 500); }
 }
 // ── WO AUDIT ─────────────────────────────────────────────────
 
@@ -12505,9 +12520,9 @@ async function getWOAudit(env, url) {
 async function translateToEnglish(env, text) {
   if (!env.ANTHROPIC_API_KEY) return text;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:400, messages:[{role:'user',content:`Translate the following from Spanish to English. Return only the translation, nothing else:\n\n${text}`}] }) });
-    const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
-  } catch(e) { return text; }
+    const { data } = await anthropicMessages(env, { model:'claude-sonnet-4-6', max_tokens:400, messages:[{role:'user',content:`Translate the following from Spanish to English. Return only the translation, nothing else:\n\n${text}`}] }, { source:'translateToEnglish' });
+    return data.content?.[0]?.text?.trim() || text;
+  } catch(e) { await aiFailOpenNote(env, 'translateToEnglish', e); return text; }
 }
 
 // Generic one-shot translation used by the Shareable WO (B-117) to show the vendor the job
@@ -12519,9 +12534,9 @@ async function translateText(env, text, fromLabel, toLabel, opts) {
   if (!env.ANTHROPIC_API_KEY || !text || !String(text).trim()) return text;
   try {
     const extra = (opts && opts.preserve ? ' ' + VENDOR_TRANSLATE_PRESERVE : '') + (opts && opts.html ? ' The input is HTML: keep every tag, attribute and link exactly as-is and translate only the visible text.' : '');
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }) });
-    const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
-  } catch(e) { return text; }
+    const { data } = await anthropicMessages(env, { model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }, { source:'translateText' });
+    return data.content?.[0]?.text?.trim() || text;
+  } catch(e) { await aiFailOpenNote(env, 'translateText', e); return text; }
 }
 
 // ── VENDOR TRANSLATION (Sep 28 2026, feat/vendor-translation-send-to-vendor) ────────────────────
@@ -12582,8 +12597,7 @@ async function translateBatchToEnglish(env, strings) {
   try {
     const ctrl = new AbortController(); timer = setTimeout(() => ctrl.abort(), 20000);
     const prompt = 'Below is a JSON array of short texts a property-maintenance contractor wrote for an estimate. Translate every item that is in Spanish (or any non-English language) into natural, plain English; return items that are already English EXACTLY unchanged. Keep dollar amounts, numbers, addresses, names and units exactly as written. Return ONLY a JSON array of strings, same length and same order, no commentary.\n\n' + JSON.stringify(idx.map(i => arr[i]));
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }) });
-    const data = await resp.json();
+    const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }, { signal: ctrl.signal, source: 'translateBatchToEnglish' });
     const txt = (data && data.content && data.content[0] && data.content[0].text) || '';
     const m = txt.match(/\[[\s\S]*\]/);
     const parsed = m ? JSON.parse(m[0]) : null;
@@ -12591,7 +12605,7 @@ async function translateBatchToEnglish(env, strings) {
     const out = arr.slice();
     idx.forEach((i, k) => { if (typeof parsed[k] === 'string' && parsed[k].trim()) out[i] = parsed[k].trim(); });
     return { ok: true, out, called: true };
-  } catch (e) { return { ok: false, out: arr, error: String((e && e.message) || e) }; }
+  } catch (e) { return Object.assign({ ok: false, out: arr, error: String((e && e.message) || e) }, aiCreditIsPausedError(e) ? { paused: true, code: AI_CREDIT_CODE } : {}); }
   finally { if (timer) clearTimeout(timer); }
 }
 
@@ -15645,6 +15659,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^selftest/, 'P1'],
   [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
   [/^failure_ledger/, 'P1'],
+  [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
+  [/^ai_credit_(exhausted|resume)/, 'P2'],                // the event record; the urgent row is the auto-clearing "ai_credit_paused" condition (failConditions)
 ];
 
 // ── pure helpers (unit-tested) ──────────────────────────────────────────────────────────────────────────────────
@@ -15802,13 +15818,15 @@ async function failConditions(env, cfg, nowMs) {
   const out = [];
   if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });
   else if (!cfg.admin_phone) out.push({ key: 'no_admin_phone', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Config admin_phone is not set, so failure alerts have nowhere to go.' });
+  // Oct 16 2026: the AI-credit pause is a CONDITION (true right now), so its urgent Needs Attention row clears itself the moment AI resumes.
+  if (String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE') out.push({ key: 'ai_credit_paused', system: 'hub', where: 'ai_credit_paused', severity: 'P0', message: `AI reading is PAUSED (${cfg[AI_CREDIT_KEYS.kind] === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}) since ${cfg[AI_CREDIT_KEYS.at] || '?'}: ${String(cfg[AI_CREDIT_KEYS.err] || '').slice(0, 160)} Fix: ${AI_CREDIT_FIX}, then tap Resume on the Hub banner.` });
   if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P1', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
   try {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
     if (parsed.error) out.push({ key: 'scheduler_state', system: 'hub', where: 'scheduler', severity: 'P0', message: parsed.error });
     else {
-      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs);
+      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs, String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE' ? (cfg[AI_CREDIT_KEYS.at] || 'paused') : '');
       for (const name of st.overdue) out.push({ key: 'overdue:' + name, system: 'hub', where: 'scheduler:' + name, severity: 'P0', message: `Scheduled job ${name} is overdue: ${(st.jobs[name] && st.jobs[name].overdue_reason) || 'not running'}` });
       if (st.tick_age_min !== null && st.tick_age_min > 60) out.push({ key: 'scheduler_silent', system: 'hub', where: 'scheduler', severity: 'P0', message: `The Apps Script scheduler has not ticked for ${st.tick_age_min} minutes.` });
     }
@@ -16031,7 +16049,7 @@ const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
 const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
-const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'str_cleaning']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'str_cleaning', 'ai_credit_probe']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
 
 // Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
 // Fails closed for a blank/short/missing secret, an empty header, any other method or path.
@@ -16114,6 +16132,9 @@ const SCHED_JOBS = [
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
   { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
   { name: 'str_cleaning',       kind: 'interval', every_min: 14, run: (env) => schedRunStrCleaning(env) },
+  // Oct 16 2026: gate:'ai_paused' = this job is not even STARTED (no claim, no state write, no Anthropic call) unless the AI-credit pause flag is on.
+  // While paused it makes ONE 1-token call at most hourly (every_min 59 = "every 60 minutes"); success clears the pause and sends one "AI is back" notice.
+  { name: 'ai_credit_probe',    kind: 'interval', every_min: 59, gate: 'ai_paused', run: (env) => schedRunAiCreditProbe(env) },
   { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
   { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
   { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
@@ -16132,10 +16153,11 @@ const SCHED_JOBS = [
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
-function schedJobDue(job, js, nowDate) {
+function schedJobDue(job, js, nowDate, aiPausedAt) {
   js = js || {};
   const nowMs = +nowDate;
   if (job.disabled) return null;                                  // turned off in the Apps Script JOBS table (enabled:false)
+  if (job.gate === 'ai_paused' && !aiPausedAt) return null;       // gated job: costs nothing and writes nothing unless AI is paused
   if (job.kind === 'interval') {
     const last = Date.parse(js.last_start || '');
     if (!isNaN(last) && last <= nowMs + 5 * 60000 && nowMs - last < job.every_min * 60000) return null;
@@ -16145,6 +16167,7 @@ function schedJobDue(job, js, nowDate) {
   if (job.kind === 'weekly' && et.dow !== job.dow) return null;
   if (et.minutes < schedAtMinutes(job.at)) return null;
   if (js.last_key === et.date) return null;                       // already done (or deliberately not retried) for this ET day
+  if (aiPausedAt && js.paused_key === et.date && js.paused_ep === aiPausedAt) return null;   // Oct 16 2026: skipped today BECAUSE AI is paused (same pause episode) - not retried every 30 min; re-armed when the pause clears
   if (js.partial_at && nowMs - (Date.parse(js.partial_at) || 0) < SCHED_PARTIAL_GAP_MS) return null;   // finished a slice a moment ago; resume on a later tick, not this one
   const at = js.attempts;
   if (at && at.key === et.date && at.n > 0) {
@@ -16163,7 +16186,7 @@ function schedDueJobs(state, now, jobs, opts) {
   const out = [];
   for (const job of (jobs || SCHED_JOBS)) {
     if (only && !only.includes(job.name)) continue;
-    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate);
+    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate, opts && opts.aiPausedAt);
     if (d) out.push({ name: job.name, key: d.key });
   }
   // DAILY/WEEKLY JOBS GO FIRST (Oct 14 2026). They run once a day, so they are cheap; the 15-minute jobs come back around anyway.
@@ -16260,7 +16283,7 @@ function schedExpected(job) {
   return `${SCHED_DOW_NAMES[job.dow]} after ${job.at} ET`;
 }
 // Pure. Per-job health for /cron/status and /health.
-function schedStatus(state, now, jobs) {
+function schedStatus(state, now, jobs, aiPausedAt) {
   const nowDate = now instanceof Date ? now : new Date(now);
   const nowMs = +nowDate, et = schedEtParts(nowDate);
   const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
@@ -16269,6 +16292,14 @@ function schedStatus(state, now, jobs) {
     const js = (state && state.jobs && state.jobs[job.name]) || {};
     if (job.disabled) {   // switched off on purpose: never "overdue"
       out.jobs[job.name] = { expected: schedExpected(job), enabled: false, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue: false, overdue_reason: '' };
+      continue;
+    }
+    if (job.gate === 'ai_paused') {   // Oct 16 2026: runs only while AI is paused - never "overdue" when nothing is paused, or in the first hours of a pause
+      const pausedAge = ageMin(aiPausedAt);
+      const okAge = ageMin(js.last_ok);
+      const od = !!aiPausedAt && pausedAge !== null && pausedAge > schedOverdueLimitMin(job) && (okAge === null || okAge > schedOverdueLimitMin(job));
+      out.jobs[job.name] = { expected: 'hourly, only while AI is paused (otherwise it does nothing and costs nothing)', enabled: true, gated: true, active: !!aiPausedAt, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: false, overdue: od, overdue_reason: od ? `AI has been paused for ${pausedAge} min and the recovery check has not completed in ${schedOverdueLimitMin(job)} min` : '' };
+      if (od) out.overdue.push(job.name);
       continue;
     }
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
@@ -16287,7 +16318,10 @@ function schedStatus(state, now, jobs) {
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
     }
-    out.jobs[job.name] = { expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
+    // Oct 16 2026: skipped on purpose because AI credit is paused -> shown as "paused: AI credit", NOT overdue (the pause itself is the loud, already-alerted problem).
+    const pausedNow = !!aiPausedAt && job.kind !== 'interval' && js.paused_key === et.date && js.paused_ep === aiPausedAt && js.last_key !== et.date;
+    if (pausedNow) { overdue = false; reason = ''; }
+    out.jobs[job.name] = Object.assign({ expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' }, pausedNow ? { paused: true, paused_reason: js.last_error || 'paused: AI credit' } : {});
     if (overdue) out.overdue.push(job.name);
   }
   return out;
@@ -16391,18 +16425,27 @@ async function schedRunDailyDigest(env) {
   return { ok: !errors.length, errors, warnings, no_retry, detail: { delivered: !!(delivery && delivery.delivered) } };
 }
 async function schedRunDailyReceipts(env) {
-  const errors = [], detail = {};
-  detail.receipt_scan = await schedStep('receipt_scan', () => receiptScan(env), errors);
-  detail.receipt_recon_scan = await schedStep('receipt_recon_scan', () => receiptReconScan(env, { max: 5 }), errors);
+  const errors = [], detail = {}, flags = { paused: false };
+  // Oct 16 2026: AI credit paused -> skip BOTH scans without touching Drive or Anthropic and report {ok:false, paused:true, reason}.
+  // (Before this the job re-tried the same PDFs every ~30 min all night after the credit ran out and nobody was told.)
+  const st0 = await aiCreditCheck(env);
+  if (st0.paused) return aiCreditSchedPaused(st0, { skipped: 'receipt_scan and receipt_recon_scan were not run' });
+  detail.receipt_scan = await schedAiStep('receipt_scan', () => receiptScan(env), errors, flags);
+  if (!flags.paused) detail.receipt_recon_scan = await schedAiStep('receipt_recon_scan', () => receiptReconScan(env, { max: 5 }), errors, flags);
+  if (flags.paused) {
+    detail.paused_during_run = true;
+    if (!errors.length) return aiCreditSchedPaused(await aiCreditCheck(env), detail);   // credit ran out DURING the scan: files already queued stay queued; the rest wait
+  }
   return { ok: !errors.length, errors, detail };
 }
 async function schedRunDailyReceiptsPost(env) {
   const errors = [], detail = {};
-  detail.items_summary = await schedStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors);
+  const flags = { paused: false };
+  detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email below does not need AI
   detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
   const before = errors.length;
   detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, {}), errors);
-  return { ok: !errors.length, errors, detail, no_retry: errors.length > before };   // a half-failed email batch is not blindly re-sent
+  return { ok: !errors.length, errors, detail, no_retry: errors.length > before, warnings: flags.paused ? ['items summary skipped: paused (AI credit) - it is retried automatically after AI resumes'] : undefined };   // a half-failed email batch is not blindly re-sent
 }
 async function schedRunDailyTurnover(env) {
   const errors = [];
@@ -16707,7 +16750,8 @@ const SCHED_PF_WHAT = {
   sweep_checks: 'runs the daily self-test (once a day) and the dead-man check (alerts if no telemetry for 24h)',
   insp_guard: 'checks inspection bookings against the STR calendar (does nothing until the inspection module is configured)',
   daily_digest: 'builds the morning digest and texts it to the admin phone',
-  daily_receipts: 'scans the receipt inbox',
+  daily_receipts: 'scans the receipt inbox (skips and reports "paused: AI credit" while Anthropic credit is out)',
+  ai_credit_probe: 'does nothing unless AI is paused; while paused, at most hourly, makes one 1-token Claude call and clears the pause (plus one "AI is back" notice) if it works',
   daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
@@ -16850,12 +16894,14 @@ async function schedRunNext(env, ctx, opts) {
   const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
   const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
   if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
-  const dueNow = schedDueJobs(st, now, jobs, { only });
+  const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
+  const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
+  if (aiPausedAt) base.ai_paused = true;
 
   // DRY RUN / PREFLIGHT: no claim, no state write, no SMS, no job code. Lists what is due and (counts only) what it would do.
   if (opts.dry) {
-    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) });
+    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs, aiPausedAt) });
     if (opts.preflight !== false) body.preflight = await schedPreflight(env, force ? only.slice() : dueNow.map(d => d.name), rows, now, seeded);
     return { status: 200, body };
   }
@@ -16909,9 +16955,13 @@ async function schedRunNext(env, ctx, opts) {
     if (partialN > SCHED_MAX_PARTIALS) { jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${SCHED_MAX_PARTIALS} slices today (it needs a person to look)` }] }; }
     const isPartial = partialN > 0 && partialN <= SCHED_MAX_PARTIALS;
     const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
-    const jobOk = jobRes.ok !== false && errors.length === 0;
+    // Oct 16 2026: {ok:false, paused:true, reason} = "skipped on purpose because AI credit is paused". NOT a failure (Brett was already alerted once, and the
+    // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
+    const jobPaused = jobRes.paused === true && errors.length === 0;
+    const jobOk = jobPaused || (jobRes.ok !== false && errors.length === 0);
     const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
     const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
+    if (jobPaused) { out.paused = true; out.paused_reason = String(jobRes.reason || 'paused: AI credit').slice(0, 300); }
     if (isPartial && jobOk) out.partial = true;
     if (errors.length) out.errors = errors;
     if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
@@ -16922,7 +16972,7 @@ async function schedRunNext(env, ctx, opts) {
       catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
     }
     // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
-    let landed = false, stateErr = null, finalState = null;
+    let landed = false, stateErr = null, finalState = null, aiPausedFinal = aiPausedAt;
     for (let attempt = 0; attempt < 2 && !landed; attempt++) {
       try {
         const r2 = await schedReadConfigRows(env, true);
@@ -16931,14 +16981,21 @@ async function schedRunNext(env, ctx, opts) {
         const cur = p2.state;
         const rec = Object.assign({}, cur.jobs[job.name] || {});
         delete rec.last_seeded; delete rec.seeded_at;   // a real run replaces the first-run seed marker
-        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? (isPartial ? 'partial' : 'ok') : 'failed';
-        rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
-        if (jobOk) rec.last_ok = rec.last_end;
+        aiPausedFinal = aiCreditPausedAtFromRows(r2);
+        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobPaused ? 'paused' : (jobOk ? (isPartial ? 'partial' : 'ok') : 'failed');
+        rec.last_error = jobPaused ? out.paused_reason : (jobOk ? null : errText); rec.duration_ms = out.duration_ms;
+        if (jobOk && !jobPaused) rec.last_ok = rec.last_end;
+        rec.paused_key = null; rec.paused_ep = null;
         if (job.kind !== 'interval') {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
           rec.partial_at = null;
-          if (jobOk && isPartial) {
+          if (jobPaused) {
+            // Not done for the day, and the start-of-run attempt is given back. While THIS pause episode lasts the job is skipped for the rest of the ET day
+            // (paused_key/paused_ep); the moment the pause clears it is due again at once (catch-up), whatever the hour.
+            rec.attempts = null;
+            if (aiPausedFinal && !force) { rec.paused_key = etDay; rec.paused_ep = aiPausedFinal; }
+          } else if (jobOk && isPartial) {
             rec.partials = { key: etDay, n: partialN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
           } else if (jobOk || finalFail) {
             rec.last_key = etDay; rec.attempts = null; rec.partials = null;
@@ -16961,7 +17018,7 @@ async function schedRunNext(env, ctx, opts) {
       try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Notes: ('could not record the result of this run in Scheduler_State (the job may run again early): ' + stateErr).slice(0, 480) }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: state write failed and telemetry write failed:', stateErr, out.telemetry_error); }
     } else if (finalState) {
-      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only }).map(d => d.name);
+      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only, aiPausedAt: aiPausedFinal }).map(d => d.name);
       out.due = stillDue; out.more = stillDue.length > 0 && !force;
     }
     return out;
@@ -17014,8 +17071,10 @@ async function schedStatusHandler(env) {
   catch (e) { return json({ ok: false, error: 'could not read Config (scheduler state): ' + schedErrText(e) }, 503); }
   if (parsed.error) return json({ ok: false, error: parsed.error }, 503);
   const eff = schedEffective(parsed.state);
-  const s = schedStatus(parsed.state, new Date(), eff.jobs);
+  const aiState = aiCreditStateFromRows(rows);
+  const s = schedStatus(parsed.state, new Date(), eff.jobs, aiState.paused ? (aiState.at || 'paused') : '');
   if (eff.schedule_error) s.schedule_error = eff.schedule_error;
+  s.ai_credit = Object.assign({ paused: !!aiState.paused, since: aiState.paused ? (aiState.at || null) : null, kind: aiState.paused ? aiState.kind : null }, aiState.paused ? { reason: aiCreditSchedPaused(aiState).reason, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) } : {});
   const claimUntil = Date.parse(parsed.state.claim_until || '');
   return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
 }
@@ -17025,8 +17084,9 @@ async function schedHealthSummary(env) {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
     if (parsed.error) return { error: 'state unreadable' };
-    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs);
-    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
+    const aiState = aiCreditStateFromRows(rows);
+    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs, aiState.paused ? (aiState.at || 'paused') : '');
+    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) };
   } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
 }
 // scheduled() is now a LOUD no-op. Cloudflare firing it means a stale Cron Trigger is still attached - a second,
@@ -17785,6 +17845,385 @@ async function telemetryLog(env, body) {
   }
 }
 
+// ═══ AI-CREDIT-GUARD-BEGIN ════════════════════════════════════════════════════════════════════
+// "ALERT ONCE, THEN PAUSE" (Oct 16 2026). On Oct 15 ~4pm ET the prepaid Anthropic credit ran out. Every Claude call then failed
+// with HTTP 400 invalid_request_error "Your credit balance is too low to access the Anthropic API...", the daily_receipts job
+// retried the same PDFs all night (3 tries per file, every ~30 minutes) and NOTHING told Brett - he found out by accident.
+//
+// ONE central place now knows how to recognise that error and what to do about it:
+//   anthropicMessages(env, body, opts)  - EVERY call to api.anthropic.com/v1/messages goes through it (callClaude, scopeClaude,
+//     estimate text, the translators, the weekly review). A new call site that uses it gets all of this for free.
+//   1. BEFORE calling: if the pause flag is on (Config AI_CREDIT_PAUSED=TRUE) it throws AiCreditPausedError WITHOUT calling
+//      Anthropic (the flag is cached 30 s per Worker instance, so a loop of 20 files costs one Config read).
+//   2. AFTER a failed call: aiCreditClassify() recognises "credit exhausted" (400/402 billing text, type billing_error) and
+//      "the key/account is refused" (401, or 403 permission_error). On a match aiCreditTrip() runs ONCE: sets the flag (+ when, +
+//      the error text), logs Ops_Telemetry Job_Type ai_credit_exhausted (Success FALSE), and sends ONE alert to Brett by text
+//      (the admin-notify path, with its daily cap) AND email (Twilio may be unavailable - A2P). No repeat while paused; a reminder
+//      only if it is STILL paused 24 h after the last alert.
+//   3. Callers see a typed error {code:'ai_credit_paused'} and answer in plain words ("Automatic reading is paused - enter it by
+//      hand"); manual entry keeps working everywhere. The scheduler's daily_receipts reports {ok:false, paused:true, reason}.
+// Getting out of the pause needs no deploy: POST /admin/ai-credit-resume (the Hub banner's Resume button) makes ONE real 1-token
+// call and clears the flag only if it works; the scheduler job ai_credit_probe does the same at most hourly, ONLY while paused,
+// and sends one "AI is back" notice. Nothing else ever clears the flag.
+// Gemini (CHEAP tier) quota/billing errors are NOT handled here - see the PR notes (follow-up).
+const AI_CREDIT_CODE = 'ai_credit_paused';
+const AI_CREDIT_KEYS = { paused: 'AI_CREDIT_PAUSED', at: 'AI_CREDIT_PAUSED_AT', err: 'AI_CREDIT_LAST_ERROR', kind: 'AI_CREDIT_PAUSED_KIND', by: 'AI_CREDIT_PAUSED_BY', alerted: 'AI_CREDIT_ALERT_LAST_SENT', resumed: 'AI_CREDIT_RESUMED_AT' };
+const AI_CREDIT_CACHE_MS = 30 * 1000;
+const AI_CREDIT_REMINDER_MS = 24 * 3600 * 1000;
+const AI_CREDIT_ALERT_RETRY_MS = 10 * 60 * 1000;   // an alert that could not be delivered is retried no sooner than this
+const AI_PAUSED_USER_MSG = 'Automatic reading is paused - enter it by hand.';
+const AI_SCAN_PAUSED_MSG = 'Automatic receipt scanning is paused (Anthropic credit is out). Receipts stay in the Drive folder and are scanned after AI resumes; adding a receipt by hand still works.';
+const AI_CREDIT_FIX = 'Anthropic Console > Settings > Billing > Buy credits (or switch on auto-reload)';
+const AI_CREDIT_EMAIL_DEFAULT = 'brett@bmoremanagement.com';
+const AI_CREDIT_AFFECTED = [
+  'receipt scanning (inbox + Receipt Reconciler) - receipts wait in Drive, nothing is lost',
+  'vendor invoice auto-read and statement / contact-card reading - the forms stay open for typing',
+  'field-inspection label reading, dictation sorting and AI summaries - notes and photos are kept',
+  'scope-of-work notes (OCR / organize / estimate text) and the weekly review proposal',
+  'Spanish/English translation of vendor texts and estimates - those go out untranslated',
+];
+
+let _aiCreditCache = null;        // { at, state } - per Worker instance
+let _aiCreditTripP = null;        // in-flight trip (concurrent failing calls share one)
+let _aiCreditResumeP = null;      // in-flight resume probe (double-tap shares one)
+let _aiCreditAlertTryMs = 0;      // last time this instance tried to deliver an alert
+let _aiCreditReadFailMs = 0;      // last time this instance reported "cannot read the flag"
+function aiCreditResetForTests() { _aiCreditCache = null; _aiCreditTripP = null; _aiCreditResumeP = null; _aiCreditAlertTryMs = 0; _aiCreditReadFailMs = 0; }
+
+class AiCreditPausedError extends Error {
+  constructor(message, info) { super(message); this.name = 'AiCreditPausedError'; this.code = AI_CREDIT_CODE; this.paused = true; this.info = info || null; this.userMessage = AI_PAUSED_USER_MSG; }
+}
+function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
+
+// PURE. Is this Anthropic error response a "credit exhausted" or "key/account refused" one? -> { kind, status, type, message } | null.
+// Deliberately narrow: an ordinary 400 (bad image, bad prompt), a 429 rate limit, a 5xx or an overloaded 529 is NOT a pause.
+function aiCreditClassify(status, data) {
+  const e = (data && typeof data === 'object' && data.error && typeof data.error === 'object') ? data.error : ((data && typeof data === 'object') ? data : {});
+  const type = String(e.type || '').toLowerCase();
+  const msg = String(e.message || (typeof data === 'string' ? data : '') || '').slice(0, 300);
+  const billingText = /credit balance|purchase credits|plans\s*(&|and)\s*billing|insufficient (credit|funds|balance)|out of credits/i.test(msg);
+  if ((status === 400 || status === 402 || status === 403) && (type === 'billing_error' || billingText)) return { kind: 'credit', status, type, message: msg || 'Anthropic credit balance is too low' };
+  if (status === 402) return { kind: 'credit', status, type, message: msg || 'Anthropic says payment is required (HTTP 402)' };
+  if (status === 401 || (status === 403 && (type === 'permission_error' || type === 'authentication_error'))) return { kind: 'auth', status, type, message: msg || ('Anthropic refused the API key / account (HTTP ' + status + ')') };
+  return null;
+}
+// PURE. Config rows -> the pause state.
+function aiCreditStateFromRows(rows) {
+  const g = (k) => schedCell(rows || [], k).trim();
+  return { paused: g(AI_CREDIT_KEYS.paused).toUpperCase() === 'TRUE', at: g(AI_CREDIT_KEYS.at), err: g(AI_CREDIT_KEYS.err), kind: g(AI_CREDIT_KEYS.kind) || 'credit', by: g(AI_CREDIT_KEYS.by), alerted_at: g(AI_CREDIT_KEYS.alerted), resumed_at: g(AI_CREDIT_KEYS.resumed) };
+}
+// PURE. The id of the pause episode in force ('' = not paused). The scheduler remembers "paused for today during THIS episode".
+function aiCreditPausedAtFromRows(rows) { const s = aiCreditStateFromRows(rows); return s.paused ? (s.at || 'paused') : ''; }
+// PURE. '' | 'first' | 'reminder' - should an alert go out now? One per pause, then at most one reminder per 24 h while still paused.
+function aiCreditAlertDue(state, nowMs) {
+  if (!state || !state.paused) return '';
+  const last = Date.parse(state.alerted_at || '');
+  if (isNaN(last)) return 'first';
+  const since = Date.parse(state.at || '');
+  if (!isNaN(since) && last < since) return 'first';          // that alert was for an earlier pause
+  return (nowMs - last >= AI_CREDIT_REMINDER_MS) ? 'reminder' : '';
+}
+// PURE. The words of the alert (text + email).
+function aiCreditAlertText(state, due) {
+  const auth = state && state.kind === 'auth';
+  const head = (due === 'reminder' ? 'STILL PAUSED (24h reminder): ' : '') + (auth ? 'Anthropic is refusing the Hub\'s API key / account.' : 'Anthropic AI credit is OUT.');
+  const err = String((state && state.err) || '').slice(0, 160);
+  const sms = `RidgeCo Hub: ${head} AI reading is PAUSED and will not keep retrying: receipt scanning, vendor invoice auto-read, field-inspection AI, scope-notes AI. Typing things in by hand still works. FIX: ${AI_CREDIT_FIX}. Then tap Resume on the red banner in the Hub (it also checks by itself about once an hour).${err ? ' Error: ' + err : ''}`;
+  const li = AI_CREDIT_AFFECTED.map(x => `<li>${x.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</li>`).join('');
+  const html = `<p><b>${head.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</b></p><p>Affected while paused (nothing is retried, nothing is lost):</p><ul>${li}</ul><p><b>Fix:</b> ${AI_CREDIT_FIX.replace(/&/g, '&amp;').replace(/</g, '&lt;')}.<br>Then open the Hub and tap <b>Resume</b> on the red banner. If you do nothing, the Hub checks about once an hour and resumes by itself once credit works.</p>`
+    + (err ? `<p>Anthropic said: <i>${err.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</i></p>` : '') + `<p>Paused since: ${String((state && state.at) || '?')}</p>`;
+  return { sms, subject: (due === 'reminder' ? 'STILL PAUSED: ' : 'ACTION NEEDED: ') + (auth ? 'Anthropic is refusing the Hub - AI reading paused' : 'Anthropic credit is out - AI reading paused'), html };
+}
+
+// Read the flag (cached 30 s per instance). NEVER throws: if Config cannot be read the call is allowed through (the Sheets failure
+// surfaces everywhere else) but it is logged to the Worker log and, at most every 10 min, to Ops_Telemetry.
+async function aiCreditCheck(env, opts) {
+  opts = opts || {};
+  const now = Date.now();
+  if (!opts.fresh && _aiCreditCache && now - _aiCreditCache.at < AI_CREDIT_CACHE_MS) return _aiCreditCache.state;
+  let state;
+  try { state = aiCreditStateFromRows(await schedReadConfigRows(env, !!opts.fresh)); }
+  catch (e) {
+    const msg = schedErrText(e);
+    console.error('ai-credit: could not read the pause flag (AI calls are allowed through):', msg);
+    if (now - _aiCreditReadFailMs > 10 * 60 * 1000) {
+      _aiCreditReadFailMs = now;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+      catch (te) { console.error('ai-credit: flag-read failure and its telemetry write both failed:', msg, schedErrText(te)); }
+    }
+    return { paused: false, read_error: msg };
+  }
+  _aiCreditCache = { at: now, state };
+  return state;
+}
+// Writes Config keys in ONE batchUpdate (+ one append for keys not there yet) and verifies by re-reading. -> { ok, error? }
+async function aiCreditWriteKeys(env, kv) {
+  const rows = await schedReadConfigRows(env, true);
+  const updates = [], appends = [];
+  for (const k of Object.keys(kv)) {
+    const idx = schedFindRow(rows, k);
+    if (idx >= 0) updates.push({ range: `Config!B${idx + 1}`, values: [[kv[k]]] }); else appends.push([k, kv[k]]);
+  }
+  if (updates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+  if (appends.length) await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: appends });
+  const back = await schedReadConfigRows(env, true);
+  const bad = Object.keys(kv).filter(k => schedCell(back, k) !== String(kv[k]));
+  return bad.length ? { ok: false, error: 'the Config write did not land for: ' + bad.join(', ') } : { ok: true };
+}
+function aiCreditPausedMessage(state) {
+  return `AI is paused (${state && state.kind === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}${state && state.at ? ' since ' + state.at : ''}); no call was made. Fix: ${AI_CREDIT_FIX}, then tap Resume in the Hub.`;
+}
+// The typed answer for an endpoint that cannot do its AI step. 503 + ok:false + code + a plain message.
+function aiCreditPausedJson(extra) {
+  const message = (extra && extra.message) || AI_PAUSED_USER_MSG;
+  return json(Object.assign({ ok: false, error: message, code: AI_CREDIT_CODE, message, paused: true }, extra || {}, { message }), 503);
+}
+// Fail-open call sites (translators) must not swallow a REAL failure: the pause is the designed, already-alerted path; anything
+// else is logged to the Worker log and Ops_Telemetry before the original text is used.
+async function aiFailOpenNote(env, where, e) {
+  if (aiCreditIsPausedError(e)) return;
+  const msg = schedErrText(e);
+  console.error('ai fail-open (' + where + '):', msg);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_fail_open', Skill_Or_Endpoint: where, Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+  catch (te) { console.error('ai fail-open: telemetry write failed:', where, msg, schedErrText(te)); }
+}
+
+// PURE. Does a stored per-file failure message look like it was caused by the credit outage / pause (not by the file)?
+function aiCreditErrorTextIsOutage(text) {
+  return /credit balance|purchase credits|plans\s*(&|and)\s*billing|AI is paused|ai_credit_paused|billing_error/i.test(String(text || ''));
+}
+
+// Sends ONE alert by text (admin-notify path: daily cap, verified counter) AND email. Delivered = either channel got through.
+async function aiCreditNotify(env, subject, smsText, html, warnings) {
+  const res = { sms: null, email: null, delivered: false };
+  try {
+    const r = await adminNotify(env, { text: smsText.slice(0, ADMIN_NOTIFY_MAX_TEXT), source: 'ai_credit' });
+    let j = null; try { j = await r.clone().json(); } catch (je) { j = { ok: false, error: 'unreadable admin-notify answer: ' + schedErrText(je) }; }
+    res.sms = { ok: !!(j && j.ok), sent: !!(j && j.ok && (j.sent || j.staged)), skipped: !!(j && j.skipped), error: (j && j.ok) ? undefined : String((j && j.error) || 'HTTP ' + r.status).slice(0, 200), reason: (j && j.reason) || undefined };
+    if (res.sms.ok === false) warnings.push('text to Brett not sent: ' + res.sms.error);
+  } catch (e) { res.sms = { ok: false, sent: false, error: schedErrText(e) }; warnings.push('text to Brett failed: ' + res.sms.error); }
+  try {
+    let to = AI_CREDIT_EMAIL_DEFAULT;
+    try { const c = schedCell(await schedReadConfigRows(env, false), 'INSP_NOTIFY_EMAIL').trim(); if (c) to = c; } catch (ce) { warnings.push('could not read the notify email from Config (used the default): ' + schedErrText(ce)); }
+    const r = await gmailSendEmail(env, { to, subject, html });
+    res.email = { ok: !!(r && (r.sent || r.staged)), to };
+    if (!res.email.ok) warnings.push('email to Brett not sent');
+  } catch (e) { res.email = { ok: false, error: schedErrText(e) }; warnings.push('email to Brett failed: ' + res.email.error); }
+  res.delivered = !!((res.sms && res.sms.sent) || (res.email && res.email.ok));
+  return res;
+}
+// The once-per-pause alert (+ the 24 h reminder). Stamps AI_CREDIT_ALERT_LAST_SENT BEFORE sending (so a second failing call cannot
+// double-send); if neither channel got through the stamp is removed again and a telemetry row says so - it is retried, never dropped.
+async function aiCreditMaybeAlert(env, state, errors) {
+  const due = aiCreditAlertDue(state, Date.now());
+  if (!due) return { skipped: 'already alerted for this pause' };
+  if (Date.now() - _aiCreditAlertTryMs < AI_CREDIT_ALERT_RETRY_MS) return { skipped: 'an alert was attempted a moment ago' };
+  _aiCreditAlertTryMs = Date.now();
+  const stamp = new Date().toISOString();
+  let stamped = false;
+  // The two failure_alert_last_sent_* keys tell the failure ledger (failLegacyAlerted) that Brett was JUST texted about this, so it records
+  // the same problem on the Needs Attention screen without sending him a second, less helpful text.
+  try { const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: stamp, failure_alert_last_sent_ai_credit_paused: stamp, failure_alert_last_sent_ai_credit_exhausted: stamp }); stamped = w.ok; if (!w.ok) errors.push('alert stamp not saved: ' + w.error); }
+  catch (e) { errors.push('alert stamp not saved: ' + schedErrText(e)); }
+  const t = aiCreditAlertText(state, due);
+  const warnings = [];
+  const res = await aiCreditNotify(env, t.subject, t.sms, t.html, warnings);
+  res.reason = due; res.stamped = stamped; res.warnings = warnings;
+  if (!res.delivered) {
+    errors.push('NEITHER the text nor the email reached Brett - it will be retried on the next detection: ' + warnings.join('; ').slice(0, 300));
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_alert_failed', Skill_Or_Endpoint: 'aiCreditMaybeAlert', Success: 'FALSE', Notes: JSON.stringify({ sms: res.sms, email: res.email }).slice(0, 450) }); }
+    catch (te) { console.error('ai-credit: alert undeliverable and its telemetry write failed:', schedErrText(te)); }
+    if (stamped) { try { await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: '', failure_alert_last_sent_ai_credit_paused: '', failure_alert_last_sent_ai_credit_exhausted: '' }); } catch (e) { errors.push('could not clear the alert stamp: ' + schedErrText(e)); } }
+  }
+  return res;
+}
+
+// Credit exhausted (or key refused) was just seen. Runs once per pause; concurrent failing calls share one run.
+function aiCreditTrip(env, cls, source) {
+  if (_aiCreditTripP) return _aiCreditTripP;
+  _aiCreditTripP = aiCreditTripRun(env, cls, source).finally(() => { _aiCreditTripP = null; });
+  return _aiCreditTripP;
+}
+async function aiCreditTripRun(env, cls, source) {
+  const out = { newly_paused: false, errors: [], alert: null };
+  const nowIso = new Date().toISOString();
+  const errText = String(cls.message || '').slice(0, 300);
+  // In-memory pause FIRST: every other call in this instance short-circuits from now on, whatever happens to Config below.
+  _aiCreditCache = { at: Date.now(), state: { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' } };
+  let sheetState = null;
+  try { sheetState = aiCreditStateFromRows(await schedReadConfigRows(env, true)); }
+  catch (e) { out.errors.push('could not read Config: ' + schedErrText(e)); }
+  if (sheetState && sheetState.paused) {                       // another request/instance already paused it
+    _aiCreditCache = { at: Date.now(), state: sheetState };
+    out.alert = await aiCreditMaybeAlert(env, sheetState, out.errors);
+    return out;
+  }
+  let flagSaved = false;
+  try {
+    const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'TRUE', [AI_CREDIT_KEYS.at]: nowIso, [AI_CREDIT_KEYS.err]: errText, [AI_CREDIT_KEYS.kind]: cls.kind, [AI_CREDIT_KEYS.by]: String(source || '').slice(0, 80), [AI_CREDIT_KEYS.alerted]: '' });
+    flagSaved = w.ok; if (!w.ok) out.errors.push('the pause flag was not saved: ' + w.error);
+  } catch (e) { out.errors.push('the pause flag was not saved: ' + schedErrText(e)); }
+  out.newly_paused = true;
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_exhausted', Skill_Or_Endpoint: String(source || 'anthropicMessages').slice(0, 80), Success: 'FALSE', Notes: `AI paused (kind=${cls.kind}); pause flag saved: ${flagSaved ? 'yes' : 'NO'}; the exact Anthropic message is in Config ${AI_CREDIT_KEYS.err} and on the Needs Attention screen` }); }   // wording kept free of billing/401 keywords on purpose: the failure ledger's urgent row is the auto-clearing "ai_credit_paused" condition, not this event
+  catch (te) { out.errors.push('telemetry row not written: ' + schedErrText(te)); console.error('ai-credit: could not log ai_credit_exhausted:', schedErrText(te)); }
+  out.alert = await aiCreditMaybeAlert(env, { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' }, out.errors);
+  return out;
+}
+
+// THE central call. body = the /v1/messages request object. opts: { signal, source, bypassPause (the probe only), simulate (staging only) }
+// -> { resp, data } for any answer that is not a pause/credit/key problem (callers keep their own resp.ok handling).
+// Throws AiCreditPausedError when paused or when THIS call discovered the credit is out; throws a plain Error if the key is missing.
+async function anthropicMessages(env, body, opts) {
+  opts = opts || {};
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  if (!opts.bypassPause) {
+    const st = await aiCreditCheck(env);
+    if (st.paused) throw new AiCreditPausedError(aiCreditPausedMessage(st), st);
+  }
+  let resp, data;
+  if (opts.simulate && env.__STAGING__) {                      // staging-only test hook (POST /admin/ai-credit-simulate); ignored everywhere else
+    resp = { ok: opts.simulate.status < 300, status: opts.simulate.status }; data = opts.simulate.body;
+  } else {
+    resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: opts.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body) });
+    data = await resp.json();
+  }
+  if (!resp.ok && !opts.bypassPause) {
+    const cls = aiCreditClassify(resp.status, data);
+    if (cls) {
+      const trip = await aiCreditTrip(env, cls, opts.source || '');
+      const err = new AiCreditPausedError(aiCreditPausedMessage({ kind: cls.kind, at: new Date().toISOString() }), { kind: cls.kind, status: cls.status });
+      err.trip = trip;
+      throw err;
+    }
+  }
+  return { resp, data };
+}
+
+// One minimal REAL call (max_tokens 1) that never trips and ignores the pause: did Anthropic accept it?
+async function aiCreditProbeCall(env) {
+  try {
+    const { resp, data } = await anthropicMessages(env, { model: MODEL_REGISTRY.REASON.model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, { bypassPause: true, source: 'ai_credit_probe' });
+    if (resp.ok) return { ok: true };
+    const cls = aiCreditClassify(resp.status, data);
+    return { ok: false, kind: cls ? cls.kind : 'other', status: resp.status, error: String((data && data.error && data.error.message) || ('HTTP ' + resp.status)).slice(0, 300) };
+  } catch (e) { return { ok: false, kind: 'other', status: 0, error: schedErrText(e) }; }
+}
+// Resume: probe first; clear the flag ONLY if the probe worked. Shared by POST /admin/ai-credit-resume and the ai_credit_probe job.
+function aiCreditResume(env, via) {
+  if (_aiCreditResumeP) return _aiCreditResumeP;
+  _aiCreditResumeP = aiCreditResumeRun(env, via).finally(() => { _aiCreditResumeP = null; });
+  return _aiCreditResumeP;
+}
+async function aiCreditResumeRun(env, via) {
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return { ok: false, resumed: false, error: 'could not read the pause flag: ' + st.read_error };
+  if (!st.paused) return { ok: true, resumed: false, paused: false, note: 'AI was not paused - nothing to do.' };
+  const probe = await aiCreditProbeCall(env);
+  if (!probe.ok) {
+    if (via === 'admin-button') {   // only when Brett pressed it; the hourly probe stays quiet (no hourly failure rows, no ledger growth)
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resume', Skill_Or_Endpoint: 'admin-button', Success: 'FALSE', Notes: `Resume pressed but AI is still paused (kind=${probe.kind})` }); }
+      catch (te) { console.error('ai-credit: resume failure and its telemetry write failed:', schedErrText(te)); }
+    }
+    return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: probe.error, probe_kind: probe.kind, status: probe.status };
+  }
+  let w;
+  try { w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'FALSE', [AI_CREDIT_KEYS.err]: '', [AI_CREDIT_KEYS.alerted]: '', [AI_CREDIT_KEYS.resumed]: new Date().toISOString() }); }
+  catch (e) { w = { ok: false, error: schedErrText(e) }; }
+  if (!w.ok) return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: 'Anthropic works again but the pause flag could not be cleared: ' + w.error };
+  _aiCreditCache = { at: Date.now(), state: { paused: false } };
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resumed', Skill_Or_Endpoint: String(via || 'resume'), Success: 'TRUE', Notes: 'Anthropic accepted a 1-token probe; pause flag cleared' }); }
+  catch (te) { console.error('ai-credit: resumed but the telemetry write failed:', schedErrText(te)); }
+  return { ok: true, resumed: true, paused: false };
+}
+// POST /admin/ai-credit-resume (admin secret only) - the Hub banner's Resume button.
+async function aiCreditResumeHandler(env) {
+  const r = await aiCreditResume(env, 'admin-button');
+  return json(r, r.ok ? 200 : 502);
+}
+function aiCreditStatusOut(state) {
+  const s = state || {};
+  return { paused: !!s.paused, since: s.at || null, kind: s.paused ? (s.kind || 'credit') : null, last_error: s.paused ? (s.err || null) : null, alerted_at: s.alerted_at || null, resumed_at: s.resumed_at || null, paused_by: s.by || null, fix: AI_CREDIT_FIX, affected: AI_CREDIT_AFFECTED };
+}
+// GET /ai-credit/status (admin; read-only, so the read-only prod token can read it too). Fresh read, never cached.
+async function aiCreditStatusHandler(env) {
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return json({ ok: false, error: 'could not read the pause flag: ' + st.read_error }, 503);
+  return json(Object.assign({ ok: true }, aiCreditStatusOut(st)));
+}
+// Coarse, public (/health): paused yes/no + since when. No error text. Never throws.
+async function aiCreditHealthSummary(env) {
+  const st = await aiCreditCheck(env);
+  if (st.read_error) return { error: 'could not read the pause flag' };
+  return { paused: !!st.paused, since: st.paused ? (st.at || null) : null };
+}
+// POST /admin/ai-credit-simulate (STAGING ONLY, admin/test token) - makes the real code path see Anthropic's "credit balance is too low"
+// answer without calling Anthropic, so the whole chain (classify -> flag -> telemetry -> alert -> short-circuit) can be verified.
+//   {} or {kind:'credit'} simulates the credit error; {kind:'auth'} a 401; {call:false, clear:true} just clears the flag (test cleanup).
+async function aiCreditSimulateHandler(env, body) {
+  if (!env.__STAGING__) return json({ ok: false, error: 'ai-credit-simulate only exists on staging' }, 404);
+  body = body || {};
+  if (body.clear === true) {
+    const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'FALSE', [AI_CREDIT_KEYS.err]: '', [AI_CREDIT_KEYS.alerted]: '', [AI_CREDIT_KEYS.resumed]: new Date().toISOString() });
+    aiCreditResetForTests();
+    return json({ ok: w.ok, cleared: w.ok, error: w.ok ? undefined : w.error }, w.ok ? 200 : 500);
+  }
+  const auth = body.kind === 'auth';
+  const sim = auth ? { status: 401, body: { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key (SIMULATED on staging)' } } }
+                   : { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. (SIMULATED on staging)' } } };
+  try {
+    await anthropicMessages(env, { model: MODEL_REGISTRY.REASON.model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, { source: 'simulate', simulate: sim });
+    return json({ ok: false, error: 'the simulated error was not recognised as a pause' }, 500);
+  } catch (e) {
+    if (!aiCreditIsPausedError(e)) return json({ ok: false, error: 'unexpected: ' + schedErrText(e) }, 500);
+    const st = await aiCreditCheck(env, { fresh: true });
+    return json({ ok: true, simulated: auth ? 'auth' : 'credit', tripped: !!e.trip, newly_paused: !!(e.trip && e.trip.newly_paused), trip_errors: (e.trip && e.trip.errors) || [], alert: (e.trip && e.trip.alert) || null, state: aiCreditStatusOut(st) });
+  }
+}
+
+// Scheduler pieces ------------------------------------------------------------------------------------------------------------
+// A job that cannot run because AI is paused returns this (the dispatcher records it as "paused: AI credit", not a failure).
+function aiCreditSchedPaused(state, detail) {
+  return { ok: false, paused: true, reason: 'paused: AI credit - ' + (state && state.kind === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out') + (state && state.at ? ' since ' + state.at : '') + '; resumes by itself after credit is added (Resume button or the hourly check)', errors: [], detail: detail || {} };
+}
+// Runs one scan step of a job. A typed ai_credit_paused answer (or throw) is a PAUSE, anything else wrong is an error.
+async function schedAiStep(name, fn, errors, flags) {
+  try {
+    const u = await schedUnwrap(await fn());
+    if (u.body && u.body.code === AI_CREDIT_CODE) { flags.paused = true; return u.body; }
+    const bad = schedBadness(u.status, u.body);
+    if (bad) errors.push({ step: name, error: bad });
+    return u.body;
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) { flags.paused = true; return { ok: false, paused: true, code: AI_CREDIT_CODE }; }
+    errors.push({ step: name, error: schedErrText(e) });
+    return undefined;
+  }
+}
+// The scheduler job ai_credit_probe: costs NOTHING while AI is not paused (the dispatcher does not even start it - see job.gate);
+// while paused, at most hourly, makes one 1-token call; success clears the pause and sends ONE "AI is back" notice.
+async function schedRunAiCreditProbe(env) {
+  const errors = [];
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return { ok: false, errors: [{ step: 'read_flag', error: st.read_error }], detail: {} };
+  if (!st.paused) return { ok: true, errors, detail: { skipped: 'AI is not paused' } };
+  const r = await aiCreditResume(env, 'scheduler-probe');
+  if (r.resumed) {
+    const subject = 'AI is back - Anthropic credit works again';
+    const sms = 'RidgeCo Hub: AI is back. Anthropic credit works again - receipt scanning, vendor invoice reading and field-inspection AI have resumed by themselves.';
+    const n = await aiCreditNotify(env, subject, sms, '<p><b>AI is back.</b> Anthropic accepted a test call, so the pause is cleared. Receipt scanning, vendor invoice auto-read, field-inspection AI and scope-notes AI have resumed. Receipts that waited in Drive are picked up on the next scan.</p>', []);
+    if (!n.delivered) errors.push({ step: 'ai_back_notice', error: 'AI resumed, but neither the text nor the email telling Brett got through' });
+    return { ok: errors.length === 0, errors, detail: { resumed: true, notice: n } };
+  }
+  if (r.ok === false && r.paused) {
+    const alertErrors = [];
+    const a = await aiCreditMaybeAlert(env, st, alertErrors);          // the 24 h reminder, if one is due
+    // Still paused is the EXPECTED outcome of a probe that did its job: success for this job (it ran, it checked, it will check again in an hour).
+    return { ok: alertErrors.length === 0, errors: alertErrors.map(m => ({ step: 'reminder', error: m })), detail: { still_paused: true, probe_error: r.error, probe_kind: r.probe_kind, reminder: a && (a.reason || a.skipped) || null } };
+  }
+  return { ok: false, errors: [{ step: 'resume', error: r.error || 'resume failed' }], detail: r };
+}
+// ═══ AI-CREDIT-GUARD-END ══════════════════════════════════════════════════════════════════════
+
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
 // Secure, self-owned multi-model router. Calls each provider directly from THIS
 // Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
@@ -17871,6 +18310,10 @@ async function routeAI(env, job) {
     attempt = await routeAICall(env, tier, job);
   }
 
+  // Oct 16 2026: AI credit paused/exhausted. The pause was already alerted + recorded once (ai_credit_exhausted), so the skipped
+  // calls write NO telemetry row each (they would flood the 1000-row grid); the caller gets a typed error and answers in plain words.
+  if (attempt.error && attempt.code === AI_CREDIT_CODE) throw new AiCreditPausedError(attempt.error, { tier, job: job.type || '' });
+
   const ms = Date.now() - t0;
   const reg = MODEL_REGISTRY[tier];
   // #89: Anthropic bills cache READS at 0.1x input and cache WRITES at 1.25x input; tokens_in
@@ -17906,7 +18349,7 @@ async function routeAICall(env, tier, job) {
     if (reg.provider === 'gemini') return await callGemini(env, reg.model, job);
     return await callClaude(env, reg.model, job);
   } catch (e) {
-    return { text: '', tokens_in: 0, tokens_out: 0, error: String((e && e.message) || e) };
+    return { text: '', tokens_in: 0, tokens_out: 0, error: String((e && e.message) || e), code: (e && e.code) || undefined };
   }
 }
 
@@ -17964,12 +18407,8 @@ async function callClaude(env, model, job) {
   }
   const reqBody = { model, max_tokens: job.maxTokens || 1200, messages: [{ role: 'user', content }] };
   if (job.system) reqBody.system = cacheable(job.system) ? [{ type: 'text', text: String(job.system), cache_control: { type: 'ephemeral' } }] : String(job.system);
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify(reqBody),
-  });
-  const data = await resp.json();
+  // Oct 16 2026: through the ONE guarded call (pause flag checked first; a credit/key error trips it) - see AI-CREDIT-GUARD.
+  const { resp, data } = await anthropicMessages(env, reqBody, { source: job.source || job.type || 'callClaude' });
   if (!resp.ok) throw new Error(data && data.error && data.error.message || `Claude ${resp.status}`);
   const text = (data.content && data.content[0] && data.content[0].text || '').trim();
   const usage = data.usage || {};
@@ -18192,8 +18631,7 @@ Ground every item in the metrics. If a job_type shows repeated failures or human
 
 TELEMETRY METRICS (${days}d):
 ${JSON.stringify(metrics, null, 2)}`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }) });
-  const data = await resp.json();
+  const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }, { source: 'llmReviewProposal' });
   let txt = (data.content && data.content[0] && data.content[0].text || '').trim();
   if (!txt) throw new Error('empty LLM response');
   txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
@@ -18246,7 +18684,7 @@ async function runWeeklyReview(env, opts) {
     proposal = `Not enough telemetry yet (${metrics.total} row(s) in ${days}d). The spine is collecting — a data-backed ranked proposal needs a bit more history. This will get sharper every week as jobs accrue.`;
   } else {
     try { const pr = await llmReviewProposal(env, metrics, days); proposal = pr.text; proposalItems = pr.items || []; }
-    catch (e) { proposal = `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
+    catch (e) { proposal = aiCreditIsPausedError(e) ? '(Model proposal skipped this round: AI is paused because the Anthropic credit is out - add credits and tap Resume in the Hub. Metrics captured below.)' : `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
     if (thinData) {
       proposal = `⚠ DIRECTIONAL ONLY — thin data (${metrics.total} telemetry rows in ${days}d; a confident review wants ${THIN_DATA_MIN}+). Treat these as hypotheses to sanity-check, not conclusions.\n\n` + proposal;
     }
@@ -21285,7 +21723,11 @@ async function summarizeItemsCheap(env, items) {
     const r = await routeAI(env, { type: 'items_summarize', prompt, maxTokens: 300, schema: true, source: 'summarizeItemsCheap' });
     const parsed = JSON.parse(String(r.result || '[]').replace(/^```json?/i, '').replace(/```$/, '').trim());
     return Array.isArray(parsed) ? parsed.filter(x => typeof x === 'string' && x.trim()).slice(0, 15) : [];
-  } catch (e) { return []; }
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) throw e;        // AI is paused: the caller stops and says so (no call was made, nothing to retry)
+    await aiFailOpenNote(env, 'summarizeItemsCheap', e);   // logged + Ops_Telemetry; the display wording is simply left blank
+    return [];
+  }
 }
 
 // GET|POST /admin/items-summarize-test — read-only diagnostic (Ops_Build_Queue #24, Sep 19
@@ -21344,15 +21786,19 @@ async function backfillItemsSummary(env, opts) {
   let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
   const pending = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (!r.Items_Summary || r.Items_Summary === '[]') && r.Items && r.Items !== '[]');
   const batch = pending.slice(0, limit);
-  let updated = 0; const failed = [];
+  let updated = 0; const failed = []; let paused = false;
   for (const r of batch) {
     try {
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
+      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) { /* silent-ok: a row whose Items JSON is unreadable is reported just below as "empty summary returned" */ }
       const summary = await summarizeItemsCheap(env, items);
       if (summary.length) { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Items_Summary: JSON.stringify(summary) }); updated++; }
       else failed.push({ id: r.ID, error: 'empty summary returned' });
-    } catch (e) { failed.push({ id: r.ID, error: String(e && e.message || e) }); }
+    } catch (e) {
+      if (aiCreditIsPausedError(e)) { paused = true; break; }   // stop at once - no more calls while AI is paused
+      failed.push({ id: r.ID, error: String(e && e.message || e) });
+    }
   }
+  if (paused) return json({ ok: false, error: AI_PAUSED_USER_MSG, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG, paused: true, updated, failed, remaining: pending.length - updated }, 503);
   return json({ ok: true, updated, failed, remaining: pending.length - batch.length });
 }
 
@@ -21605,6 +22051,8 @@ async function statementExtract(env, bytes, mime) {
     // routeAI threw (missing key, network) or the model's text didn't parse as JSON — fail open
     // with an empty lines array rather than throwing into the import endpoint (same discipline as
     // invoiceExtract's fail-open wrapper above).
+    if (aiCreditIsPausedError(e)) return { vendor_detected: '', lines: [], _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'statementExtract', e);
     return { vendor_detected: '', lines: [], _error: true, _error_message: String((e && e.message) || e) };
   }
 }
@@ -21648,6 +22096,9 @@ async function invoiceExtract(env, bytes, mime) {
   } catch (e) {
     // routeAI threw (missing key, network) or bytesToB64/media-build failed — fail open with a
     // clearly-empty suggestion rather than surfacing a 500 to a vendor mid-submit.
+    // Oct 16 2026: AI credit paused -> _paused:true + a plain "enter it by hand" message (no Anthropic call was made, Brett was already alerted).
+    if (aiCreditIsPausedError(e)) return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'invoiceExtract', e);
     return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
   }
 }
@@ -21675,6 +22126,8 @@ async function receiptImageExtractMultiple(env, bytes, mime) {
     })) : [];
     return { receipt_count: receipts.length, receipts };
   } catch (e) {
+    if (aiCreditIsPausedError(e)) return { receipt_count: 0, receipts: [], _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'receiptImageExtractMultiple', e);
     return { receipt_count: 0, receipts: [], _error: true, _error_message: String((e && e.message) || e) };
   }
 }
@@ -21751,6 +22204,8 @@ async function contactExtract(env, bytes, mime) {
       return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _raw: txt.slice(0, 300), _parse_error: true };
     }
   } catch (e) {
+    if (aiCreditIsPausedError(e)) return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'contactExtract', e);
     return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
   }
 }
@@ -22314,6 +22769,8 @@ async function vendorBillExtract(env, body) {
     bytes = arr.buffer; mime = body.mime || 'image/jpeg';
   } catch (e) { return json({ error: 'bad image_b64' }, 400); }
   const ex = await invoiceExtract(env, bytes, mime);
+  // Oct 16 2026: AI credit paused -> the vendor sees a plain "enter it by hand" note (vendor.html reads paused/message); no Anthropic call was made.
+  if (ex && ex._paused) return json({ success: true, extract: ex, paused: true, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG });
   return json({ success: true, extract: ex });
 }
 
@@ -22361,6 +22818,8 @@ async function receiptIntake(env, body) {
 // POST /receipt-scan (also called by the scheduler's daily_receipts job) — pull new files from the inbox Drive folder.
 // Self-provisions the folder the first time so there's no manual setup.
 async function receiptScan(env) {
+  // Oct 16 2026: AI credit paused -> do NOT list the folder or touch a single file (the old behaviour retried the same PDFs every 30 min all night).
+  { const st = await aiCreditCheck(env); if (st.paused) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: 0, paused_since: st.at || null, reason: 'paused: AI credit - receipts stay in the Drive folder and are scanned automatically after AI resumes' }); }
   const cfg = await fetchConfig(env);
   const tok = await getAccessToken(env);
   let folder = cfg.receipts_inbox_folder_id;
@@ -22385,7 +22844,9 @@ async function receiptScan(env) {
   // it retried forever. Now capped at 3 attempts, tracked in Config (no schema change to the
   // live Receipts_Queue tab), then skipped and surfaced via `stuck` instead of retried daily.
   let failures = {}; try { failures = JSON.parse(cfg.receipt_intake_failures || '{}'); } catch (e) { failures = {}; }
-  let n = 0; const errs = []; let failuresChanged = false;
+  let n = 0; const errs = []; let failuresChanged = false; let pausedMid = false;
+  // Self-heal (Oct 16 2026): attempts burned by the Oct 15 credit outage were never the file's fault - give those files a fresh start.
+  for (const id of Object.keys(failures)) { if (aiCreditErrorTextIsOutage(failures[id] && failures[id].error)) { delete failures[id]; failuresChanged = true; } }
   for (const f of files) {
     if (seen.has(f.id)) continue;
     const prior = failures[f.id];
@@ -22395,13 +22856,15 @@ async function receiptScan(env) {
       n++;
       if (prior) { delete failures[f.id]; failuresChanged = true; } // succeeded on a later retry — clear the record
     } catch (e) {
+      if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out DURING the scan: stop now, do not count an attempt against this file or the rest
       errs.push(f.name + ': ' + (e.message || 'err'));
       failures[f.id] = { name: f.name, error: String(e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
       failuresChanged = true;
     }
   }
-  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_intake_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_intake_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptScan: tracker write failed:', schedErrText(e)); } }
   const stuck = Object.values(failures).filter(x => x.attempts >= 3);
+  if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, errors: errs, stuck, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
   return json({ ok: true, folder_id: folder, scanned: n, skipped: files.length - n, errors: errs, stuck });
 }
 
@@ -22733,6 +23196,7 @@ async function woSharedBillExtract(env, body){
     bytes = arr.buffer; mime = body.mime || 'image/jpeg';
   } catch (e) { return json({ error: 'bad image_b64' }, 400); }
   const ex = await invoiceExtract(env, bytes, mime);
+  if (ex && ex._paused) return json({ success: true, extract: ex, paused: true, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG });   // Oct 16 2026: AI credit paused
   return json({ success: true, extract: ex });
 }
 
@@ -22773,7 +23237,7 @@ async function selfTestInvoiceExtract(env, body){
     success: true,
     extract: ex,
     read_ok: !ex._error && !ex._parse_error,
-    error_flag: ex._error ? 'model_unreachable' : (ex._parse_error ? 'unparseable_reply' : ''),
+    error_flag: ex._paused ? 'ai_credit_paused' : (ex._error ? 'model_unreachable' : (ex._parse_error ? 'unparseable_reply' : '')),   // Oct 16 2026: a paused AI is a loud, distinct canary failure
     model_tier: 'REASON',
     model: MODEL_REGISTRY.REASON.model,
     ms: Date.now() - t0,
@@ -23284,6 +23748,8 @@ async function health(env, url) {
   // Apps Script scheduler heartbeat (Oct 12 2026): coarse and public - the age of the last tick and the NAMES of any
   // overdue jobs; no detail. Detail is GET /cron/status (Scheduler_Token).
   out.scheduler = await schedHealthSummary(env);
+  // AI-credit pause (Oct 16 2026): coarse and public - paused yes/no and since when. No error text. Detail: GET /ai-credit/status.
+  out.ai_credit = await aiCreditHealthSummary(env);
   return json(out);
 }
 
@@ -23694,6 +24160,7 @@ async function isTestRecord(env, tab, id) {
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (path === '/admin/ai-credit-simulate' || path === '/admin/ai-credit-resume') return true;   // Oct 16 2026: staging only; touches no customer record - only the AI pause flag (and resume makes one 1-token Claude call)
   // Ops queue upgrade (Oct 13 2026): staging token may only create/modify/sync queue rows whose Title starts with TEST-.
   if (path === '/ops-queue/scout-submit') {
     const _its = (body && body.items) || [];
@@ -34063,7 +34530,7 @@ async function fiStructure(env, body) {
   let ai;
   try {
     ai = await routeAI(env, { type: 'fi_structure', customerFacing: true, schema: true, system: FI_STRUCTURE_SYSTEM, prompt: fiBuildStructurePrompt(Object.assign({}, body, { dictation })), maxTokens: 2200, source: 'field-inspect' });
-  } catch (e) { return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  } catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic sorting is paused (AI credit) - add the issues by hand. Your text is kept.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const parsed = fiExtractJson(ai.result);
   const issues = parsed && fiNormalizeIssues(parsed.issues);
   if (!issues) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your text is kept — retry, or add the issues by hand.');
@@ -34078,7 +34545,7 @@ async function fiSummarize(env, body) {
   if (!rollup.length) return json({ ok: true, summary: { overall: 'No repair items were recorded during this inspection.', trades: {}, priorities: [], fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: 'none' }, rollup });
   let ai;
   try { ai = await routeAI(env, { type: 'fi_summary', customerFacing: true, schema: true, system: FI_SUMMARY_SYSTEM, prompt: fiBuildSummaryPrompt(doc, rollup), maxTokens: 2500, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'The AI summary is paused (AI credit) - the grouped issue list still works.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const norm = fiNormalizeSummary(fiExtractJson(ai.result), rollup);
   if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry.');
   return json({ ok: true, summary: Object.assign(norm, { fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: ai.model_used }), rollup });
@@ -34733,7 +35200,7 @@ async function fiRouteNotes(env, body) {
   const catalog = tl.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiTypeOut(r.o)).sort((a, b) => b.uses - a.uses);
   let ai;
   try { ai = await routeAI(env, { type: 'fi_route', customerFacing: true, schema: true, system: FI_ROUTE_SYSTEM, prompt: fiBuildRoutePrompt(Object.assign({}, body, { areas, notes }), catalog), maxTokens: 8000, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic sorting of notes is paused (AI credit) - your recordings and transcripts are kept; file them by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const norm = fiNormalizeRoute(fiExtractJson(ai.result), areas.map(a => a.id));
   if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your transcripts are kept - retry.');
   return json(Object.assign({ ok: true, model_used: ai.model_used }, norm));
@@ -34759,7 +35226,7 @@ async function fiReadLabel(env, body) {
   const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. Set readable false if no label text can be read.`;
   let ai;
   try { ai = await routeAI(env, { type: 'fi_read_label', tier: 'REASON', schema: true, system: FI_LABEL_SYSTEM, prompt, media: { type: 'image', source: { type: 'base64', media_type: mime, data: bytesToB64(bytes) } }, maxTokens: 600, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI could not read this photo. Type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic label reading is paused (AI credit) - type the details by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not read this photo. Type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const parsed = fiExtractJson(ai.result);
   if (!parsed || typeof parsed !== 'object') return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry or type the details by hand.');
   const eq = fiNormalizeEquipment(Object.assign({}, parsed, { kind: kind || parsed.kind }));

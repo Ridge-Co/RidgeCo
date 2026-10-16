@@ -21,7 +21,7 @@ t('wrangler.toml: crons = [] (explicitly empty)', /\[triggers\]\s*\n\s*crons\s*=
 // the JOBS table: parse the literal rows
 const tbl = gs.slice(gs.indexOf('var JOBS = ['), gs.indexOf('// ═══ 2. FIXED SETTINGS'));
 const rows = [...tbl.matchAll(/^\s*\{ name: '(\w+)',\s+run: '(\w+)'(.*)\},?\s*$/gm)].map(m => ({ name: m[1], run: m[2], rest: m[3] }));
-t('JOBS table parses (30 rows)', rows.length === 30, rows.length);
+t('JOBS table parses (31 rows: +ai_credit_probe Oct 16 2026)', rows.length === 31, rows.length);
 const names = rows.map(r => r.name);
 t('JOBS names unique', new Set(names).size === names.length);
 const hubRows = rows.filter(r => r.run === 'hub').map(r => r.name);

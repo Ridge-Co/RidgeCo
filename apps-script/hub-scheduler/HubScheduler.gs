@@ -69,6 +69,7 @@ var JOBS = [
   { name: 'sweep_checks',        run: 'hub', every_min: 15,                    enabled: true, what: 'Runs the daily self-test and the dead-man check (alerts if there is no telemetry for 24h).' },
   { name: 'insp_guard',          run: 'hub', every_min: 15,                    enabled: true, what: 'Checks inspection bookings against the STR calendar (does nothing until that module is set up).' },
   { name: 'str_cleaning',        run: 'hub', every_min: 15,                    enabled: true, what: 'Milam Ridge cleaning scheduler: keeps 35 days of turnovers covered, texts the cleaner queue, writes the cleaning calendar, alerts Brett (does nothing until STR_ENGINE_ENABLED is TRUE).' },
+  { name: 'ai_credit_probe',    run: 'hub', every_min: 60,                    enabled: true, what: 'ONLY while AI reading is paused (Anthropic credit out): once an hour makes one tiny test call; when it works, un-pauses AI and texts/emails "AI is back". Does nothing and costs nothing when AI is not paused.' },
   { name: 'daily_digest',        run: 'hub', at: '07:00',                      enabled: true, what: 'Builds the morning digest and texts it to the admin phone.' },
   { name: 'daily_receipts',      run: 'hub', at: '07:00',                      enabled: true, what: 'Scans the receipt inbox.' },
   { name: 'daily_receipts_post', run: 'hub', at: '07:00',                      enabled: true, what: 'Emails newly scanned receipts to QuickBooks.' },
@@ -112,7 +113,7 @@ var TOKEN_KEY     = 'Scheduler_Token';
 var ENTRY_TOKEN_KEY = 'Entry_Run_Token';   // the key in the BarrelCo sheet's Config tab
 var HANDLER       = 'runScheduler';
 var TICK_MINUTES  = 15;                    // how often the timer fires (Apps Script allows 1, 5, 10, 15 or 30)
-var MAX_CALLS     = 25;                    // one Hub job per call; the Hub has 21 jobs, so a tick can finish a full catch-up
+var MAX_CALLS     = 25;                    // one Hub job per call; the Hub has 22 jobs, so a tick can finish a full catch-up
 var MAX_RUN_MS    = 4.5 * 60 * 1000;       // stay under Apps Script's 6-minute limit; anything left waits for the next tick
 var HUB_SHARE     = 0.6;                   // the Hub loop may use at most this share of the run; the rest is for the other rows
 var FAIL_REMIND_MS    = 60 * 60 * 1000;    // Hub unreachable: reminder at most hourly
@@ -228,7 +229,8 @@ function runScheduler() {
       if (!r.ok) { infraFailed = true; problem = r.problem; infraFailure_(r.problem); break; }
       var b = r.body;
       if (b.ran) {
-        ran.push(b.ran + (b.job_ok === false ? ' (FAILED)' : b.timed_out ? ' (still running)' : ''));
+        ran.push(b.ran + (b.job_ok === false ? ' (FAILED)' : b.paused ? ' (paused: AI credit)' : b.timed_out ? ' (still running)' : ''));
+        if (b.paused) Logger.log(b.ran + ' was skipped on purpose: ' + (b.paused_reason || 'paused: AI credit') + ' (Brett was alerted once; Resume button in the Hub, or it resumes by itself within an hour of credit being added).');
         if (b.job_ok === false) jobFailure_(b);
         else if (b.timed_out) Logger.log(b.ran + ' is taking longer than 50 s; it continues in the background (see statusReport).');
       }

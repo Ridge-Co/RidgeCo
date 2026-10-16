@@ -7,11 +7,15 @@ import fs from 'fs'; import vm from 'vm'; import assert from 'assert';
 const src = fs.readFileSync('worker.js','utf8');
 const a = src.indexOf('const MODEL_REGISTRY = {'), b = src.indexOf('// GET /model-registry');
 assert(a>0 && b>a);
-const section = src.slice(a,b);
+// Oct 16 2026: callClaude now goes through anthropicMessages (the AI-credit guard). Run the REAL guard block too, over a Config with no pause flag set.
+const guard = src.slice(src.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), src.indexOf('// ═══ AI-CREDIT-GUARD-END'));
+assert(guard.includes('async function anthropicMessages'));
+const section = guard + '\n' + src.slice(a,b);
 const telemetry=[]; const calls=[];
 let nextResp;
 const ctx = { console, JSON, Date, Math, Error, String, Number, Promise, Array, Object,
   logTelemetry: async (env, rec)=>{ telemetry.push(rec); },
+  schedReadConfigRows: async ()=>[], schedCell: ()=>'', schedFindRow: ()=>-1, schedErrText: (e)=>String((e&&e.message)||e), sheetsRequest: async ()=>({}),
   fetch: async (url, opts)=>{ calls.push({url, body: JSON.parse(opts.body)}); const r = nextResp(url); return { ok: r.ok!==false, status: r.status||200, json: async()=>r.json }; } };
 vm.createContext(ctx); vm.runInContext(section + '\n;globalThis.routeAI=routeAI;globalThis.callClaude=callClaude;', ctx);
 const env = { ANTHROPIC_API_KEY:'k', GEMINI_API_KEY:'g' };

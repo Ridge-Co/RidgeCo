@@ -342,7 +342,7 @@ var ES = {
   'Your invoice # (optional)':'Su # de factura (opcional)','TOTAL':'TOTAL',
   'Your invoice file (optional)':'Su archivo de factura (opcional)','Upload':'Subir',
   'Your invoice date (optional)':'Fecha de su factura (opcional)',
-  'Reading invoice…':'Leyendo factura…','Read from invoice — check below':'Leído de la factura — revise abajo',
+  'Automatic reading is paused - enter it by hand.':'La lectura automática está en pausa - ingréselo a mano.','Reading invoice…':'Leyendo factura…','Read from invoice — check below':'Leído de la factura — revise abajo',
   'Couldn’t read that file — fill in below.':'No se pudo leer ese archivo — complete abajo.',
   'Reimburse me':'Reembólsenme','On company account':'Cuenta de la empresa','What was purchased':'Qué se compró',
   'Enter hours or an item above.':'Ingrese horas o un artículo arriba.',
@@ -636,6 +636,7 @@ function handleBillInvoiceFile(input){
 // a field only auto-fills while empty or still flagged auto — a vendor's own edit is never
 // silently clobbered, and re-picking a file after editing doesn't stomp an intentional correction.
 function applyBillExtract(ex, statusEl){
+  if(ex && ex._paused){ if(statusEl){ statusEl.textContent=t('Automatic reading is paused - enter it by hand.'); statusEl.style.color='var(--muted)'; } return; }   // Oct 16 2026: Anthropic credit is out
   if(!ex || ex._error || ex._parse_error){ if(statusEl) statusEl.textContent=''; return; }
   var filled=false;
   if(typeof ex.amount==='number' && ex.amount>0){

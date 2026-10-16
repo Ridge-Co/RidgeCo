@@ -142,8 +142,12 @@ function makeFetch(db) {
   };
 }
 
+// Oct 16 2026: the translator goes through the AI-credit guard; run the REAL guard block over an unpaused Config.
+const AI_GUARD = wsrc.slice(wsrc.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), wsrc.indexOf('// ═══ AI-CREDIT-GUARD-END'));
+Object.assign(globalThis, { schedReadConfigRows: async () => [], schedCell: () => '', schedFindRow: () => -1, schedErrText: (e) => String((e && e.message) || e) });
 function build(db) {
   const src = [
+    AI_GUARD,
     'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(s)).join('\n'),
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,

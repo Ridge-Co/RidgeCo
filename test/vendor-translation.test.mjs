@@ -35,7 +35,10 @@ globalThis.fetch = async (url, init) => {
   return { json: async () => ({ content: [{ text: text.replace('Hi ', 'Hola ').replace('New job', 'Trabajo nuevo').replace('Hold on', 'Espere').replace(/Welcome/g, 'Bienvenido') }] }) };
 };
 
-const H = new Function(
+// Oct 16 2026: translateText goes through the AI-credit guard; run the REAL guard block over an unpaused Config.
+const GUARD = src.slice(src.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), src.indexOf('// ═══ AI-CREDIT-GUARD-END'));
+Object.assign(globalThis, { schedReadConfigRows: async () => [], schedCell: () => '', schedFindRow: () => -1, schedErrText: (e) => String((e && e.message) || e), sheetsRequest: async () => ({}), logTelemetry: async () => {}, MODEL_REGISTRY: { REASON: { model: 'm' } } });
+const H = new Function(GUARD + '\n' +
   grabConst('VENDOR_TRANSLATE_PRESERVE') + '\n' +
   ['vendorWantsSpanish', 'extractPreservedTokens', 'preservedTokensIntact', 'htmlTagSkeleton', 'translateText', 'translateForVendorDetailed', 'translateForVendor', 'translateVendorEmail'].map(grab).join('\n') +
   '\nreturn { VENDOR_TRANSLATE_PRESERVE, vendorWantsSpanish, extractPreservedTokens, preservedTokensIntact, htmlTagSkeleton, translateText, translateForVendorDetailed, translateForVendor, translateVendorEmail };'
