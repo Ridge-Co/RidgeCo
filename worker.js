@@ -15824,7 +15824,7 @@ async function failConditions(env, cfg, nowMs) {
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
     if (parsed.error) out.push({ key: 'scheduler_state', system: 'hub', where: 'scheduler', severity: 'P0', message: parsed.error });
     else {
-      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs);
+      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs, String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE' ? (cfg[AI_CREDIT_KEYS.at] || 'paused') : '');
       for (const name of st.overdue) out.push({ key: 'overdue:' + name, system: 'hub', where: 'scheduler:' + name, severity: 'P0', message: `Scheduled job ${name} is overdue: ${(st.jobs[name] && st.jobs[name].overdue_reason) || 'not running'}` });
       if (st.tick_age_min !== null && st.tick_age_min > 60) out.push({ key: 'scheduler_silent', system: 'hub', where: 'scheduler', severity: 'P0', message: `The Apps Script scheduler has not ticked for ${st.tick_age_min} minutes.` });
     }
