@@ -12520,9 +12520,9 @@ async function getWOAudit(env, url) {
 async function translateToEnglish(env, text) {
   if (!env.ANTHROPIC_API_KEY) return text;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:400, messages:[{role:'user',content:`Translate the following from Spanish to English. Return only the translation, nothing else:\n\n${text}`}] }) });
-    const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
-  } catch(e) { return text; }
+    const { data } = await anthropicMessages(env, { model:'claude-sonnet-4-6', max_tokens:400, messages:[{role:'user',content:`Translate the following from Spanish to English. Return only the translation, nothing else:\n\n${text}`}] }, { source:'translateToEnglish' });
+    return data.content?.[0]?.text?.trim() || text;
+  } catch(e) { await aiFailOpenNote(env, 'translateToEnglish', e); return text; }
 }
 
 // Generic one-shot translation used by the Shareable WO (B-117) to show the vendor the job
