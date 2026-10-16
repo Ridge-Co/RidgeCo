@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Ridge Co — Quick check</title>
+<style>
+  :root{
+    --bg:#eceef1; --paper:#ffffff; --ink:#1b1f24; --muted:#5b6571; --line:#d5dae1;
+    --accent:#1d4ed8; --navy:#1f2d3d; --good:#157347; --goodbg:#eaf6ee; --bad:#b42318; --badbg:#fdecea; --warn:#b45309;
+    --radius:12px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:17px;line-height:1.45;-webkit-text-size-adjust:100%}
+  .wrap{max-width:560px;margin:0 auto;padding:56px 14px 40px}
+  .top{position:absolute;top:10px;left:14px;right:14px;display:flex;justify-content:space-between;align-items:center}
+  .brand{font-weight:800;letter-spacing:.12em;color:var(--navy);font-size:14px}
+  .lang button{background:#fff;border:1px solid var(--line);color:var(--muted);font:inherit;font-size:14px;min-height:44px;min-width:48px;padding:0 12px;cursor:pointer}
+  .lang button:first-child{border-radius:10px 0 0 10px} .lang button:last-child{border-radius:0 10px 10px 0;border-left:0}
+  .lang button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:20px 18px;box-shadow:0 4px 18px rgba(20,30,45,.07)}
+  h1{font-size:22px;line-height:1.25;margin:0 0 6px}
+  .addr{color:var(--muted);font-size:15px;margin-bottom:14px}
+  .q{font-size:20px;font-weight:700;line-height:1.3;margin:14px 0 14px}
+  .opt{display:flex;align-items:center;gap:12px;width:100%;min-height:60px;padding:12px 16px;margin:0 0 10px;background:#fff;border:2px solid var(--line);border-radius:var(--radius);font:inherit;font-size:18px;text-align:left;color:var(--ink);cursor:pointer}
+  .opt .dot{flex:none;width:24px;height:24px;border-radius:50%;border:2px solid var(--line)}
+  .opt.sel{border-color:var(--accent);background:#eef3ff}
+  .opt.sel .dot{border-color:var(--accent);background:radial-gradient(circle,var(--accent) 0 45%,transparent 50%)}
+  .opt.good.sel{border-color:var(--good);background:var(--goodbg)} .opt.good.sel .dot{border-color:var(--good);background:radial-gradient(circle,var(--good) 0 45%,transparent 50%)}
+  .opt.bad.sel{border-color:var(--bad);background:var(--badbg)} .opt.bad.sel .dot{border-color:var(--bad);background:radial-gradient(circle,var(--bad) 0 45%,transparent 50%)}
+  .more{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+  .more label.l{display:block;font-weight:600;font-size:16px;margin:16px 0 6px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{min-height:48px;padding:0 16px;border:2px solid var(--line);border-radius:24px;background:#fff;font:inherit;font-size:16px;color:var(--ink);cursor:pointer}
+  .chip.sel{border-color:var(--accent);background:#eef3ff;font-weight:600}
+  input[type=text],textarea{width:100%;font:inherit;font-size:16px;min-height:48px;padding:10px 12px;border:2px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);margin-top:8px}
+  textarea{min-height:96px;resize:vertical}
+  input:focus,textarea:focus,button:focus-visible{outline:3px solid #93b4ff;outline-offset:1px}
+  .btn{display:block;width:100%;min-height:56px;border:0;border-radius:var(--radius);background:var(--accent);color:#fff;font:inherit;font-size:19px;font-weight:700;margin-top:20px;cursor:pointer}
+  .btn[disabled]{opacity:.55}
+  .btn.sec{background:#fff;color:var(--ink);border:2px solid var(--line);font-weight:600;font-size:17px}
+  .safety{display:block;width:100%;margin-top:26px;min-height:56px;padding:10px 14px;background:#fff;border:2px solid var(--bad);color:var(--bad);border-radius:var(--radius);font:inherit;font-size:16px;font-weight:600;text-align:left;cursor:pointer}
+  .msg{border-radius:10px;padding:12px 14px;margin-top:14px;font-size:16px}
+  .msg.bad{background:var(--badbg);border:1px solid var(--bad);color:var(--bad)}
+  .msg.ok{background:var(--goodbg);border:1px solid var(--good);color:var(--good)}
+  .center{text-align:center}
+  .big{font-size:56px;line-height:1;margin:6px 0 10px}
+  .call{display:flex;align-items:center;justify-content:center;min-height:60px;border-radius:var(--radius);background:var(--bad);color:#fff;text-decoration:none;font-size:20px;font-weight:700;margin-top:14px}
+  .ph{display:flex;align-items:center;justify-content:center;min-height:52px;border:2px dashed var(--line);border-radius:10px;color:var(--accent);font-weight:600;font-size:16px;cursor:pointer;margin-top:8px}
+  .ph input{display:none}
+  .pchip{font-size:14px;color:var(--muted);margin-top:6px}
+  .small{font-size:14px;color:var(--muted)}
+  #stg{position:fixed;top:0;left:0;right:0;z-index:99999;background:#7c2d12;color:#fff;font:12px/1.4 system-ui,sans-serif;text-align:center;padding:4px 8px}
+</style>
+</head>
+<body>
+<div class="top"><div class="brand">RIDGE CO</div><div class="lang"><button id="l-en" onclick="setLang('en')">EN</button><button id="l-es" onclick="setLang('es')">ES</button></div></div>
+<div class="wrap"><div id="app" aria-live="polite"><div class="card center"><div class="small" id="loading">Loading…</div></div></div></div>
+
+<script>
+var WORKER = (function(){
+  // Same staging switch as the other pages: ?api=staging points this page at the isolated staging Worker (per tab). Default is production.
+  var PROD = 'https://maintenance-hub.brett-2f8.workers.dev';
+  var STAGING = 'https://maintenance-hub-staging.brett-2f8.workers.dev';
+  try {
+    var qs = new URLSearchParams(location.search);
+    try { localStorage.removeItem('mh_api_staging'); } catch (e2) {}
+    if (qs.get('api') === 'staging') sessionStorage.setItem('mh_api_staging', '1');
+    else if (qs.get('api') === 'prod') sessionStorage.removeItem('mh_api_staging');
+    return sessionStorage.getItem('mh_api_staging') === '1' ? STAGING : PROD;
+  } catch (e) { return PROD; }
+})();
+if (WORKER.indexOf('staging') !== -1) {
+  document.addEventListener('DOMContentLoaded', function() {
+    var b = document.createElement('div'); b.id = 'stg';
+    b.textContent = '🧪 STAGING — pointed at the test Worker/Sheet, not production. SMS is stubbed.';
+    document.body.appendChild(b);
+    var tp = document.querySelector('.top'), wp = document.querySelector('.wrap');   // keep the language buttons clear of the fixed banner
+    if (tp) tp.style.top = '40px'; if (wp) wp.style.paddingTop = '92px';
+  });
+}
+var TOKEN = (new URLSearchParams(location.search).get('t') || '').trim();
+var LANG = 'en', DATA = null, CHOICE = '', VAL = {}, PHOTOS = 0, UPLOADING = 0, BUSY = false, CALLPHONE = '';
+
+function T(en, es){ return LANG === 'es' ? es : en; }
+function L(o){ return (o && (o[LANG] || o.en)) || ''; }
+function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function app(){ return document.getElementById('app'); }
+function post(path, body){
+  return fetch(WORKER + path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    .then(function(r){ return r.json().then(function(j){ j.__status = r.status; return j; }); });
+}
+function setLang(l){
+  LANG = l === 'es' ? 'es' : 'en';
+  try { localStorage.setItem('fc_lang', LANG); } catch (e) { /* storage blocked: the choice just is not remembered */ }
+  document.documentElement.lang = LANG;
+  document.getElementById('l-en').className = LANG === 'en' ? 'on' : '';
+  document.getElementById('l-es').className = LANG === 'es' ? 'on' : '';
+  if (DATA) render();
+}
+function phoneLink(){ return CALLPHONE ? '<a class="call" href="tel:' + esc(CALLPHONE.replace(/[^\d+]/g, '')) + '">📞 ' + T('Call us: ', 'Llámenos: ') + esc(CALLPHONE) + '</a>' : ''; }
+
+// ── load ──────────────────────────────────────────────────────
+function load(){
+  if (!TOKEN) { showEnd('invalid'); return; }
+  fetch(WORKER + '/fix/page?t=' + encodeURIComponent(TOKEN)).then(function(r){ return r.json().then(function(j){ j.__status = r.status; return j; }); }).then(function(d){
+    if (d.language && !savedLang()) setLang(d.language);
+    if (d.call_phone) CALLPHONE = d.call_phone;
+    if (!d.ok) { showEnd(d.state || 'invalid'); return; }
+    DATA = d; CALLPHONE = d.call_phone || CALLPHONE; PHOTOS = d.photos_used || 0;
+    if (d.previous) { CHOICE = d.previous.choice || ''; VAL = Object.assign({}, d.previous.extra || {}); if (d.previous.location) VAL.location = d.previous.location; if (d.previous.note) VAL.note = d.previous.note; }
+    render();
+  }).catch(function(e){
+    console.error('fix-check load failed', e);
+    app().innerHTML = '<div class="card"><h1>' + T('We could not load this page', 'No pudimos cargar esta página') + '</h1><p>' + T('Please check your internet connection and try again.', 'Revise su conexión a internet e intente de nuevo.') + '</p><button class="btn" onclick="load()">' + T('Try again', 'Intentar de nuevo') + '</button></div>';
+  });
+}
+function savedLang(){ try { var l = localStorage.getItem('fc_lang'); if (l) { setLang(l); return true; } } catch (e) { /* storage blocked */ } return false; }
+function showEnd(state){
+  var m = {
+    expired: [T('This link has expired', 'Este enlace venció'), T('Thank you! This check is closed now. If something is still wrong, please call us.', '¡Gracias! Esta revisión ya terminó. Si algo sigue mal, por favor llámenos.')],
+    closed:  [T('This check is finished', 'Esta revisión terminó'), T('Thank you! We have already taken care of this one. If something is still wrong, please call us.', '¡Gracias! Ya nos ocupamos de esto. Si algo sigue mal, por favor llámenos.')],
+    invalid: [T('This link does not work', 'Este enlace no funciona'), T('Please use the link from the text message exactly as we sent it, or call us.', 'Use el enlace del mensaje de texto tal como lo enviamos, o llámenos.')]
+  }[state] || [T('Something went wrong', 'Algo salió mal'), T('Please call us.', 'Por favor llámenos.')];
+  app().innerHTML = '<div class="card center"><div class="big">' + (state === 'invalid' ? '🔗' : 'ℹ️') + '</div><h1>' + m[0] + '</h1><p>' + m[1] + '</p>' + phoneLink() + '</div>';
+}
+
+// ── render ────────────────────────────────────────────────────
+function spec(){ return DATA.spec; }
+function render(){
+  if (!DATA) return;
+  var s = spec(), h = '';
+  h += '<div class="card"><h1>' + T('Hi ', 'Hola ') + esc(DATA.first_name || '') + '</h1><div class="addr">' + esc(DATA.address || '') + '</div>';
+  if (DATA.previous) h += '<div class="msg ok">' + T('You already answered. You can change your answer until ', 'Ya respondió. Puede cambiar su respuesta hasta el ') + esc(fmtDate(DATA.window_ends)) + '.</div>';
+  h += '<div class="q" id="q">' + esc(L(s.question)) + '</div><div role="radiogroup" aria-labelledby="q">';
+  s.options.forEach(function(o){
+    h += '<button type="button" class="opt ' + esc(o.tone || '') + (CHOICE === o.value ? ' sel' : '') + '" role="radio" aria-checked="' + (CHOICE === o.value) + '" data-v="' + esc(o.value) + '" onclick="pick(this.getAttribute(\'data-v\'))"><span class="dot"></span><span>' + esc(L(o.label)) + '</span></button>';
+  });
+  h += '</div>';
+  var opt = s.options.filter(function(o){ return o.value === CHOICE; })[0];
+  if (opt && opt.fields.length) h += '<div class="more">' + opt.fields.map(fieldHTML).join('') + '</div>';
+  h += '<div id="err"></div>';
+  if (opt) h += '<button class="btn" id="go" onclick="submit()"' + (UPLOADING ? ' disabled' : '') + '>' + (DATA.previous ? T('Update my answer', 'Actualizar mi respuesta') : T('Send my answer', 'Enviar mi respuesta')) + '</button>';
+  if (s.safety) h += '<button type="button" class="safety" onclick="safety()">⚠ ' + esc(L(s.safety.label)) + '<br><span class="small" style="color:var(--bad)">' + T('Tap here for urgent help', 'Toque aquí para ayuda urgente') + '</span></button>';
+  h += '</div>';
+  app().innerHTML = h;
+}
+function fieldHTML(f){
+  var d = spec().fields[f]; if (!d) return '';
+  var req = (spec().options.filter(function(o){ return o.value === CHOICE; })[0] || {}).required || [];
+  var lab = '<label class="l" for="f-' + f + '">' + esc(L(d.label)) + (req.indexOf(f) >= 0 ? ' <span style="color:var(--bad)">*</span>' : '') + '</label>';
+  if (d.type === 'choice') return lab + '<div class="chips">' + d.choices.map(function(c){ return '<button type="button" class="chip' + (VAL[f] === c.value ? ' sel' : '') + '" data-f="' + f + '" data-v="' + esc(c.value) + '" onclick="setVal(this.getAttribute(\'data-f\'),this.getAttribute(\'data-v\'),true)">' + esc(L(c.label)) + '</button>'; }).join('') + '</div>';
+  if (d.type === 'chips') return lab + '<div class="chips">' + d.choices.map(function(c){ var on = VAL[f] === c.value || (VAL[f] && VAL[f].indexOf(c.value) === 0 && c.value !== 'Other'); return '<button type="button" class="chip' + (on ? ' sel' : '') + '" data-f="' + f + '" data-v="' + esc(c.value) + '" onclick="chipPick(this.getAttribute(\'data-f\'),this.getAttribute(\'data-v\'))">' + esc(L(c.label)) + '</button>'; }).join('') + '</div><input type="text" id="f-' + f + '" maxlength="' + (d.max || 120) + '" placeholder="' + esc(L(d.placeholder)) + '" value="' + esc(VAL[f] || '') + '" oninput="setVal(\'' + f + '\',this.value,false)">';
+  if (d.type === 'text') return lab + '<input type="text" id="f-' + f + '" maxlength="' + (d.max || 80) + '" placeholder="' + esc(L(d.placeholder)) + '" value="' + esc(VAL[f] || '') + '" oninput="setVal(\'' + f + '\',this.value,false)">';
+  if (d.type === 'textarea') return lab + '<textarea id="f-' + f + '" maxlength="' + (d.max || 1000) + '" oninput="setVal(\'' + f + '\',this.value,false)">' + esc(VAL[f] || '') + '</textarea>';
+  if (d.type === 'photo') {
+    var left = (DATA.photos_max || 6) - PHOTOS;
+    return lab + (left > 0 ? '<label class="ph"><input type="file" accept="image/*" multiple onchange="pickPhotos(this)">📷 ' + T('Take or choose a photo', 'Tomar o elegir una foto') + '</label>' : '<div class="small">' + T('Photo limit reached.', 'Límite de fotos alcanzado.') + '</div>') + '<div id="ph-list"></div>';
+  }
+  return '';
+}
+function fmtDate(iso){ var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString(LANG === 'es' ? 'es-US' : 'en-US', { month:'short', day:'numeric' }); }
+function pick(v){ if (CHOICE === v) return; CHOICE = v; var keep = {}; VAL = keep; render(); var m = document.querySelector('.more'); if (m) m.scrollIntoView({ block:'nearest', behavior:'smooth' }); }
+function setVal(f, v, rerender){ VAL[f] = v; if (rerender) { var y = window.scrollY; render(); window.scrollTo(0, y); } }
+function chipPick(f, v){ VAL[f] = v === 'Other' ? '' : v; var y = window.scrollY; render(); window.scrollTo(0, y); var i = document.getElementById('f-' + f); if (i && v === 'Other') i.focus(); }
+function showErr(msg){ var e = document.getElementById('err'); if (e) { e.innerHTML = '<div class="msg bad" role="alert">' + esc(msg) + '</div>'; e.scrollIntoView({ block:'center', behavior:'smooth' }); } }
+
+// ── photos: same Drive upload path as the vendor page (session -> PUT to Drive -> log) ──
+function pickPhotos(input){
+  var files = Array.prototype.slice.call(input.files); input.value = '';
+  var box = document.getElementById('ph-list');
+  files.forEach(function(f){
+    if (PHOTOS >= (DATA.photos_max || 6)) return;
+    var chip = document.createElement('div'); chip.className = 'pchip'; chip.textContent = '⏳ ' + f.name.substring(0, 24); box.appendChild(chip);
+    UPLOADING++; var go = document.getElementById('go'); if (go) go.disabled = true;
+    upload(f).then(function(){ PHOTOS++; chip.textContent = '✅ ' + f.name.substring(0, 24); })
+      .catch(function(e){ console.error('photo upload failed', e); chip.textContent = '⚠ ' + f.name.substring(0, 24) + ' — ' + T('did not upload, please try again', 'no se subió, intente de nuevo'); chip.style.color = 'var(--bad)'; })
+      .then(function(){ UPLOADING--; var g = document.getElementById('go'); if (g && !UPLOADING) g.disabled = false; });
+  });
+}
+function upload(file){
+  return post('/fix/upload-session', { t: TOKEN, file_name: file.name, mime_type: file.type || 'image/jpeg', origin: location.origin }).then(function(res){
+    if (!res.success || !res.upload_url) throw new Error(res.error || 'session');
+    return fetch(res.upload_url, { method:'PUT', headers:{'Content-Type': file.type || 'image/jpeg'}, body: file }).then(function(r){ return r.json(); }).then(function(fd){
+      if (!fd || !fd.id) throw new Error('upload');
+      return post('/fix/log-attachment', { t: TOKEN, file_id: fd.id, file_url: fd.webViewLink || '', file_name: file.name, mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url })
+        .then(function(r2){ if (!r2.ok) throw new Error(r2.error || 'log'); });
+    });
+  });
+}
+
+// ── submit ────────────────────────────────────────────────────
+function submit(){
+  if (BUSY || UPLOADING) return;
+  var o = spec().options.filter(function(x){ return x.value === CHOICE; })[0]; if (!o) return;
+  for (var i = 0; i < o.required.length; i++) {
+    var k = o.required[i];
+    if (!String(VAL[k] || '').trim()) { showErr(T('Please fill in: ', 'Por favor complete: ') + L(spec().fields[k].label).replace(/\s*\(optional\)|\s*\(opcional\)/i, '')); return; }
+  }
+  send(Object.assign({ t: TOKEN, choice: CHOICE }, VAL), false);
+}
+function send(body, isSafety){
+  BUSY = true; var go = document.getElementById('go'); if (go) { go.disabled = true; go.textContent = T('Sending…', 'Enviando…'); }
+  post('/fix/answer', body).then(function(r){
+    BUSY = false;
+    if (r.ok) { if (isSafety) safetyScreen(true); else thanks(r); return; }
+    if (r.__status === 400) { render(); showErr(r.field ? T('Please fill in the missing answer.', 'Por favor complete la respuesta que falta.') : T('Please choose an answer.', 'Por favor elija una respuesta.')); return; }
+    if (r.__status === 410 || r.__status === 401 || r.state) { showEnd(r.state || 'expired'); return; }
+    if (isSafety) { safetyScreen(false); return; }
+    render(); showErr(T('We could not save your answer. Please try again in a minute, or call us.', 'No pudimos guardar su respuesta. Intente de nuevo en un minuto, o llámenos.') + (CALLPHONE ? ' ' + CALLPHONE : ''));
+  }).catch(function(e){
+    BUSY = false; console.error('answer failed', e);
+    if (isSafety) { safetyScreen(false); return; }
+    render(); showErr(T('No connection — your answer was NOT sent. Please try again, or call us.', 'Sin conexión — su respuesta NO se envió. Intente de nuevo, o llámenos.') + (CALLPHONE ? ' ' + CALLPHONE : ''));
+  });
+}
+function thanks(r){
+  var bad = ['persists','worse','different_location'].indexOf(r.answer) >= 0;
+  app().innerHTML = '<div class="card center"><div class="big">✅</div><h1>' + T('Thank you!', '¡Gracias!') + '</h1><p>' +
+    (r.answer === 'resolved' ? T('We are glad it is working. We will take care of anything else that is left.', 'Nos alegra que funcione. Nos ocuparemos de lo que quede pendiente.')
+      : bad ? T('Thanks for telling us. We will look into it and be in touch.', 'Gracias por avisarnos. Lo revisaremos y nos pondremos en contacto.')
+      : T('Thanks. We may call you to find out more.', 'Gracias. Es posible que le llamemos para saber más.')) +
+    '</p><p class="small">' + T('Changed your mind? You can open the same link and update your answer until ', '¿Cambió de opinión? Abra el mismo enlace y actualice su respuesta hasta el ') + esc(fmtDate(r.can_change_until)) + '.</p>' +
+    '<button class="btn sec" onclick="DATA.previous={choice:CHOICE};DATA.window_ends=\'' + esc(r.can_change_until || '') + '\';render()">' + T('Change my answer', 'Cambiar mi respuesta') + '</button></div>';
+}
+
+// ── safety ────────────────────────────────────────────────────
+function safety(){
+  var s = spec().safety;
+  if (!confirm(L(s.label) + '\n\n' + T('Tell the office this is urgent?', '¿Avisar a la oficina que es urgente?'))) return;
+  send({ t: TOKEN, choice: 'safety', note: L(s.label) }, true);
+}
+function safetyScreen(sent){
+  var msg = L(spec().safety.message).replace('{phone}', CALLPHONE || T('our office', 'nuestra oficina'));
+  app().innerHTML = '<div class="card center"><div class="big">⚠️</div><h1>' + T('Please stay safe', 'Por favor manténgase a salvo') + '</h1><p style="text-align:left">' + esc(msg) + '</p>' + phoneLink() +
+    '<a class="call" style="background:#7a1a12" href="tel:911">' + T('Emergency: call 911', 'Emergencia: llame al 911') + '</a>' +
+    (sent ? '<p class="small">' + T('We have been told and will follow up right away.', 'Ya nos avisaron y le contactaremos de inmediato.') + '</p>' : '<div class="msg bad">' + T('We could NOT send this to the office automatically. Please call us now.', 'NO pudimos avisar a la oficina automáticamente. Por favor llámenos ahora.') + '</div>') + '</div>';
+}
+
+(function(){ if (!savedLang()) setLang((navigator.language || '').toLowerCase().indexOf('es') === 0 ? 'es' : 'en'); load(); })();
+</script>
+
+<!-- auto-refresh onto new Worker code (idle only) -->
+<script>
+(function(){ var V=WORKER+'/version',booted=null;
+  function chk(){ fetch(V,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){ if(!d||!d.version)return; if(booted===null){booted=d.version;return;} if(d.version!==booted){ var el=document.activeElement; var busy=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')&&el.value; if(!busy && !BUSY && !UPLOADING && !CHOICE) location.reload(true); } }).catch(function(e){ console.warn('version check failed', e); }); }
+  chk(); setInterval(chk,60000);
+})();
+</script>
+</body>
+</html>
