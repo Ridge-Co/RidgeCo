@@ -2834,6 +2834,7 @@ async function receiptReconImportStatement(env, body) {
       return json({ error: 'Could not download the file: ' + (e && e.message || e) }, 500);
     }
     const ex = await statementExtract(env, dl.bytes, dl.mime);
+    if (ex && ex._paused) return aiCreditPausedJson({ message: 'Automatic statement reading is paused - enter the statement lines by hand (or paste the CSV).' });
     detectedVendor = ex.vendor_detected || '';
     // statementExtract's own lines already use `amount`; documented here in case an older/altered
     // extractor response ever returns `total` instead — mapped defensively, never silently dropped.
