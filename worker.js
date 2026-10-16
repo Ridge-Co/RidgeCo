@@ -7193,7 +7193,9 @@ async function createWorkOrder(env, body) {
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
     Parent_WO_ID: body.parent_wo_id||''
   }[h] ?? ''));
-  await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
+  const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
+  // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
+  woId = (await guardAppendedIds(env, 'Work_Orders', _woAppend, rows.length, idCol, [woId], (v, c) => 'WO-' + mintNextNumericId(v, c))).ids[0];
   try {
     const tenants = await fetchTab(env, 'Tenants');
     const activeTenants = tenants.filter(t => { if (t.Active === 'FALSE') return false; if (body.unit_id) return t.Unit_ID === body.unit_id; if (body.property_id) return !t.Unit_ID && String(t.Property_ID) === String(body.property_id); return false; });
