@@ -16458,7 +16458,7 @@ async function schedRunDailyReceiptsPost(env) {
   detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
   const before = errors.length;
   detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, {}), errors);
-  return { ok: !errors.length, errors, detail, no_retry: errors.length > before };   // a half-failed email batch is not blindly re-sent
+  return { ok: !errors.length, errors, detail, no_retry: errors.length > before, warnings: flags.paused ? ['items summary skipped: paused (AI credit) - it is retried automatically after AI resumes'] : undefined };   // a half-failed email batch is not blindly re-sent
 }
 async function schedRunDailyTurnover(env) {
   const errors = [];
