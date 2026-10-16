@@ -814,6 +814,67 @@ function checkOverdue_(status) {
   }
   p.setProperty('OVERDUE_SEEN', JSON.stringify(seen));
 }
+// ── Failure ledger: the independent second path (email), the report helper, and Worker health probes ───────────────
+// The Hub texts urgent problems, but if texting itself is what is broken (or the alert switch is off) the text never arrives. So every
+// tick the Hub's /cron/status also returns a summary of the failure ledger and THIS script emails about any urgent, unacknowledged problem.
+// Acknowledge a problem on the Needs Attention page to silence it.
+function checkLedger_(f) {
+  var p = props_(), now = Date.now();
+  if (f === undefined) { Logger.log('The Hub did not include a failure-ledger summary in /cron/status (older Hub build); nothing to check.'); return; }
+  if (!f || f.ok === false) {
+    alertThrottled_('ledger_unreadable', LEDGER_REMIND_MS, 'Hub failure ledger could not be read', 'The Hub could not read its failure ledger, so urgent problems may be invisible right now:\n\n' + String(f && f.error || '(no detail)').slice(0, 500));
+    return;
+  }
+  var items = f.p0_unack || [];
+  if (!items.length) { p.deleteProperty('LEDGER_P0_KEY'); p.deleteProperty('LEDGER_P0_AT'); return; }
+  var key = items.map(function (i) { return i.id; }).sort().join(','), lastKey = p.getProperty('LEDGER_P0_KEY'), lastAt = Number(p.getProperty('LEDGER_P0_AT') || 0);
+  if (key === lastKey && now - lastAt < LEDGER_REMIND_MS) return;
+  p.setProperty('LEDGER_P0_KEY', key); p.setProperty('LEDGER_P0_AT', String(now));
+  var lines = items.map(function (i) { return '  - ' + i.where + (i.count > 1 ? ' (' + i.count + 'x)' : '') + ': ' + String(i.message).slice(0, 220) + '  [first seen ' + i.first_seen + ']'; });
+  alert_('URGENT: ' + items.length + ' Hub problem' + (items.length === 1 ? '' : 's') + ' need you',
+    'These urgent problems are open in the Hub failure ledger and nobody has acknowledged them:\n\n' + lines.join('\n') +
+    '\n\n(' + (f.open || 0) + ' open in total, ' + (f.P1 || 0) + ' important.) Open the Hub, then Needs Attention, to acknowledge, fix or copy a brief for Claude. This email repeats every 6 hours while the list is unchanged; acknowledging silences it.\n\nThis message comes from the Apps Script scheduler, not from the Hub, so it still arrives if Hub texting is down.');
+}
+// Never throws. Reports to the Hub ledger with the scheduler token (trusted: real system and severity). If the Hub is down this cannot work, and the email path covers that.
+function ledger_(where, severity, message) {
+  try {
+    var token = props_().getProperty('SCHEDULER_TOKEN');
+    if (!token) return false;
+    var resp = UrlFetchApp.fetch(WORKER_URL + '/failure/report', { method: 'post', contentType: 'application/json', headers: { 'X-Auth-Token': token }, followRedirects: false, muteHttpExceptions: true,
+      payload: JSON.stringify({ system: 'scheduler', source: 'apps-script', where: where, severity: severity, message: String(message).slice(0, 300) }) });
+    if (resp.getResponseCode() !== 200) { Logger.log('LEDGER REPORT NOT ACCEPTED (HTTP ' + resp.getResponseCode() + '): ' + where + ' | ' + message); return false; }
+    return true;
+  } catch (e) { Logger.log('LEDGER REPORT FAILED: ' + e + ' | ' + where + ' | ' + message); return false; }
+}
+function ledgerThrottled_(key, windowMs, where, severity, message) {
+  var p = props_(), k = 'LAST_LEDGER_' + key, last = Number(p.getProperty(k) || 0);
+  if (Date.now() - last < windowMs) return;
+  if (ledger_(where, severity, message)) p.setProperty(k, String(Date.now()));
+}
+// GET /health on each Worker in PROBES. Reports only after PROBE_FAILS_BEFORE_ALERT failures in a row; emails once per 6 h; says when it recovers.
+function probeWorkers_() {
+  var p = props_(), st = {};
+  try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
+  PROBES.forEach(function (pr) {
+    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '';
+    try { code = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }).getResponseCode(); }
+    catch (e) { err = String(e).slice(0, 200); }
+    var down = !!err || code === 0 || code >= 500, why = err || ('HTTP ' + code);
+    if (down) {
+      s.fails = (s.fails || 0) + 1; s.last = why;
+      if (s.fails >= PROBE_FAILS_BEFORE_ALERT) {
+        s.alerted = true;
+        alertThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'Worker DOWN: ' + pr.name, 'The Worker "' + pr.name + '" (' + pr.url + ') has failed its health check ' + s.fails + ' ticks in a row. Last answer: ' + why + '.\n\nAnything that depends on it is not working until it is fixed.');
+        ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' health check failing (' + why + ', ' + s.fails + ' ticks in a row)');
+      }
+    } else {
+      if (s.alerted) alert_('Worker back up: ' + pr.name, 'The Worker "' + pr.name + '" is answering its health check again (HTTP ' + code + ').');
+      s = { fails: 0, alerted: false };
+    }
+    st[pr.name] = s;
+  });
+  p.setProperty('PROBE_STATE', JSON.stringify(st));
+}
 function fatal_(subject, body) { alert_('Hub scheduler setup: ' + subject, body); throw new Error('Hub scheduler setup failed: ' + subject + '. ' + body); }
 function alert_(subject, body) {
   try { MailApp.sendEmail(NOTIFY_EMAIL, '[Hub scheduler] ' + subject, body); }
