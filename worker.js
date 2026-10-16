@@ -23781,6 +23781,7 @@ async function isTestRecord(env, tab, id) {
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (path === '/admin/ai-credit-simulate' || path === '/admin/ai-credit-resume') return true;   // Oct 16 2026: staging only; touches no customer record - only the AI pause flag (and resume makes one 1-token Claude call)
   // Ops queue upgrade (Oct 13 2026): staging token may only create/modify/sync queue rows whose Title starts with TEST-.
   if (path === '/ops-queue/scout-submit') {
     const _its = (body && body.items) || [];
