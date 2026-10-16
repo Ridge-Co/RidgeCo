@@ -83,7 +83,7 @@ function load(store, over) {
     processEstimateReminders: async () => ({ skipped: 'x' }),
     processDepositPaidSweep: async () => ({ ok: true }),
     maybeRunDailySelftest: async () => ({ skipped: true }),
-    checkDeadManSwitch: async () => ({ skipped: true }),
+    checkDeadManSwitch: async () => ({ skipped: true }), failRollupRun: async () => ({ ok: true, events_in: 0 }),
     inspStrGuardTick: async () => ({ enabled: false }), inspAlert: async () => {},
     buildDigest: async () => ({}), deliverDigest: async () => ({ delivered: false }),
     receiptScan: async () => ({ ok: true }), receiptReconScan: async () => ({ ok: true }),
