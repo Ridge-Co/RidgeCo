@@ -248,6 +248,17 @@ window.addEventListener('pageshow', function(e){
     <div><span class="status-dot"></span><span style="color:var(--muted);font-size:11px">LIVE</span></div>
   </header>
 
+  <!-- AI-credit pause banner (Oct 16 2026). Hidden unless GET /ai-credit/status says paused (or the check itself failed). -->
+  <div id="ai-credit-banner" role="alert" aria-live="polite">
+    <div><span class="aic-title" id="ai-credit-title"></span> <span id="ai-credit-msg"></span></div>
+    <div class="aic-detail" id="ai-credit-detail"></div>
+    <div class="aic-actions">
+      <button class="btn danger" id="ai-credit-resume-btn" type="button" onclick="aiCreditResume()">Resume</button>
+      <a class="btn secondary" id="ai-credit-console-link" href="https://console.anthropic.com/settings/billing" target="_blank" rel="noopener">Open Anthropic billing</a>
+    </div>
+    <div class="aic-error" id="ai-credit-error"></div>
+  </div>
+
   <div class="page active" id="page-dashboard">
     <div class="stats-row">
       <div class="stat-card"><div class="num" id="stat-open">—</div><div class="label">OPEN WOs</div></div>
