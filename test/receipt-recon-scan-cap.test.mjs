@@ -48,6 +48,8 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
     addRow: async (env, tab, row) => { queue.push(row); },
     setConfigKey: async (env, { key, value }) => { cfg[key] = value; },
     json: (o) => o,
+    // Oct 16 2026: the AI-credit guard hooks in receiptReconScan (no pause in these scenarios)
+    aiCreditCheck: async () => ({ paused: false }), aiCreditPausedJson: (o) => o, aiCreditIsPausedError: () => false, aiCreditErrorTextIsOutage: () => false, AI_SCAN_PAUSED_MSG: 'paused',
     ...helpers,
     RECEIPT_RECON_QUEUE_HEADERS: [], RECEIPT_RECON_FOLDER_ID_DEFAULT: 'FOLDER',
   };
