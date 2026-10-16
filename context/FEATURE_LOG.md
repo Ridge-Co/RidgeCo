@@ -2063,3 +2063,4 @@ Human-gate required: yes — this PR is unreviewed and unmerged, awaiting Brett.
 - Tests: ledger test 105 assertions; Apps Script suite 270 passing (fake fetch now answers probe `/health`; fixed 3 pre-existing stale assertions: hard-coded 14 Hub rows x2, and the call cap pinned at 15 while `MAX_CALLS` is 25). All 167 Worker test files pass.
 - **Deploy order matters:** merge -> Worker deploys (so `/cron/status` has `failures`) -> THEN Brett pastes the updated `HubScheduler.gs` into script.google.com and saves. (Pasting first is safe: it logs "no failure-ledger summary" until the Worker catches up.)
 - Still to do: GitHub Actions failure hook (needs a `FAILURE_INGEST_TOKEN` secret), QuickBooks token-expiry check, gh-broker / listing-forge probe URLs. Then phases B, C, D.
+
