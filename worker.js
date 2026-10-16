@@ -4020,7 +4020,10 @@ async function scopeIngest(env, body) {
     else if (body.drive_file_id) { const tok = await getAccessToken(env); const dl = await driveDownload(tok, body.drive_file_id); added = await scopeOcr(env, dl.bytes, dl.mime); type = 'drive'; label = label || ('drive:' + body.drive_file_id); }
     else if (body.image_b64) { const raw = String(body.image_b64).replace(/^data:[^,]+,/, ''); const bin = Uint8Array.from(atob(raw), c => c.charCodeAt(0)); added = await scopeOcr(env, bin.buffer, body.mime || 'image/jpeg'); type = 'upload'; label = label || 'upload'; }
     else return json({ error: 'text, drive_file_id, or image_b64 required' }, 400);
-  } catch (e) { return json({ error: 'ingest failed: ' + (e.message || e) }, 500); }
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) return aiCreditPausedJson({ message: 'Automatic reading of the photo is paused - type the notes in by hand.' });
+    return json({ error: 'ingest failed: ' + (e.message || e) }, 500);
+  }
   const raw = s.Raw_Input ? (s.Raw_Input + '\n\n' + added) : added;
   let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
   srcs.push({ type, label, ts: new Date().toISOString(), chars: added.length });
