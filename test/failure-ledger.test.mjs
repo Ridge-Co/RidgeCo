@@ -50,6 +50,9 @@ const schedCell = () => '';
 const schedEffective = () => ({ jobs: [] });
 const schedStatus = () => ({ overdue: OVERDUE.map(o => o.name), jobs: Object.fromEntries(OVERDUE.map(o => [o.name, { overdue_reason: o.reason }])), tick_age_min: 3 });
 const SCHED_STATE_KEY = 'Scheduler_State';
+// Oct 16 2026: failConditions adds the ai_credit_paused P0 condition - the REAL key names / fix text from worker.js
+const AI_CREDIT_KEYS = eval('(' + /const AI_CREDIT_KEYS = (\{[^}]*\});/.exec(src)[1] + ')');
+const AI_CREDIT_FIX = /const AI_CREDIT_FIX = '([^']*)';/.exec(src)[1];
 const pieces = [grab('col'), grab('configFromValues'), grab('appendedRowNumber'), grab('schedEtParts')].join('\n');
 const L = new Function('sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedCell', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY',
   pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, __reset: () => { _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
