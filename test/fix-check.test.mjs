@@ -149,4 +149,103 @@ ok(W0.api.fuQuestionSpec({ check_type: 'leak', problem_label: 'the leak' }).ques
     ok(s.question.en && s.question.es && s.options.length >= 3 && s.options.every(o => o.label.es && o.label.en) && s.options.some(o => o.answer === 'resolved') && s.options.some(o => o.answer === 'persists' || o.answer === 'worse'), `question set for ${t} is complete in both languages`);
   }
 }
+
+// ═══ C. tokens ═════════════════════════════════════════════════════════════════════════════
+{
+  const A = makeWorld({}); const env = A.env;
+  const row = { ID: '7', Tenant_ID: '100' };
+  const exp = new Date(Date.now() + 14 * 86400000).toISOString();
+  const tok = await A.api.fuMintToken(env, row, exp);
+  const chk = await A.api.fuTokenCheck(tok, env.WORKER_SECRET);
+  ok(chk.ok && chk.payload.f === '7' && chk.payload.t === '100' && chk.payload.scope === 'fix-check', 'a fresh token verifies and carries only follow-up id + tenant id', chk);
+  ok(tok.length < 200, 'the token is short enough for a text message', tok.length);
+  ok(Math.abs(chk.payload.exp - (Date.now() / 1000 + 14 * 86400)) < 120, 'expires in 14 days');
+  const bad = tok.slice(0, -3) + (tok.endsWith('AAA') ? 'BBB' : 'AAA');
+  ok((await A.api.fuTokenCheck(bad, env.WORKER_SECRET)).reason === 'invalid', 'a tampered token is invalid');
+  ok((await A.api.fuTokenCheck(tok, 'other-secret')).reason === 'invalid', 'a token signed with another secret is invalid');
+  ok((await A.api.fuTokenCheck('', env.WORKER_SECRET)).reason === 'invalid' && (await A.api.fuTokenCheck('abc', env.WORKER_SECRET)).reason === 'invalid', 'empty / garbage tokens are invalid');
+  const old = await A.api.makeSessionToken({ scope: 'fix-check', f: '7', t: '100' }, env.WORKER_SECRET, -3600);
+  const oc = await A.api.fuTokenCheck(old, env.WORKER_SECRET); ok(!oc.ok && oc.reason === 'expired', 'an old link says EXPIRED (not "broken")', oc);
+  const other = await A.api.makeSessionToken({ scope: 'wo-share', f: '7', t: '100' }, env.WORKER_SECRET, 3600);
+  ok((await A.api.fuTokenCheck(other, env.WORKER_SECRET)).reason === 'invalid', 'a token of another scope (vendor share link) is refused');
+  const h = await A.api.fuSha256(tok); ok(/^[0-9a-f]{64}$/.test(h) && !h.includes(tok.slice(0, 20)), 'the stored value is a sha256 hex, never the token');
+  const two = A.api.fuAddHash(A.api.fuAddHash('', 'aaa'), 'bbb'); ok(A.api.fuHashMatches(two, 'aaa') && A.api.fuHashMatches(two, 'bbb') && !A.api.fuHashMatches(two, 'ccc'), 'the first text and its reminder link both stay valid');
+  ok(A.api.fuAddHash('a,b,c,d', 'e').split(',').length === 4, 'at most 4 hashes kept');
+}
+
+// ═══ D. gating: exact reasons ══════════════════════════════════════════════════════════════
+{
+  const G = o => W0.api.fuGateVerdict(Object.assign({ cfg: { TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' }, tenant: { ID: '1', Phone: '4105550111', Active: 'TRUE' }, property: {}, owner: {}, now: T0 }, o));
+  ok(!G({}).blocked && G({}).reasons.length === 0, 'all gates open -> not blocked');
+  ok(G({ cfg: {} }).reasons.map(r => r.code).join() === 'global_off' && /TWILIO_ENABLED/.test(G({ cfg: {} }).reasons[0].text), 'global OFF is named, with the config key');
+  ok(G({ property: { SMS_Enabled: 'FALSE' } }).reasons[0].code === 'property_off' && /Properties/.test(G({ property: { SMS_Enabled: 'FALSE' } }).reasons[0].text), 'property OFF is named');
+  ok(G({ owner: { SMS_Enabled: 'FALSE' } }).reasons[0].code === 'owner_off', 'owner OFF is named');
+  ok(G({ tenant: { ID: '1', Phone: '4105550111', SMS_Enabled: 'FALSE' } }).reasons[0].code === 'tenant_off' && /consent/.test(G({ tenant: { ID: '1', Phone: '4105550111', SMS_Enabled: 'FALSE' } }).reasons[0].text), 'tenant OFF is named and mentions consent');
+  ok(G({ tenant: { ID: '1', Phone: '4105550111', SMS_OptOut: 'TRUE' } }).reasons[0].code === 'tenant_opted_out', 'tenant STOP is named');
+  ok(G({ tenant: { ID: '1', Phone: '4105550111', Active: 'FALSE' } }).reasons[0].code === 'tenant_moved_out', 'moved-out tenant is named');
+  ok(G({ tenant: { ID: '1', Phone: '' } }).reasons.some(r => r.code === 'no_phone'), 'missing phone is named');
+  const all = G({ cfg: {}, property: { SMS_Enabled: 'FALSE' }, owner: { SMS_Enabled: 'FALSE' }, tenant: { ID: '1', Phone: '4105550111', SMS_Enabled: 'FALSE' } });
+  ok(all.reasons.map(r => r.code).join() === 'global_off,property_off,owner_off,tenant_off', 'every blocking layer is listed, in order', all.reasons);
+  ok(G({ cfg: { TWILIO_ENABLED: 'TRUE' } }).test_mode === true && G({ cfg: { TWILIO_ENABLED: 'TRUE' } }).notes.some(x => /Test mode/.test(x)), 'test mode (the default) is called out as a note, not a block');
+  ok(G({ now: new Date('2026-10-17T02:00:00Z') }).notes.some(x => /9am/.test(x)) && !G({ now: new Date('2026-10-17T02:00:00Z') }).blocked, 'after 7pm ET: held-until-9am note, not a block');
+}
+
+// ═══ E. tenant resolution fallbacks ════════════════════════════════════════════════════════
+{
+  const tenants = [
+    { ID: '100', First_Name: 'Tom', Last_Name: 'Gramiski', Property_ID: '82', Unit_ID: '9', Active: 'TRUE', Phone: '4105550100' },
+    { ID: '200', First_Name: 'Ann', Last_Name: 'A', Property_ID: '50', Unit_ID: '5', Active: 'TRUE' }, { ID: '201', First_Name: 'Bob', Last_Name: 'B', Property_ID: '50', Unit_ID: '5', Active: 'TRUE' },
+    { ID: '300', First_Name: 'Old', Last_Name: 'Tenant', Property_ID: '60', Unit_ID: '6', Active: 'FALSE' }, { ID: '301', First_Name: 'New', Last_Name: 'Tenant', Property_ID: '60', Unit_ID: '6', Active: 'TRUE' },
+    { ID: '400', First_Name: 'Solo', Last_Name: 'S', Property_ID: '70', Unit_ID: '', Active: 'TRUE' },
+  ];
+  const units = [{ ID: '9', Property_ID: '82' }, { ID: '5', Property_ID: '50' }, { ID: '6', Property_ID: '60' }];
+  const R = (wo, want) => W0.api.fuResolveTenants(wo, tenants, units, want);
+  let r = R({ ID: '1152', Property_ID: '82', Unit_ID: '', Tenant_ID: '' });
+  ok(r.chosen && r.chosen.ID === '100' && r.source === 'property', 'WO-1152: blank tenant, no unit, property 82 -> its only tenant (100)', r);
+  r = R({ ID: '1', Property_ID: '82', Unit_ID: '9', Tenant_ID: '100' }); ok(r.chosen.ID === '100' && r.source === 'wo_tenant', 'the WO\'s own tenant wins');
+  r = R({ ID: '1', Property_ID: '82', Unit_ID: '9', Tenant_ID: '' }); ok(r.chosen.ID === '100' && r.source === 'unit', 'blank tenant + unit -> the unit\'s tenant');
+  r = R({ ID: '1', Property_ID: '60', Unit_ID: '6', Tenant_ID: '300' }); ok(r.chosen.ID === '301' && /moved out/.test(r.note), 'the WO tenant moved out -> the CURRENT tenant, with a note');
+  r = R({ ID: '1', Property_ID: '50', Unit_ID: '5', Tenant_ID: '' }); ok(r.chosen === null && r.candidates.length === 2 && /pick/i.test(r.note), 'two tenants in a unit -> nobody chosen, Brett must pick');
+  r = R({ ID: '1', Property_ID: '50', Unit_ID: '5', Tenant_ID: '' }, '201'); ok(r.chosen && r.chosen.ID === '201', 'Brett\'s pick is honoured');
+  r = R({ ID: '1', Property_ID: '50', Unit_ID: '5', Tenant_ID: '' }, '100'); ok(r.chosen === null && /not linked/.test(r.note), 'a tenant from another property cannot be picked');
+  r = R({ ID: '1', Property_ID: '70', Unit_ID: '', Tenant_ID: '' }); ok(r.chosen && r.chosen.ID === '400' && r.source === 'property_no_unit', 'whole-property WO -> the tenant with no unit');
+  r = R({ ID: '1', Property_ID: '999', Unit_ID: '', Tenant_ID: '' }); ok(r.chosen === null && r.candidates.length === 0 && /No current tenant/.test(r.note), 'nobody found -> says so');
+}
+
+// ═══ F. the full flow on fake sheets ═══════════════════════════════════════════════════════
+const baseTabs = () => ({
+  Work_Orders: [
+    { ID: '1152', Property_ID: '82', Unit_ID: '', Tenant_ID: '', Vendor_ID: '2', Trade: 'Windows', Status: 'Assigned', Description: 'window leak. Need repaired and drywall/paint', Completed_Date: '' },
+    { ID: '1154', Property_ID: '82', Unit_ID: '', Tenant_ID: '', Vendor_ID: '5', Trade: 'Roofing', Status: 'Complete', Description: 'roof flashing', Completed_Date: '2026-10-10' },
+  ],
+  Properties: [{ ID: '82', Address: '522 E Fort Ave', Owner_ID: '11' }],
+  Units: [], Owners: [{ ID: '11', Company: 'Owner' }],
+  Tenants: [{ ID: '100', First_Name: 'Tom', Last_Name: 'Gramiski', Property_ID: '82', Unit_ID: '', Active: 'TRUE', Phone: '4105550177' }],
+  Vendors: [{ ID: '2', Name: 'Alex Busey', Trade: 'Painting', Active: 'TRUE' }, { ID: '5', Name: 'Eddie Smith', Trade: 'Roofing', Active: 'TRUE' }],
+});
+const sendBody = (o) => Object.assign({ wo_id: '1152', repair_wo_id: '1154', tenant_id: '100', check_type: 'leak', problem_label: 'the window leak', problem_label_es: 'la filtración de agua en la ventana', object_label: 'the window', object_label_es: 'la ventana', repair_part: 'window leak. Need repaired', cosmetic_part: 'drywall/paint', cosmetic_vendor_id: '2', rework_vendor_id: '5', mode: 'sms' }, o || {});
+{
+  // preview: reads only
+  const A = makeWorld({ tabs: baseTabs() });
+  const before = JSON.stringify(A.tabs);
+  const pr = await A.api.followupPreview(A.env, url('/followup/preview', { wo_id: '1152', repair_wo_id: '1154' }));
+  const p = D(pr);
+  ok(p.ok && p.tenants.chosen_id === '100' && p.classification.check_type === 'leak' && p.classification.cosmetic_part === 'drywall/paint', 'preview resolves tenant 100 and splits repair / cosmetic', p.classification);
+  ok(JSON.stringify(A.tabs) === before && A.sms.length === 0 && A.ensureTabCalls.length === 0, 'preview writes NOTHING and sends NOTHING (not even creating the tab)');
+  ok(/finished the repair work on the window leak at 522 E Fort Ave/.test(p.message.text) && /Reply STOP/.test(p.message.text) && /private link/.test(p.message.text), 'preview shows the exact text incl. the STOP line', p.message.text);
+  ok(p.questions.question.en === 'Since Oct 10, have you seen water come in at the window?' && p.repair_wo.completed_date === '2026-10-10', 'preview shows the exact question, dated from the repair WO (1154)');
+  ok(p.vendor_defaults.rework_vendor_id === '5' && p.vendor_defaults.cosmetic_vendor_id === '2', 'vendor defaults: rework = repair WO vendor (Eddie 5), cosmetic = this WO vendor (Alex 2)');
+  ok(!p.gate.blocked, 'gates open in this world');
+  const es = D(await A.api.followupPreview(A.env, url('/followup/preview', { wo_id: '1152', lang: 'es' }))); ok(/Hola Tom/.test(es.message.text) && es.language === 'es', 'Spanish preview');
+  const ed = D(await A.api.followupPreview(A.env, url('/followup/preview', { wo_id: '1152', problem_label: 'the bay window leak', cosmetic_part: 'paint only' }))); ok(/bay window leak/.test(ed.message.text) && ed.classification.cosmetic_part === 'paint only', 'Brett\'s edits flow into the message');
+  const tc = D(await A.api.followupPreview(A.env, url('/followup/preview', { wo_id: '1152', check_type: 'electrical' }))); ok(tc.classification.check_type === 'electrical' && /working now/.test(tc.questions.question.en), 'changing the type rebuilds the questions');
+  ok((await A.api.followupPreview(A.env, url('/followup/preview', {}))).status === 400 && (await A.api.followupPreview(A.env, url('/followup/preview', { wo_id: '999' }))).status === 404, 'missing / unknown WO handled');
+}
+{
+  // preview blocked exactly why
+  const A = makeWorld({ tabs: baseTabs(), cfg: { TWILIO_ENABLED: 'FALSE' } });
+  A.tabs.Properties[0].SMS_Enabled = 'FALSE'; A.tabs.Tenants[0].SMS_Enabled = 'FALSE';
+  const p = D(await A.api.followupPreview(A.env, url('/followup/preview', { wo_id: '1152' })));
+  ok(p.gate.blocked && p.gate.reasons.map(r => r.code).join() === 'global_off,property_off,tenant_off', 'blocked preview lists each reason', p.gate);
+}
 // FC_TEST_CONT
