@@ -7,7 +7,10 @@ import fs from 'fs'; import vm from 'vm'; import assert from 'assert';
 const src = fs.readFileSync('worker.js','utf8');
 const a = src.indexOf('const MODEL_REGISTRY = {'), b = src.indexOf('// GET /model-registry');
 assert(a>0 && b>a);
-const section = src.slice(a,b);
+// Oct 16 2026: callClaude now goes through anthropicMessages (the AI-credit guard). Run the REAL guard block too, over a Config with no pause flag set.
+const guard = src.slice(src.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), src.indexOf('// ═══ AI-CREDIT-GUARD-END'));
+assert(guard.includes('async function anthropicMessages'));
+const section = guard + '\n' + src.slice(a,b);
 const telemetry=[]; const calls=[];
 let nextResp;
 const ctx = { console, JSON, Date, Math, Error, String, Number, Promise, Array, Object,
