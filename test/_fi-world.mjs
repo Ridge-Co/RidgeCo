@@ -4,6 +4,9 @@ const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const a = src.indexOf('// ═══ FI-BLOCK-START'), b = src.indexOf('// ═══ FI-BLOCK-END');
 if (a < 0 || b < 0) throw new Error('FI block markers missing');
 const block = src.slice(a, b);
+// Oct 16 2026: the FI block's AI catch blocks use the AI-credit guard's typed-pause helpers - take the REAL definitions from worker.js.
+const aiCode = /const AI_CREDIT_CODE = [^;]*;/.exec(src)[0];
+const aiPausedFn = /function aiCreditIsPausedError\([^)]*\) \{[^\n]*\}/.exec(src)[0];
 export function grab(name, isAsync = false) {
   const needle = (isAsync ? 'async ' : '') + 'function ' + name + '(';
   const i = src.indexOf(needle); if (i < 0) throw new Error('missing ' + name);
