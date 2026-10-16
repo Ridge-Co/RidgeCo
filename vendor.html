@@ -3539,6 +3539,7 @@ function renderReconcileWarning() {
 }
 
 function applyBillExtract(ex) {
+  if (ex && ex._paused) { _invReadState = 'paused'; renderInvoiceFileStatus(); return; }   // Oct 16 2026: Anthropic credit is out - the form stays open for typing
   if (!ex || ex._error || ex._parse_error) { _invReadState = 'fail'; renderInvoiceFileStatus(); return; }
   var filled = [];
 
