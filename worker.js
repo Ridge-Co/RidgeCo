@@ -16453,7 +16453,8 @@ async function schedRunDailyReceipts(env) {
 }
 async function schedRunDailyReceiptsPost(env) {
   const errors = [], detail = {};
-  detail.items_summary = await schedStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors);
+  const flags = { paused: false };
+  detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email below does not need AI
   detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
   const before = errors.length;
   detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, {}), errors);
