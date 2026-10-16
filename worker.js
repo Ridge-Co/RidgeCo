@@ -34821,7 +34821,7 @@ async function fiRouteNotes(env, body) {
   const catalog = tl.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiTypeOut(r.o)).sort((a, b) => b.uses - a.uses);
   let ai;
   try { ai = await routeAI(env, { type: 'fi_route', customerFacing: true, schema: true, system: FI_ROUTE_SYSTEM, prompt: fiBuildRoutePrompt(Object.assign({}, body, { areas, notes }), catalog), maxTokens: 8000, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic sorting of notes is paused (AI credit) - your recordings and transcripts are kept; file them by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const norm = fiNormalizeRoute(fiExtractJson(ai.result), areas.map(a => a.id));
   if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your transcripts are kept - retry.');
   return json(Object.assign({ ok: true, model_used: ai.model_used }, norm));
