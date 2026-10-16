@@ -15333,10 +15333,10 @@ async function smsGatedSend(env, opts) {
       Delivered_To: deliveredTo,
       Sent_Date: new Date().toISOString(),
       Twilio_Message_SID: (result && result.sid) || '',
-    });
+    }, mqOpts);
   } else if (sendOk && !recipientPhone) {
     outcome = 'failed_no_phone';
-    await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' });
+    await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' }, mqOpts);
   }
   // Per-WO communication audit (Sep 20 2026) — every outbound SMS tied to a work order lands in
   // that WO's own audit trail (WO_Audit), the same place status/field edits already log to, so
