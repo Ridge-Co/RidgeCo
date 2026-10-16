@@ -1965,6 +1965,55 @@ var KEY_TYPE_LABEL = {
 };
 function keyTypeLabel(type) { return KEY_TYPE_LABEL[type] || (type || 'Key'); }
 
+// ── AI-credit pause banner (Oct 16 2026) ─────────────────────────────────────────────────────
+// When Anthropic credit runs out the Worker pauses every AI step (receipt scanning, invoice auto-read, field-inspection AI...) and texts/emails
+// Brett ONCE. This banner is the standing, on-screen version: red while paused, with a Resume button that makes ONE real 1-token call and only
+// clears the pause if it works (otherwise it shows Anthropic's own error here). It also clears by itself within about an hour of credit being added.
+var _aiCreditTimer = null;
+function aiCreditSetBanner(mode, title, msg, detail) {
+  var b = document.getElementById('ai-credit-banner'); if (!b) return;
+  if (!mode) { b.style.display = 'none'; return; }
+  b.className = mode === 'amber' ? 'amber' : '';
+  b.style.display = 'block';
+  document.getElementById('ai-credit-title').textContent = title;
+  document.getElementById('ai-credit-msg').textContent = msg;
+  document.getElementById('ai-credit-detail').textContent = detail || '';
+  document.getElementById('ai-credit-resume-btn').textContent = mode === 'amber' ? 'Check again' : 'Resume';
+}
+function loadAiCreditStatus() {
+  if (!_aiCreditTimer) _aiCreditTimer = setInterval(loadAiCreditStatus, 5 * 60 * 1000);   // re-check while the Hub stays open
+  return api('GET', '/ai-credit/status', null, 15000).then(function(r) {
+    if (!r || r.ok === false) throw new Error((r && (r.error || r.message)) || 'bad response');
+    if (!r.paused) { aiCreditSetBanner(null); return; }
+    var auth = r.kind === 'auth';
+    aiCreditSetBanner('red', 'AI reading is paused -',
+      auth ? 'Anthropic is refusing the Hub\'s API key. Fix the key or account in the Anthropic Console, then tap Resume.'
+           : 'Anthropic credit is out. Add credits in the Anthropic Console, then tap Resume.',
+      'Paused since ' + (r.since ? new Date(r.since).toLocaleString() : '?') + '. Receipts wait in Drive and nothing is retried; typing things in by hand still works.' + (r.last_error ? ' Anthropic said: ' + r.last_error : ''));
+    document.getElementById('ai-credit-error').textContent = '';
+  }).catch(function(e) {
+    // A failed check must not look like "all fine": say so, and keep a record in the Dev Log error list.
+    logError('ai-credit-status', (e && e.message) || 'Failed');
+    aiCreditSetBanner('amber', 'Could not check AI status -', 'The Hub could not tell whether AI reading is paused (' + ((e && e.message) || 'error') + '). Tap Check again.', '');
+  });
+}
+function aiCreditResume() {
+  var btn = document.getElementById('ai-credit-resume-btn'), err = document.getElementById('ai-credit-error');
+  if (btn.textContent === 'Check again') { loadAiCreditStatus(); return; }
+  btn.disabled = true; btn.textContent = 'Checking...'; err.textContent = '';
+  api('POST', '/admin/ai-credit-resume', {}, 30000).then(function(r) {
+    if (r && r.ok) {
+      toast(r.resumed ? 'AI reading is back on' : 'AI was not paused', 'success');
+      return loadAiCreditStatus();
+    }
+    // Still paused: show Anthropic's own reason right on the banner.
+    err.textContent = 'Still paused: ' + ((r && (r.error || r.message)) || 'Anthropic did not accept the test call') + '. Add credits (Anthropic Console > Settings > Billing), then tap Resume again.';
+  }).catch(function(e) {
+    logError('ai-credit-resume', (e && e.message) || 'Failed');
+    err.textContent = 'Could not reach the Hub to check: ' + ((e && e.message) || 'error') + '. Tap Resume to try again.';
+  }).then(function() { btn.disabled = false; if (btn.textContent === 'Checking...') btn.textContent = 'Resume'; });
+}
+
 function processNotificationsBackground() {
   api('GET','/notifications/pending').catch(function(){});
 }
