@@ -22881,7 +22881,7 @@ async function selfTestInvoiceExtract(env, body){
     success: true,
     extract: ex,
     read_ok: !ex._error && !ex._parse_error,
-    error_flag: ex._error ? 'model_unreachable' : (ex._parse_error ? 'unparseable_reply' : ''),
+    error_flag: ex._paused ? 'ai_credit_paused' : (ex._error ? 'model_unreachable' : (ex._parse_error ? 'unparseable_reply' : '')),   // Oct 16 2026: a paused AI is a loud, distinct canary failure
     model_tier: 'REASON',
     model: MODEL_REGISTRY.REASON.model,
     ms: Date.now() - t0,
