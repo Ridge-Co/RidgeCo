@@ -636,6 +636,7 @@ function handleBillInvoiceFile(input){
 // a field only auto-fills while empty or still flagged auto — a vendor's own edit is never
 // silently clobbered, and re-picking a file after editing doesn't stomp an intentional correction.
 function applyBillExtract(ex, statusEl){
+  if(ex && ex._paused){ if(statusEl){ statusEl.textContent=t('Automatic reading is paused - enter it by hand.'); statusEl.style.color='var(--muted)'; } return; }   // Oct 16 2026: Anthropic credit is out
   if(!ex || ex._error || ex._parse_error){ if(statusEl) statusEl.textContent=''; return; }
   var filled=false;
   if(typeof ex.amount==='number' && ex.amount>0){
