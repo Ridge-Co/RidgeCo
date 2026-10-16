@@ -23261,8 +23261,9 @@ async function addRow(env, tab, body) {
   const PHONE_TABS=['Vendors','Owner_Users','Tenants','Owners']; if(PHONE_TABS.includes(tab)&&body.Phone) body.Phone=normalizePhone(body.Phone);
   const PIN_TABS=['Vendors','Owner_Users','Tenants']; if(PIN_TABS.includes(tab)&&!body.PIN&&body.Phone) body.PIN=generatePIN(body.Phone);
   const newRow=headers.map(h=>{if(h==='ID')return String(nextId);if(h==='Active'&&body[h]===undefined)return 'TRUE';return body[h]!==undefined?String(body[h]):'';});
-  await sheetsRequest(env,'POST',`/values/${tab}:append?valueInputOption=RAW`,{values:[newRow]});
-  return json({success:true,id:String(nextId),pin:body.PIN||null});
+  const _appendResp = await sheetsRequest(env,'POST',`/values/${tab}:append?valueInputOption=RAW`,{values:[newRow]});
+  const _g = await guardAppendedIds(env, tab, _appendResp, rows.length, _idc, [String(nextId)]);
+  return json({success:true,id:_g.ids[0],pin:body.PIN||null});
 }
 
 // ── Test-infrastructure build (Sep 19 2026) ─────────────────────────────────
