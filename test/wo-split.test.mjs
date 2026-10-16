@@ -199,7 +199,7 @@ function makeFetch(db, opts = {}) {
 
 function build(db, fetchOpts) {
   const src = [
-    'const CORS = {};',
+    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
     cacheSrc, isMissingTabSrc, srSrc, ensureInnerSrc, ensureSrc, ensureTabSrc,
     idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc, logMsgAuditSrc,
