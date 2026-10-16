@@ -22413,6 +22413,8 @@ async function vendorBillExtract(env, body) {
     bytes = arr.buffer; mime = body.mime || 'image/jpeg';
   } catch (e) { return json({ error: 'bad image_b64' }, 400); }
   const ex = await invoiceExtract(env, bytes, mime);
+  // Oct 16 2026: AI credit paused -> the vendor sees a plain "enter it by hand" note (vendor.html reads paused/message); no Anthropic call was made.
+  if (ex && ex._paused) return json({ success: true, extract: ex, paused: true, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG });
   return json({ success: true, extract: ex });
 }
 
