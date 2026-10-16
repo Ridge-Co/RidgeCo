@@ -18093,6 +18093,72 @@ async function aiCreditTripRun(env, cls, source) {
   return out;
 }
 
+// THE central call. body = the /v1/messages request object. opts: { signal, source, bypassPause (the probe only), simulate (staging only) }
+// -> { resp, data } for any answer that is not a pause/credit/key problem (callers keep their own resp.ok handling).
+// Throws AiCreditPausedError when paused or when THIS call discovered the credit is out; throws a plain Error if the key is missing.
+async function anthropicMessages(env, body, opts) {
+  opts = opts || {};
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  if (!opts.bypassPause) {
+    const st = await aiCreditCheck(env);
+    if (st.paused) throw new AiCreditPausedError(aiCreditPausedMessage(st), st);
+  }
+  let resp, data;
+  if (opts.simulate && env.__STAGING__) {                      // staging-only test hook (POST /admin/ai-credit-simulate); ignored everywhere else
+    resp = { ok: opts.simulate.status < 300, status: opts.simulate.status }; data = opts.simulate.body;
+  } else {
+    resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: opts.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body) });
+    data = await resp.json();
+  }
+  if (!resp.ok && !opts.bypassPause) {
+    const cls = aiCreditClassify(resp.status, data);
+    if (cls) {
+      const trip = await aiCreditTrip(env, cls, opts.source || '');
+      const err = new AiCreditPausedError(aiCreditPausedMessage({ kind: cls.kind, at: new Date().toISOString() }), { kind: cls.kind, status: cls.status });
+      err.trip = trip;
+      throw err;
+    }
+  }
+  return { resp, data };
+}
+
+// One minimal REAL call (max_tokens 1) that never trips and ignores the pause: did Anthropic accept it?
+async function aiCreditProbeCall(env) {
+  try {
+    const { resp, data } = await anthropicMessages(env, { model: MODEL_REGISTRY.REASON.model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, { bypassPause: true, source: 'ai_credit_probe' });
+    if (resp.ok) return { ok: true };
+    const cls = aiCreditClassify(resp.status, data);
+    return { ok: false, kind: cls ? cls.kind : 'other', status: resp.status, error: String((data && data.error && data.error.message) || ('HTTP ' + resp.status)).slice(0, 300) };
+  } catch (e) { return { ok: false, kind: 'other', status: 0, error: schedErrText(e) }; }
+}
+// Resume: probe first; clear the flag ONLY if the probe worked. Shared by POST /admin/ai-credit-resume and the ai_credit_probe job.
+function aiCreditResume(env, via) {
+  if (_aiCreditResumeP) return _aiCreditResumeP;
+  _aiCreditResumeP = aiCreditResumeRun(env, via).finally(() => { _aiCreditResumeP = null; });
+  return _aiCreditResumeP;
+}
+async function aiCreditResumeRun(env, via) {
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return { ok: false, resumed: false, error: 'could not read the pause flag: ' + st.read_error };
+  if (!st.paused) return { ok: true, resumed: false, paused: false, note: 'AI was not paused - nothing to do.' };
+  const probe = await aiCreditProbeCall(env);
+  if (!probe.ok) {
+    if (via === 'admin-button') {   // only when Brett pressed it; the hourly probe stays quiet (no hourly failure rows, no ledger growth)
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resume', Skill_Or_Endpoint: 'admin-button', Success: 'FALSE', Notes: `Resume pressed but AI is still paused (kind=${probe.kind})` }); }
+      catch (te) { console.error('ai-credit: resume failure and its telemetry write failed:', schedErrText(te)); }
+    }
+    return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: probe.error, probe_kind: probe.kind, status: probe.status };
+  }
+  let w;
+  try { w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'FALSE', [AI_CREDIT_KEYS.err]: '', [AI_CREDIT_KEYS.alerted]: '', [AI_CREDIT_KEYS.resumed]: new Date().toISOString() }); }
+  catch (e) { w = { ok: false, error: schedErrText(e) }; }
+  if (!w.ok) return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: 'Anthropic works again but the pause flag could not be cleared: ' + w.error };
+  _aiCreditCache = { at: Date.now(), state: { paused: false } };
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resumed', Skill_Or_Endpoint: String(via || 'resume'), Success: 'TRUE', Notes: 'Anthropic accepted a 1-token probe; pause flag cleared' }); }
+  catch (te) { console.error('ai-credit: resumed but the telemetry write failed:', schedErrText(te)); }
+  return { ok: true, resumed: true, paused: false };
+}
+
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
 // Secure, self-owned multi-model router. Calls each provider directly from THIS
 // Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
