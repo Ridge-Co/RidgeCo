@@ -22462,6 +22462,8 @@ async function receiptIntake(env, body) {
 // POST /receipt-scan (also called by the scheduler's daily_receipts job) — pull new files from the inbox Drive folder.
 // Self-provisions the folder the first time so there's no manual setup.
 async function receiptScan(env) {
+  // Oct 16 2026: AI credit paused -> do NOT list the folder or touch a single file (the old behaviour retried the same PDFs every 30 min all night).
+  { const st = await aiCreditCheck(env); if (st.paused) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: 0, paused_since: st.at || null, reason: 'paused: AI credit - receipts stay in the Drive folder and are scanned automatically after AI resumes' }); }
   const cfg = await fetchConfig(env);
   const tok = await getAccessToken(env);
   let folder = cfg.receipts_inbox_folder_id;
