@@ -17931,6 +17931,10 @@ async function routeAI(env, job) {
     attempt = await routeAICall(env, tier, job);
   }
 
+  // Oct 16 2026: AI credit paused/exhausted. The pause was already alerted + recorded once (ai_credit_exhausted), so the skipped
+  // calls write NO telemetry row each (they would flood the 1000-row grid); the caller gets a typed error and answers in plain words.
+  if (attempt.error && attempt.code === AI_CREDIT_CODE) throw new AiCreditPausedError(attempt.error, { tier, job: job.type || '' });
+
   const ms = Date.now() - t0;
   const reg = MODEL_REGISTRY[tier];
   // #89: Anthropic bills cache READS at 0.1x input and cache WRITES at 1.25x input; tokens_in
