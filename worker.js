@@ -15321,7 +15321,7 @@ async function smsGatedSend(env, opts) {
     const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
     if (opts.redirectTo && !_redirect) {
       outcome = 'failed';
-      await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' });
+      await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' }, mqOpts);
       return { queued_id: id, send_ok: sendOk, sent: false, test_mode: true, gate_snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent', delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
     deliveredTo = _redirect || (testMode ? testRecipient : recipientPhone);
