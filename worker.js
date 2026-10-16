@@ -15102,6 +15102,8 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Can you clean {Property} for the {DateShort} turnover? Checkout is 11 AM{NextLine}. Tap to take it or pass: {Link}" },
   { Message_Type: 'str_filled_backup', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've just filled the {DateShort} turnover at {Property}. Could you act as the backup on that one? Tap here and I'll add it to your calendar: {Link}" },
+  { Message_Type: 'str_promote', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} turnover at {Property} still needs a cleaner. Can you still cover it? Checkout is 11 AM{NextLine}. Tap to say yes or pass: {Link}" },
   { Message_Type: 'str_assigned', Channel: 'sms', Subject: '', Body:
     "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}" },
   { Message_Type: 'str_checkout_day', Channel: 'sms', Subject: '', Body:
