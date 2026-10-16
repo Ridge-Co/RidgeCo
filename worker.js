@@ -21691,6 +21691,8 @@ async function statementExtract(env, bytes, mime) {
     // routeAI threw (missing key, network) or the model's text didn't parse as JSON — fail open
     // with an empty lines array rather than throwing into the import endpoint (same discipline as
     // invoiceExtract's fail-open wrapper above).
+    if (aiCreditIsPausedError(e)) return { vendor_detected: '', lines: [], _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'statementExtract', e);
     return { vendor_detected: '', lines: [], _error: true, _error_message: String((e && e.message) || e) };
   }
 }
