@@ -18305,7 +18305,7 @@ async function runWeeklyReview(env, opts) {
     proposal = `Not enough telemetry yet (${metrics.total} row(s) in ${days}d). The spine is collecting — a data-backed ranked proposal needs a bit more history. This will get sharper every week as jobs accrue.`;
   } else {
     try { const pr = await llmReviewProposal(env, metrics, days); proposal = pr.text; proposalItems = pr.items || []; }
-    catch (e) { proposal = `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
+    catch (e) { proposal = aiCreditIsPausedError(e) ? '(Model proposal skipped this round: AI is paused because the Anthropic credit is out - add credits and tap Resume in the Hub. Metrics captured below.)' : `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
     if (thinData) {
       proposal = `⚠ DIRECTIONAL ONLY — thin data (${metrics.total} telemetry rows in ${days}d; a confident review wants ${THIN_DATA_MIN}+). Treat these as hypotheses to sanity-check, not conclusions.\n\n` + proposal;
     }
