@@ -185,7 +185,7 @@ const seed = (w) => {
   t('staging token: organize limited to TEST- inspections', /path === '\/fi\/folder\/organize'\) return String\(\(body && body\.inspection_id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
   const g = src.slice(src.indexOf("path === '/fi/property/create') {"), src.indexOf("path === '/fi/property/create') {") + 900);
   t('staging token: property/create needs a TEST- address AND a TEST- owner', g.includes("startsWith('TEST-')") && g.includes('isTestRecord') && g.includes('company'));
-  t('BUILD_VERSION valid + bumped past round 2', /BUILD_VERSION = '2026-10-15\.0[3-9]-[a-z-]+'/.test(src));
+  t('BUILD_VERSION valid + bumped past round 2', /BUILD_VERSION = '2026-(?:10-1[5-9]|10-[23]\d|1[12]-\d\d)\.\d\d-[a-z0-9-]+'/.test(src));
   t('inspection sheet has the new columns', ['Owner_ID', 'Owner_Name', 'Drive_Folder_ID', 'Drive_Folder_URL'].every(c => w0().FI_INSP_HEADERS.includes(c)));
 }
 function w0() { return world(); }

@@ -302,7 +302,7 @@ const HOME = `<html><head><title>Premier Property Management | Baltimore Rentals
   t('staging token: transcribe raw route guarded to TEST- inspections', /path === '\/fi\/transcribe'[\s\S]{0,400}startsWith\('TEST-'\)/.test(src));
   t('staging token: read-label limited to TEST- inspections', /path === '\/fi\/read-label'\) return String\(\(body && body\.inspection_id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
   t('staging token: issue-type writes limited to TEST- names', src.includes("path === '/fi/issue-types/save'") && src.includes("path === '/fi/issue-types/touch'") && /touch'\) return Array\.isArray[\s\S]{0,200}startsWith\('TEST-'\)/.test(src));
-  t('BUILD_VERSION valid and not older than round 2', /BUILD_VERSION = '2026-10-15\.0[2-9]-[a-z-]+'/.test(src));
+  t('BUILD_VERSION valid and not older than round 2', /BUILD_VERSION = '2026-(?:10-1[5-9]|10-[23]\d|1[12]-\d\d)\.\d\d-[a-z0-9-]+'/.test(src));
 }
 
 console.log(`fi-round2: ${pass} passed, ${fail} failed`);

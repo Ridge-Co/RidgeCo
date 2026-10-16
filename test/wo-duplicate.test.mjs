@@ -148,7 +148,7 @@ function build(db, o = {}) {
   const fixed = o.now || NOON_ET;
   const src = [
     'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'), S.cache, S.isMissing, S.sr, S.ensureInner, S.ensure, S.ensureTab, S.idc, S.col, S.json, S.fetchTab, S.fetchTabs, S.findWO,
-    S.updateWOFields, S.nextSafeId, S.logAudit, S.logAuditMany, S.logMsgAudit, S.auditCols, S.addRow, S.invalidate, S.telemetry, S.nonShare, S.block,
+    S.updateWOFields, S.nextSafeId, S.logAudit, S.logAuditMany, S.logMsgAudit, S.auditCols, S.addRow, S.invalidate, 'async function reportFailure() { return { ok: true }; }', S.telemetry, S.nonShare, S.block,
     S.addonLive, S.isTenantCurrent, S.currentTenant, S.tenantsFor, S.isBackground, S.isNotifiable, S.tenantMovedOut, S.smsGate, S.smsToggle, S.normPhone, S.mqTab, S.mqCols,
     S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, S.sendRaw, S.updMq, S.fetchConfig, S.smsGated,
     'async function smsGatedSend(env, o) { __spy.push({ wo_id: o.wo_id, message_type: o.message_type, recipient_type: o.recipient_type, vendor_id: o.vendor && o.vendor.ID, vendor_name: o.vendor && o.vendor.Name, body: o.message_body, already_localized: o.already_localized, original_body: o.original_body, bypassQuietHours: o.bypassQuietHours === true }); return await __realSmsGatedSend(env, o); }',

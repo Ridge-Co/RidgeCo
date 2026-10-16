@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-16.02-append-id-race-guard';
+const BUILD_VERSION = '2026-10-16.03-failure-ledger';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -229,7 +229,9 @@ const _hubWorkerCore = {
       '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
-      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view'];
+      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
+      // Failure reports from pages and other apps (Oct 16 2026): public so a static page can call it; an anonymous caller can only ever create a capped P2 event (never a text).
+      '/failure/report'];
     if (!PUBLIC_PATHS.includes(path)) {
       // Auth gate (SEC-1 / B-093). Admin secret = full access. Otherwise a valid
       // PIN-issued session token grants ONLY its role's allow-listed endpoints
@@ -500,6 +502,7 @@ const _hubWorkerCore = {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
         if (path === '/cron/status')            return await schedStatusHandler(env);
+        if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
@@ -956,6 +959,8 @@ const _hubWorkerCore = {
         // never become a backdoor generic config setter, whatever the caller sends.
         if (path === '/admin/set-alert-flags')    return await setAlertFlags(env, body);
         if (path === '/telemetry/log')            return await telemetryLog(env, body);
+        if (path === '/failure/update')           return await failUpdate(env, body);
+        if (path === '/failure/report')           return await failReportEndpoint(env, request, body);
         if (path === '/judge')                    return await judgeRun(env, body);
         if (path === '/ar/remind')                return await arRemind(env, body);
         if (path === '/ar/report/send')           return await arReportSend(env, body);
@@ -15610,6 +15615,339 @@ async function checkDeadManSwitch(env) {
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
 
+// ═══ FAILURE-LEDGER-BEGIN ══════════════════════════════════════════════════════════════════════════════════════════
+// Oct 16 2026 (Brett: "nothing fails silently, ever, anywhere"; design: claude/no-silent-failures-program-oct16.md, phase A1).
+// ONE place every failure lands, so it can be logged, texted, shown on screen and handed to a build session:
+//   reportFailure()   -> appends one row to Failure_Events (append only, NO read first: Sheets read quota is itself a top failure cause).
+//   logTelemetry()    -> every Success=FALSE row is mirrored here automatically, so every existing "failed" call site is covered.
+//   failRollupRun()   -> runs in the sweep_checks job (every ~15 min): folds events into the deduplicated Failures ledger,
+//                        raises "conditions" (scheduler overdue, alerts switched off), texts Brett (P0 now, P1 once a morning).
+//   GET /failures/open, POST /failure/update, POST /failure/report -> the Needs Attention screen and other apps/pages.
+// Severity: P0 money / SMS / auth / scheduler / billing-credits (text now) · P1 data writes and integrity (8 AM digest) · P2 the rest (badge, Monday digest).
+// reportFailure NEVER throws and never recurses into logTelemetry. If the sheet itself is down it can only console.error; the Apps Script
+// watcher (it mails Brett on any unreachable Worker or overdue job) is the net for that case.
+const FAIL_EVENTS_TAB = 'Failure_Events';
+const FAIL_LEDGER_TAB = 'Failures';
+const FAIL_EVENT_COLS = ['ID', 'Timestamp', 'System', 'Source', 'Where', 'Ref', 'Severity', 'Message', 'Context'];
+const FAIL_LEDGER_COLS = ['ID', 'Fingerprint', 'Severity', 'System', 'Where', 'Message', 'Source', 'First_Seen', 'Last_Seen', 'Count', 'Status', 'Notified_At', 'Notified_Count', 'Last_Event_ID', 'Fixed_In', 'Notes'];
+const FAIL_OPEN = ['open', 'acknowledged'];
+const FAIL_STATUSES = ['open', 'acknowledged', 'fixed', 'wontfix'];
+const FAIL_P0_REPEAT_MS = 6 * 3600000;      // a P0 whose count keeps growing is re-texted at most this often
+const FAIL_P0_REMIND_MS = 24 * 3600000;     // an unacknowledged P0 is re-texted once a day even if it stopped growing
+const FAIL_LEGACY_ALERT_MS = 90 * 60000;    // alertAdminOnFailure already texted about this job this recently: do not text twice
+const FAIL_MAX_EVENTS_PER_MIN = 60;         // per isolate; a runaway loop collapses into one counted row instead of flooding the sheet
+const FAIL_CURSOR_KEY = 'failure_rollup_cursor';
+const FAIL_DIGEST_KEY = 'failure_digest_last_date';
+// Where-patterns whose severity is fixed on purpose (checked after the billing/auth escalation, before the area rules).
+const FAIL_SEVERITY_BY_WHERE = [
+  [/^door_watchdog/, 'P2'],                 // the watchdog texts Brett itself; this row is the on-screen record
+  [/^deposit_sweep_not_found/, 'P1'],
+  [/^selftest/, 'P1'],
+  [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
+  [/^failure_ledger/, 'P1'],
+];
+
+// ── pure helpers (unit-tested) ──────────────────────────────────────────────────────────────────────────────────
+function failSevRank(s) { return s === 'P0' ? 0 : s === 'P1' ? 1 : 2; }
+function failNormalizeMessage(m) {
+  return String(m == null ? '' : m).replace(/https?:\/\/\S+/g, '<url>').replace(/\b[0-9a-f]{8,}\b/gi, '<id>')
+    .replace(/"[^"]{0,80}"/g, '"?"').replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 90);
+}
+function failFingerprint(system, where, message) { return `${system || 'hub'}|${where || '?'}|${failNormalizeMessage(message)}`.slice(0, 220); }
+// explicit P0/P1/P2 wins; then billing/auth wording (always urgent); then the fixed table; then the area rules.
+function failSeverity(where, message, explicit) {
+  if (explicit === 'P0' || explicit === 'P1' || explicit === 'P2') return explicit;
+  const m = String(message || ''), w = String(where || '');
+  if (/credit balance|billing|payment required|insufficient (funds|balance|quota)|account (is )?suspended|invalid_grant|token (has )?(expired|been revoked)|unauthori[sz]ed|\b401\b|authentication (failed|error)/i.test(m)) return 'P0';
+  for (const [re, sev] of FAIL_SEVERITY_BY_WHERE) if (re.test(w)) return sev;
+  if (/sms|twilio|text_|qb|quickbooks|payment|scheduler|dead_man|auth|pin_|deposit_paid|cron|invoice_send|message_queue/i.test(w)) return 'P0';
+  if (/write|append|update|queue|duplicate|sheet|integrity|sweep|id_race/i.test(w) || /quota exceeded|did not land|not found after|duplicate/i.test(m)) return 'P1';
+  return 'P2';
+}
+// Builds one Failure_Events row from whatever a caller has. Never throws.
+function failBuildEvent(f, nowMs, rand) {
+  f = f || {};
+  const err = f.err;
+  const rawMsg = f.message != null ? f.message : (err && err.message) ? err.message : (err != null ? err : '');
+  const system = String(f.system || 'hub').toLowerCase().replace(/[^a-z0-9._:-]/g, '').slice(0, 40) || 'hub';
+  const where = String(f.where || 'unknown').replace(/[\r\n]+/g, ' ').slice(0, 80);
+  const message = String(rawMsg || '(no details)').replace(/[\r\n]+/g, ' ').slice(0, 400);
+  let ctx = '';
+  if (f.context != null) { try { ctx = JSON.stringify(f.context).slice(0, 600); } catch (e) { ctx = '(context not serialisable)'; } }
+  return { ID: String(nowMs) + '-' + rand, Timestamp: new Date(nowMs).toISOString(), System: system, Source: String(f.source || '').slice(0, 40), Where: where, Ref: String(f.ref || '').slice(0, 80), Severity: failSeverity(where, message, f.severity), Message: message, Context: ctx };
+}
+function failRowsToObjects(values, cols, firstSheetRow) {
+  const out = []; const rows = values || [];
+  for (let i = 0; i < rows.length; i++) { const o = {}; cols.forEach((c, j) => { o[c] = rows[i][j] == null ? '' : String(rows[i][j]); }); o._row = (firstSheetRow || 1) + i; out.push(o); }
+  return out;
+}
+function failLegacyAlerted(cfg, where, nowMs) {
+  for (const k of Object.keys(cfg || {})) {
+    if (k.indexOf('failure_alert_last_sent_') !== 0) continue;
+    const job = k.slice('failure_alert_last_sent_'.length); const t = Date.parse(cfg[k] || '');
+    if (isNaN(t) || nowMs - t > FAIL_LEGACY_ALERT_MS) continue;
+    if (job === where || String(where).indexOf(job) === 0 || job.indexOf(String(where)) === 0) return true;
+  }
+  return false;
+}
+// The heart of it (pure). events: new Failure_Events rows (objects). ledger: Failures rows (objects with _row). conditions: what is wrong RIGHT NOW
+// that is not an event (scheduler overdue, alerts off). Returns what to write and whom to text. Idempotent: an event already counted
+// (ID <= row.Last_Event_ID) is skipped, so a failed cursor save can never double count.
+function failRollupPlan(inp) {
+  const now = inp.nowMs, iso = new Date(now).toISOString(), day = iso.slice(0, 10);
+  const ledger = inp.ledger.map(r => Object.assign({}, r));
+  const updates = new Map(), created = [];
+  const byFp = new Map();
+  for (const ev of inp.events) { const fp = failFingerprint(ev.System, ev.Where, ev.Message); if (!byFp.has(fp)) byFp.set(fp, []); byFp.get(fp).push(ev); }
+  const findRow = (fp) => { let closed = null; for (const r of ledger) if (r.Fingerprint === fp) { if (FAIL_OPEN.indexOf(r.Status) >= 0) return r; closed = r; } return closed; };
+  const touch = (r) => { if (r._row) updates.set(r._row, r); };
+  for (const [fp, evs] of byFp) {
+    evs.sort((a, b) => (a.ID < b.ID ? -1 : a.ID > b.ID ? 1 : 0));
+    const row = findRow(fp), lastId = evs[evs.length - 1].ID;
+    if (row && String(row.Last_Event_ID || '') >= lastId) continue;
+    const fresh = row ? evs.filter(e => e.ID > String(row.Last_Event_ID || '')) : evs;
+    if (!fresh.length) continue;
+    const sev = fresh.reduce((s, e) => (failSevRank(e.Severity) < failSevRank(s) ? e.Severity : s), 'P2');
+    const last = fresh[fresh.length - 1];
+    if (!row) {
+      created.push({ ID: 'F-' + fresh[0].ID, Fingerprint: fp, Severity: sev, System: last.System, Where: last.Where, Message: last.Message, Source: last.Source, First_Seen: fresh[0].Timestamp, Last_Seen: last.Timestamp, Count: fresh.length, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: lastId, Fixed_In: '', Notes: '' });
+    } else if (row.Status === 'fixed') {
+      Object.assign(row, { Severity: sev, Message: last.Message, First_Seen: fresh[0].Timestamp, Last_Seen: last.Timestamp, Count: fresh.length, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: lastId, Notes: (row.Notes ? row.Notes + ' | ' : '') + `reopened ${day} after being marked fixed (${row.Fixed_In || 'no build noted'})` });
+      touch(row);
+    } else {
+      row.Count = (Number(row.Count) || 0) + fresh.length; row.Last_Seen = last.Timestamp; row.Message = last.Message; row.Last_Event_ID = lastId;
+      if (row.Status !== 'wontfix' && failSevRank(sev) < failSevRank(row.Severity)) row.Severity = sev;
+      touch(row);
+    }
+  }
+  // Conditions: true right now, not an event. Seen -> open/refresh; no longer true -> cleared automatically.
+  const activeFp = new Set();
+  for (const c of (inp.conditions || [])) {
+    const fp = `cond|${c.key}`; activeFp.add(fp);
+    const row = findRow(fp);
+    if (!row) created.push({ ID: 'F-c' + now + '-' + created.length, Fingerprint: fp, Severity: c.severity, System: c.system || 'hub', Where: c.where, Message: String(c.message).slice(0, 400), Source: 'condition', First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: '', Fixed_In: '', Notes: '' });
+    else if (row.Status === 'fixed') { Object.assign(row, { Severity: c.severity, Message: String(c.message).slice(0, 400), First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Notes: (row.Notes ? row.Notes + ' | ' : '') + `came back ${day}` }); touch(row); }
+    else { row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400); if (failSevRank(c.severity) < failSevRank(row.Severity)) row.Severity = c.severity; touch(row); }
+  }
+  for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
+    r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
+  }
+  const all = ledger.concat(created);
+  // Whom to text now: open P0s never texted, grown since the last text (at most every 6 h), or unacknowledged for a day.
+  const sms = [], quiet = [];
+  for (const r of all) {
+    if (r.Status !== 'open' || r.Severity !== 'P0') continue;
+    const n = Number(r.Count) || 0, nn = Number(r.Notified_Count) || 0, na = Date.parse(r.Notified_At || '');
+    const need = isNaN(na) || (n > nn && now - na >= FAIL_P0_REPEAT_MS) || (now - na >= FAIL_P0_REMIND_MS);
+    if (!need) continue;
+    if (inp.legacyAlerted && inp.legacyAlerted(r.Where)) quiet.push(r); else sms.push(r);
+  }
+  return { updates: Array.from(updates.values()), created, sms, quiet, all };
+}
+function failTrim(s, n) { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function failFormatP0Sms(rows) {
+  if (rows.length === 1) { const r = rows[0]; return `🔴 Hub problem${Number(r.Count) > 1 ? ' (' + r.Count + 'x)' : ''}: ${failTrim(r.Where, 40)} - ${failTrim(r.Message, 110)}. Open Needs Attention in the Hub.`; }
+  const top = rows.slice(0, 3).map(r => failTrim(r.Where, 28) + ': ' + failTrim(r.Message, 50)).join('; ');
+  return `🔴 ${rows.length} urgent Hub problems: ${top}${rows.length > 3 ? ' (+' + (rows.length - 3) + ' more)' : ''}. Open Needs Attention in the Hub.`;
+}
+// Once each morning (ET, from 8:00): open P1s seen in the last 36 h; on Mondays also the count of P2s. Returns { text, dateKey } or null.
+function failDigestPlan(all, nowMs, lastDate) {
+  const d = new Date(nowMs), et = schedEtParts(d);
+  if (et.minutes < 480 || lastDate === et.date) return null;
+  const recent = (r) => nowMs - Date.parse(r.Last_Seen || '') <= 36 * 3600000;
+  const p1 = all.filter(r => r.Status === 'open' && r.Severity === 'P1' && recent(r));
+  const p2 = all.filter(r => r.Status === 'open' && r.Severity === 'P2').length;
+  const parts = [];
+  if (p1.length) parts.push(`🟠 ${p1.length} Hub problem${p1.length > 1 ? 's' : ''} to look at: ` + p1.slice(0, 3).map(r => failTrim(r.Where, 28) + ': ' + failTrim(r.Message, 50)).join('; ') + (p1.length > 3 ? ` (+${p1.length - 3} more)` : ''));
+  if (et.dow === 1 && p2) parts.push(`${p2} minor open`);
+  return { text: parts.length ? parts.join('. ') + '. Open Needs Attention in the Hub.' : '', dateKey: et.date };
+}
+
+// ── reporting (impure) ──────────────────────────────────────────────────────────────────────────────────────────
+let _failTabsReady = false;
+const _failWin = { start: 0, n: 0, dropped: 0 };
+const _failAnonWin = { start: 0, n: 0, dropped: 0 };   // anonymous page reports get their own, smaller budget so they can never starve real ones
+const FAIL_MAX_ANON_PER_MIN = 20;
+async function failEnsureTabs(env) {
+  if (_failTabsReady) return;
+  await ensureTab(env, FAIL_EVENTS_TAB, FAIL_EVENT_COLS);
+  await ensureTab(env, FAIL_LEDGER_TAB, FAIL_LEDGER_COLS);
+  _failTabsReady = true;
+}
+// reportFailure(env, { system, source, where, ref, message | err, severity?, context? }) -> { ok, id?, severity?, dropped? }. NEVER throws.
+async function reportFailure(env, f) {
+  let ev;
+  try {
+    const now = Date.now(), win = (f && f.anon) ? _failAnonWin : _failWin, cap = (f && f.anon) ? FAIL_MAX_ANON_PER_MIN : FAIL_MAX_EVENTS_PER_MIN;
+    if (now - win.start > 60000) { win.start = now; win.n = 0; }
+    if (++win.n > cap) { win.dropped++; console.error('FAILURE-REPORT DROPPED (over ' + cap + '/min):', (f && (f.where || f.message)) || ''); return { ok: false, dropped: true }; }
+    ev = failBuildEvent(f, now, Math.random().toString(36).slice(2, 6));
+    if (win.dropped) { ev.Context = (ev.Context ? ev.Context + ' ' : '') + `[${win.dropped} earlier report(s) dropped in a burst]`; win.dropped = 0; }
+    await failEnsureTabs(env);
+    await sheetsRequest(env, 'POST', `/values/${FAIL_EVENTS_TAB}:append?valueInputOption=RAW`, { values: [FAIL_EVENT_COLS.map(c => ev[c])] });
+    return { ok: true, id: ev.ID, severity: ev.Severity };
+  } catch (e) {
+    try { console.error('FAILURE-REPORT COULD NOT BE SAVED:', JSON.stringify(ev || f || {}).slice(0, 600), '|', String((e && e.message) || e).slice(0, 200)); } catch (e2) { /* console is the last resort; nothing left to try */ }
+    return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+async function failSetConfig(env, key, value) {
+  const r = await setConfigKey(env, { key, value });
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error(`Config ${key} not saved (HTTP ${r.status})`);
+}
+function failSmsOk(r) { return !!(r && (r.sid || r.staged)); }
+
+// Conditions = things wrong right now that no code path "failed" at: a scheduler job that stopped, alerts switched off.
+async function failConditions(env, cfg, nowMs) {
+  const out = [];
+  if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });
+  else if (!cfg.admin_phone) out.push({ key: 'no_admin_phone', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Config admin_phone is not set, so failure alerts have nowhere to go.' });
+  if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P1', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
+  try {
+    const rows = await schedReadConfigRows(env, false);
+    const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+    if (parsed.error) out.push({ key: 'scheduler_state', system: 'hub', where: 'scheduler', severity: 'P0', message: parsed.error });
+    else {
+      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs);
+      for (const name of st.overdue) out.push({ key: 'overdue:' + name, system: 'hub', where: 'scheduler:' + name, severity: 'P0', message: `Scheduled job ${name} is overdue: ${(st.jobs[name] && st.jobs[name].overdue_reason) || 'not running'}` });
+      if (st.tick_age_min !== null && st.tick_age_min > 60) out.push({ key: 'scheduler_silent', system: 'hub', where: 'scheduler', severity: 'P0', message: `The Apps Script scheduler has not ticked for ${st.tick_age_min} minutes.` });
+    }
+  } catch (e) { out.push({ key: 'scheduler_unreadable', system: 'hub', where: 'scheduler', severity: 'P0', message: 'Could not read the scheduler state: ' + String((e && e.message) || e).slice(0, 200) }); }
+  return out;
+}
+
+// Runs inside the sweep_checks job. Throws on a real problem (the scheduler then records the job as failed), returns { ok, errors, ... }.
+async function failRollupRun(env, opts) {
+  opts = opts || {};
+  const nowMs = opts.nowMs || Date.now(), errors = [];
+  await failEnsureTabs(env);
+  const cfgVals = (await sheetsRequest(env, 'GET', '/values/Config')).values || [];
+  const cfg = configFromValues(cfgVals);
+  // Events since the cursor ("<sheet row>:<last event id>"); a cursor that no longer matches the sheet means start over (idempotent anyway).
+  const [curRowS, curId] = String(cfg[FAIL_CURSOR_KEY] || '').split(':');
+  let curRow = parseInt(curRowS, 10) || 0, evVals;
+  if (curRow >= 2 && curId) {
+    evVals = (await sheetsRequest(env, 'GET', `/values/${FAIL_EVENTS_TAB}!A${curRow}:${col(FAIL_EVENT_COLS.length - 1)}`)).values || [];
+    if (!evVals.length || String(evVals[0][0]) !== curId) { curRow = 0; evVals = null; }
+  }
+  let events, lastRow, lastId;
+  if (evVals) { events = failRowsToObjects(evVals.slice(1), FAIL_EVENT_COLS, curRow + 1); }
+  else {
+    const all = (await sheetsRequest(env, 'GET', `/values/${FAIL_EVENTS_TAB}`)).values || [];
+    if (all.length && String(all[0][0]) !== 'ID') throw new Error(`${FAIL_EVENTS_TAB} header row is not what the Worker expects - fix the tab`);
+    events = failRowsToObjects(all.slice(1), FAIL_EVENT_COLS, 2);
+  }
+  events = events.filter(e => e.ID);
+  if (events.length) { lastRow = events[events.length - 1]._row; lastId = events[events.length - 1].ID; }
+  const ledVals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || [];
+  if (ledVals.length && ledVals[0].join('|') !== FAIL_LEDGER_COLS.join('|')) throw new Error(`${FAIL_LEDGER_TAB} header row changed - the ledger columns must be: ${FAIL_LEDGER_COLS.join(', ')}`);
+  const ledger = failRowsToObjects(ledVals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+  const conditions = await failConditions(env, cfg, nowMs);
+  const plan = failRollupPlan({ events, ledger, conditions, nowMs, legacyAlerted: (w) => failLegacyAlerted(cfg, w, nowMs) });
+  const lastCol = col(FAIL_LEDGER_COLS.length - 1), rowOf = (u) => FAIL_LEDGER_COLS.map(c => (u[c] === undefined || u[c] === null) ? '' : String(u[c]));
+  // 1. write the ledger, verified (counts must match what we asked for)
+  const data = plan.updates.map(u => ({ range: `${FAIL_LEDGER_TAB}!A${u._row}:${lastCol}${u._row}`, values: [rowOf(u)] }));
+  if (data.length) {
+    const res = await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+    if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < data.length * FAIL_LEDGER_COLS.length) throw new Error(`Failures ledger: only ${res.totalUpdatedCells} of ${data.length * FAIL_LEDGER_COLS.length} cells saved`);
+  }
+  if (plan.created.length) {
+    const resp = await sheetsRequest(env, 'POST', `/values/${FAIL_LEDGER_TAB}:append?valueInputOption=RAW`, { values: plan.created.map(rowOf) });
+    const first = appendedRowNumber(resp);
+    if (resp && resp.updates && typeof resp.updates.updatedRows === 'number' && resp.updates.updatedRows !== plan.created.length) throw new Error(`Failures ledger: asked to add ${plan.created.length} row(s), sheet says ${resp.updates.updatedRows}`);
+    plan.created.forEach((r, i) => { r._row = first ? first + i : 0; });
+  }
+  // 2. move the cursor (only after the ledger is saved; a repeat is harmless because events are idempotent)
+  if (lastRow && lastId) { try { await failSetConfig(env, FAIL_CURSOR_KEY, `${lastRow}:${lastId}`); } catch (e) { errors.push({ step: 'cursor', error: String((e && e.message) || e).slice(0, 200) }); } }
+  // 3. tell Brett
+  const alertsOn = String(cfg.failure_alert_enabled || '').toUpperCase() === 'TRUE' && !!cfg.admin_phone;
+  const markNotified = [];
+  let texted = 0;
+  const finishNotify = async (rows) => {
+    for (const r of rows) { r.Notified_At = new Date(nowMs).toISOString(); r.Notified_Count = Number(r.Count) || 0; markNotified.push(r); }
+  };
+  if (alertsOn && plan.sms.length) {
+    let r; try { r = await sendSMS(env, cfg.admin_phone, failFormatP0Sms(plan.sms)); } catch (e) { r = { error: String((e && e.message) || e) }; }
+    if (failSmsOk(r)) { texted++; await finishNotify(plan.sms); }
+    else errors.push({ step: 'notify_p0', error: 'could not text the urgent-problem alert: ' + failTrim(JSON.stringify(r || {}), 200) });
+  }
+  if (plan.quiet.length) await finishNotify(plan.quiet);      // already texted by the older alert path; just record that Brett knows
+  let digest = null;
+  if (alertsOn) {
+    digest = failDigestPlan(plan.all, nowMs, cfg[FAIL_DIGEST_KEY] || '');
+    if (digest) {
+      let ok = true;
+      if (digest.text) { let r; try { r = await sendSMS(env, cfg.admin_phone, digest.text); } catch (e) { r = { error: String((e && e.message) || e) }; } ok = failSmsOk(r); if (ok) texted++; else errors.push({ step: 'notify_digest', error: 'could not text the morning digest: ' + failTrim(JSON.stringify(r || {}), 200) }); }
+      if (ok) { try { await failSetConfig(env, FAIL_DIGEST_KEY, digest.dateKey); } catch (e) { errors.push({ step: 'digest_date', error: String((e && e.message) || e).slice(0, 200) }); } }
+    }
+  }
+  if (markNotified.length) {
+    const nd = markNotified.filter(r => r._row).map(r => ({ range: `${FAIL_LEDGER_TAB}!A${r._row}:${lastCol}${r._row}`, values: [rowOf(r)] }));
+    if (nd.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: nd }); } catch (e) { errors.push({ step: 'mark_notified', error: String((e && e.message) || e).slice(0, 200) }); } }
+  }
+  const open = plan.all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
+  return { ok: errors.length === 0, errors, events_in: events.length, new_rows: plan.created.length, updated_rows: plan.updates.length, texted, alerts_on: alertsOn, open: { P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length } };
+}
+
+// ── endpoints ───────────────────────────────────────────────────────────────────────────────────────────────────
+// GET /failures/open[?all=1] - for the Needs Attention screen, the header badge and build sessions (read-only token reaches it too).
+async function failOpenList(env, url) {
+  let vals;
+  try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; }
+  catch (e) { if (isMissingTabError(e)) vals = []; else return json({ ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }, 503); }
+  const all = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+  const showAll = url && url.searchParams.get('all') === '1';
+  const rows = all.filter(r => showAll || FAIL_OPEN.indexOf(r.Status) >= 0).sort((a, b) => failSevRank(a.Severity) - failSevRank(b.Severity) || (a.Last_Seen < b.Last_Seen ? 1 : -1));
+  const open = all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
+  let alertsOn = null;
+  try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; } catch (e) { alertsOn = null; }
+  return json({ ok: true, as_of: new Date().toISOString(), alerts_on: alertsOn, counts: { open: open.length, P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length, acknowledged: open.filter(r => r.Status === 'acknowledged').length }, failures: rows.map(r => { const o = Object.assign({}, r); delete o._row; return o; }) });
+}
+// POST /failure/update { id, status, notes?, fixed_in? } - admin only (not in any ROLE_SCOPES list).
+async function failUpdate(env, body) {
+  body = body || {};
+  const id = String(body.id || '').trim(), status = String(body.status || '').trim();
+  if (!id) return json({ ok: false, error: 'id required' }, 400);
+  if (FAIL_STATUSES.indexOf(status) < 0) return json({ ok: false, error: 'status must be one of ' + FAIL_STATUSES.join(', ') }, 400);
+  const vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || [];
+  const rows = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2);
+  const row = rows.find(r => r.ID === id);
+  if (!row) return json({ ok: false, error: 'no failure with that id' }, 404);
+  row.Status = status;
+  if (body.fixed_in != null) row.Fixed_In = String(body.fixed_in).slice(0, 120);
+  if (body.notes) row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `${new Date().toISOString().slice(0, 10)} ${status}: ${String(body.notes).slice(0, 300)}`;
+  else row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `${new Date().toISOString().slice(0, 10)} marked ${status}`;
+  const lastCol = col(FAIL_LEDGER_COLS.length - 1);
+  const res = await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `${FAIL_LEDGER_TAB}!A${row._row}:${lastCol}${row._row}`, values: [FAIL_LEDGER_COLS.map(c => (row[c] === undefined ? '' : String(row[c])))] }] });
+  if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < FAIL_LEDGER_COLS.length) return json({ ok: false, error: 'the change did not save' }, 500);
+  const back = failRowsToObjects(((await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}!A${row._row}:${lastCol}${row._row}`)).values || []), FAIL_LEDGER_COLS, row._row)[0];
+  if (!back || back.ID !== id || back.Status !== status) return json({ ok: false, error: 'the change did not save (read-back mismatch)' }, 500);
+  delete back._row;
+  return json({ ok: true, failure: back });
+}
+// POST /failure/report - other pages, Workers, Apps Script. Public at the gate so a static page can call it, so: an anonymous caller can only ever
+// create a P2 event (never a text), with capped sizes; a caller with the admin secret or FAILURE_INGEST_TOKEN may set severity and system.
+async function failReportEndpoint(env, request, body) {
+  body = body || {};
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const trusted = !!tok && (tok === env.WORKER_SECRET || (!!env.FAILURE_INGEST_TOKEN && tok === env.FAILURE_INGEST_TOKEN));
+  const f = {
+    system: trusted ? body.system : 'page:' + String(body.system || 'unknown').slice(0, 30),
+    source: trusted ? body.source : 'browser',
+    where: String(body.where || '').slice(0, 80) || 'unknown',
+    ref: String(body.ref || '').slice(0, 80),
+    message: String(body.message || '').slice(0, trusted ? 400 : 300),
+    severity: trusted ? body.severity : 'P2',
+    context: trusted ? body.context : { ua: String(request.headers.get('User-Agent') || '').slice(0, 80) },
+  };
+  if (!f.message) return json({ ok: false, error: 'message required' }, 400);
+  f.anon = !trusted;
+  const r = await reportFailure(env, f);
+  if (r.dropped) return json({ ok: false, error: 'too many reports right now' }, 429);
+  return json(r.ok ? { ok: true } : { ok: false, error: 'could not save the report' }, r.ok ? 200 : 503);
+}
+// ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
+
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
 // independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
 // `schedule:` and the Cloudflare Cron Trigger in scheduled(). (Oct 12 2026: BOTH are now gone - cron-sweep.yml is deleted,
@@ -16024,6 +16362,8 @@ async function schedRunSweepChecks(env) {
   // A selftest FINDING is delivered by selftestRun itself (its own digest + telemetry); only a run that cannot execute is a job failure.
   detail.selftest = await schedStep('selftest', async () => { const r = await maybeRunDailySelftest(env); return (r && r.total !== undefined) ? { ok: r.ok, total: r.total, passed: r.passed, selftest_failed: r.failed, errors: r.errors || [] } : r; }, errors);
   detail.dead_man_switch = await schedStep('dead_man_switch', () => checkDeadManSwitch(env), errors);
+  // Last on purpose: folds this tick's telemetry failures into the ledger and texts Brett (no-silent-failures A1).
+  detail.failure_ledger = await schedStep('failure_ledger', () => failRollupRun(env), errors);
   return { ok: !errors.length, errors, detail };
 }
 async function schedRunInspGuard(env) {
@@ -17394,6 +17734,11 @@ let _telemetryTabReady = false;
 
 async function logTelemetry(env, rec) {
   rec = rec || {};
+  // Oct 16 2026 (no-silent-failures A1): every Success=FALSE row is ALSO a failure-ledger event, so all existing "failed" call sites
+  // reach the Needs Attention list and Brett's alerts without being edited. reportFailure never throws and never calls back in here.
+  if (String(rec.Success == null ? '' : rec.Success).toUpperCase() === 'FALSE') {
+    await reportFailure(env, { system: 'hub', source: rec.Source || 'worker', where: rec.Job_Type || rec.Skill_Or_Endpoint || 'telemetry', ref: rec.Skill_Or_Endpoint || '', message: rec.Notes || '(no details recorded)' });
+  }
   // Self-provision the tab (behind an isolate flag), then ensureColumns on EVERY write —
   // FEATURE_LOG rule 37: ensureTab only writes a header to an EMPTY tab, so a pre-existing
   // tab with a drifted/partial header would silently drop fields on append. ensureColumns
