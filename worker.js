@@ -16029,6 +16029,8 @@ async function schedRunSweepChecks(env) {
   // A selftest FINDING is delivered by selftestRun itself (its own digest + telemetry); only a run that cannot execute is a job failure.
   detail.selftest = await schedStep('selftest', async () => { const r = await maybeRunDailySelftest(env); return (r && r.total !== undefined) ? { ok: r.ok, total: r.total, passed: r.passed, selftest_failed: r.failed, errors: r.errors || [] } : r; }, errors);
   detail.dead_man_switch = await schedStep('dead_man_switch', () => checkDeadManSwitch(env), errors);
+  // Last on purpose: folds this tick's telemetry failures into the ledger and texts Brett (no-silent-failures A1).
+  detail.failure_ledger = await schedStep('failure_ledger', () => failRollupRun(env), errors);
   return { ok: !errors.length, errors, detail };
 }
 async function schedRunInspGuard(env) {
