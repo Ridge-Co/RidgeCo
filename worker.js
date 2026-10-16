@@ -16163,7 +16163,7 @@ const SCHED_JOBS = [
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
-function schedJobDue(job, js, nowDate) {
+function schedJobDue(job, js, nowDate, aiPausedAt) {
   js = js || {};
   const nowMs = +nowDate;
   if (job.disabled) return null;                                  // turned off in the Apps Script JOBS table (enabled:false)
