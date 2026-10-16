@@ -7181,7 +7181,7 @@ async function createWorkOrder(env, body) {
     const existingNums = rows.slice(1).map(r => parseInt(String(r[idCol]||'').replace(/\D/g,'')) || 0).filter(n => Number.isFinite(n) && n > 0);
     if (existingNums.length > 0) nextWONum = Math.max(...existingNums) + 1;
   }
-  const woId = `WO-${nextWONum}`, now = new Date().toISOString();
+  let woId = `WO-${nextWONum}`; const now = new Date().toISOString();
   const newRow = headers.map(h => ({ ID: woId, Property_ID: body.property_id||'', Unit_ID: body.unit_id||'', Tenant_ID: body.tenant_id||'', Vendor_ID: '', Type: body.type||'manual', Trade: body.trade||'', Description: body.description||'', Priority: body.priority||'normal', Status: 'New', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Owner_WO_Ref: body.owner_wo_ref||'', WO_Contact_Name: body.wo_contact_name||'', WO_Contact_Phone: body.wo_contact_phone||'', Tenant_Visible: body.tenant_visible !== false && body.tenant_visible !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Created: body.tenant_notify_created !== false && body.tenant_notify_created !== 'FALSE' ? 'TRUE' : 'FALSE', Tenant_Notify_Updates: body.tenant_notify_updates !== false && body.tenant_notify_updates !== 'FALSE' ? 'TRUE' : 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notified: 'FALSE', Created_By: body.created_by||'admin', Created_Date: now, Notes: body.notes||'', Room: body.room||'', Vendor_Needs_Access: body.vendor_needs_access||'auto', Checklist: body.checklist||'',
     // Self-Serve Work Orders ("One-Off Job", Sep 24 2026 build brief §4b) — blank/no-op for
     // every other caller (tenant submit.html, the Hub's New WO modal, etc.); only
