@@ -16186,7 +16186,7 @@ function schedDueJobs(state, now, jobs, opts) {
   const out = [];
   for (const job of (jobs || SCHED_JOBS)) {
     if (only && !only.includes(job.name)) continue;
-    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate);
+    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate, opts && opts.aiPausedAt);
     if (d) out.push({ name: job.name, key: d.key });
   }
   // DAILY/WEEKLY JOBS GO FIRST (Oct 14 2026). They run once a day, so they are cheap; the 15-minute jobs come back around anyway.
