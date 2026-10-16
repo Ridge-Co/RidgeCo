@@ -380,4 +380,112 @@ async function sentWorld(extra) {
   ok((await A.api.fixLogAttachment(A.env, { t: A.token, file_id: 'f7' })).status === 400 && (await us({})).status === 400, 'capped at 6 photos');
   ok(A.attachments.length === 6 && A.attachments.every(a => a.wo_id === '1152' && a.file_type === 'photo') && A.tabs.WO_Followups[0].Answer_Photo_IDs.split(',').length === 6, 'attachments logged against the WO and the ids saved on the follow-up');
 }
-// FC_TEST_CONT
+
+// ═══ G. suggestions ════════════════════════════════════════════════════════════════════════
+{
+  const wo = { ID: '1152', Trade: 'Windows', Vendor_ID: '2' }, rwo = { ID: '1154', Trade: 'Roofing', Vendor_ID: '5' };
+  const row = (o) => Object.assign({ ID: '1', WO_ID: '1152', Repair_WO_ID: '1154', Property_ID: '82', Unit_ID: '', Problem_Label: 'the window leak', Cosmetic_Part: 'drywall/paint', Cosmetic_Vendor_ID: '2', Rework_Vendor_ID: '5', Status: 'Answered', Answer: 'resolved', Answer_Extra: '{}' }, o);
+  let s = W0.api.fuSuggestNext(row(), wo, rwo);
+  ok(s.action === 'create_cosmetic_wo' && s.prefill.trade === 'Painting' && s.prefill.vendor_id === '2' && /drywall\/paint/.test(s.prefill.description) && s.prefill.property_id === '82', 'dry -> suggest the drywall/paint WO, vendor Alex (2), trade Painting', s);
+  s = W0.api.fuSuggestNext(row({ Answer_Extra: '{"rain_since":"no"}' }), wo, rwo); ok(s.action === 'create_cosmetic_wo' && s.severity === 'caution' && /not rained/.test(s.detail), 'dry but it has not rained -> caution');
+  s = W0.api.fuSuggestNext(row({ Cosmetic_Part: '' }), wo, rwo); ok(s.action === 'close', 'dry with no cosmetic part -> just close');
+  s = W0.api.fuSuggestNext(row({ Answer: 'persists', Answer_Location: 'by the frame', Answer_Extra: '{"trigger":"during_rain"}' }), wo, rwo);
+  ok(s.action === 'send_vendor_back' && s.vendor_id === '5' && s.prefill.trade === 'Roofing' && /Re-check the window leak \(WO-1154\)/.test(s.prefill.description) && /during rain/.test(s.prefill.description), 'persists -> send Eddie (5) back, prefilled', s);
+  ok(W0.api.fuSuggestNext(row({ Answer: 'worse' }), wo, rwo).severity === 'urgent' && W0.api.fuSuggestNext(row({ Answer: 'different_location', Answer_Location: 'Bathroom' }), wo, rwo).action === 'send_vendor_back', 'worse is urgent; different location sends the vendor back');
+  ok(W0.api.fuSuggestNext(row({ Answer: 'safety' }), wo, rwo).action === 'call_now' && W0.api.fuSuggestNext(row({ Answer: 'not_sure' }), wo, rwo).action === 'call_tenant', 'safety -> call now; not sure -> call');
+  ok(W0.api.fuSuggestNext(row({ Next_WO_ID: '1300' }), wo, rwo).action === 'done' && W0.api.fuSuggestNext(row({ Answer: '' }), wo, rwo) === null, 'handled / unanswered');
+}
+
+// ═══ H. admin list, link, close ════════════════════════════════════════════════════════════
+{
+  const A = await sentWorld();
+  await A.api.fixAnswer(A.env, { t: A.token, choice: 'dry' });
+  const l = D(await A.api.followupList(A.env, url('/followup/list')));
+  ok(l.ok && l.count === 1 && l.followups[0].needs_action === true && l.followups[0].suggestion.action === 'create_cosmetic_wo' && !('Token_Hash' in l.followups[0]), 'list: needs action, suggestion, no token hash', l.followups[0]);
+  const link = D(await A.api.followupLink(A.env, { id: '1' }, url('/x'))); const t2 = decodeURIComponent(link.link.split('t=')[1].split('&')[0]);
+  ok(link.ok && t2 !== A.token && D(await A.api.fixPage(A.env, url('/fix/page', { t: t2 }))).ok && D(await A.api.fixPage(A.env, url('/fix/page', { t: A.token }))).ok, 'copy-link-again mints a new link; the first one still works until the same window ends');
+  const cl = D(await A.api.followupClose(A.env, { id: '1', next_wo_id: '1300' })); ok(cl.ok && A.tabs.WO_Followups[0].Status === 'Closed' && A.tabs.WO_Followups[0].Next_WO_ID === '1300', 'closing links the follow-on WO');
+  const l2 = D(await A.api.followupList(A.env, url('/followup/list', { open: '1' }))); ok(l2.count === 0, 'closed ones leave the open list');
+  const l3 = D(await A.api.followupList(A.env, url('/followup/list', { wo_id: '1152' }))); ok(l3.count === 1 && l3.followups[0].suggestion.action === 'done', 'per-WO list still shows it, handled');
+  ok((await A.api.followupLink(A.env, { id: '1' }, url('/x'))).status === 409 && (await A.api.followupLink(A.env, { id: '99' }, url('/x'))).status === 404, 'cannot re-link a closed / unknown follow-up');
+  const nt = makeWorld({ tabs: baseTabs() }); ok(D(await nt.api.followupList(nt.env, url('/followup/list'))).count === 0, 'no tab yet -> empty list, not an error');
+  const bad = makeWorld({ tabs: Object.assign(baseTabs(), { WO_Followups: [] }) }); bad.fail.fetchTab = 'WO_Followups'; let th = null; try { await bad.api.followupList(bad.env, url('/followup/list')); } catch (e) { th = e; } ok(th && /exploded/.test(th.message), 'a real read failure propagates (the UI shows it), it is not turned into an empty list');
+}
+
+// ═══ I. the reminder sweep ═════════════════════════════════════════════════════════════════
+{
+  const mk = async (over) => { const A = await sentWorld(); Object.assign(A.tabs.WO_Followups[0], { Due_At: new Date(T0.getTime() - 3600000).toISOString() }, over || {}); A.sms.length = 0; return A; };
+  const S = (A, now) => A.api.followupSweep(A.env, { now: now || T0 });
+  const rows = [{ ID: '1', Status: 'Sent', Due_At: '2026-10-16T10:00:00Z', Reminder_Sent_At: '', Answer: '' }];
+  ok(W0.api.fuSweepDue(rows, T0).length === 1, 'due: Sent, due time passed, never reminded');
+  ok(!W0.api.fuSweepDue([{ ...rows[0], Due_At: '2026-10-16T16:00:00Z' }], T0).length, 'not due before Due_At');
+  ok(!W0.api.fuSweepDue([{ ...rows[0], Reminder_Sent_At: '2026-10-16T12:00:00Z' }], T0).length, 'never a second reminder');
+  ok(!W0.api.fuSweepDue([{ ...rows[0], Answer: 'resolved' }], T0).length && !W0.api.fuSweepDue([{ ...rows[0], Status: 'Answered' }], T0).length && !W0.api.fuSweepDue([{ ...rows[0], Status: 'Closed' }], T0).length && !W0.api.fuSweepDue([{ ...rows[0], Status: 'Overdue' }], T0).length, 'answered / closed / already-overdue are never reminded');
+  const hr = (iso) => W0.api.fuInReminderWindow(new Date(iso));
+  ok(!hr('2026-10-16T12:59:00Z') && hr('2026-10-16T13:00:00Z') && hr('2026-10-16T22:59:00Z') && !hr('2026-10-16T23:00:00Z'), 'reminders only 9:00-18:59 ET (EDT)');
+  ok(!hr('2026-12-16T13:59:00Z') && hr('2026-12-16T14:00:00Z') && hr('2026-12-16T23:59:00Z') && !hr('2026-12-17T00:00:00Z'), '...and the same wall-clock hours in winter (EST)');
+  // quiet hours: nothing changes
+  let A = await mk(); let r = await S(A, new Date('2026-10-17T00:30:00Z'));       // 8:30pm ET
+  ok(r.ok && r.detail.due === 1 && r.detail.skipped_outside_hours && A.sms.length === 0 && A.tabs.WO_Followups[0].Status === 'Sent' && !A.tabs.WO_Followups[0].Reminder_Sent_At, 'after 7pm: nothing sent, nothing marked (waits for a later tick)', r);
+  r = await S(A, new Date('2026-10-17T11:00:00Z'));                                 // 7am ET next day
+  ok(r.detail.skipped_outside_hours && A.sms.length === 0, 'before 9am: nothing sent');
+  // in-window: one reminder + one alert, then never again
+  r = await S(A); const row = A.tabs.WO_Followups[0];
+  const tenantTexts = A.sms.filter(s => s.recipient_type === 'tenant'), adminTexts = A.sms.filter(s => s.recipient_type === 'admin');
+  ok(r.ok && r.detail.reminded === 1 && tenantTexts.length === 1 && adminTexts.length === 1, 'in window: ONE tenant reminder and ONE alert to Brett', { r, n: A.sms.length });
+  ok(/quick reminder/.test(tenantTexts[0].message_body) && /Reply STOP/.test(tenantTexts[0].message_body) && /fix-check\.html\?t=/.test(tenantTexts[0].message_body) && tenantTexts[0].message_type === 'tenant_fix_check_reminder', 'reminder text: link + STOP line, gated as a tenant message');
+  ok(/No answer after 2 days/.test(adminTexts[0].message_body) && /Call them/.test(adminTexts[0].message_body), 'Brett: "no answer after 2 days - call them"');
+  ok(row.Status === 'Overdue' && row.Reminder_Sent_At && row.Reminder_Result === 'text sent', 'row marked Overdue with the reminder time and result', row);
+  const rtok = decodeURIComponent(tenantTexts[0].message_body.match(/t=([^&\s]+)/)[1]);
+  ok(D(await A.api.fixPage(A.env, url('/fix/page', { t: rtok }))).ok && D(await A.api.fixPage(A.env, url('/fix/page', { t: A.token }))).ok, 'the reminder link works AND the original link still works');
+  const r2 = await S(A); ok(r2.detail.due === 0 && A.sms.length === 2, 'a second sweep sends nothing (max one reminder, ever)');
+  ok(A.telemetry.some(t => t.Job_Type === 'fix_check_reminder' && t.Success === 'TRUE'), 'logged');
+  // an answer after the reminder works (Overdue -> Answered)
+  const ar = await A.api.fixAnswer(A.env, { t: A.token, choice: 'dry' }); ok(D(ar).ok && A.tabs.WO_Followups[0].Status === 'Answered', 'a late answer on an overdue check is accepted');
+  // copied link: no text to the tenant, Brett still told
+  A = await mk({ Send_Method: 'copied_link' }); r = await S(A);
+  ok(A.sms.filter(s => s.recipient_type === 'tenant').length === 0 && A.sms.filter(s => s.recipient_type === 'admin').length === 1 && /sent by hand/.test(A.tabs.WO_Followups[0].Reminder_Result) && A.tabs.WO_Followups[0].Status === 'Overdue', 'copied-link check: no tenant text, Brett told to call');
+  // gate blocked now
+  A = await mk(); A.cfg.TWILIO_ENABLED = 'FALSE'; r = await S(A);
+  ok(A.sms.filter(s => s.recipient_type === 'tenant').length === 0 && /not texted: .*TWILIO_ENABLED/.test(A.tabs.WO_Followups[0].Reminder_Result) && r.detail.texts_blocked === 1, 'gate closed at reminder time: no text, exact reason recorded');
+  A = await mk(); A.tabs.Tenants[0].SMS_OptOut = 'TRUE'; await S(A); ok(A.sms.filter(s => s.recipient_type === 'tenant').length === 0 && /opted out/.test(A.tabs.WO_Followups[0].Reminder_Result), 'a tenant who replied STOP is not reminded');
+  A = await mk({ Token_Expires_At: new Date(T0.getTime() - 1000).toISOString() }); await S(A); ok(A.sms.filter(s => s.recipient_type === 'tenant').length === 0 && /expired/.test(A.tabs.WO_Followups[0].Reminder_Result), 'expired link: not texted');
+  // no tab / read failure / undeliverable alert / forced failures
+  const none = makeWorld({ tabs: baseTabs() }); r = await none.api.followupSweep(none.env, { now: T0 }); ok(r.ok && r.detail.due === 0, 'no WO_Followups tab yet: ok, nothing due');
+  A = await mk(); A.fail.fetchTab = 'WO_Followups'; r = await S(A); ok(r.ok === false && r.errors[0].step === 'read' && /exploded/.test(r.errors[0].error), 'a failed read is returned as a job failure (the scheduler shows it overdue)');
+  A = await mk(); A.fail.updateRow = f => f.Status === 'Overdue'; r = await S(A);
+  ok(r.ok === false && r.errors.length === 1 && A.sms.length === 0 && A.telemetry.some(t => t.Job_Type === 'fix_check_reminder' && t.Success === 'FALSE'), 'if the claim cannot be written NOTHING is texted, the error is returned and logged', r);
+  A = await mk(); A.smsResult = o => o.recipient_type === 'tenant' ? { send_ok: true, sent: false, gate_snapshot: 'x' } : { send_ok: true, sent: true };
+  r = await S(A); ok(r.ok === false && r.errors.some(e => e.step === 'reminder_sms') && /FAILED/.test(A.tabs.WO_Followups[0].Reminder_Result) && A.sms.filter(s => s.recipient_type === 'admin').length === 1, 'Twilio refusing the reminder: returned as an error, recorded, Brett still told to call');
+  A = await mk(); A.smsResult = o => o.recipient_type === 'admin' ? { send_ok: false, gate_snapshot: 'Global OFF' } : { send_ok: true, sent: true };
+  r = await S(A); ok(r.ok === false && r.errors.some(e => e.step === 'admin_alert'), 'an alert to Brett that cannot be delivered is a reported error');
+  // schedRunFollowupSweep wrapper shape
+}
+
+// ═══ J. digest ═════════════════════════════════════════════════════════════════════════════
+{
+  const A = await sentWorld(); await A.api.fixAnswer(A.env, { t: A.token, choice: 'dry' });
+  const d = await A.api.fuDigestLines(A.env);
+  ok(d.error === '' && d.lines.length === 1 && /WO-1152/.test(d.lines[0]) && /says it is fixed/.test(d.lines[0]) && /Create the drywall\/paint work order/.test(d.lines[0]), 'resolved answers appear in the daily digest with the suggested next step', d);
+  A.fail.fetchTab = 'WO_Followups'; const e = await A.api.fuDigestLines(A.env); ok(e.error && /exploded/.test(e.error) && A.telemetry.some(t => t.Job_Type === 'fix_check_digest' && t.Success === 'FALSE'), 'an unreadable list is reported in the digest AND to telemetry');
+  const o = await sentWorld(); o.tabs.WO_Followups[0].Status = 'Overdue'; ok(/no answer yet - call them/.test((await o.api.fuDigestLines(o.env)).lines[0]), 'overdue checks are listed');
+}
+
+// ═══ K. wiring in worker.js ═══════════════════════════════════════════════════════════════
+{
+  const pub = w.slice(w.indexOf('const PUBLIC_PATHS = ['), w.indexOf("if (!PUBLIC_PATHS.includes(path))"));
+  for (const p of ['/fix/page', '/fix/answer', '/fix/upload-session', '/fix/log-attachment']) ok(pub.includes("'" + p + "'"), p + ' is public (token-verified)');
+  for (const p of ['/followup/preview', '/followup/list', '/followup/send', '/followup/link', '/followup/close']) ok(!pub.includes("'" + p + "'"), p + ' is NOT public');
+  const roles = w.slice(w.indexOf('const ROLE_SCOPES = {'), w.indexOf('function isPathAllowedForRole'));
+  ok(!/followup|\/fix\//.test(roles), 'no portal role (tenant / vendor / owner) can call the admin follow-up routes');
+  for (const p of ['/fix/page', '/followup/preview', '/followup/list', '/fix/answer', '/fix/upload-session', '/fix/log-attachment', '/followup/send', '/followup/link', '/followup/close']) ok(new RegExp("path === '" + p + "'").test(w), 'route wired: ' + p);
+  ok(/\{ name: 'followup_sweep',\s+kind: 'interval', every_min: 59,/.test(w), 'SCHED_JOBS has followup_sweep (hourly)');
+  ok(/name: 'followup_sweep',\s+run: 'hub', every_min: 60,\s+enabled: true/.test(fs.readFileSync(new URL('../apps-script/hub-scheduler/HubScheduler.gs', import.meta.url), 'utf8')), 'HubScheduler.gs JOBS table has the followup_sweep row');
+  ok(/followup_sweep: '/.test(w), 'preflight has a plain-English line for followup_sweep');
+  ok(/\[triggers\][^[]*crons\s*=\s*\[\]/.test(fs.readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8')), 'wrangler.toml still has crons = []');
+  const guard = w.slice(w.indexOf("if (path === '/followup/send') {"), w.indexOf("if (path === '/wo/share-send') {"));
+  ok(/isTestWO\(env, body\.wo_id\)/.test(guard) && /isTestRecord\(env, 'Tenants'/.test(guard), 'the staging test token can only create fix-checks on TEST- work orders and TEST- tenants');
+  ok(fs.existsSync(new URL('../fix-check.html', import.meta.url)), 'fix-check.html exists');
+}
+
+console.log(`fix-check: ${n} checks passed` + (process.exitCode ? ' (WITH FAILURES)' : ''));
