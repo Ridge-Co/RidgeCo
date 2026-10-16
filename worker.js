@@ -16972,7 +16972,7 @@ async function schedRunNext(env, ctx, opts) {
       catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
     }
     // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
-    let landed = false, stateErr = null, finalState = null;
+    let landed = false, stateErr = null, finalState = null, aiPausedFinal = aiPausedAt;
     for (let attempt = 0; attempt < 2 && !landed; attempt++) {
       try {
         const r2 = await schedReadConfigRows(env, true);
