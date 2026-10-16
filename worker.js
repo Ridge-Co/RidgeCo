@@ -15425,7 +15425,7 @@ async function releaseMessageQueue(env, body) {
   ]);
   const results = [];
   for (const id of ids) {
-    const row = rows.find(r => String(r.ID) === id);
+    const row = rows.find(r => String(r.ID) === id && r.Status === 'pending') || rows.find(r => String(r.ID) === id);
     if (!row) { results.push({ id, error: 'not found' }); continue; }
     if (row.Status !== 'pending') { results.push({ id, skipped: true, reason: 'not pending (' + row.Status + ')' }); continue; }
     const kind = row.Recipient_Type;
