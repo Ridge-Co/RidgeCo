@@ -17617,7 +17617,10 @@ async function buildDigest(env) {
     const failures = JSON.parse(cfg.receipt_intake_failures || '{}');
     stuckReceipts = Object.values(failures).filter(x => x.attempts >= 3).map(x => `${x.name} — ${x.error}`);
   } catch (e) { /* non-fatal */ }
+  // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
+  const fuDigest = await fuDigestLines(env);
   return {
+    followups: fuDigest.lines, followupsError: fuDigest.error,
     today, stamp: etStamp(),
     overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
     pendingBills: pendingBills.map(b=>`Bill ${b.ID} · ${b.Vendor_Name||('V-'+(b.Vendor_ID||'?'))} · WO-${b.WO_ID||'?'} · $${(parseFloat(b.Total||b.Customer_Total||0)||0).toFixed(2)}`),
