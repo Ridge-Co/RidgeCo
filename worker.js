@@ -15830,6 +15830,8 @@ async function failConditions(env, cfg, nowMs) {
   const out = [];
   if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });
   else if (!cfg.admin_phone) out.push({ key: 'no_admin_phone', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Config admin_phone is not set, so failure alerts have nowhere to go.' });
+  // Oct 16 2026: the AI-credit pause is a CONDITION (true right now), so its urgent Needs Attention row clears itself the moment AI resumes.
+  if (String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE') out.push({ key: 'ai_credit_paused', system: 'hub', where: 'ai_credit_paused', severity: 'P0', message: `AI reading is PAUSED (${cfg[AI_CREDIT_KEYS.kind] === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}) since ${cfg[AI_CREDIT_KEYS.at] || '?'}: ${String(cfg[AI_CREDIT_KEYS.err] || '').slice(0, 160)} Fix: ${AI_CREDIT_FIX}, then tap Resume on the Hub banner.` });
   if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P1', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
   try {
     const rows = await schedReadConfigRows(env, false);
