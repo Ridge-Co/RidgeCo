@@ -23169,6 +23169,140 @@ function fuSuggestNext(row, wo, repairWo) {
       description: `Re-check ${label} (WO-${fuS(row.Repair_WO_ID) || fuS(row.WO_ID)}): the tenant ${FU_ANSWER_WORDS[ans] || ans}.${where ? ' ' + where + '.' : ''}` } };
 }
 function fuParseJson(s, dflt) { if (!fuS(s)) return dflt; try { const v = JSON.parse(s); return v == null ? dflt : v; } catch (e) { return dflt; } }
+
+// ── 4. TENANT RESOLUTION + SMS GATING EXPLANATION ────────────────────────────────────────────────
+// -> { candidates: [tenant rows], chosen: tenant|null, source, note }. The WO's own tenant first, then whoever lives in the WO's unit, then
+// (for a WO with no unit) whoever lives at the property. More than one candidate -> chosen is null and Brett must pick.
+function fuResolveTenants(wo, tenants, units, wantedId) {
+  const all = tenants || [];
+  let cands = [], source = 'none', note = '';
+  const own = fuS(wo && wo.Tenant_ID) ? all.find(t => String(t.ID) === fuS(wo.Tenant_ID)) : null;
+  if (own && isTenantCurrent(own)) { cands = [own]; source = 'wo_tenant'; }
+  else {
+    if (own) note = 'The tenant on this work order has moved out, so the current tenant was looked up instead.';
+    const unit = (units || []).find(u => String(u.ID) === fuS(wo && wo.Unit_ID)) || null;
+    const viaUnit = tenantsForDispatch(all, unit, wo || {});
+    if (viaUnit.length) { cands = viaUnit; source = (wo && wo.Unit_ID) ? 'unit' : 'property_no_unit'; }
+    else if (wo && wo.Property_ID && !fuS(wo.Unit_ID)) {
+      const atProp = all.filter(t => String(t.Property_ID) === fuS(wo.Property_ID) && isTenantCurrent(t));
+      if (atProp.length) { cands = atProp; source = 'property'; }
+    }
+  }
+  const seen = new Set(); cands = cands.filter(t => !seen.has(String(t.ID)) && seen.add(String(t.ID)));
+  let chosen = null;
+  if (wantedId) { chosen = cands.find(t => String(t.ID) === fuS(wantedId)) || null; if (!chosen) note = (note ? note + ' ' : '') + 'The tenant you picked is not linked to this work order.'; }
+  else if (cands.length === 1) chosen = cands[0];
+  else if (cands.length > 1) note = (note ? note + ' ' : '') + 'More than one tenant could be the right one - pick who should get the check.';
+  else note = (note ? note + ' ' : '') + 'No current tenant was found for this work order.';
+  return { candidates: cands, chosen, source, note };
+}
+const FU_GATE_TEXT = {
+  'Global OFF': { code: 'global_off', text: 'Texting is switched OFF for the whole Hub (Config TWILIO_ENABLED is not TRUE).' },
+  'Property OFF': { code: 'property_off', text: 'Texting is OFF for this property (Properties > SMS_Enabled is FALSE).' },
+  'Customer OFF': { code: 'owner_off', text: "Texting is OFF for this property's owner (Owners > SMS_Enabled is FALSE)." },
+  'Tenant OFF': { code: 'tenant_off', text: 'Texting is OFF for this tenant (Tenants > SMS_Enabled is FALSE - often because their text consent has not been confirmed yet).' },
+  'Tenant opted out': { code: 'tenant_opted_out', text: 'This tenant replied STOP and has opted out of texts.' },
+  'Tenant moved out': { code: 'tenant_moved_out', text: 'This tenant has moved out.' },
+};
+// Same decision smsGatedSend makes (it calls the same smsGateDecision), so the preview can never promise a text that the sender would block.
+function fuGateVerdict(o) {
+  const cfg = o.cfg || {}, tenant = o.tenant || null;
+  const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+  const dec = smsGateDecision({ global, propertyOn: smsToggleOn(o.property && o.property.SMS_Enabled), ownerOn: smsToggleOn(o.owner && o.owner.SMS_Enabled), tenantOn: smsToggleOn(tenant && tenant.SMS_Enabled),
+    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', tenantMovedOut: tenantMovedOut(tenant), kind: 'tenant' });
+  const reasons = dec.sendOk ? [] : dec.gateSnapshot.split(', ').map(k => FU_GATE_TEXT[k] || { code: 'other', text: k });
+  if (!normalizePhone(tenant && tenant.Phone)) reasons.push({ code: 'no_phone', text: 'There is no phone number on file for this tenant.' });
+  const notes = [];
+  const testMode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+  if (!reasons.length && testMode) notes.push('Test mode is ON: the text goes to the test number, not to the tenant.');
+  if (!reasons.length && isQuietHoursNow(o.now || new Date())) notes.push('It is outside 9am-7pm Eastern, so the text will be held and sent at 9am.');
+  return { blocked: reasons.length > 0, reasons, notes, test_mode: testMode };
+}
+
+// ── 5. MESSAGE TEXT ──────────────────────────────────────────────────────────────────────────────
+const fuFirstName = t => fuS(t && (t.First_Name || fuS(t.Name).split(' ')[0])) || 'there';
+function fuMessage(kind, o) {   // kind 'send' | 'reminder'; o = { lang, first, label, label_es, address, link }
+  const es = o.lang === 'es', label = es ? (o.label_es || o.label) : o.label, first = o.first || (es ? 'hola' : 'there'), link = o.link || '{link}';
+  if (kind === 'reminder') return es
+    ? `Hola ${first}, un recordatorio rápido de Ridge Co sobre ${label} en ${o.address}. Toma unos 20 segundos, sin contraseña: ${link}`
+    : `Hi ${first}, a quick reminder from Ridge Co about ${label} at ${o.address}. It takes about 20 seconds, no login: ${link}`;
+  return es
+    ? `Hola ${first}, le escribe Ridge Co. Terminamos el trabajo de reparación en ${label} en ${o.address}. ¿Nos cuenta cómo va? Un toque, sin contraseña: ${link}`
+    : `Hi ${first}, it's Ridge Co. We finished the repair work on ${label} at ${o.address}. How is it going? One tap, no login: ${link}`;
+}
+// What actually goes out: the message + the tenant STOP line (same send-time rule as every tenant-facing first-touch text).
+const fuOutgoing = msg => withTenantStopNote(msg);
+
+// ── 6. TOKENS ────────────────────────────────────────────────────────────────────────────────────
+async function fuSha256(s) { const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(s))); return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''); }
+function fuConstEq(a, b) { a = String(a); b = String(b); if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0; }
+// -> { ok:true, payload } | { ok:false, reason:'invalid'|'expired' }. Like verifySessionToken, but says WHY (so an old link gets "expired", not "broken").
+async function fuTokenCheck(token, secret) {
+  if (typeof token !== 'string' || token.indexOf('.') < 0 || !secret) return { ok: false, reason: 'invalid' };
+  const [body, sig] = token.split('.'); if (!body || !sig) return { ok: false, reason: 'invalid' };
+  const expected = await _hmac(body, secret);
+  if (!fuConstEq(sig, expected)) return { ok: false, reason: 'invalid' };
+  let payload; try { payload = JSON.parse(_tdec.decode(_b64urlToBytes(body))); } catch (e) { return { ok: false, reason: 'invalid' }; }
+  if (!payload || payload.scope !== 'fix-check' || !payload.f || !payload.t) return { ok: false, reason: 'invalid' };
+  if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return { ok: false, reason: 'expired', payload };
+  return { ok: true, payload };
+}
+async function fuMintToken(env, row, expiresAtIso) {
+  const ttl = Math.max(60, Math.floor((Date.parse(expiresAtIso) - Date.now()) / 1000));
+  return makeSessionToken({ scope: 'fix-check', f: String(row.ID), t: String(row.Tenant_ID) }, env.WORKER_SECRET, ttl);
+}
+// Keeps the 4 newest hashes: the first text, its one reminder and any "copy link again" stay valid together until the single window ends.
+function fuAddHash(existing, hash) { const list = fuS(existing).split(',').filter(Boolean).filter(h => h !== hash); list.push(hash); return list.slice(-4).join(','); }
+function fuHashMatches(stored, hash) { return fuS(stored).split(',').filter(Boolean).some(h => fuConstEq(h, hash)); }
+function fuLinkFor(env, url, token, pageBase) {
+  const okBase = /^https?:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(fuS(pageBase)) ? fuS(pageBase).replace(/\/+$/, '') : FU_PAGE_BASE;
+  return `${okBase}/fix-check.html?t=${encodeURIComponent(token)}${(env.__STAGING__ ?? isStaging(env, url)) ? '&api=staging' : ''}`;
+}
+
+// ── 7. SHEET HELPERS (loud on failure) ───────────────────────────────────────────────────────────
+async function fuEnsureTab(env) {
+  await ensureTab(env, FU_TAB, FU_COLS);          // creates the tab + header row if missing; throws if it cannot (PAT-027: the sheet is already shared with the service account)
+  await ensureColumns(env, FU_TAB, FU_COLS);      // adds any column a later version introduces; logs to Ops_Telemetry centrally on failure
+}
+async function fuReadAll(env) {
+  try { return await fetchTab(env, FU_TAB); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }      // a tab that does not exist yet simply has no follow-ups; any other error is real and propagates
+}
+async function fuTelemetry(env, rec, warnings) {
+  try { await logTelemetry(env, Object.assign({ Source: 'worker' }, rec)); }
+  catch (e) { const m = 'telemetry write failed: ' + ((e && e.message) || e); console.error('fix-check ' + m); if (warnings) warnings.push(m); }
+}
+// Update + READ BACK: success:true with an unchanged cell is a failure. Throws with the real reason.
+async function fuWrite(env, id, fields) {
+  const r = await updateRow(env, FU_TAB, id, fields);
+  let j = null; try { j = await r.json(); } catch (e) { j = { success: false, error: 'unreadable response: ' + ((e && e.message) || e) }; }
+  if (!j || !j.success) throw new Error(`WO_Followups #${id} update failed: ${(j && j.error) || 'no response'}`);
+  if (j.message === 'No matching fields') throw new Error(`WO_Followups #${id} update wrote nothing (columns missing: ${Object.keys(fields).join(', ')})`);
+  const row = (await fetchTab(env, FU_TAB)).find(x => String(x.ID) === String(id));
+  if (!row) throw new Error(`WO_Followups #${id} vanished after the update`);
+  for (const k of Object.keys(fields)) if (fuS(row[k]) !== fuS(fields[k])) throw new Error(`WO_Followups #${id} did not save ${k} (the cell still reads "${fuS(row[k]).slice(0, 40)}")`);
+  return row;
+}
+async function fuCreate(env, obj) {
+  const r = await addRow(env, FU_TAB, obj);
+  let j = null; try { j = await r.json(); } catch (e) { j = { success: false, error: 'unreadable response: ' + ((e && e.message) || e) }; }
+  if (!j || !j.success || !j.id) throw new Error(`Could not create the WO_Followups row: ${(j && j.error) || 'no response'}`);
+  return String(j.id);
+}
+async function fuAdminAlert(env, row, text, kind) {
+  // Texts Brett (admin recipient: only the Global switch applies, test mode redirects). Returns { sent, reason } - never throws, never silent.
+  try {
+    const admin = await getAdminSmsRecipient(env);
+    const r = await smsGatedSend(env, { wo_id: fuS(row && row.WO_ID), message_type: 'admin_fix_check_' + kind, recipient_type: 'admin', admin, message_body: text });
+    const sent = !!(r && (r.sent || r.held_for_quiet_hours || ((env.__STAGING__ ?? false) && r.send_ok)));
+    return sent ? { sent: true, held: !!(r && r.held_for_quiet_hours) } : { sent: false, reason: (r && !r.send_ok) ? `blocked: ${r.gate_snapshot}` : 'the text did not go through' };
+  } catch (e) {
+    const reason = String((e && e.message) || e).slice(0, 200);
+    await fuTelemetry(env, { Job_Type: 'fix_check_alert', Skill_Or_Endpoint: kind, Success: 'FALSE', Notes: `followup=${fuS(row && row.ID)} ${reason}` });
+    return { sent: false, reason };
+  }
+}
+const fuAddress = (prop, unit) => (fuS(prop && prop.Address) || 'the property') + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '');
 /* FIX_CHECK:CONT */
 
 const ROLE_SCOPES = {
