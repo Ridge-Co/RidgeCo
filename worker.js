@@ -23628,9 +23628,9 @@ async function fuDigestLines(env) {
     for (const r of rows) {
       if (r.Status === 'Answered') {
         const s = fuSuggestNext(r, findWO(wos, fuS(r.WO_ID)), findWO(wos, fuS(r.Repair_WO_ID) || fuS(r.WO_ID)));
-        lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: ${(FU_ANSWER_WORDS[r.Answer] || r.Answer)}${s ? ' -> ' + s.label : ''}`);
-      } else if (r.Status === 'Overdue') lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: no answer yet - call them`);
-      else if (r.Status === 'Blocked' || r.Status === 'Draft') lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: fix-check was never sent (${fuS(r.Blocked_Reason) || 'unfinished'})`);
+        lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: ${(FU_ANSWER_WORDS[r.Answer] || r.Answer)}${s ? ' -> ' + s.label : ''}`);
+      } else if (r.Status === 'Overdue') lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: no answer yet - call them`);
+      else if (r.Status === 'Blocked' || r.Status === 'Draft') lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: fix-check was never sent (${fuS(r.Blocked_Reason) || 'unfinished'})`);
     }
     return { lines, error: '' };
   } catch (e) {
