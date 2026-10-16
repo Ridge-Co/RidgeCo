@@ -16981,9 +16981,11 @@ async function schedRunNext(env, ctx, opts) {
         const cur = p2.state;
         const rec = Object.assign({}, cur.jobs[job.name] || {});
         delete rec.last_seeded; delete rec.seeded_at;   // a real run replaces the first-run seed marker
-        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? (isPartial ? 'partial' : 'ok') : 'failed';
-        rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
-        if (jobOk) rec.last_ok = rec.last_end;
+        aiPausedFinal = aiCreditPausedAtFromRows(r2);
+        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobPaused ? 'paused' : (jobOk ? (isPartial ? 'partial' : 'ok') : 'failed');
+        rec.last_error = jobPaused ? out.paused_reason : (jobOk ? null : errText); rec.duration_ms = out.duration_ms;
+        if (jobOk && !jobPaused) rec.last_ok = rec.last_end;
+        rec.paused_key = null; rec.paused_ep = null;
         if (job.kind !== 'interval') {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
