@@ -22868,6 +22868,8 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 /* FIX_CHECK:START */
+// Work order ids are stored both as '1152' and as 'WO-1152' (WO_ID column); a label must never read 'WO-WO-1152'.
+function fuWoLabel(id) { return 'WO-' + String(id == null ? '' : id).trim().replace(/^WO-/i, ''); }
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 //  TENANT FIX-CHECK  (Oct 16 2026)  — "have you had any more trouble with this issue?"
 //  Brett: "It's sort of like a quality control check, but specific to their issue. Not just 'can you give us a
