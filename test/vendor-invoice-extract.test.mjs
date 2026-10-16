@@ -30,7 +30,11 @@ function grabConst(name){
   return src.slice(i, j + 1) + ';';
 }
 
+// Oct 16 2026: the Claude calls go through the AI-credit guard; run the REAL guard block over an unpaused Config.
+const GUARD = src.slice(src.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), src.indexOf('// ═══ AI-CREDIT-GUARD-END'));
+Object.assign(globalThis, { schedReadConfigRows: async () => [], schedCell: () => '', schedFindRow: () => -1, schedErrText: (e) => String((e && e.message) || e), sheetsRequest: async () => ({}), reportFailure: () => {} });
 const M = new Function(`
+  ${GUARD}
   const _tenc = new TextEncoder(), _tdec = new TextDecoder();
   ${grabConst('CORS')}
   ${grabConst('MODEL_REGISTRY')}
