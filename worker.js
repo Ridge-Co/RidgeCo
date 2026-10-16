@@ -31495,6 +31495,8 @@ function strIcs(events, nowMs) {
 const STR_DEFAULT_TEXTS = {
   str_offer: "Hi {FirstName}, it's {AssistantName} with Ridge Co. Can you clean {Property} for the {DateShort} turnover? Checkout is 11 AM{NextLine}. Tap to take it or pass: {Link}",
   str_filled_backup: "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've just filled the {DateShort} turnover at {Property}. Could you act as the backup on that one? Tap here and I'll add it to your calendar: {Link}",
+  // Oct 16 2026: a staged backup moves up because the earlier cleaner cancelled / passed / did not reply. Friendly confirm, never an order; no rank words.
+  str_promote: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} turnover at {Property} still needs a cleaner. Can you still cover it? Checkout is 11 AM{NextLine}. Tap to say yes or pass: {Link}",
   str_assigned: "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}",
   str_checkout_day: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}",
   str_task_cancelled: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}",
