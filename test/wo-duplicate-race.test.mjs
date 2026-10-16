@@ -97,8 +97,8 @@ function makeFetch(db, delayMs, callLog) {
     let m2 = /^\/values\/([^!:?]+):append/.exec(path);
     if (method === 'POST' && m2) {
       const body = JSON.parse(opts.body);
-      db[m2[1]].rows.push(...body.values);
-      return { json: async () => ({}) };
+      const __first = db[m2[1]].rows.length + 2; db[m2[1]].rows.push(...body.values);
+      return { json: async () => ({ updates: { updatedRange: m2[1] + '!A' + __first } }) };
     }
     if (method === 'POST' && path === '/values:batchUpdate') return { json: async () => ({}) };
     throw new Error('unhandled mock path: ' + method + ' ' + path);
