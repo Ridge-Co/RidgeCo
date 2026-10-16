@@ -18159,6 +18159,51 @@ async function aiCreditResumeRun(env, via) {
   return { ok: true, resumed: true, paused: false };
 }
 
+// POST /admin/ai-credit-resume (admin secret only) - the Hub banner's Resume button.
+async function aiCreditResumeHandler(env) {
+  const r = await aiCreditResume(env, 'admin-button');
+  return json(r, r.ok ? 200 : 502);
+}
+function aiCreditStatusOut(state) {
+  const s = state || {};
+  return { paused: !!s.paused, since: s.at || null, kind: s.paused ? (s.kind || 'credit') : null, last_error: s.paused ? (s.err || null) : null, alerted_at: s.alerted_at || null, resumed_at: s.resumed_at || null, paused_by: s.by || null, fix: AI_CREDIT_FIX, affected: AI_CREDIT_AFFECTED };
+}
+// GET /ai-credit/status (admin; read-only, so the read-only prod token can read it too). Fresh read, never cached.
+async function aiCreditStatusHandler(env) {
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return json({ ok: false, error: 'could not read the pause flag: ' + st.read_error }, 503);
+  return json(Object.assign({ ok: true }, aiCreditStatusOut(st)));
+}
+// Coarse, public (/health): paused yes/no + since when. No error text. Never throws.
+async function aiCreditHealthSummary(env) {
+  const st = await aiCreditCheck(env);
+  if (st.read_error) return { error: 'could not read the pause flag' };
+  return { paused: !!st.paused, since: st.paused ? (st.at || null) : null };
+}
+// POST /admin/ai-credit-simulate (STAGING ONLY, admin/test token) - makes the real code path see Anthropic's "credit balance is too low"
+// answer without calling Anthropic, so the whole chain (classify -> flag -> telemetry -> alert -> short-circuit) can be verified.
+//   {} or {kind:'credit'} simulates the credit error; {kind:'auth'} a 401; {call:false, clear:true} just clears the flag (test cleanup).
+async function aiCreditSimulateHandler(env, body) {
+  if (!env.__STAGING__) return json({ ok: false, error: 'ai-credit-simulate only exists on staging' }, 404);
+  body = body || {};
+  if (body.clear === true) {
+    const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'FALSE', [AI_CREDIT_KEYS.err]: '', [AI_CREDIT_KEYS.alerted]: '', [AI_CREDIT_KEYS.resumed]: new Date().toISOString() });
+    aiCreditResetForTests();
+    return json({ ok: w.ok, cleared: w.ok, error: w.ok ? undefined : w.error }, w.ok ? 200 : 500);
+  }
+  const auth = body.kind === 'auth';
+  const sim = auth ? { status: 401, body: { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key (SIMULATED on staging)' } } }
+                   : { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. (SIMULATED on staging)' } } };
+  try {
+    await anthropicMessages(env, { model: MODEL_REGISTRY.REASON.model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, { source: 'simulate', simulate: sim });
+    return json({ ok: false, error: 'the simulated error was not recognised as a pause' }, 500);
+  } catch (e) {
+    if (!aiCreditIsPausedError(e)) return json({ ok: false, error: 'unexpected: ' + schedErrText(e) }, 500);
+    const st = await aiCreditCheck(env, { fresh: true });
+    return json({ ok: true, simulated: auth ? 'auth' : 'credit', tripped: !!e.trip, newly_paused: !!(e.trip && e.trip.newly_paused), trip_errors: (e.trip && e.trip.errors) || [], alert: (e.trip && e.trip.alert) || null, state: aiCreditStatusOut(st) });
+  }
+}
+
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
 // Secure, self-owned multi-model router. Calls each provider directly from THIS
 // Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
