@@ -18,7 +18,7 @@ function makeGate(cfg) {
   const deps = {
     ensureSmsInfra: async () => {}, fetchConfig: async () => Object.assign({ TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' }, cfg || {}),
     normalizePhone: p => { const d = String(p || '').replace(/\D/g, ''); return d.length === 10 ? '+1' + d : (d.length === 11 && d[0] === '1' ? '+' + d : ''); },
-    sheetsRequest: async (e, m) => m === 'GET' ? { values: [QCOLS] } : {}, nextSafeId: () => 7,
+    sheetsRequest: async (e, m) => m === 'GET' ? { values: [QCOLS] } : {}, nextSafeId: () => 7, appendedRowNumber: () => 0, guardAppendedIds: async (e, t, r, n, c, ids) => ({ ids: ids.map(String), row: 0, repaired: false }), mqReportFailure: async () => {},
     isQuietHoursNow: () => false, nextQuietHoursEnd: () => new Date(), etHour: () => 12, quietHoldUntil: () => null,
     updateMessageQueueRow: async (e, id, f) => { state.updates.push(f); },
     sendSMSRaw: async (e, to, msg) => { state.raw.push({ to, msg }); return { sid: 'SM1' }; },
