@@ -12597,8 +12597,7 @@ async function translateBatchToEnglish(env, strings) {
   try {
     const ctrl = new AbortController(); timer = setTimeout(() => ctrl.abort(), 20000);
     const prompt = 'Below is a JSON array of short texts a property-maintenance contractor wrote for an estimate. Translate every item that is in Spanish (or any non-English language) into natural, plain English; return items that are already English EXACTLY unchanged. Keep dollar amounts, numbers, addresses, names and units exactly as written. Return ONLY a JSON array of strings, same length and same order, no commentary.\n\n' + JSON.stringify(idx.map(i => arr[i]));
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }) });
-    const data = await resp.json();
+    const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }, { signal: ctrl.signal, source: 'translateBatchToEnglish' });
     const txt = (data && data.content && data.content[0] && data.content[0].text) || '';
     const m = txt.match(/\[[\s\S]*\]/);
     const parsed = m ? JSON.parse(m[0]) : null;
