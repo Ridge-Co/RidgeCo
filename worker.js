@@ -16052,6 +16052,54 @@ async function failInvariantConditions(env, cfg, nowMs) {
     return old.concat([{ key: 'inv:run_failed', system: 'hub', where: 'integrity_check', severity: 'P1', message: 'The daily integrity checks could not run or be saved: ' + failTrim((e && e.message) || e, 200) }]);
   }
 }
+// Pure. Which open problems should become Ops_Build_Queue items: P0/P1, open or acknowledged, first seen > 24 h ago, not already queued.
+function failQueuePlan(ledger, nowMs) {
+  const out = [];
+  for (const r of ledger) {
+    if (out.length >= FAIL_QUEUE_MAX_PER_RUN) break;
+    if (FAIL_OPEN.indexOf(r.Status) < 0 || (r.Severity !== 'P0' && r.Severity !== 'P1')) continue;
+    if (/queued: Ops_Build_Queue #/.test(r.Notes || '')) continue;
+    if (FAIL_NO_QUEUE_KEYS.some(k => r.Fingerprint === 'cond|' + k)) continue;
+    const t = Date.parse(r.First_Seen || '');
+    if (!isFinite(t) || nowMs - t < FAIL_QUEUE_AFTER_MS) continue;
+    out.push(r);
+  }
+  return out;
+}
+function failQueueItem(r) {
+  return {
+    title: failTrim(`Fix: ${r.Where} - ${r.Message}`, 190),
+    problem: `Seen ${r.Count} time(s) since ${r.First_Seen} (last ${r.Last_Seen}); still open after 24 h. System ${r.System}. Error: ${r.Message}. Needs Attention ID ${r.ID}.`,
+    impact: r.Severity === 'P0' ? 'Urgent: money, texts or scheduled jobs affected.' : 'Important: data integrity or a failing path.',
+    tag: 'failure', lens: 'Inward',
+    first_step: 'Open Needs Attention, use "Copy for Claude" on this item, find the cause, fix it, add a test that forces this exact failure, and mark it fixed with the PR.',
+  };
+}
+// IO. Adds the queue rows (status "proposed", Brett still decides), then stamps the ledger Notes so it is never queued twice.
+async function failQueueRun(env, ledgerRows, nowMs, errors) {
+  const todo = failQueuePlan(ledgerRows, nowMs);
+  if (!todo.length) return 0;
+  let n = 0;
+  try { await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); }
+  catch (e) { errors.push({ step: 'queue_tab', error: String((e && e.message) || e).slice(0, 200) }); return 0; }
+  const lastCol = col(FAIL_LEDGER_COLS.length - 1);
+  for (const r of todo) {
+    try {
+      const nowIso = new Date(nowMs).toISOString();
+      const rowObj = buildScoutQueueRow(failQueueItem(r), nowIso, nowIso);
+      rowObj.Approved_By = 'failure-ledger';
+      const res = await addRow(env, OPS_QUEUE_TAB, rowObj);
+      if (res && typeof res.status === 'number' && res.status >= 400) throw new Error(`queue row could not be saved (HTTP ${res.status})`);
+      let id = ''; try { id = String((await res.clone().json()).id || ''); } catch (e) { id = ''; }
+      if (!id) throw new Error('queue row saved but its id was not returned');
+      r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `${nowIso.slice(0, 10)} queued: Ops_Build_Queue #${id}`;
+      await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `${FAIL_LEDGER_TAB}!A${r._row}:${lastCol}${r._row}`, values: [FAIL_LEDGER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : String(r[c]))] }] });
+      n++;
+    } catch (e) { errors.push({ step: 'queue_item', error: `${r.ID}: ` + String((e && e.message) || e).slice(0, 200) }); }
+  }
+  return n;
+}
+
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
