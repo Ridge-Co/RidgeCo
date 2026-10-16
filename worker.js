@@ -750,6 +750,12 @@ const _hubWorkerCore = {
         if (path === '/wo/share-link')            return await woShareLink(env, body);
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
+        if (path === '/fix/answer')               return await fixAnswer(env, body);              // PUBLIC, token-verified
+        if (path === '/fix/upload-session')       return await fixUploadSession(env, body);       // PUBLIC, token-verified
+        if (path === '/fix/log-attachment')       return await fixLogAttachment(env, body);       // PUBLIC, token-verified
+        if (path === '/followup/send')            return await followupSend(env, body, url);     // ADMIN-ONLY: Brett's tap on Send in the preview
+        if (path === '/followup/link')            return await followupLink(env, body, url);     // ADMIN-ONLY
+        if (path === '/followup/close')           return await followupClose(env, body);         // ADMIN-ONLY
         if (path === '/workorder') {
           // Tenant-work-order-submission toggle (Aug 20, 2026): only gates a TENANT's own
           // session creating their own WO (submit.html). Admin (WORKER_SECRET) and owner
