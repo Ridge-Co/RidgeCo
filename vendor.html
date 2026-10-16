@@ -3432,6 +3432,7 @@ function renderInvoiceFileStatus() {
   // Read clause first — it is the one that changed what is sitting in the form.
   if (_invReadState === 'busy')      parts.push(dim('Reading invoice…'));
   else if (_invReadState === 'ok')   parts.push(ok('Read it — check the amount, #, and date below'));
+  else if (_invReadState === 'paused') parts.push(dim('Automatic reading is paused - enter it by hand.'));
   else if (_invReadState === 'none' || _invReadState === 'fail')
                                      parts.push(dim('Couldn’t read that one — just fill it in below'));
   // Attach clause second — filing the document, nothing to do with the numbers above.
