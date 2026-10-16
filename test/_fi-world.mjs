@@ -91,6 +91,8 @@ export function world() {
     const routeAI = async (env, job) => { h.calls.push('AI ' + job.type + ' customerFacing=' + job.customerFacing); if (h.ai instanceof Error) throw h.ai; return { result: typeof h.ai === 'function' ? h.ai(job) : h.ai, model_used: 'claude-test' }; };
     const gmailSendEmail = async (env, o) => { h.mail.push(o); return h.staged === false ? { sent: true } : { staged: true, sent: false }; };
     const logTelemetry = async (env, r) => { h.telemetry.push(r); };
+    ${aiCode}
+    ${aiPausedFn}
     ${block}
     return { fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK };
   `);
