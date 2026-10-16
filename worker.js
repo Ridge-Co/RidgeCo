@@ -22465,7 +22465,9 @@ async function receiptScan(env) {
   // it retried forever. Now capped at 3 attempts, tracked in Config (no schema change to the
   // live Receipts_Queue tab), then skipped and surfaced via `stuck` instead of retried daily.
   let failures = {}; try { failures = JSON.parse(cfg.receipt_intake_failures || '{}'); } catch (e) { failures = {}; }
-  let n = 0; const errs = []; let failuresChanged = false;
+  let n = 0; const errs = []; let failuresChanged = false; let pausedMid = false;
+  // Self-heal (Oct 16 2026): attempts burned by the Oct 15 credit outage were never the file's fault - give those files a fresh start.
+  for (const id of Object.keys(failures)) { if (aiCreditErrorTextIsOutage(failures[id] && failures[id].error)) { delete failures[id]; failuresChanged = true; } }
   for (const f of files) {
     if (seen.has(f.id)) continue;
     const prior = failures[f.id];
