@@ -15269,7 +15269,7 @@ async function smsGatedSend(env, opts) {
   const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
   const rows = data.values || [];
   const headers = rows[0] && rows[0].length ? rows[0] : MSG_QUEUE_COLS;
-  const id = String(nextSafeId(rows));
+  let id = String(nextSafeId(rows));
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
