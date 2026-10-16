@@ -23935,6 +23935,18 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
+  if (path === '/followup/send') {
+    // Creates a follow-up row and may text a tenant: the WO, the repair WO and the tenant must ALL be TEST- records (staging also stubs Twilio).
+    if (!body || !(await isTestWO(env, body.wo_id))) return { ok: false, debug: 'fix-check: wo_id must be a TEST- work order' };
+    if (body.repair_wo_id && !(await isTestWO(env, body.repair_wo_id))) return { ok: false, debug: 'fix-check: repair_wo_id must be a TEST- work order' };
+    if (body.tenant_id && !(await isTestRecord(env, 'Tenants', body.tenant_id))) return { ok: false, debug: 'fix-check: tenant_id must be a TEST- tenant' };
+    return { ok: true };
+  }
+  if (path === '/followup/link' || path === '/followup/close') {
+    const fus = await fuReadAll(env);
+    const fu = fus.find(r => String(r.ID) === String(body && body.id));
+    return !!fu && await isTestWO(env, fu.WO_ID);
+  }
   if (path === '/wo/share-send') {
     // Sends a real SMS to the WO's assigned vendor — only ever to a vendor that is itself a TEST- record
     // on a TEST- Property's WO (staging additionally stubs Twilio).
