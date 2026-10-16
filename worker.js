@@ -17845,6 +17845,70 @@ async function telemetryLog(env, body) {
   }
 }
 
+// ═══ AI-CREDIT-GUARD-BEGIN ════════════════════════════════════════════════════════════════════
+// "ALERT ONCE, THEN PAUSE" (Oct 16 2026). On Oct 15 ~4pm ET the prepaid Anthropic credit ran out. Every Claude call then failed
+// with HTTP 400 invalid_request_error "Your credit balance is too low to access the Anthropic API...", the daily_receipts job
+// retried the same PDFs all night (3 tries per file, every ~30 minutes) and NOTHING told Brett - he found out by accident.
+//
+// ONE central place now knows how to recognise that error and what to do about it:
+//   anthropicMessages(env, body, opts)  - EVERY call to api.anthropic.com/v1/messages goes through it (callClaude, scopeClaude,
+//     estimate text, the translators, the weekly review). A new call site that uses it gets all of this for free.
+//   1. BEFORE calling: if the pause flag is on (Config AI_CREDIT_PAUSED=TRUE) it throws AiCreditPausedError WITHOUT calling
+//      Anthropic (the flag is cached 30 s per Worker instance, so a loop of 20 files costs one Config read).
+//   2. AFTER a failed call: aiCreditClassify() recognises "credit exhausted" (400/402 billing text, type billing_error) and
+//      "the key/account is refused" (401, or 403 permission_error). On a match aiCreditTrip() runs ONCE: sets the flag (+ when, +
+//      the error text), logs Ops_Telemetry Job_Type ai_credit_exhausted (Success FALSE), and sends ONE alert to Brett by text
+//      (the admin-notify path, with its daily cap) AND email (Twilio may be unavailable - A2P). No repeat while paused; a reminder
+//      only if it is STILL paused 24 h after the last alert.
+//   3. Callers see a typed error {code:'ai_credit_paused'} and answer in plain words ("Automatic reading is paused - enter it by
+//      hand"); manual entry keeps working everywhere. The scheduler's daily_receipts reports {ok:false, paused:true, reason}.
+// Getting out of the pause needs no deploy: POST /admin/ai-credit-resume (the Hub banner's Resume button) makes ONE real 1-token
+// call and clears the flag only if it works; the scheduler job ai_credit_probe does the same at most hourly, ONLY while paused,
+// and sends one "AI is back" notice. Nothing else ever clears the flag.
+// Gemini (CHEAP tier) quota/billing errors are NOT handled here - see the PR notes (follow-up).
+const AI_CREDIT_CODE = 'ai_credit_paused';
+const AI_CREDIT_KEYS = { paused: 'AI_CREDIT_PAUSED', at: 'AI_CREDIT_PAUSED_AT', err: 'AI_CREDIT_LAST_ERROR', kind: 'AI_CREDIT_PAUSED_KIND', by: 'AI_CREDIT_PAUSED_BY', alerted: 'AI_CREDIT_ALERT_LAST_SENT', resumed: 'AI_CREDIT_RESUMED_AT' };
+const AI_CREDIT_CACHE_MS = 30 * 1000;
+const AI_CREDIT_REMINDER_MS = 24 * 3600 * 1000;
+const AI_CREDIT_ALERT_RETRY_MS = 10 * 60 * 1000;   // an alert that could not be delivered is retried no sooner than this
+const AI_PAUSED_USER_MSG = 'Automatic reading is paused - enter it by hand.';
+const AI_SCAN_PAUSED_MSG = 'Automatic receipt scanning is paused (Anthropic credit is out). Receipts stay in the Drive folder and are scanned after AI resumes; adding a receipt by hand still works.';
+const AI_CREDIT_FIX = 'Anthropic Console > Settings > Billing > Buy credits (or switch on auto-reload)';
+const AI_CREDIT_EMAIL_DEFAULT = 'brett@bmoremanagement.com';
+const AI_CREDIT_AFFECTED = [
+  'receipt scanning (inbox + Receipt Reconciler) - receipts wait in Drive, nothing is lost',
+  'vendor invoice auto-read and statement / contact-card reading - the forms stay open for typing',
+  'field-inspection label reading, dictation sorting and AI summaries - notes and photos are kept',
+  'scope-of-work notes (OCR / organize / estimate text) and the weekly review proposal',
+  'Spanish/English translation of vendor texts and estimates - those go out untranslated',
+];
+
+let _aiCreditCache = null;        // { at, state } - per Worker instance
+let _aiCreditTripP = null;        // in-flight trip (concurrent failing calls share one)
+let _aiCreditResumeP = null;      // in-flight resume probe (double-tap shares one)
+let _aiCreditAlertTryMs = 0;      // last time this instance tried to deliver an alert
+let _aiCreditReadFailMs = 0;      // last time this instance reported "cannot read the flag"
+function aiCreditResetForTests() { _aiCreditCache = null; _aiCreditTripP = null; _aiCreditResumeP = null; _aiCreditAlertTryMs = 0; _aiCreditReadFailMs = 0; }
+
+class AiCreditPausedError extends Error {
+  constructor(message, info) { super(message); this.name = 'AiCreditPausedError'; this.code = AI_CREDIT_CODE; this.paused = true; this.info = info || null; this.userMessage = AI_PAUSED_USER_MSG; }
+}
+function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
+
+// PURE. Is this Anthropic error response a "credit exhausted" or "key/account refused" one? -> { kind, status, type, message } | null.
+// Deliberately narrow: an ordinary 400 (bad image, bad prompt), a 429 rate limit, a 5xx or an overloaded 529 is NOT a pause.
+function aiCreditClassify(status, data) {
+  const e = (data && typeof data === 'object' && data.error && typeof data.error === 'object') ? data.error : ((data && typeof data === 'object') ? data : {});
+  const type = String(e.type || '').toLowerCase();
+  const msg = String(e.message || (typeof data === 'string' ? data : '') || '').slice(0, 300);
+  const billingText = /credit balance|purchase credits|plans\s*(&|and)\s*billing|insufficient (credit|funds|balance)|out of credits/i.test(msg);
+  if ((status === 400 || status === 402 || status === 403) && (type === 'billing_error' || billingText)) return { kind: 'credit', status, type, message: msg || 'Anthropic credit balance is too low' };
+  if (status === 402) return { kind: 'credit', status, type, message: msg || 'Anthropic says payment is required (HTTP 402)' };
+  if (status === 401 || (status === 403 && (type === 'permission_error' || type === 'authentication_error'))) return { kind: 'auth', status, type, message: msg || ('Anthropic refused the API key / account (HTTP ' + status + ')') };
+  return null;
+}
+// ═══ AI-CREDIT-GUARD-END ══════════════════════════════════════════════════════════════════════
+
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
 // Secure, self-owned multi-model router. Calls each provider directly from THIS
 // Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
