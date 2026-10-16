@@ -153,7 +153,7 @@ function makeFetch(db, callLog) {
 
 function build(db, callLog) {
   const src = [
-    'const CORS = {};',
+    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
     "const TELEMETRY_TAB = 'Ops_Telemetry';",
     'async function logTelemetry(){ /* no-op in tests */ }',
     cacheSrc, srSrc, ensureInnerSrc, ensureSrc, colSrc, idcSrc, jsonSrc, fetchTabSrc, fetchTabsSrc,
