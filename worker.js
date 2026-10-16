@@ -15690,6 +15690,78 @@ function failLegacyAlerted(cfg, where, nowMs) {
   }
   return false;
 }
+// The heart of it (pure). events: new Failure_Events rows (objects). ledger: Failures rows (objects with _row). conditions: what is wrong RIGHT NOW
+// that is not an event (scheduler overdue, alerts off). Returns what to write and whom to text. Idempotent: an event already counted
+// (ID <= row.Last_Event_ID) is skipped, so a failed cursor save can never double count.
+function failRollupPlan(inp) {
+  const now = inp.nowMs, iso = new Date(now).toISOString(), day = iso.slice(0, 10);
+  const ledger = inp.ledger.map(r => Object.assign({}, r));
+  const updates = new Map(), created = [];
+  const byFp = new Map();
+  for (const ev of inp.events) { const fp = failFingerprint(ev.System, ev.Where, ev.Message); if (!byFp.has(fp)) byFp.set(fp, []); byFp.get(fp).push(ev); }
+  const findRow = (fp) => { let closed = null; for (const r of ledger) if (r.Fingerprint === fp) { if (FAIL_OPEN.indexOf(r.Status) >= 0) return r; closed = r; } return closed; };
+  const touch = (r) => { if (r._row) updates.set(r._row, r); };
+  for (const [fp, evs] of byFp) {
+    evs.sort((a, b) => (a.ID < b.ID ? -1 : a.ID > b.ID ? 1 : 0));
+    const row = findRow(fp), lastId = evs[evs.length - 1].ID;
+    if (row && String(row.Last_Event_ID || '') >= lastId) continue;
+    const fresh = row ? evs.filter(e => e.ID > String(row.Last_Event_ID || '')) : evs;
+    if (!fresh.length) continue;
+    const sev = fresh.reduce((s, e) => (failSevRank(e.Severity) < failSevRank(s) ? e.Severity : s), 'P2');
+    const last = fresh[fresh.length - 1];
+    if (!row) {
+      created.push({ ID: 'F-' + fresh[0].ID, Fingerprint: fp, Severity: sev, System: last.System, Where: last.Where, Message: last.Message, Source: last.Source, First_Seen: fresh[0].Timestamp, Last_Seen: last.Timestamp, Count: fresh.length, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: lastId, Fixed_In: '', Notes: '' });
+    } else if (row.Status === 'fixed') {
+      Object.assign(row, { Severity: sev, Message: last.Message, First_Seen: fresh[0].Timestamp, Last_Seen: last.Timestamp, Count: fresh.length, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: lastId, Notes: (row.Notes ? row.Notes + ' | ' : '') + `reopened ${day} after being marked fixed (${row.Fixed_In || 'no build noted'})` });
+      touch(row);
+    } else {
+      row.Count = (Number(row.Count) || 0) + fresh.length; row.Last_Seen = last.Timestamp; row.Message = last.Message; row.Last_Event_ID = lastId;
+      if (row.Status !== 'wontfix' && failSevRank(sev) < failSevRank(row.Severity)) row.Severity = sev;
+      touch(row);
+    }
+  }
+  // Conditions: true right now, not an event. Seen -> open/refresh; no longer true -> cleared automatically.
+  const activeFp = new Set();
+  for (const c of (inp.conditions || [])) {
+    const fp = `cond|${c.key}`; activeFp.add(fp);
+    const row = findRow(fp);
+    if (!row) created.push({ ID: 'F-c' + now + '-' + created.length, Fingerprint: fp, Severity: c.severity, System: c.system || 'hub', Where: c.where, Message: String(c.message).slice(0, 400), Source: 'condition', First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: '', Fixed_In: '', Notes: '' });
+    else if (row.Status === 'fixed') { Object.assign(row, { Severity: c.severity, Message: String(c.message).slice(0, 400), First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Notes: (row.Notes ? row.Notes + ' | ' : '') + `came back ${day}` }); touch(row); }
+    else { row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400); if (failSevRank(c.severity) < failSevRank(row.Severity)) row.Severity = c.severity; touch(row); }
+  }
+  for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
+    r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
+  }
+  const all = ledger.concat(created);
+  // Whom to text now: open P0s never texted, grown since the last text (at most every 6 h), or unacknowledged for a day.
+  const sms = [], quiet = [];
+  for (const r of all) {
+    if (r.Status !== 'open' || r.Severity !== 'P0') continue;
+    const n = Number(r.Count) || 0, nn = Number(r.Notified_Count) || 0, na = Date.parse(r.Notified_At || '');
+    const need = isNaN(na) || (n > nn && now - na >= FAIL_P0_REPEAT_MS) || (now - na >= FAIL_P0_REMIND_MS);
+    if (!need) continue;
+    if (inp.legacyAlerted && inp.legacyAlerted(r.Where)) quiet.push(r); else sms.push(r);
+  }
+  return { updates: Array.from(updates.values()), created, sms, quiet, all };
+}
+function failTrim(s, n) { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function failFormatP0Sms(rows) {
+  if (rows.length === 1) { const r = rows[0]; return `🔴 Hub problem${Number(r.Count) > 1 ? ' (' + r.Count + 'x)' : ''}: ${failTrim(r.Where, 40)} - ${failTrim(r.Message, 110)}. Open Needs Attention in the Hub.`; }
+  const top = rows.slice(0, 3).map(r => failTrim(r.Where, 28) + ': ' + failTrim(r.Message, 50)).join('; ');
+  return `🔴 ${rows.length} urgent Hub problems: ${top}${rows.length > 3 ? ' (+' + (rows.length - 3) + ' more)' : ''}. Open Needs Attention in the Hub.`;
+}
+// Once each morning (ET, from 8:00): open P1s seen in the last 36 h; on Mondays also the count of P2s. Returns { text, dateKey } or null.
+function failDigestPlan(all, nowMs, lastDate) {
+  const d = new Date(nowMs), et = schedEtParts(d);
+  if (et.minutes < 480 || lastDate === et.date) return null;
+  const recent = (r) => nowMs - Date.parse(r.Last_Seen || '') <= 36 * 3600000;
+  const p1 = all.filter(r => r.Status === 'open' && r.Severity === 'P1' && recent(r));
+  const p2 = all.filter(r => r.Status === 'open' && r.Severity === 'P2').length;
+  const parts = [];
+  if (p1.length) parts.push(`🟠 ${p1.length} Hub problem${p1.length > 1 ? 's' : ''} to look at: ` + p1.slice(0, 3).map(r => failTrim(r.Where, 28) + ': ' + failTrim(r.Message, 50)).join('; ') + (p1.length > 3 ? ` (+${p1.length - 3} more)` : ''));
+  if (et.dow === 1 && p2) parts.push(`${p2} minor open`);
+  return { text: parts.length ? parts.join('. ') + '. Open Needs Attention in the Hub.' : '', dateKey: et.date };
+}
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
 // independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
 // `schedule:` and the Cloudflare Cron Trigger in scheduled(). (Oct 12 2026: BOTH are now gone - cron-sweep.yml is deleted,
