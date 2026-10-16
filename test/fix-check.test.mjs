@@ -60,7 +60,7 @@ function makeWorld(init) {
     isStaging: () => false,
   };
   const names = Object.keys(deps);
-  const src = helpers + '\n' + BLOCK + '\nreturn { classifyIssue, fuQuestionSpec, fuValidateAnswer, fuSuggestNext, fuResolveTenants, fuGateVerdict, fuMessage, fuTokenCheck, fuMintToken, fuAddHash, fuHashMatches, fuSha256, fuSweepDue, fuInReminderWindow, fuSendOutcome, fuDateLabel, fuLabelFor, followupPreview, followupSend, followupLink, followupClose, followupList, fixPage, fixAnswer, fixUploadSession, fixLogAttachment, followupSweep, fuDigestLines, makeSessionToken, FU_COLS, FU_DUE_DAYS, FU_WINDOW_DAYS };';
+  const src = helpers + '\n' + BLOCK + '\nreturn { classifyIssue, fuQuestionSpec, fuValidateAnswer, fuSuggestNext, fuResolveTenants, fuGateVerdict, fuMessage, fuTokenCheck, fuMintToken, fuAddHash, fuHashMatches, fuSha256, fuSweepDue, fuInReminderWindow, fuSendOutcome, fuDateLabel, fuLabelFor, fuWoLabel, followupPreview, followupSend, followupLink, followupClose, followupList, fixPage, fixAnswer, fixUploadSession, fixLogAttachment, followupSweep, fuDigestLines, makeSessionToken, FU_COLS, FU_DUE_DAYS, FU_WINDOW_DAYS };';
   const api = new Function(...names, src)(...names.map(k => deps[k]));
   return Object.assign(W, { api, env: { WORKER_SECRET: 'test-secret-123', __STAGING__: !!init.staging } });
 }
