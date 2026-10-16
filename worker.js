@@ -18028,12 +18028,8 @@ async function callClaude(env, model, job) {
   }
   const reqBody = { model, max_tokens: job.maxTokens || 1200, messages: [{ role: 'user', content }] };
   if (job.system) reqBody.system = cacheable(job.system) ? [{ type: 'text', text: String(job.system), cache_control: { type: 'ephemeral' } }] : String(job.system);
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify(reqBody),
-  });
-  const data = await resp.json();
+  // Oct 16 2026: through the ONE guarded call (pause flag checked first; a credit/key error trips it) - see AI-CREDIT-GUARD.
+  const { resp, data } = await anthropicMessages(env, reqBody, { source: job.source || job.type || 'callClaude' });
   if (!resp.ok) throw new Error(data && data.error && data.error.message || `Claude ${resp.status}`);
   const text = (data.content && data.content[0] && data.content[0].text || '').trim();
   const usage = data.usage || {};
