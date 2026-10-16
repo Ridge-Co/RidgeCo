@@ -22506,8 +22506,9 @@ async function receiptScan(env) {
       failuresChanged = true;
     }
   }
-  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_intake_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_intake_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptScan: tracker write failed:', schedErrText(e)); } }
   const stuck = Object.values(failures).filter(x => x.attempts >= 3);
+  if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, errors: errs, stuck, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
   return json({ ok: true, folder_id: folder, scanned: n, skipped: files.length - n, errors: errs, stuck });
 }
 
