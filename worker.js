@@ -16901,7 +16901,7 @@ async function schedRunNext(env, ctx, opts) {
 
   // DRY RUN / PREFLIGHT: no claim, no state write, no SMS, no job code. Lists what is due and (counts only) what it would do.
   if (opts.dry) {
-    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) });
+    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs, aiPausedAt) });
     if (opts.preflight !== false) body.preflight = await schedPreflight(env, force ? only.slice() : dueNow.map(d => d.name), rows, now, seeded);
     return { status: 200, body };
   }
