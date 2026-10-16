@@ -18180,6 +18180,48 @@ async function aiCreditSimulateHandler(env, body) {
   }
 }
 
+// Scheduler pieces ------------------------------------------------------------------------------------------------------------
+// A job that cannot run because AI is paused returns this (the dispatcher records it as "paused: AI credit", not a failure).
+function aiCreditSchedPaused(state, detail) {
+  return { ok: false, paused: true, reason: 'paused: AI credit - ' + (state && state.kind === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out') + (state && state.at ? ' since ' + state.at : '') + '; resumes by itself after credit is added (Resume button or the hourly check)', errors: [], detail: detail || {} };
+}
+// Runs one scan step of a job. A typed ai_credit_paused answer (or throw) is a PAUSE, anything else wrong is an error.
+async function schedAiStep(name, fn, errors, flags) {
+  try {
+    const u = await schedUnwrap(await fn());
+    if (u.body && u.body.code === AI_CREDIT_CODE) { flags.paused = true; return u.body; }
+    const bad = schedBadness(u.status, u.body);
+    if (bad) errors.push({ step: name, error: bad });
+    return u.body;
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) { flags.paused = true; return { ok: false, paused: true, code: AI_CREDIT_CODE }; }
+    errors.push({ step: name, error: schedErrText(e) });
+    return undefined;
+  }
+}
+// The scheduler job ai_credit_probe: costs NOTHING while AI is not paused (the dispatcher does not even start it - see job.gate);
+// while paused, at most hourly, makes one 1-token call; success clears the pause and sends ONE "AI is back" notice.
+async function schedRunAiCreditProbe(env) {
+  const errors = [];
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return { ok: false, errors: [{ step: 'read_flag', error: st.read_error }], detail: {} };
+  if (!st.paused) return { ok: true, errors, detail: { skipped: 'AI is not paused' } };
+  const r = await aiCreditResume(env, 'scheduler-probe');
+  if (r.resumed) {
+    const subject = 'AI is back - Anthropic credit works again';
+    const sms = 'RidgeCo Hub: AI is back. Anthropic credit works again - receipt scanning, vendor invoice reading and field-inspection AI have resumed by themselves.';
+    const n = await aiCreditNotify(env, subject, sms, '<p><b>AI is back.</b> Anthropic accepted a test call, so the pause is cleared. Receipt scanning, vendor invoice auto-read, field-inspection AI and scope-notes AI have resumed. Receipts that waited in Drive are picked up on the next scan.</p>', []);
+    if (!n.delivered) errors.push({ step: 'ai_back_notice', error: 'AI resumed, but neither the text nor the email telling Brett got through' });
+    return { ok: errors.length === 0, errors, detail: { resumed: true, notice: n } };
+  }
+  if (r.ok === false && r.paused) {
+    const alertErrors = [];
+    const a = await aiCreditMaybeAlert(env, st, alertErrors);          // the 24 h reminder, if one is due
+    // Still paused is the EXPECTED outcome of a probe that did its job: success for this job (it ran, it checked, it will check again in an hour).
+    return { ok: alertErrors.length === 0, errors: alertErrors.map(m => ({ step: 'reminder', error: m })), detail: { still_paused: true, probe_error: r.error, probe_kind: r.probe_kind, reminder: a && (a.reason || a.skipped) || null } };
+  }
+  return { ok: false, errors: [{ step: 'resume', error: r.error || 'resume failed' }], detail: r };
+}
 // ═══ AI-CREDIT-GUARD-END ══════════════════════════════════════════════════════════════════════
 
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
