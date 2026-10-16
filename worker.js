@@ -23168,7 +23168,7 @@ function fuSuggestNext(row, wo, repairWo) {
   return { action: 'send_vendor_back', label: 'Send the vendor back', severity: ans === 'persists' ? 'caution' : 'urgent', vendor_id: vendorId,
     detail: `Tenant ${FU_ANSWER_WORDS[ans] || ans}${where ? ' (' + where + ')' : ''}.`,
     prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade: fuS((repairWo && repairWo.Trade) || (wo && wo.Trade)), type: 'manual', vendor_id: vendorId,
-      description: `Re-check ${label} (WO-${fuS(row.Repair_WO_ID) || fuS(row.WO_ID)}): the tenant ${FU_ANSWER_WORDS[ans] || ans}.${where ? ' ' + where + '.' : ''}` } };
+      description: `Re-check ${label} (${fuWoLabel(fuS(row.Repair_WO_ID) || fuS(row.WO_ID))}): the tenant ${FU_ANSWER_WORDS[ans] || ans}.${where ? ' ' + where + '.' : ''}` } };
 }
 function fuParseJson(s, dflt) { if (!fuS(s)) return dflt; try { const v = JSON.parse(s); return v == null ? dflt : v; } catch (e) { return dflt; } }
 
