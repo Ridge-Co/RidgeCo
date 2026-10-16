@@ -248,4 +248,67 @@ const sendBody = (o) => Object.assign({ wo_id: '1152', repair_wo_id: '1154', ten
   const p = D(await A.api.followupPreview(A.env, url('/followup/preview', { wo_id: '1152' })));
   ok(p.gate.blocked && p.gate.reasons.map(r => r.code).join() === 'global_off,property_off,tenant_off', 'blocked preview lists each reason', p.gate);
 }
+{
+  // SEND (sms) happy path
+  const A = makeWorld({ tabs: baseTabs() });
+  const res = await A.api.followupSend(A.env, sendBody(), url('/followup/send'));
+  const j = D(res);
+  ok(res.status === 200 && j.ok && j.status === 'Sent' && j.followup_id === '1' && /fix-check\.html\?t=/.test(j.link), 'send creates the row and returns the link', j);
+  const row = A.tabs.WO_Followups[0];
+  ok(row.Status === 'Sent' && row.Send_Method === 'sms' && row.Tenant_ID === '100' && row.Check_Type === 'leak' && row.Repair_Date === '2026-10-10' && row.Cosmetic_Part === 'drywall/paint', 'row fields', row);
+  ok(Math.abs(Date.parse(row.Due_At) - Date.parse(row.Sent_At) - 2 * 86400000) < 1000, 'due 2 days after sent');
+  const tok = decodeURIComponent(j.link.split('t=')[1]);
+  ok(row.Token_Hash === await A.api.fuSha256(tok) && !JSON.stringify(row).includes(tok), 'only the HASH of the token is stored');
+  ok(A.sms.length === 1 && A.sms[0].recipient_type === 'tenant' && A.sms[0].message_type === 'tenant_fix_check' && A.sms[0].tenant.ID === '100' && A.sms[0].wo_id === '1152', 'goes through smsGatedSend as a tenant message tied to the WO');
+  ok(A.sms[0].message_body.includes(j.link) && /Reply STOP/.test(A.sms[0].message_body), 'the text carries the link and the tenant STOP line');
+  ok(Math.abs(Date.parse(row.Token_Expires_At) - Date.now() - 14 * 86400000) < 5000, '14-day window');
+  ok(A.telemetry.some(t => t.Job_Type === 'fix_check_send' && t.Success === 'TRUE'), 'send logged to telemetry');
+  ok(A.audit.length === 1, 'a line is added to the work order history');
+  ok(A.ensureTabCalls.includes('WO_Followups'), 'the tab is created on first send');
+  // duplicate
+  const dup = await A.api.followupSend(A.env, sendBody(), url('/x')); ok(dup.status === 409 && D(dup).code === 'already_open' && A.tabs.WO_Followups.length === 1 && A.sms.length === 1, 'a second send while one is open is refused, nothing sent', D(dup));
+  const rep = await A.api.followupSend(A.env, sendBody({ replace: true }), url('/x')); ok(D(rep).ok && A.tabs.WO_Followups.length === 2 && A.tabs.WO_Followups[0].Status === 'Closed' && /Replaced/.test(A.tabs.WO_Followups[0].Closed_Reason), 'replace:true closes the old one and sends a new one');
+}
+{
+  // SEND blocked by the gate: refuses, row-less, offers copy link; copy_link works
+  const A = makeWorld({ tabs: baseTabs(), cfg: { TWILIO_ENABLED: 'FALSE' } });
+  const res = await A.api.followupSend(A.env, sendBody(), url('/x')); const j = D(res);
+  ok(res.status === 409 && j.blocked && j.reasons[0].code === 'global_off' && /Copy link/i.test(j.hint) && !A.tabs.WO_Followups && A.sms.length === 0, 'blocked: says why, no row, no text', j);
+  const cp = D(await A.api.followupSend(A.env, sendBody({ mode: 'copy_link' }), url('/x')));
+  ok(cp.ok && cp.status === 'Sent' && cp.link && A.sms.length === 0 && A.tabs.WO_Followups[0].Send_Method === 'copied_link', 'copy_link works when texting is blocked and sends nothing');
+}
+{
+  // validation
+  const A = makeWorld({ tabs: baseTabs() });
+  ok((await A.api.followupSend(A.env, sendBody({ problem_label: '' }), url('/x'))).status === 400, 'a blank "what we are checking" is refused');
+  ok((await A.api.followupSend(A.env, sendBody({ check_type: 'nope' }), url('/x'))).status === 400, 'unknown check type refused');
+  ok((await A.api.followupSend(A.env, sendBody({ tenant_id: '555' }), url('/x'))).status === 400, 'a tenant not linked to the WO is refused');
+  ok((await A.api.followupSend(A.env, sendBody({ repair_wo_id: '9999' }), url('/x'))).status === 404, 'unknown repair WO refused');
+  ok(!A.tabs.WO_Followups && A.sms.length === 0, 'nothing created or sent by the refusals');
+}
+{
+  // FAULT INJECTION on send
+  let A = makeWorld({ tabs: baseTabs() }); A.fail.ensureTab = true;
+  let thrown = null; try { await A.api.followupSend(A.env, sendBody(), url('/x')); } catch (e) { thrown = e; }
+  ok(thrown && /could not create tab/.test(thrown.message) && A.sms.length === 0, 'tab creation failure is LOUD (throws) and nothing is sent');
+  A = makeWorld({ tabs: baseTabs() }); A.tabs.WO_Followups = []; A.fail.addRow = true;
+  thrown = null; try { await A.api.followupSend(A.env, sendBody(), url('/x')); } catch (e) { thrown = e; }
+  ok(thrown && /Could not create the WO_Followups row/.test(thrown.message) && A.sms.length === 0, 'row creation failure throws; no text goes out');
+  A = makeWorld({ tabs: baseTabs() }); A.smsResult = { queued_id: '1', send_ok: true, sent: false, gate_snapshot: 'all gates open' };
+  let res = await A.api.followupSend(A.env, sendBody(), url('/x')); let j = D(res);
+  ok(res.status === 200 && j.ok === false && j.status === 'Blocked' && /did not go through/.test(j.error) && j.link && A.tabs.WO_Followups[0].Status === 'Blocked' && /Twilio/.test(A.tabs.WO_Followups[0].Blocked_Reason), 'Twilio refusing the text -> row Blocked, error returned WITH the link to copy', j);
+  ok(A.telemetry.some(t => t.Job_Type === 'fix_check_send' && t.Success === 'FALSE'), '...and logged as a failure');
+  A = makeWorld({ tabs: baseTabs() }); A.fail.sms = true;
+  res = await A.api.followupSend(A.env, sendBody(), url('/x')); j = D(res);
+  ok(res.status === 500 && j.ok === false && /twilio down/.test(j.error) && A.tabs.WO_Followups[0].Status === 'Draft' && A.telemetry.some(t => t.Success === 'FALSE'), 'the sender throwing -> 500, row stays Draft (visible), telemetry FALSE', j);
+  A = makeWorld({ tabs: baseTabs() }); A.fail.dropWrite = f => 'Token_Hash' in f;
+  res = await A.api.followupSend(A.env, sendBody(), url('/x')); j = D(res);
+  ok(res.status === 500 && j.ok === false && /did not save/.test(j.error), 'a write that claims success but changes nothing is caught by the read-back (failure, not success)', j);
+  A = makeWorld({ tabs: baseTabs() }); A.fail.telemetry = true;
+  j = D(await A.api.followupSend(A.env, sendBody(), url('/x'))); ok(j.ok && j.warnings.some(x => /telemetry write failed/.test(x)), 'a telemetry outage is returned as a warning, not hidden');
+  A = makeWorld({ tabs: baseTabs() }); A.smsResult = { queued_id: '1', send_ok: true, held_for_quiet_hours: true, send_after: '2026-10-17T13:00:00.000Z', gate_snapshot: 'x' };
+  j = D(await A.api.followupSend(A.env, sendBody(), url('/x'))); ok(j.ok && j.held_for_quiet_hours && A.tabs.WO_Followups[0].Send_Method === 'sms_held' && Date.parse(A.tabs.WO_Followups[0].Due_At) === Date.parse('2026-10-19T13:00:00.000Z'), 'held text: due date counts from when it actually goes out', A.tabs.WO_Followups[0]);
+  A = makeWorld({ tabs: baseTabs(), staging: true }); A.smsResult = { queued_id: '1', send_ok: true, sent: false, gate_snapshot: 'x' };
+  j = D(await A.api.followupSend(A.env, sendBody(), url('/x'))); ok(j.ok && j.staged && A.tabs.WO_Followups[0].Send_Method === 'sms_staging_stub' && /api=staging/.test(j.link), 'staging stub counts as sent on staging only, and the link points the page at staging', j);
+}
 // FC_TEST_CONT
