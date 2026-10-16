@@ -12466,7 +12466,7 @@ async function generateEstimateText(env, body) {
     const scopeText=data.content?.[0]?.text?.trim()||''; if (!scopeText) return json({ error:'Claude returned empty response',detail:data }, 500);
     const doc=`${property_address}\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.`+partialScopeClauseText+integrityClauseText;
     return json({ success:true, text:doc, pricing:{ finalPrice:pricing.finalPrice, deposit:pricing.deposit } });
-  } catch(e) { return json({ error:e.message }, 500); }
+  } catch(e) { if (aiCreditIsPausedError(e)) return aiCreditPausedJson({ message: 'Automatic estimate wording is paused - type the scope text by hand.' }); return json({ error:e.message }, 500); }
 }
 // ── WO AUDIT ─────────────────────────────────────────────────
 
