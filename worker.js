@@ -16126,6 +16126,7 @@ const SCHED_JOBS = [
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
   { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
   { name: 'str_cleaning',       kind: 'interval', every_min: 14, run: (env) => schedRunStrCleaning(env) },
+  { name: 'followup_sweep',     kind: 'interval', every_min: 59, run: (env) => schedRunFollowupSweep(env) },   // tenant fix-check: ONE reminder 2 days after the text, 9am-7pm ET; texts Brett "no answer - call them"
   { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
   { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
   { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
