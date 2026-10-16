@@ -107,7 +107,7 @@ function makeFetch(db, delayMs, callLog) {
 
 function build(db, delayMs, callLog) {
   const src = [
-    'const CORS = {};',
+    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
     cacheSrc, srSrc, jsonSrc, fetchTabSrc, fetchTabsSrc, findRecentDupSrc, claimCacheSrc,
     'async function ensureColumns(){}',
     'async function addRow(){ return { success:true, id:"X" }; }', // WO_Tenants linking side-effect — not under test
