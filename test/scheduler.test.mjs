@@ -186,7 +186,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
   const bo = P.schedDueJobs(backoff, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
   t('a failed daily job in its retry back-off does not block anything (not due until the gap passes)', !bo.includes('daily_qb_sync') && bo.includes('str_cleaning'), bo.join());
   const early = P.schedDueJobs(S0(), iso('2026-10-14T09:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 05:00 EDT: only the interval jobs
-  t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning', early.join());
+  t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep', early.join());
   t('only[] restricts', P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, { only: ['sweep'] }).map(d => d.name).join() === 'sweep');
 }
 // schedStatus overdue logic
