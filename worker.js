@@ -16969,9 +16969,13 @@ async function schedRunNext(env, ctx, opts) {
     if (partialN > SCHED_MAX_PARTIALS) { jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${SCHED_MAX_PARTIALS} slices today (it needs a person to look)` }] }; }
     const isPartial = partialN > 0 && partialN <= SCHED_MAX_PARTIALS;
     const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
-    const jobOk = jobRes.ok !== false && errors.length === 0;
+    // Oct 16 2026: {ok:false, paused:true, reason} = "skipped on purpose because AI credit is paused". NOT a failure (Brett was already alerted once, and the
+    // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
+    const jobPaused = jobRes.paused === true && errors.length === 0;
+    const jobOk = jobPaused || (jobRes.ok !== false && errors.length === 0);
     const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
     const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
+    if (jobPaused) { out.paused = true; out.paused_reason = String(jobRes.reason || 'paused: AI credit').slice(0, 300); }
     if (isPartial && jobOk) out.partial = true;
     if (errors.length) out.errors = errors;
     if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
