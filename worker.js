@@ -12605,7 +12605,7 @@ async function translateBatchToEnglish(env, strings) {
     const out = arr.slice();
     idx.forEach((i, k) => { if (typeof parsed[k] === 'string' && parsed[k].trim()) out[i] = parsed[k].trim(); });
     return { ok: true, out, called: true };
-  } catch (e) { return { ok: false, out: arr, error: String((e && e.message) || e) }; }
+  } catch (e) { return Object.assign({ ok: false, out: arr, error: String((e && e.message) || e) }, aiCreditIsPausedError(e) ? { paused: true, code: AI_CREDIT_CODE } : {}); }
   finally { if (timer) clearTimeout(timer); }
 }
 
