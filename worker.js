@@ -16331,7 +16331,10 @@ function schedStatus(state, now, jobs, aiPausedAt) {
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
     }
-    out.jobs[job.name] = { expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
+    // Oct 16 2026: skipped on purpose because AI credit is paused -> shown as "paused: AI credit", NOT overdue (the pause itself is the loud, already-alerted problem).
+    const pausedNow = !!aiPausedAt && job.kind !== 'interval' && js.paused_key === et.date && js.paused_ep === aiPausedAt && js.last_key !== et.date;
+    if (pausedNow) { overdue = false; reason = ''; }
+    out.jobs[job.name] = Object.assign({ expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' }, pausedNow ? { paused: true, paused_reason: js.last_error || 'paused: AI credit' } : {});
     if (overdue) out.overdue.push(job.name);
   }
   return out;
