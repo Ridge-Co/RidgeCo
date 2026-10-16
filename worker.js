@@ -17660,6 +17660,12 @@ function formatDigestText(d) {
     (d.stuckReceipts||[]).forEach(x=>L.push('⚠ Receipt could not be read after 3 tries: '+x));
     L.push('');
   }
+  if ((d.followups && d.followups.length) || d.followupsError) {
+    L.push('▶ TENANT FIX-CHECKS');
+    (d.followups||[]).forEach(x=>L.push('· '+x));
+    if (d.followupsError) L.push('⚠ Could not read the fix-check list: '+d.followupsError);
+    L.push('');
+  }
   L.push('▶ NEEDS YOU TODAY');
   if (d.overdue.length)  { L.push(`${d.overdue.length} overdue:`); d.overdue.slice(0,6).forEach(x=>L.push('· '+x)); }
   if (d.dueToday.length) { L.push(`${d.dueToday.length} scheduled today:`); d.dueToday.forEach(x=>L.push('· '+x)); }
