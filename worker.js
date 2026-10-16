@@ -227,6 +227,9 @@ const _hubWorkerCore = {
       // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
       // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
       '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics',
+      // Tenant fix-check page (Oct 16 2026): public at the gate, but every handler self-verifies the signed, expiring fix-check token (scope 'fix-check',
+      // hash-checked against WO_Followups.Token_Hash, bound to ONE follow-up and ONE tenant) before reading or writing anything.
+      '/fix/page','/fix/answer','/fix/upload-session','/fix/log-attachment',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
       '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
