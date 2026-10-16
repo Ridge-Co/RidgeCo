@@ -16438,9 +16438,17 @@ async function schedRunDailyDigest(env) {
   return { ok: !errors.length, errors, warnings, no_retry, detail: { delivered: !!(delivery && delivery.delivered) } };
 }
 async function schedRunDailyReceipts(env) {
-  const errors = [], detail = {};
-  detail.receipt_scan = await schedStep('receipt_scan', () => receiptScan(env), errors);
-  detail.receipt_recon_scan = await schedStep('receipt_recon_scan', () => receiptReconScan(env, { max: 5 }), errors);
+  const errors = [], detail = {}, flags = { paused: false };
+  // Oct 16 2026: AI credit paused -> skip BOTH scans without touching Drive or Anthropic and report {ok:false, paused:true, reason}.
+  // (Before this the job re-tried the same PDFs every ~30 min all night after the credit ran out and nobody was told.)
+  const st0 = await aiCreditCheck(env);
+  if (st0.paused) return aiCreditSchedPaused(st0, { skipped: 'receipt_scan and receipt_recon_scan were not run' });
+  detail.receipt_scan = await schedAiStep('receipt_scan', () => receiptScan(env), errors, flags);
+  if (!flags.paused) detail.receipt_recon_scan = await schedAiStep('receipt_recon_scan', () => receiptReconScan(env, { max: 5 }), errors, flags);
+  if (flags.paused) {
+    detail.paused_during_run = true;
+    if (!errors.length) return aiCreditSchedPaused(await aiCreditCheck(env), detail);   // credit ran out DURING the scan: files already queued stay queued; the rest wait
+  }
   return { ok: !errors.length, errors, detail };
 }
 async function schedRunDailyReceiptsPost(env) {
