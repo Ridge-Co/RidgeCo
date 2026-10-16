@@ -16296,7 +16296,7 @@ function schedExpected(job) {
   return `${SCHED_DOW_NAMES[job.dow]} after ${job.at} ET`;
 }
 // Pure. Per-job health for /cron/status and /health.
-function schedStatus(state, now, jobs) {
+function schedStatus(state, now, jobs, aiPausedAt) {
   const nowDate = now instanceof Date ? now : new Date(now);
   const nowMs = +nowDate, et = schedEtParts(nowDate);
   const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
