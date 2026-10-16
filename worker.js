@@ -31612,7 +31612,9 @@ async function strAddRows(env, tab, list) {
   if (!headers.length) throw strErr('sheet_write', `Tab ${tab} has no header row`);
   const idc = idColIndex(headers); let next = rows.slice(1).reduce((m, r) => Math.max(m, parseInt((r && r[idc]) || '0', 10) || 0), 0);
   const ids = [], values = list.map(f => { const id = String(++next); ids.push(id); return headers.map(h => h === 'ID' ? id : (f[h] !== undefined && f[h] !== null ? String(f[h]) : '')); });
-  await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW`, { values });
+  const appendResp = await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW`, { values });
+  try { const g = await guardAppendedIds(env, tab, appendResp, rows.length, idc, ids); for (let i = 0; i < ids.length; i++) ids[i] = g.ids[i]; }
+  catch (e) { throw strErr('write_not_landed', `A new ${tab} row may share its id with another row: ${strErrText(e)}`); }
   invalidateTabCache(tab);
   const back = await fetchTab(env, tab);
   for (const id of ids) if (!back.some(r => String(r.ID) === id)) throw strErr('write_not_landed', `A new ${tab} row (#${id}) was not found after saving`);
