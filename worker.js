@@ -2780,6 +2780,7 @@ async function receiptReconScan(env, body) {
       n++;
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
     } catch (e) {
+      if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out mid-scan: stop, no attempt counted, nothing retried
       errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
       if (receiptReconIsConfigError(e && e.message)) { configError = String(e.message).slice(0, 200); break; }
       const prior = failures[f.id];
