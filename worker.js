@@ -15280,7 +15280,15 @@ async function smsGatedSend(env, opts) {
     Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
   const newRow = headers.map(h => rowObj[h] ?? '');
-  await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
+  const _mqAppend = await sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append?valueInputOption=RAW`, { values: [newRow] });
+  // Oct 16 2026: two texts sent at the same moment used to get the SAME queue id (see guardAppendedIds). Make ours unique, and from here on
+  // address our own row by its row number so a duplicate id can never make us edit someone else's message.
+  let mqRow = appendedRowNumber(_mqAppend);
+  try {
+    const _g = await guardAppendedIds(env, MSG_QUEUE_TAB, _mqAppend, rows.length, headers.indexOf('ID') >= 0 ? headers.indexOf('ID') : 0, [id]);
+    id = _g.ids[0]; mqRow = _g.row || mqRow;
+  } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
+  const mqOpts = mqRow ? { sheetRow: mqRow } : undefined;
 
   let sent = false, deliveredTo = '', outcome = 'blocked';
   if (sendOk && recipientPhone) {
