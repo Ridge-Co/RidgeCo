@@ -18252,8 +18252,7 @@ Ground every item in the metrics. If a job_type shows repeated failures or human
 
 TELEMETRY METRICS (${days}d):
 ${JSON.stringify(metrics, null, 2)}`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }) });
-  const data = await resp.json();
+  const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }, { source: 'llmReviewProposal' });
   let txt = (data.content && data.content[0] && data.content[0].text || '').trim();
   if (!txt) throw new Error('empty LLM response');
   txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
