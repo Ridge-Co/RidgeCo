@@ -22867,6 +22867,137 @@ function _b64urlToBytes(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while
 async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw', _tenc.encode(secret), {name:'HMAC',hash:'SHA-256'}, false, ['sign']); const sig=await crypto.subtle.sign('HMAC', key, _tenc.encode(data)); return _b64urlBytes(new Uint8Array(sig)); }
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
+/* FIX_CHECK:START */
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//  TENANT FIX-CHECK  (Oct 16 2026)  — "have you had any more trouble with this issue?"
+//  Brett: "It's sort of like a quality control check, but specific to their issue. Not just 'can you give us a
+//  review', but 'have you had any more trouble with this issue?' ... differentiate between the cosmetic condition of
+//  the window and the actual physical leak ... Two-way texting doesn't exist yet, so the tenant answers on a page via
+//  a link ... it must be checked again after a couple of days."
+//
+//  • Rule-based only (NO LLM): classifyIssue(wo) splits a work order into the REPAIR part (the thing that physically has
+//    to work - the only thing the tenant is asked about) and the COSMETIC part (drywall / paint / trim / stain - never
+//    asked; carried along as the pre-filled description of the follow-on cosmetic WO).
+//  • Brett's tap on Send in the PREVIEW is the approval for that single text. Nothing is ever sent on open, and nothing
+//    is ever auto-dispatched: answers only produce SUGGESTIONS (create the cosmetic WO / send the vendor back).
+//  • Tenant link = signed HMAC token (scope 'fix-check'), 14-day window, scoped to ONE follow-up + ONE tenant, hash-checked
+//    against WO_Followups.Token_Hash (the raw token is never stored). No PIN.
+//  • SMS goes through smsGatedSend (all gating layers, Message_Queue, quiet hours, test mode) with the tenant STOP note.
+//  • Reminder: SCHED_JOBS entry `followup_sweep` (Apps Script clock, NO cron). One reminder per follow-up, ever, 9am-7pm ET.
+//  • Nothing fails silently: every catch logs to Ops_Telemetry and the failure is returned / shown.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+const FU_TAB = 'WO_Followups';
+const FU_COLS = ['ID','WO_ID','Repair_WO_ID','Property_ID','Unit_ID','Tenant_ID','Tenant_Name','Check_Type','Problem_Label','Problem_Label_Es','Object_Label','Object_Label_Es','Repair_Part','Cosmetic_Part','Repair_Date','Cosmetic_Vendor_ID','Rework_Vendor_ID','Language','Status','Blocked_Reason','Created_At','Created_By','Sent_At','Send_Method','Queue_ID','Due_At','Reminder_Sent_At','Reminder_Result','Token_Hash','Token_Expires_At','Answer','Answer_Choice','Answer_Detail','Answer_Location','Answer_Extra','Answer_Photo_IDs','Answered_At','Answer_History','Alerted_Answer','Alert_Result','Suggested_Next','Next_WO_ID','Closed_At','Closed_Reason','Active'];
+const FU_CHECK_TYPES = ['leak','electrical','plumbing_flow','hvac','appliance','lock_door','pest','other'];
+const FU_STATUSES = ['Draft','Sent','Answered','Overdue','Closed','Blocked'];
+const FU_ANSWERS = ['resolved','persists','worse','different_location','not_sure','safety'];
+const FU_ALERT_ANSWERS = ['persists','worse','different_location','safety'];       // Brett is texted the moment one of these arrives
+const FU_NEEDS_ACTION_ANSWERS = ['persists','worse','different_location','safety','not_sure'];
+const FU_WINDOW_DAYS = 14;        // how long the tenant's link works
+const FU_DUE_DAYS = 2;            // Brett: "checked again after a couple of days"
+const FU_MAX_PHOTOS = 6;
+const FU_PAGE_BASE = 'https://ridge-co.github.io/RidgeCo';
+const FU_MSG_TYPE = 'tenant_fix_check';
+const FU_REMINDER_START_ET = 9, FU_REMINDER_END_ET = 19;   // reminders only 9am-7pm ET
+
+// ── tiny pure helpers ────────────────────────────────────────────────────────────────────────────
+const fuCap = s => String(s).replace(/^(¿?)([a-zñáéíóú])/, (m, a, b) => a + b.toUpperCase());
+const fuS = v => String(v == null ? '' : v).trim();
+const fuClip = (v, n) => fuS(v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, n);
+const fuT = (en, es) => ({ en, es: es == null ? en : es });
+function fuAddDays(iso, days) { const t = Date.parse(iso); return new Date((isNaN(t) ? Date.now() : t) + days * 86400000).toISOString(); }
+const FU_MON_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const FU_MON_ES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+// "2026-10-10" or an ISO timestamp -> "Oct 10" / "10 de oct". '' when it is not a date.
+function fuDateLabel(d, lang) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(fuS(d)); if (!m) return '';
+  const mo = parseInt(m[2], 10) - 1, day = parseInt(m[3], 10); if (mo < 0 || mo > 11) return '';
+  return lang === 'es' ? `${day} de ${FU_MON_ES[mo]}` : `${FU_MON_EN[mo]} ${day}`;
+}
+
+// ── 1. ISSUE RECOGNITION (rule-based, editable in the preview) ───────────────────────────────────
+// COSMETIC = how it looks. A segment is cosmetic only when it hits one of these AND names no physical subject below.
+const FU_COSMETIC_RE = /\b(dry ?wall|sheet ?rock|plaster(ing)?|patch(ing|ed)? (the )?(hole|holes|wall|walls|ceiling|drywall)|paint(ing|ed|s)?|re-?paint\w*|touch[- ]?ups?|spackl\w*|mudd?(ing)?|tape (and|&) mud|textur\w*|refinish\w*|finish(ing)? (coat|work)|trim|base ?boards?|stain(s|ed|ing)?|discolou?r\w*|scuff\w*|wall ?paper\w*|primer|cosmetic\w*|caulk\w* (for|to) (look|looks|appearance)|unsightly)\b/i;
+// PHYSICAL SUBJECTS = the thing that has to physically work. [regex, weight]; best total wins, ties go to the earlier type.
+const FU_SUBJECTS = [
+  ['leak', [[/\b(leak\w*|drip\w*|seep\w*|flood\w*)\b/i, 3], [/\bwater (is |was )?(coming|comes|came|getting|gets|got|intrusion|infiltration|damage)\b/i, 3], [/\b(roof\w*|flashing|gutters?|skylight|shingles?|condensation|moisture|damp\w*)\b/i, 2]]],
+  ['plumbing_flow', [[/\b(clog\w*|back(ed|ing)?[- ]?up|stoppage|sewer|plunge\w*|snake[d]?)\b/i, 3], [/\b(slow(ly)?[- ](drain\w*|sink|tub|bathtub|shower)|drain\w*|no hot water|hot water|water heater|no water|water pressure|low pressure)\b/i, 2], [/\b(toilet|flush\w*|disposal|faucet|sink|tub|bathtub|shower)\b/i, 1]]],
+  ['electrical', [[/\b(outlets?|receptacles?|gfci|breakers?|fuses?|wiring|electric\w*|spark\w*|shock\w*|no power|power (out|outage|off|loss)|panel)\b/i, 3], [/\b(switch(es)?|light(s|ing)?|bulbs?|fixture|smoke (detector|alarm)|co detector|doorbell|flicker\w*)\b/i, 2]]],
+  ['hvac', [[/\b(hvac|furnace|boiler|thermostat|heat pump|mini[- ]?split|a\/c|ac|ac unit|air ?condition\w*|no heat|no cool\w*|radiator|heat)\b/i, 3]]],
+  ['appliance', [[/\b(refrigerator|fridge|freezer|stove|oven|range|dishwasher|washer|dryer|microwave|appliance|washing machine)\b/i, 3]]],
+  ['lock_door', [[/\b(lock\w*|keys?|deadbolt|door ?(knob|handle|latch|closer)|latch|re-?key\w*|hinges?|door (won'?t|doesn'?t|does not|stuck|sticks|sticking|jam\w*|rubbing))\b/i, 3]]],
+  ['pest', [[/\b(pests?|roach\w*|cockroach\w*|mice|mouse|rats?|rodents?|bed ?bugs?|ants?|termites?|wasps?|bees?|spiders?|bugs?|infest\w*|exterminat\w*)\b/i, 3]]],
+];
+const FU_HVAC_BLOCK = /\b(water heater|hot water)\b/i;
+const FU_TRADE_HINT = { plumbing: null, electrical: 'electrical', hvac: 'hvac', roofing: 'leak', 'pest control': 'pest', locks: 'lock_door', locksmith: 'lock_door', appliance: 'appliance' };
+function fuSegmentScores(seg) {
+  const out = {};
+  for (const [type, pats] of FU_SUBJECTS) {
+    if (type === 'hvac' && FU_HVAC_BLOCK.test(seg)) continue;
+    let s = 0; for (const [re, w] of pats) if (re.test(seg)) s += w;
+    if (s > 0) out[type] = s;
+  }
+  return out;
+}
+function fuBestType(scores) { let best = null, bs = 0; for (const [type] of FU_SUBJECTS) { if ((scores[type] || 0) > bs) { best = type; bs = scores[type]; } } return best; }
+// Split on sentence ends and joiners, NOT on "/" or "," ("drywall/paint" stays one cosmetic phrase).
+function fuSplitSegments(desc) {
+  return fuS(desc).split(/(?:[.;!?\n]+|\s+(?:and|then|also|plus|&)\s+|\s+\+\s+)/i).map(s => s.replace(/^[\s,:-]+|[\s,:-]+$/g, '')).filter(Boolean);
+}
+// "the thing" nouns -> [English noun, Spanish noun-with-article]. Used for the plain-English labels.
+const FU_OBJECTS = [
+  ['skylight', 'the skylight', 'el tragaluz'], ['window', 'the window', 'la ventana'], ['roof', 'the roof', 'el techo'], ['ceiling', 'the ceiling', 'el techo'],
+  ['chimney', 'the chimney', 'la chimenea'], ['gutter', 'the gutter', 'el canalón'], ['attic', 'the attic', 'el ático'], ['basement', 'the basement', 'el sótano'],
+  ['water heater', 'the water heater', 'el calentador de agua'], ['dishwasher', 'the dishwasher', 'el lavavajillas'], ['washer', 'the washer', 'la lavadora'],
+  ['faucet', 'the faucet', 'la llave del agua'], ['toilet', 'the toilet', 'el inodoro'], ['bathtub', 'the tub', 'la tina'], ['tub', 'the tub', 'la tina'], ['shower', 'the shower', 'la ducha'],
+  ['sink', 'the sink', 'el fregadero'], ['pipe', 'the pipe', 'la tubería'], ['radiator', 'the radiator', 'el radiador'], ['wall', 'the wall', 'la pared'], ['door', 'the door', 'la puerta'], ['floor', 'the floor', 'el piso'],
+];
+function fuFindObject(text) {
+  const t = fuS(text).toLowerCase(); let best = null, at = 1e9;
+  for (const [key, en, es] of FU_OBJECTS) { const m = new RegExp('\\b' + key + 's?\\b').exec(t); if (m && m.index < at) { at = m.index; best = { key, en, es }; } }
+  return best;
+}
+const FU_ELEC_OBJECTS = [['smoke detector', 'the smoke detector', 'el detector de humo'], ['smoke alarm', 'the smoke alarm', 'la alarma de humo'], ['outlet', 'the outlet', 'el enchufe'], ['receptacle', 'the outlet', 'el enchufe'], ['breaker', 'the breaker', 'el interruptor automático (breaker)'], ['panel', 'the electrical panel', 'el panel eléctrico'], ['switch', 'the switch', 'el interruptor'], ['doorbell', 'the doorbell', 'el timbre'], ['light', 'the light', 'la luz'], ['bulb', 'the light', 'la luz'], ['fixture', 'the light fixture', 'la lámpara']];
+const FU_HVAC_OBJECTS = [['thermostat', 'the thermostat', 'el termostato'], ['furnace', 'the furnace', 'el sistema de calefacción'], ['boiler', 'the boiler', 'la caldera'], ['heat pump', 'the heat pump', 'la bomba de calor'], ['air condition', 'the A/C', 'el aire acondicionado'], ['a/c', 'the A/C', 'el aire acondicionado'], ['ac unit', 'the A/C', 'el aire acondicionado'], ['cooling', 'the A/C', 'el aire acondicionado'], ['radiator', 'the radiator', 'el radiador'], ['heat', 'the heat', 'la calefacción']];
+const FU_APPLIANCE_OBJECTS = [['refrigerator', 'the refrigerator', 'el refrigerador'], ['fridge', 'the refrigerator', 'el refrigerador'], ['freezer', 'the freezer', 'el congelador'], ['dishwasher', 'the dishwasher', 'el lavavajillas'], ['washing machine', 'the washer', 'la lavadora'], ['washer', 'the washer', 'la lavadora'], ['dryer', 'the dryer', 'la secadora'], ['microwave', 'the microwave', 'el microondas'], ['stove', 'the stove', 'la estufa'], ['oven', 'the oven', 'el horno'], ['range', 'the range', 'la estufa']];
+function fuFindIn(list, text) { const t = fuS(text).toLowerCase(); for (const [key, en, es] of list) if (t.includes(key)) return { key, en, es }; return null; }
+const FU_VERB_WORDS = /^(fix|fixed|repair|repaired|repairs|replace|replaced|reinstall|install|reinstalled|change|changed|remove|check|need|needs|needed|please|asap|also|as|well|the|a|an|to|be|is|are|was|not|sure|what|happened|but|started|new|unit)$/i;
+// Fallback noun phrase for an unrecognised problem: strip verbs, keep up to 4 words, "the <words>".
+function fuFallbackLabel(seg) {
+  const words = fuS(seg).toLowerCase().replace(/[^a-z0-9\s'/-]/g, ' ').split(/\s+/).filter(Boolean);
+  while (words.length && FU_VERB_WORDS.test(words[0])) words.shift();
+  while (words.length && FU_VERB_WORDS.test(words[words.length - 1])) words.pop();
+  const kept = words.slice(0, 4).join(' ');
+  return kept ? ('the ' + kept) : '';
+}
+function fuLabelFor(type, text) {
+  // returns { problem_label, problem_label_es, object_label, object_label_es }
+  const generic = { problem_label: '', problem_label_es: '', object_label: 'the spot we repaired', object_label_es: 'el lugar que reparamos' };
+  if (type === 'leak') {
+    const o = fuFindObject(text);
+    return o ? { problem_label: `${o.en} leak`, problem_label_es: `la filtración de agua en ${o.es}`, object_label: o.en, object_label_es: o.es }
+             : { problem_label: 'the leak', problem_label_es: 'la filtración de agua', object_label: generic.object_label, object_label_es: generic.object_label_es };
+  }
+  if (type === 'electrical') { const o = fuFindIn(FU_ELEC_OBJECTS, text); return o ? { problem_label: o.en, problem_label_es: o.es, object_label: o.en, object_label_es: o.es } : { problem_label: 'the electrical repair', problem_label_es: 'la reparación eléctrica', object_label: 'the electrical repair', object_label_es: 'la reparación eléctrica' }; }
+  if (type === 'hvac') { const o = fuFindIn(FU_HVAC_OBJECTS, text); return o ? { problem_label: o.en, problem_label_es: o.es, object_label: o.en, object_label_es: o.es } : { problem_label: 'the heating/cooling', problem_label_es: 'la calefacción o el aire acondicionado', object_label: 'the heating/cooling', object_label_es: 'la calefacción o el aire acondicionado' }; }
+  if (type === 'appliance') { const o = fuFindIn(FU_APPLIANCE_OBJECTS, text); return o ? { problem_label: o.en, problem_label_es: o.es, object_label: o.en, object_label_es: o.es } : { problem_label: 'the appliance', problem_label_es: 'el electrodoméstico', object_label: 'the appliance', object_label_es: 'el electrodoméstico' }; }
+  if (type === 'plumbing_flow') {
+    const t = fuS(text).toLowerCase();
+    if (/hot water|water heater/.test(t)) return { problem_label: 'the hot water', problem_label_es: 'el agua caliente', object_label: 'the hot water', object_label_es: 'el agua caliente' };
+    if (/\btoilet\b/.test(t)) return { problem_label: 'the toilet', problem_label_es: 'el inodoro', object_label: 'the toilet', object_label_es: 'el inodoro' };
+    if (/disposal/.test(t)) return { problem_label: 'the garbage disposal', problem_label_es: 'el triturador de basura', object_label: 'the garbage disposal', object_label_es: 'el triturador de basura' };
+    if (/water pressure|low pressure/.test(t)) return { problem_label: 'the water pressure', problem_label_es: 'la presión del agua', object_label: 'the water pressure', object_label_es: 'la presión del agua' };
+    const fx = /\b(bath ?tub|tub)\b/.test(t) ? ['bathtub', 'la tina'] : /\bshower\b/.test(t) ? ['shower', 'la ducha'] : /\bkitchen sink\b/.test(t) ? ['kitchen sink', 'el fregadero de la cocina'] : /\b(bathroom sink|vanity)\b/.test(t) ? ['bathroom sink', 'el lavabo del baño'] : /\bsink\b/.test(t) ? ['sink', 'el fregadero'] : null;
+    const l = fx ? { en: `the ${fx[0]} drain`, es: `el desagüe de ${fx[1]}` } : { en: 'the drain', es: 'el desagüe' };
+    return { problem_label: l.en, problem_label_es: l.es, object_label: l.en, object_label_es: l.es };
+  }
+  if (type === 'lock_door') { const isLock = /lock|key|deadbolt/i.test(text); const l = isLock ? ['the door lock', 'la cerradura de la puerta'] : ['the door', 'la puerta']; return { problem_label: l[0], problem_label_es: l[1], object_label: l[0], object_label_es: l[1] }; }
+  if (type === 'pest') {
+    const t = fuS(text).toLowerCase(); const k = /roach/.test(t) ? ['roach', 'cucarachas'] : /mice|mouse|rat|rodent/.test(t) ? ['mouse', 'ratones'] : /bed ?bug/.test(t) ? ['bed bug', 'chinches'] : /\bant/.test(t) ? ['ant', 'hormigas'] : /termite/.test(t) ? ['termite', 'termitas'] : /wasp|bee/.test(t) ? ['wasp/bee', 'avispas o abejas'] : null;
+    return k ? { problem_label: `the ${k[0]} problem`, problem_label_es: `el problema de ${k[1]}`, object_label: `the ${k[0]} problem`, object_label_es: `el problema de ${k[1]}` } : { problem_label: 'the pest problem', problem_label_es: 'el problema de plagas', object_label: 'the pest problem', object_label_es: 'el problema de plagas' };
+  }
+/* FIX_CHECK:CONT */
+
 const ROLE_SCOPES = {
   vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
     // Vendor Additional Work (Sep 30 2026): ownership of the parent / child WO is re-checked server-side in each handler.
