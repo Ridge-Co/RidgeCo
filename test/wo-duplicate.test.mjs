@@ -130,9 +130,9 @@ function makeFetch(db, opts, log) {
     if (method === 'POST' && m2) {
       const body = JSON.parse(fopts.body);
       if (!db[m2[1]]) db[m2[1]] = { headers: [], rows: [] };
-      db[m2[1]].rows.push(...body.values);
+      const __first = db[m2[1]].rows.length + 2; db[m2[1]].rows.push(...body.values);
       if (opts.onAppend) opts.onAppend(m2[1], body.values, db);
-      return { json: async () => ({}) };
+      return { json: async () => ({ updates: { updatedRange: m2[1] + '!A' + __first } }) };
     }
     if (method === 'GET' && path.startsWith('?fields=')) return { json: async () => ({ sheets: [] }) };
     throw new Error('unhandled mock path: ' + method + ' ' + path);
