@@ -232,6 +232,79 @@ reset(); for (let i = 0; i < 25; i++) { a = mk('', { where: 'spam', message: 'm'
 ok(r.status === 429, 'anonymous spam is rate limited (429)');
 reset(); r = await L.reportFailure(env, { where: 'real', message: 'important' }); ok(r.ok, 'real reports still get through while anonymous spam is capped');
 
+console.log('\nA3a: daily checks');
+ok(JSON.stringify(L.failDuplicateIds(['1', '2', '2', ' 3', '3', '', '4'])) === '["2","3"]', 'duplicate ids found, blanks ignored');
+const NOW = T0;
+let st = L.failMessageQueueStats([
+  { Status: 'pending', Active: 'TRUE', Send_After: new Date(NOW - 8 * 3600000).toISOString() },
+  { Status: 'pending', Active: 'TRUE', Send_After: new Date(NOW - 1 * 3600000).toISOString() },
+  { Status: 'pending', Active: 'FALSE', Send_After: new Date(NOW - 9 * 3600000).toISOString() },
+  { Status: 'pending', Active: 'TRUE', Send_After: '' },
+  { Status: 'failed', Created_Date: new Date(NOW - 2 * 3600000).toISOString() },
+  { Status: 'failed', Created_Date: new Date(NOW - 50 * 3600000).toISOString() },
+  { Status: 'sent' }], NOW);
+ok(st.stuck === 1 && st.oldest_hours === 8 && st.failed24 === 1, 'stuck = active pending text >6 h past its send time; failed counted for 24 h only; held/inactive/old rows ignored');
+let it = L.failInvariantItems({ dup: [{ tab: 'Message_Queue', ids: ['298'] }, { tab: 'Work_Orders', ids: [] }], mq: { stuck: 2, oldest_hours: 9, failed24: 0 }, twilio: { balance: 8.5 }, errors: [{ check: 'message_queue', error: 'boom' }] });
+ok(it.length === 4 && it.find(x => x.key === 'inv:dup:Message_Queue').severity === 'P1' && it.find(x => x.key === 'inv:twilio_balance').severity === 'P0' && it.find(x => x.key === 'inv:check_failed:message_queue'), 'items: duplicates P1, Twilio under $10 P0, and a check that could not run is itself an item');
+ok(L.failInvariantItems({ twilio: { balance: 18 } })[0].severity === 'P1' && L.failInvariantItems({ twilio: { balance: 80 } }).length === 0, 'Twilio $10-$25 is P1; healthy balance raises nothing');
+// full run against fake sheet
+reset();
+SHEET.Message_Queue = [['ID', 'Status', 'Active', 'Send_After', 'Created_Date'], ['1', 'pending', 'TRUE', new Date(T0 - 9 * 3600000).toISOString(), ''], ['2', 'sent', 'TRUE', '', ''], ['2', 'sent', 'TRUE', '', '']];
+SHEET.Work_Orders = [['Vendor_Needs_Access', 'ID'], ['', 'WO-1'], ['', 'WO-2']];
+const envT = { TWILIO_SID: 'AC1', TWILIO_API_SID: 'SK1', TWILIO_API_KEY: 'k' }; TWILIO = { body: { balance: '7.10' } };
+res = await L.failRollupRun(envT, { nowMs: T0 });
+const rowsA = SHEET.Failures.slice(1).map(x => x[1]);
+ok(rowsA.includes('cond|inv:dup:Message_Queue') && rowsA.includes('cond|inv:mq_stuck') && rowsA.includes('cond|inv:twilio_balance') && !rowsA.includes('cond|inv:dup:Work_Orders'), 'the daily checks put duplicate IDs, a stuck text and a low Twilio balance on the ledger (WO header is not column A: found by name)');
+ok(SMS.length >= 1 && /Twilio balance|Hub problem/.test(SMS[0].text), 'a low Twilio balance (P0) texts');
+const storedCfg = SHEET.Config.find(x => x[0] === 'failure_invariants_json');
+ok(storedCfg && JSON.parse(storedCfg[1]).items.length >= 3, 'the result is stored in Config so the next 15-minute runs do not re-read every tab');
+const reads = []; const origSR = sheetsRequest;
+SHEET.Message_Queue.splice(2, 1);                                // fix the duplicate; the stored result is still fresh, so nothing changes yet
+res = await L.failRollupRun(envT, { nowMs: T0 + 900000 });
+ok(SHEET.Failures.slice(1).find(x => x[1] === 'cond|inv:dup:Message_Queue')[10] === 'open', 'within 20 h the stored result is used (no re-read)');
+res = await L.failRollupRun(envT, { nowMs: T0 + 21 * 3600000 });
+ok(SHEET.Failures.slice(1).find(x => x[1] === 'cond|inv:dup:Message_Queue')[10] === 'fixed', 'after 20 h the checks re-run and a repaired problem clears itself');
+reset(); TWILIO = new Error('Twilio down');
+res = await L.failRollupRun(envT, { nowMs: T0 });
+ok(SHEET.Failures.slice(1).some(x => x[1] === 'cond|inv:check_failed:twilio_balance' && x[2] === 'P1'), 'if the Twilio check cannot run, that is itself a visible problem (never silent)');
+reset(); TWILIO = { body: { balance: '50' } };
+const storedBad = JSON.parse(JSON.stringify([['failure_invariants_json', '{not json']])); SHEET.Config.push(storedBad[0]);
+res = await L.failRollupRun(envT, { nowMs: T0 });
+ok(res.ok !== undefined && !SHEET.Failures.slice(1).some(x => /inv:run_failed/.test(x[1])), 'a corrupt stored result is simply recomputed');
+
+console.log('\nA3a: auto-queue of problems left open > 24 h');
+const lrow = (o) => Object.assign({ ID: 'F1', Fingerprint: 'hub|x|y', Severity: 'P0', System: 'hub', Where: 'receipt_parse', Message: 'credit balance too low', Count: '19', Status: 'open', First_Seen: new Date(T0 - 30 * 3600000).toISOString(), Last_Seen: new Date(T0).toISOString(), Notes: '', _row: 2 }, o);
+ok(L.failQueuePlan([lrow({})], T0).length === 1, 'P0 open 30 h is queued');
+ok(L.failQueuePlan([lrow({ First_Seen: new Date(T0 - 5 * 3600000).toISOString() })], T0).length === 0, 'not before 24 h');
+ok(L.failQueuePlan([lrow({ Severity: 'P2' })], T0).length === 0 && L.failQueuePlan([lrow({ Status: 'fixed' })], T0).length === 0 && L.failQueuePlan([lrow({ Status: 'wontfix' })], T0).length === 0, 'minor, fixed and won\'t-fix problems are never queued');
+ok(L.failQueuePlan([lrow({ Notes: '2026-10-16 queued: Ops_Build_Queue #77' })], T0).length === 0, 'already queued: never twice');
+ok(L.failQueuePlan([lrow({ Fingerprint: 'cond|alerts_off' })], T0).length === 0, 'switches Brett flips himself are not build work');
+ok(L.failQueuePlan([1, 2, 3, 4, 5].map(i => lrow({ ID: 'F' + i, _row: i + 1 })), T0).length === 3, 'at most 3 per run (a pile-up cannot flood the queue)');
+ok(/^Fix: receipt_parse/.test(L.failQueueItem(lrow({})).title) && /Needs Attention ID F1/.test(L.failQueueItem(lrow({})).problem), 'queue item names the place and the ledger ID');
+const R0 = Date.now();
+reset(); await L.reportFailure(env, { where: 'receipt_parse', message: 'credit balance too low' });
+await L.failRollupRun(env, { nowMs: R0 });
+res = await L.failRollupRun(env, { nowMs: R0 + 30 * 3600000 });
+const q = SHEET.Ops_Build_Queue;
+ok(res.queued === 1 && q && q.length === 2 && q[1][10] === 'proposed' && q[1][11] === 'failure-ledger' && /Fix: receipt_parse/.test(q[1][2]), 'after 24 h an open P0 lands in Ops_Build_Queue as "proposed" (Brett still decides)');
+ok(/queued: Ops_Build_Queue #1/.test(SHEET.Failures.slice(1).find(x => x[4] === 'receipt_parse')[15]), 'the ledger row records which queue item it became');
+res = await L.failRollupRun(env, { nowMs: R0 + 31 * 3600000 });
+ok(res.queued === 0 && SHEET.Ops_Build_Queue.length === 2, 'and the next run does not queue it again');
+reset(); await L.reportFailure(env, { where: 'receipt_parse', message: 'credit balance too low' });
+await L.failRollupRun(env, { nowMs: R0 }); QUEUE_FAIL = true;
+res = await L.failRollupRun(env, { nowMs: R0 + 30 * 3600000 });
+ok(res.ok === false && res.errors.some(e => e.step === 'queue_item') && !/queued:/.test(SHEET.Failures.slice(1).find(x => x[4] === 'receipt_parse')[15]), 'if the queue write fails the job reports it and the ledger is not marked queued (it retries)');
+
+console.log('\nA3a: the Apps Script scheduler token may report with real severities');
+reset(); SHEET.Config.push(['Scheduler_Token', 'sched-secret-token-0123456789abcdef0123456789']);
+env.WORKER_SECRET = 'adm'; env.FAILURE_INGEST_TOKEN = '';
+a = mk('sched-secret-token-0123456789abcdef0123456789', { system: 'scheduler', source: 'apps-script', where: 'worker_probe:barrel-co', message: 'barrel-co /health HTTP 502', severity: 'P1' });
+r = await L.failReportEndpoint(env, a.request, a.body);
+ok(r.status === 200 && SHEET.Failure_Events[1][2] === 'scheduler' && SHEET.Failure_Events[1][6] === 'P1', 'the scheduler token is trusted: system and severity are kept');
+a = mk('wrong-token', { system: 'scheduler', where: 'x', message: 'm', severity: 'P0' });
+r = await L.failReportEndpoint(env, a.request, a.body);
+ok(r.status === 200 && SHEET.Failure_Events[2][6] === 'P2' && SHEET.Failure_Events[2][2] === 'page:scheduler', 'a wrong token is treated as anonymous (P2, tagged page:)');
+
 console.log('\nWiring (static) + telemetry bridge');
 const lt = grab('logTelemetry', 'async');
 ok(/Success == null \? '' : rec\.Success\)\.toUpperCase\(\) === 'FALSE'/.test(lt) && /reportFailure\(env/.test(lt), 'logTelemetry mirrors every Success=FALSE row into the ledger');
