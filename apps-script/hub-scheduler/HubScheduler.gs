@@ -21,6 +21,8 @@
  *   - a row is ON but is missing a secret it needs                  → once a day, until you add it or switch the row off
  *   - the JOBS table has a typo                                     → hourly, until fixed (Hub jobs keep running on their last schedule)
  *   - there is more than one scheduler timer (it deletes the extras and tells you)
+ *   - the Hub's failure ledger has an urgent problem nobody acknowledged     → email at once, then every 6 h while the list is unchanged (works even if Hub texting is down or alerts are off)
+ *   - another Worker (BarrelCo, STR, BrettOS, Pinterest) fails its health check twice in a row → email + a ledger item, then a "back up" email
  *   - this script itself throws (it emails you, then re-throws so Google's own failure email also fires)
  *
  * ── SETUP: TWO STEPS, YOU CHOOSE WHEN TO START ─────────────────────────────────────────────────────
@@ -107,6 +109,14 @@ var PINTEREST_URL = 'https://pinterest-sync.brett-2f8.workers.dev';
 var BARRELCO_URL  = 'https://barrel-co.brett-2f8.workers.dev';
 var STR_URL       = 'https://str-automation.brett-2f8.workers.dev';
 var BRETTOS_URL   = 'https://brett-os.brett-2f8.workers.dev';
+// Workers the watcher probes every tick (GET /health). Up = any answer below HTTP 500 (a 404 or 401 still proves the Worker is alive);
+// down = no answer, a Cloudflare error, or HTTP 5xx. To watch another Worker add a row here.
+var PROBES = [
+  { name: 'brett-os',       url: BRETTOS_URL },
+  { name: 'barrel-co',      url: BARRELCO_URL },
+  { name: 'str-automation', url: STR_URL },
+  { name: 'pinterest-sync', url: PINTEREST_URL },
+];
 var CONFIG_TAB    = 'Config';
 var TOKEN_KEY     = 'Scheduler_Token';
 var ENTRY_TOKEN_KEY = 'Entry_Run_Token';   // the key in the BarrelCo sheet's Config tab
@@ -116,6 +126,8 @@ var MAX_CALLS     = 25;                    // one Hub job per call; the Hub has 
 var MAX_RUN_MS    = 4.5 * 60 * 1000;       // stay under Apps Script's 6-minute limit; anything left waits for the next tick
 var HUB_SHARE     = 0.6;                   // the Hub loop may use at most this share of the run; the rest is for the other rows
 var FAIL_REMIND_MS    = 60 * 60 * 1000;    // Hub unreachable: reminder at most hourly
+var LEDGER_REMIND_MS  = 6 * 60 * 60 * 1000;    // urgent problems in the Hub's failure ledger: email again at most every 6 h while the set is unchanged
+var PROBE_FAILS_BEFORE_ALERT = 2;          // a Worker must fail its health probe this many ticks in a row (about 30 min) before it is reported
 var JOB_ALERT_MS      = 3 * 60 * 60 * 1000;
 var OVERDUE_ALERT_MS  = 3 * 60 * 60 * 1000;
 var NEEDS_ALERT_MS    = 24 * 60 * 60 * 1000;
@@ -246,8 +258,10 @@ function runScheduler() {
     // The non-Hub rows run even when the Hub is down (they do not depend on it).
     var script = table.ok ? runScriptJobs_(started) : { ran: [], status: { overdue: [], jobs: {} } };
     ran = ran.concat(script.ran);
+    if (hubStatus) checkLedger_(hubStatus.failures);
     if (hubStatus) checkOverdue_(mergeStatus_(hubStatus, script.status));
     else if (script.status.overdue.length) checkOverdue_(mergeStatus_({ overdue: [], jobs: {} }, script.status));
+    if (Date.now() - started < MAX_RUN_MS) { try { probeWorkers_(); } catch (pe) { alertThrottled_('probe_script', FAIL_REMIND_MS, 'Hub scheduler: the Worker health probes crashed', 'probeWorkers_ threw: ' + pe + '\n\nThe other checks in this tick still ran.'); } }
     if (!infraFailed) recovered_();
     Logger.log('Tick done: ' + (ran.length ? 'ran ' + ran.join(', ') : 'nothing was due') + (more ? ' (more still due; next tick)' : '') + '.');
     return { ok: !infraFailed, ran: ran, more: more, problem: problem };
@@ -545,7 +559,7 @@ function runScriptJobs_(started) {
     }
     if (job.run === 'github' && js.pending) {
       var v = verifyGithubRun_(job, js, now);
-      if (v.alert) jobFailure_({ ran: job.name, error: v.alert });
+      if (v.alert) { jobFailure_({ ran: job.name, error: v.alert }); ledgerThrottled_('gh_' + job.name, JOB_ALERT_MS, 'github_workflow:' + job.name, 'P1', job.name + ': ' + v.alert); }
       saveJobState_(st);
     }
     var due = scriptJobDue_(job, js, now);
@@ -585,6 +599,7 @@ function runOneScriptJob_(job, js, due, started) {
     js.last_status = 'failed';
     if (job.every_min === undefined) { var a = js.attempts && js.attempts.key === due.key ? js.attempts.n : 0; js.attempts = { key: due.key, n: a + 1 }; }
     jobFailure_({ ran: job.name, error: js.last_error });
+    ledgerThrottled_('job_' + job.name, JOB_ALERT_MS, 'script_job:' + job.name, 'P1', job.name + ' failed: ' + js.last_error);
   }
   if (res.warnings && res.warnings.length) alertThrottled_('warn_' + job.name, JOB_ALERT_MS, 'Hub scheduler job needs a look: ' + job.name, res.warnings.join('\n'));
   return { ok: ok, partial: !!res.partial };
@@ -798,6 +813,67 @@ function checkOverdue_(status) {
     alert_('Jobs OVERDUE: ' + overdue.join(', '), 'These jobs did not run when they should have:\n\n' + lines.join('\n') + '\n\nFor detail run statusReport in the Hub Scheduler Apps Script project.');
   }
   p.setProperty('OVERDUE_SEEN', JSON.stringify(seen));
+}
+// ── Failure ledger: the independent second path (email), the report helper, and Worker health probes ───────────────
+// The Hub texts urgent problems, but if texting itself is what is broken (or the alert switch is off) the text never arrives. So every
+// tick the Hub's /cron/status also returns a summary of the failure ledger and THIS script emails about any urgent, unacknowledged problem.
+// Acknowledge a problem on the Needs Attention page to silence it.
+function checkLedger_(f) {
+  var p = props_(), now = Date.now();
+  if (f === undefined) { Logger.log('The Hub did not include a failure-ledger summary in /cron/status (older Hub build); nothing to check.'); return; }
+  if (!f || f.ok === false) {
+    alertThrottled_('ledger_unreadable', LEDGER_REMIND_MS, 'Hub failure ledger could not be read', 'The Hub could not read its failure ledger, so urgent problems may be invisible right now:\n\n' + String(f && f.error || '(no detail)').slice(0, 500));
+    return;
+  }
+  var items = f.p0_unack || [];
+  if (!items.length) { p.deleteProperty('LEDGER_P0_KEY'); p.deleteProperty('LEDGER_P0_AT'); return; }
+  var key = items.map(function (i) { return i.id; }).sort().join(','), lastKey = p.getProperty('LEDGER_P0_KEY'), lastAt = Number(p.getProperty('LEDGER_P0_AT') || 0);
+  if (key === lastKey && now - lastAt < LEDGER_REMIND_MS) return;
+  p.setProperty('LEDGER_P0_KEY', key); p.setProperty('LEDGER_P0_AT', String(now));
+  var lines = items.map(function (i) { return '  - ' + i.where + (i.count > 1 ? ' (' + i.count + 'x)' : '') + ': ' + String(i.message).slice(0, 220) + '  [first seen ' + i.first_seen + ']'; });
+  alert_('URGENT: ' + items.length + ' Hub problem' + (items.length === 1 ? '' : 's') + ' need you',
+    'These urgent problems are open in the Hub failure ledger and nobody has acknowledged them:\n\n' + lines.join('\n') +
+    '\n\n(' + (f.open || 0) + ' open in total, ' + (f.P1 || 0) + ' important.) Open the Hub, then Needs Attention, to acknowledge, fix or copy a brief for Claude. This email repeats every 6 hours while the list is unchanged; acknowledging silences it.\n\nThis message comes from the Apps Script scheduler, not from the Hub, so it still arrives if Hub texting is down.');
+}
+// Never throws. Reports to the Hub ledger with the scheduler token (trusted: real system and severity). If the Hub is down this cannot work, and the email path covers that.
+function ledger_(where, severity, message) {
+  try {
+    var token = props_().getProperty('SCHEDULER_TOKEN');
+    if (!token) return false;
+    var resp = UrlFetchApp.fetch(WORKER_URL + '/failure/report', { method: 'post', contentType: 'application/json', headers: { 'X-Auth-Token': token }, followRedirects: false, muteHttpExceptions: true,
+      payload: JSON.stringify({ system: 'scheduler', source: 'apps-script', where: where, severity: severity, message: String(message).slice(0, 300) }) });
+    if (resp.getResponseCode() !== 200) { Logger.log('LEDGER REPORT NOT ACCEPTED (HTTP ' + resp.getResponseCode() + '): ' + where + ' | ' + message); return false; }
+    return true;
+  } catch (e) { Logger.log('LEDGER REPORT FAILED: ' + e + ' | ' + where + ' | ' + message); return false; }
+}
+function ledgerThrottled_(key, windowMs, where, severity, message) {
+  var p = props_(), k = 'LAST_LEDGER_' + key, last = Number(p.getProperty(k) || 0);
+  if (Date.now() - last < windowMs) return;
+  if (ledger_(where, severity, message)) p.setProperty(k, String(Date.now()));
+}
+// GET /health on each Worker in PROBES. Reports only after PROBE_FAILS_BEFORE_ALERT failures in a row; emails once per 6 h; says when it recovers.
+function probeWorkers_() {
+  var p = props_(), st = {};
+  try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
+  PROBES.forEach(function (pr) {
+    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '';
+    try { code = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }).getResponseCode(); }
+    catch (e) { err = String(e).slice(0, 200); }
+    var down = !!err || code === 0 || code >= 500, why = err || ('HTTP ' + code);
+    if (down) {
+      s.fails = (s.fails || 0) + 1; s.last = why;
+      if (s.fails >= PROBE_FAILS_BEFORE_ALERT) {
+        s.alerted = true;
+        alertThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'Worker DOWN: ' + pr.name, 'The Worker "' + pr.name + '" (' + pr.url + ') has failed its health check ' + s.fails + ' ticks in a row. Last answer: ' + why + '.\n\nAnything that depends on it is not working until it is fixed.');
+        ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' health check failing (' + why + ', ' + s.fails + ' ticks in a row)');
+      }
+    } else {
+      if (s.alerted) alert_('Worker back up: ' + pr.name, 'The Worker "' + pr.name + '" is answering its health check again (HTTP ' + code + ').');
+      s = { fails: 0, alerted: false };
+    }
+    st[pr.name] = s;
+  });
+  p.setProperty('PROBE_STATE', JSON.stringify(st));
 }
 function fatal_(subject, body) { alert_('Hub scheduler setup: ' + subject, body); throw new Error('Hub scheduler setup failed: ' + subject + '. ' + body); }
 function alert_(subject, body) {

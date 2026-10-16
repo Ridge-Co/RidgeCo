@@ -64,7 +64,7 @@ const ensureColumns = async () => {};
 const addRow = async (env, tab, obj) => { if (QUEUE_FAIL) return { status: 500, clone() { return this; }, async json() { return {}; } }; const t = SHEET[tab] || (SHEET[tab] = [OPS_QUEUE_COLS.slice()]); const id = String(t.length); t.push(OPS_QUEUE_COLS.map(c => c === 'ID' ? id : (obj[c] === undefined ? '' : String(obj[c])))); return { status: 200, clone() { return this; }, async json() { return { id }; } }; };
 const pieces = [grab('schedTokenOk'), grab('schedFindRow'), grab('schedCell'), grab('buildScoutQueueRow'), grab('col'), grab('configFromValues'), grab('appendedRowNumber'), grab('schedEtParts')].join('\n');
 const L = new Function('SCHED_TOKEN_MIN_LEN', 'SCHED_TOKEN_KEY', 'MSG_QUEUE_TAB', 'fetch', 'ensureColumns', 'addRow', 'OPS_QUEUE_TAB', 'OPS_QUEUE_COLS', 'sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY',
-  pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, failInvariantItems, failDuplicateIds, failMessageQueueStats, failInvariantConditions, failQueuePlan, failQueueItem, __reset: () => { _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
+  pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, failInvariantItems, failDuplicateIds, failMessageQueueStats, failInvariantConditions, failQueuePlan, failQueueItem, failStatusSummary, failStatusForScheduler, __reset: () => { _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
   SCHED_TOKEN_MIN_LEN, SCHED_TOKEN_KEY, 'Message_Queue', fetch, ensureColumns, addRow, OPS_QUEUE_TAB, OPS_QUEUE_COLS, sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedEffective, schedStatus, SCHED_STATE_KEY);
 const reset = (cfg) => {
   SHEET = { Config: [['failure_alert_enabled', 'TRUE'], ['admin_phone', '+15550001111'], ['dead_man_switch_enabled', 'TRUE']].concat(cfg || []) };
@@ -304,6 +304,23 @@ ok(r.status === 200 && SHEET.Failure_Events[1][2] === 'scheduler' && SHEET.Failu
 a = mk('wrong-token', { system: 'scheduler', where: 'x', message: 'm', severity: 'P0' });
 r = await L.failReportEndpoint(env, a.request, a.body);
 ok(r.status === 200 && SHEET.Failure_Events[2][6] === 'P2' && SHEET.Failure_Events[2][2] === 'page:scheduler', 'a wrong token is treated as anonymous (P2, tagged page:)');
+
+console.log('\nA3b: summary for the outside watcher');
+const sm = L.failStatusSummary([
+  { ID: 'a', Severity: 'P0', Status: 'open', Where: 'sms', Message: 'twilio down', Count: '4', First_Seen: '2026-10-16T10:00:00Z' },
+  { ID: 'b', Severity: 'P0', Status: 'acknowledged', Where: 'x', Message: 'seen', Count: '1', First_Seen: '2026-10-16T09:00:00Z' },
+  { ID: 'c', Severity: 'P1', Status: 'open', Where: 'y', Message: 'important', Count: '1', First_Seen: '2026-10-16T08:00:00Z' },
+  { ID: 'd', Severity: 'P0', Status: 'fixed', Where: 'z', Message: 'old', Count: '9', First_Seen: '2026-10-15T08:00:00Z' }]);
+ok(sm.ok && sm.open === 3 && sm.P0 === 2 && sm.P1 === 1 && sm.p0_unack.length === 1 && sm.p0_unack[0].id === 'a' && sm.p0_unack[0].count === 4, 'summary counts open problems and lists only urgent ones nobody has acknowledged');
+ok(L.failStatusSummary([1, 2, 3, 4, 5, 6, 7].map(i => ({ ID: 'i' + i, Severity: 'P0', Status: 'open', Where: 'w', Message: 'm', Count: '1', First_Seen: '2026-10-16T0' + i + ':00:00Z' }))).p0_unack.length === 5, 'at most 5 listed (the rest are in the total)');
+reset();
+let sres = await L.failStatusForScheduler(env);
+ok(sres.ok && sres.open === 0, 'no ledger tab yet is simply "nothing open"');
+await L.reportFailure(env, { where: 'receipt_parse', message: 'credit balance too low' }); await L.failRollupRun(env, { nowMs: Date.now() });
+sres = await L.failStatusForScheduler(env);
+ok(sres.ok && sres.p0_unack.length >= 1 && sres.p0_unack[0].where === 'receipt_parse', 'a real P0 in the ledger shows up for the watcher');
+{ const keep = SHEET; SHEET = null; sres = await L.failStatusForScheduler(env); SHEET = keep; ok(sres.ok === false && /could not read the failure ledger/.test(sres.error), 'if the ledger cannot be read the summary says so (the watcher then emails about it; never a quiet "nothing wrong")'); }
+ok(/function failStatusForScheduler/.test(src) && /failures: await failStatusForScheduler\(env\)/.test(grab('schedStatusHandler', 'async')), '/cron/status carries the ledger summary');
 
 console.log('\nWiring (static) + telemetry bridge');
 const lt = grab('logTelemetry', 'async');

@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-16.04-failure-invariants';
+const BUILD_VERSION = '2026-10-16.05-failure-watcher';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -16100,6 +16100,22 @@ async function failQueueRun(env, ledgerRows, nowMs, errors) {
   return n;
 }
 
+// ── A3b: summary for the Apps Script watcher (GET /cron/status carries it) ────────────────────────────────────────────
+// Pure. Ledger rows -> counts plus up to 5 urgent (P0) problems nobody has acknowledged yet. Status "open" only: acknowledged means Brett has seen it.
+function failStatusSummary(ledger) {
+  const open = ledger.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
+  const p0 = open.filter(r => r.Severity === 'P0' && r.Status === 'open').sort((a, b) => (a.First_Seen < b.First_Seen ? -1 : 1));
+  return { ok: true, open: open.length, P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length,
+    p0_unack: p0.slice(0, 5).map(r => ({ id: r.ID, where: r.Where, message: failTrim(r.Message, 220), count: Number(r.Count) || 1, first_seen: r.First_Seen })), p0_unack_total: p0.length };
+}
+// IO. Never throws: a read failure is reported inside the summary so the watcher can say so (never a quiet "nothing wrong").
+async function failStatusForScheduler(env) {
+  try {
+    let vals; try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; } catch (e) { if (isMissingTabError(e)) vals = []; else throw e; }
+    return failStatusSummary(failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID));
+  } catch (e) { return { ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }; }
+}
+
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
@@ -17171,7 +17187,7 @@ async function schedStatusHandler(env) {
   const s = schedStatus(parsed.state, new Date(), eff.jobs);
   if (eff.schedule_error) s.schedule_error = eff.schedule_error;
   const claimUntil = Date.parse(parsed.state.claim_until || '');
-  return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
+  return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null, failures: await failStatusForScheduler(env) }));
 }
 // Coarse, public (/health): names only, no detail. Never throws - a failure is reported in the field.
 async function schedHealthSummary(env) {
