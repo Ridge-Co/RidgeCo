@@ -311,4 +311,73 @@ const sendBody = (o) => Object.assign({ wo_id: '1152', repair_wo_id: '1154', ten
   A = makeWorld({ tabs: baseTabs(), staging: true }); A.smsResult = { queued_id: '1', send_ok: true, sent: false, gate_snapshot: 'x' };
   j = D(await A.api.followupSend(A.env, sendBody(), url('/x'))); ok(j.ok && j.staged && A.tabs.WO_Followups[0].Send_Method === 'sms_staging_stub' && /api=staging/.test(j.link), 'staging stub counts as sent on staging only, and the link points the page at staging', j);
 }
+
+// ── tenant page + answers ──────────────────────────────────────────────────────────────────
+async function sentWorld(extra) {
+  const A = makeWorld(Object.assign({ tabs: baseTabs() }, extra || {}));
+  const j = D(await A.api.followupSend(A.env, sendBody(), url('/x')));
+  A.token = decodeURIComponent(j.link.split('t=')[1].split('&')[0]); A.link = j.link;
+  return A;
+}
+{
+  const A = await sentWorld();
+  const pg = await A.api.fixPage(A.env, url('/fix/page', { t: A.token })); const p = D(pg);
+  ok(pg.status === 200 && p.ok && p.state === 'open' && p.first_name === 'Tom' && p.address === '522 E Fort Ave' && p.spec.options.length === 5, 'the page payload: name, own address, the questions', p);
+  const flat = JSON.stringify(p);
+  ok(!/Alex|Eddie|vendor|Vendor|Owner|lockbox|Lock_Code|Access|Gramiski|4105550177|drywall|paint|Token_Hash|Cosmetic|Repair_Part|PIN/i.test(flat), 'the tenant page never carries vendor / owner / access / last name / phone / cosmetic info', flat.match(/Alex|Eddie|vendor|Owner|Gramiski|4105550177|drywall|paint|Token|Cosmetic|Repair_Part/i));
+  ok((await A.api.fixPage(A.env, url('/fix/page', { t: 'nope' }))).status === 401, 'bad token -> 401');
+  const exp = await A.api.makeSessionToken({ scope: 'fix-check', f: '1', t: '100' }, A.env.WORKER_SECRET, -60); const er = await A.api.fixPage(A.env, url('/fix/page', { t: exp }));
+  ok(er.status === 410 && D(er).state === 'expired', 'expired link -> 410 "expired"');
+  const wrongTenant = await A.api.makeSessionToken({ scope: 'fix-check', f: '1', t: '999' }, A.env.WORKER_SECRET, 3600); ok((await A.api.fixPage(A.env, url('/fix/page', { t: wrongTenant }))).status === 401, 'a validly signed token for a different tenant is refused (hash + tenant check)');
+  const rowOnly = await A.api.makeSessionToken({ scope: 'fix-check', f: '1', t: '100' }, A.env.WORKER_SECRET, 3600); ok((await A.api.fixPage(A.env, url('/fix/page', { t: rowOnly }))).status === 401, 'a validly signed token that was never issued (hash not stored) is refused');
+  A.tabs.WO_Followups[0].Token_Expires_At = new Date(Date.now() - 1000).toISOString(); ok((await A.api.fixPage(A.env, url('/fix/page', { t: A.token }))).status === 410, 'the stored window end also expires the link');
+}
+{
+  // answers + alerts
+  const A = await sentWorld();
+  const ans = async b => A.api.fixAnswer(A.env, Object.assign({ t: A.token }, b));
+  let r = await ans({ choice: 'same_spot', trigger: 'during_rain', when: 'Tuesday night', note: 'drip by the frame' }); let j = D(r);
+  const row = () => A.tabs.WO_Followups[0];
+  ok(r.status === 200 && j.ok && j.answer === 'persists' && row().Status === 'Answered' && row().Answer === 'persists' && row().Answer_Detail === 'drip by the frame' && JSON.parse(row().Answer_Extra).trigger === 'during_rain', 'answer stored', row());
+  const alerts = () => A.sms.filter(s => s.recipient_type === 'admin');
+  ok(alerts().length === 1 && /still happening/.test(alerts()[0].message_body) && /WO-1152/.test(alerts()[0].message_body) && row().Alerted_Answer === 'persists' && row().Alert_Result === 'sent', 'Brett is texted at once about "persists"', alerts().map(a => a.message_body));
+  ok(A.audit.some(a => a[3] === 'Fix-check answer'), 'the answer is added to the WO history');
+  await ans({ choice: 'same_spot' }); ok(alerts().length === 1, 'the same answer again does not page Brett again');
+  r = await ans({ choice: 'worse' }); ok(alerts().length === 2 && /WORSE/.test(alerts()[1].message_body) && JSON.parse(row().Answer_History).length === 2, 'changing to "worse" pages again; history keeps the earlier answers');
+  r = await ans({ choice: 'dry', rain_since: 'no' }); ok(D(r).answer === 'resolved' && alerts().length === 2 && row().Answer === 'resolved' && row().Suggested_Next === 'create_cosmetic_wo', 'changing to "dry" is allowed inside the window, no alert, suggestion becomes create_cosmetic_wo');
+  r = await ans({ choice: 'different_spot' }); ok(r.status === 400 && D(r).field === 'location', 'missing required detail -> 400 with the field');
+  r = await ans({ choice: 'different_spot', location: 'Bathroom ceiling' }); ok(D(r).answer === 'different_location' && alerts().length === 3 && /DIFFERENT/.test(alerts()[2].message_body) && /Bathroom ceiling/.test(alerts()[2].message_body), 'different location pages with the location');
+  r = await ans({ choice: 'safety', note: 'ceiling sagging' }); ok(D(r).safety === true && alerts().length === 4 && /^URGENT/.test(alerts()[3].message_body), 'safety is an URGENT immediate alert');
+  r = await ans({ choice: 'bogus' }); ok(r.status === 400, 'unknown choice -> 400');
+  const pg = D(await A.api.fixPage(A.env, url('/fix/page', { t: A.token }))); ok(pg.state === 'answered' && pg.previous.choice === 'safety', 'reopening the link shows the previous answer');
+  // closed
+  row().Status = 'Closed'; r = await ans({ choice: 'dry' }); ok(r.status === 200 && D(r).ok === false && D(r).state === 'closed', 'a closed check cannot be changed', D(r));
+}
+{
+  // alert cannot be delivered -> recorded on the row, visible
+  const A = await sentWorld(); A.smsResult = o => o.recipient_type === 'admin' ? { send_ok: false, sent: false, gate_snapshot: 'Global OFF' } : { send_ok: true, sent: true };
+  const r = await A.api.fixAnswer(A.env, { t: A.token, choice: 'worse' });
+  ok(D(r).ok && A.tabs.WO_Followups[0].Alert_Result.startsWith('NOT sent') && /Global OFF/.test(A.tabs.WO_Followups[0].Alert_Result) && A.tabs.WO_Followups[0].Status === 'Answered', 'an undeliverable alert is written on the follow-up row ("NOT sent: ...") and the answer still stands');
+}
+{
+  // FAULT INJECTION on answering
+  const A = await sentWorld(); A.fail.updateRow = f => 'Answer' in f;
+  const r = await A.api.fixAnswer(A.env, { t: A.token, choice: 'worse' }); const j = D(r);
+  ok(r.status === 500 && j.ok === false && /could not save/i.test(j.error), 'a failed save is reported to the tenant as a failure (not "thanks")', j);
+  ok(A.telemetry.some(t => t.Job_Type === 'fix_check_answer' && t.Success === 'FALSE'), 'and logged to telemetry as FALSE');
+  ok(A.sms.some(s => s.recipient_type === 'admin' && /could NOT be saved/.test(s.message_body)), 'and Brett is told the answer was lost, so he can call them');
+  const B = await sentWorld(); B.fail.dropWrite = f => 'Answer' in f;
+  const r2 = await B.api.fixAnswer(B.env, { t: B.token, choice: 'worse' }); ok(r2.status === 500 && D(r2).ok === false, 'a write that silently changes nothing is a failure, not a success');
+}
+{
+  // photos
+  const A = await sentWorld();
+  const us = b => A.api.fixUploadSession(A.env, Object.assign({ t: A.token, file_name: 'a b.jpg', mime_type: 'image/jpeg' }, b));
+  let r = await us({}); ok(D(r).success && A.uploads[0].wo_id === '1152' && A.uploads[0].file_type === 'photo' && /^FixCheck-1-/.test(A.uploads[0].file_name) && A.uploads[0].property === '522 E Fort Ave', 'photo upload goes to the follow-up\'s own WO folder (from the token, not the client)', A.uploads[0]);
+  ok((await us({ mime_type: 'application/pdf' })).status === 400 && (await us({ mime_type: 'text/html' })).status === 400, 'only images');
+  ok((await A.api.fixUploadSession(A.env, { t: 'bad', file_name: 'x.jpg', mime_type: 'image/jpeg' })).status === 401, 'bad token refused');
+  for (let i = 0; i < 6; i++) { const lr = await A.api.fixLogAttachment(A.env, { t: A.token, file_id: 'f' + i, file_name: 'p.jpg', mime_type: 'image/jpeg' }); ok(D(lr).ok, 'photo ' + i + ' logged'); }
+  ok((await A.api.fixLogAttachment(A.env, { t: A.token, file_id: 'f7' })).status === 400 && (await us({})).status === 400, 'capped at 6 photos');
+  ok(A.attachments.length === 6 && A.attachments.every(a => a.wo_id === '1152' && a.file_type === 'photo') && A.tabs.WO_Followups[0].Answer_Photo_IDs.split(',').length === 6, 'attachments logged against the WO and the ids saved on the follow-up');
+}
 // FC_TEST_CONT
