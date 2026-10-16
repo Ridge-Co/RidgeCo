@@ -23378,7 +23378,7 @@ async function followupSend(env, body, url) {
   // Double-tap / duplicate guard: an open check for the same WO + tenant must be replaced on purpose.
   const all = await fuReadAll(env);
   const open = all.filter(r => fuS(r.WO_ID) === woId && fuS(r.Tenant_ID) === String(tenant.ID) && r.Active !== 'FALSE' && ['Sent', 'Overdue', 'Answered', 'Blocked', 'Draft'].includes(r.Status));
-  if (open.length && body.replace !== true) return json({ ok: false, code: 'already_open', error: `There is already an open fix-check for this tenant on WO-${woId} (#${open[0].ID}, ${open[0].Status}). Send a new one only if you mean to replace it.`, existing: { id: open[0].ID, status: open[0].Status, sent_at: open[0].Sent_At } }, 409);
+  if (open.length && body.replace !== true) return json({ ok: false, code: 'already_open', error: `There is already an open fix-check for this tenant on ${fuWoLabel(woId)} (#${open[0].ID}, ${open[0].Status}). Send a new one only if you mean to replace it.`, existing: { id: open[0].ID, status: open[0].Status, sent_at: open[0].Sent_At } }, 409);
   const now = new Date().toISOString(), lang = body.lang === 'es' ? 'es' : 'en';
   const repairDate = fuS(repairWo.Completed_Date).slice(0, 10);
   const id = await fuCreate(env, { WO_ID: woId, Repair_WO_ID: repairWoId, Property_ID: fuS(wo.Property_ID), Unit_ID: fuS(wo.Unit_ID) || fuS(tenant.Unit_ID), Tenant_ID: String(tenant.ID),
