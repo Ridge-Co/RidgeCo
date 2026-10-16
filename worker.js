@@ -17084,8 +17084,9 @@ async function schedHealthSummary(env) {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
     if (parsed.error) return { error: 'state unreadable' };
-    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs);
-    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
+    const aiState = aiCreditStateFromRows(rows);
+    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs, aiState.paused ? (aiState.at || 'paused') : '');
+    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) };
   } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
 }
 // scheduled() is now a LOUD no-op. Cloudflare firing it means a stale Cron Trigger is still attached - a second,
