@@ -144,7 +144,7 @@ function makeFetch(db) {
 
 function build(db) {
   const src = [
-    'const CORS = {};',
+    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(s)).join('\n'),
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,
     updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, grab('function englishOnly('), grab('function estimateLinesEnglish('), grab('function plausiblyNonEnglish('), grab('async function translateBatchToEnglish('), scopeItemsFromEstimateSrc, scopesTabSrc,
