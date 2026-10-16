@@ -3777,6 +3777,7 @@ function submitNewWO() {
 state.followups = []; state.followupsError = ''; state.followupsLoaded = false;
 var _fu = { pv: null, woId: '', repairWoId: '', busy: false, rows: {}, tab: 'action' };
 function fuJs(s) { return String(s == null ? '' : s).replace(/[^\w.\-]/g, ''); }
+function fuWo(id) { return 'WO-' + String(id == null ? '' : id).trim().replace(/^WO-/i, ''); }   // ids are stored as '1152' or 'WO-1152'; never show 'WO-WO-1152'
 function fuDate(iso) { if (!iso) return ''; var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
 // A failure is shown on screen (persistent text where the user is looking), written to the error log, and reported to the ledger if it exists.
 function fuFail(ctx, msg, hostId) {
@@ -3826,7 +3827,7 @@ function fuBadgeHTML(woId) {
 function fuOpenPreview(woId, repairWoId, replace) {
   _fu.woId = String(woId); _fu.repairWoId = repairWoId ? String(repairWoId) : ''; _fu.pv = null; _fu.busy = false; _fu.replace = !!replace;
   var body = document.getElementById('fu-pv-body'); body.innerHTML = '<div class="loading">Reading the work order…</div>';
-  document.getElementById('fu-pv-title').textContent = '🔎 FOLLOW UP WITH TENANT — WO-' + _fu.woId;
+  document.getElementById('fu-pv-title').textContent = '🔎 FOLLOW UP WITH TENANT — ' + fuWo(_fu.woId);
   document.getElementById('fu-pv-result').innerHTML = '';
   fuSetButtons(false);
   openModal('modal-followup');
@@ -4052,7 +4053,7 @@ function fuRenderList() {
   else h += rows.map(function (r) {
     var col = FU_STATUS_COLOR[r.Status] || 'var(--muted)', prop = safeArray(state.properties).find(function (p) { return String(p.ID) === String(r.Property_ID); });
     return '<div onclick="closeModal(\'modal-followups\');openWODetail(\'' + fuJs(r.WO_ID) + '\')" style="border:1px solid var(--border);border-left:4px solid ' + col + ';border-radius:8px;padding:9px 12px;margin-bottom:8px;cursor:pointer;background:var(--surface)">' +
-      '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">WO-' + esc(r.WO_ID) + ' · ' + esc(r.Problem_Label) + '</b><span style="font-size:11px;color:' + col + ';font-weight:bold">' + esc(r.Status.toUpperCase()) + '</span></div>' +
+      '<div style="display:flex;justify-content:space-between;gap:8px"><b style="font-size:13px">' + esc(fuWo(r.WO_ID)) + ' · ' + esc(r.Problem_Label) + '</b><span style="font-size:11px;color:' + col + ';font-weight:bold">' + esc(r.Status.toUpperCase()) + '</span></div>' +
       '<div style="font-size:12px;color:var(--muted)">' + esc(prop ? prop.Address : '') + ' · ' + esc(r.Tenant_Name) + '</div>' +
       (r.Answer ? '<div style="font-size:12px"><b>' + esc(FU_ANSWER_TEXT[r.Answer] || r.Answer) + '</b>' + (r.suggestion && r.suggestion.action !== 'done' ? ' → ' + esc(r.suggestion.label) : '') + '</div>' : '<div style="font-size:12px;color:var(--muted)">' + (r.Blocked_Reason ? 'Not sent: ' + esc(r.Blocked_Reason) : (r.Due_At ? 'Answer due ' + esc(fuDate(r.Due_At)) : '')) + '</div>') + '</div>';
   }).join('');

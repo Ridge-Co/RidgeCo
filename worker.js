@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-16.10-tenant-fix-check';
+const BUILD_VERSION = '2026-10-16.11-tenant-fix-check';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -22868,6 +22868,8 @@ async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 /* FIX_CHECK:START */
+// Work order ids are stored both as '1152' and as 'WO-1152' (WO_ID column); a label must never read 'WO-WO-1152'.
+function fuWoLabel(id) { return 'WO-' + String(id == null ? '' : id).trim().replace(/^WO-/i, ''); }
 // ══════════════════════════════════════════════════════════════════════════════════════════════════
 //  TENANT FIX-CHECK  (Oct 16 2026)  — "have you had any more trouble with this issue?"
 //  Brett: "It's sort of like a quality control check, but specific to their issue. Not just 'can you give us a
@@ -23157,7 +23159,7 @@ function fuSuggestNext(row, wo, repairWo) {
     const trade = /paint|drywall|dry wall|plaster|spackl|mud\b|texture|patch/i.test(cosmetic) ? 'Painting' : fuS(wo && wo.Trade);
     return { action: 'create_cosmetic_wo', label: `Create the ${cosmetic.length > 40 ? 'cosmetic' : cosmetic} work order`, severity: caution ? 'caution' : 'ok', detail: caution || `Tenant ${FU_ANSWER_WORDS.resolved}. The repair held, so the cosmetic work can go ahead.`,
       vendor_id: fuS(row.Cosmetic_Vendor_ID),
-      prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade, type: 'manual', vendor_id: fuS(row.Cosmetic_Vendor_ID), description: `${cosmetic} (follow-up to WO-${fuS(row.WO_ID)}: the tenant confirmed ${label} is fixed - cosmetic work only)` } };
+      prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade, type: 'manual', vendor_id: fuS(row.Cosmetic_Vendor_ID), description: `${cosmetic} (follow-up to ${fuWoLabel(fuS(row.WO_ID))}: the tenant confirmed ${label} is fixed - cosmetic work only)` } };
   }
   if (ans === 'safety') return { action: 'call_now', label: 'Call the tenant now', severity: 'urgent', detail: 'The tenant reported a safety problem. Call them, then decide whether to send a vendor.' };
   if (ans === 'not_sure') return { action: 'call_tenant', label: 'Call the tenant to clarify', severity: 'caution', detail: `Tenant ${FU_ANSWER_WORDS.not_sure}${fuS(row.Answer_Detail) ? ': "' + fuS(row.Answer_Detail) + '"' : '.'}` };
@@ -23166,7 +23168,7 @@ function fuSuggestNext(row, wo, repairWo) {
   return { action: 'send_vendor_back', label: 'Send the vendor back', severity: ans === 'persists' ? 'caution' : 'urgent', vendor_id: vendorId,
     detail: `Tenant ${FU_ANSWER_WORDS[ans] || ans}${where ? ' (' + where + ')' : ''}.`,
     prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade: fuS((repairWo && repairWo.Trade) || (wo && wo.Trade)), type: 'manual', vendor_id: vendorId,
-      description: `Re-check ${label} (WO-${fuS(row.Repair_WO_ID) || fuS(row.WO_ID)}): the tenant ${FU_ANSWER_WORDS[ans] || ans}.${where ? ' ' + where + '.' : ''}` } };
+      description: `Re-check ${label} (${fuWoLabel(fuS(row.Repair_WO_ID) || fuS(row.WO_ID))}): the tenant ${FU_ANSWER_WORDS[ans] || ans}.${where ? ' ' + where + '.' : ''}` } };
 }
 function fuParseJson(s, dflt) { if (!fuS(s)) return dflt; try { const v = JSON.parse(s); return v == null ? dflt : v; } catch (e) { return dflt; } }
 
@@ -23376,7 +23378,7 @@ async function followupSend(env, body, url) {
   // Double-tap / duplicate guard: an open check for the same WO + tenant must be replaced on purpose.
   const all = await fuReadAll(env);
   const open = all.filter(r => fuS(r.WO_ID) === woId && fuS(r.Tenant_ID) === String(tenant.ID) && r.Active !== 'FALSE' && ['Sent', 'Overdue', 'Answered', 'Blocked', 'Draft'].includes(r.Status));
-  if (open.length && body.replace !== true) return json({ ok: false, code: 'already_open', error: `There is already an open fix-check for this tenant on WO-${woId} (#${open[0].ID}, ${open[0].Status}). Send a new one only if you mean to replace it.`, existing: { id: open[0].ID, status: open[0].Status, sent_at: open[0].Sent_At } }, 409);
+  if (open.length && body.replace !== true) return json({ ok: false, code: 'already_open', error: `There is already an open fix-check for this tenant on ${fuWoLabel(woId)} (#${open[0].ID}, ${open[0].Status}). Send a new one only if you mean to replace it.`, existing: { id: open[0].ID, status: open[0].Status, sent_at: open[0].Sent_At } }, 409);
   const now = new Date().toISOString(), lang = body.lang === 'es' ? 'es' : 'en';
   const repairDate = fuS(repairWo.Completed_Date).slice(0, 10);
   const id = await fuCreate(env, { WO_ID: woId, Repair_WO_ID: repairWoId, Property_ID: fuS(wo.Property_ID), Unit_ID: fuS(wo.Unit_ID) || fuS(tenant.Unit_ID), Tenant_ID: String(tenant.ID),
@@ -23508,7 +23510,7 @@ async function fixAnswer(env, body) {
   catch (e) {
     const msg = String((e && e.message) || e);
     await fuTelemetry(env, { Job_Type: 'fix_check_answer', Skill_Or_Endpoint: '/fix/answer', Success: 'FALSE', Notes: `followup=${row.ID} ${msg}`.slice(0, 480) });
-    const al = await fuAdminAlert(env, row, `FIX-CHECK PROBLEM: a tenant answered the check on WO-${row.WO_ID} but it could NOT be saved (${msg.slice(0, 120)}). Please call them.`, 'save_failed');
+    const al = await fuAdminAlert(env, row, `FIX-CHECK PROBLEM: a tenant answered the check on ${fuWoLabel(row.WO_ID)} but it could NOT be saved (${msg.slice(0, 120)}). Please call them.`, 'save_failed');
     return json({ ok: false, error: 'We could not save your answer. Please try again in a minute, or call us.', alerted: al.sent }, 500);
   }
   const suggestion = fuSuggestNext(saved, null, null);
@@ -23518,8 +23520,8 @@ async function fixAnswer(env, body) {
     const wos = await fetchTab(env, 'Work_Orders'); const wo = findWO(wos, fuS(row.WO_ID));
     const word = { persists: 'is still happening', worse: 'is WORSE', different_location: 'is happening in a DIFFERENT spot', safety: 'has a SAFETY problem' }[c.answer];
     const text = c.answer === 'safety'
-      ? `URGENT fix-check: ${row.Tenant_Name} (WO-${row.WO_ID}) reports a SAFETY problem with ${row.Problem_Label}. Call them now.${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`
-      : `Fix-check: ${row.Tenant_Name} says ${row.Problem_Label} ${word} (WO-${row.WO_ID}${wo && wo.Property_Address ? ', ' + wo.Property_Address : ''}).${c.location ? ' Where: ' + c.location.slice(0, 60) + '.' : ''}${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`;
+      ? `URGENT fix-check: ${row.Tenant_Name} (${fuWoLabel(row.WO_ID)}) reports a SAFETY problem with ${row.Problem_Label}. Call them now.${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`
+      : `Fix-check: ${row.Tenant_Name} says ${row.Problem_Label} ${word} (${fuWoLabel(row.WO_ID)}${wo && wo.Property_Address ? ', ' + wo.Property_Address : ''}).${c.location ? ' Where: ' + c.location.slice(0, 60) + '.' : ''}${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`;
     alert = await fuAdminAlert(env, row, text, c.answer);
     try { await fuWrite(env, row.ID, { Alerted_Answer: c.answer, Alert_Result: alert.sent ? (alert.held ? 'held for quiet hours' : 'sent') : ('NOT sent: ' + (alert.reason || 'unknown')), Suggested_Next: suggestion ? suggestion.action : '' }); }
     catch (e) { warnings.push('could not record the alert: ' + ((e && e.message) || e)); }
@@ -23602,7 +23604,7 @@ async function followupSweep(env, opts) {
         }
       }
       await fuWrite(env, row.ID, { Reminder_Result: result.slice(0, 300) });
-      const al = await fuAdminAlert(env, row, `No answer after ${FU_DUE_DAYS} days: ${fuS(row.Tenant_Name)} (WO-${row.WO_ID}) has not answered the check on ${fuS(row.Problem_Label)}. Call them. Reminder: ${result.slice(0, 120)}. ${HUB_URL}?wo=${row.WO_ID}`, 'no_answer');
+      const al = await fuAdminAlert(env, row, `No answer after ${FU_DUE_DAYS} days: ${fuS(row.Tenant_Name)} (${fuWoLabel(row.WO_ID)}) has not answered the check on ${fuS(row.Problem_Label)}. Call them. Reminder: ${result.slice(0, 120)}. ${HUB_URL}?wo=${row.WO_ID}`, 'no_answer');
       if (al.sent) detail.alerted++; else errors.push({ step: 'admin_alert', error: `followup #${row.ID}: ${al.reason || 'not sent'}` });
       await fuTelemetry(env, { Job_Type: 'fix_check_reminder', Skill_Or_Endpoint: 'scheduler/followup_sweep', Success: 'TRUE', Notes: `followup=${row.ID} ${result.slice(0, 150)}` }, null);
     } catch (e) {
@@ -23626,9 +23628,9 @@ async function fuDigestLines(env) {
     for (const r of rows) {
       if (r.Status === 'Answered') {
         const s = fuSuggestNext(r, findWO(wos, fuS(r.WO_ID)), findWO(wos, fuS(r.Repair_WO_ID) || fuS(r.WO_ID)));
-        lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: ${(FU_ANSWER_WORDS[r.Answer] || r.Answer)}${s ? ' -> ' + s.label : ''}`);
-      } else if (r.Status === 'Overdue') lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: no answer yet - call them`);
-      else if (r.Status === 'Blocked' || r.Status === 'Draft') lines.push(`WO-${r.WO_ID} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: fix-check was never sent (${fuS(r.Blocked_Reason) || 'unfinished'})`);
+        lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: ${(FU_ANSWER_WORDS[r.Answer] || r.Answer)}${s ? ' -> ' + s.label : ''}`);
+      } else if (r.Status === 'Overdue') lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: no answer yet - call them`);
+      else if (r.Status === 'Blocked' || r.Status === 'Draft') lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: fix-check was never sent (${fuS(r.Blocked_Reason) || 'unfinished'})`);
     }
     return { lines, error: '' };
   } catch (e) {

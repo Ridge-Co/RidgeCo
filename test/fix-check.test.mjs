@@ -60,7 +60,7 @@ function makeWorld(init) {
     isStaging: () => false,
   };
   const names = Object.keys(deps);
-  const src = helpers + '\n' + BLOCK + '\nreturn { classifyIssue, fuQuestionSpec, fuValidateAnswer, fuSuggestNext, fuResolveTenants, fuGateVerdict, fuMessage, fuTokenCheck, fuMintToken, fuAddHash, fuHashMatches, fuSha256, fuSweepDue, fuInReminderWindow, fuSendOutcome, fuDateLabel, fuLabelFor, followupPreview, followupSend, followupLink, followupClose, followupList, fixPage, fixAnswer, fixUploadSession, fixLogAttachment, followupSweep, fuDigestLines, makeSessionToken, FU_COLS, FU_DUE_DAYS, FU_WINDOW_DAYS };';
+  const src = helpers + '\n' + BLOCK + '\nreturn { classifyIssue, fuQuestionSpec, fuValidateAnswer, fuSuggestNext, fuResolveTenants, fuGateVerdict, fuMessage, fuTokenCheck, fuMintToken, fuAddHash, fuHashMatches, fuSha256, fuSweepDue, fuInReminderWindow, fuSendOutcome, fuDateLabel, fuLabelFor, fuWoLabel, followupPreview, followupSend, followupLink, followupClose, followupList, fixPage, fixAnswer, fixUploadSession, fixLogAttachment, followupSweep, fuDigestLines, makeSessionToken, FU_COLS, FU_DUE_DAYS, FU_WINDOW_DAYS };';
   const api = new Function(...names, src)(...names.map(k => deps[k]));
   return Object.assign(W, { api, env: { WORKER_SECRET: 'test-secret-123', __STAGING__: !!init.staging } });
 }
@@ -394,6 +394,20 @@ async function sentWorld(extra) {
   ok(W0.api.fuSuggestNext(row({ Answer: 'worse' }), wo, rwo).severity === 'urgent' && W0.api.fuSuggestNext(row({ Answer: 'different_location', Answer_Location: 'Bathroom' }), wo, rwo).action === 'send_vendor_back', 'worse is urgent; different location sends the vendor back');
   ok(W0.api.fuSuggestNext(row({ Answer: 'safety' }), wo, rwo).action === 'call_now' && W0.api.fuSuggestNext(row({ Answer: 'not_sure' }), wo, rwo).action === 'call_tenant', 'safety -> call now; not sure -> call');
   ok(W0.api.fuSuggestNext(row({ Next_WO_ID: '1300' }), wo, rwo).action === 'done' && W0.api.fuSuggestNext(row({ Answer: '' }), wo, rwo) === null, 'handled / unanswered');
+}
+
+// WO ids are stored both as '1152' and 'WO-1152' (found on staging): a label must never read 'WO-WO-1152'.
+{
+  ok(W0.api.fuWoLabel('1152') === 'WO-1152' && W0.api.fuWoLabel('WO-1152') === 'WO-1152' && W0.api.fuWoLabel('wo-1152') === 'WO-1152', 'fuWoLabel handles bare and prefixed ids');
+  const s = W0.api.fuSuggestNext({ ID: '1', WO_ID: 'WO-1152', Repair_WO_ID: 'WO-1154', Property_ID: '82', Problem_Label: 'the window leak', Cosmetic_Part: 'drywall/paint', Cosmetic_Vendor_ID: '2', Rework_Vendor_ID: '5', Status: 'Answered', Answer: 'persists', Answer_Extra: '{}' }, { ID: 'WO-1152', Trade: 'Windows', Vendor_ID: '2' }, { ID: 'WO-1154', Trade: 'Roofing', Vendor_ID: '5' });
+  ok(!/WO-WO/.test(JSON.stringify(s)) && /\(WO-1154\)/.test(s.prefill.description), 'suggestion text with WO-prefixed ids has no doubled prefix', s);
+  const A = makeWorld({ tabs: baseTabs() }); A.tabs.Work_Orders.forEach(r => { r.ID = 'WO-' + r.ID; });
+  const j = D(await A.api.followupSend(A.env, sendBody({ wo_id: 'WO-1152', repair_wo_id: 'WO-1154' }), url('/x')));
+  ok(j.ok, 'send works when Work_Orders.ID is stored as WO-1152 (as on staging)', j);
+  const tk = decodeURIComponent(j.link.split('t=')[1].split('&')[0]);
+  await A.api.fixAnswer(A.env, { t: tk, choice: 'worse' });
+  ok(A.sms.filter(x => x.recipient_type === 'admin').every(x => !/WO-WO/.test(x.message_body)) && /WO-1152/.test(A.sms.filter(x => x.recipient_type === 'admin')[0].message_body), 'alert text to Brett says WO-1152 once');
+  ok(!/WO-WO/.test((await A.api.fuDigestLines(A.env)).lines.join('|')), 'digest lines have no doubled prefix');
 }
 
 // ═══ H. admin list, link, close ════════════════════════════════════════════════════════════
