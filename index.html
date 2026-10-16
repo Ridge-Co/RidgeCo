@@ -13489,6 +13489,22 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
 <!-- PICK MESSAGE RECIPIENT MODAL — button-select replacement for the old "type 1/2/3" prompt
      (CAP-036 #2, Sep 24 2026). Only shown when a WO has more than one of tenant/owner/vendor
      on file; _pickSendMessageRecipient() fills #pick-recipient-list with one button per option. -->
+<!-- TENANT FIX-CHECK: preview (nothing is sent by opening it) + list -->
+<div class="modal-overlay" id="modal-followup">
+  <div class="modal" style="max-width:580px">
+    <div class="modal-header"><div class="modal-title" id="fu-pv-title">🔎 FOLLOW UP WITH TENANT</div><button class="modal-close" onclick="closeModal('modal-followup')">✕</button></div>
+    <div id="fu-pv-body"></div>
+    <div id="fu-pv-result" style="margin-top:10px"></div>
+    <div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal('modal-followup')">Cancel</button><button class="btn secondary" id="fu-copy-btn" style="min-height:44px" onclick="fuSend('copy_link')">Copy link (don't text)</button><button class="btn" id="fu-send-btn" style="min-height:44px" onclick="fuSend('sms')">Send text to tenant</button></div>
+  </div>
+</div>
+<div class="modal-overlay" id="modal-followups">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header"><div class="modal-title">🔎 TENANT FIX-CHECKS</div><button class="modal-close" onclick="closeModal('modal-followups')">✕</button></div>
+    <div id="fu-list-body"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-pick-recipient">
   <div class="modal" style="max-width:360px">
     <div class="modal-header"><div class="modal-title">MESSAGE WHO?</div><button class="modal-close" onclick="closeModal('modal-pick-recipient')">✕</button></div>
