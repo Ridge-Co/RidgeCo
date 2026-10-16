@@ -23510,7 +23510,7 @@ async function fixAnswer(env, body) {
   catch (e) {
     const msg = String((e && e.message) || e);
     await fuTelemetry(env, { Job_Type: 'fix_check_answer', Skill_Or_Endpoint: '/fix/answer', Success: 'FALSE', Notes: `followup=${row.ID} ${msg}`.slice(0, 480) });
-    const al = await fuAdminAlert(env, row, `FIX-CHECK PROBLEM: a tenant answered the check on WO-${row.WO_ID} but it could NOT be saved (${msg.slice(0, 120)}). Please call them.`, 'save_failed');
+    const al = await fuAdminAlert(env, row, `FIX-CHECK PROBLEM: a tenant answered the check on ${fuWoLabel(row.WO_ID)} but it could NOT be saved (${msg.slice(0, 120)}). Please call them.`, 'save_failed');
     return json({ ok: false, error: 'We could not save your answer. Please try again in a minute, or call us.', alerted: al.sent }, 500);
   }
   const suggestion = fuSuggestNext(saved, null, null);
