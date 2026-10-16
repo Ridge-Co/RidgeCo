@@ -21426,15 +21426,19 @@ async function backfillItemsSummary(env, opts) {
   let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
   const pending = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (!r.Items_Summary || r.Items_Summary === '[]') && r.Items && r.Items !== '[]');
   const batch = pending.slice(0, limit);
-  let updated = 0; const failed = [];
+  let updated = 0; const failed = []; let paused = false;
   for (const r of batch) {
     try {
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
+      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) { /* silent-ok: a row whose Items JSON is unreadable is reported just below as "empty summary returned" */ }
       const summary = await summarizeItemsCheap(env, items);
       if (summary.length) { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Items_Summary: JSON.stringify(summary) }); updated++; }
       else failed.push({ id: r.ID, error: 'empty summary returned' });
-    } catch (e) { failed.push({ id: r.ID, error: String(e && e.message || e) }); }
+    } catch (e) {
+      if (aiCreditIsPausedError(e)) { paused = true; break; }   // stop at once - no more calls while AI is paused
+      failed.push({ id: r.ID, error: String(e && e.message || e) });
+    }
   }
+  if (paused) return json({ ok: false, error: AI_PAUSED_USER_MSG, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG, paused: true, updated, failed, remaining: pending.length - updated }, 503);
   return json({ ok: true, updated, failed, remaining: pending.length - batch.length });
 }
 
