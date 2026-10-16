@@ -16990,7 +16990,12 @@ async function schedRunNext(env, ctx, opts) {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
           rec.partial_at = null;
-          if (jobOk && isPartial) {
+          if (jobPaused) {
+            // Not done for the day, and the start-of-run attempt is given back. While THIS pause episode lasts the job is skipped for the rest of the ET day
+            // (paused_key/paused_ep); the moment the pause clears it is due again at once (catch-up), whatever the hour.
+            rec.attempts = null;
+            if (aiPausedFinal && !force) { rec.paused_key = etDay; rec.paused_ep = aiPausedFinal; }
+          } else if (jobOk && isPartial) {
             rec.partials = { key: etDay, n: partialN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
           } else if (jobOk || finalFail) {
             rec.last_key = etDay; rec.attempts = null; rec.partials = null;
