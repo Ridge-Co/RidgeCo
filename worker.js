@@ -1125,6 +1125,9 @@ const _hubWorkerCore = {
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
+      // Oct 16 2026: an AI step reached while Anthropic credit is out / paused is a DESIGNED, already-alerted state, not a bug: a typed 503
+      // with a plain message (no unhandled_500 row per request, no stack) so every page can say "automatic reading is paused - enter it by hand".
+      if (aiCreditIsPausedError(err)) return aiCreditPausedJson({});
       // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
       // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
       //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
