@@ -15762,6 +15762,59 @@ function failDigestPlan(all, nowMs, lastDate) {
   if (et.dow === 1 && p2) parts.push(`${p2} minor open`);
   return { text: parts.length ? parts.join('. ') + '. Open Needs Attention in the Hub.' : '', dateKey: et.date };
 }
+
+// ── reporting (impure) ──────────────────────────────────────────────────────────────────────────────────────────
+let _failTabsReady = false;
+const _failWin = { start: 0, n: 0, dropped: 0 };
+const _failAnonWin = { start: 0, n: 0, dropped: 0 };   // anonymous page reports get their own, smaller budget so they can never starve real ones
+const FAIL_MAX_ANON_PER_MIN = 20;
+async function failEnsureTabs(env) {
+  if (_failTabsReady) return;
+  await ensureTab(env, FAIL_EVENTS_TAB, FAIL_EVENT_COLS);
+  await ensureTab(env, FAIL_LEDGER_TAB, FAIL_LEDGER_COLS);
+  _failTabsReady = true;
+}
+// reportFailure(env, { system, source, where, ref, message | err, severity?, context? }) -> { ok, id?, severity?, dropped? }. NEVER throws.
+async function reportFailure(env, f) {
+  let ev;
+  try {
+    const now = Date.now(), win = (f && f.anon) ? _failAnonWin : _failWin, cap = (f && f.anon) ? FAIL_MAX_ANON_PER_MIN : FAIL_MAX_EVENTS_PER_MIN;
+    if (now - win.start > 60000) { win.start = now; win.n = 0; }
+    if (++win.n > cap) { win.dropped++; console.error('FAILURE-REPORT DROPPED (over ' + cap + '/min):', (f && (f.where || f.message)) || ''); return { ok: false, dropped: true }; }
+    ev = failBuildEvent(f, now, Math.random().toString(36).slice(2, 6));
+    if (win.dropped) { ev.Context = (ev.Context ? ev.Context + ' ' : '') + `[${win.dropped} earlier report(s) dropped in a burst]`; win.dropped = 0; }
+    await failEnsureTabs(env);
+    await sheetsRequest(env, 'POST', `/values/${FAIL_EVENTS_TAB}:append?valueInputOption=RAW`, { values: [FAIL_EVENT_COLS.map(c => ev[c])] });
+    return { ok: true, id: ev.ID, severity: ev.Severity };
+  } catch (e) {
+    try { console.error('FAILURE-REPORT COULD NOT BE SAVED:', JSON.stringify(ev || f || {}).slice(0, 600), '|', String((e && e.message) || e).slice(0, 200)); } catch (e2) { /* console is the last resort; nothing left to try */ }
+    return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+async function failSetConfig(env, key, value) {
+  const r = await setConfigKey(env, { key, value });
+  if (r && typeof r.status === 'number' && r.status >= 400) throw new Error(`Config ${key} not saved (HTTP ${r.status})`);
+}
+function failSmsOk(r) { return !!(r && (r.sid || r.staged)); }
+
+// Conditions = things wrong right now that no code path "failed" at: a scheduler job that stopped, alerts switched off.
+async function failConditions(env, cfg, nowMs) {
+  const out = [];
+  if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });
+  else if (!cfg.admin_phone) out.push({ key: 'no_admin_phone', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Config admin_phone is not set, so failure alerts have nowhere to go.' });
+  if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P1', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
+  try {
+    const rows = await schedReadConfigRows(env, false);
+    const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
+    if (parsed.error) out.push({ key: 'scheduler_state', system: 'hub', where: 'scheduler', severity: 'P0', message: parsed.error });
+    else {
+      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs);
+      for (const name of st.overdue) out.push({ key: 'overdue:' + name, system: 'hub', where: 'scheduler:' + name, severity: 'P0', message: `Scheduled job ${name} is overdue: ${(st.jobs[name] && st.jobs[name].overdue_reason) || 'not running'}` });
+      if (st.tick_age_min !== null && st.tick_age_min > 60) out.push({ key: 'scheduler_silent', system: 'hub', where: 'scheduler', severity: 'P0', message: `The Apps Script scheduler has not ticked for ${st.tick_age_min} minutes.` });
+    }
+  } catch (e) { out.push({ key: 'scheduler_unreadable', system: 'hub', where: 'scheduler', severity: 'P0', message: 'Could not read the scheduler state: ' + String((e && e.message) || e).slice(0, 200) }); }
+  return out;
+}
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
 // independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
 // `schedule:` and the Cloudflare Cron Trigger in scheduled(). (Oct 12 2026: BOTH are now gone - cron-sweep.yml is deleted,
