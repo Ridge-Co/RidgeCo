@@ -17993,7 +17993,7 @@ async function routeAICall(env, tier, job) {
     if (reg.provider === 'gemini') return await callGemini(env, reg.model, job);
     return await callClaude(env, reg.model, job);
   } catch (e) {
-    return { text: '', tokens_in: 0, tokens_out: 0, error: String((e && e.message) || e) };
+    return { text: '', tokens_in: 0, tokens_out: 0, error: String((e && e.message) || e), code: (e && e.code) || undefined };
   }
 }
 
