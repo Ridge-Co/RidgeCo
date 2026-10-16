@@ -3558,6 +3558,7 @@ function revokeShare(){
 }
 // ── New WO ───────────────────────────────────────────────────
 function openNewWOModal() {
+  window._fuPendingLink = null; var _fuBan = document.getElementById('fu-newwo-banner'); if (_fuBan) { _fuBan.style.display = 'none'; _fuBan.innerHTML = ''; }
   // Clear EVERY field so nothing persists from previous WO creation
   var toClear = ['wo-prop-filter','wo-owner-ref','wo-sched-date-opt'];
   toClear.forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
