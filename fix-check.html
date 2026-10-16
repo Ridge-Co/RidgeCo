@@ -78,6 +78,8 @@ if (WORKER.indexOf('staging') !== -1) {
     var b = document.createElement('div'); b.id = 'stg';
     b.textContent = '🧪 STAGING — pointed at the test Worker/Sheet, not production. SMS is stubbed.';
     document.body.appendChild(b);
+    var tp = document.querySelector('.top'), wp = document.querySelector('.wrap');   // keep the language buttons clear of the fixed banner
+    if (tp) tp.style.top = '40px'; if (wp) wp.style.paddingTop = '92px';
   });
 }
 var TOKEN = (new URLSearchParams(location.search).get('t') || '').trim();
