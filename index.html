@@ -2362,6 +2362,7 @@ function openWODetail(woId) {
     '<button class="btn small secondary" onclick="sendTenantManualUpdate(\''+woId+'\')">📱 Send update</button>' +
     '<button class="btn small secondary" onclick="sendPhotoRequestSMS(\''+woId+'\')" title="Canned text asking the tenant for photos of the issue">📸 Request photos</button>' +
     '<button class="btn small secondary" onclick="openWOMessageModal(\''+woId+'\')" title="Send a one-off message to the tenant, owner, or vendor on this job">✉️ Message</button>' +
+    '<button class="btn small secondary" onclick="fuOpenPreview(\''+woId+'\')" title="Ask the tenant whether the repair worked (opens a preview first - nothing is sent until you tap Send)">🔎 Follow up with tenant</button>' +
     '<select onchange="quickStatusChange(\''+woId+'\',this.value)" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:var(--radius)">' +
     '<option value="">Status: '+(wo.Status||'—')+' ▾</option>' +
     _stStatuses.map(function(s){ return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>'; }).join('') +
