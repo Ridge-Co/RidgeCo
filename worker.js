@@ -505,6 +505,7 @@ const _hubWorkerCore = {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
         if (path === '/cron/status')            return await schedStatusHandler(env);
+        if (path === '/ai-credit/status')       return await aiCreditStatusHandler(env);   // Oct 16 2026: is AI reading paused? (admin; GET + secret-free, so the read-only prod token may read it)
         if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
