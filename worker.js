@@ -23604,7 +23604,7 @@ async function followupSweep(env, opts) {
         }
       }
       await fuWrite(env, row.ID, { Reminder_Result: result.slice(0, 300) });
-      const al = await fuAdminAlert(env, row, `No answer after ${FU_DUE_DAYS} days: ${fuS(row.Tenant_Name)} (WO-${row.WO_ID}) has not answered the check on ${fuS(row.Problem_Label)}. Call them. Reminder: ${result.slice(0, 120)}. ${HUB_URL}?wo=${row.WO_ID}`, 'no_answer');
+      const al = await fuAdminAlert(env, row, `No answer after ${FU_DUE_DAYS} days: ${fuS(row.Tenant_Name)} (${fuWoLabel(row.WO_ID)}) has not answered the check on ${fuS(row.Problem_Label)}. Call them. Reminder: ${result.slice(0, 120)}. ${HUB_URL}?wo=${row.WO_ID}`, 'no_answer');
       if (al.sent) detail.alerted++; else errors.push({ step: 'admin_alert', error: `followup #${row.ID}: ${al.reason || 'not sent'}` });
       await fuTelemetry(env, { Job_Type: 'fix_check_reminder', Skill_Or_Endpoint: 'scheduler/followup_sweep', Success: 'TRUE', Notes: `followup=${row.ID} ${result.slice(0, 150)}` }, null);
     } catch (e) {
