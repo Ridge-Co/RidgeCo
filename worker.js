@@ -15815,6 +15815,139 @@ async function failConditions(env, cfg, nowMs) {
   } catch (e) { out.push({ key: 'scheduler_unreadable', system: 'hub', where: 'scheduler', severity: 'P0', message: 'Could not read the scheduler state: ' + String((e && e.message) || e).slice(0, 200) }); }
   return out;
 }
+
+// Runs inside the sweep_checks job. Throws on a real problem (the scheduler then records the job as failed), returns { ok, errors, ... }.
+async function failRollupRun(env, opts) {
+  opts = opts || {};
+  const nowMs = opts.nowMs || Date.now(), errors = [];
+  await failEnsureTabs(env);
+  const cfgVals = (await sheetsRequest(env, 'GET', '/values/Config')).values || [];
+  const cfg = configFromValues(cfgVals);
+  // Events since the cursor ("<sheet row>:<last event id>"); a cursor that no longer matches the sheet means start over (idempotent anyway).
+  const [curRowS, curId] = String(cfg[FAIL_CURSOR_KEY] || '').split(':');
+  let curRow = parseInt(curRowS, 10) || 0, evVals;
+  if (curRow >= 2 && curId) {
+    evVals = (await sheetsRequest(env, 'GET', `/values/${FAIL_EVENTS_TAB}!A${curRow}:${col(FAIL_EVENT_COLS.length - 1)}`)).values || [];
+    if (!evVals.length || String(evVals[0][0]) !== curId) { curRow = 0; evVals = null; }
+  }
+  let events, lastRow, lastId;
+  if (evVals) { events = failRowsToObjects(evVals.slice(1), FAIL_EVENT_COLS, curRow + 1); }
+  else {
+    const all = (await sheetsRequest(env, 'GET', `/values/${FAIL_EVENTS_TAB}`)).values || [];
+    if (all.length && String(all[0][0]) !== 'ID') throw new Error(`${FAIL_EVENTS_TAB} header row is not what the Worker expects - fix the tab`);
+    events = failRowsToObjects(all.slice(1), FAIL_EVENT_COLS, 2);
+  }
+  events = events.filter(e => e.ID);
+  if (events.length) { lastRow = events[events.length - 1]._row; lastId = events[events.length - 1].ID; }
+  const ledVals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || [];
+  if (ledVals.length && ledVals[0].join('|') !== FAIL_LEDGER_COLS.join('|')) throw new Error(`${FAIL_LEDGER_TAB} header row changed - the ledger columns must be: ${FAIL_LEDGER_COLS.join(', ')}`);
+  const ledger = failRowsToObjects(ledVals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+  const conditions = await failConditions(env, cfg, nowMs);
+  const plan = failRollupPlan({ events, ledger, conditions, nowMs, legacyAlerted: (w) => failLegacyAlerted(cfg, w, nowMs) });
+  const lastCol = col(FAIL_LEDGER_COLS.length - 1), rowOf = (u) => FAIL_LEDGER_COLS.map(c => (u[c] === undefined || u[c] === null) ? '' : String(u[c]));
+  // 1. write the ledger, verified (counts must match what we asked for)
+  const data = plan.updates.map(u => ({ range: `${FAIL_LEDGER_TAB}!A${u._row}:${lastCol}${u._row}`, values: [rowOf(u)] }));
+  if (data.length) {
+    const res = await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+    if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < data.length * FAIL_LEDGER_COLS.length) throw new Error(`Failures ledger: only ${res.totalUpdatedCells} of ${data.length * FAIL_LEDGER_COLS.length} cells saved`);
+  }
+  if (plan.created.length) {
+    const resp = await sheetsRequest(env, 'POST', `/values/${FAIL_LEDGER_TAB}:append?valueInputOption=RAW`, { values: plan.created.map(rowOf) });
+    const first = appendedRowNumber(resp);
+    if (resp && resp.updates && typeof resp.updates.updatedRows === 'number' && resp.updates.updatedRows !== plan.created.length) throw new Error(`Failures ledger: asked to add ${plan.created.length} row(s), sheet says ${resp.updates.updatedRows}`);
+    plan.created.forEach((r, i) => { r._row = first ? first + i : 0; });
+  }
+  // 2. move the cursor (only after the ledger is saved; a repeat is harmless because events are idempotent)
+  if (lastRow && lastId) { try { await failSetConfig(env, FAIL_CURSOR_KEY, `${lastRow}:${lastId}`); } catch (e) { errors.push({ step: 'cursor', error: String((e && e.message) || e).slice(0, 200) }); } }
+  // 3. tell Brett
+  const alertsOn = String(cfg.failure_alert_enabled || '').toUpperCase() === 'TRUE' && !!cfg.admin_phone;
+  const markNotified = [];
+  let texted = 0;
+  const finishNotify = async (rows) => {
+    for (const r of rows) { r.Notified_At = new Date(nowMs).toISOString(); r.Notified_Count = Number(r.Count) || 0; markNotified.push(r); }
+  };
+  if (alertsOn && plan.sms.length) {
+    let r; try { r = await sendSMS(env, cfg.admin_phone, failFormatP0Sms(plan.sms)); } catch (e) { r = { error: String((e && e.message) || e) }; }
+    if (failSmsOk(r)) { texted++; await finishNotify(plan.sms); }
+    else errors.push({ step: 'notify_p0', error: 'could not text the urgent-problem alert: ' + failTrim(JSON.stringify(r || {}), 200) });
+  }
+  if (plan.quiet.length) await finishNotify(plan.quiet);      // already texted by the older alert path; just record that Brett knows
+  let digest = null;
+  if (alertsOn) {
+    digest = failDigestPlan(plan.all, nowMs, cfg[FAIL_DIGEST_KEY] || '');
+    if (digest) {
+      let ok = true;
+      if (digest.text) { let r; try { r = await sendSMS(env, cfg.admin_phone, digest.text); } catch (e) { r = { error: String((e && e.message) || e) }; } ok = failSmsOk(r); if (ok) texted++; else errors.push({ step: 'notify_digest', error: 'could not text the morning digest: ' + failTrim(JSON.stringify(r || {}), 200) }); }
+      if (ok) { try { await failSetConfig(env, FAIL_DIGEST_KEY, digest.dateKey); } catch (e) { errors.push({ step: 'digest_date', error: String((e && e.message) || e).slice(0, 200) }); } }
+    }
+  }
+  if (markNotified.length) {
+    const nd = markNotified.filter(r => r._row).map(r => ({ range: `${FAIL_LEDGER_TAB}!A${r._row}:${lastCol}${r._row}`, values: [rowOf(r)] }));
+    if (nd.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: nd }); } catch (e) { errors.push({ step: 'mark_notified', error: String((e && e.message) || e).slice(0, 200) }); } }
+  }
+  const open = plan.all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
+  return { ok: errors.length === 0, errors, events_in: events.length, new_rows: plan.created.length, updated_rows: plan.updates.length, texted, alerts_on: alertsOn, open: { P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length } };
+}
+
+// ── endpoints ───────────────────────────────────────────────────────────────────────────────────────────────────
+// GET /failures/open[?all=1] - for the Needs Attention screen, the header badge and build sessions (read-only token reaches it too).
+async function failOpenList(env, url) {
+  let vals;
+  try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; }
+  catch (e) { if (isMissingTabError(e)) vals = []; else return json({ ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }, 503); }
+  const all = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+  const showAll = url && url.searchParams.get('all') === '1';
+  const rows = all.filter(r => showAll || FAIL_OPEN.indexOf(r.Status) >= 0).sort((a, b) => failSevRank(a.Severity) - failSevRank(b.Severity) || (a.Last_Seen < b.Last_Seen ? 1 : -1));
+  const open = all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
+  let alertsOn = null;
+  try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; } catch (e) { alertsOn = null; }
+  return json({ ok: true, as_of: new Date().toISOString(), alerts_on: alertsOn, counts: { open: open.length, P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length, acknowledged: open.filter(r => r.Status === 'acknowledged').length }, failures: rows.map(r => { const o = Object.assign({}, r); delete o._row; return o; }) });
+}
+// POST /failure/update { id, status, notes?, fixed_in? } - admin only (not in any ROLE_SCOPES list).
+async function failUpdate(env, body) {
+  body = body || {};
+  const id = String(body.id || '').trim(), status = String(body.status || '').trim();
+  if (!id) return json({ ok: false, error: 'id required' }, 400);
+  if (FAIL_STATUSES.indexOf(status) < 0) return json({ ok: false, error: 'status must be one of ' + FAIL_STATUSES.join(', ') }, 400);
+  const vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || [];
+  const rows = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2);
+  const row = rows.find(r => r.ID === id);
+  if (!row) return json({ ok: false, error: 'no failure with that id' }, 404);
+  row.Status = status;
+  if (body.fixed_in != null) row.Fixed_In = String(body.fixed_in).slice(0, 120);
+  if (body.notes) row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `${new Date().toISOString().slice(0, 10)} ${status}: ${String(body.notes).slice(0, 300)}`;
+  else row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `${new Date().toISOString().slice(0, 10)} marked ${status}`;
+  const lastCol = col(FAIL_LEDGER_COLS.length - 1);
+  const res = await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `${FAIL_LEDGER_TAB}!A${row._row}:${lastCol}${row._row}`, values: [FAIL_LEDGER_COLS.map(c => (row[c] === undefined ? '' : String(row[c])))] }] });
+  if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < FAIL_LEDGER_COLS.length) return json({ ok: false, error: 'the change did not save' }, 500);
+  const back = failRowsToObjects(((await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}!A${row._row}:${lastCol}${row._row}`)).values || []), FAIL_LEDGER_COLS, row._row)[0];
+  if (!back || back.ID !== id || back.Status !== status) return json({ ok: false, error: 'the change did not save (read-back mismatch)' }, 500);
+  delete back._row;
+  return json({ ok: true, failure: back });
+}
+// POST /failure/report - other pages, Workers, Apps Script. Public at the gate so a static page can call it, so: an anonymous caller can only ever
+// create a P2 event (never a text), with capped sizes; a caller with the admin secret or FAILURE_INGEST_TOKEN may set severity and system.
+async function failReportEndpoint(env, request, body) {
+  body = body || {};
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const trusted = !!tok && (tok === env.WORKER_SECRET || (!!env.FAILURE_INGEST_TOKEN && tok === env.FAILURE_INGEST_TOKEN));
+  const f = {
+    system: trusted ? body.system : 'page:' + String(body.system || 'unknown').slice(0, 30),
+    source: trusted ? body.source : 'browser',
+    where: String(body.where || '').slice(0, 80) || 'unknown',
+    ref: String(body.ref || '').slice(0, 80),
+    message: String(body.message || '').slice(0, trusted ? 400 : 300),
+    severity: trusted ? body.severity : 'P2',
+    context: trusted ? body.context : { ua: String(request.headers.get('User-Agent') || '').slice(0, 80) },
+  };
+  if (!f.message) return json({ ok: false, error: 'message required' }, 400);
+  f.anon = !trusted;
+  const r = await reportFailure(env, f);
+  if (r.dropped) return json({ ok: false, error: 'too many reports right now' }, 429);
+  return json(r.ok ? { ok: true } : { ok: false, error: 'could not save the report' }, r.ok ? 200 : 503);
+}
+// ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
+
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
 // independent automatic triggers on the same */15 cadence — GitHub Actions cron-sweep.yml's own
 // `schedule:` and the Cloudflare Cron Trigger in scheduled(). (Oct 12 2026: BOTH are now gone - cron-sweep.yml is deleted,
