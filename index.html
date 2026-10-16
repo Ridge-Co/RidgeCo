@@ -2738,6 +2738,7 @@ function openWODetail(woId) {
   if (wo.Voided==='TRUE') addBtn('↩ Restore','secondary',function(){unvoidWO(woId);});
   else { if (bgIsOpenForDup(wo)) addBtn('⧉ Duplicate','secondary',function(){openDupModal(woId);}); addBtn('✂ Split','secondary',function(){openSplitModal(woId);}); addBtn('🗑 Void / Hide','danger',function(){openVoidModal(woId);}); }
   openModal('modal-wo-detail');
+  fuRenderCard(woId);
   // Inject photo section after modal opens (deferred so modal always shows)
   setTimeout(function(){
     try {
