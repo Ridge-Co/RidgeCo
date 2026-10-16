@@ -23058,6 +23058,47 @@ function nextSafeId(rows) {
   return ids.length>0?Math.max(...ids)+1:1;
 }
 
+// ── Append-race guard (Oct 16 2026) ──────────────────────────────────────────────────────────────────────────────
+// "Read the tab, take max(ID)+1, append" leaves a gap between the read and the append. Two requests inside that gap
+// (separate Worker isolates, or a cached read) mint the SAME id, both rows land, and every later update-by-id edits the
+// first one. Oct 14 2026: Message_Queue #298 existed twice, so Skip kept editing the wrong row and the Kayla offer could
+// never be skipped. A delay cannot fix this (separate isolates cannot wait for each other). The append response says exactly
+// which row ours landed on: if that is not the row right after the rows we read, someone slipped in, so re-read the id column
+// and, if our id is now on more than one row, give OUR row (addressed by row number) a fresh unique id. Costs nothing
+// on the normal path (no extra read). A repair is logged to Ops_Telemetry; a failed repair throws (never silent).
+function appendedRowNumber(resp) {
+  const m = /!([A-Z]+)(\d+)(?::[A-Z]+(\d+))?$/.exec(String((resp && resp.updates && resp.updates.updatedRange) || ''));
+  return m ? parseInt(m[2], 10) : 0;
+}
+function mintNextNumericId(vals, idCol) {
+  let max = 0;
+  for (const r of vals) { const n = parseInt(String((r && r[idCol]) || '').replace(/\D/g, ''), 10); if (Number.isFinite(n) && n > max) max = n; }
+  return String(max + 1);
+}
+// resp: the :append response. rowsAtRead: rows (header included) in the read the ids were minted from. ids: the ids we wrote, in row order.
+async function guardAppendedIds(env, tab, resp, rowsAtRead, idCol, ids, mint) {
+  const first = appendedRowNumber(resp), out = ids.map(String);
+  if (first && first === rowsAtRead + 1) return { ids: out, row: first, repaired: false };
+  invalidateTabCache(tab);
+  const vals = ((await sheetsRequest(env, 'GET', `/values/${tab}`)).values || []).slice(1);
+  const count = id => vals.filter(r => String((r && r[idCol]) || '') === id).length;
+  const dup = out.map((id, i) => ({ id, i })).filter(x => count(x.id) > 1);
+  if (!dup.length) return { ids: out, row: first, repaired: false };
+  if (!first) throw new Error(`${tab}: a new row's id (${dup[0].id}) is on more than one row and the append response did not say where it landed - fix the duplicate by hand`);
+  const mintFn = mint || mintNextNumericId, extra = [];
+  const updates = dup.map(x => {
+    const newId = String(mintFn(vals.concat(extra.map(e => { const a = []; a[idCol] = e; return a; })), idCol));
+    extra.push(newId); out[x.i] = newId;
+    return { range: `${tab}!${col(idCol)}${first + x.i}`, values: [[newId]] };
+  });
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+  invalidateTabCache(tab);
+  const after = ((await sheetsRequest(env, 'GET', `/values/${tab}`)).values || []).slice(1);
+  for (const id of out) if (after.filter(r => String((r && r[idCol]) || '') === id).length !== 1) throw new Error(`${tab}: could not settle on a unique id (${id}) after an append race - check the tab for a duplicate row`);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'append_id_race_repaired', Skill_Or_Endpoint: tab, Success: 'TRUE', Notes: `two rows were given the same id; this row was renumbered ${dup.map(x => ids[x.i] + '->' + out[x.i]).join(', ')}`.slice(0, 480) }); } catch (_) { console.warn('append race repaired but telemetry failed'); }
+  return { ids: out, row: first, repaired: true };
+}
+
 // PAT-014: a missing tab must surface as a clean, actionable 404 — never a raw
 // Sheets stack trace. Reads already swallow this (returning []), which is exactly
 // what hid the missing Receipts tab for weeks: /receipts looked healthy while every
