@@ -35757,7 +35757,7 @@ const FI_TYPE_SEED = [
   'Light fixture not working|electrical|low||Burned-out bulb or failed fixture or switch|Replace the bulb; if still dead, replace the fixture or switch',
   'Missing cover plate or exposed wiring|electrical|high||Cover removed or never installed|Install a cover plate and make sure all wiring is inside a covered box',
   'Loose or damaged switch or outlet|electrical|medium||Wear or loose mounting|Secure or replace the device',
-  'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an electrician correct the panel and label the circuits',
+  'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an appropriate contractor correct the panel and label the circuits',
   'Furnace filter dirty or missing|hvac|medium|hvac,furnace,basement,utility|Not changed on schedule|Replace the filter with the correct size and set a change schedule',
   'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an HVAC contractor evaluate it and budget for replacement',
   'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an HVAC contractor diagnose and repair',
