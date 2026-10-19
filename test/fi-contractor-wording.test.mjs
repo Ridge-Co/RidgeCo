@@ -101,6 +101,7 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
     areas: [
       { id: 'a1', name: 'Panel', condition: 'poor', issues: [{ id: 'i1', title: 'Double tap', trade: 'electrical', severity: 'high', detail: 'Needs a licensed electrician.', recommended_fix: 'Have an HVAC contractor look.', ai: true }] },
       { id: 'a2', name: 'Kitchen', condition: 'fair', issues: [{ id: 'i2', title: 'Leak', trade: 'plumbing', severity: 'low', recommended_fix: 'Inspector wrote: licensed plumber Joe', }] },
+      { id: 'a3', name: 'Furnace', condition: 'fair', issues: [{ id: 'i3', title: 'Old furnace', trade: 'hvac', severity: 'medium', recommended_fix: 'Have an HVAC contractor evaluate it and budget for replacement', fix_source: 'suggested' }] },
     ] };
   let r = await w.fiSave(w.env, { id: ID, base_rev: 0, doc, meta: { client_name: 'Premier', inspector: 'Brett' } });
   t('save ok', r.status === 200 && r.body.ok, r);
