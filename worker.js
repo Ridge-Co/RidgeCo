@@ -35814,7 +35814,7 @@ function fiTypeAreas(v) {
   return out.slice(0, 12);
 }
 function fiTypeOut(o) {
-  return { id: o.ID, name: o.Name, trade: o.Trade || 'general', severity: o.Default_Severity || 'medium', areas: fiTypeAreas(o.Areas), detail: o.Detail || '', likely_cause: o.Likely_Cause || '', recommended_fix: o.Recommended_Fix || '', uses: Number(o.Uses) || 0, source: o.Source || 'seed' };
+  return { id: o.ID, name: o.Name, trade: o.Trade || 'general', severity: o.Default_Severity || 'medium', areas: fiTypeAreas(o.Areas), detail: fiContractorize(o.Detail || ''), likely_cause: fiContractorize(o.Likely_Cause || ''), recommended_fix: fiContractorize(o.Recommended_Fix || ''), uses: Number(o.Uses) || 0, source: o.Source || 'seed' };
 }
 // Validates a type definition coming from the phone/AI. Returns {ok, rec} or {ok:false, message}.
 function fiTypeClean(b) {
