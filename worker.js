@@ -35004,7 +35004,7 @@ function fiSeverityRank(s) { const i = FI_SEVERITIES.indexOf(s); return i < 0 ? 
 // ── Pure helpers (unit-tested by extracting them from this file) ────────────────────────────
 function fiNormalizeIssue(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const title = fiStr(raw.title, 120).trim();
+  const title = fiClean(raw.title, 120).trim();
   if (!title) return null;
   let trade = String(raw.trade || '').toLowerCase().trim().replace(/[\s/&-]+/g, '_');
   if (!FI_TRADES.includes(trade)) trade = 'general';
