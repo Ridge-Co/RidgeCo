@@ -405,6 +405,7 @@ function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.e
 
 // ── views ───────────────────────────────────────────────────────────────────
 function render(){
+  if (drag) return;   // never rebuild the list under a finger that is mid-drag; dragFinish() re-renders
   var v = $('view'), h = '';
   if (S.view==='home') h = viewHome();
   else if (S.view==='new') h = viewNew();
