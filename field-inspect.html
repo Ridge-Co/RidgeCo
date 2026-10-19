@@ -1108,7 +1108,7 @@ document.addEventListener('pointerdown', function(e){
   var h = e.target && e.target.closest && e.target.closest('.dh'); if (!h || (e.pointerType === 'mouse' && e.button !== 0)) return;
   e.preventDefault(); dragStart(e, h);
 });
-document.addEventListener('pointermove', function(e){ if (!drag || e.pointerId !== drag.pid) return; e.preventDefault(); drag.clientY = e.clientY; dragUpdate(); }, { passive:false });
+document.addEventListener('pointermove', function(e){ if (!drag || e.pointerId !== drag.pid) return; if (e.pointerType === 'mouse' && e.buttons === 0){ dragFinish(false); return; } e.preventDefault(); drag.clientY = e.clientY; dragUpdate(); }, { passive:false });
 document.addEventListener('pointerup', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(true); });
 document.addEventListener('pointercancel', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(false); });
 // Self-heal: if the release is ever missed (window switched mid-drag, button let go outside the window, system gesture) the drag must not stay "held" - render() is paused while a drag is active.
