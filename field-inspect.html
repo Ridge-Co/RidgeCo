@@ -1111,6 +1111,11 @@ document.addEventListener('pointerdown', function(e){
 document.addEventListener('pointermove', function(e){ if (!drag || e.pointerId !== drag.pid) return; e.preventDefault(); drag.clientY = e.clientY; dragUpdate(); }, { passive:false });
 document.addEventListener('pointerup', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(true); });
 document.addEventListener('pointercancel', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(false); });
+// Self-heal: if the release is ever missed (window switched mid-drag, button let go outside the window, system gesture) the drag must not stay "held" - render() is paused while a drag is active.
+document.addEventListener('lostpointercapture', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(false); });
+window.addEventListener('blur', function(){ dragFinish(false); });
+document.addEventListener('visibilitychange', function(){ if (document.hidden) dragFinish(false); });
+document.addEventListener('keydown', function(e){ if (drag && e.key === 'Escape') dragFinish(false); });
 document.addEventListener('contextmenu', function(e){ if (e.target && e.target.closest && e.target.closest('.dh')) e.preventDefault(); });
 document.addEventListener('keydown', function(e){
   var h = e.target && e.target.closest && e.target.closest('.dh'); if (!h) return;
