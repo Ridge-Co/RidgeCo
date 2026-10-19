@@ -35776,7 +35776,7 @@ const FI_TYPE_SEED = [
   'Missing or loose handrail or guardrail|safety|high|stair,porch,exterior,basement|Never installed or loose fasteners|Install or secure the rail',
   'Grading slopes toward the foundation|exterior_site|medium|exterior,rear,side,yard,basement|Soil settling|Regrade so water flows away from the house',
   'Vegetation touching the building|exterior_site|low|exterior,front,rear,side,yard|Overgrowth|Trim back from siding and roof',
-  'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have a structural professional evaluate and seal',
+  'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have an appropriate contractor evaluate and seal',
   'Water intrusion or efflorescence in basement|structural|high|basement|Poor drainage or hydrostatic pressure|Find the water source; improve drainage; seal as needed',
   'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have a qualified contractor evaluate and repair',
   'Rotted trim, sill or framing|carpentry|medium||Long-term moisture|Replace rotted wood and fix the moisture source',
