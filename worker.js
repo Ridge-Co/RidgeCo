@@ -35142,7 +35142,7 @@ function fiNormalizeSummary(parsed, rollup) {
   if (!overall) return null;
   const have = new Set(rollup.map(r => r.trade));
   const trades = {};
-  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiStr(v, 700).trim(); }
+  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiClean(v, 700).trim(); }
   const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiClean(p && p.title, 120).trim(), why: fiClean(p && p.why, 300).trim() })).filter(p => p.title);
   return { overall, trades, priorities };
 }
