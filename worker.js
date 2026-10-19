@@ -35778,7 +35778,7 @@ const FI_TYPE_SEED = [
   'Vegetation touching the building|exterior_site|low|exterior,front,rear,side,yard|Overgrowth|Trim back from siding and roof',
   'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have an appropriate contractor evaluate and seal',
   'Water intrusion or efflorescence in basement|structural|high|basement|Poor drainage or hydrostatic pressure|Find the water source; improve drainage; seal as needed',
-  'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have a qualified contractor evaluate and repair',
+  'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have an appropriate contractor evaluate and repair',
   'Rotted trim, sill or framing|carpentry|medium||Long-term moisture|Replace rotted wood and fix the moisture source',
   'Cracked drywall or ceiling|drywall_paint|low||Settling or moisture|Patch, prime and paint',
   'Hole in wall or door|drywall_paint|low||Impact damage|Patch, prime and paint',
