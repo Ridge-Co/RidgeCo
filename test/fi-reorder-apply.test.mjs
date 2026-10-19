@@ -1,0 +1,24 @@
+// Oct 19 2026 - pure logic behind drag-and-drop area reordering in field-inspect.html (reorderApply). Extracted from the page source so the test runs the real code.
+import fs from 'fs';
+const html = fs.readFileSync(new URL('../field-inspect.html', import.meta.url), 'utf8');
+const i = html.indexOf('function reorderApply('), j = html.indexOf('// ---- drag-and-drop reordering');
+if (i < 0 || j < 0) throw new Error('reorderApply not found');
+const reorderApply = new Function(html.slice(i, j) + '; return reorderApply;')();
+let pass = 0, fail = 0;
+const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? 'got ' + JSON.stringify(got) : ''); } };
+const A = (id, ex) => ({ id, name: id, excluded: !!ex });
+const ids = (arr) => arr.map(a => a.id).join(',');
+const areas = [A('a'), A('b'), A('x', true), A('c'), A('d'), A('y', true)];
+t('excluded areas keep their slots', ids(reorderApply(areas, ['d', 'a', 'b', 'c'])) === 'd,a,x,b,c,y', ids(reorderApply(areas, ['d', 'a', 'b', 'c'])));
+t('identity order unchanged', ids(reorderApply(areas, ['a', 'b', 'c', 'd'])) === 'a,b,x,c,d,y');
+t('swap first two', ids(reorderApply(areas, ['b', 'a', 'c', 'd'])) === 'b,a,x,c,d,y');
+t('does not mutate input', ids(areas) === 'a,b,x,c,d,y');
+t('same objects kept (no clones, so photos/issues survive)', reorderApply(areas, ['d', 'c', 'b', 'a'])[0] === areas[4]);
+t('wrong length -> null', reorderApply(areas, ['a', 'b', 'c']) === null);
+t('duplicate id -> null', reorderApply(areas, ['a', 'a', 'c', 'd']) === null);
+t('unknown id -> null', reorderApply(areas, ['a', 'b', 'c', 'zzz']) === null);
+t('excluded id in list -> null', reorderApply(areas, ['a', 'b', 'x', 'c']) === null);
+t('null ids -> null', reorderApply(areas, null) === null);
+t('empty list ok', ids(reorderApply([], [])) === '');
+console.log(`fi-reorder-apply: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

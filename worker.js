@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-16.12-ai-credit-pause-stg';
+const BUILD_VERSION = '2026-10-19.01-fi-appropriate-contractor';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -34947,6 +34947,44 @@ async function fiRoute(env, label, fn) {
 }
 function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
 function fiStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max); }
+// ── "appropriate contractor" wording (Brett, Oct 19 2026) ───────────────────────────────────────────────
+// Reports never say "licensed electrician", "qualified contractor", "professional plumber" etc. - the repair is to be done by "an appropriate contractor".
+// Pure and idempotent. Applied to everything the AI writes (issues, summary, catalog text) and, for AI-written text only, when a report is served.
+const FI_Q = '(?:(?:state|fully|properly)[- ])?(?:licen[sc]ed|certified|qualified|professional|registered|accredited|insured|bonded)';
+const FI_N = '(?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|inspectors?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|companies|company|tradespeople|tradesmen|tradesman|installers?|repairers?|remediators?)';
+const FI_ACON = 'appropriate contractor';
+function fiContractorize(text) {
+  let s = String(text == null ? '' : text);
+  if (!s) return s;
+  const plural = (n) => /(?:s|men|people)$/i.test(n);
+  // A) "a licensed (and insured) [HVAC] electrician" -> "an appropriate contractor"
+  s = s.replace(new RegExp("\\b(?:(an?)\\s+)?(?:" + FI_Q + "(?:\\s*(?:,|and|&|/)\\s*|\\s+))+(?:[A-Za-z][A-Za-z-]*\\s+){0,3}?(" + FI_N + ")\\b", 'gi'), (m, art, noun) => {
+    const pl = plural(noun), word = pl ? FI_ACON + 's' : FI_ACON;
+    if (art && !pl) return (art[0] === 'A' ? 'An ' : 'an ') + word;
+    return m[0] === m[0].toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word;
+  });
+  // B) "Have/Hire/Call ... an electrician|HVAC contractor|structural professional" -> "... an appropriate contractor"
+  s = s.replace(new RegExp("\\b(Have|Hire|Call|Contact|Consult|Engage|Retain|Schedule|Obtain|Seek|Get|Bring in)\\s+(an?)\\s+(?:[A-Za-z][A-Za-z-]*\\s+){0,3}?((?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|installers?|remediators?))\\b(?!['’-])", 'gi'), (m, verb, art, noun) => verb + ' ' + (art[0] === 'A' ? 'An' : 'an') + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
+  // C) "call pest control" / "have pest control inspect" -> "call an appropriate contractor"
+  s = s.replace(/\b(Have|Hire|Call|Contact|Engage|Retain|Get)\s+(?:an?\s+|the\s+)?(?:professional\s+)?(?:pest control|exterminator)(?:\s+(?:company|service|operator|professional|technician))?\b/gi, (m, verb) => verb + ' an ' + FI_ACON);
+  return s;
+}
+function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
+// Report-serve scrub: only AI-written text (issues flagged ai:true + the AI summary). Text the inspector typed or dictated verbatim is left untouched.
+function fiScrubDocForReport(doc) {
+  if (!doc || typeof doc !== 'object') return doc;
+  for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
+    if (!is || is.ai !== true) continue;
+    for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]);
+  }
+  const sm = doc.summary;
+  if (sm && typeof sm === 'object') {
+    if (typeof sm.overall === 'string') sm.overall = fiContractorize(sm.overall);
+    if (sm.trades && typeof sm.trades === 'object') for (const k of Object.keys(sm.trades)) if (typeof sm.trades[k] === 'string') sm.trades[k] = fiContractorize(sm.trades[k]);
+    if (Array.isArray(sm.priorities)) for (const pr of sm.priorities) if (pr && typeof pr === 'object') { if (typeof pr.title === 'string') pr.title = fiContractorize(pr.title); if (typeof pr.why === 'string') pr.why = fiContractorize(pr.why); }
+  }
+  return doc;
+}
 function fiIsAdmin(env, request, url) {
   const t = request.headers.get('X-Auth-Token') || '';
   if (!t) return false;
@@ -34966,7 +35004,7 @@ function fiSeverityRank(s) { const i = FI_SEVERITIES.indexOf(s); return i < 0 ? 
 // ── Pure helpers (unit-tested by extracting them from this file) ────────────────────────────
 function fiNormalizeIssue(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const title = fiStr(raw.title, 120).trim();
+  const title = fiClean(raw.title, 120).trim();
   if (!title) return null;
   let trade = String(raw.trade || '').toLowerCase().trim().replace(/[\s/&-]+/g, '_');
   if (!FI_TRADES.includes(trade)) trade = 'general';
@@ -34974,9 +35012,9 @@ function fiNormalizeIssue(raw) {
   if (!FI_SEVERITIES.includes(severity)) severity = 'medium';
   const out = {
     title, trade, severity,
-    detail: fiStr(raw.detail, 600).trim(),
-    likely_cause: fiStr(raw.likely_cause, 300).trim(),
-    recommended_fix: fiStr(raw.recommended_fix, 500).trim(),
+    detail: fiClean(raw.detail, 600).trim(),
+    likely_cause: fiClean(raw.likely_cause, 300).trim(),
+    recommended_fix: fiClean(raw.recommended_fix, 500).trim(),
     fix_source: raw.fix_source === 'inspector' ? 'inspector' : 'suggested',
   };
   if (raw.possible_duplicate_of) out.possible_duplicate_of = fiStr(raw.possible_duplicate_of, 120);
@@ -35088,6 +35126,7 @@ Rules:
 - If the property was built before 1978 and the notes mention peeling, chipping, flaking or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
 - If nothing is wrong, return an empty issues array and area_condition "nothing_to_do" (or "good").
 - Do not repeat issues already recorded; if the dictation updates one, still output it and set "possible_duplicate_of" to the existing title.
+- Wording: never write "licensed", "certified", "qualified", "professional" or "registered" in front of a contractor or trade, and never name a specific trade as the person to hire (no "licensed electrician", "HVAC contractor", "plumber", "structural professional", "pest control"). Whenever a repair needs someone to do it, say "an appropriate contractor" (e.g. "Have an appropriate contractor replace the panel"). Do not mention licensing at all.
 Output a single JSON object and nothing else.`;
 function fiBuildSummaryPrompt(doc, rollup) {
   const lines = [];
@@ -35097,15 +35136,15 @@ function fiBuildSummaryPrompt(doc, rollup) {
   }
   return `Property: ${fiStr(doc.property && doc.property.address, 160)}${doc.pre1978 ? ' (built before 1978)' : ''}\nOverall condition set by inspector: ${fiStr(doc.overall && doc.overall.condition, 20)}\nInspector's overall notes: ${fiStr(doc.overall && doc.overall.notes, 800) || '(none)'}\n\nAll issues:\n${lines.join('\n') || '(none)'}\n\nTrades with issues: ${rollup.map(r => r.trade).join(', ') || '(none)'}\n\nReturn JSON only: {"overall":"3-5 plain-English sentences summarising the condition and what matters most","trades":{"<trade>":"2-3 sentences: group related issues ACROSS areas (e.g. several plumbing issues in different rooms), say what one contractor visit should cover and the priority order"},"priorities":[{"title":"","why":""}]}\nOnly include trades listed above. At most 5 priorities, most urgent first.`;
 }
-const FI_SUMMARY_SYSTEM = `You write the summary page of a rental property inspection report that the property manager will hand to the owner or tenant. Be factual, plain, and actionable. Use only the issues provided; never add defects, costs or timelines not in the data. Tenant-action items are requests to the tenant, not landlord repairs. Output a single JSON object and nothing else.`;
+const FI_SUMMARY_SYSTEM = `You write the summary page of a rental property inspection report that the property manager will hand to the owner or tenant. Be factual, plain, and actionable. Use only the issues provided; never add defects, costs or timelines not in the data. Tenant-action items are requests to the tenant, not landlord repairs. Wording rule: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber"); when someone must do a repair or visit, say "an appropriate contractor". Do not mention licensing. Output a single JSON object and nothing else.`;
 function fiNormalizeSummary(parsed, rollup) {
   if (!parsed || typeof parsed !== 'object') return null;
-  const overall = fiStr(parsed.overall, 1200).trim();
+  const overall = fiClean(parsed.overall, 1200).trim();
   if (!overall) return null;
   const have = new Set(rollup.map(r => r.trade));
   const trades = {};
-  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiStr(v, 700).trim(); }
-  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiStr(p && p.title, 120).trim(), why: fiStr(p && p.why, 300).trim() })).filter(p => p.title);
+  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiClean(v, 700).trim(); }
+  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiClean(p && p.title, 120).trim(), why: fiClean(p && p.why, 300).trim() })).filter(p => p.title);
   return { overall, trades, priorities };
 }
 function fiHtmlEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -35329,6 +35368,7 @@ async function fiReport(env, request, url) {
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
+  fiScrubDocForReport(doc);
   return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
 }
 async function fiStructure(env, body) {
@@ -35344,7 +35384,7 @@ async function fiStructure(env, body) {
   const issues = parsed && fiNormalizeIssues(parsed.issues);
   if (!issues) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your text is kept — retry, or add the issues by hand.');
   const cond = FI_CONDITIONS.includes(parsed.area_condition) ? parsed.area_condition : '';
-  return json({ ok: true, issues, area_condition: cond, area_summary: fiStr(parsed.area_summary, 300), model_used: ai.model_used });
+  return json({ ok: true, issues, area_condition: cond, area_summary: fiClean(parsed.area_summary, 300), model_used: ai.model_used });
 }
 async function fiSummarize(env, body) {
   body = body || {};
@@ -35717,14 +35757,14 @@ const FI_TYPE_SEED = [
   'Light fixture not working|electrical|low||Burned-out bulb or failed fixture or switch|Replace the bulb; if still dead, replace the fixture or switch',
   'Missing cover plate or exposed wiring|electrical|high||Cover removed or never installed|Install a cover plate and make sure all wiring is inside a covered box',
   'Loose or damaged switch or outlet|electrical|medium||Wear or loose mounting|Secure or replace the device',
-  'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an electrician correct the panel and label the circuits',
+  'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an appropriate contractor correct the panel and label the circuits',
   'Furnace filter dirty or missing|hvac|medium|hvac,furnace,basement,utility|Not changed on schedule|Replace the filter with the correct size and set a change schedule',
-  'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an HVAC contractor evaluate it and budget for replacement',
-  'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an HVAC contractor diagnose and repair',
-  'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an HVAC contractor diagnose and repair',
+  'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an appropriate contractor evaluate it and budget for replacement',
+  'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an appropriate contractor diagnose and repair',
+  'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an appropriate contractor diagnose and repair',
   'Condensate drain clogged or missing|hvac|medium|hvac,basement,attic,utility|Algae or debris in the drain line|Clear the condensate line and install a proper drain',
   'Flue or vent pipe disconnected or corroded|safety|urgent|hvac,furnace,water heater,basement,utility|Age, corrosion or loose joints|Reconnect or replace the vent pipe; check for backdrafting',
-  'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an HVAC contractor inspect the blower and motor',
+  'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an appropriate contractor inspect the blower and motor',
   'Thermostat not working|hvac|medium|hall,living|Dead batteries or failed unit|Replace batteries; replace the thermostat if needed',
   'Damaged or missing shingles|roofing|high|roof|Wind, age or storm damage|Repair or replace the damaged shingles',
   'Failed roof flashing or penetration seal|roofing|high|roof|Cracked sealant or loose flashing|Reseal or replace the flashing',
@@ -35736,9 +35776,9 @@ const FI_TYPE_SEED = [
   'Missing or loose handrail or guardrail|safety|high|stair,porch,exterior,basement|Never installed or loose fasteners|Install or secure the rail',
   'Grading slopes toward the foundation|exterior_site|medium|exterior,rear,side,yard,basement|Soil settling|Regrade so water flows away from the house',
   'Vegetation touching the building|exterior_site|low|exterior,front,rear,side,yard|Overgrowth|Trim back from siding and roof',
-  'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have a structural professional evaluate and seal',
+  'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have an appropriate contractor evaluate and seal',
   'Water intrusion or efflorescence in basement|structural|high|basement|Poor drainage or hydrostatic pressure|Find the water source; improve drainage; seal as needed',
-  'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have a qualified contractor evaluate and repair',
+  'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have an appropriate contractor evaluate and repair',
   'Rotted trim, sill or framing|carpentry|medium||Long-term moisture|Replace rotted wood and fix the moisture source',
   'Cracked drywall or ceiling|drywall_paint|low||Settling or moisture|Patch, prime and paint',
   'Hole in wall or door|drywall_paint|low||Impact damage|Patch, prime and paint',
@@ -35757,8 +35797,8 @@ const FI_TYPE_SEED = [
   'Refrigerator not cooling or door seal worn|appliances|medium|kitchen|Failed seal, dirty coils or cooling fault|Replace the gasket; clean coils; service or replace the unit',
   'Dryer vent clogged or improperly vented|safety|high|laundry|Lint buildup or flexible foil duct|Clean the vent and use rigid metal duct to the outside',
   'Exhaust fan missing, noisy or not working|hvac|low|bath,kitchen,laundry|Worn motor or blocked duct|Clean, repair or replace the exhaust fan',
-  'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call pest control; clean up droppings safely',
-  'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have pest control inspect',
+  'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call an appropriate contractor; clean up droppings safely',
+  'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have an appropriate contractor inspect',
   'Clutter or trash needing tenant action|tenant_action|medium||Tenant storage habits|Ask the tenant to clear and dispose of the items by a set date',
   'Tenant-caused damage|tenant_action|medium||Misuse or neglect|Document and review for tenant charge-back under the lease',
   'Blocked access to panel, heater or exit|tenant_action|high||Items stored in front of required clearances|Ask the tenant to clear the area immediately',
@@ -35776,7 +35816,7 @@ function fiTypeAreas(v) {
   return out.slice(0, 12);
 }
 function fiTypeOut(o) {
-  return { id: o.ID, name: o.Name, trade: o.Trade || 'general', severity: o.Default_Severity || 'medium', areas: fiTypeAreas(o.Areas), detail: o.Detail || '', likely_cause: o.Likely_Cause || '', recommended_fix: o.Recommended_Fix || '', uses: Number(o.Uses) || 0, source: o.Source || 'seed' };
+  return { id: o.ID, name: o.Name, trade: o.Trade || 'general', severity: o.Default_Severity || 'medium', areas: fiTypeAreas(o.Areas), detail: fiContractorize(o.Detail || ''), likely_cause: fiContractorize(o.Likely_Cause || ''), recommended_fix: fiContractorize(o.Recommended_Fix || ''), uses: Number(o.Uses) || 0, source: o.Source || 'seed' };
 }
 // Validates a type definition coming from the phone/AI. Returns {ok, rec} or {ok:false, message}.
 function fiTypeClean(b) {
@@ -35959,6 +35999,7 @@ Rules:
 - Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage) go in "equipment" for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
 - "conditions": only when the inspector clearly states an area is good/fair/poor or has nothing to do.
 - "new_areas": only when the notes clearly describe a space that is not in the area list at all.
+- Wording: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber", "pest control"); whenever a repair needs someone, say "an appropriate contractor". Do not mention licensing.
 - Do not repeat issues already recorded or already proposed. "quote" is a short verbatim excerpt (max 200 chars) of the transcript that backs the item, and "note_id" is the id of the note it came from.
 Output a single JSON object and nothing else.`;
 function fiBuildRoutePrompt(b, catalog) {
