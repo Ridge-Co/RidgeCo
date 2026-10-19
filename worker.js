@@ -35999,6 +35999,7 @@ Rules:
 - Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage) go in "equipment" for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
 - "conditions": only when the inspector clearly states an area is good/fair/poor or has nothing to do.
 - "new_areas": only when the notes clearly describe a space that is not in the area list at all.
+- Wording: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber", "pest control"); whenever a repair needs someone, say "an appropriate contractor". Do not mention licensing.
 - Do not repeat issues already recorded or already proposed. "quote" is a short verbatim excerpt (max 200 chars) of the transcript that backs the item, and "note_id" is the id of the note it came from.
 Output a single JSON object and nothing else.`;
 function fiBuildRoutePrompt(b, catalog) {
