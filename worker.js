@@ -34978,6 +34978,8 @@ function fiContractorize(text) {
   s = s.replace(new RegExp("\\b(by|from|with|to|recommend|recommends|recommended|refer to|referral to)\\s+(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")\\b(?!['’-]|\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection))", 'gi'), (m, pre, a, noun) => pre + ' ' + art(a) + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
   // E) sentence-start subject: "An electrician should check the wiring."
   s = s.replace(new RegExp("(^|[.!?]\\s+)(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")(?=\\s+(?:should|must|needs?|will|can|could|may|to)\\b)", 'gi'), (m, pre, a, noun) => pre + art(a) + ' ' + FI_ACON);
+  // G) a trade named in brackets after the replacement: "an appropriate contractor (structural engineer)" -> "an appropriate contractor"
+  s = s.replace(new RegExp("(" + FI_ACON + "s?)\\s*\\((?:[^)]{0,60}?\\b" + FI_TRADE_N + "\\b[^)]{0,60}?)\\)", 'gi'), '$1');
   // F) the same replacement twice in a row ("a plumber or a licensed contractor") collapses to one
   s = s.replace(/\b(an appropriate contractor)(?:\s*(?:,|or|and|\/|&)\s*(?:an?\s+)?appropriate contractor)+/gi, '$1');
   return s;
