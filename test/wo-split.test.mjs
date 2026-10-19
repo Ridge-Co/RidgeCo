@@ -210,6 +210,7 @@ function build(db, fetchOpts) {
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
     etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
+    grab(wsrc, 'function woJobLabel('), grab(wsrc, 'function propUnitText('), grab(wsrc, 'function formatUnitLabel('),
     'return { woVoid, woUnvoid, woSplit, createWorkOrder, smsGatedSend };',
   ].join('\n');
   return new Function('getAccessToken', 'fetch', 'setTimeout',
