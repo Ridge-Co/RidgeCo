@@ -82,6 +82,14 @@
   .mv{display:flex;gap:8px;flex:none}
   .mv button{width:44px;height:44px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:18px;font-weight:700;cursor:pointer;color:var(--text)}
   .mv button:disabled{opacity:.3;cursor:not-allowed}
+  .mv button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+  .area-row.rr{cursor:default;user-select:none;-webkit-user-select:none;gap:6px}
+  .area-row.rr>span:nth-of-type(1){flex:1;min-width:0}
+  .dh{flex:none;width:44px;height:52px;border:none;background:transparent;font-size:26px;line-height:1;color:var(--muted,#6b7684);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;border-radius:10px}
+  .dh:focus-visible{outline:2px solid var(--primary,#1d4ed8);outline-offset:-2px}
+  .area-row.shifting{transition:transform .14s ease}
+  .area-row.dragging{position:relative;z-index:6;background:var(--surface,#fff);box-shadow:0 8px 22px rgba(0,0,0,.28);border-radius:10px;border-top-color:transparent;transition:none;cursor:grabbing}
+  body.dragging-rows,body.dragging-rows *{cursor:grabbing!important;user-select:none!important;-webkit-user-select:none!important}
   .eqgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
   .eqgrid .full{grid-column:1 / -1}
   .pill.type{background:#f0eafd;color:#5b3fa8}
@@ -397,6 +405,7 @@ function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.e
 
 // ── views ───────────────────────────────────────────────────────────────────
 function render(){
+  if (drag) return;   // never rebuild the list under a finger that is mid-drag; dragFinish() re-renders
   var v = $('view'), h = '';
   if (S.view==='home') h = viewHome();
   else if (S.view==='new') h = viewNew();
@@ -1027,14 +1036,92 @@ function buildAreas(o){
 }
 function groupLabel(g){ return g==='exterior' ? 'Exterior' : g==='interior' ? 'Interior' : g==='systems' ? 'Systems' : ''; }
 function toggleReorder(){ S.reorder = !S.reorder; render(); }
-function moveArea(id, dir){
+function moveArea(id, dir, keepFocus){
+  // Keep the moved row under the finger: measure it before the re-render, then scroll by however far it jumped. Without this the list re-renders and the row slides away, so a second tap hits a different row ("wonky").
+  var el = document.querySelector('.area-row[data-aid="'+id+'"]'), oldTop = el ? el.getBoundingClientRect().top : null;
   mut(function(doc){
     var vis = doc.areas.filter(function(a){ return !a.excluded; }), i = vis.map(function(a){return a.id;}).indexOf(id), j = i + dir;
     if (i < 0 || j < 0 || j >= vis.length) return;
     var ai = doc.areas.indexOf(vis[i]), aj = doc.areas.indexOf(vis[j]), tmp = doc.areas[ai]; doc.areas[ai] = doc.areas[aj]; doc.areas[aj] = tmp;
   });
   render();
+  var el2 = document.querySelector('.area-row[data-aid="'+id+'"]');
+  if (el2 && oldTop !== null){ var d = el2.getBoundingClientRect().top - oldTop; if (d) window.scrollBy(0, d); }
+  if (keepFocus && el2){ var h = el2.querySelector('.dh'); if (h) h.focus({preventScroll:true}); }
 }
+// Pure: new areas order from the ids of the visible (non-excluded) areas in their new order. Excluded areas keep their slots. Returns null if ids do not match the visible areas exactly.
+function reorderApply(areas, ids){
+  var vis = areas.filter(function(a){ return !a.excluded; });
+  if (!ids || ids.length !== vis.length) return null;
+  var byId = {}; vis.forEach(function(a){ byId[a.id] = a; });
+  var seen = {}; for (var i=0;i<ids.length;i++){ if (!byId[ids[i]] || seen[ids[i]]) return null; seen[ids[i]] = 1; }
+  var k = 0; return areas.map(function(a){ return a.excluded ? a : byId[ids[k++]]; });
+}
+// ---- drag-and-drop reordering (Pointer Events: one code path for finger, pen and mouse; only the ≡ handle drags, so the page still scrolls normally) ----
+var drag = null;
+function dragStart(e, handle){
+  var row = handle.closest('.area-row'), list = row && row.parentNode; if (!row || !list || drag) return;
+  var rows = [].slice.call(list.querySelectorAll('.area-row[data-aid]')), from = rows.indexOf(row); if (from < 0) return;
+  var sy = window.scrollY;
+  drag = { id: row.getAttribute('data-aid'), pid: e.pointerId, handle: handle, row: row, rows: rows, from: from, to: from, sy0: sy, y0: e.clientY, clientY: e.clientY, h: row.getBoundingClientRect().height, raf: 0,
+    ids: rows.map(function(r){ return r.getAttribute('data-aid'); }),
+    mids: rows.map(function(r){ var b = r.getBoundingClientRect(); return b.top + sy + b.height/2; }) };
+  try { handle.setPointerCapture(e.pointerId); } catch(_){}
+  row.classList.add('dragging'); rows.forEach(function(r){ if (r !== row) r.classList.add('shifting'); });
+  document.body.classList.add('dragging-rows');
+  drag.raf = requestAnimationFrame(dragTick);
+}
+function dragUpdate(){
+  var d = drag; if (!d) return;
+  var dy = (d.clientY + window.scrollY) - (d.y0 + d.sy0), center = d.mids[d.from] + dy, to = 0, j;
+  d.row.style.transform = 'translateY('+dy+'px)';
+  for (j=0;j<d.rows.length;j++) if (j !== d.from && d.mids[j] < center) to++;
+  d.to = to;
+  for (j=0;j<d.rows.length;j++){
+    if (j === d.from) continue;
+    var sh = 0; if (d.from < to && j > d.from && j <= to) sh = -d.h; else if (d.from > to && j >= to && j < d.from) sh = d.h;
+    d.rows[j].style.transform = sh ? 'translateY('+sh+'px)' : '';
+  }
+}
+function dragTick(){
+  var d = drag; if (!d) return;
+  var vh = window.innerHeight, edge = 90, v = 0;
+  if (d.clientY < edge) v = -Math.min(18, Math.ceil((edge - d.clientY)/edge*18));
+  else if (d.clientY > vh - edge) v = Math.min(18, Math.ceil((d.clientY - (vh - edge))/edge*18));
+  if (v){ window.scrollBy(0, v); dragUpdate(); }
+  d.raf = requestAnimationFrame(dragTick);
+}
+function dragFinish(commit){
+  var d = drag; if (!d) return; drag = null;
+  cancelAnimationFrame(d.raf);
+  try { d.handle.releasePointerCapture(d.pid); } catch(_){}
+  document.body.classList.remove('dragging-rows');
+  if (commit && d.to !== d.from){
+    var ids = d.ids.slice(); ids.splice(d.from, 1); ids.splice(d.to, 0, d.id);
+    var ok = false;
+    mut(function(doc){ var r = reorderApply(doc.areas, ids); if (r){ doc.areas = r; ok = true; } });
+    if (!ok) toast('Could not reorder - please try again');
+  }
+  render();   // rebuilds the rows from the saved order (also clears the drag transforms)
+}
+document.addEventListener('pointerdown', function(e){
+  var h = e.target && e.target.closest && e.target.closest('.dh'); if (!h || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  e.preventDefault(); dragStart(e, h);
+});
+document.addEventListener('pointermove', function(e){ if (!drag || e.pointerId !== drag.pid) return; if (e.pointerType === 'mouse' && e.buttons === 0){ dragFinish(false); return; } e.preventDefault(); drag.clientY = e.clientY; dragUpdate(); }, { passive:false });
+document.addEventListener('pointerup', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(true); });
+document.addEventListener('pointercancel', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(false); });
+// Self-heal: if the release is ever missed (window switched mid-drag, button let go outside the window, system gesture) the drag must not stay "held" - render() is paused while a drag is active.
+document.addEventListener('lostpointercapture', function(e){ if (drag && e.pointerId === drag.pid) dragFinish(false); });
+window.addEventListener('blur', function(){ dragFinish(false); });
+document.addEventListener('visibilitychange', function(){ if (document.hidden) dragFinish(false); });
+document.addEventListener('keydown', function(e){ if (drag && e.key === 'Escape') dragFinish(false); });
+document.addEventListener('contextmenu', function(e){ if (e.target && e.target.closest && e.target.closest('.dh')) e.preventDefault(); });
+document.addEventListener('keydown', function(e){
+  var h = e.target && e.target.closest && e.target.closest('.dh'); if (!h) return;
+  var k = e.key; if (k !== 'ArrowUp' && k !== 'ArrowDown') return;
+  e.preventDefault(); var row = h.closest('.area-row'); if (row) moveArea(row.getAttribute('data-aid'), k === 'ArrowUp' ? -1 : 1, true);
+});
 function autoOrderSheet(){
   openSheet('<h2>Auto-order for a walk-through</h2><p>This re-sorts every area into this path: <b>outside</b> (front, sides, rear, roof) → <b>ground floor</b> (living, dining, kitchen, laundry, hallway) → <b>basement &amp; systems</b> → <b>upstairs</b> (bedrooms, bathrooms) → <b>attic</b> → detectors. Numbers in names (Bedroom 2, 3rd floor) are respected. You can still fine-tune with ▲ ▼ afterwards.</p><div class="btns"><button class="btn primary" id="ao-go" onclick="autoOrderApply()">Re-order the areas</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
 }
@@ -1053,7 +1140,7 @@ function viewInsp(){
   h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
   h += '<div class="row" style="margin-top:6px"><h2 style="margin:8px 0">Areas in walk-through order</h2><button class="btn sm" onclick="toggleReorder()">'+(S.reorder?'Done':'↕ Reorder')+'</button></div>';
-  if (S.reorder) h += '<div class="card"><div class="muted">Tap ▲ or ▼ to move an area up or down the list. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
+  if (S.reorder) h += '<div class="card"><div class="muted">Hold and drag the <b>≡</b> handle to move an area, or tap ▲ / ▼. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
   h += '<div class="card" style="padding:4px 12px">'+vis.map(function(a,i){ return areaRow(a, i, vis.length); }).join('')+'</div>';
   var ex = doc.areas.filter(function(a){return a.excluded;});
   if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
@@ -1064,8 +1151,8 @@ function viewInsp(){
 function areaRow(a, i, n){
   var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length;
   var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'');
-  if (S.reorder) return '<div class="area-row" style="cursor:default"><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
-  return '<div class="area-row" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+condPill(a.condition)+'</div>';
+  if (S.reorder) return '<div class="area-row rr" data-aid="'+a.id+'"><button class="dh" aria-label="Drag to reorder '+esc(a.name)+'" title="Drag to reorder">≡</button><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
+  return '<div class="area-row" data-aid="'+a.id+'" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+condPill(a.condition)+'</div>';
 }
 function openArea(id){
   var a = findArea(S.rec.doc, id);

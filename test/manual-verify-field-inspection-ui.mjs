@@ -256,6 +256,125 @@ await t('areas are in walk-through order and can be re-ordered with big ▲ ▼ 
   const onServer = JSON.parse(w.h.tabs.FI_Inspections.rows[0].slice(w.h.tabs.FI_Inspections.headers.indexOf('Data_1'), w.h.tabs.FI_Inspections.headers.indexOf('Data_1') + 8).join(''));
   assert.ok(onServer.areas.map(a => a.name).indexOf('Kitchen') > onServer.areas.map(a => a.name).indexOf('Dining Room') + 0, 'order saved to the server');
 });
+// ════════ Oct 19 2026: drag-and-drop area reordering + steady arrows ════════
+const orderNames = async () => page.evaluate(() => S.rec.doc.areas.filter(a => !a.excluded).map(a => a.name));
+const domNames = async () => page.locator('.area-row[data-aid] b').allInnerTexts();
+const handleOf = (name) => page.locator('.area-row.rr:has-text("' + name + '") .dh').first();
+const centerOf = async (loc) => { const b = await loc.boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2, h: b.height }; };
+const bringBothIntoView = async (a, b) => page.evaluate(([x, y]) => {
+  const ra = document.querySelector('.area-row.rr[data-aid] .dh') && [...document.querySelectorAll('.area-row.rr')].find(r => r.textContent.includes(x)), rb = [...document.querySelectorAll('.area-row.rr')].find(r => r.textContent.includes(y));
+  const ya = ra.getBoundingClientRect().top + scrollY, yb = rb.getBoundingClientRect().top + scrollY; scrollTo(0, Math.max(0, (ya + yb) / 2 - innerHeight / 2));
+}, [a, b]);
+const mouseDrag = async (fromName, toName, below) => {
+  await bringBothIntoView(fromName, toName);
+  const h = await centerOf(handleOf(fromName)); const tr = await centerOf(page.locator('.area-row.rr:has-text("' + toName + '")').first());
+  assert.ok(h.y > 0 && h.y < 844 && tr.y > 0 && tr.y < 844, 'both rows visible for the drag: ' + h.y + ' / ' + tr.y);
+  await page.mouse.move(h.x, h.y); await page.mouse.down();
+  await page.mouse.move(h.x, h.y + (tr.y - h.y) / 2, { steps: 6 });
+  await page.mouse.move(h.x, tr.y + (below ? tr.h * 0.3 : -tr.h * 0.3), { steps: 8 });
+  return { release: async () => { await page.mouse.up(); } };
+};
+await t('drag-and-drop: handle reorders (mouse), saves to the server, excluded areas keep their slots', async () => {
+  await page.click('button:has-text("↕ Reorder")'); await page.waitForSelector('.dh');
+  const before = await orderNames();
+  assert.ok(await page.locator('.dh').count() === before.length, 'every visible area has a drag handle');
+  await handleOf('Kitchen').scrollIntoViewIfNeeded(); const hb = await handleOf('Kitchen').boundingBox(); assert.ok(hb.width >= 40 && hb.height >= 44, 'handle target ' + hb.width + 'x' + hb.height);
+  const target = before[0];
+  const d = await mouseDrag('Kitchen', target, false);
+  assert.ok(await page.locator('.area-row.dragging').count() === 1, 'dragged row is lifted while dragging');
+  await d.release(); await page.waitForFunction(() => !document.querySelector('.area-row.dragging'));
+  const after = await orderNames(); const dn = await domNames();
+  assert.deepEqual(after.slice(0, 2), ['Kitchen', target], 'Kitchen dropped at the top: ' + after.slice(0, 4));
+  assert.equal(after.length, before.length, 'no area lost or duplicated');
+  assert.deepEqual(dn, after, 'screen matches saved order');
+  await waitSaved();
+  const hdrs = w.h.tabs.FI_Inspections.headers, row = w.h.tabs.FI_Inspections.rows[0];
+  const onServer = JSON.parse(row.slice(hdrs.indexOf('Data_1'), hdrs.indexOf('Data_1') + 8).join(''));
+  assert.deepEqual(onServer.areas.filter(a => !a.excluded).map(a => a.name), after, 'order saved to the server');
+  await noHScroll(page, 'after drag');
+});
+await t('drag-and-drop: drag down, and dropping back where it started changes nothing', async () => {
+  const before = await orderNames();
+  const d = await mouseDrag(before[0], before[3], true); await d.release();
+  await page.waitForFunction(() => !document.querySelector('.area-row.dragging'));
+  const after = await orderNames(); assert.equal(after[3], before[0], 'moved down three places: ' + after.slice(0, 5));
+  assert.deepEqual(after.filter(n => n !== before[0]), before.filter(n => n !== before[0]), 'the others kept their relative order');
+  const ver = await page.evaluate(() => S.rec.ver);
+  const h = await centerOf(handleOf(after[2])); await page.mouse.move(h.x, h.y); await page.mouse.down(); await page.mouse.move(h.x, h.y + 4, { steps: 3 }); await page.mouse.up();
+  assert.equal(await page.evaluate(() => S.rec.ver), ver, 'no-op drag does not mark the inspection changed');
+  assert.deepEqual(await orderNames(), after);
+});
+await t('drag-and-drop: real touch (finger) drag works and the page does not scroll under it', async () => {
+  const cdp = await ctx.newCDPSession(page);
+  const before = await orderNames(); const from = before[2], to = before[0];
+  await bringBothIntoView(from, to);
+  const h = await centerOf(handleOf(from)), tr = await centerOf(page.locator('.area-row.rr:has-text("' + to + '")').first());
+  const y0 = await page.evaluate(() => window.scrollY);
+  const tp = (x, y) => [{ x, y, id: 1 }];
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: tp(h.x, h.y) });
+  for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: tp(h.x, h.y + (tr.y - tr.h * 0.3 - h.y) * i / 8) });
+  assert.ok(await page.locator('.area-row.dragging').count() === 1, 'lifted under a finger');
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForFunction(() => !document.querySelector('.area-row.dragging'));
+  const after = await orderNames(); assert.equal(after[0], from, 'moved to the top by touch: ' + after.slice(0, 3));
+  assert.ok(Math.abs((await page.evaluate(() => window.scrollY)) - y0) < 4, 'page did not scroll while dragging a handle');
+  // a cancelled touch (system gesture) leaves the order alone
+  const h2 = await centerOf(handleOf(after[4]));
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: tp(h2.x, h2.y) });
+  for (let i = 1; i <= 4; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: tp(h2.x, h2.y - 30 * i) });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+  await page.waitForFunction(() => !document.querySelector('.area-row.dragging'));
+  assert.deepEqual(await orderNames(), after, 'cancelled touch changed nothing');
+  await cdp.detach();
+});
+await t('drag-and-drop: dragging near the screen edge auto-scrolls so any area can be reached', async () => {
+  const before = await orderNames(); assert.ok(before.length >= 12, 'enough areas to need scrolling');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const first = before[0]; const h = await centerOf(handleOf(first));
+  await page.mouse.move(h.x, h.y); await page.mouse.down(); await page.mouse.move(h.x, 825, { steps: 10 });
+  await page.waitForTimeout(900);
+  const sy = await page.evaluate(() => window.scrollY); assert.ok(sy > 150, 'page scrolled while holding at the bottom edge: ' + sy);
+  await page.mouse.up(); await page.waitForFunction(() => !document.querySelector('.area-row.dragging'));
+  const after = await orderNames(); assert.ok(after.indexOf(first) >= 5, first + ' moved well down the list via auto-scroll: ' + after.indexOf(first));
+  assert.deepEqual(after.filter(n => n !== first), before.filter(n => n !== first), 'others unchanged');
+  await page.evaluate(() => window.scrollTo(0, 0));
+});
+await t('arrows are steady: the moved row stays under the finger across repeated taps; keyboard works on the handle', async () => {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const names = await orderNames(); const who = names[8];
+  await page.evaluate(() => window.scrollTo(0, 300));
+  const row = () => page.locator('.area-row.rr:has-text("' + who + '")').first();
+  const up = () => row().locator('button[aria-label="Move up"]');
+  for (let k = 1; k <= 3; k++) {
+    await row().scrollIntoViewIfNeeded(); const top0 = (await row().boundingBox()).y;
+    const idx0 = (await orderNames()).indexOf(who);
+    await up().click();
+    const idx1 = (await orderNames()).indexOf(who); assert.equal(idx1, idx0 - 1, 'tap ' + k + ' moved exactly one place');
+    const bb = await row().boundingBox(); assert.ok(Math.abs(bb.y - top0) < 3, 'tap ' + k + ': row stayed put on screen (moved ' + Math.round(bb.y - top0) + 'px)');
+  }
+  const hnd = row().locator('.dh'); await hnd.focus();
+  const i0 = (await orderNames()).indexOf(who);
+  await page.keyboard.press('ArrowDown'); assert.equal((await orderNames()).indexOf(who), i0 + 1, 'ArrowDown moves down');
+  await page.keyboard.press('ArrowUp'); await page.keyboard.press('ArrowUp'); assert.equal((await orderNames()).indexOf(who), i0 - 1, 'ArrowUp moves up');
+  assert.ok(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('dh')), 'focus stays on the handle');
+  await noHScroll(page, 'arrows'); await shot(page, 'reorder-drag', true);
+  await page.click('button:has-text("Done")'); await waitSaved();
+});
+await t('drag cannot get stuck: a missed release (window blur / Escape) frees the page and changes nothing', async () => {
+  await page.click('button:has-text("↕ Reorder")'); await page.waitForSelector('.dh');
+  const before = await orderNames();
+  for (const how of ['blur', 'escape']) {
+    await bringBothIntoView(before[1], before[3]);
+    const h = await centerOf(handleOf(before[1]));
+    await page.mouse.move(h.x, h.y); await page.mouse.down(); await page.mouse.move(h.x, h.y + 120, { steps: 5 });
+    assert.ok(await page.evaluate(() => !!drag), how + ': drag is active');
+    if (how === 'blur') await page.evaluate(() => window.dispatchEvent(new Event('blur'))); else await page.keyboard.press('Escape');
+    assert.ok(await page.evaluate(() => !drag) && await page.locator('.area-row.dragging').count() === 0, how + ': drag released');
+    assert.deepEqual(await orderNames(), before, how + ': order unchanged');
+    await page.mouse.up();
+  }
+  await page.click('button:has-text("Done")'); await page.waitForSelector('button:has-text("↕ Reorder")');   // UI is not frozen: render() works again
+});
 await t('photos: select several, move to another area; viewer prev/next; remove cleans phone storage', async () => {
   await page.click('.area-row:has-text("Exterior Rear")'); await page.waitForSelector('#pending');
   const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('button:has-text("Add photos")')]);

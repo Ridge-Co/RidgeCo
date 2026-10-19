@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-16.03-failure-ledger';
+const BUILD_VERSION = '2026-10-19.03-fi-contractor-brackets';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -227,6 +227,9 @@ const _hubWorkerCore = {
       // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
       // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
       '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics',
+      // Tenant fix-check page (Oct 16 2026): public at the gate, but every handler self-verifies the signed, expiring fix-check token (scope 'fix-check',
+      // hash-checked against WO_Followups.Token_Hash, bound to ONE follow-up and ONE tenant) before reading or writing anything.
+      '/fix/page','/fix/answer','/fix/upload-session','/fix/log-attachment',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
       '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
@@ -502,6 +505,7 @@ const _hubWorkerCore = {
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
         if (path === '/cron/status')            return await schedStatusHandler(env);
+        if (path === '/ai-credit/status')       return await aiCreditStatusHandler(env);   // Oct 16 2026: is AI reading paused? (admin; GET + secret-free, so the read-only prod token may read it)
         if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
@@ -636,6 +640,9 @@ const _hubWorkerCore = {
         if (path === '/trash/qb-items')         return await trashQbItems(env);
         if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
+        if (path === '/fix/page')               return await fixPage(env, url);                // PUBLIC, token-verified (tenant fix-check)
+        if (path === '/followup/preview')       return await followupPreview(env, url);        // ADMIN-ONLY: no ROLE_SCOPES entry; read-only, never sends
+        if (path === '/followup/list')          return await followupList(env, url);           // ADMIN-ONLY
         if (path === '/proposal/signatures')    return await proposalList(env, url);
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
@@ -744,6 +751,12 @@ const _hubWorkerCore = {
         if (path === '/wo/share-link')            return await woShareLink(env, body);
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
+        if (path === '/fix/answer')               return await fixAnswer(env, body);              // PUBLIC, token-verified
+        if (path === '/fix/upload-session')       return await fixUploadSession(env, body);       // PUBLIC, token-verified
+        if (path === '/fix/log-attachment')       return await fixLogAttachment(env, body);       // PUBLIC, token-verified
+        if (path === '/followup/send')            return await followupSend(env, body, url);     // ADMIN-ONLY: Brett's tap on Send in the preview
+        if (path === '/followup/link')            return await followupLink(env, body, url);     // ADMIN-ONLY
+        if (path === '/followup/close')           return await followupClose(env, body);         // ADMIN-ONLY
         if (path === '/workorder') {
           // Tenant-work-order-submission toggle (Aug 20, 2026): only gates a TENANT's own
           // session creating their own WO (submit.html). Admin (WORKER_SECRET) and owner
@@ -888,6 +901,10 @@ const _hubWorkerCore = {
         if (path === '/admin/test-drive')         return await testDriveAccess(env);
         if (path === '/admin/drive-file-check')   return await adminDriveFileCheck(env, body);
         if (path === '/admin/items-summarize-test') return await adminItemsSummarizeTest(env, body);
+        // Oct 16 2026 (AI-credit pause). ADMIN ONLY by construction: neither path is in ROLE_SCOPES, PUBLIC_PATHS or HUB_PROD_WRITE_PATHS, so only
+        // WORKER_SECRET (the Hub admin login) reaches them - plus HUB_TEST_TOKEN on STAGING (hubTestWriteAllowed). Tenant/vendor/owner sessions get 401.
+        if (path === '/admin/ai-credit-resume')   return await aiCreditResumeHandler(env);
+        if (path === '/admin/ai-credit-simulate') return await aiCreditSimulateHandler(env, body);   // 404 unless staging
         if (path === '/wo/additional-work/start')    return await addonStart(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/submit')   return await addonSubmit(env, body, callerRole, callerSessionId);
         if (path === '/wo/additional-work/withdraw') return await addonWithdraw(env, body, callerRole, callerSessionId);
@@ -1120,6 +1137,9 @@ const _hubWorkerCore = {
       }
       return json({ error: 'Not found' }, 404);
     } catch (err) {
+      // Oct 16 2026: an AI step reached while Anthropic credit is out / paused is a DESIGNED, already-alerted state, not a bug: a typed 503
+      // with a plain message (no unhandled_500 row per request, no stack) so every page can say "automatic reading is paused - enter it by hand".
+      if (aiCreditIsPausedError(err)) return aiCreditPausedJson({});
       // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
       // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
       //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
@@ -2691,6 +2711,8 @@ function statementLineMatch(line, existingReceipts, existingQueueRows) {
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
+  // Oct 16 2026: AI credit paused -> touch nothing (no Drive listing, no OCR call, no attempt counted); files wait in the folder.
+  { const st = await aiCreditCheck(env); if (st.paused) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: 0, remaining: 0, paused_since: st.at || null, reason: 'paused: AI credit - receipts stay in the Drive folder and are scanned automatically after AI resumes' }); }
   const cfg = await fetchConfig(env).catch(() => ({}));
   // Per-call cap on NEW files (Sep 22 2026). Each file costs ~4 subrequests (Drive download, OCR,
   // Sheets append); uncapped, a big drop (e.g. an email backfill) blew Cloudflare's per-invocation
@@ -2725,9 +2747,9 @@ async function receiptReconScan(env, body) {
   // outage are retried automatically the next scan.
   let healed = false;
   for (const id of Object.keys(failures)) {
-    if (receiptReconIsConfigError(failures[id] && failures[id].error)) { delete failures[id]; healed = true; }
+    if (receiptReconIsConfigError(failures[id] && failures[id].error) || aiCreditErrorTextIsOutage(failures[id] && failures[id].error)) { delete failures[id]; healed = true; }   // + Oct 16 2026: attempts burned by the credit outage
   }
-  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { console.error('receiptReconScan: could not save the healed tracker:', schedErrText(e)); await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_recon_tracker_write_failed', Skill_Or_Endpoint: 'receiptReconScan', Success: 'FALSE', Notes: schedErrText(e).slice(0, 300) }).catch(te => console.error('telemetry failed:', schedErrText(te))); } }
   const allNew = files.filter(f => !seen.has(f.id) && !(failures[f.id] && failures[f.id].attempts >= 3));
   const stuck = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
@@ -2735,7 +2757,7 @@ async function receiptReconScan(env, body) {
 
   const custCards = await receiptCustomerCards(env);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
-  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = '';
+  let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = ''; let pausedMid = false;
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
@@ -2770,6 +2792,7 @@ async function receiptReconScan(env, body) {
       n++;
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
     } catch (e) {
+      if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out mid-scan: stop, no attempt counted, nothing retried
       errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
       if (receiptReconIsConfigError(e && e.message)) { configError = String(e.message).slice(0, 200); break; }
       const prior = failures[f.id];
@@ -2777,8 +2800,9 @@ async function receiptReconScan(env, body) {
       failuresChanged = true;
     }
   }
-  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptReconScan: tracker write failed:', schedErrText(e)); } }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, remaining: allNew.length - n, errors: errs, stuck: stuckNow, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
   return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
 }
 
@@ -2823,6 +2847,7 @@ async function receiptReconImportStatement(env, body) {
       return json({ error: 'Could not download the file: ' + (e && e.message || e) }, 500);
     }
     const ex = await statementExtract(env, dl.bytes, dl.mime);
+    if (ex && ex._paused) return aiCreditPausedJson({ message: 'Automatic statement reading is paused - enter the statement lines by hand (or paste the CSV).' });
     detectedVendor = ex.vendor_detected || '';
     // statementExtract's own lines already use `amount`; documented here in case an older/altered
     // extractor response ever returns `total` instead — mapped defensively, never silently dropped.
@@ -3873,8 +3898,7 @@ function scopeItemsFromEstimate(lineItems, existingItems) {
 async function scopeClaude(env, prompt, media, maxTokens) {
   if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
   const content = media ? [media, { type: 'text', text: prompt }] : prompt;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1200, messages: [{ role: 'user', content }] }) });
-  const data = await resp.json();
+  const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1200, messages: [{ role: 'user', content }] }, { source: 'scopeClaude' });   // Oct 16 2026: guarded call (credit pause); throws AiCreditPausedError
   return (data.content && data.content[0] && data.content[0].text || '').trim();
 }
 function scopeParseJSON(txt) { try { return JSON.parse(String(txt).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return null; } }
@@ -4008,7 +4032,10 @@ async function scopeIngest(env, body) {
     else if (body.drive_file_id) { const tok = await getAccessToken(env); const dl = await driveDownload(tok, body.drive_file_id); added = await scopeOcr(env, dl.bytes, dl.mime); type = 'drive'; label = label || ('drive:' + body.drive_file_id); }
     else if (body.image_b64) { const raw = String(body.image_b64).replace(/^data:[^,]+,/, ''); const bin = Uint8Array.from(atob(raw), c => c.charCodeAt(0)); added = await scopeOcr(env, bin.buffer, body.mime || 'image/jpeg'); type = 'upload'; label = label || 'upload'; }
     else return json({ error: 'text, drive_file_id, or image_b64 required' }, 400);
-  } catch (e) { return json({ error: 'ingest failed: ' + (e.message || e) }, 500); }
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) return aiCreditPausedJson({ message: 'Automatic reading of the photo is paused - type the notes in by hand.' });
+    return json({ error: 'ingest failed: ' + (e.message || e) }, 500);
+  }
   const raw = s.Raw_Input ? (s.Raw_Input + '\n\n' + added) : added;
   let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
   srcs.push({ type, label, ts: new Date().toISOString(), chars: added.length });
@@ -12435,11 +12462,11 @@ async function generateEstimateText(env, body) {
   const partialScopeClauseText='\n- If only part of this scope is approved or completed instead of the full project, pricing for those individual items is a best-efforts estimate, not a fixed quote: the combined price is built to absorb the small unknowns of doing larger and smaller tasks together in one visit, and a standalone item doesn\'t get that same cushion — its actual final cost may run higher than estimated once that work is underway on its own.';
   const prompt=`You are a property maintenance estimate writer. Rewrite the following raw, messy scope-of-work items into a polished, professional, scannable bulleted list. Correct all typos, slang, and grammar. The output is for an English-speaking property owner: if any item or the issue description is in Spanish, write it in English. Group related items under bold category headers where it makes sense.\n\nProperty: ${property_address}\nRaw issue description: ${issues}\nRaw line items:\n${itemsList}\n\nReturn ONLY the rewritten "Scope of Work:" bulleted section — clean Markdown, no emojis, no preamble, no other sections. Do not include any dollar amounts or pricing.`;
   try {
-    const resp=await fetch('https://api.anthropic.com/v1/messages',{ method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:800, messages:[{role:'user',content:prompt}] }) });
-    const data=await resp.json(); const scopeText=data.content?.[0]?.text?.trim()||''; if (!scopeText) return json({ error:'Claude returned empty response',detail:data }, 500);
+    const { data }=await anthropicMessages(env,{ model:'claude-sonnet-4-6', max_tokens:800, messages:[{role:'user',content:prompt}] },{ source:'generateEstimateText' });
+    const scopeText=data.content?.[0]?.text?.trim()||''; if (!scopeText) return json({ error:'Claude returned empty response',detail:data }, 500);
     const doc=`${property_address}\n\n${scopeText}\n\nFinancial Terms:\n\nTotal Estimated Cost: $${pricing.finalPrice.toFixed(2)}\nRequired 50% Deposit: $${pricing.deposit.toFixed(2)}\n\nPayment & Project Terms:\n\n- A 50% electronic deposit is required to approve this estimate and schedule the work.\n- All deposits and final invoices must be paid electronically. Physical checks are not accepted.`+partialScopeClauseText+integrityClauseText;
     return json({ success:true, text:doc, pricing:{ finalPrice:pricing.finalPrice, deposit:pricing.deposit } });
-  } catch(e) { return json({ error:e.message }, 500); }
+  } catch(e) { if (aiCreditIsPausedError(e)) return aiCreditPausedJson({ message: 'Automatic estimate wording is paused - type the scope text by hand.' }); return json({ error:e.message }, 500); }
 }
 // ── WO AUDIT ─────────────────────────────────────────────────
 
@@ -12505,9 +12532,9 @@ async function getWOAudit(env, url) {
 async function translateToEnglish(env, text) {
   if (!env.ANTHROPIC_API_KEY) return text;
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:400, messages:[{role:'user',content:`Translate the following from Spanish to English. Return only the translation, nothing else:\n\n${text}`}] }) });
-    const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
-  } catch(e) { return text; }
+    const { data } = await anthropicMessages(env, { model:'claude-sonnet-4-6', max_tokens:400, messages:[{role:'user',content:`Translate the following from Spanish to English. Return only the translation, nothing else:\n\n${text}`}] }, { source:'translateToEnglish' });
+    return data.content?.[0]?.text?.trim() || text;
+  } catch(e) { await aiFailOpenNote(env, 'translateToEnglish', e); return text; }
 }
 
 // Generic one-shot translation used by the Shareable WO (B-117) to show the vendor the job
@@ -12519,9 +12546,9 @@ async function translateText(env, text, fromLabel, toLabel, opts) {
   if (!env.ANTHROPIC_API_KEY || !text || !String(text).trim()) return text;
   try {
     const extra = (opts && opts.preserve ? ' ' + VENDOR_TRANSLATE_PRESERVE : '') + (opts && opts.html ? ' The input is HTML: keep every tag, attribute and link exactly as-is and translate only the visible text.' : '');
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{'Content-Type':'application/json','x-api-key':env.ANTHROPIC_API_KEY,'anthropic-version':'2023-06-01'}, body:JSON.stringify({ model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }) });
-    const data = await resp.json(); return data.content?.[0]?.text?.trim() || text;
-  } catch(e) { return text; }
+    const { data } = await anthropicMessages(env, { model:'claude-sonnet-4-6', max_tokens:(opts && opts.max_tokens) || 600, messages:[{role:'user',content:`Translate the following from ${fromLabel} to ${toLabel}. Keep addresses, proper names, phone numbers and door/lock codes exactly as written.${extra} Return only the translation, nothing else:\n\n${text}`}] }, { source:'translateText' });
+    return data.content?.[0]?.text?.trim() || text;
+  } catch(e) { await aiFailOpenNote(env, 'translateText', e); return text; }
 }
 
 // ── VENDOR TRANSLATION (Sep 28 2026, feat/vendor-translation-send-to-vendor) ────────────────────
@@ -12582,8 +12609,7 @@ async function translateBatchToEnglish(env, strings) {
   try {
     const ctrl = new AbortController(); timer = setTimeout(() => ctrl.abort(), 20000);
     const prompt = 'Below is a JSON array of short texts a property-maintenance contractor wrote for an estimate. Translate every item that is in Spanish (or any non-English language) into natural, plain English; return items that are already English EXACTLY unchanged. Keep dollar amounts, numbers, addresses, names and units exactly as written. Return ONLY a JSON array of strings, same length and same order, no commentary.\n\n' + JSON.stringify(idx.map(i => arr[i]));
-    const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctrl.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }) });
-    const data = await resp.json();
+    const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }, { signal: ctrl.signal, source: 'translateBatchToEnglish' });
     const txt = (data && data.content && data.content[0] && data.content[0].text) || '';
     const m = txt.match(/\[[\s\S]*\]/);
     const parsed = m ? JSON.parse(m[0]) : null;
@@ -12591,7 +12617,7 @@ async function translateBatchToEnglish(env, strings) {
     const out = arr.slice();
     idx.forEach((i, k) => { if (typeof parsed[k] === 'string' && parsed[k].trim()) out[i] = parsed[k].trim(); });
     return { ok: true, out, called: true };
-  } catch (e) { return { ok: false, out: arr, error: String((e && e.message) || e) }; }
+  } catch (e) { return Object.assign({ ok: false, out: arr, error: String((e && e.message) || e) }, aiCreditIsPausedError(e) ? { paused: true, code: AI_CREDIT_CODE } : {}); }
   finally { if (timer) clearTimeout(timer); }
 }
 
@@ -15645,6 +15671,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^selftest/, 'P1'],
   [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
   [/^failure_ledger/, 'P1'],
+  [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
+  [/^ai_credit_(exhausted|resume)/, 'P2'],                // the event record; the urgent row is the auto-clearing "ai_credit_paused" condition (failConditions)
 ];
 
 // ── pure helpers (unit-tested) ──────────────────────────────────────────────────────────────────────────────────
@@ -15802,13 +15830,15 @@ async function failConditions(env, cfg, nowMs) {
   const out = [];
   if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });
   else if (!cfg.admin_phone) out.push({ key: 'no_admin_phone', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Config admin_phone is not set, so failure alerts have nowhere to go.' });
+  // Oct 16 2026: the AI-credit pause is a CONDITION (true right now), so its urgent Needs Attention row clears itself the moment AI resumes.
+  if (String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE') out.push({ key: 'ai_credit_paused', system: 'hub', where: 'ai_credit_paused', severity: 'P0', message: `AI reading is PAUSED (${cfg[AI_CREDIT_KEYS.kind] === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}) since ${cfg[AI_CREDIT_KEYS.at] || '?'}: ${String(cfg[AI_CREDIT_KEYS.err] || '').slice(0, 160)} Fix: ${AI_CREDIT_FIX}, then tap Resume on the Hub banner.` });
   if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P1', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
   try {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
     if (parsed.error) out.push({ key: 'scheduler_state', system: 'hub', where: 'scheduler', severity: 'P0', message: parsed.error });
     else {
-      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs);
+      const eff = schedEffective(parsed.state), st = schedStatus(parsed.state, new Date(nowMs), eff.jobs, String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE' ? (cfg[AI_CREDIT_KEYS.at] || 'paused') : '');
       for (const name of st.overdue) out.push({ key: 'overdue:' + name, system: 'hub', where: 'scheduler:' + name, severity: 'P0', message: `Scheduled job ${name} is overdue: ${(st.jobs[name] && st.jobs[name].overdue_reason) || 'not running'}` });
       if (st.tick_age_min !== null && st.tick_age_min > 60) out.push({ key: 'scheduler_silent', system: 'hub', where: 'scheduler', severity: 'P0', message: `The Apps Script scheduler has not ticked for ${st.tick_age_min} minutes.` });
     }
@@ -16031,7 +16061,7 @@ const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
 const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
-const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'str_cleaning']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'str_cleaning', 'followup_sweep', 'ai_credit_probe']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
 
 // Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
 // Fails closed for a blank/short/missing secret, an empty header, any other method or path.
@@ -16114,6 +16144,10 @@ const SCHED_JOBS = [
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
   { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
   { name: 'str_cleaning',       kind: 'interval', every_min: 14, run: (env) => schedRunStrCleaning(env) },
+  { name: 'followup_sweep',     kind: 'interval', every_min: 59, run: (env) => schedRunFollowupSweep(env) },   // tenant fix-check: ONE reminder 2 days after the text, 9am-7pm ET; texts Brett "no answer - call them"
+  // Oct 16 2026: gate:'ai_paused' = this job is not even STARTED (no claim, no state write, no Anthropic call) unless the AI-credit pause flag is on.
+  // While paused it makes ONE 1-token call at most hourly (every_min 59 = "every 60 minutes"); success clears the pause and sends one "AI is back" notice.
+  { name: 'ai_credit_probe',    kind: 'interval', every_min: 59, gate: 'ai_paused', run: (env) => schedRunAiCreditProbe(env) },
   { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
   { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
   { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
@@ -16132,10 +16166,11 @@ const SCHED_JOBS = [
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
-function schedJobDue(job, js, nowDate) {
+function schedJobDue(job, js, nowDate, aiPausedAt) {
   js = js || {};
   const nowMs = +nowDate;
   if (job.disabled) return null;                                  // turned off in the Apps Script JOBS table (enabled:false)
+  if (job.gate === 'ai_paused' && !aiPausedAt) return null;       // gated job: costs nothing and writes nothing unless AI is paused
   if (job.kind === 'interval') {
     const last = Date.parse(js.last_start || '');
     if (!isNaN(last) && last <= nowMs + 5 * 60000 && nowMs - last < job.every_min * 60000) return null;
@@ -16145,6 +16180,7 @@ function schedJobDue(job, js, nowDate) {
   if (job.kind === 'weekly' && et.dow !== job.dow) return null;
   if (et.minutes < schedAtMinutes(job.at)) return null;
   if (js.last_key === et.date) return null;                       // already done (or deliberately not retried) for this ET day
+  if (aiPausedAt && js.paused_key === et.date && js.paused_ep === aiPausedAt) return null;   // Oct 16 2026: skipped today BECAUSE AI is paused (same pause episode) - not retried every 30 min; re-armed when the pause clears
   if (js.partial_at && nowMs - (Date.parse(js.partial_at) || 0) < SCHED_PARTIAL_GAP_MS) return null;   // finished a slice a moment ago; resume on a later tick, not this one
   const at = js.attempts;
   if (at && at.key === et.date && at.n > 0) {
@@ -16163,7 +16199,7 @@ function schedDueJobs(state, now, jobs, opts) {
   const out = [];
   for (const job of (jobs || SCHED_JOBS)) {
     if (only && !only.includes(job.name)) continue;
-    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate);
+    const d = schedJobDue(job, state && state.jobs && state.jobs[job.name], nowDate, opts && opts.aiPausedAt);
     if (d) out.push({ name: job.name, key: d.key });
   }
   // DAILY/WEEKLY JOBS GO FIRST (Oct 14 2026). They run once a day, so they are cheap; the 15-minute jobs come back around anyway.
@@ -16260,7 +16296,7 @@ function schedExpected(job) {
   return `${SCHED_DOW_NAMES[job.dow]} after ${job.at} ET`;
 }
 // Pure. Per-job health for /cron/status and /health.
-function schedStatus(state, now, jobs) {
+function schedStatus(state, now, jobs, aiPausedAt) {
   const nowDate = now instanceof Date ? now : new Date(now);
   const nowMs = +nowDate, et = schedEtParts(nowDate);
   const ageMin = (iso) => { const t = Date.parse(iso || ''); return isNaN(t) ? null : Math.round((nowMs - t) / 60000); };
@@ -16269,6 +16305,14 @@ function schedStatus(state, now, jobs) {
     const js = (state && state.jobs && state.jobs[job.name]) || {};
     if (job.disabled) {   // switched off on purpose: never "overdue"
       out.jobs[job.name] = { expected: schedExpected(job), enabled: false, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue: false, overdue_reason: '' };
+      continue;
+    }
+    if (job.gate === 'ai_paused') {   // Oct 16 2026: runs only while AI is paused - never "overdue" when nothing is paused, or in the first hours of a pause
+      const pausedAge = ageMin(aiPausedAt);
+      const okAge = ageMin(js.last_ok);
+      const od = !!aiPausedAt && pausedAge !== null && pausedAge > schedOverdueLimitMin(job) && (okAge === null || okAge > schedOverdueLimitMin(job));
+      out.jobs[job.name] = { expected: 'hourly, only while AI is paused (otherwise it does nothing and costs nothing)', enabled: true, gated: true, active: !!aiPausedAt, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: false, overdue: od, overdue_reason: od ? `AI has been paused for ${pausedAge} min and the recovery check has not completed in ${schedOverdueLimitMin(job)} min` : '' };
+      if (od) out.overdue.push(job.name);
       continue;
     }
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
@@ -16287,7 +16331,10 @@ function schedStatus(state, now, jobs) {
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
     }
-    out.jobs[job.name] = { expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' };
+    // Oct 16 2026: skipped on purpose because AI credit is paused -> shown as "paused: AI credit", NOT overdue (the pause itself is the loud, already-alerted problem).
+    const pausedNow = !!aiPausedAt && job.kind !== 'interval' && js.paused_key === et.date && js.paused_ep === aiPausedAt && js.last_key !== et.date;
+    if (pausedNow) { overdue = false; reason = ''; }
+    out.jobs[job.name] = Object.assign({ expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' }, pausedNow ? { paused: true, paused_reason: js.last_error || 'paused: AI credit' } : {});
     if (overdue) out.overdue.push(job.name);
   }
   return out;
@@ -16391,18 +16438,27 @@ async function schedRunDailyDigest(env) {
   return { ok: !errors.length, errors, warnings, no_retry, detail: { delivered: !!(delivery && delivery.delivered) } };
 }
 async function schedRunDailyReceipts(env) {
-  const errors = [], detail = {};
-  detail.receipt_scan = await schedStep('receipt_scan', () => receiptScan(env), errors);
-  detail.receipt_recon_scan = await schedStep('receipt_recon_scan', () => receiptReconScan(env, { max: 5 }), errors);
+  const errors = [], detail = {}, flags = { paused: false };
+  // Oct 16 2026: AI credit paused -> skip BOTH scans without touching Drive or Anthropic and report {ok:false, paused:true, reason}.
+  // (Before this the job re-tried the same PDFs every ~30 min all night after the credit ran out and nobody was told.)
+  const st0 = await aiCreditCheck(env);
+  if (st0.paused) return aiCreditSchedPaused(st0, { skipped: 'receipt_scan and receipt_recon_scan were not run' });
+  detail.receipt_scan = await schedAiStep('receipt_scan', () => receiptScan(env), errors, flags);
+  if (!flags.paused) detail.receipt_recon_scan = await schedAiStep('receipt_recon_scan', () => receiptReconScan(env, { max: 5 }), errors, flags);
+  if (flags.paused) {
+    detail.paused_during_run = true;
+    if (!errors.length) return aiCreditSchedPaused(await aiCreditCheck(env), detail);   // credit ran out DURING the scan: files already queued stay queued; the rest wait
+  }
   return { ok: !errors.length, errors, detail };
 }
 async function schedRunDailyReceiptsPost(env) {
   const errors = [], detail = {};
-  detail.items_summary = await schedStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors);
+  const flags = { paused: false };
+  detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email below does not need AI
   detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
   const before = errors.length;
   detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, {}), errors);
-  return { ok: !errors.length, errors, detail, no_retry: errors.length > before };   // a half-failed email batch is not blindly re-sent
+  return { ok: !errors.length, errors, detail, no_retry: errors.length > before, warnings: flags.paused ? ['items summary skipped: paused (AI credit) - it is retried automatically after AI resumes'] : undefined };   // a half-failed email batch is not blindly re-sent
 }
 async function schedRunDailyTurnover(env) {
   const errors = [];
@@ -16706,8 +16762,10 @@ const SCHED_PF_WHAT = {
   sweep_work: 'posts due recurring work orders, sends the once-a-day estimate reminder, and moves paid-deposit scopes forward',
   sweep_checks: 'runs the daily self-test (once a day) and the dead-man check (alerts if no telemetry for 24h)',
   insp_guard: 'checks inspection bookings against the STR calendar (does nothing until the inspection module is configured)',
+  followup_sweep: 'sends the tenant ONE reminder (9am-7pm ET) for any fix-check text with no answer after 2 days, and texts Brett "no answer - call them"',
   daily_digest: 'builds the morning digest and texts it to the admin phone',
-  daily_receipts: 'scans the receipt inbox',
+  daily_receipts: 'scans the receipt inbox (skips and reports "paused: AI credit" while Anthropic credit is out)',
+  ai_credit_probe: 'does nothing unless AI is paused; while paused, at most hourly, makes one 1-token Claude call and clears the pause (plus one "AI is back" notice) if it works',
   daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
@@ -16850,12 +16908,14 @@ async function schedRunNext(env, ctx, opts) {
   const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
   const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
   if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
-  const dueNow = schedDueJobs(st, now, jobs, { only });
+  const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
+  const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
+  if (aiPausedAt) base.ai_paused = true;
 
   // DRY RUN / PREFLIGHT: no claim, no state write, no SMS, no job code. Lists what is due and (counts only) what it would do.
   if (opts.dry) {
-    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs) });
+    const body = Object.assign({}, base, { dry: true, first_run: firstRun, would_seed: seeded, claimed: !!(st.claim_until && Date.parse(st.claim_until) > t), claim_job: st.claim_job || null, status_summary: schedStatus(st, now, jobs, aiPausedAt) });
     if (opts.preflight !== false) body.preflight = await schedPreflight(env, force ? only.slice() : dueNow.map(d => d.name), rows, now, seeded);
     return { status: 200, body };
   }
@@ -16909,9 +16969,13 @@ async function schedRunNext(env, ctx, opts) {
     if (partialN > SCHED_MAX_PARTIALS) { jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${SCHED_MAX_PARTIALS} slices today (it needs a person to look)` }] }; }
     const isPartial = partialN > 0 && partialN <= SCHED_MAX_PARTIALS;
     const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
-    const jobOk = jobRes.ok !== false && errors.length === 0;
+    // Oct 16 2026: {ok:false, paused:true, reason} = "skipped on purpose because AI credit is paused". NOT a failure (Brett was already alerted once, and the
+    // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
+    const jobPaused = jobRes.paused === true && errors.length === 0;
+    const jobOk = jobPaused || (jobRes.ok !== false && errors.length === 0);
     const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
     const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
+    if (jobPaused) { out.paused = true; out.paused_reason = String(jobRes.reason || 'paused: AI credit').slice(0, 300); }
     if (isPartial && jobOk) out.partial = true;
     if (errors.length) out.errors = errors;
     if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
@@ -16922,7 +16986,7 @@ async function schedRunNext(env, ctx, opts) {
       catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
     }
     // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
-    let landed = false, stateErr = null, finalState = null;
+    let landed = false, stateErr = null, finalState = null, aiPausedFinal = aiPausedAt;
     for (let attempt = 0; attempt < 2 && !landed; attempt++) {
       try {
         const r2 = await schedReadConfigRows(env, true);
@@ -16931,14 +16995,21 @@ async function schedRunNext(env, ctx, opts) {
         const cur = p2.state;
         const rec = Object.assign({}, cur.jobs[job.name] || {});
         delete rec.last_seeded; delete rec.seeded_at;   // a real run replaces the first-run seed marker
-        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobOk ? (isPartial ? 'partial' : 'ok') : 'failed';
-        rec.last_error = jobOk ? null : errText; rec.duration_ms = out.duration_ms;
-        if (jobOk) rec.last_ok = rec.last_end;
+        aiPausedFinal = aiCreditPausedAtFromRows(r2);
+        rec.last_start = nowISO; rec.last_end = new Date(nowMs()).toISOString(); rec.last_status = jobPaused ? 'paused' : (jobOk ? (isPartial ? 'partial' : 'ok') : 'failed');
+        rec.last_error = jobPaused ? out.paused_reason : (jobOk ? null : errText); rec.duration_ms = out.duration_ms;
+        if (jobOk && !jobPaused) rec.last_ok = rec.last_end;
+        rec.paused_key = null; rec.paused_ep = null;
         if (job.kind !== 'interval') {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
           rec.partial_at = null;
-          if (jobOk && isPartial) {
+          if (jobPaused) {
+            // Not done for the day, and the start-of-run attempt is given back. While THIS pause episode lasts the job is skipped for the rest of the ET day
+            // (paused_key/paused_ep); the moment the pause clears it is due again at once (catch-up), whatever the hour.
+            rec.attempts = null;
+            if (aiPausedFinal && !force) { rec.paused_key = etDay; rec.paused_ep = aiPausedFinal; }
+          } else if (jobOk && isPartial) {
             rec.partials = { key: etDay, n: partialN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
           } else if (jobOk || finalFail) {
             rec.last_key = etDay; rec.attempts = null; rec.partials = null;
@@ -16961,7 +17032,7 @@ async function schedRunNext(env, ctx, opts) {
       try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Notes: ('could not record the result of this run in Scheduler_State (the job may run again early): ' + stateErr).slice(0, 480) }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: state write failed and telemetry write failed:', stateErr, out.telemetry_error); }
     } else if (finalState) {
-      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only }).map(d => d.name);
+      const stillDue = schedDueJobs(finalState, new Date(nowMs()), jobs, { only, aiPausedAt: aiPausedFinal }).map(d => d.name);
       out.due = stillDue; out.more = stillDue.length > 0 && !force;
     }
     return out;
@@ -17014,8 +17085,10 @@ async function schedStatusHandler(env) {
   catch (e) { return json({ ok: false, error: 'could not read Config (scheduler state): ' + schedErrText(e) }, 503); }
   if (parsed.error) return json({ ok: false, error: parsed.error }, 503);
   const eff = schedEffective(parsed.state);
-  const s = schedStatus(parsed.state, new Date(), eff.jobs);
+  const aiState = aiCreditStateFromRows(rows);
+  const s = schedStatus(parsed.state, new Date(), eff.jobs, aiState.paused ? (aiState.at || 'paused') : '');
   if (eff.schedule_error) s.schedule_error = eff.schedule_error;
+  s.ai_credit = Object.assign({ paused: !!aiState.paused, since: aiState.paused ? (aiState.at || null) : null, kind: aiState.paused ? aiState.kind : null }, aiState.paused ? { reason: aiCreditSchedPaused(aiState).reason, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) } : {});
   const claimUntil = Date.parse(parsed.state.claim_until || '');
   return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null }));
 }
@@ -17025,8 +17098,9 @@ async function schedHealthSummary(env) {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
     if (parsed.error) return { error: 'state unreadable' };
-    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs);
-    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue };
+    const aiState = aiCreditStateFromRows(rows);
+    const s = schedStatus(parsed.state, new Date(), schedEffective(parsed.state).jobs, aiState.paused ? (aiState.at || 'paused') : '');
+    return { last_tick_age_min: s.tick_age_min, overdue: s.overdue, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) };
   } catch (e) { return { error: 'could not read scheduler state: ' + schedErrText(e) }; }
 }
 // scheduled() is now a LOUD no-op. Cloudflare firing it means a stale Cron Trigger is still attached - a second,
@@ -17603,7 +17677,10 @@ async function buildDigest(env) {
     const failures = JSON.parse(cfg.receipt_intake_failures || '{}');
     stuckReceipts = Object.values(failures).filter(x => x.attempts >= 3).map(x => `${x.name} — ${x.error}`);
   } catch (e) { /* non-fatal */ }
+  // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
+  const fuDigest = await fuDigestLines(env);
   return {
+    followups: fuDigest.lines, followupsError: fuDigest.error,
     today, stamp: etStamp(),
     overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
     pendingBills: pendingBills.map(b=>`Bill ${b.ID} · ${b.Vendor_Name||('V-'+(b.Vendor_ID||'?'))} · WO-${b.WO_ID||'?'} · $${(parseFloat(b.Total||b.Customer_Total||0)||0).toFixed(2)}`),
@@ -17644,6 +17721,12 @@ function formatDigestText(d) {
     L.push('▶ SYSTEM HEALTH');
     (d.healthAlerts||[]).forEach(x=>L.push('⚠ '+x));
     (d.stuckReceipts||[]).forEach(x=>L.push('⚠ Receipt could not be read after 3 tries: '+x));
+    L.push('');
+  }
+  if ((d.followups && d.followups.length) || d.followupsError) {
+    L.push('▶ TENANT FIX-CHECKS');
+    (d.followups||[]).forEach(x=>L.push('· '+x));
+    if (d.followupsError) L.push('⚠ Could not read the fix-check list: '+d.followupsError);
     L.push('');
   }
   L.push('▶ NEEDS YOU TODAY');
@@ -17785,6 +17868,385 @@ async function telemetryLog(env, body) {
   }
 }
 
+// ═══ AI-CREDIT-GUARD-BEGIN ════════════════════════════════════════════════════════════════════
+// "ALERT ONCE, THEN PAUSE" (Oct 16 2026). On Oct 15 ~4pm ET the prepaid Anthropic credit ran out. Every Claude call then failed
+// with HTTP 400 invalid_request_error "Your credit balance is too low to access the Anthropic API...", the daily_receipts job
+// retried the same PDFs all night (3 tries per file, every ~30 minutes) and NOTHING told Brett - he found out by accident.
+//
+// ONE central place now knows how to recognise that error and what to do about it:
+//   anthropicMessages(env, body, opts)  - EVERY call to api.anthropic.com/v1/messages goes through it (callClaude, scopeClaude,
+//     estimate text, the translators, the weekly review). A new call site that uses it gets all of this for free.
+//   1. BEFORE calling: if the pause flag is on (Config AI_CREDIT_PAUSED=TRUE) it throws AiCreditPausedError WITHOUT calling
+//      Anthropic (the flag is cached 30 s per Worker instance, so a loop of 20 files costs one Config read).
+//   2. AFTER a failed call: aiCreditClassify() recognises "credit exhausted" (400/402 billing text, type billing_error) and
+//      "the key/account is refused" (401, or 403 permission_error). On a match aiCreditTrip() runs ONCE: sets the flag (+ when, +
+//      the error text), logs Ops_Telemetry Job_Type ai_credit_exhausted (Success FALSE), and sends ONE alert to Brett by text
+//      (the admin-notify path, with its daily cap) AND email (Twilio may be unavailable - A2P). No repeat while paused; a reminder
+//      only if it is STILL paused 24 h after the last alert.
+//   3. Callers see a typed error {code:'ai_credit_paused'} and answer in plain words ("Automatic reading is paused - enter it by
+//      hand"); manual entry keeps working everywhere. The scheduler's daily_receipts reports {ok:false, paused:true, reason}.
+// Getting out of the pause needs no deploy: POST /admin/ai-credit-resume (the Hub banner's Resume button) makes ONE real 1-token
+// call and clears the flag only if it works; the scheduler job ai_credit_probe does the same at most hourly, ONLY while paused,
+// and sends one "AI is back" notice. Nothing else ever clears the flag.
+// Gemini (CHEAP tier) quota/billing errors are NOT handled here - see the PR notes (follow-up).
+const AI_CREDIT_CODE = 'ai_credit_paused';
+const AI_CREDIT_KEYS = { paused: 'AI_CREDIT_PAUSED', at: 'AI_CREDIT_PAUSED_AT', err: 'AI_CREDIT_LAST_ERROR', kind: 'AI_CREDIT_PAUSED_KIND', by: 'AI_CREDIT_PAUSED_BY', alerted: 'AI_CREDIT_ALERT_LAST_SENT', resumed: 'AI_CREDIT_RESUMED_AT' };
+const AI_CREDIT_CACHE_MS = 30 * 1000;
+const AI_CREDIT_REMINDER_MS = 24 * 3600 * 1000;
+const AI_CREDIT_ALERT_RETRY_MS = 10 * 60 * 1000;   // an alert that could not be delivered is retried no sooner than this
+const AI_PAUSED_USER_MSG = 'Automatic reading is paused - enter it by hand.';
+const AI_SCAN_PAUSED_MSG = 'Automatic receipt scanning is paused (Anthropic credit is out). Receipts stay in the Drive folder and are scanned after AI resumes; adding a receipt by hand still works.';
+const AI_CREDIT_FIX = 'Anthropic Console > Settings > Billing > Buy credits (or switch on auto-reload)';
+const AI_CREDIT_EMAIL_DEFAULT = 'brett@bmoremanagement.com';
+const AI_CREDIT_AFFECTED = [
+  'receipt scanning (inbox + Receipt Reconciler) - receipts wait in Drive, nothing is lost',
+  'vendor invoice auto-read and statement / contact-card reading - the forms stay open for typing',
+  'field-inspection label reading, dictation sorting and AI summaries - notes and photos are kept',
+  'scope-of-work notes (OCR / organize / estimate text) and the weekly review proposal',
+  'Spanish/English translation of vendor texts and estimates - those go out untranslated',
+];
+
+let _aiCreditCache = null;        // { at, state } - per Worker instance
+let _aiCreditTripP = null;        // in-flight trip (concurrent failing calls share one)
+let _aiCreditResumeP = null;      // in-flight resume probe (double-tap shares one)
+let _aiCreditAlertTryMs = 0;      // last time this instance tried to deliver an alert
+let _aiCreditReadFailMs = 0;      // last time this instance reported "cannot read the flag"
+function aiCreditResetForTests() { _aiCreditCache = null; _aiCreditTripP = null; _aiCreditResumeP = null; _aiCreditAlertTryMs = 0; _aiCreditReadFailMs = 0; }
+
+class AiCreditPausedError extends Error {
+  constructor(message, info) { super(message); this.name = 'AiCreditPausedError'; this.code = AI_CREDIT_CODE; this.paused = true; this.info = info || null; this.userMessage = AI_PAUSED_USER_MSG; }
+}
+function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
+
+// PURE. Is this Anthropic error response a "credit exhausted" or "key/account refused" one? -> { kind, status, type, message } | null.
+// Deliberately narrow: an ordinary 400 (bad image, bad prompt), a 429 rate limit, a 5xx or an overloaded 529 is NOT a pause.
+function aiCreditClassify(status, data) {
+  const e = (data && typeof data === 'object' && data.error && typeof data.error === 'object') ? data.error : ((data && typeof data === 'object') ? data : {});
+  const type = String(e.type || '').toLowerCase();
+  const msg = String(e.message || (typeof data === 'string' ? data : '') || '').slice(0, 300);
+  const billingText = /credit balance|purchase credits|plans\s*(&|and)\s*billing|insufficient (credit|funds|balance)|out of credits/i.test(msg);
+  if ((status === 400 || status === 402 || status === 403) && (type === 'billing_error' || billingText)) return { kind: 'credit', status, type, message: msg || 'Anthropic credit balance is too low' };
+  if (status === 402) return { kind: 'credit', status, type, message: msg || 'Anthropic says payment is required (HTTP 402)' };
+  if (status === 401 || (status === 403 && (type === 'permission_error' || type === 'authentication_error'))) return { kind: 'auth', status, type, message: msg || ('Anthropic refused the API key / account (HTTP ' + status + ')') };
+  return null;
+}
+// PURE. Config rows -> the pause state.
+function aiCreditStateFromRows(rows) {
+  const g = (k) => schedCell(rows || [], k).trim();
+  return { paused: g(AI_CREDIT_KEYS.paused).toUpperCase() === 'TRUE', at: g(AI_CREDIT_KEYS.at), err: g(AI_CREDIT_KEYS.err), kind: g(AI_CREDIT_KEYS.kind) || 'credit', by: g(AI_CREDIT_KEYS.by), alerted_at: g(AI_CREDIT_KEYS.alerted), resumed_at: g(AI_CREDIT_KEYS.resumed) };
+}
+// PURE. The id of the pause episode in force ('' = not paused). The scheduler remembers "paused for today during THIS episode".
+function aiCreditPausedAtFromRows(rows) { const s = aiCreditStateFromRows(rows); return s.paused ? (s.at || 'paused') : ''; }
+// PURE. '' | 'first' | 'reminder' - should an alert go out now? One per pause, then at most one reminder per 24 h while still paused.
+function aiCreditAlertDue(state, nowMs) {
+  if (!state || !state.paused) return '';
+  const last = Date.parse(state.alerted_at || '');
+  if (isNaN(last)) return 'first';
+  const since = Date.parse(state.at || '');
+  if (!isNaN(since) && last < since) return 'first';          // that alert was for an earlier pause
+  return (nowMs - last >= AI_CREDIT_REMINDER_MS) ? 'reminder' : '';
+}
+// PURE. The words of the alert (text + email).
+function aiCreditAlertText(state, due) {
+  const auth = state && state.kind === 'auth';
+  const head = (due === 'reminder' ? 'STILL PAUSED (24h reminder): ' : '') + (auth ? 'Anthropic is refusing the Hub\'s API key / account.' : 'Anthropic AI credit is OUT.');
+  const err = String((state && state.err) || '').slice(0, 160);
+  const sms = `RidgeCo Hub: ${head} AI reading is PAUSED and will not keep retrying: receipt scanning, vendor invoice auto-read, field-inspection AI, scope-notes AI. Typing things in by hand still works. FIX: ${AI_CREDIT_FIX}. Then tap Resume on the red banner in the Hub (it also checks by itself about once an hour).${err ? ' Error: ' + err : ''}`;
+  const li = AI_CREDIT_AFFECTED.map(x => `<li>${x.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</li>`).join('');
+  const html = `<p><b>${head.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</b></p><p>Affected while paused (nothing is retried, nothing is lost):</p><ul>${li}</ul><p><b>Fix:</b> ${AI_CREDIT_FIX.replace(/&/g, '&amp;').replace(/</g, '&lt;')}.<br>Then open the Hub and tap <b>Resume</b> on the red banner. If you do nothing, the Hub checks about once an hour and resumes by itself once credit works.</p>`
+    + (err ? `<p>Anthropic said: <i>${err.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</i></p>` : '') + `<p>Paused since: ${String((state && state.at) || '?')}</p>`;
+  return { sms, subject: (due === 'reminder' ? 'STILL PAUSED: ' : 'ACTION NEEDED: ') + (auth ? 'Anthropic is refusing the Hub - AI reading paused' : 'Anthropic credit is out - AI reading paused'), html };
+}
+
+// Read the flag (cached 30 s per instance). NEVER throws: if Config cannot be read the call is allowed through (the Sheets failure
+// surfaces everywhere else) but it is logged to the Worker log and, at most every 10 min, to Ops_Telemetry.
+async function aiCreditCheck(env, opts) {
+  opts = opts || {};
+  const now = Date.now();
+  if (!opts.fresh && _aiCreditCache && now - _aiCreditCache.at < AI_CREDIT_CACHE_MS) return _aiCreditCache.state;
+  let state;
+  try { state = aiCreditStateFromRows(await schedReadConfigRows(env, !!opts.fresh)); }
+  catch (e) {
+    const msg = schedErrText(e);
+    console.error('ai-credit: could not read the pause flag (AI calls are allowed through):', msg);
+    if (now - _aiCreditReadFailMs > 10 * 60 * 1000) {
+      _aiCreditReadFailMs = now;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+      catch (te) { console.error('ai-credit: flag-read failure and its telemetry write both failed:', msg, schedErrText(te)); }
+    }
+    return { paused: false, read_error: msg };
+  }
+  _aiCreditCache = { at: now, state };
+  return state;
+}
+// Writes Config keys in ONE batchUpdate (+ one append for keys not there yet) and verifies by re-reading. -> { ok, error? }
+async function aiCreditWriteKeys(env, kv) {
+  const rows = await schedReadConfigRows(env, true);
+  const updates = [], appends = [];
+  for (const k of Object.keys(kv)) {
+    const idx = schedFindRow(rows, k);
+    if (idx >= 0) updates.push({ range: `Config!B${idx + 1}`, values: [[kv[k]]] }); else appends.push([k, kv[k]]);
+  }
+  if (updates.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+  if (appends.length) await sheetsRequest(env, 'POST', '/values/Config:append?valueInputOption=RAW', { values: appends });
+  const back = await schedReadConfigRows(env, true);
+  const bad = Object.keys(kv).filter(k => schedCell(back, k) !== String(kv[k]));
+  return bad.length ? { ok: false, error: 'the Config write did not land for: ' + bad.join(', ') } : { ok: true };
+}
+function aiCreditPausedMessage(state) {
+  return `AI is paused (${state && state.kind === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}${state && state.at ? ' since ' + state.at : ''}); no call was made. Fix: ${AI_CREDIT_FIX}, then tap Resume in the Hub.`;
+}
+// The typed answer for an endpoint that cannot do its AI step. 503 + ok:false + code + a plain message.
+function aiCreditPausedJson(extra) {
+  const message = (extra && extra.message) || AI_PAUSED_USER_MSG;
+  return json(Object.assign({ ok: false, error: message, code: AI_CREDIT_CODE, message, paused: true }, extra || {}, { message }), 503);
+}
+// Fail-open call sites (translators) must not swallow a REAL failure: the pause is the designed, already-alerted path; anything
+// else is logged to the Worker log and Ops_Telemetry before the original text is used.
+async function aiFailOpenNote(env, where, e) {
+  if (aiCreditIsPausedError(e)) return;
+  const msg = schedErrText(e);
+  console.error('ai fail-open (' + where + '):', msg);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_fail_open', Skill_Or_Endpoint: where, Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+  catch (te) { console.error('ai fail-open: telemetry write failed:', where, msg, schedErrText(te)); }
+}
+
+// PURE. Does a stored per-file failure message look like it was caused by the credit outage / pause (not by the file)?
+function aiCreditErrorTextIsOutage(text) {
+  return /credit balance|purchase credits|plans\s*(&|and)\s*billing|AI is paused|ai_credit_paused|billing_error/i.test(String(text || ''));
+}
+
+// Sends ONE alert by text (admin-notify path: daily cap, verified counter) AND email. Delivered = either channel got through.
+async function aiCreditNotify(env, subject, smsText, html, warnings) {
+  const res = { sms: null, email: null, delivered: false };
+  try {
+    const r = await adminNotify(env, { text: smsText.slice(0, ADMIN_NOTIFY_MAX_TEXT), source: 'ai_credit' });
+    let j = null; try { j = await r.clone().json(); } catch (je) { j = { ok: false, error: 'unreadable admin-notify answer: ' + schedErrText(je) }; }
+    res.sms = { ok: !!(j && j.ok), sent: !!(j && j.ok && (j.sent || j.staged)), skipped: !!(j && j.skipped), error: (j && j.ok) ? undefined : String((j && j.error) || 'HTTP ' + r.status).slice(0, 200), reason: (j && j.reason) || undefined };
+    if (res.sms.ok === false) warnings.push('text to Brett not sent: ' + res.sms.error);
+  } catch (e) { res.sms = { ok: false, sent: false, error: schedErrText(e) }; warnings.push('text to Brett failed: ' + res.sms.error); }
+  try {
+    let to = AI_CREDIT_EMAIL_DEFAULT;
+    try { const c = schedCell(await schedReadConfigRows(env, false), 'INSP_NOTIFY_EMAIL').trim(); if (c) to = c; } catch (ce) { warnings.push('could not read the notify email from Config (used the default): ' + schedErrText(ce)); }
+    const r = await gmailSendEmail(env, { to, subject, html });
+    res.email = { ok: !!(r && (r.sent || r.staged)), to };
+    if (!res.email.ok) warnings.push('email to Brett not sent');
+  } catch (e) { res.email = { ok: false, error: schedErrText(e) }; warnings.push('email to Brett failed: ' + res.email.error); }
+  res.delivered = !!((res.sms && res.sms.sent) || (res.email && res.email.ok));
+  return res;
+}
+// The once-per-pause alert (+ the 24 h reminder). Stamps AI_CREDIT_ALERT_LAST_SENT BEFORE sending (so a second failing call cannot
+// double-send); if neither channel got through the stamp is removed again and a telemetry row says so - it is retried, never dropped.
+async function aiCreditMaybeAlert(env, state, errors) {
+  const due = aiCreditAlertDue(state, Date.now());
+  if (!due) return { skipped: 'already alerted for this pause' };
+  if (Date.now() - _aiCreditAlertTryMs < AI_CREDIT_ALERT_RETRY_MS) return { skipped: 'an alert was attempted a moment ago' };
+  _aiCreditAlertTryMs = Date.now();
+  const stamp = new Date().toISOString();
+  let stamped = false;
+  // The two failure_alert_last_sent_* keys tell the failure ledger (failLegacyAlerted) that Brett was JUST texted about this, so it records
+  // the same problem on the Needs Attention screen without sending him a second, less helpful text.
+  try { const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: stamp, failure_alert_last_sent_ai_credit_paused: stamp, failure_alert_last_sent_ai_credit_exhausted: stamp }); stamped = w.ok; if (!w.ok) errors.push('alert stamp not saved: ' + w.error); }
+  catch (e) { errors.push('alert stamp not saved: ' + schedErrText(e)); }
+  const t = aiCreditAlertText(state, due);
+  const warnings = [];
+  const res = await aiCreditNotify(env, t.subject, t.sms, t.html, warnings);
+  res.reason = due; res.stamped = stamped; res.warnings = warnings;
+  if (!res.delivered) {
+    errors.push('NEITHER the text nor the email reached Brett - it will be retried on the next detection: ' + warnings.join('; ').slice(0, 300));
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_alert_failed', Skill_Or_Endpoint: 'aiCreditMaybeAlert', Success: 'FALSE', Notes: JSON.stringify({ sms: res.sms, email: res.email }).slice(0, 450) }); }
+    catch (te) { console.error('ai-credit: alert undeliverable and its telemetry write failed:', schedErrText(te)); }
+    if (stamped) { try { await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: '', failure_alert_last_sent_ai_credit_paused: '', failure_alert_last_sent_ai_credit_exhausted: '' }); } catch (e) { errors.push('could not clear the alert stamp: ' + schedErrText(e)); } }
+  }
+  return res;
+}
+
+// Credit exhausted (or key refused) was just seen. Runs once per pause; concurrent failing calls share one run.
+function aiCreditTrip(env, cls, source) {
+  if (_aiCreditTripP) return _aiCreditTripP;
+  _aiCreditTripP = aiCreditTripRun(env, cls, source).finally(() => { _aiCreditTripP = null; });
+  return _aiCreditTripP;
+}
+async function aiCreditTripRun(env, cls, source) {
+  const out = { newly_paused: false, errors: [], alert: null };
+  const nowIso = new Date().toISOString();
+  const errText = String(cls.message || '').slice(0, 300);
+  // In-memory pause FIRST: every other call in this instance short-circuits from now on, whatever happens to Config below.
+  _aiCreditCache = { at: Date.now(), state: { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' } };
+  let sheetState = null;
+  try { sheetState = aiCreditStateFromRows(await schedReadConfigRows(env, true)); }
+  catch (e) { out.errors.push('could not read Config: ' + schedErrText(e)); }
+  if (sheetState && sheetState.paused) {                       // another request/instance already paused it
+    _aiCreditCache = { at: Date.now(), state: sheetState };
+    out.alert = await aiCreditMaybeAlert(env, sheetState, out.errors);
+    return out;
+  }
+  let flagSaved = false;
+  try {
+    const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'TRUE', [AI_CREDIT_KEYS.at]: nowIso, [AI_CREDIT_KEYS.err]: errText, [AI_CREDIT_KEYS.kind]: cls.kind, [AI_CREDIT_KEYS.by]: String(source || '').slice(0, 80), [AI_CREDIT_KEYS.alerted]: '' });
+    flagSaved = w.ok; if (!w.ok) out.errors.push('the pause flag was not saved: ' + w.error);
+  } catch (e) { out.errors.push('the pause flag was not saved: ' + schedErrText(e)); }
+  out.newly_paused = true;
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_exhausted', Skill_Or_Endpoint: String(source || 'anthropicMessages').slice(0, 80), Success: 'FALSE', Notes: `AI paused (kind=${cls.kind}); pause flag saved: ${flagSaved ? 'yes' : 'NO'}; the exact Anthropic message is in Config ${AI_CREDIT_KEYS.err} and on the Needs Attention screen` }); }   // wording kept free of billing/401 keywords on purpose: the failure ledger's urgent row is the auto-clearing "ai_credit_paused" condition, not this event
+  catch (te) { out.errors.push('telemetry row not written: ' + schedErrText(te)); console.error('ai-credit: could not log ai_credit_exhausted:', schedErrText(te)); }
+  out.alert = await aiCreditMaybeAlert(env, { paused: true, at: nowIso, err: errText, kind: cls.kind, by: String(source || ''), alerted_at: '', resumed_at: '' }, out.errors);
+  return out;
+}
+
+// THE central call. body = the /v1/messages request object. opts: { signal, source, bypassPause (the probe only), simulate (staging only) }
+// -> { resp, data } for any answer that is not a pause/credit/key problem (callers keep their own resp.ok handling).
+// Throws AiCreditPausedError when paused or when THIS call discovered the credit is out; throws a plain Error if the key is missing.
+async function anthropicMessages(env, body, opts) {
+  opts = opts || {};
+  if (!env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  if (!opts.bypassPause) {
+    const st = await aiCreditCheck(env);
+    if (st.paused) throw new AiCreditPausedError(aiCreditPausedMessage(st), st);
+  }
+  let resp, data;
+  if (opts.simulate && env.__STAGING__) {                      // staging-only test hook (POST /admin/ai-credit-simulate); ignored everywhere else
+    resp = { ok: opts.simulate.status < 300, status: opts.simulate.status }; data = opts.simulate.body;
+  } else {
+    resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: opts.signal, headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify(body) });
+    data = await resp.json();
+  }
+  if (!resp.ok && !opts.bypassPause) {
+    const cls = aiCreditClassify(resp.status, data);
+    if (cls) {
+      const trip = await aiCreditTrip(env, cls, opts.source || '');
+      const err = new AiCreditPausedError(aiCreditPausedMessage({ kind: cls.kind, at: new Date().toISOString() }), { kind: cls.kind, status: cls.status });
+      err.trip = trip;
+      throw err;
+    }
+  }
+  return { resp, data };
+}
+
+// One minimal REAL call (max_tokens 1) that never trips and ignores the pause: did Anthropic accept it?
+async function aiCreditProbeCall(env) {
+  try {
+    const { resp, data } = await anthropicMessages(env, { model: MODEL_REGISTRY.REASON.model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, { bypassPause: true, source: 'ai_credit_probe' });
+    if (resp.ok) return { ok: true };
+    const cls = aiCreditClassify(resp.status, data);
+    return { ok: false, kind: cls ? cls.kind : 'other', status: resp.status, error: String((data && data.error && data.error.message) || ('HTTP ' + resp.status)).slice(0, 300) };
+  } catch (e) { return { ok: false, kind: 'other', status: 0, error: schedErrText(e) }; }
+}
+// Resume: probe first; clear the flag ONLY if the probe worked. Shared by POST /admin/ai-credit-resume and the ai_credit_probe job.
+function aiCreditResume(env, via) {
+  if (_aiCreditResumeP) return _aiCreditResumeP;
+  _aiCreditResumeP = aiCreditResumeRun(env, via).finally(() => { _aiCreditResumeP = null; });
+  return _aiCreditResumeP;
+}
+async function aiCreditResumeRun(env, via) {
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return { ok: false, resumed: false, error: 'could not read the pause flag: ' + st.read_error };
+  if (!st.paused) return { ok: true, resumed: false, paused: false, note: 'AI was not paused - nothing to do.' };
+  const probe = await aiCreditProbeCall(env);
+  if (!probe.ok) {
+    if (via === 'admin-button') {   // only when Brett pressed it; the hourly probe stays quiet (no hourly failure rows, no ledger growth)
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resume', Skill_Or_Endpoint: 'admin-button', Success: 'FALSE', Notes: `Resume pressed but AI is still paused (kind=${probe.kind})` }); }
+      catch (te) { console.error('ai-credit: resume failure and its telemetry write failed:', schedErrText(te)); }
+    }
+    return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: probe.error, probe_kind: probe.kind, status: probe.status };
+  }
+  let w;
+  try { w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'FALSE', [AI_CREDIT_KEYS.err]: '', [AI_CREDIT_KEYS.alerted]: '', [AI_CREDIT_KEYS.resumed]: new Date().toISOString() }); }
+  catch (e) { w = { ok: false, error: schedErrText(e) }; }
+  if (!w.ok) return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: 'Anthropic works again but the pause flag could not be cleared: ' + w.error };
+  _aiCreditCache = { at: Date.now(), state: { paused: false } };
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resumed', Skill_Or_Endpoint: String(via || 'resume'), Success: 'TRUE', Notes: 'Anthropic accepted a 1-token probe; pause flag cleared' }); }
+  catch (te) { console.error('ai-credit: resumed but the telemetry write failed:', schedErrText(te)); }
+  return { ok: true, resumed: true, paused: false };
+}
+// POST /admin/ai-credit-resume (admin secret only) - the Hub banner's Resume button.
+async function aiCreditResumeHandler(env) {
+  const r = await aiCreditResume(env, 'admin-button');
+  return json(r, r.ok ? 200 : 502);
+}
+function aiCreditStatusOut(state) {
+  const s = state || {};
+  return { paused: !!s.paused, since: s.at || null, kind: s.paused ? (s.kind || 'credit') : null, last_error: s.paused ? (s.err || null) : null, alerted_at: s.alerted_at || null, resumed_at: s.resumed_at || null, paused_by: s.by || null, fix: AI_CREDIT_FIX, affected: AI_CREDIT_AFFECTED };
+}
+// GET /ai-credit/status (admin; read-only, so the read-only prod token can read it too). Fresh read, never cached.
+async function aiCreditStatusHandler(env) {
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return json({ ok: false, error: 'could not read the pause flag: ' + st.read_error }, 503);
+  return json(Object.assign({ ok: true }, aiCreditStatusOut(st)));
+}
+// Coarse, public (/health): paused yes/no + since when. No error text. Never throws.
+async function aiCreditHealthSummary(env) {
+  const st = await aiCreditCheck(env);
+  if (st.read_error) return { error: 'could not read the pause flag' };
+  return { paused: !!st.paused, since: st.paused ? (st.at || null) : null };
+}
+// POST /admin/ai-credit-simulate (STAGING ONLY, admin/test token) - makes the real code path see Anthropic's "credit balance is too low"
+// answer without calling Anthropic, so the whole chain (classify -> flag -> telemetry -> alert -> short-circuit) can be verified.
+//   {} or {kind:'credit'} simulates the credit error; {kind:'auth'} a 401; {call:false, clear:true} just clears the flag (test cleanup).
+async function aiCreditSimulateHandler(env, body) {
+  if (!env.__STAGING__) return json({ ok: false, error: 'ai-credit-simulate only exists on staging' }, 404);
+  body = body || {};
+  if (body.clear === true) {
+    const w = await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.paused]: 'FALSE', [AI_CREDIT_KEYS.err]: '', [AI_CREDIT_KEYS.alerted]: '', [AI_CREDIT_KEYS.resumed]: new Date().toISOString() });
+    aiCreditResetForTests();
+    return json({ ok: w.ok, cleared: w.ok, error: w.ok ? undefined : w.error }, w.ok ? 200 : 500);
+  }
+  const auth = body.kind === 'auth';
+  const sim = auth ? { status: 401, body: { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key (SIMULATED on staging)' } } }
+                   : { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits. (SIMULATED on staging)' } } };
+  try {
+    await anthropicMessages(env, { model: MODEL_REGISTRY.REASON.model, max_tokens: 1, messages: [{ role: 'user', content: 'ping' }] }, { source: 'simulate', simulate: sim });
+    return json({ ok: false, error: 'the simulated error was not recognised as a pause' }, 500);
+  } catch (e) {
+    if (!aiCreditIsPausedError(e)) return json({ ok: false, error: 'unexpected: ' + schedErrText(e) }, 500);
+    const st = await aiCreditCheck(env, { fresh: true });
+    return json({ ok: true, simulated: auth ? 'auth' : 'credit', tripped: !!e.trip, newly_paused: !!(e.trip && e.trip.newly_paused), trip_errors: (e.trip && e.trip.errors) || [], alert: (e.trip && e.trip.alert) || null, state: aiCreditStatusOut(st) });
+  }
+}
+
+// Scheduler pieces ------------------------------------------------------------------------------------------------------------
+// A job that cannot run because AI is paused returns this (the dispatcher records it as "paused: AI credit", not a failure).
+function aiCreditSchedPaused(state, detail) {
+  return { ok: false, paused: true, reason: 'paused: AI credit - ' + (state && state.kind === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out') + (state && state.at ? ' since ' + state.at : '') + '; resumes by itself after credit is added (Resume button or the hourly check)', errors: [], detail: detail || {} };
+}
+// Runs one scan step of a job. A typed ai_credit_paused answer (or throw) is a PAUSE, anything else wrong is an error.
+async function schedAiStep(name, fn, errors, flags) {
+  try {
+    const u = await schedUnwrap(await fn());
+    if (u.body && u.body.code === AI_CREDIT_CODE) { flags.paused = true; return u.body; }
+    const bad = schedBadness(u.status, u.body);
+    if (bad) errors.push({ step: name, error: bad });
+    return u.body;
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) { flags.paused = true; return { ok: false, paused: true, code: AI_CREDIT_CODE }; }
+    errors.push({ step: name, error: schedErrText(e) });
+    return undefined;
+  }
+}
+// The scheduler job ai_credit_probe: costs NOTHING while AI is not paused (the dispatcher does not even start it - see job.gate);
+// while paused, at most hourly, makes one 1-token call; success clears the pause and sends ONE "AI is back" notice.
+async function schedRunAiCreditProbe(env) {
+  const errors = [];
+  const st = await aiCreditCheck(env, { fresh: true });
+  if (st.read_error) return { ok: false, errors: [{ step: 'read_flag', error: st.read_error }], detail: {} };
+  if (!st.paused) return { ok: true, errors, detail: { skipped: 'AI is not paused' } };
+  const r = await aiCreditResume(env, 'scheduler-probe');
+  if (r.resumed) {
+    const subject = 'AI is back - Anthropic credit works again';
+    const sms = 'RidgeCo Hub: AI is back. Anthropic credit works again - receipt scanning, vendor invoice reading and field-inspection AI have resumed by themselves.';
+    const n = await aiCreditNotify(env, subject, sms, '<p><b>AI is back.</b> Anthropic accepted a test call, so the pause is cleared. Receipt scanning, vendor invoice auto-read, field-inspection AI and scope-notes AI have resumed. Receipts that waited in Drive are picked up on the next scan.</p>', []);
+    if (!n.delivered) errors.push({ step: 'ai_back_notice', error: 'AI resumed, but neither the text nor the email telling Brett got through' });
+    return { ok: errors.length === 0, errors, detail: { resumed: true, notice: n } };
+  }
+  if (r.ok === false && r.paused) {
+    const alertErrors = [];
+    const a = await aiCreditMaybeAlert(env, st, alertErrors);          // the 24 h reminder, if one is due
+    // Still paused is the EXPECTED outcome of a probe that did its job: success for this job (it ran, it checked, it will check again in an hour).
+    return { ok: alertErrors.length === 0, errors: alertErrors.map(m => ({ step: 'reminder', error: m })), detail: { still_paused: true, probe_error: r.error, probe_kind: r.probe_kind, reminder: a && (a.reason || a.skipped) || null } };
+  }
+  return { ok: false, errors: [{ step: 'resume', error: r.error || 'resume failed' }], detail: r };
+}
+// ═══ AI-CREDIT-GUARD-END ══════════════════════════════════════════════════════════════════════
+
 // ── MODEL ROUTING (B-127) ─────────────────────────────────────────────────────
 // Secure, self-owned multi-model router. Calls each provider directly from THIS
 // Worker (no third-party gateway — Brett's QB/CHEP/tenant data never passes
@@ -17871,6 +18333,10 @@ async function routeAI(env, job) {
     attempt = await routeAICall(env, tier, job);
   }
 
+  // Oct 16 2026: AI credit paused/exhausted. The pause was already alerted + recorded once (ai_credit_exhausted), so the skipped
+  // calls write NO telemetry row each (they would flood the 1000-row grid); the caller gets a typed error and answers in plain words.
+  if (attempt.error && attempt.code === AI_CREDIT_CODE) throw new AiCreditPausedError(attempt.error, { tier, job: job.type || '' });
+
   const ms = Date.now() - t0;
   const reg = MODEL_REGISTRY[tier];
   // #89: Anthropic bills cache READS at 0.1x input and cache WRITES at 1.25x input; tokens_in
@@ -17906,7 +18372,7 @@ async function routeAICall(env, tier, job) {
     if (reg.provider === 'gemini') return await callGemini(env, reg.model, job);
     return await callClaude(env, reg.model, job);
   } catch (e) {
-    return { text: '', tokens_in: 0, tokens_out: 0, error: String((e && e.message) || e) };
+    return { text: '', tokens_in: 0, tokens_out: 0, error: String((e && e.message) || e), code: (e && e.code) || undefined };
   }
 }
 
@@ -17964,12 +18430,8 @@ async function callClaude(env, model, job) {
   }
   const reqBody = { model, max_tokens: job.maxTokens || 1200, messages: [{ role: 'user', content }] };
   if (job.system) reqBody.system = cacheable(job.system) ? [{ type: 'text', text: String(job.system), cache_control: { type: 'ephemeral' } }] : String(job.system);
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify(reqBody),
-  });
-  const data = await resp.json();
+  // Oct 16 2026: through the ONE guarded call (pause flag checked first; a credit/key error trips it) - see AI-CREDIT-GUARD.
+  const { resp, data } = await anthropicMessages(env, reqBody, { source: job.source || job.type || 'callClaude' });
   if (!resp.ok) throw new Error(data && data.error && data.error.message || `Claude ${resp.status}`);
   const text = (data.content && data.content[0] && data.content[0].text || '').trim();
   const usage = data.usage || {};
@@ -18192,8 +18654,7 @@ Ground every item in the metrics. If a job_type shows repeated failures or human
 
 TELEMETRY METRICS (${days}d):
 ${JSON.stringify(metrics, null, 2)}`;
-  const resp = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }) });
-  const data = await resp.json();
+  const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }, { source: 'llmReviewProposal' });
   let txt = (data.content && data.content[0] && data.content[0].text || '').trim();
   if (!txt) throw new Error('empty LLM response');
   txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
@@ -18246,7 +18707,7 @@ async function runWeeklyReview(env, opts) {
     proposal = `Not enough telemetry yet (${metrics.total} row(s) in ${days}d). The spine is collecting — a data-backed ranked proposal needs a bit more history. This will get sharper every week as jobs accrue.`;
   } else {
     try { const pr = await llmReviewProposal(env, metrics, days); proposal = pr.text; proposalItems = pr.items || []; }
-    catch (e) { proposal = `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
+    catch (e) { proposal = aiCreditIsPausedError(e) ? '(Model proposal skipped this round: AI is paused because the Anthropic credit is out - add credits and tap Resume in the Hub. Metrics captured below.)' : `(Model proposal unavailable this round: ${String((e && e.message) || e)}.) Metrics captured below.`; }
     if (thinData) {
       proposal = `⚠ DIRECTIONAL ONLY — thin data (${metrics.total} telemetry rows in ${days}d; a confident review wants ${THIN_DATA_MIN}+). Treat these as hypotheses to sanity-check, not conclusions.\n\n` + proposal;
     }
@@ -21285,7 +21746,11 @@ async function summarizeItemsCheap(env, items) {
     const r = await routeAI(env, { type: 'items_summarize', prompt, maxTokens: 300, schema: true, source: 'summarizeItemsCheap' });
     const parsed = JSON.parse(String(r.result || '[]').replace(/^```json?/i, '').replace(/```$/, '').trim());
     return Array.isArray(parsed) ? parsed.filter(x => typeof x === 'string' && x.trim()).slice(0, 15) : [];
-  } catch (e) { return []; }
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) throw e;        // AI is paused: the caller stops and says so (no call was made, nothing to retry)
+    await aiFailOpenNote(env, 'summarizeItemsCheap', e);   // logged + Ops_Telemetry; the display wording is simply left blank
+    return [];
+  }
 }
 
 // GET|POST /admin/items-summarize-test — read-only diagnostic (Ops_Build_Queue #24, Sep 19
@@ -21344,15 +21809,19 @@ async function backfillItemsSummary(env, opts) {
   let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
   const pending = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (!r.Items_Summary || r.Items_Summary === '[]') && r.Items && r.Items !== '[]');
   const batch = pending.slice(0, limit);
-  let updated = 0; const failed = [];
+  let updated = 0; const failed = []; let paused = false;
   for (const r of batch) {
     try {
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
+      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) { /* silent-ok: a row whose Items JSON is unreadable is reported just below as "empty summary returned" */ }
       const summary = await summarizeItemsCheap(env, items);
       if (summary.length) { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Items_Summary: JSON.stringify(summary) }); updated++; }
       else failed.push({ id: r.ID, error: 'empty summary returned' });
-    } catch (e) { failed.push({ id: r.ID, error: String(e && e.message || e) }); }
+    } catch (e) {
+      if (aiCreditIsPausedError(e)) { paused = true; break; }   // stop at once - no more calls while AI is paused
+      failed.push({ id: r.ID, error: String(e && e.message || e) });
+    }
   }
+  if (paused) return json({ ok: false, error: AI_PAUSED_USER_MSG, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG, paused: true, updated, failed, remaining: pending.length - updated }, 503);
   return json({ ok: true, updated, failed, remaining: pending.length - batch.length });
 }
 
@@ -21605,6 +22074,8 @@ async function statementExtract(env, bytes, mime) {
     // routeAI threw (missing key, network) or the model's text didn't parse as JSON — fail open
     // with an empty lines array rather than throwing into the import endpoint (same discipline as
     // invoiceExtract's fail-open wrapper above).
+    if (aiCreditIsPausedError(e)) return { vendor_detected: '', lines: [], _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'statementExtract', e);
     return { vendor_detected: '', lines: [], _error: true, _error_message: String((e && e.message) || e) };
   }
 }
@@ -21648,6 +22119,9 @@ async function invoiceExtract(env, bytes, mime) {
   } catch (e) {
     // routeAI threw (missing key, network) or bytesToB64/media-build failed — fail open with a
     // clearly-empty suggestion rather than surfacing a 500 to a vendor mid-submit.
+    // Oct 16 2026: AI credit paused -> _paused:true + a plain "enter it by hand" message (no Anthropic call was made, Brett was already alerted).
+    if (aiCreditIsPausedError(e)) return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'invoiceExtract', e);
     return { vendor_name: '', invoice_number: '', invoice_date: '', amount: null, line_items: [], notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
   }
 }
@@ -21675,6 +22149,8 @@ async function receiptImageExtractMultiple(env, bytes, mime) {
     })) : [];
     return { receipt_count: receipts.length, receipts };
   } catch (e) {
+    if (aiCreditIsPausedError(e)) return { receipt_count: 0, receipts: [], _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'receiptImageExtractMultiple', e);
     return { receipt_count: 0, receipts: [], _error: true, _error_message: String((e && e.message) || e) };
   }
 }
@@ -21751,6 +22227,8 @@ async function contactExtract(env, bytes, mime) {
       return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _raw: txt.slice(0, 300), _parse_error: true };
     }
   } catch (e) {
+    if (aiCreditIsPausedError(e)) return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _error: true, _paused: true, code: AI_CREDIT_CODE, _error_message: AI_PAUSED_USER_MSG };
+    await aiFailOpenNote(env, 'contactExtract', e);
     return { first_name: '', last_name: '', company: '', phone: '', email: '', notes: '', _error: true, _error_message: (e && e.message) || 'extraction failed' };
   }
 }
@@ -22314,6 +22792,8 @@ async function vendorBillExtract(env, body) {
     bytes = arr.buffer; mime = body.mime || 'image/jpeg';
   } catch (e) { return json({ error: 'bad image_b64' }, 400); }
   const ex = await invoiceExtract(env, bytes, mime);
+  // Oct 16 2026: AI credit paused -> the vendor sees a plain "enter it by hand" note (vendor.html reads paused/message); no Anthropic call was made.
+  if (ex && ex._paused) return json({ success: true, extract: ex, paused: true, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG });
   return json({ success: true, extract: ex });
 }
 
@@ -22361,6 +22841,8 @@ async function receiptIntake(env, body) {
 // POST /receipt-scan (also called by the scheduler's daily_receipts job) — pull new files from the inbox Drive folder.
 // Self-provisions the folder the first time so there's no manual setup.
 async function receiptScan(env) {
+  // Oct 16 2026: AI credit paused -> do NOT list the folder or touch a single file (the old behaviour retried the same PDFs every 30 min all night).
+  { const st = await aiCreditCheck(env); if (st.paused) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: 0, paused_since: st.at || null, reason: 'paused: AI credit - receipts stay in the Drive folder and are scanned automatically after AI resumes' }); }
   const cfg = await fetchConfig(env);
   const tok = await getAccessToken(env);
   let folder = cfg.receipts_inbox_folder_id;
@@ -22385,7 +22867,9 @@ async function receiptScan(env) {
   // it retried forever. Now capped at 3 attempts, tracked in Config (no schema change to the
   // live Receipts_Queue tab), then skipped and surfaced via `stuck` instead of retried daily.
   let failures = {}; try { failures = JSON.parse(cfg.receipt_intake_failures || '{}'); } catch (e) { failures = {}; }
-  let n = 0; const errs = []; let failuresChanged = false;
+  let n = 0; const errs = []; let failuresChanged = false; let pausedMid = false;
+  // Self-heal (Oct 16 2026): attempts burned by the Oct 15 credit outage were never the file's fault - give those files a fresh start.
+  for (const id of Object.keys(failures)) { if (aiCreditErrorTextIsOutage(failures[id] && failures[id].error)) { delete failures[id]; failuresChanged = true; } }
   for (const f of files) {
     if (seen.has(f.id)) continue;
     const prior = failures[f.id];
@@ -22395,13 +22879,15 @@ async function receiptScan(env) {
       n++;
       if (prior) { delete failures[f.id]; failuresChanged = true; } // succeeded on a later retry — clear the record
     } catch (e) {
+      if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out DURING the scan: stop now, do not count an attempt against this file or the rest
       errs.push(f.name + ': ' + (e.message || 'err'));
       failures[f.id] = { name: f.name, error: String(e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
       failuresChanged = true;
     }
   }
-  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_intake_failures', value: JSON.stringify(failures) }); } catch (e) {} }
+  if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_intake_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptScan: tracker write failed:', schedErrText(e)); } }
   const stuck = Object.values(failures).filter(x => x.attempts >= 3);
+  if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, errors: errs, stuck, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
   return json({ ok: true, folder_id: folder, scanned: n, skipped: files.length - n, errors: errs, stuck });
 }
 
@@ -22733,6 +23219,7 @@ async function woSharedBillExtract(env, body){
     bytes = arr.buffer; mime = body.mime || 'image/jpeg';
   } catch (e) { return json({ error: 'bad image_b64' }, 400); }
   const ex = await invoiceExtract(env, bytes, mime);
+  if (ex && ex._paused) return json({ success: true, extract: ex, paused: true, code: AI_CREDIT_CODE, message: AI_PAUSED_USER_MSG });   // Oct 16 2026: AI credit paused
   return json({ success: true, extract: ex });
 }
 
@@ -22773,7 +23260,7 @@ async function selfTestInvoiceExtract(env, body){
     success: true,
     extract: ex,
     read_ok: !ex._error && !ex._parse_error,
-    error_flag: ex._error ? 'model_unreachable' : (ex._parse_error ? 'unparseable_reply' : ''),
+    error_flag: ex._paused ? 'ai_credit_paused' : (ex._error ? 'model_unreachable' : (ex._parse_error ? 'unparseable_reply' : '')),   // Oct 16 2026: a paused AI is a loud, distinct canary failure
     model_tier: 'REASON',
     model: MODEL_REGISTRY.REASON.model,
     ms: Date.now() - t0,
@@ -22844,6 +23331,780 @@ function _b64urlToBytes(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while
 async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw', _tenc.encode(secret), {name:'HMAC',hash:'SHA-256'}, false, ['sign']); const sig=await crypto.subtle.sign('HMAC', key, _tenc.encode(data)); return _b64urlBytes(new Uint8Array(sig)); }
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
 async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
+/* FIX_CHECK:START */
+// Work order ids are stored both as '1152' and as 'WO-1152' (WO_ID column); a label must never read 'WO-WO-1152'.
+function fuWoLabel(id) { return 'WO-' + String(id == null ? '' : id).trim().replace(/^WO-/i, ''); }
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+//  TENANT FIX-CHECK  (Oct 16 2026)  — "have you had any more trouble with this issue?"
+//  Brett: "It's sort of like a quality control check, but specific to their issue. Not just 'can you give us a
+//  review', but 'have you had any more trouble with this issue?' ... differentiate between the cosmetic condition of
+//  the window and the actual physical leak ... Two-way texting doesn't exist yet, so the tenant answers on a page via
+//  a link ... it must be checked again after a couple of days."
+//
+//  • Rule-based only (NO LLM): classifyIssue(wo) splits a work order into the REPAIR part (the thing that physically has
+//    to work - the only thing the tenant is asked about) and the COSMETIC part (drywall / paint / trim / stain - never
+//    asked; carried along as the pre-filled description of the follow-on cosmetic WO).
+//  • Brett's tap on Send in the PREVIEW is the approval for that single text. Nothing is ever sent on open, and nothing
+//    is ever auto-dispatched: answers only produce SUGGESTIONS (create the cosmetic WO / send the vendor back).
+//  • Tenant link = signed HMAC token (scope 'fix-check'), 14-day window, scoped to ONE follow-up + ONE tenant, hash-checked
+//    against WO_Followups.Token_Hash (the raw token is never stored). No PIN.
+//  • SMS goes through smsGatedSend (all gating layers, Message_Queue, quiet hours, test mode) with the tenant STOP note.
+//  • Reminder: SCHED_JOBS entry `followup_sweep` (Apps Script clock, NO cron). One reminder per follow-up, ever, 9am-7pm ET.
+//  • Nothing fails silently: every catch logs to Ops_Telemetry and the failure is returned / shown.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+const FU_TAB = 'WO_Followups';
+const FU_COLS = ['ID','WO_ID','Repair_WO_ID','Property_ID','Unit_ID','Tenant_ID','Tenant_Name','Check_Type','Problem_Label','Problem_Label_Es','Object_Label','Object_Label_Es','Repair_Part','Cosmetic_Part','Repair_Date','Cosmetic_Vendor_ID','Rework_Vendor_ID','Language','Status','Blocked_Reason','Created_At','Created_By','Sent_At','Send_Method','Queue_ID','Due_At','Reminder_Sent_At','Reminder_Result','Token_Hash','Token_Expires_At','Answer','Answer_Choice','Answer_Detail','Answer_Location','Answer_Extra','Answer_Photo_IDs','Answered_At','Answer_History','Alerted_Answer','Alert_Result','Suggested_Next','Next_WO_ID','Closed_At','Closed_Reason','Active'];
+const FU_CHECK_TYPES = ['leak','electrical','plumbing_flow','hvac','appliance','lock_door','pest','other'];
+const FU_STATUSES = ['Draft','Sent','Answered','Overdue','Closed','Blocked'];
+const FU_ANSWERS = ['resolved','persists','worse','different_location','not_sure','safety'];
+const FU_ALERT_ANSWERS = ['persists','worse','different_location','safety'];       // Brett is texted the moment one of these arrives
+const FU_NEEDS_ACTION_ANSWERS = ['persists','worse','different_location','safety','not_sure'];
+const FU_WINDOW_DAYS = 14;        // how long the tenant's link works
+const FU_DUE_DAYS = 2;            // Brett: "checked again after a couple of days"
+const FU_MAX_PHOTOS = 6;
+const FU_PAGE_BASE = 'https://ridge-co.github.io/RidgeCo';
+const FU_MSG_TYPE = 'tenant_fix_check';
+const FU_REMINDER_START_ET = 9, FU_REMINDER_END_ET = 19;   // reminders only 9am-7pm ET
+
+// ── tiny pure helpers ────────────────────────────────────────────────────────────────────────────
+const fuCap = s => String(s).replace(/^(¿?)([a-zñáéíóú])/, (m, a, b) => a + b.toUpperCase());
+const fuS = v => String(v == null ? '' : v).trim();
+const fuClip = (v, n) => fuS(v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, n);
+const fuT = (en, es) => ({ en, es: es == null ? en : es });
+function fuAddDays(iso, days) { const t = Date.parse(iso); return new Date((isNaN(t) ? Date.now() : t) + days * 86400000).toISOString(); }
+const FU_MON_EN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const FU_MON_ES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+// "2026-10-10" or an ISO timestamp -> "Oct 10" / "10 de oct". '' when it is not a date.
+function fuDateLabel(d, lang) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(fuS(d)); if (!m) return '';
+  const mo = parseInt(m[2], 10) - 1, day = parseInt(m[3], 10); if (mo < 0 || mo > 11) return '';
+  return lang === 'es' ? `${day} de ${FU_MON_ES[mo]}` : `${FU_MON_EN[mo]} ${day}`;
+}
+
+// ── 1. ISSUE RECOGNITION (rule-based, editable in the preview) ───────────────────────────────────
+// COSMETIC = how it looks. A segment is cosmetic only when it hits one of these AND names no physical subject below.
+const FU_COSMETIC_RE = /\b(dry ?wall|sheet ?rock|plaster(ing)?|patch(ing|ed)? (the )?(hole|holes|wall|walls|ceiling|drywall)|paint(ing|ed|s)?|re-?paint\w*|touch[- ]?ups?|spackl\w*|mudd?(ing)?|tape (and|&) mud|textur\w*|refinish\w*|finish(ing)? (coat|work)|trim|base ?boards?|stain(s|ed|ing)?|discolou?r\w*|scuff\w*|wall ?paper\w*|primer|cosmetic\w*|caulk\w* (for|to) (look|looks|appearance)|unsightly)\b/i;
+// PHYSICAL SUBJECTS = the thing that has to physically work. [regex, weight]; best total wins, ties go to the earlier type.
+const FU_SUBJECTS = [
+  ['leak', [[/\b(leak\w*|drip\w*|seep\w*|flood\w*)\b/i, 3], [/\bwater (is |was )?(coming|comes|came|getting|gets|got|intrusion|infiltration|damage)\b/i, 3], [/\b(roof\w*|flashing|gutters?|skylight|shingles?|condensation|moisture|damp\w*)\b/i, 2]]],
+  ['plumbing_flow', [[/\b(clog\w*|back(ed|ing)?[- ]?up|stoppage|sewer|plunge\w*|snake[d]?)\b/i, 3], [/\b(slow(ly)?[- ](drain\w*|sink|tub|bathtub|shower)|drain\w*|no hot water|hot water|water heater|no water|water pressure|low pressure)\b/i, 2], [/\b(toilet|flush\w*|disposal|faucet|sink|tub|bathtub|shower)\b/i, 1]]],
+  ['electrical', [[/\b(outlets?|receptacles?|gfci|breakers?|fuses?|wiring|electric\w*|spark\w*|shock\w*|no power|power (out|outage|off|loss)|panel)\b/i, 3], [/\b(switch(es)?|light(s|ing)?|bulbs?|fixture|smoke (detector|alarm)|co detector|doorbell|flicker\w*)\b/i, 2]]],
+  ['hvac', [[/\b(hvac|furnace|boiler|thermostat|heat pump|mini[- ]?split|a\/c|ac|ac unit|air ?condition\w*|no heat|no cool\w*|radiator|heat)\b/i, 3]]],
+  ['appliance', [[/\b(refrigerator|fridge|freezer|stove|oven|range|dishwasher|washer|dryer|microwave|appliance|washing machine)\b/i, 3]]],
+  ['lock_door', [[/\b(lock\w*|keys?|deadbolt|door ?(knob|handle|latch|closer)|latch|re-?key\w*|hinges?|door (won'?t|doesn'?t|does not|stuck|sticks|sticking|jam\w*|rubbing))\b/i, 3]]],
+  ['pest', [[/\b(pests?|roach\w*|cockroach\w*|mice|mouse|rats?|rodents?|bed ?bugs?|ants?|termites?|wasps?|bees?|spiders?|bugs?|infest\w*|exterminat\w*)\b/i, 3]]],
+];
+const FU_HVAC_BLOCK = /\b(water heater|hot water)\b/i;
+const FU_TRADE_HINT = { plumbing: null, electrical: 'electrical', hvac: 'hvac', roofing: 'leak', 'pest control': 'pest', locks: 'lock_door', locksmith: 'lock_door', appliance: 'appliance' };
+function fuSegmentScores(seg) {
+  const out = {};
+  for (const [type, pats] of FU_SUBJECTS) {
+    if (type === 'hvac' && FU_HVAC_BLOCK.test(seg)) continue;
+    let s = 0; for (const [re, w] of pats) if (re.test(seg)) s += w;
+    if (s > 0) out[type] = s;
+  }
+  return out;
+}
+function fuBestType(scores) { let best = null, bs = 0; for (const [type] of FU_SUBJECTS) { if ((scores[type] || 0) > bs) { best = type; bs = scores[type]; } } return best; }
+// Split on sentence ends and joiners, NOT on "/" or "," ("drywall/paint" stays one cosmetic phrase).
+function fuSplitSegments(desc) {
+  return fuS(desc).split(/(?:[.;!?\n]+|\s+(?:and|then|also|plus|&)\s+|\s+\+\s+)/i).map(s => s.replace(/^[\s,:-]+|[\s,:-]+$/g, '')).filter(Boolean);
+}
+// "the thing" nouns -> [English noun, Spanish noun-with-article]. Used for the plain-English labels.
+const FU_OBJECTS = [
+  ['skylight', 'the skylight', 'el tragaluz'], ['window', 'the window', 'la ventana'], ['roof', 'the roof', 'el techo'], ['ceiling', 'the ceiling', 'el techo'],
+  ['chimney', 'the chimney', 'la chimenea'], ['gutter', 'the gutter', 'el canalón'], ['attic', 'the attic', 'el ático'], ['basement', 'the basement', 'el sótano'],
+  ['water heater', 'the water heater', 'el calentador de agua'], ['dishwasher', 'the dishwasher', 'el lavavajillas'], ['washer', 'the washer', 'la lavadora'],
+  ['faucet', 'the faucet', 'la llave del agua'], ['toilet', 'the toilet', 'el inodoro'], ['bathtub', 'the tub', 'la tina'], ['tub', 'the tub', 'la tina'], ['shower', 'the shower', 'la ducha'],
+  ['sink', 'the sink', 'el fregadero'], ['pipe', 'the pipe', 'la tubería'], ['radiator', 'the radiator', 'el radiador'], ['wall', 'the wall', 'la pared'], ['door', 'the door', 'la puerta'], ['floor', 'the floor', 'el piso'],
+];
+function fuFindObject(text) {
+  const t = fuS(text).toLowerCase(); let best = null, at = 1e9;
+  for (const [key, en, es] of FU_OBJECTS) { const m = new RegExp('\\b' + key + 's?\\b').exec(t); if (m && m.index < at) { at = m.index; best = { key, en, es }; } }
+  return best;
+}
+const FU_ELEC_OBJECTS = [['smoke detector', 'the smoke detector', 'el detector de humo'], ['smoke alarm', 'the smoke alarm', 'la alarma de humo'], ['outlet', 'the outlet', 'el enchufe'], ['receptacle', 'the outlet', 'el enchufe'], ['breaker', 'the breaker', 'el interruptor automático (breaker)'], ['panel', 'the electrical panel', 'el panel eléctrico'], ['switch', 'the switch', 'el interruptor'], ['doorbell', 'the doorbell', 'el timbre'], ['light', 'the light', 'la luz'], ['bulb', 'the light', 'la luz'], ['fixture', 'the light fixture', 'la lámpara']];
+const FU_HVAC_OBJECTS = [['thermostat', 'the thermostat', 'el termostato'], ['furnace', 'the furnace', 'el sistema de calefacción'], ['boiler', 'the boiler', 'la caldera'], ['heat pump', 'the heat pump', 'la bomba de calor'], ['air condition', 'the A/C', 'el aire acondicionado'], ['a/c', 'the A/C', 'el aire acondicionado'], ['ac unit', 'the A/C', 'el aire acondicionado'], ['cooling', 'the A/C', 'el aire acondicionado'], ['radiator', 'the radiator', 'el radiador'], ['heat', 'the heat', 'la calefacción']];
+const FU_APPLIANCE_OBJECTS = [['refrigerator', 'the refrigerator', 'el refrigerador'], ['fridge', 'the refrigerator', 'el refrigerador'], ['freezer', 'the freezer', 'el congelador'], ['dishwasher', 'the dishwasher', 'el lavavajillas'], ['washing machine', 'the washer', 'la lavadora'], ['washer', 'the washer', 'la lavadora'], ['dryer', 'the dryer', 'la secadora'], ['microwave', 'the microwave', 'el microondas'], ['stove', 'the stove', 'la estufa'], ['oven', 'the oven', 'el horno'], ['range', 'the range', 'la estufa']];
+function fuFindIn(list, text) { const t = fuS(text).toLowerCase(); for (const [key, en, es] of list) if (t.includes(key)) return { key, en, es }; return null; }
+const FU_VERB_WORDS = /^(fix|fixed|repair|repaired|repairs|replace|replaced|reinstall|install|reinstalled|change|changed|remove|check|need|needs|needed|please|asap|also|as|well|the|a|an|to|be|is|are|was|not|sure|what|happened|but|started|new|unit)$/i;
+// Fallback noun phrase for an unrecognised problem: strip verbs, keep up to 4 words, "the <words>".
+function fuFallbackLabel(seg) {
+  const words = fuS(seg).toLowerCase().replace(/[^a-z0-9\s'/-]/g, ' ').split(/\s+/).filter(Boolean);
+  while (words.length && FU_VERB_WORDS.test(words[0])) words.shift();
+  while (words.length && FU_VERB_WORDS.test(words[words.length - 1])) words.pop();
+  const kept = words.slice(0, 4).join(' ');
+  return kept ? ('the ' + kept) : '';
+}
+function fuLabelFor(type, text) {
+  // returns { problem_label, problem_label_es, object_label, object_label_es }
+  const generic = { problem_label: '', problem_label_es: '', object_label: 'the spot we repaired', object_label_es: 'el lugar que reparamos' };
+  if (type === 'leak') {
+    const o = fuFindObject(text);
+    return o ? { problem_label: `${o.en} leak`, problem_label_es: `la filtración de agua en ${o.es}`, object_label: o.en, object_label_es: o.es }
+             : { problem_label: 'the leak', problem_label_es: 'la filtración de agua', object_label: generic.object_label, object_label_es: generic.object_label_es };
+  }
+  if (type === 'electrical') { const o = fuFindIn(FU_ELEC_OBJECTS, text); return o ? { problem_label: o.en, problem_label_es: o.es, object_label: o.en, object_label_es: o.es } : { problem_label: 'the electrical repair', problem_label_es: 'la reparación eléctrica', object_label: 'the electrical repair', object_label_es: 'la reparación eléctrica' }; }
+  if (type === 'hvac') { const o = fuFindIn(FU_HVAC_OBJECTS, text); return o ? { problem_label: o.en, problem_label_es: o.es, object_label: o.en, object_label_es: o.es } : { problem_label: 'the heating/cooling', problem_label_es: 'la calefacción o el aire acondicionado', object_label: 'the heating/cooling', object_label_es: 'la calefacción o el aire acondicionado' }; }
+  if (type === 'appliance') { const o = fuFindIn(FU_APPLIANCE_OBJECTS, text); return o ? { problem_label: o.en, problem_label_es: o.es, object_label: o.en, object_label_es: o.es } : { problem_label: 'the appliance', problem_label_es: 'el electrodoméstico', object_label: 'the appliance', object_label_es: 'el electrodoméstico' }; }
+  if (type === 'plumbing_flow') {
+    const t = fuS(text).toLowerCase();
+    if (/hot water|water heater/.test(t)) return { problem_label: 'the hot water', problem_label_es: 'el agua caliente', object_label: 'the hot water', object_label_es: 'el agua caliente' };
+    if (/\btoilet\b/.test(t)) return { problem_label: 'the toilet', problem_label_es: 'el inodoro', object_label: 'the toilet', object_label_es: 'el inodoro' };
+    if (/disposal/.test(t)) return { problem_label: 'the garbage disposal', problem_label_es: 'el triturador de basura', object_label: 'the garbage disposal', object_label_es: 'el triturador de basura' };
+    if (/water pressure|low pressure/.test(t)) return { problem_label: 'the water pressure', problem_label_es: 'la presión del agua', object_label: 'the water pressure', object_label_es: 'la presión del agua' };
+    const fx = /\b(bath ?tub|tub)\b/.test(t) ? ['bathtub', 'la tina'] : /\bshower\b/.test(t) ? ['shower', 'la ducha'] : /\bkitchen sink\b/.test(t) ? ['kitchen sink', 'el fregadero de la cocina'] : /\b(bathroom sink|vanity)\b/.test(t) ? ['bathroom sink', 'el lavabo del baño'] : /\bsink\b/.test(t) ? ['sink', 'el fregadero'] : null;
+    const l = fx ? { en: `the ${fx[0]} drain`, es: `el desagüe de ${fx[1]}` } : { en: 'the drain', es: 'el desagüe' };
+    return { problem_label: l.en, problem_label_es: l.es, object_label: l.en, object_label_es: l.es };
+  }
+  if (type === 'lock_door') { const isLock = /lock|key|deadbolt/i.test(text); const l = isLock ? ['the door lock', 'la cerradura de la puerta'] : ['the door', 'la puerta']; return { problem_label: l[0], problem_label_es: l[1], object_label: l[0], object_label_es: l[1] }; }
+  if (type === 'pest') {
+    const t = fuS(text).toLowerCase(); const k = /roach/.test(t) ? ['roach', 'cucarachas'] : /mice|mouse|rat|rodent/.test(t) ? ['mouse', 'ratones'] : /bed ?bug/.test(t) ? ['bed bug', 'chinches'] : /\bant/.test(t) ? ['ant', 'hormigas'] : /termite/.test(t) ? ['termite', 'termitas'] : /wasp|bee/.test(t) ? ['wasp/bee', 'avispas o abejas'] : null;
+    return k ? { problem_label: `the ${k[0]} problem`, problem_label_es: `el problema de ${k[1]}`, object_label: `the ${k[0]} problem`, object_label_es: `el problema de ${k[1]}` } : { problem_label: 'the pest problem', problem_label_es: 'el problema de plagas', object_label: 'the pest problem', object_label_es: 'el problema de plagas' };
+  }
+  const fb = fuFallbackLabel(text);
+  return { problem_label: fb || 'the repair', problem_label_es: fb ? ('la reparación (' + fb.replace(/^the /, '') + ')') : 'la reparación', object_label: fb || 'the repair', object_label_es: 'la reparación' };
+}
+// classifyIssue(wo) -> { check_type, problem_label, problem_label_es, object_label, object_label_es, repair_part, cosmetic_part,
+//                        also_mentioned[], confidence, cosmetic_only, warnings[] }
+// Pure. wo = { Description, Trade, Type }. When unsure: check_type 'other' with a generic question; Brett edits everything in the preview.
+function classifyIssue(wo) {
+  const desc = fuS(wo && wo.Description), trade = fuS(wo && wo.Trade).toLowerCase();
+  const segs = fuSplitSegments(desc).map(text => { const scores = fuSegmentScores(text); return { text, scores, type: fuBestType(scores), cosmetic: FU_COSMETIC_RE.test(text) }; });
+  // cosmetic = looks-only: matches the cosmetic list and names no physical subject.
+  segs.forEach(s => { s.isCosmetic = s.cosmetic && !s.type; });
+  const repairSegs = segs.filter(s => !s.isCosmetic);
+  const cosmeticSegs = segs.filter(s => s.isCosmetic);
+  const primary = repairSegs.find(s => s.type) || null;
+  let check_type = primary ? primary.type : null, confidence = primary ? 'high' : 'low';
+  const warnings = [];
+  if (!check_type) {                                           // no subject in the words: let the trade pick, else 'other'
+    const hint = Object.prototype.hasOwnProperty.call(FU_TRADE_HINT, trade) ? FU_TRADE_HINT[trade] : null;
+    if (hint && repairSegs.length) { check_type = hint; confidence = 'medium'; } else check_type = 'other';
+  }
+  // Repair part = the primary subject's segments + the neutral ones ("Need repaired", "Not sure what happened..."); a DIFFERENT physical job
+  // (e.g. "Change unit door locks" next to a drain) is listed separately, not asked about.
+  const repairKeep = [], also = [];
+  for (const s of repairSegs) { if (s.type && s.type !== check_type && check_type !== 'other') also.push(s.text); else repairKeep.push(s.text); }
+  const repair_part = repairKeep.join('. ');
+  const cosmetic_part = cosmeticSegs.map(s => s.text).join('. ');
+  const cosmetic_only = !repair_part && !!cosmetic_part;
+  if (cosmetic_only) warnings.push('This work order reads as cosmetic only (paint / drywall / finish), so there is no repair to check on. Type what you want to ask about, or skip the follow-up.');
+  const basis = check_type === 'other' ? (repairKeep[0] || desc) : ((primary ? primary.text : '') + ' ' + repair_part);   // an unrecognised problem is named from its first phrase only
+  const lab = fuLabelFor(check_type, basis.trim() || desc);
+  return { check_type, problem_label: lab.problem_label, problem_label_es: lab.problem_label_es, object_label: lab.object_label, object_label_es: lab.object_label_es,
+    repair_part, cosmetic_part, also_mentioned: also, confidence, cosmetic_only, warnings };
+}
+
+// ── 2. QUESTIONS (the single source of truth: the tenant page renders this, the server validates against it) ────────────
+// Every field a tenant can fill in. choice fields only accept their listed values.
+const FU_FIELD_DEFS = {
+  rain_since: { type: 'choice', label: fuT('Has it rained (or has the water been running) since the repair?', '¿Ha llovido (o ha estado corriendo el agua) desde la reparación?'),
+    choices: [{ value: 'yes', label: fuT('Yes', 'Sí') }, { value: 'no', label: fuT('No', 'No') }, { value: 'unsure', label: fuT('Not sure', 'No sé') }] },
+  trigger: { type: 'choice', label: fuT('When does it happen?', '¿Cuándo ocurre?'),
+    choices: [{ value: 'during_rain', label: fuT('When it rains', 'Cuando llueve') }, { value: 'water_running', label: fuT('When water is running (sink, shower, washer)', 'Cuando corre el agua (fregadero, ducha, lavadora)') }, { value: 'all_the_time', label: fuT('All the time', 'Todo el tiempo') }, { value: 'not_sure', label: fuT('Not sure', 'No sé') }] },
+  location: { type: 'chips', label: fuT('Where is it?', '¿Dónde está?'), max: 120,
+    choices: [{ value: 'Kitchen', label: fuT('Kitchen', 'Cocina') }, { value: 'Bathroom', label: fuT('Bathroom', 'Baño') }, { value: 'Bedroom', label: fuT('Bedroom', 'Dormitorio') }, { value: 'Living room', label: fuT('Living room', 'Sala') }, { value: 'Basement', label: fuT('Basement', 'Sótano') }, { value: 'Other', label: fuT('Other', 'Otro') }],
+    placeholder: fuT('Which room, and where in the room?', '¿En qué cuarto, y en qué parte del cuarto?') },
+  when: { type: 'text', label: fuT('When did you first notice it?', '¿Cuándo lo notó por primera vez?'), max: 80, placeholder: fuT('For example: Tuesday night', 'Por ejemplo: el martes por la noche') },
+  note: { type: 'textarea', label: fuT('Anything else we should know? (optional)', '¿Algo más que debamos saber? (opcional)'), max: 1000 },
+  photo: { type: 'photo', label: fuT('Add a photo (optional)', 'Agregue una foto (opcional)') },
+};
+function fuOpt(value, answer, tone, en, es, fields, required) { return { value, answer, tone, label: fuT(en, es), fields: fields || [], required: required || [] }; }
+function fuSafety(en, es, msgEn, msgEs) { return { label: fuT(en, es), message: fuT(msgEn, msgEs) }; }
+// Builds the question for one follow-up row (or a draft). ctx: { check_type, problem_label(_es), object_label(_es), repair_date }
+function fuQuestionSpec(ctx) {
+  const type = FU_CHECK_TYPES.includes(ctx.check_type) ? ctx.check_type : 'other';
+  const L = fuT(fuS(ctx.problem_label) || 'the repair', fuS(ctx.problem_label_es) || 'la reparación');
+  const O = fuT(fuS(ctx.object_label) || 'the spot we repaired', fuS(ctx.object_label_es) || 'el lugar que reparamos');
+  const dEn = fuDateLabel(ctx.repair_date, 'en'), dEs = fuDateLabel(ctx.repair_date, 'es');
+  const since = fuT(dEn ? `Since ${dEn}, ` : '', dEs ? `Desde el ${dEs}, ` : '');
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const fire = fuSafety('There is a safety danger', 'Hay un peligro de seguridad', '', '');
+  const common = { check_type: type, title: fuT(`Quick check on ${L.en}`, `Revisión rápida de ${L.es}`), fields: FU_FIELD_DEFS, safety: null, options: [] };
+  const callMsg = (en, es) => fuSafety(en, es, 'Please keep away from it. If it is safe to do so, turn off the power or gas to that area. Call us right away at {phone}. If anyone is in danger, call 911.', 'Por favor aléjese. Si es seguro, corte la electricidad o el gas de esa área. Llámenos de inmediato al {phone}. Si alguien está en peligro, llame al 911.');
+  if (type === 'leak') {
+    return Object.assign(common, {
+      question: fuT(fuCap(`${since.en}have you seen water come in at ${O.en}?`), fuCap(`${since.es}¿ha visto entrar agua en ${O.es}?`)),
+      options: [
+        fuOpt('dry', 'resolved', 'good', "No, it's dry", 'No, está seco', ['rain_since', 'note']),
+        fuOpt('same_spot', 'persists', 'bad', 'Yes, the same spot', 'Sí, en el mismo lugar', ['trigger', 'when', 'photo', 'note']),
+        fuOpt('worse', 'worse', 'bad', "Yes, and it's worse", 'Sí, y está peor', ['trigger', 'when', 'photo', 'note']),
+        fuOpt('different_spot', 'different_location', 'bad', 'Yes, a different spot', 'Sí, en otro lugar', ['location', 'trigger', 'when', 'photo', 'note'], ['location']),
+        fuOpt('not_sure', 'not_sure', 'neutral', 'Not sure', 'No estoy seguro', ['note']),
+      ],
+      safety: callMsg('Water is near lights or outlets, or the ceiling is sagging', 'Hay agua cerca de luces o enchufes, o el techo se está hundiendo'),
+    });
+  }
+  const working = (qEn, qEs, safetyObj) => Object.assign(common, {
+    question: fuT(qEn, qEs),
+    options: [
+      fuOpt('working', 'resolved', 'good', 'Yes, working fine', 'Sí, funciona bien', ['note']),
+      fuOpt('still_not_working', 'persists', 'bad', "No, it's still not working", 'No, todavía no funciona', ['when', 'photo', 'note']),
+      fuOpt('on_and_off', 'persists', 'bad', 'It works on and off', 'Funciona a ratos', ['when', 'photo', 'note']),
+      fuOpt('something_else', 'not_sure', 'neutral', 'Something else', 'Otra cosa', ['note'], ['note']),
+    ],
+    safety: safetyObj,
+  });
+  if (type === 'electrical') return working(`Is ${L.en} working now?`, `¿Funciona ahora ${L.es}?`, callMsg('I see sparks, smell burning, or got a shock', 'Veo chispas, huele a quemado o sentí una descarga'));
+  if (type === 'hvac') return working(`Is ${L.en} working now?`, `¿Funciona ahora ${L.es}?`, callMsg('I smell gas or burning, or see smoke', 'Huele a gas o a quemado, o veo humo'));
+  if (type === 'appliance') return working(`Is ${L.en} working now?`, `¿Funciona ahora ${L.es}?`, callMsg('I see sparks, smell burning or gas, or see smoke', 'Veo chispas, huele a quemado o a gas, o veo humo'));
+  if (type === 'plumbing_flow') return Object.assign(common, {
+    question: fuT(`Is ${L.en} working properly now?`, `¿Funciona bien ahora ${L.es}?`),
+    options: [
+      fuOpt('working', 'resolved', 'good', 'Yes, working fine', 'Sí, funciona bien', ['note']),
+      fuOpt('still_bad', 'persists', 'bad', "No, it's still slow or blocked", 'No, todavía está lento o tapado', ['when', 'photo', 'note']),
+      fuOpt('worse', 'worse', 'bad', "It's worse (or water is backing up)", 'Está peor (o el agua se está regresando)', ['when', 'photo', 'note']),
+      fuOpt('something_else', 'not_sure', 'neutral', 'Something else', 'Otra cosa', ['note'], ['note']),
+    ],
+  });
+  if (type === 'lock_door') return Object.assign(common, {
+    question: fuT(`Is ${L.en} working properly now?`, `¿Funciona bien ahora ${L.es}?`),
+    options: [
+      fuOpt('working', 'resolved', 'good', 'Yes, works fine', 'Sí, funciona bien', ['note']),
+      fuOpt('still_bad', 'persists', 'bad', "No, it's still a problem", 'No, todavía hay un problema', ['when', 'photo', 'note']),
+      fuOpt('something_else', 'not_sure', 'neutral', 'Something else', 'Otra cosa', ['note'], ['note']),
+    ],
+  });
+  if (type === 'pest') return Object.assign(common, {
+    question: fuT(fuCap(`${since.en}have you seen any more bugs or pests in your home?`), fuCap(`${since.es}¿ha visto más plagas en su hogar?`)),
+    options: [
+      fuOpt('none', 'resolved', 'good', 'No, none', 'No, ninguno', ['note']),
+      fuOpt('still_seeing', 'persists', 'bad', 'Yes, still seeing them', 'Sí, todavía los veo', ['location', 'photo', 'note']),
+      fuOpt('more', 'worse', 'bad', 'Yes, more than before', 'Sí, más que antes', ['location', 'photo', 'note']),
+      fuOpt('different_area', 'different_location', 'bad', 'Yes, in a different area', 'Sí, en otra área', ['location', 'photo', 'note'], ['location']),
+    ],
+  });
+  return Object.assign(common, {                                  // generic 'other'
+    question: fuT(`Is ${L.en} fixed now?`, `¿Quedó arreglado ${L.es}?`),
+    options: [
+      fuOpt('fixed', 'resolved', 'good', 'Yes, fixed', 'Sí, arreglado', ['note']),
+      fuOpt('not_fixed', 'persists', 'bad', 'No, not fixed', 'No, no está arreglado', ['photo', 'note']),
+      fuOpt('partly', 'persists', 'bad', 'Partly fixed', 'Arreglado en parte', ['photo', 'note']),
+    ],
+    safety: callMsg('I smell gas or smoke, or I feel unsafe', 'Huele a gas o a humo, o me siento en peligro'),
+  });
+}
+// Validates a tenant's answer against the spec. -> { ok, error?, clean? }. Unknown fields are ignored; unknown choices are refused.
+function fuValidateAnswer(spec, body) {
+  body = body || {};
+  const choice = fuS(body.choice);
+  if (choice === 'safety') {
+    if (!spec.safety) return { ok: false, error: 'bad_choice' };
+    return { ok: true, clean: { choice: 'safety', answer: 'safety', detail: fuClip(body.note, 1000), location: '', extra: {} } };
+  }
+  const opt = spec.options.find(o => o.value === choice);
+  if (!opt) return { ok: false, error: 'bad_choice' };
+  const clean = { choice: opt.value, answer: opt.answer, detail: '', location: '', extra: {} };
+  for (const f of opt.fields) {
+    const def = spec.fields[f]; if (!def || def.type === 'photo') continue;
+    const raw = body[f === 'note' ? 'note' : f];
+    const v = def.type === 'choice' ? fuS(raw) : fuClip(raw, def.max || 200);
+    if (def.type === 'choice' && v && !def.choices.some(c => c.value === v)) return { ok: false, error: 'bad_value', field: f };
+    if (opt.required.includes(f) && !v) return { ok: false, error: 'missing_field', field: f };
+    if (!v) continue;
+    if (f === 'note') clean.detail = v; else if (f === 'location') clean.location = v; else clean.extra[f] = v;
+  }
+  return { ok: true, clean };
+}
+
+// ── 3. SUGGESTED NEXT ACTION (never executed automatically) ──────────────────────────────────────
+const FU_ANSWER_WORDS = { resolved: 'says it is fixed', persists: 'says the problem is still happening', worse: 'says it is WORSE', different_location: 'says it is happening in a DIFFERENT spot', not_sure: 'is not sure', safety: 'reports a SAFETY problem' };
+// row = a WO_Followups row (+ optional wo = the origin WO, repairWo = the WO the repair was done under). Pure.
+function fuSuggestNext(row, wo, repairWo) {
+  const ans = fuS(row && row.Answer); if (!ans) return null;
+  if (fuS(row.Next_WO_ID) || fuS(row.Status) === 'Closed') return { action: 'done', label: 'Handled', severity: 'ok', detail: fuS(row.Next_WO_ID) ? `Follow-on work order ${fuS(row.Next_WO_ID)} created.` : (fuS(row.Closed_Reason) || 'Closed.') };
+  const extra = fuParseJson(row.Answer_Extra, {});
+  const label = fuS(row.Problem_Label) || 'the repair';
+  if (ans === 'resolved') {
+    const cosmetic = fuS(row.Cosmetic_Part);
+    const caution = extra.rain_since === 'no' ? 'The tenant says it is dry, but it has not rained since the repair, so this is not a real test yet - consider waiting for rain before the cosmetic work.' : '';
+    if (!cosmetic) return { action: 'close', label: 'Nothing more to do - close this check', severity: 'ok', detail: caution || `Tenant ${FU_ANSWER_WORDS.resolved}; no cosmetic work was listed.` };
+    const trade = /paint|drywall|dry wall|plaster|spackl|mud\b|texture|patch/i.test(cosmetic) ? 'Painting' : fuS(wo && wo.Trade);
+    return { action: 'create_cosmetic_wo', label: `Create the ${cosmetic.length > 40 ? 'cosmetic' : cosmetic} work order`, severity: caution ? 'caution' : 'ok', detail: caution || `Tenant ${FU_ANSWER_WORDS.resolved}. The repair held, so the cosmetic work can go ahead.`,
+      vendor_id: fuS(row.Cosmetic_Vendor_ID),
+      prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade, type: 'manual', vendor_id: fuS(row.Cosmetic_Vendor_ID), description: `${cosmetic} (follow-up to ${fuWoLabel(fuS(row.WO_ID))}: the tenant confirmed ${label} is fixed - cosmetic work only)` } };
+  }
+  if (ans === 'safety') return { action: 'call_now', label: 'Call the tenant now', severity: 'urgent', detail: 'The tenant reported a safety problem. Call them, then decide whether to send a vendor.' };
+  if (ans === 'not_sure') return { action: 'call_tenant', label: 'Call the tenant to clarify', severity: 'caution', detail: `Tenant ${FU_ANSWER_WORDS.not_sure}${fuS(row.Answer_Detail) ? ': "' + fuS(row.Answer_Detail) + '"' : '.'}` };
+  const where = [fuS(row.Answer_Location) ? `where: ${fuS(row.Answer_Location)}` : '', extra.trigger ? `when: ${String(extra.trigger).replace(/_/g, ' ')}` : '', fuS(row.Answer_Detail) ? `"${fuS(row.Answer_Detail)}"` : ''].filter(Boolean).join('; ');
+  const vendorId = fuS(row.Rework_Vendor_ID) || fuS(repairWo && repairWo.Vendor_ID) || fuS(wo && wo.Vendor_ID);
+  return { action: 'send_vendor_back', label: 'Send the vendor back', severity: ans === 'persists' ? 'caution' : 'urgent', vendor_id: vendorId,
+    detail: `Tenant ${FU_ANSWER_WORDS[ans] || ans}${where ? ' (' + where + ')' : ''}.`,
+    prefill: { property_id: fuS(row.Property_ID), unit_id: fuS(row.Unit_ID), trade: fuS((repairWo && repairWo.Trade) || (wo && wo.Trade)), type: 'manual', vendor_id: vendorId,
+      description: `Re-check ${label} (${fuWoLabel(fuS(row.Repair_WO_ID) || fuS(row.WO_ID))}): the tenant ${FU_ANSWER_WORDS[ans] || ans}.${where ? ' ' + where + '.' : ''}` } };
+}
+function fuParseJson(s, dflt) { if (!fuS(s)) return dflt; try { const v = JSON.parse(s); return v == null ? dflt : v; } catch (e) { return dflt; } }
+
+// ── 4. TENANT RESOLUTION + SMS GATING EXPLANATION ────────────────────────────────────────────────
+// -> { candidates: [tenant rows], chosen: tenant|null, source, note }. The WO's own tenant first, then whoever lives in the WO's unit, then
+// (for a WO with no unit) whoever lives at the property. More than one candidate -> chosen is null and Brett must pick.
+function fuResolveTenants(wo, tenants, units, wantedId) {
+  const all = tenants || [];
+  let cands = [], source = 'none', note = '';
+  const own = fuS(wo && wo.Tenant_ID) ? all.find(t => String(t.ID) === fuS(wo.Tenant_ID)) : null;
+  if (own && isTenantCurrent(own)) { cands = [own]; source = 'wo_tenant'; }
+  else {
+    if (own) note = 'The tenant on this work order has moved out, so the current tenant was looked up instead.';
+    const unit = (units || []).find(u => String(u.ID) === fuS(wo && wo.Unit_ID)) || null;
+    const viaUnit = tenantsForDispatch(all, unit, wo || {});
+    if (viaUnit.length) { cands = viaUnit; source = (wo && wo.Unit_ID) ? 'unit' : 'property_no_unit'; }
+    else if (wo && wo.Property_ID && !fuS(wo.Unit_ID)) {
+      const atProp = all.filter(t => String(t.Property_ID) === fuS(wo.Property_ID) && isTenantCurrent(t));
+      if (atProp.length) { cands = atProp; source = 'property'; }
+    }
+  }
+  const seen = new Set(); cands = cands.filter(t => !seen.has(String(t.ID)) && seen.add(String(t.ID)));
+  let chosen = null;
+  if (wantedId) { chosen = cands.find(t => String(t.ID) === fuS(wantedId)) || null; if (!chosen) note = (note ? note + ' ' : '') + 'The tenant you picked is not linked to this work order.'; }
+  else if (cands.length === 1) chosen = cands[0];
+  else if (cands.length > 1) note = (note ? note + ' ' : '') + 'More than one tenant could be the right one - pick who should get the check.';
+  else note = (note ? note + ' ' : '') + 'No current tenant was found for this work order.';
+  return { candidates: cands, chosen, source, note };
+}
+const FU_GATE_TEXT = {
+  'Global OFF': { code: 'global_off', text: 'Texting is switched OFF for the whole Hub (Config TWILIO_ENABLED is not TRUE).' },
+  'Property OFF': { code: 'property_off', text: 'Texting is OFF for this property (Properties > SMS_Enabled is FALSE).' },
+  'Customer OFF': { code: 'owner_off', text: "Texting is OFF for this property's owner (Owners > SMS_Enabled is FALSE)." },
+  'Tenant OFF': { code: 'tenant_off', text: 'Texting is OFF for this tenant (Tenants > SMS_Enabled is FALSE - often because their text consent has not been confirmed yet).' },
+  'Tenant opted out': { code: 'tenant_opted_out', text: 'This tenant replied STOP and has opted out of texts.' },
+  'Tenant moved out': { code: 'tenant_moved_out', text: 'This tenant has moved out.' },
+};
+// Same decision smsGatedSend makes (it calls the same smsGateDecision), so the preview can never promise a text that the sender would block.
+function fuGateVerdict(o) {
+  const cfg = o.cfg || {}, tenant = o.tenant || null;
+  const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+  const dec = smsGateDecision({ global, propertyOn: smsToggleOn(o.property && o.property.SMS_Enabled), ownerOn: smsToggleOn(o.owner && o.owner.SMS_Enabled), tenantOn: smsToggleOn(tenant && tenant.SMS_Enabled),
+    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', tenantMovedOut: tenantMovedOut(tenant), kind: 'tenant' });
+  const reasons = dec.sendOk ? [] : dec.gateSnapshot.split(', ').map(k => FU_GATE_TEXT[k] || { code: 'other', text: k });
+  if (!normalizePhone(tenant && tenant.Phone)) reasons.push({ code: 'no_phone', text: 'There is no phone number on file for this tenant.' });
+  const notes = [];
+  const testMode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+  if (!reasons.length && testMode) notes.push('Test mode is ON: the text goes to the test number, not to the tenant.');
+  if (!reasons.length && isQuietHoursNow(o.now || new Date())) notes.push('It is outside 9am-7pm Eastern, so the text will be held and sent at 9am.');
+  return { blocked: reasons.length > 0, reasons, notes, test_mode: testMode };
+}
+
+// ── 5. MESSAGE TEXT ──────────────────────────────────────────────────────────────────────────────
+const fuFirstName = t => fuS(t && (t.First_Name || fuS(t.Name).split(' ')[0])) || 'there';
+function fuMessage(kind, o) {   // kind 'send' | 'reminder'; o = { lang, first, label, label_es, address, link }
+  const es = o.lang === 'es', label = es ? (o.label_es || o.label) : o.label, first = o.first || (es ? 'hola' : 'there'), link = o.link || '{link}';
+  if (kind === 'reminder') return es
+    ? `Hola ${first}, un recordatorio rápido de Ridge Co sobre ${label} en ${o.address}. Toma unos 20 segundos, sin contraseña: ${link}`
+    : `Hi ${first}, a quick reminder from Ridge Co about ${label} at ${o.address}. It takes about 20 seconds, no login: ${link}`;
+  return es
+    ? `Hola ${first}, le escribe Ridge Co. Terminamos el trabajo de reparación en ${label} en ${o.address}. ¿Nos cuenta cómo va? Un toque, sin contraseña: ${link}`
+    : `Hi ${first}, it's Ridge Co. We finished the repair work on ${label} at ${o.address}. How is it going? One tap, no login: ${link}`;
+}
+// What actually goes out: the message + the tenant STOP line (same send-time rule as every tenant-facing first-touch text).
+const fuOutgoing = msg => withTenantStopNote(msg);
+
+// ── 6. TOKENS ────────────────────────────────────────────────────────────────────────────────────
+async function fuSha256(s) { const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(s))); return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''); }
+function fuConstEq(a, b) { a = String(a); b = String(b); if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i); return d === 0; }
+// -> { ok:true, payload } | { ok:false, reason:'invalid'|'expired' }. Like verifySessionToken, but says WHY (so an old link gets "expired", not "broken").
+async function fuTokenCheck(token, secret) {
+  if (typeof token !== 'string' || token.indexOf('.') < 0 || !secret) return { ok: false, reason: 'invalid' };
+  const [body, sig] = token.split('.'); if (!body || !sig) return { ok: false, reason: 'invalid' };
+  const expected = await _hmac(body, secret);
+  if (!fuConstEq(sig, expected)) return { ok: false, reason: 'invalid' };
+  let payload; try { payload = JSON.parse(_tdec.decode(_b64urlToBytes(body))); } catch (e) { return { ok: false, reason: 'invalid' }; }
+  if (!payload || payload.scope !== 'fix-check' || !payload.f || !payload.t) return { ok: false, reason: 'invalid' };
+  if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return { ok: false, reason: 'expired', payload };
+  return { ok: true, payload };
+}
+async function fuMintToken(env, row, expiresAtIso) {
+  const ttl = Math.max(60, Math.floor((Date.parse(expiresAtIso) - Date.now()) / 1000));
+  return makeSessionToken({ scope: 'fix-check', f: String(row.ID), t: String(row.Tenant_ID) }, env.WORKER_SECRET, ttl);
+}
+// Keeps the 4 newest hashes: the first text, its one reminder and any "copy link again" stay valid together until the single window ends.
+function fuAddHash(existing, hash) { const list = fuS(existing).split(',').filter(Boolean).filter(h => h !== hash); list.push(hash); return list.slice(-4).join(','); }
+function fuHashMatches(stored, hash) { return fuS(stored).split(',').filter(Boolean).some(h => fuConstEq(h, hash)); }
+function fuLinkFor(env, url, token, pageBase) {
+  const okBase = /^https?:\/\/[\w.-]+(:\d+)?(\/[\w./-]*)?$/.test(fuS(pageBase)) ? fuS(pageBase).replace(/\/+$/, '') : FU_PAGE_BASE;
+  return `${okBase}/fix-check.html?t=${encodeURIComponent(token)}${(env.__STAGING__ ?? isStaging(env, url)) ? '&api=staging' : ''}`;
+}
+
+// ── 7. SHEET HELPERS (loud on failure) ───────────────────────────────────────────────────────────
+async function fuEnsureTab(env) {
+  await ensureTab(env, FU_TAB, FU_COLS);          // creates the tab + header row if missing; throws if it cannot (PAT-027: the sheet is already shared with the service account)
+  await ensureColumns(env, FU_TAB, FU_COLS);      // adds any column a later version introduces; logs to Ops_Telemetry centrally on failure
+}
+async function fuReadAll(env) {
+  try { return await fetchTab(env, FU_TAB); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }      // a tab that does not exist yet simply has no follow-ups; any other error is real and propagates
+}
+async function fuTelemetry(env, rec, warnings) {
+  try { await logTelemetry(env, Object.assign({ Source: 'worker' }, rec)); }
+  catch (e) { const m = 'telemetry write failed: ' + ((e && e.message) || e); console.error('fix-check ' + m); if (warnings) warnings.push(m); }
+}
+// Update + READ BACK: success:true with an unchanged cell is a failure. Throws with the real reason.
+async function fuWrite(env, id, fields) {
+  const r = await updateRow(env, FU_TAB, id, fields);
+  let j = null; try { j = await r.json(); } catch (e) { j = { success: false, error: 'unreadable response: ' + ((e && e.message) || e) }; }
+  if (!j || !j.success) throw new Error(`WO_Followups #${id} update failed: ${(j && j.error) || 'no response'}`);
+  if (j.message === 'No matching fields') throw new Error(`WO_Followups #${id} update wrote nothing (columns missing: ${Object.keys(fields).join(', ')})`);
+  const row = (await fetchTab(env, FU_TAB)).find(x => String(x.ID) === String(id));
+  if (!row) throw new Error(`WO_Followups #${id} vanished after the update`);
+  for (const k of Object.keys(fields)) if (fuS(row[k]) !== fuS(fields[k])) throw new Error(`WO_Followups #${id} did not save ${k} (the cell still reads "${fuS(row[k]).slice(0, 40)}")`);
+  return row;
+}
+async function fuCreate(env, obj) {
+  const r = await addRow(env, FU_TAB, obj);
+  let j = null; try { j = await r.json(); } catch (e) { j = { success: false, error: 'unreadable response: ' + ((e && e.message) || e) }; }
+  if (!j || !j.success || !j.id) throw new Error(`Could not create the WO_Followups row: ${(j && j.error) || 'no response'}`);
+  return String(j.id);
+}
+async function fuAdminAlert(env, row, text, kind) {
+  // Texts Brett (admin recipient: only the Global switch applies, test mode redirects). Returns { sent, reason } - never throws, never silent.
+  try {
+    const admin = await getAdminSmsRecipient(env);
+    const r = await smsGatedSend(env, { wo_id: fuS(row && row.WO_ID), message_type: 'admin_fix_check_' + kind, recipient_type: 'admin', admin, message_body: text });
+    const sent = !!(r && (r.sent || r.held_for_quiet_hours || ((env.__STAGING__ ?? false) && r.send_ok)));
+    return sent ? { sent: true, held: !!(r && r.held_for_quiet_hours) } : { sent: false, reason: (r && !r.send_ok) ? `blocked: ${r.gate_snapshot}` : 'the text did not go through' };
+  } catch (e) {
+    const reason = String((e && e.message) || e).slice(0, 200);
+    await fuTelemetry(env, { Job_Type: 'fix_check_alert', Skill_Or_Endpoint: kind, Success: 'FALSE', Notes: `followup=${fuS(row && row.ID)} ${reason}` });
+    return { sent: false, reason };
+  }
+}
+const fuAddress = (prop, unit) => (fuS(prop && prop.Address) || 'the property') + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '');
+
+// ── 8. ADMIN: PREVIEW (read-only; never sends, never writes) ─────────────────────────────────────
+// GET /followup/preview?wo_id=&tenant_id=&lang=&check_type=&problem_label=&repair_part=&cosmetic_part=&repair_wo_id=
+async function followupPreview(env, url) {
+  const q = k => fuS(url.searchParams.get(k));
+  const woId = q('wo_id'); if (!woId) return json({ ok: false, error: 'wo_id required' }, 400);
+  const [wos, props, units, tenants, owners, vendors] = await fetchTabs(env, ['Work_Orders', 'Properties', 'Units', 'Tenants', 'Owners', 'Vendors']);
+  const wo = findWO(wos, woId); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
+  const repairWoId = q('repair_wo_id') || woId;
+  const repairWo = repairWoId === woId ? wo : findWO(wos, repairWoId);
+  if (!repairWo) return json({ ok: false, error: `Repair work order ${repairWoId} not found` }, 404);
+  const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(wo.Unit_ID)) || null;
+  const owner = prop ? (owners.find(o => String(o.ID) === fuS(prop.Owner_ID)) || null) : null;
+  const res = fuResolveTenants(wo, tenants, units, q('tenant_id'));
+  const cls = classifyIssue(wo);
+  // Brett's edits (re-posting the preview with his changes) override the rule-based guess.
+  const typ = FU_CHECK_TYPES.includes(q('check_type')) ? q('check_type') : cls.check_type;
+  const edited = (k, dflt) => (url.searchParams.has(k) ? fuClip(url.searchParams.get(k), 400) : dflt);
+  const typeChanged = typ !== cls.check_type;
+  const lab = typeChanged ? fuLabelFor(typ, cls.repair_part || wo.Description) : null;
+  const label = edited('problem_label', lab ? lab.problem_label : cls.problem_label), labelEs = edited('problem_label_es', lab ? lab.problem_label_es : cls.problem_label_es);
+  const objLabel = lab ? lab.object_label : cls.object_label, objLabelEs = lab ? lab.object_label_es : cls.object_label_es;
+  const repairPart = edited('repair_part', cls.repair_part), cosmeticPart = edited('cosmetic_part', cls.cosmetic_part);
+  const repairDate = fuS(repairWo.Completed_Date).slice(0, 10) || '';
+  const tenant = res.chosen;
+  const lang = q('lang') === 'es' ? 'es' : q('lang') === 'en' ? 'en' : (tenant && fuS(tenant.Language).toLowerCase() === 'es' ? 'es' : 'en');
+  const cfg = await fetchConfig(env);
+  const gate = tenant ? fuGateVerdict({ cfg, tenant, property: prop, owner, now: new Date() }) : { blocked: true, reasons: [{ code: 'no_tenant', text: res.candidates.length ? 'Pick which tenant should get the check.' : 'No current tenant was found for this work order.' }], notes: [], test_mode: false };
+  const spec = fuQuestionSpec({ check_type: typ, problem_label: label, problem_label_es: labelEs, object_label: objLabel, object_label_es: objLabelEs, repair_date: repairDate });
+  const addr = fuAddress(prop, unit);
+  const msgCtx = { lang, first: fuFirstName(tenant), label, label_es: labelEs, address: addr, link: '(the private link is added here when you send)' };
+  const existing = (await fuReadAll(env)).filter(r => fuS(r.WO_ID) === woId && r.Active !== 'FALSE' && r.Status !== 'Closed')
+    .map(r => ({ id: r.ID, status: r.Status, tenant_id: r.Tenant_ID, tenant_name: r.Tenant_Name, sent_at: r.Sent_At, answer: r.Answer, check_type: r.Check_Type }));
+  return json({ ok: true,
+    wo: { id: wo.ID, address: addr, status: wo.Status, trade: wo.Trade, description: wo.Description, vendor_id: wo.Vendor_ID || '' },
+    repair_wo: { id: repairWo.ID, status: repairWo.Status, completed_date: repairDate, vendor_id: repairWo.Vendor_ID || '', trade: repairWo.Trade || '', description: repairWo.Description || '' },
+    classification: { check_type: typ, auto_check_type: cls.check_type, check_types: FU_CHECK_TYPES, problem_label: label, problem_label_es: labelEs, object_label: objLabel, object_label_es: objLabelEs, repair_part: repairPart, cosmetic_part: cosmeticPart, also_mentioned: cls.also_mentioned, confidence: cls.confidence, cosmetic_only: cls.cosmetic_only, warnings: cls.warnings },
+    tenants: { source: res.source, note: res.note, needs_pick: !tenant && res.candidates.length > 1, candidates: res.candidates.map(t => ({ id: t.ID, name: `${fuS(t.First_Name)} ${fuS(t.Last_Name)}`.trim() || fuS(t.Name), phone: t.Phone || '', unit_id: t.Unit_ID || '', language: fuS(t.Language).toLowerCase() === 'es' ? 'es' : 'en' })), chosen_id: tenant ? String(tenant.ID) : '' },
+    language: lang, gate,
+    message: { text: fuOutgoing(fuMessage('send', msgCtx)), lang },
+    questions: { question: spec.question, options: spec.options.map(o => ({ value: o.value, answer: o.answer, label: o.label, fields: o.fields, required: o.required })), safety: spec.safety ? spec.safety.label : null },
+    vendor_defaults: { cosmetic_vendor_id: fuS(wo.Vendor_ID), rework_vendor_id: fuS(repairWo.Vendor_ID) || fuS(wo.Vendor_ID) },
+    vendors: vendors.filter(v => v.Active !== 'FALSE').map(v => ({ id: v.ID, name: v.Name, trade: v.Trade || '' })),
+    existing_followups: existing });
+}
+
+// ── 9. ADMIN: SEND (Brett's tap on Send in the preview is the approval for THIS one send) ────────
+// POST /followup/send { wo_id, tenant_id, check_type, problem_label, problem_label_es, repair_part, cosmetic_part, repair_wo_id?, cosmetic_vendor_id?,
+//                       rework_vendor_id?, lang?, mode:'sms'|'copy_link', replace?, page_base? }
+async function followupSend(env, body, url) {
+  body = body || {};
+  const warnings = [];
+  const woId = fuS(body.wo_id), mode = body.mode === 'copy_link' ? 'copy_link' : 'sms';
+  if (!woId) return json({ ok: false, error: 'wo_id required' }, 400);
+  if (!FU_CHECK_TYPES.includes(fuS(body.check_type))) return json({ ok: false, error: 'check_type must be one of ' + FU_CHECK_TYPES.join(', ') }, 400);
+  const label = fuClip(body.problem_label, 120); if (!label) return json({ ok: false, error: 'Fill in "What we\'re checking" first (the tenant needs a plain-English name for the problem).' }, 400);
+  const [wos, props, units, tenants, owners] = await fetchTabs(env, ['Work_Orders', 'Properties', 'Units', 'Tenants', 'Owners']);
+  const wo = findWO(wos, woId); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
+  const repairWoId = fuS(body.repair_wo_id) || woId;
+  const repairWo = repairWoId === woId ? wo : findWO(wos, repairWoId);
+  if (!repairWo) return json({ ok: false, error: `Repair work order ${repairWoId} not found` }, 404);
+  const res = fuResolveTenants(wo, tenants, units, fuS(body.tenant_id));
+  const tenant = res.chosen;
+  if (!tenant) return json({ ok: false, error: res.note || 'Pick the tenant first.', code: 'no_tenant' }, 400);
+  const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(wo.Unit_ID)) || null;
+  const owner = prop ? (owners.find(o => String(o.ID) === fuS(prop.Owner_ID)) || null) : null;
+  const cfg = await fetchConfig(env);
+  const gate = fuGateVerdict({ cfg, tenant, property: prop, owner, now: new Date() });
+  if (mode === 'sms' && gate.blocked) return json({ ok: false, blocked: true, code: 'sms_blocked', reasons: gate.reasons, error: 'The text cannot be sent: ' + gate.reasons.map(r => r.text).join(' '), hint: 'Use "Copy link" and send it yourself.' }, 409);
+  await fuEnsureTab(env);
+  // Double-tap / duplicate guard: an open check for the same WO + tenant must be replaced on purpose.
+  const all = await fuReadAll(env);
+  const open = all.filter(r => fuS(r.WO_ID) === woId && fuS(r.Tenant_ID) === String(tenant.ID) && r.Active !== 'FALSE' && ['Sent', 'Overdue', 'Answered', 'Blocked', 'Draft'].includes(r.Status));
+  if (open.length && body.replace !== true) return json({ ok: false, code: 'already_open', error: `There is already an open fix-check for this tenant on ${fuWoLabel(woId)} (#${open[0].ID}, ${open[0].Status}). Send a new one only if you mean to replace it.`, existing: { id: open[0].ID, status: open[0].Status, sent_at: open[0].Sent_At } }, 409);
+  const now = new Date().toISOString(), lang = body.lang === 'es' ? 'es' : 'en';
+  const repairDate = fuS(repairWo.Completed_Date).slice(0, 10);
+  const id = await fuCreate(env, { WO_ID: woId, Repair_WO_ID: repairWoId, Property_ID: fuS(wo.Property_ID), Unit_ID: fuS(wo.Unit_ID) || fuS(tenant.Unit_ID), Tenant_ID: String(tenant.ID),
+    Tenant_Name: `${fuS(tenant.First_Name)} ${fuS(tenant.Last_Name)}`.trim() || fuS(tenant.Name), Check_Type: fuS(body.check_type), Problem_Label: label, Problem_Label_Es: fuClip(body.problem_label_es, 120),
+    Object_Label: fuClip(body.object_label, 120), Object_Label_Es: fuClip(body.object_label_es, 120), Repair_Part: fuClip(body.repair_part, 600), Cosmetic_Part: fuClip(body.cosmetic_part, 600), Repair_Date: repairDate,
+    Cosmetic_Vendor_ID: fuS(body.cosmetic_vendor_id), Rework_Vendor_ID: fuS(body.rework_vendor_id), Language: lang, Status: 'Draft', Created_At: now, Created_By: 'admin', Active: 'TRUE' });
+  try {
+    if (open.length && body.replace === true) for (const o of open) await fuWrite(env, o.ID, { Status: 'Closed', Closed_At: now, Closed_Reason: `Replaced by #${id}` });
+    const expires = fuAddDays(now, FU_WINDOW_DAYS);
+    const fresh = { ID: id, Tenant_ID: String(tenant.ID) };
+    const token = await fuMintToken(env, fresh, expires);
+    const link = fuLinkFor(env, url, token, body.page_base);
+    const hash = await fuSha256(token);
+    const base = { Token_Hash: hash, Token_Expires_At: expires };
+    let out = { sent: false, held: false, outcome: '', reason: '' }, status = 'Sent', blocked = '', method = 'copied_link', queueId = '', sentAt = now, dueFrom = now;
+    if (mode === 'sms') {
+      const text = fuOutgoing(fuMessage('send', { lang, first: fuFirstName(tenant), label, label_es: fuS(body.problem_label_es) || label, address: fuAddress(prop, unit), link }));
+      const r = await smsGatedSend(env, { wo_id: woId, message_type: FU_MSG_TYPE, recipient_type: 'tenant', tenant, owner, property: prop, message_body: text });
+      out = fuSendOutcome(r, !!(env.__STAGING__));
+      queueId = fuS(r && r.queued_id);
+      if (out.ok) { method = out.held ? 'sms_held' : (out.staged ? 'sms_staging_stub' : 'sms'); if (out.held && r.send_after) dueFrom = r.send_after; }
+      else { status = 'Blocked'; blocked = out.reason; method = 'sms_failed'; }
+    }
+    const saved = await fuWrite(env, id, Object.assign(base, { Status: status, Blocked_Reason: blocked, Sent_At: sentAt, Send_Method: method, Queue_ID: queueId, Due_At: status === 'Blocked' ? '' : fuAddDays(dueFrom, FU_DUE_DAYS) }));
+    try { await logWOAudit(env, woId, 'admin', 'admin', 'Fix-check follow-up', '', `#${id} ${status}: ${label} (${method})`, `tenant ${saved.Tenant_Name}`); } catch (e) { warnings.push('could not add the work order history line: ' + ((e && e.message) || e)); }
+    await fuTelemetry(env, { Job_Type: 'fix_check_send', Skill_Or_Endpoint: '/followup/send', Success: status === 'Blocked' ? 'FALSE' : 'TRUE', Notes: `followup=${id} wo=${woId} tenant=${tenant.ID} mode=${mode} method=${method}${blocked ? ' ' + blocked.slice(0, 120) : ''}` }, warnings);
+    return json({ ok: status !== 'Blocked', followup_id: id, status, method, link, expires_at: expires, due_at: saved.Due_At, held_for_quiet_hours: !!out.held, staged: !!out.staged, test_mode: gate.test_mode, notes: gate.notes, error: status === 'Blocked' ? `The text did not go through (${blocked}). Use the link below and send it yourself.` : undefined, warnings });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    await fuTelemetry(env, { Job_Type: 'fix_check_send', Skill_Or_Endpoint: '/followup/send', Success: 'FALSE', Notes: `followup=${id} wo=${woId} ${msg}`.slice(0, 480) }, warnings);
+    return json({ ok: false, followup_id: id, error: `The fix-check was created (#${id}) but could not be finished: ${msg}. It stays in the list as a draft.`, warnings }, 500);
+  }
+}
+// Pure: reads what smsGatedSend returned. staging stubs return send_ok without a Twilio sid - that is a success there, never in production.
+function fuSendOutcome(r, staging) {
+  if (!r) return { ok: false, reason: 'no response from the text sender' };
+  if (r.held_for_quiet_hours) return { ok: true, held: true };
+  if (r.sent) return { ok: true };
+  if (r.send_ok && staging) return { ok: true, staged: true };
+  if (!r.send_ok) return { ok: false, reason: 'blocked: ' + (r.gate_snapshot || 'SMS settings') };
+  return { ok: false, reason: 'Twilio did not accept the text' };
+}
+
+// ── 10. ADMIN: COPY LINK AGAIN / CLOSE ───────────────────────────────────────────────────────────
+// POST /followup/link { id, page_base? } - mints another link for an open follow-up (older links keep working until the same window ends).
+async function followupLink(env, body, url) {
+  const id = fuS(body && body.id); if (!id) return json({ ok: false, error: 'id required' }, 400);
+  const row = (await fuReadAll(env)).find(r => String(r.ID) === id && r.Active !== 'FALSE'); if (!row) return json({ ok: false, error: 'Follow-up not found' }, 404);
+  if (row.Status === 'Closed') return json({ ok: false, error: 'This follow-up is closed.' }, 409);
+  const now = new Date().toISOString();
+  let expires = fuS(row.Token_Expires_At);
+  if (!expires || Date.parse(expires) < Date.now() + 3600000) expires = fuAddDays(now, FU_WINDOW_DAYS);     // an expired/near-expired window is reopened for a fresh 14 days on purpose
+  const token = await fuMintToken(env, row, expires);
+  await fuWrite(env, id, { Token_Hash: fuAddHash(row.Token_Hash, await fuSha256(token)), Token_Expires_At: expires });
+  return json({ ok: true, followup_id: id, link: fuLinkFor(env, url, token, body.page_base), expires_at: expires });
+}
+// POST /followup/close { id, reason?, next_wo_id? } - Brett handled it (created the follow-on WO) or is dismissing the suggestion.
+async function followupClose(env, body) {
+  const id = fuS(body && body.id); if (!id) return json({ ok: false, error: 'id required' }, 400);
+  const row = (await fuReadAll(env)).find(r => String(r.ID) === id && r.Active !== 'FALSE'); if (!row) return json({ ok: false, error: 'Follow-up not found' }, 404);
+  const now = new Date().toISOString(), warnings = [];
+  const next = fuS(body.next_wo_id);
+  await fuWrite(env, id, { Status: 'Closed', Closed_At: now, Closed_Reason: fuClip(body.reason, 200) || (next ? `Follow-on work order ${next} created` : 'Closed by admin'), Next_WO_ID: next, Suggested_Next: next ? 'done' : fuS(row.Suggested_Next) });
+  try { await logWOAudit(env, row.WO_ID, 'admin', 'admin', 'Fix-check follow-up', row.Status, 'Closed', next ? `follow-on WO ${next}` : fuClip(body.reason, 100)); } catch (e) { warnings.push('could not add the work order history line: ' + ((e && e.message) || e)); }
+  return json({ ok: true, followup_id: id, status: 'Closed', warnings });
+}
+
+// ── 11. ADMIN: LIST (open follow-ups panel + the WO row badge) ───────────────────────────────────
+// GET /followup/list?wo_id=&open=1 -> rows with a computed `needs_action` and `suggestion`. Never returns Token_Hash.
+async function followupList(env, url) {
+  const woFilter = fuS(url.searchParams.get('wo_id')), onlyOpen = url.searchParams.get('open') === '1';
+  const [rows, wos] = await Promise.all([fuReadAll(env), fetchTab(env, 'Work_Orders')]);
+  const out = rows.filter(r => r.Active !== 'FALSE' && (!woFilter || fuS(r.WO_ID) === woFilter) && (!onlyOpen || r.Status !== 'Closed')).map(r => {
+    const wo = findWO(wos, fuS(r.WO_ID)), repairWo = findWO(wos, fuS(r.Repair_WO_ID) || fuS(r.WO_ID));
+    const suggestion = fuSuggestNext(r, wo, repairWo);
+    const needs = r.Status === 'Answered' && !!suggestion && suggestion.action !== 'done';
+    const o = Object.assign({}, r); delete o.Token_Hash;
+    return Object.assign(o, { suggestion, needs_action: needs || r.Status === 'Overdue' || r.Status === 'Blocked' || r.Status === 'Draft', extra: fuParseJson(r.Answer_Extra, {}) });
+  }).sort((a, b) => (Date.parse(b.Created_At) || 0) - (Date.parse(a.Created_At) || 0));
+  return json({ ok: true, count: out.length, followups: out });
+}
+
+// ── 12. PUBLIC: THE TENANT PAGE ──────────────────────────────────────────────────────────────────
+// Verifies the link for ONE follow-up and ONE tenant. -> { ok, row, payload } | { ok:false, state, status }.
+async function fuAuth(env, token) {
+  const chk = await fuTokenCheck(fuS(token), env.WORKER_SECRET);
+  if (!chk.ok) return { ok: false, state: chk.reason === 'expired' ? 'expired' : 'invalid', status: chk.reason === 'expired' ? 410 : 401 };
+  const row = (await fuReadAll(env)).find(r => String(r.ID) === String(chk.payload.f) && r.Active !== 'FALSE');
+  if (!row || String(row.Tenant_ID) !== String(chk.payload.t) || !fuHashMatches(row.Token_Hash, await fuSha256(token))) return { ok: false, state: 'invalid', status: 401 };
+  if (row.Token_Expires_At && Date.parse(row.Token_Expires_At) < Date.now()) return { ok: false, state: 'expired', status: 410 };
+  if (row.Status === 'Closed') return { ok: false, state: 'closed', status: 200, row };
+  if (row.Status === 'Draft') return { ok: false, state: 'invalid', status: 401 };
+  return { ok: true, row, payload: chk.payload };
+}
+const fuRowSpec = row => fuQuestionSpec({ check_type: row.Check_Type, problem_label: row.Problem_Label, problem_label_es: row.Problem_Label_Es, object_label: row.Object_Label, object_label_es: row.Object_Label_Es, repair_date: row.Repair_Date });
+// GET /fix/page?t=<token>. Tenant-safe: first name, their own street address, the question. Nothing about vendors, money, access codes, owners or other tenants.
+async function fixPage(env, url) {
+  const a = await fuAuth(env, url.searchParams.get('t'));
+  if (!a.ok) {
+    // Expired / closed / invalid: still show the office number so the tenant is never stuck. A config read failure is logged, not hidden.
+    let callPhone = '';
+    try { const cfg0 = await fetchConfig(env); callPhone = fuS(cfg0.followup_call_phone) || fuS(cfg0.admin_phone); }
+    catch (e) { await fuTelemetry(env, { Job_Type: 'fix_check_page', Skill_Or_Endpoint: '/fix/page', Success: 'FALSE', Notes: ('could not read the office phone: ' + ((e && e.message) || e)).slice(0, 300) }); }
+    return json({ ok: false, state: a.state, call_phone: callPhone, language: a.row && a.row.Language === 'es' ? 'es' : 'en' }, a.status === 200 ? 200 : a.status);
+  }
+  const row = a.row;
+  const [props, units, tenants, cfg] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'), fetchConfig(env)]);
+  const prop = props.find(p => String(p.ID) === fuS(row.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(row.Unit_ID)) || null;
+  const tenant = tenants.find(t => String(t.ID) === fuS(row.Tenant_ID)) || null;
+  const photos = fuS(row.Answer_Photo_IDs).split(',').filter(Boolean).length;
+  const phone = fuS(cfg.followup_call_phone) || fuS(cfg.admin_phone);
+  return json({ ok: true, state: row.Answer ? 'answered' : 'open', language: row.Language === 'es' ? 'es' : 'en', first_name: fuFirstName(tenant), address: fuAddress(prop, unit),
+    spec: fuRowSpec(row), call_phone: phone, window_ends: row.Token_Expires_At, photos_used: photos, photos_max: FU_MAX_PHOTOS,
+    previous: row.Answer ? { choice: row.Answer_Choice, location: row.Answer_Location, note: row.Answer_Detail, extra: fuParseJson(row.Answer_Extra, {}), answered_at: row.Answered_At } : null });
+}
+// POST /fix/answer { t, choice, location?, rain_since?, trigger?, when?, note? }
+async function fixAnswer(env, body) {
+  body = body || {};
+  const a = await fuAuth(env, body.t);
+  if (!a.ok) return json({ ok: false, state: a.state, error: a.state === 'closed' ? 'This check is already closed.' : 'This link is not valid any more.' }, a.status);
+  const row = a.row, spec = fuRowSpec(row);
+  const v = fuValidateAnswer(spec, body);
+  if (!v.ok) return json({ ok: false, error: v.error, field: v.field || '' }, 400);
+  const c = v.clean, now = new Date().toISOString(), warnings = [];
+  const history = fuParseJson(row.Answer_History, []); if (row.Answer) history.push({ answer: row.Answer, choice: row.Answer_Choice, at: row.Answered_At });
+  const fields = { Answer: c.answer, Answer_Choice: c.choice, Answer_Detail: c.detail, Answer_Location: c.location, Answer_Extra: JSON.stringify(c.extra), Answered_At: now, Answer_History: JSON.stringify(history.slice(-5)), Status: 'Answered' };
+  let saved;
+  try { saved = await fuWrite(env, row.ID, fields); }
+  catch (e) {
+    const msg = String((e && e.message) || e);
+    await fuTelemetry(env, { Job_Type: 'fix_check_answer', Skill_Or_Endpoint: '/fix/answer', Success: 'FALSE', Notes: `followup=${row.ID} ${msg}`.slice(0, 480) });
+    const al = await fuAdminAlert(env, row, `FIX-CHECK PROBLEM: a tenant answered the check on ${fuWoLabel(row.WO_ID)} but it could NOT be saved (${msg.slice(0, 120)}). Please call them.`, 'save_failed');
+    return json({ ok: false, error: 'We could not save your answer. Please try again in a minute, or call us.', alerted: al.sent }, 500);
+  }
+  const suggestion = fuSuggestNext(saved, null, null);
+  // Alert Brett right away for anything that needs him; once per distinct answer (changing it to the same alert answer does not re-page).
+  let alert = { sent: false, skipped: true };
+  if (FU_ALERT_ANSWERS.includes(c.answer) && fuS(saved.Alerted_Answer) !== c.answer) {
+    const wos = await fetchTab(env, 'Work_Orders'); const wo = findWO(wos, fuS(row.WO_ID));
+    const word = { persists: 'is still happening', worse: 'is WORSE', different_location: 'is happening in a DIFFERENT spot', safety: 'has a SAFETY problem' }[c.answer];
+    const text = c.answer === 'safety'
+      ? `URGENT fix-check: ${row.Tenant_Name} (${fuWoLabel(row.WO_ID)}) reports a SAFETY problem with ${row.Problem_Label}. Call them now.${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`
+      : `Fix-check: ${row.Tenant_Name} says ${row.Problem_Label} ${word} (${fuWoLabel(row.WO_ID)}${wo && wo.Property_Address ? ', ' + wo.Property_Address : ''}).${c.location ? ' Where: ' + c.location.slice(0, 60) + '.' : ''}${c.detail ? ' "' + c.detail.slice(0, 100) + '"' : ''} ${HUB_URL}?wo=${row.WO_ID}`;
+    alert = await fuAdminAlert(env, row, text, c.answer);
+    try { await fuWrite(env, row.ID, { Alerted_Answer: c.answer, Alert_Result: alert.sent ? (alert.held ? 'held for quiet hours' : 'sent') : ('NOT sent: ' + (alert.reason || 'unknown')), Suggested_Next: suggestion ? suggestion.action : '' }); }
+    catch (e) { warnings.push('could not record the alert: ' + ((e && e.message) || e)); }
+  } else {
+    try { await fuWrite(env, row.ID, { Suggested_Next: suggestion ? suggestion.action : '' }); } catch (e) { warnings.push('could not record the suggestion: ' + ((e && e.message) || e)); }
+  }
+  try { await logWOAudit(env, row.WO_ID, `Tenant ${row.Tenant_Name}`, 'tenant', 'Fix-check answer', row.Answer || '', c.answer, `#${row.ID} ${c.choice}${c.location ? ' @ ' + c.location : ''}`); } catch (e) { warnings.push('could not add the work order history line: ' + ((e && e.message) || e)); }
+  await fuTelemetry(env, { Job_Type: 'fix_check_answer', Skill_Or_Endpoint: '/fix/answer', Success: 'TRUE', Notes: `followup=${row.ID} wo=${row.WO_ID} answer=${c.answer} alert=${alert.skipped ? 'none' : (alert.sent ? 'sent' : 'NOT sent')}` }, warnings);
+  return json({ ok: true, answer: c.answer, safety: c.answer === 'safety', can_change_until: row.Token_Expires_At, warnings: warnings.length ? ['a background step failed - the office has been told'] : [] });
+}
+
+// Photos: the SAME Drive upload path the vendor share page uses. The folder comes from the follow-up's WO, never from the client; image files only; capped.
+async function fixUploadSession(env, body) {
+  body = body || {};
+  const a = await fuAuth(env, body.t); if (!a.ok) return json({ ok: false, state: a.state }, a.status);
+  const row = a.row, mime = fuS(body.mime_type).toLowerCase();
+  if (!/^image\/(jpeg|jpg|png|heic|heif|webp|gif)$/.test(mime)) return json({ ok: false, error: 'Only photos can be added here.' }, 400);
+  if (fuS(row.Answer_Photo_IDs).split(',').filter(Boolean).length >= FU_MAX_PHOTOS) return json({ ok: false, error: `You can add up to ${FU_MAX_PHOTOS} photos.` }, 400);
+  const [wos, props] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties')]);
+  const wo = findWO(wos, fuS(row.WO_ID)); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
+  const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || {};
+  return await createUploadSession(env, { wo_id: fuS(row.WO_ID), property: prop.Address || 'Unknown Property', file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80).replace(/[^\w.\- ]/g, '_'), mime_type: mime, file_type: 'photo', origin: body.origin });
+}
+async function fixLogAttachment(env, body) {
+  body = body || {};
+  const a = await fuAuth(env, body.t); if (!a.ok) return json({ ok: false, state: a.state }, a.status);
+  const row = a.row, fileId = fuClip(body.file_id, 200);
+  if (!fileId) return json({ ok: false, error: 'file_id required' }, 400);
+  const ids = fuS(row.Answer_Photo_IDs).split(',').filter(Boolean);
+  if (ids.length >= FU_MAX_PHOTOS) return json({ ok: false, error: `You can add up to ${FU_MAX_PHOTOS} photos.` }, 400);
+  const r = await logAttachment(env, { wo_id: fuS(row.WO_ID), file_id: fileId, file_url: fuClip(body.file_url, 500), file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80), file_type: 'photo', mime_type: fuClip(body.mime_type, 60), wo_folder_id: fuClip(body.wo_folder_id, 200), wo_folder_url: fuClip(body.wo_folder_url, 500) });
+  if (r.status && r.status >= 400) return r;
+  ids.push(fileId);
+  await fuWrite(env, row.ID, { Answer_Photo_IDs: ids.join(',') });
+  return json({ ok: true, photos_used: ids.length });
+}
+
+// ── 13. THE REMINDER SWEEP (scheduler job `followup_sweep`, every 60 minutes; NO cron) ───────────
+// Pure: which rows are due a reminder right now? Status Sent, Due_At passed, never reminded, link window still open.
+function fuSweepDue(rows, now) {
+  const t = (now instanceof Date ? now : new Date(now)).getTime();
+  return (rows || []).filter(r => r.Active !== 'FALSE' && r.Status === 'Sent' && !fuS(r.Reminder_Sent_At) && !fuS(r.Answer) && fuS(r.Due_At) && Date.parse(r.Due_At) <= t);
+}
+function fuInReminderWindow(now) { const h = etHour(now instanceof Date ? now : new Date(now)); return h >= FU_REMINDER_START_ET && h < FU_REMINDER_END_ET; }
+async function followupSweep(env, opts) {
+  opts = opts || {};
+  const errors = [], detail = { due: 0, reminded: 0, alerted: 0, texts_blocked: 0, skipped_outside_hours: false };
+  const now = opts.now || new Date();
+  let rows;
+  try { rows = await fuReadAll(env); } catch (e) { return { ok: false, errors: [{ step: 'read', error: String((e && e.message) || e).slice(0, 300) }], detail }; }
+  const due = fuSweepDue(rows, now); detail.due = due.length;
+  if (!due.length) return { ok: true, errors, detail };
+  if (!fuInReminderWindow(now)) { detail.skipped_outside_hours = true; return { ok: true, errors, detail }; }       // not 9am-7pm ET: wait for a later tick, change nothing
+  const [props, units, tenants, owners, cfg] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Units'), fetchTab(env, 'Tenants'), fetchTab(env, 'Owners'), fetchConfig(env)]);
+  for (const row of due) {
+    try {
+      const stamp = now.toISOString();
+      // CLAIM FIRST (one reminder, ever): mark it before anything can be sent, so an overlapping tick or a retry can never text twice.
+      await fuWrite(env, row.ID, { Status: 'Overdue', Reminder_Sent_At: stamp, Reminder_Result: 'claimed' });
+      const prop = props.find(p => String(p.ID) === fuS(row.Property_ID)) || null, unit = units.find(u => String(u.ID) === fuS(row.Unit_ID)) || null;
+      const tenant = tenants.find(t => String(t.ID) === fuS(row.Tenant_ID)) || null, owner = prop ? (owners.find(o => String(o.ID) === fuS(prop.Owner_ID)) || null) : null;
+      let result = '';
+      const windowOpen = !fuS(row.Token_Expires_At) || Date.parse(row.Token_Expires_At) > now.getTime();
+      if (fuS(row.Send_Method) === 'copied_link') result = 'not texted (the link was copied and sent by hand)';
+      else if (!windowOpen) result = 'not texted (the link has expired)';
+      else if (!tenant) result = 'not texted (tenant not found)';
+      else {
+        const gate = fuGateVerdict({ cfg, tenant, property: prop, owner, now });
+        if (gate.blocked) { result = 'not texted: ' + gate.reasons.map(r => r.text).join(' '); detail.texts_blocked++; }
+        else {
+          const token = await fuMintToken(env, row, row.Token_Expires_At);
+          const link = fuLinkFor(env, null, token, FU_PAGE_BASE);
+          await fuWrite(env, row.ID, { Token_Hash: fuAddHash(row.Token_Hash, await fuSha256(token)) });
+          const text = fuOutgoing(fuMessage('reminder', { lang: row.Language === 'es' ? 'es' : 'en', first: fuFirstName(tenant), label: fuS(row.Problem_Label), label_es: fuS(row.Problem_Label_Es), address: fuAddress(prop, unit), link }));
+          const r = await smsGatedSend(env, { wo_id: fuS(row.WO_ID), message_type: FU_MSG_TYPE + '_reminder', recipient_type: 'tenant', tenant, owner, property: prop, message_body: text });
+          const o = fuSendOutcome(r, !!env.__STAGING__);
+          result = o.ok ? (o.held ? 'text held for quiet hours' : (o.staged ? 'text sent (staging stub)' : 'text sent')) : ('text FAILED: ' + o.reason);
+          if (!o.ok) { detail.texts_blocked++; errors.push({ step: 'reminder_sms', error: `followup #${row.ID}: ${o.reason}` }); }
+          else detail.reminded++;
+        }
+      }
+      await fuWrite(env, row.ID, { Reminder_Result: result.slice(0, 300) });
+      const al = await fuAdminAlert(env, row, `No answer after ${FU_DUE_DAYS} days: ${fuS(row.Tenant_Name)} (${fuWoLabel(row.WO_ID)}) has not answered the check on ${fuS(row.Problem_Label)}. Call them. Reminder: ${result.slice(0, 120)}. ${HUB_URL}?wo=${row.WO_ID}`, 'no_answer');
+      if (al.sent) detail.alerted++; else errors.push({ step: 'admin_alert', error: `followup #${row.ID}: ${al.reason || 'not sent'}` });
+      await fuTelemetry(env, { Job_Type: 'fix_check_reminder', Skill_Or_Endpoint: 'scheduler/followup_sweep', Success: 'TRUE', Notes: `followup=${row.ID} ${result.slice(0, 150)}` }, null);
+    } catch (e) {
+      const msg = String((e && e.message) || e).slice(0, 300);
+      errors.push({ step: 'followup_' + row.ID, error: msg });
+      await fuTelemetry(env, { Job_Type: 'fix_check_reminder', Skill_Or_Endpoint: 'scheduler/followup_sweep', Success: 'FALSE', Notes: `followup=${row.ID} ${msg}`.slice(0, 480) }, null);
+    }
+  }
+  return { ok: errors.length === 0, errors, detail };
+}
+async function schedRunFollowupSweep(env) {
+  const r = await followupSweep(env, {});
+  return { ok: r.ok, errors: r.errors, detail: r.detail };
+}
+// Daily digest lines: answers waiting for Brett + checks nobody answered. Never throws; an unreadable list is reported IN the digest.
+async function fuDigestLines(env) {
+  try {
+    const rows = (await fuReadAll(env)).filter(r => r.Active !== 'FALSE' && r.Status !== 'Closed');
+    const wos = rows.length ? await fetchTab(env, 'Work_Orders') : [];
+    const lines = [];
+    for (const r of rows) {
+      if (r.Status === 'Answered') {
+        const s = fuSuggestNext(r, findWO(wos, fuS(r.WO_ID)), findWO(wos, fuS(r.Repair_WO_ID) || fuS(r.WO_ID)));
+        lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: ${(FU_ANSWER_WORDS[r.Answer] || r.Answer)}${s ? ' -> ' + s.label : ''}`);
+      } else if (r.Status === 'Overdue') lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: no answer yet - call them`);
+      else if (r.Status === 'Blocked' || r.Status === 'Draft') lines.push(`${fuWoLabel(r.WO_ID)} · ${fuS(r.Tenant_Name)} · ${fuS(r.Problem_Label)}: fix-check was never sent (${fuS(r.Blocked_Reason) || 'unfinished'})`);
+    }
+    return { lines, error: '' };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    await fuTelemetry(env, { Job_Type: 'fix_check_digest', Skill_Or_Endpoint: 'buildDigest', Success: 'FALSE', Notes: msg });
+    return { lines: [], error: msg };
+  }
+}
+/* FIX_CHECK:END */
+
 const ROLE_SCOPES = {
   vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
     // Vendor Additional Work (Sep 30 2026): ownership of the parent / child WO is re-checked server-side in each handler.
@@ -23284,6 +24545,8 @@ async function health(env, url) {
   // Apps Script scheduler heartbeat (Oct 12 2026): coarse and public - the age of the last tick and the NAMES of any
   // overdue jobs; no detail. Detail is GET /cron/status (Scheduler_Token).
   out.scheduler = await schedHealthSummary(env);
+  // AI-credit pause (Oct 16 2026): coarse and public - paused yes/no and since when. No error text. Detail: GET /ai-credit/status.
+  out.ai_credit = await aiCreditHealthSummary(env);
   return json(out);
 }
 
@@ -23694,6 +24957,7 @@ async function isTestRecord(env, tab, id) {
 // false, even if a future edit adds it to HUB_TEST_WRITE_PATHS without also adding it here.
 async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/seed-test-fixtures') return true; // self-enforces TEST- names internally
+  if (path === '/admin/ai-credit-simulate' || path === '/admin/ai-credit-resume') return true;   // Oct 16 2026: staging only; touches no customer record - only the AI pause flag (and resume makes one 1-token Claude call)
   // Ops queue upgrade (Oct 13 2026): staging token may only create/modify/sync queue rows whose Title starts with TEST-.
   if (path === '/ops-queue/scout-submit') {
     const _its = (body && body.items) || [];
@@ -23914,6 +25178,18 @@ async function hubTestWriteAllowed(env, path, body) {
     const wo = wos.find(w => String(w.ID) === String(est.WO_ID));
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
+  }
+  if (path === '/followup/send') {
+    // Creates a follow-up row and may text a tenant: the WO, the repair WO and the tenant must ALL be TEST- records (staging also stubs Twilio).
+    if (!body || !(await isTestWO(env, body.wo_id))) return { ok: false, debug: 'fix-check: wo_id must be a TEST- work order' };
+    if (body.repair_wo_id && !(await isTestWO(env, body.repair_wo_id))) return { ok: false, debug: 'fix-check: repair_wo_id must be a TEST- work order' };
+    if (body.tenant_id && !(await isTestRecord(env, 'Tenants', body.tenant_id))) return { ok: false, debug: 'fix-check: tenant_id must be a TEST- tenant' };
+    return { ok: true };
+  }
+  if (path === '/followup/link' || path === '/followup/close') {
+    const fus = await fuReadAll(env);
+    const fu = fus.find(r => String(r.ID) === String(body && body.id));
+    return !!fu && await isTestWO(env, fu.WO_ID);
   }
   if (path === '/wo/share-send') {
     // Sends a real SMS to the WO's assigned vendor — only ever to a vendor that is itself a TEST- record
@@ -33671,6 +34947,60 @@ async function fiRoute(env, label, fn) {
 }
 function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
 function fiStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max); }
+// ── "appropriate contractor" wording (Brett, Oct 19 2026) ───────────────────────────────────────────────
+// Reports never say "licensed electrician", "qualified contractor", "professional plumber" etc. - the repair is to be done by "an appropriate contractor".
+// Pure and idempotent. Applied to everything the AI writes (issues, summary, catalog text) and, for AI-written text only, when a report is served.
+const FI_Q = '(?:(?:state|fully|properly)[- ])?(?:licen[sc]ed|certified|qualified|professional|registered|accredited|insured|bonded)';
+const FI_N = '(?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|inspectors?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|companies|company|tradespeople|tradesmen|tradesman|installers?|repairers?|remediators?|operators?|sweeps?|fitters?|arborists?|renovators?|persons?|individuals?)';
+// Trade-only nouns (no generic "specialist/person"): used where there is no qualifier or verb to anchor on ("Repair by an electrician", "Refer to a structural engineer").
+const FI_TRADE_N = '(?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|hvac (?:contractors?|technicians?|techs?)|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|tradespeople|tradesmen|tradesman|installers?|remediators?)';
+const FI_ACON = 'appropriate contractor';
+// Words that may sit between a verb/article and the trade noun ("a structural professional") but never "quote", "from", "opinion"...
+const FI_MID = '(?:(?!(?:quote|quotes|estimate|estimates|opinion|from|by|of|for|with|to|and|or|the|a|an)\\b)[A-Za-z][A-Za-z-]*\\s+)';
+function fiContractorize(text) {
+  let s = String(text == null ? '' : text);
+  if (!s) return s;
+  // Bounded work: long text is processed in chunks so a hostile or huge stored string can never make the regexes burn CPU.
+  if (s.length > 3000) return s.replace(/[\s\S]{1,2500}(?:\s|$)/g, (c) => fiContractorize(c));
+  const plural = (n) => /(?:s|men|people)$/i.test(n);
+  const art = (a) => (a[0] === 'A' ? 'An' : 'an');
+  // A) "a licensed (and insured) [HVAC] electrician" -> "an appropriate contractor"
+  s = s.replace(new RegExp("\\b(?:(an?)\\s+)?(?:" + FI_Q + "(?:\\s*(?:,|and|&|/)\\s*|\\s+)){1,4}(?:" + FI_MID + "){0,3}?(" + FI_N + ")\\b(?!\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection|license|licence|certification)\\b)", 'gi'), (m, a, noun) => {
+    const pl = plural(noun), word = pl ? FI_ACON + 's' : FI_ACON;
+    if (a && !pl) return art(a) + ' ' + word;
+    return m[0] === m[0].toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word;
+  });
+  // B) "Have/Hire/Call ... an electrician|HVAC contractor|structural professional" -> "... an appropriate contractor"
+  s = s.replace(new RegExp("\\b(Have|Hire|Call|Contact|Consult|Engage|Retain|Schedule|Obtain|Seek|Get|Bring in)\\s+(an?)\\s+(?:" + FI_MID + "){0,3}?(" + FI_TRADE_N.replace('(?:contractors?|', '(?:contractors?|technicians?|techs?|specialists?|') + ")\\b(?!['’-]|\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection))", 'gi'), (m, verb, a, noun) => verb + ' ' + art(a) + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
+  // C) "call pest control" / "have pest control inspect" -> "call an appropriate contractor"
+  s = s.replace(/\b(Have|Hire|Call|Contact|Engage|Retain|Get)\s+(?:an?\s+|the\s+)?(?:professional\s+)?(?:pest control|exterminator)(?:\s+(?:company|service|operator|professional|technician))?\b/gi, (m, verb) => verb + ' an ' + FI_ACON);
+  // D) trade named without a hiring verb: "Repair by an electrician", "Refer to a structural engineer", "Recommend a plumber evaluate"
+  s = s.replace(new RegExp("\\b(by|from|with|to|recommend|recommends|recommended|refer to|referral to)\\s+(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")\\b(?!['’-]|\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection))", 'gi'), (m, pre, a, noun) => pre + ' ' + art(a) + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
+  // E) sentence-start subject: "An electrician should check the wiring."
+  s = s.replace(new RegExp("(^|[.!?]\\s+)(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")(?=\\s+(?:should|must|needs?|will|can|could|may|to)\\b)", 'gi'), (m, pre, a, noun) => pre + art(a) + ' ' + FI_ACON);
+  // G) a trade named in brackets after the replacement: "an appropriate contractor (structural engineer)" -> "an appropriate contractor"
+  s = s.replace(new RegExp("(" + FI_ACON + "s?)\\s*\\((?:[^)]{0,60}?\\b" + FI_TRADE_N + "\\b[^)]{0,60}?)\\)", 'gi'), '$1');
+  // F) the same replacement twice in a row ("a plumber or a licensed contractor") collapses to one
+  s = s.replace(/\b(an appropriate contractor)(?:\s*(?:,|or|and|\/|&)\s*(?:an?\s+)?appropriate contractor)+/gi, '$1');
+  return s;
+}
+function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
+// Report-serve scrub: only AI-written text (issues flagged ai:true, suggested fixes, and the AI summary). Text the inspector typed or dictated verbatim is left untouched.
+function fiScrubDocForReport(doc) {
+  if (!doc || typeof doc !== 'object') return doc;
+  for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
+    if (!is) continue;
+    if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
+    else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
+  }
+  const sm = doc.summary;
+  if (sm && typeof sm === 'object') {
+    if (typeof sm.overall === 'string') sm.overall = fiContractorize(sm.overall);
+    if (sm.trades && typeof sm.trades === 'object') for (const k of Object.keys(sm.trades)) if (typeof sm.trades[k] === 'string') sm.trades[k] = fiContractorize(sm.trades[k]);
+    if (Array.isArray(sm.priorities)) for (const pr of sm.priorities) if (pr && typeof pr === 'object') { if (typeof pr.title === 'string') pr.title = fiContractorize(pr.title); if (typeof pr.why === 'string') pr.why = fiContractorize(pr.why); }
+  }
+  return doc;
+}
 function fiIsAdmin(env, request, url) {
   const t = request.headers.get('X-Auth-Token') || '';
   if (!t) return false;
@@ -33690,7 +35020,7 @@ function fiSeverityRank(s) { const i = FI_SEVERITIES.indexOf(s); return i < 0 ? 
 // ── Pure helpers (unit-tested by extracting them from this file) ────────────────────────────
 function fiNormalizeIssue(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const title = fiStr(raw.title, 120).trim();
+  const title = fiClean(raw.title, 120).trim();
   if (!title) return null;
   let trade = String(raw.trade || '').toLowerCase().trim().replace(/[\s/&-]+/g, '_');
   if (!FI_TRADES.includes(trade)) trade = 'general';
@@ -33698,9 +35028,9 @@ function fiNormalizeIssue(raw) {
   if (!FI_SEVERITIES.includes(severity)) severity = 'medium';
   const out = {
     title, trade, severity,
-    detail: fiStr(raw.detail, 600).trim(),
-    likely_cause: fiStr(raw.likely_cause, 300).trim(),
-    recommended_fix: fiStr(raw.recommended_fix, 500).trim(),
+    detail: fiClean(raw.detail, 600).trim(),
+    likely_cause: fiClean(raw.likely_cause, 300).trim(),
+    recommended_fix: fiClean(raw.recommended_fix, 500).trim(),
     fix_source: raw.fix_source === 'inspector' ? 'inspector' : 'suggested',
   };
   if (raw.possible_duplicate_of) out.possible_duplicate_of = fiStr(raw.possible_duplicate_of, 120);
@@ -33812,6 +35142,7 @@ Rules:
 - If the property was built before 1978 and the notes mention peeling, chipping, flaking or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
 - If nothing is wrong, return an empty issues array and area_condition "nothing_to_do" (or "good").
 - Do not repeat issues already recorded; if the dictation updates one, still output it and set "possible_duplicate_of" to the existing title.
+- Wording: never write "licensed", "certified", "qualified", "professional" or "registered" in front of a contractor or trade, and never name a specific trade as the person to hire (no "licensed electrician", "HVAC contractor", "plumber", "structural professional", "pest control"). Whenever a repair needs someone to do it, say "an appropriate contractor" (e.g. "Have an appropriate contractor replace the panel"). Do not mention licensing at all.
 Output a single JSON object and nothing else.`;
 function fiBuildSummaryPrompt(doc, rollup) {
   const lines = [];
@@ -33821,15 +35152,15 @@ function fiBuildSummaryPrompt(doc, rollup) {
   }
   return `Property: ${fiStr(doc.property && doc.property.address, 160)}${doc.pre1978 ? ' (built before 1978)' : ''}\nOverall condition set by inspector: ${fiStr(doc.overall && doc.overall.condition, 20)}\nInspector's overall notes: ${fiStr(doc.overall && doc.overall.notes, 800) || '(none)'}\n\nAll issues:\n${lines.join('\n') || '(none)'}\n\nTrades with issues: ${rollup.map(r => r.trade).join(', ') || '(none)'}\n\nReturn JSON only: {"overall":"3-5 plain-English sentences summarising the condition and what matters most","trades":{"<trade>":"2-3 sentences: group related issues ACROSS areas (e.g. several plumbing issues in different rooms), say what one contractor visit should cover and the priority order"},"priorities":[{"title":"","why":""}]}\nOnly include trades listed above. At most 5 priorities, most urgent first.`;
 }
-const FI_SUMMARY_SYSTEM = `You write the summary page of a rental property inspection report that the property manager will hand to the owner or tenant. Be factual, plain, and actionable. Use only the issues provided; never add defects, costs or timelines not in the data. Tenant-action items are requests to the tenant, not landlord repairs. Output a single JSON object and nothing else.`;
+const FI_SUMMARY_SYSTEM = `You write the summary page of a rental property inspection report that the property manager will hand to the owner or tenant. Be factual, plain, and actionable. Use only the issues provided; never add defects, costs or timelines not in the data. Tenant-action items are requests to the tenant, not landlord repairs. Wording rule: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber"); when someone must do a repair or visit, say "an appropriate contractor". Do not mention licensing. Output a single JSON object and nothing else.`;
 function fiNormalizeSummary(parsed, rollup) {
   if (!parsed || typeof parsed !== 'object') return null;
-  const overall = fiStr(parsed.overall, 1200).trim();
+  const overall = fiClean(parsed.overall, 1200).trim();
   if (!overall) return null;
   const have = new Set(rollup.map(r => r.trade));
   const trades = {};
-  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiStr(v, 700).trim(); }
-  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiStr(p && p.title, 120).trim(), why: fiStr(p && p.why, 300).trim() })).filter(p => p.title);
+  if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiClean(v, 700).trim(); }
+  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiClean(p && p.title, 120).trim(), why: fiClean(p && p.why, 300).trim() })).filter(p => p.title);
   return { overall, trades, priorities };
 }
 function fiHtmlEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -34053,6 +35384,7 @@ async function fiReport(env, request, url) {
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
+  fiScrubDocForReport(doc);
   return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
 }
 async function fiStructure(env, body) {
@@ -34063,12 +35395,12 @@ async function fiStructure(env, body) {
   let ai;
   try {
     ai = await routeAI(env, { type: 'fi_structure', customerFacing: true, schema: true, system: FI_STRUCTURE_SYSTEM, prompt: fiBuildStructurePrompt(Object.assign({}, body, { dictation })), maxTokens: 2200, source: 'field-inspect' });
-  } catch (e) { return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  } catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic sorting is paused (AI credit) - add the issues by hand. Your text is kept.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not process this dictation. Your text is kept — retry, or add the issues by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const parsed = fiExtractJson(ai.result);
   const issues = parsed && fiNormalizeIssues(parsed.issues);
   if (!issues) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your text is kept — retry, or add the issues by hand.');
   const cond = FI_CONDITIONS.includes(parsed.area_condition) ? parsed.area_condition : '';
-  return json({ ok: true, issues, area_condition: cond, area_summary: fiStr(parsed.area_summary, 300), model_used: ai.model_used });
+  return json({ ok: true, issues, area_condition: cond, area_summary: fiClean(parsed.area_summary, 300), model_used: ai.model_used });
 }
 async function fiSummarize(env, body) {
   body = body || {};
@@ -34078,7 +35410,7 @@ async function fiSummarize(env, body) {
   if (!rollup.length) return json({ ok: true, summary: { overall: 'No repair items were recorded during this inspection.', trades: {}, priorities: [], fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: 'none' }, rollup });
   let ai;
   try { ai = await routeAI(env, { type: 'fi_summary', customerFacing: true, schema: true, system: FI_SUMMARY_SYSTEM, prompt: fiBuildSummaryPrompt(doc, rollup), maxTokens: 2500, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'The AI summary is paused (AI credit) - the grouped issue list still works.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI summary could not be generated. The grouped issue list still works; retry for the narrative.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const norm = fiNormalizeSummary(fiExtractJson(ai.result), rollup);
   if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry.');
   return json({ ok: true, summary: Object.assign(norm, { fp: fiFingerprint(doc), generated_at: new Date().toISOString(), model: ai.model_used }), rollup });
@@ -34206,7 +35538,7 @@ function fiNormalizeEquipment(raw) {
   const out = { kind };
   let any = false;
   for (const f of fiEquipFields(kind)) {
-    const v = fiStr(raw[f], fiEquipMax(f)).trim();
+    const v = (f === 'notes' ? fiClean : fiStr)(raw[f], fiEquipMax(f)).trim();   // notes are AI-written (route + label reading)
     if (v) { out[f] = v; if (f !== 'name') any = true; }
   }
   return any ? out : null;
@@ -34441,14 +35773,14 @@ const FI_TYPE_SEED = [
   'Light fixture not working|electrical|low||Burned-out bulb or failed fixture or switch|Replace the bulb; if still dead, replace the fixture or switch',
   'Missing cover plate or exposed wiring|electrical|high||Cover removed or never installed|Install a cover plate and make sure all wiring is inside a covered box',
   'Loose or damaged switch or outlet|electrical|medium||Wear or loose mounting|Secure or replace the device',
-  'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an electrician correct the panel and label the circuits',
+  'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an appropriate contractor correct the panel and label the circuits',
   'Furnace filter dirty or missing|hvac|medium|hvac,furnace,basement,utility|Not changed on schedule|Replace the filter with the correct size and set a change schedule',
-  'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an HVAC contractor evaluate it and budget for replacement',
-  'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an HVAC contractor diagnose and repair',
-  'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an HVAC contractor diagnose and repair',
+  'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an appropriate contractor evaluate it and budget for replacement',
+  'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an appropriate contractor diagnose and repair',
+  'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an appropriate contractor diagnose and repair',
   'Condensate drain clogged or missing|hvac|medium|hvac,basement,attic,utility|Algae or debris in the drain line|Clear the condensate line and install a proper drain',
   'Flue or vent pipe disconnected or corroded|safety|urgent|hvac,furnace,water heater,basement,utility|Age, corrosion or loose joints|Reconnect or replace the vent pipe; check for backdrafting',
-  'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an HVAC contractor inspect the blower and motor',
+  'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an appropriate contractor inspect the blower and motor',
   'Thermostat not working|hvac|medium|hall,living|Dead batteries or failed unit|Replace batteries; replace the thermostat if needed',
   'Damaged or missing shingles|roofing|high|roof|Wind, age or storm damage|Repair or replace the damaged shingles',
   'Failed roof flashing or penetration seal|roofing|high|roof|Cracked sealant or loose flashing|Reseal or replace the flashing',
@@ -34460,9 +35792,9 @@ const FI_TYPE_SEED = [
   'Missing or loose handrail or guardrail|safety|high|stair,porch,exterior,basement|Never installed or loose fasteners|Install or secure the rail',
   'Grading slopes toward the foundation|exterior_site|medium|exterior,rear,side,yard,basement|Soil settling|Regrade so water flows away from the house',
   'Vegetation touching the building|exterior_site|low|exterior,front,rear,side,yard|Overgrowth|Trim back from siding and roof',
-  'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have a structural professional evaluate and seal',
+  'Foundation crack|structural|high|basement,exterior|Settlement or moisture|Monitor; have an appropriate contractor evaluate and seal',
   'Water intrusion or efflorescence in basement|structural|high|basement|Poor drainage or hydrostatic pressure|Find the water source; improve drainage; seal as needed',
-  'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have a qualified contractor evaluate and repair',
+  'Sagging or damaged floor or framing|structural|urgent||Moisture, rot or overloaded members|Have an appropriate contractor evaluate and repair',
   'Rotted trim, sill or framing|carpentry|medium||Long-term moisture|Replace rotted wood and fix the moisture source',
   'Cracked drywall or ceiling|drywall_paint|low||Settling or moisture|Patch, prime and paint',
   'Hole in wall or door|drywall_paint|low||Impact damage|Patch, prime and paint',
@@ -34481,8 +35813,8 @@ const FI_TYPE_SEED = [
   'Refrigerator not cooling or door seal worn|appliances|medium|kitchen|Failed seal, dirty coils or cooling fault|Replace the gasket; clean coils; service or replace the unit',
   'Dryer vent clogged or improperly vented|safety|high|laundry|Lint buildup or flexible foil duct|Clean the vent and use rigid metal duct to the outside',
   'Exhaust fan missing, noisy or not working|hvac|low|bath,kitchen,laundry|Worn motor or blocked duct|Clean, repair or replace the exhaust fan',
-  'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call pest control; clean up droppings safely',
-  'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have pest control inspect',
+  'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call an appropriate contractor; clean up droppings safely',
+  'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have an appropriate contractor inspect',
   'Clutter or trash needing tenant action|tenant_action|medium||Tenant storage habits|Ask the tenant to clear and dispose of the items by a set date',
   'Tenant-caused damage|tenant_action|medium||Misuse or neglect|Document and review for tenant charge-back under the lease',
   'Blocked access to panel, heater or exit|tenant_action|high||Items stored in front of required clearances|Ask the tenant to clear the area immediately',
@@ -34500,7 +35832,7 @@ function fiTypeAreas(v) {
   return out.slice(0, 12);
 }
 function fiTypeOut(o) {
-  return { id: o.ID, name: o.Name, trade: o.Trade || 'general', severity: o.Default_Severity || 'medium', areas: fiTypeAreas(o.Areas), detail: o.Detail || '', likely_cause: o.Likely_Cause || '', recommended_fix: o.Recommended_Fix || '', uses: Number(o.Uses) || 0, source: o.Source || 'seed' };
+  return { id: o.ID, name: o.Name, trade: o.Trade || 'general', severity: o.Default_Severity || 'medium', areas: fiTypeAreas(o.Areas), detail: fiContractorize(o.Detail || ''), likely_cause: fiContractorize(o.Likely_Cause || ''), recommended_fix: fiContractorize(o.Recommended_Fix || ''), uses: Number(o.Uses) || 0, source: o.Source || 'seed' };
 }
 // Validates a type definition coming from the phone/AI. Returns {ok, rec} or {ok:false, message}.
 function fiTypeClean(b) {
@@ -34683,6 +36015,7 @@ Rules:
 - Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage) go in "equipment" for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
 - "conditions": only when the inspector clearly states an area is good/fair/poor or has nothing to do.
 - "new_areas": only when the notes clearly describe a space that is not in the area list at all.
+- Wording: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber", "pest control"); whenever a repair needs someone, say "an appropriate contractor". Do not mention licensing.
 - Do not repeat issues already recorded or already proposed. "quote" is a short verbatim excerpt (max 200 chars) of the transcript that backs the item, and "note_id" is the id of the note it came from.
 Output a single JSON object and nothing else.`;
 function fiBuildRoutePrompt(b, catalog) {
@@ -34733,7 +36066,7 @@ async function fiRouteNotes(env, body) {
   const catalog = tl.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiTypeOut(r.o)).sort((a, b) => b.uses - a.uses);
   let ai;
   try { ai = await routeAI(env, { type: 'fi_route', customerFacing: true, schema: true, system: FI_ROUTE_SYSTEM, prompt: fiBuildRoutePrompt(Object.assign({}, body, { areas, notes }), catalog), maxTokens: 8000, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic sorting of notes is paused (AI credit) - your recordings and transcripts are kept; file them by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const norm = fiNormalizeRoute(fiExtractJson(ai.result), areas.map(a => a.id));
   if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your transcripts are kept - retry.');
   return json(Object.assign({ ok: true, model_used: ai.model_used }, norm));
@@ -34759,7 +36092,7 @@ async function fiReadLabel(env, body) {
   const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. Set readable false if no label text can be read.`;
   let ai;
   try { ai = await routeAI(env, { type: 'fi_read_label', tier: 'REASON', schema: true, system: FI_LABEL_SYSTEM, prompt, media: { type: 'image', source: { type: 'base64', media_type: mime, data: bytesToB64(bytes) } }, maxTokens: 600, source: 'field-inspect' }); }
-  catch (e) { return fiErr(502, 'ai_failed', 'The AI could not read this photo. Type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic label reading is paused (AI credit) - type the details by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not read this photo. Type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
   const parsed = fiExtractJson(ai.result);
   if (!parsed || typeof parsed !== 'object') return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry or type the details by hand.');
   const eq = fiNormalizeEquipment(Object.assign({}, parsed, { kind: kind || parsed.kind }));
