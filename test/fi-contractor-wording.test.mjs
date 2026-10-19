@@ -119,6 +119,12 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
   t('stored doc not rewritten by report view', JSON.stringify(g.body).includes('licensed electrician'), g.status);
 }
 
+// ── equipment notes from AI (voice routing + label reading) ──
+{
+  const w = world();
+  t('route/label equipment notes cleaned', w.fiNormalizeEquipment({ kind: 'furnace', brand: 'Carrier', notes: 'Have a licensed HVAC technician verify' }).notes === 'Have an appropriate contractor verify');
+}
+
 // ── prompts carry the rule ──
 {
   const w = world();
