@@ -35382,7 +35382,7 @@ async function fiStructure(env, body) {
   const issues = parsed && fiNormalizeIssues(parsed.issues);
   if (!issues) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your text is kept — retry, or add the issues by hand.');
   const cond = FI_CONDITIONS.includes(parsed.area_condition) ? parsed.area_condition : '';
-  return json({ ok: true, issues, area_condition: cond, area_summary: fiStr(parsed.area_summary, 300), model_used: ai.model_used });
+  return json({ ok: true, issues, area_condition: cond, area_summary: fiClean(parsed.area_summary, 300), model_used: ai.model_used });
 }
 async function fiSummarize(env, body) {
   body = body || {};
