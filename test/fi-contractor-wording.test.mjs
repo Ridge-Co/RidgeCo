@@ -48,6 +48,9 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
   for (const [i, o] of cases) { t('sanitize: ' + i, f(i) === o, f(i)); t('idempotent: ' + i, f(f(i)) === f(i)); }
   t('null/undefined safe', f(null) === '' && f(undefined) === '');
   t('does not throw on huge text', f('licensed electrician '.repeat(5000)).length > 0);
+  for (const [n, txt] of [['qualifier flood', 'licensed insured bonded '.repeat(3000)], ['trade flood', 'electrician plumber '.repeat(4000)], ['filler flood', 'Have a ' + 'foo '.repeat(20000) + 'electrician']]) {
+    const t0 = Date.now(); f(txt); t('bounded time on ' + n + ' (' + (Date.now() - t0) + 'ms)', Date.now() - t0 < 1500);
+  }
 }
 
 // ── AI structure endpoint ──
