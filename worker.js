@@ -35761,7 +35761,7 @@ const FI_TYPE_SEED = [
   'Furnace filter dirty or missing|hvac|medium|hvac,furnace,basement,utility|Not changed on schedule|Replace the filter with the correct size and set a change schedule',
   'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an appropriate contractor evaluate it and budget for replacement',
   'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an appropriate contractor diagnose and repair',
-  'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an HVAC contractor diagnose and repair',
+  'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an appropriate contractor diagnose and repair',
   'Condensate drain clogged or missing|hvac|medium|hvac,basement,attic,utility|Algae or debris in the drain line|Clear the condensate line and install a proper drain',
   'Flue or vent pipe disconnected or corroded|safety|urgent|hvac,furnace,water heater,basement,utility|Age, corrosion or loose joints|Reconnect or replace the vent pipe; check for backdrafting',
   'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an HVAC contractor inspect the blower and motor',
