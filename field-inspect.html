@@ -1146,7 +1146,8 @@ function viewInsp(){
 function areaRow(a, i, n){
   var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length;
   var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'');
-  if (S.reorder) return '<div class="area-row" style="cursor:default"><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
+  if (S.reorder) return '<div class="area-row rr" data-aid="'+a.id+'"><button class="dh" aria-label="Drag to reorder '+esc(a.name)+'" title="Drag to reorder">≡</button><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
+  if (false) return '<div class="area-row"><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
   return '<div class="area-row" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+condPill(a.condition)+'</div>';
 }
 function openArea(id){
