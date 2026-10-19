@@ -35536,7 +35536,7 @@ function fiNormalizeEquipment(raw) {
   const out = { kind };
   let any = false;
   for (const f of fiEquipFields(kind)) {
-    const v = fiStr(raw[f], fiEquipMax(f)).trim();
+    const v = (f === 'notes' ? fiClean : fiStr)(raw[f], fiEquipMax(f)).trim();   // notes are AI-written (route + label reading)
     if (v) { out[f] = v; if (f !== 'name') any = true; }
   }
   return any ? out : null;
