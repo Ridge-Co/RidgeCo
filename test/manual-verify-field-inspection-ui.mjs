@@ -360,6 +360,21 @@ await t('arrows are steady: the moved row stays under the finger across repeated
   await noHScroll(page, 'arrows'); await shot(page, 'reorder-drag', true);
   await page.click('button:has-text("Done")'); await waitSaved();
 });
+await t('drag cannot get stuck: a missed release (window blur / Escape) frees the page and changes nothing', async () => {
+  await page.click('button:has-text("↕ Reorder")'); await page.waitForSelector('.dh');
+  const before = await orderNames();
+  for (const how of ['blur', 'escape']) {
+    await bringBothIntoView(before[1], before[3]);
+    const h = await centerOf(handleOf(before[1]));
+    await page.mouse.move(h.x, h.y); await page.mouse.down(); await page.mouse.move(h.x, h.y + 120, { steps: 5 });
+    assert.ok(await page.evaluate(() => !!drag), how + ': drag is active');
+    if (how === 'blur') await page.evaluate(() => window.dispatchEvent(new Event('blur'))); else await page.keyboard.press('Escape');
+    assert.ok(await page.evaluate(() => !drag) && await page.locator('.area-row.dragging').count() === 0, how + ': drag released');
+    assert.deepEqual(await orderNames(), before, how + ': order unchanged');
+    await page.mouse.up();
+  }
+  await page.click('button:has-text("Done")'); await page.waitForSelector('button:has-text("↕ Reorder")');   // UI is not frozen: render() works again
+});
 await t('photos: select several, move to another area; viewer prev/next; remove cleans phone storage', async () => {
   await page.click('.area-row:has-text("Exterior Rear")'); await page.waitForSelector('#pending');
   const [fc] = await Promise.all([page.waitForEvent('filechooser'), page.click('button:has-text("Add photos")')]);

@@ -24,11 +24,33 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
     ['Use professional-grade caulk.', 'Use professional-grade caulk.'],
     ['Have the contractor fix it.', 'Have the contractor fix it.'],
     ['Replace the GFCI outlet.', 'Replace the GFCI outlet.'],
+    // Oct 19 review round: trade named without a hiring verb, false positives, new qualifier nouns
+    ['Recommend evaluation by an HVAC contractor.', 'Recommend evaluation by an appropriate contractor.'],
+    ['Repair by an electrician is recommended.', 'Repair by an appropriate contractor is recommended.'],
+    ['An electrician should check the wiring.', 'An appropriate contractor should check the wiring.'],
+    ['Refer to a structural engineer.', 'Refer to an appropriate contractor.'],
+    ['Recommend a plumber evaluate the leak.', 'Recommend an appropriate contractor evaluate the leak.'],
+    ['Have this checked by a professional.', 'Have this checked by an appropriate contractor.'],
+    ['Have a certified electrician or plumber inspect.', 'Have an appropriate contractor or plumber inspect.'],
+    ['Get an estimate from a roofer.', 'Get an estimate from an appropriate contractor.'],
+    ['Get a quote from a plumber.', 'Get a quote from an appropriate contractor.'],
+    ['Seek a professional opinion.', 'Seek a professional opinion.'],
+    ['Call a plumber or a licensed contractor.', 'Call an appropriate contractor.'],
+    ['Use a licensed pest control operator.', 'Use an appropriate contractor.'],
+    ['A licensed chimney sweep should inspect.', 'An appropriate contractor should inspect.'],
+    ['Have a licensed gas fitter check.', 'Have an appropriate contractor check.'],
+    ['Need a qualified person to repair.', 'Need an appropriate contractor to repair.'],
+    ['professional-grade caulk, certified letter, registered mail', 'professional-grade caulk, certified letter, registered mail'],
+    ["Quality Inspector's note; mason jar; the inspector arrived.", "Quality Inspector's note; mason jar; the inspector arrived."],
+    ['The tenant said the plumber was here Tuesday.', 'The tenant said the plumber was here Tuesday.'],
     ['', ''],
   ];
   for (const [i, o] of cases) { t('sanitize: ' + i, f(i) === o, f(i)); t('idempotent: ' + i, f(f(i)) === f(i)); }
   t('null/undefined safe', f(null) === '' && f(undefined) === '');
   t('does not throw on huge text', f('licensed electrician '.repeat(5000)).length > 0);
+  for (const [n, txt] of [['qualifier flood', 'licensed insured bonded '.repeat(3000)], ['trade flood', 'electrician plumber '.repeat(4000)], ['filler flood', 'Have a ' + 'foo '.repeat(20000) + 'electrician']]) {
+    const t0 = Date.now(); f(txt); t('bounded time on ' + n + ' (' + (Date.now() - t0) + 'ms)', Date.now() - t0 < 1500);
+  }
 }
 
 // ── AI structure endpoint ──
@@ -79,6 +101,7 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
     areas: [
       { id: 'a1', name: 'Panel', condition: 'poor', issues: [{ id: 'i1', title: 'Double tap', trade: 'electrical', severity: 'high', detail: 'Needs a licensed electrician.', recommended_fix: 'Have an HVAC contractor look.', ai: true }] },
       { id: 'a2', name: 'Kitchen', condition: 'fair', issues: [{ id: 'i2', title: 'Leak', trade: 'plumbing', severity: 'low', recommended_fix: 'Inspector wrote: licensed plumber Joe', }] },
+      { id: 'a3', name: 'Furnace', condition: 'fair', issues: [{ id: 'i3', title: 'Old furnace', trade: 'hvac', severity: 'medium', recommended_fix: 'Have an HVAC contractor evaluate it and budget for replacement', fix_source: 'suggested' }] },
     ] };
   let r = await w.fiSave(w.env, { id: ID, base_rev: 0, doc, meta: { client_name: 'Premier', inspector: 'Brett' } });
   t('save ok', r.status === 200 && r.body.ok, r);
@@ -89,10 +112,17 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
   t('report ok', rep.status === 200 && rep.body.ok, rep);
   const a = rep.body.doc.areas;
   t('AI issue text cleaned at report time', a[0].issues[0].detail === 'Needs an appropriate contractor.' && a[0].issues[0].recommended_fix === 'Have an appropriate contractor look.', a[0].issues[0]);
+  t('catalog-suggested fix (older inspections, no ai flag) cleaned at report time', a[2].issues[0].recommended_fix === 'Have an appropriate contractor evaluate it and budget for replacement', a[2].issues[0]);
   t("inspector's own (non-AI) text left exactly as written", a[1].issues[0].recommended_fix === 'Inspector wrote: licensed plumber Joe', a[1].issues[0]);
   // stored doc unchanged (cleaning is on the way out only)
   const g = await w.fiGetInspection(w.env, new URL('https://x/fi/get?id=' + ID));
   t('stored doc not rewritten by report view', JSON.stringify(g.body).includes('licensed electrician'), g.status);
+}
+
+// ── equipment notes from AI (voice routing + label reading) ──
+{
+  const w = world();
+  t('route/label equipment notes cleaned', w.fiNormalizeEquipment({ kind: 'furnace', brand: 'Carrier', notes: 'Have a licensed HVAC technician verify' }).notes === 'Have an appropriate contractor verify');
 }
 
 // ── prompts carry the rule ──
