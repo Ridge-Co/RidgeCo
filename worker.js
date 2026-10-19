@@ -35797,7 +35797,7 @@ const FI_TYPE_SEED = [
   'Refrigerator not cooling or door seal worn|appliances|medium|kitchen|Failed seal, dirty coils or cooling fault|Replace the gasket; clean coils; service or replace the unit',
   'Dryer vent clogged or improperly vented|safety|high|laundry|Lint buildup or flexible foil duct|Clean the vent and use rigid metal duct to the outside',
   'Exhaust fan missing, noisy or not working|hvac|low|bath,kitchen,laundry|Worn motor or blocked duct|Clean, repair or replace the exhaust fan',
-  'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call pest control; clean up droppings safely',
+  'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call an appropriate contractor; clean up droppings safely',
   'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have pest control inspect',
   'Clutter or trash needing tenant action|tenant_action|medium||Tenant storage habits|Ask the tenant to clear and dispose of the items by a set date',
   'Tenant-caused damage|tenant_action|medium||Misuse or neglect|Document and review for tenant charge-back under the lease',
