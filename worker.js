@@ -24252,9 +24252,10 @@ function __invalidateFromWrite(path, body) {
     // Spreadsheet-structure change (grid resize, addSheet, ...) — cheap and rare; safest to
     // drop everything rather than reason about which tabs a structural change could affect.
     __tabCache.clear();
+    __inflight.clear(); __batchInflight.clear();
     return;
   }
-  tabs.forEach(t => __tabCache.delete(t));
+  tabs.forEach(t => { __tabCache.delete(t); __dropInflightFor(t); });
 }
 
 // Google throttles Sheets reads on a "read requests per minute per user" quota,
