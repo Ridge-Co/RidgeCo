@@ -35012,9 +35012,9 @@ function fiNormalizeIssue(raw) {
   if (!FI_SEVERITIES.includes(severity)) severity = 'medium';
   const out = {
     title, trade, severity,
-    detail: fiStr(raw.detail, 600).trim(),
-    likely_cause: fiStr(raw.likely_cause, 300).trim(),
-    recommended_fix: fiStr(raw.recommended_fix, 500).trim(),
+    detail: fiClean(raw.detail, 600).trim(),
+    likely_cause: fiClean(raw.likely_cause, 300).trim(),
+    recommended_fix: fiClean(raw.recommended_fix, 500).trim(),
     fix_source: raw.fix_source === 'inspector' ? 'inspector' : 'suggested',
   };
   if (raw.possible_duplicate_of) out.possible_duplicate_of = fiStr(raw.possible_duplicate_of, 120);
