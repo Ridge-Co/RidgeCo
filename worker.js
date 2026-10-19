@@ -35759,7 +35759,7 @@ const FI_TYPE_SEED = [
   'Loose or damaged switch or outlet|electrical|medium||Wear or loose mounting|Secure or replace the device',
   'Electrical panel issue (unlabeled, double-tapped, open knockouts)|electrical|medium|basement,utility,electrical|Past modifications|Have an appropriate contractor correct the panel and label the circuits',
   'Furnace filter dirty or missing|hvac|medium|hvac,furnace,basement,utility|Not changed on schedule|Replace the filter with the correct size and set a change schedule',
-  'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an HVAC contractor evaluate it and budget for replacement',
+  'Furnace or boiler near end of service life|hvac|medium|hvac,furnace,boiler,basement,utility|Age (typically 15-25+ years)|Have an appropriate contractor evaluate it and budget for replacement',
   'No heat or heating not working|hvac|urgent||Ignition, thermostat, or equipment failure|Have an HVAC contractor diagnose and repair',
   'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an HVAC contractor diagnose and repair',
   'Condensate drain clogged or missing|hvac|medium|hvac,basement,attic,utility|Algae or debris in the drain line|Clear the condensate line and install a proper drain',
