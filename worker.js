@@ -34947,6 +34947,44 @@ async function fiRoute(env, label, fn) {
 }
 function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
 function fiStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').slice(0, max); }
+// ── "appropriate contractor" wording (Brett, Oct 19 2026) ───────────────────────────────────────────────
+// Reports never say "licensed electrician", "qualified contractor", "professional plumber" etc. - the repair is to be done by "an appropriate contractor".
+// Pure and idempotent. Applied to everything the AI writes (issues, summary, catalog text) and, for AI-written text only, when a report is served.
+const FI_Q = '(?:(?:state|fully|properly)[- ])?(?:licen[sc]ed|certified|qualified|professional|registered|accredited|insured|bonded)';
+const FI_N = '(?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|inspectors?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|companies|company|tradespeople|tradesmen|tradesman|installers?|repairers?|remediators?)';
+const FI_ACON = 'appropriate contractor';
+function fiContractorize(text) {
+  let s = String(text == null ? '' : text);
+  if (!s) return s;
+  const plural = (n) => /(?:s|men|people)$/i.test(n);
+  // A) "a licensed (and insured) [HVAC] electrician" -> "an appropriate contractor"
+  s = s.replace(new RegExp("\\b(?:(an?)\\s+)?(?:" + FI_Q + "(?:\\s*(?:,|and|&|/)\\s*|\\s+))+(?:[A-Za-z][A-Za-z-]*\\s+){0,3}?(" + FI_N + ")\\b", 'gi'), (m, art, noun) => {
+    const pl = plural(noun), word = pl ? FI_ACON + 's' : FI_ACON;
+    if (art && !pl) return (art[0] === 'A' ? 'An ' : 'an ') + word;
+    return m[0] === m[0].toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word;
+  });
+  // B) "Have/Hire/Call ... an electrician|HVAC contractor|structural professional" -> "... an appropriate contractor"
+  s = s.replace(new RegExp("\\b(Have|Hire|Call|Contact|Consult|Engage|Retain|Schedule|Obtain|Seek|Get|Bring in)\\s+(an?)\\s+(?:[A-Za-z][A-Za-z-]*\\s+){0,3}?((?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|installers?|remediators?))\\b(?!['’-])", 'gi'), (m, verb, art, noun) => verb + ' ' + (art[0] === 'A' ? 'An' : 'an') + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
+  // C) "call pest control" / "have pest control inspect" -> "call an appropriate contractor"
+  s = s.replace(/\b(Have|Hire|Call|Contact|Engage|Retain|Get)\s+(?:an?\s+|the\s+)?(?:professional\s+)?(?:pest control|exterminator)(?:\s+(?:company|service|operator|professional|technician))?\b/gi, (m, verb) => verb + ' an ' + FI_ACON);
+  return s;
+}
+function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
+// Report-serve scrub: only AI-written text (issues flagged ai:true + the AI summary). Text the inspector typed or dictated verbatim is left untouched.
+function fiScrubDocForReport(doc) {
+  if (!doc || typeof doc !== 'object') return doc;
+  for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
+    if (!is || is.ai !== true) continue;
+    for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]);
+  }
+  const sm = doc.summary;
+  if (sm && typeof sm === 'object') {
+    if (typeof sm.overall === 'string') sm.overall = fiContractorize(sm.overall);
+    if (sm.trades && typeof sm.trades === 'object') for (const k of Object.keys(sm.trades)) if (typeof sm.trades[k] === 'string') sm.trades[k] = fiContractorize(sm.trades[k]);
+    if (Array.isArray(sm.priorities)) for (const pr of sm.priorities) if (pr && typeof pr === 'object') { if (typeof pr.title === 'string') pr.title = fiContractorize(pr.title); if (typeof pr.why === 'string') pr.why = fiContractorize(pr.why); }
+  }
+  return doc;
+}
 function fiIsAdmin(env, request, url) {
   const t = request.headers.get('X-Auth-Token') || '';
   if (!t) return false;
