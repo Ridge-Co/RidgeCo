@@ -112,6 +112,7 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
   t('report ok', rep.status === 200 && rep.body.ok, rep);
   const a = rep.body.doc.areas;
   t('AI issue text cleaned at report time', a[0].issues[0].detail === 'Needs an appropriate contractor.' && a[0].issues[0].recommended_fix === 'Have an appropriate contractor look.', a[0].issues[0]);
+  t('catalog-suggested fix (older inspections, no ai flag) cleaned at report time', a[2].issues[0].recommended_fix === 'Have an appropriate contractor evaluate it and budget for replacement', a[2].issues[0]);
   t("inspector's own (non-AI) text left exactly as written", a[1].issues[0].recommended_fix === 'Inspector wrote: licensed plumber Joe', a[1].issues[0]);
   // stored doc unchanged (cleaning is on the way out only)
   const g = await w.fiGetInspection(w.env, new URL('https://x/fi/get?id=' + ID));
