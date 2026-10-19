@@ -1764,7 +1764,8 @@ function loadVendorBillSummary(woId, idx) {
   api('/vendor-bills?wo_id=' + woId + '&vendor_id=' + vendorId).then(function(bills) {
     var badge = document.getElementById('bill-badge-' + idx);
     var btn = document.getElementById('bill-btn-' + idx);
-    if (!Array.isArray(bills) || !bills.length) {
+    if (!Array.isArray(bills)) throw new Error((bills && bills.error) || 'Unexpected response');
+    if (!bills.length) {
       wrap.innerHTML = '';
       if (badge) badge.innerHTML = '';
       if (btn) btn.textContent = t('💰 Submit Invoice');
