@@ -34951,22 +34951,35 @@ function fiStr(v, max) { return String(v == null ? '' : v).replace(/[\u0000-\u00
 // Reports never say "licensed electrician", "qualified contractor", "professional plumber" etc. - the repair is to be done by "an appropriate contractor".
 // Pure and idempotent. Applied to everything the AI writes (issues, summary, catalog text) and, for AI-written text only, when a report is served.
 const FI_Q = '(?:(?:state|fully|properly)[- ])?(?:licen[sc]ed|certified|qualified|professional|registered|accredited|insured|bonded)';
-const FI_N = '(?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|inspectors?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|companies|company|tradespeople|tradesmen|tradesman|installers?|repairers?|remediators?)';
+const FI_N = '(?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|inspectors?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|companies|company|tradespeople|tradesmen|tradesman|installers?|repairers?|remediators?|operators?|sweeps?|fitters?|arborists?|renovators?|persons?|individuals?)';
+// Trade-only nouns (no generic "specialist/person"): used where there is no qualifier or verb to anchor on ("Repair by an electrician", "Refer to a structural engineer").
+const FI_TRADE_N = '(?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|hvac (?:contractors?|technicians?|techs?)|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|tradespeople|tradesmen|tradesman|installers?|remediators?)';
 const FI_ACON = 'appropriate contractor';
+// Words that may sit between a verb/article and the trade noun ("a structural professional") but never "quote", "from", "opinion"...
+const FI_MID = '(?:(?!(?:quote|quotes|estimate|estimates|opinion|from|by|of|for|with|to|and|or|the|a|an)\\b)[A-Za-z][A-Za-z-]*\\s+)';
 function fiContractorize(text) {
   let s = String(text == null ? '' : text);
   if (!s) return s;
+  // Bounded work: long text is processed in chunks so a hostile or huge stored string can never make the regexes burn CPU.
+  if (s.length > 3000) return s.replace(/[\s\S]{1,2500}(?:\s|$)/g, (c) => fiContractorize(c));
   const plural = (n) => /(?:s|men|people)$/i.test(n);
+  const art = (a) => (a[0] === 'A' ? 'An' : 'an');
   // A) "a licensed (and insured) [HVAC] electrician" -> "an appropriate contractor"
-  s = s.replace(new RegExp("\\b(?:(an?)\\s+)?(?:" + FI_Q + "(?:\\s*(?:,|and|&|/)\\s*|\\s+))+(?:[A-Za-z][A-Za-z-]*\\s+){0,3}?(" + FI_N + ")\\b", 'gi'), (m, art, noun) => {
+  s = s.replace(new RegExp("\\b(?:(an?)\\s+)?(?:" + FI_Q + "(?:\\s*(?:,|and|&|/)\\s*|\\s+)){1,4}(?:" + FI_MID + "){0,3}?(" + FI_N + ")\\b(?!\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection|license|licence|certification)\\b)", 'gi'), (m, a, noun) => {
     const pl = plural(noun), word = pl ? FI_ACON + 's' : FI_ACON;
-    if (art && !pl) return (art[0] === 'A' ? 'An ' : 'an ') + word;
+    if (a && !pl) return art(a) + ' ' + word;
     return m[0] === m[0].toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word;
   });
   // B) "Have/Hire/Call ... an electrician|HVAC contractor|structural professional" -> "... an appropriate contractor"
-  s = s.replace(new RegExp("\\b(Have|Hire|Call|Contact|Consult|Engage|Retain|Schedule|Obtain|Seek|Get|Bring in)\\s+(an?)\\s+(?:[A-Za-z][A-Za-z-]*\\s+){0,3}?((?:contractors?|electricians?|plumbers?|roofers?|carpenters?|handymen|handyman|technicians?|techs?|specialists?|engineers?|masons?|painters?|locksmiths?|exterminators?|professionals?|installers?|remediators?))\\b(?!['’-])", 'gi'), (m, verb, art, noun) => verb + ' ' + (art[0] === 'A' ? 'An' : 'an') + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
+  s = s.replace(new RegExp("\\b(Have|Hire|Call|Contact|Consult|Engage|Retain|Schedule|Obtain|Seek|Get|Bring in)\\s+(an?)\\s+(?:" + FI_MID + "){0,3}?(" + FI_TRADE_N.replace('(?:contractors?|', '(?:contractors?|technicians?|techs?|specialists?|') + ")\\b(?!['’-]|\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection))", 'gi'), (m, verb, a, noun) => verb + ' ' + art(a) + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
   // C) "call pest control" / "have pest control inspect" -> "call an appropriate contractor"
   s = s.replace(/\b(Have|Hire|Call|Contact|Engage|Retain|Get)\s+(?:an?\s+|the\s+)?(?:professional\s+)?(?:pest control|exterminator)(?:\s+(?:company|service|operator|professional|technician))?\b/gi, (m, verb) => verb + ' an ' + FI_ACON);
+  // D) trade named without a hiring verb: "Repair by an electrician", "Refer to a structural engineer", "Recommend a plumber evaluate"
+  s = s.replace(new RegExp("\\b(by|from|with|to|recommend|recommends|recommended|refer to|referral to)\\s+(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")\\b(?!['’-]|\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection))", 'gi'), (m, pre, a, noun) => pre + ' ' + art(a) + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
+  // E) sentence-start subject: "An electrician should check the wiring."
+  s = s.replace(new RegExp("(^|[.!?]\\s+)(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")(?=\\s+(?:should|must|needs?|will|can|could|may|to)\\b)", 'gi'), (m, pre, a, noun) => pre + art(a) + ' ' + FI_ACON);
+  // F) the same replacement twice in a row ("a plumber or a licensed contractor") collapses to one
+  s = s.replace(/\b(an appropriate contractor)(?:\s*(?:,|or|and|\/|&)\s*(?:an?\s+)?appropriate contractor)+/gi, '$1');
   return s;
 }
 function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
