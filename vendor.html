@@ -1839,7 +1839,9 @@ function loadVendorBillSummary(woId, idx) {
       '</div>';
     }).join('');
     wrap.innerHTML = html;
-  }).catch(function() { wrap.innerHTML = ''; });
+  }).catch(function(e) {
+    showLoadFailed('bill-summary-' + idx, 'invoice status — check before submitting an invoice so it is not sent twice', e && e.message, function() { loadVendorBillSummary(woId, idx); }, woId);
+  });
 }
 
 function loadVendorTimeTracking(woId, idx) {
@@ -1847,9 +1849,11 @@ function loadVendorTimeTracking(woId, idx) {
   if (!wrap) return;
   var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
   api('/time-entries?wo_id=' + woId + '&vendor_id=' + vendorId).then(function(entries) {
-    if (!Array.isArray(entries)) entries = [];
+    if (!Array.isArray(entries)) throw new Error((entries && entries.error) || 'Unexpected response');
     renderVendorTimeSection(woId, idx, entries);
-  }).catch(function() { renderVendorTimeSection(woId, idx, []); });
+  }).catch(function(e) {
+    showLoadFailed('time-wrap-' + idx, 'your logged time', e && e.message, function() { loadVendorTimeTracking(woId, idx); }, woId);
+  });
 }
 
 function renderVendorTimeSection(woId, idx, entries) {
