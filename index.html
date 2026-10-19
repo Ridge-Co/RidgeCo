@@ -9962,7 +9962,14 @@ function refreshHubEstimateView(woId) {
     renderHubEstimateView(woId, estimates, holder);
   }).catch(function(e) {
     if (!holder) return;
-    holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--danger);border-radius:8px;padding:14px;color:var(--danger);font-size:11px">Could not load estimate: ' + esc(e.message) + '</div>';
+    var msg = (e && e.message) || 'unknown error';
+    var busy = /quota|rate.?limit|read requests/i.test(msg);
+    logError('Load estimate ' + woId, msg);
+    // Never silent (Oct 1 rule): shown on screen with a Retry, and reported to the failure ledger.
+    api('POST', '/failure/report', { system: 'hub', where: 'estimate_load', ref: String(woId), message: 'Could not load estimate: ' + msg }).catch(function(e2) { logError('failure/report', (e2 && e2.message) || e2); });
+    holder.innerHTML = '<div style="margin-top:14px;background:var(--surface2);border:1px solid var(--danger);border-radius:8px;padding:14px;color:var(--danger);font-size:11px">' +
+      (busy ? 'Google Sheets is busy right now (too many reads this minute) — nothing is lost, it just could not load yet.' : 'Could not load estimate: ' + esc(msg)) +
+      ' <button type="button" class="btn btn-sm" style="margin-left:8px;min-height:36px" onclick="delete _estimateCache[\'' + fuJs(woId) + '\']; refreshHubEstimateView(\'' + fuJs(woId) + '\')">Retry</button></div>';
   });
 }
 
