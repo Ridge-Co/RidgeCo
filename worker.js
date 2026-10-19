@@ -35138,7 +35138,7 @@ function fiBuildSummaryPrompt(doc, rollup) {
 const FI_SUMMARY_SYSTEM = `You write the summary page of a rental property inspection report that the property manager will hand to the owner or tenant. Be factual, plain, and actionable. Use only the issues provided; never add defects, costs or timelines not in the data. Tenant-action items are requests to the tenant, not landlord repairs. Output a single JSON object and nothing else.`;
 function fiNormalizeSummary(parsed, rollup) {
   if (!parsed || typeof parsed !== 'object') return null;
-  const overall = fiStr(parsed.overall, 1200).trim();
+  const overall = fiClean(parsed.overall, 1200).trim();
   if (!overall) return null;
   const have = new Set(rollup.map(r => r.trade));
   const trades = {};
