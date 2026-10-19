@@ -35798,7 +35798,7 @@ const FI_TYPE_SEED = [
   'Dryer vent clogged or improperly vented|safety|high|laundry|Lint buildup or flexible foil duct|Clean the vent and use rigid metal duct to the outside',
   'Exhaust fan missing, noisy or not working|hvac|low|bath,kitchen,laundry|Worn motor or blocked duct|Clean, repair or replace the exhaust fan',
   'Evidence of rodents|pest|high||Gaps in the building envelope; food or trash access|Seal entry points; set traps or call an appropriate contractor; clean up droppings safely',
-  'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have pest control inspect',
+  'Insect activity (roaches, ants, termites)|pest|medium||Moisture, food access or entry points|Treat and seal entry points; have an appropriate contractor inspect',
   'Clutter or trash needing tenant action|tenant_action|medium||Tenant storage habits|Ask the tenant to clear and dispose of the items by a set date',
   'Tenant-caused damage|tenant_action|medium||Misuse or neglect|Document and review for tenant charge-back under the lease',
   'Blocked access to panel, heater or exit|tenant_action|high||Items stored in front of required clearances|Ask the tenant to clear the area immediately',
