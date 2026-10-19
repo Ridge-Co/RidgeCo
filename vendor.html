@@ -300,7 +300,59 @@ function api(path, opts) {
     opts.body = JSON.stringify(opts.body);
     if (!opts.headers['Content-Type']) opts.headers['Content-Type'] = 'application/json';
   }
-  return fetch(WORKER + path, opts).then(function(r){ return r.json(); });
+  function once() { return fetch(WORKER + path, opts).then(function(r){ return r.json(); }); }
+  var m = String(opts.method || 'GET').toUpperCase();
+  if (m !== 'GET') return once();   // writes are never queued behind reads and never re-sent from the browser
+  // Reads (Oct 19 2026, Sheets quota): a portal with many work-order cards used to fire ~6 requests per card at the same
+  // instant, and every one of them read Google Sheets, so the shared per-minute read quota ran out and cards showed
+  // "Could not load estimate" or an empty "No estimate yet". Now (a) at most 4 reads are in flight at once, and (b) a
+  // read answered with the quota error is retried (3s / 6s / 12s) before the error is handed to the caller.
+  function attempt(n) {
+    return apiGate(once).then(function(data) {
+      if (sheetsBusy(data) && n < 3) {
+        return new Promise(function(r){ setTimeout(r, 3000 * Math.pow(2, n)); }).then(function(){ return attempt(n + 1); });
+      }
+      return data;
+    });
+  }
+  return attempt(0);
+}
+function sheetsBusy(data) { return !!data && typeof data.error === 'string' && /quota|rate.?limit|read requests/i.test(data.error); }
+var _apiQ = { active: 0, max: 4, waiting: [] };
+function apiGate(fn) {
+  return new Promise(function(resolve, reject) {
+    function run() {
+      _apiQ.active++;
+      fn().then(resolve, reject).then(function() { _apiQ.active--; var next = _apiQ.waiting.shift(); if (next) next(); });
+    }
+    if (_apiQ.active < _apiQ.max) run(); else _apiQ.waiting.push(run);
+  });
+}
+
+// A card section that could not load must SAY so and offer Retry. Before this, a failed estimate read looked exactly
+// like "No estimate submitted yet" (inviting a duplicate estimate) and a failed invoice read looked like "no invoice
+// yet" (inviting a double bill). Also reported (once per kind per page load) to the failure ledger so it is never silent.
+var _loadRetry = {}, _loadReported = {};
+function showLoadFailed(wrapId, what, detail, retryFn, ref) {
+  var wrap = document.getElementById(wrapId);
+  if (!wrap) return;
+  _loadRetry[wrapId] = retryFn;
+  var busy = sheetsBusy({ error: String(detail || '') });
+  wrap.innerHTML = '<div style="background:#fff3cd;border:1px solid #8a6100;border-radius:6px;padding:8px 10px;font-size:12px;color:#5c4100;line-height:1.5">' +
+    '⚠ ' + esc(t('Could not load')) + ': ' + esc(t(what)) + '. ' + (busy ? esc(t('The system is busy — tap Retry in a moment.')) + ' ' : '') +
+    '<button type="button" class="btn btn-sm" style="min-height:36px;margin-left:6px" onclick="retryLoad(\'' + wrapId + '\')">' + esc(t('Retry')) + '</button></div>';
+  if (!_loadReported[what]) {
+    _loadReported[what] = true;
+    fetch(WORKER + '/failure/report', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': SECRET },
+      body: JSON.stringify({ system: 'vendor', where: 'portal_load', ref: String(ref || ''), message: 'Vendor portal could not load ' + what + ': ' + String(detail || '').slice(0, 200) }) })
+      .catch(function(e) { console.error('failure/report failed', e); });
+  }
+}
+function retryLoad(wrapId) {
+  var wrap = document.getElementById(wrapId), fn = _loadRetry[wrapId];
+  if (!fn) return;
+  if (wrap) wrap.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading…</span>';
+  fn();
 }
 
 // Fetch a LIST endpoint (work orders / bills). The Worker answers {"error":"Unauthorized"}
