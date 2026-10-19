@@ -34983,7 +34983,7 @@ function fiContractorize(text) {
   return s;
 }
 function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
-// Report-serve scrub: only AI-written text (issues flagged ai:true + the AI summary). Text the inspector typed or dictated verbatim is left untouched.
+// Report-serve scrub: only AI-written text (issues flagged ai:true, suggested fixes, and the AI summary). Text the inspector typed or dictated verbatim is left untouched.
 function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
