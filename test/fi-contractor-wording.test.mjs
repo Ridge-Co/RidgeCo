@@ -43,6 +43,8 @@ const BAD = /\b(?:licen[sc]ed|certified|qualified|registered)\b|\bhave an? (?:el
     ['professional-grade caulk, certified letter, registered mail', 'professional-grade caulk, certified letter, registered mail'],
     ["Quality Inspector's note; mason jar; the inspector arrived.", "Quality Inspector's note; mason jar; the inspector arrived."],
     ['The tenant said the plumber was here Tuesday.', 'The tenant said the plumber was here Tuesday.'],
+    ['Have an appropriate contractor (structural engineer) evaluate the crack.', 'Have an appropriate contractor evaluate the crack.'],
+    ['Have an appropriate contractor (see photo 2) fix it.', 'Have an appropriate contractor (see photo 2) fix it.'],
     ['', ''],
   ];
   for (const [i, o] of cases) { t('sanitize: ' + i, f(i) === o, f(i)); t('idempotent: ' + i, f(f(i)) === f(i)); }

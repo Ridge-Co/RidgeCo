@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-19.02-fi-contractor-review';
+const BUILD_VERSION = '2026-10-19.03-fi-contractor-brackets';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -34978,6 +34978,8 @@ function fiContractorize(text) {
   s = s.replace(new RegExp("\\b(by|from|with|to|recommend|recommends|recommended|refer to|referral to)\\s+(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")\\b(?!['’-]|\\s+(?:opinion|advice|evaluation|assessment|review|estimate|quote|inspection))", 'gi'), (m, pre, a, noun) => pre + ' ' + art(a) + ' ' + (plural(noun) ? FI_ACON + 's' : FI_ACON));
   // E) sentence-start subject: "An electrician should check the wiring."
   s = s.replace(new RegExp("(^|[.!?]\\s+)(an?)\\s+(?:" + FI_MID + "){0,2}?(" + FI_TRADE_N + ")(?=\\s+(?:should|must|needs?|will|can|could|may|to)\\b)", 'gi'), (m, pre, a, noun) => pre + art(a) + ' ' + FI_ACON);
+  // G) a trade named in brackets after the replacement: "an appropriate contractor (structural engineer)" -> "an appropriate contractor"
+  s = s.replace(new RegExp("(" + FI_ACON + "s?)\\s*\\((?:[^)]{0,60}?\\b" + FI_TRADE_N + "\\b[^)]{0,60}?)\\)", 'gi'), '$1');
   // F) the same replacement twice in a row ("a plumber or a licensed contractor") collapses to one
   s = s.replace(/\b(an appropriate contractor)(?:\s*(?:,|or|and|\/|&)\s*(?:an?\s+)?appropriate contractor)+/gi, '$1');
   return s;
