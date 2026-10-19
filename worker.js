@@ -34987,8 +34987,9 @@ function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
 function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
-    if (!is || is.ai !== true) continue;
-    for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]);
+    if (!is) continue;
+    if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
+    else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
   }
   const sm = doc.summary;
   if (sm && typeof sm === 'object') {
