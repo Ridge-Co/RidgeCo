@@ -4449,7 +4449,7 @@ function renderVendorsPage() {
   if (!vendors.length) { el.innerHTML='<div class="loading">'+(showInactive?'No inactive vendors.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet'))+'</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Paid by QuickBooks Instant Payment — the fee (1%, $10 min, $100 max) comes off their bill as its own line">Instant pay</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!WOStatus.sets.COMPLETE_INVOICED_PAID.includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
@@ -4468,6 +4468,7 @@ function renderVendorsPage() {
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Instant_Pay||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInstantPay(\''+v.ID+'\',this.checked)" title="Paid by QuickBooks Instant Payment — the fee comes off their bill as its own line" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Bill_No_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanBillNoWO(\''+v.ID+'\',this.checked)" title="Can submit a standalone bill with no Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
@@ -12515,6 +12516,25 @@ function payablesClearFilters() {
   renderPayablesList();
 }
 
+// Text a vendor that their payment went out (Oct 19 2026). Used when Brett paid in QuickBooks himself, so the Hub
+// never saw the payment. Shows the exact text first; nothing is sent until he confirms.
+function payTextVendor(vendorId, billId, suggested) {
+  var amt = prompt('Amount you sent the vendor (after any deposit already paid and the instant-pay fee):', suggested ? Number(suggested).toFixed(2) : '');
+  if (amt == null) return;
+  amt = parseFloat(String(amt).replace(/[$,]/g, ''));
+  if (!(amt > 0)) { toast('Enter the amount that was sent.', 'error'); return; }
+  var payload = { vendor_id: vendorId, qb_bill_ids: [billId], amount: amt };
+  api('POST', '/qb/notify-vendor-paid', Object.assign({ preview: true }, payload)).then(function(res) {
+    if (!res || !res.ok) { toast((res && res.error) || 'Could not build the text', 'error'); return; }
+    var warn = (res.warnings && res.warnings.length) ? '\n\n⚠ ' + res.warnings.join('\n⚠ ') : '';
+    if (!confirm('Send this text to ' + (res.to || 'the vendor') + '?\n\n' + res.message + warn)) return;
+    api('POST', '/qb/notify-vendor-paid', Object.assign({ preview: false }, payload)).then(function(r2) {
+      if (r2 && r2.ok) toast(r2.held ? 'Text held for quiet hours — it will go out later.' : (r2.test_mode ? 'Sent to the TEST number (test mode is on), not the vendor.' : 'Text sent.'), 'success');
+      else toast((r2 && r2.error) || 'Text not sent', 'error');
+    }).catch(function(e) { toast('Text not sent: ' + (e.message || '?'), 'error'); });
+  }).catch(function(e) { toast('Could not build the text: ' + (e.message || '?'), 'error'); });
+}
+
 function renderPayablesList() {
   var el = document.getElementById('payables-body');
   if (!el) return;
@@ -12614,6 +12634,9 @@ function renderPayablesList() {
           : (r.in_house ? ' · in-house, no vendor bill' : ' · no vendor bill')) +
       '</div>' +
       payClearChip(r) +
+      ((r.bill_id && r.vendor_id && (r.state === 'vendor paid' || r.state === 'PAY THE VENDOR'))
+        ? '<div style="margin-top:6px"><a href="javascript:void(0)" onclick="payTextVendor(\'' + esc(String(r.vendor_id)) + '\',\'' + esc(String(r.bill_id)) + '\',' + (parseFloat(r.vendor_balance > 0 ? r.vendor_balance : r.vendor_cost) || 0).toFixed(2) + ')" style="color:var(--info);font-size:11px;text-decoration:none">📱 Text ' + esc(r.vendor_name || 'vendor') + ': payment sent</a></div>'
+        : '') +
       dupWarning +
     '</div>';
   }
@@ -12953,6 +12976,15 @@ function toggleVendorInHouse(id, on) {
 
 // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2) — same
 // inline-checkbox pattern as toggleVendorInHouse above, one dedicated endpoint per flag.
+function toggleVendorInstantPay(id, on) {
+  api('POST', '/vendor/set-instant-pay', { id: id, value: on }).then(function(r) {
+    if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
+    toast(on ? 'Instant pay ON — the fee will come off this vendor\'s bills as its own line' : 'Instant pay OFF — no fee line on this vendor\'s bills', 'success');
+    var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
+    if (v) v.Instant_Pay = on ? 'TRUE' : 'FALSE';
+    renderVendorsPage();
+  }).catch(function(e) { toast(String(e && e.message || e), 'error'); renderVendorsPage(); });
+}
 function toggleVendorCanBillNoWO(id, on) {
   api('POST', '/vendor/set-can-bill-no-wo', { id: id, value: on }).then(function(r) {
     if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
@@ -13447,25 +13479,117 @@ function qbMakeSubFromPreview(kind, id, btn) {
 // already approved from an earlier sitting. cancelQBSend() uses this to decide whether
 // Cancel needs to undo that approval too, or whether it's a true no-op already.
 var _qbSendJustApproved = null;
+// Oct 19 2026 — signed-proposal netting + instant-pay fee. Brett's choices live here and are re-sent with
+// every preview and with the confirm, so what he sees is exactly what the server builds.
+//   net.decision: '' (not chosen) | 'apply' | 'skip'; net.scope_id; net.job_complete; net.override_overbill
+//   net.instant_pay: undefined (vendor default) | true | false
+var _qbNet = { decision: '', scope_id: '', job_complete: false, override_overbill: false, instant_pay: undefined };
+var _qbPrev = null;
+function qbNetPayload(payload) {
+  if (_qbNet.decision) payload.netting = { decision: _qbNet.decision, scope_id: _qbNet.scope_id, job_complete: !!_qbNet.job_complete };
+  if (_qbNet.override_overbill) payload.override_overbill = true;
+  if (_qbNet.instant_pay === true || _qbNet.instant_pay === false) payload.instant_pay = _qbNet.instant_pay;
+  return payload;
+}
 function previewQBSend(id, justApproved) {
   _qbCurrent = id;
   _qbSendJustApproved = justApproved ? id : null;
+  _qbNet = { decision: '', scope_id: '', job_complete: false, override_overbill: false, instant_pay: undefined };
+  _qbPrev = null;
   document.getElementById('qb-send-title-sub').textContent = 'IR ' + id;
-  document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--muted)">Loading preview…</div>';
   document.getElementById('qb-send-msg').innerHTML = '';
+  openModal('modal-qb-send');
+  qbLoadPreview();
+}
+function qbLoadPreview() {
+  var id = _qbCurrent;
+  document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--muted)">Loading preview…</div>';
   var btn = document.getElementById('qb-send-confirm-btn');
   btn.disabled = true; btn.textContent = 'CREATE IN QUICKBOOKS';
-  openModal('modal-qb-send');
-  api('POST', '/qb/send-invoice', { id: id, preview_only: true }).then(function(res){
+  api('POST', '/qb/send-invoice', qbNetPayload({ id: id, preview_only: true })).then(function(res){
     if (!res.preview) {
       document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--danger)">⚠ ' + esc(res.error||'Cannot preview') + '</div>';
       return;
     }
+    _qbPrev = res.preview;
     document.getElementById('qb-send-preview').innerHTML = renderQBPreview(res.preview);
-    btn.disabled = false;
+    btn.disabled = !!qbPreviewBlockReason(res.preview);
   }).catch(function(e){
     document.getElementById('qb-send-preview').innerHTML = '<div style="color:var(--danger)">⚠ ' + esc(e.message||'?') + '</div>';
   });
+}
+// Why CREATE IN QUICKBOOKS must stay disabled (empty string = it may be pressed).
+function qbPreviewBlockReason(p) {
+  var n = p && p.netting;
+  if (!n || !n.found || n.stored) return '';
+  if (!_qbNet.decision) return 'Choose whether this bill is part of the signed proposal.';
+  if (_qbNet.decision === 'skip') return '';
+  var plan = n.plan; if (!plan) return 'Reload the preview.';
+  if (!_qbNet.job_complete) return 'Confirm the job is complete.';
+  var blocking = safeArray(plan.problems).filter(function(x){ return !(x.overridable && _qbNet.override_overbill); });
+  return blocking.length ? blocking[0].text : '';
+}
+function qbNetChoose(decision, scopeId) { _qbNet.decision = decision; _qbNet.scope_id = scopeId || ''; _qbNet.job_complete = false; _qbNet.override_overbill = false; qbLoadPreview(); }
+function qbNetToggle(key, val) { _qbNet[key] = val; if (_qbPrev) { document.getElementById('qb-send-preview').innerHTML = renderQBPreview(_qbPrev); document.getElementById('qb-send-confirm-btn').disabled = !!qbPreviewBlockReason(_qbPrev); } }
+function qbFeeToggle(on) { _qbNet.instant_pay = !!on; qbLoadPreview(); }
+function qbMoney(n) { return '$' + (parseFloat(n)||0).toFixed(2); }
+
+// Signed-proposal panel: suggest the matching proposal, show what was already billed, ask Brett to confirm.
+function renderQBNettingPanel(n) {
+  if (!n || !n.found) return '';
+  var box = 'background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:10px;margin-bottom:10px;font-size:12px;line-height:1.6';
+  if (n.stored) {
+    return '<div style="' + box + '"><b>📄 Signed proposal</b> — ' + (n.decision === 'apply'
+      ? 'already netted when this bill was first sent (Scope #' + esc(n.scope_id) + ', credit ' + qbMoney(n.plan && n.plan.credit_customer) + '). It will be sent exactly the same way.'
+      : 'you chose “not part of a proposal” when this bill was first sent.') + '</div>';
+  }
+  var cands = safeArray(n.candidates);
+  var html = '<div style="' + box + '"><div style="font-weight:bold;margin-bottom:4px">📄 This bill looks like part of a signed proposal</div>';
+  cands.forEach(function(c, i){
+    var sel = _qbNet.decision === 'apply' && String(_qbNet.scope_id) === String(c.scope_id);
+    var billed = safeArray(c.billed).map(function(b){ return esc(b.label) + ' ' + qbMoney(b.customer_amount) + (b.invoice ? ' (invoice ' + esc(b.invoice) + ')' : ''); }).join(', ');
+    html += '<label style="display:block;border:1px solid ' + (sel ? 'var(--accent)' : 'var(--border)') + ';border-radius:6px;padding:6px 8px;margin:4px 0;cursor:pointer">' +
+      '<input type="radio" name="qb-net-pick" ' + (sel ? 'checked ' : '') + 'onchange="qbNetChoose(\'apply\',\'' + esc(String(c.scope_id)) + '\')"> ' +
+      '<b>' + esc(c.title || ('Scope #' + c.scope_id)) + '</b> — signed ' + qbMoney(c.signed_total) + (c.signer ? ' by ' + esc(c.signer) : '') +
+      (i === 0 ? ' <span style="color:var(--accent2)">(suggested)</span>' : '') +
+      (c.link === 'same_property_vendor' ? ' <span style="color:var(--muted)">· on a different work order (same property &amp; vendor)</span>' : '') +
+      '<div style="color:var(--muted);font-size:11px;margin-left:20px">' + (billed ? 'Already invoiced: ' + billed : 'Nothing invoiced yet on this proposal') + '</div></label>';
+  });
+  html += '<label style="display:block;padding:4px 8px;cursor:pointer"><input type="radio" name="qb-net-pick" ' + (_qbNet.decision === 'skip' ? 'checked ' : '') + 'onchange="qbNetChoose(\'skip\',\'\')"> Not part of a proposal — bill the full amount as is</label>';
+  var plan = n.plan;
+  if (_qbNet.decision === 'apply' && plan) {
+    html += '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px">' +
+      '<div style="display:flex;justify-content:space-between"><span>Job total (all lines kept)</span><span>' + qbMoney(plan.gross_customer) + '</span></div>' +
+      (plan.credit_customer > 0
+        ? '<div style="display:flex;justify-content:space-between;color:var(--warn)"><span>' + esc(plan.customer_label) + '</span><span>−' + qbMoney(plan.credit_customer) + '</span></div>'
+        : '<div style="color:var(--muted)">Nothing was invoiced before, so the full job amount is billed.</div>') +
+      '<div style="display:flex;justify-content:space-between;font-weight:bold"><span>Invoice to send</span><span>' + qbMoney(plan.net_customer) + '</span></div>' +
+      (plan.credit_vendor > 0 ? '<div style="color:var(--muted);font-size:11px">Vendor bill is reduced by ' + qbMoney(plan.credit_vendor) + ' already billed to them.</div>' : '') +
+      safeArray(plan.warnings).map(function(w){ return '<div style="color:var(--warn);font-size:11px">⚠ ' + esc(w) + '</div>'; }).join('') +
+      safeArray(plan.problems).map(function(x){
+        return '<div style="color:var(--danger);font-size:11.5px;margin-top:3px">⛔ ' + esc(x.text) + '</div>' +
+          (x.overridable ? '<label style="font-size:11.5px;display:block;margin-left:14px"><input type="checkbox" ' + (_qbNet.override_overbill ? 'checked ' : '') + 'onchange="qbNetToggle(\'override_overbill\', this.checked)"> Bill the higher amount anyway</label>' : '');
+      }).join('') +
+      '<label style="display:block;margin-top:6px;font-weight:bold"><input type="checkbox" ' + (_qbNet.job_complete ? 'checked ' : '') + 'onchange="qbNetToggle(\'job_complete\', this.checked)"> The job is complete — bill the remaining balance now</label>' +
+      '</div>';
+  }
+  return html + '</div>';
+}
+
+// Instant-pay panel: the exact amount to send, and a switch that removes the fee line.
+function renderQBFeePanel(fee, vendorName, single) {
+  if (!fee) return '';
+  var show = fee.applies || fee.on || fee.vendor_default_on;
+  if (!show && !single) return '';
+  if (!show && single && !(fee.amount_if_on > 0)) return '';
+  var on = !!fee.on;
+  return '<div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:6px;font-size:12px;line-height:1.6">' +
+    '<label style="font-weight:bold;cursor:pointer"><input type="checkbox" ' + (on ? 'checked ' : '') + 'onchange="qbFeeToggle(this.checked)"> Paying ' + esc(vendorName || 'this vendor') + ' instantly</label>' +
+    (on
+      ? '<div>Instant-pay fee <b>−' + qbMoney(fee.amount) + '</b> shows as its own line on their bill. <b style="color:var(--accent2)">Send ' + qbMoney(fee.send_amount) + ' instant.</b></div>'
+      : '<div style="color:var(--muted)">No fee line. Send ' + qbMoney(fee.send_amount) + '. (Instant would take ' + qbMoney(fee.amount_if_on) + ' off the bill.)</div>') +
+    safeArray(fee.notes).map(function(x){ return '<div style="color:var(--warn);font-size:11px">⚠ ' + esc(x) + '</div>'; }).join('') +
+  '</div>';
 }
 
 // One vendor-bill block, shared by the single-vendor and combined preview renderers so
@@ -13483,7 +13607,8 @@ function renderQBBillBlock(bill, vendor) {
     (bill.in_house ? '<div style="color:var(--accent2)">' + esc((vendor && vendor.display) || 'This vendor') + ' is in-house — no bill, so no payable to you.' +
       '<div style="color:var(--muted);font-size:10.5px;margin-top:3px">The full invoice is income. Your hours are shown separately as your time, not subtracted as a cost.</div></div>' :
      bill.skipped ? '<div style="color:var(--muted)">No vendor cost — bill skipped.</div>' :
-      '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc((vendor && vendor.display) || 'vendor') + '</span><span style="color:var(--warn)">$' + (parseFloat(bill.total)||0).toFixed(2) + '</span></div>') +
+      safeArray(bill.fee && bill.fee.lines).map(function(l){ return '<div style="display:flex;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px"><span>' + esc(l.desc) + '</span><span>−' + qbMoney(Math.abs(l.amount)) + '</span></div>'; }).join('') +
+      '<div style="display:flex;justify-content:space-between"><span style="color:var(--muted)">' + esc((vendor && vendor.display) || 'vendor') + (bill.fee && bill.fee.lines && bill.fee.lines.length ? ' (bill total)' : '') + '</span><span style="color:var(--warn)">$' + (parseFloat(bill.total)||0).toFixed(2) + '</span></div>') +
     ((bill && bill.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + bill.attach_receipts + ' receipt(s) attach to this bill (not shown to customer)</div>' : '') +
   '</div>';
 }
@@ -13508,8 +13633,8 @@ function renderQBPreview(p) {
   if (p.combined) {
     var combineBanner = '<div style="background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11.5px;color:var(--accent)">' +
       '🔗 Combining ' + p.combined_count + ' vendor bills on this job into ONE customer invoice.</div>';
-    var billBlocks = safeArray(p.bills).map(function(b){ return renderQBBillBlock(b, b.vendor); }).join('');
-    return combineBanner + '' +
+    var billBlocks = safeArray(p.bills).map(function(b){ return renderQBBillBlock(b, b.vendor) + (b.fee && b.fee.applies ? renderQBFeePanel(b.fee, b.vendor && b.vendor.display, false) : ''); }).join('');
+    return combineBanner + renderQBNettingPanel(p.netting) + '' +
       '<div style="font-size:12px;line-height:1.7">' +
         qbPreviewEntity('Customer', 'owner', p.customer) +
         qbBillToLine(p) +
@@ -13525,7 +13650,7 @@ function renderQBPreview(p) {
       warns + already;
   }
 
-  return '' +
+  return renderQBNettingPanel(p.netting) +
     '<div style="font-size:12px;line-height:1.7">' +
       qbPreviewEntity('Customer', 'owner', p.customer) +
       qbBillToLine(p) +
@@ -13539,6 +13664,7 @@ function renderQBPreview(p) {
       ((p.invoice && p.invoice.attach_receipts > 0) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">📎 ' + p.invoice.attach_receipts + ' receipt(s) attached for the customer</div>' : '') +
     '</div>' +
     renderQBBillBlock(p.bill, p.vendor) +
+    ((p.bill && !p.bill.skipped && !p.bill.in_house) ? renderQBFeePanel(p.fee, p.vendor && p.vendor.display, true) : '') +
     (p.photo_link ? '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:11px;color:var(--muted)">🖼 Customer invoice links job photos</div>' : '') +
     warns + already;
 }
@@ -13552,7 +13678,7 @@ function confirmQBSend(overridePendingInfo, overrideAddon) {
   var btn = document.getElementById('qb-send-confirm-btn');
   btn.disabled = true; btn.textContent = 'CREATING…';
   document.getElementById('qb-send-msg').innerHTML = '';
-  var payload = { id: id };
+  var payload = qbNetPayload({ id: id });
   if (overridePendingInfo) payload.override_pending_info = true;
   if (overrideAddon) payload.override_addon_unapproved = true;
   api('POST', '/qb/send-invoice', payload).then(function(res){
@@ -13564,6 +13690,7 @@ function confirmQBSend(overridePendingInfo, overrideAddon) {
       var billTxt = res.bill_ids ? (billIds.length + ' bill(s)') : (res.bill_id || '—');
       var txt = res.already_sent ? 'Already in QuickBooks.' :
         ('✓ Created — invoice ' + (res.invoice_id||'—') + ', ' + billTxt +
+         (res.netted ? ' (proposal netted: ' + qbMoney(res.netted.credit_customer) + ' already invoiced taken off)' : '') +
          (res.combined_count > 1 ? ' (combined ' + res.combined_count + ' vendor bills into this one invoice)' : ''));
       // The Worker returns warnings — "Vendor_Cost is 0, the vendor bill will be skipped"
       // being the important one — and this screen used to drop them on the floor, so a send
@@ -13598,7 +13725,9 @@ function confirmQBSend(overridePendingInfo, overrideAddon) {
     } else {
       btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';
       var errs = (res.errors&&res.errors.length) ? res.errors.join('; ') : (res.error||'Error');
-      document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + esc(errs) + '</div>';
+      document.getElementById('qb-send-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + esc(errs) + '</div>' +
+        ((res.netting_required || res.job_complete_required || res.netting_blocked || res.netting_check_failed) ? '<div style="color:var(--muted);font-size:11px;margin-top:4px">Nothing was sent to QuickBooks. Fix the proposal choice above and try again.</div>' : '');
+      if (res.netting_required || res.job_complete_required || res.netting_blocked) { _qbNet.decision = res.netting_required ? '' : _qbNet.decision; qbLoadPreview(); }
     }
   }).catch(function(e){
     btn.disabled = false; btn.textContent = 'CREATE IN QUICKBOOKS';

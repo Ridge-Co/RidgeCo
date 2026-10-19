@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-19.03-fi-contractor-brackets';
+const BUILD_VERSION = '2026-10-19.04-proposal-netting-instant-fee';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -930,6 +930,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-access-requests/approve') return await vendorAccessRequestApprove(env, body);
         if (path === '/workorder/self-serve')     return await workorderSelfServe(env, body);
         if (path === '/vendor/set-can-bill-no-wo') return await vendorSetCanBillNoWO(env, body);
+        if (path === '/vendor/set-instant-pay')   return await vendorSetInstantPay(env, body);
         if (path === '/vendor/set-can-create-own-wo') return await vendorSetCanCreateOwnWO(env, body);
         if (path === '/vendor/set-billing-property-access') return await vendorSetBillingPropertyAccess(env, body);
         if (path === '/vendor/update-contact')    return await vendorUpdateContact(env, body);
@@ -1012,6 +1013,7 @@ const _hubWorkerCore = {
         if (path === '/qb/vendor-in-house')       return await qbSetVendorInHouse(env, body);
         if (path === '/qb/record-paid-bill')      return await qbRecordPaidBill(env, body);
         if (path === '/qb/pay-bills')             return await qbPayBills(env, body);
+        if (path === '/qb/notify-vendor-paid')    return await qbNotifyVendorPaid(env, body);
         if (path === '/qb/clear-ir-bill')         return await qbClearIrBill(env, body);
         if (path === '/qb/set-ir-bill')           return await qbSetIrBill(env, body);
         if (path === '/qb/reprice-invoice')       return await qbRepriceInvoice(env, body);
@@ -5423,8 +5425,8 @@ async function scopeProposalSign(env, body, ip, ua) {
   try {
     const c = await estimateSmsContext(env, s.WO_ID || '', s.Vendor_ID);
     const job = s.WO_ID ? ('work order ' + s.WO_ID) : ('proposal #' + s.ID);
-    await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
-    if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_proposal_signed', kind: 'vendor', vendor: c.vendor, wo_id: s.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
+    await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
+    if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_proposal_signed', kind: 'vendor', vendor: c.vendor, wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
   } catch (_) {}
   return json({ ok: true, subtotal, deposit, schedule: milestones });
 }
@@ -5807,6 +5809,17 @@ async function scopeProposalBillMilestones(env, body) {
   if (billSkipReason) warnings.push(billSkipReason);
   if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
 
+  // Instant-pay fee for THIS payment (Oct 19 2026): its own visible negative line on the vendor bill,
+  // only for vendors paid instantly (Vendors.Instant_Pay, or Config instant_pay_default_vendor_ids).
+  const cfgAll = await fetchConfig(env);
+  const feeCfg = instantFeeConfig(cfgAll);
+  feeCfg.warnings.forEach(w => warnings.push(w));
+  const feeDefaultOn = !!vendor && instantPayEnabled(vendor, cfgAll, undefined);
+  const feeOn = !!vendor && !vendorInHouse && vendTotal > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay);
+  const mkAdj = (force) => vendorBillAdjustments({ payable: vendTotal, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en', feeOn: force === true || feeOn, cfg: feeCfg, credits: [] });
+  const adj = mkAdj(false);
+  adj.notes.forEach(n => warnings.push(n));
+
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
     milestones: picked.map(m => ({
@@ -5816,7 +5829,8 @@ async function scopeProposalBillMilestones(env, body) {
       pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE', pending_info_note: m.Pending_Info_Note || '',
     })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
-    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName } : null,
+    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName, fee: adj.fee, send_amount: adj.bill_total,
+      fee_on: feeOn, fee_default_on: feeDefaultOn, fee_if_on: mkAdj(true).fee } : null,
     warnings,
   };
   if (body.preview_only) return json({ ok: true, preview });
@@ -5868,6 +5882,7 @@ async function scopeProposalBillMilestones(env, body) {
           VendorRef: { value: vendorQbId }, TxnDate: txnDate,
           PrivateNote: ('Scope proposal ' + row.Scope_ID + ' — ' + labelList + ' — ' + vendDisplay).slice(0, 1000),
         };
+        for (const l of adj.lines) billPayload.Line.push({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000), AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } });
         const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
@@ -5913,7 +5928,7 @@ async function scopeProposalBillMilestones(env, body) {
         const newCharge = +(priorCharge + custTotal).toFixed(2);
         const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
         const vendorNote = vendTotal > 0
-          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round')
+          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
           : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
         const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
         const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
@@ -5923,7 +5938,7 @@ async function scopeProposalBillMilestones(env, body) {
     } catch (e) { warnings.push('Invoice/bill succeeded, but updating the linked Work Order (' + s.WO_ID + ') failed: ' + (e.message || e)); }
   }
 
-  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, milestone_ids: picked.map(m => m.ID), vendor_billed: vendTotal, warnings });
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, milestone_ids: picked.map(m => m.ID), vendor_billed: vendTotal, vendor_fee: adj.fee, vendor_send_amount: adj.bill_total, warnings });
 }
 
 async function scopeProposalBook(env, body) {
@@ -5969,10 +5984,17 @@ async function scopeProposalBook(env, body) {
   warnings.push('Invoice is the DEPOSIT only ($' + deposit.toFixed(2) + ' of $' + subtotal.toFixed(2) + '); the vendor bill is the same ' + Math.round(ratio * 100) + '% of the vendor cost ($' + vendorBillAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
 
   const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — deposit (' + addr + ')').slice(0, 4000);
+  // Instant-pay fee (Oct 19 2026) — its own visible negative line, only for instant-pay vendors.
+  const cfgAll = await fetchConfig(env);
+  const feeCfg = instantFeeConfig(cfgAll);
+  feeCfg.warnings.forEach(w => warnings.push(w));
+  const adj = vendorBillAdjustments({ payable: vendorBillAmount, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en',
+    feeOn: !!vendor && !vendorInHouse && vendorBillAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg, credits: [] });
+  adj.notes.forEach(n => warnings.push(n));
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
     invoice: { customer: custDisplay, level: billTo.level, amount: deposit, item: tradeName, desc: invoiceDesc, of_total: subtotal },
-    bill: (vendor && !vendorInHouse && vendorBillAmount > 0) ? { vendor: vendDisplay, amount: vendorBillAmount, trade: tradeName, of_total: vendorCostTotal } : null,
+    bill: (vendor && !vendorInHouse && vendorBillAmount > 0) ? { vendor: vendDisplay, amount: vendorBillAmount, trade: tradeName, of_total: vendorCostTotal, fee: adj.fee, send_amount: adj.bill_total } : null,
     already: { invoice: row.QB_Invoice_ID || '', bill: row.QB_Bill_ID || '' }, warnings,
   };
   if (body.preview_only) return json({ ok: true, preview });
@@ -6032,6 +6054,7 @@ async function scopeProposalBook(env, body) {
           VendorRef: { value: vendorQbId }, TxnDate: txnDate,
           PrivateNote: ('Scope proposal ' + row.Scope_ID + ' — ' + vendDisplay).slice(0, 1000),
         };
+        for (const l of adj.lines) billPayload.Line.push({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000), AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } });
         const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
@@ -6165,10 +6188,16 @@ async function scopeProposalBookFinal(env, body) {
   warnings.push('Invoice is the FINAL BALANCE ($' + finalAmount.toFixed(2) + ' of $' + subtotal.toFixed(2) + ', deposit of $' + deposit.toFixed(2) + ' already invoiced separately); the vendor bill is the remaining ' + Math.round((1 - ratio) * 100) + '% of the vendor cost ($' + finalVendorAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
 
   const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — final balance (' + addr + ')').slice(0, 4000);
+  const cfgAll = await fetchConfig(env);
+  const feeCfg = instantFeeConfig(cfgAll);
+  feeCfg.warnings.forEach(w => warnings.push(w));
+  const adj = vendorBillAdjustments({ payable: finalVendorAmount, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en',
+    feeOn: !!vendor && !vendorInHouse && finalVendorAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg, credits: [] });
+  adj.notes.forEach(n => warnings.push(n));
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
     invoice: { customer: custDisplay, level: billTo.level, amount: finalAmount, item: tradeName, desc: invoiceDesc, of_total: subtotal, deposit_already_invoiced: deposit },
-    bill: (vendor && !vendorInHouse && finalVendorAmount > 0) ? { vendor: vendDisplay, amount: finalVendorAmount, trade: tradeName, of_total: vendorCostTotal } : null,
+    bill: (vendor && !vendorInHouse && finalVendorAmount > 0) ? { vendor: vendDisplay, amount: finalVendorAmount, trade: tradeName, of_total: vendorCostTotal, fee: adj.fee, send_amount: adj.bill_total } : null,
     already: { invoice: row.QB_Final_Invoice_ID || '', bill: row.QB_Final_Bill_ID || '' }, warnings,
   };
   if (body.preview_only) return json({ ok: true, preview });
@@ -6221,6 +6250,7 @@ async function scopeProposalBookFinal(env, body) {
           VendorRef: { value: vendorQbId }, TxnDate: txnDate,
           PrivateNote: ('Scope proposal ' + row.Scope_ID + ' — ' + vendDisplay + ' — final balance').slice(0, 1000),
         };
+        for (const l of adj.lines) billPayload.Line.push({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000), AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } });
         const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
@@ -7254,7 +7284,7 @@ async function createWorkOrder(env, body) {
     if ((body.type || '') === 'tenant' && owner?.Phone && property) {
       const notify = await shouldNotifyOwner(env, woLike, 'Received');
       if (notify) {
-        const msg = `Hi ${owner.First_Name}, we've received a new ${woLike.Trade || 'General'} request from your tenant at ${property.Address}: ${woLike.Description || '(no description)'}. We'll follow up once it's scheduled. Ref: ${woId}.`;
+        const msg = `Hi ${owner.First_Name}, we've received a new ${woLike.Trade || 'General'} request from your tenant at ${propUnitText(property, unit)}: ${woLike.Description || '(no description)'}. We'll follow up once it's scheduled. Ref: ${woId}.`;
         const r = await smsGatedSend(env, { wo_id: woId, message_type: 'owner_job_received', recipient_type: 'owner', owner, property, message_body: msg });
         if (r.sent) await updateWOFields(env, woId, { Owner_Notified: 'TRUE' });
       }
@@ -7992,7 +8022,7 @@ async function addonOwnerNotice(env, body) {
   const childId = String((body && body.child_wo_id) || '').trim();
   if (!childId) return json({ error: 'child_wo_id required' }, 400);
   const preview = !(body && body.preview === false);
-  const [workorders, estimates, attachments, properties, owners] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments', 'Properties', 'Owners']);
+  const [workorders, estimates, attachments, properties, owners, unitsAll] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments', 'Properties', 'Owners', 'Units']);
   const child = findWO(workorders, childId);
   if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
   const status = String(child.Addon_Status || '');
@@ -8012,7 +8042,7 @@ async function addonOwnerNotice(env, body) {
     return englishOnly(line.desc_en || it.desc);
   });
   const photoUrls = []; items.forEach(it => (photos[String(it.index)] || []).forEach(p => { if (p.url) photoUrls.push(p.url); }));
-  const address = (property && property.Address) || 'your property';
+  const address = propUnitText(property, unitsAll.find(u => String(u.ID) === String(child.Unit_ID || (parent && parent.Unit_ID) || ''))) || 'your property';
   const msg = addonBuildOwnerNotice({ ownerFirst: owner.First_Name, address, parentId: parent.ID, itemTexts, photoUrls });
   const ownerEmail = String(owner.Email || owner.Billing_Email || '').trim();
   const warnings = [];
@@ -8434,7 +8464,7 @@ async function woCombine(env, body) {
     if (survivorFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, survivorFresh)) {
       if (!isTenantNotifiable(tenant, survivorFresh)) continue;
       const idList = combinedIds.join(', ');
-      const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
+      const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} (${woJobLabel(survivorFresh)}) ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
       await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
   } catch (e) { /* non-fatal — combine already succeeded */ }
@@ -8464,11 +8494,12 @@ async function woCombine(env, body) {
       const properties = await fetchTab(env, 'Properties'), owners = await fetchTab(env, 'Owners');
       const property = properties.find(p => p.ID === survivorForRef.Property_ID);
       const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+      const unitForRef = (await fetchTab(env, 'Units')).find(u => u.ID === survivorForRef.Unit_ID);
       if (owner && owner.Phone && property) {
         const pairs = abandonedWOs.map(w => `${w.ID} (owner ref ${String(w.Owner_WO_Ref).trim()})`);
         const pairList = pairs.length > 1 ? pairs.slice(0, -1).join(', ') + ' and ' + pairs[pairs.length - 1] : pairs[0];
         const survivorRefText = survivorRef ? `owner ref ${survivorRef}` : 'no owner ref on file';
-        const msg = `Hi ${owner.First_Name}, ${pairList} ${abandonedWOs.length > 1 ? 'were' : 'was'} combined into ${survivorId} (${survivorRefText}). Please update your records — future updates will only come on ${survivorId}. Thank you!`;
+        const msg = `Hi ${owner.First_Name}, at ${propUnitText(property, unitForRef)}, ${pairList} ${abandonedWOs.length > 1 ? 'were' : 'was'} combined into ${survivorId} (${survivorRefText}). Please update your records — future updates will only come on ${survivorId}. Thank you!`;
         await smsGatedSend(env, { wo_id: survivorId, message_type: 'owner_wo_combined_ref', recipient_type: 'owner', owner, property, message_body: msg });
       }
     }
@@ -8725,7 +8756,7 @@ async function woSplit(env, body) {
     if (originalFresh.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, originalFresh)) {
       if (!isTenantNotifiable(tenant, originalFresh)) continue;
       const idList = createdWoIds.join(', ');
-      const msg = `Hi ${tenant.First_Name}, work order ${originalId} was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
+      const msg = `Hi ${tenant.First_Name}, work order ${originalId} (${woJobLabel(originalFresh)}) was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
   } catch (e) { /* non-fatal — split already succeeded */ }
@@ -9651,7 +9682,7 @@ async function updateStatus(env, body) {
       const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-    if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${wo.Trade} @ ${wo.Property_ID}. Pending invoice.`);
+    if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${woJobLabel(wo)} at ${address}. Pending invoice.`);
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
   }
   // Vendor accepted → notify the tenant that a technician has accepted and will reach out.
@@ -9661,7 +9692,7 @@ async function updateStatus(env, body) {
     // CAP-036 #21: every active tenant in the unit, not just one.
     if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
       if (!isTenantNotifiable(tenant, wo)) continue;
-      const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${wo.Trade} request at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
+      const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${woJobLabel(wo)} at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
       await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
   }
@@ -9689,8 +9720,8 @@ async function updateStatus(env, body) {
     const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
       const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is complete. Ref: ${body.wo_id}.`,
-        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
+        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is complete. Ref: ${body.wo_id}.`,
+        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
       };
       const msg = ownerMsgs[ownerEvent];
       const msgType = ownerEvent === 'On_Hold' ? 'owner_job_on_hold' : `owner_job_${ownerEvent.toLowerCase()}`;
@@ -11298,6 +11329,15 @@ async function qbUndoSend(env, body) {
       }
     } catch (e) { /* no ledger tab / nothing to reverse — not fatal */ }
 
+    // A signed-proposal final billing: put its payments back to pending so they can be billed again
+    // (otherwise the proposal would show as fully invoiced against a QuickBooks invoice that is gone).
+    let proposalReverted = false, proposalRevertError = '';
+    try { proposalReverted = (await qbProposalRevert(env, ir)).reverted; }
+    catch (e) {
+      proposalRevertError = 'QuickBooks was undone, but putting signed proposal Scope #' + (ir.Proposal_Scope_ID || '?') + ' back to unbilled failed: ' + String((e && e.message) || e) + ' — fix it on the Signed Proposals page.';
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_revert_failed', Skill_Or_Endpoint: '/qb/undo-send', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + proposalRevertError).slice(0, 480) }); } catch (_) {}
+    }
+
     // Mirror /invoice-review/unapprove exactly from here.
     await updateRow(env, 'Invoice_Review', ir.ID, { Active: 'FALSE', QB_Invoice_Status: 'undone' });
     let billRestored = false;
@@ -11329,8 +11369,8 @@ async function qbUndoSend(env, body) {
       success: true, ok: true, id: ir.ID, wo_id: ir.WO_ID || '', bill_id: ir.Bill_ID || '',
       invoice_deleted: invRes.doc || invoiceId || '', bill_deleted: billRes.doc || billId || '',
       loan_reversed: loanReversed,
-      bill_restored: billRestored, wo_reverted: woReverted,
-      warning: billRestored ? '' : 'QuickBooks was undone, but the vendor bill could not be set back to submitted — check the Vendor_Bills row.',
+      bill_restored: billRestored, wo_reverted: woReverted, proposal_reverted: proposalReverted,
+      warning: [billRestored ? '' : 'QuickBooks was undone, but the vendor bill could not be set back to submitted — check the Vendor_Bills row.', proposalRevertError].filter(Boolean).join(' '),
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -11649,11 +11689,29 @@ async function getAdminSmsRecipient(env) {
   let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
   return { Name: 'Brett', Phone: cfg.ADMIN_SMS_PHONE || cfg.TWILIO_TEST_RECIPIENT || '+14439617927' };
 }
+// "20 E Eager St Apt 3" for a work order — property + unit (Brett Oct 19). Falls back to the property alone,
+// and never throws (a text must not fail because a lookup did): an unresolved address is "" and logged.
+async function woLocationText(env, woId, fallbackProperty, unitId) {
+  try {
+    if (!woId && !unitId) return propUnitText(fallbackProperty, null);
+    const [wos, props, units] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'), fetchTab(env, 'Units')]);
+    const wo = woId ? findWO(wos, woId) : null;
+    const property = (wo && props.find(p => String(p.ID) === String(wo.Property_ID))) || fallbackProperty || null;
+    const uid = (wo && wo.Unit_ID) || unitId || '';
+    const unit = uid ? units.find(u => String(u.ID) === String(uid)) : null;
+    return propUnitText(property, unit) || (wo && wo.Address) || '';
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_location_lookup_failed', Skill_Or_Endpoint: 'woLocationText', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (_) {}
+    return propUnitText(fallbackProperty, null);
+  }
+}
 async function sendTemplatedSms(env, o) {
   try {
     let tpl = null; try { tpl = await getMessageTemplate(env, o.type, 'sms'); } catch (_) {}
     const def = DEFAULT_MESSAGE_TEMPLATES.find(t => t.Message_Type === o.type && t.Channel === 'sms');
-    const body = renderTemplate(tpl ? tpl.Body : (def ? def.Body : ''), Object.assign({ HubUrl: HUB_URL }, o.tokens || {})).replace(/\s+/g, ' ').trim();
+    const tk = Object.assign({ HubUrl: HUB_URL }, o.tokens || {});
+    if (tk.Location == null || tk.Location === '') tk.Location = (await woLocationText(env, o.wo_id, o.property, o.unit_id)) || tk.Address || 'the property';
+    const body = renderTemplate(tpl ? tpl.Body : (def ? def.Body : ''), tk).replace(/\s+/g, ' ').trim();
     if (!body) return { sent: false, reason: 'no template for ' + o.type };
     const opts = { wo_id: o.wo_id || '', message_type: o.type, recipient_type: o.kind, message_body: body, property: o.property, bypassQuietHours: !!o.bypassQuietHours };
     if (o.quietWindow) opts.quietWindow = o.quietWindow;
@@ -11721,9 +11779,11 @@ async function processEstimateReminders(env, nowArg) {
   const pending = estimatesAwaitingDecision(ests, wos, now, cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
   if (!pending.length) return { count: 0 };
   try { await setConfigKey(env, { key: 'estimate_reminder_last_date', value: today }); } catch (_) { return { skipped: 'could not claim the day' }; }
+  const [propsR, unitsR] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Units')]);
   const list = pending.slice(0, 5).map(p => {
     const v = vendors.find(x => x.ID === (p.estimate.Vendor_ID || p.wo.Vendor_ID));
-    return p.wo_id + (v ? ' ' + (v.First_Name || v.Name || '') : '') + ' $' + fmtMoney(p.estimate.Subtotal);
+    const loc = propUnitText(propsR.find(x => String(x.ID) === String(p.wo.Property_ID)), unitsR.find(x => String(x.ID) === String(p.wo.Unit_ID)));
+    return p.wo_id + (loc ? ' (' + loc + ')' : '') + (v ? ' ' + (v.First_Name || v.Name || '') : '') + ' $' + fmtMoney(p.estimate.Subtotal);
   }).join(', ') + (pending.length > 5 ? ' +' + (pending.length - 5) + ' more' : '');
   const r = await sendTemplatedSms(env, { type: 'admin_estimate_reminder', kind: 'admin', bypassQuietHours: true, tokens: { Count: pending.length, List: list } });
   return { count: pending.length, sent: !!(r && r.sent), gate: r && r.gate_snapshot };
@@ -11826,8 +11886,8 @@ async function scopeDepositPaidTransition(env, scopeId, sinceISO) {
       let r; try { r = await sendTemplatedSms(env, o); } catch (e) { r = { sent: false, error: String((e && e.message) || e) }; }
       if (!smsOk(r)) await logAndCollectError(env, errs, 'deposit_paid_text_failed', 'scopeDepositPaidTransition', ref + ' ' + label, new Error(label + ' text not sent: ' + why(r)));
     };
-    await send('admin_deposit_paid', { type: 'admin_deposit_paid', kind: 'admin', wo_id: scope.WO_ID || '', property: c.property, tokens: { Job: job, Address: c.address } });
-    if (c.vendor && c.vendor.Phone) await send('vendor_deposit_paid', { type: 'vendor_deposit_paid', kind: 'vendor', vendor: c.vendor, wo_id: scope.WO_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
+    await send('admin_deposit_paid', { type: 'admin_deposit_paid', kind: 'admin', wo_id: scope.WO_ID || '', unit_id: scope.Unit_ID || '', property: c.property, tokens: { Job: job, Address: c.address } });
+    if (c.vendor && c.vendor.Phone) await send('vendor_deposit_paid', { type: 'vendor_deposit_paid', kind: 'vendor', vendor: c.vendor, wo_id: scope.WO_ID || '', unit_id: scope.Unit_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
     else if (scope.Vendor_ID) await logAndCollectError(env, errs, 'deposit_paid_text_failed', 'scopeDepositPaidTransition', ref + ' vendor_deposit_paid', new Error('vendor_deposit_paid text not sent: vendor ' + scope.Vendor_ID + ' not found or has no phone'));
     return { changed: true, texted: errs.length === 0, text_errors: errs };
   } finally { _depositTransitionInFlight.delete(key); }
@@ -12790,13 +12850,14 @@ async function adminUpdateWO(env, body) {
   // update above already succeeded regardless of whether this notify goes through.
   if ('Managed_By' in body.fields && String(wo.Managed_By||'RidgeCo') !== String(body.fields.Managed_By)) {
     try {
-      const [properties, owners] = await fetchTabs(env, ['Properties','Owners']);
+      const [properties, owners, unitsMB] = await fetchTabs(env, ['Properties','Owners','Units']);
       const property = properties.find(p => p.ID === wo.Property_ID);
       const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
+      const mbLoc = propUnitText(property, unitsMB.find(u => u.ID === wo.Unit_ID));
       if (owner?.Phone && property) {
         const msg = body.fields.Managed_By === 'Owner'
-          ? `Hi ${owner.First_Name}, we've marked ${body.wo_id} at ${property.Address} as being handled by you rather than Ridge Co — we won't assign a vendor to it while it's set this way. Let us know if that's not right.`
-          : `Hi ${owner.First_Name}, ${body.wo_id} at ${property.Address} is back with Ridge Co to handle — we'll take it from here.`;
+          ? `Hi ${owner.First_Name}, we've marked ${body.wo_id} at ${mbLoc} as being handled by you rather than Ridge Co — we won't assign a vendor to it while it's set this way. Let us know if that's not right.`
+          : `Hi ${owner.First_Name}, ${body.wo_id} at ${mbLoc} is back with Ridge Co to handle — we'll take it from here.`;
         await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_managed_by_changed', recipient_type: 'owner', owner, property, message_body: msg });
       }
     } catch (e) { /* non-fatal */ }
@@ -13975,7 +14036,7 @@ async function scheduleWO(env, body) {
     const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
     if (notify) {
       const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
-      const ownerMsg = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${property.Address} — is scheduled for ${dateStr}, ${body.window}, subject to change. Ref: ${body.wo_id}.`;
+      const ownerMsg = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${propUnitText(property, unit)} — is scheduled for ${dateStr}, ${body.window}, subject to change. Ref: ${body.wo_id}.`;
       const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_scheduled', recipient_type: 'owner', owner, property, message_body: ownerMsg });
       ownerSMSSent = r.sent;
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
@@ -15108,25 +15169,30 @@ const DEFAULT_MESSAGE_TEMPLATES = [
   // Estimate / proposal notifications (Sep 28 2026, FEATURE_LOG rule 201). Editable in Message_Templates.
   // Vendor texts deliberately contain NO dollar amounts. {Job} is "work order WO-1234" or "proposal #7".
   { Message_Type: 'admin_estimate_new', Channel: 'sms', Subject: '', Body:
-    "{Kind} on {WO} ({Address}) from {Vendor}: ${Amount}. Approve, decline, ask for more info, or push to proposal: {HubUrl}" },
+    "{Kind} on {WO} at {Location} from {Vendor}: ${Amount}. Approve, decline, ask for more info, or push to proposal: {HubUrl}" },
   { Message_Type: 'admin_estimate_reminder', Channel: 'sms', Subject: '', Body:
     "{Count} estimate(s) waiting on your decision: {List}. Approve, decline, mark needs-info, or push to proposal: {HubUrl}" },
   { Message_Type: 'admin_proposal_signed', Channel: 'sms', Subject: '', Body:
-    "Proposal signed by {Signer} for {Job} ({Address}). Waiting on the deposit payment." },
+    "Proposal signed by {Signer} for {Job} at {Location}. Waiting on the deposit payment." },
   { Message_Type: 'admin_deposit_paid', Channel: 'sms', Subject: '', Body:
-    "Deposit paid for {Job} ({Address}). Proposal is now Approved." },
+    "Deposit paid for {Job} at {Location}. Proposal is now Approved." },
   { Message_Type: 'vendor_estimate_approved', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, your estimate for work order {WO} has been approved. You're clear to proceed." },
+    "Hi {FirstName}, your estimate for work order {WO} at {Location} has been approved. You're clear to proceed." },
   { Message_Type: 'vendor_estimate_approved_deposit', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, your estimate for work order {WO} has been approved. A deposit is being requested from the customer - we'll confirm once it's received." },
+    "Hi {FirstName}, your estimate for work order {WO} at {Location} has been approved. A deposit is being requested from the customer - we'll confirm once it's received." },
   { Message_Type: 'vendor_estimate_declined', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, Ridge Co won't be moving forward with your estimate for work order {WO}. Thank you for sending it." },
+    "Hi {FirstName}, Ridge Co won't be moving forward with your estimate for work order {WO} at {Location}. Thank you for sending it." },
   { Message_Type: 'vendor_estimate_needs_info', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, Ridge Co needs a bit more information on your estimate for work order {WO}. Please check your vendor portal or call us." },
+    "Hi {FirstName}, Ridge Co needs a bit more information on your estimate for work order {WO} at {Location}. Please check your vendor portal or call us." },
   { Message_Type: 'vendor_proposal_signed', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, the owner has signed the proposal for {Job}. Pending deposit payment - we'll text you when it's paid." },
+    "Hi {FirstName}, the owner has signed the proposal for {Job} at {Location}. Pending deposit payment - we'll text you when it's paid." },
   { Message_Type: 'vendor_deposit_paid', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, proposal approved for {Job}: the DEPOSIT for {Job} has been paid to RidgeCo. (This is the deposit only - not your final invoice payment.)" },
+    "Hi {FirstName}, proposal approved for {Job} at {Location}: the DEPOSIT has been paid to RidgeCo. (This is the deposit only - not your final invoice payment.)" },
+  // Vendor payment-processed text (Oct 19 2026). {Jobs} = property + unit (and WO) per bill, so a payment that
+  // covers several jobs says which. {Amount} is what was actually sent (after any deposit already paid and the
+  // instant-pay fee). Editable in Message_Templates.
+  { Message_Type: 'vendor_paid', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, Ridge Co has sent your payment of ${Amount} for: {Jobs}. It should reach you shortly. Details in your vendor portal. Thank you!" },
   // Owner heads-up when a proposal is emailed (Oct 14 2026, FEATURE_LOG rule 209). No link on purpose: it points at the email.
   { Message_Type: 'owner_proposal_ready', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Your estimate for {Address} is ready and was just emailed to you - please check your inbox (and spam folder) to review it. Questions? Just reply to that email." },
@@ -15171,8 +15237,31 @@ async function ensureMessageTemplates(env) {
   const rows = await fetchTab(env, MSG_TEMPLATES_TAB);
   if (!_msgTemplatesToppedUp || !rows.length) {
     await appendMissingTemplates(env, rows);
+    await refreshUneditedTemplates(env, rows);
     _msgTemplatesToppedUp = true;
   }
+}
+// Oct 19 2026: when a default's wording improves (property + unit in the texts), rows that still carry the OLD
+// default must follow — otherwise only brand-new sheets ever get the better wording. ONLY rows whose
+// Updated_By is still 'system_default' (nobody has edited them) are rewritten; a template Brett edited is never
+// touched. Each write is read-back verified by updateRowVerified; a failure is logged and surfaced in the return
+// value (never swallowed) and the row is simply retried on the next cold start.
+async function refreshUneditedTemplates(env, rows) {
+  const out = { updated: 0, failed: [] };
+  for (const r of rows) {
+    if (String(r.Updated_By || '') !== 'system_default') continue;
+    const def = DEFAULT_MESSAGE_TEMPLATES.find(t => t.Message_Type === r.Message_Type && t.Channel === r.Channel);
+    if (!def || String(r.Body || '') === def.Body) continue;
+    try {
+      await updateRowVerified(env, MSG_TEMPLATES_TAB, r.ID, { Body: def.Body, Subject: def.Subject, Updated_Date: new Date().toISOString(), Updated_By: 'system_default' });
+      out.updated++;
+    } catch (e) {
+      out.failed.push(r.Message_Type + ': ' + String((e && e.message) || e).slice(0, 120));
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_template_refresh_failed', Skill_Or_Endpoint: r.Message_Type, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (_) {}
+    }
+  }
+  if (out.updated) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_template_refreshed', Skill_Or_Endpoint: 'ensureMessageTemplates', Success: 'TRUE', Notes: out.updated + ' unedited default template(s) brought up to the current wording' }); } catch (_) {} }
+  return out;
 }
 function renderTemplate(body, tokens) {
   return String(body || '').replace(/\{(\w+)\}/g, (m, key) => (tokens && tokens[key] != null) ? String(tokens[key]) : '');
@@ -25414,7 +25503,7 @@ async function hubTestWriteAllowed(env, path, body) {
   // Intuit sandbox, so they can only ever touch sandbox data. The second group carries a Hub record id -> TEST only.
   if (['/qb/find-bills', '/qb/delete-bill', '/qb/set-bill-docnumber', '/qb/attach-to-bill', '/qb/record-paid-bill',
        '/qb/pay-bills'].includes(path)) return true;
-  if (path === '/qb/vendor-reconcile' || path === '/qb/link-vendor-bills') return !!_b.vendor_id && await isTestRecord(env, 'Vendors', _b.vendor_id);
+  if (path === '/qb/vendor-reconcile' || path === '/qb/link-vendor-bills' || path === '/qb/notify-vendor-paid') return !!_b.vendor_id && await isTestRecord(env, 'Vendors', _b.vendor_id);
   if (path === '/qb/backfill-emails') {
     if (!Array.isArray(_b.ids) || !_b.ids.length) return false;
     for (const _i of _b.ids) if (!(await isTestRecord(env, 'Owners', _i))) return false;
@@ -25972,8 +26061,15 @@ async function qbRepairInvoice(env, body) {
     // The rebuilt lines MUST still sum to what the customer was told they owe. If they
     // don't, something upstream changed and this stops rather than silently re-pricing
     // an invoice that has already gone out.
+    // A signed-proposal final invoice carries a negative "already invoiced" line — rebuild it too, and
+    // compare against the NET the customer actually owes on this invoice.
+    const propCredit = String(ir.Proposal_Applied || '').toUpperCase() === 'TRUE' ? money2(+ir.Proposal_Credit_Customer || 0) : 0;
+    if (propCredit > 0) {
+      rebuilt.lines.push({ DetailType: 'SalesItemLineDetail', Amount: -propCredit, Description: String(ir.Proposal_Customer_Label || 'Less: already invoiced').slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: origRef || { value: trade.item }, Qty: 1, UnitPrice: -propCredit } });
+    }
     const rebuiltTotal = rebuilt.lines.reduce((n, l) => n + (Number(l.Amount) || 0), 0);
-    const owedTotal = Number(ir.Customer_Total) || 0;
+    const owedTotal = money2((Number(ir.Customer_Total) || 0) - propCredit);
     if (Math.abs(rebuiltTotal - owedTotal) > 0.005) {
       return json({ error: `Rebuilt lines total $${rebuiltTotal.toFixed(2)} but the invoice is for $${owedTotal.toFixed(2)}. Not touching it.` }, 409);
     }
@@ -27237,6 +27333,22 @@ async function vendorSetCanBillNoWO(env, body) {
   const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
   await ensureColumns(env, 'Vendors', ['Can_Bill_No_WO']);
   await updateRow(env, 'Vendors', id, { Can_Bill_No_WO: on ? 'TRUE' : 'FALSE' });
+  return json({ success: true, id, value: on });
+}
+
+// POST /vendor/set-instant-pay { id, value } — Oct 19 2026. Vendors paid by QuickBooks Instant Payment (the 1% fee comes
+// off their bill as its own line). Written read-back verified: a toggle that did not save must say so.
+async function vendorSetInstantPay(env, body) {
+  const id = String(body.id || '').trim();
+  if (!id) return json({ error: 'Missing id' }, 400);
+  const on = body.value === true || String(body.value).toUpperCase() === 'TRUE';
+  try {
+    await ensureColumns(env, 'Vendors', ['Instant_Pay']);
+    await updateRowVerified(env, 'Vendors', id, { Instant_Pay: on ? 'TRUE' : 'FALSE' });
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_instant_pay_toggle_failed', Skill_Or_Endpoint: '/vendor/set-instant-pay', Success: 'FALSE', Notes: ('vendor=' + id + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (_) {}
+    return json({ error: 'Could not save the instant-pay setting: ' + String((e && e.message) || e) }, 500);
+  }
   return json({ success: true, id, value: on });
 }
 
@@ -28766,14 +28878,82 @@ async function qbPayBills(env, body) {
       for (const r of paidResults) {
         const vendor = hubVendors.find(v => v.QBO_Vendor_ID === r.vendor_id);
         if (!vendor || !vendor.Phone) continue;
-        const msg = `Hi ${vendor.First_Name || vendor.Name || 'there'}, payment of $${r.amount.toFixed(2)} has been sent for your recent work with Ridge Co. Thank you!`;
-        await smsGatedSend(env, { message_type: 'vendor_paid', recipient_type: 'vendor', vendor, message_body: msg });
+        const sr = await vendorPaidText(env, { vendor, amount: r.amount, qbBillIds: r.bill_ids });
+        r.vendor_text = { sent: !!sr.sent, held: !!sr.held_for_quiet_hours, reason: sr.sent ? '' : String(sr.error || sr.reason || sr.gate_snapshot || 'not sent') };
       }
-    } catch (e) { /* non-fatal — the QuickBooks payment already succeeded; a notification failure must never look like a payment failure */ }
+    } catch (e) {
+      // The QuickBooks payment already succeeded, so this must never look like a payment failure — but it is NOT silent.
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text_failed', Skill_Or_Endpoint: '/qb/pay-bills', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (_) {}
+      for (const r of paidResults) if (!r.vendor_text) r.vendor_text = { sent: false, reason: 'text failed: ' + String((e && e.message) || e).slice(0, 120) };
+    }
   }
   return json({ ok: true, paid: allPaid, paid_total: paidAmt, vendors_paid: results.filter(r => r.paid).length, results,
     log_failed: !logOk,
     ...(!logOk ? { log_warning: 'This batch went through in QuickBooks, but the audit log did NOT save after 2 tries. WRITE THIS DOWN yourself: ' + logDetail + ' — $' + paidAmt + ' — ' + new Date().toISOString() } : {}) });
+}
+
+// ── Vendor "your payment was sent" text (Oct 19 2026) ───────────────────────────────────────────────
+// One text per payment, naming each job by property + unit (a payment can cover several). The job for a QuickBooks
+// bill id is found through Vendor_Bills / Invoice_Review (single + combined sends) and Payment_Milestones
+// (progress bills); a bill that cannot be tied to a job is still listed as "Bill <number>" and reported back, never dropped.
+async function vendorPaidJobs(env, qbBillIds) {
+  const ids = Array.from(new Set((qbBillIds || []).map(x => String(x || '').trim()).filter(Boolean)));
+  const out = { jobs: [], unresolved: [] };
+  if (!ids.length) return out;
+  const [vbs, irs, mss, wos, props, units] = await Promise.all([
+    fetchTab(env, 'Vendor_Bills').catch(() => []), fetchTab(env, 'Invoice_Review').catch(() => []), fetchTab(env, 'Payment_Milestones').catch(() => []),
+    fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'), fetchTab(env, 'Units'),
+  ]);
+  const scopes = mss.length ? await fetchTab(env, 'Scopes').catch(() => []) : [];
+  for (const id of ids) {
+    let woId = '';
+    const vb = vbs.find(b => String(b.QB_Bill_ID || '').trim() === id); if (vb) woId = String(vb.WO_ID || '');
+    if (!woId) { const ir = irs.find(r => String(r.QB_Bill_ID || '').trim() === id); if (ir) woId = String(ir.WO_ID || ''); }
+    if (!woId) { const m = mss.find(r => String(r.QB_Bill_ID || '').trim() === id); const sc = m && scopes.find(x => String(x.ID) === String(m.Scope_ID)); if (sc) woId = String(sc.WO_ID || ''); }
+    const wo = woId ? findWO(wos, woId) : null;
+    if (!wo) { out.unresolved.push(id); continue; }
+    const loc = propUnitText(props.find(p => String(p.ID) === String(wo.Property_ID)), units.find(u => String(u.ID) === String(wo.Unit_ID)));
+    out.jobs.push({ bill_id: id, wo_id: wo.ID, text: (loc || 'the property') + ' (' + wo.ID + ')' });
+  }
+  return out;
+}
+async function vendorPaidMessage(env, o) {
+  const { vendor, amount, qbBillIds } = o;
+  const j = await vendorPaidJobs(env, qbBillIds);
+  const parts = Array.from(new Set(j.jobs.map(x => x.text)));
+  for (const id of j.unresolved) parts.push('bill ' + id);
+  const jobs = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : (parts[0] || 'your recent work');
+  let tpl = null; try { tpl = await getMessageTemplate(env, 'vendor_paid', 'sms'); } catch (_) {}
+  const def = DEFAULT_MESSAGE_TEMPLATES.find(t => t.Message_Type === 'vendor_paid' && t.Channel === 'sms');
+  const text = renderTemplate(tpl ? tpl.Body : def.Body, { FirstName: vendorFirstName(vendor), Amount: fmtMoney(amount), Jobs: jobs, HubUrl: HUB_URL }).replace(/\s+/g, ' ').trim();
+  return { text, jobs: j.jobs, unresolved: j.unresolved };
+}
+async function vendorPaidText(env, o) {
+  const m = await vendorPaidMessage(env, o);
+  const r = await smsGatedSend(env, { message_type: 'vendor_paid', recipient_type: 'vendor', vendor: o.vendor, message_body: m.text });
+  return Object.assign({}, r, { unresolved_bills: m.unresolved });
+}
+// POST /qb/notify-vendor-paid { vendor_id, amount, qb_bill_ids[], preview? } — the manual trigger, for when Brett paid
+// in QuickBooks himself (instant payment) so the Hub never saw the payment. preview:true returns the exact text.
+async function qbNotifyVendorPaid(env, body) {
+  const amount = money2(body && body.amount);
+  const ids = Array.isArray(body && body.qb_bill_ids) ? body.qb_bill_ids : [];
+  if (!body || !body.vendor_id) return json({ ok: false, error: 'vendor_id required' }, 400);
+  if (!(amount > 0)) return json({ ok: false, error: 'Enter the amount that was sent.' }, 400);
+  if (!ids.length) return json({ ok: false, error: 'qb_bill_ids required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === String(body.vendor_id));
+  if (!vendor) return json({ ok: false, error: 'Vendor not found' }, 404);
+  const preview = !(body.preview === false);
+  const m = await vendorPaidMessage(env, { vendor, amount, qbBillIds: ids });
+  const warnings = m.unresolved.length ? ['Could not tie QuickBooks bill ' + m.unresolved.join(', ') + ' to a job — it is listed by bill number in the text.'] : [];
+  if (!vendor.Phone) return json({ ok: false, preview, error: (vendor.Name || 'This vendor') + ' has no phone number — no text can be sent.', message: m.text, warnings }, 400);
+  if (preview) return json({ ok: true, preview: true, to: vendor.Name || '', phone: vendor.Phone, message: m.text, warnings });
+  const r = await smsGatedSend(env, { message_type: 'vendor_paid', recipient_type: 'vendor', vendor, message_body: m.text });
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text', Skill_Or_Endpoint: '/qb/notify-vendor-paid', Success: r.sent || r.held_for_quiet_hours ? 'TRUE' : 'FALSE', Notes: ('vendor=' + vendor.ID + ' amount=' + amount + ' bills=' + ids.join(',') + ' ' + (r.gate_snapshot || '')).slice(0, 300) }); } catch (_) {}
+  const sent = !!r.sent, held = !!r.held_for_quiet_hours;
+  return json({ ok: sent || held, sent, held, test_mode: !!r.test_mode, message: m.text, warnings,
+    error: (sent || held) ? '' : ('Text not sent: ' + String(r.error || r.gate_snapshot || 'blocked by the SMS gate')) });
 }
 
 // POST /qb/clear-ir-bill  { ir_id }
@@ -30024,10 +30204,17 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
   const invoicePayload = { Line: invLines, TxnDate: txnDate, PrivateNote: note };
   const billPayload = {
     Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +vendorCost.toFixed(2),
-      Description: (vendDisplay + ' — ' + tradeName + ' — standalone').slice(0, 4000),
+      Description: (vendDisplay + ' — ' + tradeName + ' — standalone' + (propUnitText(prop, null) ? ' — ' + propUnitText(prop, null) : '')).slice(0, 4000),
       AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
     TxnDate: txnDate, PrivateNote: note,
   };
+  // Instant-pay fee (Oct 19 2026): own visible negative line, only for instant-pay vendors.
+  const _cfgAll = await fetchConfig(env);
+  const _feeCfg = instantFeeConfig(_cfgAll);
+  _feeCfg.warnings.forEach(w => warnings.push(w));
+  const _adj = vendorBillAdjustments({ payable: vendorCost, lang: String(vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en',
+    feeOn: vendorCost > 0 && String(vendor.In_House || '').toUpperCase() !== 'TRUE' && instantPayEnabled(vendor, _cfgAll, body.instant_pay), cfg: _feeCfg, credits: [] });
+  for (const l of _adj.lines) billPayload.Line.push({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000), AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } });
   const termDays = vendorTermDays(vendor);
   const dueDate = new Date(txnDate + 'T12:00:00');
   dueDate.setDate(dueDate.getDate() + termDays);
@@ -30044,7 +30231,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
       customer: billToRidgeco ? null : { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', owner_id: (owner && owner.ID) || '' },
       vendor: { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '', vendor_id: vendor.ID || '' },
       invoice: billToRidgeco ? null : { total: +custTotal.toFixed(2), lines: invLines.map(l => ({ desc: l.Description, amount: l.Amount })) },
-      bill: { total: +vendorCost.toFixed(2), account: trade.expense, skipped: vendorCost <= 0 },
+      bill: { total: +_adj.bill_total.toFixed(2), gross_total: +vendorCost.toFixed(2), fee: _adj.fee, account: trade.expense, skipped: vendorCost <= 0 },
       already: { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
       warnings,
     }});
@@ -30096,6 +30283,427 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
   });
   if (errors.length) return json({ ok: false, error: errors.join('; '), warnings, invoice_id: invoiceId, bill_id: billId });
   return json({ ok: true, invoice_id: invoiceId, bill_id: billId, status, warnings });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SIGNED-PROPOSAL NETTING + INSTANT-PAY FEE (Oct 19 2026, Brett)
+// Real incident: 20 E Eager St (WO-1246, Scope 10). The owner signed a proposal, the Hub billed the
+// 40% deposit through the milestone path (invoice 1759, vendor bill paid), then the job finished and
+// the NORMAL Review Bills -> Send to QuickBooks path built invoice 1764 for the FULL $3,810 and a
+// vendor bill for the FULL $2,900. qbSendInvoice knew nothing about signed proposals, so the deposit
+// was billed twice and Cesar would have been paid his deposit twice. The same path also never took
+// Cesar's instant-pay fee (the Oct 14 brief was designed but never built).
+//
+// What this block does, in ONE place so the single-bill path, the combined path and the progress-bill
+// button can never disagree:
+//   • finds the signed proposal behind a bill (linked by WO, or same property + vendor), auto-suggests
+//     it, and makes Brett confirm (plus confirm the job is complete) before anything is netted;
+//   • nets what was already invoiced to the customer (negative invoice line, all job lines kept) and
+//     already billed to the vendor (negative bill line);
+//   • takes the instant-pay fee as its own visible negative line, PER PAYMENT, only for vendors with
+//     Instant_Pay on, using Config instant_fee_rate / instant_fee_min / instant_fee_max;
+//   • closes the proposal's remaining milestones so the progress-bill button can never bill them again.
+// Pure helpers first (unit-tested straight from this file), then the I/O around them.
+
+const INSTANT_FEE_DEFAULTS = { rate: 0.01, min: 10, max: 100 };
+const INSTANT_FEE_LABEL_EN = 'Instant/next-day payment processing fee recovery';
+const INSTANT_FEE_LABEL_ES = 'Recuperación de cargo por procesamiento de pago instantáneo/al día siguiente';
+
+// Half-up to cents. The 1e-7 nudge defeats binary float (1.005 -> 1.01, not 1.00).
+function money2(n) {
+  const x = Number(n);
+  if (!isFinite(x)) return 0;
+  return (x < 0 ? -1 : 1) * Math.round(Math.abs(x) * 100 + 1e-7) / 100;
+}
+
+// Fee schedule from Config (never hard-coded; a rate change is a Config edit, not a deploy).
+// A bad value falls back to the default AND says so in `warnings` so it is never silent.
+function instantFeeConfig(cfg) {
+  const out = { rate: INSTANT_FEE_DEFAULTS.rate, min: INSTANT_FEE_DEFAULTS.min, max: INSTANT_FEE_DEFAULTS.max, warnings: [] };
+  const read = (key) => {
+    if (!cfg) return null;
+    const raw = cfg[key] != null ? cfg[key] : cfg[key.toUpperCase()];
+    if (raw == null || String(raw).trim() === '') return null;
+    const n = Number(String(raw).replace(/[$,%\s]/g, ''));
+    return isFinite(n) ? n : NaN;
+  };
+  const rate = read('instant_fee_rate'), min = read('instant_fee_min'), max = read('instant_fee_max');
+  if (rate !== null) { if (rate > 0 && rate < 1) out.rate = rate; else out.warnings.push('Config instant_fee_rate "' + rate + '" is not a fraction between 0 and 1 (1% is 0.01) — using ' + INSTANT_FEE_DEFAULTS.rate + '.'); }
+  if (min !== null) { if (min >= 0) out.min = min; else out.warnings.push('Config instant_fee_min is not a valid amount — using ' + INSTANT_FEE_DEFAULTS.min + '.'); }
+  if (max !== null) { if (max > 0) out.max = max; else out.warnings.push('Config instant_fee_max is not a valid amount — using ' + INSTANT_FEE_DEFAULTS.max + '.'); }
+  if (out.max < out.min) { out.warnings.push('Config instant_fee_max is below instant_fee_min — using the defaults.'); out.min = INSTANT_FEE_DEFAULTS.min; out.max = INSTANT_FEE_DEFAULTS.max; }
+  return out;
+}
+const clampFee = (v, cfg) => Math.min(cfg.max, Math.max(cfg.min, v));
+// PADDED jobs (the fee was added to the vendor's price up front): pad = clamp(round(net x rate)).
+function instantFeePad(net, cfg) {
+  const c = cfg || INSTANT_FEE_DEFAULTS;
+  const n = Number(net);
+  if (!(n > 0)) return 0;
+  return money2(clampFee(money2(n * c.rate), c));
+}
+// LEGACY / already-priced bills: Brett sends bill - deduction, and QuickBooks' own 1% of THAT
+// amount equals the deduction. deduction = clamp(round(bill - bill/(1+rate))). Never more than the bill.
+function instantFeeLegacyDeduction(bill, cfg) {
+  const c = cfg || INSTANT_FEE_DEFAULTS;
+  const b = Number(bill);
+  if (!(b > 0)) return 0;
+  const d = money2(clampFee(money2(b - b / (1 + c.rate)), c));
+  return Math.min(d, money2(b));
+}
+// Is this vendor paid instantly? Per-bill override first (the Review Bills toggle), then the vendor's
+// own Instant_Pay, then Config instant_pay_default_vendor_ids (Cesar, vendor 3, by default).
+function instantPayEnabled(vendor, cfg, override) {
+  if (override === true || override === false) return override;
+  if (typeof override === 'string' && /^(true|false)$/i.test(override)) return override.toLowerCase() === 'true';
+  const own = String((vendor && vendor.Instant_Pay) || '').trim().toUpperCase();
+  if (own === 'TRUE') return true;
+  if (own === 'FALSE') return false;
+  const raw = cfg && (cfg.instant_pay_default_vendor_ids != null ? cfg.instant_pay_default_vendor_ids : cfg.INSTANT_PAY_DEFAULT_VENDOR_IDS);
+  const ids = String(raw != null && String(raw).trim() !== '' ? raw : '3').split(',').map(s => s.trim()).filter(Boolean);
+  return !!(vendor && vendor.ID != null && ids.includes(String(vendor.ID)));
+}
+
+// "20 E Eager St Apt 3" — property + unit, for vendor bills and every text (Brett Oct 19).
+function propUnitText(property, unit) {
+  const addr = String((property && (property.Address || property.Property_Address)) || '').trim();
+  const u = unit && unit.Unit_Label ? formatUnitLabel(unit.Unit_Label) : '';
+  return (addr + (u ? ' ' + u : '')).trim();
+}
+
+// ── Where does a signed proposal stand? ──────────────────────────────────────
+// Normalises BOTH shapes: Payment_Milestones rows (signed after Sep 14) and the legacy 50/50
+// deposit/final columns on Scope_Signatures. Each item says whether it has been invoiced to the
+// customer and whether a vendor bill was raised for it.
+function proposalBillingState(sig, milestonesAll) {
+  sig = sig || {};
+  const ms = (milestonesAll || [])
+    .filter(m => String(m.Signature_ID) === String(sig.ID) && String(m.Active || '').toUpperCase() !== 'FALSE')
+    .sort((a, b) => (+a.Sequence || 0) - (+b.Sequence || 0));
+  const subtotal = money2(+sig.Subtotal || 0), vendorCostTotal = money2(+sig.Vendor_Cost_Total || 0);
+  if (ms.length) {
+    const payable = scopeVendorPayableSchedule(ms.map(m => ({
+      id: m.ID, sequence: +m.Sequence || 0, vendor_amount: +m.Vendor_Amount || 0,
+      vendor_paid: String(m.Vendor_Paid_At_This_Milestone || 'TRUE').toUpperCase() !== 'FALSE',
+    })));
+    const pay = {}; payable.forEach(p => { pay[p.id] = p.vendor_payable; });
+    return { mode: 'milestones', signed_total: subtotal, vendor_cost_total: vendorCostTotal, items: ms.map(m => ({
+      id: m.ID, label: m.Label || 'Payment', customer_amount: money2(+m.Customer_Amount || 0), vendor_payable: money2(pay[m.ID] || 0),
+      billed: String(m.Status || 'pending') === 'billed',
+      invoice_id: m.QB_Invoice_ID || '', invoice_number: m.QB_Invoice_Number || '', bill_id: m.QB_Bill_ID || '', bill_number: m.QB_Bill_Number || '',
+    })) };
+  }
+  const deposit = money2(+sig.Deposit_Amount || 0);
+  const depVendor = money2(vendorCostTotal * (subtotal > 0 ? deposit / subtotal : 0.5));
+  return { mode: 'legacy', signed_total: subtotal, vendor_cost_total: vendorCostTotal, items: [
+    { id: 'legacy-deposit', label: 'Deposit', customer_amount: deposit, vendor_payable: depVendor, billed: !!sig.QB_Invoice_ID,
+      invoice_id: sig.QB_Invoice_ID || '', invoice_number: sig.QB_Invoice_Number || '', bill_id: sig.QB_Bill_ID || '', bill_number: sig.QB_Bill_Number || '' },
+    { id: 'legacy-final', label: 'Final balance', customer_amount: money2(subtotal - deposit), vendor_payable: money2(vendorCostTotal - depVendor), billed: !!sig.QB_Final_Invoice_ID,
+      invoice_id: sig.QB_Final_Invoice_ID || '', invoice_number: sig.QB_Final_Invoice_Number || '', bill_id: sig.QB_Final_Bill_ID || '', bill_number: sig.QB_Final_Bill_Number || '' },
+  ] };
+}
+
+// Which signed proposals could this bill belong to? 'linked' = the proposal sits on the bill's own
+// work order (or the WO points at it). 'same_property_vendor' = a different WO, same property and the
+// same vendor (Fort Ave: the bill is on WO-1154, the proposal on WO-1180) — only offered while the
+// proposal still has something unbilled. A linked proposal that is already fully invoiced is still
+// returned (fully_billed) so the send is stopped instead of billing the job a second time.
+function proposalCandidatesForBill(o) {
+  const { woId, wo, vendorId, scopes, sigs, milestones } = o;
+  const out = [];
+  for (const scope of (scopes || [])) {
+    if (String(scope.Active || '').toUpperCase() === 'FALSE') continue;
+    const sig = (sigs || []).filter(r => String(r.Scope_ID) === String(scope.ID) && String(r.Active || '').toUpperCase() !== 'FALSE')
+      .sort((a, b) => (+b.ID || 0) - (+a.ID || 0))[0];
+    if (!sig) continue;
+    const linked = (woId && String(scope.WO_ID || '') === String(woId)) || !!(wo && wo.Scope_ID && String(scope.ID) === String(wo.Scope_ID));
+    let weak = false;
+    if (!linked && wo && wo.Property_ID && String(scope.Property_ID || '') === String(wo.Property_ID)
+        && vendorId && String(scope.Vendor_ID || '') === String(vendorId)) {
+      weak = !(scope.Unit_ID && wo.Unit_ID && String(scope.Unit_ID) !== String(wo.Unit_ID));
+    }
+    if (!linked && !weak) continue;
+    const state = proposalBillingState(sig, milestones);
+    const fullyBilled = state.items.length > 0 && state.items.every(i => i.billed);
+    if (!linked && fullyBilled) continue;
+    out.push({ scope, sig, state, link: linked ? 'linked' : 'same_property_vendor', fully_billed: fullyBilled });
+  }
+  out.sort((a, b) => (a.link === b.link ? 0 : (a.link === 'linked' ? -1 : 1)) || ((+b.sig.ID || 0) - (+a.sig.ID || 0)));
+  return out;
+}
+
+// What changes if this bill closes out this proposal. grossCustomer / grossVendor are what Review
+// Bills approved (the whole job). Credits are what was ALREADY invoiced to the customer / billed to the
+// vendor on earlier payments; the new invoice and bill carry only the balance.
+function proposalNettingPlan(o) {
+  const { state, grossCustomer, grossVendor } = o;
+  const items = state.items || [];
+  const billed = items.filter(i => i.billed), pending = items.filter(i => !i.billed);
+  const creditCustomer = money2(billed.reduce((s, i) => s + i.customer_amount, 0));
+  const creditVendor = money2(billed.reduce((s, i) => s + (i.bill_id ? i.vendor_payable : 0), 0));
+  const gc = money2(grossCustomer), gv = money2(grossVendor);
+  const netCustomer = money2(gc - creditCustomer), netVendor = money2(gv - creditVendor);
+  const labelList = billed.map(i => i.label).join(' + ');
+  const uniq = (arr) => Array.from(new Set(arr.filter(Boolean)));
+  const invNums = uniq(billed.map(i => i.invoice_number || i.invoice_id)).join(', ');
+  const billNums = uniq(billed.map(i => i.bill_number || i.bill_id)).join(', ');
+  const problems = [], warnings = [];
+  if (!pending.length) problems.push({ code: 'fully_billed', text: 'Every payment on this proposal is already invoiced' + (invNums ? ' (invoice ' + invNums + ')' : '') + ' — sending this would bill the job a second time.' });
+  else if (netCustomer <= 0.005) problems.push({ code: 'nothing_left', text: 'After the $' + creditCustomer.toFixed(2) + ' already invoiced there is nothing left to bill ($' + gc.toFixed(2) + ' job total).' });
+  if (netVendor < -0.005) problems.push({ code: 'vendor_over_credit', text: 'The vendor was already billed $' + creditVendor.toFixed(2) + ', which is more than this bill ($' + gv.toFixed(2) + ').' });
+  const signed = money2(state.signed_total);
+  const overbill = signed > 0 && gc > signed + 0.01;
+  if (overbill) problems.push({ code: 'overbill', overridable: true, text: 'This job totals $' + gc.toFixed(2) + ' but the customer signed for $' + signed.toFixed(2) + ' — billing it would charge $' + money2(gc - signed).toFixed(2) + ' more than the signed proposal.' });
+  else if (signed > 0 && gc < signed - 0.01) warnings.push('This job totals $' + gc.toFixed(2) + ', which is $' + money2(signed - gc).toFixed(2) + ' less than the signed proposal ($' + signed.toFixed(2) + '). Fix the customer total on the bill first if the full contract amount should be billed.');
+  return {
+    mode: state.mode, signed_total: signed,
+    billed: billed.map(i => ({ id: i.id, label: i.label, customer_amount: i.customer_amount, vendor_payable: i.vendor_payable, invoice: i.invoice_number || i.invoice_id, bill: i.bill_number || i.bill_id, vendor_billed: !!i.bill_id })),
+    pending: pending.map(i => ({ id: i.id, label: i.label, customer_amount: i.customer_amount, vendor_payable: i.vendor_payable })),
+    nothing_billed: billed.length === 0,
+    gross_customer: gc, gross_vendor: gv, credit_customer: creditCustomer, credit_vendor: creditVendor, net_customer: netCustomer, net_vendor: netVendor,
+    customer_label: creditCustomer > 0 ? ('Less: ' + labelList + ' already invoiced' + (invNums ? ' (Invoice ' + invNums + ')' : '')) : '',
+    vendor_label_en: creditVendor > 0 ? ('Less: ' + labelList + ' already billed to you' + (billNums ? ' (Bill ' + billNums + ')' : '')) : '',
+    vendor_label_es: creditVendor > 0 ? ('Menos: ' + labelList + ' ya facturado' + (billNums ? ' (Factura ' + billNums + ')' : '')) : '',
+    problems, warnings,
+  };
+}
+
+// The vendor bill's extra lines: proposal credit(s), then the instant-pay fee. Every adjustment is a
+// visible line to the vendor (never a silently smaller total). `payable` is the amount the main work
+// line carries after any loan deduction. `bill_total` is what the whole bill adds up to = what Brett sends.
+function vendorBillAdjustments(o) {
+  const { payable, credits, feeOn, cfg, lang, feeOverride } = o;
+  const es = lang === 'es';
+  const lines = [], notes = [];
+  let running = money2(payable);
+  for (const c of (credits || [])) {
+    const amt = money2(c.amount);
+    if (!(amt > 0)) continue;
+    lines.push({ type: c.type || 'proposal_credit', desc: es ? (c.desc_es || c.desc) : c.desc, amount: -amt });
+    running = money2(running - amt);
+  }
+  let fee = 0;
+  if (feeOn && running > 0) {
+    fee = (typeof feeOverride === 'number' && isFinite(feeOverride)) ? Math.min(money2(feeOverride), running) : instantFeeLegacyDeduction(running, cfg);
+    if (fee > 0) {
+      lines.push({ type: 'instant_fee', desc: es ? INSTANT_FEE_LABEL_ES : INSTANT_FEE_LABEL_EN, amount: -fee });
+      running = money2(running - fee);
+      if (running <= 0.005) notes.push('The instant-pay fee takes the whole payment (it is below the fee minimum) — the vendor nets $0 on this bill.');
+    }
+  } else if (feeOn) {
+    notes.push('Nothing is payable on this bill after the adjustments, so no instant-pay fee applies.');
+  }
+  return { lines, fee, bill_total: running, notes };
+}
+
+// ── I/O around the pure helpers ──────────────────────────────────────────────
+
+// updateRow reports success even when it matched no column (a missing header is silently dropped), so
+// a write that matters is read back and compared. Throws on any mismatch — never a quiet "saved".
+async function updateRowVerified(env, tab, id, fields) {
+  const res = await updateRow(env, tab, id, fields);
+  let j = null; try { j = await res.clone().json(); } catch (_) {}
+  if (!j || j.success !== true || j.message === 'No matching fields') throw new Error(tab + ' row ' + id + ' was not updated (' + ((j && (j.error || j.message)) || (res && res.status)) + ')');
+  invalidateTabCache(tab);
+  const back = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+  if (!back) throw new Error(tab + ' row ' + id + ' did not read back after the update');
+  const bad = Object.keys(fields).filter(k => String(back[k] == null ? '' : back[k]) !== String(fields[k] == null ? '' : fields[k]));
+  if (bad.length) throw new Error(tab + ' row ' + id + ' did not keep: ' + bad.join(', '));
+  return back;
+}
+
+const NETTING_IR_COLS = ['Proposal_Applied', 'Proposal_Scope_ID', 'Proposal_Vendor_ID', 'Proposal_Signature_ID', 'Proposal_Mode', 'Proposal_Milestone_IDs',
+  'Proposal_Credit_Customer', 'Proposal_Credit_Vendor', 'Proposal_Customer_Label', 'Proposal_Vendor_Label', 'Proposal_Vendor_Label_ES',
+  'Proposal_Closed', 'Instant_Pay', 'Instant_Fee'];
+
+// Summary of one candidate for the preview (never raw sheet rows).
+function nettingCandidateSummary(c, plan) {
+  return {
+    scope_id: String(c.scope.ID), signature_id: String(c.sig.ID), title: c.scope.Title || '', wo_id: c.scope.WO_ID || '',
+    link: c.link, fully_billed: !!c.fully_billed, signer: c.sig.Signer_Name || '', signed_date: c.sig.Signed_Date || '',
+    signed_total: money2(+c.sig.Subtotal || 0),
+    billed: plan.billed, pending: plan.pending, credit_customer: plan.credit_customer, credit_vendor: plan.credit_vendor,
+    net_customer: plan.net_customer, net_vendor: plan.net_vendor, nothing_billed: plan.nothing_billed,
+    problems: plan.problems, warnings: plan.warnings,
+  };
+}
+
+// Find the signed proposal behind a bill and decide what to net. Used by the single-bill path and the
+// combined path alike.
+//   o: { body, ir, woId, wo, vendorId, grossCustomer, grossVendor, previewOnly }
+// Returns { block, applied, skipped, stop }:
+//   block   — what the preview shows (candidates, the selection, whether Brett still has to decide)
+//   applied — the plan to apply (only once Brett chose "apply" and confirmed the job is complete)
+//   stop    — { status, payload } when the send must not proceed (nothing has been written)
+async function qbResolveProposalNetting(env, o) {
+  const { body, ir, woId, wo, vendorId, grossCustomer, grossVendor, previewOnly } = o;
+  const decisionIn = (body && body.netting && typeof body.netting === 'object') ? body.netting : null;
+  const alreadyInQB = !!(String(ir.QB_Invoice_ID || '').trim() || String(ir.QB_Bill_ID || '').trim());
+
+  // A send that already recorded its decision (a retry after the invoice or bill half failed) reuses it
+  // EXACTLY — re-reading live data now would count this very invoice's milestones as "already billed".
+  // Only a send that never reached QuickBooks may be re-decided.
+  const storedState = String(ir.Proposal_Applied || '').toUpperCase();
+  if (storedState && (alreadyInQB || !decisionIn)) {
+    if (storedState === 'TRUE') {
+      const p = {
+        mode: ir.Proposal_Mode || 'milestones', signed_total: 0, billed: [], pending: [], nothing_billed: false,
+        gross_customer: money2(grossCustomer), gross_vendor: money2(grossVendor),
+        credit_customer: money2(+ir.Proposal_Credit_Customer || 0), credit_vendor: money2(+ir.Proposal_Credit_Vendor || 0),
+        customer_label: ir.Proposal_Customer_Label || '', vendor_label_en: ir.Proposal_Vendor_Label || '', vendor_label_es: ir.Proposal_Vendor_Label_ES || ir.Proposal_Vendor_Label || '',
+        problems: [], warnings: [],
+      };
+      p.net_customer = money2(p.gross_customer - p.credit_customer); p.net_vendor = money2(p.gross_vendor - p.credit_vendor);
+      return { block: { found: true, stored: true, decision: 'apply', scope_id: String(ir.Proposal_Scope_ID || ''), plan: p }, applied: { plan: p, stored: true,
+        scope_id: String(ir.Proposal_Scope_ID || ''), vendor_id: String(ir.Proposal_Vendor_ID || ''), signature_id: String(ir.Proposal_Signature_ID || ''), milestone_ids: String(ir.Proposal_Milestone_IDs || '').split(',').filter(Boolean) }, skipped: null, stop: null };
+    }
+    if (storedState === 'SKIPPED') return { block: { found: true, stored: true, decision: 'skip' }, applied: null, skipped: { stored: true }, stop: null };
+  }
+
+  let scopes, sigs, milestones;
+  try {
+    const orEmpty = e => { if (isMissingTabError(e)) return []; throw e; };
+    [scopes, sigs, milestones] = await Promise.all([
+      fetchTab(env, 'Scopes').catch(orEmpty), fetchTab(env, 'Scope_Signatures').catch(orEmpty), fetchTab(env, 'Payment_Milestones').catch(orEmpty),
+    ]);
+  } catch (e) {
+    // "Couldn't check" is NOT "no proposal" — sending now could bill a signed job twice.
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_check_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+    return { block: null, applied: null, skipped: null, stop: { status: 503, payload: { ok: false, netting_check_failed: true,
+      error: 'Could not check whether this job is on a signed proposal (' + String((e && e.message) || e).slice(0, 120) + ') — nothing was sent. Try again in a moment.' } } };
+  }
+
+  const cands = proposalCandidatesForBill({ woId, wo, vendorId, scopes, sigs, milestones });
+  if (!cands.length) return { block: { found: false }, applied: null, skipped: null, stop: null };
+
+  const plans = cands.map(c => proposalNettingPlan({ state: c.state, grossCustomer, grossVendor }));
+  const wantScope = decisionIn && decisionIn.scope_id != null ? String(decisionIn.scope_id) : '';
+  let selIdx = wantScope ? cands.findIndex(c => String(c.scope.ID) === wantScope) : -1;
+  const decisionKind = decisionIn ? String(decisionIn.decision || '').toLowerCase() : '';
+  const block = {
+    found: true, stored: false, decision: decisionKind === 'apply' || decisionKind === 'skip' ? decisionKind : '',
+    candidates: cands.map((c, i) => nettingCandidateSummary(c, plans[i])),
+    scope_id: String(cands[selIdx >= 0 ? selIdx : 0].scope.ID),
+    job_complete: !!(decisionIn && decisionIn.job_complete === true),
+    needs_decision: true,
+  };
+  const mk = (status, payload) => ({ block, applied: null, skipped: null, stop: { status, payload: Object.assign({ ok: false, netting: block }, payload) } });
+
+  if (decisionKind === 'skip') { block.needs_decision = false; return { block, applied: null, skipped: { scope_ids: cands.map(c => String(c.scope.ID)) }, stop: null }; }
+
+  if (decisionKind !== 'apply') {
+    if (previewOnly) return { block, applied: null, skipped: null, stop: null };
+    return mk(409, { netting_required: true, error: 'This bill looks like it belongs to the signed proposal "' + (cands[0].scope.Title || ('Scope #' + cands[0].scope.ID)) + '" (Scope #' + cands[0].scope.ID + '). Open Preview & Send and confirm whether to net what was already billed, or mark it as not part of a proposal. Nothing was sent.' });
+  }
+
+  if (selIdx < 0) {
+    if (previewOnly) return { block, applied: null, skipped: null, stop: null };
+    return mk(409, { netting_required: true, error: 'The proposal you picked (Scope #' + wantScope + ') is not one of the proposals this bill can belong to. Reload the preview and pick again. Nothing was sent.' });
+  }
+  const cand = cands[selIdx], plan = plans[selIdx];
+  block.scope_id = String(cand.scope.ID); block.needs_decision = false; block.plan = plan;
+  const blocking = plan.problems.filter(p => !(p.overridable && body && body.override_overbill === true));
+  if (!previewOnly) {
+    if (decisionIn.job_complete !== true) return mk(409, { job_complete_required: true, error: 'Confirm the job is complete before billing the proposal\'s remaining balance. Nothing was sent.' });
+    if (blocking.length) return mk(409, { netting_blocked: true, overbill: blocking.some(p => p.code === 'overbill'), error: blocking.map(p => p.text).join(' ') + ' Nothing was sent.' });
+  }
+  return { block, applied: { plan, stored: false, scope_id: String(cand.scope.ID), vendor_id: String(cand.scope.Vendor_ID || ''), signature_id: String(cand.sig.ID), scope: cand.scope, sig: cand.sig,
+    milestone_ids: plan.mode === 'milestones' ? plan.pending.map(p => p.id) : [], pending: plan.pending }, skipped: null, stop: null };
+}
+
+// Record the decision on the Invoice_Review row BEFORE anything is written to QuickBooks, verified by a
+// read-back. If this cannot be saved nothing is sent: a retry must see exactly what this attempt decided.
+async function qbPersistNettingDecision(env, irId, o) {
+  await ensureColumns(env, 'Invoice_Review', NETTING_IR_COLS);
+  const f = {};
+  if (o.applied) {
+    const a = o.applied, p = a.plan;
+    Object.assign(f, {
+      Proposal_Applied: 'TRUE', Proposal_Scope_ID: a.scope_id, Proposal_Vendor_ID: a.vendor_id || '', Proposal_Signature_ID: a.signature_id, Proposal_Mode: p.mode,
+      Proposal_Milestone_IDs: (a.milestone_ids || []).join(','), Proposal_Credit_Customer: String(p.credit_customer), Proposal_Credit_Vendor: String(p.credit_vendor),
+      Proposal_Customer_Label: p.customer_label, Proposal_Vendor_Label: p.vendor_label_en, Proposal_Vendor_Label_ES: p.vendor_label_es, Proposal_Closed: 'FALSE',
+    });
+  } else if (o.skipped) {
+    Object.assign(f, { Proposal_Applied: 'SKIPPED', Proposal_Scope_ID: (o.skipped.scope_ids || []).join(',') });
+  }
+  if (o.fee) Object.assign(f, { Instant_Pay: o.fee.on ? 'TRUE' : 'FALSE', Instant_Fee: String(o.fee.amount || 0) });
+  if (!Object.keys(f).length) return;
+  await updateRowVerified(env, 'Invoice_Review', irId, f);
+}
+
+// After the QuickBooks invoice (and bill) exist: mark the proposal's remaining payments billed so the
+// progress-bill button can never bill them again, close the scope, and roll the WO's billed total.
+// Idempotent (a retry that finally creates the bill fills the bill ids in). Failures are LOUD: the
+// invoice/bill are real and cannot be undone from here, so the proposal page is wrong until fixed.
+async function qbProposalCloseOut(env, o) {
+  const { ir, applied, invoiceId, invoiceNumber, billId, billNumber, errors, warnings } = o;
+  if (!applied || !invoiceId) return;
+  const now = new Date().toISOString();
+  try {
+    const p = applied.plan, sigId = applied.signature_id, scopeId = applied.scope_id;
+    if (p.mode === 'milestones') {
+      await ensureColumns(env, 'Payment_Milestones', ['Billed_Via']);
+      for (const id of (applied.milestone_ids || [])) {
+        await updateRowVerified(env, 'Payment_Milestones', id, { Status: 'billed', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber || '', QB_Bill_ID: billId || '', QB_Bill_Number: billNumber || '', Billed_Date: now, Billed_Via: 'review_bills' });
+      }
+    } else {
+      await ensureColumns(env, 'Scope_Signatures', ['QB_Final_Invoice_ID', 'QB_Final_Invoice_Number', 'QB_Final_Bill_ID', 'QB_Final_Bill_Number', 'Final_Bill_Skip_Reason']);
+      const f = {};
+      const pend = new Set((applied.pending || []).map(x => x.id));
+      if (pend.has('legacy-deposit')) Object.assign(f, { Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber || '', QB_Bill_ID: billId || '', QB_Bill_Number: billNumber || '' });
+      if (pend.has('legacy-final')) Object.assign(f, { QB_Final_Invoice_ID: invoiceId, QB_Final_Invoice_Number: invoiceNumber || '', QB_Final_Bill_ID: billId || '', QB_Final_Bill_Number: billNumber || '', Final_Bill_Skip_Reason: billId ? '' : 'Billed through Review Bills with no vendor bill.' });
+      if (Object.keys(f).length) await updateRowVerified(env, 'Scope_Signatures', sigId, f);
+    }
+    await updateRowVerified(env, 'Scopes', scopeId, { Status: 'fully-invoiced', Updated_Date: now });
+    // WO writeback: the running billed total is the whole job now (absolute, so a retry cannot double it).
+    const billedTotal = money2(p.credit_customer + (+o.netInvoice || 0));
+    const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const note = '[' + ts + '] Final billing via Review Bills — invoice ' + (invoiceNumber || invoiceId) + ' for $' + money2(+o.netInvoice || 0).toFixed(2) +
+      (p.credit_customer > 0 ? ' after $' + p.credit_customer.toFixed(2) + ' already invoiced (' + (p.customer_label || '').replace(/^Less: /, '') + ')' : '') + '; Scope #' + scopeId + ' closed.';
+    const woIds = Array.from(new Set([String(ir.WO_ID || ''), String((applied.scope && applied.scope.WO_ID) || '')].filter(Boolean)));
+    await ensureColumns(env, 'Work_Orders', ['Customer_Charge']);
+    const wosNow = await fetchTab(env, 'Work_Orders');
+    for (const wid of woIds) {
+      const w = findWO(wosNow, wid);
+      if (!w) { warnings.push('Could not find work order ' + wid + ' to record the final billing on it.'); continue; }
+      const fields = { Notes: w.Notes ? (w.Notes + '\n' + note) : note };
+      if (wid === String((applied.scope && applied.scope.WO_ID) || ir.WO_ID)) fields.Customer_Charge = String(billedTotal);
+      await updateWOFields(env, wid, fields);
+    }
+    await updateRowVerified(env, 'Invoice_Review', ir.ID, { Proposal_Closed: 'TRUE' });
+  } catch (e) {
+    const msg = 'Invoice ' + (invoiceNumber || invoiceId) + (billId ? ' and its vendor bill were' : ' was') + ' created in QuickBooks, but marking signed proposal Scope #' + (applied.scope_id || '?') + ' as billed failed: ' + String((e && e.message) || e) + '. Fix the proposal on the Signed Proposals page before billing it again.';
+    errors.push(msg);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_closeout_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' scope=' + (applied.scope_id || '') + ' ' + msg).slice(0, 480) }); } catch (_) {}
+  }
+}
+
+// Undo-send companion: put the proposal's payments back to "pending" so they can be billed again.
+async function qbProposalRevert(env, ir) {
+  if (String(ir.Proposal_Applied || '').toUpperCase() !== 'TRUE' || String(ir.Proposal_Closed || '').toUpperCase() !== 'TRUE') return { reverted: false };
+  const scopeId = String(ir.Proposal_Scope_ID || ''), sigId = String(ir.Proposal_Signature_ID || '');
+  const out = { reverted: true, restored: [] };
+  if (String(ir.Proposal_Mode || '') === 'milestones') {
+    for (const id of String(ir.Proposal_Milestone_IDs || '').split(',').filter(Boolean)) {
+      await updateRowVerified(env, 'Payment_Milestones', id, { Status: 'pending', QB_Invoice_ID: '', QB_Invoice_Number: '', QB_Bill_ID: '', QB_Bill_Number: '', Billed_Date: '', Billed_Via: '' });
+      out.restored.push(id);
+    }
+  } else {
+    const sig = (await fetchTab(env, 'Scope_Signatures')).find(r => String(r.ID) === sigId);
+    if (sig) {
+      const f = {};
+      if (String(sig.QB_Invoice_ID) === String(ir.QB_Invoice_ID)) Object.assign(f, { Status: 'Signed', QB_Invoice_ID: '', QB_Invoice_Number: '', QB_Bill_ID: '', QB_Bill_Number: '' });
+      if (String(sig.QB_Final_Invoice_ID) === String(ir.QB_Invoice_ID)) Object.assign(f, { QB_Final_Invoice_ID: '', QB_Final_Invoice_Number: '', QB_Final_Bill_ID: '', QB_Final_Bill_Number: '', Final_Bill_Skip_Reason: '' });
+      if (Object.keys(f).length) await updateRowVerified(env, 'Scope_Signatures', sigId, f);
+    }
+  }
+  if (scopeId) {
+    const sc = (await fetchTab(env, 'Scopes')).find(r => String(r.ID) === scopeId);
+    await updateRowVerified(env, 'Scopes', scopeId, { Status: 'invoiced', Updated_Date: new Date().toISOString() });
+    // The WO's running billed total goes back to what was billed before this final invoice.
+    if (sc && sc.WO_ID) await updateWOFields(env, sc.WO_ID, { Customer_Charge: String(money2(+ir.Proposal_Credit_Customer || 0)) });
+  }
+  return out;
 }
 
 async function qbSendInvoice(env, body) {
@@ -30188,6 +30796,7 @@ async function qbSendInvoice(env, body) {
         groupRows, bills, vendors, wo: _ctxWo, woList: wos, owner, prop, unit, billTo, trade, tradeName,
         warnings, previewOnly, batch: body.batch, timeEntries: _ctxTimeEntries,
         overridePendingInfo: !!body.override_pending_info,
+        netting: body.netting, overrideOverbill: body.override_overbill === true, instantPay: body.instant_pay,
       });
     }
 
@@ -30213,6 +30822,37 @@ async function qbSendInvoice(env, body) {
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
+
+    // ── Signed-proposal netting + instant-pay fee (Oct 19 2026) ──────────────────────────────
+    // Before this, a job on a signed proposal was billed in FULL here even when its deposit had
+    // already been invoiced and paid (20 E Eager St, invoice 1764). See the block above this function.
+    const cfgAll = await fetchConfig(env);
+    const feeCfg = instantFeeConfig(cfgAll);
+    feeCfg.warnings.forEach(w => warnings.push(w));
+    const vendorLang = String(vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en';
+    const propAddr = propUnitText(prop, unit);
+    const vendorInHousePre = String(vendor.In_House || '').toUpperCase() === 'TRUE';
+    const nres = await qbResolveProposalNetting(env, { body, ir, woId: ir.WO_ID, wo, vendorId: ir.Vendor_ID, grossCustomer: custTotal, grossVendor: vendorInHousePre ? 0 : vendorCost, previewOnly });
+    if (nres.stop) return json(Object.assign({ warnings }, nres.stop.payload), nres.stop.status);
+    const applied = nres.applied;
+    const creditCust = applied ? applied.plan.credit_customer : 0;
+    const creditVend = (applied && !vendorInHousePre) ? applied.plan.credit_vendor : 0;
+    if (applied && creditCust > 0) {
+      inv.lines.push({ DetailType: 'SalesItemLineDetail', Amount: -creditCust, Description: applied.plan.customer_label.slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: -creditCust } });
+    }
+    const netCustTotal = money2(custTotal - creditCust);
+    // Instant-pay fee for THIS payment: the per-bill toggle if Brett set one, else the vendor's own setting.
+    // A retry of a send that already recorded its fee reuses that exact number.
+    const storedFee = (String(ir.Instant_Fee || '').trim() !== '' && (haveInv || haveBill || body.instant_pay === undefined)) ? { on: String(ir.Instant_Pay || '').toUpperCase() === 'TRUE', amount: +ir.Instant_Fee || 0 } : null;
+    const feeOn = storedFee ? storedFee.on : instantPayEnabled(vendor, cfgAll, body.instant_pay);
+    const feeDefaultOn = instantPayEnabled(vendor, cfgAll, undefined);
+    const vendorCostGross = vendorCost;   // snapshot: `vendorCost` is reduced by a loan deduction later on
+    const buildAdj = (loanDed, forceFee) => vendorBillAdjustments({
+      payable: money2(vendorCostGross - (loanDed || 0)), lang: vendorLang, feeOn: (forceFee === true || feeOn) && !vendorInHousePre && vendorCostGross > 0, cfg: feeCfg,
+      feeOverride: storedFee && storedFee.on ? storedFee.amount : undefined,
+      credits: creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [],
+    });
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
     const vendDisplay = vendor.Name || ir.Vendor_Name || ('Vendor ' + (ir.Vendor_ID || ''));
@@ -30243,7 +30883,7 @@ async function qbSendInvoice(env, body) {
       Line: [{
         DetailType: 'AccountBasedExpenseLineDetail',
         Amount: +vendorCost.toFixed(2),
-        Description: (vendDisplay + ' — ' + tradeName + ' — WO ' + ir.WO_ID).slice(0, 4000),
+        Description: (vendDisplay + ' — ' + tradeName + ' — WO ' + ir.WO_ID + (propAddr ? ' — ' + propAddr : '')).slice(0, 4000),
         AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } },
       }],
       TxnDate: txnDate, PrivateNote: note,
@@ -30326,8 +30966,12 @@ async function qbSendInvoice(env, body) {
                     owner_id: (owner && owner.ID) || '', suggest: custSuggest, qb_list: qbCustomers },
         vendor:   { display: vendDisplay, existing_id: vendor.QBO_Vendor_ID || '',
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
-        invoice:  { total: +custTotal.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
-        bill:     { total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
+        invoice:  { total: +netCustTotal.toFixed(2), gross_total: +custTotal.toFixed(2), credit: +creditCust.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
+        netting:  nres.block,
+        fee:      (() => { const a = buildAdj(previewLoanDeduction); return { applies: !vendorInHousePre && vendorCost > 0 && (feeDefaultOn || feeOn), on: feeOn, vendor_default_on: feeDefaultOn, amount: a.fee, amount_if_on: buildAdj(previewLoanDeduction, true).fee, send_amount: a.bill_total, vendor_credit: +creditVend.toFixed(2),
+          rate: feeCfg.rate, min: feeCfg.min, max: feeCfg.max, notes: a.notes,
+          lines: a.lines.map(l => ({ type: l.type, desc: l.desc, amount: l.amount })) }; })(),
+        bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
                     terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
@@ -30352,6 +30996,26 @@ async function qbSendInvoice(env, body) {
         error: `This vendor bill is flagged "Invoiced — Pending Info"${billRow.Pending_Info_Note ? ': ' + billRow.Pending_Info_Note : ''}. Resolve it, or resend with override_pending_info to send anyway.`,
         pending_info: true, pending_info_note: billRow.Pending_Info_Note || '', warnings,
       }, 409);
+    }
+
+    // Size the vendor-side adjustments (loan deduction, proposal credit, instant fee) and RECORD the
+    // decision on the review row before anything is written to QuickBooks — a retry must see exactly
+    // what this attempt decided. If it cannot be saved, nothing is sent.
+    let loanAdjPre = { deduction: 0, laborAmount: 0, balance: 0 };
+    if (!haveBill && vendorCostGross > 0 && !vendorInHousePre && vendor.ID) {
+      try { loanAdjPre = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost: money2(vendorCostGross - creditVend), billRow }); }
+      catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
+    }
+    const adjPre = buildAdj(loanAdjPre.deduction);
+    try {
+      await qbPersistNettingDecision(env, ir.ID, {
+        applied: (applied && !applied.stored) ? applied : null,
+        skipped: (nres.skipped && !nres.skipped.stored) ? nres.skipped : null,
+        fee: (!storedFee && !vendorInHousePre && vendorCostGross > 0) ? { on: feeOn, amount: adjPre.fee } : null,
+      });
+    } catch (e) {
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+      return json({ ok: false, error: 'Could not save the billing decision on this review row (' + String((e && e.message) || e).slice(0, 140) + ') — nothing was sent to QuickBooks.', warnings }, 500);
     }
 
     const token = await qbAccessToken(env);
@@ -30488,15 +31152,19 @@ async function qbSendInvoice(env, body) {
         // comes back real (see computeVendorLoanAdjustment's comment for why: a failed bill
         // POST that gets retried must not deduct twice). General on purpose — any vendor with
         // a nonzero balance gets this, not just Alex.
-        let loanAdj = { deduction: 0, laborAmount: 0, balance: 0 };
-        try {
-          loanAdj = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost, billRow });
-          if (loanAdj.deduction > 0) {
-            vendorCost = +(vendorCost - loanAdj.deduction).toFixed(2);
-            billPayload.Line[0].Amount = +vendorCost.toFixed(2);
-            billPayload.Line[0].Description = (billPayload.Line[0].Description + ` (Loan repayment: $${loanAdj.deduction.toFixed(2)})`).slice(0, 4000);
-          }
-        } catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
+        let loanAdj = loanAdjPre;
+        if (loanAdj.deduction > 0) {
+          vendorCost = +(vendorCost - loanAdj.deduction).toFixed(2);
+          billPayload.Line[0].Amount = +vendorCost.toFixed(2);
+          billPayload.Line[0].Description = (billPayload.Line[0].Description + ` (Loan repayment: $${loanAdj.deduction.toFixed(2)})`).slice(0, 4000);
+        }
+        // Proposal credit + instant-pay fee: each its own visible negative line (never a silently smaller total).
+        const adjFinal = buildAdj(loanAdj.deduction);
+        for (const l of adjFinal.lines) {
+          billPayload.Line.push({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000),
+            AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } });
+        }
+        adjFinal.notes.forEach(n => warnings.push(n));
         billPayload.VendorRef = { value: vendorId };
         // Terms, so the bill reads "Due on receipt" rather than showing a blank term
         // alongside a same-day due date.
@@ -30525,6 +31193,7 @@ async function qbSendInvoice(env, body) {
           if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
         } else {
           billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
           if (loanAdj.deduction > 0) {
             try {
               const newBalance = await recordVendorLoanDeduction(env, {
@@ -30573,9 +31242,15 @@ async function qbSendInvoice(env, body) {
       } catch (e) {}
     }
 
+    // Signed proposal: mark its remaining payments billed (and the scope closed) so the progress-bill
+    // button can never bill them again. Loud on failure — the QuickBooks documents already exist.
+    if (applied && invoiceId) {
+      await qbProposalCloseOut(env, { ir, applied, invoiceId, invoiceNumber: invoiceDocNumber || ir.QB_Invoice_Number || '', billId, billNumber: billDocAssigned || ir.QB_Bill_Number || '', netInvoice: netCustTotal, errors, warnings });
+    }
+
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId,
                   invoice_number: invoiceDocNumber, bill_number: billDocAssigned,
-                  status, errors, warnings });
+                  status, errors, warnings, netted: applied ? { scope_id: applied.scope_id, credit_customer: creditCust, credit_vendor: creditVend, net_invoice: netCustTotal } : null });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
@@ -30656,6 +31331,43 @@ async function qbSendCombinedInvoice(env, ctx) {
     const _distinctWoIds = [...new Set(groupRows.map(r => String(r.WO_ID)))];
     const note = `RidgeCo IR ${groupRows.map(r => r.ID).join('+')} · WO ${_distinctWoIds.join('+')} · Bill ${groupRows.map(r => r.Bill_ID).join('+')}`;
 
+    // ── Signed-proposal netting + instant-pay fee (Oct 19 2026) — same rules as the single-bill path ──
+    const cfgAll = await fetchConfig(env);
+    const feeCfg = instantFeeConfig(cfgAll);
+    feeCfg.warnings.forEach(w => warnings.push(w));
+    const propAddr = propUnitText(ctx.prop, ctx.unit);
+    const leadIr = groupRows[0];
+    const sumVendor = money2(rowBuilds.reduce((sum, rb) => sum + (rb.vendorInHouse ? 0 : rb.vendorCost), 0));
+    const nres = await qbResolveProposalNetting(env, { body: { netting: ctx.netting, override_overbill: ctx.overrideOverbill }, ir: leadIr, woId, wo,
+      vendorId: leadIr.Vendor_ID, grossCustomer: combinedTotal, grossVendor: sumVendor, previewOnly });
+    if (nres.stop) return json(Object.assign({ warnings }, nres.stop.payload), nres.stop.status);
+    const applied = nres.applied;
+    const creditCust = applied ? applied.plan.credit_customer : 0;
+    // The vendor whose bill gets the proposal credit: the proposal's own vendor, else the first paid vendor.
+    const creditRow = applied && applied.plan.credit_vendor > 0
+      ? (rowBuilds.find(rb => !rb.vendorInHouse && applied.vendor_id && String(rb.row.Vendor_ID) === String(applied.vendor_id)) || rowBuilds.find(rb => !rb.vendorInHouse && rb.vendorCost > 0))
+      : null;
+    if (applied && applied.plan.credit_vendor > 0 && (!creditRow || money2(creditRow.vendorCost - applied.plan.credit_vendor) < -0.005)) {
+      return json({ ok: false, netting_blocked: true, netting: nres.block, warnings,
+        error: 'The vendor was already billed $' + applied.plan.credit_vendor.toFixed(2) + ' on this proposal, which is more than the bill it would come off. Send these bills one at a time, or fix the amounts first. Nothing was sent.' }, 409);
+    }
+    if (applied && creditCust > 0) {
+      combinedLines.push({ DetailType: 'SalesItemLineDetail', Amount: -creditCust, Description: applied.plan.customer_label.slice(0, 4000),
+        SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: -creditCust } });
+    }
+    const netCombined = money2(combinedTotal - creditCust);
+    for (const rb of rowBuilds) {
+      const feeDefaultOn = instantPayEnabled(rb.vendor, cfgAll, undefined);
+      // The per-send toggle can only switch a vendor that is already on OFF here; to turn instant pay ON for another vendor, set it on that vendor.
+      rb.feeOn = feeDefaultOn && ctx.instantPay !== false && !rb.vendorInHouse && rb.vendorCost > 0;
+      rb.feeDefaultOn = feeDefaultOn;
+      rb.vendorLang = String(rb.vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en';
+      rb.credit = (creditRow === rb) ? applied.plan.credit_vendor : 0;
+      const mk = (forceOn) => vendorBillAdjustments({ payable: rb.vendorCost, lang: rb.vendorLang, feeOn: (forceOn === true || rb.feeOn) && !rb.vendorInHouse && rb.vendorCost > 0, cfg: feeCfg,
+        credits: rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [] });
+      rb.adj = mk(false); rb.adjIfOn = mk(true);
+    }
+
     const photoFolderId  = wo.Drive_Folder_ID || '';
     const photoFolderUrl = wo.Drive_Folder_URL || (photoFolderId ? ('https://drive.google.com/drive/folders/' + photoFolderId) : '');
     const memoParts = [];
@@ -30685,9 +31397,11 @@ async function qbSendCombinedInvoice(env, ctx) {
           billsPreview.push({
             bill_id: rb.row.Bill_ID,
             vendor: { display: rb.vendDisplay, existing_id: rb.vendor.QBO_Vendor_ID || '', vendor_id: rb.vendor.ID || '', suggest: vendSuggestRow },
-            total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
+            total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
             doc_number: rb.billDoc.number, doc_from: rb.billDoc.source,
             skipped: rb.vendorCost <= 0 || rb.vendorInHouse, in_house: rb.vendorInHouse,
+            fee: { applies: !rb.vendorInHouse && rb.vendorCost > 0 && rb.feeDefaultOn, on: rb.feeOn, vendor_default_on: rb.feeDefaultOn, amount: rb.adj.fee, amount_if_on: rb.adjIfOn.fee, send_amount: rb.adj.bill_total,
+                   vendor_credit: +(rb.credit || 0).toFixed(2), rate: feeCfg.rate, min: feeCfg.min, max: feeCfg.max, notes: rb.adj.notes, lines: rb.adj.lines.map(l => ({ type: l.type, desc: l.desc, amount: l.amount })) },
           });
         }
       } catch (e) { warnings.push('Could not read the QuickBooks customer/vendor list — no match suggestions.'); }
@@ -30705,7 +31419,8 @@ async function qbSendCombinedInvoice(env, ctx) {
                    owner_linked: !!((owner && owner.QBO_Customer_ID) || '').trim() },
         customer: { display: custDisplay, existing_id: (owner && owner.QBO_Customer_ID) || '', email: (owner && (owner.Billing_Email || owner.Email)) || '',
                     owner_id: (owner && owner.ID) || '', suggest: custSuggest, qb_list: qbCustomers },
-        invoice: { total: combinedTotal, lines: combinedLines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+        invoice: { total: netCombined, gross_total: combinedTotal, credit: +creditCust.toFixed(2), lines: combinedLines.map(l => ({ desc: l.Description, amount: l.Amount })) },
+        netting: nres.block,
         bills: billsPreview,
         photo_link: photoFolderUrl,
         warnings,
@@ -30724,6 +31439,18 @@ async function qbSendCombinedInvoice(env, ctx) {
         error: `${pendingInfoRows.length} bill(s) in this group are flagged "Invoiced — Pending Info" (${pendingInfoRows.map(r => r.Bill_ID || r.ID).join(', ')}). Resolve them, or resend with override_pending_info to send anyway.`,
         pending_info: true, warnings,
       }, 409);
+    }
+
+    try {
+      const feeTotal = money2(rowBuilds.reduce((sum, rb) => sum + (rb.adj.fee || 0), 0));
+      await qbPersistNettingDecision(env, leadIr.ID, {
+        applied: (applied && !applied.stored) ? applied : null,
+        skipped: (nres.skipped && !nres.skipped.stored) ? nres.skipped : null,
+        fee: String(leadIr.Instant_Fee || '').trim() === '' ? { on: rowBuilds.some(rb => rb.feeOn), amount: feeTotal } : null,
+      });
+    } catch (e) {
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + leadIr.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+      return json({ ok: false, error: 'Could not save the billing decision on this review row (' + String((e && e.message) || e).slice(0, 140) + ') — nothing was sent to QuickBooks.', warnings }, 500);
     }
 
     const token = await qbAccessToken(env);
@@ -30831,12 +31558,17 @@ async function qbSendCombinedInvoice(env, ctx) {
           dueDate.setDate(dueDate.getDate() + rb.termDays);
           const billPayload = {
             Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +rb.vendorCost.toFixed(2),
-                      Description: (rb.vendDisplay + ' — ' + tradeName + ' — WO ' + rb.row.WO_ID).slice(0, 4000),
+                      Description: (rb.vendDisplay + ' — ' + tradeName + ' — WO ' + rb.row.WO_ID + (propAddr ? ' — ' + propAddr : '')).slice(0, 4000),
                       AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
             TxnDate: txnDate, PrivateNote: `RidgeCo IR ${rb.row.ID} · WO ${rb.row.WO_ID} · Bill ${rb.row.Bill_ID}`,
             DueDate: rb.termDays > 0 ? dueDate.toISOString().split('T')[0] : txnDate,
             VendorRef: { value: vendorId },
           };
+          for (const l of rb.adj.lines) {
+            billPayload.Line.push({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000),
+              AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } });
+          }
+          rb.adj.notes.forEach(n => warnings.push(n));
           if (rb.billDoc.number) billPayload.DocNumber = rb.billDoc.number;
           if (rb.billDoc.overlong) warnings.push(`Vendor invoice number "${rb.billDoc.overlong}" is too long for QuickBooks, so bill ${rb.row.Bill_ID} is numbered ${rb.billDoc.number} instead.`);
           const dueTermId = await qbTermForDays(env, token, rb.termDays);
@@ -30851,7 +31583,10 @@ async function qbSendCombinedInvoice(env, ctx) {
             billId = (br && br.Bill && br.Bill.Id) || '';
           }
           if (!billId) errors.push('Bill (' + rb.vendDisplay + '): ' + (qbFault(br) || 'unknown error'));
-          else rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+          else {
+            rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+            if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
+          }
         }
       } else if (rb.vendorInHouse && rb.vendorCost > 0) {
         warnings.push(`No vendor bill created — ${rb.vendDisplay} is marked in-house, so there's no payable.`);
@@ -30892,8 +31627,14 @@ async function qbSendCombinedInvoice(env, ctx) {
       }
     }
 
+    if (applied && invoiceId) {
+      await qbProposalCloseOut(env, { ir: leadIr, applied, invoiceId, invoiceNumber: invoiceDocNumber || leadIr.QB_Invoice_Number || '',
+        billId: creditRow ? (creditRow.billId || '') : '', billNumber: creditRow ? (creditRow.billDocAssigned || '') : '', netInvoice: netCombined, errors, warnings });
+    }
+
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_ids: rowBuilds.map(rb => rb.billId || ''),
-                  invoice_number: invoiceDocNumber, combined_count: groupRows.length, errors, warnings });
+                  invoice_number: invoiceDocNumber, combined_count: groupRows.length, errors, warnings,
+                  netted: applied ? { scope_id: applied.scope_id, credit_customer: creditCust, credit_vendor: applied.plan.credit_vendor, net_invoice: netCombined } : null });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
