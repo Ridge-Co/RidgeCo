@@ -35126,6 +35126,7 @@ Rules:
 - If the property was built before 1978 and the notes mention peeling, chipping, flaking or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
 - If nothing is wrong, return an empty issues array and area_condition "nothing_to_do" (or "good").
 - Do not repeat issues already recorded; if the dictation updates one, still output it and set "possible_duplicate_of" to the existing title.
+- Wording: never write "licensed", "certified", "qualified", "professional" or "registered" in front of a contractor or trade, and never name a specific trade as the person to hire (no "licensed electrician", "HVAC contractor", "plumber", "structural professional", "pest control"). Whenever a repair needs someone to do it, say "an appropriate contractor" (e.g. "Have an appropriate contractor replace the panel"). Do not mention licensing at all.
 Output a single JSON object and nothing else.`;
 function fiBuildSummaryPrompt(doc, rollup) {
   const lines = [];
