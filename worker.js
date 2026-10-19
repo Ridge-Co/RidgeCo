@@ -35764,7 +35764,7 @@ const FI_TYPE_SEED = [
   'A/C not cooling|hvac|high||Low refrigerant, dirty coil or failed component|Have an appropriate contractor diagnose and repair',
   'Condensate drain clogged or missing|hvac|medium|hvac,basement,attic,utility|Algae or debris in the drain line|Clear the condensate line and install a proper drain',
   'Flue or vent pipe disconnected or corroded|safety|urgent|hvac,furnace,water heater,basement,utility|Age, corrosion or loose joints|Reconnect or replace the vent pipe; check for backdrafting',
-  'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an HVAC contractor inspect the blower and motor',
+  'Noisy blower or unusual equipment noise|hvac|medium|hvac,furnace,basement|Worn bearings or loose parts|Have an appropriate contractor inspect the blower and motor',
   'Thermostat not working|hvac|medium|hall,living|Dead batteries or failed unit|Replace batteries; replace the thermostat if needed',
   'Damaged or missing shingles|roofing|high|roof|Wind, age or storm damage|Repair or replace the damaged shingles',
   'Failed roof flashing or penetration seal|roofing|high|roof|Cracked sealant or loose flashing|Reseal or replace the flashing',
