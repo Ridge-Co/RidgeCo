@@ -35143,7 +35143,7 @@ function fiNormalizeSummary(parsed, rollup) {
   const have = new Set(rollup.map(r => r.trade));
   const trades = {};
   if (parsed.trades && typeof parsed.trades === 'object') for (const [k, v] of Object.entries(parsed.trades)) { if (have.has(k) && typeof v === 'string' && v.trim()) trades[k] = fiStr(v, 700).trim(); }
-  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiStr(p && p.title, 120).trim(), why: fiStr(p && p.why, 300).trim() })).filter(p => p.title);
+  const priorities = (Array.isArray(parsed.priorities) ? parsed.priorities : []).slice(0, 5).map(p => ({ title: fiClean(p && p.title, 120).trim(), why: fiClean(p && p.why, 300).trim() })).filter(p => p.title);
   return { overall, trades, priorities };
 }
 function fiHtmlEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
