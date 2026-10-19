@@ -1135,7 +1135,7 @@ function viewInsp(){
   h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
   h += '<div class="row" style="margin-top:6px"><h2 style="margin:8px 0">Areas in walk-through order</h2><button class="btn sm" onclick="toggleReorder()">'+(S.reorder?'Done':'↕ Reorder')+'</button></div>';
-  if (S.reorder) h += '<div class="card"><div class="muted">Tap ▲ or ▼ to move an area up or down the list. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
+  if (S.reorder) h += '<div class="card"><div class="muted">Hold and drag the <b>≡</b> handle to move an area, or tap ▲ / ▼. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
   h += '<div class="card" style="padding:4px 12px">'+vis.map(function(a,i){ return areaRow(a, i, vis.length); }).join('')+'</div>';
   var ex = doc.areas.filter(function(a){return a.excluded;});
   if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
