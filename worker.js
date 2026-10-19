@@ -35367,6 +35367,7 @@ async function fiReport(env, request, url) {
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
+  fiScrubDocForReport(doc);
   return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
 }
 async function fiStructure(env, body) {
