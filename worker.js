@@ -32486,11 +32486,12 @@ async function qbSendInvoice(env, body) {
       QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
     });
     if (status === 'sent' && ir.WO_ID) {
-      try {
+      const _wr = await tryWrite(env, 'qb_send_invoice_wo_status', async () => {
         await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' });
         // The work order screen reads QBO_Invoice_Number and nothing ever wrote it.
         if (invoiceDocNumber) await updateWOFields(env, ir.WO_ID, { QBO_Invoice_Number: invoiceDocNumber });
-      } catch (e) {}
+      }, 'P1');
+      if (!_wr.ok) failWarnings.push('The invoice was sent, but the work order could not be marked Invoiced (' + _wr.error + ') - set the status by hand.');
     }
 
     // Signed proposal: mark its remaining payments billed (and the scope closed) so the progress-bill
