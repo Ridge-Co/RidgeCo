@@ -35699,47 +35699,93 @@ async function strStageQueue(ctx, J) {
   const rows = [], metas = []; state.texts = [];
   for (const r of J.recipients) {
     const c = ctx.st.cmap[r.cleaner_id], base = { key: r.key, name: r.name, first: r.first, kind: r.kind, dates: r.dates }, tx = J.texts[r.key] || { send: false, text: '' };
-    return json(res);
-  } catch (e) { return await strHandleErr(env, e, 'change apply'); }
-}
-async function strChangeExecute(ctx, req, plan, feed, texts, planId) {
-  const { env, S } = ctx, iso = new Date(ctx.now).toISOString(), cleaner = ctx.st.cmap[req.cleaner_id], errors = ctx.errors, warnings = [], isMark = req.action === 'mark';
-  const refOf = it => it.task_key || it.date, ires = new Map(), failCause = {};
-  for (const it of plan.items) ires.set(refOf(it), it.outcome === 'change' ? { status: 'pending', reason: '' } : { status: it.outcome === 'not_found' ? 'failed' : 'skipped', reason: it.reason });
-  const done = it => (ires.get(refOf(it)) || {}).status === 'done', fail = (it, why) => { ires.set(refOf(it), { status: 'failed', reason: why }); errors.push({ step: 'change_item', error: `${it.label}: ${why}` }); };
-  const toDo = plan.items.filter(i => i.outcome === 'change');
-  // A. the sheet changes, batched and re-read
-  if (!isMark) {
-    invalidateTabCache('STR_Turnovers');
-    const cur = new Map((await fetchTab(env, 'STR_Turnovers')).filter(r => r.Property_Key === STR_PROP).map(r => [r.Task_Key, r])), upd = [], adds = [];
-    for (const it of toDo) {
-      const row = cur.get(it.task_key), f = { Status: 'covered', Assigned_Cleaner_ID: cleaner.ID, Assigned_Via: 'admin_swap', Checkout_Text_Sent: '', Note: '', Updated_At: iso };
-      if (row) { if (row.Status === 'cancelled') { fail(it, 'The booking was cancelled a moment ago.'); continue; } if (row.Status === 'covered' && String(row.Assigned_Cleaner_ID) === cleaner.ID) { ires.set(refOf(it), { status: 'skipped', reason: `${plan.cleaner.first} already has this one.` }); continue; } upd.push({ id: row.ID, fields: f, it }); }
-      else adds.push({ it, f: Object.assign({ Task_Key: it.task_key, Property_Key: STR_PROP, Kind: it.kind, Date: it.date, Win_Start: it._t.winStart, Win_End: it._t.winEnd, Next_Arrival: it._t.next || '', Guests: it._t.guests || '', Missing_Count: '0', Created_At: iso }, f) });
+    const refs = r.refs.filter(x => okRefs.has(x)); if (!c) { state.texts.push(Object.assign(base, { status: 'failed', detail: 'Cleaner not found.' })); continue; }
+    if (!refs.length) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Nothing changed for this person, so no text.' })); continue; }
+    if (!tx.send && (r.can_send || r.kind === 'mark')) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'You unticked this text.' })); continue; }
+    if (!r.can_send) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: r.reason })); state.warnings.push(`${r.name} was NOT texted: ${r.reason} Tell them yourself.`); continue; }
+    let text = tx.text, replaced = false, ds = r.dates;
+    if (refs.length !== r.refs.length) { // some dates failed: Brett's text would be wrong, so use the standard wording for the dates that DID change
+      const its = J.items.filter(i => refs.includes(i.ref)); ds = [...new Set(its.map(i => i.date))].sort();
+      text = (await strRenderRecipient(ctx, r.kind, c, ds, r.kind === 'mark' ? { key: 'x', kind: 'checkout', date: ds[0], next: '' } : its[0]._t, { newC: cleaner, mark: req.mark })).text; replaced = true;
+      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates failed), so your edit was replaced.`);
     }
-    if (upd.length) { let r; try { r = await strBatchSet(env, 'STR_Turnovers', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) fail(u.it, f.error); else ires.set(refOf(u.it), { status: 'done', reason: '' }); } }
-    if (adds.length) { try { await strAddRows(env, 'STR_Turnovers', adds.map(a => a.f)); for (const a of adds) ires.set(refOf(a.it), { status: 'done', reason: 'The scheduler had not picked this date up yet; it was added now.' }); } catch (e) { for (const a of adds) fail(a.it, 'Could not save this date (it may or may not have saved - Refresh and check before retrying): ' + strErrText(e)); } }
-    const okItems = toDo.filter(done);
-    // A2. quietly close any waiting offers on the dates we just assigned
-    const offUpd = []; for (const it of okItems) for (const o of it.offers_closed) offUpd.push({ id: o.id, fields: { Status: o.status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'closed by admin swap' }, it });
-    if (offUpd.length) { let r; try { r = await strBatchSet(env, 'STR_Offers', offUpd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: offUpd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const f of r.failed) { const it = (offUpd.find(u => String(u.id) === String(f.id)) || {}).it; errors.push({ step: 'close_offers', error: `${it ? it.label : ''}: a waiting offer could not be closed (${f.error}). Check the board before anyone replies.` }); const x = ires.get(refOf(it)); if (x) x.flag = 'offer_not_closed'; } }
+    const expect = r.kind === 'mark' ? ds.map(d => ({ date: d, mark: req.mark })) : J.items.filter(i => refs.includes(i.ref)).map(i => ({ task_key: i.task_key, date: i.date, assigned_id: cleaner.ID }));
+    rows.push({ Plan_ID: J.planId, Cleaner_ID: c.ID, Kind: r.kind, Msg_Type: r.type, Body: text, Task_Keys: refs.join(','), Expect: JSON.stringify(expect), Not_Before: win ? iso : heldIso, Status: 'parked', Created_At: iso, Note: '' });
+    metas.push(Object.assign(base, { text, replaced, dates: ds }));
   }
-  // A3. availability marks (displaced cleaners become backup; out-marks cleared; or the whole mark action)
-  const markChanges = []; const markIt = new Map();
-  if (isMark) for (const it of toDo) { markChanges.push({ cleaner, date: it.date, mark: req.mark, source: 'admin' }); markIt.set(cleaner.ID + '|' + it.date, it); }
-  else for (const it of toDo.filter(done)) for (const m of it.marks) { markChanges.push({ cleaner: ctx.st.cmap[m.cleaner_id], date: m.date, mark: m.mark, source: 'admin_swap' }); markIt.set(m.cleaner_id + '|' + m.date, it); }
-  if (markChanges.length) {
-    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner));
-    if (isMark) { for (const it of toDo) { const f = r.failed.find(x => x.key === cleaner.ID + '|' + it.date); if (f) fail(it, 'Could not save the mark: ' + f.error); else ires.set(refOf(it), { status: 'done', reason: '' }); } }
-    else for (const f of r.failed) { const it = markIt.get(f.key); errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); const x = it && ires.get(refOf(it)); if (x) x.flag = 'mark_failed'; }
+  if (rows.length) {
+    try { const ids = await strAddRows(ctx.env, 'STR_Outbox', rows); metas.forEach((m, i) => state.texts.push(Object.assign(m, { status: 'queued', ob: ids[i] }))); }
+    catch (e) { for (const m of metas) state.texts.push(Object.assign(m, { status: 'failed', detail: 'Could not line the text up: ' + strErrText(e) })); state.errors.push({ step: 'text_queue', error: `The texts could not be lined up (${strErrText(e)}). Nobody was texted; tell them yourself.` }); }
   }
-  if (isMark && req.mark === 'out') { // close waiting offers the cleaner can no longer take; the scheduler asks the next cleaner on its next run
-    const upd = []; for (const it of toDo.filter(done)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
-    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd); for (const f of r.failed) errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); } catch (e) { errors.push({ step: 'close_offers', error: strErrText(e) }); } }
-  }
-  const okItems = toDo.filter(done);
-  // A4. audit trail: one STR_Log row per date plus one for the whole plan
-  const logRows = plan.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || ires.get(refOf(it)).status === 'failed').map(it => { const r = ires.get(refOf(it)), ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : 'admin_mark_failed') : (ok ? 'admin_swap' : 'admin_swap_failed'), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${plan.cleaner.first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${planId}` } });
+  ctx.dirty = true;
+  return true;
+}
+
+// ── Stage 5: send the due texts (the Outbox sends each one claim-first, so a crash can never send one twice) ──
+async function strStageSend(ctx, J) {
+  await strFresh(ctx);
+  const mine = () => (ctx.st.outbox || []).filter(o => o.Plan_ID === J.planId);
+  await strOutboxDrain(ctx, { plan: J.planId, budget: true, quiet: true, log: false });
+  const win = strInSendWindow(ctx.now, ctx.S);
+  return !win || !mine().some(o => o.Status === 'parked' && Date.parse(o.Not_Before || '') <= ctx.now);
+}
+
+// ── The invite email for the newly assigned cleaner (same behaviour as a normal assignment, one email however many dates) ──
+async function strSwapEmail(ctx, cleaner, doneItems) {
+  if (!cleaner.Email) return { status: 'skipped', note: `${cleaner.Name} has no email on file, so no calendar invite was sent.` };
+  if (!ctx.S.engine) return { status: 'skipped', note: 'The scheduler is OFF, so no calendar invite email was sent.' };
+  const views = strComputeViews(ctx, null), ics = strIcsForCleaner(ctx, cleaner, views), S = ctx.S;
+  const one = doneItems.length === 1, list = doneItems.map(i => `<li><b>${strEsc(strFmtDate(i.date, true))}</b> (${strEsc(i.kind_label)}; checkout 11 AM${i._t.next ? '; next guest arrives ' + strEsc(strNextDate(i.date, i._t.next)) : ''})</li>`).join('');
+  const html = `<p>Hi ${strEsc(strFirst(cleaner))},</p><p>You're set to clean <b>${strEsc(S.label)}</b> on:</p><ul>${list}</ul><p>The calendar invite is attached. Your schedule, availability and any changes: <a href="${strCleanerUrl(cleaner.Token)}">open your page</a>.</p><p>Thank you!<br>${strEsc(S.assistant)} - Ridge Co</p>`;
+  ctx.subX = (ctx.subX || 0) + 4;
+  try { const r = await gmailSendEmailWithAttachment(ctx.env, { to: cleaner.Email, subject: one ? `You're set: ${S.label} cleaning ${strFmtDate(doneItems[0].date)}` : `You're set: ${S.label} cleaning (${doneItems.length} dates)`, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } }); return { status: r && r.staged ? 'staged' : 'sent', note: '' }; }
+  catch (e) { return { status: 'failed', note: `Could not email ${cleaner.Name} the calendar invite: ${strErrText(e)}` }; }
+}
+async function strStageEmail(ctx, J) {
+  const ok = strOkItems(J);
+  if (J.req.action === 'mark' || !ok.length || !J.recipients.some(r => r.kind === 'new')) return true;
+  await strFresh(ctx);
+  const email = await strSwapEmail(ctx, J.cleaner, ok); J.state.email = email;
+  if (email.status === 'failed') J.state.errors.push({ step: 'invite_email', error: email.note }); else if (email.status === 'skipped') J.state.warnings.push(email.note);
+  return true;
+}
+
+// ── Stage 7: standing alerts (a "covered" notice for Brett if an uncovered alert was open). Problems here are heads-ups, not failures of the change ──
+async function strStageAlerts(ctx, J) {
+  if (J.req.action === 'mark' || !strOkItems(J).length) return true;
+  await strFresh(ctx);
+  const before = ctx.errors.length, warns = [];
+  await strAlertsNow(ctx, warns, 'swap');
+  for (const e of ctx.errors.splice(before)) J.state.warnings.push('Heads-up (not part of this change): ' + e.error);
+  for (const w of warns) J.state.warnings.push(w);
+  return true;
+}
+
+// ── Step 2: apply (first call claims the plan and starts the job; every later call, with resume:true, carries on) ──
+function strChangeSummaryText(plan, res) {
+  const c = res.counts, bits = [];
+  if (plan.action === 'mark') bits.push(`${c.done} of ${res.items.length} date(s) changed to "${plan.mark === 'out' ? 'Out' : (plan.mark === 'can' ? 'Available as backup' : 'cleared')}" for ${plan.cleaner.first}`);
+  else bits.push(`${plan.cleaner.first} now has ${c.done} of ${res.items.length} turnover(s) you asked for`);
+  if (c.skipped) bits.push(`${c.skipped} skipped (nothing to do or not allowed)`);
+  if (c.failed) bits.push(`${c.failed} FAILED`);
+  const t = res.texts, sent = t.filter(x => x.status === 'sent'), held = t.filter(x => x.status === 'held'), bad = t.filter(x => x.status === 'failed'), no = t.filter(x => x.status === 'not_sent');
+  if (sent.length) bits.push(`texted ${sent.map(x => x.first).join(', ')}`);
+  if (held.length) bits.push(`text held until 8 AM for ${held.map(x => x.first).join(', ')}`);
+  if (bad.length) bits.push(`text FAILED for ${bad.map(x => x.first).join(', ')}`);
+  if (no.length) bits.push(`no text for ${no.map(x => x.first).join(', ')}`);
+  if (res.calendar && res.calendar.status && !['unchanged', 'done', 'staged'].includes(res.calendar.status)) bits.push(res.calendar.status === 'not_changed' ? 'calendar NOT changed (do it by hand)' : 'calendar problem (do it by hand)');
+  return bits.join('; ') + '.';
+}
+const strByIdAsc = (a, b) => (parseInt(a.ID, 10) || 0) - (parseInt(b.ID, 10) || 0);
+function strReplay(planId, r) {
+  let result = null; try { result = JSON.parse(r.Result || 'null'); } catch (e) { result = null; } // silent-ok: a bad stored result just means no replay detail
+  const busy = r.Status === 'applying';
+  return json({ ok: true, duplicate: true, plan_id: planId, status: r.Status, stage: r.Stage || '', message: busy ? 'This exact change is already being applied. Nothing was sent or changed a second time. The page carries on by itself; if it stopped, press Continue.' : 'This exact change was already applied. Nothing was sent or changed a second time.', result });
+}
+async function strChangeApply(env, body) {
+  try {
+    body = body || {};
+    const planId = String(body.plan_id || ''), sigIn = String(body.sig || '');
   try { if (logRows.length) await strAddRows(env, 'STR_Log', logRows.map(r => Object.assign({}, r, { Detail: r.Detail.slice(0, 480) }))); } catch (e) { errors.push({ step: 'audit_log', error: 'Could not write the audit rows to the Activity log: ' + strErrText(e) }); }
   // B. the cleaning calendar
   let calendar = { mode: plan.calendar.mode, status: 'unchanged', items: {}, manual: [], message: '' };
