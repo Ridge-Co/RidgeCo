@@ -26413,7 +26413,7 @@ async function hubTestWriteAllowed(env, path, body) {
     // Config value outranks the env secret in qbAccessToken. Empty string only - never writes a token.
     if (_k === 'QB_REFRESH_TOKEN') return _b.value === '';
     if (!['pricing_config', 'Access_Trade_Defaults', 'US_HOLIDAYS', 'STR_GUARD_FIXTURE', 'STR_GUARD_NOTIFIED'].includes(_k)) return false;
-    if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }
+    if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { /* silent-ok: invalid pricing JSON typed by the caller is simply rejected */ return false; } }
     return typeof _b.value === 'string' && _b.value.length < 5000;
   }
   // Sep 30 2026: staging QuickBooks is an Intuit SANDBOX company (see qbBase), so /qb/* writes can no longer
