@@ -142,4 +142,82 @@ async function world(over, mut) {
   const orig = W.stubs.fetch;
   W.stubs.fetch = async (url, init) => { // the fake calendar also answers a single-event read (used to prove every write)
     const method = (init && init.method) || 'GET', mid = /\/events\/([^?/]+)/.exec(url);
+    if (method === 'GET' && mid && !/\/events\?/.test(url)) { W.cal.push({ method, url, body: null }); const e = W.calEvents.find(x => x.id === decodeURIComponent(mid[1])); if (!e) return new Response('gone', { status: 404 }); return new Response(JSON.stringify({ id: e.id, status: 'confirmed', summary: e.summary, extendedProperties: e.extendedProperties }), { status: 200 }); }
+    return orig(url, init);
+  };
+  const origU = W.stubs.updateRow; W.stubs.updateRow = async (env, tab, id, fields) => { if (W.failUpdateTab === tab) { W.sheetCalls += 2; return { ok: true, status: 200, json: async () => ({ success: true }) }; } return origU(env, tab, id, fields); }; // a write the sheet accepts but never keeps
+  const E = build(W); clock = E.inspEtWallToMs('2026-10-20', '10:00');
+  const r = await E.strTick({}, {}); if (!r.ok) console.log('SETUP TICK ERRORS', JSON.stringify(r.errors));
+  W.gated.length = 0; W.sms.length = 0; W.brett.length = 0; W.emails.length = 0; W.attach.length = 0; W.cal.length = 0; W.telemetry.length = 0; W.sheetCalls = 0;
+  return { W, E };
+}
+const tick = async (E, d, hm) => { CUR = E.W; if (d) clock = E.inspEtWallToMs(d, hm || '10:00'); E.__cold(); return await E.strTick({}, {}); };
+async function ask(E, date, note, over) {
+  CUR = E.W; E.__cold();
+  const pv = await J(E.strAdminPendingPreview({}, { date, note }));
+  if (!pv.ok) return { pv, cr: pv };
+  E.__cold(); const c0 = costNow(E.W);
+  const cr = await J(E.strAdminPendingCreate({}, Object.assign({ date, note, sig: pv.plan.sig, text: pv.plan.text }, over || {})));
+  const c = costNow(E.W) - c0; if (c > 48) t('create stayed under the 50-subrequest limit', false, c); else pass++;
+  return { pv, cr };
+}
+async function answer(E, who, action, offerId) { CUR = E.W; E.__cold(); const c0 = costNow(E.W), r = await J(E.strOfferRespond({}, { k: tok(E.W, who), offer_id: offerId, action })), c = costNow(E.W) - c0; if (c > 48) t('answer stayed under the 50-subrequest limit', false, c); else pass++; return r; }
+async function heldByKayla(over, mut) {
+  const w = await world(over, mut), { W, E } = w;
+  const a = await ask(E, PD, 'TEST-inquiry');
+  const g = offerOf(W, '1', PK); await answer(E, '1', 'decline', g.ID);
+  const k = offerOf(W, '2', PK, 'pending'), y = await answer(E, '2', 'accept', k.ID);
+  return Object.assign(w, { a, y, k });
+}
+const BOOK = (W, s, e, g) => W.stays.push({ start: s, end: e, guest: g || 'Pat' });
+const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/str/c/page?k=' + tok(E.W, id))));
+
+// ═══ 0. static checks ═══
+{
+  t('routes wired', ['preview', 'create', 'cancel', 'convert', 'send-now'].every(r => src.includes(`path === '/str/admin/pending/${r}'`)));
+  t('staging guard: preview open; create only with a TEST- note; cancel/convert/send-now only on a TEST- inquiry', /pending\/preview'\) return true/.test(src) && /pending\/create'\) return String\(\(body && body\.note\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src) && /pending\/cancel' \|\| path === '\/str\/admin\/pending\/convert'.*Pending_Note \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
+  const W0 = makeWorld(); const E0 = build(W0), D = E0.STR_DEFAULT_TEXTS;
+  for (const ty of ['str_pending_offer', 'str_pending_yes', 'str_pending_booked', 'str_pending_cancelled']) {
+    const m = new RegExp("Message_Type: '" + ty + "', Channel: 'sms', Subject: '', Body:\\s*\\n\\s*\"([^\"]*)\"").exec(src);
+    t('seeded template ' + ty + ' matches the built-in wording', !!m && m[1] === D[ty], m && m[1]);
+    t(ty + ' never says primary / rank / priority / backup 1', !/primary|rank|priority|backup (1|2)/i.test(D[ty]));
+  }
+  t('offer / yes / cancelled texts state no deadline', ['str_pending_offer', 'str_pending_yes', 'str_pending_cancelled'].every(ty => !/\b(deadline|within|reply by|hours?)\b/i.test(D[ty])));
+  t('offer wording: not booked yet, asks "if it does book", asks for an answer as soon as you can', /it isn't booked yet/.test(D.str_pending_offer) && /if it does book/.test(D.str_pending_offer) && /as soon as you can/.test(D.str_pending_offer) && /\{Link\}/.test(D.str_pending_offer));
+  t('yes-reply wording is exactly the approved text', D.str_pending_yes === "Thanks - we'll let you know if it books. Nothing is confirmed yet.");
+  t('booked text says it is now booked and asks to update availability', /now booked/.test(D.str_pending_booked) && /update your availability/.test(D.str_pending_booked));
+  t('guard: a "(PENDING)" title is never read as a cleaner on the calendar', E0.inspStrCleaningKind('Gina Cleaning (PENDING)') === '' && E0.inspStrCleaningKind('Gina Cleaning') === 'cleaner' && E0.inspStrCleaningKind('Gina cleaning - tentative') === '');
+  t('new columns are provisioned on STR_Turnovers', ['Pending', 'Pending_Note', 'Pending_Text', 'Pending_Mail', 'Pending_Cal', 'Pending_Body', 'Converted_To', 'Manual_Until'].every(c => E0.STR_TABS.STR_Turnovers.includes(c)));
+}
+
+// ═══ 1. Brett asks about a date: preview writes nothing, then create asks Gina (first in the queue) ═══
+{
+  const { W, E } = await world(); CUR = W;
+  const before = rowsOf(W, 'STR_Turnovers').length, offersBefore = rowsOf(W, 'STR_Offers').length;
+  E.__cold(); let c0 = costNow(W);
+  const pv = await J(E.strAdminPendingPreview({}, { date: PD, note: 'TEST-family of 4' }));
+  t('preview ok, no rows written, no text sent', pv.ok && rowsOf(W, 'STR_Turnovers').length === before && rowsOf(W, 'STR_Offers').length === offersBefore && !W.sms.length && !W.gated.length, pv);
+  t('preview stayed under the subrequest limit', costNow(W) - c0 <= 48, costNow(W) - c0);
+  t('preview: Gina is first, then Kayla, then Rachel (queue order)', pv.plan.first.first === 'Gina' && pv.plan.queue.map(q => q.name + ':' + q.state).join() === 'Gina:first,Kayla:then,Rachel:then', pv.plan.queue);
+  t('preview shows the exact text with the link placeholder, "not booked yet", no deadline', /isn't booked yet/.test(pv.plan.text) && /\{Link\}/.test(pv.plan.text) && !/ by |deadline|hours/i.test(pv.plan.text) && /Hi Gina/.test(pv.plan.text), pv.plan.text);
+  t('preview says it sends right away inside 8 AM - 9 PM', pv.plan.send_mode === 'now' && pv.plan.in_window === true);
+  for (const [name, body, code] of [['past date', { date: '2026-10-19' }, 'past_date'], ['garbage date', { date: 'soon' }, 'bad_date'], ['date with a real turnover', { date: '2026-10-25' }, 'already_booked'], ['too far out', { date: '2027-06-01' }, 'too_far']]) {
+    const r = await J(E.strAdminPendingPreview({}, body)); t('preview rejects ' + name, r.ok === false && r.error === code, r);
+  }
+  const bad = await J(E.strAdminPendingCreate({}, { date: PD, note: 'x', sig: 'wrong', text: pv.plan.text })); t('create with a stale / wrong preview signature is refused and writes nothing', bad.ok === false && bad.error === 'stale_preview' && rowsOf(W, 'STR_Turnovers').length === before && !W.sms.length, bad);
+  const empty = await J(E.strAdminPendingCreate({}, { date: PD, note: 'x', sig: pv.plan.sig, text: '' })); t('create with an empty text is refused', empty.ok === false && empty.error === 'text_empty' && rowsOf(W, 'STR_Turnovers').length === before, empty);
+
+  const custom = 'Hi Gina, tiny favour: might we need you for Nov 15 at Milam Ridge? Not booked yet. Tap here: {Link}';
+  E.__cold(); c0 = costNow(W);
+  const cr = await J(E.strAdminPendingCreate({}, { date: PD, note: 'TEST-family of 4', sig: pv.plan.sig, text: custom }));
+  t('create ok, Gina asked, one text', cr.ok && cr.advance && cr.advance.action === 'offered' && W.sms.length === 1 && W.sms[0].to.includes('Regina') && W.sms[0].type === 'str_pending_offer', { cr, sms: W.sms });
+  t('create stayed under the subrequest limit', costNow(W) - c0 <= 48, costNow(W) - c0);
+  t("Brett's edited wording is what was sent, with her own link in place of {Link}", /tiny favour/.test(W.sms[0].text) && /cleaner\.html\?k=TOKGINA/.test(W.sms[0].text) && /offer=/.test(W.sms[0].text) && !/\{Link\}/.test(W.sms[0].text), W.sms[0].text);
+  const p = pend(W);
+  t('pending row: Pending=TRUE, status offering, note kept, one offer pending for Gina', p && p.Pending === 'TRUE' && p.Status === 'offering' && p.Pending_Note === 'TEST-family of 4' && offersOf(W, PK).length === 1 && offersOf(W, PK)[0].Status === 'pending', { p, o: offersOf(W, PK) });
+  t('status reads "Waiting on Gina"', cr.status.label === 'Waiting on Gina', cr.status);
+  const dup = await J(E.strAdminPendingCreate({}, { date: PD, note: 'TEST-family of 4', sig: pv.plan.sig, text: custom }));
+  t('pressing Create again does not ask again or add a second row', dup.ok === false && dup.error === 'already_pending' && W.sms.length === 1 && rowsOf(W, 'STR_Turnovers').filter(r => r.Pending === 'TRUE').length === 1, dup);
+  t('log has the creation and the offer', logs(W, 'pending_created').length === 1 && logs(W, 'offer_sent').filter(l => l.Task_Key === PK).length === 1);
+  await tick(E, null); await tick(E, null);
 //@@APPEND@@
