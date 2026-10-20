@@ -3,6 +3,7 @@
 // invoice builders and invoiceInputsEnglish are extracted from worker.js and run against stubs.
 import fs from 'fs';
 import assert from 'node:assert';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages etc.)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 function grabFrom(text, name) {
