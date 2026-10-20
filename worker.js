@@ -36892,6 +36892,14 @@ async function strAdminPendingConvert(env, body) {
     if (!p) return json({ ok: false, error: 'not_found', message: 'That inquiry was not found.' }, 404);
     if (!strPendActive(p)) return json({ ok: true, already: true, status: strPendingStatus(ctx, p), message: 'That inquiry is already closed. Nothing was sent.' });
     if (p.Date < inspEtDate(ctx.now)) return json({ ok: false, error: 'past_date', message: 'That date has already passed.' }, 409);
+    const key = `${STR_PROP}|checkout|${p.Date}`;
+    let real = ctx.st.turnovers.find(t => t.Kind === 'checkout' && t.Date === p.Date && t.Status !== 'cancelled') || ctx.st.turnovers.find(t => t.Task_Key === key);
+    const until = new Date(ctx.now + 3 * 86400000).toISOString();
+    if (!real) {
+      const f = { Task_Key: key, Property_Key: STR_PROP, Kind: 'checkout', Date: p.Date, Win_Start: p.Date, Win_End: inspAddDays(p.Date, 3), Next_Arrival: '', Guests: '', Status: 'open', Missing_Count: '0', Created_At: iso, Updated_At: iso, Manual_Until: until, Note: 'made by "Mark as booked now" - waiting for the bookings feed to show it' };
+      const id = await strAddRow(env, 'STR_Turnovers', f); real = Object.assign({ ID: id }, f); ctx.st.turnovers.push(real);
+      await strLog(ctx, key, '', 'turnover_created_manual', `from pending ${p.Task_Key}`);
+    } else if (real.Status === 'cancelled') await strSetTurnover(ctx, real, { Status: 'open', Missing_Count: '0', Manual_Until: until, Note: 'restored by "Mark as booked now"' });
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
