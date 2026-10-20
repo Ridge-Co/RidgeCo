@@ -14323,7 +14323,12 @@ async function queueNotification(env, woId, type, phone, message, sendAfter, ctx
       Message_Type:ctx.message_type||'',Recipient_Type:ctx.recipient_type||'',Recipient_ID:ctx.recipient_id||'',Property_ID:ctx.property_id||''};
     const newRow=headers.map(h=>rowObj[h]??'');
     await sheetsRequest(env,'POST',`/values/${NOTIF_QUEUE_TAB}:append?valueInputOption=RAW`,{values:[newRow]});
-  } catch(e){/* non-fatal */}
+    return { ok: true };
+  } catch(e){
+    // Still never throws into the scheduling flow, but a tenant text that was never queued is reported (P0: SMS) and returned as ok:false.
+    const r = await softFail(env, 'queue_notification_failed', e, 'P0', { ref: woId, type });
+    return { ok: false, error: r.error };
+  }
 }
 
 let __pendingNotifAt = 0; // last time GET /notifications/pending actually ran (per isolate)
