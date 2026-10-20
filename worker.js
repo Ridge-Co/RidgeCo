@@ -24552,32 +24552,36 @@ async function __meterReportStoreFault(env, msg) {
     if (!r || r.ok === false) console.error('[read-meter] store fault could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
   } catch (e) { console.error('[read-meter] store fault could not be saved:', String((e && e.message) || e).slice(0, 200)); }
 }
+// The shared store is one Durable Object (see ReadMeterStore). Not bound (or bound to something else) -> null, and the page says so.
+function __meterStub(env) {
+  try { const ns = env && env.READ_METER_STORE; return ns && typeof ns.idFromName === 'function' ? ns.get(ns.idFromName('meter-v1')) : null; }
+  catch (e) { __meterFault('stub', e); return null; }
+}
 // Read every OTHER instance's saved counts (this instance is always taken live). Returns { rows, store } where store is shown on the page.
 async function __meterRemote(env, mins) {
-  const store = { bound: !!(env && env.READ_METER), remote_instances: 0, instances_in_store: 0, truncated_instances: 0, read_errors: 0, problems: [], partial_history: mins > METER_PERSIST_MIN, history_minutes_other_instances: METER_PERSIST_MIN };
-  const kv = env && env.READ_METER;
-  if (!kv) { store.problems.push('The READ_METER shared store is not connected to this Worker, so this page shows ONLY the one Worker instance that answered. Numbers will look too low and change on every refresh.'); return { rows: [], store }; }
+  const stub = __meterStub(env);
+  const store = { bound: !!stub, remote_instances: 0, instances_in_store: 0, truncated_instances: 0, read_errors: 0, problems: [], partial_history: mins > METER_PERSIST_MIN, history_minutes_other_instances: METER_PERSIST_MIN };
+  if (!stub) { store.problems.push('The Read Meter shared store (READ_METER_STORE) is not connected to this Worker, so this page shows ONLY the one Worker instance that answered. Numbers will look too low and change on every refresh.'); return { rows: [], store }; }
   try {
-    const now = Date.now(), prefix = 'rm1:' + __meter.tag + ':', own = prefix + __meter.isolate;
+    const now = Date.now();
     let payloads;
     const c = __meter.remoteCache;
-    if (c && c.prefix === prefix && now - c.at < METER_REMOTE_CACHE_MS) payloads = c.payloads;
+    if (c && c.tag === __meter.tag && now - c.at < METER_REMOTE_CACHE_MS) payloads = c.payloads;
     else {
-      let keys = [], cursor, pages = 0;
-      do { const r = await kv.list({ prefix, cursor }); keys = keys.concat(r.keys || []); cursor = r.list_complete ? undefined : r.cursor; } while (cursor && ++pages < 3);
-      store.instances_in_store = keys.length;
-      const fresh = keys.filter(k => k.name !== own && (!k.metadata || typeof k.metadata.t !== 'number' || k.metadata.t >= now - METER_KEEP_MIN * 60000))
-        .sort((a, b) => ((b.metadata && b.metadata.t) || 0) - ((a.metadata && a.metadata.t) || 0));
-      store.truncated_instances = Math.max(0, fresh.length - METER_MAX_REMOTE);
-      const got = await Promise.all(fresh.slice(0, METER_MAX_REMOTE).map(async k => { try { return await kv.get(k.name, 'json'); } catch (e) { store.read_errors++; return null; } }));
-      payloads = got.filter(Boolean);
-      __meter.remoteCache = { at: now, prefix, payloads, instances_in_store: store.instances_in_store, truncated: store.truncated_instances, read_errors: store.read_errors };
+      const res = await stub.fetch('https://read-meter.internal/list?tag=' + encodeURIComponent(__meter.tag) + '&exclude=' + encodeURIComponent(__meter.isolate) + '&since=' + (now - METER_KEEP_MIN * 60000) + '&limit=' + METER_MAX_REMOTE);
+      if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
+      const j = await res.json(), recs = Array.isArray(j.instances) ? j.instances : [];
+      payloads = [];
+      for (const r of recs) { const p = r && r.payload; if (p && p.v === 1 && Array.isArray(p.mins)) payloads.push(p); else store.read_errors++; }
+      store.instances_in_store = (+j.in_store) || recs.length;
+      store.truncated_instances = Math.max(0, +j.truncated || 0);
+      __meter.remoteCache = { at: now, tag: __meter.tag, payloads, instances_in_store: store.instances_in_store, truncated: store.truncated_instances, read_errors: store.read_errors };
     }
     if (c && payloads === c.payloads) { store.instances_in_store = c.instances_in_store; store.truncated_instances = c.truncated; store.read_errors = c.read_errors; }
     const cutoff = Math.floor(now / 60000) - mins + 1, rows = [];
     for (const p of payloads) { if (p && p.isolate === __meter.isolate) continue; rows.push(...__meterRowsFromPayload(p, cutoff)); }
-    store.remote_instances = payloads.filter(p => p && p.isolate !== __meter.isolate && Array.isArray(p.mins) && p.mins.some(m => m.t / 60000 >= cutoff)).length;
-    if (store.truncated_instances) store.problems.push(store.truncated_instances + ' older Worker instance(s) were left out to stay inside Cloudflare limits (' + METER_MAX_REMOTE + ' are read per view).');
+    store.remote_instances = payloads.filter(p => p && p.isolate !== __meter.isolate && Array.isArray(p.mins) && p.mins.some(m => m && m.t / 60000 >= cutoff)).length;
+    if (store.truncated_instances) store.problems.push(store.truncated_instances + ' older Worker instance(s) were left out to keep this page fast (' + METER_MAX_REMOTE + ' are read per view).');
     if (store.read_errors) store.problems.push(store.read_errors + ' saved instance record(s) could not be read.');
     return { rows, store };
   } catch (e) {
