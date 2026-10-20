@@ -7854,7 +7854,7 @@ function loadSnippets() {
     _woSnippets = Array.isArray(items)?items:[];
     var sel = document.getElementById('tmpl-snippet'); if (!sel) return;
     sel.innerHTML = '<option value="">📎 Insert saved text snippet…</option>' + _woSnippets.map(function(x){ return '<option value="'+x.ID+'">'+esc(x.Name)+'</option>'; }).join('');
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-snippets-load', e); });
 }
 function insertTemplateSnippet() {
   var id = document.getElementById('tmpl-snippet').value; if (!id) return;
