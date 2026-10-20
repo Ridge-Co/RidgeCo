@@ -18825,9 +18825,13 @@ Ground every item in the metrics. If a job_type shows repeated failures or human
 
 TELEMETRY METRICS (${days}d):
 ${JSON.stringify(metrics, null, 2)}`;
-  const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }, { source: 'llmReviewProposal' });
-  let txt = (data.content && data.content[0] && data.content[0].text || '').trim();
-  if (!txt) throw new Error('empty LLM response');
+  const { resp, data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }, { source: 'llmReviewProposal' });
+  // Oct 20 2026: show Anthropic's REAL answer. A non-OK reply (rate limit, overloaded, bad model name...) has no content, and this used to
+  // surface as the vague 'empty LLM response' on the Command Center Optimizer panel, hiding the actual cause.
+  if (!resp.ok) { const ae = data && data.error; throw new Error('Anthropic HTTP ' + resp.status + (ae ? ' (' + String(ae.type || 'error') + '): ' + String(ae.message || '').slice(0, 240) : ': no error body')); }
+  const textBlock = ((data && data.content) || []).find(b => b && b.type === 'text' && b.text);
+  let txt = (textBlock && textBlock.text || '').trim();
+  if (!txt) throw new Error('Anthropic returned no text (stop_reason=' + ((data && data.stop_reason) || 'unknown') + ', content blocks=' + ((data && data.content && data.content.length) || 0) + ')');
   txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
   let items = [];
   try { const p = JSON.parse(txt); items = Array.isArray(p) ? p : (p.proposals || []); } catch (e) { items = []; }
