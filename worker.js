@@ -30325,7 +30325,10 @@ async function receiptCheckDuplicatesOne(env, row, opts) {
         reason: `Same amount ($${(+d.amount || 0).toFixed(2)}), date (${d.date}), and store already logged as a Receipts entry${d.wo_id ? ' on WO ' + d.wo_id : ''} at this property.`,
       });
     }
-  } catch (e) { /* best-effort — a Receipts read failure shouldn't block the QB checks below */ }
+  } catch (e) {
+    softNote('receipt_dup_receipts_read_failed', e, 'P1');
+    evidence.push({ signal: 'qb_check_error', reason: 'Could not check the Receipts tab for the same receipt (the QuickBooks checks below still ran): ' + String((e && e.message) || e).slice(0, 160) });
+  }
 
   if (Number(amount) > 0 && date) {
     try {
