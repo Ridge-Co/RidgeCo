@@ -208,7 +208,7 @@ var money = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'});
 var $ = function(id){ return document.getElementById(id); };
 var state = { shop:null, methods:[], products:[], cart:{}, method:'', submitting:false };
 var source = '';
-try { source = (new URLSearchParams(location.search).get('src')||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,30); } catch(e){ console.warn('src param', e); }
+try { source = (new URLSearchParams(location.search).get('src')||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,30); } catch(e){ /* silent-ok: unparseable query string just means no campaign source */ console.warn('src param', e); }
 
 function h(tag, attrs){
   var el = document.createElement(tag);
