@@ -13123,13 +13123,16 @@ function bulkSetVendorPermission(field, endpoint) {
   if (!checked.length) return;
   var ids = checked.map(function(cb) { return cb.dataset.id; });
   if (!confirm('Enable this for ' + ids.length + ' selected vendor(s)?')) return;
-  Promise.all(ids.map(function(id) { return api('POST', endpoint, { id: id, value: true }).catch(function(){ return null; }); }))
+  var failedIds = [];
+  Promise.all(ids.map(function(id) { return api('POST', endpoint, { id: id, value: true }).then(function(r) { if (r && r.error) throw new Error(r.error); return r; }).catch(function(e){ failedIds.push(id); window.hubReportFailure && window.hubReportFailure('index:bulk-vendor-permission', e, {ref: id}); return null; }); }))
     .then(function() {
-      ids.forEach(function(id) {
+      var okIds = ids.filter(function(id) { return failedIds.indexOf(id) < 0; });
+      okIds.forEach(function(id) {
         var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
         if (v) v[field] = 'TRUE';
       });
-      toast('Updated ' + ids.length + ' vendor(s)', 'success');
+      if (failedIds.length) toast('Updated ' + okIds.length + ' vendor(s), but ' + failedIds.length + ' FAILED. Select those again and retry.', 'error');
+      else toast('Updated ' + ids.length + ' vendor(s)', 'success');
       clearPinChecks('vendors-list');
       renderVendorsPage();
     });
