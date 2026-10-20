@@ -523,8 +523,8 @@ function copyOne(qi){const x=(window.__queue||[])[qi];if(!x)return;openModal('Bu
 function copyAll(){const qs=window.__queue||[];if(!qs.length)return;const text='# BrettOS — ready-to-build queue ('+qs.length+' items)\n\nStanding rule: owner-facing views never show what owners spend with Brett; estimate/approval screens still show amounts.\n\n'+qs.map(brief).join('\n');openModal('All ready ('+qs.length+')',text,'Paste into a Claude session — this is the full build backlog.');}
 function openModal(title,text,msg){document.getElementById('mtitle').textContent=title;document.getElementById('mtext').value=text;document.getElementById('mmsg').textContent=msg||'';document.getElementById('modal').style.display='block';tryCopy(text);}
 function closeModal(){document.getElementById('modal').style.display='none';}
-function tryCopy(text){try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){var m=document.getElementById('mmsg');if(m)m.textContent='✓ Copied to clipboard. (Or select the text below to copy manually.)';},function(){});}}catch(e){}}
-function copyFromModal(){const t=document.getElementById('mtext');t.focus();t.select();try{document.execCommand('copy')}catch(e){}tryCopy(t.value);document.getElementById('mmsg').textContent='✓ Copied (or long-press the text → Copy).';}
+function tryCopy(text){try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){var m=document.getElementById('mmsg');if(m)m.textContent='✓ Copied to clipboard. (Or select the text below to copy manually.)';},function(){});}}catch(e){ /* silent-ok: clipboard blocked, the modal tells the user to copy manually */ }}
+function copyFromModal(){const t=document.getElementById('mtext');t.focus();t.select();try{document.execCommand('copy')}catch(e){ /* silent-ok: copy command blocked, message tells the user to copy manually */ }tryCopy(t.value);document.getElementById('mmsg').textContent='✓ Copied (or long-press the text → Copy).';}
 load();
 </script>
 <!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner).
