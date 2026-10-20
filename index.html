@@ -1804,7 +1804,11 @@ function doLogin() {
     // the underlying fetch kept running forever in the background either way). Now uses
     // api()'s AbortController timeout, so a stall genuinely gives up at 8s instead of
     // leaving this hanging indefinitely with just a "still waiting" label on top of it.
-    api('GET','/config', null, 8000).then(function() {
+    // Oct 19 2026: the login probe used to be GET /config, which reads the Config TAB from Google Sheets. When Google's shared
+    // per-minute read quota is under pressure that read waits through the Worker's retries (up to ~15s) and the login timed out
+    // ("Request timed out after 8s") even though the access code was fine. /model-registry sits behind the same access-code check
+    // (a wrong code is still 401) but is answered from memory -- no Sheets read -- so logging in no longer depends on Google.
+    api('GET','/model-registry', null, 15000).then(function() {
       localStorage.setItem(SECRET_KEY, val);
       errEl.style.display = 'none';
       document.getElementById('login-screen').style.display = 'none';
@@ -1861,7 +1865,7 @@ setTimeout(function(){
   var stored = localStorage.getItem(SECRET_KEY);
   if (stored) {
     AUTH_TOKEN = stored;
-    api('GET','/config', null, 12000).then(function() {
+    api('GET','/model-registry', null, 15000).then(function() {   // auth probe with no Sheets read (see doLogin)
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app').style.display = 'block';
       Promise.resolve(loadAll()).then(maybeOpenWOFromURL);

@@ -128,5 +128,16 @@ function buildVendor(fetchImpl) {
   t('Hub estimate error has a Retry button, is logged and reported', /Retry/.test(rf) && /logError\('Load estimate/.test(rf) && /\/failure\/report/.test(rf));
 }
 
+// ---------- Hub login must not depend on a Google Sheets read (Oct 19 2026) ----------
+{
+  const w = fs.readFileSync('worker.js', 'utf8');
+  const dl = grab(h, 'function doLogin(');
+  t('manual login probes /model-registry, not the Sheets-backed /config', /api\('GET','\/model-registry'/.test(dl) && !/api\('GET','\/config'/.test(dl));
+  const auto = h.slice(h.indexOf("var stored = localStorage.getItem(SECRET_KEY);"), h.indexOf("var stored = localStorage.getItem(SECRET_KEY);") + 700);
+  t('auto-login with the saved code probes /model-registry too', /api\('GET','\/model-registry'/.test(auto) && !/api\('GET','\/config'/.test(auto));
+  t('the probe path is behind the access-code gate (not a public path)', !/PUBLIC_PATHS = \[[^\]]*'\/model-registry'/.test(w));
+  t('the probe path is answered in memory (no Sheets read)', /path === '\/model-registry'\)\s+return json\(modelRegistryInfo\(\)\)/.test(w) && !/fetchTab|sheetsRequest|getConfig|fetchConfig/.test(grab(w, 'function modelRegistryInfo(')));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
