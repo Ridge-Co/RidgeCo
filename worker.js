@@ -16228,6 +16228,10 @@ const SCHED_VERIFY_DELAY_MS = 700;
 const SCHED_RETRY_GAP_MS = 30 * 60 * 1000;  // failed daily/weekly job: retry no sooner than this ...
 const SCHED_PARTIAL_GAP_MS = 5 * 60 * 1000;  // a job that returned {partial:true} (finished a slice, more to do) resumes no sooner than this ...
 const SCHED_MAX_PARTIALS = 12;              // ... and a daily/weekly job may take at most this many slices per ET day before it counts as FAILED
+// Oct 20 2026: a job that REPORTS progress (progress_made true/false on each partial slice, today only daily_qb_sync) is judged on that instead of the flat cap:
+// it fails after SCHED_MAX_STALLED_PARTIALS slices in a row that moved nothing, and only hits a (much higher) absolute backstop if it keeps creeping.
+const SCHED_MAX_STALLED_PARTIALS = 3;
+const SCHED_MAX_PARTIALS_PROGRESS = 60;
 const SCHED_MAX_ATTEMPTS = 3;               // ... and at most this many tries per ET day
 const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
