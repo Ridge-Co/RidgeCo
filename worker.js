@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-20.12-review-real-error';
+const BUILD_VERSION = '2026-10-20.13-payment-date-warning-low';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -15842,6 +15842,7 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^selftest/, 'P1'],
   [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
   [/^failure_ledger/, 'P1'],
+  [/^qb_payables_(vendor_)?(paid_)?(payment_)?date_missing/, 'P2'],   // Oct 20 2026: display-only warning ("payment date unavailable"); no money moves. Recorded once with a count, not a P0 on every page load.
   [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
   [/^ai_credit_(exhausted|resume)/, 'P2'],                // the event record; the urgent row is the auto-clearing "ai_credit_paused" condition (failConditions)
 ];
