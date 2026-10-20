@@ -1405,7 +1405,9 @@ function loadEstimateWidget(woId, idx) {
     window._estimates = window._estimates || {};
     window._estimates[woId] = estimates;
     renderEstimateWidget(woId, idx);
-  }).catch(function() { wrap.innerHTML = '<span style="color:var(--muted);font-size:11px">Could not load estimate</span>'; });
+  }).catch(function(e) {
+    showLoadFailed('est-wrap-' + idx, 'the estimate', e && e.message, function() { loadEstimateWidget(woId, idx); }, woId);
+  });
 }
 
 function renderEstimateWidget(woId, idx) {
