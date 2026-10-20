@@ -28138,7 +28138,7 @@ async function ensureColumns(env, tab, columns) {
     // if THAT specific call is what's failing, logging the failure via logTelemetry would call
     // straight back into this same failing path instead of just reporting it.
     if (tab !== TELEMETRY_TAB) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ensure_columns_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ensure_columns_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (te) { softNote('telemetry_write_failed:ensure_columns_failed', te, 'P2', { tab }); }
     }
     throw e;
   }
