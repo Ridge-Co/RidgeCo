@@ -24462,10 +24462,20 @@ async function __meterFlushAlarm(env) {
   const p = __meter.pending; if (!p) return;
   __meter.pending = null; __meter.alarms++;
   try {
+    // the quota is shared by every instance, so name the culprits across ALL instances when the shared store can be read
+    let all = null, allMin = null;
+    try {
+      const rem = await __meterRemote(env, 2);
+      if (rem.rows.length) {
+        const merged = __meterMergeRows(__meterWindow(2).concat(rem.rows));
+        all = __meterTop(merged, 'bySrc', 5).map(x => x.key + ' ' + x.reads + 'r' + (x.r429 ? '/' + x.r429 + 'x429' : ''));
+        allMin = merged.reduce((m, b) => Math.max(m, b.reads), 0);
+      }
+    } catch (e) { /* the alarm still files with this instance's view */ }
     const r = await reportFailure(env, {
       system: 'hub', source: 'read-meter', where: 'read_meter_quota', ref: p.isolate, severity: 'P2',
-      message: 'Google Sheets read quota under pressure (' + (p.why === '429' ? 'Google throttled reads' : 'busy minute') + '): ' + p.reads + ' reads in one minute, ' + p.r429 + ' throttled. Top: ' + p.top.slice(0, 3).join('; '),
-      context: { top: p.top, tabs: p.tabs, isolate: p.isolate },
+      message: 'Google Sheets read quota under pressure (' + (p.why === '429' ? 'Google throttled reads' : 'busy minute') + '): ' + p.reads + ' reads in one minute on one instance' + (allMin ? ' (' + allMin + ' across all instances)' : '') + ', ' + p.r429 + ' throttled. Top' + (all ? ' (all instances)' : '') + ': ' + (all || p.top).slice(0, 3).join('; '),
+      context: { top: p.top, tabs: p.tabs, isolate: p.isolate, all_instances_top: all },
     });
     if (!r || r.ok === false) console.error('[read-meter] quota alarm could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
   } catch (e) { console.error('[read-meter] quota alarm could not be saved:', String((e && e.message) || e).slice(0, 200)); }
