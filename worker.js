@@ -30685,7 +30685,7 @@ async function receiptDuplicateAuditFlags(env, url) {
       return {
         id: f.ID, receipt_id: f.Receipt_ID, wo_id: f.WO_ID, store: f.Store, receipt_date: f.Receipt_Date,
         amount: Number(f.Amount) || 0, match_count: Number(f.Match_Count) || 0,
-        matches: (() => { try { return JSON.parse(f.Matches_JSON || '[]'); } catch (_) { return []; } })(),
+        matches: parseJsonCell(f.Matches_JSON, [], 'Receipt_Duplicate_Audit.Matches_JSON'),
         status: f.Status || 'pending', flagged_date: f.Flagged_Date || '', reviewed_date: f.Reviewed_Date || '',
         image_attached: img.image_attached, image_url: img.image_url,
       };
