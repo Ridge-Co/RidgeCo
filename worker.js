@@ -4969,7 +4969,7 @@ async function proposalRecordHit(env, s, kind, ua) {
     const r = await updateRow(env, 'Scopes', s.ID, f);
     if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/' + kind, Success: 'FALSE', Notes: 'scope=' + (s && s.ID) + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_hit_log_failed', Skill_Or_Endpoint: '/scope-proposal/' + kind, Success: 'FALSE', Notes: 'scope=' + (s && s.ID) + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (te) { softNote('telemetry_write_failed:proposal_hit_log_failed', te, 'P2'); }
   }
 }
 // PUBLIC GET /scope-proposal/px?t=<proposal link token> - the tracking pixel. ALWAYS answers with the gif (a broken
