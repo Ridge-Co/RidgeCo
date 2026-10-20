@@ -36661,6 +36661,17 @@ async function strPendingDrain(ctx, feed) {
   }
   return out;
 }
+
+// Expire: the date passed with no booking. Silent (no texts), the calendar event is removed (retried until proven), the standing alerts close, it is logged.
+async function strPendingExpire(ctx, p) {
+  if (!strPendActive(p)) return false;
+  const iso = new Date(ctx.now).toISOString();
+  for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'date passed' });
+  await strSetTurnover(ctx, p, { Status: 'pending_expired', Pending_Cal: 'del', Pending_Text: '', Pending_Mail: '', Note: 'date passed with no booking' });
+  await strLog(ctx, p.Task_Key, p.Assigned_Cleaner_ID || '', 'pending_expired', `${p.Date} passed with no booking`);
+  ctx.pendChanged = true;
+  return true;
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
