@@ -14,7 +14,7 @@ function grab(name) {
   return src.slice(i, j + 1);
 }
 function build(stubs) {
-  return new Function('stubs', 'const { qbLookupExisting, qbMappingClash, updateRow, qbApi, qbDupId, qbFault, qbOwnerDisplayName } = stubs;\n' +
+  return new Function('stubs', 'const { qbLookupExisting, qbMappingClash, updateRow, qbApi, qbDupId, qbFault, qbOwnerDisplayName } = stubs;\n' + PHASE_C_SHIM +
     grab('qbFindOrCreateCustomer') + '\nreturn qbFindOrCreateCustomer;')(stubs);
 }
 let pass = 0, fail = 0;
