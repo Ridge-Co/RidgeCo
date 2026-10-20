@@ -437,6 +437,7 @@ function turnoverCard(t){
     + offersHtml(t) + backupsHtml(t) + '<div class="t-actions">' + acts + '</div></div>';
 }
 function renderTurnovers(){
+  Object.keys(picked).forEach(function(k){ var t = findTask(k); if(!t || t.status === 'cancelled') delete picked[k]; });
   var list = (S.tasks||[]).filter(function(t){ return t.status !== 'cancelled'; }).sort(function(a,b){ return String(a.date).localeCompare(String(b.date)) || String(a.kind).localeCompare(String(b.kind)); });
   var open = list.filter(function(t){ return !t.covered; });
   $('m-turn').textContent = open.length ? open.length + ' need a cleaner' : (list.length ? 'all covered' : '');
