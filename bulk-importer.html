@@ -184,7 +184,7 @@ function loadInspCustomers(){
     sel.innerHTML = '<option value="">— pick a customer —</option>' + INSP_CUSTOMERS.map(function(c){
       return '<option value="'+esc(c.ID)+'">'+esc(c.Name)+'</option>';
     }).join('');
-  }).catch(function(){ /* insp tabs may not exist yet — fine, hub target still works */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('bulk-importer:insp-customers-load', e); var _ic=document.getElementById('insp-customer'); if(_ic) _ic.innerHTML='<option value="">⚠ could not load customers, reload to retry</option>'; });
 }
 
 // ── Paste parsing (tab or comma delimited, quote-aware, RFC4180-ish) ────────
