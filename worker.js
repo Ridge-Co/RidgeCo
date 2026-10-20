@@ -31086,7 +31086,7 @@ async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, 
     headers: { Authorization: `Bearer ${qbToken}`, Accept: 'application/json' },
     body: form,
   });
-  const data = await res.json().catch(() => ({}));
+  const data = await safeJson(res, {}, 'qb_attachable_upload');
   const id = data && data.AttachableResponse && data.AttachableResponse[0] && data.AttachableResponse[0].Attachable && data.AttachableResponse[0].Attachable.Id;
   if (!id) throw new Error(qbFault(data) || ('attach HTTP ' + res.status));
   return id;
