@@ -25815,6 +25815,10 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/str/admin/assign') { if (!body || !body.cleaner_id) return true; const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   // Admin swap / bulk (Oct 20 2026): a preview writes nothing; a real apply may only name a TEST- cleaner.
   if (path === '/str/admin/change/preview') return true;
+  if (path === '/str/admin/pending/preview') return true;
+  // Pending cleaning (Oct 20 2026): the staging token may only create an inquiry whose note starts with TEST-, and only change an inquiry that has such a note.
+  if (path === '/str/admin/pending/create') return String((body && body.note) || '').startsWith('TEST-');
+  if (path === '/str/admin/pending/cancel' || path === '/str/admin/pending/convert' || path === '/str/admin/pending/send-now') { const _p = (await fetchTab(env, 'STR_Turnovers')).find(x => x.Task_Key === String((body && body.task_key) || '')); return !!_p && String(_p.Pending || '').toUpperCase() === 'TRUE' && String(_p.Pending_Note || '').startsWith('TEST-'); }
   if (path === '/str/admin/change/apply') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   if (path === '/str/admin/config' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
   if (path === '/str/admin/digest-run') return !!(body && body.dry);
