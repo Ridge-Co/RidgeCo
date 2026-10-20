@@ -247,7 +247,7 @@ function syncRules_(ss, cfg, me) {
   var props = PropertiesService.getScriptProperties();
   var rules = readRules_(ss);
   var queueLabelId = gmailLabelId_(LABEL_QUEUE);
-  var result = { created: 0, removed: 0, labeled: 0 };
+  var result = { created: 0, removed: 0, labeled: 0, failures: [] };   // failures: filters that could not be removed (stale filter keeps labeling mail)
   var wanted = {};
 
   rules.forEach(function (r) {
