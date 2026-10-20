@@ -263,6 +263,7 @@ function runScheduler() {
     if (hubStatus) checkLedger_(hubStatus.failures);
     if (hubStatus) checkOverdue_(mergeStatus_(hubStatus, script.status));
     else if (script.status.overdue.length) checkOverdue_(mergeStatus_({ overdue: [], jobs: {} }, script.status));
+    if (Date.now() - started < MAX_RUN_MS) { try { probeWorkers_(); } catch (pe) { alertThrottled_('probe_script', FAIL_REMIND_MS, 'Hub scheduler: the Worker health probes crashed', 'probeWorkers_ threw: ' + pe + '\n\nThe other checks in this tick still ran.'); } }
     if (!infraFailed) recovered_();
     Logger.log('Tick done: ' + (ran.length ? 'ran ' + ran.join(', ') : 'nothing was due') + (more ? ' (more still due; next tick)' : '') + '.');
     return { ok: !infraFailed, ran: ran, more: more, problem: problem };
