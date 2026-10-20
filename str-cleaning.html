@@ -1000,6 +1000,12 @@ function renderPendPlan(){
   h += '<p style="font-size:15px;margin:8px 0"><b>' + esc(p.label) + '</b> - not booked yet' + (p.note ? '<br><span class="muted">Your note: ' + esc(p.note) + '</span>' : '') + '</p>';
   h += '<h4 style="margin:12px 0 4px;font-size:15px">Who gets asked, in order</h4><div class="qrow">' + (p.queue||[]).map(function(q, i){
     return '<span class="chip ' + (q.state === 'first' ? 'first' : (q.state === 'skip' ? 'skip' : '')) + '">' + (q.state === 'first' ? 'Asked first: ' : '') + esc(q.name) + (q.why ? ' (' + esc(q.why) + ')' : '') + '</span>'; }).join('') + '</div>'
+    + '<p class="say">One at a time. If she does not answer, the Hub moves on to the next cleaner quietly; cleaners are never given a deadline. A yes holds the date tentatively and you are told right away. If nobody can, you are told right away too.</p>';
+  if((p.warnings||[]).length) h += '<div class="msg warn"><b>Heads up</b>' + listHtml(p.warnings) + '</div>';
+  if(p.first){
+    h += '<div class="rcpt"><div><b>Text to ' + esc(p.first.first) + '</b> <span class="chip">Text message</span></div><div style="margin-top:6px"><span class="pill ' + (p.send_mode === 'now' ? 'ok' : 'warn') + '">' + esc(p.send_when) + '</span></div>'
+      + '<label class="fld" for="pd-text" style="margin-top:8px">What she will get (you can edit it)</label><textarea id="pd-text" maxlength="' + (S && S.text_max ? S.text_max : 800) + '">' + esc(p.text) + '</textarea><div class="cnt" id="pd-cnt"></div>'
+      + '<p class="say">Keep <b>{Link}</b> where her personal link should go. If you delete it the link is added at the end.</p></div>';
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
