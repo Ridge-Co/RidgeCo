@@ -34652,7 +34652,7 @@ const STR_TABS = {
   STR_Cleaners: ['ID', 'Vendor_ID', 'Name', 'Nickname', 'Language', 'Link_Token', 'Active', 'Digest', 'Created_Date'],
   STR_Cleaner_Pool: ['ID', 'Property_Key', 'Cleaner_ID', 'Priority', 'Active'],
   STR_Availability: ['ID', 'Cleaner_ID', 'Property_Key', 'Date', 'Mark', 'Updated_At', 'Source'],
-  STR_Turnovers: ['ID', 'Task_Key', 'Property_Key', 'Kind', 'Date', 'Win_Start', 'Win_End', 'Next_Arrival', 'Guests', 'Status', 'Assigned_Cleaner_ID', 'Assigned_Via', 'Missing_Count', 'Checkout_Text_Sent', 'Created_At', 'Updated_At', 'Note'],
+  STR_Turnovers: ['ID', 'Task_Key', 'Property_Key', 'Kind', 'Date', 'Win_Start', 'Win_End', 'Next_Arrival', 'Guests', 'Status', 'Assigned_Cleaner_ID', 'Assigned_Via', 'Missing_Count', 'Checkout_Text_Sent', 'Created_At', 'Updated_At', 'Note', 'Pending', 'Pending_Note', 'Pending_Text', 'Pending_Mail', 'Pending_Cal', 'Pending_Body', 'Converted_To', 'Manual_Until'],
   STR_Offers: ['ID', 'Task_Key', 'Cleaner_ID', 'Round', 'Created_At', 'Sent_At', 'Deadline_At', 'Status', 'Queue_ID', 'Mode', 'Responded_At', 'Note'],
   STR_Log: ['ID', 'Timestamp', 'Task_Key', 'Cleaner_ID', 'Event', 'Detail'],
   STR_Alerts: ['ID', 'Alert_Key', 'Kind', 'Severity', 'Task_Key', 'Message', 'Sms_Text', 'Send_Count', 'Last_Sent_At', 'Next_Send_At', 'Resolved_At', 'Acked_At', 'Created_At'],
