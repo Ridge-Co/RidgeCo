@@ -35293,7 +35293,8 @@ async function schedRunStrDigest(env) {
 // Step 2 (POST /str/admin/change/apply) claims the plan_id FIRST (a second Send of the same plan returns the first result and does nothing),
 // applies every date on its own (one bad date never aborts the others), re-reads every write, fixes the cleaning calendar, then sends the
 // texts Brett edited. Nothing is silent: every failure is in the result, in Ops_Telemetry, and (when partial) alerts Brett.
-const STR_CHANGE_MAX = 40, STR_TEXT_MAX = 800, STR_MARK_HORIZON = 120, STR_CAL_OPS_MAX = 90;
+const STR_CHANGE_MAX = 40, STR_TEXT_MAX = 800, STR_MARK_HORIZON = 120, STR_SUB_LIMIT = 40;
+let __strCalCount = 0; // Google Calendar calls made by this isolate (the Sheets ones are counted by sheetsRequest as __sheetsFetchCount)
 const STR_ACTIONS = ['swap', 'assign_range', 'mark'];
 const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled'];
 function strHash(s) { let a = 5381, b = 52711; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = ((a * 33) ^ c) >>> 0; b = ((b * 31) + c) >>> 0; } return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0'); }
