@@ -15164,7 +15164,7 @@ function doorWdNextState(state, ev, decision, delivered, nowMs) {
 async function doorWdAttempt(fetchImpl, timeoutMs) {
   const ctl = new AbortController();
   let timer;
-  const timeoutP = new Promise((_, rej) => { timer = setTimeout(() => { try { ctl.abort(); } catch (e) { console.error('door-watchdog: abort failed:', e && e.message); } rej(Object.assign(new Error('timeout after ' + timeoutMs + 'ms'), { timeout: true })); }, timeoutMs); });
+  const timeoutP = new Promise((_, rej) => { timer = setTimeout(() => { try { ctl.abort(); } catch (e) { console.error('door-watchdog: abort failed:', e && e.message); softNote('door_watchdog_abort_failed', e, 'P2'); } rej(Object.assign(new Error('timeout after ' + timeoutMs + 'ms'), { timeout: true })); }, timeoutMs); });
   const work = (async () => {
     const resp = await fetchImpl(DOOR_WD_URL, { signal: ctl.signal, headers: { Accept: 'application/json' } });
     const status = resp.status;
