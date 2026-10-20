@@ -27352,6 +27352,8 @@ async function qbSyncPayments(env, body, opts) {
   const closedWOs = [];
   const doneKeys = new Set(sync && Array.isArray(sync.done) ? sync.done : []);
   let stoppedEarly = false;
+  const before = { done: doneKeys.size, ir: !!(sync && sync.ir_done), loop: !!(sync && sync.loop_done), sweep: !!(sync && sync.sweep_done) };   // for progress_made
+  let rowsThisSlice = 0, rowsLeft = null;
 
   if (!(sync && sync.loop_done)) {
     const tp = clock();
