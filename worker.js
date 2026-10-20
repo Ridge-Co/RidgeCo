@@ -24476,13 +24476,6 @@ async function fetchTabs(env, tabs, opts) {
         console.warn('[stale-serve] batchGet failed, serving last good copy of ' + missing.join(',') + ': ' + (e && e.message));
       } else { throw e; }
     }
-    if (data) {
-      const ranges=data.valueRanges||[];
-      missing.forEach((t,i)=>{
-        const values=(ranges[i]&&ranges[i].values)||[];
-        const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
-      });
-    }
   }
   return tabs.map(t=>{
     const hit = __tabCache.get(t);
