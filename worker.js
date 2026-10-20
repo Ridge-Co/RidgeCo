@@ -36732,6 +36732,11 @@ async function strPendingMarkOut(ctx, c, date, warnings) {
   for (const p of ctx.st.pendings.filter(p => p.Date === date && strPendActive(p))) {
     try {
       if (p.Status === 'pending_held' && String(p.Assigned_Cleaner_ID) === c.ID) { await strPendingRelease(ctx, p, c, 'marked out on the cleaner page'); await strPendingAdvance(ctx, p, warnings); }
+      else for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && String(o.Cleaner_ID) === c.ID && o.Status === 'pending')) { await strSetOffer(ctx, o, { Status: 'declined', Responded_At: new Date(ctx.now).toISOString(), Note: 'marked out' }); await strPendingAdvance(ctx, p, warnings); }
+      if (strRoom(ctx, 14)) { await strPendingAlerts(ctx); await strDeliverAlerts(ctx); }
+    } catch (e) { warnings.push('Marked out, but the pending date could not be updated everywhere: ' + strErrText(e)); await strSystemAlert(ctx.env, 'pending_markout', strErrText(e)); }
+  }
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
