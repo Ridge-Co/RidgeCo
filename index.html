@@ -15891,7 +15891,7 @@ function voidVendorBill(billId, woId) {
         if (!Array.isArray(bills)||!bills.length) return;
         var billsHtml = bills.filter(function(b){ return b.Active !== 'FALSE'; }).map(function(bill) {
           var items = [];
-          try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+          try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){ window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-list', e, {ref: bill.ID}); }
           var statusLabel = (bill.Status||'submitted').toUpperCase();
           var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#b45309)';
           var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
