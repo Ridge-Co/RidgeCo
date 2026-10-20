@@ -30579,7 +30579,7 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
       try {
         const full = await qbApi(env, `invoice/${inv.Id}?minorversion=73`, 'GET', null, token);
         for (const l of qbInvoiceLineCacheRows(full && full.Invoice)) { newRows.push(l); lineCount++; }
-      } catch (e) { /* one bad invoice open must not kill the rest of this batch */ }
+      } catch (e) { openFailures.push(String(inv && inv.Id)); softNote('qb_invoice_line_cache_open_failed', e, 'P1', { invoice: String(inv && inv.Id) }); /* one bad invoice open must not kill the rest of this batch */ }
     }
     if (newRows.length) {
       const cached = new Date().toISOString();
