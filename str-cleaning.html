@@ -817,17 +817,38 @@ function sendChange(){
   var go = $('sh-go'), cancel = $('sh-cancel'); go.disabled = true; cancel.disabled = true; go.textContent = 'Working… please wait';
   $('sh-err').classList.add('hide');
   var payload = Object.assign({}, CH.req, { plan_id: p.plan_id, sig: p.sig, texts: texts });
-  api('POST', '/str/admin/change/apply', payload, { allowFail: true }).then(function(r){
+  runApply(payload, 0);
+}
+/* The Hub does a change in several short steps (a phone-sized request can only do so much at once).
+   Each answer says "applying" until the last step; this page then asks it to carry on by itself.
+   If anything interrupts, the Continue button picks up exactly where it stopped (nothing is ever done twice). */
+function runApply(body, n){
+  var go = $('sh-go'), cancel = $('sh-cancel'); if(!CH) return;
+  CH.sending = true; sheetBusy = true;
+  api('POST', '/str/admin/change/apply', body, { allowFail: true }).then(function(r){
+    if(r && r.status === 'applying' && n < 40){
+      var g = $('sh-go'); if(g) g.textContent = (r.message ? String(r.message).replace(/^Working\.\.\.\s*/, 'Working… ') : 'Working… step ' + (r.step || '?') + ' of ' + (r.steps || '?'));
+      return runApply({ plan_id: CH.plan.plan_id, resume: true }, n + 1);
+    }
+    if(r && r.status === 'applying'){ throw mkErr('It is taking longer than expected.', 'slow', 0); }
     sheetBusy = false; CH.sending = false; renderResult(r); loadState();
-  }, function(e){
-    sheetBusy = false; CH.sending = false;
+  }, function(e){ throw e; }).catch(function(e){
+    sheetBusy = false; if(CH) CH.sending = false;
     if(e.code === 'unauthorized'){ authFailed(); return; }
+    var go2 = $('sh-go'), cancel2 = $('sh-cancel'); if(!go2) return;
     if(e.code === 'stale_preview'){
-      go.disabled = true; cancel.disabled = false; go.textContent = 'Out of date';
+      go2.disabled = true; cancel2.disabled = false; go2.textContent = 'Out of date';
       chShowErr('<b>Not done. Nothing was changed.</b>' + esc(errText(e)) + '<br><button class="btn sm" id="ch-again" style="margin-top:8px">Preview again</button>');
       $('ch-again').onclick = function(){ runPreview(null); }; return;
     }
-    go.disabled = false; cancel.disabled = false; go.textContent = 'Try Send again';
+    if(n > 0 || body.resume === true || e.code === 'slow' || e.code === 'progress_not_saved'){
+      /* it had already started: the safe move is Continue (same plan), never a fresh Send */
+      go2.disabled = false; cancel2.disabled = true; go2.textContent = 'Continue';
+      go2.onclick = function(){ $('sh-err').classList.add('hide'); go2.disabled = true; go2.textContent = 'Working… please wait'; runApply({ plan_id: CH.plan.plan_id, resume: true }, 0); };
+      chShowErr('<b>Stopped part-way. The change is only partly done.</b>' + esc(errText(e)) + '<br>Press Continue. The Hub remembers where it stopped and will not do anything twice or text anyone twice. Do not close this page until it says Done.');
+      return;
+    }
+    go2.disabled = false; cancel2.disabled = false; go2.textContent = 'Try Send again';
     var unsure = e.code === 'network' || e.code === 'bad_response' || /^http_5/.test(e.code);
     chShowErr('<b>' + (unsure ? 'Not sure if that went through.' : 'Not done.') + '</b>' + esc(errText(e)) + (unsure ? '<br>It is safe to press Send again: the Hub remembers this exact request and will not do it twice or text anyone twice. Or press Cancel, then Refresh, and check the Activity log.' : ''));
   });
