@@ -16401,6 +16401,43 @@ function schedSeedFirstRun(state, nowDate, jobs) {
   if (seeded.length) state.seeded = { at: nowDate.toISOString(), jobs: seeded.slice() };
   return seeded;
 }
+// ── NEW-JOB GRACE (Oct 20 2026) ──────────────────────────────────────────────────────────────────────────────
+// A job that is brand new in the registry (or was just switched back on in the JOBS table) has had no chance to run yet, so "has never
+// completed successfully" / "last success was N days ago" is not news - it was opening a P0 "overdue" row on every deploy that added a job.
+// Each tick the dispatcher stamps every ENABLED job once (`seen_at`); a job with no success yet, or one that was seen DISABLED (`seen_at: ''`)
+// and is now enabled, also gets `grace_from`. schedStatus then holds the "overdue" verdict back for the job's own limit (interval jobs:
+// 3 x cadence, at least 45 min; daily/weekly: SCHED_OVERDUE_GRACE_MIN) after `grace_from`, unless the job has succeeded since. A job that already had
+// a success before this build keeps its old, strict behaviour. Pure on `state`: mutates it in place and returns the names it changed.
+function schedStampFirstSeen(state, nowDate, jobs) {
+  const iso = nowDate.toISOString(), changed = [];
+  if (!state.jobs || typeof state.jobs !== 'object') state.jobs = {};
+  for (const job of (jobs || SCHED_JOBS)) {
+    const js = state.jobs[job.name] || {};
+    if (job.disabled) {
+      if (js.seen_at !== '') { state.jobs[job.name] = Object.assign({}, js, { seen_at: '', grace_from: null }); changed.push(job.name); }
+      continue;
+    }
+    if (js.seen_at) continue;                                                     // already stamped while enabled
+    const rec = Object.assign({}, js, { seen_at: iso });
+    if (js.seen_at === '' || !js.last_ok) rec.grace_from = iso;                    // re-enabled, or never succeeded: start the clock now
+    state.jobs[job.name] = rec; changed.push(job.name);
+  }
+  return changed;
+}
+// Pure. Is this enabled job still inside its grace window? -> { in_grace, until_min, why }
+function schedGrace(job, js, nowMs, ticking) {
+  const limit = job.kind === 'interval' ? schedOverdueLimitMin(job) : SCHED_OVERDUE_GRACE_MIN;
+  const okMs = Date.parse(js.last_ok || ''), fromMs = Date.parse(js.grace_from || '');
+  if (!isNaN(fromMs)) {
+    if (!isNaN(okMs) && okMs >= fromMs) return { in_grace: false };                // it has run fine since the clock started: judge it normally
+    const left = limit - Math.round((nowMs - fromMs) / 60000);
+    return left > 0 ? { in_grace: true, until_min: left, why: js.seen_at === '' ? 'just switched back on' : 'new job, first run pending' } : { in_grace: false };
+  }
+  // Never stamped and never succeeded, but the dispatcher IS ticking (state has a last_tick): the job was added by a deploy and the next tick has not stamped it yet.
+  // (With no tick at all there is no such excuse - that stays overdue.)
+  if (ticking && isNaN(okMs) && !js.seen_at && js.seen_at !== '' && !js.last_start) return { in_grace: true, until_min: limit, why: 'new job, waiting for its first tick' };
+  return { in_grace: false };
+}
 // ── SCHEDULE OVERRIDES (Oct 13 2026) ─────────────────────────────────────────────────────────────────────────
 // Brett wants every schedule visible and editable in ONE place: the JOBS table at the top of HubScheduler.gs. The
 // registry above holds the DEFAULTS; each tick the Apps Script sends its JOBS table as `schedule` in POST /cron/run
