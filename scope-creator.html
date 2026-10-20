@@ -511,7 +511,7 @@ async function handleDeepLink(){
       if(match){ await openScope(match.id); }
       else{ setStatus('conn-status','No scope is linked to WO '+esc(woId)+' yet — push its approved estimate to a scope first (Work Order → 📋 Push estimate to Scope Proposal).','warn'); }
     }
-  }catch(e){ /* deep link is a convenience — never blocks the normal picker on failure */ }
+  }catch(e){ /* deep link is a convenience — never blocks the normal picker on failure */ window.hubReportFailure && window.hubReportFailure('scope-creator:deep-link', e); setStatus('conn-status','⚠ Could not open the linked scope. Pick it from the list below.','warn'); }
 }
 
 /* ---------- scope list ---------- */
