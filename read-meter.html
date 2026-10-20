@@ -105,7 +105,7 @@ function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').classList.remove('hide');
   load();
-  timer = setInterval(function(){ if (document.getElementById('auto').checked && !document.hidden) load(); }, 15000);
+  timer = setInterval(function(){ if (document.getElementById('auto').checked && !document.hidden) load(); }, 30000);
 }
 function setWin(m){
   WIN = m;
