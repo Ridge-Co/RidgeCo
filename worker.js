@@ -31974,7 +31974,7 @@ async function qbSendInvoice(env, body) {
     const tradeName = resolved.name;
     const trade = QB_TRADE_MAP[tradeName];
 
-    const warnings = [];
+    const warnings = []; const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
     if (!wo.WO_ID && !wo.ID) warnings.push('Work order ' + ir.WO_ID + ' not found — trade defaulted to General.');
     else if (!resolved.matched) warnings.push('WO trade "' + (wo.Trade || 'blank') + '" is not in the QuickBooks map — booking to General. Add it, or pick a listed trade.');
     else if (resolved.via) warnings.push('WO trade "' + resolved.via + '" booked as "' + tradeName + '".');
