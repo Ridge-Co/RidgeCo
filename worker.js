@@ -12281,10 +12281,10 @@ async function setApprovalStage(env, { woId, scopeId, stage, onlyFrom }) {
       await updateWOFields(env, woId, { Approval_Stage: stage, Estimate_Revised: '' }); ok = true;
     }
     if (scopeId) {
-      try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
+      try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (e) { await softFail(env, 'approval_stage_ensure_columns', e, 'P1', { ref: scopeId }); }
       await updateRow(env, 'Scopes', scopeId, { Approval_Stage: stage }); ok = true;
     }
-  } catch (_) { /* best-effort */ }
+  } catch (e) { await softFail(env, 'approval_stage_write_failed', e, 'P1', { ref: woId || scopeId, stage }); }   // best-effort: the real action is not failed, the caller gets ok=false/partial and Brett is told
   return ok;
 }
 
