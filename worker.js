@@ -26134,7 +26134,7 @@ async function hubTestWriteAllowed(env, path, body) {
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
   if (path === '/cron/run') { const _sb = body || {}; return !_sb.force && (_sb.dry === true || _sb.dry_run === true || (typeof _sb.only === 'string' && SCHED_STAGING_SAFE_JOBS.includes(_sb.only))); }   // NB: `_b` (declared further down) is in its TDZ here - use `body`
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
-    const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    const _bk = (await fetchTabSoft(env, 'Insp_Bookings', 'staging_guard_insp_booking')).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
   }
   if (path === '/admin/sync-vendors-from-qbo') {
