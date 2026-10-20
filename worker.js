@@ -31339,7 +31339,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
     QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
   });
   if (errors.length) return json({ ok: false, error: errors.join('; '), warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}), invoice_id: invoiceId, bill_id: billId });
-  return json({ ok: true, invoice_id: invoiceId, bill_id: billId, status, warnings });
+  return json({ ok: true, invoice_id: invoiceId, bill_id: billId, status, warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}) });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
