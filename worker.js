@@ -34852,6 +34852,7 @@ function strPlanCalendar(desired, existing) {
 }
 function strCalBody(d, tz) {
   const ext = { private: { ridgecoStr: '1', ridgecoStrKey: d.key, ridgecoStrKind: d.kind } };
+  if (d.kind === 'pending') ext.private.ridgecoStrPending = '1';
   if (d.kind === 'gap') return { summary: d.title, description: d.desc, colorId: '11', transparency: 'opaque', start: { dateTime: new Date(inspEtWallToMs(d.date, '07:00')).toISOString(), timeZone: tz }, end: { dateTime: new Date(inspEtWallToMs(d.date, '19:00')).toISOString(), timeZone: tz }, extendedProperties: ext };
   return { summary: d.title, description: d.desc, transparency: 'transparent', start: { date: d.date }, end: { date: inspAddDays(d.date, 1) }, extendedProperties: ext };
 }
