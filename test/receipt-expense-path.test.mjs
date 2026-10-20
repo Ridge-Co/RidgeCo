@@ -56,6 +56,10 @@ function world() {
     gmailSendEmailWithAttachment: async (env, m) => { sent.push(m); },
     _escHtml: (s) => String(s),
     setTimeout: (f) => f(),
+    // Phase C helpers (stubs: the real ones are covered by test/soft-fail-helpers.test.mjs)
+    softNote: () => true, softFail: async () => ({ ok: false }), parseJsonCell: (r, f) => { if (r === undefined || r === null || (typeof r === 'string' && !r.trim())) return f; if (typeof r !== 'string') return r; try { return JSON.parse(r); } catch (e) { return f; } },
+    safeJson: async (r, f) => { try { return await r.json(); } catch (e) { return f; } }, fetchTabSoft: async (env, t) => { try { return await deps.fetchTab(env, t); } catch (e) { return []; } },
+    receiptAddJson: async (env, r) => r.json(),
   };
   const names = Object.keys(deps);
   const sendQB = new Function(...names, `return (${extractFn('sendReceiptsToQBEmail')});`)(...names.map(n => deps[n]));
