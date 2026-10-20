@@ -22229,7 +22229,7 @@ async function gmailOAuthCallback(env, url) {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ code, client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, redirect_uri: gmailCallbackUrl(url), grant_type: 'authorization_code' }),
   });
-  const data = await resp.json().catch(() => null);
+  const data = await safeJson(resp, null, 'gmail_oauth_callback');
   if (!resp.ok || !data || !data.access_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google rejected the sign-in: ' + JSON.stringify(data || {}).slice(0, 200) + '. Nothing changed.');
   const who = gmailIdTokenEmail(data.id_token);
   const expected = gmailExpectedSender(env);
