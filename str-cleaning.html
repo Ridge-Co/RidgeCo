@@ -1031,6 +1031,7 @@ function sendPendCreate(){
     sheetBusy = false; PD.sending = false;
     if(e.code === 'unauthorized'){ authFailed(); return; }
     var g = $('sh-go'), c = $('sh-cancel'); if(!g) return;
+    c.disabled = false;
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
