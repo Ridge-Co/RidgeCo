@@ -34226,7 +34226,7 @@ async function proposalUnbook(env, body) {
   let woWarning = '';
   if (reg && reg.wo) { const _wr = await tryWrite(env, 'proposal_unbook_wo_status', () => updateWOFields(env, reg.wo, { Status: 'Pending Invoice' }), 'P1'); if (!_wr.ok) woWarning = 'The work order ' + reg.wo + ' could not be set back to Pending Invoice (' + _wr.error + ') - set the status by hand.'; }
 
-  return json({ ok: true, undone_invoice: row.QB_Invoice_ID || '', undone_bill: row.QB_Bill_ID || '' });
+  return json({ ok: true, undone_invoice: row.QB_Invoice_ID || '', undone_bill: row.QB_Bill_ID || '', ...(woWarning ? { failure_warning: woWarning } : {}) });
 }
 
 function json(data, status=200) {
