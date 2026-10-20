@@ -15293,6 +15293,15 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}" },
   { Message_Type: 'str_task_cancelled', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}" },
+  // Oct 20 2026: admin swap / bulk change texts (Brett edits them in the preview before anything is sent).
+  { Message_Type: 'str_assigned_multi', Channel: 'sms', Subject: '', Body:
+    "{FirstName}, you're set for these turnovers at {Property}: {DateList}. Checkout is 11 AM. Details and calendar invite: {Link}" },
+  { Message_Type: 'str_swapped_backup', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover the {DateShort} turnover at {Property}, so you're off the hook - could you be the backup in case anything changes? No reply needed." },
+  { Message_Type: 'str_swapped_backup_multi', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover these turnovers at {Property}: {DateList}. So you're off the hook for those - could you be the backup in case anything changes? No reply needed." },
+  { Message_Type: 'str_admin_marked', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've marked you {MarkText} for {DateList} at {Property}. If that's not right, you can change it here: {Link}" },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
