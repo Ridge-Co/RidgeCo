@@ -21201,7 +21201,7 @@ async function qbVendorFullList(env, token) {
 }
 
 async function _landed(res) {
-  try { return res && res.status === 200 && !!(await res.clone().json()).success; } catch (e) { return false; }
+  try { return res && res.status === 200 && !!(await res.clone().json()).success; } catch (e) { return false; /* silent-ok: both callers throw "sheet write did not land" on false, which is ledgered */ }
 }
 
 // POST /admin/sync-vendors-from-qbo { apply?: bool, vendor_id?: string }
