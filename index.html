@@ -7917,7 +7917,7 @@ function loadUnitRecurring(propId, unitId) {
     el.innerHTML = '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">🔁 RECURRING WORK ORDERS</div>' +
       (here.length ? here.map(function(t){ return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="flex:1"><b>'+esc(t.Name)+'</b><div style="color:var(--muted);font-size:11px">'+(recurIsOn(t.Recurrence_Enabled)?esc(recurDescribe(t)):'Manual only')+'</div></div><button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openManageTemplatesModal();setTimeout(function(){openEditTemplateModal(\''+t.ID+'\')},400)">Edit</button><button class="btn small danger" onclick="unitLinkTemplate(\''+t.ID+'\',\''+propId+'\',\''+(unitId||'')+'\',\'remove\')">Unlink</button></div>'; }).join('') : '<div style="color:var(--muted);font-size:12px;font-style:italic;margin-bottom:6px">None linked</div>') +
       (others.length ? '<div style="display:flex;gap:6px;margin-top:6px"><select id="unit-rec-add" style="flex:1"><option value="">Link a template…</option>'+others.map(function(t){ return '<option value="'+t.ID+'">'+esc(t.Name)+'</option>'; }).join('')+'</select><button class="btn small secondary" onclick="unitLinkTemplate(document.getElementById(\'unit-rec-add\').value,\''+propId+'\',\''+(unitId||'')+'\',\'add\')">Link</button></div>' : '');
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:unit-recurring-templates', e); });
 }
 function unitLinkTemplate(tid, propId, unitId, action) {
   if (!tid) return;
