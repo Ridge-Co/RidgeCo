@@ -212,7 +212,7 @@ function build(db, fetchOpts) {
     isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
-    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
+    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, fetchConfigStrictSrc, smsFailSeveritySrc, 'async function reportFailure() { return { ok: true }; }', smsGatedSendSrc,
     grab(wsrc, 'function woJobLabel('), grab(wsrc, 'function propUnitText('), grab(wsrc, 'function formatUnitLabel('),
     'return { woVoid, woUnvoid, woSplit, createWorkOrder, smsGatedSend };',
   ].join('\n');
