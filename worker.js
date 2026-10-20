@@ -3974,7 +3974,7 @@ async function scopeClaude(env, prompt, media, maxTokens) {
   const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1200, messages: [{ role: 'user', content }] }, { source: 'scopeClaude' });   // Oct 16 2026: guarded call (credit pause); throws AiCreditPausedError
   return (data.content && data.content[0] && data.content[0].text || '').trim();
 }
-function scopeParseJSON(txt) { try { return JSON.parse(String(txt).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return null; } }
+function scopeParseJSON(txt) { try { return JSON.parse(String(txt).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { /* silent-ok: model text that is not JSON is the expected null; callers handle null */ return null; } }
 
 // OCR an uploaded/drive image or PDF of hand-written notes → verbatim transcription text.
 async function scopeOcr(env, bytes, mime) {
