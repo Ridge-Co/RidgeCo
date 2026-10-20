@@ -288,6 +288,34 @@ function pendAskCard(p){
   }
   return h+'</section>';
 }
+function pendingListHtml(d){
+  var list=arr(d.pending).filter(function(p){return !(p.offer_id&&!p.held_by_me&&!p.held_by_other);});   // a live question shows as its own card above
+  if(!list.length) return '';
+  return '<div class="sched-h"><h2>Pending - not booked</h2></div>'
+    +'<p class="muted help">These dates are <b>not booked yet</b>, so nothing here is confirmed. If one books, Brett will text you. Mark when you are free or out so he knows who he can count on.</p>'
+    +list.map(pendRow).join('');
+}
+function pendRow(p){
+  var key=String(p.key), di=inDays(p.days_out), mine=!!p.held_by_me;
+  var h='<article class="task pend'+(mine?' mine':'')+(HL_DATE&&HL_DATE===p.date?' hl':'')+'" data-date="'+esc(p.date)+'" data-key="'+esc(key)+'">'
+    +'<div class="t-top"><div><div class="t-date">'+esc(p.label)+'</div><div class="t-kind">Possible checkout 11 AM'+(di?' · '+di:'')+'</div></div><span class="pill pend">'+esc(mine?'You said yes - tentative':'Pending - not booked')+'</span></div>';
+  if(mine){
+    h+='<div class="nb"><b>NOT BOOKED YET.</b> You told us you could do this one. You are <b>not</b> on the schedule. We will text you if it books.</div>';
+    if(S.confirmKey===key){
+      var cb=S.cancelBusy===key;
+      h+='<div class="confirm" role="alertdialog" aria-label="Confirm"><b>Stop holding '+esc(p.label)+'?</b><div class="muted">Brett will be told right away so he can ask someone else.</div>'
+        +'<button class="btn badfill small" data-act="cancel-yes" data-key="'+esc(key)+'" data-fid="c|'+esc(key)+'|y"'+(cb?' disabled':'')+'>'+(cb?'Working…':'Yes, I can’t hold it')+'</button>'
+        +'<button class="btn ghost small" data-act="cancel-no" data-fid="c|'+esc(key)+'|n"'+(cb?' disabled':'')+'>No, keep holding</button></div>';
+    }else h+='<button class="btn bad small" data-act="cancel-ask" data-key="'+esc(key)+'" data-fid="c|'+esc(key)+'">I can’t hold this date anymore</button>';
+  }else{
+    var mk=p.my_mark||'', busy=!!S.markBusy[p.date];
+    h+='<div class="seg-l" id="sl-'+esc(key)+'">Your availability if it books</div><div class="seg" role="radiogroup" aria-labelledby="sl-'+esc(key)+'">'
+      +[['can','Available as backup',''],['out','Out','out'],['','Not marked','none']].map(function(o){
+        return '<button type="button" role="radio" class="'+o[2]+'" aria-checked="'+(mk===o[0]?'true':'false')+'" data-act="mark" data-key="'+esc(key)+'" data-date="'+esc(p.date)+'" data-mark="'+o[0]+'" data-fid="m|'+esc(key)+'|'+o[0]+'"'+(busy?' disabled':'')+'>'+o[1]+'</button>';
+      }).join('')+'</div>';
+  }
+  return h+msgs(S.rowMsg[key])+'</article>';
+}
 function calendarHtml(d){
   var ok=typeof d.ics_url==='string'&&/^https?:\/\//.test(d.ics_url);
   return '<div class="card cal" style="margin-top:20px">'
