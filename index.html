@@ -11580,7 +11580,7 @@ function irClearFilters() {
 // clear "no photo" flag), and whether it's Ridge Co's card or owed back to the vendor.
 function renderReceiptsJsonBreakdown(b) {
   var items = [];
-  try { items = JSON.parse(b.Receipts_JSON || '[]'); } catch (e) {}
+  try { items = JSON.parse(b.Receipts_JSON || '[]'); } catch (e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-breakdown', e, {ref: b.ID}); }
   if (!items.length) return '';
   var rows = items.map(function(it) {
     var onAccount = it.pay === 'account';
