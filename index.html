@@ -5715,7 +5715,7 @@ function loadTradeAccessDefaults() {
   if (!el) return;
   api('GET', '/config').then(function(cfg) {
     var defaults = {};
-    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:trade-defaults-parse', e); el.innerHTML = '<span style="color:var(--danger);font-size:11px">Trade defaults could not be read (the saved value is damaged). Do not edit them until this is fixed.</span>'; return; }
     var trades = Object.keys(defaults);
     if (!trades.length) {
       el.innerHTML = '<div style="color:var(--muted);font-size:12px">No trade defaults set — all trades currently default to YES (needs access).</div>';
