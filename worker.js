@@ -25537,7 +25537,7 @@ async function health(env, url) {
     const cfg = await fetchConfig(env);
     out.twilio.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
     out.twilio.test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
-  } catch (_) {}
+  } catch (e) { softNote('health_twilio_config_check', e, 'P2'); out.twilio.check_error = String((e && e.message) || e).slice(0, 120); }
   // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. LEGACY (Oct 12 2026): the GitHub
   // Actions sweep is gone; the Apps Script scheduler authenticates with Config `Scheduler_Token` instead (see
   // out.scheduler below). CRON_SWEEP_TOKEN now only guards the manual POST /cron/sweep.
