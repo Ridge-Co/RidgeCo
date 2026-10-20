@@ -19188,7 +19188,7 @@ async function judge(env, call) {
       Tier_Requested: 'CHEAP', Model_Used: attempt.model_used, Escalated: attempt.escalated ? 'TRUE' : 'FALSE',
       Success: 'TRUE', Confidence: confidence, Notes: `verdict=${verdict}; ${reason}`.slice(0, 200),
     });
-  } catch (_) { /* best-effort — never let a logging miss affect the verdict already returned */ }
+  } catch (te) { softNote('telemetry_write_failed:write_gate_verdict', te, 'P2'); }   // best-effort: a logging miss must not flip the verdict already returned
 
   return result;
 }
