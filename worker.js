@@ -6216,6 +6216,7 @@ async function scopeProposalUnbook(env, body) {
   await updateRow(env, 'Scope_Signatures', row.ID, {
     Status: 'Signed', QB_Invoice_ID: '', QB_Invoice_Number: '', QB_Bill_ID: '', QB_Bill_Number: '', Bill_Skip_Reason: '',
   });
+  let unbookWarning = '';
   try {
     await scopesTab(env);
     const scopes = await fetchTab(env, 'Scopes');
