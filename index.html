@@ -7736,7 +7736,7 @@ var _woSnippets = [];
 var _RECUR_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 var _RECUR_NTH = {1:'1st',2:'2nd',3:'3rd',4:'4th',5:'last'};
 function recurIsOn(v) { return String(v||'').toUpperCase()==='TRUE'; }
-function recurTargetsOf(t) { try { var a = JSON.parse(t.Targets||'[]'); return Array.isArray(a)?a.filter(function(x){return x&&x.p;}):[]; } catch(e) { return []; } }
+function recurTargetsOf(t) { try { var a = JSON.parse(t.Targets||'[]'); return Array.isArray(a)?a.filter(function(x){return x&&x.p;}):[]; } catch(e) { window.hubReportFailure && window.hubReportFailure('index:recurring-targets-parse', e, {ref: t&&t.ID}); return []; } }
 function recurTargetLabel(x) {
   var p = safeArray(state.properties).find(function(q){ return String(q.ID)===String(x.p); });
   var u = x.u ? safeArray(state.units).find(function(q){ return String(q.ID)===String(x.u); }) : null;
