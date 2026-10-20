@@ -3,6 +3,7 @@
 // endpoint against an in-memory fake Sheets backend, same convention as test/wo-void.test.mjs /
 // test/wo-deposit.test.mjs — this proves the actual shipped logic, not a re-implementation.
 import fs from 'fs';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages, aiCreditIsPausedError, ...) for translateBatchToEnglish
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(sig) {
@@ -144,7 +145,7 @@ function makeFetch(db) {
 
 function build(db) {
   const src = [
-    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(s)).join('\n'),
+    'const CORS = {};', aiCreditGuardPrelude(), ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(s)).join('\n'),
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,
     updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, grab('function englishOnly('), grab('function estimateLinesEnglish('), grab('function plausiblyNonEnglish('), grab('async function translateBatchToEnglish('), scopeItemsFromEstimateSrc, scopesTabSrc,

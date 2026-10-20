@@ -3,6 +3,7 @@
 // invoice builders and invoiceInputsEnglish are extracted from worker.js and run against stubs.
 import fs from 'fs';
 import assert from 'node:assert';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages etc.)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 function grabFrom(text, name) {
@@ -29,7 +30,7 @@ globalThis.fetch = async (url, init) => {
   return { json: async () => ({ content: [{ text: JSON.stringify(arr.map(t => DICT[t] || t)) }] }) };
 };
 const H = new Function(
-  ['plausiblyNonEnglish', 'englishOnly', 'translateBatchToEnglish', 'estimateEnglishFields', 'estimateLinesEnglish', 'vendorWantsSpanish', 'estimateLineItemsCanonical', 'findRecentDuplicate', 'scopeItemsFromEstimate', 'buildLaborDescription', 'buildInvoiceLines', 'invoiceInputsEnglish'].map(grab).join('\n') +
+  aiCreditGuardPrelude() + ['plausiblyNonEnglish', 'englishOnly', 'translateBatchToEnglish', 'estimateEnglishFields', 'estimateLinesEnglish', 'vendorWantsSpanish', 'estimateLineItemsCanonical', 'findRecentDuplicate', 'scopeItemsFromEstimate', 'buildLaborDescription', 'buildInvoiceLines', 'invoiceInputsEnglish'].map(grab).join('\n') +
   '\nreturn { plausiblyNonEnglish, englishOnly, translateBatchToEnglish, estimateEnglishFields, estimateLinesEnglish, vendorWantsSpanish, estimateLineItemsCanonical, findRecentDuplicate, scopeItemsFromEstimate, buildLaborDescription, buildInvoiceLines, invoiceInputsEnglish };'
 )();
 const env = { ANTHROPIC_API_KEY: 'k' };
