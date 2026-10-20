@@ -37640,7 +37640,7 @@ function fiResolveUrl(href, base) { try { const u = new URL(String(href || '').t
 function fiLdNodes(html) {
   const nodes = []; const re = /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi; let m;
   const walk = (v, depth) => { if (!v || depth > 6) return; if (Array.isArray(v)) { v.forEach(x => walk(x, depth + 1)); return; } if (typeof v !== 'object') return; nodes.push(v); if (v['@graph']) walk(v['@graph'], depth + 1); };
-  while ((m = re.exec(html))) { try { walk(JSON.parse(m[1].trim()), 0); } catch (_) { /* a malformed JSON-LD block is simply skipped; other signals are still used */ } }
+  while ((m = re.exec(html))) { try { walk(JSON.parse(m[1].trim()), 0); } catch (_) { /* silent-ok: a malformed JSON-LD block is simply skipped; other signals are still used */ } }
   return nodes;
 }
 // Pure: HTML text -> what we could find. No network.
