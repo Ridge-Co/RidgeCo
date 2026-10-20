@@ -30569,7 +30569,7 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
     if (offset === 0 && body.reset !== false) {
       // Fresh run — clear stale rows from a previous audit before repopulating, so a second run
       // never double-counts an invoice's lines against themselves.
-      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (_) { /* best-effort — a failed clear just means old + new rows coexist until the next reset */ }
+      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (e) { clearWarning = 'The old invoice-line cache could not be cleared (' + String((e && e.message) || e).slice(0, 120) + '), so old and new rows may both be present. Run the index build again from the start.'; await softFail(env, 'qb_invoice_line_cache_clear_failed', e, 'P1'); }
     }
     const batch = invoices.slice(offset, offset + limit);
     const newRows = [];
