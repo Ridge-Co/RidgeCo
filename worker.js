@@ -25601,9 +25601,19 @@ async function uiTestWindowHandler(env, url, request, body) {
 function configFromValues(values) {
   const config={}; (values||[]).forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
 }
+// Oct 20 2026 (no-silent-failures): this used to swallow EVERY error and return {}, so during a Sheets outage or quota burst
+// every caller carried on as if every setting were unset (texting off, alerts off, no tokens...). It still returns {} so the ~hundreds
+// of existing callers keep working, but the failed read is now recorded (P1, de-duplicated by the ledger). Money / SMS / credential
+// paths must use fetchConfigStrict, which throws instead of pretending the Config tab is empty.
 async function fetchConfig(env) {
-  try {
-    const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
+  try { return await fetchConfigStrict(env); }
+  catch (e) {
+    //@@F
+    return {};
+  }
+}
+async function fetchConfigStrict(env) {
+  const data = await sheetsRequest(env, 'GET', `/values/Config`); if (!data.values) return {};
     const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
   } catch(e){return {};}
 }
