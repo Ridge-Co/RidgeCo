@@ -23459,7 +23459,7 @@ async function autoLinkReceipt(env, ex) {
     const props = await fetchTab(env, 'Properties');
     const hit = props.find(p => { const a = String(p.Address || '').toLowerCase(); return a && a.length > 4 && note.includes(a.split(' ').slice(0, 2).join(' ')); });
     if (hit) out.property_id = hit.ID;
-  } catch (e) { /* best-effort */ }
+  } catch (e) { softNote('receipt_autolink_failed', e, 'P2'); }   // best-effort: the receipt just arrives without a suggested WO/property
   return out;
 }
 
