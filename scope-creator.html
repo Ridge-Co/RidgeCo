@@ -1040,7 +1040,7 @@ async function loadScopePhotos(){
   try{
     var atts=await get('/attachments?wo_id='+encodeURIComponent(scopeKey()));
     (atts||[]).filter(function(a){ return a.Active!=='FALSE'; }).forEach(function(a){ addPhotoCard(a.File_Name||'photo', a.Drive_URL||'#'); });
-  }catch(e){}
+  }catch(e){ window.hubReportFailure && window.hubReportFailure('scope-creator:load-photos', e); box.innerHTML='<span style="font-size:11px;color:var(--danger)">⚠ Could not load the existing photos. Reload to retry.</span>'; }
 }
 function addPhotoCard(name,url){ var box=document.getElementById('photo-cards'); var c=document.createElement('div'); c.style.cssText='display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;'; c.innerHTML='📷 <a class="link" href="'+esc(url)+'" target="_blank">'+esc(String(name).slice(0,18))+'</a>'; box.appendChild(c); }
 var uploadFolder=null;
