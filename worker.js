@@ -33135,7 +33135,7 @@ async function trashDefaultItem(env, token) {
   try {
     const cfg = await fetchConfig(env);
     if (cfg.trash_qb_item_id) return { id: String(cfg.trash_qb_item_id), name: cfg.trash_qb_item_name || 'Trash Service' };
-  } catch (e) {}
+  } catch (e) { await softFail(env, 'trash_default_item_config_read', e, 'P1'); }
   // Look for an existing item by name first (don't duplicate one Brett already made).
   try {
     const q = encodeURIComponent("select Id, Name from Item where Name = 'Trash Service'");
