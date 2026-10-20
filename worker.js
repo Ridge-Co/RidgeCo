@@ -33576,8 +33576,7 @@ async function inspCustomerAdd(env, body) {
 // ── Properties ───────────────────────────────────────────────
 async function inspPropertiesList(env, url) {
   const cid = (url && url.searchParams.get('customer_id')) || '';
-  let rows = [];
-  try { rows = await fetchTab(env, 'Insp_Properties'); } catch (e) {}
+  let rows = await fetchTabSoft(env, 'Insp_Properties', 'insp_properties_list');
   rows = rows.filter(r => r.Active !== 'FALSE' && (!cid || r.Customer_ID === cid));
   return json(rows);
 }
