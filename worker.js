@@ -16203,9 +16203,17 @@ async function reportFailure(env, f) {
     } catch (e) { _failPending.unshift(...carried); throw e; }
     return { ok: true, id: ev.ID, severity: ev.Severity, flushed_late: carried.length };
   } catch (e) {
-    try { console.error('FAILURE-REPORT COULD NOT BE SAVED:', JSON.stringify(ev || f || {}).slice(0, 600), '|', String((e && e.message) || e).slice(0, 200)); } catch (e2) { /* console is the last resort; nothing left to try */ }
+    if (ev && _failPending.length < FAIL_PENDING_MAX) _failPending.push(Object.assign({}, ev, { Context: ((ev.Context ? ev.Context + ' ' : '') + '[saved late: the ledger could not be written when this happened]').slice(0, 480) }));
+    try { console.error('FAILURE-REPORT COULD NOT BE SAVED:', JSON.stringify(ev || f || {}).slice(0, 600), '|', String((e && e.message) || e).slice(0, 200)); } catch (e2) { /* silent-ok: console is the last resort, nothing is left to try */ }
     return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
   }
+}
+// ── Phase C helpers (Oct 20 2026, no-silent-failures): replace swallowing catches without changing what callers get back ─────────────────
+// softNote   SYNC, never throws. Queues a ledger event (flushed by the next reportFailure, the rollup, or the end of the request). Use where you cannot await.
+// softFail   async, never throws. Writes the ledger event now. Returns { ok:false, error } so the caller can say what happened.
+// parseJsonCell(raw, fallback, where)   '' / null / undefined = a legitimately empty cell -> fallback quietly; NON-empty text that is not valid JSON = corrupt data -> fallback AND a P2 note.
+// fetchTabSoft / safeJson / tryWrite    the same idea for sheet reads, response bodies and best-effort writes.
+//@@H1
 }
 async function failSetConfig(env, key, value) {
   const r = await setConfigKey(env, { key, value });
