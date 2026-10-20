@@ -35773,7 +35773,136 @@ async function strChangeBuild(ctx, req, feed) {
     if (req.action === 'assign_range') keys = [...tasks.values()].filter(t => t.date >= req.from && t.date <= req.to).sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind)).map(t => t.key);
     if (!keys.length) throw strErr('no_dates', `There are no turnovers between ${strFmtDate(req.from)} and ${strFmtDate(req.to)}.`, 404);
     if (keys.length > STR_CHANGE_MAX) throw strErr('too_many', `That is ${keys.length} turnovers. The most you can change at once is ${STR_CHANGE_MAX}; pick a shorter range.`, 400);
-/*@@B1@@*/
+    for (const key of keys) {
+      const t = tasks.get(key);
+      if (!t) {
+        const r = st.turnovers.find(x => x.Task_Key === key);
+        if (!r) plan.items.push({ task_key: key, date: String(key).split('|')[2] || '', label: key, outcome: 'not_found', reason: 'That turnover was not found (it may have left the bookings feed).', notes: [] });
+        else plan.items.push({ task_key: key, date: r.Date, label: strFmtDate(r.Date), outcome: 'skip', reason: r.Status === 'cancelled' ? 'That booking was cancelled.' : 'That date has already passed.', notes: [] });
+        continue;
+      }
+      const it = { task_key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), kind_label: t.kind === 'prearrival' ? 'pre-arrival clean' : 'checkout clean', days_out: strDaysBetween(today, t.date), is_new: !t.row, row_id: t.row ? t.row.ID : '', outcome: 'change', reason: '', notes: [], displaced: [], unmatched: [], offers_closed: [], marks: [], needs_confirm: false, cal: { hand: [], manual: [], fyi: [], hub_delete: [], hub_create: false, hub_patch: '', title: '' }, _t: t };
+      const hub = t.row && t.row.Status === 'covered' ? (st.cmap[t.row.Assigned_Cleaner_ID] || null) : null, ext = strExternalEvents(t, foreign);
+      it.sbefore = t.row ? `${t.row.Status}:${t.row.Assigned_Cleaner_ID || ''}` : 'new';
+      if (t.row && t.row.Status === 'covered' && String(t.row.Assigned_Cleaner_ID) === cleaner.ID) { it.outcome = 'skip'; it.reason = `${first} already has this one.`; plan.items.push(it); continue; }
+      const seen = new Set(), addD = (c, source) => { if (c && String(c.ID) !== cleaner.ID && !seen.has(String(c.ID))) { seen.add(String(c.ID)); it.displaced.push({ id: String(c.ID), name: strFirst(c), source, cleaner: c }); } };
+      addD(hub, 'hub');
+      if (t.row && t.row.Status === 'covered' && !hub) plan.warnings.push(`${it.label}: the Hub shows a cleaner (id ${t.row.Assigned_Cleaner_ID}) who is no longer in your list, so nobody is told about the change.`);
+      for (const e of ext) { const c = strMatchCleaner(e.name, st.cleaners); if (c) addD(c, 'calendar'); else it.unmatched.push(e.name); if (e.deletable && !it.cal.hand.some(x => x.id === e.id)) it.cal.hand.push({ id: e.id, summary: e.summary }); else if (!e.deletable) { if (e.onDate) it.cal.manual.push(`"${e.summary}" on ${it.label} is not a plain one-day "<Name> Cleaning" entry, so the Hub will not touch it. Delete or fix it by hand.`); else it.cal.fyi.push(`"${e.summary}" (${strDateList(e.days)}) is also on the calendar near this date; the Hub does not change it.`); } }
+      it.sbefore += ':' + ext.map(e => e.id + '/' + e.name).sort().join(',');
+      for (const o of st.offers.filter(o => o.Task_Key === t.key && STR_OFFER_ACTIVE.includes(o.Status))) it.offers_closed.push({ id: o.ID, status: o.Status, name: nm(st.cmap[o.Cleaner_ID]) });
+      if (it.offers_closed.length) it.notes.push(`Waiting offer(s) to ${it.offers_closed.map(o => o.name).join(', ')} are closed quietly (no text), the same as when someone accepts.`);
+      if (st.marks[cleaner.ID + '|' + t.date] === 'out') { it.needs_confirm = true; if (!req.confirm_out) { it.outcome = 'blocked'; it.reason = `${first} marked herself OUT on ${it.label}. Tick the box to assign her anyway.`; } else { it.marks.push({ cleaner_id: cleaner.ID, date: t.date, mark: '' }); it.notes.push(`${first}'s Out mark for this date is cleared.`); } }
+      for (const d of it.displaced) {
+        const cur = st.marks[d.id + '|' + t.date] || '';
+        if (cur === 'out') it.notes.push(`${d.name} is marked OUT that day, so she stays Out (not made backup).`);
+        else if (cur !== 'can') it.marks.push({ cleaner_id: d.id, date: t.date, mark: 'can' });
+      }
+      if (it.cal.manual.length) it.notes.push(...it.cal.manual);
+      const dd = strCoverTitle(S, st, cleaner, t, today); it.cal.title = dd.title || `${first} Cleaning`;
+      const mine = hubEvents.filter(e => e.key === t.key);
+      for (const g of mine.filter(e => e.kind === 'gap')) it.cal.hub_delete.push(g.id);
+      const covers = mine.filter(e => e.kind === 'cover'), same = covers.find(e => e.date === t.date && e.title === it.cal.title);
+      if (same) covers.filter(e => e.id !== same.id).forEach(e => it.cal.hub_delete.push(e.id));
+      else if (covers.length) { it.cal.hub_patch = covers[0].id; covers.slice(1).forEach(e => it.cal.hub_delete.push(e.id)); }
+      else it.cal.hub_create = true;
+      const dn = it.displaced.map(d => d.name);
+      it.sentence = `${first} takes ${it.label} (${it.kind_label})` + (dn.length ? `; ${dn.join(' and ')} becomes backup` : (it.unmatched.length ? `; replaces ${it.unmatched.join(', ')} on the calendar (not one of your cleaners, so no text and no backup mark)` : (t.row && t.row.Status === 'covered' ? '' : '; nobody was on it before'))) + '.';
+      plan.items.push(it);
+    }
+    const blockedOut = plan.items.filter(i => i.needs_confirm);
+    if (blockedOut.length) plan.confirm = { kind: 'out_marked', checked: req.confirm_out, dates: blockedOut.map(i => i.label), message: `${first} marked herself OUT on ${blockedOut.map(i => i.label).join(', ')}. Assigning her anyway needs your explicit OK.` };
+  }
+
+  // ── what happens to the calendar (swap / assign_range) ──
+  const changed = plan.items.filter(i => i.outcome === 'change');
+  if (req.action !== 'mark') {
+    const cal = plan.calendar;
+    cal.mode = !S.calWrite ? 'off' : (feed.fixture || inspCalStaged(ctx.env, cfg) ? 'staged' : (!S.cleaningCal ? 'unconfigured' : 'write'));
+    for (const i of changed) {
+      const steps = [];
+      for (const h of i.cal.hand) steps.push(`remove the hand-typed "${h.summary}"`);
+      if (i.cal.hub_delete.length) steps.push(`remove ${i.cal.hub_delete.length} old Hub calendar entr${i.cal.hub_delete.length === 1 ? 'y' : 'ies'}`);
+      if (i.cal.hub_patch) steps.push(`rename the Hub entry to "${i.cal.title}"`);
+      if (i.cal.hub_create) steps.push(`add an all-day "${i.cal.title}"`);
+      cal.lines.push(`${i.label}: ${steps.join(', ') || 'already correct'}`);
+      const hand = i.cal.hand.map(h => `delete "${h.summary}"`).concat(i.cal.hub_create || i.cal.hub_patch ? [`add an all-day "${i.cal.title}"`] : []);
+      if (hand.length) cal.manual.push(`${i.label}: ${hand.join(' and ')}`);
+    }
+    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (the Hub\'s service account needs "Make changes to events" on that calendar) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
+  }
+
+  // ── who gets what text ──
+  const spec = (kind, c, refs, dates, task, extra) => ({ kind, c, refs, dates, task, extra: extra || {} });
+  const recs = [];
+  if (req.action === 'mark') {
+    const ch = plan.items.filter(i => i.outcome === 'change');
+    if (ch.length && req.mark !== '') recs.push(spec('mark', cleaner, ch.map(i => i.date), ch.map(i => i.date), { key: 'x', kind: 'checkout', date: ch[0].date, next: '' }, { mark: req.mark }));
+  } else if (changed.length) {
+    recs.push(spec('new', cleaner, changed.map(refOf), changed.map(i => i.date), changed[0]._t));
+    const byD = new Map(); for (const i of changed) for (const d of i.displaced) { if (!byD.has(d.id)) byD.set(d.id, { c: d.cleaner, items: [] }); byD.get(d.id).items.push(i); }
+    for (const [id, v] of byD) recs.push(spec('back', v.c, v.items.map(refOf), v.items.map(i => i.date), v.items[0]._t, { newC: cleaner }));
+  }
+  for (const r of recs) {
+    const rr = await strRenderRecipient(ctx, r.kind, r.c, r.dates, r.task, r.extra), why = (sendMode === 'off' ? 'Texts to cleaners are switched OFF (Switches).' : (sendMode === 'twilio_off' ? 'Twilio is switched off for the whole Hub, so no text can go out.' : '')) || (strReach(r.c) ? `${strFirst(r.c)} ${strReach(r.c)}.` : '');
+    const rec = { key: r.kind + ':' + r.c.ID, kind: r.kind, cleaner_id: String(r.c.ID), name: r.c.Name, first: strFirst(r.c), channel: 'sms', dates: [...new Set(r.dates)].sort(), refs: r.refs, type: rr.type, text: rr.text, chars: rr.text.length, can_send: !why, reason: why, send_default: !why && r.kind !== 'mark', language_note: r.c.Language === 'es' ? 'She gets texts in Spanish: this English wording is translated automatically when it is sent.' : '' };
+    rec.timing = !rec.can_send ? { mode: 'none', label: 'No text will be sent.' } : (win ? { mode: 'now', label: sendMode === 'test' ? 'Goes out right now, to YOUR test phone only (cleaning test mode is ON).' : 'Goes out right now.' } : { mode: 'hold', not_before: plan.held_until, label: `Held until 8:00 AM ET ${strFmtDate(inspEtDate(heldUntil), false)} (cleaner texts only go 8 AM-9 PM ET).` + (S.engine ? '' : ' The scheduler is OFF, so the held text will not go out until you switch it on.') });
+    if (rec.chars > STR_TEXT_MAX) rec.reason = rec.reason || 'Longer than the limit.';
+    plan.recipients.push(rec);
+  }
+  const nr = plan.recipients.find(r => r.kind === 'new');
+  if (req.action !== 'mark' && nr) plan.email = cleaner.Email && S.engine ? { to: cleaner.Email, subject: changed.length === 1 ? `You're set: ${S.label} cleaning ${strFmtDate(changed[0].date)}` : `You're set: ${S.label} cleaning (${changed.length} dates)`, note: 'Calendar invite (.ics) with every date she is cleaning or backing up. Sent automatically, as for any assignment.' } : { skipped: !cleaner.Email ? `${cleaner.Name} has no email on file, so no calendar invite goes out (the text and her page still work).` : 'The scheduler is OFF, so no calendar invite email goes out.' };
+  if (!plan.recipients.length && changed.length) plan.warnings.push('Nobody can be told about this change.');
+  if (!S.sms) plan.warnings.push('Texts to cleaners are switched OFF, so the changes happen but NOBODY is texted. Tell them yourself.');
+  const sigParts = [req.action, cleaner.ID, req.mark || '', ...plan.items.map(i => [refOf(i), i.outcome, i.row_id || '', i.sbefore || i.current || '', (i.displaced || []).map(d => d.id).join(','), (i.cal ? i.cal.hand.map(h => h.id).join(',') : ''), (i.offers_closed || []).map(o => o.id + o.status).join(',')].join('~'))];
+  plan.sig = strHash(sigParts.join('|'));
+  plan.counts = { change: plan.items.filter(i => i.outcome === 'change').length, skip: plan.items.filter(i => i.outcome === 'skip').length, blocked: plan.items.filter(i => i.outcome === 'blocked').length, not_found: plan.items.filter(i => i.outcome === 'not_found').length };
+  plan.summary = req.action === 'mark' ? `${first}: ${plan.counts.change} date(s) will change to "${req.mark === 'out' ? 'Out' : (req.mark === 'can' ? 'Available as backup' : 'cleared')}".` : `${first} will take ${plan.counts.change} turnover(s).`;
+  return plan;
+}
+// One text, rendered through the editable template (falls back to the built-in wording). kind: new | back | mark.
+async function strRenderRecipient(ctx, kind, c, dates, task, extra) {
+  const ds = [...new Set(dates)].sort(), one = ds.length === 1, t1 = Object.assign({}, task, { date: ds[0] });
+  if (kind === 'new') { const type = one ? 'str_assigned' : 'str_assigned_multi'; return { type, text: await strRenderText(ctx, type, strTokens(ctx, c, t1, { DateList: strDateList(ds) })) }; }
+  if (kind === 'back') { const type = one ? 'str_swapped_backup' : 'str_swapped_backup_multi'; return { type, text: await strRenderText(ctx, type, strTokens(ctx, c, t1, { DateList: strDateList(ds), NewFirst: strFirst(extra.newC) })) }; }
+  return { type: 'str_admin_marked', text: await strRenderText(ctx, 'str_admin_marked', strTokens(ctx, c, t1, { DateList: strDateList(ds), MarkText: extra.mark === 'out' ? 'out' : 'available as backup' })) };
+}
+function strPlanPublic(plan) {
+  const items = plan.items.map(i => { const o = Object.assign({}, i); delete o._t; if (o.displaced) o.displaced = o.displaced.map(d => ({ id: d.id, name: d.name, source: d.source })); return o; });
+  return Object.assign({}, plan, { items });
+}
+
+// ── Step 1: preview (writes and sends nothing) ───────────────────────────────────────────────────
+async function strChangeFeed(ctx) {
+  try { return await strReadFeed(ctx); }
+  catch (e) { throw strErr('feed_unreadable', `The bookings feed or the cleaning calendar could not be read just now, so nothing can be changed safely: ${strErrText(e)}`, 409); }
+}
+async function strChangePreview(env, body) {
+  try {
+    const req = strChangeReq(body), ctx = await strHandlerCtx(env), feed = await strChangeFeed(ctx), plan = await strChangeBuild(ctx, req, feed);
+    plan.plan_id = strChangeId();
+    return json(Object.assign({ ok: true, now: new Date(ctx.now).toISOString(), warnings_from_load: ctx.warnings }, strPlanPublic(plan)));
+  } catch (e) { return await strHandleErr(env, e, 'change preview'); }
+}
+
+// ── The calendar half of a swap: remove the old cleaner's entry (hand-typed or Hub), put the new one in, re-read to prove it ──
+async function strSwapCalendar(ctx, feed, plan, doneItems) {
+  const { env, cfg, S } = ctx, cal = { mode: plan.calendar.mode, status: 'unchanged', items: {}, manual: [], message: '' }, today = inspEtDate(ctx.now);
+  const manualFor = i => { const m = []; for (const h of i.cal.hand) m.push(`delete "${h.summary}"`); if (i.cal.hub_create || i.cal.hub_patch || i.cal.hand.length) m.push(`add an all-day "${i.cal.title}"`); return `${i.label}: ${m.join(' and ')}`; };
+  if (!doneItems.length) return cal;
+  if (cal.mode !== 'write') {
+    cal.status = cal.mode === 'staged' ? 'staged' : 'not_changed';
+    cal.message = plan.calendar.note || '';
+    if (cal.mode !== 'staged') { cal.manual = doneItems.map(manualFor); for (const i of doneItems) cal.items[i.task_key] = { status: 'not_changed', message: 'The Hub did not change the calendar (' + (cal.mode === 'off' ? 'the calendar switch is OFF' : 'no calendar is set up') + ').' }; }
+    else for (const i of doneItems) cal.items[i.task_key] = { status: 'staged', message: 'Test server: pretend-only.' };
+    return cal;
+  }
+  const enc = encodeURIComponent, ops = []; let fatal = null;
+  for (const i of doneItems) {
+    for (const id of i.cal.hub_delete) ops.push({ i, label: 'delete', id, fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(id)) });
+    for (const h of i.cal.hand) ops.push({ i, label: 'delete', id: h.id, fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(h.id)) });
+    const want = { key: i.task_key, kind: 'cover', date: i.date, title: i.cal.title, desc: `${S.label} ${i.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub (admin swap). Checkout 11 AM${i._t.next ? '; next guest arrives ' + strNextDate(i.date, i._t.next) : ''}.` };
+/*@@B2@@*/
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
