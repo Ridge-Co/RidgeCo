@@ -36754,6 +36754,22 @@ async function strPendingRespond(ctx, c, offer, p, action) {
     return json({ ok: true, result: 'declined', message: 'No problem - thank you for letting us know.', warnings });
   }
   if (p.Status === 'pending_held' && String(p.Assigned_Cleaner_ID) === c.ID) return json({ ok: true, result: 'already_yours', message: 'You already told us you could do this one. Nothing is confirmed yet - we will text you if it books.' });
+  const filled = () => json({ ok: true, result: 'filled', backup_date: p.Date, message: `Thanks for the quick answer - another cleaner already said they could do ${label}, so it is covered for now. Could you be the backup for that date? Tap "Yes, backup" and we will keep you in mind.` });
+  if (!['pending', 'expired'].includes(offer.Status)) return filled();
+  invalidateTabCache('STR_Turnovers');
+  const cur = (await fetchTab(env, 'STR_Turnovers')).find(r => String(r.ID) === String(p.ID));
+  if (!cur || !strPendActive(cur)) return json({ ok: true, result: 'cancelled', message: `The ${label} date is no longer being held. Thank you!` });
+  if (cur.Status === 'pending_held' && String(cur.Assigned_Cleaner_ID) !== c.ID) return filled();
+  Object.assign(p, cur);
+  let werr = null;
+  try { await strSetTurnover(ctx, p, { Status: 'pending_held', Assigned_Cleaner_ID: c.ID, Assigned_Via: 'pending_yes', Note: '' }); } catch (e) { if (!e || e.code !== 'write_not_landed') throw e; werr = e; }
+  invalidateTabCache('STR_Turnovers');
+  const back = (await fetchTab(env, 'STR_Turnovers')).find(r => String(r.ID) === String(p.ID));
+  if (back && back.Status === 'pending_held' && String(back.Assigned_Cleaner_ID) !== c.ID) return filled(); // another cleaner said yes at the same moment and won
+  if (werr || !back || String(back.Assigned_Cleaner_ID) !== c.ID) throw werr || strErr('write_not_landed', 'The tentative hold did not save.');
+  Object.assign(p, back);
+  await strSetOffer(ctx, offer, { Status: 'accepted', Responded_At: iso });
+  await strLog(ctx, p.Task_Key, c.ID, 'pending_held', 'said yes (tentative)');
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
