@@ -114,9 +114,9 @@ function parsePath(p){ return String(p).replace(/\[(\d+)\]/g, '.$1').split('.');
 
 // ── draft autosave (never includes the PIN) ─────────────────────────────
 var DKEY = 'oo_draft_' + TOKEN.slice(0,10);
-function saveDraft(){ try { var c = JSON.parse(JSON.stringify(S)); c.owner.pin = ''; c.step = S.step; localStorage.setItem(DKEY, JSON.stringify(c)); } catch(e){} }
-function loadDraft(){ try { var d = JSON.parse(localStorage.getItem(DKEY) || 'null'); if (d && d.owner && d.properties && d.properties.length) { S = d; S.consent = false; return true; } } catch(e){} return false; }
-function clearDraft(){ try { localStorage.removeItem(DKEY); } catch(e){} }
+function saveDraft(){ try { var c = JSON.parse(JSON.stringify(S)); c.owner.pin = ''; c.step = S.step; localStorage.setItem(DKEY, JSON.stringify(c)); } catch(e){ /* silent-ok: draft autosave is optional, storage may be blocked */ } }
+function loadDraft(){ try { var d = JSON.parse(localStorage.getItem(DKEY) || 'null'); if (d && d.owner && d.properties && d.properties.length) { S = d; S.consent = false; return true; } } catch(e){ /* silent-ok: stored draft unreadable, form starts fresh */ } return false; }
+function clearDraft(){ try { localStorage.removeItem(DKEY); } catch(e){ /* silent-ok: storage blocked, nothing stored to clear */ } }
 
 // ── validation (mirrors the server; the server is still the source of truth) ──
 function digits(v){ return String(v||'').replace(/\D/g,''); }
