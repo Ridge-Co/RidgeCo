@@ -63,7 +63,9 @@ function makeStore() {
 // ───────────────────────────── 1. scheduler block, sliced out of worker.js ─────────────────────────────
 const bi = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-BEGIN'), be = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-END');
 t('scheduler block markers exist', bi > 0 && be > bi);
-const blockSrc = wsrc.slice(bi, be);
+const gi = wsrc.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), ge = wsrc.indexOf('// ═══ AI-CREDIT-GUARD-END');
+t('AI-credit guard markers exist', gi > 0 && ge > gi);
+const blockSrc = wsrc.slice(bi, be) + '\n' + wsrc.slice(gi, ge);
 function load(store, over) {
   over = over || {};
   const telemetry = [], alerts = [];
