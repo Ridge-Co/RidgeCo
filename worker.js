@@ -16229,7 +16229,23 @@ function softNote(where, err, severity, context) {
     return true;
   } catch (e) { try { console.error('SOFT-FAIL COULD NOT BE QUEUED:', where, String((e && e.message) || e).slice(0, 120)); } catch (e2) { /* silent-ok: console is the last resort */ } return false; }
 }
-//@@H2
+async function failFlushPending(env) {
+  if (!_failPending.length) return { ok: true, flushed: 0 };
+  // Reviewer fix (Oct 20): while Sheets is failing (quota burst / outage) do not add one more failing append per request - wait 30 s after a failed flush.
+  if (failFlushPending._until && Date.now() < failFlushPending._until) return { ok: false, error: 'flush backing off after a failed attempt' };
+  const carried = _failPending.splice(0, 40);
+  try {
+    await failEnsureTabs(env);
+    await sheetsRequest(env, 'POST', `/values/${FAIL_EVENTS_TAB}:append?valueInputOption=RAW`, { values: carried.map(p => FAIL_EVENT_COLS.map(c => p[c])) });
+    return { ok: true, flushed: carried.length };
+  } catch (e) {
+    _failPending.unshift(...carried);
+    failFlushPending._until = Date.now() + 30000;
+    try { console.error('FAILURE-QUEUE FLUSH FAILED (' + carried.length + ' kept for retry):', String((e && e.message) || e).slice(0, 160)); } catch (e2) { /* silent-ok: console is the last resort */ }
+    return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+//@@H3
 }
 async function failSetConfig(env, key, value) {
   const r = await setConfigKey(env, { key, value });
