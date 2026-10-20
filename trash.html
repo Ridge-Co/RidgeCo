@@ -506,10 +506,25 @@ function unmarkSkipped(pid, week){
 function loadNudge(){
   return api('GET','/trash/unbilled').then(function(d){
     var el=document.getElementById('nudge'); var items=(d&&d.items)||[];
-    if(!items.length){ el.innerHTML=''; return; }
-    el.innerHTML='<div class="banner"><b>Needs attention</b><ul style="margin:8px 0 0;padding-left:18px">'
-      + items.map(function(i){ return '<li>'+esc(i.message)+'</li>'; }).join('')+'</ul></div>';
-  }).catch(function(){});
+    el.textContent='';
+    var errNote=loadErrorNote(d&&d.load_errors, 'the Needs attention list');
+    if(errNote) el.appendChild(errNote);
+    if(!items.length) return;
+    var banner=document.createElement('div'); banner.className='banner';
+    var title=document.createElement('b'); title.textContent='Needs attention'; banner.appendChild(title);
+    var ul=document.createElement('ul'); ul.style.cssText='margin:8px 0 0;padding-left:18px';
+    items.forEach(function(i){
+      var li=document.createElement('li'); li.textContent=String((i&&i.message)||'');
+      if(i&&i.type==='load_error'){ li.style.color='var(--danger)'; li.style.fontWeight='700'; }   // a read that failed: red, never a normal to-do
+      ul.appendChild(li);
+    });
+    banner.appendChild(ul); el.appendChild(banner);
+  }).catch(function(e){
+    // Was swallowed: an empty box looked exactly like "nothing needs attention". Say it could not load, and report.
+    window.hubReportFailure && window.hubReportFailure('trash:loadNudge', e);
+    var el=document.getElementById('nudge');
+    if (el) el.innerHTML='<div class="banner"><b>Could not load the Needs attention list.</b> Reload the page to try again; do not assume nothing needs attention.</div>';
+  });
 }
 
 // ── Visit sheet ──────────────────────────────────────────────
