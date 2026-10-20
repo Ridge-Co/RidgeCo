@@ -36873,6 +36873,8 @@ async function strAdminPendingCancel(env, body) {
     const notify = body.notify === true && !!holder && !reach, iso = new Date(ctx.now).toISOString(), custom = notify ? strCleanText(body.text || '') : '';
     if (notify && custom.length > STR_TEXT_MAX) throw strErr('text_too_long', `The text is ${custom.length} characters; the most is ${STR_TEXT_MAX}.`, 400);
     for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'inquiry cancelled by Brett' });
+    await strSetTurnover(ctx, p, { Status: 'pending_cancelled', Pending_Cal: 'del', Pending_Text: notify ? 'due' : '', Pending_Body: custom && custom !== text ? custom : '', Note: 'cancelled by Brett' });
+    await strLog(ctx, p.Task_Key, (holder && holder.ID) || '', 'pending_cancelled', notify ? `by Brett; ${strFirst(holder)} will be told` : 'by Brett; nobody texted');
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
