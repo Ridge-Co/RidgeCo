@@ -10546,9 +10546,9 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   if (!allowIds.includes(String(vendorId))) return; // soft launch — not enabled for this vendor yet
 
   const [vendors, wos, properties] = await Promise.all([
-    fetchTab(env, 'Vendors').catch(() => []),
-    fetchTab(env, 'Work_Orders').catch(() => []),
-    fetchTab(env, 'Properties').catch(() => []),
+    fetchTabSoft(env, 'Vendors', 'vendor_invoice_email'),
+    fetchTabSoft(env, 'Work_Orders', 'vendor_invoice_email'),
+    fetchTabSoft(env, 'Properties', 'vendor_invoice_email'),
   ]);
   const vendor = vendors.find(v => String(v.ID) === String(vendorId));
   if (!vendor) return;
