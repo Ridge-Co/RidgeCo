@@ -24383,6 +24383,7 @@ function __meterSrc(env) { const r = env && env.__REQ__; return r ? r.src : 'unl
 function __meterReqEnv(env, request, path) {
   try {
     const c = Object.create(env);
+    try { __meter.tag = (env.STAGING === '1' || /staging/.test(new URL(request.url).hostname)) ? 'stg' : 'prd'; } catch (e) { /* tag keeps its last value */ }
     c.__REQ__ = { src: 'pre-auth|' + request.method + ' ' + path, route: request.method + ' ' + path };
     return c;
   } catch (e) { __meterFault('reqEnv', e); return env; }
