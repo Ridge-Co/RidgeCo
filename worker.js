@@ -4519,9 +4519,9 @@ async function scopeEstimate(env, body) {
       try {
         const tr = await translateBatchToEnglish(env, [_n]);
         if (tr.ok && tr.out[0] && tr.out[0].trim().toLowerCase() !== _n.trim().toLowerCase()) {
-          try { await ensureColumns(env, 'Scopes', ['Estimate_Notes_Orig']); fields.Estimate_Notes_Orig = _n; fields.Estimate_Notes = tr.out[0]; } catch (_) {}
+          try { await ensureColumns(env, 'Scopes', ['Estimate_Notes_Orig']); fields.Estimate_Notes_Orig = _n; fields.Estimate_Notes = tr.out[0]; } catch (ce) { await softFail(env, 'scopeEstimate_notes_orig_column', ce, 'P1', { scope_id: id }); /* reported; the notes are saved untranslated */ }
         }
-      } catch (_) {}
+      } catch (te) { await softFail(env, 'scopeEstimate_translate_notes', te, 'P2', { scope_id: id }); /* reported; the notes are saved as typed */ }
     } else if (s.Estimate_Notes_Orig !== undefined) { fields.Estimate_Notes_Orig = ''; }
   }
   if (['draft', 'approved', 'wo-created'].includes(s.Status)) fields.Status = 'estimated';
