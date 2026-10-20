@@ -6077,7 +6077,7 @@ function renderErrorLog(){
   var logs=JSON.parse(localStorage.getItem('mh_errors')||'[]');
   var el=document.getElementById('error-log-list'); if(!el) return;
   if(!logs.length){el.innerHTML='<div class="loading">No errors logged</div>';return;}
-  el.innerHTML=logs.map(function(l){return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:8px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+l.time.replace('T',' ').split('.')[0]+' — '+l.context+'</div><div style="font-size:12px;color:var(--danger)">'+l.message+'</div></div>';}).join('');
+  el.innerHTML=logs.map(function(l){return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:8px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+esc(l.time.replace('T',' ').split('.')[0])+' — '+esc(l.context)+'</div><div style="font-size:12px;color:var(--danger)">'+esc(l.message)+'</div></div>';}).join('');
 }
 function clearErrorLog(){if(!confirm('Clear all error logs?'))return;localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
 
