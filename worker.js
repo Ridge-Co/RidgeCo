@@ -5479,8 +5479,10 @@ async function scopeProposalSign(env, body, ip, ua) {
     IP: String(ip || '').slice(0, 60), User_Agent: String(ua || '').slice(0, 300),
     Status: 'Signed', Created_Date: now.toISOString(), Active: 'TRUE',
   });
-  const sigJson = await sigResp.json().catch(() => ({}));
+  const sigJson = await safeJson(sigResp, {}, 'scope_sign_signature_row');
   const signatureId = sigJson.id;
+  let signWarning = '';
+  if (!signatureId) { signWarning = 'The signature was saved but its row id could not be read, so no payment milestones were created.'; await softFail(env, 'scope_sign_no_signature_id', 'Signature row added but no id came back; payment milestones NOT created', 'P1', { scope: String(s.ID) }); }
 
   // Expand the scope's payment schedule (whatever Brett configured on scope-creator.html, or the
   // built-in default if he never touched it) into individual Payment_Milestones rows tied to
