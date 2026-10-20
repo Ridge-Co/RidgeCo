@@ -32369,7 +32369,7 @@ async function qbSendInvoice(env, body) {
             if (others.length) {
               warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}. QuickBooks' counter has fallen behind your manual invoices — set the next number in QuickBooks or you'll keep getting duplicates.`);
             }
-          } catch (e) { /* the invoice exists; the duplicate check is advisory */ }
+          } catch (e) { await softFail(env, 'qb_invoice_dup_check', e, 'P2', { ir: ir.ID, invoice: invoiceId }); }   // the invoice exists; the duplicate check is advisory
         }
       }
     }
