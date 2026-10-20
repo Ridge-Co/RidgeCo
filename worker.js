@@ -6083,7 +6083,7 @@ async function scopeProposalBook(env, body) {
     billSkipReason = 'The signed selections carry $0 of vendor cost — there is nothing to bill. Check the scope\'s vendor pricing.';
   }
 
-  const warnings = [];
+  const warnings = []; const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
   if (billSkipReason) warnings.push(billSkipReason);
   if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
