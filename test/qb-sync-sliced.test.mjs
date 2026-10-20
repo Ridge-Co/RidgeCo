@@ -51,7 +51,7 @@ function build(opts) {
       throw new Error('unexpected sheets call ' + method + ' ' + path);
     },
     ensureColumns: async () => {},
-    qbPayables: async () => ({ clone() { return this; }, async json() { return opts.payablesFail ? { ok: false, error: 'QB down' } : { ok: true, count: rows.length, rows, owed_now: 0, owed_total: 0, warnings: [] }; } }),
+    qbPayables: async () => { clockRef.v += (opts.payablesMs || 0); return { clone() { return this; }, async json() { return opts.payablesFail ? { ok: false, error: 'QB down' } : { ok: true, count: rows.length, rows, owed_now: 0, owed_total: 0, warnings: [] }; } }; },
     fetchTab: async (e, tab) => tab === 'Scope_Signatures' ? [1, 2, 3, 4, 5].map(n => ({ ID: String(n), Scope_ID: String(n) })) : (opts.workorders || []), WOStatus: { sets: { CLOSED_FINAL: ['Paid', 'Closed'] } },
     findWO: (list, id) => list.find(w => w.ID === id),
     updateWOFields: async (e, id, f) => { woUpdates.push({ id, f }); }, logWOAudit: async (...a) => { if (opts.auditFails) throw new Error('audit sheet down'); audits.push(a); },
