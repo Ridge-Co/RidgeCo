@@ -35810,7 +35810,95 @@ async function strChangeBuild(ctx, req, feed) {
       const covers = mine.filter(e => e.kind === 'cover'), same = covers.find(e => e.date === t.date && e.title === it.cal.title);
       if (same) covers.filter(e => e.id !== same.id).forEach(e => it.cal.hub_delete.push(e.id));
       else if (covers.length) { it.cal.hub_patch = covers[0].id; covers.slice(1).forEach(e => it.cal.hub_delete.push(e.id)); }
-/*@@S2@@*/
+      else it.cal.hub_create = true;
+      const dn = it.displaced.map(d => d.name);
+      it.sentence = `${first} takes ${it.label} (${it.kind_label})` + (dn.length ? `; ${dn.join(' and ')} becomes backup` : (it.unmatched.length ? `; replaces ${it.unmatched.join(', ')} on the calendar (not one of your cleaners, so no text and no backup mark)` : (t.row && t.row.Status === 'covered' ? '' : '; nobody was on it before'))) + '.';
+      plan.items.push(it);
+    }
+    const blockedOut = plan.items.filter(i => i.needs_confirm);
+    if (blockedOut.length) plan.confirm = { kind: 'out_marked', checked: req.confirm_out, dates: blockedOut.map(i => i.label), message: `${first} marked herself OUT on ${blockedOut.map(i => i.label).join(', ')}. Assigning her anyway needs your explicit OK.` };
+  }
+
+  // ── what happens to the calendar (swap / assign_range) ──
+  const changed = plan.items.filter(i => i.outcome === 'change');
+  if (req.action !== 'mark') {
+    const cal = plan.calendar;
+    cal.mode = !S.calWrite ? 'off' : (feed.fixture || inspCalStaged(ctx.env, cfg) ? 'staged' : (!S.cleaningCal ? 'unconfigured' : 'write'));
+    for (const i of changed) {
+      const steps = [];
+      for (const h of i.cal.hand) steps.push(`remove the hand-typed "${h.summary}"`);
+      if (i.cal.hub_delete.length) steps.push(`remove ${i.cal.hub_delete.length} old Hub calendar entr${i.cal.hub_delete.length === 1 ? 'y' : 'ies'}`);
+      if (i.cal.hub_patch) steps.push(`rename the Hub entry to "${i.cal.title}"`);
+      if (i.cal.hub_create) steps.push(`add an all-day "${i.cal.title}"`);
+      cal.lines.push(`${i.label}: ${steps.join(', ') || 'already correct'}`);
+      const hand = i.cal.hand.map(h => `delete "${h.summary}"`).concat(i.cal.hub_create || i.cal.hub_patch ? [`add an all-day "${i.cal.title}"`] : []);
+      if (hand.length) cal.manual.push(`${i.label}: ${hand.join(' and ')}`);
+    }
+    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (the Hub\'s service account needs "Make changes to events" on that calendar) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
+  }
+
+  // ── who gets what text ──
+  const spec = (kind, c, refs, dates, task, extra) => ({ kind, c, refs, dates, task, extra: extra || {} });
+  const recs = [];
+  if (req.action === 'mark') {
+    const ch = plan.items.filter(i => i.outcome === 'change');
+    if (ch.length && req.mark !== '') recs.push(spec('mark', cleaner, ch.map(i => i.date), ch.map(i => i.date), { key: 'x', kind: 'checkout', date: ch[0].date, next: '' }, { mark: req.mark }));
+  } else if (changed.length) {
+    recs.push(spec('new', cleaner, changed.map(refOf), changed.map(i => i.date), changed[0]._t));
+    const byD = new Map(); for (const i of changed) for (const d of i.displaced) { if (!byD.has(d.id)) byD.set(d.id, { c: d.cleaner, items: [] }); byD.get(d.id).items.push(i); }
+    for (const [id, v] of byD) recs.push(spec('back', v.c, v.items.map(refOf), v.items.map(i => i.date), v.items[0]._t, { newC: cleaner }));
+  }
+  for (const r of recs) {
+    const rr = await strRenderRecipient(ctx, r.kind, r.c, r.dates, r.task, r.extra), why = (sendMode === 'off' ? 'Texts to cleaners are switched OFF (Switches).' : (sendMode === 'twilio_off' ? 'Twilio is switched off for the whole Hub, so no text can go out.' : '')) || (strReach(r.c) ? `${strFirst(r.c)} ${strReach(r.c)}.` : '');
+    const rec = { key: r.kind + ':' + r.c.ID, kind: r.kind, cleaner_id: String(r.c.ID), name: r.c.Name, first: strFirst(r.c), channel: 'sms', dates: [...new Set(r.dates)].sort(), refs: r.refs, type: rr.type, text: rr.text, chars: rr.text.length, can_send: !why, reason: why, send_default: !why && r.kind !== 'mark', language_note: r.c.Language === 'es' ? 'She gets texts in Spanish: this English wording is translated automatically when it is sent.' : '' };
+    rec.timing = !rec.can_send ? { mode: 'none', label: 'No text will be sent.' } : (win ? { mode: 'now', label: sendMode === 'test' ? 'Goes out right now, to YOUR test phone only (cleaning test mode is ON).' : 'Goes out right now.' } : { mode: 'hold', not_before: plan.held_until, label: `Held until 8:00 AM ET ${strFmtDate(inspEtDate(heldUntil), false)} (cleaner texts only go 8 AM-9 PM ET).` + (S.engine ? '' : ' The scheduler is OFF, so the held text will not go out until you switch it on.') });
+    if (rec.chars > STR_TEXT_MAX) rec.reason = rec.reason || 'Longer than the limit.';
+    plan.recipients.push(rec);
+  }
+  const nr = plan.recipients.find(r => r.kind === 'new');
+  if (req.action !== 'mark' && nr) plan.email = cleaner.Email && S.engine ? { to: cleaner.Email, subject: changed.length === 1 ? `You're set: ${S.label} cleaning ${strFmtDate(changed[0].date)}` : `You're set: ${S.label} cleaning (${changed.length} dates)`, note: 'Calendar invite (.ics) with every date she is cleaning or backing up. Sent automatically, as for any assignment.' } : { skipped: !cleaner.Email ? `${cleaner.Name} has no email on file, so no calendar invite goes out (the text and her page still work).` : 'The scheduler is OFF, so no calendar invite email goes out.' };
+  if (!plan.recipients.length && changed.length) plan.warnings.push('Nobody can be told about this change.');
+  if (!S.sms) plan.warnings.push('Texts to cleaners are switched OFF, so the changes happen but NOBODY is texted. Tell them yourself.');
+  const sigParts = [req.action, cleaner.ID, req.mark || '', ...plan.items.map(i => [refOf(i), i.outcome, i.row_id || '', i.sbefore || i.current || '', (i.displaced || []).map(d => d.id).join(','), (i.cal ? i.cal.hand.map(h => h.id).join(',') : ''), (i.offers_closed || []).map(o => o.id + o.status).join(',')].join('~'))];
+  plan.sig = strHash(sigParts.join('|'));
+  plan.counts = { change: plan.items.filter(i => i.outcome === 'change').length, skip: plan.items.filter(i => i.outcome === 'skip').length, blocked: plan.items.filter(i => i.outcome === 'blocked').length, not_found: plan.items.filter(i => i.outcome === 'not_found').length };
+  plan.summary = req.action === 'mark' ? `${first}: ${plan.counts.change} date(s) will change to "${req.mark === 'out' ? 'Out' : (req.mark === 'can' ? 'Available as backup' : 'cleared')}".` : `${first} will take ${plan.counts.change} turnover(s).`;
+  return plan;
+}
+// One text, rendered through the editable template (falls back to the built-in wording). kind: new | back | mark.
+async function strRenderRecipient(ctx, kind, c, dates, task, extra) {
+  const ds = [...new Set(dates)].sort(), one = ds.length === 1, t1 = Object.assign({}, task, { date: ds[0] });
+  if (kind === 'new') { const type = one ? 'str_assigned' : 'str_assigned_multi'; return { type, text: await strRenderText(ctx, type, strTokens(ctx, c, t1, { DateList: strDateList(ds) })) }; }
+  if (kind === 'back') { const type = one ? 'str_swapped_backup' : 'str_swapped_backup_multi'; return { type, text: await strRenderText(ctx, type, strTokens(ctx, c, t1, { DateList: strDateList(ds), NewFirst: strFirst(extra.newC) })) }; }
+  return { type: 'str_admin_marked', text: await strRenderText(ctx, 'str_admin_marked', strTokens(ctx, c, t1, { DateList: strDateList(ds), MarkText: extra.mark === 'out' ? 'out' : 'available as backup' })) };
+}
+function strPlanPublic(plan) {
+  const items = plan.items.map(i => { const o = Object.assign({}, i); delete o._t; if (o.displaced) o.displaced = o.displaced.map(d => ({ id: d.id, name: d.name, source: d.source })); return o; });
+  return Object.assign({}, plan, { items });
+}
+
+// ── Step 1: preview (writes and sends nothing) ───────────────────────────────────────────────────
+async function strChangeFeed(ctx) {
+  try { return await strReadFeed(ctx); }
+  catch (e) { throw strErr('feed_unreadable', `The bookings feed or the cleaning calendar could not be read just now, so nothing can be changed safely: ${strErrText(e)}`, 409); }
+}
+async function strChangePreview(env, body) {
+  try {
+    const req = strChangeReq(body), ctx = await strHandlerCtx(env), feed = await strChangeFeed(ctx), plan = await strChangeBuild(ctx, req, feed);
+    plan.plan_id = strChangeId();
+    return json(Object.assign({ ok: true, now: new Date(ctx.now).toISOString(), warnings_from_load: ctx.warnings }, strPlanPublic(plan)));
+  } catch (e) { return await strHandleErr(env, e, 'change preview'); }
+}
+
+// ── Subrequest budget. One Worker invocation may make only ~50 outside calls (Sheets, Calendar, Twilio, Gmail); the apply is therefore a
+// resumable job of small STAGES. Each HTTP call runs as many stages as fit under STR_SUB_LIMIT, saves where it got to, and the page simply
+// calls again until the job says it is finished. Nothing is ever skipped to save calls; it is only spread over more calls. ──
+function strSheetsCount() { return typeof __sheetsFetchCount === 'number' ? __sheetsFetchCount : 0; } // (defined outside the STR block; the typeof keeps the block usable on its own)
+function strSubUsed(ctx) { return (strSheetsCount() - (ctx.subS0 || 0)) + (__strCalCount - (ctx.subE0 || 0)) + (ctx.subX || 0); }
+function strRoom(ctx, est) { return ctx.subS0 === undefined || strSubUsed(ctx) + est <= STR_SUB_LIMIT; }
+async function strFresh(ctx) { if (ctx.dirty) { await strLoad(ctx, true); ctx.dirty = false; } }
+const STR_STAGES = ['sheets', 'audit', 'calendar', 'queue', 'send', 'email', 'alerts', 'finish'];
+/*@@S3@@*/
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
