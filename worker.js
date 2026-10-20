@@ -36900,6 +36900,9 @@ async function strAdminPendingConvert(env, body) {
       const id = await strAddRow(env, 'STR_Turnovers', f); real = Object.assign({ ID: id }, f); ctx.st.turnovers.push(real);
       await strLog(ctx, key, '', 'turnover_created_manual', `from pending ${p.Task_Key}`);
     } else if (real.Status === 'cancelled') await strSetTurnover(ctx, real, { Status: 'open', Missing_Count: '0', Manual_Until: until, Note: 'restored by "Mark as booked now"' });
+    const r = await strPendingConvert(ctx, p, real, 'Brett: mark as booked now');
+    if (!r.ok) return json({ ok: false, error: 'not_converted', message: `Could not convert: ${r.note}.` }, 409);
+    const drain = await strPendingDrain(ctx, null); // the "now booked" text / invite first, then the calendar if this call still has room
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
