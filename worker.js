@@ -5511,14 +5511,16 @@ async function scopeProposalSign(env, body, ip, ua) {
           Calc_Mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
           Flat_Customer_Amount: (m.flat_customer_amount != null ? String(m.flat_customer_amount) : ''),
         });
-        const mJson = await mResp.json().catch(() => ({}));
+        const mJson = await safeJson(mResp, {}, 'scope_sign_milestone_row');
         milestones.push(Object.assign({ id: mJson.id }, m));
       }
     } catch (e) {
       // A milestone-row failure must never undo the signature that already succeeded — the
       // Hub can still bill off Scope_Signatures' own Subtotal/Deposit_Amount via the legacy
-      // book/book-final path as a fallback if this ever happens; not silently swallowed either,
-      // since the empty `milestones` array itself is the visible signal (no schedule shown yet).
+      // book/book-final path as a fallback if this ever happens. Phase C: it is now ALSO reported
+      // (ledger, P1) and returned as `failure_warning`, not just implied by the empty `milestones` array.
+      signWarning = 'The signature was saved but the payment milestones could not be fully created: ' + String((e && e.message) || e).slice(0, 160);
+      await softFail(env, 'scope_sign_milestones_failed', e, 'P1', { scope: String(s.ID), created: milestones.length });
     }
   }
 
