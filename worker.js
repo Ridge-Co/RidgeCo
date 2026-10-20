@@ -23579,7 +23579,7 @@ async function approveReceiptQueue(env, body) {
       const name = `${date || 'nodate'}_${safe(vendor)}_${safe(total)}${ext}`;
       const up = await uploadFileToDrive(tok, dl.bytes, name, dl.mime, dest, dest);
       filedUrl = up.webViewLink || '';
-    } catch (e) { /* filing best-effort — still mark reviewed */ }
+    } catch (e) { filingWarning = 'Marked reviewed, but the scan could not be filed to Drive: ' + String((e && e.message) || e).slice(0, 120); softNote('receipt_queue_filing_failed', e, 'P2', { queue_id: String(id) }); }   // filing is best-effort: still mark reviewed
   }
   await updateRow(env, 'Receipts_Queue', id, { Vendor: vendor, Receipt_Date: date, Total: String(total), Category: category, Suggested_WO_ID: woId, Suggested_Property_ID: propId, Status: 'filed', Filed_File_URL: filedUrl });
   try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) {}
