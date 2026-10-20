@@ -29503,8 +29503,9 @@ async function addOwnerWithQBSync(env, body) {
       await qbFindOrCreateCustomer(env, { ...body, ID: ownerId }, dn, token);
     }
   } catch (e) {
-    // Best-effort only — swallow. The owner record itself is already saved (see `r` above); the
-    // lazy qbFindOrCreateCustomer call at actual invoice time is still there as a safety net.
+    // Best-effort only. The owner record itself is already saved (see `r` above); the lazy
+    // qbFindOrCreateCustomer call at actual invoice time is still there as a safety net. The failure is recorded, not hidden.
+    await softFail(env, 'owner_add_qb_sync_failed', e, 'P1');
   }
   return r;
 }
