@@ -23805,7 +23805,7 @@ async function woSharedRead(env, url){
     if (safe.access_notes) jobs.push(translateText(env, safe.access_notes, 'English', 'Spanish').then(function(v){ safe.access_notes = v; }));
     if (safe.Notes) jobs.push(translateText(env, safe.Notes, 'English', 'Spanish (keep the [date — name (role)] tags and any names/dates unchanged)').then(function(v){ safe.Notes = v; }));
     (safe.lockboxes||[]).forEach(function(k){ if (k.location) jobs.push(translateText(env, k.location, 'English', 'Spanish').then(function(v){ k.location = v; })); });
-    try { await Promise.all(jobs); } catch(e){}
+    try { await Promise.all(jobs); } catch(e){ softNote('vendor_share_translate_failed', e, 'P2', { wo: woId }); }
   }
   return json({ success:true, wo:safe, attachments, bills, vendor_id: auth.vid||'',
     vendor_name: vendorRec.Name || `${vendorRec.First_Name||''} ${vendorRec.Last_Name||''}`.trim(),
