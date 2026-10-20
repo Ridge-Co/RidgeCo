@@ -34779,7 +34779,7 @@ async function strLoad(ctx, fresh) {
   const vById = {}; for (const v of vendors) vById[String(v.ID)] = v;
   const cleaners = cl.map(c => strCleanerView(c, vById)), cmap = {}; for (const c of cleaners) cmap[c.ID] = c;
   const marks = {}; for (const a of av) if (a.Property_Key === STR_PROP && (a.Mark === 'can' || a.Mark === 'out')) marks[a.Cleaner_ID + '|' + a.Date] = a.Mark;
-  ctx.st = { cleaners, cmap, pool: pool.filter(p => p.Property_Key === STR_PROP), marks, availRows: av, turnovers: tr.filter(t => t.Property_Key === STR_PROP), offers: of, alerts: al };
+  ctx.st = { cleaners, cmap, pool: pool.filter(p => p.Property_Key === STR_PROP), marks, availRows: av, turnovers: tr.filter(t => t.Property_Key === STR_PROP), offers: of, alerts: al, outbox: ob };
   return ctx.st;
 }
 function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date, winStart: r.Win_Start || r.Date, winEnd: r.Win_End || r.Date, next: r.Next_Arrival || null, guests: r.Guests || '', status: r.Status, assigned: r.Assigned_Cleaner_ID || '' }; }
