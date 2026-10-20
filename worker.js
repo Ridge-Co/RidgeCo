@@ -3365,8 +3365,8 @@ async function receiptReconRefundCandidates(env, body) {
   const rows = await fetchTab(env, 'Receipt_Recon_Queue');
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
-  let items = []; try { items = JSON.parse(row.Items || '[]'); } catch (e) {}
+  let suggestion = parseJsonCell(row.Suggestion, null, 'Receipt_Recon_Queue.Suggestion');
+  let items = parseJsonCell(row.Items, [], 'Receipt_Recon_Queue.Items');
   const receipts = await fetchTab(env, 'Receipts');
   const candidates = receiptRefundFindMatches({ store: row.Vendor, amount: row.Total, date: row.Receipt_Date, items }, receipts);
   return json({ ok: true, id, refund: { store: row.Vendor || '', amount: row.Total || '', date: row.Receipt_Date || '', items }, candidates });
