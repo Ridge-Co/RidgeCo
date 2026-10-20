@@ -215,7 +215,7 @@ const sigRows = () => [irRow(1), irRow(2), sigRow(1), sigRow(2), sigRow(3), sigR
   const X = build({ rows: [irRow(1), sigRow(1), sigRow(2)], transitionMs: 0, transitionFails: (id) => id === '1' });
   let saved = null;
   const progress = { read: async () => (saved ? JSON.parse(saved) : null), write: async (p) => { saved = JSON.stringify(p); } };
-  const o = { today: '2026-10-14', sliceMs: 1000, now: X.clock, progress };
+  const o = { today: '2026-10-14', sliceMs: 1000, minLoopMs: 0, now: X.clock, progress };
   const j1 = await X.schedRunDailyQbSync(X.env, null, o);
   t('job: a row error fails the tick (ok:false, error text, telemetry) and the day is NOT marked complete', j1.ok === false && j1.errors.some(e => /qb_sync_payments/.test(e.step) && /transition boom/.test(e.error)) && JSON.parse(saved).complete === false && X.telemetry.some(r => r.Job_Type === 'daily_qb_sync_payments' && r.Success === 'FALSE'), j1);
   const before = X.transitions.length;
