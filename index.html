@@ -5741,7 +5741,7 @@ function saveTradeAccessDefault() {
   if (!trade) { toast('Select a trade first', 'error'); return; }
   api('GET', '/config').then(function(cfg) {
     var defaults = {};
-    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:trade-defaults-parse-save', e); throw new Error('The saved trade defaults could not be read, so nothing was changed (saving now would erase them).'); }
     defaults[trade] = val;
     return api('POST', '/config/set', { key: 'Access_Trade_Defaults', value: JSON.stringify(defaults) });
   }).then(function(res) {
