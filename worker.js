@@ -26066,7 +26066,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return { ok: _okProp, debug: _okProp ? undefined : 'intake-guard: email resolves to a non-TEST property ' + (_a.property && _a.property.ID) };
   }
   if (path === '/intake/retry') {
-    const _q = (await fetchTab(env, INTAKE_TAB).catch(() => [])).find(r => String(r.ID) === String(body && body.id));
+    const _q = (await fetchTabSoft(env, INTAKE_TAB, 'staging_guard_intake_retry')).find(r => String(r.ID) === String(body && body.id));
     if (!_q || !String(_q.Message_ID || '').startsWith('TEST-')) return { ok: false, debug: 'intake-guard: retry row is not a TEST- message' };
     if (body.unit_id && !body.property_id) return { ok: false, debug: 'intake-guard: unit_id override requires a TEST property_id' };
     if (body.property_id) return { ok: await isTestRecord(env, 'Properties', body.property_id) };
