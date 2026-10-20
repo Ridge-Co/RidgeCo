@@ -12008,7 +12008,7 @@ async function processEstimateReminders(env, nowArg) {
   const [ests, wos, vendors] = await Promise.all([fetchTab(env, 'Estimates'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors')]);
   const pending = estimatesAwaitingDecision(ests, wos, now, cfg.estimate_sms_since || ESTIMATE_SMS_DEFAULT_SINCE);
   if (!pending.length) return { count: 0 };
-  try { await setConfigKey(env, { key: 'estimate_reminder_last_date', value: today }); } catch (_) { return { skipped: 'could not claim the day' }; }
+  try { await setConfigKey(env, { key: 'estimate_reminder_last_date', value: today }); } catch (e) { await softFail(env, 'estimate_reminder_claim_failed', e, 'P1'); return { skipped: 'could not claim the day' }; }   // no reminder text goes out until the Config write works
   const [propsR, unitsR] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Units')]);
   const list = pending.slice(0, 5).map(p => {
     const v = vendors.find(x => x.ID === (p.estimate.Vendor_ID || p.wo.Vendor_ID));
