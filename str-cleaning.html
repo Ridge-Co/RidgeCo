@@ -1032,6 +1032,8 @@ function sendPendCreate(){
     if(e.code === 'unauthorized'){ authFailed(); return; }
     var g = $('sh-go'), c = $('sh-cancel'); if(!g) return;
     c.disabled = false;
+    if(e.code === 'stale_preview'){ g.disabled = true; g.textContent = 'Out of date'; chShowErr('<b>Not done. Nothing was sent.</b>' + esc(errText(e)) + '<br><button class="btn sm" id="pd-again" style="margin-top:8px">Preview again</button>'); $('pd-again').onclick = function(){ pendPreview(null); }; return; }
+    g.disabled = false; g.textContent = 'Try Send again';
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
