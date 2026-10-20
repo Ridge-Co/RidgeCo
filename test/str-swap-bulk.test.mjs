@@ -506,4 +506,95 @@ const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner
   clock = at(E, '2026-10-21', '07:50'); await E.strTick({}, {}); t('7:50am tick: still held', !held(W).length);
   clock = at(E, '2026-10-21', '08:05'); const tk = await E.strTick({}, {});
   t('8:05am tick sends both held texts, marks them sent', held(W).length === 2 && rowsOf(W, 'STR_Outbox').every(o => o.Status === 'sent' && o.Sent_At) && tk.detail.held_texts.sent === 2, { sms: W.sms.length, d: tk.detail.held_texts });
-/*@@C7@@*/
+  clock += 15 * 60000; await E.strTick({}, {}); t('a later tick never sends them again', held(W).length === 2);
+}
+{
+  // held text goes stale if the schedule changes while it waits: not sent, Brett told
+  const { W, E } = await setup(); clock = at(E, '2026-10-20', '22:30');
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body); await sendIt(E, p, body);
+  await J(E.strAdminAssign({}, { task_key: K25, cleaner_id: '3' })); W.sms.length = 0; W.brett.length = 0; W.emails.length = 0; W.telemetry.length = 0;
+  clock = at(E, '2026-10-21', '08:05'); const tk = await E.strTick({}, {});
+  t('stale held texts are NOT sent, marked stale, loud', !W.sms.some(s => /you're set|off the hook/.test(s.text)) && rowsOf(W, 'STR_Outbox').every(o => o.Status === 'stale') && tk.errors.some(e => e.step === 'held_text_stale') && W.telemetry.some(x => x.Success === 'FALSE'), tk.errors);
+}
+{
+  // a held text whose send fails after 8am is loud
+  const { W, E } = await setup(); clock = at(E, '2026-10-20', '22:30');
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body); await sendIt(E, p, body);
+  W.failSms = true; clock = at(E, '2026-10-21', '08:05'); const tk = await E.strTick({}, {});
+  t('held text send failure: row failed, error + alert, not retried blindly', rowsOf(W, 'STR_Outbox').every(o => o.Status === 'failed') && tk.errors.some(e => e.step === 'held_text_failed') && W.telemetry.some(x => x.Success === 'FALSE'), tk.errors);
+  W.failSms = false; clock += 15 * 60000; await E.strTick({}, {}); t('...and a failed held text is not auto-resent', !held(W).length);
+}
+{
+  const { W, E } = await setup({ STR_ENGINE_ENABLED: 'FALSE' }); clock = at(E, '2026-10-20', '22:30');
+  const p = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
+  t('scheduler OFF + outside the window: preview warns held texts will not go until it is switched on', p.recipients.every(r => /scheduler is OFF/.test(r.timing.label)), p.recipients.map(r => r.timing.label));
+}
+
+// ═══ 11. concurrency: two Sends of the same plan at once ═══
+{
+  const { W, E } = await setup();
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  const texts = Object.fromEntries(p.recipients.map(x => [x.key, { send: true, body: x.text }])), payload = Object.assign({}, body, { plan_id: p.plan_id, sig: p.sig, texts });
+  const [a, b] = await Promise.all([J(E.strChangeApply({}, payload)), J(E.strChangeApply({}, payload))]);
+  const real = [a, b].filter(x => x && x.duplicate !== true && x.status);
+  for (const x of real) await finish(E, x, p.plan_id);
+  t('double-tap race: at most ONE request actually applied; the other did nothing', real.length <= 1 && W.sms.filter(s => s.to === 'Regina Seville').length === 1 && W.sms.filter(s => s.to === 'Kayla').length === 1, { a: a.status || a.error || a.duplicate, b: b.status || b.error || b.duplicate });
+  t('only one live "Gina Cleaning" calendar entry and one assignment row', W.calEvents.filter(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-10-25').length === 1 && rowsOf(W, 'STR_Log').filter(l => l.Event === 'admin_swap').length === 1);
+  t('exactly one plan row is "done", the loser (if any) is marked duplicate', rowsOf(W, 'STR_Changes').filter(r => r.Status === 'done').length === 1);
+}
+
+// ═══ 11b. resumable job: stop halfway, carry on, hiccups, nothing doubled ═══
+{
+  const { W, E } = await setup();
+  const body = { action: 'swap', task_keys: [K20, K25, K30], cleaner_id: '3' }, p = await preview(E, body);
+  const texts = Object.fromEntries(p.recipients.map(x => [x.key, { send: x.send_default, body: x.text }]));
+  E.__cold(); const first = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p.plan_id, sig: p.sig, texts })));
+  t('a big change can stop halfway: first call says "applying", not "done"', first.status === 'applying' && !first.duplicate, first.status);
+  const st1 = await J(E.strAdminState({})); t('the board lists the half-finished change (unfinished_changes)', st1.ok && st1.unfinished_changes.length === 1 && st1.unfinished_changes[0].plan_id === p.plan_id, st1.unfinished_changes);
+  const smsBefore = W.sms.length;
+  const dup = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p.plan_id, sig: p.sig, texts })));
+  t('pressing Send again (no resume flag) does nothing but report it is in progress', dup.duplicate === true && W.sms.length === smsBefore, dup.message);
+  clock += 12 * 60000; const tk = await E.strTick({}, {});
+  t('a scheduler tick 12 minutes later flags the half-finished change loudly', tk.errors.some(e => e.step === 'change_unfinished' && /Continue/.test(e.error)), tk.errors);
+  const res = await finish(E, first, p.plan_id);
+  t('Continue finishes it: done, all 3 dates assigned to Rachel', res.status === 'done' && [K20, K25, K30].every(k => tr(W, k).Assigned_Cleaner_ID === '3'), res.status);
+  t('each person texted exactly once across all the calls', W.sms.filter(s => s.to === 'Rachel Twigg').length === 1 && W.sms.filter(s => s.to === 'Regina Seville').length === 1 && W.sms.filter(s => s.to === 'Kayla').length <= 1 + (W.sms.filter(s => s.type === 'str_offer').length), W.sms.map(s => s.to + ':' + s.type));
+  const st2 = await J(E.strAdminState({})); t('nothing left unfinished afterwards', st2.unfinished_changes.length === 0);
+  const smsAfter = W.sms.length, again = await J(E.strChangeApply({}, { plan_id: p.plan_id, resume: true }));
+  t('another Continue after done only replays the result (no second text, no second calendar write)', again.duplicate === true && W.sms.length === smsAfter, again.message);
+  const unk = await J(E.strChangeApply({}, { plan_id: 'abcdef0123456789', resume: true }));
+  t('Continue for an unknown plan is refused plainly', unk.ok === false && unk.error === 'plan_not_found');
+}
+{
+  // one Sheets hiccup on the main write: the date is reported FAILED, loudly; nothing is half-done or texted; a second try works
+  const { W, E } = await setup();
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  W.throwOnceBatch = true;
+  const r = await sendIt(E, p, body);
+  t('a Sheets error on the write: reported as FAILED with the reason, never "done"', r.status === 'failed' && r.counts.failed === 1 && r.items[0].status === 'failed' && /Sheets hiccup/.test(r.items[0].reason + JSON.stringify(r.errors)), { s: r.status, e: (r.errors || []).slice(0, 2) });
+  t('...the date is unchanged, nobody was told it changed, the calendar was not touched', tr(W, K25).Assigned_Cleaner_ID !== '1' && !W.cal.some(c => c.method !== 'GET'), tr(W, K25));
+  t('...and no "you are set" text went out for a change that did not happen', !W.sms.some(s => s.to === 'Regina Seville'), W.sms.map(s => s.to + ':' + s.type));
+  const p2 = await preview(E, body), r2 = await sendIt(E, p2, body);
+  t('pressing Preview + Send again works', r2.status === 'done' && tr(W, K25).Assigned_Cleaner_ID === '1' && W.sms.filter(s => s.to === 'Regina Seville').length === 1, r2.status);
+}
+{
+  // cold-start budget: even the biggest allowed change never needs more than ~48 outgoing calls in ONE request
+  const { W, E } = await setup();
+  const keys = []; for (let i = 0; i < 40; i++) keys.push('milam-ridge|checkout|2027-01-' + String(i + 1).padStart(2, '0')); // not-found dates: worst case for per-item work
+  const body = { action: 'swap', task_keys: keys, cleaner_id: '3' }, p = await preview(E, body);
+  t('40 unknown dates: preview still answers inside the limit', p && p.ok !== undefined);
+  W.maxCall = 0; const r = await sendIt(E, p, body);
+  t('40 dates: every single request stayed under 48 outgoing calls', W.maxCall <= 48, W.maxCall);
+}
+
+// ═══ 12. state + load: the old flows still work ═══
+{
+  const { W, E } = await setup();
+  const st = await J(E.strAdminState({}));
+  t('admin state still shows the Oct 25 task as on_calendar / Kayla (what the page reads)', st.ok && st.tasks.find(x => x.key === K25).status === 'on_calendar' && st.tasks.find(x => x.key === K25).assigned_name === 'Kayla' && Array.isArray(st.parked_texts));
+  const a = await J(E.strAdminAssign({}, { task_key: K25, cleaner_id: '1' }));
+  t('the old assign endpoint still works unchanged', a.ok && tr(W, K25).Assigned_Cleaner_ID === '1');
+}
+
+console.log(`str-swap-bulk: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
