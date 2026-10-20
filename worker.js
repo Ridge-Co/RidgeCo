@@ -36077,7 +36077,111 @@ async function strSwapEmail(ctx, cleaner, doneItems) {
   ctx.subX = (ctx.subX || 0) + 4;
   try { const r = await gmailSendEmailWithAttachment(ctx.env, { to: cleaner.Email, subject: one ? `You're set: ${S.label} cleaning ${strFmtDate(doneItems[0].date)}` : `You're set: ${S.label} cleaning (${doneItems.length} dates)`, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } }); return { status: r && r.staged ? 'staged' : 'sent', note: '' }; }
   catch (e) { return { status: 'failed', note: `Could not email ${cleaner.Name} the calendar invite: ${strErrText(e)}` }; }
-/*@@S5@@*/
+}
+async function strStageEmail(ctx, J) {
+  const ok = strOkItems(J);
+  if (J.req.action === 'mark' || !ok.length || !J.recipients.some(r => r.kind === 'new')) return true;
+  await strFresh(ctx);
+  const email = await strSwapEmail(ctx, J.cleaner, ok); J.state.email = email;
+  if (email.status === 'failed') J.state.errors.push({ step: 'invite_email', error: email.note }); else if (email.status === 'skipped') J.state.warnings.push(email.note);
+  return true;
+}
+
+// ── Stage 7: standing alerts (a "covered" notice for Brett if an uncovered alert was open). Problems here are heads-ups, not failures of the change ──
+async function strStageAlerts(ctx, J) {
+  if (J.req.action === 'mark' || !strOkItems(J).length) return true;
+  await strFresh(ctx);
+  const before = ctx.errors.length, warns = [];
+  await strAlertsNow(ctx, warns, 'swap');
+  for (const e of ctx.errors.splice(before)) J.state.warnings.push('Heads-up (not part of this change): ' + e.error);
+  for (const w of warns) J.state.warnings.push(w);
+  return true;
+}
+
+// ── Step 2: apply (first call claims the plan and starts the job; every later call, with resume:true, carries on) ──
+function strChangeSummaryText(plan, res) {
+  const c = res.counts, bits = [];
+  if (plan.action === 'mark') bits.push(`${c.done} of ${res.items.length} date(s) changed to "${plan.mark === 'out' ? 'Out' : (plan.mark === 'can' ? 'Available as backup' : 'cleared')}" for ${plan.cleaner.first}`);
+  else bits.push(`${plan.cleaner.first} now has ${c.done} of ${res.items.length} turnover(s) you asked for`);
+  if (c.skipped) bits.push(`${c.skipped} skipped (nothing to do or not allowed)`);
+  if (c.failed) bits.push(`${c.failed} FAILED`);
+  const t = res.texts, sent = t.filter(x => x.status === 'sent'), held = t.filter(x => x.status === 'held'), bad = t.filter(x => x.status === 'failed'), no = t.filter(x => x.status === 'not_sent');
+  if (sent.length) bits.push(`texted ${sent.map(x => x.first).join(', ')}`);
+  if (held.length) bits.push(`text held until 8 AM for ${held.map(x => x.first).join(', ')}`);
+  if (bad.length) bits.push(`text FAILED for ${bad.map(x => x.first).join(', ')}`);
+  if (no.length) bits.push(`no text for ${no.map(x => x.first).join(', ')}`);
+  if (res.calendar && res.calendar.status && !['unchanged', 'done', 'staged'].includes(res.calendar.status)) bits.push(res.calendar.status === 'not_changed' ? 'calendar NOT changed (do it by hand)' : 'calendar problem (do it by hand)');
+  return bits.join('; ') + '.';
+}
+const strByIdAsc = (a, b) => (parseInt(a.ID, 10) || 0) - (parseInt(b.ID, 10) || 0);
+function strReplay(planId, r) {
+  let result = null; try { result = JSON.parse(r.Result || 'null'); } catch (e) { result = null; } // silent-ok: a bad stored result just means no replay detail
+  const busy = r.Status === 'applying';
+  return json({ ok: true, duplicate: true, plan_id: planId, status: r.Status, stage: r.Stage || '', message: busy ? 'This exact change is already being applied. Nothing was sent or changed a second time. The page carries on by itself; if it stopped, press Continue.' : 'This exact change was already applied. Nothing was sent or changed a second time.', result });
+}
+async function strChangeApply(env, body) {
+  try {
+    body = body || {};
+    const planId = String(body.plan_id || ''), sigIn = String(body.sig || '');
+    if (!/^[a-f0-9]{16}$/.test(planId)) throw strErr('bad_plan', 'This request has no valid preview. Press Preview first.', 400);
+    const ctx = await strHandlerCtx(env), prior = (await fetchTab(env, 'STR_Changes')).filter(r => r.Plan_ID === planId).sort(strByIdAsc);
+    if (prior.length) { const f = prior[0]; return f.Status === 'applying' && body.resume === true ? await strChangeContinue(ctx, f) : strReplay(planId, f); }
+    if (body.resume === true) throw strErr('plan_not_found', 'That change was not found. Press Preview again.', 404);
+    const req = strChangeReq(body);
+    if (!sigIn) throw strErr('bad_plan', 'This request has no preview signature. Press Preview first.', 400);
+    const feed = await strChangeFeed(ctx), plan = await strChangeBuild(ctx, req, feed);
+    if (plan.sig !== sigIn) throw strErr('stale_preview', 'Things changed since you pressed Preview (a date was assigned, cancelled or edited). Nothing was done. Press Preview again to see the current picture.', 409);
+    // texts: one entry per recipient, exactly as previewed (edited or not)
+    const tin = body.texts && typeof body.texts === 'object' ? body.texts : {}, texts = {};
+    for (const k of Object.keys(tin)) if (!plan.recipients.some(r => r.key === k)) throw strErr('texts_unknown', `The page sent a text for "${k}" that is not part of this change. Press Preview again.`, 400);
+    for (const r of plan.recipients) {
+      const e = tin[r.key]; if (!e || typeof e.send !== 'boolean') throw strErr('texts_missing', `The page did not say what to do with the text for ${r.name}. Press Preview again.`, 400);
+      const txt = strCleanText(e.body); if (e.send && r.can_send && !txt) throw strErr('text_empty', `The text for ${r.name} is empty. Type something or untick "Send this text".`, 400);
+      if (txt.length > STR_TEXT_MAX) throw strErr('text_too_long', `The text for ${r.name} is ${txt.length} characters; the most is ${STR_TEXT_MAX}.`, 400);
+      texts[r.key] = { send: e.send, text: txt };
+    }
+    const items = plan.items.map(strPackItem);
+    const payload = JSON.stringify({ v: 1, req, plan: { action: plan.action, cleaner: plan.cleaner, mark: req.mark || '', calendar: { mode: plan.calendar.mode, note: plan.calendar.note || '' }, warnings: plan.warnings, summary: plan.summary }, items, recipients: plan.recipients.map(r => ({ key: r.key, kind: r.kind, cleaner_id: r.cleaner_id, name: r.name, first: r.first, dates: r.dates, refs: r.refs, type: r.type, can_send: r.can_send, reason: r.reason })), texts });
+    if (payload.length > 44000) throw strErr('too_big', 'This change is too big to apply in one go. Pick fewer dates (or a shorter range) and try again. Nothing was done.', 400);
+    // claim the plan BEFORE changing anything: the lowest STR_Changes id for this plan wins; the loser does nothing
+    const iso = new Date(ctx.now).toISOString(), myId = await strAddRow(env, 'STR_Changes', { Plan_ID: planId, Action: req.action, Status: 'applying', Created_At: iso, Summary: plan.summary, Stage: 'sheets', Payload: payload, State: JSON.stringify(strNewState(items)) });
+    const mine = (await fetchTab(env, 'STR_Changes')).filter(r => r.Plan_ID === planId).sort(strByIdAsc);
+    if (mine.length && String(mine[0].ID) !== String(myId)) { try { await strSetRow(env, 'STR_Changes', myId, { Status: 'duplicate', Finished_At: iso, Payload: '', State: '' }); } catch (e) { ctx.errors.push({ step: 'claim', error: strErrText(e) }); } return strReplay(planId, mine[0]); }
+    return await strChangeContinue(ctx, mine.find(r => String(r.ID) === String(myId)) || mine[0]);
+  } catch (e) { return await strHandleErr(env, e, 'change apply'); }
+}
+async function strChangeContinue(ctx, row) {
+  const { env } = ctx; let P, state;
+  try { P = JSON.parse(row.Payload); state = JSON.parse(row.State || '{}'); } catch (e) { throw strErr('plan_unreadable', 'The saved change could not be read back (' + strErrText(e) + '). Do not press Send again; check the Activity log and tell Brett.', 500); }
+  if (!P || !state || !state.stage || !state.ires) throw strErr('plan_unreadable', 'The saved change is incomplete. Do not press Send again; check the Activity log and tell Brett.', 500);
+  const cleaner = ctx.st.cmap[P.req.cleaner_id];
+  const J = { row, planId: row.Plan_ID, req: P.req, plan: P.plan, items: P.items.map(strUnpackItem), recipients: P.recipients, texts: P.texts, state, cleaner };
+  state.calls = (state.calls || 0) + 1;
+  const stageFns = { sheets: strStageSheets, audit: strStageAudit, calendar: strStageCalendar, queue: strStageQueue, send: strStageSend, email: strStageEmail, alerts: strStageAlerts };
+  let ran = 0, final = null;
+  if (!cleaner) { state.errors.push({ step: 'cleaner_missing', error: 'The cleaner for this change no longer exists, so it cannot be finished.' }); state.stage = 'finish'; }
+  while (state.stage !== 'done') {
+    const stage = state.stage;
+    if (ran && !strRoom(ctx, STR_STAGE_EST[stage])) break;
+    state.tries[stage] = (state.tries[stage] || 0) + 1; ran++;
+    let complete = false;
+    try {
+      if (stage === 'finish') { final = await strStageFinish(ctx, J); complete = true; }
+      else complete = await stageFns[stage](ctx, J);
+    } catch (e) {
+      state.errors.push({ step: 'stage_' + stage, error: `The step "${STR_STAGE_TEXT[stage]}" hit a problem: ${strErrText(e)}` });
+      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending') state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; }
+      else { const er = state.errors.pop(); state.warnings.push('Hiccup (tried again): ' + er.error); break; }
+    }
+    state.errors.push(...ctx.errors.splice(0));
+    if (final) return json(final);
+    if (!complete) break;
+    state.stage = STR_STAGES[STR_STAGES.indexOf(stage) + 1] || 'done';
+  }
+  // not finished: save where we got to, so the next call carries on from here
+  try { await strSetRow(env, 'STR_Changes', row.ID, { Stage: state.stage, State: JSON.stringify(state).slice(0, 46000) }); }
+  catch (e) { return json({ ok: false, status: 'applying', plan_id: J.planId, stage: state.stage, error: 'progress_not_saved', message: `The change is partly done but its progress could not be saved (${strErrText(e)}). Press Continue; nothing will be done twice.` }, 500); }
+/*@@S6@@*/
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
