@@ -36453,6 +36453,78 @@ async function strOutboxDrain(ctx, opts) {
   }
   return out;
 }
+// ── Pending cleaning (Oct 20 2026, Brett) ────────────────────────────────────────────────────────────────────────────────────────────
+// A "pending cleaning" is a cleaning DATE with no booking yet (a last-minute inquiry). Cleaners are asked about it as if it were real, one at
+// a time in queue order, but the words never say it is booked: "may be checking out ... if it does book". A cleaner's Yes is a TENTATIVE
+// HOLD (never an assignment) and tells Brett he can accept the booking. When the bookings feed produces a real checkout on that same date
+// the hold becomes the real assignment (one "now booked" text + invite); if the date passes the inquiry expires silently.
+// The pending row lives in STR_Turnovers (Pending=TRUE, Kind "pending", Task_Key milam-ridge|pending|DATE) but is kept OUT of ctx.st.turnovers
+// (it is in ctx.st.pendings), so the NOT COVERED alerts, red calendar blocks, checkout-day texts, digest, .ics and the swap / bulk engine can
+// never mistake it for a real turnover. Statuses: open | offering | exhausted | pending_held | pending_converted | pending_expired | pending_cancelled.
+const STR_PEND_OPEN = ['open', 'offering', 'exhausted', 'pending_held'];
+function strIsPendRow(r) { return String((r && r.Pending) || '').toUpperCase() === 'TRUE'; }
+function strPendActive(r) { return !!r && STR_PEND_OPEN.includes(r.Status); }
+function strPendKey(date, n) { return `${STR_PROP}|pending|${date}` + (n > 1 ? '|' + n : ''); }
+function strManualHold(r, now) { return !!(r && r.Manual_Until) && Date.parse(r.Manual_Until) > now; }
+function strPendFillLink(text, link) { const t = String(text || ''); return /\{Link\}/.test(t) ? t.replace(/\{Link\}/g, link) : (t + ' Tap here: ' + link).trim(); }
+function strLiveOffer(ctx, key) { return ctx.st.offers.filter(o => o.Task_Key === key && STR_OFFER_ACTIVE.includes(o.Status)).sort((a, b) => (parseInt(b.ID, 10) || 0) - (parseInt(a.ID, 10) || 0))[0] || null; }
+
+// One-line status Brett can read at a glance.
+function strPendingStatus(ctx, p) {
+  const st = ctx.st, who = id => strFirst(st.cmap[id]) || 'a cleaner';
+  if (p.Status === 'pending_held') return { code: 'held', label: `Held by ${who(p.Assigned_Cleaner_ID)} - tentative` };
+  if (p.Status === 'pending_converted') {
+    const real = st.turnovers.find(t => t.Task_Key === p.Converted_To), mine = real && real.Status === 'covered' && p.Assigned_Cleaner_ID && String(real.Assigned_Cleaner_ID) === String(p.Assigned_Cleaner_ID);
+    return { code: 'booked', label: 'Booked - confirmed' + (mine ? ` (${who(p.Assigned_Cleaner_ID)} is on the schedule)` : (real && real.Status === 'covered' ? ` (${who(real.Assigned_Cleaner_ID)} is on the schedule)` : '')) };
+  }
+  if (p.Status === 'pending_expired') return { code: 'expired', label: 'Date passed - no booking' };
+  if (p.Status === 'pending_cancelled') return { code: 'cancelled', label: 'Inquiry cancelled' };
+  if (p.Status === 'exhausted') return { code: 'nobody', label: 'Nobody available' };
+  const live = strLiveOffer(ctx, p.Task_Key);
+  if (live) return { code: 'waiting', label: `Waiting on ${who(live.Cleaner_ID)}` };
+  return st.offers.some(o => o.Task_Key === p.Task_Key && o.Mode !== 'cancel') ? { code: 'not_asked', label: 'Waiting to ask the next cleaner' } : { code: 'not_asked', label: 'Not asked yet' };
+}
+function strPendingPublic(ctx, p, act) {
+  const st = ctx.st, today = inspEtDate(ctx.now), s = strPendingStatus(ctx, p), held = p.Status === 'pending_held' ? st.cmap[p.Assigned_Cleaner_ID] : null, active = strPendActive(p);
+  const nx = active && !held ? strNextCleaner({ pool: st.pool, cleaners: st.cmap, marks: st.marks, offers: st.offers, task: { key: p.Task_Key, date: p.Date } }) : null;
+  const live = active ? strLiveOffer(ctx, p.Task_Key) : null;
+  return { key: p.Task_Key, date: p.Date, label: strFmtDate(p.Date), days_out: strDaysBetween(today, p.Date), note: p.Pending_Note || '', status: p.Status, code: s.code, status_label: s.label, active,
+    held_by_id: held ? held.ID : '', held_by: held ? strFirst(held) : '', next_up: nx && nx.cleaner && !live ? strFirst(nx.cleaner) : '',
+    waiting_for_window: active && !held && !live && p.Status !== 'exhausted' && !strInSendWindow(ctx.now, ctx.S),
+    asked: st.offers.filter(o => o.Task_Key === p.Task_Key && o.Mode !== 'cancel').map(o => ({ id: o.ID, cleaner: strFirst(st.cmap[o.Cleaner_ID]) || o.Cleaner_ID, status: o.Status, sent_at: o.Sent_At || '' })),
+    backups: strBackupPicture({ date: p.Date }, act, st.marks, held ? held.ID : ''), converted_to: p.Converted_To || '', text_state: p.Pending_Text || '', mail_state: p.Pending_Mail || '', cal_state: p.Pending_Cal || '',
+    can_convert: active, can_cancel: active, can_send_now: active && !held };
+}
+
+// All-day "<Name> Cleaning (PENDING)" events, one per HELD pending date. (Not-yet-held inquiries have no calendar event.)
+function strPendingDesired(ctx, today) {
+  const out = [];
+  for (const p of ctx.st.pendings) {
+    if (p.Status !== 'pending_held' || p.Date < today) continue;
+    const c = ctx.st.cmap[p.Assigned_Cleaner_ID]; if (!c) continue;
+    out.push({ key: p.Task_Key, kind: 'pending', date: p.Date, title: `${strFirst(c) || 'Cleaner'} Cleaning (PENDING)`, desc: `${ctx.S.label}: TENTATIVE hold - this date is NOT booked yet. ${strFirst(c)} said they could clean it if it books. The Ridge Co Hub turns this into the normal cleaning event when the booking arrives, or removes it if it does not.` });
+  }
+  return out;
+}
+
+// Standing alerts for pending dates. "Nobody said yes" (queue exhausted) is raised here; "a cleaner said yes" is raised the moment she answers.
+// Kind "pending" is delivered right away (exempt from Brett's quiet hours) and never repeats. The NOT COVERED red alerts never apply to these.
+async function strPendingAlerts(ctx) {
+  if (ctx.dry) return;
+  const st = ctx.st, today = inspEtDate(ctx.now);
+  for (const p of st.pendings.filter(strPendActive)) {
+    if (p.Date < today || p.Status !== 'exhausted') continue;
+    const days = strDaysBetween(today, p.Date), tried = strTriedLine(st.offers, p.Task_Key, st.cmap), head = `PENDING DATE: nobody can clean ${strFmtDate(p.Date)} (not booked yet, ${days === 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'})`;
+    await strRaiseAlert(ctx, { key: 'pnone|' + p.Task_Key, kind: 'pending', severity: 'high', taskKey: p.Task_Key, message: [head, `${tried}.`, 'Nobody has said yes, so think twice before accepting this booking.' + (p.Pending_Note ? ' Your note: ' + p.Pending_Note : ''), 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head}. ${tried}. Think twice before accepting it. ${PORTAL_BASE}/str-cleaning.html` });
+  }
+  for (const al of st.alerts) {
+    if (al.Resolved_At || !/^(pnone|pyes)\|/.test(al.Alert_Key || '')) continue;
+    const p = st.pendings.find(x => x.Task_Key === al.Task_Key), closed = !p || !strPendActive(p) || p.Date < today, stale = al.Alert_Key.startsWith('pnone|') && p && p.Status !== 'exhausted';
+    if (!((closed && (parseInt(al.Send_Count, 10) || 0) > 0) || stale)) continue;
+    try { Object.assign(al, await strSetRow(ctx.env, 'STR_Alerts', al.ID, { Resolved_At: new Date(ctx.now).toISOString() })); }
+    catch (e) { ctx.errors.push({ step: 'pending_alert_resolve', error: `Could not close alert ${al.Alert_Key}: ${strErrText(e)}` }); }
+  }
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
