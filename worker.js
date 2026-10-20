@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-20.01-failure-watcher-stack';
+const BUILD_VERSION = '2026-10-20.11-failure-watcher-stack';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -153,6 +153,7 @@ const _hubWorkerCore = {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
+    env = __meterReqEnv(env, request, path);   // Oct 19 2026: child env carrying this request's label for the read meter
     env.__STAGING__ = isStaging(env, url);
     // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
     // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
@@ -490,6 +491,7 @@ const _hubWorkerCore = {
         }
       }
     }
+    __meterIdentify(env, callerRole || (PUBLIC_PATHS.includes(path) ? 'public' : 'admin/service'), callerRole ? callerSessionId : '');
     try {
       if (callerRole) {
         const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
@@ -511,6 +513,7 @@ const _hubWorkerCore = {
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return json({ version: BUILD_VERSION });
         if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
+        if (path === '/read-meter')             return json(await __meterSnapshotAll(env, url)); // Oct 19 2026: who/what is spending the Sheets read quota (in-memory, zero Sheets reads)
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
         if (path === '/properties')             return await getSheet(env, 'Properties');
@@ -1189,11 +1192,48 @@ const _hubWorkerCore = {
   }
 };
 
+// Read Meter shared store (Oct 20 2026): ONE small Durable Object that every Worker instance saves its counts into and reads the others from.
+// Why not KV: the Workers Free plan allows only 1,000 KV writes and 1,000 KV lists a day; Durable Objects (SQLite-backed, required on Free) have room.
+// Plain object records keyed 'i:<prd|stg>:<instance>'; a record expires METER_STORE_TTL_S after its last save; /list returns the freshest ones,
+// newest first, capped (the cap and the number left out are returned so the page can say so). Never touches Google Sheets.
+export class ReadMeterStore {
+  constructor(state, env) { this.state = state; this.env = env; this.lastPrune = 0; }
+  async fetch(request) {
+    const url = new URL(request.url), now = Date.now(), st = this.state.storage;
+    try {
+      if (request.method === 'POST' && url.pathname === '/put') {
+        const rec = await request.json();
+        if (!rec || typeof rec.id !== 'string' || !rec.id || typeof rec.tag !== 'string' || !rec.tag || !rec.payload || typeof rec.payload !== 'object') return new Response('bad record', { status: 400 });
+        await st.put('i:' + rec.tag + ':' + rec.id, { id: rec.id, tag: rec.tag, t: now, build: String(rec.build || '').slice(0, 80), payload: rec.payload });
+        await this._prune(now);
+        return new Response('ok');
+      }
+      if (request.method === 'GET' && url.pathname === '/list') {
+        const tag = url.searchParams.get('tag') || 'prd', exclude = url.searchParams.get('exclude') || '';
+        const since = Number(url.searchParams.get('since')) || 0, limit = Math.max(1, Math.min(60, Number(url.searchParams.get('limit')) || 30));
+        await this._prune(now);
+        const all = Array.from((await st.list({ prefix: 'i:' + tag + ':' })).values()).filter(r => r && r.id !== exclude && r.t >= since).sort((a, b) => b.t - a.t);
+        return new Response(JSON.stringify({ in_store: all.length, truncated: Math.max(0, all.length - limit), instances: all.slice(0, limit) }), { headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    } catch (e) { return new Response('store error: ' + String((e && e.message) || e).slice(0, 200), { status: 500 }); }
+  }
+  async _prune(now) {                                 // at most once a minute: drop records not saved for METER_STORE_TTL_S
+    if (now - this.lastPrune < 60000) return;
+    this.lastPrune = now;
+    const dead = [];
+    for (const [k, v] of await this.state.storage.list({ prefix: 'i:' })) if (!v || typeof v.t !== 'number' || now - v.t > METER_STORE_TTL_S * 1000) dead.push(k);
+    for (let i = 0; i < dead.length; i += 128) await this.state.storage.delete(dead.slice(i, i + 128));
+  }
+}
+
 // Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
   async fetch(request, env, ctx) {
-    return await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
+    const res = await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
+    if (ctx && ctx.waitUntil) { if (__meter.pending) ctx.waitUntil(__meterFlushAlarm(env)); if (__meter.dirty) ctx.waitUntil(__meterPersist(env)); }   // quota-pressure evidence -> failure ledger (never blocks the response)
+    return res;
   },
   async scheduled(event, env, ctx) { return await _hubWorkerCore.scheduled(event, env, ctx); },
 };
@@ -16296,7 +16336,7 @@ const CRON_SWEEP_LOCK_KEY = 'Cron_Sweep_Claimed_Until';
 const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a normal sweep run; short enough to self-heal within one cycle if a run ever dies mid-flight without clearing it
 
 async function cronSweep(env) {
-  env = __cronEnv(env);
+  env = __meterCronEnv(__cronEnv(env), 'cronSweep');
   const now = new Date();
   let rows;
   try { rows = await schedReadConfigRows(env, true); }
@@ -17255,7 +17295,7 @@ async function schedRunNext(env, ctx, opts) {
     }
   } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
 
-  const jobEnv = __cronEnv(env);
+  const jobEnv = __meterCronEnv(__cronEnv(env), job.name);
   const t0 = Date.now();
   const work = (async () => {
     let jobRes;
@@ -24497,6 +24537,297 @@ function __dropInflightFor(tab) {
 const TAB_CACHE_MS = 6000;
 // Real outbound Google Sheets calls made by this isolate (Oct 14 2026). Cloudflare caps a single request at 50 outbound calls on
 // this plan, and the tenant roster apply must stop and resume rather than hit it, so it reads the delta of this counter.
+// ── READ METER (Oct 19 2026) ─────────────────────────────────────────────────────────────────────────────────────────
+// WHY: the whole Hub shares ONE Google service account = ONE 60-reads/min quota, and we kept guessing who was eating it.
+// This counts every real HTTP attempt to the Sheets API (including each 429 retry) per minute, tagged with WHO caused it
+// (admin / vendor:<id> / owner:<id> / tenant:<id> / public / cron job:<name>) and WHICH route + tab, plus the reads that were
+// SAVED (cache hits, coalesced joins) so we can see how well the quota fixes are working. Read it at GET /read-meter
+// (admin only, costs ZERO Sheets reads - answered from memory, so it works while the quota is saturated) or on the
+// read-meter.html page. In-memory per Worker isolate (no KV/DO binding exists), so a deploy or idle eviction resets it;
+// to keep evidence beyond that, the first time a minute is saturated (>=40 reads or any 429) a P2 row with the top culprits
+// is written to the failure ledger (Needs Attention), at most once per 10 minutes per isolate.
+// The meter must NEVER break a Sheets call: every entry point is wrapped, and a meter fault is logged loudly (once).
+const METER_KEEP_MIN = 180;
+const METER_MAX_KEYS = 250;
+const METER_ALARM_READS_PER_MIN = 40;
+const METER_ALARM_GAP_MS = 10 * 60 * 1000;
+// Cross-instance roll-up (Oct 20 2026): Cloudflare runs MANY Worker instances at once (staging showed 5 in 5 requests), each with its own memory,
+// but the Google quota is shared by all of them. So each instance saves its own recent per-minute counts to the shared READ_METER_STORE (a small
+// Durable Object, class ReadMeterStore below; KV was ruled out because the Workers Free plan allows only 1,000 KV writes a day) at most
+// once per minute while it has news, the first one right away, and /read-meter adds every instance together. Costs ZERO Sheets reads.
+const METER_PERSIST_MIN = 60;               // minutes of history each instance saves
+const METER_PERSIST_GAP_MS = 60 * 1000;     // save at most this often per instance
+const METER_STORE_TTL_S = 2 * 60 * 60;      // a saved instance record disappears after 2h
+const METER_MAX_REMOTE = 30;                // most other instances read per view (bounds the size/CPU of one view; truncation is reported)
+const METER_REMOTE_CACHE_MS = 20 * 1000;    // several viewers / refreshes within 20s share one KV read
+const __meter = { isolate: Math.random().toString(36).slice(2, 8), since: 0 /* set on first use: Workers freeze Date.now() at startup */, tag: 'prd', mins: new Map(), lastAlarmAt: 0, pending: null, alarms: 0, faults: 0,
+  dirty: false, persisting: false, lastPersistAt: 0, persists: 0, persistErrors: 0, lastPersistError: '', lastStoreAlarmAt: 0, remoteCache: null };
+function __meterFault(where, e) {
+  __meter.faults++;
+  if (__meter.faults <= 3) console.error('[read-meter] FAULT in ' + where + ' (meter only; Sheets calls are unaffected): ' + String((e && e.message) || e).slice(0, 200));
+}
+function __meterBucket(now) {
+  if (!__meter.since) __meter.since = Date.now();
+  const k = Math.floor((now === undefined ? Date.now() : now) / 60000);
+  let b = __meter.mins.get(k);
+  if (!b) {
+    b = { t: k * 60000, reads: 0, writes: 0, r429: 0, errs: 0, hits: 0, joins: 0, reqs: 0, bySrc: new Map(), byTab: new Map() };
+    __meter.mins.set(k, b);
+    for (const old of Array.from(__meter.mins.keys())) if (old < k - METER_KEEP_MIN) __meter.mins.delete(old);
+  }
+  return b;
+}
+// entry: [reads, writes, r429, requests]
+function __meterEntry(map, key, nocap) {
+  let e = map.get(key);
+  if (!e) { if (!nocap && map.size >= METER_MAX_KEYS) { key = '(other)'; e = map.get(key); } if (!e) { e = [0, 0, 0, 0]; map.set(key, e); } }
+  return e;
+}
+function __meterSrc(env) { const r = env && env.__REQ__; return r ? r.src : 'unlabeled|'; }
+// A child env that carries THIS request's label. Workers run many requests at once in one isolate, so the label can
+// never live in a module variable; it rides on the env the request already passes to everything (same trick as __cronEnv).
+function __meterReqEnv(env, request, path) {
+  try {
+    const c = Object.create(env);
+    try { __meter.tag = (env.STAGING === '1' || /staging/.test(new URL(request.url).hostname)) ? 'stg' : 'prd'; } catch (e) { /* tag keeps its last value */ }
+    c.__REQ__ = { src: 'pre-auth|' + request.method + ' ' + path, route: request.method + ' ' + path };
+    return c;
+  } catch (e) { __meterFault('reqEnv', e); return env; }
+}
+// Called once the caller is known (after the auth gate). Counts the request under its final label.
+function __meterIdentify(env, who, sid) {
+  try {
+    const r = env && env.__REQ__; if (!r) return;
+    r.src = (sid ? who + ':' + sid : who) + '|' + r.route;
+    const b = __meterBucket(); b.reqs++; __meterEntry(b.bySrc, r.src)[3]++;
+  } catch (e) { __meterFault('identify', e); }
+}
+// Label a background job's env (called where the scheduler starts a job).
+function __meterCronEnv(jobEnv, jobName) {
+  try {
+    const c = Object.create(jobEnv);   // own child, so a shared env is never relabelled
+    c.__REQ__ = { src: 'cron|job:' + jobName, route: 'job:' + jobName };
+    const b = __meterBucket(); b.reqs++; __meterEntry(b.bySrc, c.__REQ__.src)[3]++;
+    return c;
+  } catch (e) { __meterFault('cronEnv', e); }
+  return jobEnv;
+}
+function __meterTab(path) {
+  try {
+    const k = __tabCacheKey(path); if (k) return k;
+    if (path.indexOf('/values:batchGet') === 0) {
+      const tabs = [], re = /[?&]ranges=([^&]+)/g; let m;
+      while ((m = re.exec(path))) tabs.push(decodeURIComponent(m[1]).split('!')[0]);
+      return 'batchGet(' + tabs.join(',') + ')';
+    }
+    const r = /^\/values\/([^!:?]+)!/.exec(path); if (r) return decodeURIComponent(r[1]) + ' (range)';
+    return path.split('?')[0].slice(0, 60);
+  } catch (e) { return '?'; }
+}
+// One REAL attempt to Google (retries count too - each one spends quota). outcome: 'ok' | '429' | 'err'
+function __meterGoogle(env, method, path, outcome) {
+  try {
+    const b = __meterBucket(), isRead = method === 'GET', src = __meterSrc(env);
+    __meter.dirty = true;
+    if (isRead) b.reads++; else b.writes++;
+    if (outcome === '429') b.r429++; else if (outcome === 'err') b.errs++;
+    const e = __meterEntry(b.bySrc, src), t = __meterEntry(b.byTab, __meterTab(path));
+    if (isRead) { e[0]++; t[0]++; } else { e[1]++; t[1]++; }
+    if (outcome === '429') { e[2]++; t[2]++; }
+    if (isRead && (outcome === '429' || b.reads >= METER_ALARM_READS_PER_MIN)) __meterMaybeAlarm(b, outcome === '429' ? '429' : 'volume');
+  } catch (e) { __meterFault('google', e); }
+}
+function __meterSaved(env, kind, n) {
+  try { __meter.dirty = true; const b = __meterBucket(); if (kind === 'join') b.joins += (n || 1); else b.hits += (n || 1); } catch (e) { __meterFault('saved', e); }
+}
+function __meterWindow(mins) {
+  const cutoff = Math.floor(Date.now() / 60000) - mins + 1, rows = [];
+  for (const [k, b] of __meter.mins) if (k >= cutoff) rows.push(b);
+  rows.sort((a, b) => a.t - b.t);
+  return rows;
+}
+function __meterTop(rows, which, n) {
+  const agg = new Map();
+  for (const b of rows) for (const [key, v] of b[which]) { const a = __meterEntry(agg, key, true); for (let i = 0; i < 4; i++) a[i] += v[i]; }
+  return Array.from(agg.entries()).map(([key, v]) => ({ key, reads: v[0], writes: v[1], r429: v[2], requests: v[3] }))
+    .filter(x => x.reads || x.writes || x.r429).sort((a, b) => b.reads - a.reads || b.writes - a.writes).slice(0, n);
+}
+function __meterMaybeAlarm(b, why) {
+  const now = Date.now();
+  if (__meter.pending || now - __meter.lastAlarmAt < METER_ALARM_GAP_MS) return;
+  __meter.lastAlarmAt = now;
+  const rows = __meterWindow(2);
+  __meter.pending = { at: now, why, reads: b.reads, r429: b.r429, isolate: __meter.isolate,
+    top: __meterTop(rows, 'bySrc', 5).map(x => x.key + ' ' + x.reads + 'r' + (x.r429 ? '/' + x.r429 + 'x429' : '')),
+    tabs: __meterTop(rows, 'byTab', 3).map(x => x.key + ' ' + x.reads) };
+  console.warn('[read-meter] Sheets read quota pressure (' + why + '): ' + b.reads + ' reads, ' + b.r429 + ' throttled this minute. Top: ' + __meter.pending.top.join('; '));
+}
+// Writes the pending alarm to the failure ledger. Called from the fetch wrapper via ctx.waitUntil so it is not cancelled
+// when the response returns. reportFailure never throws; this is a write (append), so it can never re-trigger an alarm.
+async function __meterFlushAlarm(env) {
+  const p = __meter.pending; if (!p) return;
+  __meter.pending = null; __meter.alarms++;
+  try {
+    // the quota is shared by every instance, so name the culprits across ALL instances when the shared store can be read
+    let all = null, allMin = null;
+    try {
+      const rem = await __meterRemote(env, 2);
+      if (rem.rows.length) {
+        const merged = __meterMergeRows(__meterWindow(2).concat(rem.rows));
+        all = __meterTop(merged, 'bySrc', 5).map(x => x.key + ' ' + x.reads + 'r' + (x.r429 ? '/' + x.r429 + 'x429' : ''));
+        allMin = merged.reduce((m, b) => Math.max(m, b.reads), 0);
+      }
+    } catch (e) { /* the alarm still files with this instance's view */ }
+    const r = await reportFailure(env, {
+      system: 'hub', source: 'read-meter', where: 'read_meter_quota', ref: p.isolate, severity: 'P2',
+      message: 'Google Sheets read quota under pressure (' + (p.why === '429' ? 'Google throttled reads' : 'busy minute') + '): ' + p.reads + ' reads in one minute on one instance' + (allMin ? ' (' + allMin + ' across all instances)' : '') + ', ' + p.r429 + ' throttled. Top' + (all ? ' (all instances)' : '') + ': ' + (all || p.top).slice(0, 3).join('; '),
+      context: { top: p.top, tabs: p.tabs, isolate: p.isolate, all_instances_top: all },
+    });
+    if (!r || r.ok === false) console.error('[read-meter] quota alarm could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
+  } catch (e) { console.error('[read-meter] quota alarm could not be saved:', String((e && e.message) || e).slice(0, 200)); }
+}
+// ── cross-instance roll-up ──
+// Several instances' per-minute buckets -> one list with one bucket per minute (same shape as __meterBucket's).
+function __meterMergeRows(list) {
+  const by = new Map();
+  for (const b of list) {
+    let m = by.get(b.t);
+    if (!m) { m = { t: b.t, reads: 0, writes: 0, r429: 0, errs: 0, hits: 0, joins: 0, reqs: 0, bySrc: new Map(), byTab: new Map() }; by.set(b.t, m); }
+    for (const f of ['reads', 'writes', 'r429', 'errs', 'hits', 'joins', 'reqs']) m[f] += b[f] || 0;
+    for (const w of ['bySrc', 'byTab']) for (const [k, v] of b[w]) { const a = __meterEntry(m[w], k, true); for (let i = 0; i < 4; i++) a[i] += v[i]; }
+  }
+  return Array.from(by.values()).sort((a, b) => a.t - b.t);
+}
+// Top n entries of a map as [[key, reads, writes, r429, requests]], everything else folded into '(other)' so totals still add up.
+function __meterCompact(map, n) {
+  const all = Array.from(map.entries()).sort((a, b) => (b[1][0] - a[1][0]) || (b[1][1] - a[1][1]) || (b[1][3] - a[1][3]));
+  const top = all.slice(0, n).map(([k, v]) => [k, v[0], v[1], v[2], v[3]]);
+  const rest = all.slice(n);
+  if (rest.length) {
+    let o = top.find(x => x[0] === '(other)');
+    if (!o) { o = ['(other)', 0, 0, 0, 0]; top.push(o); }
+    for (const [, v] of rest) { o[1] += v[0]; o[2] += v[1]; o[3] += v[2]; o[4] += v[3]; }
+  }
+  return top;
+}
+function __meterPayload(now) {
+  const mins = __meterWindow(METER_PERSIST_MIN).filter(b => b.reads || b.writes || b.hits || b.joins || b.reqs)
+    .map(b => ({ t: b.t, r: b.reads, w: b.writes, x: b.r429, e: b.errs, h: b.hits, j: b.joins, q: b.reqs, s: __meterCompact(b.bySrc, 20), a: __meterCompact(b.byTab, 10) }));
+  return { v: 1, isolate: __meter.isolate, build: BUILD_VERSION, since: __meter.since, t: now, mins };
+}
+function __meterRowsFromPayload(p, cutoffMinute) {
+  const rows = [];
+  if (!p || p.v !== 1 || !Array.isArray(p.mins)) return rows;
+  for (const m of p.mins) {
+    if (!m || typeof m.t !== 'number' || m.t / 60000 < cutoffMinute) continue;
+    const b = { t: m.t, reads: +m.r || 0, writes: +m.w || 0, r429: +m.x || 0, errs: +m.e || 0, hits: +m.h || 0, joins: +m.j || 0, reqs: +m.q || 0, bySrc: new Map(), byTab: new Map() };
+    for (const e of (Array.isArray(m.s) ? m.s : [])) if (Array.isArray(e)) b.bySrc.set(String(e[0]), [+e[1] || 0, +e[2] || 0, +e[3] || 0, +e[4] || 0]);
+    for (const e of (Array.isArray(m.a) ? m.a : [])) if (Array.isArray(e)) b.byTab.set(String(e[0]), [+e[1] || 0, +e[2] || 0, +e[3] || 0, +e[4] || 0]);
+    rows.push(b);
+  }
+  return rows;
+}
+// Save THIS instance's recent counts to the shared store. Runs inside ctx.waitUntil after the response, so it never slows a request.
+// A failure is counted, shown on the Read Meter page, and filed once per 30 min to the failure ledger (never silent, never thrown).
+async function __meterPersist(env) {
+  if (__meter.persisting || !__meter.dirty) return;
+  const stub = __meterStub(env);
+  if (!stub) return;                                 // not bound: the page says so
+  const now = Date.now();
+  if (__meter.lastPersistAt && now - __meter.lastPersistAt < METER_PERSIST_GAP_MS) return;
+  __meter.persisting = true; __meter.dirty = false; __meter.lastPersistAt = now;
+  try {
+    const res = await stub.fetch('https://read-meter.internal/put', { method: 'POST', body: JSON.stringify({ id: __meter.isolate, tag: __meter.tag, build: BUILD_VERSION, payload: __meterPayload(now) }) });
+    if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
+    __meter.persists++;
+  } catch (e) {
+    __meter.persistErrors++; __meter.dirty = true;
+    __meter.lastPersistError = String((e && e.message) || e).slice(0, 200);
+    if (__meter.persistErrors <= 3) console.error('[read-meter] could not save counts to the shared store: ' + __meter.lastPersistError);
+    await __meterReportStoreFault(env, __meter.lastPersistError);
+  } finally { __meter.persisting = false; }
+}
+async function __meterReportStoreFault(env, msg) {
+  const now = Date.now();
+  if (now - __meter.lastStoreAlarmAt < 30 * 60 * 1000) return;
+  __meter.lastStoreAlarmAt = now;
+  try {
+    const r = await reportFailure(env, { system: 'hub', source: 'read-meter', where: 'read_meter_store', ref: __meter.isolate, severity: 'P2',
+      message: 'The Read Meter could not save its counts to its shared store (Durable Object READ_METER_STORE): ' + msg + '. Until fixed, the Read Meter page shows only part of the traffic.', context: { isolate: __meter.isolate } });
+    if (!r || r.ok === false) console.error('[read-meter] store fault could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
+  } catch (e) { console.error('[read-meter] store fault could not be saved:', String((e && e.message) || e).slice(0, 200)); }
+}
+// The shared store is one Durable Object (see ReadMeterStore). Not bound (or bound to something else) -> null, and the page says so.
+function __meterStub(env) {
+  try { const ns = env && env.READ_METER_STORE; return ns && typeof ns.idFromName === 'function' ? ns.get(ns.idFromName('meter-v1')) : null; }
+  catch (e) { __meterFault('stub', e); return null; }
+}
+// Read every OTHER instance's saved counts (this instance is always taken live). Returns { rows, store } where store is shown on the page.
+async function __meterRemote(env, mins) {
+  const stub = __meterStub(env);
+  const store = { bound: !!stub, remote_instances: 0, instances_in_store: 0, truncated_instances: 0, read_errors: 0, problems: [], partial_history: mins > METER_PERSIST_MIN, history_minutes_other_instances: METER_PERSIST_MIN };
+  if (!stub) { store.problems.push('The Read Meter shared store (READ_METER_STORE) is not connected to this Worker, so this page shows ONLY the one Worker instance that answered. Numbers will look too low and change on every refresh.'); return { rows: [], store }; }
+  try {
+    const now = Date.now();
+    let payloads;
+    const c = __meter.remoteCache;
+    if (c && c.tag === __meter.tag && now - c.at < METER_REMOTE_CACHE_MS) payloads = c.payloads;
+    else {
+      const res = await stub.fetch('https://read-meter.internal/list?tag=' + encodeURIComponent(__meter.tag) + '&exclude=' + encodeURIComponent(__meter.isolate) + '&since=' + (now - METER_KEEP_MIN * 60000) + '&limit=' + METER_MAX_REMOTE);
+      if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
+      const j = await res.json(), recs = Array.isArray(j.instances) ? j.instances : [];
+      payloads = [];
+      for (const r of recs) { const p = r && r.payload; if (p && p.v === 1 && Array.isArray(p.mins)) payloads.push(p); else store.read_errors++; }
+      store.instances_in_store = (+j.in_store) || recs.length;
+      store.truncated_instances = Math.max(0, +j.truncated || 0);
+      __meter.remoteCache = { at: now, tag: __meter.tag, payloads, instances_in_store: store.instances_in_store, truncated: store.truncated_instances, read_errors: store.read_errors };
+    }
+    if (c && payloads === c.payloads) { store.instances_in_store = c.instances_in_store; store.truncated_instances = c.truncated; store.read_errors = c.read_errors; }
+    const cutoff = Math.floor(now / 60000) - mins + 1, rows = [];
+    for (const p of payloads) { if (p && p.isolate === __meter.isolate) continue; rows.push(...__meterRowsFromPayload(p, cutoff)); }
+    store.remote_instances = payloads.filter(p => p && p.isolate !== __meter.isolate && Array.isArray(p.mins) && p.mins.some(m => m && m.t / 60000 >= cutoff)).length;
+    if (store.truncated_instances) store.problems.push(store.truncated_instances + ' older Worker instance(s) were left out to keep this page fast (' + METER_MAX_REMOTE + ' are read per view).');
+    if (store.read_errors) store.problems.push(store.read_errors + ' saved instance record(s) could not be read.');
+    return { rows, store };
+  } catch (e) {
+    __meterFault('remote', e);
+    store.problems.push('The shared store could not be read (' + String((e && e.message) || e).slice(0, 160) + '), so this page shows only the one Worker instance that answered.');
+    return { rows: [], store };
+  }
+}
+function __meterStoreInfo(extra) {
+  const s = extra ? extra.store : { bound: null, problems: [], remote_instances: 0 };
+  const out = Object.assign({}, s, { this_instance: { saves: __meter.persists, save_errors: __meter.persistErrors, last_save_error: __meter.lastPersistError || '', last_save_age_s: __meter.lastPersistAt ? Math.round((Date.now() - __meter.lastPersistAt) / 1000) : null } });
+  if (__meter.persistErrors) out.problems = (out.problems || []).concat('This instance could not save its counts ' + __meter.persistErrors + ' time(s): ' + __meter.lastPersistError);
+  return out;
+}
+// GET /read-meter handler: this instance live + every other instance from the shared store.
+async function __meterSnapshotAll(env, url) {
+  const mins = Math.max(1, Math.min(METER_KEEP_MIN, parseInt(url && url.searchParams.get('minutes'), 10) || 30));
+  return __meterSnapshot(url, await __meterRemote(env, mins));
+}
+// GET /read-meter?minutes=30 (admin-gated like every non-public route; role sessions are not in ROLE_SCOPES).
+function __meterSnapshot(url, extra) {
+  const mins = Math.max(1, Math.min(METER_KEEP_MIN, parseInt(url && url.searchParams.get('minutes'), 10) || 30));
+  const rows = extra && extra.rows && extra.rows.length ? __meterMergeRows(__meterWindow(mins).concat(extra.rows)) : __meterWindow(mins), tot = { reads: 0, writes: 0, r429: 0, errs: 0, cache_hits: 0, joined: 0, requests: 0 };
+  const perMin = rows.map(b => {
+    tot.reads += b.reads; tot.writes += b.writes; tot.r429 += b.r429; tot.errs += b.errs; tot.cache_hits += b.hits; tot.joined += b.joins; tot.requests += b.reqs;
+    return { minute: new Date(b.t).toISOString().slice(11, 16) + 'Z', reads: b.reads, writes: b.writes, r429: b.r429, errs: b.errs, cache_hits: b.hits, joined: b.joins, requests: b.reqs };
+  });
+  const roles = new Map();
+  for (const b of rows) for (const [key, v] of b.bySrc) {
+    const who = key.split('|')[0], kind = who.split(':')[0], a = __meterEntry(roles, kind, true);
+    for (let i = 0; i < 4; i++) a[i] += v[i];
+  }
+  return {
+    window_minutes: mins, isolate: __meter.isolate, isolate_started: new Date(__meter.since || Date.now()).toISOString(), instances: 1 + (extra && extra.store ? extra.store.remote_instances : 0), shared_store: __meterStoreInfo(extra), build: BUILD_VERSION,
+    note: 'Adds up every Worker instance that saved its counts to the shared store (see shared_store; if it is not connected this is ONE instance only). reads = real GET calls to Google incl. retries; r429 = Google said "too many".',
+    totals: tot, peak_reads_in_a_minute: rows.reduce((m, b) => Math.max(m, b.reads), 0), minutes_at_or_over_alarm: rows.filter(b => b.reads >= METER_ALARM_READS_PER_MIN).length,
+    quota_limit_per_minute: 60, alarms_raised: __meter.alarms, meter_faults: __meter.faults,
+    by_kind: Array.from(roles.entries()).map(([key, v]) => ({ key, reads: v[0], writes: v[1], r429: v[2], requests: v[3] })).sort((a, b) => b.reads - a.reads),
+    top_sources: __meterTop(rows, 'bySrc', 25), top_tabs: __meterTop(rows, 'byTab', 15), per_minute: perMin,
+  };
+}
 let __sheetsFetchCount = 0;
 // Last-resort fallback for READ-ONLY portal lists (opt-in via {stale:true}): when Google is
 // still refusing reads after every retry, serve the last good copy of the tab if it is at
@@ -24573,7 +24904,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
-      if (__cacheFresh(env, hit)) return hit.data;
+      if (__cacheFresh(env, hit)) { __meterSaved(env, 'hit'); return hit.data; }
       if (!__isLeader && !(env && env.__CRON__)) {
         // PEOPLE ONLY: background (cron) reads are paced 2.5s apart by __cronPace and must never be joined by a person (they
         // would inherit the pacing wait and a Hub login would time out) nor register themselves here.
@@ -24581,6 +24912,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
         // copy: each caller decides for ITSELF (readOpts.stale) what to do if it fails, so a caller that did not opt
         // in can never be handed stale data just because someone else did.
         let p = __inflight.get(cacheKey);
+        if (p) __meterSaved(env, 'join');
         if (!p) {
           p = sheetsRequest(env, method, path, body, undefined, true);
           __inflight.set(cacheKey, p);
@@ -24609,7 +24941,10 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
     if(body) opts.body=JSON.stringify(body);
     __sheetsFetchCount++;
-    const res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts);
+    let res;
+    try { res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts); }
+    catch (e) { __meterGoogle(env, method, path, 'err'); throw e; }
+    __meterGoogle(env, method, path, res.status === 429 ? '429' : (res.status >= 400 ? 'err' : 'ok'));   // every real attempt, retries included
     const data=await res.json();
     if(data.error){
       const code=data.error.code||res.status;
@@ -24661,6 +24996,7 @@ async function fetchTabs(env, tabs, opts) {
   if(!tabs||!tabs.length) return [];
   const now = Date.now();
   const missing = tabs.filter(t => !__cacheFresh(env, __tabCache.get(t)));
+  if (tabs.length > missing.length) __meterSaved(env, 'hit', tabs.length - missing.length);
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
     try {
@@ -24669,6 +25005,7 @@ async function fetchTabs(env, tabs, opts) {
       const bkey = missing.slice().sort().join('|');
       const shared = !(env && env.__CRON__);   // background (cron) batches are paced: never shared with people
       let bp = shared ? __batchInflight.get(bkey) : null;
+      if (bp) __meterSaved(env, 'join');
       if (!bp) {
         bp = (async () => {
           const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
@@ -34146,7 +34483,7 @@ function inspUplShape(v, depth) {
   return typeof v;
 }
 async function inspUplProbe(env) {
-  const names = Object.keys(env || {}).filter(k => /uplist/i.test(k));
+  const names = (() => { const o = []; for (const k in (env || {})) o.push(k); return o; })().filter(k => /uplist/i.test(k));   // for..in so keys inherited from the per-request child env are seen
   const keyName = env.UPLISTING_API_KEY ? 'UPLISTING_API_KEY' : (names.find(k => typeof env[k] === 'string' && /key|token|secret/i.test(k)) || '');
   if (!keyName) return json({ ok: false, error: 'no_key', message: 'No Uplisting API key on this Worker. Add a secret named UPLISTING_API_KEY.', env_names_like_uplisting: names });
   const key = String(env[keyName]).trim(), auth = inspUplBasic(key);

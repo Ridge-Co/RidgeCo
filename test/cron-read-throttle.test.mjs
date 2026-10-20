@@ -74,7 +74,7 @@ const base = { SHEET_ID: 'S' };
   t('user reads never paced', m2.waits.length === 0);
 }
 // 6. wiring
-t('cronSweep wraps env', /async function cronSweep\(env\) \{\s*env = __cronEnv\(env\);/.test(wsrc));
+t('cronSweep wraps env', /async function cronSweep\(env\) \{\s*env = (?:__meterCronEnv\()?__cronEnv\(env\)/.test(wsrc));   // Oct 19 2026: the read meter labels the child env with the job name; the __cronEnv wrap is unchanged
 t('scheduled() wraps env', /env\.__STAGING__ = isStaging\(env\);\s*env = __cronEnv\(env\);/.test(wsrc));
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
