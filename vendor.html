@@ -1624,8 +1624,11 @@ function loadVendorReceipts(woId, idx) {
   if (!wrap) return;
   var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
   api('/receipts?wo_id=' + woId + '&vendor_id=' + vendorId).then(function(receipts) {
-    renderVendorReceipts(woId, idx, Array.isArray(receipts) ? receipts : []);
-  }).catch(function() { renderVendorReceipts(woId, idx, []); });
+    if (!Array.isArray(receipts)) throw new Error((receipts && receipts.error) || 'Unexpected response');
+    renderVendorReceipts(woId, idx, receipts);
+  }).catch(function(e) {
+    showLoadFailed('receipt-wrap-' + idx, 'your receipts', e && e.message, function() { loadVendorReceipts(woId, idx); }, woId);
+  });
 }
 
 function renderVendorReceipts(woId, idx, receipts) {
