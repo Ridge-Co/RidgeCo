@@ -7869,10 +7869,15 @@ async function workorderSelfServe(env, body) {
 
   // Server-side, never a client-supplied vendor id (same class of hardening as the Sep 16
   // 2026 tenant-submission fix) — the vendor is ALWAYS assigned to themselves, never anyone else.
+  let selfAssignWarning = '';
   try { await assignVendor(env, { wo_id: created.id, vendor_id: vendorId, notify: false }); }
-  catch (e) { /* WO exists even if the self-assign step fails; Brett can assign it manually */ }
+  catch (e) {
+    // The WO exists even if the self-assign step fails; Brett can assign it manually - but he has to be told.
+    await softFail(env, 'self_serve_wo_assign_failed', e, 'P1', { wo_id: created.id, vendor_id: vendorId });
+    selfAssignWarning = 'The work order was created but could not be assigned to you automatically. Ridge Co has been notified.';
+  }
 
-  return json({ success: true, id: created.id });
+  return json({ success: true, id: created.id, ...(selfAssignWarning ? { failure_warning: selfAssignWarning } : {}) });
 }
 
 // ══════════════════════════════════════════════════════════════
