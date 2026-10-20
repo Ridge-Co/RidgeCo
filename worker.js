@@ -10718,7 +10718,11 @@ async function vendorLoanGet(env, url) {
   const vendorId = (url.searchParams.get('vendor_id') || '').trim();
   if (!vendorId) return json({ error: 'vendor_id required' }, 400);
   let rows = [];
-  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { rows = []; } // no tab yet = no history
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); }
+  catch (e) {
+    rows = [];   // no tab yet = no history; any OTHER failure would show a vendor with an open loan as clean, so it is reported
+    if (!isMissingTabError(e)) await softFail(env, 'vendor_loan_get_read_failed', e, 'P1', { vendor_id: vendorId });
+  }
   const entries = rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
     .sort((a, b) => (parseInt(a.ID) || 0) - (parseInt(b.ID) || 0));
   const balance = entries.reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
