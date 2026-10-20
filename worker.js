@@ -29523,7 +29523,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
       if (clash) {
         throw new Error(`"${dn}" matches QuickBooks #${found}, but that vendor is already linked to "${qbVendorDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
       }
-      try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) {}
+      await tryWrite(env, 'vendor_save_qbo_vendor_id', () => updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }), 'P1');
     }
     // Push billing email/address/tax ID (Phase 1 onboarding, brief section 3b) onto a vendor
     // that already has a linked QuickBooks Vendor — a brand-new vendor gets these baked into
