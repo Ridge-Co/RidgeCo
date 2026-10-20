@@ -21723,7 +21723,7 @@ async function arInvoices(env, url) {
     for (const row of not_sent.concat(overdue, sent)) Object.assign(row, lookup(row.id));
   } catch (e) {
     enrichError = String((e && e.message) || e).slice(0, 200);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ar-invoices-enrich', Skill_Or_Endpoint: '/ar/invoices', Success: 'FALSE', Notes: enrichError }); } catch (_) { /* telemetry is best-effort; enrich_error below is the visible signal */ }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ar-invoices-enrich', Skill_Or_Endpoint: '/ar/invoices', Success: 'FALSE', Notes: enrichError }); } catch (te) { softNote('telemetry_write_failed:ar-invoices-enrich', te, 'P2'); }   // enrich_error below is the visible signal
   }
   return json({
     ok: true, as_of: new Date(now).toISOString().slice(0, 10),
