@@ -1093,7 +1093,7 @@ function buildPhotoSection(woId, propAddr, opts) {
         if (last && last !== d.version) { dirty() ? banner() : reloadFresh(); }
         return;
       }
-      if (d.version !== booted){ dirty() ? banner() : reloadFresh(); }
+      if (d.version !== booted){ autoReload(dirty); }
     }).catch(function(){});
   }
   check();
