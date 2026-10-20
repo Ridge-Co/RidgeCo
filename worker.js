@@ -8204,13 +8204,13 @@ async function addonOwnerNotice(env, body) {
   const address = propUnitText(property, unitsAll.find(u => String(u.ID) === String(child.Unit_ID || (parent && parent.Unit_ID) || ''))) || 'your property';
   const msg = addonBuildOwnerNotice({ ownerFirst: owner.First_Name, address, parentId: parent.ID, itemTexts, photoUrls });
   const ownerEmail = String(owner.Email || owner.Billing_Email || '').trim();
-  const warnings = [];
+  const warnings = []; const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
   if (!photoUrls.length) warnings.push('No photo links found for this item.');
   if (!owner.Phone) warnings.push('Owner has no phone on file — no text will be sent.');
   if (!ownerEmail) warnings.push('Owner has no email on file — no email will be sent.');
   if (String(owner.Notify_Method || 'sms') === 'none') warnings.push('Owner notification method is set to none.');
   if (String(parent.Managed_By || '') === 'Owner') warnings.push('This job is marked owner-managed.');
-  let _cfg = {}; try { _cfg = await fetchConfig(env); } catch (_) {}
+  const _cfg = await fetchConfig(env);   // reports + returns {} on failure (never throws)
   const emailGate = addonEmailGate({ cfg: _cfg, property, owner });
   if (!emailGate.ok) warnings.push('Email will NOT be sent: ' + emailGate.reason + '.');
   const already = String(child.Addon_Owner_Notified_Date || '').trim();
