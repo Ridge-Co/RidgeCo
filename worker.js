@@ -12481,8 +12481,8 @@ async function depositApprove(env, body) {
   if (!vendor) return json({ error: `Vendor ${vendorId} not found` }, 404);
 
   const [properties, units] = await Promise.all([
-    fetchTab(env, 'Properties').catch(() => []),
-    fetchTab(env, 'Units').catch(() => []),
+    fetchTabSoft(env, 'Properties', 'vendor_deposit_context'),
+    fetchTabSoft(env, 'Units', 'estimate_post_units'),
   ]);
   const prop = properties.find(p => String(p.ID) === String(wo.Property_ID));
   const unit = units.find(u => String(u.ID) === String(wo.Unit_ID));
