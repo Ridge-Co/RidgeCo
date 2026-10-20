@@ -8407,9 +8407,9 @@ async function woBulkVoid(env, body) {
     } catch (e) { skipped.push({ id, reason: e.message || 'Void failed' }); }
   }
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (te) { softNote('telemetry_write_failed:wo_bulk_void', te, 'P2'); }
 
-  return json({ success: true, voided, skipped, voided_count: voided.length, skipped_count: skipped.length });
+  return json({ success: true, voided, skipped, voided_count: voided.length, skipped_count: skipped.length, ...(bulkVoidWarning ? { failure_warning: bulkVoidWarning } : {}) });
 }
 
 // Combine (bulk void-into-one, Sep 22 2026 build — index.html bulk-select toolbar; field
