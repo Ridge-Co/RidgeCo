@@ -6302,7 +6302,7 @@ function bulkSendWelcomeFromTab(listId) {
   api('GET', '/message-templates').then(function(rows) {
     var row = Array.isArray(rows) && rows.find(function(r){ return r.Message_Type === templateType && r.Channel === 'sms'; });
     if (row && row.Body) document.getElementById('bulk-welcome-text').value = row.Body;
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:welcome-template-load', e); });
 }
 
 async function executeBulkSendWelcome() {
