@@ -16197,8 +16197,11 @@ async function reportFailure(env, f) {
     ev = failBuildEvent(f, now, Math.random().toString(36).slice(2, 6));
     if (win.dropped) { ev.Context = (ev.Context ? ev.Context + ' ' : '') + `[${win.dropped} earlier report(s) dropped in a burst]`; win.dropped = 0; }
     await failEnsureTabs(env);
-    await sheetsRequest(env, 'POST', `/values/${FAIL_EVENTS_TAB}:append?valueInputOption=RAW`, { values: [FAIL_EVENT_COLS.map(c => ev[c])] });
-    return { ok: true, id: ev.ID, severity: ev.Severity };
+    const carried = _failPending.splice(0, 20);
+    try {
+      await sheetsRequest(env, 'POST', `/values/${FAIL_EVENTS_TAB}:append?valueInputOption=RAW`, { values: [FAIL_EVENT_COLS.map(c => ev[c])].concat(carried.map(p => FAIL_EVENT_COLS.map(c => p[c]))) });
+    } catch (e) { _failPending.unshift(...carried); throw e; }
+    return { ok: true, id: ev.ID, severity: ev.Severity, flushed_late: carried.length };
   } catch (e) {
     try { console.error('FAILURE-REPORT COULD NOT BE SAVED:', JSON.stringify(ev || f || {}).slice(0, 600), '|', String((e && e.message) || e).slice(0, 200)); } catch (e2) { /* console is the last resort; nothing left to try */ }
     return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
