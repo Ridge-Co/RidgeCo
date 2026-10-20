@@ -7428,9 +7428,13 @@ async function createWorkOrder(env, body) {
       const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
     }
-  } catch (e) { /* non-fatal */ }
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
-  return json({ success: true, id: woId });
+  } catch (e) {
+    // The WO exists regardless; but an owner/tenant "we received your request" text that did not go out must not vanish.
+    await softFail(env, 'wo_create_received_notifications_failed', e, 'P1', { wo_id: woId, note: 'owner/tenant received-notices may not have been sent or queued' });
+    woWarnings.push('The work order was created, but the owner/tenant "received" notices may not have been sent or queued.');
+  }
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch (te) { softNote('telemetry_write_failed:wo_create', te, 'P2'); }
+  return json({ success: true, id: woId, ...(woWarnings.length ? { failure_warnings: woWarnings } : {}) });
 }
 
 // ── Buildium email → Work Order intake (B-103, Oct 12 2026) ──────────────────────────────────
