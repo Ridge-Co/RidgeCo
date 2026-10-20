@@ -35690,7 +35690,81 @@ async function strChangeExecute(ctx, req, plan, feed, texts, planId) {
   }
   if (isMark && req.mark === 'out') { // close waiting offers the cleaner can no longer take; the scheduler asks the next cleaner on its next run
     const upd = []; for (const it of toDo.filter(done)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
-//@@STRCHUNK@@
+    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd); for (const f of r.failed) errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); } catch (e) { errors.push({ step: 'close_offers', error: strErrText(e) }); } }
+  }
+  const okItems = toDo.filter(done);
+  // A4. audit trail: one STR_Log row per date plus one for the whole plan
+  const logRows = plan.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || ires.get(refOf(it)).status === 'failed').map(it => { const r = ires.get(refOf(it)), ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : 'admin_mark_failed') : (ok ? 'admin_swap' : 'admin_swap_failed'), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${plan.cleaner.first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${planId}` } });
+  try { if (logRows.length) await strAddRows(env, 'STR_Log', logRows.map(r => Object.assign({}, r, { Detail: r.Detail.slice(0, 480) }))); } catch (e) { errors.push({ step: 'audit_log', error: 'Could not write the audit rows to the Activity log: ' + strErrText(e) }); }
+  // B. the cleaning calendar
+  let calendar = { mode: plan.calendar.mode, status: 'unchanged', items: {}, manual: [], message: '' };
+  if (!isMark) { try { calendar = await strSwapCalendar(ctx, feed, plan, okItems); } catch (e) { calendar = { mode: plan.calendar.mode, status: 'failed', items: {}, manual: okItems.map(i => `${i.label}: set the calendar to "${i.cal.title}"`), message: strErrText(e), code: 'calendar_failed' }; await strSystemAlert(env, 'swap_calendar', 'The cleaning calendar step failed: ' + strErrText(e)); } }
+  if (calendar.status === 'failed' || calendar.status === 'partial') errors.push({ step: 'calendar_failed', error: `The cleaning calendar was not fully updated. ${calendar.message} Do this by hand: ${calendar.manual.join('; ')}.` });
+  else if (calendar.status === 'not_changed') warnings.push(`The cleaning calendar was NOT changed (${calendar.message}) Do this by hand: ${calendar.manual.join('; ')}.`);
+  try { await strLoad(ctx, true); } catch (e) { errors.push({ step: 'reload', error: 'Could not re-read the schedule after the change: ' + strErrText(e) }); }
+  // C. texts (and the invite email) - the text Brett edited is exactly what is sent
+  const textRes = [], doneRef = new Set(okItems.map(refOf)), win = strInSendWindow(ctx.now, S), heldUntil = win ? 0 : strNextWindowOpenMs(ctx.now, S);
+  for (const r of plan.recipients) {
+    const c = ctx.st.cmap[r.cleaner_id], base = { key: r.key, name: r.name, first: r.first, kind: r.kind, dates: r.dates }, tx = texts[r.key];
+    const refs = r.refs.filter(x => doneRef.has(x)); if (!c) { textRes.push(Object.assign(base, { status: 'failed', detail: 'Cleaner not found.' })); continue; }
+    if (!refs.length) { textRes.push(Object.assign(base, { status: 'not_sent', detail: 'Nothing changed for this person, so no text.' })); continue; }
+    if (!tx.send && (r.can_send || r.kind === 'mark')) { textRes.push(Object.assign(base, { status: 'not_sent', detail: 'You unticked this text.' })); continue; }
+    if (!r.can_send) { textRes.push(Object.assign(base, { status: 'not_sent', detail: r.reason })); warnings.push(`${r.name} was NOT texted: ${r.reason} Tell them yourself.`); continue; }
+    let text = tx.text, replaced = false, ds = r.dates;
+    if (refs.length !== r.refs.length) { // some dates failed: Brett's text would be wrong, so send the standard wording for the dates that DID change
+      const its = plan.items.filter(i => refs.includes(refOf(i))); ds = [...new Set(its.map(i => i.date))].sort();
+      text = (await strRenderRecipient(ctx, r.kind, c, ds, r.kind === 'mark' ? { key: 'x', kind: 'checkout', date: ds[0], next: '' } : its[0]._t, { newC: cleaner, mark: req.mark })).text; replaced = true;
+      warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates failed), so your edit was replaced.`);
+    }
+    const out = Object.assign(base, { text, replaced, dates: ds });
+    if (!win) {
+      try {
+        const expect = (r.kind === 'mark' ? ds.map(d => ({ date: d, mark: req.mark })) : plan.items.filter(i => refs.includes(refOf(i))).map(i => ({ task_key: i.task_key, date: i.date, assigned_id: cleaner.ID })));
+        await strAddRow(env, 'STR_Outbox', { Plan_ID: planId, Cleaner_ID: c.ID, Kind: r.kind, Body: text, Task_Keys: refs.join(','), Expect: JSON.stringify(expect), Not_Before: new Date(heldUntil).toISOString(), Status: 'parked', Created_At: iso, Note: 'type ' + r.type });
+        textRes.push(Object.assign(out, { status: 'held', detail: `Outside 8 AM-9 PM ET, so it is held and goes out at 8:00 AM ET (${strFmtDate(inspEtDate(heldUntil))})${S.engine ? '' : ' - but the scheduler is OFF, so it will NOT go until you switch it on'}.` }));
+        await strLog(ctx, '', c.ID, 'swap_text_held', `plan ${planId}: ${r.kind} text for ${ds.length} date(s) held until ${new Date(heldUntil).toISOString()}`);
+      } catch (e) { textRes.push(Object.assign(out, { status: 'failed', detail: 'Could not hold the text for 8 AM: ' + strErrText(e) })); errors.push({ step: 'text_hold', error: `The text to ${r.name} could not be held for 8 AM (${strErrText(e)}). She was NOT texted; tell her yourself.` }); await strSystemAlert(env, 'swap_text', `A held text to ${r.name} could not be saved: ${strErrText(e)}`); }
+      continue;
+    }
+    const s = await strSendCleanerText(ctx, c, r.type, text);
+    if (s.ok) { textRes.push(Object.assign(out, { status: 'sent', detail: s.detail })); await strLog(ctx, '', c.ID, 'swap_text_sent', `plan ${planId}: ${r.kind} text for ${ds.length} date(s): ${s.detail}`); }
+    else { textRes.push(Object.assign(out, { status: s.off ? 'not_sent' : 'failed', detail: s.detail })); (s.off ? warnings : errors).push(s.off ? `${r.name} was NOT texted: ${s.detail}. Tell them yourself.` : { step: 'text_failed', error: `${r.name} was NOT texted: ${s.detail}. Tell them yourself.` }); if (!s.off) await strSystemAlert(env, 'swap_text', `The ${r.kind === 'new' ? 'assignment' : 'swap'} text to ${r.name} failed: ${s.detail}`); await strLog(ctx, '', c.ID, 'swap_text_failed', `plan ${planId}: ${s.detail}`); }
+  }
+  let email = null;
+  if (!isMark && okItems.length && plan.recipients.some(r => r.kind === 'new')) { email = await strSwapEmail(ctx, cleaner, okItems); if (email.status === 'failed') { errors.push({ step: 'invite_email', error: email.note }); await strSystemAlert(env, 'swap_email', email.note); } else if (email.status === 'skipped') warnings.push(email.note); }
+  // D. standing alerts (a covered notice for Brett if an uncovered alert was open)
+  if (!isMark && okItems.length) await strAlertsNow(ctx, warnings, 'swap');
+  const items = plan.items.map(it => { const r = ires.get(refOf(it)), ci = calendar.items[it.task_key]; return { ref: refOf(it), task_key: it.task_key || '', date: it.date, label: it.label, status: r.status, reason: r.reason || '', flag: r.flag || '', notes: it.notes || [], sentence: it.sentence || '', calendar: ci || null }; });
+  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length };
+  const anyProblem = errors.length > 0 || counts.failed > 0, status = !anyProblem ? 'done' : (counts.done > 0 ? 'partial' : 'failed');
+  const res = { ok: status === 'done', status, plan_id: planId, action: req.action, cleaner: plan.cleaner, mark: req.mark, items, counts, texts: textRes, email, calendar, warnings: warnings.concat(plan.warnings), errors, duplicate: false };
+  res.summary = strChangeSummaryText(Object.assign({}, plan, { mark: req.mark }), res);
+  for (const er of errors.slice(0, 20)) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/change/' + (er.step || 'error'), Success: 'FALSE', Notes: String(er.error).slice(0, 480) }); } catch (te) { console.error('str change: telemetry failed:', te && te.message, '| original:', er.error); } }
+  if (status !== 'done') await strSystemAlert(env, 'swap_partial', `Admin ${req.action} was ${status === 'failed' ? 'NOT done' : 'only partly done'}: ${res.summary} ${errors.slice(0, 3).map(e => e.error).join(' | ')}`);
+  try { await strAddRow(env, 'STR_Log', { Timestamp: iso, Task_Key: '', Cleaner_ID: cleaner.ID, Event: 'admin_change', Detail: `plan ${planId} ${req.action} -> ${status}: ${res.summary}`.slice(0, 480) }); } catch (e) { res.errors.push({ step: 'audit_log', error: 'Could not write the summary row to the Activity log: ' + strErrText(e) }); }
+  return res;
+}
+
+// ── Held texts: sent by the scheduler tick once 8 AM ET has arrived (no clock of their own: NO CRON) ──
+async function strOutboxDrain(ctx) {
+  const out = { sent: 0, stale: 0, failed: 0, pending: 0 };
+  const rows = ctx.st.outbox || [], iso = new Date(ctx.now).toISOString();
+  out.pending = rows.filter(o => o.Status === 'parked').length;
+  if (ctx.dry || !strInSendWindow(ctx.now, ctx.S)) return out;
+  for (const o of rows.filter(o => o.Status === 'sending' && ctx.now - Date.parse(o.Created_At || iso) > 15 * 60000)) { ctx.errors.push({ step: 'held_text_stuck', error: `Held text #${o.ID} has been "sending" for over 15 minutes - it may or may not have gone out. It is NOT being resent automatically.` }); await strSystemAlert(ctx.env, 'held_text_stuck', `Held cleaner text #${o.ID} is stuck "sending"; check whether the cleaner got it before resending.`); }
+  for (const o of rows.filter(o => o.Status === 'parked' && Date.parse(o.Not_Before || '') <= ctx.now).slice(0, 6)) {
+    try {
+      const c = ctx.st.cmap[o.Cleaner_ID]; let expect = []; try { expect = JSON.parse(o.Expect || '[]'); } catch (e) { expect = null; } // silent-ok: an unreadable Expect is treated as stale just below, which alerts Brett
+      const stale = !c || !Array.isArray(expect) || !expect.length || expect.some(e => e.mark !== undefined ? (ctx.st.marks[c.ID + '|' + e.date] || '') !== e.mark : !ctx.st.turnovers.some(t => t.Task_Key === e.task_key && t.Status === 'covered' && String(t.Assigned_Cleaner_ID) === String(e.assigned_id)));
+      if (stale) { await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'stale', Note: 'not sent: the schedule changed while it was held' }); out.stale++; const msg = `A held text to ${c ? c.Name : 'cleaner #' + o.Cleaner_ID} was NOT sent because the schedule changed while it waited: "${String(o.Body).slice(0, 120)}". Tell them yourself if it still matters.`; ctx.errors.push({ step: 'held_text_stale', error: msg }); await strSystemAlert(ctx.env, 'held_text_stale', msg); continue; }
+      await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'sending', Note: 'claimed ' + iso }); // claim first: a crash after sending must never resend
+      const s = await strSendCleanerText(ctx, c, 'str_swap_held', o.Body);
+      if (s.ok) { await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'sent', Sent_At: iso, Note: s.detail }); out.sent++; await strLog(ctx, '', c.ID, 'swap_text_sent', `held text sent: ${s.detail}`); }
+      else { await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'failed', Note: String(s.detail).slice(0, 200) }); out.failed++; ctx.errors.push({ step: 'held_text_failed', error: `The held text to ${c.Name} did not go out: ${s.detail}. Tell them yourself.` }); await strSystemAlert(ctx.env, 'held_text_failed', `The held text to ${c.Name} did not go out: ${s.detail}`); }
+    } catch (e) { ctx.errors.push({ step: 'held_text', error: `Held text #${o.ID}: ${strErrText(e)}` }); }
+  }
+  return out;
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
