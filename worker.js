@@ -21370,7 +21370,7 @@ async function qbSyncVendorOnboardingFields(env, vendor, qbId, token) {
         Skill_Or_Endpoint: 'qbSyncVendorOnboardingFields', Success: 'FALSE',
         Notes: `vendorId=${(vendor && vendor.ID) || ''} qbId=${qbId} err=${String((e && e.message) || e)}`,
       });
-    } catch (_) { /* logging itself failing must not mask the original error path */ }
+    } catch (te) { softNote('telemetry_write_failed:vendor_onboarding_qb_push_failed', te, 'P2'); }   // must not mask the original error, which is returned below
     return { ok: false, error: e.message };
   }
 }
