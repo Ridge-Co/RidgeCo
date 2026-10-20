@@ -1,5 +1,6 @@
 // Shared in-memory Sheets/Drive/AI/Gmail fake that runs the REAL FI block from worker.js (used by the unit test and the UI harness).
 import fs from 'fs';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (aiCreditIsPausedError, AI_CREDIT_CODE, ...)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const a = src.indexOf('// ═══ FI-BLOCK-START'), b = src.indexOf('// ═══ FI-BLOCK-END');
 if (a < 0 || b < 0) throw new Error('FI block markers missing');
