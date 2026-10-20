@@ -111,6 +111,16 @@ var PINTEREST_URL = 'https://pinterest-sync.brett-2f8.workers.dev';
 var BARRELCO_URL  = 'https://barrel-co.brett-2f8.workers.dev';
 var STR_URL       = 'https://str-automation.brett-2f8.workers.dev';
 var BRETTOS_URL   = 'https://brett-os.brett-2f8.workers.dev';
+// Workers the watcher probes every tick (GET /health). Up = any answer below HTTP 500 (a 404 or 401 still proves the Worker is alive);
+// down = no answer, a Cloudflare error, or HTTP 5xx. To watch another Worker add a row here.
+var PROBES = [
+  { name: 'brett-os',       url: BRETTOS_URL },
+  { name: 'barrel-co',      url: BARRELCO_URL },
+  { name: 'str-automation', url: STR_URL, body: 'str' },   // body:'str' = also read the JSON answer: open problems / stale ticks become ledger items
+  { name: 'pinterest-sync', url: PINTEREST_URL },
+  { name: 'gh-broker',      url: 'https://gh-broker.brett-2f8.workers.dev' },     // answers 401 to everything without its key: 401 proves the code is running
+  { name: 'listing-forge',  url: 'https://listing-forge.brett-2f8.workers.dev' }, // answers 200 to every path: proves only that the Worker is up
+];
 var CONFIG_TAB    = 'Config';
 var TOKEN_KEY     = 'Scheduler_Token';
 var ENTRY_TOKEN_KEY = 'Entry_Run_Token';   // the key in the BarrelCo sheet's Config tab
