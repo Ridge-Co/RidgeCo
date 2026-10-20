@@ -34122,7 +34122,7 @@ async function proposalBook(env, body) {
   const vendDisplay = (vendor.Company || vendor.Name || [vendor.First_Name, vendor.Last_Name].filter(Boolean).join(' ') || ('Vendor ' + reg.vendorId)).trim();
   const vendorInHouse = String(vendor.In_House || '').toUpperCase() === 'TRUE';
 
-  const warnings = [];
+  const warnings = []; const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
   if (!vendor.ID) warnings.push('Vendor ' + reg.vendorId + ' not found — no vendor bill will be created.');
   if (vendorInHouse) warnings.push('Vendor is marked in-house — no vendor bill will be created.');
