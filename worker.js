@@ -33322,7 +33322,15 @@ async function trashWeek(env, url) {
       skipped: !!skip, skip_reason: (skip && skip.Reason) || '',
     };
   });
-  return json({ week, properties: out });
+  return json(loadErrors.length ? { week, properties: out, load_errors: loadErrors } : { week, properties: out });
+}
+
+// A trash-tab read that must not look like "no data": a failed read is reported (ledger) and named in load_errors for the caller to show.
+async function trashReadTab(env, tab, where, severity, errs) {
+  try { return await fetchTab(env, tab); }
+  catch (e) {
+    if (/Unable to parse range/i.test((e && e.message) || '')) return [];   // silent-ok: a lazily-created Trash tab that does not exist yet is an empty tab, as before
+    await softFail(env, 'tab_read_failed:' + where, e, severity || 'P2', { tab }); errs.push('Could not read ' + tab + ': ' + String((e && e.message) || e).slice(0, 120)); return []; }
 }
 
 // GET /trash/unbilled — what needs Brett's attention. Powers the push nudge.
