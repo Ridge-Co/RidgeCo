@@ -1130,7 +1130,7 @@ async function saveEstimate(){
 /* Ridge Co materials pricing (Sep 22 2026) — per proposal: same markup / at cost / flat %. */
 function currentMatMode(){
   var s=state.current||{}; var mp=null;
-  try{ mp=JSON.parse(s.Materials_Pricing_JSON||'null'); }catch(e){ mp=null; }
+  try{ mp=JSON.parse(s.Materials_Pricing_JSON||'null'); }catch(e){ /* silent-ok: unreadable saved pricing falls back to the default markup mode */ mp=null; }
   if(!mp || ['markup','at_cost','flat_pct'].indexOf(mp.mode)<0) mp={mode:'markup'};
   return mp;
 }
