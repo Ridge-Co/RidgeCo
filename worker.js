@@ -37735,7 +37735,7 @@ async function fiFetchLimited(startUrl, opts, fetchImpl) {
     let bytes;
     if (resp.body && resp.body.getReader) {
       const rd = resp.body.getReader(); const parts = []; let total = 0;
-      for (;;) { const r = await rd.read(); if (r.done) break; parts.push(r.value); total += r.value.length; if (total > opts.maxBytes) { try { await rd.cancel(); } catch (_) { /* body already closed */ } break; } }
+      for (;;) { const r = await rd.read(); if (r.done) break; parts.push(r.value); total += r.value.length; if (total > opts.maxBytes) { try { await rd.cancel(); } catch (_) { /* silent-ok: the body is already closed or finished */ } break; } }
       bytes = new Uint8Array(Math.min(total, opts.maxBytes)); let off = 0; for (const p of parts) { const take = Math.min(p.length, bytes.length - off); if (take <= 0) break; bytes.set(p.subarray(0, take), off); off += take; }
       return { ok: true, url, bytes, truncated: total > opts.maxBytes, ctype: (resp.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() };
     }
