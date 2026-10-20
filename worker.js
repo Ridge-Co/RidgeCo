@@ -22196,7 +22196,7 @@ function gmailIdTokenEmail(idToken) {
     const b64 = part.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((part.length + 3) % 4);
     const p = JSON.parse(atob(b64));
     return { email: String(p.email || '').trim().toLowerCase(), verified: p.email_verified === true || p.email_verified === 'true' };
-  } catch (_) { return null; }
+  } catch (_) { return null; /* silent-ok: an unreadable id_token gives null and the callback page tells the user the account was not recognised */ }
 }
 async function gmailConnectUrl(env, url) {
   if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET) return json({ error: 'GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set in Cloudflare Worker secrets.' }, 400);
