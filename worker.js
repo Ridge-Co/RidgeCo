@@ -24532,7 +24532,8 @@ async function __meterPersist(env) {
   if (__meter.lastPersistAt && now - __meter.lastPersistAt < METER_PERSIST_GAP_MS) return;
   __meter.persisting = true; __meter.dirty = false; __meter.lastPersistAt = now;
   try {
-    await kv.put('rm1:' + __meter.tag + ':' + __meter.isolate, JSON.stringify(__meterPayload(now)), { expirationTtl: METER_KV_TTL_S, metadata: { t: now, b: BUILD_VERSION } });
+    const res = await stub.fetch('https://read-meter.internal/put', { method: 'POST', body: JSON.stringify({ id: __meter.isolate, tag: __meter.tag, build: BUILD_VERSION, payload: __meterPayload(now) }) });
+    if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
     __meter.persists++;
   } catch (e) {
     __meter.persistErrors++; __meter.dirty = true;
