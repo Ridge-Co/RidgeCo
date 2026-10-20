@@ -94,7 +94,7 @@ function post(path, body){
 }
 function setLang(l){
   LANG = l === 'es' ? 'es' : 'en';
-  try { localStorage.setItem('fc_lang', LANG); } catch (e) { /* storage blocked: the choice just is not remembered */ }
+  try { localStorage.setItem('fc_lang', LANG); } catch (e) { /* silent-ok: storage blocked, the choice just is not remembered */ }
   document.documentElement.lang = LANG;
   document.getElementById('l-en').className = LANG === 'en' ? 'on' : '';
   document.getElementById('l-es').className = LANG === 'es' ? 'on' : '';
