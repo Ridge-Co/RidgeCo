@@ -6478,14 +6478,18 @@ async function scopeProposalUnbookFinal(env, body) {
   await updateRow(env, 'Scope_Signatures', row.ID, {
     QB_Final_Invoice_ID: '', QB_Final_Invoice_Number: '', QB_Final_Bill_ID: '', QB_Final_Bill_Number: '',
   });
+  let unbookFinalWarning = '';
   try {
     await scopesTab(env);
     const scopes = await fetchTab(env, 'Scopes');
     const s = scopes.find(x => x.ID === row.Scope_ID);
     if (s) await updateRow(env, 'Scopes', s.ID, { Status: 'invoiced', Updated_Date: new Date().toISOString() });
-  } catch (e) {}
+  } catch (e) {
+    await softFail(env, 'scope_unbook_final_status_reset_failed', e, 'P1', { scope_signature: String(row.ID) });
+    unbookFinalWarning = 'The final invoice/bill were undone, but the scope status could not be reset to invoiced.';
+  }
 
-  return json({ ok: true, undone_invoice: row.QB_Final_Invoice_ID || '', undone_bill: row.QB_Final_Bill_ID || '' });
+  return json({ ok: true, undone_invoice: row.QB_Final_Invoice_ID || '', undone_bill: row.QB_Final_Bill_ID || '', ...(unbookFinalWarning ? { failure_warning: unbookFinalWarning } : {}) });
 }
 
 // the Owners tab. Per-customer overrides live in Owners.Hourly_Rate (blank = this default).
