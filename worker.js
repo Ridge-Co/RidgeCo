@@ -24347,8 +24347,9 @@ const METER_MAX_KEYS = 250;
 const METER_ALARM_READS_PER_MIN = 40;
 const METER_ALARM_GAP_MS = 10 * 60 * 1000;
 // Cross-instance roll-up (Oct 20 2026): Cloudflare runs MANY Worker instances at once (staging showed 5 in 5 requests), each with its own memory,
-// but the Google quota is shared by all of them. So each instance saves its own recent per-minute counts to the READ_METER KV store (at most
-// once per minute while it has news, the first one right away), and /read-meter adds every instance together. Costs ZERO Sheets reads.
+// but the Google quota is shared by all of them. So each instance saves its own recent per-minute counts to the shared READ_METER_STORE (a small
+// Durable Object, class ReadMeterStore below; KV was ruled out because the Workers Free plan allows only 1,000 KV writes a day) at most
+// once per minute while it has news, the first one right away, and /read-meter adds every instance together. Costs ZERO Sheets reads.
 const METER_PERSIST_MIN = 60;               // minutes of history each instance saves
 const METER_PERSIST_GAP_MS = 60 * 1000;     // save at most this often per instance
 const METER_KV_TTL_S = 2 * 60 * 60;         // a saved instance record disappears after 2h
