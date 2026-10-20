@@ -27152,7 +27152,7 @@ async function qbPayables(env, url) {
         terms: vendorTermLabel(vendor),
         invoice_id: invId, invoice_number: invNumber,
         customer_total: custTotal, proposal_credit: propCreditPay, customer_balance: customerBalance, customer_paid: customerPaid,
-        customer_partial: customerPartial,
+        customer_partial: customerPartial, qb_invoice_total: isFinite(qbInvTotal) ? qbInvTotal : null,
         ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
         vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
