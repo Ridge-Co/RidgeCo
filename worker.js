@@ -15537,10 +15537,10 @@ async function refreshUneditedTemplates(env, rows) {
       out.updated++;
     } catch (e) {
       out.failed.push(r.Message_Type + ': ' + String((e && e.message) || e).slice(0, 120));
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_template_refresh_failed', Skill_Or_Endpoint: r.Message_Type, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_template_refresh_failed', Skill_Or_Endpoint: r.Message_Type, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (te) { softNote('telemetry_write_failed:message_template_refresh_failed', te, 'P2'); }
     }
   }
-  if (out.updated) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_template_refreshed', Skill_Or_Endpoint: 'ensureMessageTemplates', Success: 'TRUE', Notes: out.updated + ' unedited default template(s) brought up to the current wording' }); } catch (_) {} }
+  if (out.updated) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_template_refreshed', Skill_Or_Endpoint: 'ensureMessageTemplates', Success: 'TRUE', Notes: out.updated + ' unedited default template(s) brought up to the current wording' }); } catch (te) { softNote('telemetry_write_failed:message_template_refreshed', te, 'P2'); } }
   return out;
 }
 function renderTemplate(body, tokens) {
