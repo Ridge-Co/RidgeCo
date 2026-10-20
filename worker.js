@@ -22371,7 +22371,7 @@ async function gmailSendEmail(env, { to, subject, html }) {
     method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw: _utf8B64url(raw) }),
   });
-  const data = await resp.json().catch(() => null);
+  const data = await safeJson(resp, null, 'gmail_send');   // null still throws "Gmail send failed" below
   if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
   return { sent: true, message_id: data.id };
 }
