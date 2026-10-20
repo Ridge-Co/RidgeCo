@@ -297,6 +297,34 @@ const before = ruleRows().length;
 brett.ctx.weeklyDiscovery();
 ok(ruleRows().length === before, 'weekly discovery does not re-propose denied senders');
 
+// ── 7b. Oct 20 review: a FAILED filter removal stays on the property list (reported again next run); an alert problem never blocks receipts ──
+{
+  const ruleId = ss._tabs.Rules._rows[lowesRow][0], propKey = 'filter:' + ruleId, cleanupMails = () => world.mailSent.filter(m => /filter cleanup failed/.test(m.subject || ''));
+  const resetAlertThrottle = () => { delete brett.props['ALERT_AT:Gmail filter cleanup failed']; };
+  ss._tabs.Rules._rows[lowesRow][1] = 'Approved'; brett.ctx.processQueue();
+  ok(!!brett.props[propKey] && brett.filters.some(f => f.criteria.from === 'do-not-reply@notifications.lowes.com'), '7b setup: re-approved rule has a filter and a saved record');
+  world.failRemove = 'Gmail API 500 backend error'; ss._tabs.Rules._rows[lowesRow][1] = 'Denied'; brett.ctx.processQueue();
+  ok(!!brett.props[propKey] && brett.filters.some(f => f.criteria.from === 'do-not-reply@notifications.lowes.com'), 'failed removal: the record stays in the property list (filter is still live)');
+  ok(cleanupMails().length === 1, '...and Brett is told');
+  resetAlertThrottle(); brett.ctx.processQueue();
+  ok(!!brett.props[propKey] && cleanupMails().length === 2, 'next run reports the same stuck filter again');
+  world.failRemove = null; brett.ctx.processQueue();
+  ok(!brett.props[propKey] && !brett.filters.some(f => f.criteria.from === 'do-not-reply@notifications.lowes.com'), 'once removal works the record and the filter are gone');
+  ss._tabs.Rules._rows[lowesRow][1] = 'Approved'; brett.ctx.processQueue();
+  brett.filters.splice(0, brett.filters.length, ...brett.filters.filter(f => f.criteria.from !== 'do-not-reply@notifications.lowes.com'));   // someone deleted it by hand in Gmail
+  world.failRemove = 'Requested entity was not found. (404)'; ss._tabs.Rules._rows[lowesRow][1] = 'Denied'; brett.ctx.processQueue();
+  ok(!brett.props[propKey], 'a filter that is already gone (404 / not found) is forgotten, not retried forever');
+  // alert failure must not stop receipts
+  ss._tabs.Rules._rows[lowesRow][1] = 'Approved'; world.failRemove = null; brett.ctx.processQueue();
+  world.failRemove = 'Gmail API 500 backend error'; ss._tabs.Rules._rows[lowesRow][1] = 'Denied';
+  brett.deliver(hd('hdAlertFail', '2026-09-22T09:00:00Z', '<hd-alertfail@hd>'));
+  resetAlertThrottle(); world.failMail = true;
+  let threw = null; try { brett.ctx.processQueue(); } catch (e) { threw = e; }
+  ok(!threw && world.files.some(f => /lertFail/.test(f.name)) && brett.labels['Receipts/Sent to Hub'].has('thdAlertFail'), 'the alert email failing does not throw and does not stop the receipt being saved');
+  world.failMail = false; world.failRemove = null; resetAlertThrottle(); brett.ctx.processQueue();
+  ok(!brett.props[propKey], '7b cleanup: filter removed once Gmail works again');
+}
+
 // ── 8. Manual tag (vendor forwarding an HD order screenshot, then a reply) ───────────────────
 const phoenix = [
   { id: 'ph1', threadId: 'tph', from: 'Mark <phoenixestatesmaryland@gmail.com>', fromAddr: 'phoenixestatesmaryland@gmail.com', subject: '1599 Ingleside tub drain kit', date: D('2026-09-03T01:33:42Z'), rfc: '<ph1>', attachments: [blob('Screenshot.png', 'image/png', 300000)] },
