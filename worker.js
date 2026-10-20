@@ -36770,6 +36770,13 @@ async function strPendingRespond(ctx, c, offer, p, action) {
   Object.assign(p, back);
   await strSetOffer(ctx, offer, { Status: 'accepted', Responded_At: iso });
   await strLog(ctx, p.Task_Key, c.ID, 'pending_held', 'said yes (tentative)');
+  for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && STR_OFFER_ACTIVE.includes(o.Status) && o !== offer)) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'someone else said yes' });
+  const t = await strTextCleaner(ctx, c, 'str_pending_yes', strTokens(ctx, c, strRowToTask(p)), strRowToTask(p));
+  if (!t.ok && !t.off) { warnings.push(`The "we'll let you know" text could not be sent: ${t.detail}`); ctx.errors.push({ step: 'pending_yes_text', error: `Could not text ${c.Name} the tentative-yes confirmation: ${t.detail}` }); await strSystemAlert(env, 'pending_yes_text', `Could not text ${c.Name} the "nothing is confirmed yet" reply for ${strFmtDate(p.Date)}: ${t.detail}`); }
+  const days = strDaysBetween(inspEtDate(ctx.now), p.Date), head = `PENDING DATE: ${strFirst(c)} CAN clean ${strFmtDate(p.Date)} if it books (tentative, not booked yet) - ${days === 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}`;
+  try { await strRaiseAlert(ctx, { key: `pyes|${p.Task_Key}|${c.ID}|${ctx.now}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, 'You can accept the booking: a cleaner is lined up.' + (p.Pending_Note ? ' Your note: ' + p.Pending_Note : ''), 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head}. You can accept the booking. ${PORTAL_BASE}/str-cleaning.html` }); }
+  catch (e) { warnings.push('Brett could not be told right away: ' + strErrText(e)); await strSystemAlert(env, 'pending_yes_alert', strErrText(e)); }
+  await strAlertsNow(ctx, warnings, 'pending_yes');
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
