@@ -32,6 +32,7 @@ function grabConst(name){
 }
 
 const M = new Function(aiCreditGuardPrelude() + `
+  const softNote = () => true, softFail = async () => ({ ok: false });   // Phase C reporting helpers (stubbed)
   const _tenc = new TextEncoder(), _tdec = new TextDecoder();
   ${grabConst('CORS')}
   ${grabConst('MODEL_REGISTRY')}
