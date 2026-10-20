@@ -47,7 +47,7 @@ const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } }
   const enrichWO = (wo, p, u, tn, k, opts, mk, holders) => { sawCfg = opts.tradeAccessDefaults; sawHolders = holders; return { ID: wo.ID, Priority: wo.Priority }; };
   const json = (x) => x;
   const fn = new Function('fetchTabs', 'fetchConfig', 'fetchMasterKeyHolders', '__tabCache', 'isMissingTabError', 'enrichWO', 'json', 'PRIORITY_ORDER', 'OPEN_WO_STATUSES', 'CLOSED_WO_STATUSES',
-    cfgSrc + '\n' + vw + '\nreturn vendorWorkorders;')(fetchTabs, async () => { throw new Error('fetchConfig must not be called'); }, async () => { throw new Error('holders must not be called'); }, __tabCache, () => false, enrichWO, json, {}, ['Open'], ['Complete']);
+    'const softNote = () => false;\n' + grab(wsrc, 'function parseJsonCell(') + '\n' + cfgSrc + '\n' + vw + '\nreturn vendorWorkorders;')(fetchTabs, async () => { throw new Error('fetchConfig must not be called'); }, async () => { throw new Error('holders must not be called'); }, __tabCache, () => false, enrichWO, json, {}, ['Open'], ['Complete']);
   let out; let err = null;
   try { out = await fn({}, new URL('https://x/vendor-workorders?vendor_id=V1&include_closed=true')); } catch (e) { err = e; }
   t('vendorWorkorders batched path runs without extra reads (' + (err && err.message) + ')', !err);
