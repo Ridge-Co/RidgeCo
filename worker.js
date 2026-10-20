@@ -30564,6 +30564,8 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
     // stale list — mirrors qbAllInvoicesRaw's own "list once, match in memory" convention.
     const invoices = await qbAllInvoicesRaw(env, token);
     const listQueryCarriedLine = invoices.some(inv => Array.isArray(inv.Line) && inv.Line.length > 0);
+    let clearWarning = '';
+    const openFailures = [];
     if (offset === 0 && body.reset !== false) {
       // Fresh run — clear stale rows from a previous audit before repopulating, so a second run
       // never double-counts an invoice's lines against themselves.
