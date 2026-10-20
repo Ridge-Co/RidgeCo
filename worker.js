@@ -36181,7 +36181,68 @@ async function strChangeContinue(ctx, row) {
   // not finished: save where we got to, so the next call carries on from here
   try { await strSetRow(env, 'STR_Changes', row.ID, { Stage: state.stage, State: JSON.stringify(state).slice(0, 46000) }); }
   catch (e) { return json({ ok: false, status: 'applying', plan_id: J.planId, stage: state.stage, error: 'progress_not_saved', message: `The change is partly done but its progress could not be saved (${strErrText(e)}). Press Continue; nothing will be done twice.` }, 500); }
-/*@@S6@@*/
+  const idx = STR_STAGES.indexOf(state.stage);
+  return json({ ok: true, status: 'applying', plan_id: J.planId, stage: state.stage, step: idx + 1, steps: STR_STAGES.length, calls: state.calls, message: `Working... ${STR_STAGE_TEXT[state.stage] || 'almost there'} (step ${idx + 1} of ${STR_STAGES.length}).` });
+}
+async function strStageFinish(ctx, J) {
+  const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), errors = state.errors, warnings = state.warnings, plan = J.plan;
+  await strFresh(ctx);
+  // text results come from the Outbox rows themselves: that is the truth about what was sent
+  const ob = (ctx.st.outbox || []).filter(o => o.Plan_ID === J.planId), textRes = [];
+  for (const t of state.texts) {
+    if (t.status !== 'queued') { textRes.push(t); continue; }
+    const o = ob.find(x => String(x.ID) === String(t.ob)), out = Object.assign({}, t);
+    if (!o) { out.status = 'failed'; out.detail = 'The queued text could not be found again.'; }
+    else if (o.Status === 'sent') { out.status = 'sent'; out.detail = o.Note || 'sent'; }
+    else if (o.Status === 'failed') { out.status = 'failed'; out.detail = o.Note || 'did not go out'; }
+    else if (o.Status === 'stale') { out.status = 'failed'; out.detail = 'Not sent: the schedule changed while it waited.'; }
+    else if (o.Status === 'parked') { out.status = 'held'; out.detail = `Outside 8 AM-9 PM ET, so it is held and goes out at 8:00 AM ET (${strFmtDate(inspEtDate(Date.parse(o.Not_Before) || ctx.now))})${ctx.S.engine ? '' : ' - but the scheduler is OFF, so it will NOT go until you switch it on'}.`; }
+    else { out.status = 'failed'; out.detail = 'It may or may not have gone out (it is stuck "sending"). Check with them before sending it again.'; }
+    if (out.status === 'failed') errors.push({ step: 'text_failed', error: `${t.name} was NOT texted: ${out.detail}. Tell them yourself.` });
+    textRes.push(out);
+  }
+  const items = J.items.map(it => { const r = state.ires[it.ref], ci = state.cal.items[it.ref]; return { ref: it.ref, task_key: it.task_key || '', date: it.date, label: it.label, status: r.status, reason: r.reason || '', flag: r.flag || '', notes: it.notes || [], sentence: it.sentence || '', calendar: ci || null }; });
+  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length };
+  const anyProblem = errors.length > 0 || counts.failed > 0, status = !anyProblem ? 'done' : (counts.done > 0 ? 'partial' : 'failed');
+  const cal = Object.assign({ mode: plan.calendar.mode }, state.cal); delete cal.done; delete cal.fatal;
+  const res = { ok: status === 'done', status, plan_id: J.planId, action: req.action, cleaner: plan.cleaner, mark: req.mark, items, counts, texts: textRes, email: state.email, calendar: cal, warnings: warnings.concat(plan.warnings || []), errors, calls: state.calls, duplicate: false };
+  res.summary = strChangeSummaryText({ action: plan.action, cleaner: plan.cleaner, mark: req.mark }, res);
+  // one telemetry row and one alert for the whole change (a failed change must reach Brett, but not as a dozen separate messages)
+  if (errors.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/change/' + [...new Set(errors.map(e => e.step))].slice(0, 4).join('+'), Success: 'FALSE', Notes: errors.map(e => `${e.step}: ${e.error}`).join(' | ').slice(0, 480) }); } catch (te) { console.error('str change: telemetry failed:', te && te.message, '| original:', errors.length, 'error(s)'); } }
+  if (status !== 'done') await strSystemAlert(env, 'swap_' + J.planId, `Admin ${req.action} was ${status === 'failed' ? 'NOT done' : 'only partly done'}: ${res.summary} ${errors.slice(0, 3).map(e => e.error).join(' | ')}`);
+  const logs = textRes.filter(t => ['sent', 'held', 'failed'].includes(t.status)).map(t => ({ Timestamp: iso, Task_Key: '', Cleaner_ID: (t.key.split(':')[1] || ''), Event: t.status === 'sent' ? 'swap_text_sent' : (t.status === 'held' ? 'swap_text_held' : 'swap_text_failed'), Detail: `plan ${J.planId}: ${t.kind} text for ${t.dates.length} date(s): ${t.detail}`.slice(0, 480) }));
+  logs.push({ Timestamp: iso, Task_Key: '', Cleaner_ID: cleaner.ID, Event: 'admin_change', Detail: `plan ${J.planId} ${req.action} -> ${status}: ${res.summary}`.slice(0, 480) });
+  try { await strAddRows(env, 'STR_Log', logs); } catch (e) { res.errors.push({ step: 'audit_log', error: 'Could not write the summary rows to the Activity log: ' + strErrText(e) }); }
+  try { await strSetRow(env, 'STR_Changes', J.row.ID, { Status: res.status, Finished_At: new Date().toISOString(), Stage: 'done', Result: JSON.stringify(res).slice(0, 45000), Payload: '', State: '' }); }
+  catch (e) { res.errors.push({ step: 'save_result', error: `The change was applied but its record did not save (${strErrText(e)}). Do NOT press Send again; check the Activity log.` }); res.ok = false; if (res.status === 'done') res.status = 'partial'; await strSystemAlert(env, 'swap_record_' + J.planId, strErrText(e)); }
+  return res;
+}
+
+// ── Held texts: sent by the scheduler tick once 8 AM ET has arrived (no clock of their own: NO CRON). The apply job lines its texts up here too and
+// sends the due ones itself (opts.plan); the tick sends whatever is still parked, so a text is never lost when the page is closed half way. ──
+async function strOutboxDrain(ctx, opts) {
+  opts = opts || {};
+  const out = { sent: 0, stale: 0, failed: 0, pending: 0, more: false };
+  const all = ctx.st.outbox || [], iso = new Date(ctx.now).toISOString(), rows = opts.plan ? all.filter(o => o.Plan_ID === opts.plan) : all, quiet = !!opts.quiet;
+  out.pending = rows.filter(o => o.Status === 'parked').length;
+  if (ctx.dry || !strInSendWindow(ctx.now, ctx.S)) return out;
+  if (!opts.plan) for (const o of rows.filter(o => o.Status === 'sending' && ctx.now - Date.parse(o.Created_At || iso) > 15 * 60000)) { ctx.errors.push({ step: 'held_text_stuck', error: `Held text #${o.ID} has been "sending" for over 15 minutes - it may or may not have gone out. It is NOT being resent automatically.` }); await strSystemAlert(ctx.env, 'held_text_stuck', `Held cleaner text #${o.ID} is stuck "sending"; check whether the cleaner got it before resending.`); }
+  let n = 0;
+  for (const o of rows.filter(o => o.Status === 'parked' && Date.parse(o.Not_Before || '') <= ctx.now)) {
+    if (opts.budget ? (n > 0 && !strRoom(ctx, 17)) : n >= 2) { out.more = true; break; } // the budget / two a tick: the rest go next call
+    n++;
+    try {
+      const c = ctx.st.cmap[o.Cleaner_ID]; let expect = []; try { expect = JSON.parse(o.Expect || '[]'); } catch (e) { expect = null; } // silent-ok: an unreadable Expect is treated as stale just below, which alerts Brett
+      const stale = !c || !Array.isArray(expect) || !expect.length || expect.some(e => e.mark !== undefined ? (ctx.st.marks[c.ID + '|' + e.date] || '') !== e.mark : !ctx.st.turnovers.some(t => t.Task_Key === e.task_key && t.Status === 'covered' && String(t.Assigned_Cleaner_ID) === String(e.assigned_id)));
+      if (stale) { Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'stale', Note: 'not sent: the schedule changed while it was held' })); out.stale++; if (!quiet) { const msg = `A held text to ${c ? c.Name : 'cleaner #' + o.Cleaner_ID} was NOT sent because the schedule changed while it waited: "${String(o.Body).slice(0, 120)}". Tell them yourself if it still matters.`; ctx.errors.push({ step: 'held_text_stale', error: msg }); await strSystemAlert(ctx.env, 'held_text_stale', msg); } continue; }
+      Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'sending', Note: 'claimed ' + iso })); // claim first: a crash after sending must never resend
+      const s = await strSendCleanerText(ctx, c, o.Msg_Type || 'str_swap_held', o.Body);
+      if (s.ok) { Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'sent', Sent_At: iso, Note: String(s.detail).slice(0, 200) })); out.sent++; if (opts.log !== false) await strLog(ctx, '', c.ID, 'swap_text_sent', `held text sent: ${s.detail}`); }
+      else { Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'failed', Note: String(s.detail).slice(0, 200) })); out.failed++; if (!quiet) { ctx.errors.push({ step: 'held_text_failed', error: `The held text to ${c.Name} did not go out: ${s.detail}. Tell them yourself.` }); await strSystemAlert(ctx.env, 'held_text_failed', `The held text to ${c.Name} did not go out: ${s.detail}`); } }
+    } catch (e) { if (!quiet) ctx.errors.push({ step: 'held_text', error: `Held text #${o.ID}: ${strErrText(e)}` }); else throw e; }
+  }
+  return out;
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
