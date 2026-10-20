@@ -4452,7 +4452,9 @@ async function woPushToScope(env, body) {
       WO_ID: woId, Vendor_ID: wo.Vendor_ID || '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '',
       Proposal_Text: '', Created_By: (body && body.created_by) || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
     });
-    const createJson = await createResp.clone().json().catch(() => ({}));
+    let createJson = {};
+    try { createJson = await createResp.clone().json(); }
+    catch (je) { await softFail(env, 'woPushToScope_create_response_unreadable', je, 'P1', { wo_id: woId }); /* a scope may exist whose id we could not read: the 500 below tells the admin */ }
     scopeId = createJson.id;
     if (!scopeId) return json({ error: 'Failed to create the new Scope for this WO', detail: createJson }, 500);
     try { await updateWOFields(env, woId, { Scope_ID: scopeId }); }
