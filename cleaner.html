@@ -342,7 +342,7 @@ function onMark(key,date,mark){
   doMark(date,mark).then(function(r){
     S.marksInflight--; delete S.markBusy[date];
     if(!r.ok){
-      arr(S.data.tasks).forEach(function(t){ if(t.date===date&&prev.hasOwnProperty(t.key)) t.my_mark=prev[t.key]; });
+      arr(S.data.tasks).concat(arr(S.data.pending)).forEach(function(t){ if(t.date===date&&prev.hasOwnProperty(t.key)) t.my_mark=prev[t.key]; });
       setRow(key,[{kind:'err',text:failText(r.err)}]);
       render();
       if(r.err&&r.err.status===409) loadPage();   // e.g. they actually hold that date
