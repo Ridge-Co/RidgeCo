@@ -25461,7 +25461,7 @@ async function twilioAccountStatus(env) {
         const nums = await get(`https://messaging.twilio.com/v1/Services/${svc.sid}/PhoneNumbers`);
         const list = nums.ok ? (nums.data.phone_numbers || []) : [];
         entry.from_number_in_sender_pool = list.some(n => n.phone_number === env.TWILIO_FROM);
-      } catch (e) { entry.from_number_in_sender_pool = null; }
+      } catch (e) { entry.from_number_in_sender_pool = null; entry.sender_pool_check_error = String((e && e.message) || e).slice(0, 160); }
       out.messaging_services.push(entry);
     }
     if (!out.messaging_services.length) out.messaging_services_note = 'No Messaging Services found on this account — if TWILIO_FROM is sending outside any Messaging Service, it needs its OWN direct campaign association instead (check the number itself in the Twilio Console under Phone Numbers → Manage → your number → Messaging).';
