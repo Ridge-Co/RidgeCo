@@ -993,7 +993,7 @@ globalThis.setTimeout = _realSetTimeout;
   // the scheduler block never swallows
   t('scheduler block has no empty/underscore catch', !/catch\s*\(\s*_?\s*\)\s*\{\s*\}/.test(blockSrc) && !/catch\s*\(\s*_\s*\)/.test(blockSrc) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(blockSrc));
   const ver = /const BUILD_VERSION = '([^']+)'/.exec(wsrc)[1];
-  t('BUILD_VERSION is a 2026-10-12+ build (the scheduler build is 2026-10-12.5-apps-script-scheduler; a same-day bump by another build is fine)', /^2026-10-1[2-9]\.\d+-/.test(ver), ver);
+  t('BUILD_VERSION is a 2026-10-12+ build (the scheduler build is 2026-10-12.5-apps-script-scheduler; a same-day bump by another build is fine)', /^2026-10-(1[2-9]|[23]\d)\.\d+-/.test(ver), ver);
 }
 {
   // catch-up forms of the two jobs that used to need the exact hour
