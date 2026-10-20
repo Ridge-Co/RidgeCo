@@ -16501,7 +16501,7 @@ function failMessageQueueStats(rows, nowMs) {
 }
 // IO. Each check is isolated: one failing check becomes its own item (never hides the others, never silent).
 async function failInvariantsCollect(env, nowMs) {
-  const data = { dup: [], mq: null, twilio: null, errors: [] };
+  const data = { dup: [], mq: null, twilio: null, qb: null, gmail: null, errors: [] };
   const note = (check, e) => data.errors.push({ check, error: String((e && e.message) || e) });
   for (const tab of FAIL_INV_DUP_TABS) {
     try {
