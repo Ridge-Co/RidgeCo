@@ -1145,6 +1145,11 @@ const _hubWorkerCore = {
         if (path === '/str/admin/assign')          return await strAdminAssign(env, body);
         if (path === '/str/admin/change/preview')  return await strChangePreview(env, body);
         if (path === '/str/admin/change/apply')    return await strChangeApply(env, body);
+        if (path === '/str/admin/pending/preview') return await strAdminPendingPreview(env, body);
+        if (path === '/str/admin/pending/create')  return await strAdminPendingCreate(env, body);
+        if (path === '/str/admin/pending/cancel')  return await strAdminPendingCancel(env, body);
+        if (path === '/str/admin/pending/convert') return await strAdminPendingConvert(env, body);
+        if (path === '/str/admin/pending/send-now') return await strAdminPendingSendNow(env, body);
         if (path === '/str/admin/offer-now')       return await strAdminOfferNow(env, body);
         if (path === '/str/admin/alert/ack')       return await strAdminAlertAck(env, body);
         if (path === '/str/admin/run')             return await strAdminRun(env, body);
