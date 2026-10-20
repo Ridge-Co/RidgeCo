@@ -23247,7 +23247,8 @@ async function ownerOnboardSubmit(env, body, clientIP) {
     summary.owner_id = ownerId;
   } catch (e) {
     // Nothing usable was written for the owner — release the invite so the owner can retry.
-    await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }).catch(() => {});
+    softNote('owner_onboard_owner_row_failed', e, 'P1', { invite: String(inv.ID) });
+    await tryWrite(env, 'owner_onboard_invite_release_failed', () => updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }), 'P1');
     return json({ error: 'We couldn\'t save your information just now. Nothing was submitted — please try again in a minute.' }, 500);
   }
 
