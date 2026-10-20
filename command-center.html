@@ -319,13 +319,13 @@ async function runReview(){
   const el=document.getElementById('optbtn'); if(el){el.textContent='Running… (~15s)';el.disabled=true;}
   try{
     const r=await fetch(WORKER+'/ops-review',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:'{}'});
-    const d=await r.json().catch(()=>null);
+    const d=await r.json().catch(()=>null /* silent-ok: null body throws on the next line into the visible catch */);
     if(!r.ok||!d||d.ok!==true) throw new Error((d&&d.error)||('HTTP '+r.status));
     load();
   }catch(e){ if(el){el.textContent='Run failed — '+(e&&e.message||e);el.disabled=false;} }
 }
 // AR aging — best-effort read from QuickBooks; null on any failure (card falls back to Sheet).
-async function loadAR(){ try{ return await getJSON('/ar/aging'); }catch(e){ return null; } }
+async function loadAR(){ try{ return await getJSON('/ar/aging'); }catch(e){ ccFail('AR aging',e); return null; } }
 // AR reminders (Phase 2) — preview-first, per-customer, gated on Brett's tap. Sends via
 // QuickBooks (re-emails the invoice + pay link); paid invoices are re-checked and skipped.
 async function remindAR(i){
