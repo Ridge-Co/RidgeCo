@@ -116,10 +116,8 @@ var BRETTOS_URL   = 'https://brett-os.brett-2f8.workers.dev';
 var PROBES = [
   { name: 'brett-os',       url: BRETTOS_URL },
   { name: 'barrel-co',      url: BARRELCO_URL },
-  { name: 'str-automation', url: STR_URL, body: 'str' },   // body:'str' = also read the JSON answer: open problems / stale ticks become ledger items
+  { name: 'str-automation', url: STR_URL },
   { name: 'pinterest-sync', url: PINTEREST_URL },
-  { name: 'gh-broker',      url: 'https://gh-broker.brett-2f8.workers.dev' },     // answers 401 to everything without its key: 401 proves the code is running
-  { name: 'listing-forge',  url: 'https://listing-forge.brett-2f8.workers.dev' }, // answers 200 to every path: proves only that the Worker is up
 ];
 var CONFIG_TAB    = 'Config';
 var TOKEN_KEY     = 'Scheduler_Token';
