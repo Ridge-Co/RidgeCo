@@ -18785,7 +18785,7 @@ async function aiCreditResumeRun(env, via) {
   if (!probe.ok) {
     if (via === 'admin-button') {   // only when Brett pressed it; the hourly probe stays quiet (no hourly failure rows, no ledger growth)
       try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resume', Skill_Or_Endpoint: 'admin-button', Success: 'FALSE', Notes: `Resume pressed but AI is still paused (kind=${probe.kind})` }); }
-      catch (te) { console.error('ai-credit: resume failure and its telemetry write failed:', schedErrText(te)); }
+      catch (te) { console.error('ai-credit: resume failure and its telemetry write failed:', schedErrText(te)); softNote('telemetry_write_failed:ai_credit_resume', te, 'P2'); }
     }
     return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: probe.error, probe_kind: probe.kind, status: probe.status };
   }
