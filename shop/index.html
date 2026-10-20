@@ -454,10 +454,12 @@ function submit(){
     if (res.status === 409 && d.error === 'closed'){ return loadShop().then(function(){ go('items'); }); }
     if (res.status === 429){ return formErr('We’re getting a lot of orders right now. Please text ' + phone() + ' to order.'); }
     console.error('order failed', res);
+    window.hubReportFailure && window.hubReportFailure('shop:placeOrder', 'order not accepted: HTTP ' + res.status + ' ' + String(res.d && (res.d.error || res.d.message) || 'no detail'));
     formErr('We couldn’t place your order — nothing was charged. Please try again, or text ' + phone() + '.', submit);
   })
   .catch(function(e){
     console.error('order request failed', e);
+    window.hubReportFailure && window.hubReportFailure('shop:placeOrder request', e);
     formErr(e && e.name==='AbortError' ? 'That took too long. Your order may or may not have gone through — please tap Try again (it will not double-order), or text ' + phone() + '.'
       : 'We couldn’t reach the shop — check your connection and try again (it will not double-order), or text ' + phone() + '.', submit);
   })
