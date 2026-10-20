@@ -1159,7 +1159,7 @@ function buildPhotoSection(woId, propAddr, opts) {
     session.unit_label       = d.unit_label;
     session.owner_id         = d.owner_id;
     session.can_submit_wo    = d.can_submit_wo;
-    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){ /* silent-ok: storage blocked, session stays in memory */ }
     if (buttonChanged) {
       var nr = document.getElementById('newRequestBtn');
       if (nr) nr.style.display = d.can_submit_wo ? '' : 'none';
