@@ -32328,7 +32328,7 @@ async function qbSendInvoice(env, body) {
           try {
             const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
             billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
-          } catch (e) { /* best-effort — the invoice still posts, just without a saved send-to */ }
+          } catch (e) { await softFail(env, 'qb_owner_email_lookup', e, 'P2', { ir: ir.ID, owner_qb: ownerQbId }); }   // the invoice still posts, just without a saved send-to
         }
       }
       // Only attach a well-formed address within QuickBooks' 100-char limit. A malformed or
