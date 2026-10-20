@@ -153,6 +153,7 @@ const _hubWorkerCore = {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const url  = new URL(request.url);
     const path = url.pathname;
+    env = __meterReqEnv(env, request, path);   // Oct 19 2026: child env carrying this request's label for the read meter
     env.__STAGING__ = isStaging(env, url);
     // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
     // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
