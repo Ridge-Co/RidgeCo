@@ -33146,7 +33146,7 @@ async function trashDefaultItem(env, token) {
       it = (r && r.Item) || (qbDupId(r) ? { Id: qbDupId(r), Name: 'Trash Service' } : null);
     }
     if (it && it.Id) {
-      try { await setConfigKey(env, { key: 'trash_qb_item_id', value: String(it.Id) }); await setConfigKey(env, { key: 'trash_qb_item_name', value: it.Name || 'Trash Service' }); } catch (e) {}
+      try { await setConfigKey(env, { key: 'trash_qb_item_id', value: String(it.Id) }); await setConfigKey(env, { key: 'trash_qb_item_name', value: it.Name || 'Trash Service' }); } catch (e) { await softFail(env, 'trash_default_item_cache', e, 'P2', { item: String(it.Id) }); }
       return { id: String(it.Id), name: it.Name || 'Trash Service' };
     }
   } catch (e) {}
