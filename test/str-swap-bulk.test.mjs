@@ -138,4 +138,194 @@ const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner
   const before = { sms: W.sms.length, log: rowsOf(W, 'STR_Log').length, av: rowsOf(W, 'STR_Availability').length, trs: JSON.stringify(rowsOf(W, 'STR_Turnovers')) };
   const p = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
   t('preview ok with a plan id and signature', p.ok && /^[a-f0-9]{16}$/.test(p.plan_id) && p.sig && p.action === 'swap', p);
+  const it = p.items[0];
+  t('item will change; Kayla (hand-typed calendar entry) is the displaced cleaner', it.outcome === 'change' && it.displaced.length === 1 && it.displaced[0].name === 'Kayla' && it.displaced[0].source === 'calendar', it);
+  t('calendar plan: remove the hand-typed entry and add Gina Cleaning', it.cal.hand.length === 1 && it.cal.hand[0].summary === 'Kayla Cleaning' && it.cal.title === 'Gina Cleaning' && it.cal.hub_create === true && p.calendar.mode === 'write', it.cal);
+  const gina = p.recipients.find(r => r.key === 'new:1'), kayla = p.recipients.find(r => r.key === 'back:2');
+  t('two recipients: Gina (assigned) and Kayla (backup)', p.recipients.length === 2 && gina && kayla, p.recipients.map(r => r.key));
+  t('Gina text = the stock assigned confirmation for that date', /Gina, you're set for the Sun, Oct 25 turnover at Milam Ridge/.test(gina.text) && /cleaner\.html\?k=TOKGINA/.test(gina.text), gina.text);
+  t('Kayla text = friendly, names Gina and the date, asks for backup, no reply needed', /Kayla/.test(kayla.text) && /Gina's going to cover the Sun, Oct 25 turnover at Milam Ridge, so you're off the hook/.test(kayla.text) && /backup/.test(kayla.text) && /No reply needed/.test(kayla.text), kayla.text);
+  t('no text uses the words primary or rank', !p.recipients.some(r => /primary|rank/i.test(r.text)));
+  t('both are SMS, send now (10am), default ticked', p.recipients.every(r => r.channel === 'sms' && r.can_send && r.send_default && r.timing.mode === 'now'));
+  t('email invite is shown for Gina (existing behaviour) with her address', p.email && p.email.to === 'gina@x.test' && /You're set/.test(p.email.subject), p.email);
+  t('preview WROTE and SENT nothing', W.sms.length === before.sms && rowsOf(W, 'STR_Log').length === before.log && rowsOf(W, 'STR_Availability').length === before.av && JSON.stringify(rowsOf(W, 'STR_Turnovers')) === before.trs && !W.cal.some(c => c.method !== 'GET') && !W.attach.length && rowsOf(W, 'STR_Changes').length === 0);
+  // preview outside the send window shows the hold
+  clock = at(E, '2026-10-20', '22:30');
+  const p2 = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
+  t('outside 8am-9pm the preview says the texts are HELD until 8 AM', p2.window_open === false && p2.recipients.every(r => r.timing.mode === 'hold' && /8:00 AM/.test(r.timing.label) && r.timing.not_before === new Date(at(E, '2026-10-21', '08:00')).toISOString()), p2.recipients.map(r => r.timing));
+  clock = at(E, '2026-10-20', '05:00');
+  const p3 = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
+  t('before 8am the hold is until 8am the same morning', p3.recipients[0].timing.not_before === new Date(at(E, '2026-10-20', '08:00')).toISOString());
+  // request validation
+  t('unknown action / no cleaner / no dates / too many are refused with plain errors', (await preview(E, { action: 'nope', cleaner_id: '1' })).error === 'bad_action' && (await preview(E, { action: 'swap', task_keys: [K25] })).error === 'cleaner_required' && (await preview(E, { action: 'swap', cleaner_id: '1', task_keys: [] })).error === 'no_dates' && (await preview(E, { action: 'swap', cleaner_id: '1', task_keys: Array.from({ length: 41 }, (_, i) => 'k' + i) })).error === 'too_many');
+  t('an unknown cleaner is refused', (await preview(E, { action: 'swap', cleaner_id: '99', task_keys: [K25] })).error === 'cleaner_not_found');
+}
+
+// ═══ 2. apply: happy path, edited text, calendar, audit, idempotency ═══
+{
+  const { W, E } = await setup();
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  const edited = "Kayla, Gina is covering Oct 25 so you are free. Could you be our backup that day? Thanks!";
+  const r = await sendIt(E, p, body, { 'back:2': { send: true, body: '  ' + edited + '\n' } });
+  t('apply ok, status done', r.ok === true && r.status === 'done' && r.counts.done === 1 && !r.errors.length, r);
+  const row = tr(W, K25);
+  t('turnover is now covered by Gina via admin_swap (re-read from the sheet)', row.Status === 'covered' && row.Assigned_Cleaner_ID === '1' && row.Assigned_Via === 'admin_swap', row);
+  t('Kayla is marked Available-as-backup for Oct 25, source admin_swap', markOf(W, '2', '2026-10-25') === 'can' && rowsOf(W, 'STR_Availability').some(a => a.Cleaner_ID === '2' && a.Source === 'admin_swap'));
+  t('Gina got the stock text, Kayla got EXACTLY the edited text', W.sms.length === 2 && W.sms.some(s => s.to === 'Regina Seville' && s.type === 'str_assigned') && W.sms.some(s => s.to === 'Kayla' && s.text === edited), W.sms);
+  t('texts went through the gated path with the quiet-hours bypass the other cleaner texts use', W.gated.length === 2 && W.gated.every(g => g.bypassQuietHours === true && g.recipient_type === 'vendor'));
+  t('Gina got the invite email with a calendar file', W.attach.length === 1 && W.attach[0].to === 'gina@x.test' && /BEGIN:VEVENT/.test(Buffer.from(W.attach[0].attachment.base64Data, 'base64').toString()), W.attach.length);
+  const live = W.calEvents;
+  t('calendar: the hand-typed "Kayla Cleaning" is gone', !live.some(e => e.summary === 'Kayla Cleaning'), live.map(e => e.summary));
+  const gc = live.filter(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-10-25');
+  t('calendar: exactly one all-day "Gina Cleaning" on Oct 25 carrying ridgecoStr properties', gc.length === 1 && gc[0].extendedProperties.private.ridgecoStr === '1' && gc[0].extendedProperties.private.ridgecoStrKey === K25 && gc[0].extendedProperties.private.ridgecoStrKind === 'cover' && !gc[0].start.dateTime, gc);
+  t('calendar: other hand-typed entries untouched', live.some(e => e.id === 'h1') && live.some(e => e.id === 'h3'));
+  t('result says the calendar was changed and verified', r.calendar.status === 'done' && r.calendar.items[K25].status === 'done', r.calendar);
+  const log = rowsOf(W, 'STR_Log');
+  t('audit rows: admin_swap for the date + admin_change for the plan', log.some(l => l.Event === 'admin_swap' && l.Task_Key === K25 && /Kayla \(calendar entry\) -> Gina/.test(l.Detail)) && log.some(l => l.Event === 'admin_change' && /done/.test(l.Detail)) && log.some(l => l.Event === 'swap_text_sent'), log.map(l => l.Event));
+  const ch = rowsOf(W, 'STR_Changes');
+  t('plan record saved as done with the result', ch.length === 1 && ch[0].Status === 'done' && /"status":"done"/.test(ch[0].Result), ch);
+  // Send twice: nothing happens a second time
+  const smsN = W.sms.length, calN = W.cal.length, logN = rowsOf(W, 'STR_Log').length;
+  const r2 = await sendIt(E, p, body, { 'back:2': { send: true, body: edited } });
+  t('second Send of the same preview is a no-op that says so', r2.ok && r2.duplicate === true && /already applied/.test(r2.message) && r2.result && r2.result.status === 'done', r2);
+  t('second Send: no new text, no calendar call, no log row, no new plan row', W.sms.length === smsN && W.cal.length === calN && rowsOf(W, 'STR_Log').length === logN && rowsOf(W, 'STR_Changes').length === 1);
+  // the scheduler does not undo it or re-offer, and does not duplicate calendar events
+  clock += 15 * 60000; const tk = await E.strTick({}, {});
+  t('next scheduler tick leaves it alone (still Gina, no offers, no new calendar writes for it)', tr(W, K25).Assigned_Cleaner_ID === '1' && tr(W, K25).Status === 'covered' && !rowsOf(W, 'STR_Offers').some(o => o.Task_Key === K25) && W.calEvents.filter(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-10-25').length === 1, tk.errors);
+  // preview again now: already hers
+  const p4 = await preview(E, body);
+  t('previewing the same swap again shows "already has this one" and no texts', p4.items[0].outcome === 'skip' && /already has/.test(p4.items[0].reason) && p4.recipients.length === 0 && p4.counts.change === 0);
+}
+
+// ═══ 3. stale preview, bad texts, missing preview ═══
+{
+  const { W, E } = await setup();
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  // someone else changes the same turnover after the preview (Brett assigns Rachel with the old assign button)
+  const a = await J(E.strAdminAssign({}, { task_key: K25, cleaner_id: '3' })); t('setup: old assign still works (Rachel takes Oct 25)', a.ok, a);
+  W.sms.length = 0; W.cal.length = 0;
+  const r = await sendIt(E, p, body);
+  t('stale preview: refused with a plain message, nothing changed or sent', r.ok === false && r.error === 'stale_preview' && /Press Preview again/.test(r.message) && tr(W, K25).Assigned_Cleaner_ID === '3' && !W.sms.length && !W.cal.some(c => c.method !== 'GET'), r);
+  const p2 = await preview(E, body);
+  const miss = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p2.plan_id, sig: p2.sig })));
+  t('apply without the texts object is refused (the page must say what to do with each text)', miss.ok === false && miss.error === 'texts_missing');
+  const texts = Object.fromEntries(p2.recipients.map(x => [x.key, { send: true, body: x.text }]));
+  const noprev = await J(E.strChangeApply({}, Object.assign({}, body, { texts })));
+  t('apply without a plan id is refused', noprev.ok === false && noprev.error === 'bad_plan');
+  const bad = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p2.plan_id, sig: 'deadbeef', texts })));
+  t('apply with a wrong signature is refused as stale', bad.error === 'stale_preview');
+  const unk = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p2.plan_id, sig: p2.sig, texts: Object.assign({ 'new:9': { send: true, body: 'x' } }, texts) })));
+  t('a text for someone not in the plan is refused', unk.error === 'texts_unknown');
+  const k = Object.keys(texts)[0];
+  const empty = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p2.plan_id, sig: p2.sig, texts: Object.assign({}, texts, { [k]: { send: true, body: '   ' } }) })));
+  t('an empty text that is ticked to send is refused', empty.error === 'text_empty');
+  const long = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p2.plan_id, sig: p2.sig, texts: Object.assign({}, texts, { [k]: { send: true, body: 'x'.repeat(E.STR_TEXT_MAX + 1) } }) })));
+  t('an over-long text is refused', long.error === 'text_too_long');
+  t('none of those refusals claimed the plan or changed anything', rowsOf(W, 'STR_Changes').length === 0 && tr(W, K25).Assigned_Cleaner_ID === '3' && !W.sms.length);
+  // control characters in an edited text are cleaned, not sent raw
+  const ok = await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p2.plan_id, sig: p2.sig, texts: Object.assign({}, texts, { [k]: { send: true, body: 'Hi\u0000 there\n\nfriend\u0007' } }) })));
+  t('control characters are stripped before sending', ok.ok && W.sms.some(s => s.text === 'Hi there friend'), W.sms.map(s => s.text));
+}
+
+// ═══ 4. calendar faults: loud, the swap still completes ═══
+{
+  // 4a. Google refuses writes (service account lacks "Make changes to events")
+  const { W, E } = await setup(); W.calMode = 'perm';
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+  t('permission denied: the Hub-side swap still completed', tr(W, K25).Assigned_Cleaner_ID === '1' && markOf(W, '2', '2026-10-25') === 'can' && r.counts.done === 1, r);
+  t('permission denied: status partial, calendar failed with the plain-English fix and exact by-hand steps', r.ok === false && r.status === 'partial' && r.calendar.status === 'failed' && r.calendar.code === 'calendar_failed' && /Make changes to events/.test(r.calendar.message) && r.calendar.manual.some(m => /delete "Kayla Cleaning"/.test(m) && /add an all-day "Gina Cleaning"/.test(m)) && r.errors.some(e => e.step === 'calendar_failed' && /Do this by hand/.test(e.error)), r.calendar);
+  t('permission denied: texts were still sent', W.sms.length === 2);
+  t('permission denied: telemetry failure row + Brett alerted', W.telemetry.some(x => x.Success === 'FALSE' && /calendar/i.test(x.Notes)) && (W.brett.length > 0 || W.emails.length > 0), { tel: W.telemetry.length, b: W.brett.length });
+  t('permission denied: it did not hammer Google (stopped after the first refusal)', W.cal.filter(c => c.method !== 'GET').length === 1, W.cal.map(c => c.method));
+  t('permission denied: the hand-typed Kayla entry is still there (never half-edited)', W.calEvents.some(e => e.id === 'h2'));
+  t('permission denied: audit log shows swap done', rowsOf(W, 'STR_Log').some(l => l.Event === 'admin_swap'));
+}
+{
+  // 4b. Google says OK but the change is not visible when re-read
+  const { W, E } = await setup(); W.calMode = 'ghost';
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+  t('write accepted but not visible: caught by the re-read, reported as failed, not success', r.calendar.status === 'failed' && /Re-read check failed/.test(r.calendar.items[K25].message) && r.status === 'partial' && r.ok === false, r.calendar);
+}
+{
+  // 4c. calendar switch OFF: Hub-side done, loud warning with exact steps, no Google writes
+  const { W, E } = await setup({ STR_CAL_WRITE_ENABLED: 'FALSE' });
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  t('switch OFF: the preview says so up front', p.calendar.mode === 'off' && /NOT allowed to change the cleaning calendar/.test(p.calendar.note) && p.calendar.manual.length === 1, p.calendar);
+  const r = await sendIt(E, p, body);
+  t('switch OFF: assignment + texts done, calendar NOT changed, by-hand steps given, no Google writes', r.status === 'done' && r.calendar.status === 'not_changed' && r.warnings.some(w => /calendar was NOT changed/i.test(w) && /delete "Kayla Cleaning"/.test(w)) && !W.cal.some(c => c.method !== 'GET') && W.calEvents.some(e => e.id === 'h2'), r);
+}
+{
+  // 4d. the calendar cannot be read at all: refuse BEFORE changing anything
+  const { W, E } = await setup(); W.calMode = 'down';
+  const p = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
+  t('calendar unreadable: preview refuses plainly (nothing is guessed)', p.ok === false && p.error === 'feed_unreadable' && /nothing can be changed safely/.test(p.message), p);
+}
+{
+  // 4e. calendar shapes the Hub must not touch / must handle
+  const { W, E } = await setup();
+  W.calEvents.push(W.ev('m1', 'Michele Cleaning', '2026-11-03'));
+  W.calEvents.find(e => e.id === 'h2').summary = 'Kayla Cleaning';
+  W.calEvents.push({ id: 'multi', summary: 'Kayla Cleaning', start: { date: '2026-10-25' }, end: { date: '2026-10-27' } }); // 2-day entry: not positively "that date"
+  const p = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' }), it = p.items[0];
+  t('a multi-day "Kayla Cleaning" is never deleted: listed for Brett to fix by hand', it.cal.hand.length === 1 && it.cal.hand[0].id === 'h2' && it.notes.some(n => /not a plain one-day/.test(n)), it);
+  const r = await sendIt(E, p, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
+  t('the multi-day entry survived the swap', W.calEvents.some(e => e.id === 'multi') && !W.calEvents.some(e => e.id === 'h2'));
+}
+{
+  // 4f. a Hub-written entry for a hub-assigned task is renamed, not duplicated; an unknown hand-typed name is replaced without texting anyone
+  const { W, E } = await setup();
+  const a = await J(E.strAdminAssign({}, { task_key: K108, cleaner_id: '2' })); // Kayla takes Nov 8 the old way
+  clock += 15 * 60000; await E.strTick({}, {}); // tick writes "Kayla Cleaning" (Hub-owned) for it
+  const hubEv = W.calEvents.filter(e => e.extendedProperties && e.extendedProperties.private.ridgecoStrKey === K108);
+  t('setup: Hub wrote one "Kayla Cleaning" for Nov 8', a.ok && hubEv.length === 1 && hubEv[0].summary === 'Kayla Cleaning', hubEv);
+  W.cal.length = 0;
+  const body = { action: 'swap', task_keys: [K108], cleaner_id: '1' }, p = await preview(E, body);
+  t('hub-assigned holder: Kayla displaced (source hub), Hub entry will be RENAMED', p.items[0].displaced[0].source === 'hub' && p.items[0].cal.hub_patch === hubEv[0].id && !p.items[0].cal.hub_create && p.items[0].cal.hand.length === 0, p.items[0].cal);
+  const r = await sendIt(E, p, body);
+  const now = W.calEvents.filter(e => e.extendedProperties && e.extendedProperties.private.ridgecoStrKey === K108);
+  t('renamed in place to "Gina Cleaning" (one event, same id)', r.ok && now.length === 1 && now[0].summary === 'Gina Cleaning' && now[0].id === hubEv[0].id && W.cal.filter(c => c.method === 'PATCH').length === 1 && !W.cal.some(c => c.method === 'POST'), { r: r.status, now });
+  t('Kayla (hub holder) marked backup and told', markOf(W, '2', '2026-11-08') === 'can' && W.sms.some(s => s.to === 'Kayla' && /Gina's going to cover the Sun, Nov 8/.test(s.text)));
+  // unknown name on the calendar
+  const b2 = { action: 'swap', task_keys: ['milam-ridge|checkout|2026-11-12'], cleaner_id: '1' };
+  W.calEvents.push(W.ev('mm', 'Michele Cleaning', '2026-11-12')); W.sms.length = 0;
+  const p2 = await preview(E, b2);
+  t('an unknown calendar name (Michele) is shown as replaced with no text and no mark', p2.items[0].unmatched.join() === 'Michele' && p2.items[0].displaced.length === 0 && p2.recipients.length === 1 && p2.recipients[0].key === 'new:1' && /not one of your cleaners/.test(p2.items[0].sentence), p2.items[0]);
+  const r2 = await sendIt(E, p2, b2);
+  t('...and applying removes her entry and texts only Gina', r2.ok && !W.calEvents.some(e => e.id === 'mm') && W.sms.length === 1 && W.sms[0].to === 'Regina Seville', r2);
+}
+{
+  // 4g. the red "not covered" block is removed when an uncovered turnover is assigned
+  const { W, E } = await setup({}, w => { w.stays.push({ start: '2026-11-13', end: '2026-11-15', guest: 'Q' }); });
+  const K = 'milam-ridge|checkout|2026-11-12';
+  // make it uncovered and inside the 14-day red-block window by moving "today" next to it
+  clock = at(E, '2026-10-31', '10:00'); await E.strTick({}, {});
+  const reds = W.calEvents.filter(e => e.summary === 'BOOKING NOT COVERED FOR CLEANING' && e.extendedProperties.private.ridgecoStrKey === K);
+  t('setup: the Hub put a red block on Nov 12', reds.length === 1, W.calEvents.map(e => e.summary));
+  const body = { action: 'swap', task_keys: [K], cleaner_id: '1' }, p = await preview(E, body);
+  t('open turnover: preview plans to remove the red block and add Gina Cleaning', p.items[0].cal.hub_delete.length === 1 && p.items[0].cal.hub_create === true && p.items[0].displaced.length === 0, p.items[0].cal);
+  const r = await sendIt(E, p, body);
+  t('after applying: red block gone, one Gina Cleaning, no "backup" text (nobody displaced)', r.ok && !W.calEvents.some(e => e.summary === 'BOOKING NOT COVERED FOR CLEANING' && e.extendedProperties.private.ridgecoStrKey === K) && W.calEvents.filter(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-11-12').length === 1 && r.texts.length === 1, r);
+}
+
+// ═══ 5. text faults ═══
+{
+  const { W, E } = await setup(); W.failSms = true;
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+  t('text failure: the swap itself stands (state + calendar done)', tr(W, K25).Assigned_Cleaner_ID === '1' && r.calendar.status === 'done' && r.counts.done === 1);
+  t('text failure: shown as FAILED with "tell them yourself", status partial, not ok', r.ok === false && r.status === 'partial' && r.texts.every(x => x.status === 'failed') && r.errors.some(e => e.step === 'text_failed' && /Tell them yourself/.test(e.error)) && /FAILED for Gina, Kayla/.test(r.summary), r);
+  t('text failure: telemetry + Brett alerted + audit row', W.telemetry.some(x => x.Success === 'FALSE' && /text/i.test(x.Skill_Or_Endpoint + x.Notes)) && rowsOf(W, 'STR_Log').some(l => l.Event === 'swap_text_failed'), W.telemetry.map(x => x.Skill_Or_Endpoint));
+}
+{
+  // Twilio globally off / STR texts off: preview warns, apply does the work and says nobody was texted
+  for (const [over, mode, rx] of [[{ TWILIO_ENABLED: 'FALSE' }, 'twilio_off', /switched off for the whole Hub/], [{ STR_SMS_ENABLED: 'FALSE' }, 'off', /switched OFF/]]) {
+    const { W, E } = await setup(over); const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    t(mode + ': preview shows nobody can be texted and why', p.send_mode === mode && p.recipients.every(r => !r.can_send && rx.test(r.reason)) && p.warnings.length >= 0, p.recipients.map(r => r.reason));
+    const r = await sendIt(E, p, body);
+    t(mode + ': changes applied, nobody texted, loud warnings (not a silent skip)', tr(W, K25).Assigned_Cleaner_ID === '1' && !W.sms.length && r.texts.every(x => x.status === 'not_sent') && r.warnings.filter(w => /was NOT texted/.test(w)).length === 2, r);
+  }
+}
+{
+  // a cleaner who cannot be texted (no phone / opted out) - the rest still works
+  const { W, E } = await setup({}, w => { w.tabs.get('Vendors')[2][2] = ''; }); // Kayla's phone removed
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
 //@@T@@
