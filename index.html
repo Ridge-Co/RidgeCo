@@ -2657,7 +2657,7 @@ function openWODetail(woId) {
           '<div style="font-size:10px;color:var(--muted);margin-top:4px">Never shown to the tenant. Only the vendor actually assigned to this WO ever sees this, and only their own status.</div>';
         var db2 = document.getElementById('detail-body');
         if (db2) db2.insertAdjacentElement('afterbegin', mkDiv);
-      }).catch(function(){});
+      }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-detail-master-key', e); });
     }
   }
 
