@@ -162,7 +162,7 @@ document.getElementById('login-input').addEventListener('keydown',function(e){ i
 function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').classList.remove('hide');
-  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('bulk-importer:version-display', e); });
   loadInspCustomers();
 }
 
