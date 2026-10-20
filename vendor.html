@@ -860,7 +860,7 @@ function awRemoveFile(i, j) {
   var f = _aw.items[i].files[j];
   if (!f) return;
   if (f.done) { toast(t('That photo is already uploaded.'), 'error'); return; }
-  try { URL.revokeObjectURL(f.url); } catch (e) {}
+  try { URL.revokeObjectURL(f.url); } catch (e) { /* silent-ok: preview URL already released */ }
   _aw.items[i].files.splice(j, 1);
   awRender();
 }
