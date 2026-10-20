@@ -34914,8 +34914,9 @@ async function strRenderText(ctx, type, tokens) {
   return renderTemplate(tpl && tpl.Body ? tpl.Body : STR_DEFAULT_TEXTS[type], tokens).replace(/\s+/g, ' ').trim();
 }
 // Text one cleaner through the gated chokepoint. Returns { ok, sent, mode, queueId, detail } and NEVER throws.
-async function strTextCleaner(ctx, c, type, tokens, task) {
-  const text = await strRenderText(ctx, type, tokens);
+async function strTextCleaner(ctx, c, type, tokens, task) { return strSendCleanerText(ctx, c, type, await strRenderText(ctx, type, tokens)); }
+// The send half, split out Oct 20 2026 so the admin swap flow can send Brett's EDITED wording through the very same gate.
+async function strSendCleanerText(ctx, c, type, text) {
   if (!ctx.S.sms) return { ok: false, off: true, text, detail: 'STR_SMS_ENABLED is FALSE - would have sent: ' + text };
   try {
     const o = { message_type: type, recipient_type: 'vendor', vendor: c.vendor, message_body: text, property_address: ctx.S.label, bypassQuietHours: true };
