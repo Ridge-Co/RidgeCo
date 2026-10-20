@@ -30673,7 +30673,7 @@ async function receiptDuplicateAuditFlags(env, url) {
   const status = url && url.searchParams.get('status');
   const [rows, receipts] = await Promise.all([
     fetchTab(env, 'Receipt_Duplicate_Audit'),
-    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTabSoft(env, 'Receipts', 'receipt_duplicate_audit_flags'),
   ]);
   let out = rows.filter(r => r.Active !== 'FALSE');
   if (status && status !== 'all') out = out.filter(r => (r.Status || 'pending') === status);
