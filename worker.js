@@ -9027,7 +9027,7 @@ function woDupSerialize(fn) {
   const run = __woDupChain.then(fn);
   // The chain only needs to know the previous job FINISHED; the caller still gets the real result
   // or the real error from `run`. The rejection handler logs so a failure is never invisible.
-  __woDupChain = run.then(function () {}, function (e) { console.error('[wo-dup] serialized job failed: ' + ((e && e.message) || e)); });
+  __woDupChain = run.then(() => undefined, (e) => { softNote('wo_dup_serialized_job_failed', e, 'P1'); });
   return run;
 }
 
