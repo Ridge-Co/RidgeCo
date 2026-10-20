@@ -13386,7 +13386,11 @@ async function updateWOField(env, woId, fieldName, value) {
     const idCol=idColIndex(headers), rowIdx=rows.findIndex((r,i)=>i>0&&r[idCol]===woId); if(rowIdx===-1) return;
     const colLetter=colIdx<26?String.fromCharCode(65+colIdx):'A'+String.fromCharCode(65+colIdx-26);
     await sheetsRequest(env,'PUT',`/values/Work_Orders!${colLetter}${rowIdx+1}?valueInputOption=RAW`,{values:[[value]]});
-  } catch(e) { /* non-fatal */ }
+  } catch(e) {
+    // Still non-throwing (callers rely on that), but the lost write is reported and handed back as {ok:false} so a caller that cares can say so.
+    const r = await softFail(env, 'update_wo_field_failed', e, 'P1', { ref: woId, field: fieldName });
+    return { ok: false, error: r.error };
+  }
 }
 
 // Retired July 20, 2026 — the Make.com → QBO webhook path is dead (Make stopped
