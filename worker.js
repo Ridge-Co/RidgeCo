@@ -17124,6 +17124,8 @@ async function schedRunNext(env, ctx, opts) {
   const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
   const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
   if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
+  const stamped = schedStampFirstSeen(st, now, jobs);   // Oct 20 2026: new / re-enabled jobs get a grace clock (persisted by the claim or heartbeat write below)
+  if (stamped.length) base.grace_stamped = stamped;
   const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
   const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
