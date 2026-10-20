@@ -36722,6 +36722,11 @@ async function strPendingRelease(ctx, p, c, who) {
   await strRaiseAlert(ctx, { key: `prel|${p.Task_Key}|${c.ID}|${ctx.now}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, pic + '.', 'The next cleaner is asked next.'].join('\n'), sms: `${head}. ${pic}. ${PORTAL_BASE}/str-cleaning.html` });
   return { days };
 }
+// Ask the next cleaner right now when this call still has subrequests to spare; otherwise the scheduler does it within ~15 minutes (never skipped).
+async function strPendingAdvance(ctx, p, warnings) {
+  if (ctx.subS0 !== undefined && strSubUsed(ctx) + 22 > 46) { warnings.push('The next cleaner will be asked by the scheduler within about 15 minutes.'); return null; }
+  try { return await strAdvanceTask(ctx, p); } catch (e) { warnings.push('The next cleaner could not be asked right away (' + strErrText(e) + '); the scheduler will retry.'); await strSystemAlert(ctx.env, 'advance_pending', strErrText(e)); return null; }
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
