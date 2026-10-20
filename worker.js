@@ -11528,7 +11528,13 @@ async function qbUndoSend(env, body) {
         await updateRow(env, LOAN_LEDGER_TAB, entry.ID, { Active: 'FALSE' });
         loanReversed = Math.abs(parseFloat(entry.Amount) || 0);
       }
-    } catch (e) { /* no ledger tab / nothing to reverse — not fatal */ }
+    } catch (e) {
+      // No ledger tab yet = nothing to reverse. Any other failure means a loan deduction that belonged to the deleted bill is still on the books.
+      if (!isMissingTabError(e)) {
+        loanReverseError = 'QuickBooks was undone, but reversing the vendor loan-ledger deduction failed (' + String((e && e.message) || e).slice(0, 120) + ') — check the ' + LOAN_LEDGER_TAB + ' tab for bill ' + (ir.Bill_ID || '?') + '.';
+        await softFail(env, 'qb_undo_loan_reversal_failed', e, 'P0', { ref: ir.Bill_ID || ir.ID });
+      }
+    }
 
     // A signed-proposal final billing: put its payments back to pending so they can be billed again
     // (otherwise the proposal would show as fully invoiced against a QuickBooks invoice that is gone).
