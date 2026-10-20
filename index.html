@@ -927,11 +927,189 @@ window.addEventListener('pageshow', function(e){
         <div class="dl-row"><button type="button" class="btn secondary small" style="min-height:44px" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button></div>
       </div>
     </details>
-    <div class="section-title">TROUBLESHOOTING CACHE</div>
-    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review.</p>
-    <button class="btn secondary small" onclick="loadCache()" style="margin-bottom:12px">↻ Refresh Cache List</button>
-    <div id="cache-list"><div class="loading">Click refresh to load</div></div>
+    <details class="dl-group" data-dl-key="cache">
+      <summary><span class="dl-h">Troubleshooting cache</span><span class="dl-sub">Saved AI answers, flag the ones that need review</span></summary>
+      <div class="dl-body">
+        <div class="dl-row"><button type="button" class="btn secondary small" style="min-height:44px" onclick="loadCache()">↻ Refresh Cache List</button></div>
+        <div id="cache-list"><div class="loading">Click refresh to load</div></div>
+      </div>
+    </details>
+    </section>
   </div>
+  <script>
+  // TOOLS & LOG page behaviour (Oct 20 2026): pinned "Most used", tool search, collapsible sections remembered per viewer.
+  // Progressive enhancement: every tool button works with none of this running. Saved layout lives in localStorage
+  // (mh_dl_pins, mh_dl_open), always inside try/catch; if the browser refuses storage the page says so instead of hiding it.
+  function dlLoadFailed(elId, what, where, err, retryCall) {
+    // Never silent (Oct 1 rule): shown on screen with a Retry, written to the Error Log, and reported to the failure ledger.
+    var el = document.getElementById(elId);
+    var msg = (err && err.message) || String(err || 'unknown error');
+    if (typeof logError === 'function') logError(what, msg);
+    api('POST', '/failure/report', { system: 'hub', where: where, ref: 'devlog', message: what + ': ' + msg }).catch(function (e2) { if (typeof logError === 'function') logError('failure/report', (e2 && e2.message) || e2); });
+    if (!el) return;
+    el.innerHTML = '<div style="padding:12px;border:2px solid var(--danger);border-radius:8px;color:var(--danger);font-size:13px">⚠ ' + esc(what) + ': ' + esc(msg) +
+      ' <button type="button" class="btn small" style="margin-left:8px;min-height:44px" onclick="' + retryCall + '">Retry</button></div>';
+  }
+  (function () {
+    var page = document.getElementById('page-devlog'); if (!page) return;
+    var LS_PINS = 'mh_dl_pins', LS_OPEN = 'mh_dl_open';
+    var DEFAULT_PINS = ['action-center', 'scope-creator', 'receipt-reconciler', 'message-queue', 'proposals', 'field-inspection', 'signed-proposals', 'command-center'];
+    var query = '';
+    // First visit on a phone: tool groups start closed so the page is short (pinned tools are right at the top). Change to false to open them.
+    var PHONE_GROUPS_START_CLOSED = true;
+    function startsOpen() { return !(PHONE_GROUPS_START_CLOSED && window.matchMedia && window.matchMedia('(max-width: 600px)').matches); }
+    function $(id) { return document.getElementById(id); }
+    function note(msg) { if (typeof logError === 'function') logError('Tools page', msg); }
+    function storageFailed() { var n = $('dl-storage-note'); if (n) n.hidden = false; }
+    function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { storageFailed(); return null; } }
+    function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { storageFailed(); } }
+    function readJSON(k, fallback) {
+      var raw = lsGet(k); if (raw == null) return fallback;
+      try { var v = JSON.parse(raw); return v == null ? fallback : v; }
+      catch (e) { note('Saved layout "' + k + '" was unreadable, using the default. ' + e.message); return fallback; }
+    }
+    function safe(label, fn) { return function () { try { return fn.apply(this, arguments); } catch (e) { note(label + ' failed: ' + ((e && e.message) || e)); } }; }
+    function slice(list) { return Array.prototype.slice.call(list); }
+
+    // ── pins ──
+    function getPins() { var p = readJSON(LS_PINS, null); return Array.isArray(p) ? p : DEFAULT_PINS.slice(); }
+    function tileByKey(k) { return page.querySelector('.dl-grid .dl-tool[data-tool="' + k + '"]'); }
+    function syncStars() {
+      var pins = getPins();
+      slice(page.querySelectorAll('.dl-tool')).forEach(function (t) {
+        var star = t.querySelector('.dl-star'), btn = t.querySelector('.dl-tool-btn'); if (!star || !btn) return;
+        var on = pins.indexOf(t.getAttribute('data-tool')) >= 0, label = btn.textContent.trim();
+        star.setAttribute('aria-pressed', on ? 'true' : 'false');
+        star.textContent = on ? '★' : '☆';
+        star.title = on ? 'Unpin from Most used' : 'Pin to Most used';
+        star.setAttribute('aria-label', (on ? 'Unpin ' : 'Pin ') + label + (on ? ' from Most used' : ' to Most used'));
+      });
+    }
+    function renderPins() {
+      var host = $('dl-pin-grid'); if (!host) return;
+      var pins = getPins(), n = 0; host.innerHTML = '';
+      pins.forEach(function (k) {
+        var t = tileByKey(k);
+        if (!t) { note('Pinned tool "' + k + '" no longer exists; skipped.'); return; }
+        var c = t.cloneNode(true); c.removeAttribute('hidden'); c.setAttribute('data-clone', '1');
+        var cb = c.querySelector('.dl-tool-btn'), cd = t.querySelector('.dl-desc'); if (cb && cd) cb.title = cd.textContent;
+        host.appendChild(c); n++;
+      });
+      var empty = $('dl-pin-empty'); if (empty) empty.hidden = n > 0;
+      var cnt = $('dl-pin-count'); if (cnt) { cnt.textContent = String(n); cnt.hidden = !n; }
+      syncStars();
+    }
+    page.addEventListener('click', safe('Pin toggle', function (e) {
+      var star = e.target.closest && e.target.closest('.dl-star'); if (!star) return;
+      var t = star.closest('.dl-tool'), key = t && t.getAttribute('data-tool'); if (!key) return;
+      var pins = getPins(), i = pins.indexOf(key);
+      if (i >= 0) pins.splice(i, 1); else pins.push(key);
+      lsSet(LS_PINS, JSON.stringify(pins)); renderPins();
+    }));
+
+    // ── open / closed sections, remembered per viewer ──
+    function savedOpen() { var s = readJSON(LS_OPEN, {}); return (s && typeof s === 'object' && !Array.isArray(s)) ? s : {}; }
+    function restoreOpen() {
+      var s = savedOpen();
+      slice(page.querySelectorAll('details[data-dl-key]')).forEach(function (d) {
+        var k = d.getAttribute('data-dl-key');
+        if (Object.prototype.hasOwnProperty.call(s, k)) d.open = !!s[k]; else if (d.hasAttribute('data-tools')) d.open = startsOpen();
+      });
+    }
+    page.addEventListener('click', safe('Remember section', function (e) {
+      var sm = e.target.closest && e.target.closest('summary'); if (!sm || query) return;
+      var d = sm.parentNode, k = d && d.getAttribute && d.getAttribute('data-dl-key'); if (!k) return;
+      setTimeout(function () { var s = savedOpen(); s[k] = d.open; lsSet(LS_OPEN, JSON.stringify(s)); }, 0);
+    }));
+
+    // ── search ──
+    var groups = slice(page.querySelectorAll('details.dl-group[data-tools]'));
+    var allTiles = slice(page.querySelectorAll('.dl-grid .dl-tool'));
+    allTiles.forEach(function (t) {
+      var g = t.closest('details'), gt = g ? g.querySelector('.dl-h').textContent : '';
+      t.setAttribute('data-search', (t.querySelector('.dl-tool-btn').textContent + ' ' + t.querySelector('.dl-desc').textContent + ' ' + gt).toLowerCase());
+    });
+    var total = $('dl-tool-total'); if (total) total.textContent = String(allTiles.length);
+    function applySearch() {
+      var words = query.toLowerCase().split(/\s+/).filter(Boolean), shown = 0, saved = savedOpen();
+      groups.forEach(function (g) {
+        var ts = slice(g.querySelectorAll('.dl-tool')), m = 0;
+        ts.forEach(function (t) {
+          var hay = t.getAttribute('data-search') || '', ok = words.every(function (w) { return hay.indexOf(w) >= 0; });
+          t.hidden = !ok; if (ok) m++;
+        });
+        shown += m;
+        g.hidden = words.length > 0 && m === 0;
+        var c = g.querySelector('.dl-count'); if (c) c.textContent = words.length ? (m + ' of ' + ts.length) : (ts.length + ' tools');
+        if (words.length) g.open = m > 0;
+        else { var k = g.getAttribute('data-dl-key'); g.open = Object.prototype.hasOwnProperty.call(saved, k) ? !!saved[k] : startsOpen(); }
+      });
+      var pinned = $('dl-pinned'); if (pinned) pinned.hidden = words.length > 0;
+      var st = $('dl-search-status');
+      if (st) {
+        if (!words.length) st.textContent = '';
+        else if (!shown) st.innerHTML = 'No tool matches "' + esc(query) + '". <button type="button" id="dl-clear-search">Clear search</button>';
+        else st.textContent = 'Showing ' + shown + ' of ' + allTiles.length + ' tools';
+      }
+    }
+    var box = $('dl-search');
+    if (box) {
+      box.addEventListener('input', safe('Search', function () { query = box.value.trim(); applySearch(); }));
+      box.addEventListener('keydown', safe('Search', function (e) { if (e.key === 'Escape' && box.value) { box.value = ''; query = ''; applySearch(); } }));
+    }
+    page.addEventListener('click', safe('Clear search', function (e) {
+      if (e.target && e.target.id === 'dl-clear-search' && box) { box.value = ''; query = ''; applySearch(); box.focus(); }
+    }));
+
+    // ── counts in the section headers (read what the page's own loaders already drew) ──
+    var updateCounts = safe('Counts', function () {
+      var el = $('error-log-list'), g = page.querySelector('details[data-dl-key="errors"]'), c = $('dl-errors-count');
+      if (el && c) {
+        var n = slice(el.children).filter(function (x) { return !x.classList.contains('loading'); }).length;
+        c.textContent = n ? (n + ' recorded') : 'none';
+        c.style.color = n ? 'var(--danger)' : ''; c.style.fontWeight = n ? '700' : '';
+        if (g && !Object.prototype.hasOwnProperty.call(savedOpen(), 'errors') && !query) g.open = n > 0;
+      }
+      var wc = $('dl-wishlist-count');
+      if (wc && Array.isArray(window.wishlistItems)) {
+        var open = window.wishlistItems.filter(function (i) { var s = (typeof wlStatusOf === 'function') ? wlStatusOf(i) : (i.Status || 'Active'); return s !== 'Done' && s !== 'Not applicable'; }).length;
+        wc.textContent = open + ' open';
+      }
+    });
+    ['error-log-list', 'wishlist-list'].forEach(function (id) { var el = $(id); if (el) new MutationObserver(updateCounts).observe(el, { childList: true, subtree: true }); });
+
+    // ── "Needs your attention": shown only while a list has something to show (or failed to load) ──
+    var QUIET = { 'vtr-review-list': 'Nothing waiting on your review.', 'vendor-access-requests-list': 'No pending requests.' };
+    function listShows(id) {
+      var el = $(id); if (!el) return false;
+      var t = (el.textContent || '').trim();
+      // Anything that is not clearly "empty" or "still loading" stays visible, so an error or a new message is never hidden.
+      return !(t === '' || /^Loading/i.test(t) || t === QUIET[id]);
+    }
+    var updateAttn = safe('Needs-attention strip', function () {
+      var a = listShows('vtr-review-list'), b = listShows('vendor-access-requests-list');
+      var w1 = $('vtr-review-wrap'), w2 = $('dl-var-wrap'), sec = $('dl-attn'), pill = $('dl-attn-count');
+      if (w1) w1.hidden = !a; if (w2) w2.hidden = !b; if (sec) sec.hidden = !(a || b);
+      var n = 0;
+      if (a) n += slice(document.querySelectorAll('#vtr-review-list button[id^="vtr-review-btn-"]')).length;
+      if (b && Array.isArray(window.vendorAccessRequests)) n += window.vendorAccessRequests.length;
+      if (pill) { pill.textContent = n ? String(n) : '!'; pill.hidden = !(a || b); }
+    });
+    ['vtr-review-list', 'vendor-access-requests-list'].forEach(function (id) { var el = $(id); if (el) new MutationObserver(updateAttn).observe(el, { childList: true, subtree: true, characterData: true }); });
+
+    // ── bring the result of a tool you just ran into view ──
+    var resultEl = $('admin-tool-result'), scrollTimer = null;
+    if (resultEl) new MutationObserver(safe('Show result', function () {
+      if (!(resultEl.textContent || '').trim()) return;
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(function () { if (resultEl.scrollIntoView) resultEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 60);
+    })).observe(resultEl, { childList: true, subtree: true, characterData: true });
+
+    // ── start ──
+    restoreOpen(); renderPins(); applySearch(); updateCounts(); updateAttn();
+    page.classList.add('dl-js');
+  })();
+  </script>
 </div>
 
 <!-- NEW WORK ORDER MODAL -->
