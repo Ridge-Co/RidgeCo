@@ -34581,6 +34581,7 @@ async function strTextCleaner(ctx, c, type, tokens, task) { return strSendCleane
 // The send half, split out Oct 20 2026 so the admin swap flow can send Brett's EDITED wording through the very same gate.
 async function strSendCleanerText(ctx, c, type, text) {
   if (!ctx.S.sms) return { ok: false, off: true, text, detail: 'STR_SMS_ENABLED is FALSE - would have sent: ' + text };
+  ctx.subX = (ctx.subX || 0) + 2; // the Twilio call and its wrapper overhead count against the per-invocation subrequest budget
   try {
     const o = { message_type: type, recipient_type: 'vendor', vendor: c.vendor, message_body: text, property_address: ctx.S.label, bypassQuietHours: true };
     if (ctx.S.smsTest) {
