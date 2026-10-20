@@ -1854,7 +1854,9 @@ function loadVendorTimeTracking(woId, idx) {
   api('/time-entries?wo_id=' + woId + '&vendor_id=' + vendorId).then(function(entries) {
     if (!Array.isArray(entries)) throw new Error((entries && entries.error) || 'Unexpected response');
     renderVendorTimeSection(woId, idx, entries);
-  }).catch(function() { renderVendorTimeSection(woId, idx, []); });
+  }).catch(function(e) {
+    showLoadFailed('time-wrap-' + idx, 'your logged time', e && e.message, function() { loadVendorTimeTracking(woId, idx); }, woId);
+  });
 }
 
 function renderVendorTimeSection(woId, idx, entries) {
