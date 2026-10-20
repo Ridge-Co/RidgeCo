@@ -33614,9 +33614,8 @@ async function inspUnitAdd(env, body) {
 // One combined read — the admin screen always needs both together (same reasoning
 // as hubBootstrap batching several tabs into one call).
 async function inspAvailabilityGet(env) {
-  let rules = [], blackouts = [];
-  try { rules = await fetchTab(env, 'Insp_Availability_Rules'); } catch (e) {}
-  try { blackouts = await fetchTab(env, 'Insp_Blackouts'); } catch (e) {}
+  const rules = await fetchTabSoft(env, 'Insp_Availability_Rules', 'insp_availability_get');
+  const blackouts = await fetchTabSoft(env, 'Insp_Blackouts', 'insp_availability_get');
   return json({
     rules: rules.filter(r => r.Active !== 'FALSE'),
     blackouts: blackouts.filter(r => r.Active !== 'FALSE'),
