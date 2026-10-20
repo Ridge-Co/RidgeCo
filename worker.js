@@ -16131,7 +16131,7 @@ const CRON_SWEEP_LOCK_KEY = 'Cron_Sweep_Claimed_Until';
 const CRON_SWEEP_LOCK_TTL_MS = 2 * 60 * 1000; // comfortably longer than a normal sweep run; short enough to self-heal within one cycle if a run ever dies mid-flight without clearing it
 
 async function cronSweep(env) {
-  env = __cronEnv(env);
+  env = __meterCronEnv(__cronEnv(env), 'cronSweep');
   const now = new Date();
   let rows;
   try { rows = await schedReadConfigRows(env, true); }
