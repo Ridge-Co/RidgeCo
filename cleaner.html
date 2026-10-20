@@ -410,6 +410,7 @@ $('main').addEventListener('click',function(ev){
   if(a==='retry'){S.loadErr='';loadPage();}
   else if(a==='mark') onMark(b.getAttribute('data-key'),b.getAttribute('data-date'),b.getAttribute('data-mark'));
   else if(a==='offer') onOffer(b.getAttribute('data-id'),b.getAttribute('data-do'));
+  else if(a==='pend-offer') onPendOffer(b.getAttribute('data-id'),b.getAttribute('data-do'));
   else if(a==='backup') onBackup(b.getAttribute('data-date'),b.getAttribute('data-do'));
   else if(a==='cancel-ask'){S.confirmKey=b.getAttribute('data-key');setRow(S.confirmKey,[]);render();}
   else if(a==='cancel-no'){S.confirmKey='';render();}
