@@ -12336,7 +12336,9 @@ async function backfillApprovalStage(env, body) {
     }
   }
   const counts = {}; plan.forEach(p => { const k = p.type + ':' + p.stage; counts[k] = (counts[k] || 0) + 1; });
-  return json({ success: true, applied: apply, planned: plan.length, written, counts, sample: plan.slice(0, 15) });
+  const _bf = { success: true, applied: apply, planned: plan.length, written, counts, sample: plan.slice(0, 15) };
+  if (failedWrites.length) { _bf.failed = failedWrites.length; _bf.failed_ids = failedWrites.slice(0, 15); _bf.failure_warning = failedWrites.length + ' row(s) could not be written; re-run to retry them.'; }
+  return json(_bf);
 }
 
 async function unapproveEstimate(env, body) {
