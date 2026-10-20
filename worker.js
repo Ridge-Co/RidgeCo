@@ -10851,7 +10851,7 @@ async function addVendorBill(env, body) {
   // B-227 Phase 1/2: Payment_Method (reimburse_via_labor_bill default / separate_vendor_billpay /
   // credit_card_no_bill) — same lazy-ensureColumns pattern, only touches the sheet when a caller
   // actually sends one (the vendor portal doesn't send this field, so it stays untouched there).
-  if (body.Payment_Method) { try { await ensureColumns(env, 'Vendor_Bills', ['Payment_Method']); } catch (e) {} }
+  if (body.Payment_Method) { try { await ensureColumns(env, 'Vendor_Bills', ['Payment_Method']); } catch (e) { await softFail(env, 'vendor_bill_ensure_columns:Payment_Method', e, 'P1', { ref: dupeKey }); } }
   // Same pattern for the vendor's own invoice FILE (the actual document/photo, not just the
   // number) — B-fix Aug 17: vendors had no way to attach their invoice, only receipts had an
   // upload control. Drive_File_ID kept alongside the URL so the Hub can open it directly.
