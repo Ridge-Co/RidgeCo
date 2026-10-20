@@ -270,7 +270,7 @@ var WORKER = (function(){
     // at the blank test Sheet and a vendor saw an empty "Complete your info" form. Retire any
     // leftover persistent flag, so a vendor/tenant browser can never be stuck on staging.
     var qs = new URLSearchParams(location.search);
-    try { localStorage.removeItem('mh_api_staging'); } catch (e2) {}
+    try { localStorage.removeItem('mh_api_staging'); } catch (e2) { /* silent-ok: storage blocked so there is no stale flag to retire */ }
     if (qs.get('api') === 'staging') sessionStorage.setItem('mh_api_staging', '1');
     else if (qs.get('api') === 'prod') sessionStorage.removeItem('mh_api_staging');
     return sessionStorage.getItem('mh_api_staging') === '1' ? STAGING : PROD;
