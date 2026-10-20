@@ -16294,6 +16294,7 @@ async function failConditions(env, cfg, nowMs) {
       if (st.tick_age_min !== null && st.tick_age_min > 60) out.push({ key: 'scheduler_silent', system: 'hub', where: 'scheduler', severity: 'P0', message: `The Apps Script scheduler has not ticked for ${st.tick_age_min} minutes.` });
     }
   } catch (e) { out.push({ key: 'scheduler_unreadable', system: 'hub', where: 'scheduler', severity: 'P0', message: 'Could not read the scheduler state: ' + String((e && e.message) || e).slice(0, 200) }); }
+  for (const it of await failInvariantConditions(env, cfg, nowMs)) out.push(it);
   return out;
 }
 
