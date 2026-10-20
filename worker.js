@@ -25798,7 +25798,7 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds, match) {
       if (ts >= cutoff) return r;
     }
     return null;
-  } catch (e) { return null; }
+  } catch (e) { softNote('duplicate_guard_failed:' + tab, e, 'P1', { tab }); return null; }
 }
 
 // Duplicate-guard for /property/add and /unit/add (Sep 24 2026, Brett's ask): both handlers
