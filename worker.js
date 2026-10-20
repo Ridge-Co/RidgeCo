@@ -24588,7 +24588,10 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
     if(body) opts.body=JSON.stringify(body);
     __sheetsFetchCount++;
-    const res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts);
+    let res;
+    try { res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts); }
+    catch (e) { __meterGoogle(env, method, path, 'err'); throw e; }
+    __meterGoogle(env, method, path, res.status === 429 ? '429' : (res.status >= 400 ? 'err' : 'ok'));   // every real attempt, retries included
     const data=await res.json();
     if(data.error){
       const code=data.error.code||res.status;
