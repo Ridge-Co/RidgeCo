@@ -1175,8 +1175,9 @@ function buildPhotoSection(woId, propAddr, opts) {
     lastCheck = Date.now();
     api('/tenant-session-refresh').then(function(d){
       if (d && d.session_invalid) { doLogout(); showLoginMsg('Your session has ended. Please sign in again.', 'error'); return; }
+      bgOk('tenant:sessionRefresh');
       if (d && !d.error) applyRefresh(d);
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('tenant:sessionRefresh', e); });
   }
 
   // Catches Brett's exact reported case: a hard refresh re-runs restoreTenantSession() from
