@@ -12592,7 +12592,7 @@ async function addEstimateVersion(env, body) {
   const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
   if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (e) { await softFail(env, 'estimate_change_reason_en_column', e, 'P1', { ref: woId }); estWarnings.push('English copy of the change reason was not saved'); } }
   await addRow(env, 'Estimates', row);
-  try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
+  try { const ur = await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); if (ur && ur.ok === false) estWarnings.push('the work order\'s Current_Estimate was not updated'); } catch (e) { await softFail(env, 'estimate_current_estimate_update', e, 'P1', { ref: woId }); estWarnings.push('the work order\'s Current_Estimate was not updated'); }
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
   // the job was approved/proposed/signed means something changed — do NOT silently reset the stage
   // (that hides a signed job's change); flag it "revised" so Brett reviews it (change order vs
