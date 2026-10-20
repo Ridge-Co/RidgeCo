@@ -381,10 +381,10 @@ function open_(id){ document.getElementById(id).classList.add('open'); }
 
 // ── boot ──────────────────────────────────────────────────────
 (function boot(){
-  try{ var sl=localStorage.getItem('mh_wo_lang'); if(sl==='es') setLang('es'); }catch(e){}
+  try{ var sl=localStorage.getItem('mh_wo_lang'); if(sl==='es') setLang('es'); }catch(e){ /* silent-ok: storage blocked, default language used */ }
   if(!WO || !LINK){ showErr(t('Link problem'), 'This link is missing information. Please ask for a new one.'); return; }
   // existing 24h session?
-  var saved=null; try{ saved=JSON.parse(localStorage.getItem(SESS_KEY)||'null'); }catch(e){}
+  var saved=null; try{ saved=JSON.parse(localStorage.getItem(SESS_KEY)||'null'); }catch(e){ /* silent-ok: unreadable saved session just means sign in again */ }
   if(saved && saved.token && saved.exp && saved.exp*1000 > Date.now()){
     VIEW = saved.token; loadDoc(); return;
   }
