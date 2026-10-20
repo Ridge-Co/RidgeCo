@@ -16885,9 +16885,9 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
   catch (e) { return { ok: false, errors: [{ step: 'qb_sync_progress', error: schedErrText(e) }], detail }; }
   if (!prog || prog.date !== today) prog = { date: today, started: new Date().toISOString(), done: [], ir_done: false, loop_done: false, sweep_done: false, complete: false, slices: 0, totals: { written: 0, failed: 0, closed: 0, closed_wos: [] } };
   if (prog.complete) return { ok: true, errors, detail: { skipped: `already finished today (${today})` } };
-  let partial = false;
+  let partial = false, progressMade;
   try {
-    const res = await qbSyncPayments(env, {}, { state: prog, sliceMs: opts.sliceMs, now: opts.now });
+    const res = await qbSyncPayments(env, {}, { state: prog, sliceMs: opts.sliceMs, minLoopMs: opts.minLoopMs, now: opts.now });
     const u = await schedUnwrap(res);
     const b = u.body;
     // Same condition scheduled() always used (ok:false or a non-empty errors list), plus a non-2xx status.
