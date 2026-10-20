@@ -26774,7 +26774,7 @@ async function logAugment(env, type, id, field, oldVal, newVal) {
     };
     const newRow = headers.map(h => rec[h] ?? '');
     await sheetsRequest(env, 'POST', `/values/${TAB}:append?valueInputOption=RAW`, { values: [newRow] });
-  } catch (e) { /* audit must never break the write */ }
+  } catch (e) { softNote('augment_log_write_failed', e, 'P2', { type, id: String(id) }); /* the audit row is best-effort and must never break the write, but the loss is recorded */ }
 }
 
 async function updateWOFields(env, woId, fields) {
