@@ -2302,7 +2302,7 @@ function renderWOPage() {
   if (priority) wos = wos.filter(function(w){ return (w.Priority||'normal').toLowerCase()===priority.toLowerCase(); });
   if (stage === '__needs__') wos = wos.filter(function(w){ return !!w.Approval_Stage && w.Approval_Stage !== 'Approved'; });
   else if (stage) wos = wos.filter(function(w){ return (w.Approval_Stage||'') === stage; });
-  try { var _ec = document.getElementById('estimatedWOsCount'); if (_ec) { var _n = safeArray(state.workorders).filter(function(w){ return w.Voided!=='TRUE' && w.Approval_Stage==='Estimated' && OPEN.includes(w.Status); }).length; _ec.textContent = _n ? '('+_n+')' : ''; } } catch(_) {}
+  try { var _ec = document.getElementById('estimatedWOsCount'); if (_ec) { var _n = safeArray(state.workorders).filter(function(w){ return w.Voided!=='TRUE' && w.Approval_Stage==='Estimated' && OPEN.includes(w.Status); }).length; _ec.textContent = _n ? '('+_n+')' : ''; } } catch(_) { window.hubReportFailure && window.hubReportFailure('index:estimated-count', _); }
   if (search) wos = wos.filter(function(w){
     var prop = state.properties.find(function(p){return p.ID===w.Property_ID;});
     var vendor = state.vendors.find(function(v){return v.ID===w.Vendor_ID;});
