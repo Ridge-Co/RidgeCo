@@ -22,6 +22,7 @@
   html{-webkit-text-size-adjust:100%}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.4;overflow-wrap:anywhere}
   .hide{display:none !important}
+  body.selecting main{padding-bottom:150px}
   .muted{color:var(--muted);font-size:13px}
   .say{font-size:14px;color:var(--muted);margin:6px 0 0}
   b{font-weight:700}
@@ -100,7 +101,7 @@
   .nums b{white-space:nowrap}
 
   /* forms + sheet */
-  input[type=text],input[type=tel],input[type=email],input[type=password],input[type=number],select{width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text);font-family:inherit}
+  input[type=text],input[type=tel],input[type=email],input[type=password],input[type=number],input[type=date],select{width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text);font-family:inherit}
   label.fld{display:block;margin:12px 0 4px;font-size:13px;color:var(--muted);font-weight:600}
   label.tog{display:flex;align-items:center;gap:12px;min-height:48px;margin-top:6px;padding:6px 0;font-size:15px;font-weight:600;cursor:pointer}
   label.tog input{width:26px;height:26px;flex:none}
@@ -125,6 +126,29 @@
   .loglist .li{border-top:1px solid var(--border);padding:7px 0}
   .loglist .li:first-child{border-top:none}
   .soon{font-size:13px;color:var(--muted);text-align:center;padding:6px 0}
+  /* swap + bulk changes */
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 6px}
+  .toolbar .btn{flex:1 1 150px}
+  .selhelp{margin:0 0 10px}
+  .selhelp ul{margin:6px 0 0;padding-left:18px}
+  .selrow{display:flex;align-items:center;gap:12px;min-height:44px;margin:6px 0 0;font-size:15px;font-weight:600;cursor:pointer}
+  .selrow input{width:26px;height:26px;flex:none}
+  .tcard.picked{outline:3px solid var(--accent)}
+  .bulkbar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);border-top:2px solid var(--accent);padding:8px 12px calc(8px + env(safe-area-inset-bottom));box-shadow:0 -4px 14px var(--shadow)}
+  .bulkbar .bb-top{display:flex;align-items:center;justify-content:space-between;gap:8px;max-width:1100px;margin:0 auto 6px;font-weight:700;font-size:14px}
+  .bulkbar .bb-btns{display:flex;gap:6px;max-width:1100px;margin:0 auto}
+  .bulkbar .bb-btns .btn{flex:1 1 0;min-width:0;min-height:44px;padding:6px 6px;font-size:13px;line-height:1.2}
+  .chg-item{border-top:1px solid var(--border);padding:8px 0;font-size:14px}
+  .chg-item:first-child{border-top:none}
+  .chg-item .pill{margin-right:6px}
+  .chg-item .why{color:var(--muted);font-size:13px;margin-top:2px}
+  .rcpt{border:1px solid var(--border);border-radius:12px;background:var(--surface2);padding:10px;margin:10px 0}
+  .rcpt textarea{width:100%;min-height:132px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:16px;line-height:1.35;background:var(--surface);color:var(--text);font-family:inherit;resize:vertical;margin-top:6px}
+  .rcpt .cnt{font-size:12px;color:var(--muted);text-align:right}
+  .rcpt .cnt.long{color:var(--warn);font-weight:700}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+  .stk{background:var(--surface);position:sticky;bottom:-16px;margin:0 -16px -16px;padding:10px 16px 16px;border-top:1px solid var(--border)}
+  .stk .btnrow{margin-top:0}
   .stg{background:var(--warnbg);color:var(--warn);text-align:center;font-size:13px;font-weight:700;padding:4px}
 </style>
 </head>
@@ -152,6 +176,15 @@
     <details class="sec" id="sec-turn" open>
       <summary>Turnovers <span class="meta" id="m-turn"></span></summary>
       <div class="body">
+        <div class="toolbar">
+          <button class="btn sm" id="sel-toggle" data-act="seltoggle">Select dates…</button>
+          <button class="btn sm" data-act="rangeassign">Assign a date range…</button>
+        </div>
+        <p class="say" style="margin:0 0 10px">Select dates: tick several turnovers, then swap the cleaner, or mark someone out or available as backup for all of them at once. Assign a date range: give one cleaner every turnover between two dates. Both show you exactly what will happen, and the exact texts, and nothing is done until you press Send.</p>
+        <div id="selhelp" class="msg info selhelp hide"><b>Tick the dates you want to change, then use the buttons at the bottom.</b><ul>
+          <li><b>Swap cleaner:</b> the cleaner you pick takes the ticked dates. Whoever had them is told they are off the hook and becomes backup. The cleaning calendar is fixed too.</li>
+          <li><b>Assign a range:</b> one cleaner gets every turnover between two dates you choose.</li>
+          <li><b>Mark out / backup:</b> sets a cleaner as Out or Available-as-backup for the ticked dates, or clears it.</li></ul></div>
         <div class="seg"><button data-act="filter" data-v="all" class="sel">Everything</button><button data-act="filter" data-v="open">Needs a cleaner</button></div>
         <div id="turn-list"><p class="muted">Loading…</p></div>
       </div>
@@ -202,6 +235,10 @@
   </main>
 </div>
 
+<div class="bulkbar hide" id="bulkbar" role="region" aria-label="Change several dates at once">
+  <div class="bb-top"><span id="bb-count">0 dates ticked</span><button class="linkbtn" data-act="selclear">Untick all</button><button class="linkbtn" data-act="seltoggle">Done</button></div>
+  <div class="bb-btns"><button class="btn primary" data-act="bulk-swap">Swap cleaner</button><button class="btn" data-act="bulk-range">Assign a range</button><button class="btn" data-act="bulk-mark">Mark out / backup</button></div>
+</div>
 <div class="modal" id="sheet" aria-hidden="true"><div class="sheet" id="sheet-box" role="dialog" aria-modal="true" aria-labelledby="sh-title"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -215,6 +252,8 @@ var AUTH_TOKEN = '';
 var S = null;                 // last good state from the server
 var filterMode = 'all';
 var loading = false;
+var selecting = false;        // 'Select dates' mode
+var picked = {};              // task_key -> true while selecting
 var ET = 'America/New_York';
 
 /* ---------- small helpers ---------- */
@@ -383,20 +422,22 @@ function turnoverCard(t){
   var urgent = !t.covered && t.uncovered_alert;
   var k = esc(t.key), acts = '';
   if(t.status === 'new'){
-    acts = '<p class="say">The scheduler hasn\'t picked this one up yet, so nothing can be done to it here. It appears after the next scheduler run (every 15 minutes while it is ON), or use "Preview" under Tools.</p>';
+    acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">The scheduler hasn\'t picked this one up yet. Assigning here adds it for you, texts the cleaner, and puts it on the cleaning calendar. You see the exact text first.</p>';
   } else if(t.status === 'covered'){
-    acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Change cleaner…</button><button class="btn sm" data-act="unassign" data-key="' + k + '">Unassign</button>';
+    acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Swap cleaner…</button><button class="btn sm" data-act="assign" data-key="' + k + '">Change cleaner…</button><button class="btn sm" data-act="unassign" data-key="' + k + '">Unassign</button><p class="say" style="flex:1 0 100%"><b>Swap cleaner</b> texts the new cleaner, tells the old one she is off the hook (and backup), and fixes the calendar. You check the texts first. <b>Change cleaner</b> only changes the Hub and tells nobody.</p>';
   } else if(t.status === 'on_calendar'){
-    acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">This is covered by an entry someone typed on the cleaning calendar. To undo that, change the calendar itself.</p>';
+    acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Swap cleaner…</button><button class="btn sm" data-act="assign" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">This is covered by an entry someone typed on the cleaning calendar. <b>Swap cleaner</b> replaces that entry with the new cleaner\'s, texts both of them, and makes the old one backup. You check everything first.</p>';
   } else {
     acts = '<button class="btn sm primary" data-act="assign" data-key="' + k + '">Assign…</button><button class="btn sm" data-act="offer" data-key="' + k + '">Ask next cleaner now</button><button class="btn sm" data-act="restart" data-key="' + k + '">Restart the queue</button>';
   }
-  return '<div class="tcard' + (urgent ? ' urgent' : '') + '"><div class="t-head"><div><b class="t-date">' + esc(t.label || fmtDay(t.date)) + '</b> <span class="chip">' + kind + '</span></div>' + statusPill(t) + '</div>'
+  var sel = (selecting && t.status !== 'cancelled') ? '<label class="selrow"><input type="checkbox" data-act="sel" data-key="' + k + '"' + (picked[t.key] ? ' checked' : '') + '> Select this date</label>' : '';
+  return '<div class="tcard' + (urgent ? ' urgent' : '') + (selecting && picked[t.key] ? ' picked' : '') + '">' + sel + '<div class="t-head"><div><b class="t-date">' + esc(t.label || fmtDay(t.date)) + '</b> <span class="chip">' + kind + '</span></div>' + statusPill(t) + '</div>'
     + '<div class="muted" style="margin-top:4px">' + esc(daysText(t.days_out)) + ' · ' + esc(next) + esc(guests) + '</div>'
     + (t.note ? '<div class="muted" style="margin-top:4px">Note: ' + esc(t.note) + '</div>' : '')
     + offersHtml(t) + backupsHtml(t) + '<div class="t-actions">' + acts + '</div></div>';
 }
 function renderTurnovers(){
+  Object.keys(picked).forEach(function(k){ var t = findTask(k); if(!t || t.status === 'cancelled') delete picked[k]; });
   var list = (S.tasks||[]).filter(function(t){ return t.status !== 'cancelled'; }).sort(function(a,b){ return String(a.date).localeCompare(String(b.date)) || String(a.kind).localeCompare(String(b.kind)); });
   var open = list.filter(function(t){ return !t.covered; });
   $('m-turn').textContent = open.length ? open.length + ' need a cleaner' : (list.length ? 'all covered' : '');
@@ -404,6 +445,7 @@ function renderTurnovers(){
   Array.prototype.forEach.call(document.querySelectorAll('[data-act=filter]'), function(b){ b.classList.toggle('sel', b.getAttribute('data-v') === filterMode); });
   if(!show.length){ $('turn-list').innerHTML = '<p class="muted">' + (filterMode === 'open' ? 'Nothing needs a cleaner right now.' : (S.feed_ok === false ? 'No turnovers to show because the bookings feed could not be read.' : 'No upcoming turnovers found.')) + '</p>'; return; }
   $('turn-list').innerHTML = '<div class="grid">' + show.map(turnoverCard).join('') + '</div>';
+  updateBulkBar();
 }
 function findTask(key){ return (S.tasks||[]).filter(function(t){ return t.key === key; })[0]; }
 
@@ -633,6 +675,207 @@ function openOffer(key, restart){
   });
 }
 
+/* ---------- swap + bulk changes (preview first, then Send) ---------- */
+var CH = null;   // the change in progress: { req, plan, sending }
+function pickedKeys(){ return Object.keys(picked).filter(function(k){ return picked[k] && findTask(k); }).sort(); }
+function updateBulkBar(){
+  var n = pickedKeys().length;
+  $('bulkbar').classList.toggle('hide', !selecting);
+  document.body.classList.toggle('selecting', selecting);
+  $('bb-count').textContent = n === 0 ? 'No dates ticked yet' : plural(n, 'date', 'dates') + ' ticked';
+  $('selhelp').classList.toggle('hide', !selecting);
+  $('sel-toggle').textContent = selecting ? 'Stop selecting' : 'Select dates…';
+  Array.prototype.forEach.call(document.querySelectorAll('.tcard'), function(c){ var i = c.querySelector('input[data-act=sel]'); if(i) c.classList.toggle('picked', i.checked); });
+}
+function cleanerOptions(selId){
+  var act = (S.cleaners||[]).filter(function(c){ return c.active; });
+  return act.map(function(c){ return '<option value="' + esc(c.id) + '"' + (String(c.id) === String(selId) ? ' selected' : '') + '>' + esc(c.name + (c.nickname ? ' (' + c.nickname + ')' : '') + (c.sms_ok === false ? ' - texts off' : '')) + '</option>'; }).join('');
+}
+function datesChips(keys){ return '<div class="chips">' + keys.map(function(k){ var t = findTask(k); return '<span class="chip">' + esc(t ? (t.label || fmtDay(t.date)) + (t.kind === 'prearrival' ? ' (pre-arrival)' : '') : taskName(k)) + '</span>'; }).join('') + '</div>'; }
+function sheetShell(title, say, body, btns){
+  openSheet('<h2 id="sh-title">' + esc(title) + '</h2>' + (say ? '<p class="say" style="font-size:15px;color:var(--text)">' + say + '</p>' : '') + body + '<div id="sh-err" class="msg err hide" role="alert" style="margin-top:12px"></div>' + btns);
+}
+function chShowErr(html){ var e = $('sh-err'); if(!e) return; e.innerHTML = html; e.classList.remove('hide'); try { e.scrollIntoView({block:'nearest'}); } catch(x){} }
+
+/* step 0: choose who and what */
+function openChange(kind, keys){
+  if(!(S.cleaners||[]).some(function(c){ return c.active; })){ openAction({ title: 'Change cleaners', say: 'There are no active cleaners to choose from. Add or re-activate one under Cleaners first.', go: null, run: null }); return; }
+  var title, say, body = '<label class="fld" for="ch-c">Which cleaner?</label><select id="ch-c">' + cleanerOptions('') + '</select>', validate = function(){ return ''; }, make;
+  if(kind === 'swap'){
+    if(!keys.length){ toast('Tick at least one date first'); return; }
+    title = keys.length === 1 ? 'Swap the cleaner' : 'Swap the cleaner on ' + keys.length + ' dates';
+    say = 'The cleaner you pick takes these dates. Whoever had them is told they are off the hook and becomes backup, and the cleaning calendar is fixed. <b>Nothing happens yet:</b> next you see exactly what will change and the exact texts, and you press Send.';
+    body += '<div class="muted" style="margin-top:12px">Dates</div>' + datesChips(keys);
+    make = function(){ return { action: 'swap', cleaner_id: $('ch-c').value, task_keys: keys }; };
+  } else if(kind === 'range'){
+    title = 'Assign a date range';
+    say = 'Gives one cleaner every turnover between two dates (including both). Whoever had them is told and becomes backup. <b>Nothing happens yet:</b> next you see the list and the exact texts, and you press Send.';
+    var first = ((S.tasks||[]).filter(function(t){ return t.status !== 'cancelled'; }).map(function(t){ return t.date; }).sort()[0]) || '';
+    body += '<label class="fld" for="ch-from">From (first date)</label><input type="date" id="ch-from" value="' + esc(first) + '"><label class="fld" for="ch-to">To (last date)</label><input type="date" id="ch-to" value="">';
+    validate = function(){ var f = $('ch-from').value, t = $('ch-to').value; if(!f || !t) return 'Pick both a first date and a last date.'; if(t < f) return 'The last date is before the first date.'; return ''; };
+    make = function(){ return { action: 'assign_range', cleaner_id: $('ch-c').value, from: $('ch-from').value, to: $('ch-to').value }; };
+  } else {
+    var dates = []; keys.forEach(function(k){ var t = findTask(k); if(t && dates.indexOf(t.date) < 0) dates.push(t.date); }); dates.sort();
+    if(!dates.length){ toast('Tick at least one date first'); return; }
+    title = dates.length === 1 ? 'Mark a cleaner out or backup' : 'Mark a cleaner for ' + dates.length + ' dates';
+    say = 'Sets what the scheduler believes about one cleaner on these dates. <b>Out</b> means do not ask her. <b>Available as backup</b> means she can be asked if someone cancels. <b>Clear</b> removes the mark. <b>Nothing happens yet:</b> next you see what will change, and you press Send.';
+    body += '<label class="fld" for="ch-m">Mark her as</label><select id="ch-m"><option value="out">Out (not available)</option><option value="can">Available as backup</option><option value="">Clear the mark</option></select><div class="muted" style="margin-top:12px">Dates</div><div class="chips">' + dates.map(function(d){ return '<span class="chip">' + esc(fmtDay(d)) + '</span>'; }).join('') + '</div>';
+    make = function(){ return { action: 'mark', cleaner_id: $('ch-c').value, mark: $('ch-m').value, dates: dates }; };
+  }
+  sheetShell(title, say, body, '<div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go">Preview what will happen</button></div>');
+  $('sh-cancel').onclick = closeSheet;
+  $('sh-go').onclick = function(){
+    var v = validate(); if(v){ chShowErr(esc(v)); return; }
+    CH = { req: make(), plan: null, sending: false, kind: kind };
+    runPreview($('sh-go'));
+  };
+}
+
+/* step 1: ask the server for the plan (nothing is written or sent) */
+function runPreview(btn){
+  var req = CH.req;
+  $('sh-err') && $('sh-err').classList.add('hide');
+  var label = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  api('POST', '/str/admin/change/preview', req).then(function(p){
+    CH.plan = p; renderPlan();
+  }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    if(btn){ btn.disabled = false; btn.textContent = label; }
+    if($('sh-err')) chShowErr('<b>Could not build the preview. Nothing was changed.</b>' + esc(errText(e)));
+    else openAction({ title: 'Could not check', say: errText(e) + ' Nothing was changed.', go: null, run: null });
+  });
+}
+var ITEM_PILL = { change: ['ok', 'Will change'], skip: ['', 'Skipped'], blocked: ['bad', 'Blocked'], not_found: ['bad', 'Not found'] };
+function planItemHtml(i){
+  var pl = ITEM_PILL[i.outcome] || ['', human(i.outcome)];
+  var h = '<div class="chg-item"><span class="pill ' + pl[0] + '">' + esc(pl[1]) + '</span><b>' + esc(i.label || i.date || taskName(i.task_key)) + '</b>';
+  if(i.outcome === 'change' && i.sentence) h += '<div>' + esc(i.sentence) + '</div>';
+  else if(i.reason) h += '<div class="why">' + esc(i.reason) + '</div>';
+  (i.notes||[]).forEach(function(n){ h += '<div class="why">' + esc(n) + '</div>'; });
+  return h + '</div>';
+}
+function timingHtml(r){
+  var tm = r.timing || {};
+  if(tm.mode === 'hold') return '<span class="pill warn">' + esc(tm.label || 'Held') + '</span>';
+  if(tm.mode === 'now') return '<span class="pill ok">' + esc(tm.label || 'Sends right away') + '</span>';
+  return '<span class="pill">' + esc(tm.label || '') + '</span>';
+}
+function rcptHtml(r, idx){
+  var title = r.kind === 'new' ? 'Text to ' + r.first_or_name : (r.kind === 'back' ? 'Text to ' + r.first_or_name + ' (told she is off the hook)' : 'Text to ' + r.first_or_name + ' (optional note)');
+  var h = '<div class="rcpt" data-ri="' + idx + '"><div><b>' + esc(title) + '</b> <span class="chip">Text message</span></div>';
+  if(!r.can_send) return h + '<div class="msg warn" style="margin:8px 0 0"><b>No text can go to ' + esc(r.first_or_name) + '</b>' + esc(r.reason || 'Not possible right now.') + ' Tell her yourself.</div></div>';
+  h += '<div style="margin-top:6px">' + timingHtml(r) + '</div>' + (r.language_note ? '<div class="say">' + esc(r.language_note) + '</div>' : '');
+  h += '<label class="tog" style="min-height:44px"><input type="checkbox" id="rc-send-' + idx + '"' + (r.send_default ? ' checked' : '') + '>Send this text</label>';
+  h += '<label class="fld" for="rc-body-' + idx + '" style="margin-top:2px">What she will get (you can edit it)</label><textarea id="rc-body-' + idx + '" maxlength="' + (S && S.text_max ? S.text_max : 800) + '">' + esc(r.text) + '</textarea><div class="cnt" id="rc-cnt-' + idx + '"></div></div>';
+  return h;
+}
+function updateCount(idx){
+  var ta = $('rc-body-' + idx), c = $('rc-cnt-' + idx); if(!ta || !c) return;
+  var n = ta.value.length; c.textContent = n + ' characters' + (n > 160 ? ' - long, may go out as several texts' : '');
+  c.className = 'cnt' + (n > 320 ? ' long' : '');
+}
+/* step 1b: show the plan and the editable texts */
+function renderPlan(){
+  var p = CH.plan, req = CH.req, h = '';
+  (p.recipients||[]).forEach(function(r){ r.first_or_name = r.first || r.name || 'her'; });
+  var nChange = (p.counts && p.counts.change) || 0;
+  h += '<div class="msg info"><b>Nothing has been sent or changed yet.</b>This is a preview. Check it, edit the texts if you like, then press Send.</div>';
+  if(p.summary) h += '<p style="font-size:15px;margin:8px 0"><b>' + esc(p.summary) + '</b></p>';
+  if(p.confirm){
+    h += '<div class="msg err" role="alert"><b>A cleaner you picked marked herself out</b>' + esc(p.confirm.message || '') + '<label class="tog" style="margin-top:8px"><input type="checkbox" id="ch-confirm"' + (req.confirm_out ? ' checked' : '') + '>Yes, assign her anyway on those dates (this clears her Out mark)</label></div>';
+  }
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">What will happen, date by date</h4>' + (p.items||[]).map(planItemHtml).join('');
+  var cal = p.calendar || {};
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">The cleaning calendar</h4>';
+  if(cal.mode === 'write') h += '<div class="msg ok"><b>The Hub will fix the calendar</b>' + (cal.lines && cal.lines.length ? listHtml(cal.lines) : '') + (cal.note ? esc(cal.note) : '') + '</div>';
+  else if(cal.mode === 'staged') h += '<div class="msg info"><b>Test server</b>' + esc(cal.note || 'Calendar changes are pretend-only here.') + '</div>';
+  else h += '<div class="msg warn"><b>The Hub will NOT change the calendar</b>' + esc(cal.note || '') + ((cal.manual||[]).length ? '<div style="margin-top:6px">You would do this by hand in Google Calendar:</div>' + listHtml(cal.manual) : '') + '</div>';
+  if(p.email) h += '<p class="say" style="margin-top:8px">' + (p.email.skipped ? esc('Email invite: ' + p.email.skipped) : 'Email: ' + esc(p.email.to) + ' also gets the usual confirmation email with a calendar invite' + (p.email.subject ? ' ("' + esc(p.email.subject) + '")' : '') + '.') + '</p>';
+  if(!p.window_open && (p.recipients||[]).some(function(r){ return r.can_send; })) h += '<div class="msg warn"><b>It is outside 8 AM to 9 PM</b>The changes happen now. The texts are held and go out at the first scheduler run after ' + esc(p.held_until ? fmtET(p.held_until) : '8 AM') + '. If anything changes before then, a held text is NOT sent and you are told.</div>';
+  if((p.warnings||[]).length) h += '<div class="msg warn"><b>Heads up</b>' + listHtml(p.warnings) + '</div>';
+  h += '<h4 style="margin:14px 0 0;font-size:15px">Texts</h4>' + ((p.recipients||[]).length ? (p.recipients||[]).map(rcptHtml).join('') : '<p class="say">No texts will be sent for this change.</p>');
+  var can = nChange > 0;
+  var btns = '<div class="stk"><div id="sh-err2"></div><div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go"' + (can ? '' : ' disabled') + '>' + (can ? 'Send: make the changes' + ((p.recipients||[]).some(function(r){ return r.can_send; }) ? ' and send the texts' : '') : 'Nothing to change') + '</button></div></div>';
+  sheetShell('Check before it happens', '', h, btns);
+  (p.recipients||[]).forEach(function(r, idx){ if(r.can_send){ updateCount(idx); $('rc-body-' + idx).addEventListener('input', function(){ updateCount(idx); }); } });
+  $('sh-cancel').onclick = function(){ CH = null; closeSheet(); };
+  var cf = $('ch-confirm'); if(cf) cf.onchange = function(){ CH.req.confirm_out = cf.checked; cf.disabled = true; runPreview(null); };
+  $('sh-go').onclick = sendChange;
+}
+/* step 2: Send. One tap only; the same plan id can never be applied twice */
+function sendChange(){
+  if(!CH || CH.sending) return;
+  var p = CH.plan, texts = {}, bad = '';
+  (p.recipients||[]).forEach(function(r, idx){
+    var send = false, body = r.text;
+    if(r.can_send){ send = $('rc-send-' + idx).checked; body = $('rc-body-' + idx).value; if(send && !body.trim()) bad = 'The text to ' + r.first_or_name + ' is empty. Type something or untick "Send this text".'; }
+    texts[r.key] = { send: send, body: body };
+  });
+  if(bad){ chShowErr(esc(bad)); return; }
+  CH.sending = true; sheetBusy = true;
+  var go = $('sh-go'), cancel = $('sh-cancel'); go.disabled = true; cancel.disabled = true; go.textContent = 'Working… please wait';
+  $('sh-err').classList.add('hide');
+  var payload = Object.assign({}, CH.req, { plan_id: p.plan_id, sig: p.sig, texts: texts });
+  runApply(payload, 0);
+}
+/* The Hub does a change in several short steps (a phone-sized request can only do so much at once).
+   Each answer says "applying" until the last step; this page then asks it to carry on by itself.
+   If anything interrupts, the Continue button picks up exactly where it stopped (nothing is ever done twice). */
+function runApply(body, n){
+  var go = $('sh-go'), cancel = $('sh-cancel'); if(!CH) return;
+  CH.sending = true; sheetBusy = true;
+  api('POST', '/str/admin/change/apply', body, { allowFail: true }).then(function(r){
+    if(r && r.status === 'applying' && n < 40){
+      var g = $('sh-go'); if(g) g.textContent = (r.message ? String(r.message).replace(/^Working\.\.\.\s*/, 'Working… ') : 'Working… step ' + (r.step || '?') + ' of ' + (r.steps || '?'));
+      return runApply({ plan_id: CH.plan.plan_id, resume: true }, n + 1);
+    }
+    if(r && r.status === 'applying'){ throw mkErr('It is taking longer than expected.', 'slow', 0); }
+    sheetBusy = false; CH.sending = false; renderResult(r); loadState();
+  }, function(e){ throw e; }).catch(function(e){
+    sheetBusy = false; if(CH) CH.sending = false;
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    var go2 = $('sh-go'), cancel2 = $('sh-cancel'); if(!go2) return;
+    if(e.code === 'stale_preview'){
+      go2.disabled = true; cancel2.disabled = false; go2.textContent = 'Out of date';
+      chShowErr('<b>Not done. Nothing was changed.</b>' + esc(errText(e)) + '<br><button class="btn sm" id="ch-again" style="margin-top:8px">Preview again</button>');
+      $('ch-again').onclick = function(){ runPreview(null); }; return;
+    }
+    if(n > 0 || body.resume === true || e.code === 'slow' || e.code === 'progress_not_saved'){
+      /* it had already started: the safe move is Continue (same plan), never a fresh Send */
+      go2.disabled = false; cancel2.disabled = true; go2.textContent = 'Continue';
+      go2.onclick = function(){ $('sh-err').classList.add('hide'); go2.disabled = true; go2.textContent = 'Working… please wait'; runApply({ plan_id: CH.plan.plan_id, resume: true }, 0); };
+      chShowErr('<b>Stopped part-way. The change is only partly done.</b>' + esc(errText(e)) + '<br>Press Continue. The Hub remembers where it stopped and will not do anything twice or text anyone twice. Do not close this page until it says Done.');
+      return;
+    }
+    go2.disabled = false; cancel2.disabled = false; go2.textContent = 'Try Send again';
+    var unsure = e.code === 'network' || e.code === 'bad_response' || /^http_5/.test(e.code);
+    chShowErr('<b>' + (unsure ? 'Not sure if that went through.' : 'Not done.') + '</b>' + esc(errText(e)) + (unsure ? '<br>It is safe to press Send again: the Hub remembers this exact request and will not do it twice or text anyone twice. Or press Cancel, then Refresh, and check the Activity log.' : ''));
+  });
+}
+var TXT_PILL = { sent: ['ok', 'Text sent'], held: ['warn', 'Text held'], not_sent: ['warn', 'Not texted'], failed: ['bad', 'TEXT FAILED'] };
+var ITM_PILL = { done: ['ok', 'Done'], skipped: ['warn', 'Skipped'], failed: ['bad', 'FAILED'] };
+function renderResult(r){
+  var dup = !!r.duplicate; if(dup && r.result) r = r.result;
+  var tone = r.status === 'done' ? 'ok' : (r.status === 'failed' ? 'err' : 'warn');
+  var head = dup ? 'This was already done earlier. Nothing was done again.' : (r.status === 'done' ? 'Done.' : (r.status === 'failed' ? 'It did NOT go through.' : 'Done, but with problems. Read them below.'));
+  var h = '<h2 id="sh-title">' + esc(head) + '</h2>';
+  if(r.summary) h += '<div class="msg ' + tone + '" role="status"><b style="margin:0">' + esc(r.summary) + '</b></div>';
+  var errs = stepErrs(r.errors);
+  if(errs.length) h += '<div class="msg err" role="alert"><b>Problems</b>' + listHtml(errs) + '</div>';
+  var cal = r.calendar || {};
+  if((cal.manual||[]).length && cal.status !== 'staged') h += '<div class="msg warn" role="alert"><b>Do this by hand in Google Calendar</b>' + (cal.message ? '<div>' + esc(cal.message) + '</div>' : '') + listHtml(cal.manual) + '</div>';
+  var wr = (r.warnings||[]).map(String); if(wr.length) h += '<div class="msg warn"><b>Heads up</b>' + listHtml(wr) + '</div>';
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">Date by date</h4>' + (r.items||[]).map(function(i){
+    var pl = ITM_PILL[i.status] || ['', human(i.status)];
+    return '<div class="chg-item"><span class="pill ' + pl[0] + '">' + esc(pl[1]) + '</span><b>' + esc(i.label || i.date || taskName(i.task_key || i.ref)) + '</b>' + (i.status === 'done' && i.sentence ? '<div>' + esc(i.sentence) + '</div>' : '') + (i.reason ? '<div class="why">' + esc(i.reason) + '</div>' : '') + (i.calendar && i.calendar.message ? '<div class="why">Calendar: ' + esc(i.calendar.message) + '</div>' : '') + '</div>';
+  }).join('');
+  if((r.texts||[]).length) h += '<h4 style="margin:14px 0 4px;font-size:15px">Texts</h4>' + r.texts.map(function(x){ var pl = TXT_PILL[x.status] || ['', human(x.status)]; return '<div class="chg-item"><span class="pill ' + pl[0] + '">' + esc(pl[1]) + '</span><b>' + esc(x.name || x.first || '') + '</b><div class="why">' + esc(x.detail || '') + '</div></div>'; }).join('');
+  if(r.email) h += '<p class="say">Email invite: ' + esc(typeof r.email === 'string' ? r.email : (r.email.message || r.email.status || '')) + '</p>';
+  h += '<div class="btnrow"><button class="btn primary" id="sh-done">Done</button></div>';
+  openSheet(h);
+  $('sh-done').onclick = function(){ CH = null; closeSheet(); }; $('sh-done').focus();
+}
 /* ---------- the one confirm / result sheet ---------- */
 var sheetBusy = false;
 function openSheet(html){ var m = $('sheet'); $('sheet-box').innerHTML = html; m.classList.add('open'); m.setAttribute('aria-hidden', 'false'); var f = $('sheet-box').querySelector('input,select,button'); if(f) setTimeout(function(){ f.focus({preventScroll:true}); }, 30); }
@@ -741,6 +984,13 @@ document.addEventListener('click', function(ev){
   else if(a === 'offer') openOffer(key, false);
   else if(a === 'restart') openOffer(key, true);
   else if(a === 'copylink') copyLink(el);
+  else if(a === 'swap') openChange('swap', [key]);
+  else if(a === 'rangeassign' || a === 'bulk-range') openChange('range', []);
+  else if(a === 'seltoggle'){ selecting = !selecting; if(!selecting) picked = {}; if(S) renderTurnovers(); else updateBulkBar(); }
+  else if(a === 'sel'){ if(el.checked) picked[key] = true; else delete picked[key]; updateBulkBar(); }
+  else if(a === 'selclear'){ picked = {}; if(S) renderTurnovers(); }
+  else if(a === 'bulk-swap') openChange('swap', pickedKeys());
+  else if(a === 'bulk-mark') openChange('mark', pickedKeys());
   else if(a === 'newlink'){
     var c = findCleaner(id); if(!c) return;
     openAction({
