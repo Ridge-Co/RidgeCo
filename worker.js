@@ -12627,7 +12627,7 @@ async function addEstimateVersion(env, body) {
 // Unset → null → pricing SUGGESTIONS/estimates are dormant; manual invoicing still works.
 async function getPricingConfig(env) {
   try { if (env && env.PRICING_CONFIG) return JSON.parse(env.PRICING_CONFIG); } catch (e) { softNote('pricing_config_secret_invalid', e, 'P1', { note: 'PRICING_CONFIG secret is not valid JSON; falling back to the Config-sheet row' }); }
-  try { const cfg = await fetchConfig(env); if (cfg && cfg.pricing_config) return JSON.parse(cfg.pricing_config); } catch(_) {}
+  try { const cfg = await fetchConfig(env); if (cfg && cfg.pricing_config) return JSON.parse(cfg.pricing_config); } catch (e) { softNote('pricing_config_sheet_invalid', e, 'P1', { note: 'Config pricing_config is not valid JSON; pricing is dormant' }); }
   return null;
 }
 // Pure, config-driven — no constants baked in. Returns null if pricing isn't configured.
