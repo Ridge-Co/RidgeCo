@@ -123,7 +123,7 @@ function noToken(){
   document.getElementById('sSub').textContent='Enter the Hub token below.';
   document.getElementById('body').innerHTML='';
 }
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* silent-ok: token kept in memory for this visit only */ }
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* token kept in memory for this visit only */ }
   document.getElementById('tokbar').style.display='none';load();}
 
 async function load(){
