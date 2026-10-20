@@ -31096,8 +31096,7 @@ async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, 
 // and reimbursable receipts also to the vendor Bill (internal). Downloads each file once.
 // Best-effort — every failure is a warning, never blocks the send.
 async function qbAttachReceipts(env, qbToken, invoiceId, billId, billRow, warnings) {
-  let receipts = [];
-  try { receipts = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); } catch (e) {}
+  const receipts = parseJsonCell(billRow && billRow.Receipts_JSON, [], 'Vendor_Bills.Receipts_JSON', 'P1');
   const withUrl = (Array.isArray(receipts) ? receipts : []).filter(r => r && r.url);
   if (!withUrl.length) return;
   let gtoken;
