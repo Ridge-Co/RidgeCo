@@ -10401,7 +10401,7 @@ function awExtraBadgeHTML(w) {
     }
     var n = _awBadgeCache.counts[w.ID] || 0;
     return n ? '<span class="badge" style="background:#e8f0fb;border:1px solid var(--accent);color:var(--accent);margin-left:4px" title="Vendor-found additional work">+' + n + ' extra</span>' : '';
-  } catch (e) { return ''; }
+  } catch (e) { window.hubReportFailure && window.hubReportFailure('index:addon-badge', e); return ''; }
 }
 
 // ── Hub Receipt Tracking ──────────────────────────────────────
