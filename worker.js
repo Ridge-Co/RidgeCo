@@ -10865,7 +10865,7 @@ async function addVendorBill(env, body) {
   // trail — Created_Date is date-only (matches this tab's existing business-date convention),
   // Submitted_At captures the actual moment regardless of what the caller sends.
   if (!body.Submitted_At) body.Submitted_At = new Date().toISOString();
-  try { await ensureColumns(env, 'Vendor_Bills', ['Submitted_At']); } catch (e) {}
+  try { await ensureColumns(env, 'Vendor_Bills', ['Submitted_At']); } catch (e) { await softFail(env, 'vendor_bill_ensure_columns:Submitted_At', e, 'P1', { ref: dupeKey }); }
 
   // Hours logged on the job can BE the bill — that is the whole point when Brett is the
   // vendor. The ids ride in on the body but are not a Vendor_Bills column, so they come
