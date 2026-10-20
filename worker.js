@@ -11112,7 +11112,11 @@ async function editVendorBillReceipts(env, body) {
   // Hard stop: already sent to QuickBooks. Same check moveVendorBillToNewWO/vendorBillReassignLock
   // use — a live Invoice_Review row for this bill carrying a QB_Invoice_ID.
   let invoiceReviewRows = [];
-  try { invoiceReviewRows = await fetchTab(env, 'Invoice_Review'); } catch (e) { invoiceReviewRows = []; }
+  try { invoiceReviewRows = await fetchTab(env, 'Invoice_Review'); }
+  catch (e) {
+    invoiceReviewRows = [];   // proceeds as before, but the "already sent to QuickBooks" hard stop below could not be checked, so Brett is told
+    await softFail(env, 'bill_receipts_invoice_review_read_failed', e, 'P1', { ref: billId });
+  }
   const liveIR = invoiceReviewRows.find(ir => ir.Active !== 'FALSE' && String(ir.Bill_ID) === billId);
   if (liveIR && String(liveIR.QB_Invoice_ID || '').trim()) {
     return json({ error: `Already sent to QuickBooks (invoice ${liveIR.QB_Invoice_ID}) — fix this in QuickBooks directly, or void this bill and have the vendor resubmit.` }, 409);
