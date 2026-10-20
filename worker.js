@@ -16389,7 +16389,7 @@ async function failOpenList(env, url) {
   const rows = all.filter(r => showAll || FAIL_OPEN.indexOf(r.Status) >= 0).sort((a, b) => failSevRank(a.Severity) - failSevRank(b.Severity) || (a.Last_Seen < b.Last_Seen ? 1 : -1));
   const open = all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
   let alertsOn = null;
-  try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; } catch (e) { alertsOn = null; }
+  try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; } catch (e) { softNote('failures_open_config_read', e, 'P2'); alertsOn = null; }   // alerts_on:null tells the page the switch state is unknown
   return json({ ok: true, as_of: new Date().toISOString(), alerts_on: alertsOn, counts: { open: open.length, P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length, acknowledged: open.filter(r => r.Status === 'acknowledged').length }, failures: rows.map(r => { const o = Object.assign({}, r); delete o._row; return o; }) });
 }
 // POST /failure/update { id, status, notes?, fixed_in? } - admin only (not in any ROLE_SCOPES list).
