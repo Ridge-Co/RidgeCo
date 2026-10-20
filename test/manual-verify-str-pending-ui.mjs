@@ -169,4 +169,59 @@ const SEL = '.card.offer.pend';
 
 await t('cleaner: question card says NOT BOOKED YET - tentative, no deadline, no primary/rank; buttons are Yes, I\'d be available / No', async () => {
   const p = await cleaner(() => ({ body: { ok: true } }), cpage([cpend()]));
+  const c = await p.locator(SEL).innerText(); assert(/NOT BOOKED YET - tentative/.test(c)); assert(/Could you clean Saturday, November 14 if it books\?/.test(c)); assert(/not.*booked yet/i.test(c) && /does not put you on the schedule/.test(c));
+  assert(!/primary|rank|reply by|deadline|by \d/i.test(c), 'no deadline/primary/rank wording: ' + c);
+  const bs = await p.locator(SEL + ' button').allInnerTexts(); assert.deepStrictEqual(bs, ['Yes, I’d be available', 'No']);
+  const body = await p.locator('body').innerText(); assert(!/\bprimary\b|\brank\b/i.test(body));
+  assert((await p.locator(SEL + ' button').first().boundingBox()).height >= 48); await noScroll(p); assert.deepStrictEqual(p._errs, []);
+  await p.context().close();
+});
+await t('cleaner: the question card is the offer deep link target and is above the schedule; the question date is NOT also an availability row', async () => {
+  const p = await cleaner(() => ({ body: { ok: true } }), cpage([cpend(), cpend({ key: 'milam-ridge|pending|2026-11-21', date: '2026-11-21', label: 'Sat, Nov 21', long_label: 'Saturday, November 21', offer_id: '' })]));
+  assert.strictEqual(await p.locator('#offer-13').count(), 1); const order = await p.evaluate(() => [...document.querySelectorAll('main > *')].map(e => e.className.split(' ')[0] + ':' + (e.id || e.textContent.slice(0, 18))).join(' / '));
+  assert(order.indexOf('offer-13') < order.indexOf('Pending - not'), order); assert(order.indexOf('Pending - not') < order.indexOf('Schedule'), order);
+  assert.strictEqual(await p.locator('.task.pend').count(), 1, 'only the not-asked date is a list row'); assert(/Pending - not booked/.test(await p.locator('.task.pend').innerText()));
+  assert(/Not marked/.test(await p.locator('.task.pend').innerText())); await p.context().close();
+});
+await t('cleaner: Yes -> posts offer_id + accept, shows the held message, then the date is listed as "You said yes - tentative" with a release button', async () => {
+  let held = false;
+  const p = await cleaner((pth, body) => { if (pth === '/str/c/offer') { held = true; return { body: { ok: true, result: 'held', message: 'Thanks - we\'ll let you know if it books. Nothing is confirmed yet.', warnings: [] } }; } return { body: { ok: true } }; }, () => held ? cpage([cpend({ offer_id: '', held_by_me: true, can_release: true, status_label: 'You said yes - tentative' })]) : cpage([cpend()]));
+  await p.click('[data-act=pend-offer][data-do=accept]'); await p.waitForFunction(() => /Nothing is confirmed yet/.test(document.querySelector('.card.offer.pend').innerText));
+  const c = callsTo(p, '/str/c/offer'); assert.strictEqual(c.length, 1); assert.deepStrictEqual(c[0].body, { k: 'TOKEN', offer_id: '13', action: 'accept' });
+  await p.waitForSelector('.task.pend.mine'); const row = await p.locator('.task.pend.mine').innerText(); assert(/You said yes - tentative/.test(row) && /NOT BOOKED YET/.test(row) && /not.*on the schedule/.test(row));
+  assert.strictEqual(await p.locator('.task.pend.mine .seg').count(), 0, 'no availability marks on a date she holds'); assert(/I can’t hold this date anymore/.test(row));
+  assert(!/primary|rank/i.test(await p.locator('main').innerText())); assert.strictEqual(await p.locator('.card.offer.pend button').count(), 0, 'answered card has no buttons to tap twice'); await noScroll(p); await p.context().close();
+});
+await t('cleaner: release a tentative hold - confirm first, then posts the pending key to /str/c/cancel; message shown', async () => {
+  const p = await cleaner((pth) => pth === '/str/c/cancel' ? { body: { ok: true, message: 'Thank you for letting us know - you are no longer holding Saturday, November 14. Brett has been told.', warnings: [] } } : { body: { ok: true } }, cpage([cpend({ offer_id: '', held_by_me: true, can_release: true, status_label: 'You said yes - tentative' })]));
+  await p.click('[data-act=cancel-ask]'); assert(/Stop holding Sat, Nov 14\?/.test(await p.locator('.confirm').innerText())); assert.strictEqual(callsTo(p, '/str/c/cancel').length, 0);
+  await p.click('[data-act=cancel-no]'); assert.strictEqual(await p.locator('.confirm').count(), 0);
+  await p.click('[data-act=cancel-ask]'); await p.click('[data-act=cancel-yes]'); await p.waitForFunction(() => /no longer holding/.test(document.querySelector('main').innerText));
+  assert.deepStrictEqual(callsTo(p, '/str/c/cancel')[0].body, { k: 'TOKEN', task_key: 'milam-ridge|pending|2026-11-14' }); await p.context().close();
+});
+await t('cleaner: No -> declined message; Yes when another cleaner already holds it -> filled message plus the Yes, backup / No pair', async () => {
+  const p = await cleaner((pth, body) => pth === '/str/c/offer' ? { body: { ok: true, result: 'declined', message: 'No problem - thank you for letting us know.' } } : { body: { ok: true } }, cpage([cpend()]));
+  await p.click('[data-act=pend-offer][data-do=decline]'); await p.waitForFunction(() => /No problem/.test(document.querySelector('.card.offer.pend').innerText)); assert.strictEqual(callsTo(p, '/str/c/offer')[0].body.action, 'decline'); await p.context().close();
+  const q = await cleaner((pth, body) => { if (pth === '/str/c/offer') return { body: { ok: true, result: 'filled', backup_date: '2026-11-14', message: 'Thanks for the quick answer - another cleaner already said they could do Saturday, November 14, so it is covered for now. Could you be the backup for that date?' } }; if (pth === '/str/c/mark') return { body: { ok: true, warnings: [] } }; return { body: { ok: true } }; }, cpage([cpend()]));
+  await q.click('[data-act=pend-offer][data-do=accept]'); await q.waitForSelector(SEL + ' [data-act=backup]'); assert(/another cleaner already said/.test(await q.locator(SEL).innerText()));
+  await q.click(SEL + ' [data-act=backup][data-do=can]'); await q.waitForFunction(() => /marked as the backup/.test(document.querySelector('.card.offer.pend').innerText));
+  assert.deepStrictEqual(callsTo(q, '/str/c/mark')[0].body, { k: 'TOKEN', marks: [{ date: '2026-11-14', mark: 'can' }] }); await q.context().close();
+});
+await t('cleaner: the answer fails (500 / no signal) -> plain error, buttons usable again, nothing shown as saved', async () => {
+  let n = 0; const p = await cleaner((pth) => { if (pth === '/str/c/offer') { n++; return n === 1 ? { status: 500, body: { ok: false, error: 'write_not_landed', message: 'The tentative hold did not save.' } } : { body: { ok: true, result: 'held', message: 'Thanks - we\'ll let you know if it books. Nothing is confirmed yet.' } }; } return { body: { ok: true } }; }, cpage([cpend()]));
+  await p.click('[data-act=pend-offer][data-do=accept]'); await p.waitForSelector(SEL + ' .msg.err'); const e = await p.locator(SEL + ' .msg.err').innerText(); assert(/Couldn’t save that/.test(e) && /did not save/.test(e));
+  assert.strictEqual(await p.locator(SEL + ' [data-do=accept]').isDisabled(), false); assert(!/Nothing is confirmed yet/.test(await p.locator(SEL).innerText()));
+  await p.click('[data-act=pend-offer][data-do=accept]'); await p.waitForFunction(() => /Nothing is confirmed yet/.test(document.querySelector('.card.offer.pend').innerText)); await p.context().close();
+});
+await t('cleaner: availability marks on a pending date (not asked) post the date; failure rolls back and says so', async () => {
+  let fail = false; const p = await cleaner((pth) => pth === '/str/c/mark' ? (fail ? { status: 500, body: { ok: false, error: 'x', message: 'Could not save.' } } : { body: { ok: true, warnings: [] } }) : { body: { ok: true } }, cpage([cpend({ offer_id: '' })]));
+  await p.click('.task.pend [data-act=mark][data-mark=out]'); await p.waitForFunction(() => document.querySelector('.task.pend [data-mark=out]').getAttribute('aria-checked') === 'true');
+  assert.deepStrictEqual(callsTo(p, '/str/c/mark')[0].body, { k: 'TOKEN', marks: [{ date: '2026-11-14', mark: 'out' }] }); await p.context().close();
+  const q = await cleaner((pth) => pth === '/str/c/mark' ? { status: 500, body: { ok: false, error: 'x', message: 'Could not save.' } } : { body: { ok: true } }, cpage([cpend({ offer_id: '' })]));
+  await q.click('.task.pend [data-act=mark][data-mark=can]'); await q.waitForSelector('.task.pend .msg.err'); assert(/Couldn’t save that/.test(await q.locator('.task.pend .msg.err').innerText()));
+  assert.strictEqual(await q.locator('.task.pend [data-mark=can]').getAttribute('aria-checked'), 'false', 'rolled back'); await q.context().close();
+});
+await t('cleaner: a date another cleaner holds shows as Pending - not booked with no names; dark mode and 320px have no horizontal scroll', async () => {
+  const p = await cleaner(() => ({ body: { ok: true } }), cpage([cpend({ offer_id: '', held_by_other: true })]));
+  const r = await p.locator('.task.pend').innerText(); assert(/Pending - not booked/.test(r)); assert(!/Gina|Rachel|held by|said yes/i.test(r), 'no other cleaner info: ' + r); await noScroll(p); await p.context().close();
 //@@APPEND@@
