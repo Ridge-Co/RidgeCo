@@ -10589,7 +10589,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
 
   const base = String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '');
   let fileToken = '';
-  try { fileToken = await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET); } catch (e) {}
+  try { fileToken = await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET); } catch (e) { await softFail(env, 'vendor_invoice_email_file_token_failed', e, 'P0', { ref: vendor.ID }); }   // the email goes out without file links
   const fileLink = (fileId) => `${base}/vendor-file/view?wo_id=${encodeURIComponent(woId)}&file_id=${encodeURIComponent(fileId)}&t=${encodeURIComponent(fileToken)}`;
 
   const linkRows = [];
