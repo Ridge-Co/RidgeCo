@@ -1067,7 +1067,7 @@ function dragStart(e, handle){
   drag = { id: row.getAttribute('data-aid'), pid: e.pointerId, handle: handle, row: row, rows: rows, from: from, to: from, sy0: sy, y0: e.clientY, clientY: e.clientY, h: row.getBoundingClientRect().height, raf: 0,
     ids: rows.map(function(r){ return r.getAttribute('data-aid'); }),
     mids: rows.map(function(r){ var b = r.getBoundingClientRect(); return b.top + sy + b.height/2; }) };
-  try { handle.setPointerCapture(e.pointerId); } catch(_){}
+  try { handle.setPointerCapture(e.pointerId); } catch(_){ /* silent-ok: pointer capture unsupported, drag still works */ }
   row.classList.add('dragging'); rows.forEach(function(r){ if (r !== row) r.classList.add('shifting'); });
   document.body.classList.add('dragging-rows');
   drag.raf = requestAnimationFrame(dragTick);
