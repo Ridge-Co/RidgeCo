@@ -36848,7 +36848,7 @@ async function inspOpenBlockReopen(env, body) {
     return json({ ok: true, mode, id: String(b.ID), closes_iso: new Date(sel.closeMs).toISOString(), closes_label: inspFmtEt(sel.closeMs), capped: sel.capped, capped_to_label: sel.capped_to_label, notify: notifyLog, warnings });
   } catch (e) {
     console.error('insp: reopen/extend failed:', e && e.message);
-    try { await inspAlert(env, 'reopen_unexpected', 'Reopen/extend crashed: ' + (e && e.message)); } catch (ae) { console.error('insp: could not raise the reopen_unexpected alert:', ae && ae.message); }
+    try { await inspAlert(env, 'reopen_unexpected', 'Reopen/extend crashed: ' + (e && e.message)); } catch (ae) { console.error('insp: could not raise the reopen_unexpected alert:', ae && ae.message); softNote('insp_reopen_alert_failed', ae, 'P1'); }
     return json({ ok: false, error: 'internal', message: 'Something went wrong, so nobody was notified: ' + (e && e.message) }, 500);
   }
 }
