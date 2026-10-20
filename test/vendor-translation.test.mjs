@@ -3,6 +3,7 @@
 // as message-queue.test.mjs) and runs them against a stubbed Anthropic fetch and stubbed Sheets deps.
 import fs from 'fs';
 import assert from 'node:assert';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages, aiFailOpenNote, ...)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 function grab(name) {
