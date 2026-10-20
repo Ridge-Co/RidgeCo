@@ -396,7 +396,7 @@ function validate(){
   return !first;
 }
 function newToken(){
-  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){ console.warn('randomUUID', e); }
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){ /* silent-ok: feature-detect, falls back to getRandomValues just below */ console.warn('randomUUID', e); }
   var a = new Uint8Array(16); crypto.getRandomValues(a);
   return Array.prototype.map.call(a, function(b){ return ('0'+b.toString(16)).slice(-2); }).join('');
 }
