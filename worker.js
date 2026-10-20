@@ -34169,7 +34169,8 @@ async function proposalBook(env, body) {
     invoiceNumber = (r.Invoice && r.Invoice.DocNumber) || '';
     // Persist the invoice id NOW, before touching the bill, so a later failure (bill error or a
     // dropped connection) can never cause a duplicate invoice on retry.
-    try { await updateRow(env, 'Proposal_Signatures', row.ID, { Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber }); } catch (e) {}
+    const _pi = await tryWrite(env, 'proposal_book_persist_invoice', () => updateRow(env, 'Proposal_Signatures', row.ID, { Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber }), 'P0');
+    if (!_pi.ok) failWarnings.push('Invoice ' + (invoiceNumber || invoiceId) + ' was created in QuickBooks but saving its id on the proposal failed (' + _pi.error + ') - do not book this proposal again until it is fixed.');
   }
 
   // 2) Vendor bill (full base cost) — idempotent; skipped if vendor missing/in-house.
