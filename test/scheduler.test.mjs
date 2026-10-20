@@ -63,7 +63,9 @@ function makeStore() {
 // ───────────────────────────── 1. scheduler block, sliced out of worker.js ─────────────────────────────
 const bi = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-BEGIN'), be = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-END');
 t('scheduler block markers exist', bi > 0 && be > bi);
-const blockSrc = wsrc.slice(bi, be);
+// Oct 20 2026: the AI-credit step helpers live just outside the block; take the real source so the daily_receipts tests keep exercising them.
+const aiHelpSrc = wsrc.slice(wsrc.indexOf('function aiCreditSchedPaused('), wsrc.indexOf('// The scheduler job ai_credit_probe:'));
+const blockSrc = wsrc.slice(bi, be) + '\n' + aiHelpSrc;
 function load(store, over) {
   over = over || {};
   const telemetry = [], alerts = [];
