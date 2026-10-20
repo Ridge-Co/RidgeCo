@@ -267,7 +267,7 @@ function applyShop(){
 }
 
 /* ---------- products ---------- */
-function photoUrl(p){ try { return new URL(p, location.href).href; } catch(e){ console.warn('bad photo', p); return ''; } }
+function photoUrl(p){ try { return new URL(p, location.href).href; } catch(e){ console.warn('bad photo', p); /* silent-ok: a bad photo address just shows no picture */ return ''; } }
 function renderProducts(){
   var box = $('products'); box.textContent = '';
   if (!state.products.length){ box.appendChild(h('p',{class:'fine',text:'Nothing is listed right now.'})); return; }
