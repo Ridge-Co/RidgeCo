@@ -24353,7 +24353,7 @@ const METER_ALARM_GAP_MS = 10 * 60 * 1000;
 const METER_PERSIST_MIN = 60;               // minutes of history each instance saves
 const METER_PERSIST_GAP_MS = 60 * 1000;     // save at most this often per instance
 const METER_STORE_TTL_S = 2 * 60 * 60;      // a saved instance record disappears after 2h
-const METER_MAX_REMOTE = 30;                // most other instances read per view (keeps under the subrequest limit; truncation is reported)
+const METER_MAX_REMOTE = 30;                // most other instances read per view (bounds the size/CPU of one view; truncation is reported)
 const METER_REMOTE_CACHE_MS = 20 * 1000;    // several viewers / refreshes within 20s share one KV read
 const __meter = { isolate: Math.random().toString(36).slice(2, 8), since: 0 /* set on first use: Workers freeze Date.now() at startup */, tag: 'prd', mins: new Map(), lastAlarmAt: 0, pending: null, alarms: 0, faults: 0,
   dirty: false, persisting: false, lastPersistAt: 0, persists: 0, persistErrors: 0, lastPersistError: '', lastStoreAlarmAt: 0, remoteCache: null };
