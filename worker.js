@@ -6141,7 +6141,12 @@ async function scopeProposalBook(env, body) {
     invoiceNumber = (r.Invoice && r.Invoice.DocNumber) || '';
     // Persist the invoice id NOW, before touching the bill, so a later failure (bill error or a
     // dropped connection) can never cause a duplicate invoice on retry.
-    try { await updateRow(env, 'Scope_Signatures', row.ID, { Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber }); } catch (e) {}
+    try { await updateRow(env, 'Scope_Signatures', row.ID, { Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber }); }
+    catch (e) {
+      // P0: the QB invoice EXISTS but its id was not saved - a retry could create a duplicate invoice. Reported now and returned to the screen.
+      await softFail(env, 'scope_book_persist_invoice_id_failed', e, 'P0', { scope_signature: String(row.ID), qb_invoice_id: invoiceId });
+      failWarnings.push('QuickBooks invoice ' + (invoiceNumber || invoiceId) + ' WAS created but its id could not be saved on the signature row yet - do not book again; check QuickBooks for a duplicate.');
+    }
   }
 
   // 2) Vendor bill (prorated cost) — idempotent; skipped if vendor missing/in-house/zero.
