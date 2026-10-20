@@ -12626,7 +12626,7 @@ async function addEstimateVersion(env, body) {
 //     "onsiteHourly": <n>, "onsiteMinFee": <n>, "passThroughFlat": <n>, "roundTo": <n> }
 // Unset → null → pricing SUGGESTIONS/estimates are dormant; manual invoicing still works.
 async function getPricingConfig(env) {
-  try { if (env && env.PRICING_CONFIG) return JSON.parse(env.PRICING_CONFIG); } catch(_) {}
+  try { if (env && env.PRICING_CONFIG) return JSON.parse(env.PRICING_CONFIG); } catch (e) { softNote('pricing_config_secret_invalid', e, 'P1', { note: 'PRICING_CONFIG secret is not valid JSON; falling back to the Config-sheet row' }); }
   try { const cfg = await fetchConfig(env); if (cfg && cfg.pricing_config) return JSON.parse(cfg.pricing_config); } catch(_) {}
   return null;
 }
