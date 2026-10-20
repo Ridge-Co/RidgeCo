@@ -4547,10 +4547,11 @@ async function scopeEstimate(env, body) {
   // zero jobs in both places despite having signed, in-progress proposal work. Only fires when
   // this call is actually changing the vendor and the scope has a real linked WO; never writes
   // a blank Vendor_ID onto a WO.
+  let woVendorSync = null;
   if (body.vendor_id !== undefined && body.vendor_id && s.WO_ID) {
-    try { await updateWOFields(env, s.WO_ID, { Vendor_ID: body.vendor_id }); } catch (_) {}
+    woVendorSync = await tryWrite(env, 'scopeEstimate_wo_vendor_sync', () => updateWOFields(env, s.WO_ID, { Vendor_ID: body.vendor_id }), 'P1');
   }
-  return json({ success: true });
+  return json(Object.assign({ success: true }, (woVendorSync && !woVendorSync.ok) ? { failure_warning: `Saved, but the linked work order ${s.WO_ID} was not updated with the new vendor (it may not show in that vendor's portal until fixed).` } : {}));
 }
 
 // Pure: should this Scope's Vendor_ID be backfilled onto its linked Work Order? Factored out so
