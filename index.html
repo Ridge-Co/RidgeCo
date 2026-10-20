@@ -3705,7 +3705,7 @@ function openTenantSafetyScreen() {
 function checklistFromText(text, existingJson){
   var items = (text||'').split('\n').map(function(l){return l.trim();}).filter(function(l){return l.length;});
   if(!items.length) return '';
-  var prev=[]; try{ prev=JSON.parse(existingJson||'[]')||[]; }catch(e){}
+  var prev=[]; try{ prev=JSON.parse(existingJson||'[]')||[]; }catch(e){ window.hubReportFailure && window.hubReportFailure('index:checklist-existing', e); }
   return JSON.stringify(items.map(function(t){
     var m=prev.find(function(p){return (p.t||'')===t;});
     return m?{t:t,done:!!m.done,code:m.code||'',why:m.why||''}:{t:t,done:false,code:'',why:''};
