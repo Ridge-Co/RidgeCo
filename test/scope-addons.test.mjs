@@ -66,6 +66,7 @@ ok(P.subtotal + P.items[1].variants[0].price === whole, 'base + add-on lands exa
 // ---- customer boundary: add-on flag passes through, vendor cost never does ----
 const stored = P.items;
 const viewStubs = {
+  ...SOFTO,
   scopeProposalLinkAuth: async () => ({ s: { ID: '5', Property_ID: '1', Proposal_Items_JSON: JSON.stringify(stored) } }),
   scopeAddr: async () => '1 Main St', scopeProposalPhotos: async () => [],
   scopeParsePaymentSchedule: () => [{ label: 'Deposit', percent: 40, trigger: 'upfront' }, { label: 'Final', percent: 60, trigger: 'completion' }],
