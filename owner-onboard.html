@@ -467,7 +467,7 @@ function suggestAndCheck(attempt){
     if (j.available) { pinState = { pin: pin, ok: true, msg: '' }; updatePinUI(); return; }
     if ((attempt || 0) < 4 && j.ok) { suggestAndCheck((attempt || 0) + 1); return; }
     pinState = { pin: pin, ok: false, msg: j.reason || 'That PIN is not available.' }; updatePinUI();
-  }).catch(function(){ /* the server re-checks on submit */ });
+  }).catch(function(e){ /* the server re-checks on submit */ window.hubReportFailure && window.hubReportFailure('owner-onboard:pin-suggest-check', e); });
 }
 
 // ── boot ────────────────────────────────────────────────────────────────
