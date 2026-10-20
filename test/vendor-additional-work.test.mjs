@@ -347,7 +347,7 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
 
 // ── F. one call for the whole portal (executed) ─────────────────────────────────
 {
-  const mkList = new Function('json', 'fetchTabs', 'findWO', 'addonIsDraft', 'addonParseItems', 'addonLatestEstimate', 'addonPhotosByItem', 'ADDON_PHOTO_TYPES', grabAsync('addonList') + '\nreturn addonList;');
+  const mkList = new Function('json', 'fetchTabs', 'findWO', 'addonIsDraft', 'addonParseItems', 'addonLatestEstimate', 'addonPhotosByItem', 'ADDON_PHOTO_TYPES', SOFT + grabAsync('addonList') + '\nreturn addonList;');
   const W = [
     { ID: 'WO-1', Vendor_ID: 'V1', Type: 'manual' }, { ID: 'WO-2', Vendor_ID: 'V2', Type: 'manual' },
     { ID: 'WO-11', Vendor_ID: 'V1', Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Submitted', Addon_Items_JSON: '[{"index":0,"desc":"a"}]', Created_Date: '2' },
