@@ -100,7 +100,7 @@ ok(s.status === 'unknown' && s.count === 2, 'payments without a usable date -> u
 console.log('\nqbPayables — clearing integration — offline tests\n');
 const qbpSrc = ['function qbEscape(', 'async function qbFindLikelyUnlinkedPayment(', 'function depositMilestoneForSignature(', 'function firstMilestoneForSignature(', 'async function logAndCollectError(',
   'function parseHolidayMap(', 'function nextBusinessDay(', 'function paymentClearDaysMap(', 'function classifyPaymentMethod(', 'function addBusinessDays(',
-  'function summarizeInvoicePayments(', 'async function qbLoadInvoicePayments(', 'async function qbPayables(']
+  'function summarizeInvoicePayments(', 'function money2(', 'function vendorBillPaymentIds(', 'function vendorBillPaidDate(', 'async function qbLoadInvoicePayments(', 'async function qbPayables(']
   .map(sg => { const isAsync = sg.startsWith('async '); const name = sg.replace('async ', '').replace('function ', '').replace('(', ''); return extractFn(name, isAsync); }).join('\n');
 
 const NOW = '2026-10-14'; // Wednesday, after Columbus Day (Mon 10-12)

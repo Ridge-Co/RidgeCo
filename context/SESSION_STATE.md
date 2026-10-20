@@ -2,7 +2,10 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Checkpoint: Oct 19, 2026 — proposal netting + instant-pay fee + property/unit texts built on `feat/proposal-netting-instant-fee-oct19`
+## Checkpoint: Oct 19, 2026 (evening) — vendor Paid tab, estimate skip-text, padded fee, fee credits, credit-aware reprice/Who To Pay, sweep built on `feat/estimate-skip-sms-vendor-paid-tab-oct19`
+**State:** code + tests + docs done; next: staging verification (staging PR), Brett's go/no-go on the `main` PR. Details: FEATURE_LOG "VENDOR PORTAL PAID TAB ...".
+
+## Earlier checkpoint: Oct 19, 2026 — proposal netting + instant-pay fee + property/unit texts built on `feat/proposal-netting-instant-fee-oct19`
 **State:** code, UI (Review Bills preview, Who To Pay text button, Vendors Instant pay checkbox), 83 tests and context docs done. Next: staging verification, then Brett's go/no-go to merge the `main` PR. Details: FEATURE_LOG "PROPOSAL NETTING + INSTANT-PAY FEE", CURRENT.md top block, Continuous Improvement Project doc `claude/final-billing-after-deposit-netting-instant-fee-oct19.md`.
 
 ## Last checkpoint: Sep 26, 2026 (~18:20 ET) — BrettOS Tasks Manager quick-link shipped (PR #76 → staging, PR #77 → main)

@@ -30,7 +30,7 @@ const { calcTieredEstimate, invPricing, setup } = new Function(
   '  if(id.indexOf("inv-brett-hrs-")===0) return {value:String(fields.brettHrs||0)};\n' +
   '  if(id.indexOf("inv-travel-")===0) return {value:String(fields.travel||0)};\n' +
   '  return null;}};\n' +
-  grab('calcTieredEstimate') + '\n' + grab('invPricing') +
+  'var INSTANT_FEE_CFG = null;\n' + grab('invPadFor') + '\n' + grab('calcTieredEstimate') + '\n' + grab('invPricing') +
   '\nreturn { calcTieredEstimate, invPricing };')(ctx.state, ctx._invBill, {});
 
 function price(bill, fields, vendors){
@@ -47,7 +47,7 @@ function price(bill, fields, vendors){
     '  if(id.indexOf("inv-brett-hrs-")===0) return {value:String(fields.brettHrs||0)};\n' +
     '  if(id.indexOf("inv-travel-")===0) return {value:String(fields.travel||0)};\n' +
     '  return null;}};\n' +
-    grab('calcTieredEstimate') + '\n' + grab('invPricing') +
+    'var INSTANT_FEE_CFG = null;\n' + grab('invPadFor') + '\n' + grab('calcTieredEstimate') + '\n' + grab('invPricing') +
     '\nreturn invPricing("k");')(state,_invBill,f);
   return mod;
 }
