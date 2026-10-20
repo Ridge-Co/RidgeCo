@@ -29911,7 +29911,7 @@ async function qbPayBills(env, body) {
       }
     } catch (e) {
       // The QuickBooks payment already succeeded, so this must never look like a payment failure — but it is NOT silent.
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text_failed', Skill_Or_Endpoint: '/qb/pay-bills', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text_failed', Skill_Or_Endpoint: '/qb/pay-bills', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (te) { softNote('telemetry_write_failed:vendor_paid_text_failed', te, 'P2'); }
       for (const r of paidResults) if (!r.vendor_text) r.vendor_text = { sent: false, reason: 'text failed: ' + String((e && e.message) || e).slice(0, 120) };
     }
   }
