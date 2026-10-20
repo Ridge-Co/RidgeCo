@@ -1192,6 +1192,41 @@ const _hubWorkerCore = {
   }
 };
 
+// Read Meter shared store (Oct 20 2026): ONE small Durable Object that every Worker instance saves its counts into and reads the others from.
+// Why not KV: the Workers Free plan allows only 1,000 KV writes and 1,000 KV lists a day; Durable Objects (SQLite-backed, required on Free) have room.
+// Plain object records keyed 'i:<prd|stg>:<instance>'; a record expires METER_STORE_TTL_S after its last save; /list returns the freshest ones,
+// newest first, capped (the cap and the number left out are returned so the page can say so). Never touches Google Sheets.
+export class ReadMeterStore {
+  constructor(state, env) { this.state = state; this.env = env; this.lastPrune = 0; }
+  async fetch(request) {
+    const url = new URL(request.url), now = Date.now(), st = this.state.storage;
+    try {
+      if (request.method === 'POST' && url.pathname === '/put') {
+        const rec = await request.json();
+        if (!rec || typeof rec.id !== 'string' || !rec.id || typeof rec.tag !== 'string' || !rec.tag || !rec.payload || typeof rec.payload !== 'object') return new Response('bad record', { status: 400 });
+        await st.put('i:' + rec.tag + ':' + rec.id, { id: rec.id, tag: rec.tag, t: now, build: String(rec.build || '').slice(0, 80), payload: rec.payload });
+        await this._prune(now);
+        return new Response('ok');
+      }
+      if (request.method === 'GET' && url.pathname === '/list') {
+        const tag = url.searchParams.get('tag') || 'prd', exclude = url.searchParams.get('exclude') || '';
+        const since = Number(url.searchParams.get('since')) || 0, limit = Math.max(1, Math.min(60, Number(url.searchParams.get('limit')) || 30));
+        await this._prune(now);
+        const all = Array.from((await st.list({ prefix: 'i:' + tag + ':' })).values()).filter(r => r && r.id !== exclude && r.t >= since).sort((a, b) => b.t - a.t);
+        return new Response(JSON.stringify({ in_store: all.length, truncated: Math.max(0, all.length - limit), instances: all.slice(0, limit) }), { headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    } catch (e) { return new Response('store error: ' + String((e && e.message) || e).slice(0, 200), { status: 500 }); }
+  }
+  async _prune(now) {                                 // at most once a minute: drop records not saved for METER_STORE_TTL_S
+    if (now - this.lastPrune < 60000) return;
+    this.lastPrune = now;
+    const dead = [];
+    for (const [k, v] of await this.state.storage.list({ prefix: 'i:' })) if (!v || typeof v.t !== 'number' || now - v.t > METER_STORE_TTL_S * 1000) dead.push(k);
+    for (let i = 0; i < dead.length; i += 128) await this.state.storage.delete(dead.slice(i, i + 128));
+  }
+}
+
 // Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
@@ -24347,12 +24382,13 @@ const METER_MAX_KEYS = 250;
 const METER_ALARM_READS_PER_MIN = 40;
 const METER_ALARM_GAP_MS = 10 * 60 * 1000;
 // Cross-instance roll-up (Oct 20 2026): Cloudflare runs MANY Worker instances at once (staging showed 5 in 5 requests), each with its own memory,
-// but the Google quota is shared by all of them. So each instance saves its own recent per-minute counts to the READ_METER KV store (at most
-// once per minute while it has news, the first one right away), and /read-meter adds every instance together. Costs ZERO Sheets reads.
+// but the Google quota is shared by all of them. So each instance saves its own recent per-minute counts to the shared READ_METER_STORE (a small
+// Durable Object, class ReadMeterStore below; KV was ruled out because the Workers Free plan allows only 1,000 KV writes a day) at most
+// once per minute while it has news, the first one right away, and /read-meter adds every instance together. Costs ZERO Sheets reads.
 const METER_PERSIST_MIN = 60;               // minutes of history each instance saves
 const METER_PERSIST_GAP_MS = 60 * 1000;     // save at most this often per instance
-const METER_KV_TTL_S = 2 * 60 * 60;         // a saved instance record disappears after 2h
-const METER_MAX_REMOTE = 30;                // most other instances read per view (keeps under the subrequest limit; truncation is reported)
+const METER_STORE_TTL_S = 2 * 60 * 60;      // a saved instance record disappears after 2h
+const METER_MAX_REMOTE = 30;                // most other instances read per view (bounds the size/CPU of one view; truncation is reported)
 const METER_REMOTE_CACHE_MS = 20 * 1000;    // several viewers / refreshes within 20s share one KV read
 const __meter = { isolate: Math.random().toString(36).slice(2, 8), since: 0 /* set on first use: Workers freeze Date.now() at startup */, tag: 'prd', mins: new Map(), lastAlarmAt: 0, pending: null, alarms: 0, faults: 0,
   dirty: false, persisting: false, lastPersistAt: 0, persists: 0, persistErrors: 0, lastPersistError: '', lastStoreAlarmAt: 0, remoteCache: null };
@@ -24506,7 +24542,7 @@ function __meterCompact(map, n) {
 }
 function __meterPayload(now) {
   const mins = __meterWindow(METER_PERSIST_MIN).filter(b => b.reads || b.writes || b.hits || b.joins || b.reqs)
-    .map(b => ({ t: b.t, r: b.reads, w: b.writes, x: b.r429, e: b.errs, h: b.hits, j: b.joins, q: b.reqs, s: __meterCompact(b.bySrc, 30), a: __meterCompact(b.byTab, 15) }));
+    .map(b => ({ t: b.t, r: b.reads, w: b.writes, x: b.r429, e: b.errs, h: b.hits, j: b.joins, q: b.reqs, s: __meterCompact(b.bySrc, 20), a: __meterCompact(b.byTab, 10) }));
   return { v: 1, isolate: __meter.isolate, build: BUILD_VERSION, since: __meter.since, t: now, mins };
 }
 function __meterRowsFromPayload(p, cutoffMinute) {
@@ -24525,18 +24561,19 @@ function __meterRowsFromPayload(p, cutoffMinute) {
 // A failure is counted, shown on the Read Meter page, and filed once per 30 min to the failure ledger (never silent, never thrown).
 async function __meterPersist(env) {
   if (__meter.persisting || !__meter.dirty) return;
-  const kv = env && env.READ_METER;
-  if (!kv) return;                                   // not bound: the page says so
+  const stub = __meterStub(env);
+  if (!stub) return;                                 // not bound: the page says so
   const now = Date.now();
   if (__meter.lastPersistAt && now - __meter.lastPersistAt < METER_PERSIST_GAP_MS) return;
   __meter.persisting = true; __meter.dirty = false; __meter.lastPersistAt = now;
   try {
-    await kv.put('rm1:' + __meter.tag + ':' + __meter.isolate, JSON.stringify(__meterPayload(now)), { expirationTtl: METER_KV_TTL_S, metadata: { t: now, b: BUILD_VERSION } });
+    const res = await stub.fetch('https://read-meter.internal/put', { method: 'POST', body: JSON.stringify({ id: __meter.isolate, tag: __meter.tag, build: BUILD_VERSION, payload: __meterPayload(now) }) });
+    if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
     __meter.persists++;
   } catch (e) {
     __meter.persistErrors++; __meter.dirty = true;
     __meter.lastPersistError = String((e && e.message) || e).slice(0, 200);
-    if (__meter.persistErrors <= 3) console.error('[read-meter] could not save counts to the shared store (READ_METER): ' + __meter.lastPersistError);
+    if (__meter.persistErrors <= 3) console.error('[read-meter] could not save counts to the shared store: ' + __meter.lastPersistError);
     await __meterReportStoreFault(env, __meter.lastPersistError);
   } finally { __meter.persisting = false; }
 }
@@ -24546,36 +24583,40 @@ async function __meterReportStoreFault(env, msg) {
   __meter.lastStoreAlarmAt = now;
   try {
     const r = await reportFailure(env, { system: 'hub', source: 'read-meter', where: 'read_meter_store', ref: __meter.isolate, severity: 'P2',
-      message: 'The Read Meter could not save its counts to the shared store (READ_METER): ' + msg + '. Until fixed, the Read Meter page shows only part of the traffic.', context: { isolate: __meter.isolate } });
+      message: 'The Read Meter could not save its counts to its shared store (Durable Object READ_METER_STORE): ' + msg + '. Until fixed, the Read Meter page shows only part of the traffic.', context: { isolate: __meter.isolate } });
     if (!r || r.ok === false) console.error('[read-meter] store fault could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
   } catch (e) { console.error('[read-meter] store fault could not be saved:', String((e && e.message) || e).slice(0, 200)); }
 }
+// The shared store is one Durable Object (see ReadMeterStore). Not bound (or bound to something else) -> null, and the page says so.
+function __meterStub(env) {
+  try { const ns = env && env.READ_METER_STORE; return ns && typeof ns.idFromName === 'function' ? ns.get(ns.idFromName('meter-v1')) : null; }
+  catch (e) { __meterFault('stub', e); return null; }
+}
 // Read every OTHER instance's saved counts (this instance is always taken live). Returns { rows, store } where store is shown on the page.
 async function __meterRemote(env, mins) {
-  const store = { bound: !!(env && env.READ_METER), remote_instances: 0, instances_in_store: 0, truncated_instances: 0, read_errors: 0, problems: [], partial_history: mins > METER_PERSIST_MIN, history_minutes_other_instances: METER_PERSIST_MIN };
-  const kv = env && env.READ_METER;
-  if (!kv) { store.problems.push('The READ_METER shared store is not connected to this Worker, so this page shows ONLY the one Worker instance that answered. Numbers will look too low and change on every refresh.'); return { rows: [], store }; }
+  const stub = __meterStub(env);
+  const store = { bound: !!stub, remote_instances: 0, instances_in_store: 0, truncated_instances: 0, read_errors: 0, problems: [], partial_history: mins > METER_PERSIST_MIN, history_minutes_other_instances: METER_PERSIST_MIN };
+  if (!stub) { store.problems.push('The Read Meter shared store (READ_METER_STORE) is not connected to this Worker, so this page shows ONLY the one Worker instance that answered. Numbers will look too low and change on every refresh.'); return { rows: [], store }; }
   try {
-    const now = Date.now(), prefix = 'rm1:' + __meter.tag + ':', own = prefix + __meter.isolate;
+    const now = Date.now();
     let payloads;
     const c = __meter.remoteCache;
-    if (c && c.prefix === prefix && now - c.at < METER_REMOTE_CACHE_MS) payloads = c.payloads;
+    if (c && c.tag === __meter.tag && now - c.at < METER_REMOTE_CACHE_MS) payloads = c.payloads;
     else {
-      let keys = [], cursor, pages = 0;
-      do { const r = await kv.list({ prefix, cursor }); keys = keys.concat(r.keys || []); cursor = r.list_complete ? undefined : r.cursor; } while (cursor && ++pages < 3);
-      store.instances_in_store = keys.length;
-      const fresh = keys.filter(k => k.name !== own && (!k.metadata || typeof k.metadata.t !== 'number' || k.metadata.t >= now - METER_KEEP_MIN * 60000))
-        .sort((a, b) => ((b.metadata && b.metadata.t) || 0) - ((a.metadata && a.metadata.t) || 0));
-      store.truncated_instances = Math.max(0, fresh.length - METER_MAX_REMOTE);
-      const got = await Promise.all(fresh.slice(0, METER_MAX_REMOTE).map(async k => { try { return await kv.get(k.name, 'json'); } catch (e) { store.read_errors++; return null; } }));
-      payloads = got.filter(Boolean);
-      __meter.remoteCache = { at: now, prefix, payloads, instances_in_store: store.instances_in_store, truncated: store.truncated_instances, read_errors: store.read_errors };
+      const res = await stub.fetch('https://read-meter.internal/list?tag=' + encodeURIComponent(__meter.tag) + '&exclude=' + encodeURIComponent(__meter.isolate) + '&since=' + (now - METER_KEEP_MIN * 60000) + '&limit=' + METER_MAX_REMOTE);
+      if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
+      const j = await res.json(), recs = Array.isArray(j.instances) ? j.instances : [];
+      payloads = [];
+      for (const r of recs) { const p = r && r.payload; if (p && p.v === 1 && Array.isArray(p.mins)) payloads.push(p); else store.read_errors++; }
+      store.instances_in_store = (+j.in_store) || recs.length;
+      store.truncated_instances = Math.max(0, +j.truncated || 0);
+      __meter.remoteCache = { at: now, tag: __meter.tag, payloads, instances_in_store: store.instances_in_store, truncated: store.truncated_instances, read_errors: store.read_errors };
     }
     if (c && payloads === c.payloads) { store.instances_in_store = c.instances_in_store; store.truncated_instances = c.truncated; store.read_errors = c.read_errors; }
     const cutoff = Math.floor(now / 60000) - mins + 1, rows = [];
     for (const p of payloads) { if (p && p.isolate === __meter.isolate) continue; rows.push(...__meterRowsFromPayload(p, cutoff)); }
-    store.remote_instances = payloads.filter(p => p && p.isolate !== __meter.isolate && Array.isArray(p.mins) && p.mins.some(m => m.t / 60000 >= cutoff)).length;
-    if (store.truncated_instances) store.problems.push(store.truncated_instances + ' older Worker instance(s) were left out to stay inside Cloudflare limits (' + METER_MAX_REMOTE + ' are read per view).');
+    store.remote_instances = payloads.filter(p => p && p.isolate !== __meter.isolate && Array.isArray(p.mins) && p.mins.some(m => m && m.t / 60000 >= cutoff)).length;
+    if (store.truncated_instances) store.problems.push(store.truncated_instances + ' older Worker instance(s) were left out to keep this page fast (' + METER_MAX_REMOTE + ' are read per view).');
     if (store.read_errors) store.problems.push(store.read_errors + ' saved instance record(s) could not be read.');
     return { rows, store };
   } catch (e) {
