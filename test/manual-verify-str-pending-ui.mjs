@@ -224,4 +224,8 @@ await t('cleaner: availability marks on a pending date (not asked) post the date
 await t('cleaner: a date another cleaner holds shows as Pending - not booked with no names; dark mode and 320px have no horizontal scroll', async () => {
   const p = await cleaner(() => ({ body: { ok: true } }), cpage([cpend({ offer_id: '', held_by_other: true })]));
   const r = await p.locator('.task.pend').innerText(); assert(/Pending - not booked/.test(r)); assert(!/Gina|Rachel|held by|said yes/i.test(r), 'no other cleaner info: ' + r); await noScroll(p); await p.context().close();
-//@@APPEND@@
+  for (const cs of ['dark', 'light']) { const ctx = await browser.newContext({ ...phone, colorScheme: cs, viewport: { width: 320, height: 700 } }); const q = await ctx.newPage(); await q.route(W + '/**', route => route.fulfill({ status: 200, headers: { 'Access-Control-Allow-Origin': '*', 'content-type': 'application/json' }, body: JSON.stringify(cpage([cpend(), cpend({ key: 'k2', date: '2026-11-21', offer_id: '', held_by_me: true })])) })); await q.goto(BASE + 'cleaner.html?k=TOKEN'); await q.waitForSelector('.task'); await noScroll(q); await ctx.close(); }
+});
+
+await browser.close(); server.close();
+console.log(`\n${passes} passed, ${fails} failed`); process.exit(fails ? 1 : 0);
