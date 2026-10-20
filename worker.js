@@ -33559,8 +33559,7 @@ async function ensureInspTabs(env) {
 // ── Customers (a "customer" here is a whole inspection line — the new PM rental
 // customer, or a synthetic AMSCRE row for Phase 3's routing) ──────────────────
 async function inspCustomersList(env) {
-  let rows = [];
-  try { rows = await fetchTab(env, 'Insp_Customers'); } catch (e) {}
+  const rows = await fetchTabSoft(env, 'Insp_Customers', 'insp_customers_list');
   return json(rows.filter(r => r.Active !== 'FALSE'));
 }
 async function inspCustomerAdd(env, body) {
