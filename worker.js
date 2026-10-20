@@ -21930,7 +21930,7 @@ function buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl }) {
 // scoped to {owner, rev}. Revoke = bump Owners.AR_Report_Rev; a token whose rev no longer
 // matches is dead. No separate token-storage table — the sheet row IS the source of truth.
 async function arReportLinkToken(env, ownerId) {
-  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {}
+  await tryWrite(env, 'ar_report_ensure_rev_column', () => ensureColumns(env, 'Owners', ['AR_Report_Rev']), 'P1');
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === String(ownerId));
   const rev = String((owner && owner.AR_Report_Rev) || '0');
