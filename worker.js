@@ -17234,7 +17234,7 @@ async function schedRunNext(env, ctx, opts) {
             rec.attempts = null;
             if (aiPausedFinal && !force) { rec.paused_key = etDay; rec.paused_ep = aiPausedFinal; }
           } else if (jobOk && isPartial) {
-            rec.partials = { key: etDay, n: partialN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
+            rec.partials = { key: etDay, n: partialN, stalled: stalledN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
           } else if (jobOk || finalFail) {
             rec.last_key = etDay; rec.attempts = null; rec.partials = null;
             rec.last_failed_final = finalFail ? etDay : null;
