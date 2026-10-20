@@ -37636,7 +37636,7 @@ function fiRgb(hex) { return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16
 function fiLuminance(hex) { const c = fiRgb(hex).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; }
 function fiIsNeutral(hex) { const c = fiRgb(hex); return Math.max(...c) - Math.min(...c) < 28; }
 function fiColorDist(a, b) { const x = fiRgb(a), y = fiRgb(b); return Math.abs(x[0] - y[0]) + Math.abs(x[1] - y[1]) + Math.abs(x[2] - y[2]); }
-function fiResolveUrl(href, base) { try { const u = new URL(String(href || '').trim(), base); return (u.protocol === 'http:' || u.protocol === 'https:') ? u.toString() : ''; } catch (_) { return ''; } }
+function fiResolveUrl(href, base) { try { const u = new URL(String(href || '').trim(), base); return (u.protocol === 'http:' || u.protocol === 'https:') ? u.toString() : ''; } catch (_) { /* silent-ok: a string that is not a URL is simply not a link */ return ''; } }
 function fiLdNodes(html) {
   const nodes = []; const re = /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi; let m;
   const walk = (v, depth) => { if (!v || depth > 6) return; if (Array.isArray(v)) { v.forEach(x => walk(x, depth + 1)); return; } if (typeof v !== 'object') return; nodes.push(v); if (v['@graph']) walk(v['@graph'], depth + 1); };
