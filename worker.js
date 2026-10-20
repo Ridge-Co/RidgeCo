@@ -23341,7 +23341,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
     if (cfg.admin_phone) {
       await sendSMS(env, cfg.admin_phone, `🆕 ${(c.owner.business_name || (c.owner.first + ' ' + c.owner.last)).trim()} finished owner onboarding: ${c.properties.length} propert${c.properties.length === 1 ? 'y' : 'ies'}.${needsReview ? ' ⚠ ' + warnings.length + ' item(s) need your review (Hub → Owners → Onboarding).' : ''}`);
     }
-  } catch (e) { /* notification is best-effort */ }
+  } catch (e) { await softFail(env, 'owner_onboard_admin_sms_failed', e, 'P0', { invite: String(inv.ID) }); }   // notification is best-effort for the owner, but Brett must hear it did not go
 
   return json({ success: true, first_name: c.owner.first, properties: c.properties.length });
 }
