@@ -13838,18 +13838,19 @@ async function adminMergeProperty(env, body) {
   // QuickBooks: the second create hits a duplicate-name fault, resolves to the SAME
   // sub-customer, and both units end up billing to one ledger. Worth knowing before the
   // merge, not after.
-  let labelClashes = [];
+  let labelClashes = [], labelClashCheckFailed = false;
   try {
     const units = await fetchTab(env, 'Units');
     const labelOf = u => String(u.Unit_Label || '').trim().toLowerCase();
     const toLabels = new Set(units.filter(u => String(u.Property_ID) === toId && u.Active !== 'FALSE').map(labelOf).filter(Boolean));
     labelClashes = units.filter(u => String(u.Property_ID) === fromId && u.Active !== 'FALSE' && toLabels.has(labelOf(u)))
                         .map(u => u.Unit_Label);
-  } catch (e) { /* advisory only */ }
+  } catch (e) { labelClashCheckFailed = true; await softFail(env, 'property_merge_label_clash_check', e, 'P2', { from: fromId, to: toId }); /* advisory only, but an empty list must not read as "no clashes" */ }
 
   if (!apply) {
     return json({ success: true, applied: false, from: fromId, to: toId, address: from.Address,
-                  plan, total: plan.reduce((n, p) => n + p.count, 0), label_clashes: labelClashes });
+                  plan, total: plan.reduce((n, p) => n + p.count, 0), label_clashes: labelClashes,
+                  ...(labelClashCheckFailed ? { label_clash_check_failed: true, failure_warning: 'Could not read the Units tab to check for duplicate unit names - label_clashes is NOT a clean bill of health.' } : {}) });
   }
 
   // Repoint everything BEFORE deactivating, so a failure part-way leaves both rows live
