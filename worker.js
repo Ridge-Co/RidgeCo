@@ -10894,11 +10894,11 @@ async function addVendorBill(env, body) {
         await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
       }
     }
-  } catch(e) { /* non-fatal: bill is still saved */ }
+  } catch (e) { await softFail(env, 'vendor_bill_auto_complete_wo', e, 'P1', { ref: body.WO_ID || body.wo_id }); }   // bill is saved; the WO was not moved to Complete
   // B-20260916-1930-k7: vendor invoice confirmation email — best-effort, soft-launched via
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
-  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { /* never blocks the bill */ }
-  try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
+  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { await softFail(env, 'vendor_bill_qbo_vendor_match', e, 'P1', { ref: body.Vendor_ID || body.vendor_id }); }
+  try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { await softFail(env, 'vendor_invoice_confirmation_email_failed', e, 'P1', { ref: body.WO_ID || body.wo_id }); }
   return res;
 }
 
