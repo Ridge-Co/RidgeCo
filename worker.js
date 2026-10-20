@@ -29209,7 +29209,7 @@ async function qbCreateSubCustomer(env, body) {
   try {
     const pg = await qbApi(env, `customer/${encodeURIComponent(parentId)}?minorversion=73`, 'GET', null, token);
     parentEmail = (pg && pg.Customer && pg.Customer.PrimaryEmailAddr && pg.Customer.PrimaryEmailAddr.Address) || '';
-  } catch (e) {}
+  } catch (e) { softNote('qb_parent_email_lookup_failed', e, 'P1', { parent: String(parentId) }); }   // sub-customer starts with a blank email, so say so
 
   // QuickBooks requires DisplayName to be unique across ALL customers, not just within a
   // parent. Two owners each with a "100 Main St" collide, so fall back to the full path.
