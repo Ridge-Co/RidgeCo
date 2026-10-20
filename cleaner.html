@@ -178,7 +178,7 @@ function render(){
     if(!S.loadErr) h+='<div class="card"><p class="muted" style="margin:0">Loading your schedule…</p></div>';
     main.innerHTML=h; return;
   }
-  h+=offersHtml(d)+backupTopHtml(d)+scheduleHtml(d)+calendarHtml(d)+soonHtml(d);
+  h+=offersHtml(d)+pendingAsksHtml(d)+backupTopHtml(d)+pendingListHtml(d)+scheduleHtml(d)+calendarHtml(d)+soonHtml(d);
   main.innerHTML=h;
   window.scrollTo(0,y);
   if(fid){var n=main.querySelector('[data-fid="'+fid.replace(/"/g,'')+'"]'); if(n&&!n.disabled) n.focus({preventScroll:true});}
