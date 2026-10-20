@@ -5075,7 +5075,7 @@ async function scopeProposalSend(env, body) {
     try {
       await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
       await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'FAILED: ' + String((e && e.message) || e).slice(0, 200) });
-    } catch (_) { /* audit log best-effort */ }
+    } catch (le) { await softFail(env, 'proposal_send_log_failed', le, 'P2', { scope: String(id) }); }
     return json({ error: 'Send failed: ' + e.message }, 500);
   }
 
