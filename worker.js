@@ -11644,7 +11644,7 @@ async function approveInvoiceReview(env, body) {
       ensureColumns(env, 'Vendor_Bills',   ['Own_Wage', 'Profit', 'Own_Materials']),
       ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit', 'Own_Materials', 'Own_Material_IDs']),
     ]);
-  } catch (e) { /* the money fields below still land; only the split is lost */ }
+  } catch (e) { await softFail(env, 'approve_invoice_review_ensure_columns', e, 'P1', { ref: wo_id }); }   // the money fields below still land; only the wage/profit split is lost
   if (padRes.pad > 0) { await ensureColumns(env, 'Invoice_Review', ['Instant_Pad']); }   // not in the try above: a pad that cannot be stored must stop the approval
 
   // 1. Update Vendor_Bills row: mark reviewed, save markup fields — only when there IS a
