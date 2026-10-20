@@ -7954,7 +7954,7 @@ function addonMissingPhotoItems(items, photoRows) {
   return (Array.isArray(items) ? items : []).map(it => it.index).filter(ix => !have.has(String(ix)));
 }
 
-function addonParseItems(child) { try { const a = JSON.parse(child.Addon_Items_JSON || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+function addonParseItems(child) { const a = parseJsonCell(child && child.Addon_Items_JSON, [], 'Work_Orders.Addon_Items_JSON'); return Array.isArray(a) ? a : []; }
 function addonLatestEstimate(estimates, woId) {
   const v = (estimates || []).filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   return v.length ? v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b) : null;
