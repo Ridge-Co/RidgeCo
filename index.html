@@ -2517,7 +2517,7 @@ function openWODetail(woId) {
     window._billCache = window._billCache || {};
     var billsHtml = bills.map(function(bill) {
       var items = [];
-      try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+      try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){ window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json', e, {ref: bill.ID}); }
       window._billCache[bill.ID] = bill;   // so the receipt editor below can read this bill's current fields without a re-fetch
       var qbSent = !!bill.QB_Invoice_ID;   // Vendor_Bills itself never carries this; harmless if absent — the real guard is server-side (Invoice_Review)
       var statusLabel = (bill.Status||'submitted').toUpperCase();
