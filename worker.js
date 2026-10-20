@@ -5195,16 +5195,16 @@ async function scopeProposalView(env, url, ua, ctx) {
     const sigs = await fetchTab(env, 'Scope_Signatures');
     const row = sigs.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
     if (row) {
-      let sel = {}; try { sel = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
+      const sel = parseJsonCell(row.Selections_JSON, {}, 'Scope_Signatures.Selections_JSON');
       let signedSchedule = schedule; // fallback: unsigned live schedule, shown against the locked subtotal below
       try {
         await paymentMilestonesTab(env);
         const ms = (await fetchTab(env, 'Payment_Milestones')).filter(m => m.Signature_ID === String(row.ID) && String(m.Active || '').toUpperCase() !== 'FALSE');
         if (ms.length) signedSchedule = ms.map(m => ({ label: m.Label, percent: +m.Percent || 0, trigger: m.Trigger, customer_amount: +m.Customer_Amount || 0, calc_mode: m.Calc_Mode === 'flat' ? 'flat' : 'percent', status: m.Status || 'pending' }));
-      } catch (_) {}
+      } catch (me) { softNote('scope_proposal_view_milestones_failed', me, 'P1', { scope: String(s.ID) }); }   // falls back to the unsigned live schedule, but Brett is told
       signed = { signer_name: row.Signer_Name, signed_date: row.Signed_Date, subtotal: +row.Subtotal || subtotal, deposit: +row.Deposit_Amount || deposit, selections: sel, schedule: signedSchedule };
     }
-  } catch (_) {}
+  } catch (se) { softNote('scope_proposal_view_signed_state_failed', se, 'P1', { scope: String(s.ID), note: 'page may show an already-signed estimate as unsigned' }); }
   return json({ ok: true, address: addr || ('Property ' + s.Property_ID), title: s.Title || '', status: s.Status || '', items, subtotal, deposit, schedule, proposal_text: s.Proposal_Text || '', signed, photos });
 }
 
