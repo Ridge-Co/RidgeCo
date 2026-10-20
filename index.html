@@ -15939,7 +15939,7 @@ function openEditReceiptsPanel(billId, woId) {
   var bill = (window._billCache || {})[billId];
   if (!bill) { toast('Bill data not loaded — reopen the work order and try again.', 'error'); return; }
   var items = [];
-  try { items = JSON.parse(bill.Receipts_JSON || '[]'); } catch (e) {}
+  try { items = JSON.parse(bill.Receipts_JSON || '[]'); } catch (e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-edit', e, {ref: billId}); toast('This bill\'s receipt list is damaged and cannot be edited here. Nothing was changed.', 'error'); return; }
   // A fresh editable copy each time the panel opens, so Cancel truly discards unsaved edits.
   window._billReceiptsEdit[billId] = items.map(function(r) {
     return { amount: parseFloat(r.amount) || 0, desc: r.desc || '', pay: r.pay === 'account' ? 'account' : 'reimburse', url: r.url || '' };
