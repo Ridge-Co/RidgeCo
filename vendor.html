@@ -4376,12 +4376,13 @@ function isVendorBusy(){
     var url = location.pathname + (location.pathname.indexOf('?') >= 0 ? '&' : '?') + '_fresh=' + Date.now().toString(36);
     fetch(url, {cache: 'no-store', method: 'HEAD'}).then(function(r){
       var tag = r.headers.get('etag') || r.headers.get('last-modified');
+      bgOk('vendor:pageFreshness');
       if (!tag) return; // host doesn't expose either -- nothing to compare against, fail open
       if (pageEtagKnown === null){
         pageEtagKnown = tag;
         var last = null;
-        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){}
-        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){ /* silent-ok: storage blocked, no previous tag to compare */ }
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){ /* silent-ok: storage blocked, tag not remembered */ }
         // Same pattern as the version check's own first-run branch: if the last ETag this
         // browser saw differs from what's live right now, THIS load itself was already stale.
         if (last && last !== tag) { isVendorBusy() ? banner() : reloadFresh(); }
