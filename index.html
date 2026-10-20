@@ -6105,8 +6105,10 @@ function loadVendorTaskReviewQueue() {
   var el = document.getElementById('vtr-review-list');
   if (!el) return;
   api('GET', '/vendor-task-requests/pending-review').then(function(rows) {
-    renderVendorTaskReviewQueue(rows || []);
-  }).catch(function(e) { el.innerHTML = '<div style="color:#e55;font-size:12px">Failed to load: ' + esc(e.message || '') + '</div>'; });
+    // api() resolves with {error:...} on a server-side failure: that must show as a failure, not as "Nothing waiting on your review."
+    if (!Array.isArray(rows)) throw new Error((rows && rows.error) || 'unexpected answer from the server');
+    renderVendorTaskReviewQueue(rows);
+  }).catch(function(e) { dlLoadFailed('vtr-review-list', 'Vendor task review queue', 'vendor_task_review_load', e, 'loadVendorTaskReviewQueue()'); });
 }
 function renderVendorTaskReviewQueue(rows) {
   var el = document.getElementById('vtr-review-list');
