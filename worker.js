@@ -32900,10 +32900,11 @@ async function qbSendCombinedInvoice(env, ctx) {
     if (allSent) {
       // One WO for an ordinary group; parent + each add-on child when the invoice rolled them together.
       for (const _wid of _distinctWoIds) {
-        try {
+        const _wr = await tryWrite(env, 'qb_send_invoice_group_wo_status', async () => {
           await updateWOFields(env, _wid, { Status: 'Invoiced' });
           if (invoiceDocNumber) await updateWOFields(env, _wid, { QBO_Invoice_Number: invoiceDocNumber });
-        } catch (e) {}
+        }, 'P1');
+        if (!_wr.ok) failWarnings.push('The invoice was sent, but work order ' + _wid + ' could not be marked Invoiced (' + _wr.error + ') - set the status by hand.');
       }
     }
 
