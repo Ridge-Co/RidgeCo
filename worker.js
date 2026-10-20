@@ -18648,7 +18648,7 @@ async function aiFailOpenNote(env, where, e) {
   const msg = schedErrText(e);
   console.error('ai fail-open (' + where + '):', msg);
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_fail_open', Skill_Or_Endpoint: where, Success: 'FALSE', Notes: msg.slice(0, 400) }); }
-  catch (te) { console.error('ai fail-open: telemetry write failed:', where, msg, schedErrText(te)); }
+  catch (te) { console.error('ai fail-open: telemetry write failed:', where, msg, schedErrText(te)); softNote('ai_fail_open:' + where, 'AI step failed (' + msg.slice(0, 150) + ') and its telemetry write failed: ' + schedErrText(te).slice(0, 150), 'P1'); }
 }
 
 // PURE. Does a stored per-file failure message look like it was caused by the credit outage / pause (not by the file)?
