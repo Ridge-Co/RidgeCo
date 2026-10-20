@@ -33365,7 +33365,9 @@ async function trashUnbilled(env, url) {
       }
     }
   }
-  return json({ generated_at: new Date().toISOString(), this_week: thisWeek, prev_week: prevWeek, count: items.length, items });
+  // Reviewer fix (Oct 20): every existing consumer (trash.html nudge, the push-nudge poller) reads items/count only, so a failed read is ALSO shown as an item, never as 'nothing to do'.
+  for (const m of loadErrors) items.push({ type: 'load_error', message: m });
+  return json({ generated_at: new Date().toISOString(), this_week: thisWeek, prev_week: prevWeek, count: items.length, items, ...(loadErrors.length ? { load_errors: loadErrors } : {}) });
 }
 
 // POST /trash/invoice { property_id, week?, preview_only? } — assemble + send the
