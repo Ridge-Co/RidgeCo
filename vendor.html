@@ -293,7 +293,7 @@ var _foldOpen = { paid: false, cancelled: false };   // Paid / Cancelled section
 var failCount = 0;
 // Deep-link support: an SMS can link straight to ?wo=WO-1234 so the vendor's portal opens
 // already filtered to the job the text was about, instead of making them search for it.
-var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ return ''; } })();
+var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ /* silent-ok: unparseable query string just means no deep link */ return ''; } })();
 var _deepLinkApplied = false;
 
 function api(path, opts) {
