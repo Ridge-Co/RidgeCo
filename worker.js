@@ -29781,7 +29781,7 @@ async function payAuthLog(env, result, detail, amount, by, idem) {
     await ensureColumns(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
     await addRow(env, PAY_AUTH_LOG_TAB, { Timestamp: new Date().toISOString(), Result: result, Detail: String(detail || '').slice(0, 300), Amount: amount != null ? String(amount) : '', By: String(by || 'hub'), Idem: String(idem || '').slice(0, 80) });
     return true;
-  } catch (_) { return false; }
+  } catch (e) { softNote('pay_auth_log_write_failed', e, 'P1'); return false; }   // callers retry once and then warn Brett on screen
 }
 
 // POST /qb/pay-bills { bill_ids:[qbBillId,...], pay_account_id, passphrase, preview?, by? }
