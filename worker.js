@@ -5083,7 +5083,11 @@ async function scopeProposalSend(env, body) {
     await ensureColumns(env, 'Scopes', ['Sent_Date', 'Sent_To', 'Send_Count']);
     const nextCount = String((parseInt(s.Send_Count || '0', 10) || 0) + 1);
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount });
-  } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
+  } catch (se) {
+    // The email already sent successfully, so this is NOT reported as a send failure - but the Scopes row (Sent_Date / Send_Count) is what the double-send guard reads, so Brett is told.
+    await softFail(env, 'proposal_send_stamp_failed', se, 'P1', { scope: String(id), note: 'email sent; Sent_Date/Send_Count not saved, so the double-send guard will not see this send' });
+    sendWarnings.push('The estimate email was sent, but the sent-date could not be saved on the scope (the double-send guard will not see this send).');
+  }
 
   // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
   // Email already went; the text is held/skipped/blocked on its own rules and its outcome is always reported.
