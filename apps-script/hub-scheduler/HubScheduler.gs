@@ -610,6 +610,7 @@ function runOneScriptJob_(job, js, due, started) {
     js.last_status = 'failed';
     if (job.every_min === undefined) { var a = js.attempts && js.attempts.key === due.key ? js.attempts.n : 0; js.attempts = { key: due.key, n: a + 1 }; }
     jobFailure_({ ran: job.name, error: js.last_error });
+    ledgerThrottled_('job_' + job.name, JOB_ALERT_MS, 'script_job:' + job.name, 'P1', job.name + ' failed: ' + js.last_error);
   }
   if (res.warnings && res.warnings.length) alertThrottled_('warn_' + job.name, JOB_ALERT_MS, 'Hub scheduler job needs a look: ' + job.name, res.warnings.join('\n'));
   return { ok: ok, partial: !!res.partial };
