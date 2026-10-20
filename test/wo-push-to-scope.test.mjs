@@ -3,6 +3,7 @@
 // endpoint against an in-memory fake Sheets backend, same convention as test/wo-void.test.mjs /
 // test/wo-deposit.test.mjs — this proves the actual shipped logic, not a re-implementation.
 import fs from 'fs';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages, aiCreditIsPausedError, ...) for translateBatchToEnglish
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(sig) {
