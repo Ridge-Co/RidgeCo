@@ -27295,8 +27295,15 @@ async function qbSyncPayments(env, body, opts) {
     if (data) T.checked = data.count;
     sync.slices = (sync.slices || 0) + 1;
   }
+  // Oct 20 2026: did this slice move the pass forward? (a row finished, or a stage -- stored-copy write, row loop, deposit sweep -- completed.) The dispatcher
+  // fails a job that reports progress_made:false several slices in a row instead of letting it burn a flat number of slices; slice_log keeps the timings.
+  const progressMade = !!(sync && (doneKeys.size > before.done || (sync.ir_done && !before.ir) || (sync.loop_done && !before.loop) || (sync.sweep_done && !before.sweep)));
+  if (sync) {
+    const entry = { n: sync.slices, at: new Date().toISOString(), total_ms: clock() - t0, rows_done: rowsThisSlice, rows_left: rowsLeft, stopped_early: stoppedEarly, progress: progressMade, t: timings };
+    sync.slice_log = (Array.isArray(sync.slice_log) ? sync.slice_log : []).concat(entry).slice(-QB_SYNC_LOG_KEEP);
+  }
   const T2 = sync ? sync.totals : null;
-  return json({ ok: true, partial: !!(sync && (stoppedEarly || !sync.sweep_done)), timings_ms: timings, slice: sync ? sync.slices : undefined,
+  return json({ ok: true, partial: !!(sync && (stoppedEarly || !sync.sweep_done)), progress_made: sync ? progressMade : undefined, rows_this_slice: sync ? rowsThisSlice : undefined, timings_ms: timings, slice: sync ? sync.slices : undefined,
                 checked: T2 ? T2.checked : (data ? data.count : 0), written: T2 ? T2.written : written, failed: T2 ? T2.failed : failed, closed: T2 ? T2.closed : closed, closed_wos: T2 ? T2.closed_wos : closedWOs,
                 owed_now: data ? data.owed_now : undefined, owed_total: data ? data.owed_total : undefined, warnings: data ? (data.warnings || []) : [], errors: syncErrors,
                 deposit_sweep: depositSweep, rows: sync ? undefined : (data ? data.rows : []) });
