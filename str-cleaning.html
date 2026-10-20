@@ -430,7 +430,8 @@ function turnoverCard(t){
   } else {
     acts = '<button class="btn sm primary" data-act="assign" data-key="' + k + '">Assign…</button><button class="btn sm" data-act="offer" data-key="' + k + '">Ask next cleaner now</button><button class="btn sm" data-act="restart" data-key="' + k + '">Restart the queue</button>';
   }
-  return '<div class="tcard' + (urgent ? ' urgent' : '') + '"><div class="t-head"><div><b class="t-date">' + esc(t.label || fmtDay(t.date)) + '</b> <span class="chip">' + kind + '</span></div>' + statusPill(t) + '</div>'
+  var sel = (selecting && t.status !== 'cancelled') ? '<label class="selrow"><input type="checkbox" data-act="sel" data-key="' + k + '"' + (picked[t.key] ? ' checked' : '') + '> Select this date</label>' : '';
+  return '<div class="tcard' + (urgent ? ' urgent' : '') + (selecting && picked[t.key] ? ' picked' : '') + '">' + sel + '<div class="t-head"><div><b class="t-date">' + esc(t.label || fmtDay(t.date)) + '</b> <span class="chip">' + kind + '</span></div>' + statusPill(t) + '</div>'
     + '<div class="muted" style="margin-top:4px">' + esc(daysText(t.days_out)) + ' · ' + esc(next) + esc(guests) + '</div>'
     + (t.note ? '<div class="muted" style="margin-top:4px">Note: ' + esc(t.note) + '</div>' : '')
     + offersHtml(t) + backupsHtml(t) + '<div class="t-actions">' + acts + '</div></div>';
