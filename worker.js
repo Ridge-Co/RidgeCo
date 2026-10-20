@@ -11339,7 +11339,7 @@ async function moveVendorBillToNewWO(env, body) {
       notes: `Created by splitting bill ${billId} + ${movedAttachmentIds.length} photo(s) off ${oldWoId}.${reason ? ' Reason: ' + reason : ''}` },
   ]);
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'bill_split', Skill_Or_Endpoint: '/vendor-bill/move-to-new-wo', Success: 'TRUE', Notes: `old_wo=${oldWoId} new_wo=${newWoId} bill=${billId} attachments=${movedAttachmentIds.length}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'bill_split', Skill_Or_Endpoint: '/vendor-bill/move-to-new-wo', Success: 'TRUE', Notes: `old_wo=${oldWoId} new_wo=${newWoId} bill=${billId} attachments=${movedAttachmentIds.length}` }); } catch (te) { softNote('telemetry_write_failed:bill_split', te, 'P2'); }
 
   return json({
     success: true, applied: true,
