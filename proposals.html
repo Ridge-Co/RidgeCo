@@ -478,7 +478,7 @@ async function startBuild(){
   const rEl=document.getElementById('buildResult');
   try{
     const r=await fetch(WORKER+'/ops-queue/start-build',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({ids:ids})});
-    const d=await r.json().catch(function(){return null;});
+    const d=await r.json().catch(function(){/* silent-ok: null body makes the next check report HTTP status */return null;});
     if(!r.ok||!d||d.ok!==true){
       const msg=(d&&d.error)||('HTTP '+r.status);
       if(rEl)rEl.innerHTML='<div class="banner">✕ Start Build failed — '+h(msg)+(d&&d.skipped&&d.skipped.length?'<br>Skipped: '+d.skipped.map(function(s){return h(s.id)+' ('+h(s.reason)+')';}).join(', '):'')+'</div>';
