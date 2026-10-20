@@ -14033,7 +14033,7 @@ async function adminDriveFileCheck(env, body) {
           });
         } else {
           let msg = `HTTP ${res.status}`;
-          try { const eb = await res.json(); msg = (eb && eb.error && eb.error.message) || msg; } catch (_) {}
+          try { const eb = await res.json(); msg = (eb && eb.error && eb.error.message) || msg; } catch (_) { /* silent-ok: the error body is optional detail, the HTTP status is already in the result */ }
           results.push({ id, found: false, status: res.status, error: msg });
         }
       } catch (e) {
