@@ -5394,7 +5394,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   const dup = existing.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (dup) return json({ ok: true, id: dup.ID, duplicate: true, subtotal: +dup.Subtotal || 0, deposit: +dup.Deposit_Amount || 0 });
 
-  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  const items = parseJsonCell(s.Proposal_Items_JSON, [], 'Scopes.Proposal_Items_JSON');
   if (!items.length) return json({ error: 'Proposal not ready to sign yet.' }, 400);
   const selections = (body && body.selections && typeof body.selections === 'object') ? body.selections : {};
   let subtotal = 0;
