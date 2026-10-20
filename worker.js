@@ -18120,7 +18120,7 @@ async function tenantManualUpdate(env, body) {
     if (r.gate_snapshot) lastGate = r.gate_snapshot;
     if (r.queued_id && !firstQueuedId) firstQueuedId = r.queued_id;
   }
-  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), anySent ? 'Sent' : (anySendOk ? 'Send failed' : 'Queued — gate: ' + lastGate)); } catch(_){}
+  try { await logWOAudit(env, body.wo_id, body.updated_by || 'admin', body.updated_by_role || 'admin', 'Tenant_Manual_SMS', '', message.slice(0,100), anySent ? 'Sent' : (anySendOk ? 'Send failed' : 'Queued — gate: ' + lastGate)); } catch (e) { softNote('tenant_manual_sms_audit_failed', e, 'P1', { ref: body.wo_id }); }
   return json({ success: true, sent: anySent, send_ok: anySendOk, queued_id: firstQueuedId, gate_snapshot: lastGate, tenant_count: woTenants.length });
 }
 
