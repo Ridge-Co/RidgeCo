@@ -31338,7 +31338,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
     QB_Bill_To: billToRidgeco ? 'ridgeco' : (billTo.level + (billTo.display ? ': ' + billTo.display : '')),
     QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
   });
-  if (errors.length) return json({ ok: false, error: errors.join('; '), warnings, invoice_id: invoiceId, bill_id: billId });
+  if (errors.length) return json({ ok: false, error: errors.join('; '), warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}), invoice_id: invoiceId, bill_id: billId });
   return json({ ok: true, invoice_id: invoiceId, bill_id: billId, status, warnings });
 }
 
