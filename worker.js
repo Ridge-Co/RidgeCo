@@ -13079,7 +13079,7 @@ async function adminUpdateWO(env, body) {
   // portal's grayed-out treatment) branch on this being exactly one of two strings.
   if ('Managed_By' in body.fields) {
     if (!['RidgeCo','Owner'].includes(body.fields.Managed_By)) return json({ error: "Managed_By must be 'RidgeCo' or 'Owner'" }, 400);
-    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (e) { await softFail(env, 'admin_update_wo_managed_by_column', e, 'P1', { ref: body.wo_id }); adminWarn = 'The Managed_By column could not be prepared, so this change may not have saved'; }
   }
   await updateRow(env, 'Work_Orders', body.wo_id, body.fields);
   // One batched audit write covering every changed field, instead of a GET+POST pair per
