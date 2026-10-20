@@ -18308,15 +18308,15 @@ async function buildDigest(env) {
         healthAlerts.push(`${jt}: ${Math.round(jm.success_rate * 100)}% success (${jm.fail}/${jm.count} failed) — last 24h`);
       }
     }
-  } catch (e) { /* non-fatal — health check must never break the digest */ }
+  } catch (e) { softNote('digest_health_check_failed', e, 'P2'); }   // the digest still goes out without the health lines
   // Receipts that failed intake 3x and were given up on (receiptScan fix, greenlit #17) —
   // surfaced here rather than silently retried forever with no way for Brett to find out.
   let stuckReceipts = [];
   try {
     const cfg = await fetchConfig(env);
-    const failures = JSON.parse(cfg.receipt_intake_failures || '{}');
+    const failures = parseJsonCell(cfg.receipt_intake_failures, {}, 'Config.receipt_intake_failures');
     stuckReceipts = Object.values(failures).filter(x => x.attempts >= 3).map(x => `${x.name} — ${x.error}`);
-  } catch (e) { /* non-fatal */ }
+  } catch (e) { softNote('digest_stuck_receipts_failed', e, 'P2'); }   // the digest still goes out without the stuck-receipt lines
   // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
   const fuDigest = await fuDigestLines(env);
   return {
