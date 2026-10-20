@@ -57,4 +57,66 @@ await t('admin: Pending list shows the four at-a-glance statuses, who was asked,
   for (const s of ['Held by Gina - tentative', 'Waiting on Kayla', 'Nobody available', 'Booked - confirmed']) assert(txt.includes(s), 'missing status ' + s);
   assert(/Backup available:\s*Kayla/.test(txt), 'backup shown'); assert(/Gina: said yes \(tentative\)/.test(txt), 'who said yes'); assert(/Kayla: waiting for a reply/.test(txt), 'who is asked');
   assert(/NOT an assignment/.test(txt), 'held is described as tentative'); assert(/follow-up text to her has not gone out yet/.test(txt), 'failed follow-up text is visible');
+  assert(/Pending date \(not booked yet\)/.test(await p.locator('#alerts').innerText()), 'alert label');
+  assert(/Pending \(not booked\)/.test(await p.locator('#sec-pend summary').innerText()));
+  assert(/3 open inquiries/.test(await p.locator('#m-pend').innerText()));
+  assert.strictEqual(await p.locator('#pend-list .tcard').count(), 4);
+  await noScroll(p); assert.deepStrictEqual(p._errs, []);
+  const small = await p.evaluate(() => [...document.querySelectorAll('#sec-pend button')].filter(b => b.offsetHeight < 44).map(b => b.textContent));
+  assert.deepStrictEqual(small, [], 'tap targets under 44px: ' + small);
+  await p.screenshot({ path: process.env.SHOTS ? process.env.SHOTS + '/admin-pending.png' : '/dev/null', fullPage: false }).catch(() => {});
+  await p.context().close();
+});
+await t('admin: closed items have no action buttons; open ones explain each button in plain words', async () => {
+  const p = await admin(() => ({ body: { ok: true } }));
+  const done = p.locator('#pend-list .tcard.done'); assert.strictEqual(await done.count(), 1); assert.strictEqual(await done.locator('button').count(), 0);
+  const first = await p.locator('#pend-list .tcard').first().innerText(); assert(/Mark as booked now:/.test(first) && /Cancel:/.test(first));
+  assert(!/Ask now:/.test(first), 'held date has no Ask now'); assert(/Ask now:/.test(await p.locator('#pend-list .tcard').nth(1).innerText()));
+  await p.context().close();
+});
+await t('admin: Ask about a date - preview then edit then send (edited text, sig, note, date are what is posted)', async () => {
+  const p = await admin((pth, body) => { if (pth === '/str/admin/pending/preview') return { body: { ok: true, plan: plan({ date: body.date }) } }; if (pth === '/str/admin/pending/create') return { body: { ok: true, key: 'k', message: 'Asked Gina about Saturday, December 5. You will be told as soon as someone says yes (or if nobody can).', warnings: [] } }; return { body: { ok: true } }; });
+  await p.click('[data-act=pend-new]'); await p.waitForSelector('#pd-date');
+  await p.click('#sh-go'); assert(/Pick the date first/.test(await p.locator('#sh-err').innerText()), 'needs a date'); assert.strictEqual(callsTo(p, '/str/admin/pending/preview').length, 0);
+  await p.fill('#pd-date', '2026-12-05'); await p.fill('#pd-note', 'TEST- maybe'); await p.click('#sh-go'); await p.waitForSelector('#pd-text');
+  const s = await sheetText(p); assert(/Nothing has been sent or saved yet/.test(s)); assert(/Asked first: Gina/.test(s)); assert(/Rachel \(marked out that day\)/.test(s)); assert(/typed by hand/.test(s));
+  assert(!/primary|rank/i.test(await p.locator('#pd-text').inputValue()), 'cleaner text has no primary/rank'); assert(!/deadline|reply by/i.test(await p.locator('#pd-text').inputValue()));
+  assert.strictEqual(await p.locator('#pd-now').count(), 0, 'no send-late box inside the window');
+  assert.strictEqual(callsTo(p, '/str/admin/pending/create').length, 0, 'nothing created before Send');
+  await p.fill('#pd-text', 'Hi Gina - edited text {Link}'); await p.click('#sh-go'); await p.waitForSelector('#sh-done');
+  const c = callsTo(p, '/str/admin/pending/create'); assert.strictEqual(c.length, 1);
+  assert.deepStrictEqual({ ...c[0].body }, { date: '2026-12-05', note: 'TEST- maybe', sig: 'abc123', text: 'Hi Gina - edited text {Link}', send_now: false });
+  assert(/Asked Gina about Saturday, December 5/.test(await sheetText(p))); await noScroll(p); await p.context().close();
+});
+await t('admin: outside 8-9 the page offers "Send now even if late" (default off) and posts send_now only when ticked', async () => {
+  const p = await admin((pth, body) => { if (pth === '/str/admin/pending/preview') return { body: { ok: true, plan: plan({ in_window: false, send_mode: 'after_window', send_when: 'It is outside the 8 AM - 9 PM texting hours, so it will be sent at 8 AM. Tick "Send now even if late" to send it immediately.' }) } }; if (pth === '/str/admin/pending/create') return { body: { ok: true, message: 'Saved. Gina will be asked at 8 AM.', warnings: [] } }; return { body: { ok: true } }; });
+  await p.click('[data-act=pend-new]'); await p.fill('#pd-date', '2026-12-05'); await p.click('#sh-go'); await p.waitForSelector('#pd-now');
+  assert.strictEqual(await p.locator('#pd-now').isChecked(), false); assert(/sent at 8 AM/.test(await sheetText(p)));
+  await p.click('#sh-go'); await p.waitForSelector('#sh-done'); assert.strictEqual(callsTo(p, '/str/admin/pending/create')[0].body.send_now, false); await p.context().close();
+  const p2 = await admin((pth, body) => { if (pth === '/str/admin/pending/preview') return { body: { ok: true, plan: plan({ in_window: false, send_mode: 'after_window', send_when: 'x' }) } }; return { body: { ok: true, message: 'Asked Gina.', warnings: [] } }; });
+  await p2.click('[data-act=pend-new]'); await p2.fill('#pd-date', '2026-12-05'); await p2.click('#sh-go'); await p2.waitForSelector('#pd-now'); await p2.check('#pd-now'); await p2.click('#sh-go'); await p2.waitForSelector('#sh-done');
+  assert.strictEqual(callsTo(p2, '/str/admin/pending/create')[0].body.send_now, true); await p2.context().close();
+});
+await t('admin: empty text is refused on the page; nobody-to-ask can still be saved with a clear explanation', async () => {
+  const p = await admin((pth) => pth === '/str/admin/pending/preview' ? { body: { ok: true, plan: plan() } } : { body: { ok: true, message: 'm', warnings: [] } });
+  await p.click('[data-act=pend-new]'); await p.fill('#pd-date', '2026-12-05'); await p.click('#sh-go'); await p.waitForSelector('#pd-text'); await p.fill('#pd-text', '   '); await p.click('#sh-go');
+  assert(/text is empty/.test(await p.locator('#sh-err').innerText())); assert.strictEqual(callsTo(p, '/str/admin/pending/create').length, 0); await p.context().close();
+  const q = await admin((pth) => pth === '/str/admin/pending/preview' ? { body: { ok: true, plan: plan({ first: null, text: '', send_mode: 'none', send_when: 'Nobody to text.', queue: [{ id: '1', name: 'Gina', state: 'skip', why: 'texts switched off' }] }) } } : { body: { ok: true, message: 'Saved, but nobody in the queue can be asked right now. You have been told.', warnings: [] } });
+  await q.click('[data-act=pend-new]'); await q.fill('#pd-date', '2026-12-05'); await q.click('#sh-go'); await q.waitForSelector('.stk #sh-go');
+  assert(/Nobody to text/.test(await sheetText(q))); assert.strictEqual(await q.locator('#pd-text').count(), 0); assert(/Save: nobody to ask/.test(await q.locator('#sh-go').innerText()));
+  await q.click('#sh-go'); await q.waitForSelector('#sh-done'); assert.strictEqual(callsTo(q, '/str/admin/pending/create')[0].body.text, ''); await q.context().close();
+});
+await t('admin: server refuses (date already booked) at Preview: message shown, nothing created', async () => {
+  const p = await admin((pth) => pth === '/str/admin/pending/preview' ? { status: 409, body: { ok: false, error: 'already_booked', message: 'Saturday, December 5 already has a real turnover on the board.' } } : { body: { ok: true } });
+  await p.click('[data-act=pend-new]'); await p.fill('#pd-date', '2026-12-05'); await p.click('#sh-go'); await p.waitForSelector('#sh-err:not(.hide)');
+  const e = await p.locator('#sh-err').innerText(); assert(/Nothing was changed/.test(e) && /already has a real turnover/.test(e)); assert.strictEqual(callsTo(p, '/str/admin/pending/create').length, 0);
+  assert.strictEqual(await p.locator('#sh-go').isDisabled(), false, 'can fix the date and try again'); await p.context().close();
+});
+await t('admin: stale preview -> Out of date + Preview again; unsure network failure says it is safe to retry and never double-creates by itself', async () => {
+  let n = 0; const p = await admin((pth) => { if (pth === '/str/admin/pending/preview') return { body: { ok: true, plan: plan() } }; if (pth === '/str/admin/pending/create') { n++; return n === 1 ? { status: 409, body: { ok: false, error: 'stale_preview', message: 'Things changed since you pressed Preview.' } } : { status: 502, body: 'bad gateway' }; } return { body: { ok: true } }; });
+  await p.click('[data-act=pend-new]'); await p.fill('#pd-date', '2026-12-05'); await p.click('#sh-go'); await p.waitForSelector('#pd-text'); await p.click('#sh-go'); await p.waitForSelector('#pd-again');
+  assert(/Out of date/.test(await p.locator('#sh-go').innerText())); assert(/Nothing was sent/.test(await p.locator('#sh-err').innerText()));
+  await p.click('#pd-again'); await p.waitForSelector('#pd-text'); await p.click('#sh-go'); await p.waitForSelector('#sh-err:not(.hide)');
+  const e = await p.locator('#sh-err').innerText(); assert(/Not sure if that went through/.test(e) && /safe to press Send again/.test(e)); assert.strictEqual(callsTo(p, '/str/admin/pending/create').length, 2, 'exactly the taps made'); await p.context().close();
+});
 //@@APPEND@@
