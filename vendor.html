@@ -841,14 +841,14 @@ function awAddItem() {
 }
 function awRemoveItem(i) {
   if (!_aw || _aw.childId || _aw.busy || _aw.items.length < 2) return;
-  _aw.items[i].files.forEach(function(f) { try { URL.revokeObjectURL(f.url); } catch (e) {} });
+  _aw.items[i].files.forEach(function(f) { try { URL.revokeObjectURL(f.url); } catch (e) { /* silent-ok: preview URL already released */ } });
   _aw.items.splice(i, 1);
   awRender();
 }
 function awAddFiles(i, input) {
   if (!_aw || !_aw.items[i] || _aw.busy) { input.value = ''; return; }
   Array.from(input.files || []).forEach(function(file) {
-    var url = ''; try { url = URL.createObjectURL(file); } catch (e) {}
+    var url = ''; try { url = URL.createObjectURL(file); } catch (e) { window.hubReportFailure && window.hubReportFailure('vendor:awAddFiles preview', e); }
     _aw.items[i].files.push({ file: file, url: url, done: false, card: null });
   });
   input.value = '';
