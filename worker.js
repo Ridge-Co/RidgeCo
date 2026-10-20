@@ -16478,6 +16478,22 @@ function failDuplicateIds(ids) {
   for (const v of ids) { const s = String(v == null ? '' : v).trim(); if (!s) continue; if (seen.has(s)) dup.add(s); else seen.add(s); }
   return Array.from(dup);
 }
+// Pure. Message_Queue rows -> { stuck, oldest_hours, failed24 }. "Stuck" = pending, active, with a send time more than 6 h ago.
+function failMessageQueueStats(rows, nowMs) {
+  let stuck = 0, oldest = 0, failed24 = 0;
+  for (const r of rows) {
+    const st = String(r.Status || '').toLowerCase(), active = String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() !== 'FALSE';
+    if (st === 'pending' && active && r.Send_After) {
+      const t = Date.parse(r.Send_After);
+      if (isFinite(t) && nowMs - t > FAIL_INV_STUCK_AFTER_MS) { stuck++; oldest = Math.max(oldest, Math.round((nowMs - t) / 3600000)); }
+    }
+    if (st === 'failed') {
+      const t = Date.parse(r.Created_Date || r.Sent_Date || '');
+      if (isFinite(t) && nowMs - t < 24 * 3600000) failed24++;
+    }
+  }
+  return { stuck, oldest_hours: oldest, failed24 };
+}
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
