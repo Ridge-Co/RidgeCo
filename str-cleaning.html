@@ -1070,6 +1070,13 @@ function openPendCancel(key){
     } else if(hold) body += '<div class="msg warn"><b>Cannot text ' + esc(hold.first) + '.</b>' + esc(hold.why_not || 'No text possible.') + ' Tell her yourself if you want her to know.</div>';
     else body += '<p class="say">Nobody has said yes, so there is nobody to tell.</p>';
     sheetShell('Cancel the ' + p.label + ' inquiry?', '', body, '<div class="btnrow"><button class="btn ghost" id="sh-cancel">Keep it</button><button class="btn danger" id="sh-go">Cancel this inquiry</button></div>');
+    $('sh-cancel').onclick = closeSheet;
+    var nf = $('pc-notify'), ta = $('pc-body');
+    if(nf) nf.onchange = function(){ $('pc-txt').classList.toggle('hide', !nf.checked); if(nf.checked){ var upd = function(){ var n = ta.value.length; $('pc-cnt').textContent = n + ' characters'; $('pc-cnt').className = 'cnt' + (n > 320 ? ' long' : ''); }; upd(); ta.oninput = upd; } };
+    $('sh-go').onclick = function(){
+      var notify = !!(nf && nf.checked);
+      if(notify && !ta.value.trim()){ chShowErr('The text is empty. Type something or untick "Also tell".'); return; }
+      sheetBusy = true; var go = $('sh-go'), cn = $('sh-cancel'); go.disabled = true; cn.disabled = true; go.textContent = 'Working…'; $('sh-err').classList.add('hide');
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
