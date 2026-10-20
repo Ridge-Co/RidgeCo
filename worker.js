@@ -29605,7 +29605,7 @@ async function qbTermForDays(env, token, days) {
         const key = Number.isFinite(d) ? d : (/due\s*(up)?on\s*receipt/i.test(String(t.Name || '')) ? 0 : null);
         if (key !== null && _qbTermsByDays[key] === undefined) _qbTermsByDays[key] = String(t.Id);
       });
-    } catch (e) { /* leave empty — the due date still gets set */ }
+    } catch (e) { softNote('qb_terms_lookup_failed', e, 'P2'); /* leave empty — the due date still gets set */ }
     _qbTermsAt = Date.now();
   }
   return _qbTermsByDays[days] || '';
