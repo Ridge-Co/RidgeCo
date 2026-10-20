@@ -24329,7 +24329,7 @@ function __tabCacheKey(path) {
   const m = /^\/values\/([^!:?]+)$|^\/values\/([^!:?]+):/.exec(path);
   return m ? decodeURIComponent(m[1] || m[2]) : null;
 }
-function invalidateTabCache(tab) { if (tab) __tabCache.delete(tab); }
+function invalidateTabCache(tab) { if (tab) { __tabCache.delete(tab); __dropInflightFor(tab); } }
 function __invalidateFromWrite(path, body) {
   const tabs = new Set();
   const m = /^\/values\/([^!:?]+)/.exec(path);
