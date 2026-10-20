@@ -1344,7 +1344,7 @@ async function clearPinLockout(env, pin) {
       { range: `PIN_Lockout!${col(iF)}${sr}`, values: [['0']] },
       { range: `PIN_Lockout!${col(iL)}${sr}`, values: [['']] },
     ]});
-  } catch(e) { /* non-fatal */ }
+  } catch(e) { await softFail(env, 'pin_lockout_clear_failed', e, 'P1'); /* reported; the login itself still proceeds */ }
 }
 
 async function pinLookup(env, pin, finder) {
