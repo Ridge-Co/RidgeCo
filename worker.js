@@ -20015,7 +20015,7 @@ async function opsQueueScoutSubmit(env, body) {
       Proposal_JSON: JSON.stringify(items),
       Trigger: String((body && body.trigger) || 'scout_reuse_radar').slice(0, 60), Delivered: 'no',
     });
-  } catch (_) { /* history write is best-effort; the queue insert above already succeeded */ }
+  } catch (e) { await softFail(env, 'ops_queue_review_log_failed', e, 'P1'); }   // best-effort: the queue insert above already succeeded
   return json({ ok: true, queued, queued_items, skipped_duplicates, flagged_overlaps, rechecked, recheck_errors, shipped_check: shipped.ok ? 'ok' : ('unavailable: ' + shipped.error) });
 }
 
