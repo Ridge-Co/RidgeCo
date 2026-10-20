@@ -8912,15 +8912,17 @@ async function woSplit(env, body) {
       notes: `Created via split from ${originalId}`,
     })));
   } catch (e) {
+    const rollbackFailures = [];   // a rollback step that itself fails must never be reported as "rolled back"
     for (const ar of appliedReassignments) {
       const tab = ar.type === 'time_entry' ? 'Time_Entries' : 'Vendor_Bills';
-      try { await updateRow(env, tab, ar.id, { WO_ID: ar.from }); } catch (_) {}
+      try { await updateRow(env, tab, ar.id, { WO_ID: ar.from }); } catch (re) { rollbackFailures.push('move ' + ar.type + ' ' + ar.id + ' back: ' + String((re && re.message) || re).slice(0, 100)); }
     }
-    if (Object.keys(originalFieldsToApply).length) { try { await updateWOFields(env, originalId, originalSnapshot); } catch (_) {} }
+    if (Object.keys(originalFieldsToApply).length) { try { await updateWOFields(env, originalId, originalSnapshot); } catch (re) { rollbackFailures.push('restore ' + originalId + ': ' + String((re && re.message) || re).slice(0, 100)); } }
     for (const id of createdWoIds) {
-      try { await woVoid(env, { wo_id: id, reason: 'Other', detail: `Split rolled back — ${originalId}'s split failed partway`, updated_by: changedBy, updated_by_role: changedByRole }); } catch (_) {}
+      try { await woVoid(env, { wo_id: id, reason: 'Other', detail: `Split rolled back — ${originalId}'s split failed partway`, updated_by: changedBy, updated_by_role: changedByRole }); } catch (re) { rollbackFailures.push('void ' + id + ': ' + String((re && re.message) || re).slice(0, 100)); }
     }
-    return json({ error: 'split_failed', detail: e.message, rolled_back: true, created_then_rolled_back: createdWoIds }, 500);
+    if (rollbackFailures.length) await softFail(env, 'wo_split_rollback_incomplete', e, 'P1', { original: String(originalId), rollback_failures: rollbackFailures.join('; ').slice(0, 300) });
+    return json({ error: 'split_failed', detail: e.message, rolled_back: rollbackFailures.length === 0, ...(rollbackFailures.length ? { rollback_failures: rollbackFailures } : {}), created_then_rolled_back: createdWoIds }, 500);
   }
 
   // 5. Batched tenant SMS — gated on the ORIGINAL's own (post-override) Tenant_Notify_Updates,
