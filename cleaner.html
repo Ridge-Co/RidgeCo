@@ -337,7 +337,7 @@ function doMark(date,mark){   // resolves {ok:true,res} or {ok:false,err}
 function onMark(key,date,mark){
   if(S.markBusy[date]) return;
   var prev={}, d=S.data;
-  arr(d.tasks).forEach(function(t){ if(t.date===date){prev[t.key]=t.my_mark||''; t.my_mark=mark;} });
+  arr(d.tasks).concat(arr(d.pending)).forEach(function(t){ if(t.date===date){prev[t.key]=t.my_mark||''; t.my_mark=mark;} });
   S.markBusy[date]=1; S.marksInflight++; setRow(key,[]); render();
   doMark(date,mark).then(function(r){
     S.marksInflight--; delete S.markBusy[date];
