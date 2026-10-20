@@ -11931,13 +11931,13 @@ async function woLocationText(env, woId, fallbackProperty, unitId) {
     const unit = uid ? units.find(u => String(u.ID) === String(uid)) : null;
     return propUnitText(property, unit) || (wo && wo.Address) || '';
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_location_lookup_failed', Skill_Or_Endpoint: 'woLocationText', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_location_lookup_failed', Skill_Or_Endpoint: 'woLocationText', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (te) { softNote('telemetry_write_failed:wo_location_lookup_failed', te, 'P2'); }
     return propUnitText(fallbackProperty, null);
   }
 }
 async function sendTemplatedSms(env, o) {
   try {
-    let tpl = null; try { tpl = await getMessageTemplate(env, o.type, 'sms'); } catch (_) {}
+    let tpl = null; try { tpl = await getMessageTemplate(env, o.type, 'sms'); } catch (te) { softNote('message_template_lookup_failed:' + o.type, te, 'P2'); }   // falls back to the built-in default text
     const def = DEFAULT_MESSAGE_TEMPLATES.find(t => t.Message_Type === o.type && t.Channel === 'sms');
     const tk = Object.assign({ HubUrl: HUB_URL }, o.tokens || {});
     if (tk.Location == null || tk.Location === '') tk.Location = (await woLocationText(env, o.wo_id, o.property, o.unit_id)) || tk.Address || 'the property';
