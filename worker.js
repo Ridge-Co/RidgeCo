@@ -22027,7 +22027,12 @@ async function arReportSetOptIn(env, body) {
   if (!ownerId) return json({ error: 'owner_id required' }, 400);
   const enabled = body && (body.enabled === true || body.enabled === '1' || body.enabled === 'TRUE');
   await ensureTab(env, AR_OPTIN_TAB, AR_OPTIN_COLS);
-  const rows = await fetchTab(env, AR_OPTIN_TAB).catch(() => []);
+  let rows;
+  try { rows = await fetchTab(env, AR_OPTIN_TAB); }
+  catch (e) {   // an unreadable list would make us add a duplicate row: refuse and say so
+    await softFail(env, 'ar_optin_read_failed', e, 'P1', { owner: ownerId });
+    return json({ error: 'Could not read the opt-in list, so nothing was changed: ' + String((e && e.message) || e).slice(0, 150) }, 502);
+  }
   const existing = rows.find(r => String(r.Owner_ID) === ownerId);
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === ownerId);
