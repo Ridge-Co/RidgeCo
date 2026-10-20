@@ -1006,6 +1006,10 @@ function renderPendPlan(){
     h += '<div class="rcpt"><div><b>Text to ' + esc(p.first.first) + '</b> <span class="chip">Text message</span></div><div style="margin-top:6px"><span class="pill ' + (p.send_mode === 'now' ? 'ok' : 'warn') + '">' + esc(p.send_when) + '</span></div>'
       + '<label class="fld" for="pd-text" style="margin-top:8px">What she will get (you can edit it)</label><textarea id="pd-text" maxlength="' + (S && S.text_max ? S.text_max : 800) + '">' + esc(p.text) + '</textarea><div class="cnt" id="pd-cnt"></div>'
       + '<p class="say">Keep <b>{Link}</b> where her personal link should go. If you delete it the link is added at the end.</p></div>';
+    if(p.send_mode === 'after_window') h += '<label class="tog"><input type="checkbox" id="pd-now">Send now even if late (outside 8 AM - 9 PM)</label><p class="say">Leave it unticked to wait until 8 AM. Tick it only if you really want her texted right now.</p>';
+  } else h += '<div class="msg warn"><b>Nobody to text.</b>You can still save the inquiry. It will show "Nobody available" and you will be told.</div>';
+  var btns = '<div class="stk"><div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go">' + (p.first ? 'Send: ask ' + esc(p.first.first) : 'Save: nobody to ask') + '</button></div></div>';
+  sheetShell('Check before it is sent', '', h, btns);
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
