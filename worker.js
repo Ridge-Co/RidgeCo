@@ -25953,7 +25953,7 @@ async function uiTestSessionHandler(env, url, body) {
   u.searchParams.set('name', CFG.first(row));
   const res = await CFG.fn(env, u);
   let data = null;
-  try { data = await res.json(); } catch (e) { data = null; }
+  try { data = await res.json(); } catch (e) { data = null; /* silent-ok: an unreadable reply is returned just below as test login failed */ }
   if (!res.ok || !data) return json({ error: 'test login failed', status: res.status, detail: data && data.error }, 502);
   const id = CFG.idOf(data) || row.ID;
   data.token = await makeSessionToken({ role, id, stg: 1 }, env.WORKER_SECRET, 2 * 60 * 60);
