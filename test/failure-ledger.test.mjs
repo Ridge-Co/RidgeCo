@@ -53,7 +53,7 @@ const sendSMS = async (env, to, text) => { SMS.push({ to, text }); return SMS_RE
 const setConfigKey = async (env, { key, value }) => { const t = SHEET.Config; const r = t.find(x => x[0] === key); if (r) r[1] = value; else t.push([key, value]); return json({ success: true }); };
 const schedReadConfigRows = async () => SHEET.Config;
 const schedParseState = () => ({ state: {} });
-const schedCell = () => '';
+const SCHED_TOKEN_MIN_LEN = 24, SCHED_TOKEN_KEY = 'Scheduler_Token';
 const schedEffective = () => ({ jobs: [] });
 const schedStatus = () => ({ overdue: OVERDUE.map(o => o.name), jobs: Object.fromEntries(OVERDUE.map(o => [o.name, { overdue_reason: o.reason }])), tick_age_min: 3 });
 const SCHED_STATE_KEY = 'Scheduler_State';
