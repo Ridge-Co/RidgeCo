@@ -22845,7 +22845,8 @@ async function vendorBillReconcileReceipts(env, body) {
   return json({
     ok: true, receipt_count: extract.receipt_count, detected, matched, unmatched,
     logged_count: logged.length, extraction_failed: !!extract._error,
-    all_accounted_for: !extract._error && unmatched.length === 0,
+    all_accounted_for: !extract._error && !loggedReadError && unmatched.length === 0,
+    ...(loggedReadError ? { logged_read_error: loggedReadError } : {}),
   });
 }
 
