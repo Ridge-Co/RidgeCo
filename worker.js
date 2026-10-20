@@ -35522,7 +35522,8 @@ async function strCleanerPage(env, url) {
       return { id: o.ID, task_key: v.key, date: v.date, label: strFmtDate(v.date, true), next_label: v.next ? strNextDate(v.date, v.next) : '', deadline: o.Deadline_At, late: o.Status === 'expired' || Date.parse(o.Deadline_At) < ctx.now };
     }).filter(Boolean);
     const bd = String(url.searchParams.get('backup') || ''), bt = /^\d{4}-\d{2}-\d{2}$/.test(bd) ? views.find(v => v.date === bd && v.coveredAny && String(v.assigned) !== c.ID) : null;
-    return json({ ok: true, cleaner: { name: c.Name, first: strFirst(c), language: c.Language }, property: ctx.S.label, today, server_time: new Date(ctx.now).toISOString(), tasks, offers, backup_prompt: bt ? { date: bt.date, label: strFmtDate(bt.date, true) } : null, ics_url: `${new URL(url).origin}/str/c/ics?k=${encodeURIComponent(c.Token)}`, coming_soon: STR_COMING_SOON });
+    const pending = strPendingForCleaner(ctx, c, today);
+    return json({ ok: true, cleaner: { name: c.Name, first: strFirst(c), language: c.Language }, property: ctx.S.label, today, pending, server_time: new Date(ctx.now).toISOString(), tasks, offers, backup_prompt: bt ? { date: bt.date, label: strFmtDate(bt.date, true) } : null, ics_url: `${new URL(url).origin}/str/c/ics?k=${encodeURIComponent(c.Token)}`, coming_soon: STR_COMING_SOON });
   } catch (e) { return await strHandleErr(env, e, 'cleaner page'); }
 }
 
