@@ -12427,7 +12427,7 @@ async function approveEstimate(env, body) {
     catch (e) {
       // The approval is saved; a failed text must be visible, not swallowed.
       vendorSmsNote = 'text failed: ' + String((e && e.message) || e).slice(0, 120);
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_approve_vendor_sms_failed', Skill_Or_Endpoint: '/estimate/approve', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_approve_vendor_sms_failed', Skill_Or_Endpoint: '/estimate/approve', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (te) { softNote('telemetry_write_failed:estimate_approve_vendor_sms_failed', te, 'P2'); }
     }
   }
   return json({ success: true, requestDeposit, vendor_sms_skipped: skipVendorSms,
