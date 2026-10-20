@@ -35054,7 +35054,7 @@ async function strDeliverAlerts(ctx) {
     if (oneShot && count > 0) continue;
     if (!oneShot && count > 0 && Date.parse(al.Next_Send_At || '') > ctx.now) continue;
     const daysOut = al.Task_Key ? strDaysBetween(inspEtDate(ctx.now), String(al.Task_Key).split('|')[2] || inspEtDate(ctx.now)) : 0;
-    if (al.Kind !== 'promote' && !strBrettSmsOk(ctx.now, daysOut)) continue; // wait for 7am (retried next tick); a turnover 1 day out or less never waits
+    if (al.Kind !== 'promote' && al.Kind !== 'pending' && !strBrettSmsOk(ctx.now, daysOut)) continue; // wait for 7am (retried next tick); a turnover 1 day out or less never waits
     const subject = (al.Severity === 'urgent' ? '⚠ ' : '') + String(al.Message).split('\n')[0].slice(0, 90);
     const res = await strSendBrett(env, ctx.cfg, subject, al.Sms_Text, String(al.Message).split('\n'), true);
     if (!res.ok) { ctx.errors.push({ step: 'alert_delivery', error: `Could not tell Brett (${al.Alert_Key}): ${res.log.join('; ')}` }); await strSystemAlert(env, 'alert_delivery', `Could not deliver "${al.Alert_Key}" to Brett: ${res.log.join('; ')}`); continue; }
