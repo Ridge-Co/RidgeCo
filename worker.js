@@ -6350,7 +6350,11 @@ async function scopeProposalBookFinal(env, body) {
     invoiceNumber = (r.Invoice && r.Invoice.DocNumber) || '';
     // Persist the invoice id NOW, before touching the bill, so a later failure (bill error or a
     // dropped connection) can never cause a duplicate invoice on retry.
-    try { await updateRow(env, 'Scope_Signatures', row.ID, { QB_Final_Invoice_ID: invoiceId, QB_Final_Invoice_Number: invoiceNumber }); } catch (e) {}
+    try { await updateRow(env, 'Scope_Signatures', row.ID, { QB_Final_Invoice_ID: invoiceId, QB_Final_Invoice_Number: invoiceNumber }); }
+    catch (e) {
+      await softFail(env, 'scope_book_final_persist_invoice_id_failed', e, 'P0', { scope_signature: String(row.ID), qb_invoice_id: invoiceId });
+      failWarnings.push('QuickBooks final invoice ' + (invoiceNumber || invoiceId) + ' WAS created but its id could not be saved on the signature row yet - do not book again; check QuickBooks for a duplicate.');
+    }
   }
 
   // 2) Vendor bill (remaining cost) — idempotent; skipped if vendor missing/in-house/zero. Same
