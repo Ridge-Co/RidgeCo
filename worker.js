@@ -11325,7 +11325,7 @@ async function moveVendorBillToNewWO(env, body) {
   const movedAttachmentIds = [];
   for (const a of moving) {
     try { await updateRow(env, 'Attachments', a.ID, { WO_ID: newWoId }); movedAttachmentIds.push(a.ID); }
-    catch (e) { /* best-effort — report what didn't move below rather than losing the whole apply over one row */ }
+    catch (e) { softNote('bill_split_attachment_move_failed', e, 'P1', { ref: a.ID, wo: newWoId }); }   // also returned to the caller below as attachments_failed
   }
   const failedAttachmentIds = moving.map(a => a.ID).filter(id => !movedAttachmentIds.includes(id));
 
