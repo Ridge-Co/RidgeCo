@@ -16576,6 +16576,30 @@ function failQueueItem(r) {
     first_step: 'Open Needs Attention, use "Copy for Claude" on this item, find the cause, fix it, add a test that forces this exact failure, and mark it fixed with the PR.',
   };
 }
+// IO. Adds the queue rows (status "proposed", Brett still decides), then stamps the ledger Notes so it is never queued twice.
+async function failQueueRun(env, ledgerRows, nowMs, errors) {
+  const todo = failQueuePlan(ledgerRows, nowMs);
+  if (!todo.length) return 0;
+  let n = 0;
+  try { await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); }
+  catch (e) { errors.push({ step: 'queue_tab', error: String((e && e.message) || e).slice(0, 200) }); return 0; }
+  const lastCol = col(FAIL_LEDGER_COLS.length - 1);
+  for (const r of todo) {
+    try {
+      const nowIso = new Date(nowMs).toISOString();
+      const rowObj = buildScoutQueueRow(failQueueItem(r), nowIso, nowIso);
+      rowObj.Approved_By = 'failure-ledger';
+      const res = await addRow(env, OPS_QUEUE_TAB, rowObj);
+      if (res && typeof res.status === 'number' && res.status >= 400) throw new Error(`queue row could not be saved (HTTP ${res.status})`);
+      let id = ''; try { id = String((await res.clone().json()).id || ''); } catch (e) { id = ''; }
+      if (!id) throw new Error('queue row saved but its id was not returned');
+      r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `${nowIso.slice(0, 10)} queued: Ops_Build_Queue #${id}`;
+      await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `${FAIL_LEDGER_TAB}!A${r._row}:${lastCol}${r._row}`, values: [FAIL_LEDGER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : String(r[c]))] }] });
+      n++;
+    } catch (e) { errors.push({ step: 'queue_item', error: `${r.ID}: ` + String((e && e.message) || e).slice(0, 200) }); }
+  }
+  return n;
+}
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
