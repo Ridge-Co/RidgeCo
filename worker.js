@@ -36860,6 +36860,13 @@ async function strAdminPendingSendNow(env, body) {
     return json({ ok: true, result: adv, status: strPendingStatus(ctx, p), errors: ctx.errors, warnings: ctx.warnings });
   } catch (e) { return await strHandleErr(env, e, 'pending send now'); }
 }
+// Cancel an inquiry. {preview:true} shows the (optional) "no booking after all" text for the cleaner who said yes; nothing is changed or sent.
+async function strAdminPendingCancel(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), p = ctx.st.pendings.find(x => x.Task_Key === body.task_key);
+    if (!p) return json({ ok: false, error: 'not_found', message: 'That inquiry was not found.' }, 404);
+    if (!strPendActive(p)) return json({ ok: true, already: true, status: strPendingStatus(ctx, p), message: 'That inquiry is already closed. Nothing was sent.' });
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
