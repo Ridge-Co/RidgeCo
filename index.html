@@ -15752,7 +15752,7 @@ function bvUpdateConfirmGate() {
 function bvRenderPreview() {
   var ids = _bulkVoidIds;
   Promise.all(ids.map(function(id) {
-    return api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(id)).catch(function() { return []; });
+    return api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(id)).catch(function(e) { window.hubReportFailure && window.hubReportFailure('index:bulk-void-bill-lookup', e, {ref: id}); throw e; });
   })).then(function(billLists) {
     var voidable = [], skips = [];
     ids.forEach(function(id, i) {
