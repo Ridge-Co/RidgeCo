@@ -24538,7 +24538,7 @@ async function __meterPersist(env) {
   } catch (e) {
     __meter.persistErrors++; __meter.dirty = true;
     __meter.lastPersistError = String((e && e.message) || e).slice(0, 200);
-    if (__meter.persistErrors <= 3) console.error('[read-meter] could not save counts to the shared store (READ_METER): ' + __meter.lastPersistError);
+    if (__meter.persistErrors <= 3) console.error('[read-meter] could not save counts to the shared store: ' + __meter.lastPersistError);
     await __meterReportStoreFault(env, __meter.lastPersistError);
   } finally { __meter.persisting = false; }
 }
