@@ -8812,7 +8812,10 @@ async function woSplit(env, body) {
   let timeEntries = [], vendorBills = [], invoiceReview = [];
   if (reassignments.some(r => r.type === 'time_entry')) timeEntries = await fetchTab(env, 'Time_Entries');
   if (reassignments.length) vendorBills = await fetchTab(env, 'Vendor_Bills');
-  if (reassignments.some(r => r.type === 'vendor_bill')) { try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) {} }
+  if (reassignments.some(r => r.type === 'vendor_bill')) {
+    try { invoiceReview = await fetchTab(env, 'Invoice_Review'); }
+    catch (e) { await softFail(env, 'wo_split_invoice_review_unreadable', e, 'P1', { note: 'vendor-bill lock check ran without Invoice_Review' }); }
+  }
 
   const resolvedReassignments = [];
   for (const r of reassignments) {
