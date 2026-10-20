@@ -5144,7 +5144,7 @@ async function scopeProposalPhotos(env, s) {
         return { fileId: a.Drive_File_ID || '', url: a.Drive_URL || '', name: a.File_Name || 'photo', isVideo, isViewable: isVideo || isImage };
       })
       .filter(p => p.isViewable && p.fileId);
-  } catch (_) { return []; }
+  } catch (e) { softNote('scope_proposal_photos_failed', e, 'P2', { scope: String(s && s.ID) }); return []; }   // the public page still renders, just without photos
 }
 
 // structured per-item/variant view built by scopeProposal() (Proposal_Items_JSON) — HARD RULE:
