@@ -17041,7 +17041,7 @@ async function schedRunSweepWork(env) {
   detail.estimate_reminders = await schedStep('estimate_reminders', () => processEstimateReminders(env), errors);
   detail.deposit_paid = await schedStep('deposit_paid', async () => {
     try { return await processDepositPaidSweep(env); }
-    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); } throw e; }
+    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); softNote('telemetry_write_failed:deposit_sweep_cron', e2, 'P2'); /* the sweep error itself is rethrown just below and ledgered by the scheduler */ } throw e; }
   }, errors);
   return { ok: !errors.length, errors, detail };
 }
