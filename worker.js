@@ -23331,10 +23331,10 @@ async function ownerOnboardSubmit(env, body, clientIP) {
   if (!c.sms_consent) warnings.push('Owner did NOT check the SMS permission box — owner SMS is switched off for them.');
 
   const needsReview = warnings.length > 0;
-  await updateRow(env, 'Owner_Invites', inv.ID, {
+  await tryWrite(env, 'owner_onboard_invite_mark_used_failed', () => updateRow(env, 'Owner_Invites', inv.ID, {
     Status: 'used', Used_Date: nowIso, Owner_ID: ownerId, Needs_Review: needsReview ? 'TRUE' : 'FALSE',
     Result_Summary: JSON.stringify({ ...summary, warnings }).slice(0, 45000),
-  }).catch(() => {});
+  }), 'P1');   // the owner already has an account by now: a failure here is reported, not shown to them
 
   try {
     const cfg = await fetchConfig(env);
