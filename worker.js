@@ -32774,7 +32774,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         try {
           const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
           billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qb_owner_email_lookup', e, 'P2', { ir: leadIr.ID, owner_qb: ownerQbId }); }   // the invoice still posts, just without a saved send-to
       }
     }
     const emailOk = billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail);
