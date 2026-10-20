@@ -29043,7 +29043,7 @@ async function qbVendorTransactions(env, token, qboVendorId) {
       const r = await qbApi(env, `query?query=${encodeURIComponent(sql)}&minorversion=73`, 'GET', null, token);
       if (r && r.Fault) return null;
       return (r && r.QueryResponse && r.QueryResponse[key]) || [];
-    } catch (e) { return null; }
+    } catch (e) { softNote('qb_vendor_transactions_query_failed:' + key, e, 'P2'); return null; }   // the caller's `sources` flags show which source did not load
   };
   const [bills, payments, purchases] = await Promise.all([
     run(`select Id, DocNumber, TxnDate, DueDate, TotalAmt, Balance from Bill where VendorRef = '${v}' maxresults 500`, 'Bill'),
