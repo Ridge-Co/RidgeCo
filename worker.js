@@ -21259,7 +21259,7 @@ async function syncVendorsFromQbo(env, body) {
         }
       } catch (e) {
         r.error = String((e && e.message) || e);
-        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: '/admin/sync-vendors-from-qbo', Success: 'FALSE', Notes: ('vendor '+id+': '+r.error).slice(0,480) }); } catch (e2) {}
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: '/admin/sync-vendors-from-qbo', Success: 'FALSE', Notes: ('vendor '+id+': '+r.error).slice(0,480) }); } catch (e2) { softNote('telemetry_write_failed:vendor_qbo_sync', e2, 'P2'); }
       }
       results.push(r);
     }
