@@ -29347,7 +29347,7 @@ async function applyStagingQbTradeMap(env) {
 
 // Extract an existing entity Id from a QBO "Duplicate Name Exists" (6240) error.
 function qbDupId(r) {
-  try { const e = r?.Fault?.Error?.[0]; if (e?.code === '6240' && e?.Detail) { const m = e.Detail.match(/Id=(\d+)/); if (m) return m[1]; } } catch (x) {}
+  try { const e = r?.Fault?.Error?.[0]; if (e?.code === '6240' && e?.Detail) { const m = e.Detail.match(/Id=(\d+)/); if (m) return m[1]; } } catch (x) { /* silent-ok: reading an id out of an error detail is a best-effort probe */ }
   return null;
 }
 
