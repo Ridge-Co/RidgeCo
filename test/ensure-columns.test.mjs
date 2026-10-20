@@ -19,7 +19,7 @@ function grabCol(){
 // Telemetry row via logTelemetry on any failure — grab both, and stub logTelemetry/TELEMETRY_TAB
 // so the wrapper's dependencies resolve in this sandboxed scope same as sheetsRequest does.
 const { ensureColumns } = new Function('sheetsRequest', 'logTelemetry', 'TELEMETRY_TAB',
-  grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
+  PHASE_C_SHIM + grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
   async (env, method, path, body) => { calls.push({method, path, body}); return stub; },
   async () => {}, 'Ops_Telemetry');
 
