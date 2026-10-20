@@ -26647,9 +26647,13 @@ async function propertyUpdate(env, body) {
     if (!w.ok) colFails.push('Source fields (' + w.error + ')');
   }
   if (fields.Commercial_Subtype !== undefined) {
-    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
+    const w = await tryWrite(env, 'property_update_ensure_subtype_column', () => ensureColumns(env, 'Properties', ['Commercial_Subtype']), 'P1');
+    if (!w.ok) colFails.push('Commercial subtype (' + w.error + ')');
   }
-  return await updateRow(env, 'Properties', body.id, fields);
+  const resp = await updateRow(env, 'Properties', body.id, fields);
+  // updateRow quietly skips a field whose column does not exist, so a failed ensureColumns used to look like a clean save.
+  if (colFails.length && resp && resp.status < 400) return json({ error: 'Some property changes were NOT saved: the sheet column could not be created for ' + colFails.join('; ') + '. Other changes were saved.', partial: true }, 500);
+  return resp;
 }
 
 async function updateRow(env, tab, id, fields) {
