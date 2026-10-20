@@ -36972,7 +36972,7 @@ async function fiRoute(env, label, fn) {
   try { return await fn(); }
   catch (e) {
     console.error('fi/' + label + ' failed:', e && e.message);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* telemetry is best-effort; the error itself is returned below */ }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (te) { softNote('telemetry_write_failed:fi_route_error', te, 'P2', { route: label }); }   // the error itself is returned below
     return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', { detail: String((e && e.message) || e).slice(0, 160) });
   }
 }
