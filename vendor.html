@@ -92,6 +92,16 @@ input:focus{outline:none;border-color:var(--accent);}
 .tab.active{background:var(--surface);color:var(--accent);}
 
 .wo-count{color:var(--muted);font-size:11px;margin-bottom:10px;}
+.wo-fold{margin-bottom:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);}
+.wo-fold>summary{cursor:pointer;padding:10px 12px;font-size:11px;letter-spacing:.06em;color:var(--muted);list-style:none;}
+.wo-fold>summary::-webkit-details-marker{display:none;}
+.wo-fold>summary::before{content:'▸ ';}
+.wo-fold[open]>summary::before{content:'▾ ';}
+.wo-fold>.wo-fold-body{padding:10px 10px 0;}
+.paid-quick{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;}
+.paid-quick button{flex:1;min-width:84px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);font-family:var(--font);font-size:11px;letter-spacing:.04em;padding:8px 6px;border-radius:6px;cursor:pointer;}
+.paid-quick button.active{background:var(--surface);color:var(--accent);border-color:var(--accent);}
+.wo-paid-date{color:var(--accent2);font-size:11px;margin-top:3px;}
 
 /* ── WO Card ── */
 .wo-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;overflow:hidden;}
@@ -227,11 +237,18 @@ input[type=file]{display:none;}
     <div class="tab" id="tabAll" data-i18n="ALL JOBS" onclick="switchTab('all')">ALL JOBS</div>
     <div class="tab" id="tabDue" data-i18n="NEEDS INVOICE" onclick="switchTab('due')">NEEDS INVOICE</div>
     <div class="tab" id="tabInvoiced" data-i18n="INVOICED" onclick="switchTab('invoiced')">INVOICED</div>
+    <div class="tab" id="tabPaid" data-i18n="PAID" onclick="switchTab('paid')">PAID</div>
   </div>
 
   <div id="vtrBanner"></div>
 
-  <div style="margin-bottom:10px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO #, ref #, address, trade…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div><div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"><select id="vFilterTrade" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Trades</option><option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option></select><select id="vFilterPriority" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><select id="vSort" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="priority">Priority</option><option value="address">Address A-Z</option><option value="date-desc">Newest First</option><option value="date-asc">Oldest First</option></select></div>
+  <div style="margin-bottom:10px;position:relative"><input type="text" id="woSearch" placeholder="Search by WO #, ref #, address, trade…" oninput="filterVendorWOs()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px 10px 10px 32px;"><span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:15px;pointer-events:none">⌕</span></div><div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"><select id="vFilterTrade" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Trades</option><option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option></select><select id="vFilterPriority" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="">All Priorities</option><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><select id="vSort" onchange="filterVendorWOs()" style="flex:1;min-width:100px;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px;border-radius:6px"><option value="priority">Priority</option><option value="address">Address A-Z</option><option value="date-desc">Newest First</option><option value="date-asc">Oldest First</option><option value="paid-desc">Recently paid first</option><option value="paid-asc">Oldest payment first</option></select></div>
+<div id="paidQuick" class="paid-quick" style="display:none">
+  <button type="button" data-days="10" onclick="setPaidRange(10)">Paid in last 10 days</button>
+  <button type="button" data-days="14" onclick="setPaidRange(14)">Paid in last 14 days</button>
+  <button type="button" data-days="30" onclick="setPaidRange(30)">Paid in last 30 days</button>
+  <button type="button" data-days="0" class="active" onclick="setPaidRange(0)">All paid jobs</button>
+</div>
 <div id="woList"><div class="spinner">Loading work orders…</div></div>
 </div>
 
@@ -270,6 +287,8 @@ var SECRET = '';                 // session token, set on PIN login — NO hardc
 var SESS_KEY = 'mh_vendor_sess'; // persisted {…, token} so a reload / auto-refresh stays logged in
 var session = null;
 var currentTab = 'open';
+var paidRange = 0;                       // PAID tab quick filter: 0 = all, else paid within the last N days
+var _foldOpen = { paid: false, cancelled: false };   // Paid / Cancelled sections stay collapsed unless the vendor opens them
 var failCount = 0;
 // Deep-link support: an SMS can link straight to ?wo=WO-1234 so the vendor's portal opens
 // already filtered to the job the text was about, instead of making them search for it.
@@ -1095,7 +1114,10 @@ function filterVendorWOs() {
   var priority = (document.getElementById('vFilterPriority')||{}).value||'';
   var sort     = (document.getElementById('vSort')||{}).value||'priority';
   var PRI = {urgent:0,high:1,normal:2,low:3};
-  var filtered = (window._wos||[]).filter(function(wo) {
+  // Always filter the FULL loaded list (window._allWos), never the already-filtered one that renderWOs leaves in window._wos --
+  // otherwise backspacing in the search box could never bring a job back.
+  var filtered = (window._allWos || window._wos || []).filter(function(wo) {
+    if (currentTab === 'paid' && paidRange > 0 && !paidWithinDays(wo, paidRange)) return false;
     if (trade    && (wo.Trade||'').toLowerCase() !== trade.toLowerCase()) return false;
     if (priority && (wo.Priority||'normal').toLowerCase() !== priority.toLowerCase()) return false;
     if (q && !((wo.ID||'').toLowerCase().includes(q)||(wo.Owner_WO_Ref||'').toLowerCase().includes(q)||
@@ -1104,13 +1126,14 @@ function filterVendorWOs() {
     return true;
   });
   filtered.sort(function(a,b){
+    if (sort==='paid-desc' || sort==='paid-asc') return comparePaidDate(a,b, sort==='paid-desc');
     if (sort==='address') return (a.property_address||'').localeCompare(b.property_address||'');
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='date-desc') return new Date(b.Created_Date)-new Date(a.Created_Date);
     var pa=(PRI[(a.Priority||'normal').toLowerCase()]??2), pb=(PRI[(b.Priority||'normal').toLowerCase()]??2);
     return pa!==pb?pa-pb:(a.property_address||'').localeCompare(b.property_address||'');
   });
-  renderWOs(filtered);
+  renderWOs(filtered, { filtered: true });
 }
 
 // "NEEDS INVOICE" tab (Sep 22 2026): jobs this vendor has finished but hasn't yet billed for --
@@ -1164,7 +1187,57 @@ function fetchInvoicedWOs() {
     return invoiced;
   });
 }
+// ── PAID tab + paid/cancelled folding (Oct 19 2026) ───────────────────────────────────────────
+// Vendor_Paid_Date is the day QuickBooks says the vendor bill was paid (written by the Hub's payment sync). A paid job whose date
+// could not be read has '' here: it is listed under "All paid jobs" (at the bottom) but never matches a "last N days" filter.
+function isPaidWO(wo) { return String((wo && wo.Status) || '').toLowerCase() === 'paid'; }
+function isCancelledWO(wo) { var st = String((wo && wo.Status) || '').toLowerCase(); return st === 'cancelled' || st === 'canceled'; }
+function paidDateOf(wo) { var d = String((wo && wo.Vendor_Paid_Date) || '').slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : ''; }
+function localDateStr(dt) { var m = dt.getMonth() + 1, d = dt.getDate(); return dt.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d; }
+function paidWithinDays(wo, days, nowDt) {
+  var d = paidDateOf(wo); if (!d) return false;
+  var cut = new Date(nowDt || new Date()); cut.setHours(12, 0, 0, 0); cut.setDate(cut.getDate() - days);
+  return d >= localDateStr(cut);
+}
+// Newest payment first (desc) or oldest first; jobs with no readable date always sink to the bottom.
+function comparePaidDate(a, b, desc) {
+  var da = paidDateOf(a), db = paidDateOf(b);
+  if (!da && !db) return new Date(b.Created_Date || 0) - new Date(a.Created_Date || 0);
+  if (!da) return 1;
+  if (!db) return -1;
+  if (da === db) return 0;
+  return desc ? (da < db ? 1 : -1) : (da < db ? -1 : 1);
+}
+function fmtPaidDate(d) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || ''); if (!m) return '';
+  var mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[2] - 1];
+  return mon + ' ' + (+m[3]) + ', ' + m[1];
+}
+// Active jobs first, then Paid, then Cancelled (each keeps the order it came in). Pure.
+function partitionPaidCancelled(wos) {
+  var active = [], paid = [], cancelled = [];
+  (wos || []).forEach(function(w) { (isCancelledWO(w) ? cancelled : isPaidWO(w) ? paid : active).push(w); });
+  return { active: active, paid: paid, cancelled: cancelled };
+}
+function fetchPaidWOs() {
+  return apiList('/vendor-workorders?vendor_id=' + session.vendor_id + '&include_closed=true').then(function(wos) {
+    var paid = (wos || []).filter(isPaidWO);
+    paid.sort(function(a, b) { return comparePaidDate(a, b, true); });
+    return paid;
+  });
+}
+function setPaidRange(days) {
+  paidRange = days;
+  syncPaidQuickButtons();
+  filterVendorWOs();
+}
+function syncPaidQuickButtons() {
+  var bar = document.getElementById('paidQuick'); if (!bar) return;
+  bar.style.display = currentTab === 'paid' ? 'flex' : 'none';
+  Array.prototype.forEach.call(bar.querySelectorAll('button'), function(b) { b.className = (+b.getAttribute('data-days') === paidRange) ? 'active' : ''; });
+}
 function loadWOsForCurrentTab() {
+  if (currentTab === 'paid') return fetchPaidWOs();
   if (currentTab === 'due') return fetchDueWOs();
   if (currentTab === 'invoiced') return fetchInvoicedWOs();
   var includeClosed = currentTab === 'all' ? '&include_closed=true' : '';
@@ -1177,6 +1250,11 @@ function switchTab(tab) {
   document.getElementById('tabAll').className = 'tab' + (tab === 'all' ? ' active' : '');
   document.getElementById('tabDue').className = 'tab' + (tab === 'due' ? ' active' : '');
   document.getElementById('tabInvoiced').className = 'tab' + (tab === 'invoiced' ? ' active' : '');
+  document.getElementById('tabPaid').className = 'tab' + (tab === 'paid' ? ' active' : '');
+  // The two payment-date sorts only make sense on the PAID tab: default there, and fall back to Priority everywhere else.
+  var sortSel = document.getElementById('vSort');
+  if (sortSel) { if (tab === 'paid') sortSel.value = 'paid-desc'; else if (/^paid-/.test(sortSel.value)) sortSel.value = 'priority'; }
+  syncPaidQuickButtons();
   loadWorkOrders();
 }
 
@@ -1197,15 +1275,26 @@ function loadWorkOrders() {
     });
 }
 
-function renderWOs(wos) {
+function renderWOs(wos, opts) {
   var list = document.getElementById('woList');
+  if (!(opts && opts.filtered)) {
+    window._allWos = wos;   // the full loaded list; filterVendorWOs always starts from this
+    if (currentTab === 'paid') return filterVendorWOs();   // the PAID tab always applies its range filter + payment-date sort
+  }
+  // Paid and cancelled jobs sink to the bottom of every list, each in its own collapsed section. (The PAID tab itself is the
+  // paid list, so nothing is folded there.) idx below is the position in THIS display order -- everything keyed on idx
+  // (window._wos[idx], card-N, detail-N) therefore stays consistent.
+  var parts = currentTab === 'paid' ? { active: wos || [], paid: [], cancelled: [] } : partitionPaidCancelled(wos);
+  wos = parts.active.concat(parts.paid, parts.cancelled);
+  var nActive = parts.active.length, nPaid = parts.paid.length;
   if (!wos || !wos.length) {
-    var emptyMsg = currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : currentTab === 'invoiced' ? 'No invoiced jobs yet.' : 'No work orders.';
+    var emptyMsg = currentTab === 'paid' ? (paidRange > 0 ? 'No jobs paid in that time. Tap "All paid jobs" to see every paid job.' : 'No paid jobs yet.') : currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : currentTab === 'invoiced' ? 'No invoiced jobs yet.' : 'No work orders.';
     list.innerHTML = '<div class="empty"><div class="icon">✓</div>' + emptyMsg + '</div>';
     return;
   }
 
   var html = '<div class="wo-count">' + wos.length + ' work order' + (wos.length !== 1 ? 's' : '') + '</div>';
+  var paidHtml = '', cancelledHtml = '';
   wos.forEach(function(wo, idx) {
     var pri = (wo.Priority || 'normal').toLowerCase();
     var statusClass = {
@@ -1256,13 +1345,14 @@ function renderWOs(wos) {
 
     var clHtml = buildVendorChecklist(wo, idx);
 
-    html += '<div class="wo-card ' + pri + '" id="card-' + idx + '">' +
+    var cardHtml = '<div class="wo-card ' + pri + '" id="card-' + idx + '">' +
       '<div class="wo-header" onclick="toggleCard(' + idx + ')">' +
         '<div class="wo-header-left">' +
           '<div class="wo-id">' + esc(wo.ID) + (wo.Owner_WO_Ref ? ' <span style="color:var(--info);font-size:11px">[' + esc(wo.Owner_WO_Ref) + ']</span>' : '') + '</div>' +
           '<div class="wo-address">' + esc(addrLine) + '</div>' +
           '<div class="wo-trade">' + esc(wo.Trade || '—') + '</div>' +
           '<div class="wo-desc">' + esc(descShort) + '</div>' +
+          (isPaidWO(wo) ? '<div class="wo-paid-date">' + (paidDateOf(wo) ? '💵 ' + t('Paid') + ' ' + esc(fmtPaidDate(paidDateOf(wo))) : '💵 ' + t('Paid')) + '</div>' : '') +
           '<div id="bill-badge-' + idx + '"></div>' +
         '</div>' +
         '<div class="wo-header-right">' +
@@ -1324,9 +1414,22 @@ function renderWOs(wos) {
         '</div>' +
       '</div>' +
     '</div>';
+    if (currentTab !== 'paid' && idx >= nActive + nPaid) cancelledHtml += cardHtml;
+    else if (currentTab !== 'paid' && idx >= nActive) paidHtml += cardHtml;
+    else html += cardHtml;
   });
+  // Collapsed sections; they open if the vendor opened them before, or while a search is narrowing the list.
+  var searching = !!((document.getElementById('woSearch') || {}).value || '').trim();
+  function foldBlock(key, label, count, body) {
+    if (!count) return '';
+    return '<details class="wo-fold" data-fold="' + key + '"' + ((_foldOpen[key] || searching) ? ' open' : '') + '><summary>' + label + ' (' + count + ')</summary><div class="wo-fold-body">' + body + '</div></details>';
+  }
+  html += foldBlock('paid', 'PAID JOBS', nPaid, paidHtml) + foldBlock('cancelled', 'CANCELLED JOBS', parts.cancelled.length, cancelledHtml);
 
   list.innerHTML = html;
+  Array.prototype.forEach.call(list.querySelectorAll('details.wo-fold'), function(d) {
+    d.addEventListener('toggle', function() { _foldOpen[d.getAttribute('data-fold')] = d.open; });
+  });
 
   // Store WOs for status tracking
   window._wos = wos;
@@ -3884,6 +3987,17 @@ var ES = {
   'OPEN JOBS':'TRABAJOS ABIERTOS',
   'ALL JOBS':'TODOS LOS TRABAJOS',
   'NEEDS INVOICE':'FALTA FACTURA',
+  'PAID':'PAGADOS',
+  'PAID JOBS':'TRABAJOS PAGADOS',
+  'CANCELLED JOBS':'TRABAJOS CANCELADOS',
+  'Paid in last 10 days':'Pagados en los últimos 10 días',
+  'Paid in last 14 days':'Pagados en los últimos 14 días',
+  'Paid in last 30 days':'Pagados en los últimos 30 días',
+  'All paid jobs':'Todos los trabajos pagados',
+  'Recently paid first':'Pagados recientemente primero',
+  'Oldest payment first':'Pago más antiguo primero',
+  'No paid jobs yet.':'Aún no hay trabajos pagados.',
+  'No jobs paid in that time. Tap "All paid jobs" to see every paid job.':'Ningún trabajo pagado en ese periodo. Toque "Todos los trabajos pagados" para ver todos.',
   'VENDOR PORTAL':'PORTAL DE CONTRATISTAS',
   'FIRST NAME':'NOMBRE',
   'YOUR NAME':'SU NOMBRE',
@@ -4241,7 +4355,7 @@ function isVendorBusy(){
     if (!session) return;
     loadWOsForCurrentTab().then(function(wos) {
       if (!session) return; // logged out while the request was in flight
-      if (woSignature(wos) === woSignature(window._wos)) return; // nothing changed -- leave the DOM alone
+      if (woSignature(wos) === woSignature(window._allWos || window._wos)) return; // nothing changed -- leave the DOM alone
       if (isVendorBusy()) { pendingWos = wos; } // wait -- see the backgrounding handler below
       else { pendingWos = null; applyNow(wos); }
     }).catch(function(){}); // silent -- this is a background check; a manual loadWorkOrders() still surfaces real errors

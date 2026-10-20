@@ -12180,7 +12180,9 @@ async function approveEstimate(env, body) {
   const sheetRow = rowIdx + 1;
   function colLetter(n) { return n < 26 ? String.fromCharCode(65+n) : 'A'+String.fromCharCode(65+n-26); }
   const approvedBy = body.approved_by || 'admin', requestDeposit = !!body.request_deposit;
-  const approvalNote = body.approval_type || (requestDeposit ? 'Deposit requested' : 'Approved — no deposit required');
+  // Oct 19 2026: approving after the job is already done must be able to skip the "you're clear to proceed" text.
+  const skipVendorSms = body.skip_vendor_sms === true || String(body.skip_vendor_sms).toLowerCase() === 'true';
+  const approvalNote = body.approval_type || ((requestDeposit ? 'Deposit requested' : 'Approved — no deposit required') + (skipVendorSms ? ' (vendor not texted — approved after the fact)' : ''));
   const batch = [{ range: `Estimates!${colLetter(statusCol)}${sheetRow}`, values: [['Approved']] }];
   const optionalCols = { Approved_By: approvedBy, Approved_Date: new Date().toISOString(), Approval_Note: approvalNote };
   Object.entries(optionalCols).forEach(([colName, val]) => { const idx = headers.indexOf(colName); if (idx > -1) batch.push({ range: `Estimates!${colLetter(idx)}${sheetRow}`, values: [[val]] }); });
@@ -12188,8 +12190,18 @@ async function approveEstimate(env, body) {
   await setApprovalStage(env, { woId, stage: 'Approved' });
   // Vendor text via the gated, editable template path (no dollar amounts — FEATURE_LOG rule 201).
   let vendorSms = null;
-  if (latest.Vendor_ID) { try { vendorSms = await notifyVendorTemplated(env, requestDeposit ? 'vendor_estimate_approved_deposit' : 'vendor_estimate_approved', woId, latest.Vendor_ID); } catch (e) {} }
-  return json({ success: true, requestDeposit, vendor_sms: vendorSms ? (vendorSms.sent ? 'sent' : (vendorSms.gate_snapshot || vendorSms.reason || 'not sent')) : 'no vendor' });
+  let vendorSmsNote = '';
+  if (skipVendorSms) vendorSmsNote = 'skipped (you chose not to text the vendor)';
+  else if (latest.Vendor_ID) {
+    try { vendorSms = await notifyVendorTemplated(env, requestDeposit ? 'vendor_estimate_approved_deposit' : 'vendor_estimate_approved', woId, latest.Vendor_ID); }
+    catch (e) {
+      // The approval is saved; a failed text must be visible, not swallowed.
+      vendorSmsNote = 'text failed: ' + String((e && e.message) || e).slice(0, 120);
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_approve_vendor_sms_failed', Skill_Or_Endpoint: '/estimate/approve', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (_) {}
+    }
+  }
+  return json({ success: true, requestDeposit, vendor_sms_skipped: skipVendorSms,
+    vendor_sms: vendorSmsNote || (vendorSms ? (vendorSms.sent ? 'sent' : (vendorSms.gate_snapshot || vendorSms.reason || 'not sent')) : 'no vendor') });
 }
 
 // POST /wo/deposit-approve { wo_id, vendor_id?, amount, notes? }
@@ -26306,6 +26318,22 @@ async function qbLoadInvoicePayments(env, token, invoices, warnings, methodsCach
   return byInvoice;
 }
 
+// PURE — the date a vendor bill was PAID: the latest TxnDate among the QuickBooks BillPayment(s) linked to it.
+// '' when none can be resolved (never a guessed date). payById is a Map of BillPayment Id -> BillPayment.
+function vendorBillPaymentIds(bill) {
+  return (Array.isArray(bill && bill.LinkedTxn) ? bill.LinkedTxn : [])
+    .filter(t => t && /^BillPayment/i.test(String(t.TxnType || '')) && t.TxnId != null).map(t => String(t.TxnId));
+}
+function vendorBillPaidDate(bill, payById) {
+  let best = '';
+  for (const id of vendorBillPaymentIds(bill)) {
+    const p = payById && typeof payById.get === 'function' ? payById.get(id) : null;
+    const d = p ? String(p.TxnDate || '').slice(0, 10) : '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d > best) best = d;
+  }
+  return best;
+}
+
 async function qbPayables(env, url) {
   try {
     const days = Math.max(1, Math.min(365, parseInt(url && url.searchParams.get('days')) || 90));
@@ -26386,6 +26414,14 @@ async function qbPayables(env, url) {
       qbBatchById('Bill', candidates.map(ir => (ir.QB_Bill_ID || '').trim())),
     ]);
     const invPayments = await qbLoadInvoicePayments(env, token, [...invById.values()], warnings, methodsCache);
+    // Vendor payment dates (Oct 19 2026, vendor-portal PAID tab): only bills QuickBooks says are fully paid need their BillPayment looked up.
+    const vendorPaidDateMissing = [];
+    async function loadBillPayDates(billMap) {
+      const ids = [];
+      for (const b of billMap.values()) if (b && Number(b.Balance) <= 0.005) ids.push(...vendorBillPaymentIds(b));
+      return ids.length ? await qbBatchById('BillPayment', ids) : new Map();
+    }
+    const billPayById = await loadBillPayDates(billById);
 
     const rows = [];
     for (const ir of candidates) {
@@ -26400,7 +26436,7 @@ async function qbPayables(env, url) {
       }
 
       const billId = (ir.QB_Bill_ID || '').trim();
-      let vendorPaid = null, vendorBalance = null, billDue = '', vendorRef = '', vendorTotal = null;
+      let vendorPaid = null, vendorBalance = null, billDue = '', vendorRef = '', vendorTotal = null, vendorPaidDate = '';
       if (billId) {
         const b = billById.get(billId);
         if (b) {
@@ -26412,6 +26448,7 @@ async function qbPayables(env, url) {
           // Blank when the vendor gave no number — the card falls back to the WO number, which
           // is also what QuickBooks shows in that case, so the two views still line up.
           vendorRef = b.DocNumber || '';
+          if (vendorPaid) { vendorPaidDate = vendorBillPaidDate(b, billPayById); if (!vendorPaidDate) vendorPaidDateMissing.push(ir.WO_ID || ('bill ' + billId)); }
         }
       }
 
@@ -26453,7 +26490,7 @@ async function qbPayables(env, url) {
         customer_partial: customerPartial,
         ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
-        vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
+        vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
         bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
       });
     }
@@ -26505,15 +26542,17 @@ async function qbPayables(env, url) {
           qbBatchById('Bill', sigCandidates.map(c => c.billId)),
         ]);
         const sigPayments = await qbLoadInvoicePayments(env, token, [...sigInvById.values()], warnings, methodsCache);
+        const sigBillPayById = await loadBillPayDates(sigBillById);
         for (const c of sigCandidates) {
           let customerPaid = null, customerBalance = null, invNumber = '';
           const q = sigInvById.get(c.invId);
           if (q) { customerBalance = Number(q.Balance); customerPaid = !isNaN(customerBalance) && customerBalance <= 0.005; invNumber = q.DocNumber || ''; }
 
-          let vendorPaid = null, vendorBalance = null, billDue = '', vendorRef = '', vendorTotal = null;
+          let vendorPaid = null, vendorBalance = null, billDue = '', vendorRef = '', vendorTotal = null, vendorPaidDate = '';
           if (c.billId) {
             const b = sigBillById.get(c.billId);
-            if (b) { vendorBalance = Number(b.Balance); vendorTotal = Number(b.TotalAmt); vendorPaid = !isNaN(vendorBalance) && vendorBalance <= 0.005; billDue = b.DueDate || ''; vendorRef = b.DocNumber || ''; }
+            if (b) { vendorBalance = Number(b.Balance); vendorTotal = Number(b.TotalAmt); vendorPaid = !isNaN(vendorBalance) && vendorBalance <= 0.005; billDue = b.DueDate || ''; vendorRef = b.DocNumber || '';
+              if (vendorPaid) { vendorPaidDate = vendorBillPaidDate(b, sigBillPayById); if (!vendorPaidDate) vendorPaidDateMissing.push(c.sc.WO_ID + ' (' + c.phase + ')'); } }
           }
 
           const vendor = vendors.find(v => String(v.ID) === String(c.sc.Vendor_ID));
@@ -26554,13 +26593,17 @@ async function qbPayables(env, url) {
             customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
             ...clearFields(c.sc.WO_ID + ' (' + c.phase + ')', q, customerPaid === true || customerPartial, sigPayments),
             bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
-            vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial,
+            vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
             bill_due: billDue, in_house: inHouse, state, possible_duplicate: possibleDuplicate,
           });
         }
       }
     } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
+    if (vendorPaidDateMissing.length) {
+      await logAndCollectError(env, warnings, 'qb_payables_vendor_paid_date_missing', '/qb/payables', vendorPaidDateMissing.slice(0, 20).join(', '),
+        new Error(vendorPaidDateMissing.length + ' paid vendor bill(s) have no QuickBooks BillPayment with a usable date -- the vendor portal PAID tab lists them as "date unavailable": ' + vendorPaidDateMissing.slice(0, 20).join(', ')));
+    }
     if (paymentDateMissing.length) {
       await logAndCollectError(env, warnings, 'qb_payables_payment_date_missing', '/qb/payables', paymentDateMissing.slice(0, 20).join(', '),
         new Error(paymentDateMissing.length + ' paid/part-paid invoice(s) have no QuickBooks Payment with a usable date (credit memo, journal entry or lookup problem) -- shown as "payment date unavailable": ' + paymentDateMissing.slice(0, 20).join(', ')));
@@ -26667,6 +26710,7 @@ async function qbSyncPayments(env, body, opts) {
     let workorders = [];
     try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_read_work_orders', '/qb/sync-payments', 'Work_Orders (auto-close skipped)', e); }
 
+    const woPaidDateSeen = new Map(); let woPaidDateColReady = false;
     const tl = clock();
     for (const r of data.rows) {
       const rk = qbSyncRowKey(r);
@@ -26708,6 +26752,20 @@ async function qbSyncPayments(env, body, opts) {
             closed++; closedWOs.push({ wo_id: r.wo_id, from: cur, vendor_ref: r.vendor_ref || '' });
           }
         } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_auto_close_wo', '/qb/sync-payments', 'wo=' + r.wo_id, e); /* the payable state still saved above */ }
+      }
+      // Oct 19 2026 (vendor portal PAID tab): remember WHEN QuickBooks says the vendor was paid, on the work order itself, so the
+      // vendor can sort/filter their paid jobs by payment date. Only ever moves forward (a later payment on the same job wins), is
+      // read back after the write, and a failure is logged + returned -- it never blocks the Paid status change above.
+      if (r.vendor_paid === true && r.vendor_paid_date && r.wo_id && !(r.source === 'scope_signature' && r.phase !== 'final')) {
+        try {
+          const wo = findWO(workorders, r.wo_id);
+          const haveStr = [String((wo && wo.Vendor_Paid_Date) || ''), String(woPaidDateSeen.get(String(r.wo_id)) || '')].sort().pop();
+          if (wo && r.vendor_paid_date > haveStr) {
+            if (!woPaidDateColReady) { await ensureColumns(env, 'Work_Orders', ['Vendor_Paid_Date']); woPaidDateColReady = true; }
+            await updateRowVerified(env, 'Work_Orders', wo.ID, { Vendor_Paid_Date: r.vendor_paid_date });
+            woPaidDateSeen.set(String(r.wo_id), r.vendor_paid_date);
+          }
+        } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_vendor_paid_date', '/qb/sync-payments', 'wo=' + r.wo_id + ' date=' + r.vendor_paid_date + ' (vendor portal PAID tab date not saved)', e); }
       }
       doneKeys.add(rk);
     }

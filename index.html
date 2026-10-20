@@ -9871,7 +9871,10 @@ function renderHubEstimateView(woId, estimates, holder) {
         '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
         '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
         '</label>' +
-        '<button class="btn small" style="background:var(--accent2);color:#fff" title="Approves the estimate and texts the vendor that they are clear to proceed. No proposal, no owner contact." onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve (no proposal)</button> ' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
+        '<input type="checkbox" id="est-skip-sms-' + woId + '"> Do NOT text the vendor (job is already done — approving after the fact)' +
+        '</label>' +
+        '<button class="btn small" style="background:var(--accent2);color:#fff" title="Approves the estimate and texts the vendor that they are clear to proceed (unless the box above is ticked). No proposal, no owner contact." onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve (no proposal)</button> ' +
         '<button class="btn small" style="background:var(--accent);color:#fff" title="Approves the estimate silently and moves it into a Scope Proposal. The vendor is NOT texted until the owner signs." onclick="openPushToScopeUI(\'' + woId + '\', true)">📋 Approve &amp; send to proposal</button> ' +
         '<button class="btn small secondary" title="Texts the vendor a short request for more info. Daily reminders pause for 3 days, then resume." onclick="estimateNeedsInfoUI(\'' + woId + '\')">❓ Needs more info</button> ' +
         '<button class="btn small secondary" style="color:var(--danger)" title="Texts the vendor that you are not moving forward. Stops reminders." onclick="estimateDeclineUI(\'' + woId + '\')">✕ Decline</button>' +
@@ -10041,10 +10044,12 @@ function estimateDeclineUI(woId) {
 function approveEstimateUI(woId) {
   var depositEl = document.getElementById('est-deposit-' + woId);
   var requestDeposit = !!(depositEl && depositEl.checked);
-  api('POST', '/estimate/approve', { wo_id: woId, approved_by: 'admin', request_deposit: requestDeposit })
+  var skipEl = document.getElementById('est-skip-sms-' + woId);
+  var skipSms = !!(skipEl && skipEl.checked);
+  api('POST', '/estimate/approve', { wo_id: woId, approved_by: 'admin', request_deposit: requestDeposit, skip_vendor_sms: skipSms })
     .then(function(res) {
       if (res.success) {
-        toast(requestDeposit ? 'Approved — deposit request will follow' : 'Approved — no deposit needed', 'success');
+        toast((requestDeposit ? 'Approved — deposit request will follow' : 'Approved — no deposit needed') + (skipSms ? ' · vendor NOT texted' : (res.vendor_sms && res.vendor_sms !== 'sent' ? ' · vendor text: ' + res.vendor_sms : '')), 'success');
         refreshHubEstimateView(woId);
       } else {
         toast(res.error || 'Approval failed', 'error');
