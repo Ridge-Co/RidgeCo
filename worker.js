@@ -24356,7 +24356,7 @@ function __invalidateFromWrite(path, body) {
 // NEVER applied, so it is safe to retry any method (including an append). A 500/503
 // is ambiguous — the write may have landed — so those are retried ONLY for GET,
 // never for a POST/PUT that could double-write a bill or row.
-async function sheetsRequest(env, method, path, body, readOpts) {
+async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
   if (method === 'GET') {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
