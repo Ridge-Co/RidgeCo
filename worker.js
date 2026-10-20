@@ -33299,10 +33299,10 @@ async function trashLogVisit(env, body) {
 async function trashWeek(env, url) {
   const week = trashWeekKey((url && url.searchParams.get('week')) || null);
   const pid  = (url && url.searchParams.get('property_id')) || '';
-  let props = [], visits = [], skips = [];
-  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
-  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
-  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
+  const loadErrors = [];
+  let props = await trashReadTab(env, 'Trash_Properties', 'trash_week', 'P2', loadErrors);
+  const visits = await trashReadTab(env, 'Trash_Visits', 'trash_week', 'P2', loadErrors);
+  const skips = await trashReadTab(env, 'Trash_Skips', 'trash_week', 'P2', loadErrors);
   props = props.filter(p => p.Active !== 'FALSE' && (!pid || p.ID === pid));
   const out = props.map(p => {
     const vs = visits.filter(v => v.Active !== 'FALSE' && v.Property_ID === p.ID && v.Week_Key === week);
