@@ -13584,7 +13584,7 @@ async function adminOwnerToUser(env, body) {
       PIN: pin, Role: 'secondary', Active: 'TRUE',
       Created_Date: new Date().toISOString().split('T')[0],
     });
-    try { const parsed = await res.clone().json(); userId = parsed && parsed.id ? String(parsed.id) : ''; } catch (e) {}
+    try { const parsed = await res.clone().json(); userId = parsed && parsed.id ? String(parsed.id) : ''; } catch (e) { softNote('owner_merge_user_create_response_unreadable', e, 'P1', { ref: toId }); /* userId stays empty and the next line returns a 500 */ }
     if (!userId) return json({ error: 'Could not create the owner user — nothing else was changed.' }, 500);
   }
 
