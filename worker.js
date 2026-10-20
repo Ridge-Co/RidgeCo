@@ -34993,7 +34993,7 @@ async function inspStrGuardTick(env, opts) {
     items[key].ids.push(bl.ID); items[key].lines.push(`${bl.Date} ${bl.Start_Time}–${bl.End_Time} (${bl.Customer_ID ? cname(bl.Customer_ID) : 'any customer'}) is CLOSED to booking until a cleaner is scheduled. ${inspStrDayText(inspStrDayInfo(st, bl.Date), st.label)}`);
   }
   for (const it of Object.values(items)) it.sig = it.ids.slice().sort().join(',') + '|' + it.bucket;
-  let prev = {}; try { prev = JSON.parse(cfg.STR_GUARD_NOTIFIED || '{}') || {}; } catch (e) { console.error('insp: STR_GUARD_NOTIFIED unreadable, treating as empty:', e && e.message); }
+  let prev = {}; try { prev = JSON.parse(cfg.STR_GUARD_NOTIFIED || '{}') || {}; } catch (e) { console.error('insp: STR_GUARD_NOTIFIED unreadable, treating as empty:', e && e.message); softNote('str_guard_notified_unreadable', e, 'P2'); }
   const fresh = Object.entries(items).filter(([k, it]) => prev[k] !== it.sig);
   const resolved = Object.keys(prev).filter(k => !items[k] && k.slice(2) >= inspAddDays(today, -1));
   const out = { enabled: true, items: Object.fromEntries(Object.entries(items).map(([k, it]) => [k, { sig: it.sig, lines: it.lines }])), new: fresh.map(f => f[0]), resolved };
