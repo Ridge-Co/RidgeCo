@@ -1430,7 +1430,7 @@ function buildPhotoSection(woId, propAddr, opts) {
       // permission error) actually ends it now.
       rec.onend = function(){
         base = ta.value;
-        if (!userStopped) { try { rec.start(); return; } catch (e) {} }
+        if (!userStopped) { try { rec.start(); return; } catch (e) { /* silent-ok: recognizer restart failed, falls through to stopUI below */ } }
         stopUI();
       };
       rec.onerror = function(e){
