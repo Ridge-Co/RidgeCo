@@ -3744,9 +3744,7 @@ async function receiptReconSearch(env, url) {
   const qAmount = parseFloat(qRaw.replace(/[^0-9.\-]/g, ''));
   const hasAmount = qRaw.replace(/[^0-9.]/g, '').length > 0 && !isNaN(qAmount);
 
-  let properties = [], workorders = [];
-  try { properties = await fetchTab(env, 'Properties'); } catch (e) {}
-  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) {}
+  const properties = await fetchTabSoft(env, 'Properties', 'receipt_search_lookup'), workorders = await fetchTabSoft(env, 'Work_Orders', 'receipt_search_lookup');
   const propById = new Map(properties.map(p => [String(p.ID), p]));
   const woById = new Map(workorders.map(w => [String(w.ID), w]));
 
