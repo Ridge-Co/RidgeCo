@@ -22119,8 +22119,8 @@ async function runWeeklyArReport(env) {
   const ownerIds = optin.filter(r => String(r.Enabled || '').toUpperCase() === 'TRUE').map(r => String(r.Owner_ID)).filter(Boolean);
   if (!ownerIds.length) return { delivered: false, reason: 'no opted-in customers' };
   const resp = await arReportSend(env, { owner_ids: ownerIds, preview: false, trigger: 'weekly-cron' });
-  const data = await resp.json().catch(() => ({}));
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ar_weekly_report', Skill_Or_Endpoint: 'scheduled/ar-report', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `sent ${data.sent || 0}/${ownerIds.length}` }); } catch (_) {}
+  const data = await safeJson(resp, {}, 'runWeeklyArReport');
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ar_weekly_report', Skill_Or_Endpoint: 'scheduled/ar-report', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `sent ${data.sent || 0}/${ownerIds.length}` }); } catch (te) { softNote('telemetry_write_failed:ar_weekly_report', te, 'P2'); }
   return { delivered: true, sent: data.sent || 0, results: data.results || [] };
 }
 
