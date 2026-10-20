@@ -36229,7 +36229,7 @@ async function inspAvailability(env, customer, input) {
   const anchors = []; let unplaced = 0;
   for (const x of relevant) {
     if (!(Number.isFinite(x.lat) && Number.isFinite(x.lng)) && x.location) {
-      try { const g = await inspGeocode(env, x.location); if (g) { x.lat = g.lat; x.lng = g.lng; } } catch (e) { console.error('insp: could not geocode calendar location:', e && e.message); /* counted in `unplaced` and surfaced as a warning */ }
+      try { const g = await inspGeocode(env, x.location); if (g) { x.lat = g.lat; x.lng = g.lng; } } catch (e) { console.error('insp: could not geocode calendar location:', e && e.message); softNote('insp_geocode_failed', e, 'P2', { location: String(x.location || '').slice(0, 80) }); /* also counted in `unplaced` and surfaced as a warning */ }
     }
     if (Number.isFinite(x.lat) && Number.isFinite(x.lng)) anchors.push({ key: x.key, lat: x.lat, lng: x.lng }); else unplaced++;
   }
