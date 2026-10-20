@@ -4310,7 +4310,7 @@ function isVendorBusy(){
         if (last && last !== d.version) { isVendorBusy() ? banner() : reloadFresh(); }
         return;
       }
-      if (d.version !== booted){ isVendorBusy() ? banner() : reloadFresh(); }
+      if (d.version !== booted){ autoReload(isVendorBusy); }
     }).catch(function(){});
   }
   check();
