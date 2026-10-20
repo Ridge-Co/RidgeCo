@@ -1097,12 +1097,13 @@ function buildPhotoSection(woId, propAddr, opts) {
   }
   function check(){
     fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      bgOk('tenant:versionCheck');
       if (!d || !d.version) return;
       if (booted === null){
         booted = d.version;
         var last = null;
-        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
-        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){ /* silent-ok: storage blocked, no previous version to compare */ }
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){ /* silent-ok: storage blocked, version not remembered */ }
         // This page already loaded and ran successfully just now (we're executing at the
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
