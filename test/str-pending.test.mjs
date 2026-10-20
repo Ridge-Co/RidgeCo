@@ -492,4 +492,12 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
   W.failEmail = false; await tick(E, null); await tick(E, null);
   t('email retried once and then never again', W.attach.length === 1 && /^sent:/.test(pend(W).Pending_Mail) && smsTo(W, 'Kayla', 'str_pending_booked').length === 1);
 }
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.calMode = 'perm'; const r = await tick(E, null);
+  t('calendar denied: conversion still happened and Kayla was told; the calendar problem is reported to Brett and in the result; still owed', pend(W, RK).Status === 'covered' && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && pend(W).Pending_Cal === 'conv' && r.errors.some(e => /calendar/.test(e.step)) && W.brett.some(b => /calendar/i.test(b.text)), { cal: pend(W).Pending_Cal, errs: r.errors, brett: W.brett });
+  W.calMode = 'ok'; await tick(E, null); await tick(E, null);
+  const evs = W.calEvents.filter(e => e.start.date === PD);
+  t('calendar back: exactly one normal "Kayla Cleaning" event, no (PENDING) left, Pending_Cal done, no extra texts', evs.length === 1 && evs[0].summary === 'Kayla Cleaning' && !pendingEvents(W).length && pend(W).Pending_Cal === 'done' && smsTo(W, 'Kayla').length === 1, { evs, p: pend(W) });
+}
 //@@APPEND@@
