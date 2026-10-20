@@ -112,7 +112,7 @@ async function api(method,path,body){
   let r;
   try{ r=await fetch(WORKER+path,{method,headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:body?JSON.stringify(body):undefined}); }
   catch(e){ throw new Error('could not reach the Hub ('+(e&&e.message||'network')+')'); }
-  let d=null; try{ d=await r.json(); }catch(e){ /* silent-ok: non-JSON body, the status check below reports it */ }
+  let d=null; try{ d=await r.json(); }catch(e){ /* non-JSON body: handled by the status check below */ }
   if(r.status===401||r.status===403) throw new Error('this device\'s token is not allowed to see failures (admin token needed)');
   if(!r.ok||(d&&d.ok===false)) throw new Error((d&&d.error)||('HTTP '+r.status));
   return d;
