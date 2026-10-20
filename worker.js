@@ -16419,7 +16419,13 @@ async function failUpdate(env, body) {
 async function failReportEndpoint(env, request, body) {
   body = body || {};
   const tok = request.headers.get('X-Auth-Token') || '';
-  const trusted = !!tok && (tok === env.WORKER_SECRET || (!!env.FAILURE_INGEST_TOKEN && tok === env.FAILURE_INGEST_TOKEN));
+  let trusted = !!tok && (tok === env.WORKER_SECRET || (!!env.FAILURE_INGEST_TOKEN && tok === env.FAILURE_INGEST_TOKEN));
+  // The Apps Script scheduler already holds Config Scheduler_Token; accept it here too so the outside watcher can report with real severities
+  // without a new secret. A failed Config read just means "not trusted" (the report is still recorded, as anonymous P2).
+  if (!trusted && tok) {
+    try { trusted = schedTokenOk(schedCell(await schedReadConfigRows(env, false), SCHED_TOKEN_KEY), tok, 'POST', '/cron/run'); }
+    catch (e) { trusted = false; console.error('[failure/report] could not check the scheduler token: ' + String((e && e.message) || e).slice(0, 160)); }
+  }
   const f = {
     system: trusted ? body.system : 'page:' + String(body.system || 'unknown').slice(0, 30),
     source: trusted ? body.source : 'browser',
