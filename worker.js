@@ -8193,7 +8193,7 @@ async function addonOwnerNotice(env, body) {
   const property = properties.find(p => String(p.ID) === String(child.Property_ID)) || null;
   const owner = property ? owners.find(o => String(o.ID) === String(property.Owner_ID)) : null;
   if (!owner) return json({ error: 'No owner found for this property' }, 400);
-  let lines = []; try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (_) {}
+  const lines = parseJsonCell(est && est.Line_Items, [], 'Estimates.Line_Items');
   const photos = addonPhotosByItem(attachments, childId);
   const items = addonParseItems(child);
   const itemTexts = items.map(it => {
