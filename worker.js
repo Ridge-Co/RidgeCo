@@ -15844,8 +15844,8 @@ async function releaseMessageQueue(env, body) {
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
     const sent = !!(result && result.sid);
-    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot });
-    results.push({ id, sent, gate_snapshot: gateSnapshot });
+    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: sent ? gateSnapshot : (gateSnapshot + ' | send failed: ' + String((result && (result.error || result.message)) || 'no reply from Twilio')).slice(0, 480) });
+    results.push({ id, sent, gate_snapshot: gateSnapshot, error: sent ? undefined : String((result && (result.error || result.message)) || 'no reply from Twilio') });
   }
   return json({ ok: true, results });
 }
