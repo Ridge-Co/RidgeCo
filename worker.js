@@ -13617,9 +13617,10 @@ async function adminOwnerToUser(env, body) {
   } catch (e) { deactivated = false; }
 
   return json({ success: true, applied: true, owner_user_id: userId, person: personName,
-    keeper: qbOwnerDisplayName(to), moved: moved.length, qb_moved: !!(fq && !tq),
+    keeper: qbOwnerDisplayName(to), moved: moved.length, qb_moved: qbCarried,
     deactivated,
     warning: deactivated ? '' : `${personName} can sign in under ${qbOwnerDisplayName(to)}, but the old owner row could not be deactivated — it is still active and still holds the PIN. Deactivate it by hand.`,
+    ...(qbCarryWarn ? { failure_warning: qbCarryWarn.trim() } : {}),
     login_name: loginFirstName,
     note: `${personName} now signs in as a secondary user on ${qbOwnerDisplayName(to)} with the same PIN, giving their first name "${loginFirstName}".` });
 }
