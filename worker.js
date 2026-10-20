@@ -33149,7 +33149,7 @@ async function trashDefaultItem(env, token) {
       try { await setConfigKey(env, { key: 'trash_qb_item_id', value: String(it.Id) }); await setConfigKey(env, { key: 'trash_qb_item_name', value: it.Name || 'Trash Service' }); } catch (e) { await softFail(env, 'trash_default_item_cache', e, 'P2', { item: String(it.Id) }); }
       return { id: String(it.Id), name: it.Name || 'Trash Service' };
     }
-  } catch (e) {}
+  } catch (e) { await softFail(env, 'trash_default_item_qb_lookup', e, 'P0', { fallback: 'General (40)' }); }   // the invoice then bills the generic General item - Brett must know
   return { id: '40', name: 'General' }; // ultimate fallback: the existing General item
 }
 
