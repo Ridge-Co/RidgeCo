@@ -172,9 +172,9 @@
   function tryLogin(filled) {
     if (!filled) return;
     // Admin tools whose login screen never reads mh_auth: submit the sentinel through their own login.
-    if (document.getElementById('login-pw') && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) {} return; }
+    if (document.getElementById('login-pw') && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) { tlFail('doLogin', e); } return; }
     var pw = document.querySelector('input[type=password]');
-    if (pw && pw.offsetParent !== null && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) {} }
+    if (pw && pw.offsetParent !== null && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) { tlFail('doLogin', e); } }
   }
   function banner() {
     var b = document.createElement('div');
