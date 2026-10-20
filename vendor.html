@@ -1146,9 +1146,14 @@ function submitOneOffJob() {
 // applyTranslations -- has already run. Fix: defer the restore itself until DOMContentLoaded,
 // by which point the whole document (every <script> tag) has executed.
 function restoreVendorSession(){
-  try { var raw = localStorage.getItem(SESS_KEY);
+  var raw = null;
+  try { raw = localStorage.getItem(SESS_KEY); } catch(e){ /* silent-ok: storage blocked so vendor simply signs in */ }
+  try {
     if (raw) { var d = JSON.parse(raw); if (d && d.token) onLoginSuccess(d, false); }
-  } catch(e){}
+  } catch(e){
+    // A corrupt saved session or a crash while opening the dashboard used to leave a blank login with no trace.
+    window.hubReportFailure && window.hubReportFailure('vendor:restoreSession', e);
+  }
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreVendorSession);
