@@ -1002,11 +1002,21 @@ function awSubmit() {
 // every add-on of the signed-in vendor, each row carrying parent_wo_id; rows are distributed to the cards here.
 function loadVendorAddons() {
   return api('GET', '/wo/additional-work').then(function(res) {
-    var all = (res && res.success && res.items) || [];
+    if (!(res && res.success)) throw new Error((res && (res.error || res.message)) || 'unexpected answer from /wo/additional-work');   // an error object is a failure, not "no add-ons"
+    var all = res.items || [];
     window._addons = {};
     all.forEach(function(a) { var p = a.parent_wo_id; if (p) (window._addons[p] = window._addons[p] || []).push(a); });
     (window._wos || []).forEach(function(wo, idx) { if (awEligible(wo)) renderVendorAddons(wo.ID, idx); });
-  }).catch(function() { /* non-critical: leave empty */ });
+  }).catch(function(e) {
+    // Was swallowed: a vendor with submitted extra-work items saw nothing and could re-send them. Say so, offer Retry, report.
+    // ONE request failed, so show ONE error box (in the first eligible card), not a copy under every job.
+    var shown = false;
+    (window._wos || []).forEach(function(wo, idx) {
+      if (!awEligible(wo)) return;
+      if (!shown) { shown = true; showLoadFailed('addon-wrap-' + idx, 'your extra-work requests', e && e.message, loadVendorAddons, wo.ID); }
+      else { var w = document.getElementById('addon-wrap-' + idx); if (w) w.textContent = ''; }
+    });
+  });
 }
 function awStatusInfo(a) {
   var s = String(a.estimate_status || '').toLowerCase();
