@@ -903,7 +903,7 @@ const runsBody = (w, list) => ({ code: 200, body: { workflow_runs: list.map(x =>
   w = world(); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
   scriptedHub(w, [{}], st({ ok: true, open: 0, P0: 0, P1: 0, p0_unack: [], p0_unack_total: 0 }));
   w.run('runScheduler');
-  ok(w.probeFetches.length === 4 && w.probeFetches.every(u => /\/health$/.test(u)) && w.mails.length === 0, 'every Worker in PROBES gets a GET /health each tick; healthy = no email');
+  ok(w.probeFetches.length === 6 && w.probeFetches.every(u => /\/health$/.test(u)) && w.mails.length === 0, 'every Worker in PROBES gets a GET /health each tick; healthy = no email');
   w.probe = (u) => /barrel-co/.test(u) ? { code: 502 } : { code: 404 };
   w.clock += 15 * MIN; w.run('runScheduler');
   ok(mailsWith(w, /Worker DOWN/).length === 0, 'one failed probe is not reported yet (could be a blip)');
