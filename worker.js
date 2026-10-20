@@ -16441,6 +16441,25 @@ async function failReportEndpoint(env, request, body) {
   if (r.dropped) return json({ ok: false, error: 'too many reports right now' }, 429);
   return json(r.ok ? { ok: true } : { ok: false, error: 'could not save the report' }, r.ok ? 200 : 503);
 }
+// ── A3a: daily "should have happened" checks + auto-queue of problems left open ───────────────────────────────────────
+// Checks catch failures nobody thought to instrument: duplicate IDs, texts stuck waiting, texts that failed, low Twilio balance.
+// They are read-only and run at most once every 20 h (Sheets read quota is itself a top failure cause); the result is stored in Config
+// (failure_invariants_json) and fed to the rollup as conditions every run, so a problem stays on screen until a later check no longer finds it.
+const FAIL_INV_KEY = 'failure_invariants_json';
+const FAIL_INV_MAX_AGE_MS = 20 * 3600000;
+const FAIL_INV_DUP_TABS = ['Message_Queue', 'Work_Orders', 'Vendor_Requests', 'Notification_Queue', 'Ops_Build_Queue'];
+const FAIL_INV_STUCK_AFTER_MS = 6 * 3600000;
+const FAIL_TWILIO_P0_USD = 10, FAIL_TWILIO_P1_USD = 25;
+const FAIL_QUEUE_AFTER_MS = 24 * 3600000;
+const FAIL_QUEUE_MAX_PER_RUN = 3;
+const FAIL_NO_QUEUE_KEYS = ['alerts_off', 'no_admin_phone', 'dead_man_off'];   // switches Brett flips himself; not build work
+
+// Pure. data = { dup: [{tab, ids:[...]}], mq: {stuck, oldest_hours, failed24} | null, twilio: {balance} | null, errors: [{check, error}] }.
+function failInvariantItems(data) {
+  data = data || {};
+  const out = [];
+  for (const d of (data.dup || [])) if (d && d.ids && d.ids.length) out.push({ key: 'inv:dup:' + d.tab, system: 'hub', where: 'integrity:' + d.tab, severity: 'P1', message: `${d.tab} has ${d.ids.length} duplicate ID${d.ids.length === 1 ? '' : 's'} (e.g. ${d.ids.slice(0, 4).join(', ')}). A duplicate ID means an edit can land on the wrong row.` });
+//@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
