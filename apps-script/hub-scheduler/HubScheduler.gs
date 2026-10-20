@@ -858,8 +858,8 @@ function probeWorkers_() {
   var p = props_(), st = {};
   try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
   PROBES.forEach(function (pr) {
-    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '', text = '';
-    try { var resp = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }); code = resp.getResponseCode(); if (pr.body) text = String(resp.getContentText() || ''); }
+    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '';
+    try { code = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }).getResponseCode(); }
     catch (e) { err = String(e).slice(0, 200); }
     var down = !!err || code === 0 || code >= 500, why = err || ('HTTP ' + code);
     if (down) {
