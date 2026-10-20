@@ -32519,7 +32519,7 @@ async function qbSendInvoice(env, body) {
 // directly, so it inherits that function's route-level auth.
 async function qbSendCombinedInvoice(env, ctx) {
   const { groupRows, bills, vendors, wo, owner, prop, unit, billTo, trade, tradeName, previewOnly, timeEntries } = ctx;
-  const warnings = (ctx.warnings || []).slice();
+  const warnings = (ctx.warnings || []).slice(); const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
   try {
     // Date on an already-approved bill: use the earliest approval in the group so the
     // combined invoice isn't dated later than work Brett already did. Falls back to today
