@@ -1231,9 +1231,11 @@ export class ReadMeterStore {
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
   async fetch(request, env, ctx) {
-    const res = await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
+    const resp = await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
     if (ctx && ctx.waitUntil) { if (__meter.pending) ctx.waitUntil(__meterFlushAlarm(env)); if (__meter.dirty) ctx.waitUntil(__meterPersist(env)); }   // quota-pressure evidence -> failure ledger (never blocks the response)
-    return res;
+    // Phase C: failures noted with softNote() during this request are written after the response, never delaying or breaking it.
+    if (_failPending.length && ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(failFlushPending(env));
+    return resp;
   },
   async scheduled(event, env, ctx) { return await _hubWorkerCore.scheduled(event, env, ctx); },
 };
