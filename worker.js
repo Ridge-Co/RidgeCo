@@ -2206,7 +2206,7 @@ async function listTimeEntries(env, url) {
     try {
       const bills = await fetchTab(env, 'Vendor_Bills');
       live = new Set(bills.filter(b => b.Active !== 'FALSE').map(b => String(b.ID)));
-    } catch (e) { live = null; }
+    } catch (e) { softNote('vendor_bills_live_filter_read', e, 'P2'); live = null; }   // the list is returned unfiltered, as before
     results = results.map(r => {
       const billId = String(r.Bill_ID || '').trim();
       return Object.assign({}, r, {
