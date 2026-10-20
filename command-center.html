@@ -201,7 +201,7 @@ async function load(){
 // The Sheet stays canonical; this is a glance card only. Best-effort: any failure (including the
 // endpoint 500ing because the sheet isn't shared with the runtime service account yet — see the
 // PR description) just omits the card, never trips sample mode.
-async function loadTasks(){ try{ return await getJSON('/brettos-tasks-summary?limit=6'); }catch(e){ return null; } }
+async function loadTasks(){ try{ return await getJSON('/brettos-tasks-summary?limit=6'); }catch(e){ ccFail('BrettOS Tasks',e); return null; } }
 const BRETTOS_TASKS_SHEET_FALLBACK_URL='https://docs.google.com/spreadsheets/d/1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA/edit';
 function tasksCard(t){
   if(!t||!t.ok) return '';
