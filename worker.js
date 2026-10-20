@@ -18612,7 +18612,7 @@ async function aiCreditCheck(env, opts) {
     if (now - _aiCreditReadFailMs > 10 * 60 * 1000) {
       _aiCreditReadFailMs = now;
       try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
-      catch (te) { console.error('ai-credit: flag-read failure and its telemetry write both failed:', msg, schedErrText(te)); }
+      catch (te) { console.error('ai-credit: flag-read failure and its telemetry write both failed:', msg, schedErrText(te)); softNote('ai_credit_flag_read_failed', 'pause-flag read failed (' + msg.slice(0, 150) + ') and its telemetry write failed too: ' + schedErrText(te).slice(0, 150), 'P0'); }
     }
     return { paused: false, read_error: msg };
   }
