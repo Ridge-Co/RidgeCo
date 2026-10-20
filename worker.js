@@ -26920,7 +26920,11 @@ async function qbApprovedReceipts(env, ir) {
   try {
     const rows = await fetchTab(env, 'Receipts');
     return rows.filter(r => ids.includes(String(r.ID)) && r.Active !== 'FALSE');
-  } catch (e) { return []; }
+  } catch (e) {
+    // An empty list here would rebuild the invoice WITHOUT its materials lines, so stop the repair instead of guessing.
+    softNote('qb_approved_receipts_read_failed', e, 'P1', { ir: ir && ir.ID });
+    throw new Error('Could not read the Receipts tab, so the invoice lines cannot be rebuilt safely: ' + String((e && e.message) || e).slice(0, 160));
+  }
 }
 
 // The item an invoice was originally posted against. Reused when repairing so the wording
