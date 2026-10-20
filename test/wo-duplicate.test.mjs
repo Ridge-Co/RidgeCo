@@ -100,8 +100,8 @@ function makeFetch(db, opts, log) {
     if (/api\.twilio\.com/.test(url)) {
       log.twilio.push(String(fopts.body || ''));
       if (!opts.allowTwilio) throw new Error('unexpected real Twilio call in a test');
-      if (opts.twilioFail) return { json: async () => ({ message: 'The \'To\' number is not a valid phone number', code: 21211 }) };
-      return { json: async () => ({ sid: 'SM_FAKE' + log.twilio.length }) };
+      if (opts.twilioFail) { const b = { message: 'The \'To\' number is not a valid phone number', code: 21211 }; return { ok: false, status: 400, text: async () => JSON.stringify(b), json: async () => b }; }
+      { const b = { sid: 'SM_FAKE' + log.twilio.length }; return { ok: true, status: 201, text: async () => JSON.stringify(b), json: async () => b }; }
     }
     const full = url.replace(/^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+/, '');
     const path = full.split('?')[0], method = fopts.method;
