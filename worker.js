@@ -24327,6 +24327,154 @@ function __dropInflightFor(tab) {
 const TAB_CACHE_MS = 6000;
 // Real outbound Google Sheets calls made by this isolate (Oct 14 2026). Cloudflare caps a single request at 50 outbound calls on
 // this plan, and the tenant roster apply must stop and resume rather than hit it, so it reads the delta of this counter.
+// ── READ METER (Oct 19 2026) ─────────────────────────────────────────────────────────────────────────────────────────
+// WHY: the whole Hub shares ONE Google service account = ONE 60-reads/min quota, and we kept guessing who was eating it.
+// This counts every real HTTP attempt to the Sheets API (including each 429 retry) per minute, tagged with WHO caused it
+// (admin / vendor:<id> / owner:<id> / tenant:<id> / public / cron job:<name>) and WHICH route + tab, plus the reads that were
+// SAVED (cache hits, coalesced joins) so we can see how well the quota fixes are working. Read it at GET /read-meter
+// (admin only, costs ZERO Sheets reads - answered from memory, so it works while the quota is saturated) or on the
+// read-meter.html page. In-memory per Worker isolate (no KV/DO binding exists), so a deploy or idle eviction resets it;
+// to keep evidence beyond that, the first time a minute is saturated (>=40 reads or any 429) a P2 row with the top culprits
+// is written to the failure ledger (Needs Attention), at most once per 10 minutes per isolate.
+// The meter must NEVER break a Sheets call: every entry point is wrapped, and a meter fault is logged loudly (once).
+const METER_KEEP_MIN = 180;
+const METER_MAX_KEYS = 250;
+const METER_ALARM_READS_PER_MIN = 40;
+const METER_ALARM_GAP_MS = 10 * 60 * 1000;
+const __meter = { isolate: Math.random().toString(36).slice(2, 8), since: Date.now(), mins: new Map(), lastAlarmAt: 0, pending: null, alarms: 0, faults: 0 };
+function __meterFault(where, e) {
+  __meter.faults++;
+  if (__meter.faults <= 3) console.error('[read-meter] FAULT in ' + where + ' (meter only; Sheets calls are unaffected): ' + String((e && e.message) || e).slice(0, 200));
+}
+function __meterBucket(now) {
+  const k = Math.floor((now === undefined ? Date.now() : now) / 60000);
+  let b = __meter.mins.get(k);
+  if (!b) {
+    b = { t: k * 60000, reads: 0, writes: 0, r429: 0, errs: 0, hits: 0, joins: 0, reqs: 0, bySrc: new Map(), byTab: new Map() };
+    __meter.mins.set(k, b);
+    for (const old of Array.from(__meter.mins.keys())) if (old < k - METER_KEEP_MIN) __meter.mins.delete(old);
+  }
+  return b;
+}
+// entry: [reads, writes, r429, requests]
+function __meterEntry(map, key, nocap) {
+  let e = map.get(key);
+  if (!e) { if (!nocap && map.size >= METER_MAX_KEYS) { key = '(other)'; e = map.get(key); } if (!e) { e = [0, 0, 0, 0]; map.set(key, e); } }
+  return e;
+}
+function __meterSrc(env) { const r = env && env.__REQ__; return r ? r.src : 'unlabeled|'; }
+// A child env that carries THIS request's label. Workers run many requests at once in one isolate, so the label can
+// never live in a module variable; it rides on the env the request already passes to everything (same trick as __cronEnv).
+function __meterReqEnv(env, request, path) {
+  try {
+    const c = Object.create(env);
+    c.__REQ__ = { src: 'pre-auth|' + request.method + ' ' + path, route: request.method + ' ' + path };
+    return c;
+  } catch (e) { __meterFault('reqEnv', e); return env; }
+}
+// Called once the caller is known (after the auth gate). Counts the request under its final label.
+function __meterIdentify(env, who, sid) {
+  try {
+    const r = env && env.__REQ__; if (!r) return;
+    r.src = (sid ? who + ':' + sid : who) + '|' + r.route;
+    const b = __meterBucket(); b.reqs++; __meterEntry(b.bySrc, r.src)[3]++;
+  } catch (e) { __meterFault('identify', e); }
+}
+// Label a background job's env (called where the scheduler starts a job).
+function __meterCronEnv(jobEnv, jobName) {
+  try {
+    const c = Object.create(jobEnv);   // own child, so a shared env is never relabelled
+    c.__REQ__ = { src: 'cron|job:' + jobName, route: 'job:' + jobName };
+    const b = __meterBucket(); b.reqs++; __meterEntry(b.bySrc, c.__REQ__.src)[3]++;
+    return c;
+  } catch (e) { __meterFault('cronEnv', e); }
+  return jobEnv;
+}
+function __meterTab(path) {
+  try {
+    const k = __tabCacheKey(path); if (k) return k;
+    if (path.indexOf('/values:batchGet') === 0) {
+      const tabs = [], re = /[?&]ranges=([^&]+)/g; let m;
+      while ((m = re.exec(path))) tabs.push(decodeURIComponent(m[1]).split('!')[0]);
+      return 'batchGet(' + tabs.join(',') + ')';
+    }
+    const r = /^\/values\/([^!:?]+)!/.exec(path); if (r) return decodeURIComponent(r[1]) + ' (range)';
+    return path.split('?')[0].slice(0, 60);
+  } catch (e) { return '?'; }
+}
+// One REAL attempt to Google (retries count too - each one spends quota). outcome: 'ok' | '429' | 'err'
+function __meterGoogle(env, method, path, outcome) {
+  try {
+    const b = __meterBucket(), isRead = method === 'GET', src = __meterSrc(env);
+    if (isRead) b.reads++; else b.writes++;
+    if (outcome === '429') b.r429++; else if (outcome === 'err') b.errs++;
+    const e = __meterEntry(b.bySrc, src), t = __meterEntry(b.byTab, __meterTab(path));
+    if (isRead) { e[0]++; t[0]++; } else { e[1]++; t[1]++; }
+    if (outcome === '429') { e[2]++; t[2]++; }
+    if (isRead && (outcome === '429' || b.reads >= METER_ALARM_READS_PER_MIN)) __meterMaybeAlarm(b, outcome === '429' ? '429' : 'volume');
+  } catch (e) { __meterFault('google', e); }
+}
+function __meterSaved(env, kind, n) {
+  try { const b = __meterBucket(); if (kind === 'join') b.joins += (n || 1); else b.hits += (n || 1); } catch (e) { __meterFault('saved', e); }
+}
+function __meterWindow(mins) {
+  const cutoff = Math.floor(Date.now() / 60000) - mins + 1, rows = [];
+  for (const [k, b] of __meter.mins) if (k >= cutoff) rows.push(b);
+  rows.sort((a, b) => a.t - b.t);
+  return rows;
+}
+function __meterTop(rows, which, n) {
+  const agg = new Map();
+  for (const b of rows) for (const [key, v] of b[which]) { const a = __meterEntry(agg, key, true); for (let i = 0; i < 4; i++) a[i] += v[i]; }
+  return Array.from(agg.entries()).map(([key, v]) => ({ key, reads: v[0], writes: v[1], r429: v[2], requests: v[3] }))
+    .filter(x => x.reads || x.writes || x.r429).sort((a, b) => b.reads - a.reads || b.writes - a.writes).slice(0, n);
+}
+function __meterMaybeAlarm(b, why) {
+  const now = Date.now();
+  if (__meter.pending || now - __meter.lastAlarmAt < METER_ALARM_GAP_MS) return;
+  __meter.lastAlarmAt = now;
+  const rows = __meterWindow(2);
+  __meter.pending = { at: now, why, reads: b.reads, r429: b.r429, isolate: __meter.isolate,
+    top: __meterTop(rows, 'bySrc', 5).map(x => x.key + ' ' + x.reads + 'r' + (x.r429 ? '/' + x.r429 + 'x429' : '')),
+    tabs: __meterTop(rows, 'byTab', 3).map(x => x.key + ' ' + x.reads) };
+  console.warn('[read-meter] Sheets read quota pressure (' + why + '): ' + b.reads + ' reads, ' + b.r429 + ' throttled this minute. Top: ' + __meter.pending.top.join('; '));
+}
+// Writes the pending alarm to the failure ledger. Called from the fetch wrapper via ctx.waitUntil so it is not cancelled
+// when the response returns. reportFailure never throws; this is a write (append), so it can never re-trigger an alarm.
+async function __meterFlushAlarm(env) {
+  const p = __meter.pending; if (!p) return;
+  __meter.pending = null; __meter.alarms++;
+  try {
+    const r = await reportFailure(env, {
+      system: 'hub', source: 'read-meter', where: 'read_meter_quota', ref: p.isolate, severity: 'P2',
+      message: 'Google Sheets read quota under pressure (' + (p.why === '429' ? 'Google throttled reads' : 'busy minute') + '): ' + p.reads + ' reads in one minute, ' + p.r429 + ' throttled. Top: ' + p.top.slice(0, 3).join('; '),
+      context: { top: p.top, tabs: p.tabs, isolate: p.isolate },
+    });
+    if (!r || r.ok === false) console.error('[read-meter] quota alarm could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
+  } catch (e) { console.error('[read-meter] quota alarm could not be saved:', String((e && e.message) || e).slice(0, 200)); }
+}
+// GET /read-meter?minutes=30 (admin-gated like every non-public route; role sessions are not in ROLE_SCOPES).
+function __meterSnapshot(url) {
+  const mins = Math.max(1, Math.min(METER_KEEP_MIN, parseInt(url && url.searchParams.get('minutes'), 10) || 30));
+  const rows = __meterWindow(mins), tot = { reads: 0, writes: 0, r429: 0, errs: 0, cache_hits: 0, joined: 0, requests: 0 };
+  const perMin = rows.map(b => {
+    tot.reads += b.reads; tot.writes += b.writes; tot.r429 += b.r429; tot.errs += b.errs; tot.cache_hits += b.hits; tot.joined += b.joins; tot.requests += b.reqs;
+    return { minute: new Date(b.t).toISOString().slice(11, 16) + 'Z', reads: b.reads, writes: b.writes, r429: b.r429, errs: b.errs, cache_hits: b.hits, joined: b.joins, requests: b.reqs };
+  });
+  const roles = new Map();
+  for (const b of rows) for (const [key, v] of b.bySrc) {
+    const who = key.split('|')[0], kind = who.split(':')[0], a = __meterEntry(roles, kind, true);
+    for (let i = 0; i < 4; i++) a[i] += v[i];
+  }
+  return {
+    window_minutes: mins, isolate: __meter.isolate, isolate_started: new Date(__meter.since).toISOString(), build: BUILD_VERSION,
+    note: 'Counts only THIS Worker instance since it started (a deploy or idle restart resets it). reads = real GET calls to Google incl. retries; r429 = Google said "too many".',
+    totals: tot, peak_reads_in_a_minute: rows.reduce((m, b) => Math.max(m, b.reads), 0), minutes_at_or_over_alarm: rows.filter(b => b.reads >= METER_ALARM_READS_PER_MIN).length,
+    quota_limit_per_minute: 60, alarms_raised: __meter.alarms, meter_faults: __meter.faults,
+    by_kind: Array.from(roles.entries()).map(([key, v]) => ({ key, reads: v[0], writes: v[1], r429: v[2], requests: v[3] })).sort((a, b) => b.reads - a.reads),
+    top_sources: __meterTop(rows, 'bySrc', 25), top_tabs: __meterTop(rows, 'byTab', 15), per_minute: perMin,
+  };
+}
 let __sheetsFetchCount = 0;
 // Last-resort fallback for READ-ONLY portal lists (opt-in via {stale:true}): when Google is
 // still refusing reads after every retry, serve the last good copy of the tab if it is at
