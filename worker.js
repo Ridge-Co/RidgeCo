@@ -23582,8 +23582,8 @@ async function approveReceiptQueue(env, body) {
     } catch (e) { filingWarning = 'Marked reviewed, but the scan could not be filed to Drive: ' + String((e && e.message) || e).slice(0, 120); softNote('receipt_queue_filing_failed', e, 'P2', { queue_id: String(id) }); }   // filing is best-effort: still mark reviewed
   }
   await updateRow(env, 'Receipts_Queue', id, { Vendor: vendor, Receipt_Date: date, Total: String(total), Category: category, Suggested_WO_ID: woId, Suggested_Property_ID: propId, Status: 'filed', Filed_File_URL: filedUrl });
-  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) {}
-  return json({ ok: true, id, filed: filedUrl || null, category });
+  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = parseJsonCell(cfg.receipt_vendor_defaults, {}, 'Config.receipt_vendor_defaults'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) { await softFail(env, 'receipt_vendor_default_learn_failed', e, 'P2'); }
+  return json(filingWarning ? { ok: true, id, filed: filedUrl || null, category, failure_warning: filingWarning } : { ok: true, id, filed: filedUrl || null, category });
 }
 
 // ── GOOGLE SHEETS / AUTH ─────────────────────────────────────
