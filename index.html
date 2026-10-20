@@ -5852,7 +5852,7 @@ function markVendorTaskReviewed(id) {
 function loadWishlist(){
   api('GET','/wishlist').then(function(items){
     wishlistItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderWishlist();
-  }).catch(function(e){console.log('Wishlist load error',e);});
+  }).catch(function(e){console.log('Wishlist load error',e); window.hubReportFailure && window.hubReportFailure('index:wishlist-load', e); toast('Could not load the wishlist. Reload to retry.','error');});
 }
 function addWishlistItem(){
   var input=document.getElementById('wishlist-input'); var val=input.value.trim(); if(!val)return;
