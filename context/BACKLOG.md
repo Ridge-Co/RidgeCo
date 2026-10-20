@@ -22,6 +22,10 @@ findable by grep even though they never share a number. Example:
 - B-20261020-1201-ub · 🟢 **[str-cleaning]** NOT built: Uplisting date blocking / check-in blocking on an uncovered day (roadmap item 10). Test with one real date first.
 - B-20261020-1202-bd · 🟢 **[str-cleaning]** NOT built: Phase 2 backup drip (staged backup asks).
 
+**Oct 20 2026 additions (STR pending cleaning):**
+- B-20261020-1400-pc · 🟡 **[str-cleaning]** Pending cleaning built (FEATURE_LOG rule 225), stacked on PR #382: merge #382 first. Needs `STR_CAL_WRITE_ENABLED` TRUE for the "(PENDING)" calendar event; otherwise holds work but no tentative event is written.
+- B-20261020-1401-pd · 🟢 **[str-cleaning]** Maybe later: let "Mark as booked now" also take a guest name/dates; widen the exact-date match to a +/-1 day option if Brett wants it (today adjacent-day bookings only alert).
+
 **Oct 19 2026 additions (proposal netting + instant-pay fee):**
 - B-20261019-1500-pf · 🟡 **[vendor-payments]** Padded-price fee: built for Review Bills single + combined sends, OFF until Config `instant_fee_pad_enabled` = TRUE. Still legacy deduction on progress bills, legacy deposit/final booking, deposit-approve and bulk approve; pad is not yet folded into server-side estimate pricing / `scopeItemsPricing` (only the invoice builder's cost basis).
 - B-20261019-1501-fc · 🟡 **[vendor-payments]** Fee-credit ledger + manual "Post fee credit" built (Review Bills sends). Still open: parsing bank statements into credits (separate planning brief), and applying credits on progress-bill / deposit / legacy booking paths.
