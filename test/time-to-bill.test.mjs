@@ -50,7 +50,7 @@ t('time_entry_ids is stripped before the row is written', /delete body\.time_ent
 t('the bill is created BEFORE the hours are marked spent',
   addSrc.indexOf("addRow(env, 'Vendor_Bills'") < addSrc.indexOf('linkTimeEntriesToBill(env, timeIds'));
 t('a failed link never takes the saved bill down with it',
-  /catch \(e\) \{ \/\* the bill is saved; the link is not worth losing it over \*\/ \}/.test(addSrc));
+  /catch \(e\) \{ await softFail\(env, 'vendor_bill_link_time_entries'/.test(addSrc));
 t('the response is cloned before being read — reading it would consume the body',
   /res\.clone\(\)\.json\(\)/.test(addSrc));
 t('a re-submit links its hours to the bill that already exists',
