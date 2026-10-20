@@ -2013,16 +2013,20 @@ async function handlePhotoUploadClean(env, request) {
     // Make customer/job-facing media (before/after/report/photo/video) anyone-with-link readable so
     // vendors/tenants/owners can open it in the portal without a Google login. Internal cost docs
     // (receipt/bill/invoice → _Internal — Vendor Bills) are NEVER shared (FEATURE_LOG rule 13).
+    const uploadWarnings = [];   // Phase C: each non-fatal step that failed is reported to the ledger AND named in the response (added only when non-empty)
     if (!isInternal) {
       try {
         const shared = await driveShareAnyone(token, uploaded.id);
-        if (!shared) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'drive_share_failed', Skill_Or_Endpoint: 'upload-photo', Success: 'FALSE', Notes: `wo=${woId} file=${filename} id=${uploaded.id}` }); } catch (_) {} }
-      } catch (_) { /* still non-fatal to the upload itself */ }
+        if (!shared) {
+          try { await logTelemetry(env, { Source: 'worker', Job_Type: 'drive_share_failed', Skill_Or_Endpoint: 'upload-photo', Success: 'FALSE', Notes: `wo=${woId} file=${filename} id=${uploaded.id}` }); } catch (te) { softNote('telemetry_write_failed:drive_share_failed', te, 'P2'); }
+          uploadWarnings.push('The file uploaded but could not be made viewable by link, so vendors/tenants/owners may not be able to open it.');
+        }
+      } catch (shareErr) { await softFail(env, 'upload_photo_drive_share', shareErr, 'P1', { wo_id: woId, file: filename }); uploadWarnings.push('The file uploaded but sharing it by link failed, so others may not be able to open it.'); /* still non-fatal to the upload itself */ }
     }
     step.current = 'log_attachments';
     try {
       await addRow(env, 'Attachments', { WO_ID: woId, File_Name: filename, File_Type: fileType, Drive_File_ID: uploaded.id, Drive_URL: uploaded.webViewLink || uploaded.id, Mime_Type: mimeType, Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE' });
-    } catch(sheetErr) { /* non-fatal */ }
+    } catch(sheetErr) { await softFail(env, 'upload_photo_attachment_row', sheetErr, 'P1', { wo_id: woId, file: filename, drive_file_id: uploaded.id }); uploadWarnings.push('The file uploaded to Drive but was not listed in the work order attachments.'); }
     step.current = 'update_wo_fields';
     try {
       // Only the customer-facing WO folder becomes the WO's shared Drive_Folder (photo link).
