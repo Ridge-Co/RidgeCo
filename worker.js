@@ -8036,7 +8036,7 @@ async function addonSubmit(env, body, callerRole, callerSessionId) {
     // are $0 — Subtotal === amount exactly, every item stays individually readable (and translatable).
     const line_items = items.map((it, i) => ({ desc: it.desc, amount: i === 0 ? amount : 0, addon_item: it.index }));
     const estRes = await addEstimateVersion(env, { wo_id: childId, vendor_id: vendorId, line_items, created_by: 'vendor', sms_kind: 'Additional work' });
-    let est = null; try { est = await estRes.clone().json(); } catch (_) {}
+    let est = null; try { est = await estRes.clone().json(); } catch (_) { /* silent-ok: an unreadable estimate response is returned to the caller as-is on the next line */ }
     if (!est || est.error || !est.success) return estRes;
   }
   // Un-hide the child: it is now a normal job awaiting approval.
