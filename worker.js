@@ -22158,7 +22158,7 @@ async function gmailAccessToken(env) {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: c.token, grant_type: 'refresh_token' }),
     });
-    const data = await resp.json().catch(() => null);
+    const data = await safeJson(resp, null, 'gmail_token_refresh');
     if (resp.ok && data && data.access_token) {
       _gmailTokenCache = { token: data.access_token, at: Date.now(), source: c.source };
       return data.access_token;
