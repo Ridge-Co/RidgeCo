@@ -31904,7 +31904,7 @@ async function qbProposalCloseOut(env, o) {
   } catch (e) {
     const msg = 'Invoice ' + (invoiceNumber || invoiceId) + (billId ? ' and its vendor bill were' : ' was') + ' created in QuickBooks, but marking signed proposal Scope #' + (applied.scope_id || '?') + ' as billed failed: ' + String((e && e.message) || e) + '. Fix the proposal on the Signed Proposals page before billing it again.';
     errors.push(msg);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_closeout_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' scope=' + (applied.scope_id || '') + ' ' + msg).slice(0, 480) }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_closeout_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' scope=' + (applied.scope_id || '') + ' ' + msg).slice(0, 480) }); } catch (te) { softNote('telemetry_write_failed:proposal_closeout_failed', te, 'P2'); }
   }
 }
 
