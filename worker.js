@@ -29828,7 +29828,7 @@ async function qbPayBills(env, body) {
     try {
       const ar = await qbApi(env, `account/${encodeURIComponent(payAcct)}?minorversion=73`, 'GET', null, token);
       payAcctName = (ar && ar.Account && ar.Account.Name) || '';
-    } catch (_) { /* name is cosmetic for the preview */ }
+    } catch (e) { softNote('qb_pay_bills_account_name_lookup_failed', e, 'P2'); /* name is cosmetic for the preview */ }
   }
 
   if (preview) {
