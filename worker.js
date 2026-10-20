@@ -16213,7 +16213,23 @@ async function reportFailure(env, f) {
 // softFail   async, never throws. Writes the ledger event now. Returns { ok:false, error } so the caller can say what happened.
 // parseJsonCell(raw, fallback, where)   '' / null / undefined = a legitimately empty cell -> fallback quietly; NON-empty text that is not valid JSON = corrupt data -> fallback AND a P2 note.
 // fetchTabSoft / safeJson / tryWrite    the same idea for sheet reads, response bodies and best-effort writes.
-//@@H1
+function softNote(where, err, severity, context) {
+  try {
+    const msg = (err && err.message) ? err.message : String(err == null ? '(no details)' : err);
+    console.error('SOFT-FAIL ' + where + ': ' + String(msg).slice(0, 200));
+    if (_failPending.length >= FAIL_PENDING_MAX) return false;
+    const ev = failBuildEvent({ system: 'hub', source: 'worker', where, message: msg, severity, context }, Date.now(), Math.random().toString(36).slice(2, 6));
+    if (_failPending.some(p => p.Where === ev.Where && p.Message === ev.Message)) return true;   // same thing already queued this request
+    // Reviewer fix (Oct 20): a PERSISTENTLY bad cell or an outage would otherwise add a new ledger row on every request. One row per where+message per 10 min per isolate (the ledger's own fingerprint rollup still counts repeats).
+    const seen = softNote._seen || (softNote._seen = new Map()), nowMs = Date.now(), key = ev.Where + '|' + ev.Message, last = seen.get(key);
+    if (last && nowMs - last < 600000) return true;
+    if (seen.size > 300) seen.clear();
+    seen.set(key, nowMs);
+    _failPending.push(Object.assign({}, ev, { Context: ((ev.Context ? ev.Context + ' ' : '') + '[queued: written after the request]').slice(0, 480) }));
+    return true;
+  } catch (e) { try { console.error('SOFT-FAIL COULD NOT BE QUEUED:', where, String((e && e.message) || e).slice(0, 120)); } catch (e2) { /* silent-ok: console is the last resort */ } return false; }
+}
+//@@H2
 }
 async function failSetConfig(env, key, value) {
   const r = await setConfigKey(env, { key, value });
