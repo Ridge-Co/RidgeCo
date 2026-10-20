@@ -14766,7 +14766,7 @@ async function shouldNotifyOwner(env, wo, statusEvent) {
 async function addWishlistItem(env, body) {
   // Ensure the Status column exists so new items are born 'Active' and the Dev Log status
   // buttons have somewhere to write (rule 37: never write a column that isn't there).
-  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* non-fatal — add still works */ }
+  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { await softFail(env, 'wishlist_status_column', e, 'P2'); /* the add itself still proceeds */ }
   const data=await sheetsRequest(env,'GET',`/values/Wishlist`); const rows=data.values||[['ID','Text','Created','Active','Status']], headers=rows[0];
   const now=new Date().toISOString().replace('T',' ').split('.')[0];
   const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),Text:body.text||'',Created:now,Active:'TRUE',Status:'Active'}[h]??''));
