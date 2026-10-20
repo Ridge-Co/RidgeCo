@@ -25,6 +25,9 @@ async function open(vp, { failWishlist = false, blockStorage = false, failVAR = 
     if (u.pathname === '/failure/report') { if (reports) reports.push(route.request().postData()); return json(route, { success: true }); }
     if (u.pathname === '/wishlist') return failWishlist ? json(route, { error: 'boom' }, 500) : json(route, []);
     if (/vendor-access-request/.test(u.pathname) && failVAR) return json(route, { error: 'boom' }, 500);
+    if (/vendor-task-requests\/pending-review/.test(u.pathname) && failVTR) return json(route, { error: '<img src=x onerror=window.__xss=1>' }, 500);
+    if (/vendor-access-request/.test(u.pathname) && populate && route.request().method() === 'GET') return json(route, [{ ID: 'VAR-1', Vendor_Name: 'Test Vendor', Requested_Property_ID: '1', Note: 'please', Created_Date: '2026-10-20T00:00:00Z' }]);
+    if (/vendor-task-requests\/pending-review/.test(u.pathname) && populate) return json(route, [{ ID: 'VTR-1', WO_ID: 'WO-1', Vendor_ID: '1', Request_Type: 'Extra', Scope: 'x', Message: 'm' }]);
     return json(route, route.request().method() === 'GET' ? [] : { success: true }); });
   await page.goto(base, { waitUntil: 'load' }); await page.waitForTimeout(800);
   await page.evaluate(() => showPage('devlog', document.querySelector('.nav-btn[onclick*="devlog"]'))); await page.waitForTimeout(900);
