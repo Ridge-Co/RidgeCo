@@ -165,6 +165,14 @@ For every build and every PR, no exceptions:
    automations for silent-failure risk, with fixes for every finding, is in progress — see the
    "Silent-Failure Audit Plan" doc in the Continuous Improvement project.
 
+**The tooling that now enforces this (Oct 16-20 2026) - use it, do not re-invent it:**
+- **Failure ledger.** Worker: `await reportFailure(env, { system, source, where, ref, message|err, severity? })` (never throws; P0 = money/SMS/auth/scheduler/credits, P1 = data writes/integrity, P2 = parse/UI/read). Pages: `window.hubReportFailure(where, errOrMessage)` inside a catch (`failure-reporter.js` is on every page; a static test fails a new page without it). Apps Script: `ledger_(where, severity, message)`. Admin sees the live list at `failures.html` (Needs Attention) and via `GET /failures/open`.
+- **Start of every session:** read open failures for the area you will touch (`hub_prod_get /failures/open` through GH Broker) and fold them into the work; tell Brett what is open (skill `no-silent-failures`).
+- **Never-swallow helpers (worker.js, Oct 20 2026):** `softNote` (sync, queued), `softFail` (async), `parseJsonCell`, `fetchTabSoft`, `safeJson`, `tryWrite`. Use them instead of `catch (_) {}` / `.catch(() => [])`. When a side step fails but the main action worked, add `warning` / `warnings` to the success response (failure only); `failure-reporter.js` shows it on screen. Harnesses that extract worker.js functions must stub these helpers.
+- **Lint ratchet.** `node scripts/silent-failure-lint.mjs` counts empty / log-only / return-default catches and swallowing `.catch(() => ...)` per file against `scripts/silent-failure-baseline.json`. Counts may only go DOWN (CI check "Silent-failure guard"). Benign probes (a `JSON.parse` of an optional value) need `// silent-ok: <reason, 3+ words>` inside the catch. After you remove offenders run `node scripts/silent-failure-lint.mjs --update` to lock the lower numbers in.
+- **PR gate.** The PR description must contain a line starting `Silent-failure check:` (template in `.github/pull_request_template.md`): what failure you FORCED in a test and what surfaced. CI fails a code PR without it.
+- **Tests run in CI** (`Unit tests` workflow): a red test file is a red check. If your change breaks a harness, fix the harness in the same PR.
+
 ## Regression rules — DON'T break working features (full log in /context/FEATURE_LOG.md)
 - **A silent `catch(e){}`/`catch(_){}` around a Sheets/Drive write is a real blind spot, not a
   safe default** (rule 174, Sep 15 2026): `Payment_Source` never actually got created on the
