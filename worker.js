@@ -13280,7 +13280,7 @@ async function releaseTurnoverCleaningIfReady(env, groupId) {
   const allDone = others.length > 0 && others.every(w => TURNOVER_RELEASE_DONE_STATUSES.includes(w.Status));
   if (allDone) {
     await updateWOFields(env, cleaning.ID, { Status: 'New', Hold_Reason: '' });
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'updateStatus', Success: 'TRUE', Notes: `group=${groupId} reason=repairs_paint_complete` }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'updateStatus', Success: 'TRUE', Notes: `group=${groupId} reason=repairs_paint_complete` }); } catch (te) { softNote('telemetry_write_failed:turnover_release', te, 'P2'); }
   }
 }
 
