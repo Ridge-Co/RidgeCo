@@ -24507,7 +24507,7 @@ function __meterCompact(map, n) {
 }
 function __meterPayload(now) {
   const mins = __meterWindow(METER_PERSIST_MIN).filter(b => b.reads || b.writes || b.hits || b.joins || b.reqs)
-    .map(b => ({ t: b.t, r: b.reads, w: b.writes, x: b.r429, e: b.errs, h: b.hits, j: b.joins, q: b.reqs, s: __meterCompact(b.bySrc, 30), a: __meterCompact(b.byTab, 15) }));
+    .map(b => ({ t: b.t, r: b.reads, w: b.writes, x: b.r429, e: b.errs, h: b.hits, j: b.joins, q: b.reqs, s: __meterCompact(b.bySrc, 20), a: __meterCompact(b.byTab, 10) }));
   return { v: 1, isolate: __meter.isolate, build: BUILD_VERSION, since: __meter.since, t: now, mins };
 }
 function __meterRowsFromPayload(p, cutoffMinute) {
