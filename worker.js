@@ -35565,6 +35565,55 @@ async function strSwapCalendar(ctx, feed, plan, doneItems) {
     for (const id of i.cal.hub_delete) ops.push({ i, label: 'delete', id, fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(id)) });
     for (const h of i.cal.hand) ops.push({ i, label: 'delete', id: h.id, fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(h.id)) });
     const want = { key: i.task_key, kind: 'cover', date: i.date, title: i.cal.title, desc: `${S.label} ${i.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub (admin swap). Checkout 11 AM${i._t.next ? '; next guest arrives ' + strNextDate(i.date, i._t.next) : ''}.` };
+    if (i.cal.hub_patch) ops.push({ i, label: 'patch', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(i.cal.hub_patch), strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update'); } });
+    else if (i.cal.hub_create) ops.push({ i, label: 'create', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id'); } });
+  }
+  const fail = {}; let n = 0;
+  for (const op of ops) {
+    if (fatal) { fail[op.i.task_key] = fail[op.i.task_key] || fatal; continue; }
+    if (n >= STR_CAL_OPS_MAX) { fail[op.i.task_key] = fail[op.i.task_key] || 'Too many calendar changes in one go; this one was not attempted.'; continue; }
+    n++;
+    try { await op.fn(); } catch (e) {
+      if (op.label === 'delete' && (e.httpStatus === 410 || e.httpStatus === 404)) continue; // already gone: that is the goal
+      const msg = strErrText(e); fail[op.i.task_key] = fail[op.i.task_key] || msg;
+      if (STR_CAL_FATAL.includes(e.code)) fatal = msg;
+    }
+  }
+  // Re-read the calendar and check every date for real. A write Google accepted but that is not visible is a failure.
+  let back = null, readErr = '';
+  try { const ds = doneItems.map(i => i.date).sort(); back = await strReadCleaningCal(env, cfg, S.cleaningCal, ds[0], ds[ds.length - 1]); } catch (e) { readErr = strErrText(e); }
+  for (const i of doneItems) {
+    if (fail[i.task_key]) { cal.items[i.task_key] = { status: 'failed', message: fail[i.task_key] }; continue; }
+    if (!back) { cal.items[i.task_key] = { status: 'failed', message: 'The calendar was changed but could not be re-read to check it: ' + readErr }; continue; }
+    const live = back.filter(e => String(e.status || '').toUpperCase() !== 'CANCELLED'), problems = [];
+    const covers = live.filter(e => e.ext && e.ext.ridgecoStr && e.ext.ridgecoStrKey === i.task_key && e.ext.ridgecoStrKind === 'cover' && inspStrEvDay(e.start) === i.date);
+    if (covers.length !== 1 || covers[0].summary !== i.cal.title) problems.push(`"${i.cal.title}" is not on ${i.label} exactly once`);
+    for (const id of i.cal.hub_delete.concat(i.cal.hand.map(h => h.id))) if (live.some(e => e.id === id)) problems.push('an old entry is still there');
+    cal.items[i.task_key] = problems.length ? { status: 'failed', message: 'Re-read check failed: ' + problems.join('; ') } : { status: 'done', message: `Calendar shows "${i.cal.title}" on ${i.label}.` };
+  }
+  const bad = doneItems.filter(i => cal.items[i.task_key].status !== 'done');
+  cal.status = bad.length ? (bad.length === doneItems.length ? 'failed' : 'partial') : 'done';
+  if (bad.length) {
+    cal.manual = bad.map(manualFor);
+    cal.message = fatal ? fatal : bad.map(i => `${i.label}: ${cal.items[i.task_key].message}`).slice(0, 3).join(' | ');
+    cal.code = 'calendar_failed';
+    await strSystemAlert(env, 'swap_calendar', `The cleaning calendar was NOT fully updated for ${bad.map(i => i.label).join(', ')}: ${cal.message} By hand: ${cal.manual.join('; ')}.`);
+  }
+  return cal;
+}
+
+// ── The invite email for the newly assigned cleaner (same behaviour as a normal assignment, one email however many dates) ──
+async function strSwapEmail(ctx, cleaner, doneItems) {
+  if (!cleaner.Email) return { status: 'skipped', note: `${cleaner.Name} has no email on file, so no calendar invite was sent.` };
+  if (!ctx.S.engine) return { status: 'skipped', note: 'The scheduler is OFF, so no calendar invite email was sent.' };
+  const views = strComputeViews(ctx, null), ics = strIcsForCleaner(ctx, cleaner, views), S = ctx.S;
+  const one = doneItems.length === 1, list = doneItems.map(i => `<li><b>${strEsc(strFmtDate(i.date, true))}</b> (${strEsc(i.kind_label)}; checkout 11 AM${i._t.next ? '; next guest arrives ' + strEsc(strNextDate(i.date, i._t.next)) : ''})</li>`).join('');
+  const html = `<p>Hi ${strEsc(strFirst(cleaner))},</p><p>You're set to clean <b>${strEsc(S.label)}</b> on:</p><ul>${list}</ul><p>The calendar invite is attached. Your schedule, availability and any changes: <a href="${strCleanerUrl(cleaner.Token)}">open your page</a>.</p><p>Thank you!<br>${strEsc(S.assistant)} - Ridge Co</p>`;
+  try { const r = await gmailSendEmailWithAttachment(ctx.env, { to: cleaner.Email, subject: one ? `You're set: ${S.label} cleaning ${strFmtDate(doneItems[0].date)}` : `You're set: ${S.label} cleaning (${doneItems.length} dates)`, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } }); return { status: r && r.staged ? 'staged' : 'sent', note: '' }; }
+  catch (e) { return { status: 'failed', note: `Could not email ${cleaner.Name} the calendar invite: ${strErrText(e)}` }; }
+}
+
+// ── Step 2: apply ────────────────────────────────────────────────────────────────────────────────
 //@@STRCHUNK@@
 // ═══ STR-BLOCK-END
 
