@@ -117,7 +117,7 @@ function load(){
     app().innerHTML = '<div class="card"><h1>' + T('We could not load this page', 'No pudimos cargar esta página') + '</h1><p>' + T('Please check your internet connection and try again.', 'Revise su conexión a internet e intente de nuevo.') + '</p><button class="btn" onclick="load()">' + T('Try again', 'Intentar de nuevo') + '</button></div>';
   });
 }
-function savedLang(){ try { var l = localStorage.getItem('fc_lang'); if (l) { setLang(l); return true; } } catch (e) { /* storage blocked */ } return false; }
+function savedLang(){ try { var l = localStorage.getItem('fc_lang'); if (l) { setLang(l); return true; } } catch (e) { /* silent-ok: storage blocked, language falls back to default */ } return false; }
 function showEnd(state){
   var m = {
     expired: [T('This link has expired', 'Este enlace venció'), T('Thank you! This check is closed now. If something is still wrong, please call us.', '¡Gracias! Esta revisión ya terminó. Si algo sigue mal, por favor llámenos.')],
