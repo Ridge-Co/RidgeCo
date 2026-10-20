@@ -9838,7 +9838,7 @@ async function updateStatus(env, body) {
   if (body.status === 'Complete' || body.status === 'Pending Invoice')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
   if (body.status === 'On Hold') {
-    try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (e) { await softFail(env, 'wo_status_ensure_hold_reason', e, 'P1', { ref: body.wo_id }); _warns.push('The hold reason could not be saved (the sheet column could not be created).'); }
     fields.Hold_Reason = holdReason;
   }
   await updateWOFields(env, body.wo_id, fields);
