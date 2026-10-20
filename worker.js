@@ -35725,7 +35725,92 @@ function strChangeReq(body) {
     const keys = [...new Set((Array.isArray(body.task_keys) ? body.task_keys : []).map(k => String(k || '').trim()).filter(Boolean))];
     if (!keys.length) throw strErr('no_dates', 'Pick at least one turnover.', 400); many(keys.length);
     if (keys.some(k => k.length > 80)) throw strErr('bad_task_key', 'A turnover key looks wrong. Refresh the page and try again.', 400);
-/*@@S1@@*/
+    req.task_keys = keys;
+  } else if (action === 'assign_range') {
+    if (!ymd(body.from) || !ymd(body.to)) throw strErr('bad_range', 'Pick a start date and an end date.', 400);
+    if (body.to < body.from) throw strErr('bad_range', 'The end date is before the start date.', 400);
+    if (strDaysBetween(body.from, body.to) > STR_MARK_HORIZON) throw strErr('bad_range', `Pick a range of ${STR_MARK_HORIZON} days or less.`, 400);
+    req.from = body.from; req.to = body.to;
+  } else {
+    const mark = String(body.mark == null ? '' : body.mark); if (!['out', 'can', ''].includes(mark)) throw strErr('bad_mark', 'mark must be out, can or empty (clear).', 400);
+    const dates = [...new Set((Array.isArray(body.dates) ? body.dates : []).map(d => String(d || '')))];
+    if (!dates.length) throw strErr('no_dates', 'Pick at least one date.', 400); many(dates.length);
+    if (dates.some(d => !ymd(d))) throw strErr('bad_date', 'Each date must look like 2026-11-05.', 400);
+    req.mark = mark; req.dates = dates.sort();
+  }
+  return req;
+}
+const strCoverTitle = (S, st, cleaner, t, today) => (strDesiredCalendar([{ key: t.key, kind: t.kind, date: t.date, next: t.next, status: 'covered', assigned: cleaner.ID, coveredAny: true }], st.cmap, today, S)[0] || {});
+
+// Everything that WOULD happen, computed without writing a thing. feed = strReadFeed(ctx).
+async function strChangeBuild(ctx, req, feed) {
+  const { S, st, cfg } = ctx, today = inspEtDate(ctx.now), cleaner = st.cmap[req.cleaner_id];
+  if (!cleaner) throw strErr('cleaner_not_found', 'That cleaner was not found.', 404);
+  if (String(cleaner.Active).toUpperCase() === 'FALSE' && req.action !== 'mark') throw strErr('cleaner_inactive', `${cleaner.Name} is not active. Make them active under Cleaners first.`, 409);
+  const first = strFirst(cleaner), foreign = feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr)), hubEvents = feed.cal.filter(e => e.ext && e.ext.ridgecoStr && String(e.status || '').toUpperCase() !== 'CANCELLED').map(e => ({ id: e.id, key: e.ext.ridgecoStrKey, kind: e.ext.ridgecoStrKind, date: inspStrEvDay(e.start), title: e.summary || '' }));
+  const sendMode = strSendMode(cfg, S), win = strInSendWindow(ctx.now, S), heldUntil = win ? 0 : strNextWindowOpenMs(ctx.now, S);
+  const plan = { action: req.action, cleaner: { id: cleaner.ID, name: cleaner.Name, first }, items: [], recipients: [], warnings: [], confirm: null, send_mode: sendMode, window_open: win, held_until: heldUntil ? new Date(heldUntil).toISOString() : '', email: null, calendar: { mode: '', lines: [], manual: [] } };
+  const views = strComputeViews(ctx, foreign), tasks = new Map(views.map(v => [v.key, v]));
+  for (const t of strBuildTasks(feed.stays, today, S)) if (!tasks.has(t.key) && !st.turnovers.some(r => r.Task_Key === t.key)) tasks.set(t.key, Object.assign({}, t, { row: null, status: 'new', assigned: '', ext: [] }));
+  const refOf = it => it.task_key || it.date;
+  const nm = c => c ? strFirst(c) : '?';
+
+  if (req.action === 'mark') {
+    const allTasks = [...tasks.values()];
+    for (const date of req.dates) {
+      const it = { date, label: strFmtDate(date), current: st.marks[cleaner.ID + '|' + date] || '', to: req.mark, outcome: 'change', reason: '', notes: [], offers_declined: [] };
+      const word = m => m === 'out' ? 'Out' : (m === 'can' ? 'Available as backup' : 'nothing');
+      if (date < today) { it.outcome = 'skip'; it.reason = 'That date has already passed.'; }
+      else if (strDaysBetween(today, date) > STR_MARK_HORIZON) { it.outcome = 'skip'; it.reason = `More than ${STR_MARK_HORIZON} days away.`; }
+      else {
+        const holding = allTasks.filter(t => t.date === date).filter(t => (t.row && t.row.Status === 'covered' && String(t.row.Assigned_Cleaner_ID) === cleaner.ID) || strExternalEvents(t, foreign).some(e => { const c = strMatchCleaner(e.name, st.cleaners); return c && String(c.ID) === cleaner.ID; }));
+        if (holding.length && req.mark !== '') { it.outcome = 'blocked'; it.reason = `${first} is the one cleaning on ${strFmtDate(date)}, so she cannot be marked ${word(req.mark)} that day. Swap her out first.`; }
+        else if (it.current === req.mark) { it.outcome = 'skip'; it.reason = `Already ${word(req.mark)}.`; }
+        else {
+          it.sentence = `${first}: ${word(it.current)} -> ${word(req.mark)} on ${it.label}.`;
+          if (req.mark === 'out') for (const o of st.offers.filter(o => String(o.Cleaner_ID) === cleaner.ID && o.Status === 'pending')) { const tr = st.turnovers.find(x => x.Task_Key === o.Task_Key && x.Date === date); if (tr) { it.offers_declined.push({ id: o.ID, task_key: o.Task_Key }); it.notes.push(`${first}'s waiting offer for this date is closed; the scheduler asks the next cleaner on its next run (about 15 minutes).`); } }
+        }
+      }
+      plan.items.push(it);
+    }
+  } else {
+    let keys = req.task_keys;
+    if (req.action === 'assign_range') keys = [...tasks.values()].filter(t => t.date >= req.from && t.date <= req.to).sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind)).map(t => t.key);
+    if (!keys.length) throw strErr('no_dates', `There are no turnovers between ${strFmtDate(req.from)} and ${strFmtDate(req.to)}.`, 404);
+    if (keys.length > STR_CHANGE_MAX) throw strErr('too_many', `That is ${keys.length} turnovers. The most you can change at once is ${STR_CHANGE_MAX}; pick a shorter range.`, 400);
+    for (const key of keys) {
+      const t = tasks.get(key);
+      if (!t) {
+        const r = st.turnovers.find(x => x.Task_Key === key);
+        if (!r) plan.items.push({ task_key: key, date: String(key).split('|')[2] || '', label: key, outcome: 'not_found', reason: 'That turnover was not found (it may have left the bookings feed).', notes: [] });
+        else plan.items.push({ task_key: key, date: r.Date, label: strFmtDate(r.Date), outcome: 'skip', reason: r.Status === 'cancelled' ? 'That booking was cancelled.' : 'That date has already passed.', notes: [] });
+        continue;
+      }
+      const it = { task_key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), kind_label: t.kind === 'prearrival' ? 'pre-arrival clean' : 'checkout clean', days_out: strDaysBetween(today, t.date), is_new: !t.row, row_id: t.row ? t.row.ID : '', outcome: 'change', reason: '', notes: [], displaced: [], unmatched: [], offers_closed: [], marks: [], needs_confirm: false, cal: { hand: [], manual: [], fyi: [], hub_delete: [], hub_create: false, hub_patch: '', title: '' }, _t: t };
+      const hub = t.row && t.row.Status === 'covered' ? (st.cmap[t.row.Assigned_Cleaner_ID] || null) : null, ext = strExternalEvents(t, foreign);
+      it.sbefore = t.row ? `${t.row.Status}:${t.row.Assigned_Cleaner_ID || ''}` : 'new';
+      if (t.row && t.row.Status === 'covered' && String(t.row.Assigned_Cleaner_ID) === cleaner.ID) { it.outcome = 'skip'; it.reason = `${first} already has this one.`; plan.items.push(it); continue; }
+      const seen = new Set(), addD = (c, source) => { if (c && String(c.ID) !== cleaner.ID && !seen.has(String(c.ID))) { seen.add(String(c.ID)); it.displaced.push({ id: String(c.ID), name: strFirst(c), source, cleaner: c }); } };
+      addD(hub, 'hub');
+      if (t.row && t.row.Status === 'covered' && !hub) plan.warnings.push(`${it.label}: the Hub shows a cleaner (id ${t.row.Assigned_Cleaner_ID}) who is no longer in your list, so nobody is told about the change.`);
+      for (const e of ext) { const c = strMatchCleaner(e.name, st.cleaners); if (c) addD(c, 'calendar'); else it.unmatched.push(e.name); if (e.deletable && !it.cal.hand.some(x => x.id === e.id)) it.cal.hand.push({ id: e.id, summary: e.summary }); else if (!e.deletable) { if (e.onDate) it.cal.manual.push(`"${e.summary}" on ${it.label} is not a plain one-day "<Name> Cleaning" entry, so the Hub will not touch it. Delete or fix it by hand.`); else it.cal.fyi.push(`"${e.summary}" (${strDateList(e.days)}) is also on the calendar near this date; the Hub does not change it.`); } }
+      it.sbefore += ':' + ext.map(e => e.id + '/' + e.name).sort().join(',');
+      for (const o of st.offers.filter(o => o.Task_Key === t.key && STR_OFFER_ACTIVE.includes(o.Status))) it.offers_closed.push({ id: o.ID, status: o.Status, name: nm(st.cmap[o.Cleaner_ID]) });
+      if (it.offers_closed.length) it.notes.push(`Waiting offer(s) to ${it.offers_closed.map(o => o.name).join(', ')} are closed quietly (no text), the same as when someone accepts.`);
+      if (st.marks[cleaner.ID + '|' + t.date] === 'out') { it.needs_confirm = true; if (!req.confirm_out) { it.outcome = 'blocked'; it.reason = `${first} marked herself OUT on ${it.label}. Tick the box to assign her anyway.`; } else { it.marks.push({ cleaner_id: cleaner.ID, date: t.date, mark: '' }); it.notes.push(`${first}'s Out mark for this date is cleared.`); } }
+      for (const d of it.displaced) {
+        const cur = st.marks[d.id + '|' + t.date] || '';
+        if (cur === 'out') it.notes.push(`${d.name} is marked OUT that day, so she stays Out (not made backup).`);
+        else if (cur !== 'can') it.marks.push({ cleaner_id: d.id, date: t.date, mark: 'can' });
+      }
+      if (it.cal.manual.length) it.notes.push(...it.cal.manual);
+      const dd = strCoverTitle(S, st, cleaner, t, today); it.cal.title = dd.title || `${first} Cleaning`;
+      const mine = hubEvents.filter(e => e.key === t.key);
+      for (const g of mine.filter(e => e.kind === 'gap')) it.cal.hub_delete.push(g.id);
+      const covers = mine.filter(e => e.kind === 'cover'), same = covers.find(e => e.date === t.date && e.title === it.cal.title);
+      if (same) covers.filter(e => e.id !== same.id).forEach(e => it.cal.hub_delete.push(e.id));
+      else if (covers.length) { it.cal.hub_patch = covers[0].id; covers.slice(1).forEach(e => it.cal.hub_delete.push(e.id)); }
+/*@@S2@@*/
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
