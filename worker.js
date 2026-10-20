@@ -32255,7 +32255,7 @@ async function qbSendInvoice(env, body) {
         fee: (!storedFee && !vendorInHousePre && vendorCostGross > 0) ? { on: feeOn, amount: adjPre.fee } : null,
       });
     } catch (e) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (te) { softNote('telemetry_write_failed:proposal_netting_persist_failed', te, 'P2'); }
       return json({ ok: false, error: 'Could not save the billing decision on this review row (' + String((e && e.message) || e).slice(0, 140) + ') — nothing was sent to QuickBooks.', warnings }, 500);
     }
 
