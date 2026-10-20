@@ -24559,6 +24559,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
         // copy: each caller decides for ITSELF (readOpts.stale) what to do if it fails, so a caller that did not opt
         // in can never be handed stale data just because someone else did.
         let p = __inflight.get(cacheKey);
+        if (p) __meterSaved(env, 'join');
         if (!p) {
           p = sheetsRequest(env, method, path, body, undefined, true);
           __inflight.set(cacheKey, p);
