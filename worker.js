@@ -4292,17 +4292,18 @@ async function scopeToWO(env, body) {
   for (const a of Object.keys(byArea)) { desc += '\n' + a + ':\n'; for (const it of byArea[a]) desc += '  • ' + (it.description || '') + (it.qty ? (' (qty ' + it.qty + ')') : '') + (it.trade ? (' [' + it.trade + ']') : '') + (it.note ? (' — ' + it.note) : '') + '\n'; }
   const checklist = JSON.stringify(items.map(it => ({ t: (it.area ? (it.area + ': ') : '') + (it.description || ''), done: false, code: '', why: '' })));
   const woResp = await createWorkOrder(env, { property_id: s.Property_ID, unit_id: s.Unit_ID, room: s.Room, trade, type: 'estimate', priority: body.priority || 'normal', description: desc.trim(), notes: 'Request for estimate created from Scope #' + s.ID, checklist, created_by: body.created_by || 'scope-creator', vendor_needs_access: body.vendor_needs_access || 'auto' });
-  const wj = await woResp.json().catch(() => ({}));
+  const wj = await safeJson(woResp, {}, 'scopeToWO_create_wo');
   const woId = wj.id; if (!woId) return json({ error: 'WO creation failed', detail: wj }, 500);
-  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) {}
+  const scopeToWoWarnings = [];
+  { const ec = await tryWrite(env, 'scopeToWO_ensure_scope_id_column', () => ensureColumns(env, 'Work_Orders', ['Scope_ID']), 'P1'); if (!ec.ok) scopeToWoWarnings.push('The work order was created but its Scope_ID column could not be prepared, so it may not be linked back to this scope.'); }
   await updateWOFields(env, woId, { Status: 'Estimate Requested', Scope_ID: s.ID });
   let moved = 0;
   try {
     const atts = await fetchTab(env, 'Attachments'); const key = 'SCOPE-' + s.ID;
     for (const a of atts) { if (a.WO_ID === key && String(a.Active || '').toUpperCase() !== 'FALSE') { await updateRow(env, 'Attachments', a.ID, { WO_ID: woId }); moved++; } }
-  } catch (_) {}
+  } catch (me) { await softFail(env, 'scopeToWO_move_photos', me, 'P1', { scope_id: s.ID, wo_id: woId, moved }); scopeToWoWarnings.push(`Only ${moved} of the scope's photos were moved onto the new work order; the rest could not be moved.`); }
   await updateRow(env, 'Scopes', id, { Status: 'wo-created', WO_ID: woId, Updated_Date: new Date().toISOString() });
-  return json({ success: true, wo_id: woId, photos_moved: moved });
+  return json(Object.assign({ success: true, wo_id: woId, photos_moved: moved }, scopeToWoWarnings.length ? { failure_warnings: scopeToWoWarnings } : {}));
 }
 
 // POST /wo/push-to-scope (Sep 18 2026) — ADMIN-ONLY: zero ROLE_SCOPES entries, reachable only via
