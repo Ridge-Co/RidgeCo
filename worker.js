@@ -27086,7 +27086,7 @@ async function qbPayables(env, url) {
             wo_id: c.sc.WO_ID, vendor_id: c.sc.Vendor_ID || '', vendor_name: vendor ? qbVendorDisplayName(vendor) : '',
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
-            customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
+            customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial, qb_invoice_total: isFinite(qbInvTotal) ? qbInvTotal : null,
             ...clearFields(c.sc.WO_ID + ' (' + c.phase + ')', q, customerPaid === true || customerPartial, sigPayments),
             bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
             vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
