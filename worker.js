@@ -14092,14 +14092,15 @@ async function logAttachment(env, body) {
     // Vendor Additional Work (Sep 30 2026): addon_item = the item index this photo belongs to. The row
     // below is a FIXED object, so the column must exist first and the value must be named here.
     const _addonItem = (body.addon_item === undefined || body.addon_item === null) ? '' : String(body.addon_item).trim();
-    if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} }
+    const attWarnings = [];
+    if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch (e) { await softFail(env, 'log_attachment_addon_column', e, 'P1', { ref: body.wo_id }); attWarnings.push('the additional-work item link was not saved'); } }
     await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem});
     // Share the just-uploaded job media anyone-with-link so it opens in the portal without a Google
     // login. This is the resumable-upload path the vendor portal uses (createUploadSession → PUT → here).
     const ft=(body.file_type||'').toLowerCase();
-    if(body.file_id && !NON_SHARE_FILE_TYPES.includes(ft)){ try{ const tok=await getAccessToken(env); await driveShareAnyone(tok, body.file_id); }catch(_){ /* non-fatal */ } }
+    if(body.file_id && !NON_SHARE_FILE_TYPES.includes(ft)){ try{ const tok=await getAccessToken(env); await driveShareAnyone(tok, body.file_id); }catch(e){ await softFail(env, 'log_attachment_share_failed', e, 'P1', { ref: body.wo_id, file: body.file_id }); attWarnings.push('the file could not be shared, so it may not open in the portal'); } }
     if(body.wo_folder_url){await updateWOField(env,body.wo_id,'Drive_Folder_URL',body.wo_folder_url);await updateWOField(env,body.wo_id,'Drive_Folder_ID',body.wo_folder_id||'');}
-    return json({success:true});
+    return json(attWarnings.length ? {success:true, failure_warnings: attWarnings} : {success:true});
   } catch(e){return json({error:e.message},500);}
 }
 
