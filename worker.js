@@ -24551,7 +24551,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
-      if (__cacheFresh(env, hit)) return hit.data;
+      if (__cacheFresh(env, hit)) { __meterSaved(env, 'hit'); return hit.data; }
       if (!__isLeader && !(env && env.__CRON__)) {
         // PEOPLE ONLY: background (cron) reads are paced 2.5s apart by __cronPace and must never be joined by a person (they
         // would inherit the pacing wait and a Hub login would time out) nor register themselves here.
