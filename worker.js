@@ -16173,6 +16173,10 @@ function failDigestPlan(all, nowMs, lastDate) {
 
 // ── reporting (impure) ──────────────────────────────────────────────────────────────────────────────────────────
 let _failTabsReady = false;
+// Oct 20 2026: when the ledger itself cannot be written (Sheets quota / outage) the event used to be lost with only a console line. Keep up to
+// FAIL_PENDING_MAX of them in memory and write them with the next report that succeeds (or the next rollup), marked as saved late.
+const _failPending = [];
+const FAIL_PENDING_MAX = 50;
 const _failWin = { start: 0, n: 0, dropped: 0 };
 const _failAnonWin = { start: 0, n: 0, dropped: 0 };   // anonymous page reports get their own, smaller budget so they can never starve real ones
 const FAIL_MAX_ANON_PER_MIN = 20;
