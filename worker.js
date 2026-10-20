@@ -23512,7 +23512,15 @@ async function receiptScan(env) {
   const params = new URLSearchParams({ q: `'${folder}' in parents and trashed=false`, fields: 'files(id,name,mimeType)', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', pageSize: '50' });
   const res = await fetch(`https://www.googleapis.com/drive/v3/files?${params}`, { headers: { Authorization: `Bearer ${tok}` } });
   const data = await res.json(); const files = data.files || [];
-  let existing = []; try { existing = await fetchTab(env, 'Receipts_Queue'); } catch (e) {}
+  let existing = [];
+  try { existing = await fetchTab(env, 'Receipts_Queue'); }
+  catch (e) {
+    if (/Unable to parse range/i.test((e && e.message) || '')) existing = [];   // silent-ok: the queue tab is created by the first intake, so a missing tab means nothing ingested yet
+    else {   // without the queue we cannot tell which files are already ingested: stop rather than re-read (and re-bill AI for) the whole folder
+    await softFail(env, 'receipt_scan_queue_read_failed', e, 'P1');
+    return json({ ok: false, error: 'Could not read Receipts_Queue, so the scan was skipped: ' + String((e && e.message) || e).slice(0, 150), scanned: 0 }, 500);
+    }
+  }
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
   // Permanently-failing files (Sep 2026, greenlit #17): live telemetry showed the SAME file
   // failing every single day at cron time with "Could not process image" — a hard Claude
