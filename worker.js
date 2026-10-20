@@ -27295,6 +27295,11 @@ async function qbPayables(env, url) {
 // the scheduler runs this in resumable slices: opts.state (progress, mutated) + opts.sliceMs. With no opts it is the same one-pass call it
 // always was (Who To Pay "sync", manual POST). A row that could not be written is now reported (before, updateRow's 404 was ignored).
 const QB_SYNC_SLICE_MS = 30 * 1000;
+// Oct 20 2026: the slice budget used to be measured from the START of the slice, but the QuickBooks payables read + its ~8 paced Sheets reads can
+// eat all of it, so some slices processed ZERO rows and the day ran out of slices (14 slices, 115 of 120 rows). The row loop now gets its own window
+// (at least this long, measured from when the loop starts) AND always processes at least one row per slice, so every slice makes progress.
+const QB_SYNC_MIN_LOOP_MS = 12 * 1000;
+const QB_SYNC_LOG_KEEP = 20;      // per-slice timings kept in the qb_sync_progress cell (the evidence for the next "why is it slow")
 function qbSyncRowKey(r) { return r.source === 'scope_signature' ? ['sig', r.signature_id || '', r.phase || '', r.milestone_id || ''].join(':') : 'ir:' + (r.ir_id || ''); }
 async function qbSyncWriteInvoiceReview(env, rows, nowISO) {
   const targets = rows.filter(r => r.source !== 'scope_signature');   // Signed-Proposal rows have no Invoice_Review row (QuickBooks' own Balance is their source of truth)
