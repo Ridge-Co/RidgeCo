@@ -36799,6 +36799,17 @@ async function strPendingPlan(ctx, body) {
   const nx = strNextCleaner({ pool: st.pool, cleaners: st.cmap, marks: st.marks, offers: st.offers, task }), first = nx.cleaner;
   const order = st.pool.filter(p => String(p.Active || '').toUpperCase() !== 'FALSE').slice().sort((x, y) => (parseInt(x.Priority, 10) || 999) - (parseInt(y.Priority, 10) || 999) || (parseInt(x.ID, 10) || 0) - (parseInt(y.ID, 10) || 0));
   const why = { inactive: 'not active', no_phone: 'no phone number', sms_opted_out: 'texts switched off', already_asked: 'already asked', marked_out: 'marked out that day' };
+  const queue = order.map(p => { const id = String(p.Cleaner_ID), c = st.cmap[id], sk = nx.skipped.find(s => s.id === id); return { id, name: c ? strFirst(c) : id, state: first && first.ID === id ? 'first' : (sk ? 'skip' : 'then'), why: sk ? (why[sk.reason] || sk.reason) : '' }; });
+  const inWin = strInSendWindow(ctx.now, ctx.S);
+  let text = '';
+  if (first) text = await strRenderText(ctx, 'str_pending_offer', strTokens(ctx, first, task, { Link: '{Link}' }));
+  else warnings.push('Nobody in the queue can be asked right now (' + (nx.skipped.map(s => `${strFirst(st.cmap[s.id]) || s.id}: ${why[s.reason] || s.reason}`).join('; ') || 'the queue is empty') + '). The inquiry would show "Nobody available" and you would be told.');
+  if (!ctx.S.engine) warnings.push('The cleaning scheduler is switched OFF (STR_ENGINE_ENABLED), so nothing will be sent until it is on.');
+  else if (!ctx.S.sms) warnings.push('Cleaner texts are switched OFF (STR_SMS_ENABLED), so no text will be sent.');
+  else if (ctx.S.smsTest) warnings.push('Cleaning text TEST mode is on: the text goes to the Hub test phone, not to the cleaner.');
+  const sendMode = !first ? 'none' : (inWin ? 'now' : 'after_window');
+  return { date, label: strFmtDate(date, true), note, key, first: first ? { id: first.ID, name: first.Name, first: strFirst(first) } : null, text, queue, in_window: inWin, send_mode: sendMode,
+    send_when: sendMode === 'now' ? 'It is sent right away.' : (sendMode === 'after_window' ? 'It is outside the 8 AM - 9 PM texting hours, so it will be sent at 8 AM. Tick "Send now even if late" to send it immediately.' : 'Nobody to text.'),
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
