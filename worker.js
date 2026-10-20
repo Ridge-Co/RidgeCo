@@ -35974,7 +35974,110 @@ async function strStageSheets(ctx, J) {
 async function strStageAudit(ctx, J) {
   const { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', first = J.plan.cleaner.first;
   const logRows = J.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || state.ires[it.ref].status === 'failed').map(it => { const r = state.ires[it.ref], ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : 'admin_mark_failed') : (ok ? 'admin_swap' : 'admin_swap_failed'), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${J.planId}`.slice(0, 480) }; });
-/*@@S4@@*/
+  try { if (logRows.length) await strAddRows(ctx.env, 'STR_Log', logRows.map(r => Object.assign({}, r, { Detail: r.Detail.slice(0, 480) }))); } catch (e) { state.errors.push({ step: 'audit_log', error: 'Could not write the audit rows to the Activity log: ' + strErrText(e) }); }
+  return true;
+}
+
+// ── Stage 3: the cleaning calendar (chunked; stops at the first refusal Google says will repeat) ──
+async function strStageCalendar(ctx, J) {
+  const { env, cfg, S } = ctx, { plan, state } = J, cal = state.cal, mode = plan.calendar.mode, okItems = strOkItems(J);
+  if (J.req.action === 'mark' || !okItems.length) { cal.status = 'unchanged'; return true; }
+  cal.mode = mode;
+  if (mode !== 'write') {
+    cal.status = mode === 'staged' ? 'staged' : 'not_changed'; cal.message = plan.calendar.note || '';
+    if (mode === 'staged') for (const i of okItems) cal.items[i.ref] = { status: 'staged', message: 'Test server: pretend-only.' };
+    else { cal.manual = okItems.map(strCalManual); for (const i of okItems) cal.items[i.ref] = { status: 'not_changed', message: 'The Hub did not change the calendar (' + (mode === 'off' ? 'the calendar switch is OFF' : 'no calendar is set up') + ').' }; state.warnings.push(`The cleaning calendar was NOT changed (${cal.message}) Do this by hand: ${cal.manual.join('; ')}.`); }
+    return true;
+  }
+  const doneSet = new Set(cal.done), todo = okItems.filter(i => !doneSet.has(i.ref));
+  if (todo.length) {
+    const chunk = [], ops = [];
+    for (const i of todo) { const io = strCalOps(env, S, i); if (chunk.length && strSubUsed(ctx) + ops.length + io.length + 4 > STR_SUB_LIMIT) break; chunk.push(i); for (const o of io) ops.push(Object.assign(o, { i })); }
+    const fail = {};
+    for (const op of ops) {
+      if (cal.fatal) { fail[op.i.ref] = fail[op.i.ref] || cal.fatal; continue; }
+      try { await op.fn(); }
+      catch (e) {
+        if (op.label === 'delete' && (e.httpStatus === 410 || e.httpStatus === 404)) continue; // already gone: that is the goal
+        const msg = strErrText(e); fail[op.i.ref] = fail[op.i.ref] || msg;
+        if (STR_CAL_FATAL.includes(e.code)) cal.fatal = msg;
+      }
+    }
+    // Re-read the calendar and check every date for real. A write Google accepted but that is not visible is a failure.
+    let back = null, readErr = '';
+    if (chunk.some(i => !fail[i.ref])) { try { const ds = chunk.map(i => i.date).sort(); back = await strReadCleaningCal(env, cfg, S.cleaningCal, ds[0], ds[ds.length - 1]); } catch (e) { readErr = strErrText(e); } }
+    for (const i of chunk) {
+      cal.done.push(i.ref);
+      if (fail[i.ref]) { cal.items[i.ref] = { status: 'failed', message: fail[i.ref] }; continue; }
+      if (!back) { cal.items[i.ref] = { status: 'failed', message: 'The calendar was changed but could not be re-read to check it: ' + readErr }; continue; }
+      const live = back.filter(e => String(e.status || '').toUpperCase() !== 'CANCELLED'), problems = [];
+      const covers = live.filter(e => e.ext && e.ext.ridgecoStr && e.ext.ridgecoStrKey === i.task_key && e.ext.ridgecoStrKind === 'cover' && inspStrEvDay(e.start) === i.date);
+      if (covers.length !== 1 || covers[0].summary !== i.cal.title) problems.push(`"${i.cal.title}" is not on ${i.label} exactly once`);
+      for (const id of i.cal.hub_delete.concat(i.cal.hand.map(h => h.id))) if (live.some(e => e.id === id)) problems.push('an old entry is still there');
+      cal.items[i.ref] = problems.length ? { status: 'failed', message: 'Re-read check failed: ' + problems.join('; ') } : { status: 'done', message: `Calendar shows "${i.cal.title}" on ${i.label}.` };
+    }
+    if (cal.fatal) for (const i of todo) if (!cal.done.includes(i.ref)) { cal.done.push(i.ref); cal.items[i.ref] = { status: 'failed', message: cal.fatal }; }
+  }
+  if (okItems.some(i => !cal.done.includes(i.ref))) return false; // more dates next call
+  const bad = okItems.filter(i => (cal.items[i.ref] || {}).status !== 'done');
+  cal.status = bad.length ? (bad.length === okItems.length ? 'failed' : 'partial') : 'done';
+  if (bad.length) {
+    cal.manual = bad.map(strCalManual);
+    cal.message = cal.fatal ? cal.fatal : bad.map(i => `${i.label}: ${cal.items[i.ref].message}`).slice(0, 3).join(' | ');
+    cal.code = 'calendar_failed';
+    state.errors.push({ step: 'calendar_failed', error: `The cleaning calendar was not fully updated. ${cal.message} Do this by hand: ${cal.manual.join('; ')}.` });
+  }
+  return true;
+}
+
+// ── Stage 4: line the texts up in the Outbox (the exact words Brett approved). Sending is stage 5; a text outside 8 AM-9 PM ET simply stays parked ──
+async function strStageQueue(ctx, J) {
+  const { S } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), okRefs = new Set(strOkItems(J).map(i => i.ref)), win = strInSendWindow(ctx.now, S), heldIso = new Date(strNextWindowOpenMs(ctx.now, S)).toISOString();
+  const rows = [], metas = []; state.texts = [];
+  for (const r of J.recipients) {
+    const c = ctx.st.cmap[r.cleaner_id], base = { key: r.key, name: r.name, first: r.first, kind: r.kind, dates: r.dates }, tx = J.texts[r.key] || { send: false, text: '' };
+    const refs = r.refs.filter(x => okRefs.has(x)); if (!c) { state.texts.push(Object.assign(base, { status: 'failed', detail: 'Cleaner not found.' })); continue; }
+    if (!refs.length) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Nothing changed for this person, so no text.' })); continue; }
+    if (!tx.send && (r.can_send || r.kind === 'mark')) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'You unticked this text.' })); continue; }
+    if (!r.can_send) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: r.reason })); state.warnings.push(`${r.name} was NOT texted: ${r.reason} Tell them yourself.`); continue; }
+    let text = tx.text, replaced = false, ds = r.dates;
+    if (refs.length !== r.refs.length) { // some dates failed: Brett's text would be wrong, so use the standard wording for the dates that DID change
+      const its = J.items.filter(i => refs.includes(i.ref)); ds = [...new Set(its.map(i => i.date))].sort();
+      text = (await strRenderRecipient(ctx, r.kind, c, ds, r.kind === 'mark' ? { key: 'x', kind: 'checkout', date: ds[0], next: '' } : its[0]._t, { newC: cleaner, mark: req.mark })).text; replaced = true;
+      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates failed), so your edit was replaced.`);
+    }
+    const expect = r.kind === 'mark' ? ds.map(d => ({ date: d, mark: req.mark })) : J.items.filter(i => refs.includes(i.ref)).map(i => ({ task_key: i.task_key, date: i.date, assigned_id: cleaner.ID }));
+    rows.push({ Plan_ID: J.planId, Cleaner_ID: c.ID, Kind: r.kind, Msg_Type: r.type, Body: text, Task_Keys: refs.join(','), Expect: JSON.stringify(expect), Not_Before: win ? iso : heldIso, Status: 'parked', Created_At: iso, Note: '' });
+    metas.push(Object.assign(base, { text, replaced, dates: ds }));
+  }
+  if (rows.length) {
+    try { const ids = await strAddRows(ctx.env, 'STR_Outbox', rows); metas.forEach((m, i) => state.texts.push(Object.assign(m, { status: 'queued', ob: ids[i] }))); }
+    catch (e) { for (const m of metas) state.texts.push(Object.assign(m, { status: 'failed', detail: 'Could not line the text up: ' + strErrText(e) })); state.errors.push({ step: 'text_queue', error: `The texts could not be lined up (${strErrText(e)}). Nobody was texted; tell them yourself.` }); }
+  }
+  ctx.dirty = true;
+  return true;
+}
+
+// ── Stage 5: send the due texts (the Outbox sends each one claim-first, so a crash can never send one twice) ──
+async function strStageSend(ctx, J) {
+  await strFresh(ctx);
+  const mine = () => (ctx.st.outbox || []).filter(o => o.Plan_ID === J.planId);
+  await strOutboxDrain(ctx, { plan: J.planId, budget: true, quiet: true, log: false });
+  const win = strInSendWindow(ctx.now, ctx.S);
+  return !win || !mine().some(o => o.Status === 'parked' && Date.parse(o.Not_Before || '') <= ctx.now);
+}
+
+// ── The invite email for the newly assigned cleaner (same behaviour as a normal assignment, one email however many dates) ──
+async function strSwapEmail(ctx, cleaner, doneItems) {
+  if (!cleaner.Email) return { status: 'skipped', note: `${cleaner.Name} has no email on file, so no calendar invite was sent.` };
+  if (!ctx.S.engine) return { status: 'skipped', note: 'The scheduler is OFF, so no calendar invite email was sent.' };
+  const views = strComputeViews(ctx, null), ics = strIcsForCleaner(ctx, cleaner, views), S = ctx.S;
+  const one = doneItems.length === 1, list = doneItems.map(i => `<li><b>${strEsc(strFmtDate(i.date, true))}</b> (${strEsc(i.kind_label)}; checkout 11 AM${i._t.next ? '; next guest arrives ' + strEsc(strNextDate(i.date, i._t.next)) : ''})</li>`).join('');
+  const html = `<p>Hi ${strEsc(strFirst(cleaner))},</p><p>You're set to clean <b>${strEsc(S.label)}</b> on:</p><ul>${list}</ul><p>The calendar invite is attached. Your schedule, availability and any changes: <a href="${strCleanerUrl(cleaner.Token)}">open your page</a>.</p><p>Thank you!<br>${strEsc(S.assistant)} - Ridge Co</p>`;
+  ctx.subX = (ctx.subX || 0) + 4;
+  try { const r = await gmailSendEmailWithAttachment(ctx.env, { to: cleaner.Email, subject: one ? `You're set: ${S.label} cleaning ${strFmtDate(doneItems[0].date)}` : `You're set: ${S.label} cleaning (${doneItems.length} dates)`, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } }); return { status: r && r.staged ? 'staged' : 'sent', note: '' }; }
+  catch (e) { return { status: 'failed', note: `Could not email ${cleaner.Name} the calendar invite: ${strErrText(e)}` }; }
+/*@@S5@@*/
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
