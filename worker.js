@@ -16525,6 +16525,19 @@ async function failInvariantsCollect(env, nowMs) {
   } catch (e) { note('twilio_balance', e); }
   // Sign-ins that expire on their own: a dead QuickBooks / Gmail refresh token stops invoices, bills and emails with nothing "failing" in between.
   // Production only (staging talks to Intuit's sandbox). qbAccessToken / gmailAccessToken already write their own ledger events when they fail.
+  if (!(env.__STAGING__ ?? isStaging(env))) {
+    if (env.QB_CLIENT_ID) {
+      // Reviewer fix (Oct 20): retry once, and only a real auth refusal is P0; a Sheets blip / Intuit hiccup is P1 and must not hold a 'QuickBooks is broken' P0 open for 20 h.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try { await qbAccessToken(env); data.qb = { ok: true }; break; }
+        catch (e) { const m = String((e && e.message) || e); data.qb = { ok: false, error: m, hard: /expired or revoked|refresh token missing|env vars missing|token refresh 40[01]/i.test(m) }; if (data.qb.hard) break; }
+      }
+    }
+    try { _gmailTokenCache = { token: null, at: 0 }; await gmailAccessToken(env); data.gmail = { ok: true }; }
+    catch (e) { data.gmail = { ok: false, error: String((e && e.message) || e) }; }
+  }
+  return data;
+}
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
