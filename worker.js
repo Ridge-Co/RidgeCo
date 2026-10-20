@@ -17183,9 +17183,15 @@ async function schedRunNext(env, ctx, opts) {
     // marked done for the day (no last_key); it resumes after SCHED_PARTIAL_GAP_MS. Taking more than SCHED_MAX_PARTIALS slices in one ET day
     // is a failure (loud), so a job that can never finish cannot look healthy forever.
     const etDayP = force ? schedEtParts(new Date(nowMs())).date : key;
-    const partialN = (jobRes.partial === true && job.kind !== 'interval') ? ((prev.partials && prev.partials.key === etDayP ? prev.partials.n : 0) + 1) : 0;
-    if (partialN > SCHED_MAX_PARTIALS) { jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${SCHED_MAX_PARTIALS} slices today (it needs a person to look)` }] }; }
-    const isPartial = partialN > 0 && partialN <= SCHED_MAX_PARTIALS;
+    const prevP = (prev.partials && prev.partials.key === etDayP) ? prev.partials : null;
+    const partialN = (jobRes.partial === true && job.kind !== 'interval') ? ((prevP ? prevP.n : 0) + 1) : 0;
+    const reportsProgress = partialN > 0 && typeof jobRes.progress_made === 'boolean';
+    const stalledN = reportsProgress ? (jobRes.progress_made ? 0 : ((prevP && prevP.stalled) || 0) + 1) : 0;
+    const partialCap = reportsProgress ? SCHED_MAX_PARTIALS_PROGRESS : SCHED_MAX_PARTIALS;
+    let partialFailed = false;
+    if (partialN > partialCap) { partialFailed = true; jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${partialCap} slices today (it needs a person to look)` }] }; }
+    else if (reportsProgress && stalledN >= SCHED_MAX_STALLED_PARTIALS) { partialFailed = true; jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} made no progress in its last ${stalledN} slices today (slice ${partialN}; it needs a person to look)` }] }; }
+    const isPartial = partialN > 0 && !partialFailed;
     const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
     // Oct 16 2026: {ok:false, paused:true, reason} = "skipped on purpose because AI credit is paused". NOT a failure (Brett was already alerted once, and the
     // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
