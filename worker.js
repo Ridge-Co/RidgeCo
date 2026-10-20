@@ -24362,7 +24362,9 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
       if (__cacheFresh(env, hit)) return hit.data;
-      if (!__isLeader) {
+      if (!__isLeader && !(env && env.__CRON__)) {
+        // PEOPLE ONLY: background (cron) reads are paced 2.5s apart by __cronPace and must never be joined by a person (they
+        // would inherit the pacing wait and a Hub login would time out) nor register themselves here.
         // Share one real read among every concurrent caller of this tab. The shared read itself never serves a stale
         // copy: each caller decides for ITSELF (readOpts.stale) what to do if it fails, so a caller that did not opt
         // in can never be handed stale data just because someone else did.
