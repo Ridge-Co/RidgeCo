@@ -36611,6 +36611,28 @@ async function strPendingCalFix(ctx, feed, p) {
   ev.summary = want.title; ev.ext = Object.assign({}, ev.ext, { ridgecoStrKey: real.Task_Key, ridgecoStrKind: 'cover' }); delete ev.ext.ridgecoStrPending;
   return await done('event converted in place');
 }
+
+// The held cleaner's "that date is now booked" text (or Brett's opted-in "no booking after all" text): claim first, then send, so a crash can never send it twice.
+async function strPendingSendText(ctx, p) {
+  const flag = p.Pending_Text || '', iso = new Date(ctx.now).toISOString();
+  if (/^sending:/.test(flag)) { if (ctx.now - Date.parse(flag.slice(8)) > 15 * 60000 && !(p.Note || '').includes('stuck-told')) { await strSystemAlert(ctx.env, 'pending_text_stuck', `The text to the held cleaner for ${strFmtDate(p.Date)} was claimed but never confirmed. It is NOT being resent; check whether ${strFirst(ctx.st.cmap[p.Assigned_Cleaner_ID]) || 'they'} got it.`); await strSetTurnover(ctx, p, { Note: ((p.Note || '') + ' stuck-told').trim() }); } return null; }
+  if (!(flag === 'due' || /^failed:[12]$/.test(flag))) return null;
+  const c = ctx.st.cmap[p.Assigned_Cleaner_ID], n = (/^failed:(\d)$/.exec(flag) || [0, 0])[1] | 0;
+  if (!c) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:no_cleaner' }); return { skipped: true }; }
+  if (!ctx.S.sms) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:sms_off' }); await strLog(ctx, p.Task_Key, c.ID, 'pending_text_skipped', 'STR_SMS_ENABLED is FALSE'); return { skipped: true }; }
+  if (!strInSendWindow(ctx.now, ctx.S)) return { held: true };
+  const why = strReach(c); if (why) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:unreachable' }); ctx.errors.push({ step: 'pending_text', error: `${c.Name} ${why}, so they were NOT texted about ${strFmtDate(p.Date)}.` }); await strSystemAlert(ctx.env, 'pending_text', `${c.Name} ${why}: not texted about ${strFmtDate(p.Date)}. Tell them yourself.`); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Text: 'sending:' + iso });
+  let r;
+  if (p.Status === 'pending_cancelled') r = p.Pending_Body ? await strSendCleanerText(ctx, c, 'str_pending_cancelled', p.Pending_Body) : await strTextCleaner(ctx, c, 'str_pending_cancelled', strTokens(ctx, c, strRowToTask(p)), strRowToTask(p));
+  else { const real = ctx.st.turnovers.find(t => t.Task_Key === p.Converted_To), task = real ? strRowToTask(real) : strRowToTask(p); r = await strTextCleaner(ctx, c, 'str_pending_booked', strTokens(ctx, c, task), task); }
+  if (r.ok) { await strSetTurnover(ctx, p, { Pending_Text: 'sent:' + iso }); await strLog(ctx, p.Task_Key, c.ID, p.Status === 'pending_cancelled' ? 'pending_cancel_text_sent' : 'pending_booked_text_sent', r.detail); return { ok: true }; }
+  if (r.off) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:sms_off' }); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Text: 'failed:' + (n + 1) });
+  ctx.errors.push({ step: 'pending_text', error: `Could not text ${c.Name} about ${strFmtDate(p.Date)} (try ${n + 1}/3): ${r.detail}` });
+  await strSystemAlert(ctx.env, 'pending_text', `The ${p.Status === 'pending_cancelled' ? '"no booking after all"' : '"now booked"'} text to ${c.Name} for ${strFmtDate(p.Date)} failed (try ${n + 1}/3)${n + 1 >= 3 ? ' and will NOT be retried - tell them yourself' : ''}: ${r.detail}`);
+  return { ok: false };
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
