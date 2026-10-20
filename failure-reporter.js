@@ -89,6 +89,59 @@
     } catch (e) { consoleErr('[failure-reporter] rejection handler failed', e); }
   });
 
+  // 1b. "Saved, but ..." warnings. Since Oct 20 2026 the Hub adds `failure_warning` (string) / `failure_warnings` (array of strings) to a success response when a
+  // side step FAILED (it is already in the failure ledger). The plain `warning` / `warnings` keys are informational notes (fee notes, deposit cap, previews) and are
+  // deliberately ignored here. Shown persistently until dismissed: the admin sees the text; tenants / vendors / owners only a friendly line (never raw server text).
+  var warnIsAdmin = false;
+  try { warnIsAdmin = !!localStorage.getItem(AUTH_KEY); } catch (e) { warnIsAdmin = false; /* silent-ok: storage blocked, show the friendly line instead */ }
+  var WARN_MAX = 5, warnShown = {}, warnCount = 0, warnPending = [], warnRetryHooked = false;
+  function warnBar(items) {
+    try {
+      var fresh = [];
+      items.forEach(function (t) { if (t && !warnShown[t] && fresh.indexOf(t) < 0) fresh.push(t); });
+      if (!fresh.length) return;
+      if (!document.body) {                                                     // page still parsing: keep the lines and show them once the body exists
+        warnPending = warnPending.concat(fresh);
+        if (!warnRetryHooked && document.addEventListener) {
+          warnRetryHooked = true;
+          document.addEventListener('DOMContentLoaded', function () { warnRetryHooked = false; var p = warnPending; warnPending = []; warnBar(p); });
+        }
+        return;
+      }
+      var bar = document.getElementById('hub-warn-bar');
+      if (!bar) {
+        warnShown = {}; warnCount = 0;
+        bar = document.createElement('div'); bar.id = 'hub-warn-bar'; bar.setAttribute('role', 'alert');
+        bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483000;background:#7a4b00;color:#fff;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:10px 40px 10px 14px;max-height:25vh;overflow:auto';
+        var x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', es ? 'Cerrar' : 'Dismiss');
+        x.style.cssText = 'position:absolute;right:8px;top:4px;background:none;border:0;color:#fff;font-size:22px;cursor:pointer';
+        x.onclick = function () { try { bar.remove(); warnShown = {}; warnCount = 0; } catch (e) { consoleErr('[failure-reporter] could not dismiss the warning bar', e); } };
+        bar.appendChild(x); document.body.appendChild(bar);
+      }
+      fresh.forEach(function (t) {
+        warnShown[t] = 1;
+        if (warnCount >= WARN_MAX) return;                                      // total lines cap (the problem is in the failure ledger either way)
+        warnCount++;
+        var d = document.createElement('div'); d.textContent = t; bar.appendChild(d);
+      });
+    } catch (e) { consoleErr('[failure-reporter] warning bar failed', e); }
+  }
+  function watchWarnings(r, path) {
+    try {
+      var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
+      if (ct.indexOf('json') < 0) return;
+      r.clone().json().then(function (b) {
+        if (!b || b.preview || b.preview_only) return;                          // dry-run / preview responses never nag
+        var items = [];
+        if (typeof b.failure_warning === 'string' && b.failure_warning) items.push(b.failure_warning);
+        if (Array.isArray(b.failure_warnings)) b.failure_warnings.forEach(function (w) { if (w) items.push(String(w)); });
+        if (!items.length) return;
+        warnBar(warnIsAdmin ? items.map(function (t) { return (es ? 'Guardado, pero: ' : 'Saved, but: ') + clip(t, 300); })
+          : [es ? 'Se guardó, pero una parte necesita seguimiento. Ya nos avisaron.' : 'Saved, but one part needs a follow-up. We\'ve been notified.']);
+      }).catch(function (e) { consoleErr('[failure-reporter] warning parse failed for ' + path, e); });
+    } catch (e) { consoleErr('[failure-reporter] warning check failed', e); }
+  }
+
   // 1c. Hub API calls that fail. Wrap fetch; never alter the response or the caller's error handling.
   if (realFetch) {
     window.fetch = function (input, init) {
