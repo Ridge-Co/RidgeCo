@@ -1882,14 +1882,28 @@ function api(method, path, body, timeoutMs) {
   } else {
     _getCache = {};
   }
-  var controller = (timeoutMs && typeof AbortController !== 'undefined') ? new AbortController() : null;
-  var timer = null;
-  if (controller) { opts.signal = controller.signal; timer = setTimeout(function(){ controller.abort(); }, timeoutMs); }
-  var p = fetch(WORKER + path, opts).then(function(res){
-    if (timer) clearTimeout(timer);
-    return res.json().then(function(data){
-      if (data.error === 'Unauthorized') throw new Error('Unauthorized');
-      return data;
+  // Google Sheets read quota (Oct 19 2026): the Worker already waits out short throttles, but a long one still comes back
+  // as {error:"...Quota exceeded..."}. A GET that gets that answer is retried here (3 more tries, 3s/6s/12s) before the
+  // error is handed to the caller. GET only: a write is never re-sent from the browser.
+  function sheetsBusy(data) { return !!data && typeof data.error === 'string' && /quota|rate.?limit|read requests/i.test(data.error); }
+  function attempt(n) {
+    var controller = (timeoutMs && typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = null;
+    var o = opts;
+    if (controller) { o = Object.assign({}, opts, { signal: controller.signal }); timer = setTimeout(function(){ controller.abort(); }, timeoutMs); }
+    return fetch(WORKER + path, o).then(function(res){
+      if (timer) clearTimeout(timer);
+      return res.json().then(function(data){
+        if (data.error === 'Unauthorized') throw new Error('Unauthorized');
+        if (method === 'GET' && sheetsBusy(data) && n < 3) {
+          return new Promise(function(r){ setTimeout(r, 3000 * Math.pow(2, n)); }).then(function(){ return attempt(n + 1); });
+        }
+        return data;
+      });
+    }).catch(function(e){
+      if (timer) clearTimeout(timer);
+      if (e && e.name === 'AbortError') throw new Error('Request timed out after ' + (timeoutMs/1000) + 's — check network or retry');
+      throw e;
     });
   }).catch(function(e){
     if (timer) clearTimeout(timer);
