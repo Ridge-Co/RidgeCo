@@ -4258,7 +4258,11 @@ async function scopeSplit(env, body) {
     Vendor_ID: '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '', Proposal_Text: '',
     Created_By: body.created_by || 'admin', Created_Date: now, Updated_Date: now, Notes: 'Split from Scope #' + s.ID, Active: 'TRUE',
   });
-  const cj = await child.json().catch(() => ({}));
+  let cj; try { cj = await child.json(); } catch (je) {
+    // Phase C: an unreadable create response used to become {} and the items were still removed from the parent, with no id for the new scope.
+    await softFail(env, 'scopeSplit_child_response_unreadable', je, 'P1', { scope_id: id });
+    return json({ error: 'The new scope may have been created, but its response was unreadable. Check the Scopes tab; the original scope was left unchanged.' }, 502);
+  }
   if (body.remove_from_parent) {
     const remain = items.filter(it => !ids.includes(it.id));
     await updateRow(env, 'Scopes', s.ID, { Line_Items: JSON.stringify(remain), Updated_Date: now });
