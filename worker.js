@@ -34703,6 +34703,10 @@ const STR_TABS = {
   STR_Offers: ['ID', 'Task_Key', 'Cleaner_ID', 'Round', 'Created_At', 'Sent_At', 'Deadline_At', 'Status', 'Queue_ID', 'Mode', 'Responded_At', 'Note'],
   STR_Log: ['ID', 'Timestamp', 'Task_Key', 'Cleaner_ID', 'Event', 'Detail'],
   STR_Alerts: ['ID', 'Alert_Key', 'Kind', 'Severity', 'Task_Key', 'Message', 'Sms_Text', 'Send_Count', 'Last_Sent_At', 'Next_Send_At', 'Resolved_At', 'Acked_At', 'Created_At'],
+  // Oct 20 2026 (admin swap / bulk): texts parked until 8 AM (sent by the scheduler tick, never by a clock of their own) and one row per
+  // preview-then-send plan, so pressing Send twice can never apply or text twice.
+  STR_Outbox: ['ID', 'Plan_ID', 'Cleaner_ID', 'Kind', 'Msg_Type', 'Body', 'Task_Keys', 'Expect', 'Not_Before', 'Status', 'Created_At', 'Sent_At', 'Note'],
+  STR_Changes: ['ID', 'Plan_ID', 'Action', 'Status', 'Created_At', 'Finished_At', 'Summary', 'Result', 'Stage', 'Payload', 'State'],
 };
 // Config keys the admin page may change (allow-list). Value rules in strConfigSave.
 const STR_CFG_BOOL = ['STR_ENGINE_ENABLED', 'STR_SMS_ENABLED', 'STR_SMS_TEST_MODE', 'STR_CAL_WRITE_ENABLED', 'STR_DIGEST_ENABLED'];
