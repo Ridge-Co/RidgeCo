@@ -4402,7 +4402,7 @@ async function woPushToScope(env, body) {
       const need = lineItems.map((li, i) => (li && li.desc && !li.desc_en && plausiblyNonEnglish(li.desc)) ? i : -1).filter(i => i >= 0);
       const tr = await translateBatchToEnglish(env, need.map(i => lineItems[i].desc));
       if (tr.ok) need.forEach((i, k) => { if (String(tr.out[k]).trim().toLowerCase() !== String(lineItems[i].desc).trim().toLowerCase()) lineItems[i] = Object.assign({}, lineItems[i], { desc_en: tr.out[k] }); });
-    } catch (_) {}
+    } catch (te) { await softFail(env, 'woPushToScope_translate_lines', te, 'P2', { wo_id: woId }); /* reported; the original wording is kept */ }
   }
 
   // ---- Resolve target scope: reuse Work_Orders.Scope_ID if already set, else preview a new one.
