@@ -23486,7 +23486,9 @@ async function receiptIntake(env, body) {
     Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
   };
   const appended = await addRow(env, 'Receipts_Queue', row);
-  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) {}
+  const addedBody = await safeJson(appended, {}, 'receipt_intake_add');
+  const newId = (addedBody && addedBody.id) || '';
+  if (!newId) softNote('receipt_intake_no_id', 'Receipts_Queue add returned no id (status ' + (appended && appended.status) + '): the receipt may not be in the queue', 'P1');
   return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
 }
 
