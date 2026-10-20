@@ -2814,7 +2814,7 @@ async function receiptReconScan(env, body) {
   for (const id of Object.keys(failures)) {
     if (receiptReconIsConfigError(failures[id] && failures[id].error) || aiCreditErrorTextIsOutage(failures[id] && failures[id].error)) { delete failures[id]; healed = true; }   // + Oct 16 2026: attempts burned by the credit outage
   }
-  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { console.error('receiptReconScan: could not save the healed tracker:', schedErrText(e)); await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_recon_tracker_write_failed', Skill_Or_Endpoint: 'receiptReconScan', Success: 'FALSE', Notes: schedErrText(e).slice(0, 300) }).catch(te => console.error('telemetry failed:', schedErrText(te))); } }
+  if (healed) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { console.error('receiptReconScan: could not save the healed tracker:', schedErrText(e)); await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_recon_tracker_write_failed', Skill_Or_Endpoint: 'receiptReconScan', Success: 'FALSE', Notes: schedErrText(e).slice(0, 300) }).catch(te => softNote('telemetry_write_failed:receipt_recon_tracker_write_failed', te, 'P2')); } }
   const allNew = files.filter(f => !seen.has(f.id) && !(failures[f.id] && failures[f.id].attempts >= 3));
   const stuck = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
   if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
