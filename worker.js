@@ -5366,7 +5366,8 @@ function scopeVendorPayableSchedule(milestones) {
   return out;
 }
 function scopeParsePaymentSchedule(s) {
-  try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
+  const arr = parseJsonCell(s && s.Payment_Schedule_JSON, null, 'Scopes.Payment_Schedule_JSON', 'P1');   // corrupt text -> noted, then the default schedule below
+  if (Array.isArray(arr) && arr.length) return arr;
   return scopeDefaultPaymentSchedule();
 }
 
