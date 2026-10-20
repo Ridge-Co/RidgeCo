@@ -11021,7 +11021,11 @@ async function listVendorAccessRequests(env, url) {
   const status = (url.searchParams.get('status') || '').trim().toLowerCase();
   const countOnly = url.searchParams.get('count_only') === '1';
   let rows = [];
-  try { rows = await fetchTab(env, 'Vendor_Access_Requests'); } catch (e) { rows = []; }
+  try { rows = await fetchTab(env, 'Vendor_Access_Requests'); }
+  catch (e) {
+    rows = [];   // a missing tab = no requests yet; any other failure would make pending requests (and the nav badge) vanish, so it is reported
+    if (!isMissingTabError(e)) await softFail(env, 'vendor_access_requests_read_failed', e, 'P2');
+  }
   let results = rows.filter(r => r.Active !== 'FALSE');
   if (status) results = results.filter(r => String(r.Status || 'pending').toLowerCase() === status);
   if (countOnly) return json({ count: results.length });
