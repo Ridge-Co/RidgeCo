@@ -35296,7 +35296,7 @@ async function strSystemAlert(env, kind, message) {
   if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
   __strSysAt[kind] = now;
   try { const cfg = await fetchConfig(env); await strSendBrett(env, cfg, 'Cleaning scheduler problem: ' + kind, ('Cleaning scheduler problem (' + kind + '): ' + message).slice(0, 300), [message], true); }
-  catch (e) { console.error('str alert: could not tell Brett:', e && e.message, '| original:', kind, message); }
+  catch (e) { console.error('str alert: could not tell Brett:', e && e.message, '| original:', kind, message); softNote('str_alert_could_not_tell_brett', e, 'P0', { kind, original: String(message).slice(0, 120) }); }
 }
 // SMS + email to Brett. smsOk=false skips the SMS only. Never throws; returns { ok, log }.
 async function strSendBrett(env, cfg, subject, smsText, htmlLines, smsOk) {
