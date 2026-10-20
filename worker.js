@@ -26641,8 +26641,10 @@ async function seedTestFixtures(env, url) {
 const PROPERTY_SOURCE_FIELDS = ['Source_Name', 'Source_Type', 'Source_Phone', 'Source_Email'];
 async function propertyUpdate(env, body) {
   const fields = (body && body.fields) || {};
+  const colFails = [];
   if (PROPERTY_SOURCE_FIELDS.some(f => fields[f] !== undefined)) {
-    try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {}
+    const w = await tryWrite(env, 'property_update_ensure_source_columns', () => ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS), 'P1');
+    if (!w.ok) colFails.push('Source fields (' + w.error + ')');
   }
   if (fields.Commercial_Subtype !== undefined) {
     try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
