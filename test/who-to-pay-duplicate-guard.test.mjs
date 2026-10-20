@@ -112,7 +112,7 @@ function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, ir
   const paymentMilestonesTab = async () => {};
   const logTelemetry = async () => {};
   const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('parseHolidayMap', false)}\n${extractFn('nextBusinessDay', false)}\n${extractFn('etDateString', false)}\n${extractFn('paymentClearDaysMap', false)}\n${extractFn('classifyPaymentMethod', false)}\n${extractFn('addBusinessDays', false)}\n${extractFn('summarizeInvoicePayments', false)}\n${extractFn('money2', false)}\n${extractFn('vendorBillPaymentIds', false)}\n${extractFn('vendorBillPaidDate', false)}\n${extractFn('qbLoadInvoicePayments', true)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
-  return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', src)
+  return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', PHASE_C_SHIM + src)
     (fetchTabs, fetchTab, paymentMilestonesTab, logTelemetry, qbAccessToken, qbApi, qbVendorDisplayName, vendorTermLabel, json, TEST_FETCH_CONFIG);
 }
 
