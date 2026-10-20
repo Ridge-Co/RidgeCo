@@ -25608,7 +25608,8 @@ function configFromValues(values) {
 async function fetchConfig(env) {
   try { return await fetchConfigStrict(env); }
   catch (e) {
-    //@@F
+    // Reviewer fix (Oct 20): queued (sync, de-duped, flushed after the response) instead of awaiting a ledger write into the same Sheets that just failed - hundreds of callers, and a quota burst would double.
+    softNote('config_read_failed', 'Could not read the Config tab; callers fell back to "no settings": ' + String((e && e.message) || e).slice(0, 220), 'P1');
     return {};
   }
 }
