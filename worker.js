@@ -34959,7 +34959,7 @@ async function strHandleErr(env, e, where) {
 // shared Sheets read quota (it is per minute for the whole Hub). Every handler that WRITES keeps fresh=true.
 async function strHandlerCtx(env, fresh) {
   const cfg = await fetchConfig(env), S = strSettings(cfg);
-  const ctx = { env, cfg, S, dry: false, now: Date.now(), errors: [], warnings: [], actions: [], detail: {} };
+  const ctx = { env, cfg, S, dry: false, now: Date.now(), errors: [], warnings: [], actions: [], detail: {}, subS0: strSheetsCount(), subE0: __strCalCount, subX: 2, dirty: false };
   await strEnsureTabs(env); await strLoad(ctx, fresh !== false);
   return ctx;
 }
