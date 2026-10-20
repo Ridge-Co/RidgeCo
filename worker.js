@@ -15889,7 +15889,7 @@ async function processQuietHoursQueue(env) {
           continue;
         }
       } catch (e) {
-        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (te) { softNote('telemetry_write_failed:proposal_sms_skip_check_failed', te, 'P2'); }
       }
     }
     const property = properties.find(p => p.ID === row.Property_ID);
