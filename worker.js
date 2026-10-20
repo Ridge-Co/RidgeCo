@@ -35898,7 +35898,83 @@ function strSubUsed(ctx) { return (strSheetsCount() - (ctx.subS0 || 0)) + (__str
 function strRoom(ctx, est) { return ctx.subS0 === undefined || strSubUsed(ctx) + est <= STR_SUB_LIMIT; }
 async function strFresh(ctx) { if (ctx.dirty) { await strLoad(ctx, true); ctx.dirty = false; } }
 const STR_STAGES = ['sheets', 'audit', 'calendar', 'queue', 'send', 'email', 'alerts', 'finish'];
-/*@@S3@@*/
+const STR_STAGE_EST = { sheets: 18, audit: 4, calendar: 8, queue: 4, send: 17, email: 7, alerts: 12, finish: 22 };
+const STR_STAGE_TEXT = { sheets: 'saving the schedule change', audit: 'writing the activity log', calendar: 'fixing the cleaning calendar', queue: 'lining up the texts', send: 'sending the texts', email: 'sending the calendar invite', alerts: 'checking the standing alerts', finish: 'wrapping up' };
+
+// ── Compact copy of the plan that is saved with the job (a cell holds at most 50,000 characters) ──
+function strPackItem(it) {
+  const o = { r: it.task_key || it.date, d: it.date, l: it.label, o: it.outcome, rs: it.reason || '', n: it.notes || [], s: it.sentence || '' };
+  if (it.task_key) { o.k = it.task_key; o.kd = it.kind; o.kl = it.kind_label; if (it._t) { o.nx = it._t.next || ''; o.ws = it._t.winStart; o.we = it._t.winEnd; } }
+  if (it.displaced) { o.p = it.displaced.map(d => ({ i: d.id, n: d.name, s: d.source })); o.u = it.unmatched || []; o.c = it.offers_closed || []; o.m = it.marks || []; o.h = it.cal.hand; o.x = it.cal.hub_delete; o.cr = it.cal.hub_create ? 1 : 0; o.cp = it.cal.hub_patch || ''; o.ti = it.cal.title || ''; }
+  else { o.cu = it.current || ''; o.od = it.offers_declined || []; }
+  return o;
+}
+function strUnpackItem(o) {
+  const it = { ref: o.r, task_key: o.k || '', date: o.d, label: o.l, outcome: o.o, reason: o.rs, notes: o.n || [], sentence: o.s || '' };
+  if (o.p) { it.kind = o.kd; it.kind_label = o.kl; it._t = { key: o.k, kind: o.kd, date: o.d, winStart: o.ws, winEnd: o.we, next: o.nx || null, guests: '' }; it.displaced = o.p.map(d => ({ id: d.i, name: d.n, source: d.s })); it.unmatched = o.u || []; it.offers_closed = o.c || []; it.marks = o.m || []; it.cal = { hand: o.h || [], hub_delete: o.x || [], hub_create: !!o.cr, hub_patch: o.cp || '', title: o.ti || '', manual: [], fyi: [] }; }
+  else { it.current = o.cu || ''; it.offers_declined = o.od || []; }
+  return it;
+}
+function strNewState(items) {
+  const ires = {}; for (const it of items) ires[it.r] = it.o === 'change' ? { status: 'pending', reason: '' } : { status: it.o === 'not_found' ? 'failed' : 'skipped', reason: it.rs };
+  return { stage: 'sheets', tries: {}, calls: 0, ires, cal: { done: [], items: {}, status: 'unchanged', manual: [], message: '', fatal: '' }, texts: [], email: null, errors: [], warnings: [] };
+}
+
+// ── The cleaning calendar, in budgeted chunks: remove the old cleaner's entry (hand-typed or Hub), put the new one in, re-read to prove it ──
+const strCalManual = i => { const m = []; for (const h of i.cal.hand) m.push(`delete "${h.summary}"`); if (i.cal.hub_create || i.cal.hub_patch || i.cal.hand.length) m.push(`add an all-day "${i.cal.title}"`); return `${i.label}: ${m.join(' and ')}`; };
+function strCalOps(env, S, i) {
+  const enc = encodeURIComponent, ops = [];
+  for (const id of i.cal.hub_delete) ops.push({ label: 'delete', fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(id)) });
+  for (const h of i.cal.hand) ops.push({ label: 'delete', fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(h.id)) });
+  const want = { key: i.task_key, kind: 'cover', date: i.date, title: i.cal.title, desc: `${S.label} ${i.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub (admin swap). Checkout 11 AM${i._t.next ? '; next guest arrives ' + strNextDate(i.date, i._t.next) : ''}.` };
+  if (i.cal.hub_patch) ops.push({ label: 'patch', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(i.cal.hub_patch), strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update'); } });
+  else if (i.cal.hub_create) ops.push({ label: 'create', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id'); } });
+  return ops;
+}
+const strOkItems = J => J.items.filter(i => i.outcome === 'change' && J.state.ires[i.ref] && J.state.ires[i.ref].status === 'done');
+
+// ── Stage 1: the schedule itself (turnover rows, waiting offers, backup / out marks), batched and re-read ──
+async function strStageSheets(ctx, J) {
+  const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', ires = state.ires, first = J.plan.cleaner.first;
+  const toDo = J.items.filter(i => i.outcome === 'change');
+  const done = it => ires[it.ref].status === 'done', fail = (it, why) => { ires[it.ref] = { status: 'failed', reason: why }; state.errors.push({ step: 'change_item', error: `${it.label}: ${why}` }); };
+  if (!isMark) {
+    invalidateTabCache('STR_Turnovers');
+    const cur = new Map((await fetchTab(env, 'STR_Turnovers')).filter(r => r.Property_Key === STR_PROP).map(r => [r.Task_Key, r])), upd = [], adds = [];
+    for (const it of toDo) {
+      if (ires[it.ref].status !== 'pending') continue; // (resuming) already settled
+      const row = cur.get(it.task_key), f = { Status: 'covered', Assigned_Cleaner_ID: cleaner.ID, Assigned_Via: 'admin_swap', Checkout_Text_Sent: '', Note: '', Updated_At: iso };
+      if (row) { if (row.Status === 'cancelled') { fail(it, 'The booking was cancelled a moment ago.'); continue; } if (row.Status === 'covered' && String(row.Assigned_Cleaner_ID) === cleaner.ID) { ires[it.ref] = { status: 'done', reason: `${first} already has this one.` }; continue; } upd.push({ id: row.ID, fields: f, it }); }
+      else adds.push({ it, f: Object.assign({ Task_Key: it.task_key, Property_Key: STR_PROP, Kind: it.kind, Date: it.date, Win_Start: it._t.winStart, Win_End: it._t.winEnd, Next_Arrival: it._t.next || '', Guests: '', Missing_Count: '0', Created_At: iso }, f) });
+    }
+    if (upd.length) { let r; try { r = await strBatchSet(env, 'STR_Turnovers', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) fail(u.it, f.error); else ires[u.it.ref] = { status: 'done', reason: '' }; } }
+    if (adds.length) { try { await strAddRows(env, 'STR_Turnovers', adds.map(a => a.f)); for (const a of adds) ires[a.it.ref] = { status: 'done', reason: 'The scheduler had not picked this date up yet; it was added now.' }; } catch (e) { for (const a of adds) fail(a.it, 'Could not save this date (it may or may not have saved - Refresh and check before retrying): ' + strErrText(e)); } }
+    // quietly close any waiting offers on the dates we just assigned
+    const offUpd = []; for (const it of toDo.filter(done)) for (const o of it.offers_closed) offUpd.push({ id: o.id, fields: { Status: o.status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'closed by admin swap' }, it });
+    if (offUpd.length) { let r; try { r = await strBatchSet(env, 'STR_Offers', offUpd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: offUpd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const f of r.failed) { const it = (offUpd.find(u => String(u.id) === String(f.id)) || {}).it; state.errors.push({ step: 'close_offers', error: `${it ? it.label : ''}: a waiting offer could not be closed (${f.error}). Check the board before anyone replies.` }); if (it) ires[it.ref].flag = 'offer_not_closed'; } }
+  }
+  // availability marks (displaced cleaners become backup; out-marks cleared; or the whole mark action)
+  const markChanges = [], markIt = new Map();
+  if (isMark) { for (const it of toDo) { markChanges.push({ cleaner, date: it.date, mark: req.mark, source: 'admin' }); markIt.set(cleaner.ID + '|' + it.date, it); } }
+  else for (const it of toDo.filter(done)) for (const m of it.marks) { markChanges.push({ cleaner: ctx.st.cmap[m.cleaner_id], date: m.date, mark: m.mark, source: 'admin_swap' }); markIt.set(m.cleaner_id + '|' + m.date, it); }
+  if (markChanges.length) {
+    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner));
+    if (isMark) { for (const it of toDo) { const f = r.failed.find(x => x.key === cleaner.ID + '|' + it.date); if (f) fail(it, 'Could not save the mark: ' + f.error); else ires[it.ref] = { status: 'done', reason: '' }; } }
+    else for (const f of r.failed) { const it = markIt.get(f.key); state.errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); if (it) ires[it.ref].flag = 'mark_failed'; }
+  }
+  if (isMark && req.mark === 'out') { // close waiting offers the cleaner can no longer take; the scheduler asks the next cleaner on its next run
+    const upd = []; for (const it of toDo.filter(done)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
+    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
+  }
+  ctx.dirty = true;
+  return true;
+}
+
+// ── Stage 2: audit trail, one STR_Log row per date ──
+async function strStageAudit(ctx, J) {
+  const { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', first = J.plan.cleaner.first;
+  const logRows = J.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || state.ires[it.ref].status === 'failed').map(it => { const r = state.ires[it.ref], ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : 'admin_mark_failed') : (ok ? 'admin_swap' : 'admin_swap_failed'), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${J.planId}`.slice(0, 480) }; });
+/*@@S4@@*/
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
