@@ -16303,6 +16303,11 @@ async function failRollupRun(env, opts) {
   opts = opts || {};
   const nowMs = opts.nowMs || Date.now(), errors = [];
   await failEnsureTabs(env);
+  if (_failPending.length) {                                  // events that could not be written earlier: write them now, loudly if that still fails
+    const carried = _failPending.splice(0, 40);
+    try { await sheetsRequest(env, 'POST', `/values/${FAIL_EVENTS_TAB}:append?valueInputOption=RAW`, { values: carried.map(p => FAIL_EVENT_COLS.map(c => p[c])) }); }
+    catch (e) { _failPending.unshift(...carried); errors.push('could not write ' + carried.length + ' late failure event(s): ' + String((e && e.message) || e).slice(0, 160)); }
+  }
   const cfgVals = (await sheetsRequest(env, 'GET', '/values/Config')).values || [];
   const cfg = configFromValues(cfgVals);
   // Events since the cursor ("<sheet row>:<last event id>"); a cursor that no longer matches the sheet means start over (idempotent anyway).
