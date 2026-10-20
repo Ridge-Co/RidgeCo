@@ -98,6 +98,9 @@ window.addEventListener('pageshow', function(e){
   #page-devlog .dl-dot.careful { background: var(--danger); border-color: var(--danger); }
   #page-devlog .dl-dot.open { background: var(--surface2); border-color: var(--muted); }
   #page-devlog .dl-note { font-size: 13px; line-height: 1.5; color: var(--dl-muted); margin: 0 0 12px; }
+  /* Buttons drawn by the page's own loaders (access requests, review queue, wishlist) get the same 44px touch size; long words wrap instead of being clipped. */
+  #page-devlog #vendor-access-requests-list .btn, #page-devlog #vtr-review-list .btn, #page-devlog #wishlist-filters .btn, #page-devlog #wishlist-list .btn { min-height: 44px; }
+  #page-devlog #wishlist-list { overflow-wrap: anywhere; }
   #page-devlog .dl-h { font-size: 16px; font-weight: 700; margin: 0; color: var(--text); }
   #page-devlog .dl-section { margin-bottom: 24px; }
   #page-devlog .dl-section > .dl-h { margin-bottom: 12px; }
