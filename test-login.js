@@ -84,7 +84,7 @@
           if (minted) return Promise.resolve(new Response(JSON.stringify(minted), { status: 200, headers: { 'Content-Type': 'application/json' } }));
         }
         if (u !== url) input = typeof input === 'string' ? u : new Request(u, input);
-      } catch (e) {}
+      } catch (e) { tlFail('fetch rewrite (request may hit PROD)', e); }
       return origFetch(input, init);
     };
   }
