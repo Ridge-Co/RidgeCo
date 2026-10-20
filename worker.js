@@ -11010,7 +11010,7 @@ async function vendorRequestPropertyAccess(env, body) {
       await sendSMS(env, config.admin_phone,
         `🔑 ${vendorName} requested billing access to ${prop.Address || ('property ' + propertyId)}. Review in Hub → Dev Log → Vendor Access Requests.`);
     }
-  } catch (e) { /* non-fatal — the request row is already saved */ }
+  } catch (e) { await softFail(env, 'vendor_access_request_admin_sms_failed', e, 'P0', { ref: vendorId }); }   // the request row is saved; Brett just was not texted
   return res;
 }
 
