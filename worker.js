@@ -11398,7 +11398,7 @@ async function setVendorBillPendingInfo(env, body) {
       wasPending ? ('Pending Info: ' + (bill.Pending_Info_Note || '')) : 'not flagged',
       pending ? ('Pending Info: ' + note) : 'cleared',
       pending ? ('Flagged bill ' + id + ' pending info: ' + note) : ('Cleared pending-info flag on bill ' + id + '.'));
-  } catch (e) { /* audit is best-effort — the flag itself already landed */ }
+  } catch (e) { await softFail(env, 'bill_pending_info_audit_failed', e, 'P1', { ref: id }); }   // the flag itself already landed; the audit row did not
   return json({ success: true, id, pending_info: pending, note: pending ? note : '' });
 }
 
