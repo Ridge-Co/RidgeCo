@@ -886,27 +886,34 @@ window.addEventListener('pageshow', function(e){
       </div>
     </details>
 
-    <div class="section-title" style="margin-bottom:8px">🔔 ALERTING</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Both alerts page the admin phone via the existing SMS pattern — no new channel. Both ship OFF by default; flip them on here whenever you're ready to start getting paged.</div>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
-        <input type="checkbox" id="alert-flag-failure">
-        <span>Failure Alerts — page me when a wo_create/wo_status job fails (debounced to once/hour per job type)</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
-        <input type="checkbox" id="alert-flag-deadman">
-        <span>Dead Man's Switch — page me if the Worker goes 24h+ with zero completed jobs (debounced to once/24h)</span>
-      </label>
-    </div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
-      <button class="btn small" onclick="saveAlertFlags()">Save</button>
-      <span id="alert-flags-status" style="font-size:11px;color:var(--muted)"></span>
-    </div>
+    <details class="dl-group" data-dl-key="alerting">
+      <summary><span class="dl-h">Alerting</span><span class="dl-sub">Page the admin phone when something breaks</span></summary>
+      <div class="dl-body">
+        <p class="dl-note">Both alerts page the admin phone using the existing SMS setup, with no new channel. Both ship OFF; switch them on here whenever you are ready to be paged.</p>
+        <div class="dl-panel">
+          <label class="dl-check">
+            <input type="checkbox" id="alert-flag-failure">
+            <span>Failure alerts: page me when a wo_create or wo_status job fails (at most once an hour per job type)</span>
+          </label>
+          <label class="dl-check">
+            <input type="checkbox" id="alert-flag-deadman">
+            <span>Dead man's switch: page me if the Worker goes 24 hours or more with zero completed jobs (at most once a day)</span>
+          </label>
+        </div>
+        <div class="dl-row">
+          <button type="button" class="btn small" style="min-height:44px" onclick="saveAlertFlags()">Save</button>
+          <span id="alert-flags-status" style="font-size:13px;color:var(--dl-muted)"></span>
+        </div>
+      </div>
+    </details>
 
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
-      <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
-      <button class="btn secondary small" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button>
-    </div>
+    <details class="dl-group" data-dl-key="errors">
+      <summary><span class="dl-h">Error log</span><span class="dl-sub">Problems this browser has recorded</span><span id="dl-errors-count" class="dl-count"></span></summary>
+      <div class="dl-body">
+        <div class="dl-row"><button type="button" class="btn danger small" style="min-height:44px" onclick="clearErrorLog()">Clear Errors</button></div>
+        <div id="error-log-list"><div class="loading">No errors logged</div></div>
+      </div>
+    </details>
     <div class="section-title">ERROR LOG</div>
     <div id="error-log-list" style="margin-bottom:24px"><div class="loading">No errors logged</div></div>
     <div class="section-title">WISHLIST / DEV LOG</div>
