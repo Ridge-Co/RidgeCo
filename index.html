@@ -1865,7 +1865,7 @@ setTimeout(function(){
   var stored = localStorage.getItem(SECRET_KEY);
   if (stored) {
     AUTH_TOKEN = stored;
-    api('GET','/config', null, 12000).then(function() {
+    api('GET','/model-registry', null, 15000).then(function() {   // auth probe with no Sheets read (see doLogin)
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app').style.display = 'block';
       Promise.resolve(loadAll()).then(maybeOpenWOFromURL);
