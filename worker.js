@@ -6546,17 +6546,21 @@ async function addTimeEntry(env, body) {
   // separate from Notes (private — never leaves the Hub). Same lazy ensureColumns pattern as
   // every other additive field in this file: a write to a column the sheet doesn't have yet
   // reports success and stores nothing (rule 37), so this has to run before the write.
-  if (invoice_description) { try { await ensureColumns(env, 'Time_Entries', ['Invoice_Description']); } catch (e) {} }
+  let timeEntryWarning = '';
+  if (invoice_description) {
+    try { await ensureColumns(env, 'Time_Entries', ['Invoice_Description']); }
+    catch (e) { await softFail(env, 'time_entry_ensure_invoice_description_failed', e, 'P1', { wo_id: String(wo_id), note: 'the invoice description may not be saved' }); timeEntryWarning = 'The time was logged, but the customer invoice description may not have been saved.'; }
+  }
 
   await addRow(env, 'Time_Entries', { WO_ID: wo_id, Entered_By: entered_by||'', Entered_By_ID: String(entered_by_id||''), Role: role, Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'), Start_DateTime: start_datetime||'', End_DateTime: end_datetime||'', Duration_Minutes: String(durationMinutes), Notes: notes||'', Invoice_Description: invoice_description||'', Billable: role === 'hub' ? String(billable === 'TRUE' || billable === true) : 'TRUE', Hourly_Rate: String(rate), Billable_Amount: String(billableAmt.toFixed(2)), Created_Date: new Date().toISOString(), Active: 'TRUE' });
-  return json({ success: true, duration_minutes: durationMinutes, hourly_rate: rate });
+  return json({ success: true, duration_minutes: durationMinutes, hourly_rate: rate, ...(timeEntryWarning ? { failure_warning: timeEntryWarning } : {}) });
 }
 
 async function listWOTenants(env, url) {
   const woId = url.searchParams.get('wo_id') || '';
   if (!woId) return json({ error: 'wo_id required' }, 400);
   try { const rows = await fetchTab(env, 'WO_Tenants'); return json(rows.filter(r => r.WO_ID === woId && r.Active !== 'FALSE')); }
-  catch(e) { return json([]); }
+  catch(e) { softNote('list_wo_tenants_failed', e, 'P2', { wo_id: woId }); return json([]); }
 }
 
 async function addTenantToWO(env, body) {
