@@ -18795,7 +18795,7 @@ async function aiCreditResumeRun(env, via) {
   if (!w.ok) return { ok: false, resumed: false, paused: true, code: AI_CREDIT_CODE, error: 'Anthropic works again but the pause flag could not be cleared: ' + w.error };
   _aiCreditCache = { at: Date.now(), state: { paused: false } };
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_resumed', Skill_Or_Endpoint: String(via || 'resume'), Success: 'TRUE', Notes: 'Anthropic accepted a 1-token probe; pause flag cleared' }); }
-  catch (te) { console.error('ai-credit: resumed but the telemetry write failed:', schedErrText(te)); }
+  catch (te) { console.error('ai-credit: resumed but the telemetry write failed:', schedErrText(te)); softNote('telemetry_write_failed:ai_credit_resumed', te, 'P2'); }
   return { ok: true, resumed: true, paused: false };
 }
 // POST /admin/ai-credit-resume (admin secret only) - the Hub banner's Resume button.
