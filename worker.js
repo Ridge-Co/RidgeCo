@@ -10565,7 +10565,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
       try {
         await sendSMS(env, vendor.Phone, msg);
         await updateRow(env, 'Vendors', vendor.ID, { Email_Request_Sent_Date: new Date().toISOString().split('T')[0] });
-      } catch (e) {}
+      } catch (e) { await softFail(env, 'vendor_email_request_sms_failed', e, 'P1', { ref: vendor.ID }); }
     }
     return;
   }
