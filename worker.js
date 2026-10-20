@@ -27101,7 +27101,7 @@ async function qbPayables(env, url) {
         new Error(vendorPaidDateMissing.length + ' paid vendor bill(s) have no QuickBooks BillPayment with a usable date -- the vendor portal PAID tab lists them as "date unavailable": ' + vendorPaidDateMissing.slice(0, 20).join(', ')));
     }
     if (paymentDateMissing.length) {
-      await logAndCollectError(env, warnings, 'qb_payables_payment_date_missing', '/qb/payables', paymentDateMissing.slice(0, 20).join(', '),
+      await warnDateMissing('qb_payables_payment_date_missing', paymentDateMissing.slice(0, 20).join(', '),
         new Error(paymentDateMissing.length + ' paid/part-paid invoice(s) have no QuickBooks Payment with a usable date (credit memo, journal entry or lookup problem) -- shown as "payment date unavailable": ' + paymentDateMissing.slice(0, 20).join(', ')));
     }
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
