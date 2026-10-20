@@ -1057,6 +1057,13 @@ function openPendConvert(key){
     body: '<p class="say">' + (p.held_by ? '<b>' + esc(p.held_by) + '</b> becomes the assigned cleaner, gets a "now booked" text, and her calendar entry becomes the normal one. ' : 'Nobody has said yes yet, so it becomes an ordinary open turnover and the cleaner queue takes over. ') + 'Cleaners who passed are not texted. If the feed does not show the booking within about 3 days, the Hub treats it like any booking that left the feed and tells you.</p>',
     go: 'Yes, it is booked', run: function(){ return api('POST', '/str/admin/pending/convert', { task_key: key }).then(function(r){ return pendDoneSheet('', r); }); } });
 }
+function openPendCancel(key){
+  var p = findPend(key); if(!p) return;
+  openSheet('<h2 id="sh-title">Cancel the ' + esc(p.label) + ' inquiry?</h2><p class="muted" style="margin-top:8px">Checking who is affected…</p>');
+  api('POST', '/str/admin/pending/cancel', { task_key: key, preview: true }).then(function(r){
+    if(r.already){ openAction({ title: 'Already closed', say: r.message || 'That inquiry is already closed.', go: null, run: null }); loadState(); return; }
+    var pv = r.preview || {}, hold = pv.holder, body = '';
+    body += '<p class="say" style="font-size:15px;color:var(--text)">Closes the inquiry and takes the tentative entry off the calendar. Anyone still waiting to answer just stops seeing the question. <b>Nobody is texted unless you choose it below.</b></p>';
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
