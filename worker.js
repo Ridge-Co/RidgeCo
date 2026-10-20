@@ -16728,7 +16728,8 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
       catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
     }
     partial = !!(b && b.partial);
-    detail.qb_sync = { status: u.status, slice: prog.slices, partial, done_rows: prog.done.length, timings_ms: b && b.timings_ms, deposit_sweep: !!prog.sweep_done };
+    if (b && typeof b.progress_made === 'boolean') progressMade = b.progress_made;
+    detail.qb_sync = { status: u.status, slice: prog.slices, partial, progress_made: progressMade, rows_this_slice: b && b.rows_this_slice, done_rows: prog.done.length, timings_ms: b && b.timings_ms, deposit_sweep: !!prog.sweep_done };
   } catch (e) {
     errors.push({ step: 'qb_sync_payments', error: schedErrText(e) });
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: schedErrText(e) }); }
