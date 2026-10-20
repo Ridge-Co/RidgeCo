@@ -1373,7 +1373,7 @@ function buildPhotoSection(woId, propAddr, opts) {
         return;
       }
       if (d.version !== booted){ autoReload(dirty); }
-    }).catch(function(){});
+    }).catch(function(e){ if(navigator.onLine!==false) window.hubReportFailure && window.hubReportFailure('owner:version-check', e); });
   }
   check();
   setInterval(check, 60000);
