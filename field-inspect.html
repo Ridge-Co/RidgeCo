@@ -1254,7 +1254,7 @@ function removePhotosNow(){
 function purgeOrphanPhotos(ids){
   var used = {}; S.rec.doc.areas.forEach(function(a){ (a.photo_ids||[]).forEach(function(p){ used[p]=1; }); (a.issues||[]).forEach(function(is){ (is.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); (a.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); });
   var chain = Promise.resolve();
-  ids.forEach(function(id){ if (used[id]) return; chain = chain.then(function(){ return dbDel('photos', id); }).then(function(){ if (blobUrl[id]){ try{ URL.revokeObjectURL(blobUrl[id]); }catch(e){ /* url already released */ } delete blobUrl[id]; } delete photoState[id]; }); });
+  ids.forEach(function(id){ if (used[id]) return; chain = chain.then(function(){ return dbDel('photos', id); }).then(function(){ if (blobUrl[id]){ try{ URL.revokeObjectURL(blobUrl[id]); }catch(e){ /* silent-ok: object url already released */ } delete blobUrl[id]; } delete photoState[id]; }); });
   return chain.then(function(){ setSync(); });
 }
 function viewPhoto(id){
