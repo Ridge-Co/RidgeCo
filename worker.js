@@ -21456,7 +21456,7 @@ async function vendorCompleteOnboarding(env, body) {
     }
   } catch (e) {
     qbPush = { ok: false, error: e.message };
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed', Skill_Or_Endpoint: '/vendor/complete-onboarding', Success: 'FALSE', Notes: `vendorId=${vendorId} err=${String((e && e.message) || e)}` }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed', Skill_Or_Endpoint: '/vendor/complete-onboarding', Success: 'FALSE', Notes: `vendorId=${vendorId} err=${String((e && e.message) || e)}` }); } catch (te) { softNote('telemetry_write_failed:vendor_onboarding_qb_push_failed', te, 'P2'); }
   }
 
   const status = vendorOnboardingComplete(Object.assign({}, (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(vendorId)) || {}));
