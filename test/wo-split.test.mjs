@@ -202,7 +202,7 @@ function makeFetch(db, opts = {}) {
 
 function build(db, fetchOpts) {
   const src = [
-    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
+    'const CORS = {}; const softNote = () => true; const softFail = async () => ({ ok: false }); const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === \'string\' && !raw.trim())) return fb; if (typeof raw !== \'string\') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
     cacheSrc, isMissingTabSrc, srSrc, ensureInnerSrc, ensureSrc, ensureTabSrc,
     idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc, logMsgAuditSrc,
