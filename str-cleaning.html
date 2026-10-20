@@ -445,6 +445,7 @@ function renderTurnovers(){
   Array.prototype.forEach.call(document.querySelectorAll('[data-act=filter]'), function(b){ b.classList.toggle('sel', b.getAttribute('data-v') === filterMode); });
   if(!show.length){ $('turn-list').innerHTML = '<p class="muted">' + (filterMode === 'open' ? 'Nothing needs a cleaner right now.' : (S.feed_ok === false ? 'No turnovers to show because the bookings feed could not be read.' : 'No upcoming turnovers found.')) + '</p>'; return; }
   $('turn-list').innerHTML = '<div class="grid">' + show.map(turnoverCard).join('') + '</div>';
+  updateBulkBar();
 }
 function findTask(key){ return (S.tasks||[]).filter(function(t){ return t.key === key; })[0]; }
 
