@@ -23569,7 +23569,7 @@ async function approveReceiptQueue(env, body) {
   const vendor = c.vendor ?? row.Vendor, date = c.date ?? row.Receipt_Date, total = c.total ?? row.Total, category = c.category ?? row.Category;
   const woId = c.wo_id ?? row.Suggested_WO_ID, propId = c.property_id ?? row.Suggested_Property_ID;
   const cfg = await fetchConfig(env); const dest = cfg.receipts_dest_folder_id || env.DRIVE_VENDORS_ROOT;
-  let filedUrl = '';
+  let filedUrl = '', filingWarning = '';
   const fileId = row.Source_File_ID || driveIdFromUrl(row.Source_File_URL);
   if (fileId && dest) {
     try {
