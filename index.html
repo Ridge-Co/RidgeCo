@@ -11394,10 +11394,10 @@ function loadInvoiceReview() {
     var fhost = document.getElementById('ir-filters');
     if (!_irBills.length) {
       if (fhost) fhost.innerHTML = '';
-      el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ No vendor bills pending review.</div>';
+      el.innerHTML = ctxBannerHtml() + '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ No vendor bills pending review.</div>';
       return;
     }
-    el.innerHTML = _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
+    el.innerHTML = ctxBannerHtml() + _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
     // Card indexes are reused across renders, so clear panel state first — otherwise
     // 'ir0' could still be holding the bill or IR row from a previous load.
     _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _invMode = {}; _invPass5 = {}; _invMat = {}; _invMatPicked = {}; _invMatSeen = {}; _invMatGen = {}; _invMatBilled = {}; _invMatMulti = {}; _invMatUnknown = {}; _qbAllPromise = null;
