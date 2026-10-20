@@ -3429,13 +3429,18 @@ function renderSplitCards() {
 }
 
 function loadSplitReassignRows(woId) {
+  var failed = [];
   Promise.all([
-    api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).catch(function(){ return []; }),
-    api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(woId)).catch(function(){ return []; }),
+    api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).catch(function(e){ failed.push('time entries'); window.hubReportFailure && window.hubReportFailure('index:split-time-entries', e); return []; }),
+    api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(woId)).catch(function(e){ failed.push('vendor bills'); window.hubReportFailure && window.hubReportFailure('index:split-vendor-bills', e); return []; }),
   ]).then(function(results){
     _splitTimeEntries = safeArray(results[0]).filter(function(t){ return t.Active !== 'FALSE'; });
     _splitVendorBills = safeArray(results[1]);
     renderSplitReassignOptions();
+    if (failed.length) {
+      var _sw = document.getElementById('split-reassign-wrap'), _sr = document.getElementById('split-reassign-rows');
+      if (_sw && _sr) { _sw.style.display = ''; _sr.insertAdjacentHTML('afterbegin', '<div role="alert" style="color:var(--danger);font-size:12px;margin-bottom:6px">&#9888; Could not load the ' + failed.join(' and ') + ' for this work order, so this list is incomplete. Close and reopen to retry.</div>'); }
+    }
   });
 }
 
