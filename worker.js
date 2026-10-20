@@ -34135,7 +34135,7 @@ function inspUplShape(v, depth) {
   return typeof v;
 }
 async function inspUplProbe(env) {
-  const names = Object.keys(env || {}).filter(k => /uplist/i.test(k));
+  const names = (() => { const o = []; for (const k in (env || {})) o.push(k); return o; })().filter(k => /uplist/i.test(k));   // for..in so keys inherited from the per-request child env are seen
   const keyName = env.UPLISTING_API_KEY ? 'UPLISTING_API_KEY' : (names.find(k => typeof env[k] === 'string' && /key|token|secret/i.test(k)) || '');
   if (!keyName) return json({ ok: false, error: 'no_key', message: 'No Uplisting API key on this Worker. Add a secret named UPLISTING_API_KEY.', env_names_like_uplisting: names });
   const key = String(env[keyName]).trim(), auth = inspUplBasic(key);
