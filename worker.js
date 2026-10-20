@@ -11767,7 +11767,7 @@ async function approveInvoiceReviewBulk(env, body) {
       ensureColumns(env, 'Vendor_Bills',   ['Own_Wage', 'Profit', 'Own_Materials']),
       ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit', 'Own_Materials', 'Own_Material_IDs']),
     ]);
-  } catch (e) { /* the money fields below still land; only the split is lost */ }
+  } catch (e) { await softFail(env, 'approve_invoice_review_bulk_ensure_columns', e, 'P1'); }   // the money fields below still land; only the wage/profit split is lost
 
   const [vendorBillsData, irData] = await Promise.all([
     sheetsRequest(env, 'GET', '/values/Vendor_Bills'),
