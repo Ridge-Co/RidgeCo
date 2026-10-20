@@ -1,3 +1,9 @@
+# STR CLEANING ADMIN SWAP + BULK — Oct 20, 2026 — PR #370 into `main` (base verified `main` with get_pull_request), head `feat/str-swap-bulk-oct20` cut from main tip 007987b50007c522a74f8bdbe6e442936886e9f2, NOT merged (Brett merges). BUILD_VERSION `2026-10-20.01-str-swap-bulk`.
+
+## 🟡 Built and tested (155 engine assertions + 37 Playwright checks at 412px; full suite = the same 13 pre-existing failures as untouched main). Staging test-only PR is SEPARATE: #371 into `staging` (`staging-test-only: true`, never for main). Staging verification result: see the PR #370 comment / final report (recorded below once done). No temp or nudge commits. After merge (Brett): (1) poll prod /version for the build above; (2) share the "TURNOVER COVERAGE MILAM RIDGE" calendar with maintenance-hub-sheets@maintenance-hub-498819.iam.gserviceaccount.com with "Make changes to events"; (3) page Switches > Cleaning calendar ON. Oct 25 Gina/Kayla swap: page > Sun Oct 25 > "Swap cleaner..." > Gina > Preview > edit texts > Send. Not built (backlog): Uplisting date blocking, Phase 2 backup drip. See FEATURE_LOG rule 222.
+
+---
+
 # VENDOR PAID TAB + ESTIMATE SKIP-TEXT + PADDED FEE + FEE CREDITS + SWEEP — Oct 19, 2026 — branch `feat/estimate-skip-sms-vendor-paid-tab-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.07-paid-tab-pad-credit-sweep`.
 
 ## 🟡 Built and tested (146 new checks across 3 test files; full suite = the 13 pre-existing failures). After merge: (1) Paid tab fills in dates after the next payment sync; (2) padded fee stays OFF until Config `instant_fee_pad_enabled` = TRUE; (3) WO-1227: when Cesar's $800 bill (id 124) is approved, pick Scope 8 and confirm net $733.26 BEFORE sending; (4) post a fee credit from Vendors > Fee credit when a statement shows an over-deduction. Details: FEATURE_LOG "VENDOR PORTAL PAID TAB ...".
