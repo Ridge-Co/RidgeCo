@@ -6505,6 +6505,7 @@ async function resolveHubHourlyRate(env, woId) {
     const r = owner ? parseFloat(owner.Hourly_Rate || 0) : 0;
     return r > 0 ? r : DEFAULT_HUB_RATE;
   } catch (e) {
+    softNote('hub_hourly_rate_lookup_failed', e, 'P1', { wo_id: String(woId || ''), note: 'billing at the default rate' });
     return DEFAULT_HUB_RATE;
   }
 }
