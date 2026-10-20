@@ -29447,7 +29447,7 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
         // Stop rather than guess — the mapping screen is where this gets settled.
         throw new Error(`"${dn}" matches QuickBooks #${found}, but that customer is already linked to "${qbOwnerDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
       }
-      try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: found }); } catch (e) {}
+      await tryWrite(env, 'owner_save_qbo_customer_id', () => updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: found }), 'P1');
     }
     return found;
   }
