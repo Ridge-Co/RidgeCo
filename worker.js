@@ -29341,7 +29341,7 @@ async function applyStagingQbTradeMap(env) {
     }
     if (n) _stgQbTradeApplied = true;
     console.log(`🧪 STAGING — QB trade map re-pointed at sandbox ids for ${n} trades`);
-  } catch (e) { console.log('staging QB trade map apply failed: ' + (e && e.message)); }
+  } catch (e) { console.log('staging QB trade map apply failed: ' + (e && e.message)); softNote('staging_qb_trade_map_apply_failed', e, 'P2'); }
   finally { _stgQbTradeRunning = false; }
 }
 
