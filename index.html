@@ -949,13 +949,19 @@ window.addEventListener('pageshow', function(e){
     // Never silent (Oct 1 rule): shown on screen with a Retry, written to the Error Log, and reported to the failure ledger.
     var el = document.getElementById(elId);
     var msg = (err && err.message) || String(err || 'unknown error');
-    if (typeof logError === 'function') logError(what, msg);
-    // Prefer the Hub's shared reporter (failure-reporter.js: de-duplicated, capped); fall back to posting the report directly.
-    if (typeof window.hubReportFailure === 'function') window.hubReportFailure(where, what + ': ' + msg, { ref: 'devlog' });
-    else api('POST', '/failure/report', { system: 'hub', where: where, ref: 'devlog', message: what + ': ' + msg }).catch(function (e2) { if (typeof logError === 'function') logError('failure/report', (e2 && e2.message) || e2); });
-    if (!el) return;
-    el.innerHTML = '<div style="padding:12px;border:2px solid var(--danger);border-radius:8px;color:var(--danger);font-size:13px">⚠ ' + esc(what) + ': ' + esc(msg) +
+    // 1) Put the red message on screen FIRST, so nothing below (blocked storage, a reporter fault) can stop the person seeing the failure.
+    if (el) el.innerHTML = '<div style="padding:12px;border:2px solid var(--danger);border-radius:8px;color:var(--danger);font-size:13px">⚠ ' + esc(what) + ': ' + esc(msg) +
       ' <button type="button" class="btn small" style="margin-left:8px;min-height:44px" onclick="' + retryCall + '">Retry</button></div>';
+    function side(why, e) { // a failure while recording the failure is shown on the page too, never swallowed
+      if (el) el.insertAdjacentHTML('beforeend', '<div style="margin-top:8px;font-size:13px;color:var(--danger)">' + esc(why + ' (' + ((e && e.message) || e) + ')') + '</div>');
+    }
+    // 2) Error Log (its storage can be blocked) and 3) failure ledger, each guarded on its own.
+    try { if (typeof logError === 'function') logError(what, msg); } catch (e1) { side('Could not save this to the Error Log', e1); }
+    try {
+      // Prefer the Hub's shared reporter (failure-reporter.js: de-duplicated, capped); fall back to posting the report directly.
+      if (typeof window.hubReportFailure === 'function') window.hubReportFailure(where, what + ': ' + msg, { ref: 'devlog' });
+      else api('POST', '/failure/report', { system: 'hub', where: where, ref: 'devlog', message: what + ': ' + msg }).catch(function (e2) { side('Could not report this failure', e2); });
+    } catch (e3) { side('Could not report this failure', e3); }
   }
   (function () {
     var page = document.getElementById('page-devlog'); if (!page) return;
