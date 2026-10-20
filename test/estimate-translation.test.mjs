@@ -30,7 +30,7 @@ globalThis.fetch = async (url, init) => {
   return { json: async () => ({ content: [{ text: JSON.stringify(arr.map(t => DICT[t] || t)) }] }) };
 };
 const H = new Function(
-  aiCreditGuardPrelude() + ['plausiblyNonEnglish', 'englishOnly', 'translateBatchToEnglish', 'estimateEnglishFields', 'estimateLinesEnglish', 'vendorWantsSpanish', 'estimateLineItemsCanonical', 'findRecentDuplicate', 'scopeItemsFromEstimate', 'buildLaborDescription', 'buildInvoiceLines', 'invoiceInputsEnglish'].map(grab).join('\n') +
+  'const softNote = () => true, softFail = async () => ({ ok: false }), safeJson = async (r, f) => { try { return await r.json(); } catch (e) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (e) { return f; } };\n' + aiCreditGuardPrelude() + ['plausiblyNonEnglish', 'englishOnly', 'translateBatchToEnglish', 'estimateEnglishFields', 'estimateLinesEnglish', 'vendorWantsSpanish', 'estimateLineItemsCanonical', 'findRecentDuplicate', 'scopeItemsFromEstimate', 'buildLaborDescription', 'buildInvoiceLines', 'invoiceInputsEnglish'].map(grab).join('\n') +
   '\nreturn { plausiblyNonEnglish, englishOnly, translateBatchToEnglish, estimateEnglishFields, estimateLinesEnglish, vendorWantsSpanish, estimateLineItemsCanonical, findRecentDuplicate, scopeItemsFromEstimate, buildLaborDescription, buildInvoiceLines, invoiceInputsEnglish };'
 )();
 const env = { ANTHROPIC_API_KEY: 'k' };
