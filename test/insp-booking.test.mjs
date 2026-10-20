@@ -261,7 +261,7 @@ t('slot engine skips closed days; availability reads the guard fresh for real bo
 t('guard read failure pauses booking + alerts (never silently offers days)', /async function inspStrClosedOrThrow[\s\S]{0,500}inspAlert[\s\S]{0,300}calendar_unavailable/.test(src));
 t('approve + approval page include the no-cleaner conflict', has(/inspStrBookingConflict\(env, await fetchConfig\(env\), b, true\); if \(nc\) conf\.push\(nc\)/) && has(/if \(nc\) conflicts\.push\(nc\)/));
 t('open-block add returns str_warnings; block list marks closed days', has(/str_warnings: strWarnings/) && has(/Str_Closed:/));
-t('scheduler job insp_guard (every ~15 min, no cron) runs the guard tick and alerts on its failure', /name: 'insp_guard',\s+kind: 'interval'/.test(src) && /async function schedRunInspGuard[\s\S]{0,700}inspStrGuardTick\(env\)[\s\S]{0,300}inspAlert\(env, 'str_guard_tick'/.test(src));
+t('scheduler job insp_guard (every ~15 min, no cron) runs the guard tick and alerts on its failure', /name: 'insp_guard',\s+kind: 'interval'/.test(src) && /async function schedRunInspGuard[\s\S]{0,700}inspStrGuardTick\(env\)[\s\S]{0,300}inspGuardFailure\(env, 'str_guard_tick'/.test(src));
 t('tick: notifies once per change, re-alerts as a booking nears (24h/72h), reports reopened days, retries if notify failed', has(/bucket = hrs < 24 \? 'u1'/) && has(/Good news: /) && /if \(!res\.ok\) \{ await inspAlert\(env, 'str_guard_notify'/.test(src));
 t('config save only touches the STR_GUARD keys and validates input', has(/sets\.STR_GUARD_BOOKING_SOURCES/) && has(/error: 'bad_sources'/) && has(/error: 'bad_cleaning_cal'/));
 t('admin page: 2c card, pre-save cleaner check, closed badge', fs.readFileSync('inspect.html', 'utf8').includes('2c. Cabin cleaning protection') && fs.readFileSync('inspect.html', 'utf8').includes('/insp/str-guard/status?dates=') && fs.readFileSync('inspect.html', 'utf8').includes('Closed — no cleaner'));
@@ -324,6 +324,15 @@ t('packing: with the key pickup, the first inspection of the day still hugs the 
 t('pack slack config: default 30, number, OFF', E.inspPackSlackMin({}) === 30 && E.inspPackSlackMin({ INSP_PACK_SLACK_MIN: '45' }) === 45 && E.inspPackSlackMin({ INSP_PACK_SLACK_MIN: 'off' }) === null && E.inspPackSlackMin({ INSP_PACK_SLACK_MIN: 'junk' }) === 30);
 t('worker wiring: availability passes packSlackMin; add validates + stores Last_Start; info exposes last_start', has(/packSlackMin: inspPackSlackMin\(cfg\)/) && has(/Last_Start must be a time/) && has(/last_start: !!String/) && has(/'Last_Start'/));
 t('admin page has the Latest start input and sends it', fs.readFileSync('inspect.html', 'utf8').includes('id="ob-last"') && fs.readFileSync('inspect.html', 'utf8').includes('Last_Start:document.getElementById(\'ob-last\')'));
+
+// ── Oct 20 2026: guard quota hits are logged + retried, not texted ──
+const GQ = new Function(grab('INSP_GUARD_QUOTA_GRACE_MS', 'const') + '\n' + grab('inspIsSheetsQuotaErr') + '\nreturn { inspIsSheetsQuotaErr, INSP_GUARD_QUOTA_GRACE_MS };')();
+t('quota: the exact Sheets error Brett got is recognised', GQ.inspIsSheetsQuotaErr(new Error("Sheets API error on GET /values/Insp_Bookings: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com'")));
+t('quota: ordinary failures are NOT treated as transient', !GQ.inspIsSheetsQuotaErr(new Error('Sheets API error: The caller does not have permission')) && !GQ.inspIsSheetsQuotaErr(new Error('Unable to parse range: Insp_Bookings')) && !GQ.inspIsSheetsQuotaErr(null));
+t('quota: grace is 45 min (about 3 ticks)', GQ.INSP_GUARD_QUOTA_GRACE_MS === 45 * 60000);
+t('guard tick reads its 3 tabs in ONE batchGet and routes failures through inspGuardFailure', has(/fetchTabs\(env, \['Insp_Open_Blocks', 'Insp_Bookings', 'Insp_Customers'\]\)/) && has(/inspGuardFailure\(env, 'str_guard_sheet'/) && has(/inspGuardFailure\(env, e\.code \|\| 'str_guard_unavailable'/));
+t('non-quota guard failures still alert immediately; quota ones log telemetry and only alert after the grace', /async function inspGuardFailure[\s\S]{0,300}if \(!inspIsSheetsQuotaErr\(e\)\) return inspAlert\(env, kind, msg\)[\s\S]{0,2200}insp-book\/' \+ kind \+ '_quota'[\s\S]{0,400}INSP_GUARD_QUOTA_GRACE_MS\) return inspAlert\(env, kind \+ '_persistent'/.test(src));
+t('guard clears the outage marker on a clean read (and a failed clear is logged, not swallowed)', has(/await inspGuardRecovered\(env, cfg\);/) && /async function inspGuardRecovered[\s\S]{0,600}logTelemetry/.test(src));
 
 
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
