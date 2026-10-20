@@ -24370,7 +24370,7 @@ async function fuTokenCheck(token, secret) {
   const [body, sig] = token.split('.'); if (!body || !sig) return { ok: false, reason: 'invalid' };
   const expected = await _hmac(body, secret);
   if (!fuConstEq(sig, expected)) return { ok: false, reason: 'invalid' };
-  let payload; try { payload = JSON.parse(_tdec.decode(_b64urlToBytes(body))); } catch (e) { return { ok: false, reason: 'invalid' }; }
+  let payload; try { payload = JSON.parse(_tdec.decode(_b64urlToBytes(body))); } catch (e) { /* silent-ok: an unparseable token is handed back to the caller as invalid */ return { ok: false, reason: 'invalid' }; }
   if (!payload || payload.scope !== 'fix-check' || !payload.f || !payload.t) return { ok: false, reason: 'invalid' };
   if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return { ok: false, reason: 'expired', payload };
   return { ok: true, payload };
