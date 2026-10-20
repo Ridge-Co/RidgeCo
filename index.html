@@ -12242,7 +12242,7 @@ function irBulkApprove() {
           irHideCard(r.k);
           // Same memo-save the single path does — best-effort, doesn't block anything.
           if (r.built.memo) {
-            api('POST', '/workorder/update', { id: r.built.woId, fields: { Invoice_Memo: r.built.memo, Customer_Charge: r.built.payload.customer_total } }).catch(function(){});
+            api('POST', '/workorder/update', { id: r.built.woId, fields: { Invoice_Memo: r.built.memo, Customer_Charge: r.built.payload.customer_total } }).then(function(mr){ if (!woUpdateLanded(mr)) { window.hubReportFailure && window.hubReportFailure('index:bulk-invoice-memo-save', 'memo save did not land', {ref: r.built.woId}); toast('Invoice memo for ' + r.built.woId + ' did not save. Re-enter it on the work order.', 'error'); } }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:bulk-invoice-memo-save', e, {ref: r.built.woId}); toast('Invoice memo for ' + r.built.woId + ' did not save. Re-enter it on the work order.', 'error'); });
           }
           invRefreshMaterialsForWO(r.built.woId);
         }
