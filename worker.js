@@ -1302,7 +1302,7 @@ async function checkPinLockout(env, pin) {
     if (lockedUntil && lockedUntil > new Date())
       return { locked: true, minutes_remaining: Math.ceil((lockedUntil - Date.now()) / 60000), fail_count: failCount };
     return { locked: false, fail_count: failCount };
-  } catch(e) { return { locked: false, fail_count: 0 }; }
+  } catch(e) { softNote('pin_lockout_read_failed', e, 'P1', { note: 'PIN lockout could not be checked, so lockout is OFF for this attempt' }); return { locked: false, fail_count: 0 }; }
 }
 
 async function recordPinFailure(env, pin) {
