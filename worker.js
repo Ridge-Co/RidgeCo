@@ -36867,6 +36867,9 @@ async function strAdminPendingCancel(env, body) {
     const ctx = await strHandlerCtx(env), p = ctx.st.pendings.find(x => x.Task_Key === body.task_key);
     if (!p) return json({ ok: false, error: 'not_found', message: 'That inquiry was not found.' }, 404);
     if (!strPendActive(p)) return json({ ok: true, already: true, status: strPendingStatus(ctx, p), message: 'That inquiry is already closed. Nothing was sent.' });
+    const holder = p.Status === 'pending_held' ? ctx.st.cmap[p.Assigned_Cleaner_ID] : null, reach = holder ? strReach(holder) : '';
+    const text = holder ? await strRenderText(ctx, 'str_pending_cancelled', strTokens(ctx, holder, strRowToTask(p))) : '';
+    if (body.preview === true) return json({ ok: true, preview: { holder: holder ? { id: holder.ID, name: holder.Name, first: strFirst(holder), can_text: !reach, why_not: reach ? `${holder.Name} ${reach}` : '' } : null, text, in_window: strInSendWindow(ctx.now, ctx.S), note: 'Only the cleaner who said yes can be told. Anyone still waiting to answer simply stops seeing the question.' } });
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
