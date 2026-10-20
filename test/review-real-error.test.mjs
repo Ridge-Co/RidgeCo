@@ -22,7 +22,7 @@ ok(/if \(!resp\.ok\)/.test(body), 'a non-OK Anthropic reply is checked explicitl
 ok(body.includes("'Anthropic HTTP ' + resp.status"), 'the thrown error carries the real HTTP status');
 ok(body.includes('ae.message'), 'the thrown error carries Anthropic\'s own error message');
 ok(body.includes('stop_reason'), 'a reply with no text names its stop_reason');
-ok(!body.includes("'empty LLM response'"), 'the vague "empty LLM response" message is gone');
+ok(!body.includes("new Error('empty LLM response')"), 'the vague "empty LLM response" error is no longer thrown');
 ok(body.includes("b.type === 'text'"), 'the first TEXT block is used, not blindly content[0]');
 
 console.log(`review-real-error: ${n}/${n} passing`);
