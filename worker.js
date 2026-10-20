@@ -35786,44 +35786,80 @@ async function strChangeApply(env, body) {
   try {
     body = body || {};
     const planId = String(body.plan_id || ''), sigIn = String(body.sig || '');
-  try { if (logRows.length) await strAddRows(env, 'STR_Log', logRows.map(r => Object.assign({}, r, { Detail: r.Detail.slice(0, 480) }))); } catch (e) { errors.push({ step: 'audit_log', error: 'Could not write the audit rows to the Activity log: ' + strErrText(e) }); }
-  // B. the cleaning calendar
-  let calendar = { mode: plan.calendar.mode, status: 'unchanged', items: {}, manual: [], message: '' };
-  if (!isMark) { try { calendar = await strSwapCalendar(ctx, feed, plan, okItems); } catch (e) { calendar = { mode: plan.calendar.mode, status: 'failed', items: {}, manual: okItems.map(i => `${i.label}: set the calendar to "${i.cal.title}"`), message: strErrText(e), code: 'calendar_failed' }; await strSystemAlert(env, 'swap_calendar', 'The cleaning calendar step failed: ' + strErrText(e)); } }
-  if (calendar.status === 'failed' || calendar.status === 'partial') errors.push({ step: 'calendar_failed', error: `The cleaning calendar was not fully updated. ${calendar.message} Do this by hand: ${calendar.manual.join('; ')}.` });
-  else if (calendar.status === 'not_changed') warnings.push(`The cleaning calendar was NOT changed (${calendar.message}) Do this by hand: ${calendar.manual.join('; ')}.`);
-  try { await strLoad(ctx, true); } catch (e) { errors.push({ step: 'reload', error: 'Could not re-read the schedule after the change: ' + strErrText(e) }); }
-  // C. texts (and the invite email) - the text Brett edited is exactly what is sent
-  const textRes = [], doneRef = new Set(okItems.map(refOf)), win = strInSendWindow(ctx.now, S), heldUntil = win ? 0 : strNextWindowOpenMs(ctx.now, S);
-  for (const r of plan.recipients) {
-    const c = ctx.st.cmap[r.cleaner_id], base = { key: r.key, name: r.name, first: r.first, kind: r.kind, dates: r.dates }, tx = texts[r.key];
-    const refs = r.refs.filter(x => doneRef.has(x)); if (!c) { textRes.push(Object.assign(base, { status: 'failed', detail: 'Cleaner not found.' })); continue; }
-    if (!refs.length) { textRes.push(Object.assign(base, { status: 'not_sent', detail: 'Nothing changed for this person, so no text.' })); continue; }
-    if (!tx.send && (r.can_send || r.kind === 'mark')) { textRes.push(Object.assign(base, { status: 'not_sent', detail: 'You unticked this text.' })); continue; }
-    if (!r.can_send) { textRes.push(Object.assign(base, { status: 'not_sent', detail: r.reason })); warnings.push(`${r.name} was NOT texted: ${r.reason} Tell them yourself.`); continue; }
-    let text = tx.text, replaced = false, ds = r.dates;
-    if (refs.length !== r.refs.length) { // some dates failed: Brett's text would be wrong, so send the standard wording for the dates that DID change
-      const its = plan.items.filter(i => refs.includes(refOf(i))); ds = [...new Set(its.map(i => i.date))].sort();
-      text = (await strRenderRecipient(ctx, r.kind, c, ds, r.kind === 'mark' ? { key: 'x', kind: 'checkout', date: ds[0], next: '' } : its[0]._t, { newC: cleaner, mark: req.mark })).text; replaced = true;
-      warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates failed), so your edit was replaced.`);
+    if (!/^[a-f0-9]{16}$/.test(planId)) throw strErr('bad_plan', 'This request has no valid preview. Press Preview first.', 400);
+    const ctx = await strHandlerCtx(env), prior = (await fetchTab(env, 'STR_Changes')).filter(r => r.Plan_ID === planId).sort(strByIdAsc);
+    if (prior.length) { const f = prior[0]; return f.Status === 'applying' && body.resume === true ? await strChangeContinue(ctx, f) : strReplay(planId, f); }
+    if (body.resume === true) throw strErr('plan_not_found', 'That change was not found. Press Preview again.', 404);
+    const req = strChangeReq(body);
+    if (!sigIn) throw strErr('bad_plan', 'This request has no preview signature. Press Preview first.', 400);
+    const feed = await strChangeFeed(ctx), plan = await strChangeBuild(ctx, req, feed);
+    if (plan.sig !== sigIn) throw strErr('stale_preview', 'Things changed since you pressed Preview (a date was assigned, cancelled or edited). Nothing was done. Press Preview again to see the current picture.', 409);
+    // texts: one entry per recipient, exactly as previewed (edited or not)
+    const tin = body.texts && typeof body.texts === 'object' ? body.texts : {}, texts = {};
+    for (const k of Object.keys(tin)) if (!plan.recipients.some(r => r.key === k)) throw strErr('texts_unknown', `The page sent a text for "${k}" that is not part of this change. Press Preview again.`, 400);
+    for (const r of plan.recipients) {
+      const e = tin[r.key]; if (!e || typeof e.send !== 'boolean') throw strErr('texts_missing', `The page did not say what to do with the text for ${r.name}. Press Preview again.`, 400);
+      const txt = strCleanText(e.body); if (e.send && r.can_send && !txt) throw strErr('text_empty', `The text for ${r.name} is empty. Type something or untick "Send this text".`, 400);
+      if (txt.length > STR_TEXT_MAX) throw strErr('text_too_long', `The text for ${r.name} is ${txt.length} characters; the most is ${STR_TEXT_MAX}.`, 400);
+      texts[r.key] = { send: e.send, text: txt };
     }
-    const out = Object.assign(base, { text, replaced, dates: ds });
-    if (!win) {
-      try {
-        const expect = (r.kind === 'mark' ? ds.map(d => ({ date: d, mark: req.mark })) : plan.items.filter(i => refs.includes(refOf(i))).map(i => ({ task_key: i.task_key, date: i.date, assigned_id: cleaner.ID })));
-        await strAddRow(env, 'STR_Outbox', { Plan_ID: planId, Cleaner_ID: c.ID, Kind: r.kind, Body: text, Task_Keys: refs.join(','), Expect: JSON.stringify(expect), Not_Before: new Date(heldUntil).toISOString(), Status: 'parked', Created_At: iso, Note: 'type ' + r.type });
-        textRes.push(Object.assign(out, { status: 'held', detail: `Outside 8 AM-9 PM ET, so it is held and goes out at 8:00 AM ET (${strFmtDate(inspEtDate(heldUntil))})${S.engine ? '' : ' - but the scheduler is OFF, so it will NOT go until you switch it on'}.` }));
-        await strLog(ctx, '', c.ID, 'swap_text_held', `plan ${planId}: ${r.kind} text for ${ds.length} date(s) held until ${new Date(heldUntil).toISOString()}`);
-      } catch (e) { textRes.push(Object.assign(out, { status: 'failed', detail: 'Could not hold the text for 8 AM: ' + strErrText(e) })); errors.push({ step: 'text_hold', error: `The text to ${r.name} could not be held for 8 AM (${strErrText(e)}). She was NOT texted; tell her yourself.` }); await strSystemAlert(env, 'swap_text', `A held text to ${r.name} could not be saved: ${strErrText(e)}`); }
-      continue;
+    const items = plan.items.map(strPackItem);
+    const payload = JSON.stringify({ v: 1, req, plan: { action: plan.action, cleaner: plan.cleaner, mark: req.mark || '', calendar: { mode: plan.calendar.mode, note: plan.calendar.note || '' }, warnings: plan.warnings, summary: plan.summary }, items, recipients: plan.recipients.map(r => ({ key: r.key, kind: r.kind, cleaner_id: r.cleaner_id, name: r.name, first: r.first, dates: r.dates, refs: r.refs, type: r.type, can_send: r.can_send, reason: r.reason })), texts });
+    if (payload.length > 44000) throw strErr('too_big', 'This change is too big to apply in one go. Pick fewer dates (or a shorter range) and try again. Nothing was done.', 400);
+    // claim the plan BEFORE changing anything: the lowest STR_Changes id for this plan wins; the loser does nothing
+    const iso = new Date(ctx.now).toISOString(), myId = await strAddRow(env, 'STR_Changes', { Plan_ID: planId, Action: req.action, Status: 'applying', Created_At: iso, Summary: plan.summary, Stage: 'sheets', Payload: payload, State: JSON.stringify(strNewState(items)) });
+    const mine = (await fetchTab(env, 'STR_Changes')).filter(r => r.Plan_ID === planId).sort(strByIdAsc);
+    if (mine.length && String(mine[0].ID) !== String(myId)) { try { await strSetRow(env, 'STR_Changes', myId, { Status: 'duplicate', Finished_At: iso, Payload: '', State: '' }); } catch (e) { ctx.errors.push({ step: 'claim', error: strErrText(e) }); } return strReplay(planId, mine[0]); }
+    return await strChangeContinue(ctx, mine.find(r => String(r.ID) === String(myId)) || mine[0]);
+  } catch (e) { return await strHandleErr(env, e, 'change apply'); }
+}
+async function strChangeContinue(ctx, row) {
+  const { env } = ctx; let P, state;
+  try { P = JSON.parse(row.Payload); state = JSON.parse(row.State || '{}'); } catch (e) { throw strErr('plan_unreadable', 'The saved change could not be read back (' + strErrText(e) + '). Do not press Send again; check the Activity log and tell Brett.', 500); }
+  if (!P || !state || !state.stage || !state.ires) throw strErr('plan_unreadable', 'The saved change is incomplete. Do not press Send again; check the Activity log and tell Brett.', 500);
+  const cleaner = ctx.st.cmap[P.req.cleaner_id];
+  const J = { row, planId: row.Plan_ID, req: P.req, plan: P.plan, items: P.items.map(strUnpackItem), recipients: P.recipients, texts: P.texts, state, cleaner };
+  state.calls = (state.calls || 0) + 1;
+  const stageFns = { sheets: strStageSheets, audit: strStageAudit, calendar: strStageCalendar, queue: strStageQueue, send: strStageSend, email: strStageEmail, alerts: strStageAlerts };
+  let ran = 0, final = null;
+  if (!cleaner) { state.errors.push({ step: 'cleaner_missing', error: 'The cleaner for this change no longer exists, so it cannot be finished.' }); state.stage = 'finish'; }
+  while (state.stage !== 'done') {
+    const stage = state.stage;
+    if (ran && !strRoom(ctx, STR_STAGE_EST[stage])) break;
+    state.tries[stage] = (state.tries[stage] || 0) + 1; ran++;
+    let complete = false;
+    try {
+      if (stage === 'finish') { final = await strStageFinish(ctx, J); complete = true; }
+      else complete = await stageFns[stage](ctx, J);
+    } catch (e) {
+      state.errors.push({ step: 'stage_' + stage, error: `The step "${STR_STAGE_TEXT[stage]}" hit a problem: ${strErrText(e)}` });
+      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending') state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; }
+      else { const er = state.errors.pop(); state.warnings.push('Hiccup (tried again): ' + er.error); break; }
     }
-    const s = await strSendCleanerText(ctx, c, r.type, text);
-    if (s.ok) { textRes.push(Object.assign(out, { status: 'sent', detail: s.detail })); await strLog(ctx, '', c.ID, 'swap_text_sent', `plan ${planId}: ${r.kind} text for ${ds.length} date(s): ${s.detail}`); }
-    else { textRes.push(Object.assign(out, { status: s.off ? 'not_sent' : 'failed', detail: s.detail })); (s.off ? warnings : errors).push(s.off ? `${r.name} was NOT texted: ${s.detail}. Tell them yourself.` : { step: 'text_failed', error: `${r.name} was NOT texted: ${s.detail}. Tell them yourself.` }); if (!s.off) await strSystemAlert(env, 'swap_text', `The ${r.kind === 'new' ? 'assignment' : 'swap'} text to ${r.name} failed: ${s.detail}`); await strLog(ctx, '', c.ID, 'swap_text_failed', `plan ${planId}: ${s.detail}`); }
+    state.errors.push(...ctx.errors.splice(0));
+    if (final) return json(final);
+    if (!complete) break;
+    state.stage = STR_STAGES[STR_STAGES.indexOf(stage) + 1] || 'done';
   }
-  let email = null;
-  if (!isMark && okItems.length && plan.recipients.some(r => r.kind === 'new')) { email = await strSwapEmail(ctx, cleaner, okItems); if (email.status === 'failed') { errors.push({ step: 'invite_email', error: email.note }); await strSystemAlert(env, 'swap_email', email.note); } else if (email.status === 'skipped') warnings.push(email.note); }
-  // D. standing alerts (a covered notice for Brett if an uncovered alert was open)
+  // not finished: save where we got to, so the next call carries on from here
+  try { await strSetRow(env, 'STR_Changes', row.ID, { Stage: state.stage, State: JSON.stringify(state).slice(0, 46000) }); }
+  catch (e) { return json({ ok: false, status: 'applying', plan_id: J.planId, stage: state.stage, error: 'progress_not_saved', message: `The change is partly done but its progress could not be saved (${strErrText(e)}). Press Continue; nothing will be done twice.` }, 500); }
+  const idx = STR_STAGES.indexOf(state.stage);
+  return json({ ok: true, status: 'applying', plan_id: J.planId, stage: state.stage, step: idx + 1, steps: STR_STAGES.length, calls: state.calls, message: `Working... ${STR_STAGE_TEXT[state.stage] || 'almost there'} (step ${idx + 1} of ${STR_STAGES.length}).` });
+}
+async function strStageFinish(ctx, J) {
+  const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), errors = state.errors, warnings = state.warnings, plan = J.plan;
+  await strFresh(ctx);
+  // text results come from the Outbox rows themselves: that is the truth about what was sent
+  const ob = (ctx.st.outbox || []).filter(o => o.Plan_ID === J.planId), textRes = [];
+  for (const t of state.texts) {
+    if (t.status !== 'queued') { textRes.push(t); continue; }
+    const o = ob.find(x => String(x.ID) === String(t.ob)), out = Object.assign({}, t);
+    if (!o) { out.status = 'failed'; out.detail = 'The queued text could not be found again.'; }
+    else if (o.Status === 'sent') { out.status = 'sent'; out.detail = o.Note || 'sent'; }
+    else if (o.Status === 'failed') { out.status = 'failed'; out.detail = o.Note || 'did not go out'; }
+    else if (o.Status === 'stale') { out.status = 'failed'; out.detail = 'Not sent: the schedule changed while it waited.'; }
+    else if (o.Status === 'parked') { out.status = 'held'; out.detail = `Outside 8 AM-9 PM ET, so it is held and goes out at 8:00 AM ET (${strFmtDate(inspEtDate(Date.parse(o.Not_Before) || ctx.now))})${ctx.S.engine ? '' : ' - but the scheduler is OFF, so it will NOT go until you switch it on'}.`; }
   if (!isMark && okItems.length) await strAlertsNow(ctx, warnings, 'swap');
   const items = plan.items.map(it => { const r = ires.get(refOf(it)), ci = calendar.items[it.task_key]; return { ref: refOf(it), task_key: it.task_key || '', date: it.date, label: it.label, status: r.status, reason: r.reason || '', flag: r.flag || '', notes: it.notes || [], sentence: it.sentence || '', calendar: ci || null }; });
   const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length };
