@@ -29416,7 +29416,7 @@ async function qbLookupExisting(env, kind, displayName, email, token) {
     // normal shape here. Choosing between those puts an invoice on the wrong ledger, so
     // strong is offered as a SUGGESTION on the mapping screen and nothing more.
     if (m && m.confidence === 'exact') return m.id;
-  } catch (e) { /* fall through to the direct query */ }
+  } catch (e) { /* silent-ok: falls through to the direct QuickBooks name query below */ }
 
   try {
     const type = kind === 'vendor' ? 'Vendor' : 'Customer';
