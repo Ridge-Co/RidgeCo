@@ -36909,6 +36909,12 @@ async function strAdminPendingConvert(env, body) {
     return json({ ok: true, status: strPendingStatus(ctx, after), result: r, drain, message: r.conflict ? `Marked as booked, but ${r.conflict} is already on that date, so nobody was assigned from the inquiry. You have been told.` : (r.assigned ? `Marked as booked. ${r.assigned} is now on the schedule${/^sent:/.test(after.Pending_Text || '') ? ' and was texted' : (strInSendWindow(ctx.now, ctx.S) ? ' (the "now booked" text and calendar invite go out within a few minutes)' : ' (the "now booked" text and invite go out at 8 AM)')}.` : 'Marked as booked. Nobody had said yes, so it is now an ordinary open turnover and the cleaner queue takes over.'), warnings: warnings.concat(ctx.errors.map(e => e.error)) });
   } catch (e) { return await strHandleErr(env, e, 'pending convert'); }
 }
+// What a cleaner sees on her own page: every open pending date (marked "Pending - not booked"), the question if she is the one being asked, and her
+// own tentative hold. She never sees who else answered what.
+function strPendingForCleaner(ctx, c, today) {
+  const st = ctx.st;
+  return st.pendings.filter(p => strPendActive(p) && p.Date >= today && strDaysBetween(today, p.Date) <= STR_MARK_HORIZON).sort((a, b) => a.Date.localeCompare(b.Date)).map(p => {
+    const held = p.Status === 'pending_held', mine = held && String(p.Assigned_Cleaner_ID) === c.ID;
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
