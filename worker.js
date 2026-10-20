@@ -1143,6 +1143,8 @@ const _hubWorkerCore = {
         if (path === '/str/admin/cleaner/new-link') return await strAdminNewLink(env, body);
         if (path === '/str/admin/config')          return await strAdminConfig(env, body);
         if (path === '/str/admin/assign')          return await strAdminAssign(env, body);
+        if (path === '/str/admin/change/preview')  return await strChangePreview(env, body);
+        if (path === '/str/admin/change/apply')    return await strChangeApply(env, body);
         if (path === '/str/admin/offer-now')       return await strAdminOfferNow(env, body);
         if (path === '/str/admin/alert/ack')       return await strAdminAlertAck(env, body);
         if (path === '/str/admin/run')             return await strAdminRun(env, body);
