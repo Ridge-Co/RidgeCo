@@ -29951,7 +29951,7 @@ async function vendorPaidMessage(env, o) {
   const parts = Array.from(new Set(j.jobs.map(x => x.text)));
   for (const id of j.unresolved) parts.push('bill ' + id);
   const jobs = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : (parts[0] || 'your recent work');
-  let tpl = null; try { tpl = await getMessageTemplate(env, 'vendor_paid', 'sms'); } catch (_) {}
+  let tpl = null; try { tpl = await getMessageTemplate(env, 'vendor_paid', 'sms'); } catch (e) { softNote('vendor_paid_template_read_failed', e, 'P2'); }   // falls back to the built-in wording
   const def = DEFAULT_MESSAGE_TEMPLATES.find(t => t.Message_Type === 'vendor_paid' && t.Channel === 'sms');
   const text = renderTemplate(tpl ? tpl.Body : def.Body, { FirstName: vendorFirstName(vendor), Amount: fmtMoney(amount), Jobs: jobs, HubUrl: HUB_URL }).replace(/\s+/g, ' ').trim();
   return { text, jobs: j.jobs, unresolved: j.unresolved };
