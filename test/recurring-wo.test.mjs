@@ -12,7 +12,7 @@ function grab(name) {
 }
 function grabConst(name) { const m = new RegExp('const ' + name + ' = [^;]*;').exec(src); if (!m) throw new Error('missing const ' + name); return m[0]; }
 const names = ['recurParseISO','recurDayNum','recurISOFromDayNum','recurAddDays','recurWeekday','recurDaysInMonth','recurInSeason','recurInt','recurIsOccurrence','recurLatestDue','recurNextOccurrences','recurTargets','recurTargetKey','recurWOIsOpen','recurIsTrue','recurSanitizeTemplateFields'];
-const code = [grabConst('RECUR_CLOSED_STATUSES'), grabConst('RECUR_LOOKBACK_DAYS'), ...names.map(grab)].join('\n') + '\nreturn {' + names.join(',') + '};';
+const code = ['const softNote = () => {};', grab('parseJsonCell'), grabConst('RECUR_CLOSED_STATUSES'), grabConst('RECUR_LOOKBACK_DAYS'), ...names.map(grab)].join('\n') + '\nreturn {' + names.join(',') + '};';
 const R = new Function(code)();
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } };
