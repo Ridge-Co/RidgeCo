@@ -33596,8 +33596,7 @@ async function inspPropertyAdd(env, body) {
 // exactly one synthetic unit) ───────────────────────────────────────────────────
 async function inspUnitsList(env, url) {
   const pid = (url && url.searchParams.get('property_id')) || '';
-  let rows = [];
-  try { rows = await fetchTab(env, 'Insp_Units'); } catch (e) {}
+  let rows = await fetchTabSoft(env, 'Insp_Units', 'insp_units_list');
   rows = rows.filter(r => r.Active !== 'FALSE' && (!pid || r.Property_ID === pid));
   return json(rows);
 }
