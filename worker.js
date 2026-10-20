@@ -11570,7 +11570,7 @@ async function qbUndoSend(env, body) {
         `Undid the QuickBooks send for bill ${ir.Bill_ID || ir.ID} (invoice ${invoiceId || 'none'}, bill ${billId || 'none'} deleted in QuickBooks).` +
         (loanReversed ? ` Reversed a $${loanReversed.toFixed(2)} loan-ledger deduction.` : '') +
         (body.reason ? ` Reason: ${body.reason}` : ''));
-    } catch (e) { /* audit is best-effort */ }
+    } catch (e) { await softFail(env, 'qb_undo_audit_failed', e, 'P1', { ref: ir.ID }); }
 
     return json({
       success: true, ok: true, id: ir.ID, wo_id: ir.WO_ID || '', bill_id: ir.Bill_ID || '',
