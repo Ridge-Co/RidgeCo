@@ -13048,6 +13048,7 @@ const OWNER_EDITABLE_FIELDS = ['Owner_WO_Ref','Priority','Scheduled_Date','Manag
 async function ownerUpdateWO(env, body) {
   const allowed = {}; for (const [k,v] of Object.entries(body.fields||{})) { if (OWNER_EDITABLE_FIELDS.includes(k)) allowed[k]=v; }
   if (!Object.keys(allowed).length) return json({ error: 'No owner-editable fields provided' }, 400);
+  let ownerWarn = '';
   // Managed_By (Sep 16 2026, Brett): additive column, ensured here on first real write rather
   // than a central schema pass — same convention as Hold_Reason in updateStatus. Values are
   // 'RidgeCo' (default/blank) or 'Owner'; validated so a bad client value can't write junk into
