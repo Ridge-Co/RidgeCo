@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-19.04-proposal-netting-instant-fee';
+const BUILD_VERSION = '2026-10-19.05-sheets-read-coalescing';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -24270,6 +24270,18 @@ async function signRS256(input, key) {
 // (and cannot, without a KV/Durable Object binding this environment doesn't have) guarantee
 // zero duplicate reads globally.
 const __tabCache = new Map(); // tabName -> { data, exp }
+// In-flight read sharing (Oct 19 2026, vendor-portal quota burst). The 6s cache above only helps AFTER a read has
+// finished; a vendor portal that opens N work-order cards fires ~6N requests in the same instant, every one of them
+// a cache MISS, so every one went to Google separately and the shared 60-reads/minute quota was gone in seconds
+// ("Could not load estimate: ... Read requests per minute per user"). Now the first caller reads and every other
+// concurrent caller for the same tab (or the same batchGet tab set) awaits that one read. Writes drop the entry so a
+// reader that starts after a write never joins a read that began before it.
+const __inflight = new Map();      // tabName -> Promise<sheetsData>
+const __batchInflight = new Map(); // sorted tab names joined by '|' -> Promise<void> (resolves once cached)
+function __dropInflightFor(tab) {
+  __inflight.delete(tab);
+  for (const k of Array.from(__batchInflight.keys())) { if (k.split('|').indexOf(tab) > -1) __batchInflight.delete(k); }
+}
 const TAB_CACHE_MS = 6000;
 // Real outbound Google Sheets calls made by this isolate (Oct 14 2026). Cloudflare caps a single request at 50 outbound calls on
 // this plan, and the tenant roster apply must stop and resume rather than hit it, so it reads the delta of this counter.
@@ -24317,7 +24329,7 @@ function __tabCacheKey(path) {
   const m = /^\/values\/([^!:?]+)$|^\/values\/([^!:?]+):/.exec(path);
   return m ? decodeURIComponent(m[1] || m[2]) : null;
 }
-function invalidateTabCache(tab) { if (tab) __tabCache.delete(tab); }
+function invalidateTabCache(tab) { if (tab) { __tabCache.delete(tab); __dropInflightFor(tab); } }
 function __invalidateFromWrite(path, body) {
   const tabs = new Set();
   const m = /^\/values\/([^!:?]+)/.exec(path);
@@ -24329,9 +24341,10 @@ function __invalidateFromWrite(path, body) {
     // Spreadsheet-structure change (grid resize, addSheet, ...) — cheap and rare; safest to
     // drop everything rather than reason about which tabs a structural change could affect.
     __tabCache.clear();
+    __inflight.clear(); __batchInflight.clear();
     return;
   }
-  tabs.forEach(t => __tabCache.delete(t));
+  tabs.forEach(t => { __tabCache.delete(t); __dropInflightFor(t); });
 }
 
 // Google throttles Sheets reads on a "read requests per minute per user" quota,
@@ -24343,12 +24356,32 @@ function __invalidateFromWrite(path, body) {
 // NEVER applied, so it is safe to retry any method (including an append). A 500/503
 // is ambiguous — the write may have landed — so those are retried ONLY for GET,
 // never for a POST/PUT that could double-write a bill or row.
-async function sheetsRequest(env, method, path, body, readOpts) {
+async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
   if (method === 'GET') {
     const cacheKey = __tabCacheKey(path);
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
       if (__cacheFresh(env, hit)) return hit.data;
+      if (!__isLeader) {
+        // Share one real read among every concurrent caller of this tab. The shared read itself never serves a stale
+        // copy: each caller decides for ITSELF (readOpts.stale) what to do if it fails, so a caller that did not opt
+        // in can never be handed stale data just because someone else did.
+        let p = __inflight.get(cacheKey);
+        if (!p) {
+          p = sheetsRequest(env, method, path, body, undefined, true);
+          __inflight.set(cacheKey, p);
+          const clear = () => { if (__inflight.get(cacheKey) === p) __inflight.delete(cacheKey); };
+          p.then(clear, clear);
+        }
+        try { return await p; }
+        catch (e) {
+          if (readOpts && readOpts.stale) {
+            const s = __staleTab(cacheKey);
+            if (s) { console.warn('[stale-serve] Sheets read failed, serving last good copy of ' + cacheKey + ': ' + ((e && e.message) || '')); return s; }
+          }
+          throw e;
+        }
+      }
     }
   }
   if (method === 'GET') await __cronPace(env);
@@ -24416,21 +24449,32 @@ async function fetchTabs(env, tabs, opts) {
   const missing = tabs.filter(t => !__cacheFresh(env, __tabCache.get(t)));
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
-    let data = null;
-    try { data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`); }
+    try {
+      // Concurrent callers needing the same set of tabs share ONE batchGet (see __inflight above). The leader writes
+      // the result into __tabCache before the shared promise resolves, so followers just read the cache below.
+      const bkey = missing.slice().sort().join('|');
+      let bp = __batchInflight.get(bkey);
+      if (!bp) {
+        bp = (async () => {
+          const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
+          const ranges=d.valueRanges||[];
+          missing.forEach((t,i)=>{
+            const values=(ranges[i]&&ranges[i].values)||[];
+            const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
+          });
+        })();
+        __batchInflight.set(bkey, bp);
+        const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
+        bp.then(clear, clear);
+      }
+      await bp;
+    }
     catch (e) {
       // Opt-in, read-only callers only: if EVERY tab we still need has a recent good copy,
       // keep serving it (the final map below reads __tabCache regardless of expiry).
       if (opts && opts.stale && missing.every(t => __staleTab(t))) {
         console.warn('[stale-serve] batchGet failed, serving last good copy of ' + missing.join(',') + ': ' + (e && e.message));
       } else { throw e; }
-    }
-    if (data) {
-      const ranges=data.valueRanges||[];
-      missing.forEach((t,i)=>{
-        const values=(ranges[i]&&ranges[i].values)||[];
-        const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
-      });
     }
   }
   return tabs.map(t=>{

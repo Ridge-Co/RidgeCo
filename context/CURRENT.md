@@ -1,3 +1,9 @@
+# SHEETS READ QUOTA BURST FIX — Oct 19, 2026 — head `fix/sheets-read-coalescing-oct19b` cut from main tip 5110483 (after #351), PR into `main` NOT merged (Brett merges). BUILD_VERSION `2026-10-19.05-sheets-read-coalescing`.
+
+## 🟡 Built and tested (22 + 24 new assertions; related read-layer suites green); staging verification result is in the PR. Cause of "Could not load estimate ... Read requests per minute per user": Cesar's vendor portal fires ~6 requests per work-order card at once and every one was a separate Google read against the one shared quota. Fix: concurrent reads of the same tab / tab set now share ONE Google read (worker), vendor portal reads capped at 4 in flight with quota retry, Hub `api()` retries quota answers, and a failed load now shows "Could not load" + Retry (and reports to the failure ledger) instead of the old "No estimate submitted yet" / blank invoice summary. See FEATURE_LOG `[FL-20261019-sheets-coalesce]`. Not part of this PR: 13 test files already fail identically on main (AI-credit helper extraction in the harness, `ai_credit_probe` JOBS row, translation tests).
+
+---
+
 # PROPOSAL NETTING + INSTANT-PAY FEE + PROPERTY/UNIT TEXTS — Oct 19, 2026 — Ridge-Co/RidgeCo, head `feat/proposal-netting-instant-fee-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.04-proposal-netting-instant-fee`.
 
 ## 🟡 Built and tested (83 new checks; full suite shows only the 13 pre-existing failures); staging verification result is in the PR. After merge: (1) set Cesar's Vendors.Instant_Pay TRUE on the Vendors page; (2) Fort Ave (Eddie, bill WO-1154): in Preview & Send pick "Scope 4" and confirm the customer total reads $925 BEFORE sending; (3) backfill open Cesar bills 7923 (WO-1202 $750) and 7950 (WO-1236 $150) one at a time via Preview & Send. Brett already corrected invoice 1764 / bill 7970 by hand. See FEATURE_LOG "PROPOSAL NETTING + INSTANT-PAY FEE".
