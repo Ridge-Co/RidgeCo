@@ -16546,7 +16546,7 @@ async function failInvariantsCollect(env, nowMs) {
 // IO. Stored result if fresh, else re-check. Returns condition items. Never throws.
 async function failInvariantConditions(env, cfg, nowMs) {
   let stored = null;
-  try { const p = JSON.parse(cfg[FAIL_INV_KEY] || 'null'); if (p && typeof p.at === 'number' && Array.isArray(p.items)) stored = p; } catch (e) { stored = null; }
+  { const p = parseJsonCell(cfg[FAIL_INV_KEY], null, 'Config.' + FAIL_INV_KEY); if (p && typeof p.at === 'number' && Array.isArray(p.items)) stored = p; }   // a corrupt cache = re-check now (and noted)
   if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) return stored.items;
   try {
     const items = failInvariantItems(await failInvariantsCollect(env, nowMs));
