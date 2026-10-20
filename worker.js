@@ -36884,6 +36884,14 @@ async function strAdminPendingCancel(env, body) {
     return json({ ok: true, status: strPendingStatus(ctx, after), message: notify ? (/^sent:/.test(ts) ? `Cancelled. ${strFirst(holder)} was told.` : (ts === 'due' ? `Cancelled. ${strFirst(holder)} will be told ${strInSendWindow(ctx.now, ctx.S) ? 'within a few minutes' : 'at 8 AM'}.` : `Cancelled, but the text to ${strFirst(holder)} did not go out (${ts || 'see warnings'}).`)) : 'Cancelled. Nobody was texted.', text_state: ts, warnings: warnings.concat(ctx.errors.map(e => e.error)) });
   } catch (e) { return await strHandleErr(env, e, 'pending cancel'); }
 }
+// "Mark as booked now": the booking is real but the feed has not caught up. Makes the real turnover (kept alive ~3 days while the feed catches up),
+// then converts exactly like the automatic path.
+async function strAdminPendingConvert(env, body) {
+  try {
+    const ctx = await strHandlerCtx(env), p = ctx.st.pendings.find(x => x.Task_Key === (body || {}).task_key), iso = new Date(ctx.now).toISOString(), warnings = [];
+    if (!p) return json({ ok: false, error: 'not_found', message: 'That inquiry was not found.' }, 404);
+    if (!strPendActive(p)) return json({ ok: true, already: true, status: strPendingStatus(ctx, p), message: 'That inquiry is already closed. Nothing was sent.' });
+    if (p.Date < inspEtDate(ctx.now)) return json({ ok: false, error: 'past_date', message: 'That date has already passed.' }, 409);
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
