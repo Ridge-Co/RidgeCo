@@ -1084,6 +1084,15 @@ function openPendCancel(key){
       }, function(e){
         sheetBusy = false; if(e.code === 'unauthorized'){ authFailed(); return; }
         var g = $('sh-go'), c = $('sh-cancel'); if(g){ g.disabled = false; g.textContent = 'Try again'; } if(c) c.disabled = false;
+        chShowErr('<b>Not done.</b>' + esc(errText(e)) + '<br>If you are not sure whether it went through, close this and press Refresh to check.');
+      });
+    };
+  }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    openAction({ title: 'Could not check', say: errText(e) + ' Nothing was changed.', go: null, run: null });
+  });
+}
+
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
