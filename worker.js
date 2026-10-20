@@ -16459,6 +16459,14 @@ function failInvariantItems(data) {
   data = data || {};
   const out = [];
   for (const d of (data.dup || [])) if (d && d.ids && d.ids.length) out.push({ key: 'inv:dup:' + d.tab, system: 'hub', where: 'integrity:' + d.tab, severity: 'P1', message: `${d.tab} has ${d.ids.length} duplicate ID${d.ids.length === 1 ? '' : 's'} (e.g. ${d.ids.slice(0, 4).join(', ')}). A duplicate ID means an edit can land on the wrong row.` });
+  const mq = data.mq;
+  if (mq && mq.stuck > 0) out.push({ key: 'inv:mq_stuck', system: 'hub', where: 'integrity:Message_Queue', severity: 'P1', message: `${mq.stuck} text${mq.stuck === 1 ? ' is' : 's are'} still pending long after ${mq.stuck === 1 ? 'its' : 'their'} send time (oldest ${mq.oldest_hours} h overdue). The sweep should have sent ${mq.stuck === 1 ? 'it' : 'them'}.` });
+  if (mq && mq.failed24 > 0) out.push({ key: 'inv:mq_failed', system: 'hub', where: 'integrity:Message_Queue', severity: 'P1', message: `${mq.failed24} text${mq.failed24 === 1 ? '' : 's'} failed to send in the last 24 h (Message_Queue status "failed").` });
+  const tw = data.twilio;
+  if (tw && typeof tw.balance === 'number' && isFinite(tw.balance)) {
+    if (tw.balance < FAIL_TWILIO_P0_USD) out.push({ key: 'inv:twilio_balance', system: 'hub', where: 'twilio_balance', severity: 'P0', message: `Twilio balance is $${tw.balance.toFixed(2)}. When it reaches zero every text stops. Add funds in the Twilio console.` });
+    else if (tw.balance < FAIL_TWILIO_P1_USD) out.push({ key: 'inv:twilio_balance', system: 'hub', where: 'twilio_balance', severity: 'P1', message: `Twilio balance is $${tw.balance.toFixed(2)} (low). Add funds before it runs out.` });
+  }
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
