@@ -25516,7 +25516,7 @@ async function health(env, url) {
     out.gmail.client_secret_set = !!(env && env.GMAIL_CLIENT_SECRET);
     out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
     out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
-  } catch (_) {}
+  } catch (_) { /* silent-ok: reading env bindings cannot realistically throw */ }
   // "Reconnect Gmail" (Sep 22 2026): whether a sign-in-flow token is stored in Config, and when —
   // presence/date only, never the value. The live no-send check is ADMIN-only: GET /gmail/token-check.
   try {
