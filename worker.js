@@ -3620,7 +3620,7 @@ async function receiptReconReassign(env, body) {
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: original.Payment_Source,
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await receiptAddJson(env, addResp, 'reassign');
 
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
