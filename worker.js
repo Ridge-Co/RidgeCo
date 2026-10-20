@@ -14446,7 +14446,7 @@ async function resetVendorNudgeClock(env, woId, vendorId) {
     const now = new Date();
     const nextNudge = new Date(Math.max(next9amET(now).getTime(), now.getTime() + 16*3600000));
     await updateRow(env, VENDOR_REQ_TAB, row.ID, { Nudge_Count: '0', Next_Nudge_At: nextNudge.toISOString(), Last_Activity_At: now.toISOString() });
-  } catch (e) { /* non-fatal */ }
+  } catch (e) { await softFail(env, 'vendor_nudge_clock_reset_failed', e, 'P1', { ref: woId, vendor: vendorId }); }
 }
 
 // POST /vendor-request/create { wo_id, vendor_id, request_type: 'photos'|'invoice' } — the
