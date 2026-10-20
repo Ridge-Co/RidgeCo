@@ -2792,7 +2792,14 @@ async function receiptReconScan(env, body) {
   if (data.error) return json({ ok: false, error: 'Drive list failed: ' + (data.error.message || JSON.stringify(data.error)) }, 500);
   const files = (data.files || []).filter(f => /image|pdf/i.test(f.mimeType || ''));
 
-  let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
+  let existing = [];
+  try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); }
+  catch (e) {
+    if (!/Unable to parse range/i.test((e && e.message) || '')) {   // a missing tab = nothing queued yet (ensureTab above creates it); any OTHER failure must stop the scan, or every file in the folder is queued a second time
+      await softFail(env, 'receiptReconScan_queue_read', e, 'P1');
+      return json({ ok: false, error: 'Could not read Receipt_Recon_Queue, so the scan was skipped (it would queue duplicates): ' + String((e && e.message) || e).slice(0, 150), scanned: 0 }, 503);
+    }
+  }
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
   // A file the OCR can't read (Sep 22 2026: recon_smoke_test.png, "Could not process image")
   // was never written to the queue, so every scan retried it forever — one wasted AI call per
