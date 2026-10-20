@@ -12376,7 +12376,7 @@ async function unapproveEstimate(env, body) {
         await logSMS(env, woId, 'estimate_unapproved', vendor.ID, vendor.Phone, tv.translated ? msg + ' || EN: ' + msgEn : msg);
         vendorTold = true;
       }
-    } catch (e) { /* status is already back to Pending; the SMS is best-effort */ }
+    } catch (e) { await softFail(env, 'estimate_unapprove_vendor_sms_failed', e, 'P0', { ref: woId }); }   // status is already back to Pending; `warning` below tells the caller the vendor was not texted
   }
   return json({ success: true, wo_id: woId, version: latest.Version, subtotal: latest.Subtotal,
                 vendor_notified: vendorTold,
