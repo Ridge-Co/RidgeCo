@@ -27140,7 +27140,7 @@ async function qbFindLikelyUnlinkedPayment(env, token, vendorQboId, amountOwed) 
     const match = purchases.find(p => Math.abs(Number(p.TotalAmt || 0) - amountOwed) < 1.00);
     if (!match) return null;
     return { id: String(match.Id), date: match.TxnDate || '', amount: Number(match.TotalAmt || 0), payment_type: match.PaymentType || '', doc: match.DocNumber || '', note: (match.PrivateNote || '').slice(0, 200) };
-  } catch (_) { return null; }
+  } catch (e) { softNote('qb_unlinked_payment_lookup_failed', e, 'P2'); return null; }
 }
 
 // ── Who To Pay: "customer paid on" + funds-clearing indicator (Oct 14 2026) ──────────────────────
