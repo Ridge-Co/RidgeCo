@@ -26240,7 +26240,7 @@ async function hubTestWriteAllowed(env, path, body) {
   // read-only (it never edits a row), so it is safe for any row on staging.
   if (path === '/scope/create') return await isTestRecord(env, 'Properties', body && body.property_id);
   if (path === '/scope/update' || path === '/scope/proposal' || path === '/scope/proposal/link') {
-    const _sc2 = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
+    const _sc2 = (await fetchTabSoft(env, 'Scopes', 'staging_guard_scope')).find(x => String(x.ID) === String(body && body.scope_id));
     if (!_sc2) return false;
     return await isTestRecord(env, 'Properties', _sc2.Property_ID);
   }
