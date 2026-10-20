@@ -137,7 +137,7 @@
         var s = mintSync(pp[0]);
         if (s) { s._tm_ts = Date.now(); s._tm_id = qs.get('as') || ''; sI.call(window.sessionStorage, pp[1], JSON.stringify(s)); }
       }
-    } catch (e) {}
+    } catch (e) { tlFail('portal session mint', e); }
   }
 
   // ---- 4. dialogs ---------------------------------------------------------------------------
