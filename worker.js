@@ -31332,7 +31332,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
 
   const billNotOwed = vendorCost <= 0 || vendorInHouse;
   const status = ((invoiceId || billToRidgeco) && (billId || billNotOwed)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
-  try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); } catch (e) {}
+  { const _ec = await tryWrite(env, 'qb_send_invoice_ensure_columns', () => ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']), 'P1'); if (!_ec.ok) failWarnings.push('Could not add the QuickBooks tracking columns to Invoice_Review (' + _ec.error + ') — the invoice/bill numbers may not be saved on the review row.'); }
   await updateRow(env, 'Invoice_Review', ir.ID, {
     QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
     QB_Bill_To: billToRidgeco ? 'ridgeco' : (billTo.level + (billTo.display ? ': ' + billTo.display : '')),
