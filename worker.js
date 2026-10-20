@@ -29470,7 +29470,7 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
   const r = await qbApi(env, 'customer?minorversion=73', 'POST', payload, token);
   const id = r?.Customer?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB customer');
-  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) {} }
+  if (owner.ID) { await tryWrite(env, 'owner_save_qbo_customer_id', () => updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }), 'P1'); }
   return id;
 }
 
