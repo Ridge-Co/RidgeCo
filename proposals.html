@@ -553,7 +553,7 @@ load();
       if (!d || !d.version) return;
       if (booted === null){ booted = d.version; return; }
       if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
-    }).catch(function(){});
+    }).catch(function(e){ if(navigator.onLine!==false) window.hubReportFailure && window.hubReportFailure('proposals:version-check', e); });
   }
   check();
   setInterval(check, 60000);
