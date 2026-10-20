@@ -432,7 +432,7 @@ function loadDoc(){
     .then(function(res){
       if(!res || !res.success){
         // token expired / invalid → back to gate
-        try{ localStorage.removeItem(SESS_KEY); }catch(e){}
+        try{ localStorage.removeItem(SESS_KEY); }catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ }
         VIEW=''; showGate();
         var m=document.getElementById('gate-msg'); if(res && res.message){ m.className='gate-msg err-red'; m.textContent=res.message; }
         return;
