@@ -35553,66 +35553,68 @@ async function strChangePreview(env, body) {
   } catch (e) { return await strHandleErr(env, e, 'change preview'); }
 }
 
-// ── The calendar half of a swap: remove the old cleaner's entry (hand-typed or Hub), put the new one in, re-read to prove it ──
-async function strSwapCalendar(ctx, feed, plan, doneItems) {
-  const { env, cfg, S } = ctx, cal = { mode: plan.calendar.mode, status: 'unchanged', items: {}, manual: [], message: '' }, today = inspEtDate(ctx.now);
-  const manualFor = i => { const m = []; for (const h of i.cal.hand) m.push(`delete "${h.summary}"`); if (i.cal.hub_create || i.cal.hub_patch || i.cal.hand.length) m.push(`add an all-day "${i.cal.title}"`); return `${i.label}: ${m.join(' and ')}`; };
-  if (!doneItems.length) return cal;
-  if (cal.mode !== 'write') {
-    cal.status = cal.mode === 'staged' ? 'staged' : 'not_changed';
-    cal.message = plan.calendar.note || '';
-    if (cal.mode !== 'staged') { cal.manual = doneItems.map(manualFor); for (const i of doneItems) cal.items[i.task_key] = { status: 'not_changed', message: 'The Hub did not change the calendar (' + (cal.mode === 'off' ? 'the calendar switch is OFF' : 'no calendar is set up') + ').' }; }
-    else for (const i of doneItems) cal.items[i.task_key] = { status: 'staged', message: 'Test server: pretend-only.' };
-    return cal;
-  }
-  const enc = encodeURIComponent, ops = []; let fatal = null;
-  for (const i of doneItems) {
-    for (const id of i.cal.hub_delete) ops.push({ i, label: 'delete', id, fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(id)) });
-    for (const h of i.cal.hand) ops.push({ i, label: 'delete', id: h.id, fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(h.id)) });
-    const want = { key: i.task_key, kind: 'cover', date: i.date, title: i.cal.title, desc: `${S.label} ${i.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub (admin swap). Checkout 11 AM${i._t.next ? '; next guest arrives ' + strNextDate(i.date, i._t.next) : ''}.` };
-    if (i.cal.hub_patch) ops.push({ i, label: 'patch', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(i.cal.hub_patch), strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update'); } });
-    else if (i.cal.hub_create) ops.push({ i, label: 'create', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id'); } });
-  }
-  const fail = {}; let n = 0;
-  for (const op of ops) {
-    if (fatal) { fail[op.i.task_key] = fail[op.i.task_key] || fatal; continue; }
-    if (n >= STR_CAL_OPS_MAX) { fail[op.i.task_key] = fail[op.i.task_key] || 'Too many calendar changes in one go; this one was not attempted.'; continue; }
-    n++;
-    try { await op.fn(); } catch (e) {
-      if (op.label === 'delete' && (e.httpStatus === 410 || e.httpStatus === 404)) continue; // already gone: that is the goal
-      const msg = strErrText(e); fail[op.i.task_key] = fail[op.i.task_key] || msg;
-      if (STR_CAL_FATAL.includes(e.code)) fatal = msg;
-    }
-  }
-  // Re-read the calendar and check every date for real. A write Google accepted but that is not visible is a failure.
-  let back = null, readErr = '';
-  try { const ds = doneItems.map(i => i.date).sort(); back = await strReadCleaningCal(env, cfg, S.cleaningCal, ds[0], ds[ds.length - 1]); } catch (e) { readErr = strErrText(e); }
-  for (const i of doneItems) {
-    if (fail[i.task_key]) { cal.items[i.task_key] = { status: 'failed', message: fail[i.task_key] }; continue; }
-    if (!back) { cal.items[i.task_key] = { status: 'failed', message: 'The calendar was changed but could not be re-read to check it: ' + readErr }; continue; }
-    const live = back.filter(e => String(e.status || '').toUpperCase() !== 'CANCELLED'), problems = [];
-    const covers = live.filter(e => e.ext && e.ext.ridgecoStr && e.ext.ridgecoStrKey === i.task_key && e.ext.ridgecoStrKind === 'cover' && inspStrEvDay(e.start) === i.date);
-    if (covers.length !== 1 || covers[0].summary !== i.cal.title) problems.push(`"${i.cal.title}" is not on ${i.label} exactly once`);
-    for (const id of i.cal.hub_delete.concat(i.cal.hand.map(h => h.id))) if (live.some(e => e.id === id)) problems.push('an old entry is still there');
-    cal.items[i.task_key] = problems.length ? { status: 'failed', message: 'Re-read check failed: ' + problems.join('; ') } : { status: 'done', message: `Calendar shows "${i.cal.title}" on ${i.label}.` };
-  }
-  const bad = doneItems.filter(i => cal.items[i.task_key].status !== 'done');
-  cal.status = bad.length ? (bad.length === doneItems.length ? 'failed' : 'partial') : 'done';
-  if (bad.length) {
-    cal.manual = bad.map(manualFor);
-    cal.message = fatal ? fatal : bad.map(i => `${i.label}: ${cal.items[i.task_key].message}`).slice(0, 3).join(' | ');
-    cal.code = 'calendar_failed';
-    await strSystemAlert(env, 'swap_calendar', `The cleaning calendar was NOT fully updated for ${bad.map(i => i.label).join(', ')}: ${cal.message} By hand: ${cal.manual.join('; ')}.`);
-  }
-  return cal;
+// ── Subrequest budget. One Worker invocation may make only ~50 outside calls (Sheets, Calendar, Twilio, Gmail); the apply is therefore a
+// resumable job of small STAGES. Each HTTP call runs as many stages as fit under STR_SUB_LIMIT, saves where it got to, and the page simply
+// calls again until the job says it is finished. Nothing is ever skipped to save calls; it is only spread over more calls. ──
+function strSheetsCount() { return typeof __sheetsFetchCount === 'number' ? __sheetsFetchCount : 0; } // (defined outside the STR block; the typeof keeps the block usable on its own)
+function strSubUsed(ctx) { return (strSheetsCount() - (ctx.subS0 || 0)) + (__strCalCount - (ctx.subE0 || 0)) + (ctx.subX || 0); }
+function strRoom(ctx, est) { return ctx.subS0 === undefined || strSubUsed(ctx) + est <= STR_SUB_LIMIT; }
+async function strFresh(ctx) { if (ctx.dirty) { await strLoad(ctx, true); ctx.dirty = false; } }
+const STR_STAGES = ['sheets', 'audit', 'calendar', 'queue', 'send', 'email', 'alerts', 'finish'];
+const STR_STAGE_EST = { sheets: 18, audit: 4, calendar: 8, queue: 4, send: 17, email: 7, alerts: 12, finish: 22 };
+const STR_STAGE_TEXT = { sheets: 'saving the schedule change', audit: 'writing the activity log', calendar: 'fixing the cleaning calendar', queue: 'lining up the texts', send: 'sending the texts', email: 'sending the calendar invite', alerts: 'checking the standing alerts', finish: 'wrapping up' };
+
+// ── Compact copy of the plan that is saved with the job (a cell holds at most 50,000 characters) ──
+function strPackItem(it) {
+  const o = { r: it.task_key || it.date, d: it.date, l: it.label, o: it.outcome, rs: it.reason || '', n: it.notes || [], s: it.sentence || '' };
+  if (it.task_key) { o.k = it.task_key; o.kd = it.kind; o.kl = it.kind_label; if (it._t) { o.nx = it._t.next || ''; o.ws = it._t.winStart; o.we = it._t.winEnd; } }
+  if (it.displaced) { o.p = it.displaced.map(d => ({ i: d.id, n: d.name, s: d.source })); o.u = it.unmatched || []; o.c = it.offers_closed || []; o.m = it.marks || []; o.h = it.cal.hand; o.x = it.cal.hub_delete; o.cr = it.cal.hub_create ? 1 : 0; o.cp = it.cal.hub_patch || ''; o.ti = it.cal.title || ''; }
+  else { o.cu = it.current || ''; o.od = it.offers_declined || []; }
+  return o;
+}
+function strUnpackItem(o) {
+  const it = { ref: o.r, task_key: o.k || '', date: o.d, label: o.l, outcome: o.o, reason: o.rs, notes: o.n || [], sentence: o.s || '' };
+  if (o.p) { it.kind = o.kd; it.kind_label = o.kl; it._t = { key: o.k, kind: o.kd, date: o.d, winStart: o.ws, winEnd: o.we, next: o.nx || null, guests: '' }; it.displaced = o.p.map(d => ({ id: d.i, name: d.n, source: d.s })); it.unmatched = o.u || []; it.offers_closed = o.c || []; it.marks = o.m || []; it.cal = { hand: o.h || [], hub_delete: o.x || [], hub_create: !!o.cr, hub_patch: o.cp || '', title: o.ti || '', manual: [], fyi: [] }; }
+  else { it.current = o.cu || ''; it.offers_declined = o.od || []; }
+  return it;
+}
+function strNewState(items) {
+  const ires = {}; for (const it of items) ires[it.r] = it.o === 'change' ? { status: 'pending', reason: '' } : { status: it.o === 'not_found' ? 'failed' : 'skipped', reason: it.rs };
+  return { stage: 'sheets', tries: {}, calls: 0, ires, cal: { done: [], items: {}, status: 'unchanged', manual: [], message: '', fatal: '' }, texts: [], email: null, errors: [], warnings: [] };
 }
 
-// ── The invite email for the newly assigned cleaner (same behaviour as a normal assignment, one email however many dates) ──
-async function strSwapEmail(ctx, cleaner, doneItems) {
-  if (!cleaner.Email) return { status: 'skipped', note: `${cleaner.Name} has no email on file, so no calendar invite was sent.` };
-  if (!ctx.S.engine) return { status: 'skipped', note: 'The scheduler is OFF, so no calendar invite email was sent.' };
-  const views = strComputeViews(ctx, null), ics = strIcsForCleaner(ctx, cleaner, views), S = ctx.S;
-  const one = doneItems.length === 1, list = doneItems.map(i => `<li><b>${strEsc(strFmtDate(i.date, true))}</b> (${strEsc(i.kind_label)}; checkout 11 AM${i._t.next ? '; next guest arrives ' + strEsc(strNextDate(i.date, i._t.next)) : ''})</li>`).join('');
+// ── The cleaning calendar, in budgeted chunks: remove the old cleaner's entry (hand-typed or Hub), put the new one in, re-read to prove it ──
+const strCalManual = i => { const m = []; for (const h of i.cal.hand) m.push(`delete "${h.summary}"`); if (i.cal.hub_create || i.cal.hub_patch || i.cal.hand.length) m.push(`add an all-day "${i.cal.title}"`); return `${i.label}: ${m.join(' and ')}`; };
+function strCalOps(env, S, i) {
+  const enc = encodeURIComponent, ops = [];
+  for (const id of i.cal.hub_delete) ops.push({ label: 'delete', fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(id)) });
+  for (const h of i.cal.hand) ops.push({ label: 'delete', fn: () => strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(h.id)) });
+  const want = { key: i.task_key, kind: 'cover', date: i.date, title: i.cal.title, desc: `${S.label} ${i.kind === 'prearrival' ? 'pre-arrival clean' : 'turnover clean'} - assigned by the Ridge Co Hub (admin swap). Checkout 11 AM${i._t.next ? '; next guest arrives ' + strNextDate(i.date, i._t.next) : ''}.` };
+  if (i.cal.hub_patch) ops.push({ label: 'patch', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(i.cal.hub_patch), strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update'); } });
+  else if (i.cal.hub_create) ops.push({ label: 'create', fn: async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id'); } });
+  return ops;
+}
+const strOkItems = J => J.items.filter(i => i.outcome === 'change' && J.state.ires[i.ref] && J.state.ires[i.ref].status === 'done');
+
+// ── Stage 1: the schedule itself (turnover rows, waiting offers, backup / out marks), batched and re-read ──
+async function strStageSheets(ctx, J) {
+  const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', ires = state.ires, first = J.plan.cleaner.first;
+  const toDo = J.items.filter(i => i.outcome === 'change');
+  const done = it => ires[it.ref].status === 'done', fail = (it, why) => { ires[it.ref] = { status: 'failed', reason: why }; state.errors.push({ step: 'change_item', error: `${it.label}: ${why}` }); };
+  if (!isMark) {
+    invalidateTabCache('STR_Turnovers');
+    const cur = new Map((await fetchTab(env, 'STR_Turnovers')).filter(r => r.Property_Key === STR_PROP).map(r => [r.Task_Key, r])), upd = [], adds = [];
+    for (const it of toDo) {
+      if (ires[it.ref].status !== 'pending') continue; // (resuming) already settled
+      const row = cur.get(it.task_key), f = { Status: 'covered', Assigned_Cleaner_ID: cleaner.ID, Assigned_Via: 'admin_swap', Checkout_Text_Sent: '', Note: '', Updated_At: iso };
+      if (row) { if (row.Status === 'cancelled') { fail(it, 'The booking was cancelled a moment ago.'); continue; } if (row.Status === 'covered' && String(row.Assigned_Cleaner_ID) === cleaner.ID) { ires[it.ref] = { status: 'done', reason: `${first} already has this one.` }; continue; } upd.push({ id: row.ID, fields: f, it }); }
+      else adds.push({ it, f: Object.assign({ Task_Key: it.task_key, Property_Key: STR_PROP, Kind: it.kind, Date: it.date, Win_Start: it._t.winStart, Win_End: it._t.winEnd, Next_Arrival: it._t.next || '', Guests: '', Missing_Count: '0', Created_At: iso }, f) });
+    }
+    if (upd.length) { let r; try { r = await strBatchSet(env, 'STR_Turnovers', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) fail(u.it, f.error); else ires[u.it.ref] = { status: 'done', reason: '' }; } }
+    if (adds.length) { try { await strAddRows(env, 'STR_Turnovers', adds.map(a => a.f)); for (const a of adds) ires[a.it.ref] = { status: 'done', reason: 'The scheduler had not picked this date up yet; it was added now.' }; } catch (e) { for (const a of adds) fail(a.it, 'Could not save this date (it may or may not have saved - Refresh and check before retrying): ' + strErrText(e)); } }
+    // quietly close any waiting offers on the dates we just assigned
+    const offUpd = []; for (const it of toDo.filter(done)) for (const o of it.offers_closed) offUpd.push({ id: o.id, fields: { Status: o.status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'closed by admin swap' }, it });
+    if (offUpd.length) { let r; try { r = await strBatchSet(env, 'STR_Offers', offUpd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: offUpd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const f of r.failed) { const it = (offUpd.find(u => String(u.id) === String(f.id)) || {}).it; state.errors.push({ step: 'close_offers', error: `${it ? it.label : ''}: a waiting offer could not be closed (${f.error}). Check the board before anyone replies.` }); if (it) ires[it.ref].flag = 'offer_not_closed'; } }
   const html = `<p>Hi ${strEsc(strFirst(cleaner))},</p><p>You're set to clean <b>${strEsc(S.label)}</b> on:</p><ul>${list}</ul><p>The calendar invite is attached. Your schedule, availability and any changes: <a href="${strCleanerUrl(cleaner.Token)}">open your page</a>.</p><p>Thank you!<br>${strEsc(S.assistant)} - Ridge Co</p>`;
   try { const r = await gmailSendEmailWithAttachment(ctx.env, { to: cleaner.Email, subject: one ? `You're set: ${S.label} cleaning ${strFmtDate(doneItems[0].date)}` : `You're set: ${S.label} cleaning (${doneItems.length} dates)`, html, attachment: { filename: 'cleaning-schedule.ics', mimeType: 'text/calendar', base64Data: strB64(ics) } }); return { status: r && r.staged ? 'staged' : 'sent', note: '' }; }
   catch (e) { return { status: 'failed', note: `Could not email ${cleaner.Name} the calendar invite: ${strErrText(e)}` }; }
