@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-20.13-payment-date-warning-low';
+const BUILD_VERSION = '2026-10-20.14-insp-guard-quota-no-sms';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -16759,7 +16759,7 @@ async function schedRunInspGuard(env) {
   const errors = [], warnings = [];
   const r = await schedStep('insp_guard', async () => {
     try { return await inspStrGuardTick(env); }
-    catch (e) { try { await inspAlert(env, 'str_guard_tick', schedErrText(e)); } catch (e2) { warnings.push('could not alert about the guard failure: ' + schedErrText(e2)); } throw e; }
+    catch (e) { try { await inspGuardFailure(env, 'str_guard_tick', e); } catch (e2) { warnings.push('could not alert about the guard failure: ' + schedErrText(e2)); } throw e; }
   }, errors);
   return { ok: !errors.length, errors, warnings, detail: r };
 }
@@ -34272,6 +34272,34 @@ async function inspAlert(env, kind, message) {
   try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); }
 }
 
+// Oct 20 2026: the background cleaning-coverage guard runs every ~14 min against a Sheets read quota (60/min) that the WHOLE Hub shares.
+// A quota hit there is transient and the next tick simply retries, so it must NOT text Brett (he gets too many Hub texts, and a fix he can't
+// act on is noise). It is still never silent: every failure is a Telemetry row, and if the guard has not had a clean run for 45+ minutes
+// (about 3 ticks in a row) the normal alert (SMS + email) fires, because by then cabin cleaning coverage is genuinely unchecked.
+const INSP_GUARD_QUOTA_GRACE_MS = 45 * 60000;
+function inspIsSheetsQuotaErr(e) { return /quota exceeded|read requests per minute|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(String((e && e.message) || e || '')); }
+async function inspGuardFailure(env, kind, e) {
+  const msg = String((e && e.message) || e || '');
+  if (!inspIsSheetsQuotaErr(e)) return inspAlert(env, kind, msg);   // a real problem: alert exactly as before
+  const now = Date.now(); let since = NaN, cfgNote = '';
+  try { const cfg = await fetchConfig(env); since = Date.parse(String(cfg.STR_GUARD_FAIL_SINCE || '')); }
+  catch (ce) { cfgNote = ' [could not read Config to time the outage: ' + String((ce && ce.message) || ce).slice(0, 120) + ']'; console.error('insp guard: Config unreadable while handling a quota failure:', ce && ce.message); }
+  if (!Number.isFinite(since) && !cfgNote) {
+    since = now;
+    try { await failSetConfig(env, 'STR_GUARD_FAIL_SINCE', new Date(now).toISOString()); }
+    catch (se) { cfgNote = ' [could not record outage start: ' + String((se && se.message) || se).slice(0, 120) + ']'; console.error('insp guard: could not save STR_GUARD_FAIL_SINCE:', se && se.message); }
+  }
+  const mins = Number.isFinite(since) ? Math.round((now - since) / 60000) : 0;
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + '_quota', Success: 'FALSE', Notes: ('Sheets read quota hit, will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
+  catch (te) { console.error('insp guard: telemetry write failed:', te && te.message, '| original:', kind, msg); }
+  if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the sheet for ' + mins + ' minutes (Sheets read quota). ' + msg);
+}
+async function inspGuardRecovered(env, cfg) {
+  if (!cfg.STR_GUARD_FAIL_SINCE) return;
+  try { await failSetConfig(env, 'STR_GUARD_FAIL_SINCE', ''); }
+  catch (e) { console.error('insp guard: could not clear STR_GUARD_FAIL_SINCE:', e && e.message); try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/str_guard_recover', Success: 'FALSE', Notes: ('could not clear STR_GUARD_FAIL_SINCE: ' + String((e && e.message) || e)).slice(0, 480) }); } catch (te) { console.error('insp guard: telemetry write failed:', te && te.message); } }
+}
+
 // ── STR cleaning-coverage guard (Oct 7 2026) ──────────────────────────────────────────────
 // Brett's short-term rental needs a turnover clean after every checkout and before the next guest arrives. When no cleaner
 // is on the cleaning calendar he has to drive out and clean himself (6 hours round trip = the whole day), so a checkout with
@@ -34574,11 +34602,12 @@ async function inspSendBrettText(env, cfg, subject, smsText, htmlLines, link) {
 async function inspStrGuardTick(env, opts) {
   const dry = !!(opts && opts.dry), cfg = await fetchConfig(env), sc = inspStrConfig(env, cfg);
   if (!sc.enabled) return { enabled: false };
-  let st; try { st = await inspStrStatus(env, cfg, { fresh: true }); } catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', 'Cleaning-coverage check could not run: ' + e.message); return { enabled: true, error: e.message }; }
+  let st; try { st = await inspStrStatus(env, cfg, { fresh: true }); } catch (e) { await inspGuardFailure(env, e.code || 'str_guard_unavailable', new Error('Cleaning-coverage check could not run: ' + e.message)); return { enabled: true, error: e.message }; }
   const closed = new Set(st.closed), now = Date.now(), today = inspEtDate(now), dh = inspDefaultBookByHours(cfg);
   let blocks = [], bookings = [], customers = [];
-  try { [blocks, bookings, customers] = await Promise.all([fetchTab(env, 'Insp_Open_Blocks'), fetchTab(env, 'Insp_Bookings'), fetchTab(env, 'Insp_Customers')]); }
-  catch (e) { if (isMissingTabError(e)) return { enabled: true, items: [] }; await inspAlert(env, 'str_guard_sheet', 'Cleaning-coverage check could not read the sheet: ' + e.message); return { enabled: true, error: e.message }; }
+  try { [blocks, bookings, customers] = await fetchTabs(env, ['Insp_Open_Blocks', 'Insp_Bookings', 'Insp_Customers']); }   // ONE batchGet read instead of three
+  catch (e) { if (isMissingTabError(e)) return { enabled: true, items: [] }; await inspGuardFailure(env, 'str_guard_sheet', new Error('Cleaning-coverage check could not read the sheet: ' + e.message)); return { enabled: true, error: e.message }; }
+  await inspGuardRecovered(env, cfg);
   const cname = id => ((customers.find(c => String(c.ID) === String(id)) || {}).Name) || 'a partner';
   const items = {}; // key -> { sig, line, kind }
   for (const b of bookings) {
