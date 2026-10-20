@@ -491,6 +491,7 @@ const _hubWorkerCore = {
         }
       }
     }
+    __meterIdentify(env, callerRole || (PUBLIC_PATHS.includes(path) ? 'public' : 'admin/service'), callerRole ? callerSessionId : '');
     try {
       if (callerRole) {
         const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
