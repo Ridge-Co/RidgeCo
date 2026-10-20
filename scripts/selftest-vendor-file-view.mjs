@@ -90,7 +90,7 @@ async function main() {
   try {
     const resp = await fetch(`${BASE}/selftest/vendor-file-view?wo_id=${encodeURIComponent(WO_ID)}&file_id=${encodeURIComponent(FILE_ID)}&token=${encodeURIComponent(TOKEN)}`);
     status = resp.status;
-    try { body = await resp.json(); } catch (_) { body = null; }
+    try { body = await resp.json(); } catch (_) { body = null; /* silent-ok: an unreadable body is failed by the check below */ }
   } catch (e) {
     t('endpoint reachable', false, String(e && e.message));
     console.log(`\n${pass} passed, ${fail} failed`);
