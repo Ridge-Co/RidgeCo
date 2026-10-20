@@ -17937,7 +17937,7 @@ async function processRecurringWorkOrders(env, opts) {
   for (const tpl of templates) {
     const due = recurLatestDue(tpl, today);
     if (!due) continue;
-    let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (_) {}
+    const skips = parseJsonCell(tpl.Last_Skips, {}, 'Recurring_Templates.Last_Skips') || {};
     let skipsChanged = false, postedAny = false;
     for (const target of recurTargets(tpl)) {
       const key = recurTargetKey(target);
