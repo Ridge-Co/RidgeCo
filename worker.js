@@ -11069,7 +11069,7 @@ async function vendorAccessRequestApprove(env, body) {
           await updateRow(env, 'Vendors', reqRow.Vendor_ID, { Billing_Property_Access: list.join(',') });
         }
       }
-    } catch (e) { /* the request itself is already resolved; the vendor list append is best-effort */ }
+    } catch (e) { await softFail(env, 'vendor_access_grant_property_append', e, 'P1', { ref: reqRow && reqRow.Vendor_ID }); }   // the request is resolved but the vendor's billing-property list was not updated
   }
   return json({ success: true, id, status: newStatus });
 }
