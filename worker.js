@@ -36791,6 +36791,14 @@ async function strPendingPlan(ctx, body) {
   if (st.turnovers.some(t => t.Date === date && t.Kind === 'checkout' && t.Status !== 'cancelled')) throw strErr('already_booked', `${strFmtDate(date)} already has a real turnover on the board. Use the normal board for that date.`, 409);
   try {
     const feed = await strReadFeed(ctx);
+    if (strBuildTasks(feed.stays, today, ctx.S).some(t => t.kind === 'checkout' && t.date === date)) throw strErr('already_booked', `The bookings feed already shows a guest checking out on ${strFmtDate(date)}, so this is a real turnover (the scheduler picks it up within about 15 minutes). Use the normal board.`, 409);
+    const hand = strExternalCover({ winStart: date, winEnd: date }, feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr)));
+    if (hand.length) warnings.push(`The cleaning calendar already has "${hand.join(', ')}" on ${strFmtDate(date)} (typed by hand). Check you really need this inquiry.`);
+  } catch (e) { if (e && e.code === 'already_booked') throw e; warnings.push('Could not check the bookings feed (' + strErrText(e) + '), so the Hub could not confirm the date is not already booked.'); }
+  const n = st.pendings.filter(p => p.Date === date).length + 1, key = strPendKey(date, n), task = { key, kind: 'pending', date, next: null, winStart: date, winEnd: date };
+  const nx = strNextCleaner({ pool: st.pool, cleaners: st.cmap, marks: st.marks, offers: st.offers, task }), first = nx.cleaner;
+  const order = st.pool.filter(p => String(p.Active || '').toUpperCase() !== 'FALSE').slice().sort((x, y) => (parseInt(x.Priority, 10) || 999) - (parseInt(y.Priority, 10) || 999) || (parseInt(x.ID, 10) || 0) - (parseInt(y.ID, 10) || 0));
+  const why = { inactive: 'not active', no_phone: 'no phone number', sms_opted_out: 'texts switched off', already_asked: 'already asked', marked_out: 'marked out that day' };
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
