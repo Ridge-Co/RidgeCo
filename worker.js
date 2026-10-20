@@ -24598,7 +24598,7 @@ async function __meterSnapshotAll(env, url) {
 // GET /read-meter?minutes=30 (admin-gated like every non-public route; role sessions are not in ROLE_SCOPES).
 function __meterSnapshot(url, extra) {
   const mins = Math.max(1, Math.min(METER_KEEP_MIN, parseInt(url && url.searchParams.get('minutes'), 10) || 30));
-  const rows = __meterWindow(mins), tot = { reads: 0, writes: 0, r429: 0, errs: 0, cache_hits: 0, joined: 0, requests: 0 };
+  const rows = extra && extra.rows && extra.rows.length ? __meterMergeRows(__meterWindow(mins).concat(extra.rows)) : __meterWindow(mins), tot = { reads: 0, writes: 0, r429: 0, errs: 0, cache_hits: 0, joined: 0, requests: 0 };
   const perMin = rows.map(b => {
     tot.reads += b.reads; tot.writes += b.writes; tot.r429 += b.r429; tot.errs += b.errs; tot.cache_hits += b.hits; tot.joined += b.joins; tot.requests += b.reqs;
     return { minute: new Date(b.t).toISOString().slice(11, 16) + 'Z', reads: b.reads, writes: b.writes, r429: b.r429, errs: b.errs, cache_hits: b.hits, joined: b.joins, requests: b.reqs };
