@@ -24346,7 +24346,16 @@ const METER_KEEP_MIN = 180;
 const METER_MAX_KEYS = 250;
 const METER_ALARM_READS_PER_MIN = 40;
 const METER_ALARM_GAP_MS = 10 * 60 * 1000;
-const __meter = { isolate: Math.random().toString(36).slice(2, 8), since: Date.now(), mins: new Map(), lastAlarmAt: 0, pending: null, alarms: 0, faults: 0 };
+// Cross-instance roll-up (Oct 20 2026): Cloudflare runs MANY Worker instances at once (staging showed 5 in 5 requests), each with its own memory,
+// but the Google quota is shared by all of them. So each instance saves its own recent per-minute counts to the READ_METER KV store (at most
+// once per minute while it has news, the first one right away), and /read-meter adds every instance together. Costs ZERO Sheets reads.
+const METER_PERSIST_MIN = 60;               // minutes of history each instance saves
+const METER_PERSIST_GAP_MS = 60 * 1000;     // save at most this often per instance
+const METER_KV_TTL_S = 2 * 60 * 60;         // a saved instance record disappears after 2h
+const METER_MAX_REMOTE = 30;                // most other instances read per view (keeps under the subrequest limit; truncation is reported)
+const METER_REMOTE_CACHE_MS = 20 * 1000;    // several viewers / refreshes within 20s share one KV read
+const __meter = { isolate: Math.random().toString(36).slice(2, 8), since: 0 /* set on first use: Workers freeze Date.now() at startup */, tag: 'prd', mins: new Map(), lastAlarmAt: 0, pending: null, alarms: 0, faults: 0,
+  dirty: false, persisting: false, lastPersistAt: 0, persists: 0, persistErrors: 0, lastPersistError: '', lastStoreAlarmAt: 0, remoteCache: null };
 function __meterFault(where, e) {
   __meter.faults++;
   if (__meter.faults <= 3) console.error('[read-meter] FAULT in ' + where + ' (meter only; Sheets calls are unaffected): ' + String((e && e.message) || e).slice(0, 200));
