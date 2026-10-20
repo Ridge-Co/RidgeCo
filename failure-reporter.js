@@ -205,7 +205,7 @@
   function badge() {
     try {
       var cached = null;
-      try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; /* private mode: just fetch */ }
+      try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; /* silent-ok: private mode, so just fetch fresh */ }
       if (cached && Date.now() - cached.t < 60000) { paint(cached.n, cached.w); return; }
       realFetch(WORKER + '/failures/open', { headers: { 'X-Auth-Token': token } })
         .then(function (r) {
