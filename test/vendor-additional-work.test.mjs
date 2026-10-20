@@ -464,7 +464,7 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
   t('ready queue: a voided add-on row is flagged', rows[0].addon_unapproved === true);
 
   // woPushToScope guard — executed
-  const mkPush = new Function('json', 'scopesTab', 'ensureColumns', 'fetchTab', 'findWO', grabAsync('woPushToScope') + '\nreturn woPushToScope;');
+  const mkPush = new Function('json', 'scopesTab', 'ensureColumns', 'fetchTab', 'findWO', "const softNote=()=>true;const softFail=async()=>({ok:false});const parseJsonCell=(r,f)=>{if(r===undefined||r===null||(typeof r==='string'&&!r.trim()))return f;if(typeof r!=='string')return r;try{return JSON.parse(r)}catch(e){return f}};const safeJson=async(r,f)=>{try{return await r.json()}catch(e){return f}};const tryWrite=async(env,w,fn)=>{try{return{ok:true,value:await fn()}}catch(e){return{ok:false,error:String(e&&e.message)}}};" + grabAsync('woPushToScope') + '\nreturn woPushToScope;');
   const push = async w => { let est = 0; const f = mkPush(json, async () => {}, async () => {}, async (env, tab) => { if (tab === 'Estimates') est++; return tab === 'Work_Orders' ? [w] : []; }, findWO); const r = await f({}, { wo_id: w.ID }); return { r, est }; };
   for (const [label, w] of [['Voided', child({ Voided: 'TRUE' })], ['Withdrawn', child({ Addon_Status: 'Withdrawn', Voided: 'TRUE' })], ['Draft', child({ Addon_Status: 'Draft', Voided: 'TRUE' })], ['Withdrawn but un-voided', child({ Addon_Status: 'Withdrawn' })]]) {
     const { r, est } = await push(w);
