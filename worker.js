@@ -31732,7 +31732,7 @@ async function proposalBillingSweep(env) {
 // a write that matters is read back and compared. Throws on any mismatch — never a quiet "saved".
 async function updateRowVerified(env, tab, id, fields) {
   const res = await updateRow(env, tab, id, fields);
-  let j = null; try { j = await res.clone().json(); } catch (_) {}
+  let j = null; try { j = await res.clone().json(); } catch (_) { /* silent-ok: an unreadable reply is treated as not-saved and throws on the next line */ }
   if (!j || j.success !== true || j.message === 'No matching fields') throw new Error(tab + ' row ' + id + ' was not updated (' + ((j && (j.error || j.message)) || (res && res.status)) + ')');
   invalidateTabCache(tab);
   const back = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
