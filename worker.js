@@ -22097,10 +22097,10 @@ async function arReportPayLink(env, body) {
   if (!email) return json({ error: 'no_email', message: 'No email on file for this invoice — please contact Ridge Co.' }, 400);
   try {
     const rr = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(invoiceId)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
-    const sres = await rr.json().catch(() => null);
+    const sres = await safeJson(rr, null, 'ar_pay_link_send');   // null still fails the confirmation check below
     if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed');
     return json({ ok: true, sent_to_email: true, email });
-  } catch (e) { return json({ error: 'send_failed', message: 'Could not send a payment link right now — please contact Ridge Co directly.' }, 502); }
+  } catch (e) { softNote('ar_pay_link_send_failed', e, 'P1', { invoice: String(invoiceId) }); return json({ error: 'send_failed', message: 'Could not send a payment link right now — please contact Ridge Co directly.' }, 502); }
 }
 
 // Weekly cron entry point — fully automatic per Brett's decision, opted-in owners only, gated
