@@ -314,12 +314,14 @@ function hideLoading() {
     b.onclick = function(){ location.reload(true); };
     document.body.appendChild(b);
   }
+  var fails = 0;   // consecutive failed polls; one blip on a weak signal is normal, a poll that keeps failing is reported
   function check(){
     fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      fails = 0;
       if (!d || !d.version) return;
       if (booted === null){ booted = d.version; return; }
       if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
-    }).catch(function(){});
+    }).catch(function(e){ if (navigator.onLine !== false && !document.hidden && ++fails === 5) window.hubReportFailure && window.hubReportFailure('submit:versionCheck failing repeatedly', e); });
   }
   check();
   setInterval(check, 60000);
