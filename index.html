@@ -5753,13 +5753,13 @@ function saveTradeAccessDefault() {
 function removeTradeAccessDefault(trade) {
   api('GET', '/config').then(function(cfg) {
     var defaults = {};
-    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:trade-defaults-parse-remove', e); throw new Error('The saved trade defaults could not be read, so nothing was changed (saving now would erase them).'); }
     delete defaults[trade];
     return api('POST', '/config/set', { key: 'Access_Trade_Defaults', value: JSON.stringify(defaults) });
   }).then(function(res) {
     if (res && res.success) { toast('Removed default for ' + trade, 'success'); loadTradeAccessDefaults(); }
     else toast('Error: ' + ((res&&res.error)||''), 'error');
-  });
+  }).catch(function(e) { toast('Error: ' + (e && e.message || e), 'error'); });
 }
 
 function loadAlertFlags() {
