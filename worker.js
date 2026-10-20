@@ -24362,6 +24362,26 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
       if (__cacheFresh(env, hit)) return hit.data;
+      if (!__isLeader) {
+        // Share one real read among every concurrent caller of this tab. The shared read itself never serves a stale
+        // copy: each caller decides for ITSELF (readOpts.stale) what to do if it fails, so a caller that did not opt
+        // in can never be handed stale data just because someone else did.
+        let p = __inflight.get(cacheKey);
+        if (!p) {
+          p = sheetsRequest(env, method, path, body, undefined, true);
+          __inflight.set(cacheKey, p);
+          const clear = () => { if (__inflight.get(cacheKey) === p) __inflight.delete(cacheKey); };
+          p.then(clear, clear);
+        }
+        try { return await p; }
+        catch (e) {
+          if (readOpts && readOpts.stale) {
+            const s = __staleTab(cacheKey);
+            if (s) { console.warn('[stale-serve] Sheets read failed, serving last good copy of ' + cacheKey + ': ' + ((e && e.message) || '')); return s; }
+          }
+          throw e;
+        }
+      }
     }
   }
   if (method === 'GET') await __cronPace(env);
