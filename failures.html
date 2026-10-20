@@ -132,7 +132,7 @@ async function load(){
   const all=document.getElementById('showAll').checked;
   try{
     DATA=await api('GET','/failures/open'+(all?'?all=1':''));
-    try{sessionStorage.removeItem('hub_fail_badge_v1')}catch(e){ /* silent-ok: the badge cache is optional, next load refetches */ }
+    try{sessionStorage.removeItem('hub_fail_badge_v1')}catch(e){ /* cache is optional */ }
     render();
   }catch(e){
     document.getElementById('summary').className='summary bad';
