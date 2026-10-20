@@ -1045,6 +1045,12 @@ function pendDoneSheet(title, r){
 var SEND_WORDS = { offered:'Asked now.', promoted:'Asked now.', waiting_send_window:'Still waiting for 8 AM.', exhausted:'Nobody left to ask. You have been told.', sms_off:'No text sent because texting is switched off.', twilio_off:'No text sent because texting is switched off.', would_offer:'No text sent because texting is switched off.', offer_failed:'The text FAILED. You have been told.' };
 function openPendSend(key){
   var p = findPend(key); if(!p) return;
+  openAction({ title: 'Ask now for ' + p.label + '?', say: 'Sends the question to the next cleaner right now, even if it is outside 8 AM - 9 PM. Use it only if it cannot wait until morning.', go: 'Yes, ask now', body: p.next_up ? '<p class="say">Next to ask: <b>' + esc(p.next_up) + '</b>.</p>' : '',
+    run: function(){ return api('POST', '/str/admin/pending/send-now', { task_key: key }, { allowFail: true }).then(function(r){
+      var a = r.result && r.result.action, errs = stepErrs(r.errors);
+      return { tone: errs.length || a === 'offer_failed' ? 'warn' : 'ok', head: (SEND_WORDS[a] || 'Done.') + (r.status ? ' ' + r.status.label + '.' : ''), extra: errs.length ? '<div class="msg err"><b>Problems</b>' + listHtml(errs) + '</div>' : '' };
+    }); } });
+}
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
