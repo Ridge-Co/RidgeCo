@@ -15750,7 +15750,7 @@ async function smsGatedSend(env, opts) {
         messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
-    } catch (e) {}
+    } catch (e) { softNote('sms_message_audit_failed', e, 'P1', { ref: opts.wo_id }); /* the text already went out; its audit row is what is missing */ }
   }
   return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
 }
