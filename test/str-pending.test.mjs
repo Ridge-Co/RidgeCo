@@ -500,4 +500,17 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
   const evs = W.calEvents.filter(e => e.start.date === PD);
   t('calendar back: exactly one normal "Kayla Cleaning" event, no (PENDING) left, Pending_Cal done, no extra texts', evs.length === 1 && evs[0].summary === 'Kayla Cleaning' && !pendingEvents(W).length && pend(W).Pending_Cal === 'done' && smsTo(W, 'Kayla').length === 1, { evs, p: pend(W) });
 }
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.calMode = 'ghost'; const r = await tick(E, null);
+  t('calendar write not landing is caught by the re-read, not trusted: error + Brett told + still owed', pend(W).Pending_Cal === 'conv' && r.errors.some(e => e.step === 'pending_calendar' && /did not change|still there|confirm/.test(e.error)) && W.brett.some(b => /did not land/.test(b.text)), { errs: r.errors, brett: W.brett, cal: pend(W).Pending_Cal });
+  W.calMode = 'ok'; await tick(E, null); await tick(E, null);
+  t('and fixed once the calendar behaves: one normal event', W.calEvents.filter(e => e.start.date === PD).length === 1 && W.calEvents.find(e => e.start.date === PD).summary === 'Kayla Cleaning' && pend(W).Pending_Cal === 'done', W.calEvents);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0;
+  W.calMode = 'ghost'; const r = await tick(E, '2026-11-16', '10:00');
+  t('expiry with a calendar delete that does not land: still expired (silently), the leftover event is reported and retried', pend(W).Status === 'pending_expired' && pend(W).Pending_Cal === 'del' && !W.sms.length && r.errors.some(e => e.step === 'pending_calendar'), { p: pend(W), errs: r.errors });
+  W.calMode = 'ok'; await tick(E, null); t('removed on the next tick', !pendingEvents(W).length && pend(W).Pending_Cal === 'done');
+}
 //@@APPEND@@
