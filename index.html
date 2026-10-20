@@ -10281,7 +10281,7 @@ function reloadHubAdditionalWork(woId) {
     _awAdmin[woId] = list;
     list.forEach(function(a) { _awAdminChildren[a.child_wo_id] = woId; });
     renderHubAdditionalWork(woId, list, holder);
-  }).catch(function() { /* non-critical — section simply stays hidden */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:additional-work-load', e); });
 }
 // Called from refreshHubEstimateView: any estimate action taken on a child (approve, needs-info,
 // decline, push-to-scope) re-renders its parent's Additional work section.
