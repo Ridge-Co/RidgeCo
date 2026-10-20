@@ -31798,7 +31798,7 @@ async function qbResolveProposalNetting(env, o) {
     ]);
   } catch (e) {
     // "Couldn't check" is NOT "no proposal" — sending now could bill a signed job twice.
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_check_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_check_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (te) { softNote('telemetry_write_failed:proposal_netting_check_failed', te, 'P2'); }
     return { block: null, applied: null, skipped: null, stop: { status: 503, payload: { ok: false, netting_check_failed: true,
       error: 'Could not check whether this job is on a signed proposal (' + String((e && e.message) || e).slice(0, 120) + ') — nothing was sent. Try again in a moment.' } } };
   }
