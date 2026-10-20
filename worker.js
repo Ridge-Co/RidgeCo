@@ -31484,7 +31484,7 @@ async function vendorFeeCreditAdd(env, body) {
   const res = await addRow(env, FEE_CREDIT_TAB, { Vendor_ID: vendorId, Vendor_Name: vendor.Name || '', Entry_Type: 'credit', Amount: String(amount), Balance_After: String(money2(prior + amount)),
     Statement_Ref: String(body.statement_ref || '').slice(0, 200), Period: String(body.period || '').slice(0, 100), Date: String(body.date || new Date().toISOString().split('T')[0]).slice(0, 10),
     Notes: String(body.notes || '').slice(0, 500), Entered_By: String(body.entered_by || 'Brett').slice(0, 60) });
-  let parsed = null; try { parsed = await res.clone().json(); } catch (_) {}
+  const parsed = await safeJson(res.clone(), null, 'vendor_fee_credit_add');
   if (parsed && parsed.error) return res;
   invalidateTabCache(FEE_CREDIT_TAB);
   const after = await feeCreditBalance(env, vendorId);
