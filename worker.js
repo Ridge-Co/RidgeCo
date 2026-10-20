@@ -16192,7 +16192,8 @@ async function reportFailure(env, f) {
   try {
     const now = Date.now(), win = (f && f.anon) ? _failAnonWin : _failWin, cap = (f && f.anon) ? FAIL_MAX_ANON_PER_MIN : FAIL_MAX_EVENTS_PER_MIN;
     if (now - win.start > 60000) { win.start = now; win.n = 0; }
-    if (++win.n > cap) { win.dropped++; console.error('FAILURE-REPORT DROPPED (over ' + cap + '/min):', (f && (f.where || f.message)) || ''); return { ok: false, dropped: true }; }
+    const _sevUrgent = /^P[01]$/.test(String((f && f.severity) || ''));
+    if (++win.n > cap && !(_sevUrgent && win.n <= cap * 2)) { win.dropped++; console.error('FAILURE-REPORT DROPPED (over ' + cap + '/min):', (f && (f.where || f.message)) || ''); return { ok: false, dropped: true }; }
     ev = failBuildEvent(f, now, Math.random().toString(36).slice(2, 6));
     if (win.dropped) { ev.Context = (ev.Context ? ev.Context + ' ' : '') + `[${win.dropped} earlier report(s) dropped in a burst]`; win.dropped = 0; }
     await failEnsureTabs(env);
