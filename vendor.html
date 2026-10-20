@@ -2556,7 +2556,12 @@ function loadPortalAttachments(woId, opts) {
       });
       runningIdx += typeCount;
     });
-  }).catch(function(){});
+  }).catch(function(e) {
+    // Photos/files failed to load: previously the job card just looked like it had none (inviting a re-upload).
+    // showLoadFailed shows the box AND reports it once (POST /failure/report); do not report a second time here.
+    var elB = document.getElementById('uploads-before-' + woId);
+    showLoadFailed(elB ? 'uploads-before-' + woId : 'wo-uploads-' + woId, 'your photos and files', e && e.message, function() { loadPortalAttachments(woId, opts); }, woId);
+  });
 }
 
 // -- Photo Lightbox -- in-app swipeable viewer --------------------------------
