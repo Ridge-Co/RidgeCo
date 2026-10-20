@@ -5786,7 +5786,7 @@ function computeStandaloneBillTotals(lineItems) {
 }
 
 async function scopeSigResolveParties(env, s, row) {
-  let selections = {}; try { selections = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
+  const selections = parseJsonCell(row.Selections_JSON, {}, 'Scope_Signatures.Selections_JSON');
   const items = scopeParseItems(s);
   const tradeName = scopeSigTrade(items, selections);
   const trade = QB_TRADE_MAP[tradeName] || QB_TRADE_MAP.General;
