@@ -1483,7 +1483,7 @@ async function logVendorContactChange(env, vendorId, vendorName, field, oldValue
       Old_Value: oldValue || '', New_Value: newValue || '',
       Changed_By: changedBy || 'vendor', Changed_Date: new Date().toISOString(),
     });
-  } catch (e) { /* history is best-effort — a logging failure must never block the real update */ }
+  } catch (e) { await softFail(env, 'vendor_contact_history_write_failed', e, 'P1', { vendor_id: vendorId, field }); /* reported; a history failure must never block the real update */ }
 }
 
 // POST /vendor/update-contact {vendor_id, phone?, email?, company?} — deliberately does NOT
