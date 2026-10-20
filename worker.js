@@ -24943,7 +24943,7 @@ function __meterTab(path) {
     }
     const r = /^\/values\/([^!:?]+)!/.exec(path); if (r) return decodeURIComponent(r[1]) + ' (range)';
     return path.split('?')[0].slice(0, 60);
-  } catch (e) { return '?'; }
+  } catch (e) { /* silent-ok: an unlabelled route shows as a question mark */ return '?'; }
 }
 // One REAL attempt to Google (retries count too - each one spends quota). outcome: 'ok' | '429' | 'err'
 function __meterGoogle(env, method, path, outcome) {
