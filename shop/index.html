@@ -478,7 +478,7 @@ function payLink(m, total, orderId){
 function success(d, lines, total, methodId){
   var srvLines = (d.lines && d.lines.length) ? d.lines.map(function(l){ return {n:l.name,q:l.qty,t:l.total}; }) : lines.map(function(l){ return {n:l.p.name,q:l.qty,t:l.total}; });
   var snap = {orderId:d.orderId, total:d.total, methodId:methodId, lines:srvLines, ts:Date.now()};
-  try { sessionStorage.setItem('mr_last_order', JSON.stringify(snap)); } catch(e){ console.warn('could not save confirmation', e); }
+  try { sessionStorage.setItem('mr_last_order', JSON.stringify(snap)); } catch(e){ /* silent-ok: storage blocked, confirmation still shown on screen */ console.warn('could not save confirmation', e); }
   state.cart = {}; state.products.forEach(refreshCard); resetToken();
   $('orderForm').reset(); state.method = ''; renderMethods();
   renderDone(snap); go('done');
