@@ -1054,6 +1054,21 @@ function buildPhotoSection(woId, propAddr, opts) {
       location.replace(u.toString());
     } catch (e) { location.reload(true); }
   }
+  // Oct 19 2026 (Sheets read quota): a deploy used to make EVERY open copy of this page (every background tab, every user) reload
+  // within a minute of each other -- a stampede of cold page loads against the shared Google Sheets read quota right after each
+  // deploy. Now only a tab the person is actually looking at reloads, at a random moment in the next 20s; a hidden tab waits until
+  // it is shown (the visibilitychange/focus handlers call check() again, which lands here). Typing/unsaved work still gets the
+  // tap-to-refresh banner instead of a reload.
+  var _autoReloadPending = false;
+  function autoReload(isBusy){
+    if (document.hidden || _autoReloadPending) return;
+    _autoReloadPending = true;
+    setTimeout(function(){
+      _autoReloadPending = false;
+      if (document.hidden) return;
+      if (isBusy()) banner(); else reloadFresh();
+    }, Math.floor(Math.random() * 20000));
+  }
   function banner(){
     if (document.getElementById('mh-upd-banner')) return;
     var b = document.createElement('div');
@@ -1078,7 +1093,7 @@ function buildPhotoSection(woId, propAddr, opts) {
         if (last && last !== d.version) { dirty() ? banner() : reloadFresh(); }
         return;
       }
-      if (d.version !== booted){ dirty() ? banner() : reloadFresh(); }
+      if (d.version !== booted){ autoReload(dirty); }
     }).catch(function(){});
   }
   check();
