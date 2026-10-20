@@ -12332,7 +12332,7 @@ async function backfillApprovalStage(env, body) {
         if (p.type === 'wo') await updateWOFields(env, p.id, { Approval_Stage: p.stage });
         else await updateRow(env, 'Scopes', p.id, { Approval_Stage: p.stage });
         written++;
-      } catch (_) {}
+      } catch (e) { failedWrites.push(p.type + ':' + p.id); softNote('backfill_approval_stage_row_failed', e, 'P1', { ref: p.type + ':' + p.id }); }
     }
   }
   const counts = {}; plan.forEach(p => { const k = p.type + ':' + p.stage; counts[k] = (counts[k] || 0) + 1; });
