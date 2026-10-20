@@ -14430,7 +14430,7 @@ async function createVendorNudgeClock(env, woId, vendorId) {
       Nudge_Count: '0', First_Nudge_At: firstNudge.toISOString(), Next_Nudge_At: firstNudge.toISOString(),
       Last_Activity_At: now.toISOString(), Satisfied_Date: '', Created_Date: now.toISOString(), Active: 'TRUE',
     });
-  } catch (e) { /* non-fatal — assignment itself already succeeded */ }
+  } catch (e) { await softFail(env, 'vendor_nudge_clock_create_failed', e, 'P1', { ref: woId, vendor: vendorId }); /* the assignment itself already succeeded, but this vendor will not be nudged */ }
 }
 
 // Called from updateStatus/scheduleWO when updated_by_role==='vendor' — real vendor activity
