@@ -4349,7 +4349,7 @@ function isVendorBusy(){
         return;
       }
       if (d.version !== booted){ autoReload(isVendorBusy); }
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('vendor:versionCheck', e); });
   }
   check();
   setInterval(check, 60000);
