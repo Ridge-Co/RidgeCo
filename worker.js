@@ -11725,14 +11725,19 @@ async function approveInvoiceReview(env, body) {
   // now had its final bill reviewed and folded into vendor_cost (per the deposit banner
   // renderIRCard shows). Flip Deposit_Applied so a SECOND bill/review on this same WO never
   // nets the same deposit out twice, and the banner stops showing once it's been accounted for.
+  let depositFlagWarning = '';
   try {
     const wos = await fetchTab(env, 'Work_Orders');
     const wo = findWO(wos, wo_id);
     if (wo && wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0 && wo.Deposit_Applied !== 'TRUE') {
       await updateWOFields(env, wo_id, { Deposit_Applied: 'TRUE' });
     }
-  } catch (e) { /* non-fatal — the review itself is already saved */ }
-  return json({ success: true, id: realId, instant_pad: padRes.pad || 0 });
+  } catch (e) {
+    // The review is saved, but the deposit is not marked as accounted for: a second review on this WO could net it out twice.
+    await softFail(env, 'approve_invoice_review_deposit_flag', e, 'P1', { ref: wo_id });
+    depositFlagWarning = 'The review was saved, but the vendor deposit could not be marked as applied (' + String((e && e.message) || e).slice(0, 100) + '). Check the deposit on ' + wo_id + ' before approving another bill for it.';
+  }
+  return json(depositFlagWarning ? { success: true, id: realId, instant_pad: padRes.pad || 0, failure_warning: depositFlagWarning } : { success: true, id: realId, instant_pad: padRes.pad || 0 });
 }
 
 // POST /invoice-review/approve-bulk { approvals: [ {bill_id, wo_id, vendor_id, vendor_name,
