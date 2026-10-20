@@ -436,7 +436,7 @@ function weeklyDigest() {
 function getOrCreateSheet_(me) {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty('SHEET_ID');
-  if (id) { try { return SpreadsheetApp.openById(id); } catch (e) { /* fall through and look again */ } }
+  if (id) { try { return SpreadsheetApp.openById(id); } catch (e) { /* silent-ok: falls through to the Drive search just below which throws if no sheet is found */ Logger.log('openById(' + id + ') failed, searching Drive: ' + e); } }
 
   // Another mailbox may already have created it and shared it with this one.
   var it = DriveApp.searchFiles('title = "' + SHEET_NAME + '" and mimeType = "application/vnd.google-apps.spreadsheet" and trashed = false');
