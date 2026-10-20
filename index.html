@@ -12520,7 +12520,7 @@ function loadPayables(save) {
     _payablesRes = res;
     // Oct 1 2026: nothing may fail silently -- warnings/errors from the read or the save are shown, never dropped.
     _payablesAlerts.warnings = safeArray(res.warnings);
-    _payablesAlerts.errors = safeArray(res.errors);
+    _payablesAlerts.errors = safeArray(res.errors).concat(ctxFailed.map(function(l) { return { stage: 'context_load', error: 'Could not load ' + l + ', so names and filters below may be incomplete. Reload to retry.' }; }));
     if (res.deposit_sweep) _payablesAlerts.sweep = res.deposit_sweep;
     renderPayablesAlerts();
     _payablesRows = safeArray(res.rows);
