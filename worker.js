@@ -11151,7 +11151,7 @@ async function editVendorBillReceipts(env, body) {
     fields.Status = 'submitted';
     resetToSubmitted = true;
     if (liveIR) {
-      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { /* non-fatal — the stale row is now orphaned but harmless; Review Bills re-derives from Vendor_Bills */ }
+      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { await softFail(env, 'bill_receipts_stale_review_row', e, 'P1', { ref: billId, review: liveIR.ID }); }   // the stale Invoice_Review row stays active; Review Bills re-derives from Vendor_Bills
     }
   }
 
