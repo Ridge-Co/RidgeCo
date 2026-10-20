@@ -4608,15 +4608,16 @@ async function backfillScopeWOVendor(env) {
 // again, so re-running this after new receipts come in only picks up the new ones.
 async function backfillReceiptAttachments(env, body) {
   const apply = !!(body && body.apply === true);
-  const [receipts, attachments] = await Promise.all([
-    fetchTab(env, 'Receipts').catch(() => []),
-    fetchTab(env, 'Attachments').catch(() => []),
-  ]);
+  // Phase C: an unreadable Attachments tab would make every receipt look unlinked and create duplicates, so a failed read stops the run (and is reported).
+  const readErrors = [];
+  const rdTab = async (tab) => { try { return await fetchTab(env, tab); } catch (e) { readErrors.push(tab); await softFail(env, 'backfillReceiptAttachments_read:' + tab, e, 'P1'); return []; } };
+  const [receipts, attachments] = await Promise.all([rdTab('Receipts'), rdTab('Attachments')]);
+  if (readErrors.length) return json({ success: false, error: `Could not read ${readErrors.join(' and ')} - nothing was changed. Try again; the problem has been recorded.` }, 500);
   const alreadyLinked = new Set(
     attachments.filter(a => String(a.File_Type || '').toLowerCase() === 'receipt' && a.Receipt_ID)
       .map(a => String(a.Receipt_ID))
   );
-  let scanned = 0, eligible = 0, created = 0; const details = [];
+  let scanned = 0, eligible = 0, created = 0, writeFailed = 0; const details = [];
   for (const r of receipts) {
     if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
     scanned++;
