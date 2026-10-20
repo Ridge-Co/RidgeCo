@@ -16012,9 +16012,12 @@ async function checkDeadManSwitch(env) {
   const msg = gapHrs !== null
     ? `🔴 RidgeCo Hub: no worker job has completed in ~${gapHrs}h — something may be stuck or down.`
     : `🔴 RidgeCo Hub: no worker activity recorded in the last 2 days — something may be stuck or down.`;
-  try { await sendSMS(env, cfg.admin_phone, msg); } catch (_) {}
-  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (_) {}
+  let dmsSmsErr = '';
+  try { const sr = await sendSMS(env, cfg.admin_phone, msg); if (sr && sr.error) dmsSmsErr = String(sr.error).slice(0, 200); }
+  catch (e) { dmsSmsErr = String((e && e.message) || e).slice(0, 200); await softFail(env, 'dead_man_switch_sms_failed', e, 'P0'); }
+  if (!dmsSmsErr) { try { await failSetConfig(env, key, new Date().toISOString()); } catch (e) { await softFail(env, 'dead_man_switch_debounce_write_failed', e, 'P1', { note: 'the alert may repeat on the next sweep' }); } }   // only debounce a text that really left, so a failed one is retried
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (te) { softNote('telemetry_write_failed:dead_man_switch', te, 'P2'); }
+  if (dmsSmsErr) return { ok: true, tripped: true, alerted: false, sms_error: dmsSmsErr, last_activity: lastActivityISO };
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
 
