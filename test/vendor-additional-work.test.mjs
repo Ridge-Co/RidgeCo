@@ -4,6 +4,7 @@
 import fs from 'fs';
 import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const src = fs.readFileSync('worker.js', 'utf8');
+const SOFT = "const softNote = () => true; const softFail = async () => ({ ok: false }); const safeJson = async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }; const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };\n";   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 
 function grabAny(prefix, name) {
   const i = src.indexOf(prefix + name + '(');
