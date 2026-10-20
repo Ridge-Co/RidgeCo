@@ -8644,7 +8644,7 @@ async function woCombine(env, body) {
       const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} (${woJobLabel(survivorFresh)}) ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
       await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-  } catch (e) { /* non-fatal — combine already succeeded */ }
+  } catch (e) { combineWarnings.push('The combine succeeded, but the tenant notice may not have been sent.'); await softFail(env, 'wo_combine_tenant_sms_failed', e, 'P0', { survivor: String(survivorId) }); }
 
   // Owner ref notice (Sep 23 2026, Brett's follow-up) — Owner_WO_Ref is excluded from both
   // WO_COMBINE_RECONCILE_FIELDS and WO_COMBINE_MERGE_FIELDS (see the comment above
