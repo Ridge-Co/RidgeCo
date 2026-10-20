@@ -3774,7 +3774,7 @@ function clQuickKey(e, taId){
   if(e.key === 'Enter' && !e.isComposing){ e.preventDefault(); clQuickAdd(taId); }
 }
 function clQuickPaste(e, taId){
-  var t = ''; try{ t = (e.clipboardData || window.clipboardData).getData('text') || ''; }catch(x){}
+  var t = ''; try{ t = (e.clipboardData || window.clipboardData).getData('text') || ''; }catch(x){ /* silent-ok: clipboard read blocked, normal paste still works */ }
   if(!/[\r\n]/.test(t.replace(/[\r\n]+$/, ''))) return;   // single line: let the browser paste normally
   e.preventDefault();
   var inp = e.target;
