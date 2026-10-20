@@ -8704,7 +8704,7 @@ function loadInvoiceMaterials(k) {
   // up the same materials — the owner would see $100 of screws itemised twice.
   Promise.all([
     api('GET', '/receipts?wo_id=' + encodeURIComponent(woId)),
-    api('GET', '/receipts-billed?wo_id=' + encodeURIComponent(woId)).catch(function() { return { failed: true, billed: {} }; }),
+    api('GET', '/receipts-billed?wo_id=' + encodeURIComponent(woId)).catch(function() { /* silent-ok: failed:true is read just below and nothing gets ticked */ return { failed: true, billed: {} }; }),
   ]).then(function(both) {
     var rows = both[0];
     var billed = (both[1] && both[1].billed) || {};
