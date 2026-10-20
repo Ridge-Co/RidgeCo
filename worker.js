@@ -35906,6 +35906,7 @@ async function strOutboxDrain(ctx, opts) {
   }
   return out;
 }
+
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
