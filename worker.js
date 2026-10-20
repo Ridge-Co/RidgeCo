@@ -36810,6 +36810,23 @@ async function strPendingPlan(ctx, body) {
   const sendMode = !first ? 'none' : (inWin ? 'now' : 'after_window');
   return { date, label: strFmtDate(date, true), note, key, first: first ? { id: first.ID, name: first.Name, first: strFirst(first) } : null, text, queue, in_window: inWin, send_mode: sendMode,
     send_when: sendMode === 'now' ? 'It is sent right away.' : (sendMode === 'after_window' ? 'It is outside the 8 AM - 9 PM texting hours, so it will be sent at 8 AM. Tick "Send now even if late" to send it immediately.' : 'Nobody to text.'),
+    warnings, sig: strHash(['pend1', date, first ? first.ID : '-', n].join('|')) };
+}
+async function strAdminPendingPreview(env, body) {
+  try { const ctx = await strHandlerCtx(env); const plan = await strPendingPlan(ctx, body || {}); return json({ ok: true, plan }); }
+  catch (e) { return await strHandleErr(env, e, 'pending preview'); }
+}
+async function strAdminPendingCreate(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), plan = await strPendingPlan(ctx, body);
+    if (String(body.sig || '') !== plan.sig) throw strErr('stale_preview', 'Things changed since you pressed Preview (the queue or the date). Nothing was done. Press Preview again.', 409);
+    let text = strCleanText(body.text || '');
+    if (plan.first) { if (!text) throw strErr('text_empty', 'The text is empty. Type something, or press Preview again for the standard wording.', 400); if (text.length > STR_TEXT_MAX) throw strErr('text_too_long', `The text is ${text.length} characters; the most is ${STR_TEXT_MAX}.`, 400); }
+    const iso = new Date(ctx.now).toISOString(), fields = { Task_Key: plan.key, Property_Key: STR_PROP, Kind: 'pending', Date: plan.date, Win_Start: plan.date, Win_End: plan.date, Next_Arrival: '', Guests: '', Status: 'open', Missing_Count: '0', Created_At: iso, Updated_At: iso, Pending: 'TRUE', Pending_Note: plan.note };
+    const id = await strAddRow(env, 'STR_Turnovers', fields), row = Object.assign({ ID: id }, fields); ctx.st.pendings.push(row);
+    // two taps at once: the lowest row id for the date wins, the other withdraws itself and does nothing
+    invalidateTabCache('STR_Turnovers');
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
