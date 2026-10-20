@@ -8068,15 +8068,21 @@ async function addonWithdraw(env, body, callerRole, callerSessionId) {
     const es = String((est && est.Status) || 'Pending');
     if (!['Pending', 'Needs Info', ''].includes(es)) return json({ error: 'Too late to withdraw — this was already ' + es }, 400);
   } else if (status !== 'Draft') return json({ error: 'This job is not additional work' }, 400);
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  const withdrawWarnings = [];
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); }
+  catch (e) { await softFail(env, 'addon_withdraw_ensure_columns_failed', e, 'P1', { child_wo_id: childId }); withdrawWarnings.push('The void columns could not be prepared, so the withdrawal may not have been saved on the job.'); }
   const now = new Date().toISOString();
   await updateWOFields(env, childId, {
     Voided: 'TRUE', Void_Reason: 'Other', Void_Reason_Detail: 'Additional work withdrawn by vendor', Voided_By: 'vendor:' + vendorId, Voided_Date: now,
     Addon_Status: 'Withdrawn',
   });
-  if (est && est.ID) { try { await updateRow(env, 'Estimates', est.ID, { Status: 'Withdrawn' }); } catch (_) {} }
-  try { await logWOAudit(env, childId, 'vendor:' + vendorId, callerRole === 'vendor' ? 'vendor' : 'admin', 'Addon_Status', status, 'Withdrawn', 'Additional work withdrawn'); } catch (_) {}
-  return json({ success: true, child_wo_id: childId });
+  if (est && est.ID) {
+    try { await updateRow(env, 'Estimates', est.ID, { Status: 'Withdrawn' }); }
+    catch (e) { await softFail(env, 'addon_withdraw_estimate_status_failed', e, 'P1', { child_wo_id: childId, estimate_id: est.ID }); withdrawWarnings.push('The job was withdrawn, but its estimate could not be marked Withdrawn and may still show as pending.'); }
+  }
+  try { await logWOAudit(env, childId, 'vendor:' + vendorId, callerRole === 'vendor' ? 'vendor' : 'admin', 'Addon_Status', status, 'Withdrawn', 'Additional work withdrawn'); }
+  catch (e) { softNote('addon_withdraw_audit_failed', e, 'P2', { child_wo_id: childId }); }
+  return json({ success: true, child_wo_id: childId, ...(withdrawWarnings.length ? { failure_warnings: withdrawWarnings } : {}) });
 }
 
 // Photo rows (customer-safe types only) grouped by item index.
