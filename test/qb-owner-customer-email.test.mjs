@@ -3,6 +3,8 @@
 // read Billing_Email while the look-before-create lookup already used Billing_Email || Email. Runs the REAL
 // qbFindOrCreateCustomer from worker.js with stubbed QuickBooks/Sheets calls and inspects the create payload.
 import fs from 'fs';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 const src = fs.readFileSync('worker.js', 'utf8');
 function grab(name) {
   const i = src.indexOf('async function ' + name + '(');
