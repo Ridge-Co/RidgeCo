@@ -3201,7 +3201,7 @@ async function receiptAttachOnly(env, body) {
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source,
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await receiptAddJson(env, addResp, 'attach_only');
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
