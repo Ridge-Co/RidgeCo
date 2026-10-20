@@ -30,6 +30,20 @@ workers_dev = true
 [triggers]
 crons = []
 
+# ── Read Meter shared store (Oct 20 2026) ──
+# Cloudflare runs many instances of this Worker at once and each has its own memory, but the Google Sheets read quota is shared by all
+# of them. Each instance saves its recent per-minute read counts into ONE small Durable Object (class ReadMeterStore, exported from
+# worker.js) and GET /read-meter adds them together. Durable Objects work on the Workers Free plan (KV does not: 1,000 writes/day) but
+# only the SQLite kind, hence new_sqlite_classes. Staging and production each get their own copy. The code works without the binding
+# (the Read Meter page says so), it just shows one instance at a time.
+[[durable_objects.bindings]]
+name = "READ_METER_STORE"
+class_name = "ReadMeterStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ReadMeterStore"]
+
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
 # ── Environment variables & secrets (managed in the Cloudflare dashboard) ──
