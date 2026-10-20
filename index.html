@@ -15918,7 +15918,7 @@ function voidVendorBill(billId, woId) {
           '</div>';
         }).join('');
         if (billsHtml) db.insertAdjacentHTML('beforeend', billsHtml);
-      }).catch(function(){});
+      }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-bills-refresh', e); });
     } else {
       toast('Could not void bill','error');
     }
