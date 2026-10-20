@@ -3727,7 +3727,7 @@ function hubChecklistHtml(wo){
 // Turn stored checklist JSON back into editable text (one item per line).
 function checklistToText(json){
   try { var a=JSON.parse(json||'[]'); return (a||[]).map(function(i){return i.t||'';}).filter(Boolean).join('\n'); }
-  catch(e){ return ''; }
+  catch(e){ window.hubReportFailure && window.hubReportFailure('index:checklist-to-text', e); return ''; }
 }
 // ── Checklist quick entry (Oct 1 2026) ───────────────────────
 // parseChecklistPaste is the ONE parser for pasted/typed checklist text -> string[] of item titles
