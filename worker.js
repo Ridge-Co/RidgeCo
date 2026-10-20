@@ -12323,9 +12323,10 @@ async function backfillApprovalStage(env, body) {
     if (stage) plan.push({ type: 'scope', id: sc.ID, stage });
   }
   let written = 0;
+  const failedWrites = [];
   if (apply && plan.length) {
-    try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
-    try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (e) { await softFail(env, 'backfill_approval_stage_ensure_columns', e, 'P1'); }
+    try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (e) { await softFail(env, 'backfill_approval_stage_ensure_columns', e, 'P1'); }
     for (const p of plan) {
       try {
         if (p.type === 'wo') await updateWOFields(env, p.id, { Approval_Stage: p.stage });
