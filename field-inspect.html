@@ -809,7 +809,7 @@ function startDictation(){
     S.listening = true; recog.start();
   }catch(e){ S.listening=false; S.dictErr='Could not start voice typing: '+e.message; }
 }
-function stopDictation(){ S.listening=false; S.interim=''; if (recog){ try{ recog.onend=null; recog.stop(); }catch(e){ /* already stopped */ } recog=null; } }
+function stopDictation(){ S.listening=false; S.interim=''; if (recog){ try{ recog.onend=null; recog.stop(); }catch(e){ /* silent-ok: recognizer already stopped, nothing to do */ } recog=null; } }
 
 // ---- AI structure ----
 function structureNow(){
