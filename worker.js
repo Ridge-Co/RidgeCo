@@ -36672,6 +36672,41 @@ async function strPendingExpire(ctx, p) {
   ctx.pendChanged = true;
   return true;
 }
+
+// The tick's pending step: expire, convert, follow up on anything owed, then ask the next cleaner for each inquiry still waiting.
+async function strPendingTick(ctx, feed, built, builtMap) {
+  const st = ctx.st, today = inspEtDate(ctx.now), out = { expired: 0, converted: 0, conflicts: 0, offers: [] };
+  if (!st.pendings.length) return out;
+  const active = () => st.pendings.filter(strPendActive);
+  for (const p of active().filter(p => p.Date < today)) {
+    if (ctx.dry) { ctx.actions.push({ pending: p.Task_Key, would_expire: true }); continue; }
+    try { if (await strPendingExpire(ctx, p)) out.expired++; } catch (e) { ctx.errors.push({ step: 'pending_expire', error: `${p.Task_Key}: ${strErrText(e)}` }); }
+  }
+  for (const p of active().filter(p => p.Date >= today)) {
+    const real = st.turnovers.find(t => t.Kind === 'checkout' && t.Date === p.Date && t.Status !== 'cancelled' && !String(t.ID).startsWith('dry-') && (builtMap.has(t.Task_Key) || strManualHold(t, ctx.now)));
+    if (real) {
+      if (ctx.dry) { ctx.actions.push({ pending: p.Task_Key, would_convert_to: real.Task_Key }); continue; }
+      if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'pending date(s) to convert'); continue; }
+      try { const r = await strPendingConvert(ctx, p, real, 'bookings feed'); if (r.ok && !r.already) { out.converted++; if (r.conflict) out.conflicts++; } else if (!r.ok) ctx.warnings.push(`Pending ${strFmtDate(p.Date)}: not converted (${r.note}).`); }
+      catch (e) { ctx.errors.push({ step: 'pending_convert', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_convert', `The pending ${strFmtDate(p.Date)} date could not be turned into the real booking yet (it will be retried): ${strErrText(e)}`); }
+      continue;
+    }
+    // no exact match: a booking one day either side, or a pre-arrival clean on the date, is NOT treated as the same booking - Brett decides
+    if (!ctx.dry) for (const t of built.filter(t => (t.kind === 'checkout' && Math.abs(strDaysBetween(p.Date, t.date)) === 1) || (t.kind === 'prearrival' && t.date === p.Date))) {
+      try {
+        const head = `PENDING DATE ${strFmtDate(p.Date)}: a real booking now ${t.kind === 'prearrival' ? 'needs a pre-arrival clean that same day' : 'checks out on ' + strFmtDate(t.date)}, not on the date you asked cleaners about.`;
+        await strRaiseAlert(ctx, { key: `padj|${p.Task_Key}|${t.key}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, 'It was NOT treated as the same booking, so nobody was assigned. If the guest just changed dates, cancel the inquiry on the board; the new date goes through the normal cleaner queue. If the feed is simply behind, tap "Mark as booked now".', 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head} Not matched automatically - see the board. ${PORTAL_BASE}/str-cleaning.html` });
+      } catch (e) { ctx.errors.push({ step: 'pending_adjacent', error: strErrText(e) }); }
+    }
+  }
+  if (!ctx.dry) { try { out.drain = await strPendingDrain(ctx, feed); } catch (e) { ctx.errors.push({ step: 'pending_followup', error: strErrText(e) }); } }
+  for (const p of active().filter(p => p.Date >= today && ['open', 'offering', 'exhausted'].includes(p.Status))) {
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'pending date(s) to check for offers'); continue; }
+    try { const r = await strAdvanceTask(ctx, p); out.offers.push(Object.assign({ task: p.Task_Key }, r)); }
+    catch (e) { ctx.errors.push({ step: 'pending_offers', error: `${p.Task_Key}: ${strErrText(e)}` }); }
+  }
+  return out;
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
