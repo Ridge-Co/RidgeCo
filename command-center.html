@@ -228,7 +228,7 @@ function tasksCard(t){
 // pulled READ-ONLY. Best-effort: any failure just omits the card, never trips sample mode.
 // Stuck-WO alert (greenlit #2 "wo_status polling"): open WOs sitting in an active status past the
 // threshold. READ-ONLY. Best-effort — any failure just omits the card, never trips sample mode.
-async function loadStale(){ try{ return await getJSON('/stale-wos?days=4'); }catch(e){ return null; } }
+async function loadStale(){ try{ return await getJSON('/stale-wos?days=4'); }catch(e){ ccFail('Stuck-work alert',e); return null; } }
 function staleCard(s){
   if(!s||!s.ok||!s.count) return '';
   var all=s.stale||[]; var SHOWN=8;
