@@ -138,7 +138,10 @@ function render(d){
   var peak = d.peak_reads_in_a_minute;
   var started = new Date(d.isolate_started);
   var up = Math.round((Date.now() - started.getTime())/60000);
-  var h = '<div class="card"><div class="tiles">'
+  var ss = d.shared_store || {}, probs = (ss.problems || []).slice();
+  if (ss.partial_history) probs.push('Longer than 1 hour: other instances only keep the last hour, so the older part of this window is incomplete.');
+  var banner = probs.length ? '<div class="err"><b>Numbers may be incomplete.</b> ' + probs.map(esc).join(' ') + '</div>' : '';
+  var h = banner + '<div class="card"><div class="tiles">'
     + '<div class="tile ' + (peak>=40?'bad':peak>=25?'warn':'good') + '"><b>' + peak + ' / 60</b><span>busiest minute (reads)</span></div>'
     + '<div class="tile"><b>' + t.reads + '</b><span>reads in this window</span></div>'
     + '<div class="tile ' + (t.r429?'bad':'good') + '"><b>' + t.r429 + '</b><span>times Google said "too many"</span></div>'
