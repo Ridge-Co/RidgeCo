@@ -33203,8 +33203,7 @@ async function trashUnmarkSkipped(env, body) {
 }
 
 async function trashListProperties(env) {
-  let rows = [];
-  try { rows = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
+  const rows = await fetchTabSoft(env, 'Trash_Properties', 'trash_list_properties');
   const out = rows.filter(r => r.Active !== 'FALSE').map(r => ({
     id: r.ID, label: r.Label,
     customer_id: r.QBO_Customer_ID || '', customer_name: r.Customer_Name || '',
