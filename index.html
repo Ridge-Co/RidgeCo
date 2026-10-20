@@ -81,6 +81,66 @@ window.addEventListener('pageshow', function(e){
   .stat-card .num { font-size: 2rem; font-weight: bold; color: var(--accent); }
   .stat-card .label { color: var(--muted); font-size: 11px; letter-spacing: 0.1em; margin-top: 4px; }
   .section-title { color: var(--muted); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  /* ── TOOLS & LOG page (was "Dev Log"; Oct 20 2026). Everything is scoped to #page-devlog so no other page changes.
+     Reuses the one .btn family: gray .secondary = opens a page / only looks, blue = fixes data (shows you first),
+     red .danger = Careful (changes live data). Spacing steps: 4 / 8 / 12 / 16 / 24. Text never below 13px. ── */
+  #page-devlog { --dl-muted: #4b5563; }
+  #page-devlog [hidden] { display: none !important; }
+  #page-devlog .dl-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-bottom: 8px; }
+  #page-devlog .dl-title { font-size: 22px; font-weight: 700; margin: 0; }
+  #page-devlog .dl-search { flex: 1 1 260px; max-width: 440px; min-height: 44px; font: 16px var(--font); padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); }
+  #page-devlog .dl-search:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #page-devlog .dl-status { font-size: 13px; color: var(--dl-muted); min-height: 20px; margin-bottom: 8px; }
+  #page-devlog .dl-status button { background: none; border: 0; color: var(--accent); text-decoration: underline; font: inherit; cursor: pointer; min-height: 36px; padding: 0 4px; }
+  #page-devlog .dl-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--dl-muted); margin: 0 0 16px; }
+  #page-devlog .dl-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; border: 1px solid var(--border); }
+  #page-devlog .dl-dot.fix { background: var(--accent); border-color: var(--accent); }
+  #page-devlog .dl-dot.careful { background: var(--danger); border-color: var(--danger); }
+  #page-devlog .dl-dot.open { background: var(--surface2); border-color: var(--muted); }
+  #page-devlog .dl-note { font-size: 13px; line-height: 1.5; color: var(--dl-muted); margin: 0 0 12px; }
+  #page-devlog .dl-h { font-size: 16px; font-weight: 700; margin: 0; color: var(--text); }
+  #page-devlog .dl-section { margin-bottom: 24px; }
+  #page-devlog .dl-section > .dl-h { margin-bottom: 12px; }
+  #page-devlog .dl-pill { display: inline-block; min-width: 22px; padding: 1px 8px; border-radius: 12px; background: var(--surface2); border: 1px solid var(--border); font-size: 13px; font-weight: 700; color: var(--text); text-align: center; }
+  #page-devlog .dl-pill.alert { background: var(--danger); border-color: var(--danger); color: #fff; }
+  #page-devlog .dl-result { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; scroll-margin-top: 16px; }
+  #page-devlog .dl-result:empty { display: none; }
+  #page-devlog .dl-result:not(:empty)::before { content: "Result"; display: block; font-size: 13px; font-weight: 700; color: var(--dl-muted); margin-bottom: 4px; }
+  #page-devlog .dl-attn { background: #fdf2e2; border: 1px solid var(--warn); border-radius: 8px; padding: 16px; }
+  #page-devlog .dl-attn > .dl-h { margin-bottom: 12px; }
+  #page-devlog .dl-attn .dl-sub-h { font-size: 14px; font-weight: 700; margin: 0 0 4px; }
+  #page-devlog .dl-attn .dl-block + .dl-block { margin-top: 16px; }
+  #page-devlog details.dl-group { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+  #page-devlog details.dl-group > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 16px; min-height: 48px; }
+  #page-devlog details.dl-group > summary::-webkit-details-marker { display: none; }
+  #page-devlog details.dl-group > summary::before { content: "▸"; color: var(--dl-muted); font-size: 14px; width: 12px; transition: transform .15s; }
+  #page-devlog details.dl-group[open] > summary::before { transform: rotate(90deg); }
+  #page-devlog details.dl-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+  #page-devlog .dl-sub { flex: 1 1 200px; font-size: 13px; color: var(--dl-muted); }
+  #page-devlog .dl-count { margin-left: auto; font-size: 13px; color: var(--dl-muted); }
+  #page-devlog .dl-body { padding: 0 16px 16px; }
+  #page-devlog .dl-grid, #page-devlog .dl-pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+  #page-devlog .dl-tool { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  #page-devlog .dl-tool .dl-tool-btn { flex: 1 1 0; min-width: 0; min-height: 44px; text-align: left; font-size: 14px; letter-spacing: 0; line-height: 1.3; }
+  #page-devlog .dl-pin-grid { grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr)); gap: 8px; }
+  #page-devlog .dl-pin-grid .dl-tool { padding: 8px; gap: 4px 8px; }
+  #page-devlog .dl-pin-grid .dl-desc { display: none; }
+  #page-devlog .dl-star { flex: 0 0 44px; min-height: 44px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 20px; line-height: 1; cursor: pointer; color: var(--dl-muted); }
+  #page-devlog .dl-star[aria-pressed="true"] { color: var(--warn); border-color: var(--warn); }
+  #page-devlog:not(.dl-js) .dl-star { display: none; }
+  #page-devlog .dl-desc { flex: 1 1 100%; margin: 0; font-size: 13px; line-height: 1.45; color: var(--dl-muted); }
+  #page-devlog .dl-kind { flex: 1 1 100%; margin: 0; font-size: 13px; font-weight: 700; }
+  #page-devlog .dl-kind.fix { color: var(--accent); }
+  #page-devlog .dl-kind.careful { color: var(--danger); }
+  #page-devlog .dl-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
+  #page-devlog .dl-field, #page-devlog .dl-select { min-height: 44px; font: 16px var(--font); padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); }
+  #page-devlog .dl-field { width: 100%; resize: vertical; }
+  #page-devlog .dl-check { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; line-height: 1.4; cursor: pointer; min-height: 44px; }
+  #page-devlog .dl-check input { width: 22px; height: 22px; margin-top: 1px; flex: 0 0 auto; }
+  #page-devlog .dl-panel { display: flex; flex-direction: column; gap: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
+  #page-devlog .dl-storage { font-size: 13px; color: var(--danger); margin-bottom: 8px; }
+  /* Text that the page's own scripts write (wishlist cards, error log, requests) carries inline 10-11.5px sizes; lift them to a readable 13px without touching those scripts. */
+  #page-devlog [style*="font-size:10px"], #page-devlog [style*="font-size:10.5px"], #page-devlog [style*="font-size:11px"], #page-devlog [style*="font-size:11.5px"], #page-devlog [style*="font-size:12px"], #page-devlog .btn.small, #page-devlog .loading { font-size: 13px !important; }
   .wo-list { display: flex; flex-direction: column; gap: 8px; }
   .wo-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: border-color 0.15s; }
   .wo-card:hover { border-color: var(--accent); }
