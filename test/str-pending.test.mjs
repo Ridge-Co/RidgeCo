@@ -220,4 +220,81 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
   t('pressing Create again does not ask again or add a second row', dup.ok === false && dup.error === 'already_pending' && W.sms.length === 1 && rowsOf(W, 'STR_Turnovers').filter(r => r.Pending === 'TRUE').length === 1, dup);
   t('log has the creation and the offer', logs(W, 'pending_created').length === 1 && logs(W, 'offer_sent').filter(l => l.Task_Key === PK).length === 1);
   await tick(E, null); await tick(E, null);
+  t('no NOT COVERED alert is ever raised for a pending date', alertsOf(W, /^unc\|/).filter(a => /11-15|pending/.test(a.Alert_Key)).length === 0);
+  t('no red block and no (PENDING) event while nobody has said yes', !W.calEvents.some(e => e.start && e.start.date === PD) && !W.calEvents.some(e => e.start && e.start.dateTime && /2026-11-15/.test(e.start.dateTime)), W.calEvents.filter(e => /11-15/.test(JSON.stringify(e.start))));
+  const st = await J(E.strAdminState({})); t('admin state lists it in "pending", not in the real turnovers', st.pending.length === 1 && st.pending[0].key === PK && st.pending[0].status_label === 'Waiting on Gina' && !st.tasks.some(x => x.date === PD), st.pending);
+  t('the original real turnovers are untouched (no pending key among them)', st.tasks.every(x => !/pending/.test(x.key)));
+  const page = await pageOf(E, '1'), mine = page.pending[0];
+  t("Gina's page: pending date marked \"Pending - not booked\" with the question for her; real tasks list has no pending", page.pending.length === 1 && mine.status_label === 'Pending - not booked' && mine.offer_id && !page.tasks.some(x => x.date === PD) && !page.offers.some(o => /pending/.test(o.task_key)), page.pending);
+  const page2 = await pageOf(E, '3'); t("Rachel's page lists the date too (so she can mark backup) but has no question", page2.pending.length === 1 && !page2.pending[0].offer_id, page2.pending);
+  const ics = await E.strCleanerIcs({}, new URL('https://x.test/str/c/ics?k=' + tok(W, '1'))); t('the .ics file has no pending date', !/20261115/.test(await ics.text()));
+  const dg = await E.strRunDigest({}, { dry: true }); t('digest never lists the pending date', !JSON.stringify(dg).includes('Nov 15'));
+}
+
+// ═══ 2. Passing, saying yes, backups, the tentative hold ═══
+{
+  const { W, E, y, k } = await heldByKayla(); CUR = W;
+  const gOff = offerOf(W, '1', PK);
+  t('Gina said no: her offer is declined and Kayla was asked next with the pending wording', gOff.Status === 'declined' && smsTo(W, 'Kayla', 'str_pending_offer').length === 1, W.sms);
+  t("Kayla's yes is a TENTATIVE HOLD: status pending_held, held via pending_yes, not assigned", y.ok && y.result === 'held' && pend(W).Status === 'pending_held' && pend(W).Assigned_Cleaner_ID === '2' && pend(W).Assigned_Via === 'pending_yes', { y, p: pend(W) });
+  t('she gets exactly the approved "nothing is confirmed" text, once', smsTo(W, 'Kayla', 'str_pending_yes').length === 1 && smsTo(W, 'Kayla', 'str_pending_yes')[0].text === "Thanks - we'll let you know if it books. Nothing is confirmed yet.", smsTo(W, 'Kayla'));
+  t('nobody got an "assigned" or "filled" text, and the real turnovers have no row for the date', !W.sms.some(s => /assigned|filled/.test(s.type)) && !rowsOf(W, 'STR_Turnovers').some(r => r.Task_Key === RK));
+  t('Brett was told right away that Kayla CAN do it (tentative, you can accept the booking)', W.brett.some(b => /PENDING DATE: Kayla CAN clean/.test(b.text) && /accept the booking/.test(b.text)), W.brett);
+  const st0 = await J(E.strAdminState({})); t('status reads "Held by Kayla - tentative"', st0.pending[0].status_label === 'Held by Kayla - tentative' && st0.pending[0].held_by === 'Kayla', st0.pending[0]);
+  const again = await answer(E, '2', 'accept', k.ID); t('saying yes twice is harmless: "already", no second text', again.result === 'already_yours' && smsTo(W, 'Kayla', 'str_pending_yes').length === 1, again);
+  await tick(E, null);
+  const ev = pendingEvents(W);
+  t('the tick puts ONE all-day "Kayla Cleaning (PENDING)" event on the calendar with the Hub marks and a pending flag', ev.length === 1 && ev[0].summary === 'Kayla Cleaning (PENDING)' && ev[0].start.date === PD && ev[0].end.date === '2026-11-16' && ev[0].extendedProperties.private.ridgecoStr === '1' && ev[0].extendedProperties.private.ridgecoStrKey === PK && ev[0].extendedProperties.private.ridgecoStrPending === '1', ev);
+  const w0 = calWrites(W); await tick(E, null); t('a second tick writes nothing more to the calendar', calWrites(W) === w0 && pendingEvents(W).length === 1);
+  t('no NOT COVERED alert for a held pending date', alertsOf(W, /^unc\|/).filter(a => /11-15/.test(a.Alert_Key)).length === 0);
+  const ics = await (await E.strCleanerIcs({}, new URL('https://x.test/str/c/ics?k=' + tok(W, '2')))).text(); t("a tentative hold is not on her calendar file", !/20261115/.test(ics));
+  const pg = await pageOf(E, '2'); t('her page shows "You said yes - tentative" and lets her give it back', pg.pending[0].held_by_me && pg.pending[0].can_release && pg.pending[0].status_label === 'You said yes - tentative', pg.pending);
+  const pr = await pageOf(E, '3'); t('Rachel sees it only as "Pending - not booked"', !pr.pending[0].held_by_me && pr.pending[0].held_by_other && pr.pending[0].status_label === 'Pending - not booked');
+  const late = await answer(E, '1', 'accept', gOff.ID); t('a cleaner who already passed cannot take the hold from Kayla', late.result === 'filled' || late.result === 'already', late);
+  t("the hold is still Kayla's", pend(W).Assigned_Cleaner_ID === '2' && pend(W).Status === 'pending_held');
+}
+
+// ═══ 3. Nobody says yes ═══
+{
+  const { W, E } = await world(); CUR = W;
+  await ask(E, PD, 'TEST-none');
+  for (const [cid, who] of [['1', 'Gina'], ['2', 'Kayla'], ['3', 'Rachel']]) { const o = offerOf(W, cid, PK, 'pending'); t(who + ' was asked in queue order', !!o, offersOf(W, PK)); if (o) await answer(E, cid, 'decline', o.ID); }
+  const st = await J(E.strAdminState({}));
+  t('queue exhausted: status exhausted, label "Nobody available"', pend(W).Status === 'exhausted' && st.pending[0].status_label === 'Nobody available', pend(W));
+  t('Brett told right away that nobody can do it (one alert)', alertsOf(W, /^pnone\|/).length === 1 && W.brett.filter(b => /nobody can clean/i.test(b.text)).length === 1, W.brett);
+  const n = W.brett.length; await tick(E, null); await tick(E, null);
+  t('further ticks do not repeat the "nobody" alert and raise no NOT COVERED alert', W.brett.length === n && alertsOf(W, /^unc\|/).filter(a => /11-15/.test(a.Alert_Key)).length === 0, W.brett.slice(n));
+  t('exactly three texts went out (one per cleaner)', W.sms.filter(s => s.type === 'str_pending_offer').length === 3);
+}
+
+// ═══ 4. Send window: respected by default, "send now even if late" is explicit ═══
+{
+  const { W, E } = await world(); CUR = W; clock = at(E, '2026-10-20', '22:30');
+  const pv = await J(E.strAdminPendingPreview({}, { date: PD, note: 'TEST-late' }));
+  t('preview at 10:30 PM says it will wait until 8 AM and offers "send now"', pv.plan.send_mode === 'after_window' && pv.plan.in_window === false && /8 AM/.test(pv.plan.send_when), pv.plan);
+  const cr = await J(E.strAdminPendingCreate({}, { date: PD, note: 'TEST-late', sig: pv.plan.sig, text: pv.plan.text }));
+  t('default: nothing is texted at night; saved as "Not asked yet"', cr.ok && cr.advance.action === 'waiting_send_window' && !W.sms.length && pend(W).Status === 'open' && cr.status.label === 'Not asked yet', cr);
+  await tick(E, '2026-10-20', '23:10'); t('a tick at night still sends nothing', !W.sms.length);
+  const st = await J(E.strAdminState({})); t('board marks it as waiting for 8 AM and can send now', st.pending[0].waiting_for_window === true && st.pending[0].can_send_now && st.pending[0].next_up === 'Gina', st.pending[0]);
+  await tick(E, '2026-10-21', '08:05'); t('the first tick after 8 AM asks Gina', smsTo(W, 'Regina', 'str_pending_offer').length === 1 && offerOf(W, '1', PK, 'pending'), W.sms);
+}
+{
+  const { W, E } = await world(); CUR = W; clock = at(E, '2026-10-20', '22:30');
+  await ask(E, PD, 'TEST-late'); t('(setup) waiting', !W.sms.length);
+  E.__cold(); const c0 = costNow(W), r = await J(E.strAdminPendingSendNow({}, { task_key: PK }));
+  t('"Send now even if late" texts Gina immediately at 10:30 PM', r.ok && r.result.action === 'offered' && smsTo(W, 'Regina', 'str_pending_offer').length === 1, r);
+  t('send-now stayed under the subrequest limit', costNow(W) - c0 <= 48, costNow(W) - c0);
+  const r2 = await J(E.strAdminPendingSendNow({}, { task_key: PK })); t('pressing it again does not text twice', smsTo(W, 'Regina').length === 1 && r2.result.action === 'waiting_reply', r2);
+  await answer(E, '1', 'decline', offerOf(W, '1', PK, 'pending').ID);
+  t('after a pass at night the next cleaner is NOT texted until 8 AM (a pending date is never urgent)', !smsTo(W, 'Kayla').length && (await J(E.strAdminState({}))).pending[0].status_label === 'Waiting to ask the next cleaner');
+}
+
+// ═══ 5. The booking arrives: automatic conversion ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W;
+  await tick(E, null); const evId = pendingEvents(W)[0].id; W.sms.length = 0; W.attach.length = 0; W.brett.length = 0; W.cal.length = 0;
+  BOOK(W, '2026-11-13', PD, 'Pat');
+  const r = await tick(E, null);
+  const real = pend(W, RK), p = pend(W);
+  t('tick ok', r.ok, r.errors);
 //@@APPEND@@
