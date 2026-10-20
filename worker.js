@@ -7980,14 +7980,19 @@ async function addonStart(env, body, callerRole, callerSessionId) {
     const stored = existing ? addonParseItems(existing) : [];
     return json({ success: true, duplicate: true, child_wo_id: childId, items: (stored.length ? stored : v.items).map(it => ({ index: it.index, desc: it.desc })) });
   }
-  try { await assignVendor(env, { wo_id: childId, vendor_id: vendorId, notify: false }); } catch (e) { /* surfaced by the field check below */ }
+  let addonAssignWarning = '';
+  try { await assignVendor(env, { wo_id: childId, vendor_id: vendorId, notify: false }); }
+  catch (e) {
+    await softFail(env, 'addon_start_assign_failed', e, 'P1', { child_wo_id: childId, vendor_id: vendorId });   // submit would later refuse "not assigned to you"
+    addonAssignWarning = 'The additional-work draft was created but could not be assigned to you; submitting it may be refused. Ridge Co has been notified.';
+  }
   await updateWOFields(env, childId, {
     Voided: 'TRUE', Void_Reason: 'Other', Void_Reason_Detail: 'Additional-work draft (not submitted yet)',
     Parent_WO_ID: parentId, Addon_Status: 'Draft',
     Addon_Tenant_Mentioned: (body.tenant_mentioned === true || body.tenant_mentioned === 'TRUE') ? 'TRUE' : 'FALSE',
     Addon_Items_JSON: JSON.stringify(v.items), Addon_Amount: v.amount.toFixed(2),
   });
-  return json({ success: true, child_wo_id: childId, items: v.items.map(it => ({ index: it.index, desc: it.desc })) });
+  return json({ success: true, child_wo_id: childId, items: v.items.map(it => ({ index: it.index, desc: it.desc })), ...(addonAssignWarning ? { failure_warning: addonAssignWarning } : {}) });
 }
 
 // POST /wo/additional-work/submit { child_wo_id }
