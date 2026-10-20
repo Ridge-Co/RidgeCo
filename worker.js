@@ -24466,9 +24466,11 @@ async function fetchTabs(env, tabs, opts) {
             const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
           });
         })();
-        __batchInflight.set(bkey, bp);
-        const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
-        bp.then(clear, clear);
+        if (shared) {
+          __batchInflight.set(bkey, bp);
+          const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
+          bp.then(clear, clear);
+        }
       }
       await bp;
     }
