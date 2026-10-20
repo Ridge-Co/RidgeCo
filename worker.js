@@ -30311,7 +30311,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
 // row (see receiptReconCheckDuplicatesBulk).
 async function receiptCheckDuplicatesOne(env, row, opts) {
   opts = opts || {};
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (_) {}
+  const suggestion = parseJsonCell(row.Suggestion, null, 'Receipt_Recon_Queue.Suggestion');
   const amount = row.Total, date = row.Receipt_Date;
   const propertyId = (suggestion && suggestion.property && suggestion.property.id) || '';
   const evidence = [];
