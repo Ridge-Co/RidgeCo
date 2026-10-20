@@ -24548,7 +24548,7 @@ async function __meterReportStoreFault(env, msg) {
   __meter.lastStoreAlarmAt = now;
   try {
     const r = await reportFailure(env, { system: 'hub', source: 'read-meter', where: 'read_meter_store', ref: __meter.isolate, severity: 'P2',
-      message: 'The Read Meter could not save its counts to the shared store (READ_METER): ' + msg + '. Until fixed, the Read Meter page shows only part of the traffic.', context: { isolate: __meter.isolate } });
+      message: 'The Read Meter could not save its counts to its shared store (Durable Object READ_METER_STORE): ' + msg + '. Until fixed, the Read Meter page shows only part of the traffic.', context: { isolate: __meter.isolate } });
     if (!r || r.ok === false) console.error('[read-meter] store fault could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
   } catch (e) { console.error('[read-meter] store fault could not be saved:', String((e && e.message) || e).slice(0, 200)); }
 }
