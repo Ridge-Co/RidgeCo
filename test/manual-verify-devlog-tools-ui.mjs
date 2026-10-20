@@ -114,6 +114,29 @@ console.log('(load failures are visible, logged, reported)');
   ok(reports.some(r => /vendor_access_requests_load/.test(r || '')), 'vendor-requests failure reported to /failure/report');
   await ctx.close(); }
 
+console.log('(review findings: error log blocked, review queue failure, escaping, populated lists)');
+{ const reports = []; const { ctx, page } = await open({ width: 390, height: 844 }, { failWishlist: true, blockErrorLog: true, reports }); await page.waitForTimeout(600);
+  const txt = await page.textContent('#wishlist-list');
+  ok(/Could not load the wishlist/.test(txt) && /Retry/.test(txt), 'wishlist failure is still shown on screen when the Error Log cannot be written');
+  ok(/Could not save this to the Error Log/.test(txt), 'and the page says the Error Log write failed');
+  ok(reports.some(r => /wishlist_load/.test(r || '')), 'and it is still reported to the failure ledger');
+  await ctx.close(); }
+{ const reports = []; const { ctx, page } = await open({ width: 390, height: 844 }, { failVTR: true, reports }); await page.waitForTimeout(600);
+  const txt = await page.textContent('#vtr-review-list');
+  ok(/Could not|Vendor task review queue/.test(txt) && /Retry/.test(txt) && !/Nothing waiting/.test(txt), 'review queue {error} shows a red failure with Retry, not "Nothing waiting"');
+  ok(await vis(page, '#dl-attn'), 'the Needs-your-attention strip stays open for the review-queue failure');
+  ok(reports.some(r => /vendor_task_review_load/.test(r || '')), 'review-queue failure reported to the failure ledger');
+  ok(await page.evaluate(() => window.__xss === undefined), 'server error text is not executed as HTML');
+  const logHtml = await page.evaluate(() => document.getElementById('error-log-list').innerHTML);
+  ok(/&lt;img/.test(logHtml) && !/<img/.test(logHtml), 'the Error Log screen shows server text escaped');
+  await ctx.close(); }
+{ const { ctx, page } = await open({ width: 390, height: 844 }, { populate: true }); await page.waitForTimeout(800);
+  const small = await page.evaluate(() => Array.from(document.querySelectorAll('#vendor-access-requests-list .btn, #vtr-review-list .btn')).filter(e => e.offsetParent !== null && e.getBoundingClientRect().height < 43).length);
+  const total = await page.evaluate(() => document.querySelectorAll('#vendor-access-requests-list .btn, #vtr-review-list .btn').length);
+  ok(total >= 4 && small === 0, 'Approve / Deny / Mark Reviewed buttons are 44px tall (' + small + ' of ' + total + ' too small)');
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), 'no horizontal scroll with the lists filled in');
+  await ctx.close(); }
+
 ok(errors.length === 0, 'no page errors ' + errors.join('|'));
 await browser.close(); server.close();
 console.log(pass + ' passed, ' + fail + ' failed'); process.exit(fail ? 1 : 0);
