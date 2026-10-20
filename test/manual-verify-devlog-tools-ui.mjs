@@ -14,7 +14,7 @@ let pass = 0, fail = 0; const ok = (c, m) => { if (c) { pass++; console.log('  â
 const json = (route, d, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(d) });
 const browser = await chromium.launch();
 const errors = [];
-async function open(vp, { failWishlist = false, blockStorage = false, failVAR = false, reports } = {}) {
+async function open(vp, { failWishlist = false, blockStorage = false, failVAR = false, failVTR = false, blockErrorLog = false, populate = false, reports } = {}) {
   const ctx = await browser.newContext({ viewport: vp }); const page = await ctx.newPage();
   page.on('pageerror', e => errors.push(String(e)));
   await page.addInitScript(bs => { try { localStorage.setItem('mh_auth', 'TEST-TOKEN'); } catch (e) {}
