@@ -132,11 +132,67 @@ const sigRows = () => [irRow(1), irRow(2), sigRow(1), sigRow(2), sigRow(3), sigR
   // sweep stage alone: after the rows are done the next slice skips the QuickBooks read entirely
   const X = build({ rows: sigRows(), transitionMs: 0, sweepFails: (() => { let n = 0; return () => n++ === 0; })() });
   const st = { done: [] };
-  const r1 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 1000, now: X.clock }));
+  const r1 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 1000, minLoopMs: 0, now: X.clock }));
   t('a sweep that throws is reported, the pass is not marked finished', r1.errors.some(e => e.stage === 'qb_sync_deposit_sweep') && st.loop_done === true && !st.sweep_done && r1.partial === true, r1);
   let payablesCalls = 0; const origCalls = X.calls.length;
-  const r2 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 1000, now: X.clock }));
+  const r2 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 1000, minLoopMs: 0, now: X.clock }));
   t('retry slice runs ONLY the sweep (no QuickBooks read, no row side effects repeated)', r2.partial === false && st.sweep_done === true && X.sweeps.length === 2 && X.transitions.length === 5 && X.calls.length === origCalls, { r2, calls: X.calls.slice(origCalls) });
+}
+// 4b. Oct 20 2026: a slow QuickBooks read can no longer starve the row loop (14 slices, 115/120 rows on Oct 20)
+{
+  // payables alone takes 60 s (twice the whole 30 s slice budget). The old code did zero rows; the loop now has its own 12 s window.
+  const X = build({ rows: sigRows(), transitionMs: 5000, payablesMs: 60000 });
+  const st = { done: [] };
+  const r1 = await body(await X.qbSyncPayments(X.env, {}, { state: st, now: X.clock }));
+  t('slow payables (60 s > 30 s slice): the row loop still gets its own window and does rows', r1.rows_this_slice >= 3 && r1.progress_made === true && st.done.length === r1.rows_this_slice, r1);
+  t('...and still stops at the window (not the whole list), partial, no sweep yet', r1.partial === true && st.done.length < 7 && X.sweeps.length === 0, { r1, done: st.done });
+  const r2 = await body(await X.qbSyncPayments(X.env, {}, { state: st, now: X.clock }));
+  const r3 = await body(await X.qbSyncPayments(X.env, {}, { state: st, now: X.clock }));
+  t('with a 60 s read every slice, the pass still finishes in a few slices (each one moves forward)', st.loop_done === true && r1.progress_made && r2.progress_made && (r3.progress_made || st.sweep_done) && st.slices <= 4, { slices: st.slices, done: st.done.length });
+}
+{
+  // at least one row per slice, even with no time left at all
+  const X = build({ rows: sigRows(), transitionMs: 100, payablesMs: 60000 });
+  const st = { done: [] };
+  const r1 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 0, minLoopMs: 0, now: X.clock }));
+  t('zero time left: still exactly ONE row is processed (a slice can never do nothing)', r1.rows_this_slice === 1 && st.done.length === 1 && r1.partial === true && r1.progress_made === true, r1);
+  let guard = 0; while (!st.sweep_done && guard++ < 20) await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 0, minLoopMs: 0, now: X.clock });
+  t('...so even a zero budget finishes the whole pass, one row per slice, sweep exactly once', st.loop_done && st.sweep_done && X.sweeps.length === 1 && new Set(X.transitions).size === 5 && st.slices <= 9, { slices: st.slices });
+}
+{
+  // progress_made is FALSE for a slice that moved nothing (rows done, sweep keeps failing) - and the failure is still reported
+  const X = build({ rows: sigRows(), transitionMs: 0, sweepFails: () => true });
+  const st = { done: [] };
+  const r1 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 1000, minLoopMs: 0, now: X.clock }));
+  t('slice that finished the rows but failed the sweep still counts as progress (rows + loop done)', r1.progress_made === true && r1.errors.some(e => e.stage === 'qb_sync_deposit_sweep'), r1);
+  const r2 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 1000, minLoopMs: 0, now: X.clock }));
+  t('the next slice (sweep fails again, nothing else left) reports progress_made:false + the error', r2.progress_made === false && r2.partial === true && r2.errors.some(e => e.stage === 'qb_sync_deposit_sweep'), r2);
+}
+{
+  // slice_log: per-slice timings land in the progress object, capped
+  const X = build({ rows: sigRows(), transitionMs: 20, payablesMs: 700 });
+  const st = { done: [] };
+  await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, minLoopMs: 0, now: X.clock });
+  await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, minLoopMs: 0, now: X.clock });
+  const L1 = st.slice_log && st.slice_log[0];
+  t('slice_log records each slice: number, rows done/left, payables ms, whether it stopped early', st.slice_log.length === 2 && L1.n === 1 && L1.rows_done >= 1 && L1.rows_left > 0 && L1.stopped_early === true && L1.t.payables_ms === 700 && L1.progress === true && !!L1.at, st.slice_log);
+  let g2 = 0; while (!st.sweep_done && g2++ < 20) await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, minLoopMs: 0, now: X.clock });
+  const lastL = st.slice_log[st.slice_log.length - 1];
+  t('slice_log: the finishing slice shows rows_left 0, not stopped early', st.sweep_done && lastL.rows_left === 0 && lastL.stopped_early === false, st.slice_log);
+  st.sweep_done = false; st.loop_done = false; st.done = [];   // reset for the cap check below
+  st.slice_log = Array.from({ length: 25 }, (_, i) => ({ n: i }));
+  await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, minLoopMs: 0, now: X.clock });
+  t('slice_log is capped (keeps the newest 20)', st.slice_log.length === 20 && st.slice_log[19].n === st.slices, st.slice_log.map(x => x.n));
+  t('a one-pass call (no scheduler state) keeps the old shape: no progress_made / rows_this_slice', (await body(await X.qbSyncPayments(X.env, {}))).progress_made === undefined);
+}
+{
+  // the job wrapper hands progress_made to the dispatcher and keeps the log in the saved progress
+  const X = build({ rows: sigRows(), transitionMs: 20 });
+  let saved = null;
+  const progress = { read: async () => (saved ? JSON.parse(saved) : null), write: async (p) => { saved = JSON.stringify(p); } };
+  const j1 = await X.schedRunDailyQbSync(X.env, null, { today: '2026-10-20', sliceMs: 50, minLoopMs: 0, now: X.clock, progress });
+  t('job result carries progress_made (true) on a partial slice, and detail has the rows done', j1.ok === true && j1.partial === true && j1.progress_made === true && j1.detail.qb_sync.rows_this_slice >= 1, j1);
+  t('saved progress carries slice_log', JSON.parse(saved).slice_log.length === 1, JSON.parse(saved).slice_log);
 }
 // 5. the job wrapper: progress across ticks, done once per day
 {
