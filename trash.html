@@ -413,7 +413,14 @@ function loadWeek(offset){
                + '<div>'+status+'</div></div>';
         }).join('')
       + '</div>';
+    if(wkErr) el.insertBefore(wkErr, el.firstChild);
     renderBatchBar(offset);
+  }).catch(function(e){
+    window.hubReportFailure && window.hubReportFailure('trash:loadWeek', e);
+    var el=document.getElementById('week'); if(!el) return;
+    el.textContent='';
+    var box=loadErrorNote(['Could not load the week list ('+((e&&e.message)||'network error')+').'], 'this week\'s list');
+    if(box) el.appendChild(box);
   });
 }
 
