@@ -96,7 +96,7 @@ const STAGING=_params.has('staging')||_params.get('env')==='staging';
 const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';
 let TOKEN='';
-try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* storage blocked: the token box below handles it */ }
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* silent-ok: storage blocked, the token box below handles it */ }
 let DATA=null;
 
 function h(s){return (s==null?'':(''+s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
