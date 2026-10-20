@@ -15307,6 +15307,15 @@ const DEFAULT_MESSAGE_TEMPLATES = [
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover these turnovers at {Property}: {DateList}. So you're off the hook for those - could you be the backup in case anything changes? No reply needed." },
   { Message_Type: 'str_admin_marked', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've marked you {MarkText} for {DateList} at {Property}. If that's not right, you can change it here: {Link}" },
+  // Oct 20 2026: pending cleaning (a date with no booking yet).
+  { Message_Type: 'str_pending_offer', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, quick question - we may have a guest checking out {DateShort} at {Property}, but it isn't booked yet. Would you be available to clean it if it does book? An answer as soon as you can helps us decide whether to accept it. Tap here: {Link}" },
+  { Message_Type: 'str_pending_yes', Channel: 'sms', Subject: '', Body:
+    "Thanks - we'll let you know if it books. Nothing is confirmed yet." },
+  { Message_Type: 'str_pending_booked', Channel: 'sms', Subject: '', Body:
+    "{FirstName}, good news - {DateShort} at {Property} is now booked and you're on the schedule. Checkout is 11 AM{NextLine}. Please update your availability if needed. Details and invite: {Link}" },
+  { Message_Type: 'str_pending_cancelled', Channel: 'sms', Subject: '', Body:
+    "Hi {FirstName}, thanks for saying you could do {DateShort} at {Property}. It didn't book after all, so you don't need to keep that date open. We really appreciate it!" },
   { Message_Type: 'property_notice', Channel: 'email', Subject: 'Maintenance update - {Address}', Body:
     "<p>This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}.</p><p>[describe the issue here]</p><p>Questions? Reply to this email.</p>" },
 ];
