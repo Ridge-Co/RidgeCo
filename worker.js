@@ -18177,7 +18177,7 @@ async function sendCustomMessage(env, body) {
   // wo_id is set -- see logMessageAudit inside it. With no wo_id (a list-page message, not tied
   // to any work order) there's no WO_Audit row possible, so log to SMS_Logs instead as the
   // durable record of the send attempt.
-  if (!body.wo_id) { try { await logSMS(env, '', kind, recipient.ID, recipient.Phone, msg); } catch (_) {} }
+  if (!body.wo_id) { try { await logSMS(env, '', kind, recipient.ID, recipient.Phone, msg); } catch (e) { softNote('custom_message_sms_log_failed', e, 'P1'); } }
 
   return json({
     success: true, sent: r.sent, send_ok: r.send_ok, held_for_quiet_hours: !!r.held_for_quiet_hours,
