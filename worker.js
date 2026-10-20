@@ -35291,7 +35291,7 @@ async function strLog(ctx, taskKey, cleanerId, event, detail) {
 const __strSysAt = {};
 // Failure Brett must see. Never throws; telemetry row first (Success=FALSE), then throttled SMS + email.
 async function strSystemAlert(env, kind, message) {
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); softNote('telemetry_write_failed:str_cleaning', te, 'P2', { kind }); }
   const now = Date.now();
   if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
   __strSysAt[kind] = now;
