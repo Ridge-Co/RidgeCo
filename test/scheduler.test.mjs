@@ -63,7 +63,9 @@ function makeStore() {
 // ───────────────────────────── 1. scheduler block, sliced out of worker.js ─────────────────────────────
 const bi = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-BEGIN'), be = wsrc.indexOf('// ═══ SCHEDULER-BLOCK-END');
 t('scheduler block markers exist', bi > 0 && be > bi);
-const blockSrc = wsrc.slice(bi, be);
+const gi = wsrc.indexOf('// ═══ AI-CREDIT-GUARD-BEGIN'), ge = wsrc.indexOf('// ═══ AI-CREDIT-GUARD-END');
+t('AI-credit guard markers exist', gi > 0 && ge > gi);
+const blockSrc = wsrc.slice(bi, be) + '\n' + wsrc.slice(gi, ge);
 function load(store, over) {
   over = over || {};
   const telemetry = [], alerts = [];
@@ -74,7 +76,7 @@ function load(store, over) {
     alertAdminOnFailure: async (env, k, m) => { alerts.push({ k, m }); return { skipped: true }; },
     setConfigKey: async (env, b) => { store.setCfg(b.key, b.value); return { ok: true }; },
     json: (b, s) => ({ body: b, status: s || 200 }),
-    __cronEnv: (e) => e,
+    __cronEnv: (e) => e, __meterCronEnv: (e) => e,
     doorWatchdogCron: async () => ({ ok: true }),
     processQuietHoursQueue: async () => ({ checked: 0, results: [] }),
     processPendingNotifications: async () => ({ status: 200, clone() { return this; }, async json() { return { processed: 0 }; } }),
@@ -111,7 +113,7 @@ const primeState = (store) => { store.tabs.get('Config').push(['Scheduler_State'
 // registry shape
 {
   const names = P.SCHED_JOBS.map(j => j.name);
-  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily', 'str_digest_mon', 'str_digest_wed', 'str_digest_fri']), names);
+  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'ai_credit_probe', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily', 'str_digest_mon', 'str_digest_wed', 'str_digest_fri']), names);
   t('registry names unique', new Set(names).size === names.length);
   const dw = P.SCHED_JOBS.find(j => j.name === 'door_watchdog'), sw = P.SCHED_JOBS.find(j => j.name === 'sweep');
   t('15-minute jobs gate at >=14 min', dw.every_min === 14 && sw.every_min === 14);
@@ -986,11 +988,11 @@ globalThis.setTimeout = _realSetTimeout;
   t('no leftover cronSweepLogged / cron-branch dispatch in worker.js', !/cronSweepLogged/.test(wsrc) && !/cron === '/.test(wsrc));
   // every registry job points at a real function
   const names = [...blockSrc.matchAll(/run: \(env(?:[^)]*)\) => (\w+)\(/g)].map(m => m[1]);
-  t('every registry entry maps to a defined job function', names.length === 22 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
+  t('every registry entry maps to a defined job function', names.length === 23 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
   // the scheduler block never swallows
   t('scheduler block has no empty/underscore catch', !/catch\s*\(\s*_?\s*\)\s*\{\s*\}/.test(blockSrc) && !/catch\s*\(\s*_\s*\)/.test(blockSrc) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(blockSrc));
   const ver = /const BUILD_VERSION = '([^']+)'/.exec(wsrc)[1];
-  t('BUILD_VERSION is a 2026-10-12+ build (the scheduler build is 2026-10-12.5-apps-script-scheduler; a same-day bump by another build is fine)', /^2026-10-1[2-9]\.\d+-/.test(ver), ver);
+  t('BUILD_VERSION is a 2026-10-12+ build (the scheduler build is 2026-10-12.5-apps-script-scheduler; a same-day bump by another build is fine)', /^2026-10-(1[2-9]|2\d|3[01])\.\d+-/.test(ver), ver);
 }
 {
   // catch-up forms of the two jobs that used to need the exact hour

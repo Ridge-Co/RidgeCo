@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BrettOS — Needs Attention</title>
+<script src="failure-reporter.js"></script>
+<style>
+  :root{
+    --bg:#e9ebef;--card:#fff;--ink:#0e1621;--muted:#5b6672;--line:#d8dce2;
+    --green:#1a8f4c;--greenbg:#e6f4ec;--amber:#b26a00;--amberbg:#fbf0dd;
+    --red:#c0242b;--redbg:#f9e4e4;--blue:#1d4ed8;--bluebg:#e7effb;
+    --shadow:0 1px 2px rgba(16,23,32,.08),0 1px 8px rgba(16,23,32,.04);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;font-size:16px;line-height:1.4;padding-bottom:40px}
+  .wrap{max-width:640px;margin:0 auto;padding:0 12px}
+  header{padding:12px 0 6px}
+  .title{font-size:17px;font-weight:800;display:flex;align-items:center;gap:8px}
+  .summary{margin-top:8px;border-radius:14px;padding:13px 14px;box-shadow:var(--shadow);border:1px solid var(--line);background:var(--greenbg);border-color:#bfe3cd}
+  .summary.bad{background:var(--redbg);border-color:#efc2c2}
+  .summary.warn{background:var(--amberbg);border-color:#ecd3a3}
+  .summary h1{margin:0;font-size:16px;font-weight:800}
+  .summary p{margin:3px 0 0;font-size:12.5px;color:var(--muted)}
+  .banner{margin:8px 0 0;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:700;background:var(--amberbg);color:var(--amber);border:1px solid #ecd3a3}
+  .banner.red{background:var(--redbg);color:var(--red);border-color:#efc2c2}
+  .tools{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+  .btn{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:10px;padding:9px 12px;font-size:13px;font-weight:800;cursor:pointer}
+  .btn.dark{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .btn:disabled{opacity:.5;cursor:default}
+  h2.sec{font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin:18px 2px 4px}
+  .card{background:var(--card);border:1px solid var(--line);border-left-width:5px;border-radius:14px;padding:12px 14px;margin:8px 0;box-shadow:var(--shadow)}
+  .card.P0{border-left-color:var(--red)} .card.P1{border-left-color:var(--amber)} .card.P2{border-left-color:var(--muted)}
+  .card.done{opacity:.65}
+  .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .sev{font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;color:#fff}
+  .sev.P0{background:var(--red)} .sev.P1{background:var(--amber)} .sev.P2{background:var(--muted)}
+  .where{font-weight:800;font-size:14.5px;word-break:break-word}
+  .cnt{margin-left:auto;font-size:12px;font-weight:800;color:var(--muted)}
+  .msg{margin:6px 0 4px;font-size:13.5px;word-break:break-word;white-space:pre-wrap}
+  .meta{font-size:12px;color:var(--muted)}
+  .chip{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:20px;background:var(--bluebg);color:var(--blue);margin-left:6px}
+  .chip.fixed{background:var(--greenbg);color:var(--green)} .chip.wontfix{background:#eceef1;color:var(--muted)}
+  .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  .acts .btn{padding:7px 10px;font-size:12px}
+  .note{margin-top:8px;display:none}
+  .note input{width:100%;padding:9px;border:1px solid var(--line);border-radius:9px;font-size:16px}
+  .notes{margin-top:6px;font-size:11.5px;color:var(--muted);word-break:break-word}
+  .errbox{margin:12px 0;padding:12px;border-radius:12px;background:var(--redbg);color:var(--red);font-weight:700;font-size:13.5px;border:1px solid #efc2c2}
+  .spin{color:var(--muted);font-size:13px;padding:14px 2px}
+  .tokbar{display:none;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+  .tokbar input{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:16px;margin:6px 0}
+  .tokbar button{width:100%;border:none;border-radius:9px;padding:11px;font-weight:700;background:var(--blue);color:#fff}
+  .foot{font-size:11.5px;color:var(--muted);text-align:center;margin:18px 4px 2px;line-height:1.5}
+  label.chk{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="rc-navbar" style="position:static;z-index:9999;background:#1d4ed8;color:#fff;display:flex;align-items:center;gap:8px;padding:6px 10px;font:600 12px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;overflow-x:auto">
+  <a href="index.html" style="color:#fff;text-decoration:none;display:flex;align-items:center;gap:4px;flex:none">← Hub</a>
+  <a href="command-center.html" style="color:#fff;text-decoration:none;flex:none;margin-left:auto">Command Center</a>
+  <a href="action-center.html" style="color:#fff;text-decoration:none;flex:none">Action Center</a>
+</div>
+
+<div class="wrap">
+  <header>
+    <div class="title">⚠ Needs Attention</div>
+    <div class="summary" id="summary"><h1 id="sTitle">Loading…</h1><p id="sSub">reading the failure ledger</p></div>
+    <div id="alertBanner"></div>
+  </header>
+
+  <div class="tokbar" id="tokbar">
+    <b>Enter your Hub access token</b>
+    <div class="sub" style="font-size:12px;color:var(--muted)">Same token your Hub uses. Stored only on this device.</div>
+    <input type="password" id="tok" placeholder="access token" autocomplete="off">
+    <button onclick="saveTok()">Connect</button>
+  </div>
+
+  <div class="tools">
+    <button class="btn dark" id="copyAll" onclick="copyAll()">Copy all open for Claude</button>
+    <button class="btn" onclick="load()">Refresh</button>
+    <label class="chk"><input type="checkbox" id="showAll" onchange="load()"> Show closed too</label>
+  </div>
+
+  <div id="body"><div class="spin">Loading…</div></div>
+
+  <p class="foot">Every failure the Hub, its pages and its jobs detect lands here, counted once however often it repeats.<br>
+  Acknowledge = seen, still broken. Fixed = repaired (it reopens by itself if it happens again). Won't fix = known and accepted.<br>
+  Paste a "Copy for Claude" brief into a session and it becomes part of that build.</p>
+</div>
+
+<script>
+const _params=new URLSearchParams(location.search);
+const STAGING=_params.has('staging')||_params.get('env')==='staging';
+const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
+const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';
+let TOKEN='';
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* storage blocked: the token box below handles it */ }
+let DATA=null;
+
+function h(s){return (s==null?'':(''+s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function ago(iso){
+  if(!iso) return '—';
+  const t=Date.parse(iso); if(!isFinite(t)) return '—';
+  const m=Math.round((Date.now()-t)/60000);
+  if(m<1) return 'just now'; if(m<60) return m+' min ago';
+  const hr=Math.round(m/60); if(hr<48) return hr+' h ago';
+  return Math.round(hr/24)+' days ago';
+}
+async function api(method,path,body){
+  let r;
+  try{ r=await fetch(WORKER+path,{method,headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:body?JSON.stringify(body):undefined}); }
+  catch(e){ throw new Error('could not reach the Hub ('+(e&&e.message||'network')+')'); }
+  let d=null; try{ d=await r.json(); }catch(e){ /* non-JSON body: handled by the status check below */ }
+  if(r.status===401||r.status===403) throw new Error('this device\'s token is not allowed to see failures (admin token needed)');
+  if(!r.ok||(d&&d.ok===false)) throw new Error((d&&d.error)||('HTTP '+r.status));
+  return d;
+}
+function noToken(){
+  document.getElementById('tokbar').style.display='block';
+  document.getElementById('sTitle').textContent='Connect to see problems';
+  document.getElementById('sSub').textContent='Enter the Hub token below.';
+  document.getElementById('body').innerHTML='';
+}
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* token kept in memory for this visit only */ }
+  document.getElementById('tokbar').style.display='none';load();}
+
+async function load(){
+  if(!TOKEN) return noToken();
+  document.getElementById('tokbar').style.display='none';
+  const all=document.getElementById('showAll').checked;
+  try{
+    DATA=await api('GET','/failures/open'+(all?'?all=1':''));
+    try{sessionStorage.removeItem('hub_fail_badge_v1')}catch(e){ /* cache is optional */ }
+    render();
+  }catch(e){
+    document.getElementById('summary').className='summary bad';
+    document.getElementById('sTitle').textContent='Could not load the problem list';
+    document.getElementById('sSub').textContent='That itself is a problem: '+e.message;
+    document.getElementById('body').innerHTML='<div class="errbox">'+h(e.message)+'<br><br>If the Hub is down, text alerts and the morning check still run from outside it.</div>';
+    if(window.hubReportFailure) window.hubReportFailure('failures.html load',e.message);
+  }
+}
+
+function brief(f){
+  return ['Hub problem to fix (from Needs Attention, '+new Date().toISOString().slice(0,10)+')',
+    'ID: '+f.ID+'   Severity: '+f.Severity+'   System: '+f.System+'   Status: '+f.Status,
+    'Where: '+f.Where,
+    'Error: '+f.Message,
+    'Seen '+f.Count+' time(s); first '+f.First_Seen+', last '+f.Last_Seen+(f.Source?'; source: '+f.Source:''),
+    f.Notes?('Notes: '+f.Notes):'',
+    'Please find the cause in the code, fix it, add a test that forces this exact failure and proves it appears in the failure ledger, and mark it fixed with the build/PR.'
+  ].filter(Boolean).join('\n');
+}
+async function copyText(txt,btn){
+  try{ await navigator.clipboard.writeText(txt); const o=btn.textContent; btn.textContent='Copied ✓'; setTimeout(()=>{btn.textContent=o},1500); }
+  catch(e){
+    const ta=document.createElement('textarea'); ta.value=txt; ta.style.cssText='position:fixed;opacity:0'; document.body.appendChild(ta); ta.select();
+    let okc=false; try{ okc=document.execCommand('copy'); }catch(x){ okc=false; }
+    ta.remove();
+    if(okc){ const o=btn.textContent; btn.textContent='Copied ✓'; setTimeout(()=>{btn.textContent=o},1500); }
+    else { btn.textContent='Copy failed — select the text manually'; if(window.hubReportFailure) window.hubReportFailure('failures.html copy',e&&e.message||'clipboard blocked'); }
+  }
+}
+function copyAll(){
+  if(!DATA) return;
+  const open=DATA.failures.filter(f=>f.Status==='open'||f.Status==='acknowledged');
+  if(!open.length){ document.getElementById('copyAll').textContent='Nothing open'; return; }
+  copyText('There are '+open.length+' open Hub problems. Fold the ones in the area we are touching into this build, and tell me about the rest.\n\n'+open.map((f,i)=>(i+1)+'.\n'+brief(f)).join('\n\n'), document.getElementById('copyAll'));
+}
+function copyOne(id,btn){ const f=DATA&&DATA.failures.find(x=>x.ID===id); if(f) copyText(brief(f),btn); }
+
+function card(f){
+  const closed=!(f.Status==='open'||f.Status==='acknowledged');
+  const chip=f.Status==='open'?'':'<span class="chip '+h(f.Status)+'">'+h(f.Status==='wontfix'?"won't fix":f.Status)+'</span>';
+  const id=h(f.ID);
+  return '<div class="card '+h(f.Severity)+(closed?' done':'')+'" id="c-'+id+'">'
+    +'<div class="top"><span class="sev '+h(f.Severity)+'">'+h(f.Severity)+'</span><span class="where">'+h(f.Where)+'</span>'+chip+'<span class="cnt">'+h(f.Count)+'×</span></div>'
+    +'<div class="msg">'+h(f.Message)+'</div>'
+    +'<div class="meta">'+h(f.System)+' · first '+h(ago(f.First_Seen))+' · last '+h(ago(f.Last_Seen))+(f.Fixed_In?' · fixed in '+h(f.Fixed_In):'')+'</div>'
+    +(f.Notes?'<div class="notes">'+h(f.Notes)+'</div>':'')
+    +'<div class="note" id="n-'+id+'"><input id="ni-'+id+'" placeholder="Fixed in which PR/build? (optional)"><div class="acts"><button class="btn dark" onclick="setStatus(\''+id+'\',\'fixed\')">Save as fixed</button></div></div>'
+    +'<div class="acts">'
+    +(f.Status!=='acknowledged'&&!closed?'<button class="btn" onclick="setStatus(\''+id+'\',\'acknowledged\')">Acknowledge</button>':'')
+    +(f.Status!=='fixed'?'<button class="btn" onclick="document.getElementById(\'n-'+id+'\').style.display=\'block\';document.getElementById(\'ni-'+id+'\').focus()">Fixed…</button>':'')
+    +(f.Status!=='wontfix'?'<button class="btn" onclick="setStatus(\''+id+'\',\'wontfix\')">Won\'t fix</button>':'')
+    +(closed?'<button class="btn" onclick="setStatus(\''+id+'\',\'open\')">Reopen</button>':'')
+    +'<button class="btn" onclick="copyOne(\''+id+'\',this)">Copy for Claude</button>'
+    +'</div></div>';
+}
+
+async function setStatus(id,status){
+  const card=document.getElementById('c-'+id); if(card) card.querySelectorAll('button').forEach(b=>b.disabled=true);
+  try{
+    const ni=document.getElementById('ni-'+id);
+    await api('POST','/failure/update',{id,status,fixed_in:status==='fixed'&&ni?ni.value.trim():undefined});
+    await load();
+  }catch(e){
+    if(card) card.querySelectorAll('button').forEach(b=>b.disabled=false);
+    alertBox('Could not save the change: '+e.message);
+    if(window.hubReportFailure) window.hubReportFailure('failures.html update',e.message);
+  }
+}
+function alertBox(msg){
+  const b=document.getElementById('alertBanner');
+  b.innerHTML='<div class="banner red">'+h(msg)+'</div>';
+}
+
+function render(){
+  const d=DATA, c=d.counts||{};
+  const unack=Math.max(0,(c.open||0)-(c.acknowledged||0));
+  const s=document.getElementById('summary');
+  s.className='summary'+(c.P0?' bad':(c.P1?' warn':''));
+  document.getElementById('sTitle').textContent=(c.open||0)===0?'✅ Nothing is failing':(c.open+' open problem'+(c.open===1?'':'s')+(unack!==c.open?' ('+unack+' not yet acknowledged)':''));
+  document.getElementById('sSub').textContent='Urgent '+(c.P0||0)+' · Important '+(c.P1||0)+' · Minor '+(c.P2||0)+' · updated '+ago(d.as_of);
+  const ab=document.getElementById('alertBanner');
+  ab.innerHTML=d.alerts_on===false?'<div class="banner red">Text alerts are OFF — urgent problems will not text you. Turn on “failure_alert_enabled” in Hub Settings.</div>':(d.alerts_on===null?'<div class="banner">Could not read the alert setting.</div>':'');
+  const list=d.failures||[];
+  if(!list.length){ document.getElementById('body').innerHTML='<div class="spin">All clear. If something breaks, it will show up here and (if urgent) text you.</div>'; return; }
+  const groups=[['P0','Urgent (texts you)'],['P1','Important (morning digest)'],['P2','Minor (listed here only)']];
+  let html='';
+  for(const [sev,label] of groups){
+    const g=list.filter(f=>f.Severity===sev); if(!g.length) continue;
+    html+='<h2 class="sec">'+label+' · '+g.length+'</h2>'+g.map(card).join('');
+  }
+  document.getElementById('body').innerHTML=html;
+}
+
+load();
+setInterval(()=>{ if(!document.hidden) load(); },60000);
+</script>
+</body>
+</html>

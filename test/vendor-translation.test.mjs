@@ -3,6 +3,7 @@
 // as message-queue.test.mjs) and runs them against a stubbed Anthropic fetch and stubbed Sheets deps.
 import fs from 'fs';
 import assert from 'node:assert';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages, aiFailOpenNote, ...)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 function grab(name) {
@@ -36,7 +37,7 @@ globalThis.fetch = async (url, init) => {
 };
 
 const H = new Function(
-  grabConst('VENDOR_TRANSLATE_PRESERVE') + '\n' +
+  aiCreditGuardPrelude() + 'const logTelemetry = async () => {};   // telemetry sink for the fail-open note\n' + grabConst('VENDOR_TRANSLATE_PRESERVE') + '\n' +
   ['vendorWantsSpanish', 'extractPreservedTokens', 'preservedTokensIntact', 'htmlTagSkeleton', 'translateText', 'translateForVendorDetailed', 'translateForVendor', 'translateVendorEmail'].map(grab).join('\n') +
   '\nreturn { VENDOR_TRANSLATE_PRESERVE, vendorWantsSpanish, extractPreservedTokens, preservedTokensIntact, htmlTagSkeleton, translateText, translateForVendorDetailed, translateForVendor, translateVendorEmail };'
 )();

@@ -23,6 +23,8 @@ ratchet('secret/PIN console.log', /console\.log\([^)]*(PIN|token|secret)/gi, 0, 
 // 15→16 (Oct 13 2026, ops-queue upgrade): `buCol = headers.indexOf('Build_Updated')` in opsQueueStartBuild — every use is guarded by `!== -1`, same pattern as the existing statusCol/heldNoteCol.
 ratchet('unguarded header-column indexOf', /=\s*\w+\.indexOf\('[^']+'\)\s*;/g, 16, 'Column lookups must handle -1 (missing header) and be by header name, not index.');
 // Baseline 12 -> 13 (Oct 13 2026, sms_delivery_check): the one new btoa() encodes Twilio's ASCII API-key SID:secret pair for Basic auth - identical to sendSMSRaw's - never user text.
-ratchet('btoa()', /\bbtoa\(/g, 13, 'btoa throws on non-Latin-1 text (gh-broker bug class). Use a UTF-8-safe encoder for text.');
-ratchet('bare await request.json()', /await\s+request\.json\(\)(?!\s*\))/g, 1, 'Empty POST bodies must not 500 (rule 167). Wrap in try/catch.');
+// Baseline 13 -> 14 (Oct 16 2026, failure ledger A3a): the Twilio Balance.json check encodes the same ASCII API-key SID:secret pair for Basic auth (already UTF-8-wrapped), never user text.
+ratchet('btoa()', /\bbtoa\(/g, 14, 'btoa throws on non-Latin-1 text (gh-broker bug class). Use a UTF-8-safe encoder for text.');
+// Baseline 1 -> 2 (Oct 20 2026): ReadMeterStore /put (internal Durable Object endpoint, only called by the Worker itself, wrapped in the class's outer try/catch). test/read-meter-rollup.test.mjs requires unreadable input to return an error, not be swallowed.
+ratchet('bare await request.json()', /await\s+request\.json\(\)(?!\s*\))/g, 2, 'Empty POST bodies must not 500 (rule 167). Wrap in try/catch.');
 console.log(`bug-class-tripwires: ${n}/${n} passing`);

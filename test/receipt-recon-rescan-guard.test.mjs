@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (aiCreditCheck, aiCreditPausedJson, ...)
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(join(here, '..', 'worker.js'), 'utf8');
@@ -138,7 +139,7 @@ function world({ receipts = [], queueRows = [], files = [], extract = () => ({ v
   deps.RECEIPT_RECON_QUEUE_HEADERS = [];
   deps.RECEIPT_RECON_FOLDER_ID_DEFAULT = 'FOLDER';
   const names = Object.keys(deps);
-  const fn = new Function(...names, `return (${extractFn('receiptReconScan')});`)(...names.map(n => deps[n]));
+  const fn = new Function(...names, aiCreditGuardPrelude() + `return (${extractFn('receiptReconScan')});`)(...names.map(n => deps[n]));
   return { scan: (b) => fn({}, b), added };
 }
 
