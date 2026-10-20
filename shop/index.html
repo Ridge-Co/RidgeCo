@@ -434,7 +434,7 @@ function submit(){
   payload.orderToken = orderToken(JSON.stringify(payload));
   var ctl = new AbortController(); var timer = setTimeout(function(){ ctl.abort(); }, 40000);
   fetch(API + '/public/order', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:ctl.signal})
-  .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ return {status:r.status, d:d}; }); })
+  .then(function(r){ return r.json().catch(function(){ /* silent-ok: non-JSON reply falls through to the visible could-not-place-order message and is reported there */ return {}; }).then(function(d){ return {status:r.status, d:d}; }); })
   .then(function(res){
     var d = res.d;
     if (res.status === 200 && d.ok){ return success(d, lines, total, method); }
