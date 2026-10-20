@@ -1095,7 +1095,7 @@ function dragTick(){
 function dragFinish(commit){
   var d = drag; if (!d) return; drag = null;
   cancelAnimationFrame(d.raf);
-  try { d.handle.releasePointerCapture(d.pid); } catch(_){}
+  try { d.handle.releasePointerCapture(d.pid); } catch(_){ /* silent-ok: pointer already released, nothing to do */ }
   document.body.classList.remove('dragging-rows');
   if (commit && d.to !== d.from){
     var ids = d.ids.slice(); ids.splice(d.from, 1); ids.splice(d.to, 0, d.id);
