@@ -36727,6 +36727,11 @@ async function strPendingAdvance(ctx, p, warnings) {
   if (ctx.subS0 !== undefined && strSubUsed(ctx) + 22 > 46) { warnings.push('The next cleaner will be asked by the scheduler within about 15 minutes.'); return null; }
   try { return await strAdvanceTask(ctx, p); } catch (e) { warnings.push('The next cleaner could not be asked right away (' + strErrText(e) + '); the scheduler will retry.'); await strSystemAlert(ctx.env, 'advance_pending', strErrText(e)); return null; }
 }
+// Marking out on a pending date: a waiting offer is declined, a held date is given back. Returns warnings.
+async function strPendingMarkOut(ctx, c, date, warnings) {
+  for (const p of ctx.st.pendings.filter(p => p.Date === date && strPendActive(p))) {
+    try {
+      if (p.Status === 'pending_held' && String(p.Assigned_Cleaner_ID) === c.ID) { await strPendingRelease(ctx, p, c, 'marked out on the cleaner page'); await strPendingAdvance(ctx, p, warnings); }
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
