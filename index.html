@@ -6577,7 +6577,7 @@ function renderOwnersPage() {
   if (!owners.length) { el.innerHTML='<div class="loading">No owners on file</div>'; return; }
 
   // Load Owner_Users too
-  api('GET', '/owner-users?owner_id=all').catch(function(){ return []; }).then(function() {});
+  api('GET', '/owner-users?owner_id=all').catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:owner-users-preload', e); return []; }).then(function() {});
 
   var search = ((document.getElementById('owner-search')||{}).value || '').trim().toLowerCase();
   var statusFilter = (document.getElementById('owner-filter-status')||{}).value || 'all';
