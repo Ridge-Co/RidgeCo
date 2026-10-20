@@ -263,6 +263,31 @@ function taskRow(t){
   }
   return h+msgs(S.rowMsg[key])+'</article>';
 }
+// ── pending (not booked yet) dates ──────────────────────────
+// A pending date is a possible checkout that has NOT been booked. Saying yes only holds it tentatively; it is never an assignment.
+function pendAskItems(d){
+  var seen={}, list=arr(d.pending).filter(function(p){return p.offer_id&&!p.held_by_me&&!p.held_by_other;});
+  list.forEach(function(p){seen[String(p.offer_id)]=1;});
+  Object.keys(S.pendRes).forEach(function(id){ if(!seen[id]) list.push(S.pendRes[id].item); });   // keep an answered card on screen after the reload drops it
+  return list;
+}
+function pendingAsksHtml(d){ return pendAskItems(d).map(function(p){return pendAskCard(p);}).join(''); }
+function pendAskCard(p){
+  var id=String(p.offer_id), res=S.pendRes[id], busy=!!S.offerBusy['p'+id], err=S.offerErr['p'+id];
+  var h='<section class="card offer pend'+(OFFER===id?' hl':'')+'" id="offer-'+esc(id)+'" data-offer="'+esc(id)+'" data-pend="'+esc(p.key)+'">';
+  h+='<div class="eyebrow pend">NOT BOOKED YET - tentative</div><h2>Could you clean '+esc(p.long_label||p.label)+' if it books?</h2>';
+  if(!res){
+    h+='<div class="muted">Checkout is 11 AM. This date is <b>not booked yet</b>. Saying yes does <b>not</b> put you on the schedule - it just tells us you would be free. We will text you if it books.</div>';
+    if(err) h+='<div class="msg err" role="alert">'+esc(err)+'</div>';
+    h+='<button class="btn ok" data-act="pend-offer" data-id="'+esc(id)+'" data-do="accept" data-fid="p|'+esc(id)+'|a"'+(busy?' disabled':'')+'>'+(busy&&S.offerBusy['p'+id]==='accept'?'Saving…':'Yes, I’d be available')+'</button>'
+      +'<button class="btn ghost" data-act="pend-offer" data-id="'+esc(id)+'" data-do="decline" data-fid="p|'+esc(id)+'|d"'+(busy?' disabled':'')+'>'+(busy&&S.offerBusy['p'+id]==='decline'?'Saving…':'No')+'</button>';
+  }else{
+    var kind={held:'good',declined:'info',filled:'warn',already:'info',already_yours:'good',cancelled:'info',booked:'good'}[res.result]||'info';
+    h+='<div class="msg '+kind+'" role="status">'+esc(res.message||'Saved.')+'</div>'+msgs(warnMsgs(res.warnings));
+    if(res.result==='filled'&&res.backup_date) h+=backupPair(res.backup_date,'p'+id);
+  }
+  return h+'</section>';
+}
 function calendarHtml(d){
   var ok=typeof d.ics_url==='string'&&/^https?:\/\//.test(d.ics_url);
   return '<div class="card cal" style="margin-top:20px">'
