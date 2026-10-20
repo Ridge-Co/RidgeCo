@@ -8680,13 +8680,13 @@ async function woCombine(env, body) {
         await smsGatedSend(env, { wo_id: survivorId, message_type: 'owner_wo_combined_ref', recipient_type: 'owner', owner, property, message_body: msg });
       }
     }
-  } catch (e) { /* non-fatal — combine already succeeded */ }
+  } catch (e) { combineWarnings.push('The combine succeeded, but the owner reference notice may not have been sent.'); await softFail(env, 'wo_combine_owner_notice_failed', e, 'P0', { survivor: String(survivorId) }); }
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (te) { softNote('telemetry_write_failed:wo_combine', te, 'P2'); }
 
   const mergedFieldsApplied = {};
   for (const f of WO_COMBINE_MERGE_FIELDS) if (Object.prototype.hasOwnProperty.call(fieldsToApply, f)) mergedFieldsApplied[f] = fieldsToApply[f];
-  return json({ success: true, survivor_wo_id: survivorId, combined_wo_ids: combinedIds, resolved_fields: resolved, merged_fields: mergedFieldsApplied });
+  return json({ success: true, survivor_wo_id: survivorId, combined_wo_ids: combinedIds, resolved_fields: resolved, merged_fields: mergedFieldsApplied, ...(combineWarnings.length ? { failure_warnings: combineWarnings } : {}) });
 }
 
 // Split (inverse of Combine, Sep 22 2026 build — WO detail "Split" action). Takes ONE existing
