@@ -1732,7 +1732,7 @@ function loadVendorNearbyWOs(woId, idx) {
       '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">You have other open WOs nearby in the same area:</div>' +
       cards +
       '</div>';
-  }).catch(function() { /* non-fatal */ });
+  }).catch(function(e) { window.hubReportFailure && window.hubReportFailure('vendor:nearbyWOs', e); /* optional panel; reported, nothing shown */ });
 }
 
 function scrollToCard(woId) {
