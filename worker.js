@@ -36777,6 +36777,20 @@ async function strPendingRespond(ctx, c, offer, p, action) {
   try { await strRaiseAlert(ctx, { key: `pyes|${p.Task_Key}|${c.ID}|${ctx.now}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, 'You can accept the booking: a cleaner is lined up.' + (p.Pending_Note ? ' Your note: ' + p.Pending_Note : ''), 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head}. You can accept the booking. ${PORTAL_BASE}/str-cleaning.html` }); }
   catch (e) { warnings.push('Brett could not be told right away: ' + strErrText(e)); await strSystemAlert(env, 'pending_yes_alert', strErrText(e)); }
   await strAlertsNow(ctx, warnings, 'pending_yes');
+  return json({ ok: true, result: 'held', date: p.Date, message: `Thanks - we'll let you know if it books. Nothing is confirmed yet.`, warnings });
+}
+
+// ── Admin: ask about a date (preview, then create) ────────────────────────────────────────────────────────────────────────────
+async function strPendingPlan(ctx, body) {
+  const today = inspEtDate(ctx.now), date = String((body && body.date) || '').trim(), note = strCleanText((body && body.note) || '').slice(0, 200), st = ctx.st, warnings = [];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(Date.parse(date + 'T12:00:00Z'))) throw strErr('bad_date', 'Pick the date of the possible checkout.', 400);
+  if (date < today) throw strErr('past_date', `${strFmtDate(date)} has already passed.`, 400);
+  if (strDaysBetween(today, date) > STR_MARK_HORIZON) throw strErr('too_far', `That is more than ${STR_MARK_HORIZON} days away. Pick a nearer date.`, 400);
+  const open = st.pendings.find(p => p.Date === date && strPendActive(p));
+  if (open) throw Object.assign(strErr('already_pending', `There is already an open inquiry for ${strFmtDate(date)} (${strPendingStatus(ctx, open).label}). Cancel it first if you want to start over.`, 409), { key: open.Task_Key });
+  if (st.turnovers.some(t => t.Date === date && t.Kind === 'checkout' && t.Status !== 'cancelled')) throw strErr('already_booked', `${strFmtDate(date)} already has a real turnover on the board. Use the normal board for that date.`, 409);
+  try {
+    const feed = await strReadFeed(ctx);
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
