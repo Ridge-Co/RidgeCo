@@ -4991,7 +4991,7 @@ async function proposalStampSms(env, scopeId, status) {
     const r = await updateRow(env, 'Scopes', scopeId, { Owner_SMS_Status: status, Owner_SMS_Time: new Date().toISOString() });
     if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (te) { softNote('telemetry_write_failed:proposal_sms_stamp_failed', te, 'P2'); }
   }
 }
 // Text the owner "your estimate was emailed". Gated like every owner SMS (global / property / owner toggles, test mode).
