@@ -60,7 +60,7 @@
   <main>
     <div class="card">
       <h2>Who is spending the Google Sheets read quota?</h2>
-      <div class="muted">Google allows 60 reads a minute for the whole Hub, shared by everyone: you, vendors, owners, tenants and the background scheduler. Every real read is counted here and tagged with who caused it. Opening this page costs no reads. It only counts since the Worker last started (a deploy resets it), and a busy minute also leaves a "Needs Attention" note.</div>
+      <div class="muted">Google allows 60 reads a minute for the whole Hub, shared by everyone: you, vendors, owners, tenants and the background scheduler. Every real read is counted here and tagged with who caused it. Opening this page costs no reads. Cloudflare runs several copies ("instances") of the Hub at once; this page adds them all together. Counts start at zero after each deploy, and a busy minute also leaves a "Needs Attention" note.</div>
     </div>
     <div class="tabs" id="win-tabs">
       <button class="btn small" data-m="15" onclick="setWin(15)">15 min</button>
