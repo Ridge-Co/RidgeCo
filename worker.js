@@ -25583,7 +25583,7 @@ async function uiTestWindowOpen(env) {
     const left = until - Date.now();
     // Also reject a far-future value: a window can never be longer than the max, even if the Config row is hand-edited.
     return left > 0 && left <= (UI_TEST_MAX_MINUTES + 1) * 60000;
-  } catch (e) { return false; }
+  } catch (e) { softNote('ui_test_window_check', e, 'P2'); return false; }
 }
 async function uiTestWindowHandler(env, url, request, body) {
   if (!isStaging(env, url)) return json({ error: 'Not available' }, 404);
