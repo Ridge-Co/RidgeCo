@@ -280,10 +280,42 @@ function syncRules_(ss, cfg, me) {
     if (k.indexOf('filter:') !== 0) return;
     var ruleId = k.slice(7);
     if (wanted[ruleId]) return;
-    try { Gmail.Users.Settings.Filters.remove('me', JSON.parse(props.getProperty(k)).id); result.removed++; } catch (e) {}
-    props.deleteProperty(k);
+    var oldId = '';
+    try { oldId = JSON.parse(props.getProperty(k)).id; } catch (e) { result.failures.push('rule ' + ruleId + ': saved filter record unreadable (' + e + ')'); return; }   // keep the record so the next run reports it again
+    // Forget the record only when the filter is really gone; a failed removal stays in the property list and is reported again next run.
+    if (!oldId || removeFilter_(oldId, result, 'rule ' + ruleId)) props.deleteProperty(k);
   });
   return result;
+}
+
+/** Remove one Gmail filter. Returns true when the filter is gone (removed now, or already gone); false when the removal failed (recorded in result.failures). */
+function removeFilter_(filterId, result, what) {
+  try { Gmail.Users.Settings.Filters.remove('me', filterId); result.removed++; return true; }
+  catch (e) {
+    if (/not ?found|404|does not exist/i.test(String(e && e.message || e))) return true;   // already gone: the goal is met
+    result.failures.push(what + ': could not remove Gmail filter ' + filterId + ' (' + String(e && e.message || e) + ')');
+    return false;
+  }
+}
+
+/**
+ * Tell Brett by email (Notify_Email) that something failed quietly inside a run. At most one email per distinct subject per 6 hours
+ * (processQueue runs every 10 minutes). Uncaught errors still reach Brett through Apps Script's own failed-trigger emails.
+ */
+function alertBrett_(cfg, subject, detail) {
+  var msg = subject + ': ' + detail;
+  Logger.log(msg);
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var key = 'ALERT_AT:' + subject, last = Number(props.getProperty(key)) || 0;
+    if (Date.now() - last < 6 * 3600 * 1000) return false;
+    MailApp.sendEmail({ to: (cfg && cfg.Notify_Email) || CONFIG_DEFAULTS.Notify_Email, subject: 'Receipt Mail to Hub problem: ' + subject, body: detail });
+    props.setProperty(key, String(Date.now()));
+    return true;
+  } catch (e) {
+    // Last-resort channel: when even the alert email fails, the execution log is all that is left, so fail the run loudly.
+    throw new Error('Receipt Mail to Hub could not send its alert (' + msg + '): ' + e);
+  }
 }
 
 function labelPast_(rule, since) {
