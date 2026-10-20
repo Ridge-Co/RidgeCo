@@ -36847,6 +36847,19 @@ function strPendingCreateMessage(plan, adv) {
   if (a === 'offer_failed') return `Saved, but the text to ${who} FAILED. You have been told; use "Send now" to try again.`;
   return 'Saved.';
 }
+// "Send now even if late" for an inquiry that is waiting for 8 AM (or whose first text failed).
+async function strAdminPendingSendNow(env, body) {
+  try {
+    const ctx = await strHandlerCtx(env), p = ctx.st.pendings.find(x => x.Task_Key === (body || {}).task_key);
+    if (!p || !strPendActive(p)) return json({ ok: false, error: 'not_found', message: 'That inquiry is not open any more.' }, 404);
+    if (p.Status === 'pending_held') return json({ ok: false, error: 'already_held', message: `${strFirst(ctx.st.cmap[p.Assigned_Cleaner_ID])} has already said yes.` }, 409);
+    for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && o.Status === 'queued' && ctx.now - Date.parse(o.Created_At) > 10 * 60000)) await strSetOffer(ctx, o, { Status: 'failed', Responded_At: new Date(ctx.now).toISOString(), Note: 'stuck sending; reset by Brett' });
+    await strLog(ctx, p.Task_Key, '', 'pending_send_now', 'asked now, even if outside texting hours');
+    const adv = await strAdvanceTask(ctx, p, { sendNow: true });
+    await strAlertsNow(ctx, [], 'pending_send_now');
+    return json({ ok: true, result: adv, status: strPendingStatus(ctx, p), errors: ctx.errors, warnings: ctx.warnings });
+  } catch (e) { return await strHandleErr(env, e, 'pending send now'); }
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
