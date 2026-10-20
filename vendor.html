@@ -1401,6 +1401,7 @@ function loadEstimateWidget(woId, idx) {
   var wrap = document.getElementById('est-wrap-' + idx);
   if (!wrap) return;
   api('GET', '/estimates?wo_id=' + woId).then(function(estimates) {
+    if (!Array.isArray(estimates)) throw new Error((estimates && estimates.error) || 'Unexpected response');
     window._estimates = window._estimates || {};
     window._estimates[woId] = estimates;
     renderEstimateWidget(woId, idx);
