@@ -5462,13 +5462,13 @@ async function scopeProposalSign(env, body, ip, ua) {
     const addonProblem = scopeScheduleAddonProblem(sv.schedule || scopeDefaultPaymentSchedule(), subtotal);
     if (addonProblem) {
       let telemetryError = '';
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_sign_schedule_mismatch', Skill_Or_Endpoint: '/scope-proposal/sign', Success: 'FALSE', Notes: `scope=${s.ID} subtotal=${subtotal} problem=${addonProblem}`.slice(0, 480) }); } catch (e) { telemetryError = String(e && e.message || e); }
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scope_sign_schedule_mismatch', Skill_Or_Endpoint: '/scope-proposal/sign', Success: 'FALSE', Notes: `scope=${s.ID} subtotal=${subtotal} problem=${addonProblem}`.slice(0, 480) }); } catch (e) { telemetryError = String(e && e.message || e); softNote('telemetry_write_failed:scope_sign_schedule_mismatch', e, 'P2'); }
       return json({ error: 'schedule_unavailable', message: 'This proposal can\'t be signed online right now. Please contact Ridge Co and we\'ll send you a corrected copy.', ...(telemetryError ? { telemetry_error: telemetryError } : {}) }, 409);
     }
   }
   const now = new Date();
   if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
-    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
+    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (ce) { await softFail(env, 'scope_sign_ensure_rc_columns_failed', ce, 'P1', { scope: String(s.ID), note: 'RC materials cost/price may not be saved on the signature row' }); }
   }
   const sigResp = await addRow(env, 'Scope_Signatures', {
     RC_Materials_Cost: rcMaterialsCost ? String(rcMaterialsCost) : '', RC_Materials_Price: rcMaterialsPrice ? String(rcMaterialsPrice) : '',
