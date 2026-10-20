@@ -537,7 +537,11 @@ function loadVendorTaskAlerts() {
   if (!session) return;
   api('/vendor-task-requests?status=open').then(function(rows) {
     renderVendorTaskAlerts(rows || []);
-  }).catch(function(e) { console.error('[loadVendorTaskAlerts]', e); });
+  }).catch(function(e) {
+    console.error('[loadVendorTaskAlerts]', e);
+    // Brett's requests for this vendor must never just vanish: say so on screen (with Retry) and report it.
+    showLoadFailed('vtrBanner', 'requests that need your attention', e && e.message, loadVendorTaskAlerts, 'vendor-task-requests');
+  });
 }
 function renderVendorTaskAlerts(rows) {
   var el = document.getElementById('vtrBanner');
