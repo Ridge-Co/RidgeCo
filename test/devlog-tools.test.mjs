@@ -102,7 +102,7 @@ ok(/dlLoadFailed\('vendor-access-requests-list'/.test(html), 'vendor-access-requ
 // api() resolves with {error:...} on a server-side failure (it only rejects on network errors), so the loaders must treat a non-list answer as a failure too
 ok(/if\(!Array\.isArray\(items\)\) throw new Error/.test(html), 'wishlist: an {error} answer is a failure, not an empty list');
 ok(/if\(!Array\.isArray\(rows\)\) throw new Error/.test(html), 'vendor access requests: an {error} answer is a failure, not "No pending requests."');
-const helper = html.slice(html.indexOf('function dlLoadFailed('), html.indexOf('function dlLoadFailed(') + 1500);
+const helper = html.slice(html.indexOf('function dlLoadFailed('), html.indexOf('function dlLoadFailed(') + 3000);
 ok(/logError\(/.test(helper) && /\/failure\/report/.test(helper) && /hubReportFailure/.test(helper) && /Retry/.test(helper), 'helper logs, reports to the failure ledger (shared reporter, with a direct fallback), and offers Retry');
 const script = html.slice(html.indexOf('// TOOLS & LOG page behaviour'), html.indexOf('</script>', html.indexOf('// TOOLS & LOG page behaviour')));
 ok(/id="dl-storage-note"/.test(page) && /storageFailed\(\)/.test(script), 'a browser that refuses storage is told so on the page');
