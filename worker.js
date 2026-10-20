@@ -32221,7 +32221,7 @@ async function qbSendInvoice(env, body) {
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
         warnings,
-      }});
+      }, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}) });
     }
 
     // ---- CONFIRM (writes to QuickBooks) ----
