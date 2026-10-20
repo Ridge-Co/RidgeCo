@@ -409,10 +409,10 @@ function orderToken(sig){
   if (!saved) saved = state.tokenMem || null;
   if (saved && saved.h === h) return saved.t;
   var rec = {t:newToken(), h:h}; state.tokenMem = rec;
-  try { sessionStorage.setItem('mr_order_token', JSON.stringify(rec)); } catch(e){ console.warn('sessionStorage unavailable', e); }
+  try { sessionStorage.setItem('mr_order_token', JSON.stringify(rec)); } catch(e){ /* silent-ok: storage blocked, token kept in memory */ console.warn('sessionStorage unavailable', e); }
   return rec.t;
 }
-function resetToken(){ state.tokenMem = null; try { sessionStorage.removeItem('mr_order_token'); } catch(e){ console.warn('sessionStorage unavailable', e); } }
+function resetToken(){ state.tokenMem = null; try { sessionStorage.removeItem('mr_order_token'); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ console.warn('sessionStorage unavailable', e); } }
 
 $('orderForm').addEventListener('submit', function(ev){
   ev.preventDefault();
