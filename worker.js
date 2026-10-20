@@ -18279,11 +18279,11 @@ function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpper
 async function buildDigest(env) {
   const today = etTodayISO();
   const [wos, bills, props, vendors, tenants] = await Promise.all([
-    fetchTab(env,'Work_Orders').catch(()=>[]),
-    fetchTab(env,'Vendor_Bills').catch(()=>[]),
-    fetchTab(env,'Properties').catch(()=>[]),
-    fetchTab(env,'Vendors').catch(()=>[]),
-    fetchTab(env,'Tenants').catch(()=>[]),
+    fetchTabSoft(env,'Work_Orders','digest_work_orders',undefined,'P1'),
+    fetchTabSoft(env,'Vendor_Bills','digest_vendor_bills',undefined,'P1'),
+    fetchTabSoft(env,'Properties','buildDigest'),
+    fetchTabSoft(env,'Vendors','buildDigest'),
+    fetchTabSoft(env,'Tenants','buildDigest'),
   ]);
   const open = wos.filter(w => OPEN_WO_STATUSES.includes(w.Status));
   const isUrgent = w => String(w.Priority||'').toLowerCase()==='urgent';
