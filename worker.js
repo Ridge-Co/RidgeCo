@@ -35459,7 +35459,7 @@ async function strTick(env, opts) {
   try { ctx.detail.pending = await strPendingTick(ctx, feed, built, builtMap); if (ctx.pendChanged) views = strComputeViews(ctx, foreign); } catch (e) { ctx.errors.push({ step: 'pending', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'pending_tick', 'The pending-date step failed: ' + strErrText(e)); }
   // 3. offers: expire stale ones, ask the next cleaner
   const offered = [];
-  for (const v of views.filter(v => !v.coveredAny && ['open', 'offering', 'exhausted'].includes(v.row.Status))) {
+  for (const v of views.filter(v => !v.coveredAny && ['open', 'offering', 'exhausted'].includes(v.row.Status) && !(v.kind === 'checkout' && st.pendings.some(p => strPendActive(p) && p.Date === v.date)))) { // (a real turnover whose date still has an open inquiry waits one tick so the inquiry converts first)
     if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'turnover(s) to check for offers'); continue; }
     try { const r = await strAdvanceTask(ctx, v.row); offered.push(Object.assign({ task: v.key }, r)); v.status = v.row.Status; }
     catch (e) { ctx.errors.push({ step: 'offers', error: `${v.key}: ${strErrText(e)}` }); }
