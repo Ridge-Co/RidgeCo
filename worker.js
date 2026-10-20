@@ -16398,6 +16398,10 @@ const SCHED_VERIFY_DELAY_MS = 700;
 const SCHED_RETRY_GAP_MS = 30 * 60 * 1000;  // failed daily/weekly job: retry no sooner than this ...
 const SCHED_PARTIAL_GAP_MS = 5 * 60 * 1000;  // a job that returned {partial:true} (finished a slice, more to do) resumes no sooner than this ...
 const SCHED_MAX_PARTIALS = 12;              // ... and a daily/weekly job may take at most this many slices per ET day before it counts as FAILED
+// Oct 20 2026: a job that REPORTS progress (progress_made true/false on each partial slice, today only daily_qb_sync) is judged on that instead of the flat cap:
+// it fails after SCHED_MAX_STALLED_PARTIALS slices in a row that moved nothing, and only hits a (much higher) absolute backstop if it keeps creeping.
+const SCHED_MAX_STALLED_PARTIALS = 3;
+const SCHED_MAX_PARTIALS_PROGRESS = 60;
 const SCHED_MAX_ATTEMPTS = 3;               // ... and at most this many tries per ET day
 const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
@@ -16567,6 +16571,43 @@ function schedSeedFirstRun(state, nowDate, jobs) {
   if (seeded.length) state.seeded = { at: nowDate.toISOString(), jobs: seeded.slice() };
   return seeded;
 }
+// ── NEW-JOB GRACE (Oct 20 2026) ──────────────────────────────────────────────────────────────────────────────
+// A job that is brand new in the registry (or was just switched back on in the JOBS table) has had no chance to run yet, so "has never
+// completed successfully" / "last success was N days ago" is not news - it was opening a P0 "overdue" row on every deploy that added a job.
+// Each tick the dispatcher stamps every ENABLED job once (`seen_at`); a job with no success yet, or one that was seen DISABLED (`seen_at: ''`)
+// and is now enabled, also gets `grace_from`. schedStatus then holds the "overdue" verdict back for the job's own limit (interval jobs:
+// 3 x cadence, at least 45 min; daily/weekly: SCHED_OVERDUE_GRACE_MIN) after `grace_from`, unless the job has succeeded since. A job that already had
+// a success before this build keeps its old, strict behaviour. Pure on `state`: mutates it in place and returns the names it changed.
+function schedStampFirstSeen(state, nowDate, jobs) {
+  const iso = nowDate.toISOString(), changed = [];
+  if (!state.jobs || typeof state.jobs !== 'object') state.jobs = {};
+  for (const job of (jobs || SCHED_JOBS)) {
+    const js = state.jobs[job.name] || {};
+    if (job.disabled) {
+      if (js.seen_at !== '') { state.jobs[job.name] = Object.assign({}, js, { seen_at: '', grace_from: null }); changed.push(job.name); }
+      continue;
+    }
+    if (js.seen_at) continue;                                                     // already stamped while enabled
+    const rec = Object.assign({}, js, { seen_at: iso });
+    if (js.seen_at === '' || !js.last_ok) rec.grace_from = iso;                    // re-enabled, or never succeeded: start the clock now
+    state.jobs[job.name] = rec; changed.push(job.name);
+  }
+  return changed;
+}
+// Pure. Is this enabled job still inside its grace window? -> { in_grace, until_min, why }
+function schedGrace(job, js, nowMs, ticking) {
+  const limit = job.kind === 'interval' ? schedOverdueLimitMin(job) : SCHED_OVERDUE_GRACE_MIN;
+  const okMs = Date.parse(js.last_ok || ''), fromMs = Date.parse(js.grace_from || '');
+  if (!isNaN(fromMs)) {
+    if (!isNaN(okMs) && okMs >= fromMs) return { in_grace: false };                // it has run fine since the clock started: judge it normally
+    const left = limit - Math.round((nowMs - fromMs) / 60000);
+    return left > 0 ? { in_grace: true, until_min: left, why: js.seen_at === '' ? 'just switched back on' : 'new job, first run pending' } : { in_grace: false };
+  }
+  // Never stamped and never succeeded, but the dispatcher IS ticking (state has a last_tick): the job was added by a deploy and the next tick has not stamped it yet.
+  // (With no tick at all there is no such excuse - that stays overdue.)
+  if (ticking && isNaN(okMs) && !js.seen_at && js.seen_at !== '' && !js.last_start) return { in_grace: true, until_min: limit, why: 'new job, waiting for its first tick' };
+  return { in_grace: false };
+}
 // ── SCHEDULE OVERRIDES (Oct 13 2026) ─────────────────────────────────────────────────────────────────────────
 // Brett wants every schedule visible and editable in ONE place: the JOBS table at the top of HubScheduler.gs. The
 // registry above holds the DEFAULTS; each tick the Apps Script sends its JOBS table as `schedule` in POST /cron/run
@@ -16659,16 +16700,18 @@ function schedStatus(state, now, jobs, aiPausedAt) {
     }
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
     let overdue = false, reason = '';
+    const grace = schedGrace(job, js, nowMs, !!(state && state.last_tick));   // Oct 20 2026: a new / just re-enabled job is not "overdue" for the first stretch
     if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
       overdue = true; reason = `started ${ageMin(js.last_start)} min ago and never finished (timed out or crashed)`;
     }
     if (job.kind === 'interval') {
       const okAge = ageMin(js.last_ok);
-      if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
+      if (grace.in_grace) { /* still inside its grace window - not overdue yet */ }
+      else if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
       else if (okAge > schedOverdueLimitMin(job)) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${schedOverdueLimitMin(job)})`; }
     } else {
       const expectedToday = job.kind === 'daily' || et.dow === job.dow;
-      if (expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
+      if (!grace.in_grace && expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
         overdue = true; reason = reason || `has not run for ${et.date} (was due ${job.at} ET)`;
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
@@ -16676,7 +16719,7 @@ function schedStatus(state, now, jobs, aiPausedAt) {
     // Oct 16 2026: skipped on purpose because AI credit is paused -> shown as "paused: AI credit", NOT overdue (the pause itself is the loud, already-alerted problem).
     const pausedNow = !!aiPausedAt && job.kind !== 'interval' && js.paused_key === et.date && js.paused_ep === aiPausedAt && js.last_key !== et.date;
     if (pausedNow) { overdue = false; reason = ''; }
-    out.jobs[job.name] = Object.assign({ expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' }, pausedNow ? { paused: true, paused_reason: js.last_error || 'paused: AI credit' } : {});
+    out.jobs[job.name] = Object.assign({ expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' }, pausedNow ? { paused: true, paused_reason: js.last_error || 'paused: AI credit' } : {}, grace.in_grace && !overdue ? { grace: true, grace_reason: `${grace.why}; judged overdue after another ~${grace.until_min} min if it still has not run` } : {});
     if (overdue) out.overdue.push(job.name);
   }
   return out;
@@ -16842,9 +16885,9 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
   catch (e) { return { ok: false, errors: [{ step: 'qb_sync_progress', error: schedErrText(e) }], detail }; }
   if (!prog || prog.date !== today) prog = { date: today, started: new Date().toISOString(), done: [], ir_done: false, loop_done: false, sweep_done: false, complete: false, slices: 0, totals: { written: 0, failed: 0, closed: 0, closed_wos: [] } };
   if (prog.complete) return { ok: true, errors, detail: { skipped: `already finished today (${today})` } };
-  let partial = false;
+  let partial = false, progressMade;
   try {
-    const res = await qbSyncPayments(env, {}, { state: prog, sliceMs: opts.sliceMs, now: opts.now });
+    const res = await qbSyncPayments(env, {}, { state: prog, sliceMs: opts.sliceMs, minLoopMs: opts.minLoopMs, now: opts.now });
     const u = await schedUnwrap(res);
     const b = u.body;
     // Same condition scheduled() always used (ok:false or a non-empty errors list), plus a non-2xx status.
@@ -16855,7 +16898,8 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
       catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
     }
     partial = !!(b && b.partial);
-    detail.qb_sync = { status: u.status, slice: prog.slices, partial, done_rows: prog.done.length, timings_ms: b && b.timings_ms, deposit_sweep: !!prog.sweep_done };
+    if (b && typeof b.progress_made === 'boolean') progressMade = b.progress_made;
+    detail.qb_sync = { status: u.status, slice: prog.slices, partial, progress_made: progressMade, rows_this_slice: b && b.rows_this_slice, done_rows: prog.done.length, timings_ms: b && b.timings_ms, deposit_sweep: !!prog.sweep_done };
   } catch (e) {
     errors.push({ step: 'qb_sync_payments', error: schedErrText(e) });
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: schedErrText(e) }); }
@@ -16866,7 +16910,7 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
   try { await write(prog); }
   catch (e) { errors.push({ step: 'qb_sync_progress', error: 'could not save progress' + (prog.complete ? ' (the pass finished but is not marked done, so it may run again)' : '') + ': ' + schedErrText(e) }); }
   if (errors.length) return { ok: false, errors, detail };
-  return partial ? { ok: true, partial: true, errors, detail } : { ok: true, errors, detail };
+  return partial ? { ok: true, partial: true, progress_made: progressMade, errors, detail } : { ok: true, errors, detail };
 }
 async function schedRunWeeklyReview(env, deliver) {
   const errors = [];
@@ -17250,6 +17294,8 @@ async function schedRunNext(env, ctx, opts) {
   const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
   const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
   if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
+  const stamped = schedStampFirstSeen(st, now, jobs);   // Oct 20 2026: new / re-enabled jobs get a grace clock (persisted by the claim or heartbeat write below)
+  if (stamped.length) base.grace_stamped = stamped;
   const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
   const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
@@ -17307,9 +17353,15 @@ async function schedRunNext(env, ctx, opts) {
     // marked done for the day (no last_key); it resumes after SCHED_PARTIAL_GAP_MS. Taking more than SCHED_MAX_PARTIALS slices in one ET day
     // is a failure (loud), so a job that can never finish cannot look healthy forever.
     const etDayP = force ? schedEtParts(new Date(nowMs())).date : key;
-    const partialN = (jobRes.partial === true && job.kind !== 'interval') ? ((prev.partials && prev.partials.key === etDayP ? prev.partials.n : 0) + 1) : 0;
-    if (partialN > SCHED_MAX_PARTIALS) { jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${SCHED_MAX_PARTIALS} slices today (it needs a person to look)` }] }; }
-    const isPartial = partialN > 0 && partialN <= SCHED_MAX_PARTIALS;
+    const prevP = (prev.partials && prev.partials.key === etDayP) ? prev.partials : null;
+    const partialN = (jobRes.partial === true && job.kind !== 'interval') ? ((prevP ? prevP.n : 0) + 1) : 0;
+    const reportsProgress = partialN > 0 && typeof jobRes.progress_made === 'boolean';
+    const stalledN = reportsProgress ? (jobRes.progress_made ? 0 : ((prevP && prevP.stalled) || 0) + 1) : 0;
+    const partialCap = reportsProgress ? SCHED_MAX_PARTIALS_PROGRESS : SCHED_MAX_PARTIALS;
+    let partialFailed = false;
+    if (partialN > partialCap) { partialFailed = true; jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${partialCap} slices today (it needs a person to look)` }] }; }
+    else if (reportsProgress && stalledN >= SCHED_MAX_STALLED_PARTIALS) { partialFailed = true; jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} made no progress in its last ${stalledN} slices today (slice ${partialN}; it needs a person to look)` }] }; }
+    const isPartial = partialN > 0 && !partialFailed;
     const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
     // Oct 16 2026: {ok:false, paused:true, reason} = "skipped on purpose because AI credit is paused". NOT a failure (Brett was already alerted once, and the
     // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
@@ -17352,7 +17404,7 @@ async function schedRunNext(env, ctx, opts) {
             rec.attempts = null;
             if (aiPausedFinal && !force) { rec.paused_key = etDay; rec.paused_ep = aiPausedFinal; }
           } else if (jobOk && isPartial) {
-            rec.partials = { key: etDay, n: partialN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
+            rec.partials = { key: etDay, n: partialN, stalled: stalledN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
           } else if (jobOk || finalFail) {
             rec.last_key = etDay; rec.attempts = null; rec.partials = null;
             rec.last_failed_final = finalFail ? etDay : null;
@@ -26967,6 +27019,27 @@ async function qbPayables(env, url) {
         customer_clear_days: s.clear_days, customer_clears_on: s.clears_on, customer_clear_status: s.status, customer_payment_count: s.count };
     }
 
+    // Oct 20 2026: "owner paid in part" is judged against what QuickBooks' OWN invoice says it totals (TotalAmt) -- exactly like the vendor side -- and only falls back
+    // to the Hub's figure when QuickBooks gave no usable total. The Hub's Customer_Total is a gross/estimate figure; an invoice hand-corrected in QuickBooks (WO-1246,
+    // invoice 1764) is smaller, and an UNPAID invoice read as "part paid" -> a P0 "payment date unavailable" every sync. A true part-payment is still balance < TotalAmt.
+    function isPartiallyPaid(balance, qbTotal, hubTotal) {
+      if (balance == null || !(balance > 0.005)) return false;
+      const total = (qbTotal != null && isFinite(qbTotal) && qbTotal > 0) ? qbTotal : hubTotal;
+      return total > 0 && balance < (total - 0.005);
+    }
+    // The two "date unavailable" notices repeat on every call (every sync, every Who To Pay open) for the same invoices. The warning is ALWAYS returned to the page;
+    // only the Ops_Telemetry / failure-ledger write is skipped when this isolate already logged the same list in the last 6 h. A failed log write is retried next call.
+    const warnSeen = (qbPayables._warnSeen = qbPayables._warnSeen || new Map());
+    async function warnDateMissing(stage, ref, err) {
+      const key = stage + '|' + ref, nowMs = Date.now(), last = warnSeen.get(key);
+      if (last != null && nowMs - last < 6 * 3600 * 1000) { warnings.push({ stage, ref, error: String(err.message).slice(0, 300), repeat: true }); return; }
+      if (warnSeen.size > 200) warnSeen.clear();
+      warnSeen.set(key, nowMs);
+      const from = warnings.length;
+      await logAndCollectError(env, warnings, stage, '/qb/payables', ref, err);
+      if (warnings.slice(from).some(w => w.stage === 'telemetry')) warnSeen.delete(key);
+    }
+
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
     const candidates = irs.filter(ir => {
@@ -27052,7 +27125,8 @@ async function qbPayables(env, url) {
       // QuickBooks invoice is the NET amount -- compare balances to what was actually invoiced or an unpaid netted invoice reads "part paid".
       const propCreditPay = String(ir.Proposal_Applied || '').toUpperCase() === 'TRUE' ? money2(+ir.Proposal_Credit_Customer || 0) : 0;
       const custTotal = Math.max(0, money2((Number(ir.Customer_Total) || 0) - propCreditPay));
-      const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+      const qbInvTotal = q ? Number(q.TotalAmt) : NaN;
+      const customerPartial = isPartiallyPaid(customerBalance, qbInvTotal, custTotal);
       const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
 
       // The state that matters: money in, money not yet out.
@@ -27082,7 +27156,7 @@ async function qbPayables(env, url) {
         terms: vendorTermLabel(vendor),
         invoice_id: invId, invoice_number: invNumber,
         customer_total: custTotal, proposal_credit: propCreditPay, customer_balance: customerBalance, customer_paid: customerPaid,
-        customer_partial: customerPartial,
+        customer_partial: customerPartial, qb_invoice_total: isFinite(qbInvTotal) ? qbInvTotal : null,
         ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
         vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
@@ -27153,7 +27227,8 @@ async function qbPayables(env, url) {
           const vendor = vendors.find(v => String(v.ID) === String(c.sc.Vendor_ID));
           const inHouse = scopeSigSkipIsInHouse(c.skipReason);
           const custTotal = c.custTotal;
-          const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+          const qbInvTotal = q ? Number(q.TotalAmt) : NaN;
+          const customerPartial = isPartiallyPaid(customerBalance, qbInvTotal, custTotal);
           const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
 
           let state;
@@ -27185,7 +27260,7 @@ async function qbPayables(env, url) {
             wo_id: c.sc.WO_ID, vendor_id: c.sc.Vendor_ID || '', vendor_name: vendor ? qbVendorDisplayName(vendor) : '',
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
-            customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
+            customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial, qb_invoice_total: isFinite(qbInvTotal) ? qbInvTotal : null,
             ...clearFields(c.sc.WO_ID + ' (' + c.phase + ')', q, customerPaid === true || customerPartial, sigPayments),
             bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
             vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
@@ -27196,11 +27271,11 @@ async function qbPayables(env, url) {
     } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
     if (vendorPaidDateMissing.length) {
-      await logAndCollectError(env, warnings, 'qb_payables_vendor_paid_date_missing', '/qb/payables', vendorPaidDateMissing.slice(0, 20).join(', '),
+      await warnDateMissing('qb_payables_vendor_paid_date_missing', vendorPaidDateMissing.slice(0, 20).join(', '),
         new Error(vendorPaidDateMissing.length + ' paid vendor bill(s) have no QuickBooks BillPayment with a usable date -- the vendor portal PAID tab lists them as "date unavailable": ' + vendorPaidDateMissing.slice(0, 20).join(', ')));
     }
     if (paymentDateMissing.length) {
-      await logAndCollectError(env, warnings, 'qb_payables_payment_date_missing', '/qb/payables', paymentDateMissing.slice(0, 20).join(', '),
+      await warnDateMissing('qb_payables_payment_date_missing', paymentDateMissing.slice(0, 20).join(', '),
         new Error(paymentDateMissing.length + ' paid/part-paid invoice(s) have no QuickBooks Payment with a usable date (credit memo, journal entry or lookup problem) -- shown as "payment date unavailable": ' + paymentDateMissing.slice(0, 20).join(', ')));
     }
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
@@ -27224,6 +27299,11 @@ async function qbPayables(env, url) {
 // the scheduler runs this in resumable slices: opts.state (progress, mutated) + opts.sliceMs. With no opts it is the same one-pass call it
 // always was (Who To Pay "sync", manual POST). A row that could not be written is now reported (before, updateRow's 404 was ignored).
 const QB_SYNC_SLICE_MS = 30 * 1000;
+// Oct 20 2026: the slice budget used to be measured from the START of the slice, but the QuickBooks payables read + its ~8 paced Sheets reads can
+// eat all of it, so some slices processed ZERO rows and the day ran out of slices (14 slices, 115 of 120 rows). The row loop now gets its own window
+// (at least this long, measured from when the loop starts) AND always processes at least one row per slice, so every slice makes progress.
+const QB_SYNC_MIN_LOOP_MS = 12 * 1000;
+const QB_SYNC_LOG_KEEP = 20;      // per-slice timings kept in the qb_sync_progress cell (the evidence for the next "why is it slow")
 function qbSyncRowKey(r) { return r.source === 'scope_signature' ? ['sig', r.signature_id || '', r.phase || '', r.milestone_id || ''].join(':') : 'ir:' + (r.ir_id || ''); }
 async function qbSyncWriteInvoiceReview(env, rows, nowISO) {
   const targets = rows.filter(r => r.source !== 'scope_signature');   // Signed-Proposal rows have no Invoice_Review row (QuickBooks' own Balance is their source of truth)
@@ -27276,6 +27356,8 @@ async function qbSyncPayments(env, body, opts) {
   const closedWOs = [];
   const doneKeys = new Set(sync && Array.isArray(sync.done) ? sync.done : []);
   let stoppedEarly = false;
+  const before = { done: doneKeys.size, ir: !!(sync && sync.ir_done), loop: !!(sync && sync.loop_done), sweep: !!(sync && sync.sweep_done) };   // for progress_made
+  let rowsThisSlice = 0, rowsLeft = null;
 
   if (!(sync && sync.loop_done)) {
     const tp = clock();
@@ -27307,11 +27389,14 @@ async function qbSyncPayments(env, body, opts) {
 
     const woPaidDateSeen = new Map(); let woPaidDateColReady = false;
     const tl = clock();
+    // The loop's own window: the rest of the slice, but never less than QB_SYNC_MIN_LOOP_MS after the loop starts (payables may have used the slice up).
+    const loopDeadline = sync ? Math.max(deadline, tl + (opts.minLoopMs != null ? opts.minLoopMs : QB_SYNC_MIN_LOOP_MS)) : Infinity;
     for (const r of data.rows) {
       const rk = qbSyncRowKey(r);
       if (doneKeys.has(rk)) continue;
-      // Time-slice: stop BEFORE starting a row's side effects when the slice is spent; the next tick carries on from the saved keys.
-      if (clock() >= deadline) { stoppedEarly = true; break; }
+      // Time-slice: stop BEFORE starting another row's side effects when the window is spent -- but only after at least ONE row this slice, so a
+      // slow payables read can never again produce a slice that does nothing. The next tick carries on from the saved keys.
+      if (rowsThisSlice > 0 && clock() >= loopDeadline) { stoppedEarly = true; break; }
 
       // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
       // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
@@ -27362,9 +27447,10 @@ async function qbSyncPayments(env, body, opts) {
           }
         } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_vendor_paid_date', '/qb/sync-payments', 'wo=' + r.wo_id + ' date=' + r.vendor_paid_date + ' (vendor portal PAID tab date not saved)', e); }
       }
-      doneKeys.add(rk);
+      doneKeys.add(rk); rowsThisSlice++;
     }
     timings.rows_ms = clock() - tl;
+    rowsLeft = data.rows.filter(x => !doneKeys.has(qbSyncRowKey(x))).length;
     if (sync) { sync.done = [...doneKeys]; if (!stoppedEarly) sync.loop_done = true; }
   }
 
@@ -27383,8 +27469,15 @@ async function qbSyncPayments(env, body, opts) {
     if (data) T.checked = data.count;
     sync.slices = (sync.slices || 0) + 1;
   }
+  // Oct 20 2026: did this slice move the pass forward? (a row finished, or a stage -- stored-copy write, row loop, deposit sweep -- completed.) The dispatcher
+  // fails a job that reports progress_made:false several slices in a row instead of letting it burn a flat number of slices; slice_log keeps the timings.
+  const progressMade = !!(sync && (doneKeys.size > before.done || (sync.ir_done && !before.ir) || (sync.loop_done && !before.loop) || (sync.sweep_done && !before.sweep)));
+  if (sync) {
+    const entry = { n: sync.slices, at: new Date().toISOString(), total_ms: clock() - t0, rows_done: rowsThisSlice, rows_left: rowsLeft, stopped_early: stoppedEarly, progress: progressMade, t: timings };
+    sync.slice_log = (Array.isArray(sync.slice_log) ? sync.slice_log : []).concat(entry).slice(-QB_SYNC_LOG_KEEP);
+  }
   const T2 = sync ? sync.totals : null;
-  return json({ ok: true, partial: !!(sync && (stoppedEarly || !sync.sweep_done)), timings_ms: timings, slice: sync ? sync.slices : undefined,
+  return json({ ok: true, partial: !!(sync && (stoppedEarly || !sync.sweep_done)), progress_made: sync ? progressMade : undefined, rows_this_slice: sync ? rowsThisSlice : undefined, timings_ms: timings, slice: sync ? sync.slices : undefined,
                 checked: T2 ? T2.checked : (data ? data.count : 0), written: T2 ? T2.written : written, failed: T2 ? T2.failed : failed, closed: T2 ? T2.closed : closed, closed_wos: T2 ? T2.closed_wos : closedWOs,
                 owed_now: data ? data.owed_now : undefined, owed_total: data ? data.owed_total : undefined, warnings: data ? (data.warnings || []) : [], errors: syncErrors,
                 deposit_sweep: depositSweep, rows: sync ? undefined : (data ? data.rows : []) });

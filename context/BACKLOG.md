@@ -22,6 +22,10 @@ findable by grep even though they never share a number. Example:
 - B-20261019-1501-fc · 🟡 **[vendor-payments]** Fee-credit ledger + manual "Post fee credit" built (Review Bills sends). Still open: parsing bank statements into credits (separate planning brief), and applying credits on progress-bill / deposit / legacy booking paths.
 - B-20261019-1502-rp · ✅ **[reports]** DONE Oct 19: Who To Pay uses the NET invoice. No other report sums Invoice_Review.Customer_Total.
 - B-20261019-1503-rr · ✅ **[qb-invoices]** DONE Oct 19: Reprice/Relabel handle the proposal credit line.
+- B-20261020-1130-sg · ✅ **[scheduler]** DONE Oct 20 (PR pending Brett): new/re-enabled jobs get a grace window before they read overdue (`[FL-20261020-sched-grace-qbsync]`).
+- B-20261020-1131-qs · ✅ **[qb-sync]** DONE Oct 20 (PR pending Brett): daily_qb_sync row loop has its own window, one row minimum per slice, `progress_made` + `slice_log`, 3-stalled-slices failure instead of a flat 12.
+- B-20261020-1132-qt · ✅ **[who-to-pay]** DONE Oct 20 (PR pending Brett): part-paid is judged against QuickBooks' invoice TotalAmt; date-missing notices are P2 and deduped.
+- B-20261020-1133-al · 🟠 **[failure-alerts]** OPEN: go through the stale Failure ledger rows with Brett, then turn on `failure_alert_enabled` and `dead_man_switch_enabled` (they are OFF on purpose until then). Also open: field-inspection leftovers (handoff item 5).
 - B-20261019-1504-sc · ✅ **[sweep]** DONE Oct 19 (read-only, prod data): only WO-1227 / Scope 8 is exposed - see FEATURE_LOG. `GET /qb/proposal-billing-sweep` re-runs it any time.
 
 **Reconciliation pass — Sep 7, 2026 (this file + CURRENT.md had both gone stale since Aug 24 despite real Sep 2/3/7 sessions shipping real work):**
