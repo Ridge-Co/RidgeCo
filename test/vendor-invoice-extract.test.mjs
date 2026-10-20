@@ -12,6 +12,7 @@
 //       says "not configured" rather than 401ing forever when the secret is missing, and reports
 //       read_ok honestly so a fail-open blank can't be mistaken for a passing canary.
 import fs from 'fs';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages, aiCreditIsPausedError, AI_CREDIT_CODE, ...)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(name){
