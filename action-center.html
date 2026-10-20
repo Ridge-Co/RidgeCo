@@ -158,10 +158,11 @@ async function getJSON(path){
   let r;
   try{ r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}}); }
   catch(e){ throw new Error('could not connect (network/CORS)'); }
-  let d=null,t='';
-  try{ t=await r.text(); d=JSON.parse(t); }catch(e){}
+  let d=null,t='',parseFail=null;
+  try{ t=await r.text(); d=JSON.parse(t); }catch(e){ parseFail=e; }
   if(!r.ok) throw new Error((d&&d.error)?d.error:('HTTP '+r.status));
   if(d&&d.error) throw new Error(d.error);
+  if(parseFail&&t.trim()){ window.hubReportFailure&&window.hubReportFailure('action-center:unreadable-response '+path.split('?')[0],parseFail); throw new Error('the Hub answered with something unreadable'); }
   return d;
 }
 
