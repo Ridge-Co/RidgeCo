@@ -25505,7 +25505,7 @@ async function health(env, url) {
   // can be diagnosed from a plain curl instead of needing the admin token or guessing.
   out.pricing = { secret_set: false, sheet_set: false, parses_ok: false };
   try { out.pricing.secret_set = !!(env && env.PRICING_CONFIG); } catch (_) { /* silent-ok: reading an env binding cannot realistically throw */ }
-  try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (_) {}
+  try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (e) { softNote('health_pricing_sheet_check', e, 'P2'); out.pricing.check_error = String((e && e.message) || e).slice(0, 120); }
   try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (_) {}
   // Gmail OAuth (B-210) config-presence check — same never-expose-values pattern as pricing
   // above. Confirms the 4 Cloudflare secrets actually landed and are non-empty, without
