@@ -17537,7 +17537,7 @@ async function schedRunNext(env, ctx, opts) {
   if (ov.errors.length) {
     const msg = (sentSchedule ? 'the schedule sent by the Apps Script JOBS table was rejected: ' : 'the stored schedule is invalid: ') + ov.errors.join('; ');
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: 'schedule_overrides', Success: 'FALSE', Notes: msg.slice(0, 480) }); }
-    catch (e) { console.error('scheduler: schedule rejected and telemetry write failed:', msg, schedErrText(e)); }
+    catch (e) { console.error('scheduler: schedule rejected and telemetry write failed:', msg, schedErrText(e)); softNote('telemetry_write_failed:schedule_overrides', e, 'P2'); /* logTelemetry already ledgered the FALSE row; the 400 below carries the rejection to the caller */ }
     return { status: 400, body: Object.assign({}, base, { ok: false, error: msg.slice(0, 500) }) };
   }
   jobs = ov.jobs;
