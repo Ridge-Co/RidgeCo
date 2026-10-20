@@ -24609,7 +24609,7 @@ function __meterSnapshot(url, extra) {
     for (let i = 0; i < 4; i++) a[i] += v[i];
   }
   return {
-    window_minutes: mins, isolate: __meter.isolate, isolate_started: new Date(__meter.since).toISOString(), build: BUILD_VERSION,
+    window_minutes: mins, isolate: __meter.isolate, isolate_started: new Date(__meter.since || Date.now()).toISOString(), instances: 1 + (extra && extra.store ? extra.store.remote_instances : 0), shared_store: __meterStoreInfo(extra), build: BUILD_VERSION,
     note: 'Counts only THIS Worker instance since it started (a deploy or idle restart resets it). reads = real GET calls to Google incl. retries; r429 = Google said "too many".',
     totals: tot, peak_reads_in_a_minute: rows.reduce((m, b) => Math.max(m, b.reads), 0), minutes_at_or_over_alarm: rows.filter(b => b.reads >= METER_ALARM_READS_PER_MIN).length,
     quota_limit_per_minute: 60, alarms_raised: __meter.alarms, meter_faults: __meter.faults,
