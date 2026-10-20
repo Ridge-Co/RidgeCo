@@ -97,6 +97,7 @@ function setup() {
   var msg = 'Setup done for ' + me + '.\n' +
     'Sheet: ' + ss.getUrl() + '\n' +
     'Filters created/updated: ' + synced.created + ', past emails queued (since ' + cfg.Backfill_Since + '): ' + synced.labeled + '\n' +
+    (synced.failures.length ? 'PROBLEMS removing old Gmail filters (fix by hand in Gmail settings): ' + synced.failures.join('; ') + '\n' : '') +
     'New sender candidates added to the sheet for approval: ' + found + '\n' +
     'Files start landing in the Hub folder within 10 minutes (' + (Number(cfg.Max_Per_Run) || 25) + ' emails per run).';
   Logger.log(msg);
