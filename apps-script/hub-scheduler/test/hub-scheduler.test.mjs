@@ -63,8 +63,6 @@ function world(opts) {
   vm.runInContext(SRC, ctx);
   // Most tests below are about the Hub loop, so by default the table is cut down to the Hub rows; allJobs:true keeps the real table.
   if (!opts.allJobs) vm.runInContext("JOBS = JOBS.filter(function (j) { return j.run === 'hub'; });", ctx);
-  // The two outside watchers (GitHub runs on main, deployed version) are switched off by default so the older tests keep their exact email/fetch expectations; watchers:true turns them on.
-  if (!opts.watchers) vm.runInContext("checkMainRuns_ = function () {}; checkDeploy_ = function () {};", ctx);
   w.run = (fn) => vm.runInContext(fn + '()', ctx);
   w.ctx = ctx;
   return w;
