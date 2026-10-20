@@ -4487,10 +4487,10 @@ async function woPushToScope(env, body) {
     await ensureColumns(env, 'Estimates', ['Converted_Scope_ID', 'Converted_Date']);
     await updateRow(env, 'Estimates', estimate.ID, { Status: 'Converted', Converted_Scope_ID: scopeId, Converted_Date: new Date().toISOString() });
     convertedMarked = true;
-  } catch (e) {}
+  } catch (e) { await softFail(env, 'woPushToScope_mark_converted', e, 'P1', { wo_id: woId, estimate_id: estimate.ID, scope_id: scopeId }); /* reported; the response below carries the warning */ }
 
   await setApprovalStage(env, { woId, scopeId, stage: 'Proposed' });
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (te) { softNote('telemetry_write_failed:wo_push_to_scope', te, 'P2'); }
 
   return json({
     success: true, applied: true, wo_id: woId, scope_id: scopeId, created_new_scope: willCreate,
