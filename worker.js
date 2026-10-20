@@ -10638,7 +10638,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   try { await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') }); emailOutcome = 'sent'; } catch (e) { emailOutcome = 'failed'; throw e; }
   finally {
     // Per-WO communication audit (Sep 20 2026) — same visibility as the SMS side (smsGatedSend).
-    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) {}
+    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) { softNote('message_audit_failed:vendor_invoice_confirmation', e, 'P2', { ref: woId }); }
   }
 }
 
