@@ -9799,12 +9799,13 @@ async function assignVendor(env, body, internal) {
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch(_){}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch (te) { softNote('telemetry_write_failed:wo_assign', te, 'P2'); }
   return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail });
 }
 
 async function updateStatus(env, body) {
   const _t0 = Date.now();
+  const _warns = [];   // non-fatal problems that happened AFTER the status was saved; returned to the caller so a half-done update is never reported as clean
   // On Hold now REQUIRES a reason (Sep 14 2026, Brett) — checked before anything is written,
   // so a bad request never leaves a WO On Hold with no reason on record. hold_reason is the
   // real field name the client should send; notes is accepted as a fallback so an older/other
