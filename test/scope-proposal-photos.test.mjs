@@ -33,7 +33,7 @@ function extractConst(name) {
 
 let TABS = {};
 const fetchTab = async (env, tab) => { if (TABS[tab] === undefined) throw new Error(`no fake table for ${tab}`); return TABS[tab]; };
-const scopeProposalPhotos = new Function('fetchTab', `${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(fetchTab);
+const scopeProposalPhotos = new Function('fetchTab', `${SOFT}${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(fetchTab);
 
 console.log('scopeProposalPhotos — offline tests\n');
 
