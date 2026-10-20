@@ -32914,7 +32914,7 @@ async function qbSendCombinedInvoice(env, ctx) {
     }
 
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_ids: rowBuilds.map(rb => rb.billId || ''),
-                  invoice_number: invoiceDocNumber, combined_count: groupRows.length, errors, warnings,
+                  invoice_number: invoiceDocNumber, combined_count: groupRows.length, errors, warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}),
                   netted: applied ? { scope_id: applied.scope_id, credit_customer: creditCust, credit_vendor: applied.plan.credit_vendor, net_invoice: netCombined } : null });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
