@@ -37608,7 +37608,7 @@ function fiSafeUrl(input) {
   if (!s) return { ok: false, error: 'Enter the company website address.' };
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = 'https://' + s;
   let u;
-  try { u = new URL(s); } catch (_) { return { ok: false, error: 'That does not look like a web address.' }; }
+  try { u = new URL(s); } catch (_) { /* silent-ok: bad input is returned to the person as a message */ return { ok: false, error: 'That does not look like a web address.' }; }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return { ok: false, error: 'Only http/https web addresses can be captured.' };
   if (u.username || u.password) return { ok: false, error: 'Web addresses with a login in them are not allowed.' };
   if (u.port && u.port !== '80' && u.port !== '443') return { ok: false, error: 'Only standard web ports are allowed.' };
