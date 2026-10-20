@@ -173,7 +173,7 @@ function overlapsQueue(it,rows){const ta=toks(it.title),fa=toks([it.title,it.pro
 function st(x){return String(x.Status||'').toLowerCase();}
 function ms(v){const t=Date.parse(String(v||''));return Number.isFinite(t)?t:NaN;}
 function daysLeft(x){return Math.ceil((ms(x.Snooze_Until)-Date.now())/86400000);}
-let REVIEW_ANYWAY={}; try{REVIEW_ANYWAY=JSON.parse(localStorage.getItem('prop_review_anyway')||'{}')||{};}catch(e){}
+let REVIEW_ANYWAY={}; try{REVIEW_ANYWAY=JSON.parse(localStorage.getItem('prop_review_anyway')||'{}')||{};}catch(e){ /* silent-ok: stored choice unreadable, starts empty */ }
 function classify(allQ){
   const out={review:[],built:[],snoozed:[],ready:[],flight:[],live:[],byId:{}};
   allQ.forEach(function(x){
