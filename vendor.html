@@ -2572,7 +2572,7 @@ function rcCloseLightbox() {
   var lb = document.getElementById('rc-lightbox');
   if (lb) lb.style.display = 'none';
   var v = document.getElementById('rc-lb-video');
-  if (v) { try { v.pause(); } catch(e){} v.removeAttribute('src'); v.load(); }
+  if (v) { try { v.pause(); } catch(e){ /* silent-ok: video element already detached */ } v.removeAttribute('src'); v.load(); }
 }
 function rcLightboxNav(delta) {
   if (!_rcLbItems.length) return;
