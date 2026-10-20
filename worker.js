@@ -36477,7 +36477,7 @@ async function inspSendPartnerEmail(env, { to, subject, html, ics, method }) {
   const accessToken = await gmailAccessToken(env);
   const raw = inspBuildInviteMime({ from: inspSenderAddr(env), to, subject, html, ics, method });
   const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(raw) }) });
-  const data = await resp.json().catch(() => null);
+  const data = await resp.json().catch(() => null);   // silent-ok: an unreadable reply makes the next line throw, so the caller sees the failure
   if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
   return { sent: true, message_id: data.id, ics_attached: true };
 }
