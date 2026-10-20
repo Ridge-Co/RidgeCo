@@ -27443,9 +27443,10 @@ async function qbSyncPayments(env, body, opts) {
           }
         } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_vendor_paid_date', '/qb/sync-payments', 'wo=' + r.wo_id + ' date=' + r.vendor_paid_date + ' (vendor portal PAID tab date not saved)', e); }
       }
-      doneKeys.add(rk);
+      doneKeys.add(rk); rowsThisSlice++;
     }
     timings.rows_ms = clock() - tl;
+    rowsLeft = data.rows.filter(x => !doneKeys.has(qbSyncRowKey(x))).length;
     if (sync) { sync.done = [...doneKeys]; if (!stoppedEarly) sync.loop_done = true; }
   }
 
