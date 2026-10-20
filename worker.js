@@ -4336,7 +4336,7 @@ async function woPushToScope(env, body) {
   const apply = !!body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
 
   await scopesTab(env);
-  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) {}
+  const _scopeColReady = await tryWrite(env, 'woPushToScope_ensure_scope_id_column', () => ensureColumns(env, 'Work_Orders', ['Scope_ID']), 'P1');   // reported; the push continues and the later Scope_ID write surfaces its own failure
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
