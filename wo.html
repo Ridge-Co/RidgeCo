@@ -741,8 +741,8 @@ function msg(id,text,cls){ var el=document.getElementById(id); el.textContent=te
 
 <!-- auto-refresh onto new Worker code (idle only) -->
 <script>
-(function(){ var V=WORKER+'/version',booted=null;
-  function chk(){ fetch(V,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){ if(!d||!d.version)return; if(booted===null){booted=d.version;return;} if(d.version!==booted){ var el=document.activeElement; var busy=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')&&el.value; if(!busy) location.reload(true); } }).catch(function(){}); }
+(function(){ var V=WORKER+'/version',booted=null,fails=0;
+  function chk(){ fetch(V,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){ fails=0; if(!d||!d.version)return; if(booted===null){booted=d.version;return;} if(d.version!==booted){ var el=document.activeElement; var busy=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')&&el.value; if(!busy) location.reload(true); } }).catch(function(e){ if(navigator.onLine!==false&&!document.hidden&&++fails===5) window.hubReportFailure && window.hubReportFailure('wo:versionCheck failing repeatedly', e); }); }
   chk(); setInterval(chk,60000);
 })();
 </script>
