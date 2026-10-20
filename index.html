@@ -11359,26 +11359,26 @@ function loadInvoiceReview() {
   // address), not on Vendor_Bills. If the page is opened before loadAll() finished — or
   // that call failed — the cards would silently render with no job context and the whole
   // point of the screen is lost. So top the state up first; never render context-blind.
-  var prep = [];
+  var prep = [], ctxFailed = []; function ctxFail(label) { return function(e) { ctxFailed.push(label); window.hubReportFailure && window.hubReportFailure('index:invoice-review-context ' + label, e); }; } function ctxBannerHtml() { return ctxFailed.length ? '<div role="alert" style="border:2px solid var(--danger);background:rgba(220,38,38,.10);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px"><b style="color:var(--danger)">&#9888; Could not load: ' + ctxFailed.join(', ') + '.</b> Job names, addresses and the in-house vendor flag may be missing, so the numbers below may be wrong. Reload before approving anything.</div>' : ''; }
   if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) {
-    if (Array.isArray(r)) state.workorders = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.workorders = r; else ctxFail('workorders')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('workorders')));
   if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) {
-    if (Array.isArray(r)) state.properties = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.properties = r; else ctxFail('properties')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('properties')));
   if (!safeArray(state.units).length) prep.push(api('GET', '/units').then(function(r) {
-    if (Array.isArray(r)) state.units = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.units = r; else ctxFail('units')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('units')));
   // Vendors is load-bearing for the money now, not just for names: the in-house flag lives
   // there, and without it an in-house job would quietly report the old profit — netting out
   // labour that never left the business.
   if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) {
-    if (Array.isArray(r)) state.vendors = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.vendors = r; else ctxFail('vendors')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('vendors')));
   // Owners power the Owner filter's labels (resolved property → owner). Top up if empty.
   if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) {
-    if (Array.isArray(r)) state.owners = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.owners = r; else ctxFail('owners')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('owners')));
 
   Promise.all(prep).then(function() {
     return api('GET', '/vendor-bills?status=submitted');
