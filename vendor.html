@@ -524,7 +524,7 @@ function doLogout() {
   document.getElementById('woList').innerHTML = '<div class="spinner">Loading work orders…</div>';
   show('screenDash', false);
   show('screenLogin', true);
-  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ }
 }
 
 // Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Needs Your Attention". A dedicated,
