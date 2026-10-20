@@ -553,4 +553,19 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
 {
   const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-race');
   const g = offerOf(W, '1', PK, 'pending'); await tick(E, '2026-10-21', '09:00');
-//@@APPEND@@
+  const k = offerOf(W, '2', PK, 'pending'); t('(setup) Gina expired, Kayla asked', offerOf(W, '1', PK).Status === 'expired' && !!k, offersOf(W, PK));
+  W.sms.length = 0; E.__cold(); const [a, b] = await Promise.all([J(E.strOfferRespond({}, { k: tok(W, '2'), offer_id: k.ID, action: 'accept' })), J(E.strOfferRespond({}, { k: tok(W, '1'), offer_id: g.ID, action: 'accept' }))]);
+  const p = pend(W);
+  t('only one of two simultaneous yes answers holds the date; the other is told it is covered and offered backup', p.Status === 'pending_held' && [a, b].filter(x => x.result === 'held').length === 1 && [a, b].filter(x => x.result === 'filled').length === 1 && W.sms.filter(s => s.type === 'str_pending_yes').length === 1, { a, b, p });
+}
+
+// ═══ 15. Several inquiries at once; never "primary" ═══
+{
+  const { W, E } = await world(); CUR = W;
+  await ask(E, PD, 'TEST-a'); await ask(E, '2026-11-17', 'TEST-b'); await ask(E, '2026-11-19', 'TEST-c');
+  t('three inquiries at once each ask Gina (Brett asked on purpose; the per-cleaner cap is for the automatic backlog)', smsTo(W, 'Regina', 'str_pending_offer').length === 3, W.sms.length);
+  t('no pending text anywhere says primary / rank', !W.sms.some(s => /primary|rank/i.test(s.text)));
+}
+
+console.log(`str-pending: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
