@@ -16590,7 +16590,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
         mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
       }).then(function(lr) { if (lr && lr.error) throw new Error(lr.error); }).catch(function(e) {
         window.hubReportFailure && window.hubReportFailure('index:log-attachment', e, {ref: woId});
-        card.insertAdjacentHTML('beforeend', ' <span style="color:var(--danger)" title="The file uploaded but was not linked to this work order">⚠ not linked to the work order, re-upload</span>');
+        card.insertAdjacentHTML('beforeend', ' <span style="color:var(--danger)" title="The file uploaded but was not linked to this work order">\u26a0 not linked to the work order, re-upload</span>');
         toast('A file uploaded but could not be linked to the work order. Re-upload it.', 'error');
       });
 
