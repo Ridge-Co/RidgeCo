@@ -3098,7 +3098,7 @@ async function receiptReconConfirm(env, body) {
   const description = body.description || row.PO_Reference || row.Vendor || '';
   const store = body.store || row.Vendor || '';
   const date = body.date || row.Receipt_Date || '';
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  let suggestion = parseJsonCell(row.Suggestion, null, 'Receipt_Recon_Queue.Suggestion');
   // Brett, Sep 22 2026: "attach receipts to Ridge Co and 1864 Kerns School Rd as an expense
   // rather than selecting a work order". A no-WO confirm is ALWAYS an expense record, even when
   // the scanner suggested 'billable' (a Home Depot receipt with a job address on it) — otherwise
