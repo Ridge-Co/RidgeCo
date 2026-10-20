@@ -36269,7 +36269,7 @@ async function inspBookInfo(env, url) {
   if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid. Please ask Brett for a current one.' }, 404);
   let blocks = []; try { blocks = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ ok: false, error: 'sheet_unavailable', message: 'Scheduling is temporarily unavailable.' }, 503); }
   const today = inspEtDate(Date.now());
-  let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for book info:', e && e.message); }
+  let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for book info:', e && e.message); softNote('insp_config_read_book_info', e, 'P2'); }
   const now = Date.now();
   const mine = blocks.filter(b => String(b.Active || '').toUpperCase() !== 'FALSE' && b.Date >= today && (!b.Customer_ID || String(b.Customer_ID) === String(c.ID)));
   const open_days = mine.map(b => ({ b, exp: inspBlockExpiryMs(b, dh) })).filter(x => Number.isFinite(x.exp) && now < x.exp)
