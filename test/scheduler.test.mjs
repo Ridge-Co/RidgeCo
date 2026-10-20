@@ -553,6 +553,38 @@ for (const N of [2, 5, 8]) {
   const s = stateOf(store).jobs.dq;
   t('a job that never finishes becomes a loud FAILURE on slice 13 (not a forever-green "partial")', log.length === 13 && s.last_status === 'failed' && /after 12 slices/.test(s.last_error || '') && L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dq'), { n: log.length, s });
 }
+// 2k-e Oct 20 2026: a job that REPORTS progress_made on its partial slices (daily_qb_sync) is judged on progress, not a flat 12 slices
+{
+  const runN = async (seq, extra) => {
+    const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+    let i = 0;
+    const jobs = mkJobs(log, [['dq', 'daily', { run: async () => { log.push('dq'); const step = seq[Math.min(i++, seq.length - 1)];
+      return step === 'done' ? { ok: true, errors: [] } : (step === undefined ? { ok: true, partial: true, errors: [] } : { ok: true, partial: true, progress_made: step === 'p', errors: [] }); } }]]);
+    let last = null;
+    for (let k = 0; k < (extra || 100); k++) { last = await L.schedRunNext({}, null, fast(c, { jobs })); c.v += 6 * 60000; if (last.body.ran !== 'dq') break; }
+    return { store, L, c, log, last, s: stateOf(store).jobs.dq };
+  };
+  // 3 slices in a row with no progress -> failure on the 3rd
+  const a = await runN(['n', 'n', 'n', 'n']);
+  t('3 no-progress slices in a row = loud FAILURE on slice 3 ("made no progress")', a.log.length === 3 && a.s.last_status === 'failed' && /made no progress in its last 3 slices/.test(a.s.last_error || '') && a.L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dq'), { n: a.log.length, s: a.s });
+  // two stalls then progress resets the counter; 20 progress slices sail past the old flat cap of 12
+  const b = await runN(['n', 'n', 'p', 'n', 'n', 'p', ...Array(14).fill('p'), 'done']);
+  t('stalls that are followed by progress never fail; 21 slices pass the old flat 12-slice cap and the day completes', b.log.length === 21 && b.s.last_status === 'ok' && !!b.s.last_key && b.s.partials === null, { n: b.log.length, s: b.s });
+  const c2 = await runN(['n', 'n', 'p'], 4);
+  t('stalled counter is stored (partials.stalled) and reset by a progress slice', c2.log.length === 4 && c2.s.last_status === 'partial' && c2.s.partials.stalled === 0, c2.s);
+  const store2 = primeState(makeStore()), L2 = load(store2), clk2 = clock(T0), log2 = [];
+  const jobs2 = mkJobs(log2, [['dq', 'daily', { run: async () => { log2.push('dq'); return { ok: true, partial: true, progress_made: false, errors: [] }; } }]]);
+  await L2.schedRunNext({}, null, fast(clk2, { jobs: jobs2 })); clk2.v += 6 * 60000; await L2.schedRunNext({}, null, fast(clk2, { jobs: jobs2 }));
+  t('after 2 stalled slices the state holds partials {n:2, stalled:2} and the job is still "partial", not failed', stateOf(store2).jobs.dq.partials.stalled === 2 && stateOf(store2).jobs.dq.partials.n === 2 && stateOf(store2).jobs.dq.last_status === 'partial', stateOf(store2).jobs.dq);
+  clk2.v += 6 * 60000; await L2.schedRunNext({}, null, fast(clk2, { jobs: jobs2 }));   // 3rd stalled slice -> failed
+  t('3rd stalled slice fails and is retried by the normal 30 min rule (attempt counted)', stateOf(store2).jobs.dq.last_status === 'failed' && stateOf(store2).jobs.dq.attempts.n === 1, stateOf(store2).jobs.dq);
+  // a job that creeps (always progress) hits the absolute backstop, loudly
+  const e = await runN(['p']);
+  t('always-progress-but-never-finishing job fails at the hard backstop (slice 61), not forever', e.log.length === 61 && e.s.last_status === 'failed' && /after 60 slices/.test(e.s.last_error || ''), { n: e.log.length, s: e.s });
+  // a job that does NOT report progress keeps the old flat cap (the daily self-test)
+  const f = await runN([undefined]);
+  t('a partial job that does not report progress_made keeps the flat 12-slice cap', f.log.length === 13 && /after 12 slices/.test(f.s.last_error || ''), { n: f.log.length, s: f.s });
+}
 {
   const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
   const jobs = mkJobs(log, [['dq', 'daily', { run: async () => { log.push('dq'); return { ok: false, partial: true, errors: [{ step: 'x', error: 'boom' }] }; } }]]);
