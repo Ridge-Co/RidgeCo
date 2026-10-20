@@ -17,7 +17,7 @@ const MIN = 60000, HOUR = 3600000;
 function world(opts) {
   opts = opts || {};
   const w = { clock: Date.parse('2026-10-12T14:00:00Z'), logs: [], mails: [], fetches: [], props: {}, triggers: [], locked: false, sleeps: 0,
-    mailFails: false, hub: null, uuid: 0, dropSheetWrite: false, opened: [], sheets: {} };
+    mailFails: false, probeFetches: [], probe: null, hub: null, uuid: 0, dropSheetWrite: false, opened: [], sheets: {} };
   w.sheetRows = [['Key', 'Value'], ['digest_enabled', 'TRUE']];
   w.sheets['1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4'] = { Config: w.sheetRows };
   w.setupTriggers = opts.triggers || 0;
@@ -55,7 +55,7 @@ function world(opts) {
     MailApp: { sendEmail: (to, subject, body) => { if (w.mailFails) throw new Error('mail quota'); w.mails.push({ to, subject, body }); } },
     SpreadsheetApp: { openById: (id) => { w.openedSheet = id; w.opened.push(id); const book = w.sheets[id]; if (!book) throw new Error('no such spreadsheet ' + id);
         return { getSheetByName: (n) => book[n] ? mkSheet(book[n]) : null, insertSheet: (n) => { book[n] = []; return mkSheet(book[n]); } }; }, flush: () => {} },
-    UrlFetchApp: { fetch: (url, o) => { w.fetches.push({ url, o }); if (!w.hub) throw new Error('no hub scripted'); const r = w.hub(url, o); if (r instanceof Error) throw r; return { getResponseCode: () => r.code, getContentText: () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body)) }; } },
+    UrlFetchApp: { fetch: (url, o) => { if (/\/health$/.test(url) && !/maintenance-hub/.test(url)) { w.probeFetches.push(url); const pr = w.probe ? w.probe(url) : { code: 200 }; if (pr instanceof Error) throw pr; return { getResponseCode: () => pr.code, getContentText: () => '' }; } w.fetches.push({ url, o }); if (!w.hub) throw new Error('no hub scripted'); const r = w.hub(url, o); if (r instanceof Error) throw r; return { getResponseCode: () => r.code, getContentText: () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body)) }; } },
   };
   class FakeDate extends Date { constructor(...a) { if (a.length) super(...a); else super(w.clock); } static now() { return w.clock; } }
   ctx.Date = FakeDate;
@@ -230,7 +230,7 @@ function ready(w, queue, statusBody) { w.props.SCHEDULER_TOKEN = 'hs_' + 'a'.rep
 {
   const w = world(); ready(w, [{ ran: 'x', job_ok: true, more: true }]);
   w.run('runScheduler');
-  ok(w.fetches.filter(f => run(f.url)).length === 15, 'hard cap of 15 calls per tick when more never clears');
+  ok(w.fetches.filter(f => run(f.url)).length === vm.runInContext('MAX_CALLS', w.ctx), 'hard cap (MAX_CALLS) on calls per tick when more never clears', w.fetches.filter(f => run(f.url)).length);
 }
 {
   const w = world(); ready(w, [{ ran: 'x', job_ok: true, more: true }]);
@@ -449,7 +449,7 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
   // Hub rows == the Hub's SCHED_JOBS registry (same names, same defaults), so editing the table is always a real choice
   const reg = [...WORKER.slice(WORKER.indexOf('const SCHED_JOBS = ['), WORKER.indexOf('// Pure. Is this one job due')).matchAll(/\{ name: '(\w+)',\s+kind: '(\w+)',\s*(?:dow: (\d), )?(?:at: '([\d:]+)', )?(?:every_min: (\d+), )?/g)].map(m => ({ name: m[1], kind: m[2], dow: m[3] === undefined ? undefined : +m[3], at: m[4], every_min: m[5] === undefined ? undefined : +m[5] }));
   const hubRows = rows.filter(r => r.run === 'hub');
-  ok(reg.length === 14 && hubRows.length === 14 && JSON.stringify(reg.map(r => r.name)) === JSON.stringify(hubRows.map(r => r.name)), 'the 14 Hub rows are exactly the Hub registry, in the same order', { reg: reg.map(r => r.name), rows: hubRows.map(r => r.name) });
+  ok(reg.length >= 14 && hubRows.length === reg.length && JSON.stringify(reg.map(r => r.name)) === JSON.stringify(hubRows.map(r => r.name)), 'the Hub rows are exactly the Hub registry, in the same order', { reg: reg.map(r => r.name), rows: hubRows.map(r => r.name) });
   const DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   ok(reg.every(r => { const h = hubRows.find(x => x.name === r.name); return r.kind === 'interval' ? (h.every_min === r.every_min + 1 && h.at === undefined) : (h.at === r.at && (r.kind === 'weekly' ? DOW[h.day] === r.dow : h.day === undefined)); }), 'every Hub row carries the same default time as the registry (15 min = registry 14 + 1 jitter minute)', reg);
   ok(hubRows.every(r => r.enabled === true), 'all Hub rows are on by default');
@@ -530,7 +530,7 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
   w.run('runScheduler');
   const sent = JSON.parse(calls.find(c => run(c.url)).o.payload).schedule;
   ok(sent.door_watchdog.enabled === false && sent.sweep.every_min === 30 && sent.daily_digest.at === '06:45' && sent.review_mon.dow === 1 && sent.review_mon.at === '08:30' && sent.review_wed.dow === 3, 'edits to the table are exactly what the Hub is sent (off / every 30 / 06:45 / weekday numbers)', sent);
-  ok(Object.keys(sent).length === 14 && !('pinterest_sync' in sent) && !('ci_drift_check' in sent), 'only the 14 Hub rows go to the Hub');
+  ok(Object.keys(sent).length === vm.runInContext("JOBS.filter(function (j) { return j.run === 'hub'; }).length", w.ctx) && !('pinterest_sync' in sent) && !('ci_drift_check' in sent), 'only the Hub rows go to the Hub');
 }
 
 // ── pure due / overdue logic for the non-Hub rows ───────────────────────────────────────────────────
@@ -864,6 +864,68 @@ const runsBody = (w, list) => ({ code: 200, body: { workflow_runs: list.map(x =>
   const L = w.logs.join('\n');
   ok(/ON  daily_digest - every day at 7:00 AM Eastern \[Hub\]/.test(L) && /ON  review_mon - every Monday at 8:30 AM Eastern \[Hub\]/.test(L) && /ON  sweep - every 15 minutes \[Hub\]/.test(L) && /OFF str_tick - every hour/.test(L) && /ON  ci_context_sync - every 30 minutes \[GitHub context-sync\.yml\]/.test(L) && /NOT started/.test(L), 'showSchedule prints every row in plain words with on/off and where it runs', L);
   ok(w.fetches.length === 0 && w.mails.length === 0, 'showSchedule touches nothing');
+}
+
+
+// ── failure ledger: independent email path, ledger reports, Worker probes (no-silent-failures A3b) ──────────────────
+{
+  const P0 = (id, where, msg, n) => ({ id, where, message: msg, count: n || 1, first_seen: '2026-10-12T13:00:00Z' });
+  const st = (f) => Object.assign({}, GOOD_STATUS, f === undefined ? {} : { failures: f });
+  // 1. an urgent unacknowledged problem is emailed at once, even though the Hub texts separately
+  let w = world(); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
+  scriptedHub(w, [{}], st({ ok: true, open: 2, P0: 1, P1: 1, p0_unack: [P0('F-1', 'receipt_parse', 'Your credit balance is too low', 19)], p0_unack_total: 1 }));
+  w.run('runScheduler');
+  let m = mailsWith(w, /URGENT: 1 Hub problem/);
+  ok(m.length === 1 && /receipt_parse/.test(m[0].body) && /19x/.test(m[0].body) && /still arrives if Hub texting is down/.test(m[0].body), 'an urgent unacknowledged ledger problem is emailed by the scheduler itself');
+  w.clock += 15 * MIN; w.run('runScheduler');
+  ok(mailsWith(w, /URGENT/).length === 1, 'same list 15 min later: no repeat email');
+  w.clock += 6 * HOUR; w.run('runScheduler');
+  ok(mailsWith(w, /URGENT/).length === 2, 'same list 6 h later: reminder');
+  scriptedHub(w, [{}], st({ ok: true, open: 2, P0: 2, P1: 0, p0_unack: [P0('F-1', 'a', 'x'), P0('F-2', 'b', 'y')], p0_unack_total: 2 }));
+  w.clock += 15 * MIN; w.run('runScheduler');
+  ok(mailsWith(w, /URGENT: 2 Hub problems/).length === 1, 'a NEW urgent problem emails immediately');
+  scriptedHub(w, [{}], st({ ok: true, open: 0, P0: 0, P1: 0, p0_unack: [], p0_unack_total: 0 }));
+  w.clock += 15 * MIN; w.run('runScheduler'); const n0 = w.mails.length;
+  w.clock += 15 * MIN; w.run('runScheduler');
+  ok(w.mails.length === n0 && !w.props.LEDGER_P0_KEY, 'once everything is acknowledged or fixed it goes quiet and forgets the list');
+  // 2. ledger unreadable is itself an email
+  w = world(); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
+  scriptedHub(w, [{}], st({ ok: false, error: 'could not read the failure ledger: Sheets 503' }));
+  w.run('runScheduler');
+  ok(mailsWith(w, /failure ledger could not be read/).length === 1, 'if the Hub cannot read its own ledger the scheduler emails about it');
+  // 3. an older Hub with no summary: logged, not an alarm
+  w = world(); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
+  scriptedHub(w, [{}], GOOD_STATUS); w.run('runScheduler');
+  ok(w.mails.length === 0 && w.logs.some(l => /did not include a failure-ledger summary/.test(l)), 'a Hub without the summary field is logged, not mailed');
+  // 4. Worker probes
+  w = world(); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
+  scriptedHub(w, [{}], st({ ok: true, open: 0, P0: 0, P1: 0, p0_unack: [], p0_unack_total: 0 }));
+  w.run('runScheduler');
+  ok(w.probeFetches.length === 4 && w.probeFetches.every(u => /\/health$/.test(u)) && w.mails.length === 0, 'every Worker in PROBES gets a GET /health each tick; healthy = no email');
+  w.probe = (u) => /barrel-co/.test(u) ? { code: 502 } : { code: 404 };
+  w.clock += 15 * MIN; w.run('runScheduler');
+  ok(mailsWith(w, /Worker DOWN/).length === 0, 'one failed probe is not reported yet (could be a blip)');
+  w.clock += 15 * MIN; w.run('runScheduler');
+  ok(mailsWith(w, /Worker DOWN: barrel-co/).length === 1 && mailsWith(w, /Worker DOWN/).length === 1, 'two failures in a row: emailed once, only for the Worker that is down (a 404 elsewhere still means "alive")');
+  ok(w.fetches.some(f => /\/failure\/report$/.test(f.url) && JSON.parse(f.o.payload).where === 'worker_probe:barrel-co' && JSON.parse(f.o.payload).severity === 'P1' && f.o.headers['X-Auth-Token'] === 'T'.repeat(30)), '... and reported to the Hub ledger with the scheduler token as P1');
+  w.clock += 15 * MIN; w.run('runScheduler');
+  ok(mailsWith(w, /Worker DOWN/).length === 1, 'still down 15 min later: no repeat within 6 h');
+  w.probe = () => ({ code: 200 }); w.clock += 15 * MIN; w.run('runScheduler');
+  ok(mailsWith(w, /Worker back up: barrel-co/).length === 1, 'recovery is announced');
+  w.probe = (u) => /str-automation/.test(u) ? new Error('DNS failure') : { code: 200 };
+  w.clock += 15 * MIN; w.run('runScheduler'); w.clock += 15 * MIN; w.run('runScheduler');
+  ok(mailsWith(w, /Worker DOWN: str-automation/).length === 1, 'a network exception counts as down');
+  // 5. ledger_ never throws and never claims success it did not get
+  w = world(); w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
+  w.hub = () => new Error('Hub unreachable');
+  ok(vm.runInContext("ledger_('x', 'P1', 'm')", w.ctx) === false && w.logs.some(l => /LEDGER REPORT FAILED/.test(l)), 'when the Hub is unreachable the report fails loudly in the log and returns false');
+  w.hub = () => ({ code: 500, body: 'err' });
+  ok(vm.runInContext("ledger_('x', 'P1', 'm')", w.ctx) === false && w.logs.some(l => /NOT ACCEPTED \(HTTP 500\)/.test(l)), 'a rejected report is logged with the status');
+  w = world(); ok(vm.runInContext("ledger_('x', 'P1', 'm')", w.ctx) === false, 'no token: returns false, no crash');
+  // 6. a failing script job (not a Hub job) also lands in the ledger
+  w = world({ allJobs: true }); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
+  ok(/ledgerThrottled_\('job_' \+ job\.name/.test(SRC) && /ledgerThrottled_\('gh_' \+ job\.name/.test(SRC), 'script-job failures and failed GitHub workflow checks are wired to the ledger');
+  ok(!/catch \((\w+)\) \{\s*\}/.test(SRC), 'still no empty catch blocks');
 }
 
 console.log(`\nhub-scheduler: ${pass} passed, ${fail} failed`);

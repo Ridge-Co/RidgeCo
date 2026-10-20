@@ -4,6 +4,7 @@
 // before media), cache reads priced 0.1x / writes 1.25x, tokens_in includes cached tokens, Gemini
 // puts the stable prefix first. Run from the repo root: node test/route-ai-prompt-cache.test.mjs
 import fs from 'fs'; import vm from 'vm'; import assert from 'assert';
+import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block: callClaude -> anthropicMessages needs it
 const src = fs.readFileSync('worker.js','utf8');
 const a = src.indexOf('const MODEL_REGISTRY = {'), b = src.indexOf('// GET /model-registry');
 assert(a>0 && b>a);
@@ -13,7 +14,7 @@ let nextResp;
 const ctx = { console, JSON, Date, Math, Error, String, Number, Promise, Array, Object,
   logTelemetry: async (env, rec)=>{ telemetry.push(rec); },
   fetch: async (url, opts)=>{ calls.push({url, body: JSON.parse(opts.body)}); const r = nextResp(url); return { ok: r.ok!==false, status: r.status||200, json: async()=>r.json }; } };
-vm.createContext(ctx); vm.runInContext(section + '\n;globalThis.routeAI=routeAI;globalThis.callClaude=callClaude;', ctx);
+vm.createContext(ctx); vm.runInContext(aiCreditGuardPrelude() + section + '\n;globalThis.routeAI=routeAI;globalThis.callClaude=callClaude;', ctx);
 const env = { ANTHROPIC_API_KEY:'k', GEMINI_API_KEY:'g' };
 const claudeOK = (usage)=>({json:{content:[{text:'{"a":1}'}], usage}});
 let pass=0; const t=(n,f)=>f().then(()=>{pass++;console.log('PASS',n)},e=>{console.log('FAIL',n,e.message);process.exitCode=1});
