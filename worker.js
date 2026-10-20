@@ -13104,9 +13104,9 @@ async function adminUpdateWO(env, body) {
           : `Hi ${owner.First_Name}, ${body.wo_id} at ${mbLoc} is back with Ridge Co to handle — we'll take it from here.`;
         await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_managed_by_changed', recipient_type: 'owner', owner, property, message_body: msg });
       }
-    } catch (e) { /* non-fatal */ }
+    } catch (e) { await softFail(env, 'managed_by_owner_notify_failed', e, 'P0', { ref: body.wo_id }); /* the WO update already succeeded; the owner text is what failed */ }
   }
-  return json({ success: true });
+  return json(adminWarn ? { success: true, failure_warning: adminWarn } : { success: true });
 }
 
 async function appendDescription(env, body) {
