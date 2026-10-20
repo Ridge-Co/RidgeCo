@@ -14,7 +14,7 @@ let nextResp;
 const ctx = { console, JSON, Date, Math, Error, String, Number, Promise, Array, Object,
   logTelemetry: async (env, rec)=>{ telemetry.push(rec); },
   fetch: async (url, opts)=>{ calls.push({url, body: JSON.parse(opts.body)}); const r = nextResp(url); return { ok: r.ok!==false, status: r.status||200, json: async()=>r.json }; } };
-vm.createContext(ctx); vm.runInContext(section + '\n;globalThis.routeAI=routeAI;globalThis.callClaude=callClaude;', ctx);
+vm.createContext(ctx); vm.runInContext(aiCreditGuardPrelude() + section + '\n;globalThis.routeAI=routeAI;globalThis.callClaude=callClaude;', ctx);
 const env = { ANTHROPIC_API_KEY:'k', GEMINI_API_KEY:'g' };
 const claudeOK = (usage)=>({json:{content:[{text:'{"a":1}'}], usage}});
 let pass=0; const t=(n,f)=>f().then(()=>{pass++;console.log('PASS',n)},e=>{console.log('FAIL',n,e.message);process.exitCode=1});
