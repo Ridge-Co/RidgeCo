@@ -1077,6 +1077,13 @@ function openPendCancel(key){
       var notify = !!(nf && nf.checked);
       if(notify && !ta.value.trim()){ chShowErr('The text is empty. Type something or untick "Also tell".'); return; }
       sheetBusy = true; var go = $('sh-go'), cn = $('sh-cancel'); go.disabled = true; cn.disabled = true; go.textContent = 'Working…'; $('sh-err').classList.add('hide');
+      api('POST', '/str/admin/pending/cancel', { task_key: key, notify: notify, text: notify ? ta.value : '' }).then(function(res){
+        sheetBusy = false; var x = pendDoneSheet('', res);
+        $('sheet-box').innerHTML = '<h2 id="sh-title">Done.</h2><div class="msg ' + x.tone + '" role="status"><b style="margin:0">' + esc(x.head) + '</b></div>' + x.extra + '<div class="btnrow"><button class="btn primary" id="sh-done">Done</button></div>';
+        $('sh-done').onclick = closeSheet; $('sh-done').focus(); loadState();
+      }, function(e){
+        sheetBusy = false; if(e.code === 'unauthorized'){ authFailed(); return; }
+        var g = $('sh-go'), c = $('sh-cancel'); if(g){ g.disabled = false; g.textContent = 'Try again'; } if(c) c.disabled = false;
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
