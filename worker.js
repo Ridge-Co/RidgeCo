@@ -10575,7 +10575,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   const address = prop ? (prop.Address || '') : '';
   const isEs = vendor.Language === 'es';
   let description = wo.Description || '';
-  if (isEs && description) { try { const t = await translateText(env, description, 'English', 'Spanish'); if (t) description = t; } catch (e) {} }
+  if (isEs && description) { try { const t = await translateText(env, description, 'English', 'Spanish'); if (t) description = t; } catch (e) { softNote('vendor_invoice_email_translate_failed', e, 'P2', { ref: woId }); } }   // falls back to the English description
 
   const holidayMap = parseHolidayMap(config.US_HOLIDAYS);
   const submissionDate = String(billRow.Submitted_At || new Date().toISOString()).split('T')[0];
