@@ -330,7 +330,7 @@ load();
       if(booted===null){booted=v.version;return;}
       if(v.version!==booted){ var el=document.activeElement;
         if(el&&(el.tagName==='INPUT'))return; location.reload(true); }
-    }).catch(function(){});
+    }).catch(function(e){ if(navigator.onLine!==false) window.hubReportFailure && window.hubReportFailure('action-center:version-check', e); });
   }
   check(); setInterval(check,60000);
 })();
