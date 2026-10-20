@@ -34341,6 +34341,11 @@ const STR_DEFAULT_TEXTS = {
   str_assigned: "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}",
   str_checkout_day: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}",
   str_task_cancelled: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}",
+  // Oct 20 2026 (admin swap / bulk). Friendly confirmations; never a rank word. The displaced cleaner is marked backup directly, so no reply is needed.
+  str_assigned_multi: "{FirstName}, you're set for these turnovers at {Property}: {DateList}. Checkout is 11 AM. Details and calendar invite: {Link}",
+  str_swapped_backup: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover the {DateShort} turnover at {Property}, so you're off the hook - could you be the backup in case anything changes? No reply needed.",
+  str_swapped_backup_multi: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover these turnovers at {Property}: {DateList}. So you're off the hook for those - could you be the backup in case anything changes? No reply needed.",
+  str_admin_marked: "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've marked you {MarkText} for {DateList} at {Property}. If that's not right, you can change it here: {Link}",
 };
 function strNextLine(task) {
   if (!task.next) return ' (no booking after that yet)';
