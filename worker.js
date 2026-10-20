@@ -35179,7 +35179,7 @@ async function strAdvanceTask(ctx, trow, opts) {
   const dup = (await fetchTab(env, 'STR_Offers')).filter(o => o.Task_Key === trow.Task_Key && STR_OFFER_ACTIVE.includes(o.Status));
   if (dup.length > 1 && String(dup.map(d => parseInt(d.ID, 10)).sort((a, b) => a - b)[0]) !== String(oid)) { await strSetOffer(ctx, orow, { Status: 'superseded', Note: 'another run claimed this turnover first' }); return { action: 'lost_claim' }; }
   const tokens = strTokens(ctx, nx.cleaner, task, { Link: strCleanerUrl(nx.cleaner.Token, 'offer=' + oid) });
-  const r = await strTextCleaner(ctx, nx.cleaner, promo ? 'str_promote' : 'str_offer', tokens, task);
+  const r = pend && opts.textOverride ? await strSendCleanerText(ctx, nx.cleaner, 'str_pending_offer', strPendFillLink(opts.textOverride, tokens.Link)) : await strTextCleaner(ctx, nx.cleaner, pend ? 'str_pending_offer' : (promo ? 'str_promote' : 'str_offer'), tokens, task);
   if (r.ok) {
     await strSetOffer(ctx, orow, Object.assign({ Status: 'pending', Sent_At: iso, Queue_ID: r.queueId || '', Mode: r.mode }, promo ? { Note: 'promotion' } : {}));
     await strSetTurnover(ctx, trow, { Status: 'offering', Note: '' });
