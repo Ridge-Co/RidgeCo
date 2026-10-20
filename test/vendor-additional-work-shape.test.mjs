@@ -4,6 +4,7 @@
 import fs from 'fs';
 import assert from 'node:assert';
 const src = fs.readFileSync('worker.js', 'utf8');
+const SOFT = "const softNote = () => true; const softFail = async () => ({ ok: false }); const safeJson = async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }; const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };\n";   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 const vendor = fs.readFileSync('vendor.html', 'utf8');
 const admin = fs.readFileSync('index.html', 'utf8');
 function grabAny(text, prefix, name) {
