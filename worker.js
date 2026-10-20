@@ -22596,7 +22596,8 @@ async function sendReceiptsToQBEmail(env, opts) {
     }
     await new Promise(res => setTimeout(res, 400)); // pace Gmail/Drive calls, matches existing convention
   }
-  return json({ ok: true, sent, sent_without_attachment: sentNoFile, failed, remaining: pending.length - batch.length + failed.length });
+  return json(Object.assign({ ok: true, sent, sent_without_attachment: sentNoFile, failed, remaining: pending.length - batch.length + failed.length },
+    colsWrite.ok ? {} : { failure_warnings: ['Receipts columns could not be confirmed (' + colsWrite.error + ') - sent rows may not be marked as sent.'] }));
 }
 
 function bytesToB64(buf) {
