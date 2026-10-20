@@ -825,6 +825,152 @@ function checkOverdue_(status) {
   }
   p.setProperty('OVERDUE_SEEN', JSON.stringify(seen));
 }
+// ── Failure ledger: the independent second path (email), the report helper, and Worker health probes ───────────────
+// The Hub texts urgent problems, but if texting itself is what is broken (or the alert switch is off) the text never arrives. So every
+// tick the Hub's /cron/status also returns a summary of the failure ledger and THIS script emails about any urgent, unacknowledged problem.
+// Acknowledge a problem on the Needs Attention page to silence it.
+function checkLedger_(f) {
+  var p = props_(), now = Date.now();
+  if (f === undefined) { Logger.log('The Hub did not include a failure-ledger summary in /cron/status (older Hub build); nothing to check.'); return; }
+  if (!f || f.ok === false) {
+    alertThrottled_('ledger_unreadable', LEDGER_REMIND_MS, 'Hub failure ledger could not be read', 'The Hub could not read its failure ledger, so urgent problems may be invisible right now:\n\n' + String(f && f.error || '(no detail)').slice(0, 500));
+    return;
+  }
+  var items = f.p0_unack || [];
+  if (!items.length) { p.deleteProperty('LEDGER_P0_KEY'); p.deleteProperty('LEDGER_P0_AT'); return; }
+  var key = items.map(function (i) { return i.id; }).sort().join(','), lastKey = p.getProperty('LEDGER_P0_KEY'), lastAt = Number(p.getProperty('LEDGER_P0_AT') || 0);
+  if (key === lastKey && now - lastAt < LEDGER_REMIND_MS) return;
+  p.setProperty('LEDGER_P0_KEY', key); p.setProperty('LEDGER_P0_AT', String(now));
+  var lines = items.map(function (i) { return '  - ' + i.where + (i.count > 1 ? ' (' + i.count + 'x)' : '') + ': ' + String(i.message).slice(0, 220) + '  [first seen ' + i.first_seen + ']'; });
+  alert_('URGENT: ' + items.length + ' Hub problem' + (items.length === 1 ? '' : 's') + ' need you',
+    'These urgent problems are open in the Hub failure ledger and nobody has acknowledged them:\n\n' + lines.join('\n') +
+    '\n\n(' + (f.open || 0) + ' open in total, ' + (f.P1 || 0) + ' important.) Open the Hub, then Needs Attention, to acknowledge, fix or copy a brief for Claude. This email repeats every 6 hours while the list is unchanged; acknowledging silences it.\n\nThis message comes from the Apps Script scheduler, not from the Hub, so it still arrives if Hub texting is down.');
+}
+// Never throws. Reports to the Hub ledger with the scheduler token (trusted: real system and severity). If the Hub is down this cannot work, and the email path covers that.
+function ledger_(where, severity, message) {
+  try {
+    var token = props_().getProperty('SCHEDULER_TOKEN');
+    if (!token) return false;
+    var resp = UrlFetchApp.fetch(WORKER_URL + '/failure/report', { method: 'post', contentType: 'application/json', headers: { 'X-Auth-Token': token }, followRedirects: false, muteHttpExceptions: true,
+      payload: JSON.stringify({ system: 'scheduler', source: 'apps-script', where: where, severity: severity, message: String(message).slice(0, 300) }) });
+    if (resp.getResponseCode() !== 200) { Logger.log('LEDGER REPORT NOT ACCEPTED (HTTP ' + resp.getResponseCode() + '): ' + where + ' | ' + message); return false; }
+    return true;
+  } catch (e) { Logger.log('LEDGER REPORT FAILED: ' + e + ' | ' + where + ' | ' + message); return false; }
+}
+function ledgerThrottled_(key, windowMs, where, severity, message) {
+  var p = props_(), k = 'LAST_LEDGER_' + key, last = Number(p.getProperty(k) || 0);
+  if (Date.now() - last < windowMs) return;
+  if (ledger_(where, severity, message)) p.setProperty(k, String(Date.now()));
+}
+// GET /health on each Worker in PROBES. Reports only after PROBE_FAILS_BEFORE_ALERT failures in a row; emails once per 6 h; says when it recovers.
+function probeWorkers_() {
+  var p = props_(), st = {};
+  try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
+  PROBES.forEach(function (pr) {
+    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '', text = '';
+    try { var resp = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }); code = resp.getResponseCode(); if (pr.body) text = String(resp.getContentText() || ''); }
+    catch (e) { err = String(e).slice(0, 200); }
+    var down = !!err || code === 0 || code >= 500, why = err || ('HTTP ' + code);
+    if (down) {
+      s.fails = (s.fails || 0) + 1; s.last = why;
+      if (s.fails >= PROBE_FAILS_BEFORE_ALERT) {
+        s.alerted = true;
+        alertThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'Worker DOWN: ' + pr.name, 'The Worker "' + pr.name + '" (' + pr.url + ') has failed its health check ' + s.fails + ' ticks in a row. Last answer: ' + why + '.\n\nAnything that depends on it is not working until it is fixed.');
+        ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' health check failing (' + why + ', ' + s.fails + ' ticks in a row)');
+      }
+    } else {
+      // a crash while reading the body must not stop PROBE_STATE from being saved for every Worker: report it as a watcher miss instead
+      if (pr.body === 'str') { try { probeStrBody_(pr, code, text); } catch (be) { watcherMiss_('probe_body_' + pr.name, 'probe_body:' + pr.name, pr.name + ' /health body check crashed: ' + String(be).slice(0, 200)); } }
+      if (s.alerted) alert_('Worker back up: ' + pr.name, 'The Worker "' + pr.name + '" is answering its health check again (HTTP ' + code + ').');
+      s = { fails: 0, alerted: false };
+    }
+    st[pr.name] = s;
+  });
+  p.setProperty('PROBE_STATE', JSON.stringify(st));
+}
+// A watcher that cannot get its own answer must say so (3 misses in a row), or a broken watcher looks exactly like "all green".
+function watcherMiss_(key, where, why) {
+  var p = props_(), k = 'WATCH_FAILS_' + key, n = Number(p.getProperty(k) || 0) + 1;
+  p.setProperty(k, String(n));
+  if (n >= WATCH_FAILS_BEFORE_ALERT) {
+    ledgerThrottled_('watch_' + key, LEDGER_REMIND_MS, where, 'P2', why + ' (' + n + ' checks in a row)');
+    alertThrottled_('watch_' + key, MAIN_RUN_REMIND_MS, 'Hub scheduler watcher is blind: ' + where, why + '\n\nThis check has failed ' + n + ' times in a row, so problems it watches for would not be noticed.');
+  }
+}
+function watcherOk_(key) { props_().deleteProperty('WATCH_FAILS_' + key); }
+// Failed GitHub runs on main. The newest finished push-run of each workflow decides: red = P1 in the ledger + an email (once a day while it stays red).
+function checkMainRuns_() {
+  var p = props_(), now = Date.now();
+  if (now - Number(p.getProperty('MAINRUNS_AT') || 0) < WATCH_EVERY_MS) return;
+  var job = { repo: MAIN_REPO }, tokenKey = ghTokenProp_(job);
+  if (!p.getProperty(tokenKey)) {
+    ledgerThrottled_('mainruns_notoken', MAIN_RUN_REMIND_MS, 'main_runs_check', 'P2', 'Cannot watch for failed GitHub runs on main: the script property ' + tokenKey + ' is not set.');
+    return;
+  }
+  p.setProperty('MAINRUNS_AT', String(now));
+  var r = http_('get', 'https://api.github.com/repos/' + MAIN_REPO + '/actions/runs?branch=main&event=push&status=completed&per_page=100', ghHeaders_(job));
+  var runs = r.ok && r.body && Array.isArray(r.body.workflow_runs) ? r.body.workflow_runs : null;
+  if (!runs) { watcherMiss_('mainruns', 'main_runs_check', 'Could not read the GitHub run list for ' + MAIN_REPO + ': ' + String(r.problem || 'unexpected answer shape').slice(0, 250)); return; }
+  watcherOk_('mainruns');
+  var seen = {};
+  runs.forEach(function (x) {
+    if (!x) return;
+    var id = String(x.workflow_id || x.name);
+    if (seen[id]) return;               // newest first: the first JUDGEABLE run per workflow is its current state
+    // a cancelled / skipped / neutral run says nothing about whether main is healthy: look at the next older run of that workflow instead
+    if (['cancelled', 'skipped', 'neutral'].indexOf(x.conclusion) >= 0) return;
+    seen[id] = true;
+    if (['failure', 'timed_out', 'startup_failure'].indexOf(x.conclusion) < 0) return;
+    var msg = 'The newest run of "' + x.name + '" on main is ' + x.conclusion + ' (run #' + x.run_number + ', commit ' + String(x.head_sha || '').slice(0, 7) + '): ' + x.html_url;
+    ledgerThrottled_('mainrun_' + id, MAIN_RUN_REMIND_MS, 'main_run:' + x.name, 'P1', msg);
+    alertThrottled_('mainrun_' + id, MAIN_RUN_REMIND_MS, 'GitHub: "' + x.name + '" is failing on main', msg + '\n\nA red check on main usually means a test, a deploy or a sync is broken. Forward this to Claude to fix.');
+  });
+}
+// Is the live Worker running what main says it should? Compares BUILD_VERSION in main's worker.js with the live /health.
+function checkDeploy_() {
+  var p = props_(), now = Date.now();
+  if (now - Number(p.getProperty('DEPLOY_AT') || 0) < WATCH_EVERY_MS) return;
+  p.setProperty('DEPLOY_AT', String(now));
+  var hdr = { Range: 'bytes=0-60000' }, tok = p.getProperty(ghTokenProp_({ repo: MAIN_REPO }));
+  if (tok) hdr.Authorization = 'Bearer ' + tok;
+  var raw = http_('get', 'https://raw.githubusercontent.com/' + MAIN_REPO + '/main/worker.js', hdr);
+  var m = raw.ok ? /const BUILD_VERSION = '([^']+)'/.exec(raw.text || '') : null;
+  var live = http_('get', WORKER_URL + '/health');
+  var lv = live.ok && live.body ? live.body.build_version : null;
+  if (!m || !lv) {
+    watcherMiss_('deploy', 'deploy_check', 'Cannot compare main with the live Hub: ' + (!m ? 'main BUILD_VERSION unreadable (' + String(raw.problem || 'no BUILD_VERSION line in the first 60 KB').slice(0, 160) + ')' : '') + (!lv ? ' live /health gave no build_version (' + String(live.problem || 'field missing').slice(0, 160) + ')' : ''));
+    return;
+  }
+  watcherOk_('deploy');
+  if (m[1] === lv) { p.deleteProperty('DEPLOY_DRIFT'); return; }
+  var d = {}; try { d = JSON.parse(p.getProperty('DEPLOY_DRIFT') || '{}') || {}; } catch (e) { d = {}; Logger.log('DEPLOY_DRIFT was not valid JSON; starting fresh.'); }
+  if (d.main !== m[1] || d.live !== lv) { d = { main: m[1], live: lv, since: now }; p.setProperty('DEPLOY_DRIFT', JSON.stringify(d)); }
+  if (now - d.since < DEPLOY_DRIFT_GRACE_MS) return;
+  var msg = 'The live Hub is on build ' + lv + ' but main is on ' + m[1] + ' and has been for over ' + Math.round((now - d.since) / 60000) + ' minutes. Either the deploy failed or main moved without a deploy.';
+  ledgerThrottled_('deploy_drift', MAIN_RUN_REMIND_MS, 'deploy_drift', 'P1', msg);
+  alertThrottled_('deploy_drift', MAIN_RUN_REMIND_MS, 'Hub deploy is behind main', msg + '\n\nCheck the latest "Deploy" run in GitHub Actions. Forward this to Claude to fix.');
+}
+// str-automation answers /health with its own problem registry: { ok, last_tick, problems:[{key,count,at}], ... }. An answer of HTTP 200 with problems in it is NOT healthy,
+// and the Worker's own text alerts never reach the Hub ledger. Mirror them (P1, once a day per problem set); an unreadable body is reported by the same rule as a miss.
+function probeStrBody_(pr, code, text) {
+  var j = null;
+  try { j = JSON.parse(text); } catch (e) { watcherMiss_('probe_body_' + pr.name, 'probe_body:' + pr.name, pr.name + ' /health answered HTTP ' + code + ' but not with JSON (' + String(e).slice(0, 80) + '): ' + String(text).slice(0, 120)); return; }
+  watcherOk_('probe_body_' + pr.name);
+  var probs = (j && Array.isArray(j.problems)) ? j.problems : [];
+  var stale = [], p = props_(), sigKey = 'PROBE_BODY_SIG_' + pr.name;
+  if (j && j.ok === false) stale.push('ok:false');
+  Object.keys(j || {}).forEach(function (k) { if (/_stale$/.test(k) && j[k]) stale.push(k); });
+  var named = probs.filter(function (x) { return x && x.key; });             // a null / keyless entry must not throw before the rest is judged
+  var odd = probs.length - named.length;
+  if (odd > 0) stale.push('unreadable_problem_entry' + (odd > 1 ? ' (' + odd + 'x)' : ''));
+  if (!named.length && !stale.length) { p.deleteProperty(sigKey); return; }  // healthy again: a later recurrence is a new report
+  var names = named.map(function (x) { return x.key + (x.count > 1 ? ' (' + x.count + 'x)' : ''); }).concat(stale);
+  // ONE fixed throttle key + ONE signature property (sorted problem keys, WITHOUT counts): a count ticking up must neither re-report nor mint new Script Properties.
+  var sig = named.map(function (x) { return String(x.key); }).concat(stale).sort().join(',').slice(0, 400), last = null;
+  try { last = JSON.parse(p.getProperty(sigKey) || 'null'); } catch (e) { last = null; Logger.log(sigKey + ' was not valid JSON; re-reporting.'); }
+  if (last && last.sig === sig && Date.now() - Number(last.at || 0) < MAIN_RUN_REMIND_MS) return;
+  if (ledger_('worker_problem:' + pr.name, 'P1', pr.name + ' reports open problems in its own /health: ' + names.join(', ') + (j && j.last_tick ? ' (last tick ' + j.last_tick + ')' : ''))) p.setProperty(sigKey, JSON.stringify({ sig: sig, at: Date.now() }));
+}
 function fatal_(subject, body) { alert_('Hub scheduler setup: ' + subject, body); throw new Error('Hub scheduler setup failed: ' + subject + '. ' + body); }
 function alert_(subject, body) {
   try { MailApp.sendEmail(NOTIFY_EMAIL, '[Hub scheduler] ' + subject, body); }
