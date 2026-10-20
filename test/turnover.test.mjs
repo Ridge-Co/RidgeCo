@@ -167,7 +167,7 @@ function build(db, callLog) {
     'return { createTurnoverWOs, startTurnoverManual, scheduleMoveOutWithTurnover, releaseTurnoverCleaningIfReady, releaseTurnoverByDate, dayBefore, nextTurnoverGroupId };',
   ].join('\n');
   return new Function('getAccessToken', 'fetch', 'setTimeout',
-    src
+    PHASE_C_SHIM + src
   )(async () => 'tok', makeFetch(db, callLog), (fn) => fn());
 }
 
