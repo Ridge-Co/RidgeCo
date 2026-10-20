@@ -27,7 +27,7 @@
   window.addEventListener('beforeunload', function () { unloading = true; });
   window.addEventListener('pagehide', function () { unloading = true; });
 
-  function consoleErr() { try { console.error.apply(console, arguments); } catch (e) { /* silent-ok: console unavailable, nothing else exists to tell */ } }
+  function consoleErr() { try { console.error.apply(console, arguments); } catch (e) { /* console unavailable: nothing else exists to tell */ } }
   function clip(s, n) { s = (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
   // Friendly, non-blocking notice (one per 20 s). Text only, no HTML from the error is ever inserted.
@@ -40,7 +40,7 @@
       t.textContent = es ? 'Algo no funcionó. Ya nos avisaron y lo vamos a arreglar.' : "Something didn't work. We've been notified and will fix it.";
       t.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);max-width:92vw;background:#0e1621;color:#fff;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:10px 14px;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.35);z-index:2147483000';
       document.body.appendChild(t);
-      setTimeout(function () { try { t.remove(); } catch (e) { /* silent-ok: element already gone, nothing to remove */ } }, 7000);
+      setTimeout(function () { try { t.remove(); } catch (e) { /* element already gone */ } }, 7000);
     } catch (e) { consoleErr('[failure-reporter] toast failed', e); }
   }
 
@@ -83,64 +83,11 @@
   window.addEventListener('unhandledrejection', function (ev) {
     try {
       var r = ev && ev.reason, msg = r && r.message ? r.message : (r == null ? '' : String(r));
-      if (r && (r.name === 'AbortError' || r.name === 'TimeoutError')) return;
+      if (r && (r.name === 'AbortError')) return;
       if (/Failed to fetch|NetworkError|Load failed/i.test(msg) && navigator.onLine === false) return;   // simply offline
       if (report('unhandled-rejection', msg || 'a promise was rejected with no message')) toast();
     } catch (e) { consoleErr('[failure-reporter] rejection handler failed', e); }
   });
-
-  // 1b. "Saved, but ..." warnings. Since Oct 20 2026 the Hub adds `failure_warning` (string) / `failure_warnings` (array of strings) to a success response when a
-  // side step FAILED (it is already in the failure ledger). The plain `warning` / `warnings` keys are informational notes (fee notes, deposit cap, previews) and are
-  // deliberately ignored here. Shown persistently until dismissed: the admin sees the text; tenants / vendors / owners only a friendly line (never raw server text).
-  var warnIsAdmin = false;
-  try { warnIsAdmin = !!localStorage.getItem(AUTH_KEY); } catch (e) { warnIsAdmin = false; /* silent-ok: storage blocked, show the friendly line instead */ }
-  var WARN_MAX = 5, warnShown = {}, warnCount = 0, warnPending = [], warnRetryHooked = false;
-  function warnBar(items) {
-    try {
-      var fresh = [];
-      items.forEach(function (t) { if (t && !warnShown[t] && fresh.indexOf(t) < 0) fresh.push(t); });
-      if (!fresh.length) return;
-      if (!document.body) {                                                     // page still parsing: keep the lines and show them once the body exists
-        warnPending = warnPending.concat(fresh);
-        if (!warnRetryHooked && document.addEventListener) {
-          warnRetryHooked = true;
-          document.addEventListener('DOMContentLoaded', function () { warnRetryHooked = false; var p = warnPending; warnPending = []; warnBar(p); });
-        }
-        return;
-      }
-      var bar = document.getElementById('hub-warn-bar');
-      if (!bar) {
-        warnShown = {}; warnCount = 0;
-        bar = document.createElement('div'); bar.id = 'hub-warn-bar'; bar.setAttribute('role', 'alert');
-        bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483000;background:#7a4b00;color:#fff;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:10px 40px 10px 14px;max-height:25vh;overflow:auto';
-        var x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', es ? 'Cerrar' : 'Dismiss');
-        x.style.cssText = 'position:absolute;right:8px;top:4px;background:none;border:0;color:#fff;font-size:22px;cursor:pointer';
-        x.onclick = function () { try { bar.remove(); warnShown = {}; warnCount = 0; } catch (e) { consoleErr('[failure-reporter] could not dismiss the warning bar', e); } };
-        bar.appendChild(x); document.body.appendChild(bar);
-      }
-      fresh.forEach(function (t) {
-        warnShown[t] = 1;
-        if (warnCount >= WARN_MAX) return;                                      // total lines cap (the problem is in the failure ledger either way)
-        warnCount++;
-        var d = document.createElement('div'); d.textContent = t; bar.appendChild(d);
-      });
-    } catch (e) { consoleErr('[failure-reporter] warning bar failed', e); }
-  }
-  function watchWarnings(r, path) {
-    try {
-      var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
-      if (ct.indexOf('json') < 0) return;
-      r.clone().json().then(function (b) {
-        if (!b || b.preview || b.preview_only) return;                          // dry-run / preview responses never nag
-        var items = [];
-        if (typeof b.failure_warning === 'string' && b.failure_warning) items.push(b.failure_warning);
-        if (Array.isArray(b.failure_warnings)) b.failure_warnings.forEach(function (w) { if (w) items.push(String(w)); });
-        if (!items.length) return;
-        warnBar(warnIsAdmin ? items.map(function (t) { return (es ? 'Guardado, pero: ' : 'Saved, but: ') + clip(t, 300); })
-          : [es ? 'Se guardó, pero una parte necesita seguimiento. Ya nos avisaron.' : 'Saved, but one part needs a follow-up. We\'ve been notified.']);
-      }).catch(function (e) { consoleErr('[failure-reporter] warning parse failed for ' + path, e); });
-    } catch (e) { consoleErr('[failure-reporter] warning check failed', e); }
-  }
 
   // 1c. Hub API calls that fail. Wrap fetch; never alter the response or the caller's error handling.
   if (realFetch) {
@@ -151,13 +98,11 @@
       var p = realFetch(input, init);
       if (!isHub || url.indexOf('/failure/report') >= 0) return p;
       var path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0].slice(0, 60);
-      var isWrite = !!(init && init.method && String(init.method).toUpperCase() !== 'GET');
       p.then(function (r) {
         try { if (r && r.status >= 500) { if (report('api ' + path, 'HTTP ' + r.status + ' from ' + path)) toast(); } } catch (e) { consoleErr('[failure-reporter] status check failed', e); }
-        if (isWrite && r && r.ok) watchWarnings(r, path);
       }, function (e) {
         try {
-          if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) return;
+          if (e && e.name === 'AbortError') return;
           if (navigator.onLine === false) return;
           if (report('api ' + path, 'network error calling ' + path + ': ' + (e && e.message || e))) toast();
         } catch (x) { consoleErr('[failure-reporter] network check failed', x); }
@@ -168,8 +113,6 @@
 
   // 3. manual reporting from catch blocks
   window.hubReportFailure = function (where, message, extra) {
-    // ordinary network conditions (offline, aborted, timed out) are not Hub failures: no report, no toast
-    if (navigator.onLine === false || (message && (message.name === 'AbortError' || message.name === 'TimeoutError'))) return false;
     var did = report(where || 'caught', message && message.message ? message.message : message, extra);
     if (did) toast();
     return did;
@@ -205,7 +148,7 @@
   function badge() {
     try {
       var cached = null;
-      try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; /* silent-ok: private mode, so just fetch fresh */ }
+      try { cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || 'null'); } catch (e) { cached = null; /* private mode: just fetch */ }
       if (cached && Date.now() - cached.t < 60000) { paint(cached.n, cached.w); return; }
       realFetch(WORKER + '/failures/open', { headers: { 'X-Auth-Token': token } })
         .then(function (r) {
@@ -216,7 +159,7 @@
         .then(function (d) {
           if (!d) return;
           var c = d.counts || {}, n = Math.max(0, (c.open || 0) - (c.acknowledged || 0)), w = c.P0 ? 'P0' : (c.P1 ? 'P1' : 'P2');
-          try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), n: n, w: w })); } catch (e) { /* silent-ok: the badge cache is optional, next load refetches */ }
+          try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), n: n, w: w })); } catch (e) { /* cache is optional */ }
           paint(n, w);
         })
         .catch(function (e) { consoleErr('[failure-reporter] badge refresh failed', e); });
