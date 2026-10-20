@@ -26825,17 +26825,20 @@ async function qbAccessToken(env) {
   if (_qbRotated && _qbRotated.token && refresh !== _qbRotated.token && !_qbRotated.saved && Date.now() - _qbRotated.at < 6 * 3600000) refresh = _qbRotated.token;   // ONLY when the Config save of that token failed (reviewer fix Oct 20: another instance may have rotated again and saved a NEWER one, which must win)
   if (!refresh) throw await fail('qb_auth', 'QB refresh token missing (set QB_REFRESH_TOKEN env or Config)');
   const basic = btoa(`${env.QB_CLIENT_ID}:${env.QB_CLIENT_SECRET}`);
-  const res = await fetch(QB_TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}`,
-  });
-  const text = await res.text();
-  let data = {}; try { data = JSON.parse(text); } catch (e) {}
+  let res, text;
+  try {
+    res = await fetch(QB_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}`,
+    });
+    text = await res.text();
+  } catch (e) { throw await fail('qb_auth', 'QuickBooks token refresh could not reach Intuit: ' + String((e && e.message) || e).slice(0, 160), 'P1'); }
+  let data = {}; try { data = JSON.parse(text); } catch (e) { data = {}; /* silent-ok: a non-JSON reply is reported just below with its first characters */ }
   if (!res.ok || !data.access_token) {
     if (text.includes('invalid_grant'))
-      throw new Error('QB refresh token expired or revoked — reconnect QuickBooks (re-auth needed).');
-    throw new Error(`QB token refresh ${res.status}: ${text.slice(0, 220)}`);
+      throw await fail('qb_auth', 'QB refresh token expired or revoked — reconnect QuickBooks (re-auth needed).');
+    throw await fail('qb_auth', `QB token refresh ${res.status}: ${text.slice(0, 220)}`, res.status >= 500 ? 'P1' : 'P0');
   }
   // Persist the rotated refresh token so the next call uses the fresh one (fixes the
   // old discard-on-every-call bug that would eventually break auth after rotation).
