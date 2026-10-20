@@ -366,6 +366,20 @@ function onOffer(id,action){
     render();
   });
 }
+function onPendOffer(id,action){
+  var bk='p'+id; if(S.offerBusy[bk]) return;
+  S.offerBusy[bk]=action; delete S.offerErr[bk]; render();
+  var p=pendAskItems(S.data).filter(function(x){return String(x.offer_id)===id;})[0];
+  api('POST','/str/c/offer',{k:K,offer_id:id,action:action}).then(function(res){
+    delete S.offerBusy[bk];
+    S.pendRes[id]={item:p,result:res.result,message:res.message,backup_date:res.backup_date||'',warnings:res.warnings};
+    render(); loadPage();
+  },function(e){
+    delete S.offerBusy[bk];
+    S.offerErr[bk]=failText(e);
+    render();
+  });
+}
 function onBackup(date,mark){
   var b=S.bk[date]||(S.bk[date]={}); if(b.busy) return;
   b.busy=true; b.err=''; S.marksInflight++; render();
