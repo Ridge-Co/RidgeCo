@@ -463,7 +463,7 @@ function nz(s){
 }
 function loadProps(){
   var cached = S.dir ? '' : lsGet('fi_dir','');
-  if (cached){ try{ S.dir = JSON.parse(cached); }catch(e){ S.dir = null; } }
+  if (cached){ try{ S.dir = JSON.parse(cached); }catch(e){ /* silent-ok: unreadable cached directory, the fresh fetch below replaces it */ S.dir = null; } }
   api('GET','/fi/directory').then(function(d){
     S.dir = { properties:d.properties||[], units:d.units||[], owners:d.owners||[] }; S.propsErr='';
     lsSet('fi_dir', JSON.stringify(S.dir));
