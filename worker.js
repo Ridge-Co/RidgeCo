@@ -3431,7 +3431,7 @@ async function receiptReconRefundReverse(env, body) {
     category: 'refund', source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: true,
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await receiptAddJson(env, addResp, 'refund_reverse');
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && addJson.id) {
     // Same signed-scope-proposal carve-out receiptReconConfirm uses: a job billed through
