@@ -1,4 +1,4 @@
-# VENDOR PAID TAB + ESTIMATE SKIP-TEXT + PADDED FEE + FEE CREDITS + SWEEP — Oct 19, 2026 — branch `feat/estimate-skip-sms-vendor-paid-tab-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.06-paid-tab-pad-credit-sweep`.
+# VENDOR PAID TAB + ESTIMATE SKIP-TEXT + PADDED FEE + FEE CREDITS + SWEEP — Oct 19, 2026 — branch `feat/estimate-skip-sms-vendor-paid-tab-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.07-paid-tab-pad-credit-sweep`.
 
 ## 🟡 Built and tested (146 new checks across 3 test files; full suite = the 13 pre-existing failures). After merge: (1) Paid tab fills in dates after the next payment sync; (2) padded fee stays OFF until Config `instant_fee_pad_enabled` = TRUE; (3) WO-1227: when Cesar's $800 bill (id 124) is approved, pick Scope 8 and confirm net $733.26 BEFORE sending; (4) post a fee credit from Vendors > Fee credit when a statement shows an over-deduction. Details: FEATURE_LOG "VENDOR PORTAL PAID TAB ...".
 

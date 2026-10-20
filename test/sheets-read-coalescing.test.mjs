@@ -136,6 +136,34 @@ const env = { SHEET_ID: 'S' };
   t('structural change clears everything', (() => { m.fetchTab(env, 'Z').catch(() => {}); m.__invalidateFromWrite('/:batchUpdate', {}); return m.__inflight.size === 0; })());
 }
 
+// 9. BACKGROUND (cron) READS ARE NEVER SHARED WITH PEOPLE. Cron reads are deliberately paced 2.5s apart (__cronPace) so the
+// scheduler cannot eat the quota. If a person's request joined an in-flight cron read it would inherit that pacing and a
+// Hub login (GET /config) would time out at 8s while a sweep was running. A person must start their own read.
+{
+  const now = { v: 1_000_000 };
+  const calls = []; const gate = []; const timers = [];
+  const fetchImpl = (url) => new Promise((resolve) => { calls.push(url); gate.push(() => resolve({ json: async () => EST })); });
+  const mod = new Function('getAccessToken', 'fetch', 'setTimeout', 'Date',
+    cacheSrc + '\n' + srSrc + '\n' + ftSrc + '\n' + fT1Src + '\nreturn { fetchTab, fetchTabs, __inflight, __batchInflight };'
+  )(async () => 'tok', fetchImpl, (fn) => { timers.push(fn); }, { now: () => now.v });   // timers are HELD: this is the pacing wait
+  const cronEnv = { SHEET_ID: 'S', __CRON__: true };
+  const cron1 = mod.fetchTab(cronEnv, 'Work_Orders');           // takes the first pace slot (no wait) and reads
+  for (let i = 0; i < 6; i++) { await tick(); while (gate.length) gate.shift()(); }
+  await cron1;
+  const cron2 = mod.fetchTab(cronEnv, 'Config');                // next slot is 2.5s away -> parked on the pacing timer
+  await tick(); await tick();
+  t('a paced cron read does not register itself for people to join', !mod.__inflight.has('Config'));
+  const person = mod.fetchTab({ SHEET_ID: 'S' }, 'Config');     // a person asks for the same tab at the same moment
+  let outcome = 'hung';
+  const done = person.then(() => { outcome = 'done'; });
+  for (let i = 0; i < 12 && outcome === 'hung'; i++) { await tick(); while (gate.length) gate.shift()(); }   // fetches answer; pacing timers stay held
+  t('a person is NOT parked behind a paced cron read of the same tab', outcome === 'done');
+  const bcron = mod.fetchTabs(cronEnv, ['Work_Orders', 'Tenants', 'Properties']); await tick(); await tick();
+  t('a cron batchGet does not register itself in the shared batch table', mod.__batchInflight.size === 0);
+  timers.splice(0).forEach(f => f()); for (let i = 0; i < 8; i++) { await tick(); while (gate.length) gate.shift()(); }
+  await Promise.allSettled([cron2, bcron]);
+}
+
 // 8. wiring guard: the shared-read plumbing is declared inside the cache block the other tests load
 {
   t('in-flight maps live in the cache block', /const __inflight = new Map\(\)/.test(cacheSrc) && /const __batchInflight = new Map\(\)/.test(cacheSrc));

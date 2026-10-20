@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-19.06-paid-tab-pad-credit-sweep';
+const BUILD_VERSION = '2026-10-19.07-paid-tab-pad-credit-sweep';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -24404,7 +24404,9 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     if (cacheKey) {
       const hit = __tabCache.get(cacheKey);
       if (__cacheFresh(env, hit)) return hit.data;
-      if (!__isLeader) {
+      if (!__isLeader && !(env && env.__CRON__)) {
+        // PEOPLE ONLY: background (cron) reads are paced 2.5s apart by __cronPace and must never be joined by a person (they
+        // would inherit the pacing wait and a Hub login would time out) nor register themselves here.
         // Share one real read among every concurrent caller of this tab. The shared read itself never serves a stale
         // copy: each caller decides for ITSELF (readOpts.stale) what to do if it fails, so a caller that did not opt
         // in can never be handed stale data just because someone else did.
@@ -24495,7 +24497,8 @@ async function fetchTabs(env, tabs, opts) {
       // Concurrent callers needing the same set of tabs share ONE batchGet (see __inflight above). The leader writes
       // the result into __tabCache before the shared promise resolves, so followers just read the cache below.
       const bkey = missing.slice().sort().join('|');
-      let bp = __batchInflight.get(bkey);
+      const shared = !(env && env.__CRON__);   // background (cron) batches are paced: never shared with people
+      let bp = shared ? __batchInflight.get(bkey) : null;
       if (!bp) {
         bp = (async () => {
           const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
@@ -24505,9 +24508,11 @@ async function fetchTabs(env, tabs, opts) {
             const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
           });
         })();
-        __batchInflight.set(bkey, bp);
-        const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
-        bp.then(clear, clear);
+        if (shared) {
+          __batchInflight.set(bkey, bp);
+          const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
+          bp.then(clear, clear);
+        }
       }
       await bp;
     }
