@@ -12500,11 +12500,11 @@ function loadPayables(save) {
   if (fhost) fhost.innerHTML = '';
   // Job/property/owner context (WO → Property → Owner) powers the filter labels + search below —
   // same top-up-if-empty pattern loadInvoiceReview() already uses. Never render context-blind.
-  var prep = [];
-  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) { if (Array.isArray(r)) state.workorders = r; }).catch(function() {}));
-  if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) { if (Array.isArray(r)) state.properties = r; }).catch(function() {}));
-  if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) { if (Array.isArray(r)) state.vendors = r; }).catch(function() {}));
-  if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) { if (Array.isArray(r)) state.owners = r; }).catch(function() {}));
+  var prep = [], ctxFailed = []; function ctxFail(label) { return function(e) { ctxFailed.push(label); window.hubReportFailure && window.hubReportFailure('index:payables-context ' + label, e); }; }
+  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) { if (Array.isArray(r)) state.workorders = r; else ctxFail('workorders')((r && r.error) || 'unexpected response'); }).catch(ctxFail('workorders')));
+  if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) { if (Array.isArray(r)) state.properties = r; else ctxFail('properties')((r && r.error) || 'unexpected response'); }).catch(ctxFail('properties')));
+  if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) { if (Array.isArray(r)) state.vendors = r; else ctxFail('vendors')((r && r.error) || 'unexpected response'); }).catch(ctxFail('vendors')));
+  if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) { if (Array.isArray(r)) state.owners = r; else ctxFail('owners')((r && r.error) || 'unexpected response'); }).catch(ctxFail('owners')));
 
   Promise.all(prep).then(function() {
     return save ? api('POST', '/qb/sync-payments', { days: 90 })
