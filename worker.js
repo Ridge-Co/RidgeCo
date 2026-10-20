@@ -21321,7 +21321,7 @@ async function autoMatchVendorToQbo(env, vendorId, source) {
     const res = await updateRow(env, 'Vendors', id, write);
     if (!(await _landed(res))) throw new Error('sheet write did not land');
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: source, Success: 'FALSE', Notes: `vendor ${id}: ${String((e && e.message) || e)}`.slice(0,480) }); } catch (e2) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_qbo_sync', Skill_Or_Endpoint: source, Success: 'FALSE', Notes: `vendor ${id}: ${String((e && e.message) || e)}`.slice(0,480) }); } catch (e2) { softNote('telemetry_write_failed:vendor_qbo_sync', e2, 'P2'); }
   }
 }
 
