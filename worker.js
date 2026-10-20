@@ -16538,6 +16538,21 @@ async function failInvariantsCollect(env, nowMs) {
   }
   return data;
 }
+// IO. Stored result if fresh, else re-check. Returns condition items. Never throws.
+async function failInvariantConditions(env, cfg, nowMs) {
+  let stored = null;
+  { const p = parseJsonCell(cfg[FAIL_INV_KEY], null, 'Config.' + FAIL_INV_KEY); if (p && typeof p.at === 'number' && Array.isArray(p.items)) stored = p; }   // a corrupt cache = re-check now (and noted)
+  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) return stored.items;
+  try {
+    const items = failInvariantItems(await failInvariantsCollect(env, nowMs));
+    const compact = items.map(i => ({ key: i.key, system: i.system, where: i.where, severity: i.severity, message: failTrim(i.message, 300) }));
+    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact }));
+    return compact;
+  } catch (e) {
+    const old = stored ? stored.items : [];
+    return old.concat([{ key: 'inv:run_failed', system: 'hub', where: 'integrity_check', severity: 'P1', message: 'The daily integrity checks could not run or be saved: ' + failTrim((e && e.message) || e, 200) }]);
+  }
+}
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
