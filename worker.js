@@ -23789,7 +23789,7 @@ async function woSharedRead(env, url){
     const at = await fetchTab(env, 'Attachments');
     attachments = at.filter(a => a.Active!=='FALSE' && a.WO_ID===woId && !NON_SHARE_FILE_TYPES.includes((a.File_Type||'').toLowerCase()))
       .map(a => ({ File_Name:a.File_Name||'file', File_Type:(a.File_Type||'other').toLowerCase(), Drive_URL:a.Drive_URL||'', Mime_Type:a.Mime_Type||'' }));
-  } catch(e2){}
+  } catch(e2){ await softFail(env, 'vendor_share_attachments_read', e2, 'P2', { wo: woId }); }
   let bills = [];
   try {
     const vb = await fetchTab(env, 'Vendor_Bills');
