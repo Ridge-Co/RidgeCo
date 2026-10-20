@@ -123,7 +123,7 @@ const sigRows = () => [irRow(1), irRow(2), sigRow(1), sigRow(2), sigRow(3), sigR
   t('slice 1: progress remembers which rows are done', st.done.length === 2 + 3 && st.done.includes('sig:1:deposit:') && st.done.includes('ir:IR1'), st.done);
   t('slice 1: does not return the big rows list', r1.rows === undefined);
   const writesAfter1 = X.calls.filter(c => c === 'POST /values:batchUpdate').length;
-  const r2 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, now: X.clock }));
+  const r2 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, minLoopMs: 0, now: X.clock }));
   t('slice 2: resumes - finishes the remaining rows, runs the sweep exactly once, not partial', r2.partial === false && st.loop_done && st.sweep_done && X.sweeps.length === 1 && X.transitions.length === 5 && new Set(X.transitions).size === 5, { r2, tr: X.transitions });
   t('slice 2: the stored-copy batch write is NOT repeated', X.calls.filter(c => c === 'POST /values:batchUpdate').length === writesAfter1);
   t('slices accumulate their totals', r2.written === 2 && r2.checked === 7, r2);
