@@ -481,7 +481,7 @@ function clearWOFilters() {
 // tenant lands on that job with the note box already open, instead of having to find it and dig
 // for how to ask a question. Mirrors vendor.html's own ?wo= pattern. Once-per-load, same as
 // vendor.html, so the tenant can freely browse/search afterward without it snapping back.
-var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ return ''; } })();
+var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ /* silent-ok: unparseable query string just means no deep link */ return ''; } })();
 var _deepLinkApplied = false;
 function applyDeepLink() {
   if (!_deepLinkWoId || _deepLinkApplied) return;
