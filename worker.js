@@ -12588,7 +12588,7 @@ async function addEstimateVersion(env, body) {
     const vendorRow = body.vendor_id ? (await fetchTabSoft(env, 'Vendors', 'estimate_post_vendor_lang')).find(v => String(v.ID) === String(body.vendor_id)) : null;
     const en = await estimateEnglishFields(env, body.line_items, nextVersion === 1 ? '' : changeReason, { force: vendorWantsSpanish(vendorRow) });
     if (en.ok) { storedLineItems = en.line_items; changeReasonEn = en.change_reason_en; }
-  } catch (_) {}
+  } catch (e) { softNote('estimate_english_copy_failed', e, 'P2', { ref: woId }); }
   const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
   if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) {} }
   await addRow(env, 'Estimates', row);
