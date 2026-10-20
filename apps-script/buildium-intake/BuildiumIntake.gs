@@ -143,7 +143,7 @@ function send_(m, token, dry) {
     });
   } catch (e) { return { ok: false, raw: 'network error: ' + e }; }
   var code = resp.getResponseCode(), raw = resp.getContentText().slice(0, 600), j = null;
-  try { j = JSON.parse(resp.getContentText()); } catch (e) {}
+  try { j = JSON.parse(resp.getContentText()); } catch (e) { /* silent-ok: unparseable body makes j null so the line below returns ok:false and the caller emails Brett */ }
   if (code !== 200 || !j || j.success !== true) return { ok: false, raw: 'HTTP ' + code + ' ' + raw };
   var attention = false, text = '';
   if (j.parked) { attention = true; text = 'The Hub did NOT create a work order for this one (' + j.reason + ': ' + j.detail + '). It is parked in the Hub Intake_Queue tab (row ' + j.queue_id + ').' + (j.queue_updated === false ? ' (The Hub could not update the queue row after texting you.)' : '') + (j.telemetry_ok === false ? ' (The Hub could not write its log row.)' : ''); }
