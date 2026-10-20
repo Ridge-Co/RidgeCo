@@ -370,6 +370,16 @@ function switchWeekTab(offset){
 }
 function refreshWeek(){ return loadWeek(curWeekOffset); }
 
+// The Worker answers with `load_errors` (array of text) when a sheet tab could not be read. That must never look like "nothing to do":
+// show a persistent red note (text only, never HTML from the server).
+function loadErrorNote(errs, what){
+  if(!Array.isArray(errs)||!errs.length) return null;
+  var box=document.createElement('div'); box.className='load-err'; box.setAttribute('role','alert');
+  var h=document.createElement('div'); h.textContent='Some data did not load, so '+what+' may be incomplete (not "nothing to do"). Reload to try again.'; box.appendChild(h);
+  errs.forEach(function(m){ var d=document.createElement('div'); d.textContent=String(m); box.appendChild(d); });
+  return box;
+}
+
 function loadWeek(offset){
   offset = offset||0;
   var qs = '';
