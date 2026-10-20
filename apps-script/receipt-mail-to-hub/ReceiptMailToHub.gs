@@ -114,7 +114,8 @@ function processQueue() {
     var me = Session.getActiveUser().getEmail();
     var ss = getOrCreateSheet_(me);
     var cfg = readConfig_(ss);
-    syncRules_(ss, cfg, me);   // cheap when nothing changed: approvals take effect within 10 min
+    var sync = syncRules_(ss, cfg, me);   // cheap when nothing changed: approvals take effect within 10 min
+    // The cleanup report is sent AFTER the receipts are processed (an alert problem must never stop receipts from reaching the Hub).
 
     var rules = readRules_(ss).filter(function (r) { return r.Status === 'Approved'; });
     var logged = loggedIds_(ss);
