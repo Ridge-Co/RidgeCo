@@ -18,7 +18,7 @@ function grabAny(text, prefix, name) {
 }
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 const W = grabAny.bind(null, src, 'function '), WA = grabAny.bind(null, src, 'async function ');
-const grab0 = f => new Function(W(f) + '\nreturn ' + f + ';')();
+const grab0 = f => new Function(SOFT + W(f) + '\nreturn ' + f + ';')();
 
 // ---- real server output ----
 const json = d => ({ _d: d });
