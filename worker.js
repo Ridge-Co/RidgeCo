@@ -16706,11 +16706,12 @@ function schedStatus(state, now, jobs, aiPausedAt) {
     }
     if (job.kind === 'interval') {
       const okAge = ageMin(js.last_ok);
-      if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
+      if (grace.in_grace) { /* still inside its grace window - not overdue yet */ }
+      else if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
       else if (okAge > schedOverdueLimitMin(job)) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${schedOverdueLimitMin(job)})`; }
     } else {
       const expectedToday = job.kind === 'daily' || et.dow === job.dow;
-      if (expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
+      if (!grace.in_grace && expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
         overdue = true; reason = reason || `has not run for ${et.date} (was due ${job.at} ET)`;
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
