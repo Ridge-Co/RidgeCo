@@ -11542,7 +11542,7 @@ async function qbUndoSend(env, body) {
     try { proposalReverted = (await qbProposalRevert(env, ir)).reverted; }
     catch (e) {
       proposalRevertError = 'QuickBooks was undone, but putting signed proposal Scope #' + (ir.Proposal_Scope_ID || '?') + ' back to unbilled failed: ' + String((e && e.message) || e) + ' — fix it on the Signed Proposals page.';
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_revert_failed', Skill_Or_Endpoint: '/qb/undo-send', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + proposalRevertError).slice(0, 480) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_revert_failed', Skill_Or_Endpoint: '/qb/undo-send', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + proposalRevertError).slice(0, 480) }); } catch (te) { softNote('telemetry_write_failed:proposal_revert_failed', te, 'P2'); }
     }
 
     // Mirror /invoice-review/unapprove exactly from here.
