@@ -34774,8 +34774,8 @@ function strCleanerView(c, vendorsById) {
 }
 async function strLoad(ctx, fresh) {
   const env = ctx.env;
-  if (fresh) for (const t of ['STR_Cleaners', 'STR_Cleaner_Pool', 'STR_Availability', 'STR_Turnovers', 'STR_Offers', 'STR_Alerts', 'Vendors']) invalidateTabCache(t);
-  const [cl, pool, av, tr, of, al, vendors] = await fetchTabs(env, ['STR_Cleaners', 'STR_Cleaner_Pool', 'STR_Availability', 'STR_Turnovers', 'STR_Offers', 'STR_Alerts', 'Vendors']);
+  if (fresh) for (const t of ['STR_Cleaners', 'STR_Cleaner_Pool', 'STR_Availability', 'STR_Turnovers', 'STR_Offers', 'STR_Alerts', 'STR_Outbox', 'STR_Changes', 'Vendors']) invalidateTabCache(t);
+  const [cl, pool, av, tr, of, al, ob, chg, vendors] = await fetchTabs(env, ['STR_Cleaners', 'STR_Cleaner_Pool', 'STR_Availability', 'STR_Turnovers', 'STR_Offers', 'STR_Alerts', 'STR_Outbox', 'STR_Changes', 'Vendors']);
   const vById = {}; for (const v of vendors) vById[String(v.ID)] = v;
   const cleaners = cl.map(c => strCleanerView(c, vById)), cmap = {}; for (const c of cleaners) cmap[c.ID] = c;
   const marks = {}; for (const a of av) if (a.Property_Key === STR_PROP && (a.Mark === 'can' || a.Mark === 'out')) marks[a.Cleaner_ID + '|' + a.Date] = a.Mark;
