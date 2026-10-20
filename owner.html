@@ -1363,8 +1363,8 @@ function buildPhotoSection(woId, propAddr, opts) {
       if (booted === null){
         booted = d.version;
         var last = null;
-        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
-        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){ /* silent-ok: storage blocked, only the reload hint is lost */ }
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){ /* silent-ok: storage blocked, only the reload hint is lost */ }
         // This page already loaded and ran successfully just now (we're executing at the
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
