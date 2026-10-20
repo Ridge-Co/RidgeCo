@@ -24526,8 +24526,8 @@ function __meterRowsFromPayload(p, cutoffMinute) {
 // A failure is counted, shown on the Read Meter page, and filed once per 30 min to the failure ledger (never silent, never thrown).
 async function __meterPersist(env) {
   if (__meter.persisting || !__meter.dirty) return;
-  const kv = env && env.READ_METER;
-  if (!kv) return;                                   // not bound: the page says so
+  const stub = __meterStub(env);
+  if (!stub) return;                                 // not bound: the page says so
   const now = Date.now();
   if (__meter.lastPersistAt && now - __meter.lastPersistAt < METER_PERSIST_GAP_MS) return;
   __meter.persisting = true; __meter.dirty = false; __meter.lastPersistAt = now;
