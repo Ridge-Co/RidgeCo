@@ -1192,6 +1192,41 @@ const _hubWorkerCore = {
   }
 };
 
+// Read Meter shared store (Oct 20 2026): ONE small Durable Object that every Worker instance saves its counts into and reads the others from.
+// Why not KV: the Workers Free plan allows only 1,000 KV writes and 1,000 KV lists a day; Durable Objects (SQLite-backed, required on Free) have room.
+// Plain object records keyed 'i:<prd|stg>:<instance>'; a record expires METER_STORE_TTL_S after its last save; /list returns the freshest ones,
+// newest first, capped (the cap and the number left out are returned so the page can say so). Never touches Google Sheets.
+export class ReadMeterStore {
+  constructor(state, env) { this.state = state; this.env = env; this.lastPrune = 0; }
+  async fetch(request) {
+    const url = new URL(request.url), now = Date.now(), st = this.state.storage;
+    try {
+      if (request.method === 'POST' && url.pathname === '/put') {
+        const rec = await request.json();
+        if (!rec || typeof rec.id !== 'string' || !rec.id || typeof rec.tag !== 'string' || !rec.tag || !rec.payload || typeof rec.payload !== 'object') return new Response('bad record', { status: 400 });
+        await st.put('i:' + rec.tag + ':' + rec.id, { id: rec.id, tag: rec.tag, t: now, build: String(rec.build || '').slice(0, 80), payload: rec.payload });
+        await this._prune(now);
+        return new Response('ok');
+      }
+      if (request.method === 'GET' && url.pathname === '/list') {
+        const tag = url.searchParams.get('tag') || 'prd', exclude = url.searchParams.get('exclude') || '';
+        const since = Number(url.searchParams.get('since')) || 0, limit = Math.max(1, Math.min(60, Number(url.searchParams.get('limit')) || 30));
+        await this._prune(now);
+        const all = Array.from((await st.list({ prefix: 'i:' + tag + ':' })).values()).filter(r => r && r.id !== exclude && r.t >= since).sort((a, b) => b.t - a.t);
+        return new Response(JSON.stringify({ in_store: all.length, truncated: Math.max(0, all.length - limit), instances: all.slice(0, limit) }), { headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    } catch (e) { return new Response('store error: ' + String((e && e.message) || e).slice(0, 200), { status: 500 }); }
+  }
+  async _prune(now) {                                 // at most once a minute: drop records not saved for METER_STORE_TTL_S
+    if (now - this.lastPrune < 60000) return;
+    this.lastPrune = now;
+    const dead = [];
+    for (const [k, v] of await this.state.storage.list({ prefix: 'i:' })) if (!v || typeof v.t !== 'number' || now - v.t > METER_STORE_TTL_S * 1000) dead.push(k);
+    for (let i = 0; i < dead.length; i += 128) await this.state.storage.delete(dead.slice(i, i + 128));
+  }
+}
+
 // Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
