@@ -338,6 +338,45 @@ ok(/'\/failure\/report'/.test(pub) && !/'\/failure\/update'/.test(pub) && !/'\/f
 const scopes = src.slice(src.indexOf('const ROLE_SCOPES'), src.indexOf('const ROLE_SCOPES') + 200000);
 ok(!/\/failure\/update|\/failures\/open/.test(scopes.slice(0, scopes.indexOf('\n};'))), 'no portal role can list or change failures');
 
+console.log('\nC1: events the ledger could not save are kept; QuickBooks and Gmail sign-in checks');
+reset(); FAIL_APPEND = true;
+const lateA = await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_one', message: 'boom one', severity: 'P1' });
+ok(lateA.ok === false && L._failPendingLen() === 1, 'an event the ledger cannot write is kept in memory, not lost');
+const lateB = await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_two', message: 'boom two', severity: 'P1' });
+ok(lateB.ok === false && L._failPendingLen() === 2, 'a second one is kept too');
+FAIL_APPEND = false;
+const lateC = await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_three', message: 'boom three', severity: 'P1' });
+const evTab = SHEET.Failure_Events || [];
+ok(lateC.ok && lateC.flushed_late === 2 && L._failPendingLen() === 0, 'the next successful report writes the kept events too', lateC);
+ok(['late_one', 'late_two', 'late_three'].every(w => evTab.some(r => r.join('|').includes(w))) && evTab.some(r => r.join('|').includes('saved late')), 'all three rows are in the ledger and the late ones say so');
+reset(); FAIL_APPEND = true;
+await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_four', message: 'boom four', severity: 'P1' });
+FAIL_APPEND = false;
+await L.failRollupRun(env, { nowMs: T0 });
+ok(L._failPendingLen() === 0 && (SHEET.Failure_Events || []).some(r => r.join('|').includes('late_four')), 'the 15-minute rollup also writes kept events');
+reset(); FAIL_APPEND = true;
+for (let i = 0; i < 70; i++) await L.reportFailure(env, { system: 'hub', source: 'test', where: 'flood' + (i % 3), message: 'x' + i, severity: 'P2' });
+ok(L._failPendingLen() <= 50, 'the in-memory buffer is bounded (50)');
+FAIL_APPEND = false;
+
+ok(L.failInvariantItems({ qb: { ok: false, hard: true, error: 'QB refresh token expired or revoked' } }).some(i => i.key === 'inv:qb_auth' && i.severity === 'P0' && /reconnected/.test(i.message)), 'a broken QuickBooks sign-in (token refused) is an urgent (P0) condition');
+ok(L.failInvariantItems({ qb: { ok: false, error: 'Config tab read 429' } }).some(i => i.key === 'inv:qb_auth' && i.severity === 'P1'), 'a transient QuickBooks check failure (Sheets blip / Intuit hiccup) is only P1, not an urgent P0 held open for 20 h');
+ok(L.failInvariantItems({ gmail: { ok: false, error: 'Gmail token refresh failed' } }).some(i => i.key === 'inv:gmail_auth' && i.severity === 'P1'), 'a broken Gmail sign-in is a P1 condition');
+ok(L.failInvariantItems({ qb: { ok: true }, gmail: { ok: true } }).length === 0, 'healthy sign-ins add nothing');
+const envQ = { QB_CLIENT_ID: 'x' };
+reset(); QB_ERR = new Error('QB refresh token expired or revoked - reconnect QuickBooks (re-auth needed).');
+let items = await L.failInvariantConditions(envQ, {}, T0);
+ok(items.some(i => i.key === 'inv:qb_auth' && i.severity === 'P0'), 'daily check: a QuickBooks refresh that fails becomes a P0 item');
+reset(); GMAIL_ERR = new Error('Gmail needs to be reconnected');
+items = await L.failInvariantConditions(envQ, {}, T0);
+ok(items.some(i => i.key === 'inv:gmail_auth') && !items.some(i => i.key === 'inv:qb_auth'), 'daily check: Gmail failure reported, healthy QuickBooks not');
+reset(); STAGING_FLAG = true; QB_ERR = new Error('sandbox'); GMAIL_ERR = new Error('sandbox');
+items = await L.failInvariantConditions(envQ, {}, T0);
+ok(!items.some(i => /qb_auth|gmail_auth/.test(i.key)), 'staging never runs the sign-in checks');
+reset();
+items = await L.failInvariantConditions({}, {}, T0);
+ok(!items.some(i => i.key === 'inv:qb_auth'), 'no QB_CLIENT_ID configured: the QuickBooks check is skipped');
+
 console.error = origErr;
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
