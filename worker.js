@@ -22825,9 +22825,12 @@ async function vendorBillReconcileReceipts(env, body) {
   const extract = await receiptImageExtractMultiple(env, bytes, mime);
   const detected = extract.receipts || [];
 
-  let logged = [];
+  let logged = [], loggedReadError = '';
   try { const all = await fetchTab(env, 'Receipts'); logged = wo_id ? all.filter(r => String(r.WO_ID) === String(wo_id) && r.Active !== 'FALSE') : []; }
-  catch (e) { /* best-effort — an unreadable Receipts tab still returns what was detected */ }
+  catch (e) {   // an unreadable Receipts tab still returns what was detected, but every receipt will look unmatched: say so
+    loggedReadError = String((e && e.message) || e).slice(0, 150);
+    await softFail(env, 'vendor_bill_reconcile_receipts_read_failed', e, 'P1', { wo: String(wo_id) });
+  }
 
   const matched = [], unmatched = [];
   const usedLoggedIds = new Set();
