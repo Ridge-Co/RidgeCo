@@ -35540,6 +35540,7 @@ async function strOfferRespond(env, body) {
     if (body.action !== 'accept' && body.action !== 'decline') return json({ ok: false, error: 'bad_action', message: 'action must be accept or decline' }, 400);
     const offer = ctx.st.offers.find(o => String(o.ID) === String(body.offer_id) && String(o.Cleaner_ID) === c.ID);
     if (!offer) return json({ ok: false, error: 'offer_not_found', message: 'That offer was not found.' }, 404);
+    const prow = ctx.st.pendings.find(t => t.Task_Key === offer.Task_Key); if (prow) return await strPendingRespond(ctx, c, offer, prow, body.action); // a pending (not booked) date: Yes is a tentative hold
     const trow = ctx.st.turnovers.find(t => t.Task_Key === offer.Task_Key); if (!trow) return json({ ok: false, error: 'task_not_found', message: 'That turnover no longer exists.' }, 404);
     const task = strRowToTask(trow), label = strFmtDate(task.date, true), taken = trow.Status === 'covered' || trow.Status === 'ext_covered';
     const filledMsg = `Thank you for being so quick - the ${label} turnover has just been filled. Could you be the backup for that date? Tap "Yes, backup" and it goes on your calendar.`;
