@@ -216,7 +216,7 @@
         .then(function (d) {
           if (!d) return;
           var c = d.counts || {}, n = Math.max(0, (c.open || 0) - (c.acknowledged || 0)), w = c.P0 ? 'P0' : (c.P1 ? 'P1' : 'P2');
-          try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), n: n, w: w })); } catch (e) { /* cache is optional */ }
+          try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), n: n, w: w })); } catch (e) { /* silent-ok: the badge cache is optional, next load refetches */ }
           paint(n, w);
         })
         .catch(function (e) { consoleErr('[failure-reporter] badge refresh failed', e); });
