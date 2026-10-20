@@ -8371,7 +8371,7 @@ function refreshWOStatusBadge(woId, prevStatus) {
     state.workorders = wos;
     var wo = wos.find(function(w) { return String(w.ID) === String(woId); });
     if (wo && wo.Status && String(wo.Status) !== String(prevStatus)) toast('Work order moved to ' + wo.Status, 'info');
-  }).catch(function() { /* cosmetic only */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-status-refresh', e); });
 }
 
 var _hubBillSaving = {};
