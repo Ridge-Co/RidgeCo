@@ -536,7 +536,7 @@ function loggedIds_(ss) {
 }
 function isLogged_(lg, m) { return !!(lg.gmail[m.getId()] || (rfcId_(m) && lg.rfc[rfcId_(m)])); }
 function markLogged_(lg, m) { lg.gmail[m.getId()] = true; var r = rfcId_(m); if (r) lg.rfc[r] = true; }
-function rfcId_(m) { try { return String(m.getHeader('Message-ID') || '').trim(); } catch (e) { return ''; } }
+function rfcId_(m) { try { return String(m.getHeader('Message-ID') || '').trim(); } catch (e) { /* silent-ok: no header means dedupe falls back to the Gmail id only */ return ''; } }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 // SMALL HELPERS (pure; covered by test/receipt-mail-to-hub.test.mjs)
