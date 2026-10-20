@@ -5593,24 +5593,24 @@ function scopeSigFinalBillGap(row, inHouseFallback) {
 async function scopeProposalSignedList(env, url) {
   await scopeSigTab(env);
   const rows = await fetchTab(env, 'Scope_Signatures');
-  const scopes = await fetchTab(env, 'Scopes').catch(() => []);
-  const props = await fetchTab(env, 'Properties').catch(() => []);
+  const scopes = await fetchTabSoft(env, 'Scopes', 'scope_signed_list');
+  const props = await fetchTabSoft(env, 'Properties', 'scope_signed_list');
   // Vendors is read only to re-derive the in-house case for legacy rows (see scopeSigBillGap).
-  const vendors = await fetchTab(env, 'Vendors').catch(() => []);
+  const vendors = await fetchTabSoft(env, 'Vendors', 'scope_signed_list');
   // Payment_Milestones (Sep 14 2026): rows signed under the new milestone system carry these;
   // rows signed before it shipped have none and keep rendering the old deposit/final UI
   // (signed-proposals.html branches on milestones.length).
   let allMilestones = [];
-  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (_) {}
+  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (me) { await softFail(env, 'scope_signed_list_milestones_failed', me, 'P1', { note: 'signed proposals will render in the old deposit/final layout' }); allMilestones = []; }
   // Receipts on each signed scope's work order = the ACTUAL side of Ridge Co materials budget
   // vs actual (Sep 22 2026). null (not []) on a read failure so the page says "couldn't check"
   // instead of a confident $0.
   let allReceipts = null;
-  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (_) {}
+  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (re) { await softFail(env, 'scope_signed_list_receipts_failed', re, 'P2', { note: 'page shows "couldn\'t check" for materials actuals' }); }
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
-    let sel = {}; try { sel = JSON.parse(r.Selections_JSON || '{}'); } catch (_) {}
+    const sel = parseJsonCell(r.Selections_JSON, {}, 'Scope_Signatures.Selections_JSON');
     const subtotal = +r.Subtotal || 0, deposit = +r.Deposit_Amount || 0, vendorCostTotal = +r.Vendor_Cost_Total || 0;
     // The Hub's "Bill vendor (deposit share)" figure must be the amount book() will ACTUALLY
     // bill — Vendor_Cost_Total × deposit/subtotal — not the vendor's full job cost. Showing the
