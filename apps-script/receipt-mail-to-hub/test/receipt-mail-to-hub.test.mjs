@@ -122,7 +122,7 @@ function makeMailbox(world, email, fixtures) {
       Settings: { Filters: {
         list: () => ({ filter: filters.slice() }),
         create: (f) => { const r = { id: 'F' + (++filterSeq), ...f }; filters.push(r); return r; },
-        remove: (_me, id) => { const i = filters.findIndex(f => f.id === id); if (i >= 0) filters.splice(i, 1); },
+        remove: (_me, id) => { if (world.failRemove) throw new Error(world.failRemove); const i = filters.findIndex(f => f.id === id); if (i >= 0) filters.splice(i, 1); },
       } } } },
     DriveApp: {
       getFolderById: (id) => {
