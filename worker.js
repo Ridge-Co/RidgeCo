@@ -24596,7 +24596,7 @@ async function __meterSnapshotAll(env, url) {
   return __meterSnapshot(url, await __meterRemote(env, mins));
 }
 // GET /read-meter?minutes=30 (admin-gated like every non-public route; role sessions are not in ROLE_SCOPES).
-function __meterSnapshot(url) {
+function __meterSnapshot(url, extra) {
   const mins = Math.max(1, Math.min(METER_KEEP_MIN, parseInt(url && url.searchParams.get('minutes'), 10) || 30));
   const rows = __meterWindow(mins), tot = { reads: 0, writes: 0, r429: 0, errs: 0, cache_hits: 0, joined: 0, requests: 0 };
   const perMin = rows.map(b => {
