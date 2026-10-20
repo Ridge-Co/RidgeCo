@@ -3338,11 +3338,12 @@ async function receiptReconBulkAction(env, body) {
       else if (action === 'expense') res = await receiptReconConfirm(env, { id, no_wo: true, property_id: body.property_id || '' });
       else if (action === 'move_to_pending') res = await receiptReconUnskip(env, { id });
       else res = await receiptReconSkip(env, { id, reason: body.reason || 'bulk skip from Receipt Reconciler' });
-      const resJson = await res.json().catch(() => ({}));
+      const resJson = await res.json();   // Phase C: an unreadable body now lands in `failed` (and the ledger) instead of counting as a success
       if (resJson && resJson.error) failed.push({ id, error: resJson.error });
       else succeeded.push({ id, result: resJson });
     } catch (e) {
       failed.push({ id, error: String(e && e.message || e) });
+      softNote('receipt_bulk_action_item_failed:' + action, e, 'P1', { id });
     }
   }
   return json({
