@@ -9976,7 +9976,7 @@ async function vendorWorkorders(env, url, callerRole, callerSessionId) {
     ]);
   }
   let tradeAccessDefaults = {};
-  try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
+  tradeAccessDefaults = parseJsonCell(config.Access_Trade_Defaults, {}, 'Config.Access_Trade_Defaults');
   // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
   // status a vendor should be able to page back to, it's a job that shouldn't have existed.
   const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && String(w.Addon_Status || '') !== 'Draft' && !(String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() && String(w.Approval_Stage || '') !== 'Approved') && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
