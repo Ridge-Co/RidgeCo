@@ -30384,7 +30384,7 @@ async function receiptReconCheckDuplicatesBulk(env, body) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Duplicate_Evidence_JSON', 'Duplicate_Checked_Date']);
   let token = null, allInvoices = null;
   try { token = await qbAccessToken(env); allInvoices = await qbAllInvoicesRaw(env, token); }
-  catch (e) { /* per-row calls below fall back to fetching their own token/list on a miss */ }
+  catch (e) { softNote('receipt_dup_bulk_qb_prefetch_failed', e, 'P2'); /* per-row calls below fall back to fetching their own token/list on a miss */ }
   const results = [];
   for (const id of ids) {
     const row = rows.find(r => String(r.ID) === String(id));
