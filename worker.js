@@ -36525,6 +36525,92 @@ async function strPendingAlerts(ctx) {
     catch (e) { ctx.errors.push({ step: 'pending_alert_resolve', error: `Could not close alert ${al.Alert_Key}: ${strErrText(e)}` }); }
   }
 }
+
+// ── Converting a pending date into the real turnover ─────────────────────────────────────────────────────────────────────────
+// MATCH RULE: an ACTIVE pending date matches a real "checkout" turnover whose Date is EXACTLY the pending date (the stay's end date) that is
+// currently on the bookings feed (or was just made by "Mark as booked now"). Nothing else matches: a booking ending the day before / after, or a
+// pre-arrival clean on that date, only alerts Brett. Two stays ending the same day are already one task, so it converts once.
+// Safe to run twice: the pending row flips to pending_converted only AFTER the real row is assigned (or the offers are moved), every step is
+// re-read, and a half-finished run simply finishes next time. The held cleaner is texted ONCE (Pending_Text claim marker), never the others.
+async function strPendingConvert(ctx, p, real, how) {
+  const { st } = ctx, iso = new Date(ctx.now).toISOString(), key = p.Task_Key, when = strFmtDate(p.Date);
+  if (!strPendActive(p)) return { ok: true, already: true };
+  if (real.Status === 'cancelled') return { ok: false, note: 'the real turnover is cancelled' };
+  const holder = p.Status === 'pending_held' ? st.cmap[p.Assigned_Cleaner_ID] : null;
+  const finish = async (fields, detail) => {
+    await strSetTurnover(ctx, p, Object.assign({ Status: 'pending_converted', Converted_To: real.Task_Key, Pending_Cal: holder ? 'conv' : 'del', Pending_Body: '' }, fields));
+    await strLog(ctx, key, (holder && holder.ID) || '', 'pending_converted', `${how}: ${detail}`.slice(0, 460));
+    ctx.pendChanged = true;
+  };
+  if (holder) {
+    let takenBy = '';
+    if (real.Status === 'ext_covered') takenBy = 'a hand-typed calendar entry';
+    else if (real.Status === 'covered' && String(real.Assigned_Cleaner_ID) !== holder.ID) takenBy = strFirst(st.cmap[real.Assigned_Cleaner_ID]) || 'someone else';
+    else if (!(real.Status === 'covered' && String(real.Assigned_Cleaner_ID) === holder.ID)) {
+      const r = await strAssign(ctx, real, holder, 'pending_converted', null);
+      if (r.cancelled) return { ok: false, note: 'the real turnover was cancelled' };
+      if (!r.ok) takenBy = r.by || 'someone else';
+    }
+    if (takenBy) {
+      const head = `PENDING DATE NOW BOOKED - ALREADY COVERED: ${when} is booked, but ${takenBy} is already on it, so ${strFirst(holder)}'s tentative yes was NOT turned into an assignment.`;
+      await strRaiseAlert(ctx, { key: `pconf|${key}|${ctx.now}`, kind: 'pending', severity: 'high', taskKey: key, message: [head, `${strFirst(holder)} was NOT texted. Tell them if you want to.`, 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head} ${strFirst(holder)} was not texted.` });
+      for (const o of st.offers.filter(o => o.Task_Key === key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'date booked' });
+      await finish({ Pending_Cal: 'del', Pending_Text: 'skipped:conflict', Pending_Mail: 'skipped:conflict', Pending_Note: ((p.Pending_Note || '') + ' [booked, but already covered by ' + takenBy + ']').trim().slice(0, 240) }, `already covered by ${takenBy}; ${strFirst(holder)} not texted`);
+      return { ok: true, conflict: takenBy };
+    }
+    // anything already running on the real turnover (a normal offer made before this ran) closes quietly: nobody else is texted
+    for (const o of st.offers.filter(o => o.Task_Key === real.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: String(o.Cleaner_ID) === holder.ID ? 'accepted' : 'superseded', Responded_At: iso, Note: 'pending hold became the booking' });
+    for (const o of st.offers.filter(o => o.Task_Key === key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'date booked' });
+    await finish({ Pending_Text: p.Pending_Text && p.Pending_Text !== '' ? p.Pending_Text : 'due', Pending_Mail: p.Pending_Mail && p.Pending_Mail !== '' ? p.Pending_Mail : 'due' }, `${strFirst(holder)} is now assigned`);
+    return { ok: true, assigned: holder.Name };
+  }
+  // Nobody held it: whoever is mid-offer keeps their offer (now about the real booking); cleaners who already passed are not asked again; the normal path takes over.
+  if (['open', 'offering', 'exhausted'].includes(real.Status)) {
+    let moved = 0;
+    for (const o of st.offers.filter(o => o.Task_Key === key)) {
+      if (STR_OFFER_ACTIVE.includes(o.Status)) { await strSetOffer(ctx, o, { Task_Key: real.Task_Key, Note: 'asked while pending; the date is now booked' }); moved++; }
+      else if (['declined', 'cancelled'].includes(o.Status) && !st.offers.some(x => x.Task_Key === real.Task_Key && String(x.Cleaner_ID) === String(o.Cleaner_ID) && STR_OFFER_BLOCKS.includes(x.Status))) {
+        const id = await strAddRow(ctx.env, 'STR_Offers', { Task_Key: real.Task_Key, Cleaner_ID: o.Cleaner_ID, Round: '0', Created_At: iso, Status: o.Status, Mode: 'pending', Responded_At: o.Responded_At || iso, Note: 'passed while the date was pending' });
+        st.offers.push({ ID: id, Task_Key: real.Task_Key, Cleaner_ID: o.Cleaner_ID, Status: o.Status, Mode: 'pending' });
+      }
+    }
+    if (moved && real.Status !== 'offering') await strSetTurnover(ctx, real, { Status: 'offering', Note: '' });
+  }
+  await finish({ Pending_Text: '', Pending_Mail: '' }, 'nobody had held it');
+  return { ok: true, assigned: '' };
+}
+
+// The calendar half of a close-out (also retried every tick until it lands): "del" removes the (PENDING) event; "conv" turns it into the normal
+// "<Name> Cleaning" event IN PLACE. Both re-read the event to prove it. Only events carrying this pending date's own ridgecoStrKey are touched.
+async function strPendingCalFix(ctx, feed, p) {
+  const mode = p.Pending_Cal || ''; if (mode !== 'del' && mode !== 'conv') return null;
+  const { env, S } = ctx, enc = encodeURIComponent, done = async note => { await strSetTurnover(ctx, p, { Pending_Cal: 'done' }); return { done: true, note }; };
+  if (!S.calWrite) return await done('calendar writes are off');
+  if (feed.fixture || inspCalStaged(env, ctx.cfg)) return await done('staging: calendar writes are stubbed');
+  const ev = feed.cal.find(e => e.ext && e.ext.ridgecoStr && e.ext.ridgecoStrKey === p.Task_Key && e.ext.ridgecoStrKind === 'pending' && String(e.status || '').toUpperCase() !== 'CANCELLED');
+  if (!ev) return await done('no pending event on the calendar');
+  const gone = async () => { try { const r = await strCalFetch(env, S.cleaningCal, 'GET', '/events/' + enc(ev.id) + '?fields=id,status'); return String((r && r.status) || '').toLowerCase() === 'cancelled'; } catch (er) { if (er.httpStatus === 404 || er.httpStatus === 410) return true; throw er; } };
+  if (mode === 'del' || p.Status !== 'pending_converted') {
+    try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(ev.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; }
+    if (!(await gone())) throw strErr('calendar_verify', `The (PENDING) event for ${strFmtDate(p.Date)} was deleted but is still there when re-read.`);
+    ev.status = 'CANCELLED';
+    return await done('event removed');
+  }
+  const real = ctx.st.turnovers.find(t => t.Task_Key === p.Converted_To), c = real && real.Status === 'covered' ? ctx.st.cmap[real.Assigned_Cleaner_ID] : null;
+  if (!real || !c) { // not (or no longer) assigned: no normal event to turn it into, so remove the tentative one
+    try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(ev.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; }
+    if (!(await gone())) throw strErr('calendar_verify', `The (PENDING) event for ${strFmtDate(p.Date)} could not be removed.`);
+    ev.status = 'CANCELLED'; return await done('event removed (no assignment)');
+  }
+  const want = strDesiredCalendar([{ key: real.Task_Key, kind: real.Kind, date: real.Date, next: real.Next_Arrival || null, status: 'covered', assigned: real.Assigned_Cleaner_ID, coveredAny: true }], ctx.st.cmap, inspEtDate(ctx.now), S)[0];
+  const body = strCalBody(want, INSP_TZ); body.extendedProperties.private.ridgecoStrPending = null;
+  const r = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(ev.id), body);
+  if (!r || !r.id) throw strErr('calendar_verify', `Google did not confirm turning the (PENDING) event for ${strFmtDate(p.Date)} into the normal event.`);
+  const back = await strCalFetch(env, S.cleaningCal, 'GET', '/events/' + enc(ev.id) + '?fields=id,status,summary,extendedProperties(private)'), pr = (back && back.extendedProperties && back.extendedProperties.private) || {};
+  if (!back || back.summary !== want.title || pr.ridgecoStrKey !== real.Task_Key || pr.ridgecoStrKind !== 'cover' || pr.ridgecoStrPending) throw strErr('calendar_verify', `The calendar event for ${strFmtDate(p.Date)} did not change as asked when re-read (title "${back && back.summary}").`);
+  ev.summary = want.title; ev.ext = Object.assign({}, ev.ext, { ridgecoStrKey: real.Task_Key, ridgecoStrKind: 'cover' }); delete ev.ext.ridgecoStrPending;
+  return await done('event converted in place');
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
