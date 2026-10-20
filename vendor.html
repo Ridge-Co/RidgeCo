@@ -352,6 +352,16 @@ function apiGate(fn) {
 // A card section that could not load must SAY so and offer Retry. Before this, a failed estimate read looked exactly
 // like "No estimate submitted yet" (inviting a duplicate estimate) and a failed invoice read looked like "no invoice
 // yet" (inviting a double bill). Also reported (once per kind per page load) to the failure ledger so it is never silent.
+// Background polls (version / page freshness / work-order refresh) run every minute and a flaky job-site connection makes
+// single failures normal. Report only when one keeps failing (5 in a row), once, so a dead poll is never invisible.
+var _bgFails = {};
+function bgOk(where) { _bgFails[where] = 0; }
+function bgFailure(where, e) {
+  // offline / backgrounded tab / aborted or timed-out requests are ordinary network conditions, not Hub failures: do not count them
+  if (navigator.onLine === false || document.hidden || (e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) return;
+  _bgFails[where] = (_bgFails[where] || 0) + 1;
+  if (_bgFails[where] === 5) { window.hubReportFailure && window.hubReportFailure(where + ' failing repeatedly', e); }
+}
 var _loadRetry = {}, _loadReported = {};
 function showLoadFailed(wrapId, what, detail, retryFn, ref) {
   var wrap = document.getElementById(wrapId);
