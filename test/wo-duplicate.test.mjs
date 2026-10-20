@@ -166,7 +166,7 @@ function build(db, o = {}) {
     'return { processQuietHoursQueue, bidCancelVendorMessage, bidCancelVendorPlan, bidWinnerNotifyPlan, bidWinnerNotifyDiff, vendorSmsDetailFromResult, woDuplicate, woBidGroupUnlink, woBidGroupGet, woBidGroupCancel, assignVendor, updateStatus, bidGroupWriteBlock, bidCancelClassify, nextBidGroupId, woDupResetChecklist, ownerWorkorders, woCombine, woSplit, hubTestWriteAllowed, isBidGroupWO, woDupAppendCopy, woDupSerialize, __woDupTapCache };',
   ].join('\n');
   class FD extends Date { constructor(...a) { if (a.length) super(...a); else super(fixed); } static now() { return fixed; } }
-  const api = new Function('getAccessToken', 'fetch', 'setTimeout', 'Date', '__spy', src)(async () => 'tok', makeFetch(db, o, log), (fn) => fn(), FD, log.sms);
+  const api = new Function('getAccessToken', 'fetch', 'setTimeout', 'Date', '__spy', PHASE_C_SHIM + src)(async () => 'tok', makeFetch(db, o, log), (fn) => fn(), FD, log.sms);
   return Object.assign({ log }, api);
 }
 
