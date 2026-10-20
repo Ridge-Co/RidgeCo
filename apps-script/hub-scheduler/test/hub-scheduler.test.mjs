@@ -55,7 +55,7 @@ function world(opts) {
     MailApp: { sendEmail: (to, subject, body) => { if (w.mailFails) throw new Error('mail quota'); w.mails.push({ to, subject, body }); } },
     SpreadsheetApp: { openById: (id) => { w.openedSheet = id; w.opened.push(id); const book = w.sheets[id]; if (!book) throw new Error('no such spreadsheet ' + id);
         return { getSheetByName: (n) => book[n] ? mkSheet(book[n]) : null, insertSheet: (n) => { book[n] = []; return mkSheet(book[n]); } }; }, flush: () => {} },
-    UrlFetchApp: { fetch: (url, o) => { w.fetches.push({ url, o }); if (!w.hub) throw new Error('no hub scripted'); const r = w.hub(url, o); if (r instanceof Error) throw r; return { getResponseCode: () => r.code, getContentText: () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body)) }; } },
+    UrlFetchApp: { fetch: (url, o) => { if (/\/health$/.test(url) && !/maintenance-hub/.test(url)) { w.probeFetches.push(url); const pr = w.probe ? w.probe(url) : { code: 200 }; if (pr instanceof Error) throw pr; return { getResponseCode: () => pr.code, getContentText: () => '' }; } w.fetches.push({ url, o }); if (!w.hub) throw new Error('no hub scripted'); const r = w.hub(url, o); if (r instanceof Error) throw r; return { getResponseCode: () => r.code, getContentText: () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body)) }; } },
   };
   class FakeDate extends Date { constructor(...a) { if (a.length) super(...a); else super(w.clock); } static now() { return w.clock; } }
   ctx.Date = FakeDate;
