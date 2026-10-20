@@ -24422,6 +24422,7 @@ function __meterTab(path) {
 function __meterGoogle(env, method, path, outcome) {
   try {
     const b = __meterBucket(), isRead = method === 'GET', src = __meterSrc(env);
+    __meter.dirty = true;
     if (isRead) b.reads++; else b.writes++;
     if (outcome === '429') b.r429++; else if (outcome === 'err') b.errs++;
     const e = __meterEntry(b.bySrc, src), t = __meterEntry(b.byTab, __meterTab(path));
