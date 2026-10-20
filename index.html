@@ -9102,7 +9102,7 @@ function loadVendorBillForInvoice(k) {
       items.forEach(function(r) {
         rows += '<div>🧾 ' + esc(r.desc || 'Receipt') + ': <b>$' + parseFloat(r.amount || 0).toFixed(2) + '</b></div>';
       });
-    } catch(e) {}
+    } catch(e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-detail', e, {ref: bill.ID}); }
     var total = parseFloat(bill.Total || 0);
     rows += '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;color:var(--accent2)">Total owed: <b>$' + total.toFixed(2) + '</b></div>';
     var padRow = safeArray(state.vendors).find(function(v) { return String(v.ID) === String(bill.Vendor_ID); });
