@@ -34449,6 +34449,7 @@ function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date,
 
 // Calendar reads/writes against the CLEANING calendar (not the main inspection calendar).
 async function strCalFetch(env, calId, method, pathAndQuery, body) {
+  __strCalCount++;
   const token = await getCalendarAccessToken(env);
   const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}${pathAndQuery}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (resp.status === 204) return {};
