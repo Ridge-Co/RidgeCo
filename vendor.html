@@ -1928,7 +1928,7 @@ function loadVendorBillSummary(woId, idx) {
       var truckLine = parseFloat(bill.Truck_Stock||0) > 0
         ? '<div>🚚 Truck stock' + (bill.Truck_Desc ? ' – ' + esc(bill.Truck_Desc) : '') + ': $' + parseFloat(bill.Truck_Stock).toFixed(2) + '</div>' : '';
       var receipts = [];
-      try { receipts = JSON.parse(bill.Receipts_JSON || '[]'); } catch(e) {}
+      try { receipts = JSON.parse(bill.Receipts_JSON || '[]'); } catch(e) { window.hubReportFailure && window.hubReportFailure('vendor:billReceiptsJson', e, { ref: String(bill.ID || bill.Bill_ID || '') }); }
       var receiptLines = receipts.map(function(r) {
         // Receipt files are deliberately never Drive-shared (rule 13) — a raw drive.google.com
         // link always blanks out, even for the vendor who uploaded it. This is what "once I
