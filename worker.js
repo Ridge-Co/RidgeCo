@@ -4755,11 +4755,16 @@ function scopeCleanMaterialsPricing(mp) {
   return { value: { mode, pct: Math.round(pct * 100) / 100 } };
 }
 function scopeParseMaterialsPricing(s) {
-  try {
-    const v = JSON.parse((s && s.Materials_Pricing_JSON) || 'null');
-    const c = scopeCleanMaterialsPricing(v);
-    if (c.value) return c.value;
-  } catch (_) {}
+  // Phase C: a stored pricing choice that cannot be read quietly priced the customer's materials as 'markup'. The fallback is kept, but now reported (P1: it changes a customer price).
+  const raw = s && s.Materials_Pricing_JSON;
+  if (raw !== undefined && raw !== null && String(raw).trim()) {
+    try {
+      const v = JSON.parse(raw);
+      const c = scopeCleanMaterialsPricing(v);
+      if (c.value) return c.value;
+      if (v !== null) softNote('scope_materials_pricing_invalid', c.error || 'invalid stored materials pricing', 'P1', { scope_id: s && s.ID });
+    } catch (e) { softNote('scope_materials_pricing_corrupt', e, 'P1', { scope_id: s && s.ID }); }
+  }
   return { mode: 'markup' };
 }
 
