@@ -153,11 +153,13 @@ const STAGING=_params.has('staging')||_params.get('env')==='staging';
 const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';  // staging uses its own token, separate from prod
 let TOKEN='';
-try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }
+const CC_FAILED=[]; function ccFail(label,e){ if(CC_FAILED.indexOf(label)<0) CC_FAILED.push(label); window.hubReportFailure&&window.hubReportFailure('command-center:'+label,e); }
+function ccFailBanner(){ return CC_FAILED.length?'<div class="card" style="border-color:#ecc3c3;background:var(--redbg)"><p class="note" style="margin:0">⚠ Couldn’t load: '+h(CC_FAILED.join(', '))+'. Those cards are hidden until you reload. The problem was logged.</p></div>':''; }
 if(STAGING){try{document.title='BrettOS — Command Center (STAGING)';
   var _b=document.createElement('div');_b.textContent='🧪 STAGING SANDBOX — test data only, not your live Hub';
   _b.style.cssText='background:#7a3fb0;color:#fff;font-weight:800;font-size:12px;text-align:center;padding:7px;letter-spacing:.4px';
-  document.body.insertBefore(_b,document.body.firstChild);}catch(e){}}
+  document.body.insertBefore(_b,document.body.firstChild);}catch(e){ /* silent-ok: staging banner is cosmetic only */ }}
 
 // status model (from live code: index.html STA map + worker OPEN_WO_STATUSES)
 const NEEDS_BRETT={'New':1,'Declined':1,'On Hold':1,'Complete':1,'Pending Invoice':1};
