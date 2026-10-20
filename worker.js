@@ -13037,7 +13037,7 @@ async function addWONote(env, body) {
         await sendSMS(env, noteOwner.Phone, ownerMsg);
         await logSMS(env, body.wo_id, 'owner_onhold_note', noteOwner.ID, noteOwner.Phone, ownerMsg);
       }
-    } catch(e) { /* non-fatal — note already saved */ }
+    } catch(e) { await softFail(env, 'onhold_note_owner_sms_failed', e, 'P0', { ref: body.wo_id }); /* the note itself is already saved; the owner text is what failed */ }
   }
 
   return json({ success: true });
