@@ -8231,9 +8231,13 @@ async function addonOwnerNotice(env, body) {
     catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; }
   }
   const anyOut = !!(smsResult && (smsResult.sent || smsResult.held_for_quiet_hours)) || emailResult.sent;
-  if (anyOut) { try { await updateWOFields(env, childId, { Addon_Owner_Notified_Date: new Date().toISOString() }); } catch (_) {} }
-  try { await logWOAudit(env, childId, 'admin', 'admin', 'Addon_Owner_Notified', '', anyOut ? 'sent' : 'not sent', 'Owner information notice'); } catch (_) {}
-  return json({ success: true, sms: { sent: !!(smsResult && smsResult.sent), held_for_quiet_hours: !!(smsResult && smsResult.held_for_quiet_hours), gate_snapshot: (smsResult && (smsResult.gate_snapshot || smsResult.reason)) || '' }, email: emailResult, warnings });
+  if (anyOut) {
+    try { await updateWOFields(env, childId, { Addon_Owner_Notified_Date: new Date().toISOString() }); }
+    catch (e) { await softFail(env, 'addon_owner_notice_stamp_failed', e, 'P1', { child_wo_id: childId, note: 'owner WAS notified; the notified-date was not saved so a resend is not blocked' }); failWarnings.push('The owner was notified, but the notified-date could not be saved (a resend will not be blocked).'); }
+  }
+  try { await logWOAudit(env, childId, 'admin', 'admin', 'Addon_Owner_Notified', '', anyOut ? 'sent' : 'not sent', 'Owner information notice'); }
+  catch (e) { softNote('addon_owner_notice_audit_failed', e, 'P2', { child_wo_id: childId }); }
+  return json({ success: true, sms: { sent: !!(smsResult && smsResult.sent), held_for_quiet_hours: !!(smsResult && smsResult.held_for_quiet_hours), gate_snapshot: (smsResult && (smsResult.gate_snapshot || smsResult.reason)) || '' }, email: emailResult, warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}) });
 }
 
 async function appendWONotes(env, body) {
