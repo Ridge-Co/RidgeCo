@@ -19796,7 +19796,7 @@ async function opsQueueStartBuild(env, body) {
       },
       body: JSON.stringify({ text }),
     });
-    respData = await resp.json().catch(() => ({}));
+    respData = await safeJson(resp, {}, 'ops_queue_routine_fire');
   } catch (e) {
     await rollbackToOriginalStatus();
     return json({ ok: false, error: String((e && e.message) || e), fired_ids: [], skipped }, 502);
