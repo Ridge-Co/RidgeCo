@@ -939,6 +939,18 @@ function pendCard(p){
     + '<div class="muted" style="margin-top:4px">' + esc(daysText(p.days_out)) + '</div>'
     + (p.note ? '<div class="pendnote">Your note (only you see it): ' + esc(p.note) + '</div>' : '');
   if(p.code === 'held') h += '<div class="pendnote"><b>' + esc(p.held_by) + '</b> said yes. It is a tentative hold, NOT an assignment. She has been told nothing is confirmed.</div>';
+  else if(p.code === 'nobody') h += '<div class="pendnote"><b>Everyone in the queue was asked or is out.</b> Think twice before accepting this booking.</div>';
+  else if(p.active && p.next_up) h += '<div class="pendnote">' + (p.waiting_for_window ? 'Next to ask: <b>' + esc(p.next_up) + '</b>. It is outside 8 AM - 9 PM, so she is asked at 8 AM.' : 'Next to ask: <b>' + esc(p.next_up) + '</b>.') + '</div>';
+  if(p.code === 'booked' && p.converted_to) h += '<div class="pendnote">It is now an ordinary turnover on the board below.</div>';
+  var asked = p.asked || [];
+  if(asked.length) h += '<div class="muted" style="margin-top:8px">Who was asked</div><ul class="offers">' + asked.map(function(o){
+    var w = OFFER_WORDS[o.status] || o.status; if(o.status === 'accepted') w = 'said yes (tentative)';
+    return '<li><b>' + esc(o.cleaner) + '</b>: ' + esc(w) + '</li>'; }).join('') + '</ul>';
+  h += backupsHtml({ backups: p.backups });
+  h += pendTextNote(p);
+  if(p.active){
+    h += '<div class="t-actions"><button class="btn sm primary" data-act="pend-convert" data-key="' + k + '">Mark as booked now</button>'
+      + (p.can_send_now ? '<button class="btn sm" data-act="pend-send" data-key="' + k + '">Ask now, even if late</button>' : '')
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
