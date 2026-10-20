@@ -6,6 +6,7 @@
 // under test is exactly what the endpoint actually runs, not a re-implementation.
 import './_midday-clock.mjs';
 import fs from 'fs';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 
 function grab(src, sig) {
