@@ -34998,7 +34998,7 @@ async function inspStrGuardTick(env, opts) {
   const resolved = Object.keys(prev).filter(k => !items[k] && k.slice(2) >= inspAddDays(today, -1));
   const out = { enabled: true, items: Object.fromEntries(Object.entries(items).map(([k, it]) => [k, { sig: it.sig, lines: it.lines }])), new: fresh.map(f => f[0]), resolved };
   if (dry || (!fresh.length && !resolved.length)) {
-    if (!dry && !fresh.length && !resolved.length) { const keep = {}; for (const k of Object.keys(items)) keep[k] = items[k].sig; if (JSON.stringify(keep) !== JSON.stringify(prev)) { try { await setConfigKey(env, { key: 'STR_GUARD_NOTIFIED', value: JSON.stringify(keep) }); } catch (e) { console.error('insp: could not prune STR_GUARD_NOTIFIED:', e && e.message); } } }
+    if (!dry && !fresh.length && !resolved.length) { const keep = {}; for (const k of Object.keys(items)) keep[k] = items[k].sig; if (JSON.stringify(keep) !== JSON.stringify(prev)) { try { await setConfigKey(env, { key: 'STR_GUARD_NOTIFIED', value: JSON.stringify(keep) }); } catch (e) { console.error('insp: could not prune STR_GUARD_NOTIFIED:', e && e.message); softNote('str_guard_notified_prune', e, 'P2'); } } }
     return out;
   }
   const nA = fresh.filter(([k]) => k[0] === 'A').length, nB = fresh.filter(([k]) => k[0] === 'B').length;
