@@ -6179,10 +6179,12 @@ async function scopeProposalBook(env, body) {
     Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber, QB_Bill_ID: billId, QB_Bill_Number: billNumber,
     Bill_Skip_Reason: billId ? '' : billSkipReason,
   });
-  try { await updateRow(env, 'Scopes', s.ID, { Status: 'invoiced', Updated_Date: new Date().toISOString() }); } catch (e) {}
-  try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); } catch (e) {}
+  try { await updateRow(env, 'Scopes', s.ID, { Status: 'invoiced', Updated_Date: new Date().toISOString() }); }
+  catch (e) { await softFail(env, 'scope_book_scope_status_failed', e, 'P1', { scope: String(s.ID) }); failWarnings.push('Booked in QuickBooks, but the scope status could not be set to invoiced.'); }
+  try { if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Invoiced' }); }
+  catch (e) { await softFail(env, 'scope_book_wo_status_failed', e, 'P1', { wo_id: String(s.WO_ID || '') }); failWarnings.push('Booked in QuickBooks, but work order ' + s.WO_ID + ' could not be set to Invoiced.'); }
 
-  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}) });
 }
 
 // POST /scope-proposal/unbook (admin) { id }
