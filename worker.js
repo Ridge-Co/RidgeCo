@@ -6289,7 +6289,7 @@ async function scopeProposalBookFinal(env, body) {
     billSkipReason = 'The remaining vendor balance is $0 or less — there is nothing to bill.';
   }
 
-  const warnings = [];
+  const warnings = []; const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
   if (billSkipReason) warnings.push(billSkipReason);
   if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
