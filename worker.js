@@ -9927,7 +9927,7 @@ async function saveChecklist(env, body) {
   const value = typeof body.checklist === 'string' ? body.checklist : JSON.stringify(body.checklist || []);
   await updateWOFields(env, body.wo_id, { Checklist: value });
   if (body.updated_by) {
-    try { await logWOAudit(env, body.wo_id, body.updated_by, body.updated_by_role || 'vendor', 'Checklist', '', 'updated', body.note || ''); } catch(_){}
+    try { await logWOAudit(env, body.wo_id, body.updated_by, body.updated_by_role || 'vendor', 'Checklist', '', 'updated', body.note || ''); } catch (e) { await softFail(env, 'checklist_audit_failed', e, 'P2', { ref: body.wo_id }); }
   }
   return json({ success: true });
 }
