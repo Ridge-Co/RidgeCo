@@ -6377,13 +6377,14 @@ async function scopeProposalBookFinal(env, body) {
     QB_Final_Invoice_ID: invoiceId, QB_Final_Invoice_Number: invoiceNumber, QB_Final_Bill_ID: billId, QB_Final_Bill_Number: billNumber,
     Final_Bill_Skip_Reason: billId ? '' : billSkipReason,
   });
-  try { await updateRow(env, 'Scopes', s.ID, { Status: 'fully-invoiced', Updated_Date: new Date().toISOString() }); } catch (e) {}
+  try { await updateRow(env, 'Scopes', s.ID, { Status: 'fully-invoiced', Updated_Date: new Date().toISOString() }); }
+  catch (e) { await softFail(env, 'scope_book_final_scope_status_failed', e, 'P1', { scope: String(s.ID) }); failWarnings.push('Final balance booked in QuickBooks, but the scope status could not be set to fully-invoiced.'); }
   // WO_Status intentionally left untouched here — unlike the deposit half, the job is already
   // done by the time a final invoice is booked (that's the whole trigger for this call), so its
   // Status should already reflect real-world completion; this function shouldn't guess and
   // overwrite whatever more specific state the WO is actually in.
 
-  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
+  return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}) });
 }
 
 // POST /scope-proposal/adjust-bill (admin) { id, phase: 'deposit'|'final', amount, reason, preview_only }
