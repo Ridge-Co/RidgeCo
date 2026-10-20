@@ -153,12 +153,12 @@ const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'ht
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';
 const REPO_URL='https://github.com/Ridge-Co/RidgeCo';
 const REVIEW_CAP=25, DEFAULT_SNOOZE=10, RECHECK_GRACE_DAYS=4, STALLED_HOURS=24;
-let TOKEN=''; try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+let TOKEN=''; try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }
 let PROPOSALS=[], REVIEW_TS='', SHOW_ALL_REVIEW=false, SYNCED=false;
 function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function jsq(s){return JSON.stringify(String(s==null?'':s));}
-async function getJSON(path){const r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}});const t=await r.text();let d=null;try{d=JSON.parse(t)}catch(e){}if(!r.ok)throw new Error(path+' → HTTP '+r.status+' '+((d&&d.error)||t.slice(0,80)));if(d&&d.error)throw new Error(d.error);return d;}
-async function postJSON(path,body){const r=await fetch(WORKER+path,{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify(body)});const d=await r.json().catch(function(){return null;});if(!r.ok||!d||d.error||(d.success!==true&&d.ok!==true))throw new Error((d&&d.error)||('HTTP '+r.status));return d;}
+async function getJSON(path){const r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}});const t=await r.text();let d=null,pf=null;try{d=JSON.parse(t)}catch(e){pf=e}if(!r.ok)throw new Error(path+' → HTTP '+r.status+' '+((d&&d.error)||t.slice(0,80)));if(d&&d.error)throw new Error(d.error);if(pf&&t.trim()){window.hubReportFailure&&window.hubReportFailure('proposals:unreadable-response '+path.split('?')[0],pf);throw new Error(path+' → the Hub answered with something unreadable');}return d;}
+async function postJSON(path,body){const r=await fetch(WORKER+path,{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify(body)});const d=await r.json().catch(function(){/* silent-ok: null body makes the next line throw to the caller */return null;});if(!r.ok||!d||d.error||(d.success!==true&&d.ok!==true))throw new Error((d&&d.error)||('HTTP '+r.status));return d;}
 function toast(msg,kind){const el=document.getElementById('toast');if(!el)return;el.innerHTML=msg?'<div class="banner'+(kind==='ok'?' ok':'')+'">'+msg+' <button class="mini" style="float:right;padding:3px 8px" onclick="toast(\'\')">✕</button></div>':'';}
 function chip(tag){const t=(tag||'').toUpperCase();if(t.indexOf('QUICK')>=0)return '<span class="chip quick">QUICK WIN</span>';if(t.indexOf('FIX')>=0)return '<span class="chip fix">FIXES EXISTING</span>';if(t.indexOf('BIG')>=0)return '<span class="chip big">BIG GAIN</span>';return t?'<span class="chip eff">'+h(t)+'</span>':'';}
 function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
