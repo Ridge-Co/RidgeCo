@@ -3713,7 +3713,7 @@ function checklistFromText(text, existingJson){
 }
 // Read-only checklist progress for the Hub WO detail (so Brett sees what the vendor did).
 function hubChecklistHtml(wo){
-  var items=[]; try{ items=JSON.parse((wo&&wo.Checklist)||'[]')||[]; }catch(e){ return ''; }
+  var items=[]; try{ items=JSON.parse((wo&&wo.Checklist)||'[]')||[]; }catch(e){ window.hubReportFailure && window.hubReportFailure('index:checklist-render', e, {ref: wo&&wo.ID}); return ''; }
   if(!items.length) return '';
   var CODES={na:'Not applicable',separate:'Separate WO',estimate:'Needs estimate',access:'Couldn’t access',parts:'Needs parts'};
   var done=items.filter(function(i){return i.done;}).length;
