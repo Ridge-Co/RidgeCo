@@ -10847,7 +10847,7 @@ async function addVendorBill(env, body) {
   // the vendor's invoice, so this is a genuinely new fact, not a rename/reuse of an existing
   // column). Only touches the sheet when a caller actually sends one — neither the plain hourly/
   // flat bill flow nor the older vendor.html build ever did, so this is a no-op for them.
-  if (body.Vendor_Invoice_Date) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_Date']); } catch (e) {} }
+  if (body.Vendor_Invoice_Date) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_Date']); } catch (e) { await softFail(env, 'vendor_bill_ensure_columns:Vendor_Invoice_Date', e, 'P1', { ref: dupeKey }); } }
   // B-227 Phase 1/2: Payment_Method (reimburse_via_labor_bill default / separate_vendor_billpay /
   // credit_card_no_bill) — same lazy-ensureColumns pattern, only touches the sheet when a caller
   // actually sends one (the vendor portal doesn't send this field, so it stays untouched there).
