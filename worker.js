@@ -8390,7 +8390,12 @@ async function woBulkVoid(env, body) {
   // issue at all; it just means the vendor-bill leg of the money check can't run (Customer_Charge
   // / QBO_Invoice_Number still do), same fail-open posture findRecentDuplicate uses.
   let vendorBills = [];
-  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); } catch (e) {}
+  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); }
+  catch (e) {
+    // Fail-open stays (see above), but the skipped vendor-bill check is now reported and returned, not invisible.
+    await softFail(env, 'wo_bulk_void_vendor_bills_unreadable', e, 'P1', { note: 'voiding without the vendor-bill money check' });
+    bulkVoidWarning = (bulkVoidWarning ? bulkVoidWarning + ' ' : '') + 'The vendor-bill check could not run, so work orders with vendor bills were NOT blocked from voiding.';
+  }
 
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const voided = [], skipped = [];
