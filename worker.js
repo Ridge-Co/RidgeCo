@@ -12061,7 +12061,7 @@ async function scopeDepositInvoiceId(env, scopeId, tabs) {
   if (tabs) { sigs = tabs.sigs; milestones = tabs.milestones; }
   else {
     sigs = await fetchTab(env, 'Scope_Signatures');
-    try { await paymentMilestonesTab(env); } catch (_) {}
+    try { await paymentMilestonesTab(env); } catch (e) { softNote('payment_milestones_ensure_tab_failed', e, 'P1'); }   // the read just below throws if the tab is really missing
     milestones = await fetchTab(env, 'Payment_Milestones');
   }
   return resolveScopeDepositInvoice(sigs, milestones, scopeId);
