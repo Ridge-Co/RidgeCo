@@ -449,7 +449,7 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
   // Hub rows == the Hub's SCHED_JOBS registry (same names, same defaults), so editing the table is always a real choice
   const reg = [...WORKER.slice(WORKER.indexOf('const SCHED_JOBS = ['), WORKER.indexOf('// Pure. Is this one job due')).matchAll(/\{ name: '(\w+)',\s+kind: '(\w+)',\s*(?:dow: (\d), )?(?:at: '([\d:]+)', )?(?:every_min: (\d+), )?/g)].map(m => ({ name: m[1], kind: m[2], dow: m[3] === undefined ? undefined : +m[3], at: m[4], every_min: m[5] === undefined ? undefined : +m[5] }));
   const hubRows = rows.filter(r => r.run === 'hub');
-  ok(reg.length === 14 && hubRows.length === 14 && JSON.stringify(reg.map(r => r.name)) === JSON.stringify(hubRows.map(r => r.name)), 'the 14 Hub rows are exactly the Hub registry, in the same order', { reg: reg.map(r => r.name), rows: hubRows.map(r => r.name) });
+  ok(reg.length >= 14 && hubRows.length === reg.length && JSON.stringify(reg.map(r => r.name)) === JSON.stringify(hubRows.map(r => r.name)), 'the Hub rows are exactly the Hub registry, in the same order', { reg: reg.map(r => r.name), rows: hubRows.map(r => r.name) });
   const DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   ok(reg.every(r => { const h = hubRows.find(x => x.name === r.name); return r.kind === 'interval' ? (h.every_min === r.every_min + 1 && h.at === undefined) : (h.at === r.at && (r.kind === 'weekly' ? DOW[h.day] === r.dow : h.day === undefined)); }), 'every Hub row carries the same default time as the registry (15 min = registry 14 + 1 jitter minute)', reg);
   ok(hubRows.every(r => r.enabled === true), 'all Hub rows are on by default');
