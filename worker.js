@@ -30595,6 +30595,8 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
       ok: true, total_invoices: invoices.length, offset, opened_this_batch: opened,
       lines_cached_this_batch: lineCount, next_offset: done ? null : nextOffset, done,
       list_query_carried_line: listQueryCarriedLine,
+      ...(clearWarning ? { clear_warning: clearWarning } : {}),
+      ...(openFailures.length ? { open_failures: openFailures.length, failed_invoice_ids: openFailures.slice(0, 20), failure_warning: openFailures.length + ' invoice(s) could not be opened, so their lines are missing from the index and the audit cannot see them.' } : {}),
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
