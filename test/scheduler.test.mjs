@@ -265,6 +265,8 @@ function mkJobs(log, spec) {
 }
 const fast = (c, extra) => Object.assign({ now: c.now, sleep: async () => {}, verifyDelayMs: 0, budgetMs: 5000 }, extra || {});
 const stateOf = (store) => JSON.parse(store.cfg().Scheduler_State);
+// Oct 20 2026: pretend every job's grace clock started long ago (the grace window is what these tests are NOT about).
+const ageGrace = (store) => { const s = JSON.parse(store.cfg().Scheduler_State); for (const j of Object.values(s.jobs)) { if (j.grace_from) j.grace_from = '2026-01-01T00:00:00.000Z'; } store.setCfg('Scheduler_State', JSON.stringify(s)); };
 
 // 2a first run, one job per call, more flag, then idle
 {
