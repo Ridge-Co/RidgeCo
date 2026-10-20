@@ -96,6 +96,7 @@ function load(store, over) {
     recurIsTrue: (v) => String(v).toUpperCase() === 'TRUE', recurEtDateISO: (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(d),
     recurLatestDue: () => null, recurTargets: () => [], recurTargetKey: (x) => x.p + '|' + (x.u || ''), recurWOIsOpen: () => false,
     hubImpPull: async () => ({ new: 0 }), hubImpReconcile: async () => ({ rows: 0, updated: 0, completed_now: [], problems: [] }), opsQueueSync: async () => ({ ok: true, checked: 0, changed: [], errors: [] }),
+    aiCreditPausedAtFromRows: () => '', aiCreditCheck: async () => ({ paused: false }), AI_CREDIT_CODE: 'ai_credit_paused', aiCreditIsPausedError: (e) => !!e && e.code === 'ai_credit_paused', schedRunAiCreditProbe: async () => ({ ok: true }),
     qbSyncPayments: async () => ({ ok: true }), runWeeklyReview: async () => ({ ok: true, logged: true, delivery: null }), runWeeklyArReport: async () => ({ delivered: false }),
   };
   Object.assign(stubs, over.stubs || {});
