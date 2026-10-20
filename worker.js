@@ -31237,8 +31237,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
 
   // One invoice/bill line per submitted line item, straight off the bill's own descriptions —
   // there is no WO description to fall back to for a standalone bill (§5).
-  let receipts = [];
-  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+  const receipts = parseJsonCell(billRow.Receipts_JSON, [], 'Vendor_Bills.Receipts_JSON', 'P1');
   const itemRef = { value: trade.item };
   const invLines = (Array.isArray(receipts) ? receipts : []).map(rc => {
     const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
