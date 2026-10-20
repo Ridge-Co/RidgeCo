@@ -506,7 +506,7 @@ async function approveSel(){
     setTimeout(load,700);
   }catch(e){ g.disabled=false; g.textContent='Failed — '+(e&&e.message||e); }
 }
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
 
 // ── copyable brief (includes Your change) ───────────────────────────────────────────────────
 function brief(x){
