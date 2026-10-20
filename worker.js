@@ -17090,7 +17090,7 @@ async function schedRunNext(env, ctx, opts) {
     }
   } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
 
-  const jobEnv = __cronEnv(env);
+  const jobEnv = __meterCronEnv(__cronEnv(env), job.name);
   const t0 = Date.now();
   const work = (async () => {
     let jobRes;
