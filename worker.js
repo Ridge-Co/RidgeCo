@@ -34912,6 +34912,9 @@ async function strTick(env, opts) {
     } catch (e) { ctx.errors.push({ step: 'coverage', error: `${v.key}: ${strErrText(e)}` }); }
   }
   try { ctx.detail.filled_catchup = await strFilledCatchUp(ctx); } catch (e) { ctx.errors.push({ step: 'filled_catchup', error: strErrText(e) }); }
+  // Oct 20 2026: texts Brett parked from the admin swap / bulk flow (outside 8am-9pm) go out now that the window is open.
+  if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) strDefer(ctx, 'held text(s)');
+  else try { ctx.detail.held_texts = await strOutboxDrain(ctx); } catch (e) { ctx.errors.push({ step: 'held_texts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'held_texts', 'Held cleaner texts could not be processed: ' + strErrText(e)); }
   // 3. offers: expire stale ones, ask the next cleaner
   const offered = [];
   for (const v of views.filter(v => !v.coveredAny && ['open', 'offering', 'exhausted'].includes(v.row.Status))) {
