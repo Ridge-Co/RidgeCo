@@ -2000,7 +2000,7 @@ var KEY_TYPE_LABEL = {
 function keyTypeLabel(type) { return KEY_TYPE_LABEL[type] || (type || 'Key'); }
 
 function processNotificationsBackground() {
-  api('GET','/notifications/pending').catch(function(){});
+  api('GET','/notifications/pending').catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:notifications-pending', e); });
 }
 
 var _names8 = ['properties','units','tenants','vendors','workorders','invoices','owners','keys'];
