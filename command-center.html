@@ -254,11 +254,11 @@ function staleCard(s){
 async function loadOptimizer(){
   try{
     const [rev,tel]=await Promise.all([
-      getJSON('/ops-review-log?limit=1').catch(()=>null),
-      getJSON('/ops-telemetry?days=7').catch(()=>null)
+      getJSON('/ops-review-log?limit=1').catch(e=>{ ccFail('Optimizer review',e); return null; }),
+      getJSON('/ops-telemetry?days=7').catch(e=>{ ccFail('Optimizer telemetry',e); return null; })
     ]);
     return {rev,tel};
-  }catch(e){ return null; }
+  }catch(e){ ccFail('Optimizer',e); return null; }
 }
 function optCard(opt){
   const rev=opt&&opt.rev&&opt.rev.rows&&opt.rev.rows[0];
