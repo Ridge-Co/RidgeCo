@@ -204,6 +204,7 @@ const r2 = x => Math.round(x * 100) / 100;
     { key: 'v1', label: '', price: 1650, vendor_cost: 800, rc_materials_cost: 400, materials_price: 550, materials_desc: 'LVP' },
   ] }, { id: 'li2', description: 'Faucet', selected_key: 'v1', variants: [{ key: 'v1', label: '', price: 255, vendor_cost: 150 }] }];
   const stubs = {
+    ...SOFTO,
     scopeProposalLinkAuth: async () => ({ s: { ID: '5', Property_ID: '1', Proposal_Items_JSON: JSON.stringify(stored) } }),
     scopeAddr: async () => '1 Main St', scopeProposalPhotos: async () => [],
     scopeParsePaymentSchedule: () => [{ label: 'Deposit', percent: 50, trigger: 'upfront' }, { label: 'Final', percent: 50, trigger: 'completion' }],
