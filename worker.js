@@ -36921,6 +36921,10 @@ function strPendingForCleaner(ctx, c, today) {
       status_label: mine ? 'You said yes - tentative' : 'Pending - not booked' };
   });
 }
+function strPendingBoard(ctx, act) {
+  return ctx.st.pendings.filter(p => strPendActive(p) || Date.parse(p.Updated_At || '') > ctx.now - 3 * 86400000).sort((a, b) => a.Date.localeCompare(b.Date) || (parseInt(a.ID, 10) || 0) - (parseInt(b.ID, 10) || 0)).map(p => strPendingPublic(ctx, p, act));
+}
+
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
