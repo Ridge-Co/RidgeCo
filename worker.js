@@ -32966,10 +32966,10 @@ async function ensureDeliveryTab(env) {
 async function deliveriesList(env, url) {
   await ensureDeliveryTab(env);
   let dels = [], props = [], units = [], tenants = [];
-  try { dels    = await fetchTab(env, 'Deliveries'); } catch (e) {}
-  try { props   = await fetchTab(env, 'Properties'); } catch (e) {}
-  try { units   = await fetchTab(env, 'Units'); } catch (e) {}
-  try { tenants = await fetchTab(env, 'Tenants'); } catch (e) {}
+  dels    = await fetchTabSoft(env, 'Deliveries', 'deliveries_list');
+  props   = await fetchTabSoft(env, 'Properties', 'deliveries_list');
+  units   = await fetchTabSoft(env, 'Units', 'deliveries_list');
+  tenants = await fetchTabSoft(env, 'Tenants', 'deliveries_list');
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const out = dels.filter(d => d.Active !== 'FALSE').map(d => {
     const p = props.find(x => String(x.ID) === String(d.Property_ID));
