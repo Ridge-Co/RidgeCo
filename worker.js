@@ -23695,7 +23695,7 @@ async function woShareSend(env, body){
   let reason = '';
   if(!ok) reason = !r.send_ok ? ('Blocked by SMS settings: ' + r.gate_snapshot) : 'Send failed — the text did not go through (Twilio). Use Copy message.';
   else if(r.held_for_quiet_hours) reason = 'Held for quiet hours — will send after ' + r.send_after;
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_share_send', Skill_Or_Endpoint:'/wo/share-send', Success: ok ? 'TRUE' : 'FALSE', Notes:`wo=${woId} lang=${lang} sent=${!!r.sent} held=${!!r.held_for_quiet_hours}` }); } catch(_) {}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_share_send', Skill_Or_Endpoint:'/wo/share-send', Success: ok ? 'TRUE' : 'FALSE', Notes:`wo=${woId} lang=${lang} sent=${!!r.sent} held=${!!r.held_for_quiet_hours}` }); } catch(te) { softNote('telemetry_write_failed:wo_share_send', te, 'P2'); }
   return json({
     success: ok, sent: !!r.sent, held_for_quiet_hours: !!r.held_for_quiet_hours, send_after: r.send_after||'',
     send_ok: !!r.send_ok, gate_snapshot: r.gate_snapshot, test_mode: !!r.test_mode, reason, error: ok ? '' : reason,
