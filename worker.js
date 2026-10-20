@@ -22558,9 +22558,9 @@ async function sendReceiptsToQBEmail(env, opts) {
   const batch = pending.slice(0, limit);
   if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
 
-  let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
+  const queueRows = await fetchTabSoft(env, 'Receipt_Recon_Queue', 'sendReceiptsToQb');   // only used to find the scanned image: a failed read sends text-only emails and is reported
   const [properties, workorders] = await Promise.all([
-    fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => []),
+    fetchTabSoft(env, 'Properties', 'sendReceiptsToQb'), fetchTabSoft(env, 'Work_Orders', 'sendReceiptsToQb'),
   ]);
 
   let sent = 0, sentNoFile = 0; const failed = [];
