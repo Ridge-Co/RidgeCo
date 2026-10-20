@@ -37976,7 +37976,7 @@ async function fiGeminiTranscribe(env, bytes, mime, fetchImpl) {
   for (const m of tries) {
     const reqBody = { systemInstruction: { parts: [{ text: FI_TRANSCRIBE_SYSTEM }] }, contents: [{ parts: [{ inline_data: { mime_type: m, data: b64 } }, { text: 'Transcribe this recording.' }] }], generationConfig: { temperature: 0, maxOutputTokens: 16000 } };
     const resp = await f(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reqBody) });
-    let data = null; try { data = await resp.json(); } catch (_) { data = null; }
+    let data = null; try { data = await resp.json(); } catch (_) { data = null; /* silent-ok: an unreadable reply falls to the not-ok / no-candidate failure returns right below */ }
     if (!resp.ok) { last = (data && data.error && data.error.message) || ('HTTP ' + resp.status); if (resp.status === 400) continue; break; }
     const cand = data && data.candidates && data.candidates[0];
     const text = ((cand && cand.content && cand.content.parts) || []).map(p => p.text || '').join('').trim();
