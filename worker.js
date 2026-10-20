@@ -29543,7 +29543,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
   const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
   const id = r?.Vendor?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');
-  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) {} }
+  if (vendor.ID) { await tryWrite(env, 'vendor_save_qbo_vendor_id', () => updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }), 'P1'); }
   return id;
 }
 
