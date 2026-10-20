@@ -158,8 +158,8 @@ function rid(n){ var a=new Uint8Array(n||8); crypto.getRandomValues(a); var s=''
 function newId(){ return ID_PREFIX + rid(12); }
 function todayStr(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
 function lsGet(k,d){ try{ var v=localStorage.getItem(k); return v==null?d:v; }catch(e){ return d; } }
-function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){ /* private mode: nothing was stored */ } }
-function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){ /* private mode: preference just isn't remembered */ } }
+function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){ /* silent-ok: private mode, nothing was stored */ } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){ /* silent-ok: private mode, preference just is not remembered */ } }
 // Synchronous double-tap guard (claimSubmit pattern): true = you own the action, false = already running.
 function claim(key){ if(S.busy[key]) return false; S.busy[key]=true; return true; }
 function release(key){ delete S.busy[key]; }
