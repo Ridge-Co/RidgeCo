@@ -371,7 +371,7 @@ function hub_(method, path, token, payload) {
   try { resp = UrlFetchApp.fetch(WORKER_URL + path, opts); }
   catch (e) { return { ok: false, problem: 'could not reach the Hub (' + path + '): ' + e }; }
   var code = resp.getResponseCode(), text = String(resp.getContentText() || ''), j = null;
-  try { j = JSON.parse(text); } catch (e) { /* silent-ok: a non-JSON reply is handled below by the status check */ }
+  try { j = JSON.parse(text); } catch (e) { /* handled below */ }
   if (code !== 200) return { ok: false, problem: 'the Hub answered HTTP ' + code + ' for ' + path + ': ' + text.slice(0, 400) + (code === 401 ? '  (401 = the token in the Hub Config sheet does not match this script; run setup() again)' : '') };
   if (!j || typeof j !== 'object') return { ok: false, problem: 'the Hub answered ' + path + ' with something that is not JSON: ' + text.slice(0, 300) };
   if (j.ok === false) return { ok: false, problem: 'the Hub reported a problem on ' + path + ': ' + String(j.error || text).slice(0, 500) };
