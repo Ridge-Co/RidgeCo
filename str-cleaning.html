@@ -1007,6 +1007,10 @@ document.addEventListener('click', function(ev){
   else if(a === 'selclear'){ picked = {}; if(S) renderTurnovers(); }
   else if(a === 'bulk-swap') openChange('swap', pickedKeys());
   else if(a === 'bulk-mark') openChange('mark', pickedKeys());
+  else if(a === 'pend-new') openPendNew();
+  else if(a === 'pend-convert') openPendConvert(key);
+  else if(a === 'pend-send') openPendSend(key);
+  else if(a === 'pend-cancel') openPendCancel(key);
   else if(a === 'newlink'){
     var c = findCleaner(id); if(!c) return;
     openAction({
