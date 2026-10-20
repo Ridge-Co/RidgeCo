@@ -30299,7 +30299,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
           matches.push({ invoice_id: String(inv.Id), doc: inv.DocNumber || '', date: inv.TxnDate, amount: Number(line.Amount || 0), description: String(line.Description || '').slice(0, 120) });
         }
       }
-    } catch (e) { /* one bad invoice open must not kill the rest of this receipt's check */ }
+    } catch (e) { softNote('receipt_dup_invoice_open_failed', e, 'P1', { invoice: String(cand && cand.Id) }); /* one bad invoice open must not kill the rest of this receipt's check */ }
   }
   return matches;
 }
