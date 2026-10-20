@@ -52,7 +52,7 @@ const S = {
   etHour: grab(wsrc, 'function etHour('), nyOff: grab(wsrc, 'function nyOffsetMinutes('),
   quietConsts: grabConst(wsrc, 'const QUIET_HOURS_START_ET') + '\n' + grabConst(wsrc, 'const QUIET_HOURS_END_ET'),
   isQuiet: grab(wsrc, 'function isQuietHoursNow('), nextQuiet: grab(wsrc, 'function nextQuietHoursEnd('),
-  sendRaw: grab(wsrc, 'async function sendSMSRaw('), updMq: grab(wsrc, 'async function updateMessageQueueRow('), fetchConfig: grab(wsrc, 'async function fetchConfig('),
+  sendRaw: grab(wsrc, 'async function sendSMSRaw('), updMq: grab(wsrc, 'async function updateMessageQueueRow('), fetchConfig: grab(wsrc, 'async function fetchConfig('), fetchConfigStrict: grab(wsrc, 'async function fetchConfigStrict('), smsSev: grab(wsrc, 'function smsFailSeverity('),
   smsGated: grab(wsrc, 'async function smsGatedSend(').replace('async function smsGatedSend(', 'async function __realSmsGatedSend('),
   quietQueue: grab(wsrc, 'async function processQuietHoursQueue('),
   notifyConsts: grabConst(wsrc, 'const OWNER_NOTIFY_DEFAULTS') + '\n' + grabConst(wsrc, 'const NOTIFY_TIERS'), shouldNotify: grab(wsrc, 'async function shouldNotifyOwner('),
