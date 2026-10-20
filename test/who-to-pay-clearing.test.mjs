@@ -136,7 +136,7 @@ function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig, 
   };
   const names = Object.keys(stubs);
   const fn = new Function(...names, qbpSrc + '\nreturn qbPayables;')(...names.map(n => stubs[n]));
-  return { run: () => fn({}, new URL('http://x/?days=90')), telemetry, calls };
+  return { run: () => fn({}, new URL('http://x/?days=90')), telemetry, calls, flags };
 }
 const PM = [{ Id: '4', Name: 'ACH', Type: 'NON_CREDIT_CARD' }, { Id: '2', Name: 'Check', Type: 'NON_CREDIT_CARD' }, { Id: '3', Name: 'Visa', Type: 'CREDIT_CARD' }];
 const paidInv = (id, pays, extra) => ({ Id: id, Balance: 0, TotalAmt: 500, DocNumber: id, LinkedTxn: pays.map(x => ({ TxnId: x, TxnType: 'Payment' })), CustomerRef: { value: 'C-' + id }, ...extra });
