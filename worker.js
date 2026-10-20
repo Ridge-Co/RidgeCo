@@ -9913,8 +9913,8 @@ async function updateStatus(env, body) {
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`status=${body.status||''}` }); } catch(_){}
-  return json({ success: true });
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`status=${body.status||''}` }); } catch (te) { softNote('telemetry_write_failed:wo_status', te, 'P2'); }
+  return json(_warns.length ? { success: true, failure_warnings: _warns } : { success: true });
 }
 
 // Save a WO's itemized checklist state (admin defines items; vendor checks them off /
