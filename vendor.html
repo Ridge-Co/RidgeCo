@@ -2151,7 +2151,7 @@ function submitStatus(woId, idx) {
   // Persist checklist state alongside the status change (best-effort) so reasons are saved.
   if (window._checklists && window._checklists[idx] && window._checklists[idx].length) {
     api('/wo/checklist', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) }).catch(function(){});
+      body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('vendor:saveChecklist', e, { ref: String(woId) }); });
   }
   showActionMsg(idx, 'Saving…', '');
   api('/status', {
