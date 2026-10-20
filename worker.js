@@ -25504,7 +25504,7 @@ async function health(env, url) {
   // config — so a bad setup (wrong Worker/environment, wrong Sheet key/typo, malformed JSON)
   // can be diagnosed from a plain curl instead of needing the admin token or guessing.
   out.pricing = { secret_set: false, sheet_set: false, parses_ok: false };
-  try { out.pricing.secret_set = !!(env && env.PRICING_CONFIG); } catch (_) {}
+  try { out.pricing.secret_set = !!(env && env.PRICING_CONFIG); } catch (_) { /* silent-ok: reading an env binding cannot realistically throw */ }
   try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (_) {}
   try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (_) {}
   // Gmail OAuth (B-210) config-presence check — same never-expose-values pattern as pricing
