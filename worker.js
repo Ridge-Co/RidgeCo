@@ -36838,6 +36838,15 @@ async function strAdminPendingCreate(env, body) {
     return json({ ok: true, key: row.Task_Key, advance: adv, status: strPendingStatus(ctx, row), message: strPendingCreateMessage(plan, adv), warnings: warnings.concat(ctx.errors.map(e => e.error)) });
   } catch (e) { return await strHandleErr(env, e, 'pending create'); }
 }
+function strPendingCreateMessage(plan, adv) {
+  const a = adv && adv.action, who = (adv && (adv.cleaner || adv.next)) || (plan.first && plan.first.first) || '';
+  if (a === 'offered' || a === 'promoted') return `Asked ${who} about ${plan.label}. You will be told as soon as someone says yes (or if nobody can).`;
+  if (a === 'waiting_send_window') return `Saved. ${who} will be asked at 8 AM (outside texting hours now). Use "Send now" on the inquiry if you want it sent immediately.`;
+  if (a === 'exhausted') return 'Saved, but nobody in the queue can be asked right now. You have been told.';
+  if (a === 'sms_off' || a === 'twilio_off' || a === 'would_offer') return 'Saved, but no text was sent because texting is switched off right now.';
+  if (a === 'offer_failed') return `Saved, but the text to ${who} FAILED. You have been told; use "Send now" to try again.`;
+  return 'Saved.';
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
