@@ -2389,7 +2389,13 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
       // Additional-work photos carry the item they belong to; every other upload is unchanged.
       if (opts && opts.addonItem !== undefined && opts.addonItem !== null) logBody.addon_item = opts.addonItem;
       var logP = api('POST', '/log-attachment', logBody);
-      logP.catch(function(){});
+      // The file is on Drive but if logging it to the job fails it will not show on the work order: tell the vendor and report.
+      logP.then(function(r) {
+        if (r && (r.success === false || r.error)) throw new Error(String(r.error || 'log-attachment refused'));
+      }).catch(function(e) {
+        window.hubReportFailure && window.hubReportFailure('vendor:logAttachment', e, { ref: String(woId) });
+        card.innerHTML += ' <span style="color:var(--danger)">⚠ ' + esc(t('Uploaded, but not attached to the job. Please tell Ridge Co.')) + '</span>';
+      });
 
       var isVideo = file.type.startsWith('video/');
       var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
