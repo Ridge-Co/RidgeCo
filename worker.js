@@ -21952,13 +21952,13 @@ async function arReportLinkAuth(env, tok) {
 async function arReportRevoke(env, body) {
   const ownerId = String((body && body.owner_id) || '').trim();
   if (!ownerId) return json({ error: 'owner_id required' }, 400);
-  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {}
+  const ens = await tryWrite(env, 'ar_report_ensure_rev_column', () => ensureColumns(env, 'Owners', ['AR_Report_Rev']), 'P1');
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === ownerId);
   if (!owner) return json({ error: 'Owner not found' }, 404);
   const next = String((parseInt(owner.AR_Report_Rev || '0', 10) || 0) + 1);
   await updateRow(env, 'Owners', ownerId, { AR_Report_Rev: next });
-  return json({ success: true, owner_id: ownerId, rev: next });
+  return json(ens.ok ? { success: true, owner_id: ownerId, rev: next } : { success: true, owner_id: ownerId, rev: next, failure_warning: 'The AR_Report_Rev column could not be confirmed (' + ens.error + ') - check that the old links really stopped working.' });
 }
 
 // POST /ar/report/send {owner_ids:[...], preview?, trigger?} — admin-gated (also called
