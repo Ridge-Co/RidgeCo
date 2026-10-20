@@ -8524,7 +8524,8 @@ async function woCombine(env, body) {
   if (!combinedIds.length) return json({ error: 'combined_wo_ids required (at least one)' }, 400);
   if (combinedIds.includes(String(survivorId))) return json({ error: 'survivor_wo_id cannot also appear in combined_wo_ids' }, 400);
 
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); }
+  catch (e) { await softFail(env, 'wo_combine_ensure_columns_failed', e, 'P1', { survivor: String(survivorId) }); }   // the per-WO void below returns/throws if it really could not save, which rolls the combine back
   const workorders = await fetchTab(env, 'Work_Orders');
   const survivor = findWO(workorders, survivorId);
   if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
