@@ -107,7 +107,29 @@ ok(/logError\(/.test(helper) && /\/failure\/report/.test(helper) && /hubReportFa
 const script = html.slice(html.indexOf('// TOOLS & LOG page behaviour'), html.indexOf('</script>', html.indexOf('// TOOLS & LOG page behaviour')));
 ok(/id="dl-storage-note"/.test(page) && /storageFailed\(\)/.test(script), 'a browser that refuses storage is told so on the page');
 ok(/localStorage\.getItem\(k\)\s*;\s*\}\s*catch/.test(script) && /localStorage\.setItem\(k, v\)\s*;\s*\}\s*catch/.test(script), 'localStorage reads/writes are in try/catch');
-for (const c of script.matchAll(/catch \(\w+\) \{([^}]*)\}/g)) ok(/note\(|storageFailed\(|logError\(/.test(c[1]), 'catch surfaces the problem: ' + c[1].trim().slice(0, 60));
+for (const c of script.matchAll(/catch \(\w+\) \{([^}]*)\}/g)) ok(/note\(|storageFailed\(|logError\(|side\(/.test(c[1]), 'catch surfaces the problem: ' + c[1].trim().slice(0, 60));
+// Independent review (Oct 20) findings, each pinned so it cannot quietly come back:
+{ // a) the red message is drawn BEFORE the Error Log write, and the Error Log write (localStorage can be blocked) is guarded
+  const h = html.slice(html.indexOf('function dlLoadFailed('), html.indexOf('function dlLoadFailed(') + 2600);
+  const draw = h.indexOf('el.innerHTML ='), log = h.indexOf('logError(what, msg)');
+  ok(draw > 0 && log > draw, 'dlLoadFailed draws the red message before it touches the Error Log');
+  ok(/try \{ if \(typeof logError === 'function'\) logError\(what, msg\); \} catch \(e1\) \{ side\(/.test(h), 'the Error Log write in dlLoadFailed is guarded and a fault there is shown on the page');
+  ok(/try \{[^]*hubReportFailure[^]*\} catch \(e3\) \{ side\(/.test(h), 'the failure-ledger report in dlLoadFailed is guarded and a fault there is shown on the page');
+}
+{ // b) the Error Log screen escapes what it prints (server text reaches it)
+  const r = html.slice(html.indexOf('function renderErrorLog()'), html.indexOf('function clearErrorLog()'));
+  ok(/esc\(l\.message\)/.test(r) && /esc\(l\.context\)/.test(r) && !/\+l\.message\+/.test(r) && !/\+l\.context\+/.test(r), 'renderErrorLog escapes message and context');
+}
+{ // c) the vendor review queue treats a server {error} as a failure, not as "Nothing waiting on your review."
+  const v = html.slice(html.indexOf('function loadVendorTaskReviewQueue()'), html.indexOf('function renderVendorTaskReviewQueue('));
+  ok(/if\s*\(!Array\.isArray\(rows\)\)\s*throw new Error/.test(v) && /dlLoadFailed\('vtr-review-list'/.test(v), 'vendor review queue: an {error} answer is a visible failure');
+}
+{ // d) loader-drawn buttons get 44px targets; honest legend/descriptions for the two gray tools that write something
+  const css2 = html.slice(html.indexOf('/* ── TOOLS & LOG'), html.indexOf('/* ── TOOLS & LOG') + 12000);
+  ok(/#vendor-access-requests-list \.btn[^}]*min-height:\s*44px/.test(css2), 'access-request / review / wishlist buttons are 44px tall');
+  ok(/Gray: opens a page or runs a safe check/.test(page), 'legend says gray = opens a page or a safe check');
+  ok(/saves its findings/.test(tiles['ops-review'].desc) && /Adds one test row/.test(tiles['test-telemetry'].desc), 'Ops Review and Test Telemetry say they save something');
+}
 
 // 5) phone layout: nothing forces horizontal scroll, touch targets are big enough
 const css = html.slice(html.indexOf('/* ── TOOLS & LOG'), html.indexOf('/* ── TOOLS & LOG') + 9000);
