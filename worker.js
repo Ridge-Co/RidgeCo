@@ -29424,7 +29424,7 @@ async function qbLookupExisting(env, kind, displayName, email, token) {
     const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
     const rows = (data && data.QueryResponse && data.QueryResponse[type]) || [];
     if (rows.length === 1 && rows[0].Id) return rows[0].Id;   // exactly one, or don't guess
-  } catch (e) { /* fall through to create */ }
+  } catch (e) { softNote('qb_lookup_existing_failed:' + kind, e, 'P1'); /* falls through to create; QuickBooks' duplicate-name reply (6240) is handled by the caller */ }
 
   return null;
 }
