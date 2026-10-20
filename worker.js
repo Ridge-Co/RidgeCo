@@ -9886,7 +9886,7 @@ async function updateStatus(env, body) {
   // that's actually part of a turnover group and just went Complete — everything else is a
   // no-op single extra field read.
   if (body.status === 'Complete' && wo.Turnover_Group_ID && wo.Turnover_Role && wo.Turnover_Role !== 'Cleaning') {
-    try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { /* non-fatal */ }
+    try { await releaseTurnoverCleaningIfReady(env, wo.Turnover_Group_ID); } catch (e) { await softFail(env, 'turnover_cleaning_release_failed', e, 'P1', { ref: wo.Turnover_Group_ID }); _warns.push('The turnover cleaning job could not be released automatically (' + String((e && e.message) || e).slice(0, 100) + ').'); }
   }
   // Owner notifications (Sep 14 2026 rebuild) — Received/Complete/On_Hold here; Scheduled
   // moved to scheduleWO itself (Sep 15 2026 — real gap found live-testing: nothing in this
