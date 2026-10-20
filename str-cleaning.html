@@ -1067,6 +1067,9 @@ function openPendCancel(key){
     if(hold && hold.can_text){
       body += '<label class="tog"><input type="checkbox" id="pc-notify">Also tell ' + esc(hold.first) + ' it did not book</label><p class="say">' + esc(hold.first) + ' said yes, so she may be keeping the date open. Untick to cancel quietly.</p>'
         + '<div id="pc-txt" class="hide"><div class="rcpt"><label class="fld" for="pc-body" style="margin-top:2px">What she will get (you can edit it)</label><textarea id="pc-body" maxlength="' + (S && S.text_max ? S.text_max : 800) + '">' + esc(pv.text) + '</textarea><div class="cnt" id="pc-cnt"></div>' + (pv.in_window ? '' : '<p class="say">It is outside 8 AM - 9 PM, so this text goes out at 8 AM.</p>') + '</div></div>';
+    } else if(hold) body += '<div class="msg warn"><b>Cannot text ' + esc(hold.first) + '.</b>' + esc(hold.why_not || 'No text possible.') + ' Tell her yourself if you want her to know.</div>';
+    else body += '<p class="say">Nobody has said yes, so there is nobody to tell.</p>';
+    sheetShell('Cancel the ' + p.label + ' inquiry?', '', body, '<div class="btnrow"><button class="btn ghost" id="sh-cancel">Keep it</button><button class="btn danger" id="sh-go">Cancel this inquiry</button></div>');
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
