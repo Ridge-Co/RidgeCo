@@ -1242,7 +1242,7 @@ function buildPhotoSection(woId, propAddr, opts) {
       // permission error) actually ends it now.
       rec.onend = function(){
         base = ta.value;
-        if (!userStopped) { try { rec.start(); return; } catch (e) {} }
+        if (!userStopped) { try { rec.start(); return; } catch (e) { /* silent-ok: recognizer cannot restart so dictation stops via stopUI below */ } }
         stopUI();
       };
       rec.onerror = function(e){
