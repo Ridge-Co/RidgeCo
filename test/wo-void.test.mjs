@@ -102,7 +102,7 @@ function makeFetch(db) {
 
 function build(db) {
   const src = [
-    'const CORS = {};',
+    'const CORS = {}; const softNote = () => true; const softFail = async () => ({ ok: false }); const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === \'string\' && !raw.trim())) return fb; if (typeof raw !== \'string\') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };',
     cacheSrc, srSrc, ensureSrc, idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc,
     reasonsSrc, columnsSrc, woVoidSrc, woUnvoidSrc, getListSrc,
