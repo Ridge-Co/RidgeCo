@@ -26843,7 +26843,10 @@ async function qbAccessToken(env) {
   // Persist the rotated refresh token so the next call uses the fresh one (fixes the
   // old discard-on-every-call bug that would eventually break auth after rotation).
   if (data.refresh_token && data.refresh_token !== refresh) {
-    try { await setConfigKey(env, { key: 'QB_REFRESH_TOKEN', value: data.refresh_token }); } catch (e) {}
+    _qbRotated = { token: data.refresh_token, at: Date.now(), saved: false };
+    const saved = await qbPersistRefreshToken(env, data.refresh_token);
+    if (saved.ok) _qbRotated.saved = true;
+    if (!saved.ok) await reportFailure(env, { system: 'hub', source: 'quickbooks', where: 'qb_token_not_saved', message: 'QuickBooks issued a NEW refresh token but it could NOT be saved to the Config tab (' + saved.error + '). The old one is now invalid: QuickBooks will stop working when this Worker instance recycles. Fix: reconnect QuickBooks.', severity: 'P0' });
   }
   return data.access_token;
 }
