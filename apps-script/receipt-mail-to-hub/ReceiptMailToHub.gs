@@ -228,7 +228,7 @@ function saveMessage_(m, rule, folder, minImgBytes, mailbox) {
     var existing = folder.getFilesByName(b.getName());         // belt-and-braces duplicate guard
     if (existing.hasNext()) { ids.push(existing.next().getId()); return; }
     var f = folder.createFile(b);
-    try { f.setDescription(desc.slice(0, 1000)); } catch (e) { /* description is nice-to-have */ }
+    try { f.setDescription(desc.slice(0, 1000)); } catch (e) { /* silent-ok: description is cosmetic metadata, the file and its Log row are still saved */ Logger.log('setDescription failed: ' + e); }
     ids.push(f.getId());
   });
   return ids;
