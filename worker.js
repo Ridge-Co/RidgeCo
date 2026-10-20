@@ -19773,7 +19773,7 @@ async function opsQueueStartBuild(env, body) {
       rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(statusCol)}${sheetRow}`, values: [[originalStatus[row.ID]]] });
       if (bsCol !== -1) rbUpdates.push({ range: `${OPS_QUEUE_TAB}!${col(bsCol)}${sheetRow}`, values: [['']] });
     }
-    if (rbUpdates.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: rbUpdates }); } catch (_) {} }
+    if (rbUpdates.length) { await tryWrite(env, 'ops_queue_rollback_failed', () => sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: rbUpdates }), 'P1'); }   // items stay 'building' if this fails: reported so Brett sees it
   };
 
   // Fully inert unless Brett has finished his own one-time setup at claude.ai/code/routines —
