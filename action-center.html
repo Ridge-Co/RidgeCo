@@ -175,7 +175,7 @@ function noToken(){
   document.getElementById('body').innerHTML='';
   document.getElementById('jump').innerHTML='';
 }
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }
   document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';document.getElementById('tokbar').style.display='none';load();}
 
 async function load(){
