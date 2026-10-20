@@ -15980,8 +15980,8 @@ async function callWithFailureAlert(env, jobType, skillOrEndpoint, fn) {
     return await fn();
   } catch (e) {
     const errMsg = String((e && e.message) || e);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: jobType, Skill_Or_Endpoint: skillOrEndpoint, Success: 'FALSE', Latency_ms: Date.now() - _t0, Notes: `unhandled error: ${errMsg}`.slice(0, 500) }); } catch (_) {}
-    try { await alertAdminOnFailure(env, jobType, errMsg); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: jobType, Skill_Or_Endpoint: skillOrEndpoint, Success: 'FALSE', Latency_ms: Date.now() - _t0, Notes: `unhandled error: ${errMsg}`.slice(0, 500) }); } catch (te) { softNote('telemetry_write_failed:' + jobType, te, 'P2'); }
+    try { await alertAdminOnFailure(env, jobType, errMsg); } catch (ae) { softNote('failure_alert_threw:' + jobType, ae, 'P0'); }
     throw e;
   }
 }
