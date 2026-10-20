@@ -12247,7 +12247,7 @@ async function flagEstimate(env, body, kind) {
   if (_blockMsg) return json({ error: _blockMsg }, 400);
   const st = String(latest.Status || 'Pending');
   if (!['Pending', 'Needs Info'].includes(st)) return json({ error: `That estimate is "${st}" — only a pending estimate can be flagged ${kind === 'decline' ? 'declined' : 'needs-info'}.` }, 409);
-  try { await ensureColumns(env, 'Estimates', ['Needs_Info_Date', 'Declined_Date', 'Decline_Reason']); } catch (_) {}
+  try { await ensureColumns(env, 'Estimates', ['Needs_Info_Date', 'Declined_Date', 'Decline_Reason']); } catch (e) { await softFail(env, 'estimate_flag_ensure_columns', e, 'P1', { ref: woId }); }   // the date/reason fields below would be dropped
   const now = new Date().toISOString();
   await updateRow(env, 'Estimates', latest.ID, kind === 'decline'
     ? { Status: 'Declined', Declined_Date: now, Decline_Reason: String(body.reason || '').slice(0, 300) }
