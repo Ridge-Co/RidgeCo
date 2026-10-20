@@ -396,6 +396,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   threw = false;
   try { await mk(async () => { throw new Error('kaboom2'); }, true, true)({}); } catch (e) { threw = true; }
   t('even telemetry + alert failing cannot break the scheduler job', threw === false);
+  t('...and both secondary failures are reported (telemetry P2 note, admin-alert P0), not swallowed', log.notes.some(n => n[0] === 'telemetry_write_failed:door_watchdog' && n[1] === 'P2') && log.fails.some(f => f[0] === 'door_watchdog_admin_alert_failed' && f[1] === 'P0'));
   const okRes = await mk(async () => ({ ok: true, errors: [] }), false, false)({});
   restore();
   t('normal pass result passed through', okRes.ok === true);
