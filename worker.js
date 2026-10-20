@@ -35122,7 +35122,7 @@ async function strEvalAlerts(ctx, views) {
       if ((parseInt(al.Send_Count, 10) || 0) > 0 && !al.Acked_At && S.engine) {
         const who = gone ? '' : (v.via === 'calendar' ? 'it is now on the calendar' : 'covered by ' + (v.assignedName || 'a cleaner'));
         const txt = gone ? `Cleaning alert cleared: ${strFmtDate(String(tk).split('|')[2] || '')} turnover no longer needs a cleaner (booking changed).` : `Good news: ${S.label} ${strFmtDate(v.date)} cleaning is covered - ${who}.`;
-        const r = await strSendBrett(ctx.env, ctx.cfg, 'Cleaning covered: ' + strFmtDate(v.date || ''), txt, [txt], true);
+        const r = await strSendBrett(ctx.env, ctx.cfg, 'Cleaning covered: ' + strFmtDate((v && v.date) || String(tk).slice(String(tk).lastIndexOf('|') + 1)), txt, [txt], true);
         if (!r.ok) ctx.errors.push({ step: 'alert_resolve_notice', error: 'Could not send the covered notice: ' + r.log.join('; ') });
       }
     } catch (e) { ctx.errors.push({ step: 'alert_resolve', error: `Could not resolve alert ${al.Alert_Key}: ${strErrText(e)}` }); }
