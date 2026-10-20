@@ -2313,7 +2313,7 @@ async function addReceipt(env, body) {
     QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
-  let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
+  let newId = ''; { const j = await safeJson(addResp.clone(), null, 'receipt_add_response'); newId = j && j.id || ''; }
 
   // Sep 28 2026 fix (Brett — WO-1229/Amanda's garbage disposal): a receipt confirmed through the
   // Receipt Reconciler correctly writes Source_File_ID/Source_File_URL onto this new Receipts
