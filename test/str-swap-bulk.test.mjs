@@ -78,7 +78,83 @@ function makeWorld(opts) {
   return W;
 }
 const names = ['fetchConfig', 'fetchTab', 'fetchTabs', 'invalidateTabCache', 'json', 'sheetsRequest', 'ensureColumns', 'addRow', 'updateRow', 'setConfigKey', 'logTelemetry', 'getMessageTemplate', 'smsGatedSend', 'sendSMS', 'gmailSendEmail', 'gmailSendEmailWithAttachment', 'inspCalStaged', 'getCalendarAccessToken', 'inspStrReadIcs', 'inspStrReadGoogle', 'schedStep', 'schedErrText', 'isStaging', 'normalizePhone', 'inspRandToken', '_utf8B64url', 'BUILD_VERSION', 'PORTAL_BASE', 'CORS', 'fetch'];
-/*@@C2@@*/
+const exportsList = ['strTick', 'strAdminState', 'strAdminAssign', 'strChangePreview', 'strChangeApply', 'strCleanerMark', 'strBatchSet', 'strMatchCleaner', 'strCleanText', 'strHash', 'strExternalEvents', 'STR_DEFAULT_TEXTS', 'inspEtWallToMs', 'inspEtDate', 'inspAddDays', 'strInSendWindow', 'strOutboxDrain', 'STR_CHANGE_MAX', 'STR_TEXT_MAX', 'STR_TABS'];
+let CUR = null; Object.defineProperty(globalThis, '__sheetsFetchCount', { get: () => (CUR ? CUR.sheetCalls : 0), configurable: true });
+function build(W) { CUR = W; const F = new Function(...names, realFns + '\n' + realConsts + '\n' + block + '\nreturn {' + exportsList.join(',') + ', __cold: () => { __strTabsReady = false; }};'); const E = F(...names.map(n => W.stubs[n])); E.W = W; return E; }
+// what one HTTP call really costs: Sheets calls + Calendar calls + Twilio + Gmail (the limit is about 50 per call)
+const costNow = W => W.sheetCalls + W.cal.length + W.sms.length + W.attach.length * 4 + W.brett.length + W.emails.length * 3;
+let clock = 0; Date.now = () => clock;
+const held = W => W.sms.filter(s => /^str_(assigned|swapped|admin)/.test(s.type));
+async function finish(E, r, planId) { let n = 0; while (r && r.status === 'applying' && n < 30) { E.__cold(); r = await J(E.strChangeApply({}, { plan_id: planId, resume: true })); n++; } return r; }
+const rowsOf = (W, tab) => { if (!W.tabs.has(tab)) return []; const [h, ...r] = W.tabs.get(tab); return r.map(x => Object.fromEntries(h.map((k, i) => [k, x[i] || '']))); };
+const J = async r => { const o = await r; return typeof o.json === 'function' ? await o.json() : o; };
+const GINA = 'TOKGINA' + 'a'.repeat(30);
+
+function seed(W, over) {
+  W.cfg = Object.assign({ admin_phone: '+15555550100', STR_ENGINE_ENABLED: 'TRUE', STR_SMS_ENABLED: 'TRUE', STR_SMS_TEST_MODE: 'FALSE', TWILIO_ENABLED: 'TRUE', STR_CAL_WRITE_ENABLED: 'TRUE', STR_GUARD_CLEANING_CAL: 'cal_x@group.calendar.google.com', STR_GUARD_BOOKING_SOURCES: 'https://feed.test/x.ics' }, over || {});
+  W.tabs.set('Vendors', [['ID', 'Name', 'Phone', 'Email', 'Trade', 'Active', 'Service_Area', 'Language', 'SMS_Enabled', 'SMS_OptOut'], ['101', 'Regina Seville', '+15403364284', 'gina@x.test', 'Short-Term Rental Cleaner', 'TRUE', 'Milam Ridge', 'en', '', ''], ['102', 'Kayla', '+13043590045', 'kayla@x.test', 'Short-Term Rental Cleaner', 'TRUE', 'Milam Ridge', 'en', '', ''], ['103', 'Rachel Twigg', '+13048135101', '', 'Short-Term Rental Cleaner', 'TRUE', 'Milam Ridge', 'en', '', '']]);
+  W.tabs.set('STR_Cleaners', [['ID', 'Vendor_ID', 'Name', 'Nickname', 'Language', 'Link_Token', 'Active', 'Digest', 'Created_Date'], ['1', '101', 'Regina Seville', 'Gina', 'en', GINA, 'TRUE', 'TRUE', ''], ['2', '102', 'Kayla', 'Kayla', 'en', 'TOKKAYLA' + 'b'.repeat(30), 'TRUE', 'TRUE', ''], ['3', '103', 'Rachel Twigg', 'Rachel', 'en', 'TOKRACHEL' + 'c'.repeat(30), 'TRUE', 'TRUE', '']]);
+  W.tabs.set('STR_Cleaner_Pool', [['ID', 'Property_Key', 'Cleaner_ID', 'Priority', 'Active'], ['1', 'milam-ridge', '1', '1', 'TRUE'], ['2', 'milam-ridge', '2', '2', 'TRUE'], ['3', 'milam-ridge', '3', '3', 'TRUE']]);
+  const ev = (id, title, d) => ({ id, summary: title, start: { date: d }, end: { date: new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10) + 1)).toISOString().slice(0, 10) } });
+  W.ev = ev;
+  W.stays = [{ start: '2026-10-15', end: '2026-10-20', guest: 'Chase' }, { start: '2026-10-21', end: '2026-10-25', guest: 'Benjamin Myers' }, { start: '2026-10-26', end: '2026-10-30', guest: 'Linda' }, { start: '2026-11-01', end: '2026-11-08', guest: 'Julie' }, { start: '2026-11-10', end: '2026-11-12', guest: 'Zed' }];
+  W.calEvents = [ev('h1', 'Gina Cleaning', '2026-10-20'), ev('h2', 'Kayla Cleaning', '2026-10-25'), ev('h3', 'Gina Cleaning', '2026-10-30')];
+}
+async function setup(over, mut) {
+  const W = makeWorld(); seed(W, over); if (mut) mut(W);
+  const E = build(W); clock = E.inspEtWallToMs('2026-10-20', '10:00');
+  const r = await E.strTick({}, {}); if (!r.ok) console.log('SETUP TICK ERRORS', JSON.stringify(r.errors));
+  W.gated.length = 0; W.sms.length = 0; W.brett.length = 0; W.emails.length = 0; W.attach.length = 0; W.cal.length = 0; W.telemetry.length = 0; W.sheetCalls = 0;
+  return { W, E };
+}
+const at = (E, d, hm) => E.inspEtWallToMs(d, hm);
+const K25 = 'milam-ridge|checkout|2026-10-25', K20 = 'milam-ridge|checkout|2026-10-20', K30 = 'milam-ridge|checkout|2026-10-30', K108 = 'milam-ridge|checkout|2026-11-08';
+const preview = async (E, body) => { CUR = E.W; E.__cold(); const c0 = costNow(E.W), r = await J(E.strChangePreview({}, body)); const c = costNow(E.W) - c0; if (c > 48) t('preview stayed under the 50-subrequest limit (cold start)', false, c); else pass++; return r; };
+// apply exactly what the preview showed (optionally editing texts)
+async function sendIt(E, p, body, edit) {
+  CUR = E.W;
+  const texts = {}; for (const r of p.recipients) texts[r.key] = { send: r.send_default, body: r.text };
+  Object.assign(texts, edit || {});
+  const call = async b => { E.__cold(); const c0 = costNow(E.W), r = await J(E.strChangeApply({}, b)), c = costNow(E.W) - c0; E.W.maxCall = Math.max(E.W.maxCall || 0, c); if (c > 48) t('apply call stayed under the 50-subrequest limit (cold start)', false, { c, status: r.status, stage: r.stage }); else pass++; return r; };
+  let r = await call(Object.assign({}, body, { plan_id: p.plan_id, sig: p.sig, texts })), n = 1;
+  while (r && r.status === 'applying' && !r.duplicate && n < 30) { r = await call({ plan_id: p.plan_id, resume: true }); n++; }
+  if (r && typeof r === 'object') r.__calls = n;
+  return r;
+}
+const tr = (W, key) => rowsOf(W, 'STR_Turnovers').find(r => r.Task_Key === key);
+const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner_ID === cid && a.Date === d) || {}).Mark;
+
+// ═══ 0. static checks ═══
+{
+  t('new tabs are provisioned', src.includes("STR_Outbox: ['ID', 'Plan_ID'") && src.includes("STR_Changes: ['ID', 'Plan_ID'"));
+  t('routes wired (preview + apply)', /path === '\/str\/admin\/change\/preview'\)\s+return await strChangePreview/.test(src) && /path === '\/str\/admin\/change\/apply'\)\s+return await strChangeApply/.test(src));
+  t('staging test guard: preview open, apply only for TEST- cleaners', /path === '\/str\/admin\/change\/preview'\) return true;/.test(src) && /path === '\/str\/admin\/change\/apply'\) \{ const _c = .*startsWith\('TEST-'\)/.test(src));
+  const W0 = makeWorld(); const E0 = build(W0);
+  const newTypes = ['str_assigned_multi', 'str_swapped_backup', 'str_swapped_backup_multi', 'str_admin_marked'];
+  for (const ty of newTypes) {
+    const m = new RegExp("Message_Type: '" + ty + "', Channel: 'sms', Subject: '', Body:\\s*\\n\\s*\"([^\"]*)\"").exec(src);
+    t('seeded template ' + ty + ' exists and matches the built-in wording', !!m && m[1] === E0.STR_DEFAULT_TEXTS[ty], m && m[1]);
+    t(ty + ' never says primary / rank / backup 1', !/primary|rank|backup (1|2)|priority/i.test(E0.STR_DEFAULT_TEXTS[ty]));
+  }
+  t('displaced-cleaner wording is friendly and needs no reply', /off the hook/.test(E0.STR_DEFAULT_TEXTS.str_swapped_backup) && /No reply needed/.test(E0.STR_DEFAULT_TEXTS.str_swapped_backup) && /backup/.test(E0.STR_DEFAULT_TEXTS.str_swapped_backup));
+  t('the date-list match helper: Kayla / Gina / ambiguity', (() => { const cl = [{ ID: '1', Name: 'Regina Seville', Nickname: 'Gina' }, { ID: '2', Name: 'Kayla', Nickname: 'Kayla' }, { ID: '4', Name: 'Kayla Brown', Nickname: '' }]; return E0.strMatchCleaner('gina', cl).ID === '1' && E0.strMatchCleaner('Regina Seville', cl).ID === '1' && E0.strMatchCleaner('Michele', cl) === null && E0.strMatchCleaner('Kayla', cl) === null /* two Kaylas: never guess */; })());
+  t('text sanitizer: control chars / runs of space collapse, empty stays empty', E0.strCleanText('a\u0000b\n\n  c\t d') === 'a b c d' && E0.strCleanText(null) === '' && E0.strCleanText('  ') === '');
+}
+
+// ═══ 1. the Oct 25 case: preview (Kayla hand-typed on the calendar -> Gina, Kayla becomes backup) ═══
+{
+  const { W, E } = await setup();
+  t('setup: Oct 25 is covered from the calendar (ext_covered), nothing offered', tr(W, K25) && tr(W, K25).Status === 'ext_covered', tr(W, K25));
+  const before = { sms: W.sms.length, log: rowsOf(W, 'STR_Log').length, av: rowsOf(W, 'STR_Availability').length, trs: JSON.stringify(rowsOf(W, 'STR_Turnovers')) };
+  const p = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
+  t('preview ok with a plan id and signature', p.ok && /^[a-f0-9]{16}$/.test(p.plan_id) && p.sig && p.action === 'swap', p);
+  const it = p.items[0];
+  t('item will change; Kayla (hand-typed calendar entry) is the displaced cleaner', it.outcome === 'change' && it.displaced.length === 1 && it.displaced[0].name === 'Kayla' && it.displaced[0].source === 'calendar', it);
+  t('calendar plan: remove the hand-typed entry and add Gina Cleaning', it.cal.hand.length === 1 && it.cal.hand[0].summary === 'Kayla Cleaning' && it.cal.title === 'Gina Cleaning' && it.cal.hub_create === true && p.calendar.mode === 'write', it.cal);
+  const gina = p.recipients.find(r => r.key === 'new:1'), kayla = p.recipients.find(r => r.key === 'back:2');
+  t('two recipients: Gina (assigned) and Kayla (backup)', p.recipients.length === 2 && gina && kayla, p.recipients.map(r => r.key));
+  t('Gina text = the stock assigned confirmation for that date', /Gina, you're set for the Sun, Oct 25 turnover at Milam Ridge/.test(gina.text) && /cleaner\.html\?k=TOKGINA/.test(gina.text), gina.text);
+  t('Kayla text = friendly, names Gina and the date, asks for backup, no reply needed', /Kayla/.test(kayla.text) && /Gina's going to cover the Sun, Oct 25 turnover at Milam Ridge, so you're off the hook/.test(kayla.text) && /backup/.test(kayla.text) && /No reply needed/.test(kayla.text), kayla.text);
 /*@@C3@@*/
 /*@@C4@@*/
 /*@@C5@@*/
