@@ -21783,7 +21783,7 @@ async function arRemind(env, body) {
         await ensureTab(env, AR_REMINDER_TAB, AR_REMINDER_COLS);
         await ensureColumns(env, AR_REMINDER_TAB, AR_REMINDER_COLS);
         await addRow(env, AR_REMINDER_TAB, { Timestamp: new Date().toISOString(), Invoice_ID: id, Doc: doc, Customer: cust, Amount: bal.toFixed(2), Email: email, Result: 'sent', By: String(body.by || 'command-center') });
-      } catch (_) { /* audit log best-effort; the send already happened */ }
+      } catch (le) { await softFail(env, 'ar_remind_audit_log_failed', le, 'P1', { invoice: id }); }   // best-effort: the send already happened
     } catch (e) { items.push({ id, doc, customer: cust, balance: +bal.toFixed(2), email, willSend: true, sent: false, reason: String((e && e.message) || e).slice(0, 150) }); }
   }
   return json({ ok: true, preview, count: items.length, to_send: items.filter(i => i.willSend).length, sent: items.filter(i => i.sent).length, skipped: items.filter(i => !i.willSend).length, items });
