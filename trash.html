@@ -389,7 +389,12 @@ function loadWeek(offset){
     var wk=(d&&d.week)||''; var list=(d&&d.properties)||[];
     curWeekKey[offset]=wk; weekListCache[offset]=list;
     var label = offset===0 ? 'This week' : 'Last week';
-    if(!list.length){ el.innerHTML='<div class="card muted">Nothing on file for '+label.toLowerCase()+' yet.</div>'; renderBatchBar(offset); return; }
+    var wkErr = loadErrorNote(d&&d.load_errors, 'this week\'s list');
+    if(!list.length){
+      el.innerHTML = wkErr ? '' : '<div class="card muted">Nothing on file for '+label.toLowerCase()+' yet.</div>';
+      if(wkErr) el.appendChild(wkErr);
+      renderBatchBar(offset); return;
+    }
     el.innerHTML = '<div class="card"><div class="row"><b>'+label+'</b><span class="muted">'+esc(wk)+'</span></div>'
       + list.map(function(p){
           var status, checkbox='';
