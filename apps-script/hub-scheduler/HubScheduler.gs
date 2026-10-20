@@ -631,7 +631,7 @@ function http_(method, url, headers, payload) {
   try { resp = UrlFetchApp.fetch(url, opts); }
   catch (e) { return { ok: false, code: 0, problem: 'could not reach ' + url.replace(/\?.*$/, '') + ': ' + e }; }
   var code = resp.getResponseCode(), text = String(resp.getContentText() || ''), j = null;
-  try { j = JSON.parse(text); } catch (e) { /* not JSON: handled by callers that need it */ }
+  try { j = JSON.parse(text); } catch (e) { /* silent-ok: not JSON, callers that need it check the status */ }
   if (code < 200 || code >= 300) return { ok: false, code: code, body: j, text: text, problem: 'answered HTTP ' + code + ' for ' + url.replace(/\?.*$/, '') + ': ' + text.slice(0, 300) };
   return { ok: true, code: code, body: j, text: text };
 }
