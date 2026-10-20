@@ -82,7 +82,7 @@ ok(Array.isArray(photos3) && photos3.length === 0, 'no matching attachments → 
 
 // ---- 5. fetchTab throwing (e.g. Sheets hiccup) fails open to an empty array, never breaks the proposal ----
 const badFetchTab = async () => { throw new Error('Sheets API down'); };
-const scopeProposalPhotosFailOpen = new Function('fetchTab', `${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(badFetchTab);
+const scopeProposalPhotosFailOpen = new Function('fetchTab', `${SOFT}${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(badFetchTab);
 const photos4 = await scopeProposalPhotosFailOpen({}, s1);
 ok(Array.isArray(photos4) && photos4.length === 0, 'a Sheets read failure fails open (empty photos) rather than breaking the whole proposal load');
 
