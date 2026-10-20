@@ -2341,10 +2341,10 @@ async function addReceipt(env, body) {
         Mime_Type: '', Receipt_ID: String(newId),
         Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
       });
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {} }
+    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (te) { softNote('telemetry_write_failed:receipt_attachment_gallery_write', te, 'P2'); } galleryWarning = 'The receipt was saved but its image could not be added to the work order attachments.'; }
   }
 
-  return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
+  return json(Object.assign({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource }, galleryWarning ? { failure_warning: galleryWarning } : {}));
 }
 
 // ── RECEIPT RECONCILER (CAP-002) — deterministic matching engine, ZERO AI ──────────────────────
