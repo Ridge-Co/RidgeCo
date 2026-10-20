@@ -35184,7 +35184,7 @@ async function strAdvanceTask(ctx, trow, opts) {
     await strSetOffer(ctx, orow, Object.assign({ Status: 'pending', Sent_At: iso, Queue_ID: r.queueId || '', Mode: r.mode }, promo ? { Note: 'promotion' } : {}));
     await strSetTurnover(ctx, trow, { Status: 'offering', Note: '' });
     await strLog(ctx, trow.Task_Key, nx.cleaner.ID, promo ? 'promotion_sent' : 'offer_sent', `${r.detail}; reply by ${orow.Deadline_At}`);
-    if (promo) {
+    if (promo && !pend) {
       // Brett hears about it immediately (kind 'promote' is exempt from his 7am-10pm quiet hours) so he can plan.
       try {
         const prev = st.offers.filter(o => o.Task_Key === trow.Task_Key && ['declined', 'expired', 'cancelled'].includes(o.Status)).sort((x, y) => (parseInt(y.ID, 10) || 0) - (parseInt(x.ID, 10) || 0))[0];
