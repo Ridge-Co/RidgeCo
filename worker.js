@@ -8942,9 +8942,9 @@ async function woSplit(env, body) {
       const msg = `Hi ${tenant.First_Name}, work order ${originalId} (${woJobLabel(originalFresh)}) was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-  } catch (e) { /* non-fatal — split already succeeded */ }
+  } catch (e) { await softFail(env, 'wo_split_tenant_notify', e, 'P0', { ref: originalId }); }   // tenant SMS about the split did not go out (the split itself succeeded)
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (te) { softNote('telemetry_write_failed:wo_split', te, 'P2'); }
 
   return json({ success: true, original_wo_id: originalId, new_wo_ids: createdWoIds });
 }
