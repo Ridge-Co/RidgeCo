@@ -199,7 +199,7 @@ const sigRows = () => [irRow(1), irRow(2), sigRow(1), sigRow(2), sigRow(3), sigR
   const X = build({ rows: sigRows(), transitionMs: 20 });
   let saved = null;
   const progress = { read: async () => (saved ? JSON.parse(saved) : null), write: async (p) => { saved = JSON.stringify(p); } };
-  const o = { today: '2026-10-14', sliceMs: 50, now: X.clock, progress };
+  const o = { today: '2026-10-14', sliceMs: 50, minLoopMs: 0, now: X.clock, progress };
   const j1 = await X.schedRunDailyQbSync(X.env, null, o);
   t('job tick 1: ok + partial (the dispatcher will resume it), progress saved', j1.ok === true && j1.partial === true && JSON.parse(saved).complete === false && JSON.parse(saved).done.length === 5, j1);
   const j2 = await X.schedRunDailyQbSync(X.env, null, o);
