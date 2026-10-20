@@ -33342,10 +33342,10 @@ async function trashUnbilled(env, url) {
   const thisWeek = trashWeekKey(today.toISOString().slice(0,10));
   const prevD = new Date(thisWeek + 'T12:00:00Z'); prevD.setUTCDate(prevD.getUTCDate() - 7);
   const prevWeek = prevD.toISOString().slice(0,10);
-  let props = [], visits = [], skips = [];
-  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
-  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
-  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
+  const loadErrors = [];   // a failed read must not look like "nothing is unbilled" - this feeds the push nudge
+  let props = await trashReadTab(env, 'Trash_Properties', 'trash_unbilled', 'P1', loadErrors);
+  const visits = await trashReadTab(env, 'Trash_Visits', 'trash_unbilled', 'P1', loadErrors);
+  const skips = await trashReadTab(env, 'Trash_Skips', 'trash_unbilled', 'P1', loadErrors);
   props = props.filter(p => p.Active !== 'FALSE');
   const items = [];
   for (const week of [prevWeek, thisWeek]) {
