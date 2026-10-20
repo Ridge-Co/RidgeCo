@@ -952,6 +952,7 @@ store.setCfg('admin_phone', '+15555550100');
   t('preflight with a schedule: previews it (digest disabled -> not in the due list / preflight jobs), writes nothing', dry.status === 200 && dry.json.disabled.join() === 'daily_digest' && !dry.json.due.includes('daily_digest') && !(pf.jobs.daily_digest) && store.calls.filter(x => x.startsWith('POST')).length === posts && !JSON.parse(store.cfg().Scheduler_State || '{}').schedule);
   const live = await call('POST', '/cron/run', H, { only: 'insp_guard', schedule: { door_watchdog: { enabled: false }, sweep: { every_min: 30 } } });
   t('live call with a schedule is accepted, and remembers it in Scheduler_State', live.status === 200 && live.json.schedule_overrides.join() === 'door_watchdog,sweep' && live.json.disabled.join() === 'door_watchdog' && JSON.stringify(JSON.parse(store.cfg().Scheduler_State).schedule) === '{"door_watchdog":{"enabled":false},"sweep":{"every_min":30}}', live.json);
+  ageGrace(store);
   const stat = await call('GET', '/cron/status', H);
   t('/cron/status uses the remembered schedule: door_watchdog DISABLED and not overdue, sweep "every 30 min"', stat.json.jobs.door_watchdog.enabled === false && stat.json.jobs.door_watchdog.overdue === false && !stat.json.overdue.includes('door_watchdog') && stat.json.jobs.sweep.expected === 'every 30 min' && stat.json.overdue.includes('sweep_work'), stat.json.jobs.door_watchdog);
   const health = await call('GET', '/health', {});
