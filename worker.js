@@ -7344,7 +7344,11 @@ async function createWorkOrder(env, body) {
 
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
-  if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
+  const woWarnings = [];   // Phase C: follow-up steps that failed AFTER the work order was created (returned + reported)
+  if (body.checklist) {
+    try { await ensureColumns(env, 'Work_Orders', ['Checklist']); }
+    catch (e) { await softFail(env, 'wo_create_ensure_checklist_failed', e, 'P1', { note: 'the checklist may be dropped from the new work order' }); woWarnings.push('The checklist column could not be prepared, so the checklist may not have been saved on the new work order.'); }
+  }
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
