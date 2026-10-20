@@ -4390,10 +4390,10 @@ function isVendorBusy(){
       }
       if (tag !== pageEtagKnown){
         pageEtagKnown = tag;
-        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){ /* silent-ok: storage blocked, tag not remembered */ }
         isVendorBusy() ? banner() : reloadFresh();
       }
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('vendor:pageFreshness', e); });
   }
   checkPageFreshness();
   setInterval(checkPageFreshness, 60000);
