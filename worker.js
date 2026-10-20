@@ -4830,7 +4830,7 @@ async function scopeProposal(env, body) {
     const txt = await scopeClaude(env, bulletsPrompt, null, 1500);
     const arr = scopeParseJSON(txt);
     if (Array.isArray(arr)) for (const r of arr) if (r && r.id) rewritten[r.id] = r.text;
-  } catch (_) {}
+  } catch (re) { await softFail(env, 'scopeProposal_rewrite_bullets', re, 'P2', { scope_id: id }); /* reported; the proposal uses the original item wording */ }
   for (const it of priced.items) if (rewritten[it.id]) it.description = rewritten[it.id];
 
   // Flat-text fallback doc (clipboard "Copy proposal" + legacy clients) — grand total + deposit
