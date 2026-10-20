@@ -1038,6 +1038,13 @@ function sendPendCreate(){
     chShowErr('<b>' + (unsure ? 'Not sure if that went through.' : 'Not done.') + '</b>' + esc(errText(e)) + (unsure ? '<br>It is safe to press Send again: the Hub will not make a second inquiry for the same date or text anyone twice. You can also Cancel, press Refresh and look at the Pending list.' : ''));
   });
 }
+function pendDoneSheet(title, r){
+  var warn = (r.warnings||[]).filter(Boolean);
+  return { tone: warn.length ? 'warn' : 'ok', head: r.message || 'Done.', extra: warn.length ? '<div class="msg warn"><b>Heads up</b>' + listHtml(warn) + '</div>' : '' };
+}
+var SEND_WORDS = { offered:'Asked now.', promoted:'Asked now.', waiting_send_window:'Still waiting for 8 AM.', exhausted:'Nobody left to ask. You have been told.', sms_off:'No text sent because texting is switched off.', twilio_off:'No text sent because texting is switched off.', would_offer:'No text sent because texting is switched off.', offer_failed:'The text FAILED. You have been told.' };
+function openPendSend(key){
+  var p = findPend(key); if(!p) return;
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
