@@ -28370,7 +28370,7 @@ async function vendorSetInstantPay(env, body) {
     await ensureColumns(env, 'Vendors', ['Instant_Pay']);
     await updateRowVerified(env, 'Vendors', id, { Instant_Pay: on ? 'TRUE' : 'FALSE' });
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_instant_pay_toggle_failed', Skill_Or_Endpoint: '/vendor/set-instant-pay', Success: 'FALSE', Notes: ('vendor=' + id + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_instant_pay_toggle_failed', Skill_Or_Endpoint: '/vendor/set-instant-pay', Success: 'FALSE', Notes: ('vendor=' + id + ' ' + String((e && e.message) || e)).slice(0, 300) }); } catch (te) { softNote('telemetry_write_failed:vendor_instant_pay_toggle_failed', te, 'P2'); }
     return json({ error: 'Could not save the instant-pay setting: ' + String((e && e.message) || e) }, 500);
   }
   return json({ success: true, id, value: on });
