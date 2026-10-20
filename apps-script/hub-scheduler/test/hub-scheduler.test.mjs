@@ -532,7 +532,7 @@ const noLeak = (w, msg, extraSecrets) => ok(![...SECRETS, ...(extraSecrets || []
   w.run('runScheduler');
   const sent = JSON.parse(calls.find(c => run(c.url)).o.payload).schedule;
   ok(sent.door_watchdog.enabled === false && sent.sweep.every_min === 30 && sent.daily_digest.at === '06:45' && sent.review_mon.dow === 1 && sent.review_mon.at === '08:30' && sent.review_wed.dow === 3, 'edits to the table are exactly what the Hub is sent (off / every 30 / 06:45 / weekday numbers)', sent);
-  ok(Object.keys(sent).length === 14 && !('pinterest_sync' in sent) && !('ci_drift_check' in sent), 'only the 14 Hub rows go to the Hub');
+  ok(Object.keys(sent).length === vm.runInContext("JOBS.filter(function (j) { return j.run === 'hub'; }).length", w.ctx) && !('pinterest_sync' in sent) && !('ci_drift_check' in sent), 'only the Hub rows go to the Hub');
 }
 
 // ── pure due / overdue logic for the non-Hub rows ───────────────────────────────────────────────────
