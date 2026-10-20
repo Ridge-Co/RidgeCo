@@ -37,7 +37,7 @@ globalThis.fetch = async (url, init) => {
 };
 
 const H = new Function(
-  grabConst('VENDOR_TRANSLATE_PRESERVE') + '\n' +
+  aiCreditGuardPrelude() + 'const logTelemetry = async () => {};   // telemetry sink for the fail-open note\n' + grabConst('VENDOR_TRANSLATE_PRESERVE') + '\n' +
   ['vendorWantsSpanish', 'extractPreservedTokens', 'preservedTokensIntact', 'htmlTagSkeleton', 'translateText', 'translateForVendorDetailed', 'translateForVendor', 'translateVendorEmail'].map(grab).join('\n') +
   '\nreturn { VENDOR_TRANSLATE_PRESERVE, vendorWantsSpanish, extractPreservedTokens, preservedTokensIntact, htmlTagSkeleton, translateText, translateForVendorDetailed, translateForVendor, translateVendorEmail };'
 )();
