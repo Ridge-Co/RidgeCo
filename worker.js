@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-20.11-failure-watcher-stack';
+const BUILD_VERSION = '2026-10-20.12-review-real-error';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -18995,9 +18995,13 @@ Ground every item in the metrics. If a job_type shows repeated failures or human
 
 TELEMETRY METRICS (${days}d):
 ${JSON.stringify(metrics, null, 2)}`;
-  const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }, { source: 'llmReviewProposal' });
-  let txt = (data.content && data.content[0] && data.content[0].text || '').trim();
-  if (!txt) throw new Error('empty LLM response');
+  const { resp, data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: 2600, messages: [{ role: 'user', content: prompt }] }, { source: 'llmReviewProposal' });
+  // Oct 20 2026: show Anthropic's REAL answer. A non-OK reply (rate limit, overloaded, bad model name...) has no content, and this used to
+  // surface as the vague 'empty LLM response' on the Command Center Optimizer panel, hiding the actual cause.
+  if (!resp.ok) { const ae = data && data.error; throw new Error('Anthropic HTTP ' + resp.status + (ae ? ' (' + String(ae.type || 'error') + '): ' + String(ae.message || '').slice(0, 240) : ': no error body')); }
+  const textBlock = ((data && data.content) || []).find(b => b && b.type === 'text' && b.text);
+  let txt = (textBlock && textBlock.text || '').trim();
+  if (!txt) throw new Error('Anthropic returned no text (stop_reason=' + ((data && data.stop_reason) || 'unknown') + ', content blocks=' + ((data && data.content && data.content.length) || 0) + ')');
   txt = txt.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
   let items = [];
   try { const p = JSON.parse(txt); items = Array.isArray(p) ? p : (p.proposals || []); } catch (e) { items = []; }
