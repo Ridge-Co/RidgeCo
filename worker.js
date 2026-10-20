@@ -24652,6 +24652,7 @@ async function fetchTabs(env, tabs, opts) {
       const bkey = missing.slice().sort().join('|');
       const shared = !(env && env.__CRON__);   // background (cron) batches are paced: never shared with people
       let bp = shared ? __batchInflight.get(bkey) : null;
+      if (bp) __meterSaved(env, 'join');
       if (!bp) {
         bp = (async () => {
           const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
