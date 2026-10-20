@@ -976,6 +976,24 @@ function openPendNew(){
     '<label class="fld" for="pd-date">Date of the possible checkout</label><input type="date" id="pd-date" min="' + esc(today) + '" max="' + esc(addDaysYmd(today, 120)) + '">'
     + '<label class="fld" for="pd-note">Note for yourself (optional, the cleaner never sees it)</label><input type="text" id="pd-note" maxlength="200" placeholder="e.g. family of 6, waiting on their deposit">',
     '<div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go">Preview the text</button></div>');
+  $('sh-cancel').onclick = closeSheet;
+  $('sh-go').onclick = function(){
+    var d = $('pd-date').value; if(!d){ chShowErr('Pick the date first.'); return; }
+    PD = { req: { date: d, note: $('pd-note').value.trim() }, plan: null, sending: false };
+    pendPreview($('sh-go'));
+  };
+}
+function pendPreview(btn){
+  var label = btn ? btn.textContent : '';
+  if($('sh-err')) $('sh-err').classList.add('hide');
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  api('POST', '/str/admin/pending/preview', PD.req).then(function(r){ PD.plan = r.plan; renderPendPlan(); }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    if(btn){ btn.disabled = false; btn.textContent = label; }
+    if($('sh-err')) chShowErr('<b>Could not build the preview. Nothing was changed.</b>' + esc(errText(e)));
+    else openAction({ title: 'Could not check', say: errText(e) + ' Nothing was changed.', go: null, run: null });
+  });
+}
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
