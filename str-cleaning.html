@@ -359,7 +359,7 @@ function loadState(){
     if(e.code === 'unauthorized'){ authFailed(); return; }
     var stale = S ? ' What you see below may be out of date.' : '';
     $('loaderr').innerHTML = '<div class="msg err" role="alert"><b>Could not load the latest information.</b>' + esc(errText(e)) + esc(stale) + '<br><button class="btn" data-act="retry">Try again</button></div>';
-    if(!S){ $('cover').className = 'cover bad'; $('cover').textContent = "Can't load - coverage is NOT being shown"; ['turn-list','clean-list','sw-body','log-list'].forEach(function(id){ $(id).innerHTML = '<p class="muted">Not loaded.</p>'; }); }
+    if(!S){ $('cover').className = 'cover bad'; $('cover').textContent = "Can't load - coverage is NOT being shown"; ['pend-list','turn-list','clean-list','sw-body','log-list'].forEach(function(id){ $(id).innerHTML = '<p class="muted">Not loaded.</p>'; }); }
   }).then(function(){ loading = false; });
 }
 function safeRender(){
