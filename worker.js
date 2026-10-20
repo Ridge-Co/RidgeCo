@@ -37078,7 +37078,7 @@ function fiNormalizeIssues(arr) {
 }
 function fiExtractJson(text) {
   const s = String(text || '').replace(/^```json?/i, '').replace(/```\s*$/, '').trim();
-  try { return JSON.parse(s); } catch (_) { /* fall through to brace scan */ }
+  try { return JSON.parse(s); } catch (_) { /* silent-ok: AI text is often not pure JSON, so fall through to the brace scan */ }
   const a = s.indexOf('{'), b = s.lastIndexOf('}');
   if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
   return null;
