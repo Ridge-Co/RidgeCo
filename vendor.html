@@ -1842,7 +1842,9 @@ function loadVendorBillSummary(woId, idx) {
       '</div>';
     }).join('');
     wrap.innerHTML = html;
-  }).catch(function() { wrap.innerHTML = ''; });
+  }).catch(function(e) {
+    showLoadFailed('bill-summary-' + idx, 'invoice status — check before submitting an invoice so it is not sent twice', e && e.message, function() { loadVendorBillSummary(woId, idx); }, woId);
+  });
 }
 
 function loadVendorTimeTracking(woId, idx) {
