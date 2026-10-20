@@ -10848,7 +10848,7 @@ function loadHubNearbyWOs(woId, detailBody) {
       '</div>' +
       rows +
       '</div>';
-  }).catch(function() { /* non-fatal, proximity is supplemental */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:nearby-wos', e); });
 }
 
 // Bundling opportunities: group open WOs by cluster, highlight clusters with 2+ WOs
