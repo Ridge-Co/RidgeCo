@@ -33412,7 +33412,7 @@ async function trashInvoice(env, body) {
           const cg = await qbApi(env, `customer/${encodeURIComponent(p.QBO_Customer_ID)}?minorversion=73`, 'GET', null, pvToken);
           const custEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address || '').trim();
           if (!custEmail) warnings.push('No email on this QuickBooks customer, so the invoice has no saved send-to address — add one on the customer in QuickBooks.');
-        } catch (e) { /* best-effort — never block the preview over this */ }
+        } catch (e) { await softFail(env, 'trash_preview_customer_email', e, 'P2', { property: p.Label }); failWarnings.push('Could not check the QuickBooks customer email (' + String((e && e.message) || e).slice(0, 100) + ').'); }   // never blocks the preview
       }
       return json({ preview: {
         property: p.Label, week,
