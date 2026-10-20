@@ -4065,11 +4065,11 @@ async function scopeAddr(env, s) {
           const units = await fetchTab(env, 'Units');
           const u = units.find(x => x.ID === s.Unit_ID);
           if (u && u.Unit_Label) label = u.Unit_Label;
-        } catch (_) {}
+        } catch (ue) { await softFail(env, 'scopeAddr_units_read', ue, 'P2', { scope_id: s.ID }); /* reported; the raw Unit_ID is the documented fallback label */ }
         addr += ' Unit ' + label;
       }
     }
-  } catch (_) {}
+  } catch (pe) { await softFail(env, 'scopeAddr_properties_read', pe, 'P2', { scope_id: s.ID }); /* reported; the proposal header shows no address */ }
   return addr;
 }
 
