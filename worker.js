@@ -34663,7 +34663,7 @@ async function inspAlert(env, kind, message) {
   __inspAlertAt[kind] = now;
   const cfg = await fetchConfig(env);
   const text = `Inspection booking problem (${kind}): ${message}`;
-  try { if (cfg.admin_phone) await sendSMS(env, cfg.admin_phone, text.slice(0, 300)); } catch (se) { console.error('insp alert: SMS failed:', se && se.message, '| original:', text); }
+  try { if (cfg.admin_phone) await sendSMS(env, cfg.admin_phone, text.slice(0, 300)); } catch (se) { console.error('insp alert: SMS failed:', se && se.message, '| original:', text); softNote('insp_alert_sms_failed', se, 'P0', { kind, original: String(message).slice(0, 120) }); }
   try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); }
 }
 
