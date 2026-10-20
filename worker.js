@@ -14840,7 +14840,23 @@ async function sendSMSRaw(env, to, message) {
     headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
   });
-  return resp.json();
+  // Oct 20 2026 (no-silent-failures): the HTTP status used to be ignored and a non-JSON reply threw an unrelated parse error. A send is only
+  // OK with a 2xx AND a message sid. Anything else comes back with `error` (and Twilio's own fields) so callers can record WHY, and is
+  // written to the failure ledger. A network failure still throws (callers retry on the next sweep).
+  let raw = ''; try { raw = await resp.text(); } catch (e) { raw = ''; /* silent-ok: the status line below still reports the failure */ }
+  let data = null; try { data = JSON.parse(raw); } catch (e) { data = null; /* silent-ok: a non-JSON body is reported below with its first characters */ }
+  if (resp.ok && data && data.sid) return data;
+  const code = data && data.code;
+  const detail = `Twilio HTTP ${resp.status}${code ? ' code ' + code : ''}: ${String((data && data.message) || raw || 'empty reply').replace(/\s+/g, ' ').slice(0, 200)}`;
+  await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_send', ref: 'to ...' + String(to).slice(-4), message: detail, severity: smsFailSeverity(resp.status, code) });
+  return Object.assign({}, data && typeof data === 'object' ? data : {}, { error: detail, twilio_status: resp.status, twilio_code: code || null });
+}
+// P2 = a problem with one recipient (bad / opted-out / non-mobile number); P0 = Twilio will not send for anyone (auth, account, outage); else P1.
+function smsFailSeverity(status, code) {
+  const c = String(code || '');
+  if (['21211', '21610', '21614', '21612', '21408', '21215', '21217', '21401'].indexOf(c) >= 0) return 'P2';
+  if (status === 401 || status === 403 || status >= 500 || ['20003', '20005', '20404', '21606', '21608', '21609', '30001', '30002', '30041'].indexOf(c) >= 0) return 'P0';
+  return 'P1';
 }
 
 // sendSMS — the long-standing chokepoint every pre-existing call site in this file already
