@@ -48,7 +48,7 @@ function runner(state) {
   const sendTemplatedSms = async (_e, o) => { sent.push(o); return { sent: true }; };
   const fmtMoney = x => (+x).toFixed(2);
   const src = grabConst('const ESTIMATE_SMS_DEFAULT_SINCE') + grabConst('const NEEDS_INFO_RESUME_DAYS') + grabConst('const REMINDER_MIN_AGE_HOURS') + '\n' + grab('function estimatesAwaitingDecision(') + '\n' + grab('function propUnitText(') + '\n' + grab('function formatUnitLabel(') + '\n' + grab('async function processEstimateReminders(') + '\nreturn processEstimateReminders;';
-  const fn = new Function('etHour', 'etDateString', 'fetchConfig', 'fetchTab', 'setConfigKey', 'sendTemplatedSms', 'fmtMoney', src)(etHour, etDateString, fetchConfig, fetchTab, setConfigKey, sendTemplatedSms, fmtMoney);
+  const fn = new Function('etHour', 'etDateString', 'fetchConfig', 'fetchConfigStrict', 'softFail', 'fetchTab', 'setConfigKey', 'sendTemplatedSms', 'fmtMoney', src)(etHour, etDateString, fetchConfig, fetchConfig, async () => ({ ok: false }), fetchTab, setConfigKey, sendTemplatedSms, fmtMoney);
   return { fn, sent, cfgWrites };
 }
 const mk = (o) => Object.assign({ hour: 8, cfg: { estimate_sms_since: SINCE }, ests: [est('A', { Vendor_ID: 'V1', Subtotal: '1250' })], wos: [wo('A')] }, o);
