@@ -365,7 +365,7 @@ async function stmtPdfSelected(input){
     });
     if (!sess.success || !sess.upload_url) throw new Error(sess.error || 'Could not start upload.');
     const putRes = await fetch(sess.upload_url, { method:'PUT', headers:{'Content-Type': file.type||'application/octet-stream'}, body: file });
-    const fileData = await putRes.json().catch(() => null);
+    const fileData = await putRes.json().catch(() => null /* silent-ok: null makes the next line throw 'Upload did not complete' */);
     if (!fileData || !fileData.id) throw new Error('Upload did not complete.');
     statusEl.innerHTML = '<span class="info">Uploaded — reading statement (this can take a bit for a long one)…</span>';
     await stmtRunImport({ vendor, file_id: fileData.id, mime_type: file.type || 'application/octet-stream', source_file_name: file.name });
