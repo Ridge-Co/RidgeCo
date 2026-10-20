@@ -11520,7 +11520,7 @@ async function qbUndoSend(env, body) {
 
     // Undo any loan-ledger deduction this send applied — otherwise Brett would owe the
     // vendor money that was already docked against a bill that no longer exists.
-    let loanReversed = 0;
+    let loanReversed = 0, loanReverseError = '';
     try {
       const ledger = await fetchTab(env, LOAN_LEDGER_TAB);
       const entry = ledger.find(r => r.Active !== 'FALSE' && r.Entry_Type === 'auto-deduction' && String(r.Bill_ID) === String(ir.Bill_ID));
