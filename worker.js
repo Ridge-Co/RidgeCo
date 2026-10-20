@@ -11187,7 +11187,7 @@ async function listVendorBills(env, url) {
     if (woId)     results = results.filter(b => b.WO_ID     === woId);
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
     return json(results);
-  } catch(e) { return json([]); }
+  } catch (e) { await softFail(env, 'vendor_bills_list_failed', e, 'P1'); return json([]); }   // the Hub list still gets [] (its UI expects an array) but the failure is no longer invisible
 }
 
 // GET /vendor-bills/truck-stock — Brett, Sep 2026: "I need to be able to review all truck
