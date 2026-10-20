@@ -16553,6 +16553,29 @@ async function failInvariantConditions(env, cfg, nowMs) {
     return old.concat([{ key: 'inv:run_failed', system: 'hub', where: 'integrity_check', severity: 'P1', message: 'The daily integrity checks could not run or be saved: ' + failTrim((e && e.message) || e, 200) }]);
   }
 }
+// Pure. Which open problems should become Ops_Build_Queue items: P0/P1, open or acknowledged, first seen > 24 h ago, not already queued.
+function failQueuePlan(ledger, nowMs) {
+  const out = [];
+  for (const r of ledger) {
+    if (out.length >= FAIL_QUEUE_MAX_PER_RUN) break;
+    if (FAIL_OPEN.indexOf(r.Status) < 0 || (r.Severity !== 'P0' && r.Severity !== 'P1')) continue;
+    if (/queued: Ops_Build_Queue #/.test(r.Notes || '')) continue;
+    if (FAIL_NO_QUEUE_KEYS.some(k => r.Fingerprint === 'cond|' + k)) continue;
+    const t = Date.parse(r.First_Seen || '');
+    if (!isFinite(t) || nowMs - t < FAIL_QUEUE_AFTER_MS) continue;
+    out.push(r);
+  }
+  return out;
+}
+function failQueueItem(r) {
+  return {
+    title: failTrim(`Fix: ${r.Where} - ${r.Message}`, 190),
+    problem: `Seen ${r.Count} time(s) since ${r.First_Seen} (last ${r.Last_Seen}); still open after 24 h. System ${r.System}. Error: ${r.Message}. Needs Attention ID ${r.ID}.`,
+    impact: r.Severity === 'P0' ? 'Urgent: money, texts or scheduled jobs affected.' : 'Important: data integrity or a failing path.',
+    tag: 'failure', lens: 'Inward',
+    first_step: 'Open Needs Attention, use "Copy for Claude" on this item, find the cause, fix it, add a test that forces this exact failure, and mark it fixed with the PR.',
+  };
+}
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
