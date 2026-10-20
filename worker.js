@@ -4575,10 +4575,11 @@ async function adminGeminiContextUpdate(env, body) {
 }
 
 async function backfillScopeWOVendor(env) {
-  const [scopes, workorders] = await Promise.all([
-    fetchTab(env, 'Scopes').catch(() => []),
-    fetchTab(env, 'Work_Orders').catch(() => []),
-  ]);
+  // Phase C: an unreadable tab used to look like "nothing to backfill" (success:true, zeros). Now it is reported and the run says so.
+  const readErrors = [];
+  const rdTab = async (tab) => { try { return await fetchTab(env, tab); } catch (e) { readErrors.push(tab); await softFail(env, 'backfillScopeWOVendor_read:' + tab, e, 'P1'); return []; } };
+  const [scopes, workorders] = await Promise.all([rdTab('Scopes'), rdTab('Work_Orders')]);
+  if (readErrors.length) return json({ success: false, error: `Could not read ${readErrors.join(' and ')} - nothing was changed. Try again; the problem has been recorded.` }, 500);
   const woById = new Map(workorders.map(w => [String(w.ID), w]));
   let scopesChecked = 0, updated = 0; const details = [];
   for (const s of scopes) {
