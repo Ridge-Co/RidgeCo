@@ -1,6 +1,10 @@
-# VENDOR PAID TAB + ESTIMATE SKIP-TEXT + PADDED FEE + FEE CREDITS + SWEEP — Oct 19, 2026 — branch `feat/estimate-skip-sms-vendor-paid-tab-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.05-paid-tab-pad-credit-sweep`.
+# VENDOR PAID TAB + ESTIMATE SKIP-TEXT + PADDED FEE + FEE CREDITS + SWEEP — Oct 19, 2026 — branch `feat/estimate-skip-sms-vendor-paid-tab-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.06-paid-tab-pad-credit-sweep`.
 
 ## 🟡 Built and tested (146 new checks across 3 test files; full suite = the 13 pre-existing failures). After merge: (1) Paid tab fills in dates after the next payment sync; (2) padded fee stays OFF until Config `instant_fee_pad_enabled` = TRUE; (3) WO-1227: when Cesar's $800 bill (id 124) is approved, pick Scope 8 and confirm net $733.26 BEFORE sending; (4) post a fee credit from Vendors > Fee credit when a statement shows an over-deduction. Details: FEATURE_LOG "VENDOR PORTAL PAID TAB ...".
+
+# SHEETS READ QUOTA BURST FIX — Oct 19, 2026 — head `fix/sheets-read-coalescing-oct19b` cut from main tip 5110483 (after #351), PR into `main` NOT merged (Brett merges). BUILD_VERSION `2026-10-19.05-sheets-read-coalescing`.
+
+## 🟡 Built and tested (22 + 24 new assertions; related read-layer suites green); staging verification result is in the PR. Cause of "Could not load estimate ... Read requests per minute per user": Cesar's vendor portal fires ~6 requests per work-order card at once and every one was a separate Google read against the one shared quota. Fix: concurrent reads of the same tab / tab set now share ONE Google read (worker), vendor portal reads capped at 4 in flight with quota retry, Hub `api()` retries quota answers, and a failed load now shows "Could not load" + Retry (and reports to the failure ledger) instead of the old "No estimate submitted yet" / blank invoice summary. See FEATURE_LOG `[FL-20261019-sheets-coalesce]`. Not part of this PR: 13 test files already fail identically on main (AI-credit helper extraction in the harness, `ai_credit_probe` JOBS row, translation tests).
 
 ---
 
