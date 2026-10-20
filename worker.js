@@ -27385,11 +27385,14 @@ async function qbSyncPayments(env, body, opts) {
 
     const woPaidDateSeen = new Map(); let woPaidDateColReady = false;
     const tl = clock();
+    // The loop's own window: the rest of the slice, but never less than QB_SYNC_MIN_LOOP_MS after the loop starts (payables may have used the slice up).
+    const loopDeadline = sync ? Math.max(deadline, tl + (opts.minLoopMs != null ? opts.minLoopMs : QB_SYNC_MIN_LOOP_MS)) : Infinity;
     for (const r of data.rows) {
       const rk = qbSyncRowKey(r);
       if (doneKeys.has(rk)) continue;
-      // Time-slice: stop BEFORE starting a row's side effects when the slice is spent; the next tick carries on from the saved keys.
-      if (clock() >= deadline) { stoppedEarly = true; break; }
+      // Time-slice: stop BEFORE starting another row's side effects when the window is spent -- but only after at least ONE row this slice, so a
+      // slow payables read can never again produce a slice that does nothing. The next tick carries on from the saved keys.
+      if (rowsThisSlice > 0 && clock() >= loopDeadline) { stoppedEarly = true; break; }
 
       // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
       // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
