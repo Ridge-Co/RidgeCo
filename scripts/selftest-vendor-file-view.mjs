@@ -102,6 +102,7 @@ async function main() {
   else {
     t('endpoint responds 200', status === 200, `got ${status}${body && body.error ? ' — ' + body.error : ''}`);
   }
+  if (status === 200 && !body) t('answer is readable JSON', false, 'HTTP 200 but the body was not JSON');
   if (status !== 200 || !body) {
     console.log(`\n${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
