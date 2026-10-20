@@ -26818,9 +26818,12 @@ async function qbAccessToken(env) {
     throw await fail('qb_auth', 'QB env vars missing (need QB_CLIENT_ID, QB_CLIENT_SECRET, QB_REALM_ID)');
   // Intuit rotates the refresh token. Prefer the rotated value persisted in the Config
   // tab; fall back to the env seed. After a successful refresh, persist the new token.
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (e) {}
-  const refresh = (cfg.QB_REFRESH_TOKEN && cfg.QB_REFRESH_TOKEN.trim()) || env.QB_REFRESH_TOKEN;
-  if (!refresh) throw new Error('QB refresh token missing (set QB_REFRESH_TOKEN env or Config)');
+  let cfg;
+  try { cfg = await fetchConfigStrict(env); }
+  catch (e) { throw await fail('qb_auth', 'QuickBooks: could not read the Config tab to get the saved refresh token (' + String((e && e.message) || e).slice(0, 160) + '). Not trying the old env token, it may already be rotated away.', 'P1'); }
+  let refresh = (cfg.QB_REFRESH_TOKEN && cfg.QB_REFRESH_TOKEN.trim()) || env.QB_REFRESH_TOKEN;
+  if (_qbRotated && _qbRotated.token && refresh !== _qbRotated.token && !_qbRotated.saved && Date.now() - _qbRotated.at < 6 * 3600000) refresh = _qbRotated.token;   // ONLY when the Config save of that token failed (reviewer fix Oct 20: another instance may have rotated again and saved a NEWER one, which must win)
+  if (!refresh) throw await fail('qb_auth', 'QB refresh token missing (set QB_REFRESH_TOKEN env or Config)');
   const basic = btoa(`${env.QB_CLIENT_ID}:${env.QB_CLIENT_SECRET}`);
   const res = await fetch(QB_TOKEN_URL, {
     method: 'POST',
