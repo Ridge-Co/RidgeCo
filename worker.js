@@ -16513,6 +16513,18 @@ async function failInvariantsCollect(env, nowMs) {
     const rows = vals.slice(1).map(r => { const o = {}; hd.forEach((h, i) => { o[h] = r[i] === undefined ? '' : r[i]; }); return o; });
     data.mq = failMessageQueueStats(rows, nowMs);
   } catch (e) { if (!isMissingTabError(e)) note('message_queue', e); }
+  try {
+    if (env.TWILIO_SID && env.TWILIO_API_SID && env.TWILIO_API_KEY) {
+      const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Balance.json`, { headers: { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`))) } });
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(`Twilio Balance API HTTP ${resp.status}: ${text.slice(0, 120)}`);
+      const j = JSON.parse(text), b = parseFloat(j && j.balance);
+      if (!isFinite(b)) throw new Error('Twilio Balance API returned no balance');
+      data.twilio = { balance: b };
+    }
+  } catch (e) { note('twilio_balance', e); }
+  // Sign-ins that expire on their own: a dead QuickBooks / Gmail refresh token stops invoices, bills and emails with nothing "failing" in between.
+  // Production only (staging talks to Intuit's sandbox). qbAccessToken / gmailAccessToken already write their own ledger events when they fail.
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
