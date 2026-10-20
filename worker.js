@@ -4641,7 +4641,8 @@ async function backfillReceiptAttachments(env, body) {
         });
         created++;
       } catch (e) {
-        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_backfill', Skill_Or_Endpoint: '/admin/backfill-receipt-attachments', Success: 'FALSE', Notes: `receipt_id=${r.ID} wo_id=${r.WO_ID} err=${String(e && e.message || e)}` }); } catch (_) {}
+        writeFailed++;
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_backfill', Skill_Or_Endpoint: '/admin/backfill-receipt-attachments', Success: 'FALSE', Notes: `receipt_id=${r.ID} wo_id=${r.WO_ID} err=${String(e && e.message || e)}` }); } catch (te) { softNote('telemetry_write_failed:receipt_attachment_gallery_backfill', te, 'P2'); }
       }
     }
   }
