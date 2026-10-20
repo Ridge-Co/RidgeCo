@@ -5530,10 +5530,12 @@ async function scopeProposalSign(env, body, ip, ua) {
   try {
     const c = await estimateSmsContext(env, s.WO_ID || '', s.Vendor_ID);
     const job = s.WO_ID ? ('work order ' + s.WO_ID) : ('proposal #' + s.ID);
-    await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
+    const _adminSms = await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
+    // Reviewer fix (Oct 20): sendTemplatedSms returns {sent:false,...} instead of throwing, so the catch below almost never fired; check the result.
+    if (_adminSms && _adminSms.sent === false && !_adminSms.held_for_quiet_hours && !_adminSms.test_mode && (_adminSms.error || _adminSms.send_ok === false)) await softFail(env, 'scope_signed_admin_sms_not_sent', String(_adminSms.error || _adminSms.reason || 'not sent'), 'P1', { scope: String(s.ID), note: 'Brett was NOT texted that the owner signed' });
     if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_proposal_signed', kind: 'vendor', vendor: c.vendor, wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
-  } catch (_) {}
-  return json({ ok: true, subtotal, deposit, schedule: milestones });
+  } catch (te) { await softFail(env, 'scope_signed_sms_failed', te, 'P0', { scope: String(s.ID), note: 'Brett/vendor were NOT texted that the owner signed' }); }
+  return json({ ok: true, subtotal, deposit, schedule: milestones, ...(signWarning ? { failure_warning: signWarning } : {}) });
 }
 
 // ── Vendor-bill gap tracking (Aug 24 2026) ──────────────────────────────────
