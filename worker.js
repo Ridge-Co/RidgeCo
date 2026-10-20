@@ -24432,7 +24432,7 @@ function __meterGoogle(env, method, path, outcome) {
   } catch (e) { __meterFault('google', e); }
 }
 function __meterSaved(env, kind, n) {
-  try { const b = __meterBucket(); if (kind === 'join') b.joins += (n || 1); else b.hits += (n || 1); } catch (e) { __meterFault('saved', e); }
+  try { __meter.dirty = true; const b = __meterBucket(); if (kind === 'join') b.joins += (n || 1); else b.hits += (n || 1); } catch (e) { __meterFault('saved', e); }
 }
 function __meterWindow(mins) {
   const cutoff = Math.floor(Date.now() / 60000) - mins + 1, rows = [];
