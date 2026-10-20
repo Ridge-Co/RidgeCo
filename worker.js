@@ -8617,9 +8617,11 @@ async function woCombine(env, body) {
       voidedSoFar.push(w.ID);
     }
   } catch (e) {
-    for (const id of voidedSoFar) { try { await woUnvoid(env, { wo_id: id, updated_by: changedBy, updated_by_role: changedByRole }); } catch (_) {} }
-    if (Object.keys(fieldsToApply).length) { try { await updateWOFields(env, survivorId, survivorSnapshot); } catch (_) {} }
-    return json({ error: 'combine_failed', detail: e.message, rolled_back: true }, 500);
+    const rollbackFailures = [];   // a rollback step that itself fails must never be reported as "rolled back"
+    for (const id of voidedSoFar) { try { await woUnvoid(env, { wo_id: id, updated_by: changedBy, updated_by_role: changedByRole }); } catch (re) { rollbackFailures.push('un-void ' + id + ': ' + String((re && re.message) || re).slice(0, 100)); } }
+    if (Object.keys(fieldsToApply).length) { try { await updateWOFields(env, survivorId, survivorSnapshot); } catch (re) { rollbackFailures.push('restore ' + survivorId + ': ' + String((re && re.message) || re).slice(0, 100)); } }
+    if (rollbackFailures.length) await softFail(env, 'wo_combine_rollback_incomplete', e, 'P1', { survivor: String(survivorId), rollback_failures: rollbackFailures.join('; ').slice(0, 300) });
+    return json({ error: 'combine_failed', detail: e.message, rolled_back: rollbackFailures.length === 0, ...(rollbackFailures.length ? { rollback_failures: rollbackFailures } : {}) }, 500);
   }
 
   // Batched tenant SMS — ONE new notice about the merge, gated exactly like every other
