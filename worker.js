@@ -16372,8 +16372,10 @@ async function failRollupRun(env, opts) {
     const nd = markNotified.filter(r => r._row).map(r => ({ range: `${FAIL_LEDGER_TAB}!A${r._row}:${lastCol}${r._row}`, values: [rowOf(r)] }));
     if (nd.length) { try { await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: nd }); } catch (e) { errors.push({ step: 'mark_notified', error: String((e && e.message) || e).slice(0, 200) }); } }
   }
+  let queued = 0;
+  try { queued = await failQueueRun(env, plan.all.filter(r => r._row), nowMs, errors); } catch (e) { errors.push({ step: 'queue', error: String((e && e.message) || e).slice(0, 200) }); }
   const open = plan.all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
-  return { ok: errors.length === 0, errors, events_in: events.length, new_rows: plan.created.length, updated_rows: plan.updates.length, texted, alerts_on: alertsOn, open: { P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length } };
+  return { ok: errors.length === 0, errors, queued, events_in: events.length, new_rows: plan.created.length, updated_rows: plan.updates.length, texted, alerts_on: alertsOn, open: { P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length } };
 }
 
 // ── endpoints ───────────────────────────────────────────────────────────────────────────────────────────────────
