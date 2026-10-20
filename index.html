@@ -14950,7 +14950,7 @@ function loadOwnerInvites() {
     if (!rows.length) { el.innerHTML='<div style="color:var(--muted);font-size:12px">No links yet.</div>'; return; }
     var pill = {pending:'background:#e8f0fb;color:#1d4ed8',used:'background:#eaf6ee;color:#166534',expired:'background:#f3f5f8;color:#66707c',revoked:'background:#fdecea;color:#b42318',processing:'background:#fff3e0;color:#9a5b00'};
     el.innerHTML = rows.slice(0,25).map(function(r){
-      var s = {}; try { s = JSON.parse(r.summary || '{}'); } catch(e) {}
+      var s = {}; try { s = JSON.parse(r.summary || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:owner-invite-summary', e, {ref: r.id}); }
       var warn = safeArray(s.warnings);
       var ownerLbl = r.owner_id ? (function(){ var o = safeArray(state.owners).find(function(x){ return String(x.ID)===String(r.owner_id); }); return o ? ((o.Company||((o.First_Name||'')+' '+(o.Last_Name||'')).trim())) : ('Owner '+r.owner_id); })() : '';
       return '<div style="border-top:1px solid var(--border);padding:8px 0;font-size:12px">' +
