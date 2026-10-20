@@ -25638,6 +25638,9 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/str/admin/cleaner/new-link') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   if (path === '/str/c/mark' || path === '/str/c/offer' || path === '/str/c/cancel') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => x.Link_Token && x.Link_Token === String((body && body.k) || '')); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   if (path === '/str/admin/assign') { if (!body || !body.cleaner_id) return true; const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
+  // Admin swap / bulk (Oct 20 2026): a preview writes nothing; a real apply may only name a TEST- cleaner.
+  if (path === '/str/admin/change/preview') return true;
+  if (path === '/str/admin/change/apply') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   if (path === '/str/admin/config' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
   if (path === '/str/admin/digest-run') return !!(body && body.dry);
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
