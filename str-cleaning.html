@@ -1034,6 +1034,10 @@ function sendPendCreate(){
     c.disabled = false;
     if(e.code === 'stale_preview'){ g.disabled = true; g.textContent = 'Out of date'; chShowErr('<b>Not done. Nothing was sent.</b>' + esc(errText(e)) + '<br><button class="btn sm" id="pd-again" style="margin-top:8px">Preview again</button>'); $('pd-again').onclick = function(){ pendPreview(null); }; return; }
     g.disabled = false; g.textContent = 'Try Send again';
+    var unsure = e.code === 'network' || e.code === 'bad_response' || /^http_5/.test(e.code);
+    chShowErr('<b>' + (unsure ? 'Not sure if that went through.' : 'Not done.') + '</b>' + esc(errText(e)) + (unsure ? '<br>It is safe to press Send again: the Hub will not make a second inquiry for the same date or text anyone twice. You can also Cancel, press Refresh and look at the Pending list.' : ''));
+  });
+}
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
