@@ -14199,13 +14199,13 @@ async function adminShareAttachments(env, body) {
         try {
           await ensureColumns(env, 'Attachments', ['Drive_File_Missing']);
           await updateRow(env, 'Attachments', r.ID, { Drive_File_Missing: 'TRUE' });
-        } catch (_) { /* best-effort — a failed mark just means it's re-tried (and re-marked) next batch, not silently lost */ }
+        } catch (e) { softNote('share_attachments_mark_missing_failed', e, 'P2', { ref: r.ID }); /* best-effort — a failed mark just means it's re-tried (and re-marked) next batch; one note per request even in a loop */ }
       }
     }
     const remainingAfterBatch = Math.max(0, shareable - offset - considered);
     const nextOffset = offset + considered;
     const statusBreakdown = Object.entries(failedByStatus).map(([s, c]) => `${s}:${c}`).join(',');
-    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Latency_ms: Date.now()-_t0, Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}${statusBreakdown ? ' failed_by_status=' + statusBreakdown : ''} known_missing=${skippedKnownMissing}` }); } catch(_){}
+    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Latency_ms: Date.now()-_t0, Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}${statusBreakdown ? ' failed_by_status=' + statusBreakdown : ''} known_missing=${skippedKnownMissing}` }); } catch (te) { softNote('telemetry_write_failed:admin_share_attachments', te, 'P2');}
     const out = {
       success: true,
       dry_run: dryRun,
