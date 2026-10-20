@@ -33007,7 +33007,9 @@ async function deliveryAdd(env, body) {
       trade: body.trade || 'Appliance', type: 'delivery', description: desc || 'Appliance delivery',
       priority: body.priority || 'normal', notes: body.delivery_notes || '', created_by: body.created_by || 'admin',
     });
-    try { const wj = await woResp.json(); if (wj && wj.id) { createdWO = wj.id; woIds = wj.id; } } catch (_) {}
+    const wj = await safeJson(woResp, null, 'delivery_add_wo_response');
+    if (wj && wj.id) { createdWO = wj.id; woIds = wj.id; }
+    else softNote('delivery_add_auto_wo_not_created', 'The install work order for a new delivery was not created (' + String((wj && wj.error) || 'no id returned').slice(0, 120) + '), so the delivery was saved without one', 'P1', { order: body.order_number || '' });
   }
   const add = await addRow(env, 'Deliveries', {
     Order_Number: body.order_number || '', Store: body.store || '', Item_Type: body.item_type || '',
