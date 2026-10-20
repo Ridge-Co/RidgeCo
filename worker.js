@@ -36819,7 +36819,7 @@ async function inspOpenBlockReopen(env, body) {
     const wr = await updateRow(env, 'Insp_Open_Blocks', b.ID, { Active: 'TRUE', Book_By: sel.wall, Book_By_Hours: '' });
     let wj = null; try { wj = await wr.json(); } catch (je) { console.error('insp: reopen save response unreadable:', je && je.message); softNote('insp_reopen_save_response', je, 'P1', { block: b.ID }); }
     if (!wj || !wj.success) { await inspAlert(env, 'reopen_save', `Block #${b.ID} could not be ${mode === 'reopen' ? 'reopened' : 'extended'}: ${(wj && wj.error) || 'save failed'}`); return json({ ok: false, error: 'save_failed', message: 'Could not save — nothing was changed and nobody was notified.' + (wj && wj.error ? ' (' + wj.error + ')' : '') }, 500); }
-    let after = null; try { after = (await fetchTab(env, 'Insp_Open_Blocks')).find(r => String(r.ID) === String(b.ID)); } catch (e) { after = null; }
+    let after = null; try { after = (await fetchTab(env, 'Insp_Open_Blocks')).find(r => String(r.ID) === String(b.ID)); } catch (e) { after = null; /* silent-ok: a failed re-read counts as not saved in the check right below, which alerts */ }
     if (!after || String(after.Active || '').toUpperCase() === 'FALSE' || String(after.Book_By || '').trim() !== sel.wall || inspBlockExpiryMs(after, dh) !== sel.closeMs) {
       await inspAlert(env, 'reopen_verify', `Block #${b.ID}: the ${mode} did not show up when read back (wanted close ${sel.wall}). Nobody was notified.`);
       return json({ ok: false, error: 'verify_failed', message: "The change didn't show up when I read it back, so nobody was notified. Check the block in the list, then try again." }, 500);
