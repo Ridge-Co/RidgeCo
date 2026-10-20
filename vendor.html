@@ -398,7 +398,7 @@ function sessionExpired() {
 }
 function apiList(path) {
   return fetch(WORKER + path, { headers: { 'X-Auth-Token': SECRET } }).then(function(r) {
-    return r.json().catch(function(){ return null; }).then(function(data) {
+    return r.json().catch(function(){ /* silent-ok: non-JSON body is rejected just below as an unexpected response */ return null; }).then(function(data) {
       if (r.status === 401) { sessionExpired(); throw new Error('Session expired - please sign in again'); }
       if (!Array.isArray(data)) {
         throw new Error((data && data.error) ? data.error : ('Unexpected response (HTTP ' + r.status + ')'));
