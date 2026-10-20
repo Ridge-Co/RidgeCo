@@ -101,7 +101,7 @@
   var ADMIN_KEYS = { mh_auth: 1, mh_auth_staging: 1 };
   var SESSION_REDIRECT = /^(mh_vendor_sess|mh_owner_sess|mh_tenant_sess|mh_api_staging|mh_wo_share_.*)$/;
   var SP = Storage.prototype, gI = SP.getItem, sI = SP.setItem, rI = SP.removeItem;
-  function isLS(s) { try { return s === window.localStorage; } catch (e) { return false; } }
+  function isLS(s) { try { return s === window.localStorage; } catch (e) { /* silent-ok: storage access denied means it is not our localStorage */ return false; } }
   SP.getItem = function (k) {
     if (isLS(this)) {
       if (ADMIN_KEYS[k]) return SENT;
