@@ -1064,6 +1064,9 @@ function openPendCancel(key){
     if(r.already){ openAction({ title: 'Already closed', say: r.message || 'That inquiry is already closed.', go: null, run: null }); loadState(); return; }
     var pv = r.preview || {}, hold = pv.holder, body = '';
     body += '<p class="say" style="font-size:15px;color:var(--text)">Closes the inquiry and takes the tentative entry off the calendar. Anyone still waiting to answer just stops seeing the question. <b>Nobody is texted unless you choose it below.</b></p>';
+    if(hold && hold.can_text){
+      body += '<label class="tog"><input type="checkbox" id="pc-notify">Also tell ' + esc(hold.first) + ' it did not book</label><p class="say">' + esc(hold.first) + ' said yes, so she may be keeping the date open. Untick to cancel quietly.</p>'
+        + '<div id="pc-txt" class="hide"><div class="rcpt"><label class="fld" for="pc-body" style="margin-top:2px">What she will get (you can edit it)</label><textarea id="pc-body" maxlength="' + (S && S.text_max ? S.text_max : 800) + '">' + esc(pv.text) + '</textarea><div class="cnt" id="pc-cnt"></div>' + (pv.in_window ? '' : '<p class="say">It is outside 8 AM - 9 PM, so this text goes out at 8 AM.</p>') + '</div></div>';
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
