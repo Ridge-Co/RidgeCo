@@ -453,7 +453,7 @@ function onLoginSuccess(data, persist) {
   if (oneOffBtn) oneOffBtn.style.display = (data.can_create_own_wo === true || String(data.can_create_own_wo).toUpperCase() === 'TRUE') ? '' : 'none';
   loadWorkOrders();
   loadVendorTaskAlerts();
-  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ /* silent-ok: storage blocked, vendor just signs in again next visit */ } }
 }
 
 // ── Login ────────────────────────────────────────────────────
