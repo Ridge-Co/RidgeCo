@@ -7687,7 +7687,7 @@ async function intakeSmsAdmin(env, message, woId, property) {
 
 async function intakeTelemetry(env, t0, ok, notes) {
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'intake_email', Skill_Or_Endpoint: '/intake/email', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 480) }); return true; }
-  catch (_) { return false; }
+  catch (te) { softNote('telemetry_write_failed:intake_email', te, 'P2'); return false; }   // callers return telemetry_ok:false so the poller can email Brett
 }
 
 // The sender must be the ACTUAL address (bare, or the last <...> of "Name <addr>") on managebuilding.com.
