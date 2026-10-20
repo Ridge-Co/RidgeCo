@@ -232,7 +232,7 @@ function ready(w, queue, statusBody) { w.props.SCHEDULER_TOKEN = 'hs_' + 'a'.rep
 {
   const w = world(); ready(w, [{ ran: 'x', job_ok: true, more: true }]);
   w.run('runScheduler');
-  ok(w.fetches.filter(f => run(f.url)).length === 15, 'hard cap of 15 calls per tick when more never clears');
+  ok(w.fetches.filter(f => run(f.url)).length === vm.runInContext('MAX_CALLS', w.ctx), 'hard cap (MAX_CALLS) on calls per tick when more never clears', w.fetches.filter(f => run(f.url)).length);
 }
 {
   const w = world(); ready(w, [{ ran: 'x', job_ok: true, more: true }]);
