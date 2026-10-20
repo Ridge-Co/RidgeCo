@@ -159,7 +159,7 @@ const qbApiPaid = async (env, path) => {
   return {};
 };
 const srcPaid = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('parseHolidayMap', false)}\n${extractFn('nextBusinessDay', false)}\n${extractFn('etDateString', false)}\n${extractFn('paymentClearDaysMap', false)}\n${extractFn('classifyPaymentMethod', false)}\n${extractFn('addBusinessDays', false)}\n${extractFn('summarizeInvoicePayments', false)}\n${extractFn('money2', false)}\n${extractFn('vendorBillPaymentIds', false)}\n${extractFn('vendorBillPaidDate', false)}\n${extractFn('qbLoadInvoicePayments', true)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
-const qbPayablesAlreadyPaid = new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', srcPaid)
+const qbPayablesAlreadyPaid = new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', PHASE_C_SHIM + srcPaid)
   (fetchTabsPaid, async () => [], async () => {}, async () => {}, async () => 'x', qbApiPaid, (v) => (v && v.Company) || 'Vendor', () => 'Due on receipt', (b) => b, TEST_FETCH_CONFIG);
 const resPaid = await qbPayablesAlreadyPaid({}, new URL('http://x/?days=90'));
 ok(resPaid.rows[0].state === 'vendor paid', 'a genuinely already-paid vendor bill still says vendor paid');
