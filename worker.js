@@ -27096,7 +27096,8 @@ async function qbRepairInvoice(env, body) {
 
     return json({ ok: true, applied: true, invoice_id: qbInvId, wo_id: ir.WO_ID,
       doc_number: updated.DocNumber || '', total: updated.TotalAmt,
-      photo_linked: !!folderUrl });
+      photo_linked: !!folderUrl,
+      ...(shareWarning ? { share_warning: shareWarning } : {}), ...(flagWarning ? { flag_warning: flagWarning } : {}) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
