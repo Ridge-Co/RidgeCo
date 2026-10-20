@@ -260,6 +260,7 @@ function runScheduler() {
     // The non-Hub rows run even when the Hub is down (they do not depend on it).
     var script = table.ok ? runScriptJobs_(started) : { ran: [], status: { overdue: [], jobs: {} } };
     ran = ran.concat(script.ran);
+    if (hubStatus) checkLedger_(hubStatus.failures);
     if (hubStatus) checkOverdue_(mergeStatus_(hubStatus, script.status));
     else if (script.status.overdue.length) checkOverdue_(mergeStatus_({ overdue: [], jobs: {} }, script.status));
     if (!infraFailed) recovered_();
