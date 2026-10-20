@@ -29672,7 +29672,10 @@ async function qbRecordPaidBill(env, body) {
         const r = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
         const hits = (r && r.QueryResponse && r.QueryResponse.Bill) || [];
         bill = hits.find(b => String(b.VendorRef && b.VendorRef.value) === vendorId) || null;
-      } catch (e) { /* fall through to create */ }
+      } catch (e) {
+        // The same-numbered-bill check could not run, so a duplicate bill is possible. Fall through to create (as before) but tell Brett.
+        await softFail(env, 'qb_bill_idempotency_lookup_failed', e, 'P0', { doc: String(docNum) });
+      }
     }
 
     let billCreated = false;
