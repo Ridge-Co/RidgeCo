@@ -23624,7 +23624,7 @@ async function woShareAuth(env, tok, woWanted){
 // Shared by woShareLink (copy-draft) and woShareSend (real SMS): mints the link token (format and
 // TTL unchanged) and builds the ready-to-send EN/ES message. Returns {error,status} or {res, vendor}.
 async function woShareBuild(env, woId, pageBase){
-  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
+  await tryWrite(env, 'wo_share_ensure_rev_column', () => ensureColumns(env, 'Work_Orders', ['Share_Rev']), 'P1');
   const [wos, props, units, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Vendors']);
   const wo = findWO(wos, woId);
   if(!wo) return { error:'WO not found', status:404 };
