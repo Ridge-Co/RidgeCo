@@ -23128,7 +23128,9 @@ async function ownerOnboardInviteCreate(env, body) {
     Note: ooClean(body.note, 300), Check_Attempts: '0', Needs_Review: 'FALSE', Active: 'TRUE',
   };
   const r = await addRow(env, 'Owner_Invites', row);
-  let id = ''; try { id = (await r.clone().json()).id || ''; } catch (e) {}
+  const idBody = await safeJson(r.clone(), {}, 'owner_invite_create');
+  const id = (idBody && idBody.id) || '';
+  if (!id) softNote('owner_invite_create_no_id', 'Owner_Invites add returned no id (status ' + (r && r.status) + '): the invite link may not work', 'P1');
   return json({ success: true, id, token, link: `${PORTAL_BASE}/owner-onboard.html?t=${token}`, expires: row.Expires_Date });
 }
 
