@@ -1112,7 +1112,7 @@ function buildPhotoSection(woId, propAddr, opts) {
         return;
       }
       if (d.version !== booted){ autoReload(dirty); }
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('tenant:versionCheck', e); });
   }
   check();
   setInterval(check, 60000);
