@@ -36832,6 +36832,12 @@ async function strAdminPendingCreate(env, body) {
     await strLog(ctx, row.Task_Key, '', 'pending_created', `${plan.date}${plan.note ? ' - ' + plan.note : ''}`);
     const warnings = plan.warnings.slice();
     let adv = null;
+    try { adv = await strAdvanceTask(ctx, row, { sendNow: body.send_now === true, textOverride: plan.first ? text : '' }); }
+    catch (e) { warnings.push('The first cleaner could not be asked yet (' + strErrText(e) + '). The scheduler will try again.'); await strSystemAlert(env, 'pending_offer', strErrText(e)); }
+    await strAlertsNow(ctx, warnings, 'pending_create');
+    return json({ ok: true, key: row.Task_Key, advance: adv, status: strPendingStatus(ctx, row), message: strPendingCreateMessage(plan, adv), warnings: warnings.concat(ctx.errors.map(e => e.error)) });
+  } catch (e) { return await strHandleErr(env, e, 'pending create'); }
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
