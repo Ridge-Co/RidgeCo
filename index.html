@@ -2810,7 +2810,7 @@ function openWODetail(woId) {
         loadHubReceiptTracking(_woIdForPhoto, _db);
         loadHubTimeTracking(_woIdForPhoto, _db);
       }
-    } catch(e2) { /* photo section is non-critical */ }
+    } catch(e2) { window.hubReportFailure && window.hubReportFailure('index:wo-detail-photos', e2); }
   }, 50);
   // Post-render: make property name clickable after detail modal opens
   setTimeout(function(){
