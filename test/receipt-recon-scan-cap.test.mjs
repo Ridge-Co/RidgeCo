@@ -53,7 +53,7 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
     RECEIPT_RECON_QUEUE_HEADERS: [], RECEIPT_RECON_FOLDER_ID_DEFAULT: 'FOLDER',
   };
   const names = Object.keys(deps);
-  const fn = new Function(...names, `return (${extractFn('receiptReconScan')});`)(...names.map(n => deps[n]));
+  const fn = new Function(...names, aiCreditGuardPrelude() + `return (${extractFn('receiptReconScan')});`)(...names.map(n => deps[n]));
   return { scan: (b) => fn({}, b), queue, get downloads() { return downloads; } };
 }
 
