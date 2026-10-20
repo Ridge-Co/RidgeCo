@@ -2368,7 +2368,7 @@ function maybeOpenWOFromURL() {
     }
     var wid = qs.get('wo');
     if (wid && typeof openWODetail === 'function') openWODetail(wid);
-  } catch (e) {}
+  } catch (e) { window.hubReportFailure && window.hubReportFailure('index:open-wo-from-url', e); }
 }
 
 function openWODetail(woId) {
