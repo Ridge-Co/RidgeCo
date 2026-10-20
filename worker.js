@@ -35621,6 +35621,111 @@ async function schedRunStrDigest(env) {
   const errors = [], warnings = [], r = await schedStep('str_digest', async () => { const o = await strRunDigest(env); errors.push(...o.errors); warnings.push(...o.warnings); return { ok: true, no_retry: o.no_retry, detail: o.detail }; }, errors);
   return { ok: !errors.length, errors, warnings, no_retry: !!(r && r.no_retry), detail: r && r.detail };
 }
+// ── Admin swap + bulk changes (Oct 20 2026, Brett) ───────────────────────────────────────────────
+// ONE preview-then-send engine behind three admin actions, all with the same safety rules:
+//   swap          swap the cleaner on one or many turnovers (works on hub-covered AND hand-typed calendar coverage)
+//   assign_range  give one cleaner every turnover between two dates (same effect as a swap on each)
+//   mark          mark one cleaner out / available-as-backup / cleared for several dates (admin-set availability)
+// Step 1 (POST /str/admin/change/preview) writes and sends NOTHING: it returns what would happen and the exact text each person would get.
+// Step 2 (POST /str/admin/change/apply) claims the plan_id FIRST (a second Send of the same plan returns the first result and does nothing),
+// applies every date on its own (one bad date never aborts the others), re-reads every write, fixes the cleaning calendar, then sends the
+// texts Brett edited. Nothing is silent: every failure is in the result, in Ops_Telemetry, and (when partial) alerts Brett.
+const STR_CHANGE_MAX = 40, STR_TEXT_MAX = 800, STR_MARK_HORIZON = 120, STR_SUB_LIMIT = 40;
+let __strCalCount = 0; // Google Calendar calls made by this isolate (the Sheets ones are counted by sheetsRequest as __sheetsFetchCount)
+const STR_ACTIONS = ['swap', 'assign_range', 'mark'];
+const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled'];
+function strHash(s) { let a = 5381, b = 52711; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = ((a * 33) ^ c) >>> 0; b = ((b * 31) + c) >>> 0; } return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0'); }
+// Text Brett typed: a plain string only. Control characters and runs of whitespace collapse exactly like the stock texts do (strRenderText).
+function strCleanText(s) { return String(s == null ? '' : s).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function strNorm(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+// "Kayla" on a hand-typed "Kayla Cleaning" entry -> the one cleaner with that nickname / first name / full name. Ambiguous or unknown -> null.
+function strMatchCleaner(name, cleaners) {
+  const n = strNorm(name); if (!n) return null;
+  const hits = (cleaners || []).filter(c => [c.Nickname, String(c.Name || '').split(/\s+/)[0], c.Name].some(k => strNorm(k) === n));
+  const ids = [...new Set(hits.map(c => String(c.ID)))];
+  return ids.length === 1 ? hits.find(c => String(c.ID) === ids[0]) : null;
+}
+function strDateList(dates) { return [...new Set(dates)].sort().map(d => strFmtDate(d)).join('; '); }
+// Outside 8am-9pm ET: the next 8:00 AM ET.
+function strNextWindowOpenMs(now, S) { const today = inspEtDate(now); return inspEtMinutes(now) < S.sendStartMin ? inspEtWallToMs(today, '08:00') : inspEtWallToMs(inspAddDays(today, 1), '08:00'); }
+function strReach(c) { if (!c) return 'was not found'; if (String(c.Active).toUpperCase() === 'FALSE') return 'is not active'; if (!c.Phone) return 'has no phone number on file'; if (c.SmsOk === false) return 'has texts switched off'; return ''; }
+function strSendMode(cfg, S) { return !S.sms ? 'off' : (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE' ? 'twilio_off' : (S.smsTest ? 'test' : 'live')); }
+function strOutboxDates(o) { try { return [...new Set((JSON.parse(o.Expect || '[]') || []).map(e => e.date).filter(Boolean))].sort(); } catch (e) { return []; } } // silent-ok: display only; a bad Expect blob is caught (stale) when the row is processed
+function strChangeId() { return Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b => b.toString(16).padStart(2, '0')).join(''); }
+
+// Calendar entries on the task's window that are NOT the Hub's own and that name a cleaner ("Kayla Cleaning"). `deletable` is true only when the
+// entry is positively a one-day all-day "<Name> Cleaning" on the task's own date - anything else is reported for Brett to fix by hand.
+function strExternalEvents(task, foreign) {
+  const days = new Set(); for (let d = task.winStart || task.date, i = 0; d <= (task.winEnd || task.date) && i < 40; d = inspAddDays(d, 1), i++) days.add(d);
+  const out = [];
+  for (const ev of (foreign || [])) {
+    if (!ev || String(ev.status || '').toUpperCase() === 'CANCELLED' || inspStrCleaningKind(ev.summary) !== 'cleaner') continue;
+    const evDays = inspStrEventDays(ev); if (!evDays.some(d => days.has(d))) continue;
+    const m = /^\s*([A-Za-z][A-Za-z'.\- ]{0,40}?)\s+cleaning\s*$/i.exec(String(ev.summary || '')), name = String(ev.summary || '').replace(/clean(ing|er|ers)?/ig, '').replace(/\s+/g, ' ').trim() || 'cleaner';
+    out.push({ id: ev.id || '', summary: String(ev.summary || ''), name: m ? m[1].trim() : name, days: evDays, onDate: evDays.includes(task.date), deletable: !!(m && ev.id && ev.start && ev.start.date && evDays.length === 1 && evDays[0] === task.date) });
+  }
+  return out;
+}
+
+// ── Batched, verified Sheets writes (one read + one write + one re-read per tab, however many rows: a 40-date change must not burn the per-minute read quota) ──
+async function strBatchSet(env, tab, updates) {
+  const out = { ok: [], failed: [] }; if (!updates.length) return out;
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [], headers = rows[0] || [];
+  if (!headers.length) throw strErr('sheet_write', `Tab ${tab} has no header row`);
+  const idc = idColIndex(headers), cells = [], sent = [];
+  for (const u of updates) {
+    const ri = rows.findIndex((r, i) => i > 0 && String((r || [])[idc]) === String(u.id));
+    if (ri < 0) { out.failed.push({ id: u.id, error: `${tab} #${u.id} was not found` }); continue; }
+    const bad = Object.keys(u.fields).filter(k => headers.indexOf(k) < 0);
+    if (bad.length) { out.failed.push({ id: u.id, error: `${tab} has no column ${bad.join(', ')}` }); continue; }
+    for (const [k, v] of Object.entries(u.fields)) cells.push({ range: `${tab}!${col(headers.indexOf(k))}${ri + 1}`, values: [[String(v == null ? '' : v)]] });
+    sent.push(u);
+  }
+  if (!cells.length) return out;
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: cells });
+  invalidateTabCache(tab);
+  const back = await fetchTab(env, tab);
+  for (const u of sent) {
+    const row = back.find(r => String(r.ID) === String(u.id)), badk = row ? Object.keys(u.fields).filter(k => String(row[k] == null ? '' : row[k]) !== String(u.fields[k] == null ? '' : u.fields[k])) : ['(row missing)'];
+    if (badk.length) out.failed.push({ id: u.id, error: `${tab} #${u.id}: ${badk.join(', ')} did not save` }); else out.ok.push(u.id);
+  }
+  return out;
+}
+// Admin-set availability marks, many at once. changes: [{cleaner, date, mark:'can'|'out'|'', source}]. Returns { ok:[key], failed:[{key,error}] } and keeps ctx.st in step.
+async function strMarkBatch(ctx, changes) {
+  const iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [] }, upd = [], add = [];
+  for (const ch of changes) {
+    const k = ch.cleaner.ID + '|' + ch.date, m = ch.mark || '', ex = ctx.st.availRows.find(a => String(a.Cleaner_ID) === String(ch.cleaner.ID) && a.Property_Key === STR_PROP && a.Date === ch.date);
+    if (ex) upd.push({ id: ex.ID, k, ex, fields: { Mark: m, Updated_At: iso, Source: ch.source || 'admin' } });
+    else if (m) add.push({ k, f: { Cleaner_ID: ch.cleaner.ID, Property_Key: STR_PROP, Date: ch.date, Mark: m, Updated_At: iso, Source: ch.source || 'admin' } });
+    else res.ok.push(k); // clearing a mark that was never there: nothing to do
+  }
+  const keep = (k, mark) => { if (mark) ctx.st.marks[k] = mark; else delete ctx.st.marks[k]; };
+  if (upd.length) {
+    let r; try { r = await strBatchSet(ctx.env, 'STR_Availability', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; }
+    for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) res.failed.push({ key: u.k, error: f.error }); else { Object.assign(u.ex, u.fields); keep(u.k, u.fields.Mark); res.ok.push(u.k); } }
+  }
+  if (add.length) {
+    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f)); add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
+    catch (e) { for (const a of add) res.failed.push({ key: a.k, error: strErrText(e) }); }
+  }
+  return res;
+}
+
+// ── Request + plan ───────────────────────────────────────────────────────────────────────────────
+function strChangeReq(body) {
+  body = body || {};
+  const action = String(body.action || '');
+  if (!STR_ACTIONS.includes(action)) throw strErr('bad_action', 'action must be swap, assign_range or mark.', 400);
+  const cleaner_id = String(body.cleaner_id == null ? '' : body.cleaner_id).trim(); if (!cleaner_id) throw strErr('cleaner_required', 'Pick a cleaner first.', 400);
+  const ymd = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')), req = { action, cleaner_id, confirm_out: body.confirm_out === true };
+  const many = n => { if (n > STR_CHANGE_MAX) throw strErr('too_many', `That is ${n} dates. The most you can change at once is ${STR_CHANGE_MAX}; pick fewer or do it in two goes.`, 400); };
+  if (action === 'swap') {
+    const keys = [...new Set((Array.isArray(body.task_keys) ? body.task_keys : []).map(k => String(k || '').trim()).filter(Boolean))];
+    if (!keys.length) throw strErr('no_dates', 'Pick at least one turnover.', 400); many(keys.length);
+    if (keys.some(k => k.length > 80)) throw strErr('bad_task_key', 'A turnover key looks wrong. Refresh the page and try again.', 400);
+/*@@S1@@*/
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
