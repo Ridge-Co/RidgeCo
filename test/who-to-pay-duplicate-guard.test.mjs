@@ -41,7 +41,7 @@ const qbEscapeSrc = extractFn('qbEscape', false);
 const findFnSrc = extractFn('qbFindLikelyUnlinkedPayment', true);
 
 function build(qbApi) {
-  return new Function('qbApi', `${qbEscapeSrc}\n${findFnSrc}\nreturn qbFindLikelyUnlinkedPayment;`)(qbApi);
+  return new Function('qbApi', `${PHASE_C_SHIM}${qbEscapeSrc}\n${findFnSrc}\nreturn qbFindLikelyUnlinkedPayment;`)(qbApi);
 }
 
 // Brett's exact case: a $297.50 Venmo payment sitting in QuickBooks as an unlinked Purchase.
