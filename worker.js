@@ -36707,6 +36707,21 @@ async function strPendingTick(ctx, feed, built, builtMap) {
   }
   return out;
 }
+
+// ── A held cleaner gives the date back (or marks herself out on it) ─────────────────────────────────────────────────────────────
+async function strPendingRelease(ctx, p, c, who) {
+  const iso = new Date(ctx.now).toISOString(), days = strDaysBetween(inspEtDate(ctx.now), p.Date);
+  await strSetTurnover(ctx, p, { Status: 'open', Assigned_Cleaner_ID: '', Assigned_Via: '', Note: `hold released by ${c.Name} ${iso}` });
+  const mine = ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && String(o.Cleaner_ID) === c.ID && o.Status === 'accepted').pop(); // her "yes" offer becomes "cancelled" (still blocks asking her again)
+  if (mine) await strSetOffer(ctx, mine, { Status: 'cancelled', Responded_At: iso, Note: who });
+  else { const id = await strAddRow(ctx.env, 'STR_Offers', { Task_Key: p.Task_Key, Cleaner_ID: c.ID, Round: '0', Created_At: iso, Status: 'cancelled', Mode: 'cancel', Responded_At: iso, Note: who }); ctx.st.offers.push({ ID: id, Task_Key: p.Task_Key, Cleaner_ID: c.ID, Status: 'cancelled', Mode: 'cancel' }); }
+  await strLog(ctx, p.Task_Key, c.ID, 'pending_hold_released', who);
+  await strSetMark(ctx, c, p.Date, 'out', 'cancel');
+  const pic = strBackupLine(strBackupPicture({ date: p.Date }, ctx.st.cleaners.filter(x => String(x.Active).toUpperCase() !== 'FALSE'), ctx.st.marks, c.ID));
+  const head = `PENDING HOLD RELEASED: ${strFirst(c)} can no longer hold ${strFmtDate(p.Date)} (tentative, not booked) - ${days <= 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}`;
+  await strRaiseAlert(ctx, { key: `prel|${p.Task_Key}|${c.ID}|${ctx.now}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, pic + '.', 'The next cleaner is asked next.'].join('\n'), sms: `${head}. ${pic}. ${PORTAL_BASE}/str-cleaning.html` });
+  return { days };
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
