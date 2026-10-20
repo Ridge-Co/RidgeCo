@@ -36338,7 +36338,7 @@ async function inspBookRequest(env, body) {
     if (racers.length) {
       if (!inspCalStaged(env, a.cfg)) { try { await inspCalFetch(env, a.cfg, 'DELETE', '/events/' + encodeURIComponent(ev.id)); createdEventId = ''; } catch (e2) { await inspAlert(env, 'calendar_orphan', 'A booking hold (' + ev.id + ') hit a conflict but could not be removed: ' + e2.message); } } else createdEventId = '';
       console.log('insp: booking race caught, slot taken between check and hold:', JSON.stringify(racers.map(r => r.kind)));
-      let fresh = []; try { fresh = (await inspAvailability(env, c, input)).slots.slice(0, 600).map(inspSlotOut); } catch (e3) { console.error('insp: fresh slots after race failed:', e3 && e3.message); }
+      let fresh = []; try { fresh = (await inspAvailability(env, c, input)).slots.slice(0, 600).map(inspSlotOut); } catch (e3) { console.error('insp: fresh slots after race failed:', e3 && e3.message); softNote('insp_fresh_slots_after_race', e3, 'P2'); }
       return json({ ok: false, error: 'slot_taken', message: 'Sorry — that time was just taken. Please pick another.', slots: fresh }, 409);
     }
     // 2) Then the Sheet row. If that fails, take the event back off the calendar (and say so).
