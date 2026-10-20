@@ -170,3 +170,7 @@ Open questions with defaults used: Gina = Regina Seville; Sierra is not in the p
 `worker.js` (STR-BLOCK-BEGIN … END), `cleaner.html`, `str-cleaning.html`, `test/str-cleaning.test.mjs`, `apps-script/hub-scheduler/HubScheduler.gs` (4 rows),
 `test/scheduler.test.mjs` + `test/no-cron-anywhere.test.mjs` (job counts), gh-broker `HUB_TEST_*_PATHS`.
 Cleaner phone numbers are **not** in this public repo: they are entered through the admin page (or seeded once with `hub_prod_post /str/admin/cleaner/save`).
+
+## Pending cleaning - ask about a date that is not booked (Oct 20 2026, BUILD_VERSION `2026-10-20.13-str-pending`, FEATURE_LOG rule 225; stacked on PR #382)
+- **Flow:** Admin "Ask about a date" (date + internal note) -> `POST /str/admin/pending/preview` (nothing written; queue order, exact text, send window, warnings, `sig`) -> `POST /str/admin/pending/create {date,note,sig,text,send_now}` -> offer to the first cleaner in queue order (Gina, Kayla, Rachel), one at a time. Cleaner page shows "NOT BOOKED YET - tentative" with "Yes, I'd be available" / "No". Yes = `pending_held` + `str_pending_yes` text + immediate Brett alert. Other cleaners see "Pending - not booked" with the normal backup / Out marks; a held cleaner who cancels triggers the existing staged backup promotion.
+(PENDING-BR-2)
