@@ -151,11 +151,13 @@
       var p = realFetch(input, init);
       if (!isHub || url.indexOf('/failure/report') >= 0) return p;
       var path = url.replace(/^https?:\/\/[^/]+/, '').split('?')[0].slice(0, 60);
+      var isWrite = !!(init && init.method && String(init.method).toUpperCase() !== 'GET');
       p.then(function (r) {
         try { if (r && r.status >= 500) { if (report('api ' + path, 'HTTP ' + r.status + ' from ' + path)) toast(); } } catch (e) { consoleErr('[failure-reporter] status check failed', e); }
+        if (isWrite && r && r.ok) watchWarnings(r, path);
       }, function (e) {
         try {
-          if (e && e.name === 'AbortError') return;
+          if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) return;
           if (navigator.onLine === false) return;
           if (report('api ' + path, 'network error calling ' + path + ': ' + (e && e.message || e))) toast();
         } catch (x) { consoleErr('[failure-reporter] network check failed', x); }
