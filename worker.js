@@ -24361,6 +24361,7 @@ function __meterFault(where, e) {
   if (__meter.faults <= 3) console.error('[read-meter] FAULT in ' + where + ' (meter only; Sheets calls are unaffected): ' + String((e && e.message) || e).slice(0, 200));
 }
 function __meterBucket(now) {
+  if (!__meter.since) __meter.since = Date.now();
   const k = Math.floor((now === undefined ? Date.now() : now) / 60000);
   let b = __meter.mins.get(k);
   if (!b) {
