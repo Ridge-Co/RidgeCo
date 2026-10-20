@@ -7,6 +7,7 @@
 import fs from 'fs';
 import assert from 'node:assert';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
+const SOFTO = { softNote: () => true, softFail: async () => ({ ok: false }), safeJson: async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }, parseJsonCell: (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } } };   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 function grab(name, isAsync) {
   const sig = (isAsync ? 'async function ' : 'function ') + name + '(';
   const i = src.indexOf(sig);
