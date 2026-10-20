@@ -15175,7 +15175,7 @@ async function doorWdAttempt(fetchImpl, timeoutMs) {
     const snippet = (bad || status !== 200) ? String(text).replace(/\s+/g, ' ').slice(0, 160) : undefined;
     return { status, json: bad ? undefined : parsed, bad_json: bad, snippet };
   })();
-  work.catch((e) => { console.error('door-watchdog: health attempt rejected:', e && e.message); });
+  work.catch((e) => { console.error('door-watchdog: health attempt rejected:', e && e.message); }); // silent-ok: the Promise.race below returns this same rejection as {error}, which the watchdog reports; this only stops an unhandled rejection after a timeout win
   try { return await Promise.race([work, timeoutP]); }
   catch (e) { return { error: String((e && e.message) || e).slice(0, 200), timeout: !!(e && e.timeout) }; }
   finally { clearTimeout(timer); }
