@@ -13065,12 +13065,13 @@ async function ownerUpdateWO(env, body) {
   await updateRow(env, 'Work_Orders', body.wo_id, allowed);
   const _ownerEntries = Object.entries(allowed).filter(([field,newVal]) => String(wo[field]||'') !== String(newVal||'')).map(([field,newVal]) => ({ woId: body.wo_id, changedBy: body.owner_name, changedByRole: 'owner', field, oldValue: wo[field]||'', newValue: newVal, notes: 'Owner updated via portal' }));
   await logWOAuditMany(env, _ownerEntries);
-  return json({ success: true });
+  return json(ownerWarn ? { success: true, failure_warning: ownerWarn } : { success: true });
 }
 
 async function adminUpdateWO(env, body) {
   const adminName = body.admin_name||'Admin'; if (!body.wo_id||!body.fields) return json({ error: 'Missing wo_id or fields' }, 400);
   const workorders = await fetchTab(env, 'Work_Orders'); const wo = workorders.find(w => w.ID === body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
+  let adminWarn = '';
   // Managed_By (Sep 16 2026, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part B):
   // adminUpdateWO takes arbitrary body.fields with no allow-list (unlike ownerUpdateWO's
   // OWNER_EDITABLE_FIELDS), so Managed_By gets the same validation + ensureColumns here that
