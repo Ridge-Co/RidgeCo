@@ -29,12 +29,20 @@
   var PROD = 'https://maintenance-hub.brett-2f8.workers.dev';
   var SENT = '__staging_ui_test__';
   var on = false;
+  // A swallowed error inside a test tool is a lie about the test run: record it where the tester can see it
+  // (window.__testLoginErrors + a console FAIL line) instead of continuing as if the shim worked.
+  window.__testLoginErrors = window.__testLoginErrors || [];
+  function tlFail(where, e) {
+    var m = '[test-login] FAIL ' + where + ': ' + (e && e.message || e);
+    window.__testLoginErrors.push(m);
+    console.error(m);
+  }
   try {
     var q = new URLSearchParams(location.search);
     if (q.get('testmode') === '1') sessionStorage.setItem('mh_testmode', '1');
     else if (q.get('testmode') === '0') sessionStorage.removeItem('mh_testmode');
     on = sessionStorage.getItem('mh_testmode') === '1';
-  } catch (e) {}
+  } catch (e) { tlFail('testmode flag', e); }
   if (!on) return;
   window.__testmode = true;
   window.__testDialogs = [];
