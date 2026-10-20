@@ -35130,8 +35130,9 @@ async function strSetOffer(ctx, o, fields) { Object.assign(o, await strSetRow(ct
 async function strSetTurnover(ctx, r, fields) { Object.assign(r, await strSetRow(ctx.env, 'STR_Turnovers', r.ID, Object.assign({ Updated_At: new Date(ctx.now).toISOString() }, fields))); return r; }
 
 // Move one open turnover forward: expire stale offers, then ask the next cleaner in the queue (when inside the send window).
-async function strAdvanceTask(ctx, trow) {
-  const { env, S, st } = ctx, now = ctx.now, task = strRowToTask(trow), today = inspEtDate(now), iso = new Date(now).toISOString();
+async function strAdvanceTask(ctx, trow, opts) {
+  opts = opts || {};
+  const { env, S, st } = ctx, now = ctx.now, task = strRowToTask(trow), today = inspEtDate(now), iso = new Date(now).toISOString(), pend = strIsPendRow(trow); // pend: a pending (not booked) date, see the Pending cleaning block
   const mine = () => st.offers.filter(o => o.Task_Key === trow.Task_Key);
   for (const o of mine().filter(o => o.Status === 'pending')) {
     if (Date.parse(o.Deadline_At) <= now) {
