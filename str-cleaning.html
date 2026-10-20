@@ -951,6 +951,21 @@ function pendCard(p){
   if(p.active){
     h += '<div class="t-actions"><button class="btn sm primary" data-act="pend-convert" data-key="' + k + '">Mark as booked now</button>'
       + (p.can_send_now ? '<button class="btn sm" data-act="pend-send" data-key="' + k + '">Ask now, even if late</button>' : '')
+      + '<button class="btn sm" data-act="pend-cancel" data-key="' + k + '">Cancel this inquiry</button>'
+      + '<p class="say" style="flex:1 0 100%"><b>Mark as booked now:</b> use it when you already accepted the booking but the bookings feed has not shown it yet. The holder becomes the assigned cleaner and is texted. '
+      + (p.can_send_now ? '<b>Ask now:</b> sends the question to the next cleaner immediately instead of waiting for 8 AM. ' : '')
+      + '<b>Cancel:</b> closes the inquiry. You choose whether the cleaner who said yes is told.</p></div>';
+  }
+  return h + '</div>';
+}
+function renderPending(){
+  var list = S.pending || [], act = list.filter(function(p){ return p.active; });
+  $('m-pend').textContent = act.length ? plural(act.length, 'open inquiry', 'open inquiries') : '';
+  if(!list.length){ $('pend-list').innerHTML = '<p class="muted">No pending dates. Use "Ask about a date" when a possible booking comes in.</p>'; return; }
+  var open = list.filter(function(p){ return p.active; }), shut = list.filter(function(p){ return !p.active; });
+  $('pend-list').innerHTML = (open.length ? '<div class="grid">' + open.map(pendCard).join('') + '</div>' : '')
+    + (shut.length ? '<div class="muted" style="margin:12px 0 4px">Closed recently</div><div class="grid">' + shut.map(pendCard).join('') + '</div>' : '');
+}
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
