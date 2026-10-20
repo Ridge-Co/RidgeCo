@@ -10841,7 +10841,7 @@ async function addVendorBill(env, body) {
   }
   // Vendor_Bills has no column for the vendor's own invoice number until something needs
   // one, and addRow maps by header — a write to a missing column stores nothing silently.
-  if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) {} }
+  if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) { await softFail(env, 'vendor_bill_ensure_columns:Vendor_Invoice_No', e, 'P1', { ref: dupeKey }); } }
   // Same lazy pattern for the vendor's own invoice DATE (Aug 31 2026, invoice-OCR pre-fill —
   // Created_Date already means "the day this bill row was submitted," not the date printed on
   // the vendor's invoice, so this is a genuinely new fact, not a rename/reuse of an existing
