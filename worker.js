@@ -11709,7 +11709,7 @@ async function approveInvoiceReview(env, body) {
     const parsed = await addRes.clone().json();
     if (parsed && parsed.error) return addRes;      // missing tab / no header row — surface it
     realId = String(parsed && parsed.id || '');
-  } catch (e) { /* fall through with an empty id rather than fail the whole approval */ }
+  } catch (e) { await softFail(env, 'approve_invoice_review_add_response_unreadable', e, 'P1', { ref: wo_id }); }   // fall through with an empty id rather than fail the whole approval; the instant-pad read-back below is skipped without an id
   if (padRes.pad > 0 && realId) {
     // A pad that did not land would send the vendor a legacy deduction while the customer's price was built on a pad: say so, never go quiet.
     try {
