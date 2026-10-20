@@ -12196,7 +12196,7 @@ async function processDepositPaidSweep(env) {
     scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
     out.checked = scopes.length;
     if (!scopes.length) { out.ok = !out.errors.length; return out; }
-    try { await paymentMilestonesTab(env); } catch (_) {}
+    try { await paymentMilestonesTab(env); } catch (e) { softNote('payment_milestones_ensure_tab_failed', e, 'P1'); }   // the read just below throws if the tab is really missing
     tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
   } catch (e) {
     await logAndCollectError(env, out.errors, 'deposit_sweep_read', 'processDepositPaidSweep', 'scopes/signatures/milestones', e);
