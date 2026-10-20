@@ -35530,7 +35530,7 @@ async function strCleanerPage(env, url) {
 // POST /str/c/offer {k, offer_id, action:'accept'|'decline'}
 // After a handler changes state: re-evaluate the standing alerts and deliver anything due (exhausted queue, covered notice...). Never throws.
 async function strAlertsNow(ctx, warnings, tag) {
-  try { await strEvalAlerts(ctx, strComputeViews(ctx, null)); await strDeliverAlerts(ctx); }
+  try { await strEvalAlerts(ctx, strComputeViews(ctx, null)); await strPendingAlerts(ctx); await strDeliverAlerts(ctx); }
   catch (e) { warnings.push('Brett could not be sent the latest alert: ' + strErrText(e)); await strSystemAlert(ctx.env, 'alerts_' + tag, strErrText(e)); }
 }
 async function strOfferRespond(env, body) {
