@@ -16494,6 +16494,25 @@ function failMessageQueueStats(rows, nowMs) {
   }
   return { stuck, oldest_hours: oldest, failed24 };
 }
+// IO. Each check is isolated: one failing check becomes its own item (never hides the others, never silent).
+async function failInvariantsCollect(env, nowMs) {
+  const data = { dup: [], mq: null, twilio: null, qb: null, gmail: null, errors: [] };
+  const note = (check, e) => data.errors.push({ check, error: String((e && e.message) || e) });
+  for (const tab of FAIL_INV_DUP_TABS) {
+    try {
+      const hdr = (await sheetsRequest(env, 'GET', `/values/${tab}!1:1`)).values || [];
+      const idx = Math.max(0, (hdr[0] || []).indexOf('ID'));
+      const c = col(idx);
+      const vals = (await sheetsRequest(env, 'GET', `/values/${tab}!${c}2:${c}`)).values || [];
+      data.dup.push({ tab, ids: failDuplicateIds(vals.map(r => r[0])) });
+    } catch (e) { if (!isMissingTabError(e)) note('duplicate_ids:' + tab, e); }
+  }
+  try {
+    const vals = (await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`)).values || [];
+    const hd = vals[0] || [];
+    const rows = vals.slice(1).map(r => { const o = {}; hd.forEach((h, i) => { o[h] = r[i] === undefined ? '' : r[i]; }); return o; });
+    data.mq = failMessageQueueStats(rows, nowMs);
+  } catch (e) { if (!isMissingTabError(e)) note('message_queue', e); }
 //@@L
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
