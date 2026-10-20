@@ -36646,6 +36646,21 @@ async function strPendingSendMail(ctx, p) {
   ctx.errors.push({ step: 'pending_invite', error: r.note }); await strSystemAlert(ctx.env, 'pending_invite', r.note + (n + 1 >= 3 ? ' (no more tries)' : ''));
   return { ok: false };
 }
+// Everything a closed-out pending row still owes: its text, its invite email, its calendar clean-up. Each piece is skipped (left for the next tick)
+// when this call is short of subrequests, and never blocks the others.
+async function strPendingDrain(ctx, feed) {
+  if (ctx.dry) return { skipped: 'dry run' };
+  const out = { texts: 0, mails: 0, cal: 0 };
+  for (const p of ctx.st.pendings.filter(p => ['pending_converted', 'pending_cancelled', 'pending_expired'].includes(p.Status))) {
+    const owes = (p.Pending_Text === 'due' || /^failed:[12]$/.test(p.Pending_Text || '') || /^sending:/.test(p.Pending_Text || '')), oweMail = p.Pending_Mail === 'due' || /^failed:[12]$/.test(p.Pending_Mail || ''), oweCal = p.Pending_Cal === 'del' || p.Pending_Cal === 'conv';
+    if (!owes && !oweMail && !oweCal) continue;
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'pending-date follow-up(s)'); continue; }
+    if (owes && strRoom(ctx, 22)) { try { if ((await strPendingSendText(ctx, p) || {}).ok) out.texts++; } catch (e) { ctx.errors.push({ step: 'pending_text', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_text', strErrText(e)); } }
+    if (oweMail && strRoom(ctx, 24)) { try { if ((await strPendingSendMail(ctx, p) || {}).ok) out.mails++; } catch (e) { ctx.errors.push({ step: 'pending_invite', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_invite', strErrText(e)); } }
+    if (oweCal && feed && strRoom(ctx, 16)) { try { if ((await strPendingCalFix(ctx, feed, p) || {}).done) out.cal++; } catch (e) { ctx.errors.push({ step: 'pending_calendar', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_calendar', `The cleaning calendar change for the pending ${strFmtDate(p.Date)} date did not land: ${strErrText(e)}. It will be retried.`); } }
+  }
+  return out;
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
