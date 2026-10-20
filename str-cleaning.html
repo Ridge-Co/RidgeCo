@@ -1010,6 +1010,17 @@ function renderPendPlan(){
   } else h += '<div class="msg warn"><b>Nobody to text.</b>You can still save the inquiry. It will show "Nobody available" and you will be told.</div>';
   var btns = '<div class="stk"><div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go">' + (p.first ? 'Send: ask ' + esc(p.first.first) : 'Save: nobody to ask') + '</button></div></div>';
   sheetShell('Check before it is sent', '', h, btns);
+  var ta = $('pd-text'); if(ta){ var upd = function(){ var n = ta.value.length; $('pd-cnt').textContent = n + ' characters' + (n > 160 ? ' - long, may go out as several texts' : ''); $('pd-cnt').className = 'cnt' + (n > 320 ? ' long' : ''); }; upd(); ta.addEventListener('input', upd); }
+  $('sh-cancel').onclick = function(){ PD = null; closeSheet(); };
+  $('sh-go').onclick = sendPendCreate;
+}
+function sendPendCreate(){
+  if(!PD || PD.sending) return;
+  var p = PD.plan, ta = $('pd-text'), now = $('pd-now');
+  if(p.first && !ta.value.trim()){ chShowErr('The text is empty. Type something first.'); return; }
+  PD.sending = true; sheetBusy = true;
+  var go = $('sh-go'), cancel = $('sh-cancel'); go.disabled = true; cancel.disabled = true; go.textContent = 'Working… please wait';
+  if($('sh-err')) $('sh-err').classList.add('hide');
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
