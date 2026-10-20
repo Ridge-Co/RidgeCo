@@ -4464,7 +4464,7 @@ async function woPushToScope(env, body) {
   }
 
   const finalItems = existingItems.concat(mappedItems);
-  let srcs = []; try { srcs = JSON.parse((targetScope && targetScope.Source_Refs) || '[]'); } catch (_) {}
+  const srcs = parseJsonCell(targetScope && targetScope.Source_Refs, [], 'Scopes.Source_Refs');
   srcs.push({ type: 'estimate', estimate_id: estimate.ID, version: estimate.Version, wo_id: woId, ts: new Date().toISOString() });
   try {
     await updateRow(env, 'Scopes', scopeId, {
