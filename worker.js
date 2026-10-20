@@ -24270,6 +24270,18 @@ async function signRS256(input, key) {
 // (and cannot, without a KV/Durable Object binding this environment doesn't have) guarantee
 // zero duplicate reads globally.
 const __tabCache = new Map(); // tabName -> { data, exp }
+// In-flight read sharing (Oct 19 2026, vendor-portal quota burst). The 6s cache above only helps AFTER a read has
+// finished; a vendor portal that opens N work-order cards fires ~6N requests in the same instant, every one of them
+// a cache MISS, so every one went to Google separately and the shared 60-reads/minute quota was gone in seconds
+// ("Could not load estimate: ... Read requests per minute per user"). Now the first caller reads and every other
+// concurrent caller for the same tab (or the same batchGet tab set) awaits that one read. Writes drop the entry so a
+// reader that starts after a write never joins a read that began before it.
+const __inflight = new Map();      // tabName -> Promise<sheetsData>
+const __batchInflight = new Map(); // sorted tab names joined by '|' -> Promise<void> (resolves once cached)
+function __dropInflightFor(tab) {
+  __inflight.delete(tab);
+  for (const k of Array.from(__batchInflight.keys())) { if (k.split('|').indexOf(tab) > -1) __batchInflight.delete(k); }
+}
 const TAB_CACHE_MS = 6000;
 // Real outbound Google Sheets calls made by this isolate (Oct 14 2026). Cloudflare caps a single request at 50 outbound calls on
 // this plan, and the tenant roster apply must stop and resume rather than hit it, so it reads the delta of this counter.
