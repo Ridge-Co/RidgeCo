@@ -16116,6 +16116,167 @@ async function failReportEndpoint(env, request, body) {
   if (r.dropped) return json({ ok: false, error: 'too many reports right now' }, 429);
   return json(r.ok ? { ok: true } : { ok: false, error: 'could not save the report' }, r.ok ? 200 : 503);
 }
+// ── A3a: daily "should have happened" checks + auto-queue of problems left open ───────────────────────────────────────
+// Checks catch failures nobody thought to instrument: duplicate IDs, texts stuck waiting, texts that failed, low Twilio balance.
+// They are read-only and run at most once every 20 h (Sheets read quota is itself a top failure cause); the result is stored in Config
+// (failure_invariants_json) and fed to the rollup as conditions every run, so a problem stays on screen until a later check no longer finds it.
+const FAIL_INV_KEY = 'failure_invariants_json';
+const FAIL_INV_MAX_AGE_MS = 20 * 3600000;
+const FAIL_INV_DUP_TABS = ['Message_Queue', 'Work_Orders', 'Vendor_Requests', 'Notification_Queue', 'Ops_Build_Queue'];
+const FAIL_INV_STUCK_AFTER_MS = 6 * 3600000;
+const FAIL_TWILIO_P0_USD = 10, FAIL_TWILIO_P1_USD = 25;
+const FAIL_QUEUE_AFTER_MS = 24 * 3600000;
+const FAIL_QUEUE_MAX_PER_RUN = 3;
+const FAIL_NO_QUEUE_KEYS = ['alerts_off', 'no_admin_phone', 'dead_man_off'];   // switches Brett flips himself; not build work
+
+// Pure. data = { dup: [{tab, ids:[...]}], mq: {stuck, oldest_hours, failed24} | null, twilio: {balance} | null, errors: [{check, error}] }.
+function failInvariantItems(data) {
+  data = data || {};
+  const out = [];
+  for (const d of (data.dup || [])) if (d && d.ids && d.ids.length) out.push({ key: 'inv:dup:' + d.tab, system: 'hub', where: 'integrity:' + d.tab, severity: 'P1', message: `${d.tab} has ${d.ids.length} duplicate ID${d.ids.length === 1 ? '' : 's'} (e.g. ${d.ids.slice(0, 4).join(', ')}). A duplicate ID means an edit can land on the wrong row.` });
+  const mq = data.mq;
+  if (mq && mq.stuck > 0) out.push({ key: 'inv:mq_stuck', system: 'hub', where: 'integrity:Message_Queue', severity: 'P1', message: `${mq.stuck} text${mq.stuck === 1 ? ' is' : 's are'} still pending long after ${mq.stuck === 1 ? 'its' : 'their'} send time (oldest ${mq.oldest_hours} h overdue). The sweep should have sent ${mq.stuck === 1 ? 'it' : 'them'}.` });
+  if (mq && mq.failed24 > 0) out.push({ key: 'inv:mq_failed', system: 'hub', where: 'integrity:Message_Queue', severity: 'P1', message: `${mq.failed24} text${mq.failed24 === 1 ? '' : 's'} failed to send in the last 24 h (Message_Queue status "failed").` });
+  const tw = data.twilio;
+  if (tw && typeof tw.balance === 'number' && isFinite(tw.balance)) {
+    if (tw.balance < FAIL_TWILIO_P0_USD) out.push({ key: 'inv:twilio_balance', system: 'hub', where: 'twilio_balance', severity: 'P0', message: `Twilio balance is $${tw.balance.toFixed(2)}. When it reaches zero every text stops. Add funds in the Twilio console.` });
+    else if (tw.balance < FAIL_TWILIO_P1_USD) out.push({ key: 'inv:twilio_balance', system: 'hub', where: 'twilio_balance', severity: 'P1', message: `Twilio balance is $${tw.balance.toFixed(2)} (low). Add funds before it runs out.` });
+  }
+  for (const e of (data.errors || [])) out.push({ key: 'inv:check_failed:' + e.check, system: 'hub', where: 'integrity_check:' + e.check, severity: 'P1', message: `The daily check "${e.check}" itself could not run: ${failTrim(e.error, 200)}` });
+  return out.slice(0, 25);
+}
+// Pure. Ids that appear more than once in a column (blank ids ignored).
+function failDuplicateIds(ids) {
+  const seen = new Set(), dup = new Set();
+  for (const v of ids) { const s = String(v == null ? '' : v).trim(); if (!s) continue; if (seen.has(s)) dup.add(s); else seen.add(s); }
+  return Array.from(dup);
+}
+// Pure. Message_Queue rows -> { stuck, oldest_hours, failed24 }. "Stuck" = pending, active, with a send time more than 6 h ago.
+function failMessageQueueStats(rows, nowMs) {
+  let stuck = 0, oldest = 0, failed24 = 0;
+  for (const r of rows) {
+    const st = String(r.Status || '').toLowerCase(), active = String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() !== 'FALSE';
+    if (st === 'pending' && active && r.Send_After) {
+      const t = Date.parse(r.Send_After);
+      if (isFinite(t) && nowMs - t > FAIL_INV_STUCK_AFTER_MS) { stuck++; oldest = Math.max(oldest, Math.round((nowMs - t) / 3600000)); }
+    }
+    if (st === 'failed') {
+      const t = Date.parse(r.Created_Date || r.Sent_Date || '');
+      if (isFinite(t) && nowMs - t < 24 * 3600000) failed24++;
+    }
+  }
+  return { stuck, oldest_hours: oldest, failed24 };
+}
+// IO. Each check is isolated: one failing check becomes its own item (never hides the others, never silent).
+async function failInvariantsCollect(env, nowMs) {
+  const data = { dup: [], mq: null, twilio: null, errors: [] };
+  const note = (check, e) => data.errors.push({ check, error: String((e && e.message) || e) });
+  for (const tab of FAIL_INV_DUP_TABS) {
+    try {
+      const hdr = (await sheetsRequest(env, 'GET', `/values/${tab}!1:1`)).values || [];
+      const idx = Math.max(0, (hdr[0] || []).indexOf('ID'));
+      const c = col(idx);
+      const vals = (await sheetsRequest(env, 'GET', `/values/${tab}!${c}2:${c}`)).values || [];
+      data.dup.push({ tab, ids: failDuplicateIds(vals.map(r => r[0])) });
+    } catch (e) { if (!isMissingTabError(e)) note('duplicate_ids:' + tab, e); }
+  }
+  try {
+    const vals = (await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`)).values || [];
+    const hd = vals[0] || [];
+    const rows = vals.slice(1).map(r => { const o = {}; hd.forEach((h, i) => { o[h] = r[i] === undefined ? '' : r[i]; }); return o; });
+    data.mq = failMessageQueueStats(rows, nowMs);
+  } catch (e) { if (!isMissingTabError(e)) note('message_queue', e); }
+  try {
+    if (env.TWILIO_SID && env.TWILIO_API_SID && env.TWILIO_API_KEY) {
+      const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Balance.json`, { headers: { Authorization: 'Basic ' + btoa(unescape(encodeURIComponent(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`))) } });
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(`Twilio Balance API HTTP ${resp.status}: ${text.slice(0, 120)}`);
+      const j = JSON.parse(text), b = parseFloat(j && j.balance);
+      if (!isFinite(b)) throw new Error('Twilio Balance API returned no balance');
+      data.twilio = { balance: b };
+    }
+  } catch (e) { note('twilio_balance', e); }
+  return data;
+}
+// IO. Stored result if fresh, else re-check. Returns condition items. Never throws.
+async function failInvariantConditions(env, cfg, nowMs) {
+  let stored = null;
+  try { const p = JSON.parse(cfg[FAIL_INV_KEY] || 'null'); if (p && typeof p.at === 'number' && Array.isArray(p.items)) stored = p; } catch (e) { stored = null; }
+  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) return stored.items;
+  try {
+    const items = failInvariantItems(await failInvariantsCollect(env, nowMs));
+    const compact = items.map(i => ({ key: i.key, system: i.system, where: i.where, severity: i.severity, message: failTrim(i.message, 300) }));
+    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact }));
+    return compact;
+  } catch (e) {
+    const old = stored ? stored.items : [];
+    return old.concat([{ key: 'inv:run_failed', system: 'hub', where: 'integrity_check', severity: 'P1', message: 'The daily integrity checks could not run or be saved: ' + failTrim((e && e.message) || e, 200) }]);
+  }
+}
+// Pure. Which open problems should become Ops_Build_Queue items: P0/P1, open or acknowledged, first seen > 24 h ago, not already queued.
+function failQueuePlan(ledger, nowMs) {
+  const out = [];
+  for (const r of ledger) {
+    if (out.length >= FAIL_QUEUE_MAX_PER_RUN) break;
+    if (FAIL_OPEN.indexOf(r.Status) < 0 || (r.Severity !== 'P0' && r.Severity !== 'P1')) continue;
+    if (/queued: Ops_Build_Queue #/.test(r.Notes || '')) continue;
+    if (FAIL_NO_QUEUE_KEYS.some(k => r.Fingerprint === 'cond|' + k)) continue;
+    const t = Date.parse(r.First_Seen || '');
+    if (!isFinite(t) || nowMs - t < FAIL_QUEUE_AFTER_MS) continue;
+    out.push(r);
+  }
+  return out;
+}
+function failQueueItem(r) {
+  return {
+    title: failTrim(`Fix: ${r.Where} - ${r.Message}`, 190),
+    problem: `Seen ${r.Count} time(s) since ${r.First_Seen} (last ${r.Last_Seen}); still open after 24 h. System ${r.System}. Error: ${r.Message}. Needs Attention ID ${r.ID}.`,
+    impact: r.Severity === 'P0' ? 'Urgent: money, texts or scheduled jobs affected.' : 'Important: data integrity or a failing path.',
+    tag: 'failure', lens: 'Inward',
+    first_step: 'Open Needs Attention, use "Copy for Claude" on this item, find the cause, fix it, add a test that forces this exact failure, and mark it fixed with the PR.',
+  };
+}
+// IO. Adds the queue rows (status "proposed", Brett still decides), then stamps the ledger Notes so it is never queued twice.
+async function failQueueRun(env, ledgerRows, nowMs, errors) {
+  const todo = failQueuePlan(ledgerRows, nowMs);
+  if (!todo.length) return 0;
+  let n = 0;
+  try { await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS); }
+  catch (e) { errors.push({ step: 'queue_tab', error: String((e && e.message) || e).slice(0, 200) }); return 0; }
+  const lastCol = col(FAIL_LEDGER_COLS.length - 1);
+  for (const r of todo) {
+    try {
+      const nowIso = new Date(nowMs).toISOString();
+      const rowObj = buildScoutQueueRow(failQueueItem(r), nowIso, nowIso);
+      rowObj.Approved_By = 'failure-ledger';
+      const res = await addRow(env, OPS_QUEUE_TAB, rowObj);
+      if (res && typeof res.status === 'number' && res.status >= 400) throw new Error(`queue row could not be saved (HTTP ${res.status})`);
+      let id = ''; try { id = String((await res.clone().json()).id || ''); } catch (e) { id = ''; }
+      if (!id) throw new Error('queue row saved but its id was not returned');
+      r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `${nowIso.slice(0, 10)} queued: Ops_Build_Queue #${id}`;
+      await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: [{ range: `${FAIL_LEDGER_TAB}!A${r._row}:${lastCol}${r._row}`, values: [FAIL_LEDGER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : String(r[c]))] }] });
+      n++;
+    } catch (e) { errors.push({ step: 'queue_item', error: `${r.ID}: ` + String((e && e.message) || e).slice(0, 200) }); }
+  }
+  return n;
+}
+
+// ── A3b: summary for the Apps Script watcher (GET /cron/status carries it) ────────────────────────────────────────────
+// Pure. Ledger rows -> counts plus up to 5 urgent (P0) problems nobody has acknowledged yet. Status "open" only: acknowledged means Brett has seen it.
+function failStatusSummary(ledger) {
+  const open = ledger.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
+  const p0 = open.filter(r => r.Severity === 'P0' && r.Status === 'open').sort((a, b) => (a.First_Seen < b.First_Seen ? -1 : 1));
+  return { ok: true, open: open.length, P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length,
+    p0_unack: p0.slice(0, 5).map(r => ({ id: r.ID, where: r.Where, message: failTrim(r.Message, 220), count: Number(r.Count) || 1, first_seen: r.First_Seen })), p0_unack_total: p0.length };
+}
+// IO. Never throws: a read failure is reported inside the summary so the watcher can say so (never a quiet "nothing wrong").
+async function failStatusForScheduler(env) {
+  try {
+    let vals; try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; } catch (e) { if (isMissingTabError(e)) vals = []; else throw e; }
+    return failStatusSummary(failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID));
+  } catch (e) { return { ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }; }
+}
+
 // ═══ FAILURE-LEDGER-END ════════════════════════════════════════════════════════════════════════════════════════════
 
 // Sweep single-flight claim (Sep 20 2026 — real incident fix): this used to be called by TWO
