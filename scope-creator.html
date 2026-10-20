@@ -483,12 +483,12 @@ function showList(){ show('list'); loadScopes(); }
 
 async function boot(){
   setStatus('conn-status','Loading…');
-  try{
-    var res = await Promise.all([getRetry('/properties'),getRetry('/units'),getRetry('/owners'),getRetry('/vendors'),get('/config').catch(function(){return {};})]);
+  var cfgFailed=false; try{
+    var res = await Promise.all([getRetry('/properties'),getRetry('/units'),getRetry('/owners'),getRetry('/vendors'),get('/config').catch(function(e){ cfgFailed=true; window.hubReportFailure && window.hubReportFailure('scope-creator:config-load', e); return {}; })]);
     [0,1,2,3].forEach(function(i){ if(!Array.isArray(res[i])) throw new Error('Could not load data (unexpected response) — reload in a minute.'); });
     state.properties=res[0]||[]; state.units=res[1]||[]; state.owners=res[2]||[]; state.vendors=res[3]||[];
     var cfgVal=parseFloat((res[4]||{}).MAX_UPFRONT_DEPOSIT_PCT); if(isFinite(cfgVal)&&cfgVal>0&&cfgVal<=100) scheduleState.maxUpfrontPct=cfgVal;
-    setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok');
+    setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok'); if(cfgFailed) setStatus('conn-status','✅ connected — '+state.properties.length+' properties. ⚠ Settings did not load, so the default deposit limit is being used. Reload to retry.','warn');
     populateOwners(); populateVendors();
     await loadScopes();
     await handleDeepLink();
