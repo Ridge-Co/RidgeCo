@@ -35455,6 +35455,8 @@ async function strTick(env, opts) {
   else try { ctx.detail.held_texts = await strOutboxDrain(ctx); } catch (e) { ctx.errors.push({ step: 'held_texts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'held_texts', 'Held cleaner texts could not be processed: ' + strErrText(e)); }
   // Oct 20 2026: an admin swap that stopped half way (the page was closed) is flagged until someone presses Continue on the page.
   try { for (const ch of (ctx.st.changes || []).filter(c => c.Status === 'applying' && ctx.now - Date.parse(c.Created_At || '') > 10 * 60000)) { const age = Math.round((ctx.now - Date.parse(ch.Created_At)) / 60000), m = `A change you started (${ch.Summary || 'plan ' + ch.Plan_ID}) is only half finished (stopped at "${ch.Stage}"). Open the cleaning page and press Continue.`; ctx.errors.push({ step: 'change_unfinished', error: m }); if (!ctx.dry && age < 180) await strSystemAlert(env, 'swap_stuck_' + ch.Plan_ID, m); } } catch (e) { ctx.errors.push({ step: 'change_unfinished', error: strErrText(e) }); }
+  // 2b. pending (not booked) dates: expire, convert when the booking arrives, owed texts / invites / calendar clean-up, ask the next cleaner
+  try { ctx.detail.pending = await strPendingTick(ctx, feed, built, builtMap); if (ctx.pendChanged) views = strComputeViews(ctx, foreign); } catch (e) { ctx.errors.push({ step: 'pending', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'pending_tick', 'The pending-date step failed: ' + strErrText(e)); }
   // 3. offers: expire stale ones, ask the next cleaner
   const offered = [];
   for (const v of views.filter(v => !v.coveredAny && ['open', 'offering', 'exhausted'].includes(v.row.Status))) {
