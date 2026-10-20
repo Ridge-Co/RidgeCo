@@ -9167,7 +9167,7 @@ function invPricing(k) {
         if (r && r.pay === 'account') onAccount += amt; else reimburse += amt;
       });
     }
-  } catch (e) {}
+  } catch (e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-split', e, {ref: bill.ID}); }
 
   // Materials bought outside the vendor's bill. Money out of the business, so they belong
   // in the pricing basis — which is what makes the markup and the card fee apply to them, the
