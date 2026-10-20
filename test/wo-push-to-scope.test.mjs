@@ -145,7 +145,7 @@ function makeFetch(db) {
 
 function build(db) {
   const src = [
-    'const CORS = {};', aiCreditGuardPrelude(), ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(s)).join('\n'),
+    'const CORS = {};', "const softNote=()=>true;const softFail=async()=>({ok:false});const parseJsonCell=(r,f)=>{if(r===undefined||r===null||(typeof r==='string'&&!r.trim()))return f;if(typeof r!=='string')return r;try{return JSON.parse(r)}catch(e){return f}};const safeJson=async(r,f)=>{try{return await r.json()}catch(e){return f}};const tryWrite=async(env,w,fn)=>{try{return{ok:true,value:await fn()}}catch(e){return{ok:false,error:String(e&&e.message)}}};", aiCreditGuardPrelude(), ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(s)).join('\n'),
     cacheSrc, srSrc, ensureColumnsSrc, ensureColumnsInnerSrc, ensureTabSrc, idcSrc, colSrc, jsonSrc,
     isMissingTabErrorSrc, missingTabResponseSrc, fetchTabSrc, findWOSrc, addRowSrc, updateRowSrc,
     updateWOFieldsSrc, scopesHeadersSrc, scopeParseItemsSrc, grab('function englishOnly('), grab('function estimateLinesEnglish('), grab('function plausiblyNonEnglish('), grab('async function translateBatchToEnglish('), scopeItemsFromEstimateSrc, scopesTabSrc,
