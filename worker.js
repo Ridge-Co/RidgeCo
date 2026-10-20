@@ -36916,6 +36916,8 @@ function strPendingForCleaner(ctx, c, today) {
   return st.pendings.filter(p => strPendActive(p) && p.Date >= today && strDaysBetween(today, p.Date) <= STR_MARK_HORIZON).sort((a, b) => a.Date.localeCompare(b.Date)).map(p => {
     const held = p.Status === 'pending_held', mine = held && String(p.Assigned_Cleaner_ID) === c.ID;
     const o = !held ? st.offers.filter(o => o.Task_Key === p.Task_Key && String(o.Cleaner_ID) === c.ID && (o.Status === 'pending' || o.Status === 'expired')).sort((a, b) => (parseInt(b.ID, 10) || 0) - (parseInt(a.ID, 10) || 0))[0] : null;
+    return { key: p.Task_Key, date: p.Date, label: strFmtDate(p.Date), long_label: strFmtDate(p.Date, true), days_out: strDaysBetween(today, p.Date), tentative: true, held_by_me: mine, held_by_other: held && !mine,
+      offer_id: o ? o.ID : '', late: !!o && (o.Status === 'expired' || Date.parse(o.Deadline_At) < ctx.now), my_mark: st.marks[c.ID + '|' + p.Date] || '', can_release: mine,
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
