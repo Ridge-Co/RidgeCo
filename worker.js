@@ -36880,6 +36880,10 @@ async function strAdminPendingCancel(env, body) {
     await strPendingDrain(ctx, null); // the held cleaner's text first (the important part), then the calendar if this call still has room
     try { if (strRoom(ctx, 14)) await strPendingDrain(ctx, await strReadFeed(ctx)); } catch (e) { warnings.push('The calendar could not be updated just now; the tentative event is removed by the next scheduler run.'); }
     await strPendingAlerts(ctx);
+    const after = ctx.st.pendings.find(x => x.Task_Key === p.Task_Key) || p, ts = after.Pending_Text || '';
+    return json({ ok: true, status: strPendingStatus(ctx, after), message: notify ? (/^sent:/.test(ts) ? `Cancelled. ${strFirst(holder)} was told.` : (ts === 'due' ? `Cancelled. ${strFirst(holder)} will be told ${strInSendWindow(ctx.now, ctx.S) ? 'within a few minutes' : 'at 8 AM'}.` : `Cancelled, but the text to ${strFirst(holder)} did not go out (${ts || 'see warnings'}).`)) : 'Cancelled. Nobody was texted.', text_state: ts, warnings: warnings.concat(ctx.errors.map(e => e.error)) });
+  } catch (e) { return await strHandleErr(env, e, 'pending cancel'); }
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
