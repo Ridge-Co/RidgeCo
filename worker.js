@@ -12583,8 +12583,9 @@ async function addEstimateVersion(env, body) {
   // English. Fails open — a translation miss just means no English copy (Re-translate can retry).
   const changeReason = nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised');
   let storedLineItems = body.line_items, changeReasonEn = '';
+  const estWarnings = [];   // Oct 20 2026: best-effort writes that failed are reported to the ledger AND handed back so the vendor/admin screen can say so
   try {
-    const vendorRow = body.vendor_id ? (await fetchTab(env, 'Vendors').catch(() => [])).find(v => String(v.ID) === String(body.vendor_id)) : null;
+    const vendorRow = body.vendor_id ? (await fetchTabSoft(env, 'Vendors', 'estimate_post_vendor_lang')).find(v => String(v.ID) === String(body.vendor_id)) : null;
     const en = await estimateEnglishFields(env, body.line_items, nextVersion === 1 ? '' : changeReason, { force: vendorWantsSpanish(vendorRow) });
     if (en.ok) { storedLineItems = en.line_items; changeReasonEn = en.change_reason_en; }
   } catch (_) {}
