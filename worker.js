@@ -2771,7 +2771,7 @@ function statementLineMatch(line, existingReceipts, existingQueueRows) {
 async function receiptReconScan(env, body) {
   // Oct 16 2026: AI credit paused -> touch nothing (no Drive listing, no OCR call, no attempt counted); files wait in the folder.
   { const st = await aiCreditCheck(env); if (st.paused) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: 0, remaining: 0, paused_since: st.at || null, reason: 'paused: AI credit - receipts stay in the Drive folder and are scanned automatically after AI resumes' }); }
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env);
   // Per-call cap on NEW files (Sep 22 2026). Each file costs ~4 subrequests (Drive download, OCR,
   // Sheets append); uncapped, a big drop (e.g. an email backfill) blew Cloudflare's per-invocation
   // subrequest limit partway through — same failure rule 155a hit at 25 for QB email forwarding.
