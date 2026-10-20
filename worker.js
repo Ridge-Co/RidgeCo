@@ -16245,7 +16245,30 @@ async function failFlushPending(env) {
     return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
   }
 }
-//@@H3
+async function softFail(env, where, err, severity, context) {
+  const r = await reportFailure(env, { system: 'hub', source: 'worker', where, err: (err && err.message) ? err : undefined, message: (err && err.message) ? undefined : String(err == null ? '(no details)' : err), severity, context });
+  return { ok: false, error: String((err && err.message) || err || '').slice(0, 200), reported: !!(r && r.ok) };
+}
+function parseJsonCell(raw, fallback, where, severity) {
+  if (raw === undefined || raw === null || (typeof raw === 'string' && !raw.trim())) return fallback;
+  if (typeof raw !== 'string') return raw;
+  try { return JSON.parse(raw); }
+  catch (e) { softNote('json_cell_corrupt:' + (where || 'unknown'), 'Stored text is not valid JSON (' + String((e && e.message) || e).slice(0, 80) + '): ' + raw.slice(0, 80), severity || 'P2'); return fallback; }
+}
+async function fetchTabSoft(env, tab, where, opts, severity) {
+  try { return await fetchTab(env, tab, opts); }
+  catch (e) {
+    if (/Unable to parse range/i.test((e && e.message) || '')) return [];   // silent-ok: a lazily-created tab that does not exist yet is an empty tab, as before
+    await softFail(env, 'tab_read_failed:' + (where || tab), e, severity || 'P2', { tab }); return [];
+  }
+}
+async function safeJson(resp, fallback, where) {
+  try { return await resp.json(); }
+  catch (e) { softNote('response_not_json:' + (where || 'unknown'), e, 'P2', { status: resp && resp.status }); return fallback; }
+}
+async function tryWrite(env, where, fn, severity) {
+  try { return { ok: true, value: await fn() }; }
+  catch (e) { return await softFail(env, where, e, severity || 'P1'); }
 }
 async function failSetConfig(env, key, value) {
   const r = await setConfigKey(env, { key, value });
