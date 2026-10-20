@@ -12002,7 +12002,7 @@ function etDateString(date) { return new Intl.DateTimeFormat('en-CA', { timeZone
 async function processEstimateReminders(env, nowArg) {
   const now = nowArg || new Date();
   { const h = etHour(now); if (h < 8 || h >= 18) return { skipped: 'outside the 8am-6pm ET reminder window' }; }
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  let cfg; try { cfg = await fetchConfigStrict(env); } catch (e) { await softFail(env, 'estimate_reminders_config_read', e, 'P1'); return { skipped: 'Config could not be read - not sending (it would risk repeating today\'s reminder)' }; }
   const today = etDateString(now);
   if (cfg.estimate_reminder_last_date === today) return { skipped: 'already sent today' };
   const [ests, wos, vendors] = await Promise.all([fetchTab(env, 'Estimates'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors')]);
