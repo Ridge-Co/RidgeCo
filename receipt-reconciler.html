@@ -460,12 +460,13 @@ async function loadQueue(){
   if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
   if (curStatus === 'audit') { await loadAudit(status, list); return; }
   if (curStatus === 'search') { await loadSearchTab(status, list); return; }
+  const ctxFailed = []; const softGet = (label, path) => get(path).catch(e => { ctxFailed.push(label); window.hubReportFailure && window.hubReportFailure('receipt-reconciler:context-load ' + label, e); return []; });
   try {
     const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
-      allWOs.length ? Promise.resolve(allWOs) : get('/workorders').catch(()=>[]),
-      allProperties.length ? Promise.resolve(allProperties) : get('/properties').catch(()=>[]),
-      allUnits.length ? Promise.resolve(allUnits) : get('/units').catch(()=>[]),
+      allWOs.length ? Promise.resolve(allWOs) : softGet('work orders','/workorders'),
+      allProperties.length ? Promise.resolve(allProperties) : softGet('properties','/properties'),
+      allUnits.length ? Promise.resolve(allUnits) : softGet('units','/units'),
     ]);
     allWOs = wos || [];
     allProperties = props || [];
