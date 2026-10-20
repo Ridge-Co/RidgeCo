@@ -16740,7 +16740,7 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
   try { await write(prog); }
   catch (e) { errors.push({ step: 'qb_sync_progress', error: 'could not save progress' + (prog.complete ? ' (the pass finished but is not marked done, so it may run again)' : '') + ': ' + schedErrText(e) }); }
   if (errors.length) return { ok: false, errors, detail };
-  return partial ? { ok: true, partial: true, errors, detail } : { ok: true, errors, detail };
+  return partial ? { ok: true, partial: true, progress_made: progressMade, errors, detail } : { ok: true, errors, detail };
 }
 async function schedRunWeeklyReview(env, deliver) {
   const errors = [];
