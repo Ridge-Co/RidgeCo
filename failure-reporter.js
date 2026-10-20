@@ -83,7 +83,7 @@
   window.addEventListener('unhandledrejection', function (ev) {
     try {
       var r = ev && ev.reason, msg = r && r.message ? r.message : (r == null ? '' : String(r));
-      if (r && (r.name === 'AbortError')) return;
+      if (r && (r.name === 'AbortError' || r.name === 'TimeoutError')) return;
       if (/Failed to fetch|NetworkError|Load failed/i.test(msg) && navigator.onLine === false) return;   // simply offline
       if (report('unhandled-rejection', msg || 'a promise was rejected with no message')) toast();
     } catch (e) { consoleErr('[failure-reporter] rejection handler failed', e); }
