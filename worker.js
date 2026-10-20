@@ -35615,6 +35615,13 @@ async function strCleanerCancel(env, body) {
   try {
     body = body || {};
     const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, body.k); if (!c) return STR_BAD_LINK();
+    const prow = ctx.st.pendings.find(t => t.Task_Key === body.task_key);
+    if (prow && prow.Status === 'pending_held' && String(prow.Assigned_Cleaner_ID) === c.ID) { // she gives back a tentative hold on a pending date
+      const info = await strPendingRelease(ctx, prow, c, 'released from the cleaner page'), warnings = [];
+      await strPendingAdvance(ctx, prow, warnings);
+      await strAlertsNow(ctx, warnings, 'pending_release');
+      return json({ ok: true, message: `Thank you for letting us know - you are no longer holding ${strFmtDate(prow.Date, true)}. Brett has been told.`, days_out: info.days, warnings: warnings.concat(ctx.errors.map(e => e.error)) });
+    }
     const trow = ctx.st.turnovers.find(t => t.Task_Key === body.task_key);
     if (!trow || trow.Status !== 'covered' || String(trow.Assigned_Cleaner_ID) !== c.ID) return json({ ok: false, error: 'not_yours', message: 'You are not scheduled for that date.' }, 409);
     const info = await strCancelAssignment(ctx, trow, c, 'cancelled from the cleaner page'), warnings = [];
