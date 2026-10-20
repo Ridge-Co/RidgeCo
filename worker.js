@@ -27121,7 +27121,8 @@ async function qbPayables(env, url) {
       // QuickBooks invoice is the NET amount -- compare balances to what was actually invoiced or an unpaid netted invoice reads "part paid".
       const propCreditPay = String(ir.Proposal_Applied || '').toUpperCase() === 'TRUE' ? money2(+ir.Proposal_Credit_Customer || 0) : 0;
       const custTotal = Math.max(0, money2((Number(ir.Customer_Total) || 0) - propCreditPay));
-      const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+      const qbInvTotal = q ? Number(q.TotalAmt) : NaN;
+      const customerPartial = isPartiallyPaid(customerBalance, qbInvTotal, custTotal);
       const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
 
       // The state that matters: money in, money not yet out.
