@@ -5328,11 +5328,12 @@ function submitEditTenant() {
     if(res.error){logError('Edit tenant',res.error);toast('Error: '+res.error,'error');return;}
     if (!unitChanged) { toast('Tenant updated','success');closeModal('modal-edit-tenant');loadAll(); return; }
     // Relink both sides: clear the old unit's Tenant_ID (if any), set the new one's (if any).
-    var chain = Promise.resolve();
-    if (_etOriginalUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:_etOriginalUnitId,fields:{Tenant_ID:''}}).catch(function(){}); });
+    var chain = Promise.resolve(), _oldUnlinkErr = '';
+    if (_etOriginalUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:_etOriginalUnitId,fields:{Tenant_ID:''}}).catch(function(e){ _oldUnlinkErr = (e && e.message) || 'unknown error'; window.hubReportFailure && window.hubReportFailure('index:tenant-old-unit-unlink', e); }); });
     if (newUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:newUnitId,fields:{Tenant_ID:id}}); });
     chain.then(function(unitRes){
       if (unitRes && unitRes.error) { toast('Tenant updated, but unit link failed: '+unitRes.error,'warn'); }
+      else if (_oldUnlinkErr) { toast('Tenant updated and moved, but the old unit may still show this tenant (' + _oldUnlinkErr + '). Check it.','warn'); }
       else { toast('Tenant updated and moved','success'); }
       closeModal('modal-edit-tenant');loadAll();
     }).catch(function(e){ toast('Tenant updated, but unit link failed: '+e.message,'warn'); closeModal('modal-edit-tenant');loadAll(); });
