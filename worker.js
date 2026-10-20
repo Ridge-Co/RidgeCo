@@ -17678,7 +17678,7 @@ async function schedRunNext(env, ctx, opts) {
     }
     return out;
   })();
-  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(work.catch((e) => { console.error('scheduler: background completion of ' + job.name + ' failed:', schedErrText(e)); }));   // keeps running + records state even if the caller hung up
+  if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(work.catch((e) => { console.error('scheduler: background completion of ' + job.name + ' failed:', schedErrText(e)); return softFail(env, 'scheduler_background_failed:' + job.name, e, 'P0', { job: job.name }); }));   // keeps running + records state even if the caller hung up
   let timer;
   const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), budget); });
   const done = await Promise.race([work, timeout]);
