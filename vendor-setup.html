@@ -139,7 +139,7 @@ function parseVCardText(text){
       else if (key.indexOf('TEL') === 0 && !out.phone) { out.phone = val.trim(); }
       else if (key.indexOf('EMAIL') === 0 && !out.email) { out.email = val.trim(); }
     });
-  } catch(e) {}
+  } catch(e) { window.hubReportFailure && window.hubReportFailure('vendor-setup:parseVCard', e); }   // fields parsed so far are still returned; Brett is told the card was not fully read
   return out;
 }
 function setIfEmpty(id, val){ if(!val) return; var el=document.getElementById(id); if(!el||(el.value&&el.value.trim())) return; el.value=val; }
