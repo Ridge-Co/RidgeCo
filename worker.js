@@ -25005,7 +25005,7 @@ async function __meterFlushAlarm(env) {
       context: { top: p.top, tabs: p.tabs, isolate: p.isolate, all_instances_top: all },
     });
     if (!r || r.ok === false) console.error('[read-meter] quota alarm could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
-  } catch (e) { console.error('[read-meter] quota alarm could not be saved:', String((e && e.message) || e).slice(0, 200)); }
+  } catch (e) { /* silent-ok: the failure ledger itself is what failed, console is the last resort */ console.error('[read-meter] quota alarm could not be saved:', String((e && e.message) || e).slice(0, 200)); }
 }
 // ── cross-instance roll-up ──
 // Several instances' per-minute buckets -> one list with one bucket per minute (same shape as __meterBucket's).
