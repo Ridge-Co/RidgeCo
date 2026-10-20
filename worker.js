@@ -33392,7 +33392,7 @@ async function trashInvoice(env, body) {
       return json({ ok: true, already_sent: true, invoice_id: alreadyBilled[0].QB_Invoice_ID, invoice_number: alreadyBilled[0].QB_Invoice_Number });
     }
 
-    const warnings = [];
+    const warnings = []; const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
     const hasOwnItem = !!String(p.QBO_Item_ID || '').trim();
     const photoCount = toBill.reduce((s, v) => s + String(v.Photo_File_IDs || '').split(',').filter(Boolean).length, 0);
 
