@@ -34198,7 +34198,7 @@ async function proposalBook(env, body) {
   await updateRow(env, 'Proposal_Signatures', row.ID, {
     Status: 'Booked', QB_Invoice_ID: invoiceId, QB_Invoice_Number: invoiceNumber, QB_Bill_ID: billId, QB_Bill_Number: billNumber,
   });
-  try { if (reg.wo) await updateWOFields(env, reg.wo, { Status: 'Invoiced' }); } catch (e) {}
+  if (reg.wo) { const _wr = await tryWrite(env, 'proposal_book_wo_status', () => updateWOFields(env, reg.wo, { Status: 'Invoiced' }), 'P1'); if (!_wr.ok) failWarnings.push('The work order ' + reg.wo + ' could not be marked Invoiced (' + _wr.error + ') - set the status by hand.'); }
 
   return json({ ok: true, invoice_id: invoiceId, invoice_number: invoiceNumber, bill_id: billId, bill_number: billNumber, warnings });
 }
