@@ -15966,8 +15966,16 @@ async function alertAdminOnFailure(env, jobType, errMsg) {
   if (!cfg.admin_phone) return { skipped: true, reason: 'admin_phone not set' };
   const key = `failure_alert_last_sent_${jobType}`;
   if (!alertDebounceOk(cfg, key, Date.now(), 3600000)) return { skipped: true, reason: 'already alerted within the last hour' };
-  try { await sendSMS(env, cfg.admin_phone, `🔴 ${jobType} failed: ${String(errMsg).slice(0, 200)}`); } catch (_) {}
-  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
+  // Oct 20 2026: a text that did not go out is no longer reported as sent. sendSMS reports its own non-throwing failures (sms_send); a THROW (network) is reported here.
+  // Reviewer fix (Oct 20): the hourly debounce key is written ONLY when the text went out. failRollupRun treats this key as 'already texted' for 90 min, so writing it after a failed
+  // text would make the rollup mark the P0 notified without anyone being texted. The failed text is in the ledger (sms_send / failure_alert_sms_failed). No loop: nothing here calls alertAdminOnFailure again.
+  let smsErr = '';
+  try { const sr = await sendSMS(env, cfg.admin_phone, `🔴 ${jobType} failed: ${String(errMsg).slice(0, 200)}`); if (sr && sr.error) smsErr = String(sr.error).slice(0, 200); }
+  catch (e) { smsErr = String((e && e.message) || e).slice(0, 200); await softFail(env, 'failure_alert_sms_failed', e, 'P0', { job: jobType }); }
+  // Reviewer fix (Oct 20): a refusal of Brett's OWN number (opted out / invalid / non-mobile) is rated P2 for ordinary recipients, but here it kills every urgent text, so it is P0 (shows on Needs Attention and in the scheduler email).
+  if (smsErr && /code (21211|21610|21614|21612|21408|21215|21217|21401)\b/.test(smsErr)) await softFail(env, 'admin_sms_undeliverable', smsErr, 'P0', { job: jobType, note: 'urgent texts to the admin phone are being refused' });
+  if (!smsErr) try { await failSetConfig(env, key, new Date().toISOString()); } catch (e) { await softFail(env, 'failure_alert_debounce_write_failed', e, 'P1', { job: jobType, note: 'the same alert may be texted again on the next failure' }); }
+  if (smsErr) return { sent: false, error: smsErr };
   return { sent: true };
 }
 
