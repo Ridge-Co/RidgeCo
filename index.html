@@ -1905,11 +1905,8 @@ function api(method, path, body, timeoutMs) {
       if (e && e.name === 'AbortError') throw new Error('Request timed out after ' + (timeoutMs/1000) + 's — check network or retry');
       throw e;
     });
-  }).catch(function(e){
-    if (timer) clearTimeout(timer);
-    if (e && e.name === 'AbortError') throw new Error('Request timed out after ' + (timeoutMs/1000) + 's — check network or retry');
-    throw e;
-  });
+  }
+  var p = attempt(0);
   if (method === 'GET') {
     _getCache[path] = { promise: p, exp: Date.now() + GET_CACHE_MS };
     p.catch(function(){ delete _getCache[path]; });
