@@ -8121,7 +8121,7 @@ async function addonList(env, url, callerRole, callerSessionId) {
   const out = children.map(c => {
     const est = addonLatestEstimate(estimates, c.ID);
     const photos = addonPhotosByItem(attachments, c.ID);
-    let lines = []; try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (_) {}
+    const lines = parseJsonCell(est && est.Line_Items, [], 'Estimates.Line_Items');
     const items = addonParseItems(c).map(it => {
       const line = lines.find(l => l && Number(l.addon_item) === it.index) || {};
       const ph = photos[String(it.index)] || [];
