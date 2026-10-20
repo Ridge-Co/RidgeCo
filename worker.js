@@ -11636,7 +11636,7 @@ async function approveInvoiceReview(env, body) {
         differs: !sameCents(already.Customer_Total, customer_total),
         qb_status: already.QB_Invoice_Status || 'pending' });
     }
-  } catch (e) { /* tab unreadable — fall through and let the append surface the real error */ }
+  } catch (e) { await softFail(env, 'approve_invoice_review_dedupe_read', e, 'P1', { ref: wo_id }); }   // tab unreadable: the "already approved?" check was skipped, so a double approval is possible; the append below still surfaces a hard error
   // Neither tab has these columns yet, and updateRow/addRow map by header — a write to a
   // column that isn't there reports success and stores nothing.
   try {
