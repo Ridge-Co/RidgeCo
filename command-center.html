@@ -494,10 +494,10 @@ function render(d){
     +'<div class="row2"><span class="pdot a"></span><div class="t">Confirm Kingbee proof-of-claim filed<small>protects your funds pool</small></div><span class="vtag">FLEET</span></div>'
     +'<p class="note">These come from your backlog. Once the BrettOS sheet is wired (Phase 2) they’ll be live too.</p></div>';
 
-  document.getElementById('body').innerHTML=html;
+  document.getElementById('body').innerHTML=ccFailBanner()+html;
 }
 
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
 
 // emergency rollback — UI present, action gated until the preview/versioning lane exists
 function openSheet(t,b,red,go,reqCk){document.getElementById('shT').textContent=t;document.getElementById('shB').textContent=b;
