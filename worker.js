@@ -31028,7 +31028,7 @@ async function driveShareAnyoneVerbose(token, fileId) {
         const errBody = await res.json();
         lastError = (errBody && errBody.error && errBody.error.message) || JSON.stringify(errBody).slice(0, 200);
       } catch (_) {
-        lastError = (await res.text().catch(() => '')).slice(0, 200) || `HTTP ${res.status}`;
+        lastError = (await res.text().catch(() => '')).slice(0, 200) || `HTTP ${res.status}`;   // silent-ok: falls back to the HTTP status in the returned error
       }
       if (attempt < 2) await new Promise(r => setTimeout(r, 400));
     } catch (e) {
