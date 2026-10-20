@@ -143,11 +143,11 @@ const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'ht
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';   // staging uses its own token, separate from prod
 const HUB='index.html', CC='command-center.html';
 let TOKEN='';
-try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }
 if(STAGING){try{document.title='BrettOS — Action Center (STAGING)';
   var _b=document.createElement('div');_b.textContent='🧪 STAGING SANDBOX — test data only, not your live Hub';
   _b.style.cssText='background:#7a3fb0;color:#fff;font-weight:800;font-size:12px;text-align:center;padding:7px;letter-spacing:.4px';
-  document.body.insertBefore(_b,document.body.firstChild);}catch(e){}}
+  document.body.insertBefore(_b,document.body.firstChild);}catch(e){ /* silent-ok: staging banner is cosmetic only */ }}
 
 function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function money(n){var v=Number(n); if(!isFinite(v))return '—'; return '$'+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
