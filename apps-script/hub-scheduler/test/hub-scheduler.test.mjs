@@ -17,7 +17,7 @@ const MIN = 60000, HOUR = 3600000;
 function world(opts) {
   opts = opts || {};
   const w = { clock: Date.parse('2026-10-12T14:00:00Z'), logs: [], mails: [], fetches: [], props: {}, triggers: [], locked: false, sleeps: 0,
-    mailFails: false, hub: null, uuid: 0, dropSheetWrite: false, opened: [], sheets: {} };
+    mailFails: false, probeFetches: [], probe: null, hub: null, uuid: 0, dropSheetWrite: false, opened: [], sheets: {} };
   w.sheetRows = [['Key', 'Value'], ['digest_enabled', 'TRUE']];
   w.sheets['1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4'] = { Config: w.sheetRows };
   w.setupTriggers = opts.triggers || 0;
