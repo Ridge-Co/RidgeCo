@@ -10855,7 +10855,7 @@ async function addVendorBill(env, body) {
   // Same pattern for the vendor's own invoice FILE (the actual document/photo, not just the
   // number) — B-fix Aug 17: vendors had no way to attach their invoice, only receipts had an
   // upload control. Drive_File_ID kept alongside the URL so the Hub can open it directly.
-  if (body.Invoice_File_URL) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_File_URL', 'Invoice_File_ID']); } catch (e) {} }
+  if (body.Invoice_File_URL) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_File_URL', 'Invoice_File_ID']); } catch (e) { await softFail(env, 'vendor_bill_ensure_columns:Invoice_File', e, 'P1', { ref: dupeKey }); } }
   // Invoice_Description — the customer-facing text (separate from Notes, which stays
   // private). Used directly on flat/no-time-entry bills, and as the lead-in when time
   // entries with their own Invoice_Description are also linked to this bill (buildInvoiceLines).
