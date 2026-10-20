@@ -11939,7 +11939,7 @@ function irCalc(i) {
         if (r && r.pay === 'account') accountReceipts += amt; else reimburseReceipts += amt;
       });
     }
-  } catch(e) {}
+  } catch(e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-pricing', e, {ref: b.ID}); }
 
   var customerMaterials = truckStock + receiptsAll;                 // customer pays all materials
   var totalCost = laborTotal + truckStock + receiptsAll;           // money out of Brett's pocket
