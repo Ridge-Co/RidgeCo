@@ -14,7 +14,7 @@ function grab(src, sig) {
   return src.slice(start, i + 1);
 }
 const code = [
-  "const QB_SYNC_SLICE_MS = 30 * 1000; const QB_SYNC_PROGRESS_KEY = 'qb_sync_progress';",
+  "const QB_SYNC_SLICE_MS = 30 * 1000; const QB_SYNC_MIN_LOOP_MS = 12 * 1000; const QB_SYNC_LOG_KEEP = 20; const QB_SYNC_PROGRESS_KEY = 'qb_sync_progress';",
   grab(wsrc, 'function qbSyncRowKey('), grab(wsrc, 'async function qbSyncWriteInvoiceReview('), grab(wsrc, 'async function qbSyncPayments('),
   grab(wsrc, 'async function schedRunDailyQbSync('), grab(wsrc, 'async function qbSyncReadProgress('), grab(wsrc, 'async function qbSyncWriteProgress('),
   grab(wsrc, 'async function logAndCollectError('), grab(wsrc, 'function idColIndex('), grab(wsrc, 'function col('),
