@@ -16756,7 +16756,7 @@ function loadPortalAttachments(woId, opts) {
       });
       runningIdx += typeCount;
     });
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-photos-load', e); });
 }
 
 // -- Photo Lightbox -- in-app swipeable viewer (mirrors vendor.html's) --------------------
