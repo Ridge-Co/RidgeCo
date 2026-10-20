@@ -3404,7 +3404,7 @@ async function receiptReconRefundReverse(env, body) {
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (['confirmed', 'attached_only', 'refund_reversed'].includes(row.Status)) return json({ error: `already ${row.Status}`, id }, 409);
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  let suggestion = parseJsonCell(row.Suggestion, null, 'Receipt_Recon_Queue.Suggestion');
   const isRefundRow = (suggestion && suggestion.category === 'refund') || Number(row.Total) < 0;
   if (!isRefundRow) return json({ error: 'This queue row is not flagged as a refund.' }, 400);
 
