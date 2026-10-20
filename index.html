@@ -916,16 +916,19 @@ window.addEventListener('pageshow', function(e){
         <div id="error-log-list"><div class="loading">No errors logged</div></div>
       </div>
     </details>
-    <div class="section-title">ERROR LOG</div>
-    <div id="error-log-list" style="margin-bottom:24px"><div class="loading">No errors logged</div></div>
-    <div class="section-title">WISHLIST / DEV LOG</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Every idea/improvement, with a live status. As things get built or stop mattering, mark them ✓ Done or ✗ N-A so this list always reflects reality. Filter by status below; "Clear Done / N-A" archives the finished ones without touching what's still open.</div>
-    <div style="display:flex;gap:8px;margin-bottom:12px">
-      <textarea id="wishlist-input" placeholder="Type an idea or improvement..." style="flex:1;min-height:60px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:var(--radius)"></textarea>
-      <button class="btn" onclick="addWishlistItem()">Add</button>
-    </div>
-    <div id="wishlist-filters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
-    <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
+    <details class="dl-group" data-dl-key="wishlist">
+      <summary><span class="dl-h">Wishlist</span><span class="dl-sub">Ideas and improvements, each with a live status</span><span id="dl-wishlist-count" class="dl-count"></span></summary>
+      <div class="dl-body">
+        <p class="dl-note">Mark items ✓ Done or ✗ N-A as they get built or stop mattering, so this list always reflects reality. "Clear Done / N-A" archives the finished ones and leaves everything still open.</p>
+        <div class="dl-row" style="align-items:stretch">
+          <textarea id="wishlist-input" class="dl-field" placeholder="Type an idea or improvement..." rows="2" style="flex:1 1 260px;width:auto;min-height:64px"></textarea>
+          <button type="button" class="btn" style="min-height:44px" onclick="addWishlistItem()">Add</button>
+        </div>
+        <div id="wishlist-filters" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"></div>
+        <div id="wishlist-list" style="margin-bottom:16px"><div class="loading">No items yet</div></div>
+        <div class="dl-row"><button type="button" class="btn secondary small" style="min-height:44px" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button></div>
+      </div>
+    </details>
     <div class="section-title">VENDOR ACCESS REQUESTS <span id="var-nav-count-inline" style="display:none;color:var(--warn);font-size:11px;font-weight:normal">— pending</span></div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Vendors requesting billing access to a property not already on their Billing_Property_Access list (Vendor Standalone Billing, §3d). "Approve once" clears just this request; "Approve ongoing" also adds the property to their standing list.</div>
     <div id="vendor-access-requests-list" style="margin-bottom:24px"><div class="loading">Loading…</div></div>
