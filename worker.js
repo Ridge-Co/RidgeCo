@@ -17851,13 +17851,12 @@ function recurNextOccurrences(tpl, fromISO, count) {
   return out;
 }
 function recurTargets(tpl) {
-  try {
-    const a = JSON.parse(String((tpl && tpl.Targets) || '[]') || '[]');
-    if (!Array.isArray(a)) return [];
-    const seen = new Set(), out = [];
-    for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
-    return out;
-  } catch (_) { return []; }
+  // Oct 20 2026: a corrupt Targets cell still yields [] (no targets) but is now noted, so a template that silently stopped generating is visible.
+  const a = parseJsonCell(String((tpl && tpl.Targets) || ''), [], 'Recurring_Templates.Targets');
+  if (!Array.isArray(a)) return [];
+  const seen = new Set(), out = [];
+  for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
+  return out;
 }
 function recurTargetKey(t) { return t.p + '|' + (t.u || ''); }
 function recurWOIsOpen(wo) { return !RECUR_CLOSED_STATUSES.includes(wo.Status) && String(wo.Active || '').toUpperCase() !== 'FALSE'; }
