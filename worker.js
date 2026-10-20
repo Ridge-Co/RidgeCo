@@ -14209,7 +14209,7 @@ async function adminShareAttachments(env, body) {
     const remainingAfterBatch = Math.max(0, shareable - offset - considered);
     const nextOffset = offset + considered;
     const statusBreakdown = Object.entries(failedByStatus).map(([s, c]) => `${s}:${c}`).join(',');
-    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Latency_ms: Date.now()-_t0, Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}${statusBreakdown ? ' failed_by_status=' + statusBreakdown : ''} known_missing=${skippedKnownMissing}` }); } catch (te) { softNote('telemetry_write_failed:admin_share_attachments', te, 'P2');}
+    try { await logTelemetry(env, { Source:'worker', Job_Type:'admin_share_attachments', Skill_Or_Endpoint:'/admin/share-attachments', Success: failed ? 'FALSE' : 'TRUE', Latency_ms: Date.now()-_t0, Notes:`dry_run=${dryRun} offset=${offset} shareable=${shareable} considered=${considered} shared=${shared} already_shared=${alreadyShared} failed=${failed}${statusBreakdown ? ' failed_by_status=' + statusBreakdown : ''} known_missing=${skippedKnownMissing}` }); } catch (te) { softNote('telemetry_write_failed:admin_share_attachments', te, 'P2'); }
     const out = {
       success: true,
       dry_run: dryRun,
