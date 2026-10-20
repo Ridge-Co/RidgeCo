@@ -13602,7 +13602,8 @@ async function adminOwnerToUser(env, body) {
 
   // Carry the QuickBooks link over if only the old row had one.
   const fq = (from.QBO_Customer_ID || '').trim(), tq = (to.QBO_Customer_ID || '').trim();
-  if (fq && !tq) { try { await updateRow(env, 'Owners', toId, { QBO_Customer_ID: fq }); } catch (e) {} }
+  let qbCarried = !!(fq && !tq), qbCarryWarn = '';
+  if (fq && !tq) { try { await updateRow(env, 'Owners', toId, { QBO_Customer_ID: fq }); } catch (e) { qbCarried = false; qbCarryWarn = ` The QuickBooks link (#${fq}) could not be moved to the keeper - set it by hand or the keeper may get a duplicate QuickBooks customer.`; await softFail(env, 'owner_merge_qb_link_carry_failed', e, 'P0', { ref: toId, from: fromId }); } }
 
   // Clear the old PIN before deactivating, so one PIN never resolves to two records.
   // updateRow returns a 404 response rather than throwing, so its result has to be read —
