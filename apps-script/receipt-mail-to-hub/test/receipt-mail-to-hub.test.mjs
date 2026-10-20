@@ -109,7 +109,7 @@ function makeMailbox(world, email, fixtures) {
       WeekDay: { MONDAY: 'MON' },
       newTrigger: (fn) => { const t = { fn }; const b = { timeBased: () => b, everyMinutes: () => b, onWeekDay: () => b, atHour: () => b, create: () => { triggers.push(t); return t; } }; return b; },
     },
-    MailApp: { sendEmail: (o) => world.mailSent.push({ from: email, ...o }) },
+    MailApp: { sendEmail: (o) => { if (world.failMail) throw new Error('mail quota'); return world.mailSent.push({ from: email, ...o }); } },
     GmailApp: {
       getUserLabelByName: (n) => labels[n] ? labelObj(n) : null,
       createLabel: (n) => { labels[n] = labels[n] || new Set(); return labelObj(n); },
