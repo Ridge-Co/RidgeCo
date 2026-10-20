@@ -870,8 +870,6 @@ function probeWorkers_() {
         ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' health check failing (' + why + ', ' + s.fails + ' ticks in a row)');
       }
     } else {
-      // a crash while reading the body must not stop PROBE_STATE from being saved for every Worker: report it as a watcher miss instead
-      if (pr.body === 'str') { try { probeStrBody_(pr, code, text); } catch (be) { watcherMiss_('probe_body_' + pr.name, 'probe_body:' + pr.name, pr.name + ' /health body check crashed: ' + String(be).slice(0, 200)); } }
       if (s.alerted) alert_('Worker back up: ' + pr.name, 'The Worker "' + pr.name + '" is answering its health check again (HTTP ' + code + ').');
       s = { fails: 0, alerted: false };
     }
