@@ -1,5 +1,7 @@
 // ensureColumns must place new headers past the widest row, and write single cells.
 import fs from 'fs';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 const src = fs.readFileSync('worker.js','utf8');
 function grab(name){
   let i = src.indexOf('async function '+name+'(');
