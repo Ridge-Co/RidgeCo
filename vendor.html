@@ -2776,7 +2776,7 @@ function submitMyInfo() {
     if (res.error) { document.getElementById("myInfoMsg").innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + res.error + '</div>'; return; }
     if (res.vendor) {
       session.vendor_phone = res.vendor.phone; session.vendor_email = res.vendor.email; session.vendor_company = res.vendor.company;
-      try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
+      try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){ /* silent-ok: storage blocked, session stays in memory */ }
     }
     var msg = (res.changed && res.changed.length) ? "✓ Saved" : "No changes to save";
     document.getElementById("myInfoMsg").innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + msg + '</div>';
