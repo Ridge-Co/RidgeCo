@@ -463,4 +463,33 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
   await tick(E, null); await tick(E, null); await tick(E, null);
   t('three ticks with the feed still behind: the manual turnover is NOT cancelled and nobody is re-texted', pend(W, RK).Status === 'covered' && smsTo(W, 'Kayla').length === 1, pend(W, RK));
   BOOK(W, '2026-11-13', PD); await tick(E, null);
+  t('when the feed catches up the protection is lifted and nothing changes for Kayla', pend(W, RK).Manual_Until === '' && pend(W, RK).Status === 'covered' && smsTo(W, 'Kayla').length === 1, pend(W, RK));
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await J(E.strAdminPendingConvert({}, { task_key: PK })); W.sms.length = 0; W.brett.length = 0;
+  await tick(E, '2026-10-24', '10:00'); await tick(E, null); await tick(E, null);
+  t('after ~3 days with no booking on the feed the manual turnover is cancelled and Brett + Kayla are told', pend(W, RK).Status === 'cancelled' && W.brett.some(b => /BOOKING CHANGED|Booking changed/i.test(b.text)) && smsTo(W, 'Kayla', 'str_task_cancelled').length === 1, { p: pend(W, RK), brett: W.brett, sms: W.sms });
+}
+{
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-nohold'); W.sms.length = 0;
+  const r = await J(E.strAdminPendingConvert({}, { task_key: PK }));
+  t('mark-as-booked with nobody having said yes: an ordinary open turnover, the Gina question moves to it, no "booked" text', r.ok && pend(W, RK).Status === 'offering' && offerOf(W, '1', RK, 'pending') && !W.sms.length && pend(W).Status === 'pending_converted', { r, real: pend(W, RK), o: offersOf(W, RK) });
+}
+
+// ═══ 12. FAULT INJECTION ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; W.telemetry.length = 0; BOOK(W, '2026-11-13', PD);
+  W.failSms = true; const r = await tick(E, null);
+  t('text failure: the booking is still converted and Kayla is assigned', pend(W, RK).Status === 'covered' && pend(W, RK).Assigned_Cleaner_ID === '2');
+  t('text failure: marked failed:1, Brett told (alert + telemetry), the error is in the tick result', pend(W).Pending_Text === 'failed:1' && W.brett.length >= 1 && W.telemetry.some(x => x.Success === 'FALSE') && r.errors.some(e => e.step === 'pending_text'), { p: pend(W), brett: W.brett, errs: r.errors });
+  W.failSms = false; await tick(E, null); await tick(E, null);
+  t('next tick sends it once; later ticks never again', smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && /^sent:/.test(pend(W).Pending_Text), { sms: W.sms, p: pend(W) });
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.failEmail = true; const r = await tick(E, null);
+  t('invite email failure: marked failed:1, Brett told, text still went out', pend(W).Pending_Mail === 'failed:1' && W.brett.length >= 1 && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && r.errors.some(e => e.step === 'pending_invite'), { p: pend(W), errs: r.errors });
+  W.failEmail = false; await tick(E, null); await tick(E, null);
+  t('email retried once and then never again', W.attach.length === 1 && /^sent:/.test(pend(W).Pending_Mail) && smsTo(W, 'Kayla', 'str_pending_booked').length === 1);
+}
 //@@APPEND@@
