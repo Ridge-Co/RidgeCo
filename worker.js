@@ -11578,6 +11578,7 @@ async function qbUndoSend(env, body) {
       loan_reversed: loanReversed,
       bill_restored: billRestored, wo_reverted: woReverted, proposal_reverted: proposalReverted,
       warning: [billRestored ? '' : 'QuickBooks was undone, but the vendor bill could not be set back to submitted — check the Vendor_Bills row.', proposalRevertError].filter(Boolean).join(' '),
+      ...(loanReverseError ? { failure_warning: loanReverseError } : {}),   // new key: the older `warning` above is unchanged for existing readers
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
