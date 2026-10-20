@@ -712,8 +712,8 @@ function uploadTenantPhoto(file, woId, fileType) {
   fd.append('wo_id', woId);
   if (fileType) fd.append('file_type', fileType);
   return fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
-    .then(function(r){ return r.json().then(function(j){ return !!(r.ok && j && j.success); }, function(){ return false; }); })
-    .catch(function(){ return false; });
+    .then(function(r){ return r.json().then(function(j){ return !!(r.ok && j && j.success); }, function(){ /* silent-ok: false makes the caller show the failed-upload message */ return false; }); })
+    .catch(function(e){ window.hubReportFailure && window.hubReportFailure('tenant:uploadPhoto', e, { ref: String(woId) }); return false; });   // caller shows the tenant the failed-upload message
 }
 
 function submitNote() {
