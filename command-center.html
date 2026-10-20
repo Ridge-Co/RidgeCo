@@ -176,17 +176,18 @@ async function getJSON(path){
   let r;
   try{ r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}}); }
   catch(e){ throw new Error(path+' → could not connect (network/CORS)'); }
-  let d=null,t='';
-  try{ t=await r.text(); d=JSON.parse(t); }catch(e){}
+  let d=null,t='',parseFail=null;
+  try{ t=await r.text(); d=JSON.parse(t); }catch(e){ parseFail=e; }
   if(!r.ok) throw new Error(path+' → HTTP '+r.status+' '+((d&&d.error)?d.error:t.slice(0,90)));
   if(d&&d.error) throw new Error(path+' → '+d.error);
+  if(parseFail&&t.trim()){ window.hubReportFailure&&window.hubReportFailure('command-center:unreadable-response '+path.split('?')[0],parseFail); throw new Error(path+' → the Hub answered with something unreadable'); }
   return d;
 }
 function daysSince(s){const t=Date.parse(s);if(isNaN(t))return null;return Math.floor((Date.now()-t)/86400000)}
 
 async function load(){
   if(!TOKEN){return sampleMode('no token yet')}
-  const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
+  CC_FAILED.length=0; const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
   const arP=loadAR();           // best-effort AR aging (QuickBooks)
   const staleP=loadStale();     // best-effort stuck-WO alert (greenlit #2)
   const tasksP=loadTasks();     // best-effort BrettOS Tasks Sheet summary (TASK_LINKING_BUILD_BRIEF #2)
