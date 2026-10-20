@@ -128,7 +128,7 @@ function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig, 
     return { QueryResponse: {} };
   };
   const stubs = {
-    fetchTabs, fetchTab, paymentMilestonesTab: async () => {}, logTelemetry: async (env, row) => { telemetry.push(row); },
+    fetchTabs, fetchTab, paymentMilestonesTab: async () => {}, logTelemetry: async (env, row) => { if (flags.telemetryFails) throw new Error('telemetry sheet down'); telemetry.push(row); },
     fetchConfig: async () => config || { US_HOLIDAYS: HOLS },
     etDateString: () => NOW,
     qbAccessToken: async () => 't', qbApi, qbVendorDisplayName: (v) => (v && v.Company) || 'Vendor', vendorTermLabel: () => 'Due on receipt', json: (b) => b,
