@@ -30891,7 +30891,7 @@ async function invoiceInputsEnglish(env, billRow, timeEntries) {
     try {
       const r = await translateBatchToEnglish(env, slots.map(s => s.text));
       if (r.ok) slots.forEach((s, i) => { if (r.out[i] && r.out[i].trim()) s.obj[s.key] = r.out[i]; });
-    } catch (_) {}
+    } catch (e) { softNote('invoice_inputs_translate_failed', e, 'P2'); }   // fails open: the original wording stays
   }
   return { billRow: bill, timeEntries: entries };
 }
