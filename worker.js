@@ -13732,10 +13732,12 @@ async function adminMergeOwner(env, body) {
 
   // Carry the QuickBooks link over if only the loser had one, so the keeper inherits the
   // ledger rather than looking unmapped and getting a new customer created for it.
-  if (fq && !tq) { try { await updateRow(env, 'Owners', toId, { QBO_Customer_ID: fq }); } catch (e) {} }
+  let qbCarried = !!(fq && !tq), qbCarryWarn = '';
+  if (fq && !tq) { try { await updateRow(env, 'Owners', toId, { QBO_Customer_ID: fq }); } catch (e) { qbCarried = false; qbCarryWarn = `The QuickBooks link (#${fq}) could not be moved to the keeper - set it by hand or the keeper may get a duplicate QuickBooks customer.`; await softFail(env, 'owner_merge_qb_link_carry_failed', e, 'P0', { ref: toId, from: fromId }); } }
   await updateRow(env, 'Owners', fromId, { Active: 'FALSE' });
   return json({ success: true, applied: true, from: fromId, to: toId, moved: moved.length,
-                qb_moved: !!(fq && !tq),
+                qb_moved: qbCarried,
+                ...(qbCarryWarn ? { failure_warning: qbCarryWarn } : {}),
                 note: `Owner ${fromId} is deactivated, not deleted — the row is still in the sheet.` });
 }
 
