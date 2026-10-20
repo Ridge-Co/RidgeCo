@@ -35421,7 +35421,7 @@ async function strTick(env, opts) {
         if ((r.Win_End || '') !== b.winEnd) patch.Win_End = b.winEnd;
         if ((r.Guests || '') !== b.guests) patch.Guests = b.guests;
         if (Object.keys(patch).length) await strSetTurnover(ctx, r, patch);
-      } else if (!anomaly && r.Date >= today && r.Status !== 'cancelled') {
+      } else if (!anomaly && r.Date >= today && r.Status !== 'cancelled' && !strManualHold(r, ctx.now)) {
         const miss = (parseInt(r.Missing_Count, 10) || 0) + 1;
         if (miss < 2) { await strSetTurnover(ctx, r, { Missing_Count: String(miss) }); continue; }
         const was = r.Status, who = st.cmap[r.Assigned_Cleaner_ID];
