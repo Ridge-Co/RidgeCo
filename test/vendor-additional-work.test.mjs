@@ -65,7 +65,7 @@ function harness(state) {
     grab('addonParseItems'), grab('addonLatestEstimate'), grabAsync('addonStart'), grabAsync('addonSubmit'), grabAsync('addonWithdraw'),
   ].join('\n');
   const f = new Function('S', 'calls', 'json', 'fetchTab', 'findWO', 'ensureColumns', 'createWorkOrder', 'assignVendor', 'updateWOFields', 'addEstimateVersion', 'updateRow', 'logWOAudit', 'WO_VOID_COLUMNS',
-    body + '\nreturn { addonStart, addonSubmit, addonWithdraw };');
+    SOFT + body + '\nreturn { addonStart, addonSubmit, addonWithdraw };');
   const json = (d, s = 200) => ({ status: s, _d: d, clone() { return this; }, json: async () => d });
   const fns = f(state, calls, json,
     async (env, tab) => state[tab] || [],
