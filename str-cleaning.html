@@ -1021,6 +1021,16 @@ function sendPendCreate(){
   PD.sending = true; sheetBusy = true;
   var go = $('sh-go'), cancel = $('sh-cancel'); go.disabled = true; cancel.disabled = true; go.textContent = 'Working… please wait';
   if($('sh-err')) $('sh-err').classList.add('hide');
+  api('POST', '/str/admin/pending/create', { date: p.date, note: p.note, sig: p.sig, text: ta ? ta.value : '', send_now: !!(now && now.checked) }).then(function(r){
+    sheetBusy = false; PD.sending = false;
+    var warn = (r.warnings||[]).filter(Boolean);
+    openSheet('<h2 id="sh-title">' + esc(r.duplicate ? 'Already asked.' : 'Done.') + '</h2><div class="msg ' + (warn.length ? 'warn' : 'ok') + '" role="status"><b style="margin:0">' + esc(r.message || 'Saved.') + '</b></div>'
+      + (warn.length ? '<div class="msg warn"><b>Heads up</b>' + listHtml(warn) + '</div>' : '') + '<div class="btnrow"><button class="btn primary" id="sh-done">Done</button></div>');
+    $('sh-done').onclick = function(){ PD = null; closeSheet(); }; $('sh-done').focus(); loadState();
+  }, function(e){
+    sheetBusy = false; PD.sending = false;
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    var g = $('sh-go'), c = $('sh-cancel'); if(!g) return;
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
