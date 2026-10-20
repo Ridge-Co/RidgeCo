@@ -2982,17 +2982,26 @@ async function receiptReconImportStatement(env, body) {
   });
 }
 
+// Phase C (Oct 20 2026): addReceipt()'s response body drives "was the receipt written?". An unreadable body used to become {} (no success, no error:
+// the confirm flow then answered ok:true with nothing said). Now it is reported P1 and handed back as { error } so the caller / bulk list shows it.
+async function receiptAddJson(env, addResp, where) {
+  try { return await addResp.json(); }
+  catch (e) {
+    await softFail(env, 'receipt_add_response_unreadable:' + where, e, 'P1', { status: addResp && addResp.status });
+    return { error: `The receipt save returned an unreadable response (HTTP ${(addResp && addResp.status) || '?'}). Check the Receipts tab before retrying: a row may or may not have been written.` };
+  }
+}
 // GET /receipt-recon/queue?status=pending|confirmed|skipped|all — the confirm-first review list.
 async function listReceiptReconQueue(env, url) {
-  let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json([]); }
+  let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { await softFail(env, 'receipt_recon_queue_list_read', e, 'P1'); return json([]); }
   const status = url.searchParams.get('status') || 'pending';
   return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (status === 'all' || (r.Status || 'pending') === status))
     .map(r => {
-      let suggestion = null; try { suggestion = JSON.parse(r.Suggestion || 'null'); } catch (e) {}
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
-      let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
-      let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
-      let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      let suggestion = parseJsonCell(r.Suggestion, null, 'Receipt_Recon_Queue.Suggestion');
+      const items = parseJsonCell(r.Items, [], 'Receipt_Recon_Queue.Items');
+      const items_summary = parseJsonCell(r.Items_Summary, [], 'Receipt_Recon_Queue.Items_Summary');
+      const duplicate_evidence = parseJsonCell(r.Duplicate_Evidence_JSON, [], 'Receipt_Recon_Queue.Duplicate_Evidence_JSON');
+      const rescan_matches = parseJsonCell(r.Rescan_Match_JSON, [], 'Receipt_Recon_Queue.Rescan_Match_JSON');
       // Sep 23 2026 build: Brett's manual "mark as refund" override for a row the automatic
       // refund detection (receiptExtract's refund_signal_text / negative-total check) missed.
       // Only ever flips the category the frontend reads to decide which card to render — never
