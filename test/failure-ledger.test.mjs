@@ -53,17 +53,26 @@ const sendSMS = async (env, to, text) => { SMS.push({ to, text }); return SMS_RE
 const setConfigKey = async (env, { key, value }) => { const t = SHEET.Config; const r = t.find(x => x[0] === key); if (r) r[1] = value; else t.push([key, value]); return json({ success: true }); };
 const schedReadConfigRows = async () => SHEET.Config;
 const schedParseState = () => ({ state: {} });
-const schedCell = () => '';
+const SCHED_TOKEN_MIN_LEN = 24, SCHED_TOKEN_KEY = 'Scheduler_Token';
 const schedEffective = () => ({ jobs: [] });
 const schedStatus = () => ({ overdue: OVERDUE.map(o => o.name), jobs: Object.fromEntries(OVERDUE.map(o => [o.name, { overdue_reason: o.reason }])), tick_age_min: 3 });
 const SCHED_STATE_KEY = 'Scheduler_State';
-const pieces = [grab('col'), grab('configFromValues'), grab('appendedRowNumber'), grab('schedEtParts')].join('\n');
-const L = new Function('sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedCell', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY',
-  pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, __reset: () => { _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
-  sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedCell, schedEffective, schedStatus, SCHED_STATE_KEY);
+const OPS_QUEUE_TAB = 'Ops_Build_Queue', OPS_QUEUE_COLS = ['ID', 'Timestamp', 'Title', 'Rank', 'Problem', 'Impact', 'Effort', 'Tag', 'First_Step', 'Review_TS', 'Status', 'Approved_By', 'Risk_Class', 'Lens', 'Requires_Spend', 'Spend_Note', 'Workaround'];
+let TWILIO, QUEUE_FAIL, QB_ERR, GMAIL_ERR, STAGING_FLAG;
+const isStaging = () => !!STAGING_FLAG;
+const qbAccessToken = async () => { if (QB_ERR) throw QB_ERR; return 'tok'; };
+const gmailAccessToken = async () => { if (GMAIL_ERR) throw GMAIL_ERR; return 'g'; };
+const fetch = async (url) => { if (TWILIO instanceof Error) throw TWILIO; return { ok: TWILIO.status === undefined ? true : TWILIO.status < 400, status: TWILIO.status || 200, text: async () => JSON.stringify(TWILIO.body) }; };
+const ensureColumns = async () => {};
+const addRow = async (env, tab, obj) => { if (QUEUE_FAIL) return { status: 500, clone() { return this; }, async json() { return {}; } }; const t = SHEET[tab] || (SHEET[tab] = [OPS_QUEUE_COLS.slice()]); const id = String(t.length); t.push(OPS_QUEUE_COLS.map(c => c === 'ID' ? id : (obj[c] === undefined ? '' : String(obj[c])))); return { status: 200, clone() { return this; }, async json() { return { id }; } }; };
+const constLine = (n) => { const m = new RegExp('^const ' + n + ' = .*;$', 'm').exec(src); if (!m) throw new Error('missing const ' + n); return m[0]; };
+const pieces = [constLine('AI_CREDIT_KEYS'), constLine('AI_CREDIT_FIX'), grab('schedTokenOk'), grab('schedFindRow'), grab('schedCell'), grab('buildScoutQueueRow'), grab('col'), grab('configFromValues'), grab('appendedRowNumber'), grab('schedEtParts')].join('\n');
+const L = new Function('SCHED_TOKEN_MIN_LEN', 'SCHED_TOKEN_KEY', 'MSG_QUEUE_TAB', 'fetch', 'ensureColumns', 'addRow', 'OPS_QUEUE_TAB', 'OPS_QUEUE_COLS', 'sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY', 'isStaging', 'qbAccessToken', 'gmailAccessToken',
+  'let _gmailTokenCache = { token: null, at: 0 };\n' + pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, failInvariantItems, failDuplicateIds, failMessageQueueStats, failInvariantConditions, failQueuePlan, failQueueItem, failStatusSummary, failStatusForScheduler, _failPendingLen: () => _failPending.length, __reset: () => { _failPending.length = 0; _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
+  SCHED_TOKEN_MIN_LEN, SCHED_TOKEN_KEY, 'Message_Queue', fetch, ensureColumns, addRow, OPS_QUEUE_TAB, OPS_QUEUE_COLS, sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedEffective, schedStatus, SCHED_STATE_KEY, isStaging, qbAccessToken, gmailAccessToken);
 const reset = (cfg) => {
   SHEET = { Config: [['failure_alert_enabled', 'TRUE'], ['admin_phone', '+15550001111'], ['dead_man_switch_enabled', 'TRUE']].concat(cfg || []) };
-  L.__reset(); SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
+  L.__reset(); TWILIO = new Error('no twilio'); QUEUE_FAIL = false; QB_ERR = null; GMAIL_ERR = null; STAGING_FLAG = false; SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
 };
 const origErr = console.error; console.error = (...a) => { ERR.push(a.join(' ')); };
 const T0 = Date.UTC(2026, 9, 16, 12, 5);      // 8:05 AM ET
