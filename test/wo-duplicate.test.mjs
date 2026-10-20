@@ -617,7 +617,7 @@ async function groupOf4() {
   t('routes wired: POST /wo/duplicate, /wo/bid-group/unlink, /wo/bid-group/cancel and GET /wo/bid-group', /path === '\/wo\/duplicate'\)\s+return await woDuplicate/.test(rt) && /path === '\/wo\/bid-group\/unlink'\)\s+return await woBidGroupUnlink/.test(rt) && /path === '\/wo\/bid-group\/cancel'\)\s+return await woBidGroupCancel/.test(wsrc) && /path === '\/wo\/bid-group'\)\s+return await woBidGroupGet/.test(wsrc));
   t('admin-only: none of the new paths is in any ROLE_SCOPES list (vendor/tenant/owner sessions are refused)', !/ROLE_SCOPES[\s\S]{0,4000}\/wo\/(duplicate|bid-group)/.test(wsrc.slice(wsrc.indexOf('const ROLE_SCOPES'), wsrc.indexOf('function isPathAllowedForRole'))));
   t('the HTTP body cannot set Bid_Group_ID/Duplicated_From through createWorkOrder (not touched)', !/Bid_Group_ID|Duplicated_From/.test(grab(wsrc, 'async function createWorkOrder(')));
-  t('BUILD_VERSION bumped for this feature', /const BUILD_VERSION = '2026-10-1[2-9]\.\d+-[a-z-]+'/.test(wsrc));
+  t('BUILD_VERSION bumped for this feature', /const BUILD_VERSION = '2026-10-(1[2-9]|2\d|3[01])\.\d+-[a-z-]+'/.test(wsrc));   // widened Oct 20 2026: a pinned date range broke on every later build
   t('no swallowing catch in the new block', !/catch\s*\(\s*\w*\s*\)\s*\{\s*\}/.test(S.block) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(S.block));
 }
 

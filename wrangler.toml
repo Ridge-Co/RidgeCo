@@ -30,6 +30,15 @@ workers_dev = true
 [triggers]
 crons = []
 
+# ── Read Meter shared store (Oct 20 2026) ──
+# Cloudflare runs many instances of this Worker at once and each has its own memory, but the Google Sheets read quota is shared by all
+# of them. Each instance saves its recent per-minute read counts here (one small record per instance, expires after 2h) and
+# GET /read-meter adds them together. Staging and production use different key prefixes inside this one namespace.
+# The code works without it (it says so on the Read Meter page), it just shows one instance at a time.
+[[kv_namespaces]]
+binding = "READ_METER"
+id = "d6b267fa43274702a37e3a3a17245968"
+
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
 # ── Environment variables & secrets (managed in the Cloudflare dashboard) ──

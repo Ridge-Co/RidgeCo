@@ -60,14 +60,14 @@
   <main>
     <div class="card">
       <h2>Who is spending the Google Sheets read quota?</h2>
-      <div class="muted">Google allows 60 reads a minute for the whole Hub, shared by everyone: you, vendors, owners, tenants and the background scheduler. Every real read is counted here and tagged with who caused it. Opening this page costs no reads. It only counts since the Worker last started (a deploy resets it), and a busy minute also leaves a "Needs Attention" note.</div>
+      <div class="muted">Google allows 60 reads a minute for the whole Hub, shared by everyone: you, vendors, owners, tenants and the background scheduler. Every real read is counted here and tagged with who caused it. Opening this page costs no reads. Cloudflare runs several copies ("instances") of the Hub at once; this page adds them all together. Counts start at zero after each deploy, and a busy minute also leaves a "Needs Attention" note.</div>
     </div>
     <div class="tabs" id="win-tabs">
       <button class="btn small" data-m="15" onclick="setWin(15)">15 min</button>
       <button class="btn small active" data-m="60" onclick="setWin(60)">1 hour</button>
       <button class="btn small" data-m="180" onclick="setWin(180)">3 hours</button>
       <button class="btn small" style="margin-left:auto" onclick="load()">↻ Refresh</button>
-      <label class="muted"><input type="checkbox" id="auto" checked style="width:auto;vertical-align:middle"> auto (15s)</label>
+      <label class="muted"><input type="checkbox" id="auto" checked style="width:auto;vertical-align:middle"> auto (30s)</label>
     </div>
     <div id="err" class="err hide"></div>
     <div id="out"><div class="card muted">Loading…</div></div>
@@ -105,7 +105,7 @@ function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').classList.remove('hide');
   load();
-  timer = setInterval(function(){ if (document.getElementById('auto').checked && !document.hidden) load(); }, 15000);
+  timer = setInterval(function(){ if (document.getElementById('auto').checked && !document.hidden) load(); }, 30000);
 }
 function setWin(m){
   WIN = m;
@@ -138,14 +138,17 @@ function render(d){
   var peak = d.peak_reads_in_a_minute;
   var started = new Date(d.isolate_started);
   var up = Math.round((Date.now() - started.getTime())/60000);
-  var h = '<div class="card"><div class="tiles">'
+  var ss = d.shared_store || {}, probs = (ss.problems || []).slice();
+  if (ss.partial_history) probs.push('Longer than 1 hour: other instances only keep the last hour, so the older part of this window is incomplete.');
+  var banner = probs.length ? '<div class="err"><b>Numbers may be incomplete.</b> ' + probs.map(esc).join(' ') + '</div>' : '';
+  var h = banner + '<div class="card"><div class="tiles">'
     + '<div class="tile ' + (peak>=40?'bad':peak>=25?'warn':'good') + '"><b>' + peak + ' / 60</b><span>busiest minute (reads)</span></div>'
     + '<div class="tile"><b>' + t.reads + '</b><span>reads in this window</span></div>'
     + '<div class="tile ' + (t.r429?'bad':'good') + '"><b>' + t.r429 + '</b><span>times Google said "too many"</span></div>'
     + '<div class="tile"><b>' + (t.cache_hits + t.joined) + '</b><span>reads SAVED (cache + shared)</span></div>'
     + '<div class="tile"><b>' + t.requests + '</b><span>people/job requests</span></div>'
     + '<div class="tile ' + (d.minutes_at_or_over_alarm?'warn':'good') + '"><b>' + d.minutes_at_or_over_alarm + '</b><span>minutes at 40+ reads</span></div>'
-    + '</div><div class="muted" style="margin-top:8px">Counting for ' + up + ' min since the Worker last started (build ' + esc(d.build) + ', instance ' + esc(d.isolate) + ').</div></div>';
+    + '</div><div class="muted" style="margin-top:8px">Adding up ' + (d.instances || 1) + ' Worker instance' + ((d.instances || 1) === 1 ? '' : 's') + '. This page was answered by instance ' + esc(d.isolate) + ' (build ' + esc(d.build) + ', up ' + up + ' min). Instances save their counts about once a minute, so the newest minute can be a little behind.</div></div>';
   var maxm = Math.max.apply(null, pm.map(function(m){ return m.reads; }).concat([60]));
   h += '<div class="card"><h2>Reads per minute</h2><div class="muted">Red line = Google\'s 60/min limit. Bars at 40+ turn orange/red.</div><div class="chart">'
     + pm.map(function(m){ return '<div class="' + (m.reads>=60||m.r429?'hot':m.reads>=40?'warm':'') + '" style="height:' + Math.max(2, Math.round(100*m.reads/maxm)) + '%" title="' + esc(m.minute) + ': ' + m.reads + ' reads, ' + m.r429 + ' throttled"></div>'; }).join('')
