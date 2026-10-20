@@ -35158,8 +35158,9 @@ async function strAdvanceTask(ctx, trow, opts) {
   // per-cleaner pending cap and is sent right away, even outside the 8am-9pm window (Brett Oct 16 2026: "send now, don't wait for 8am").
   const promo = !!nx.staged;
   // A cleaner is never asked about more than maxPending turnovers at once (nearest dates first), so a fresh 35-day backlog does not become a wall of texts.
-  if (!promo && st.offers.filter(o => String(o.Cleaner_ID) === nx.cleaner.ID && STR_OFFER_ACTIVE.includes(o.Status)).length >= S.maxPending) return { action: 'waiting_cleaner_busy', next: nx.cleaner.Name };
-  if (!promo && !strInSendWindow(now, S)) return { action: 'waiting_send_window', next: nx.cleaner.Name };
+  if (!promo && !pend && st.offers.filter(o => String(o.Cleaner_ID) === nx.cleaner.ID && STR_OFFER_ACTIVE.includes(o.Status)).length >= S.maxPending) return { action: 'waiting_cleaner_busy', next: nx.cleaner.Name };
+  // a pending date is never urgent: even a staged-backup move-up waits for the 8am-9pm window unless Brett taps "send now even if late"
+  if (!(promo && !pend) && !opts.sendNow && !strInSendWindow(now, S)) return { action: 'waiting_send_window', next: nx.cleaner.Name };
   if (ctx.dry || !S.engine) { ctx.actions.push({ task: trow.Task_Key, would_offer: nx.cleaner.Name, promotion: promo, window: strWindowText(strDaysBetween(today, task.date), S) }); if (ctx.dry) st.offers.push({ ID: 'dry', Task_Key: trow.Task_Key, Cleaner_ID: nx.cleaner.ID, Status: 'pending', Deadline_At: '9999-01-01T00:00:00Z' }); return { action: 'would_offer', next: nx.cleaner.Name }; }
   if (!S.sms) {
     const note = 'SMS OFF - next up: ' + nx.cleaner.Name;
