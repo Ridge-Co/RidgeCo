@@ -36827,6 +36827,11 @@ async function strAdminPendingCreate(env, body) {
     const id = await strAddRow(env, 'STR_Turnovers', fields), row = Object.assign({ ID: id }, fields); ctx.st.pendings.push(row);
     // two taps at once: the lowest row id for the date wins, the other withdraws itself and does nothing
     invalidateTabCache('STR_Turnovers');
+    const twins = (await fetchTab(env, 'STR_Turnovers')).filter(r => strIsPendRow(r) && r.Date === plan.date && strPendActive(r)).sort(strByIdAsc);
+    if (twins.length > 1 && String(twins[0].ID) !== String(id)) { await strSetTurnover(ctx, row, { Status: 'pending_cancelled', Note: 'duplicate request' }); return json({ ok: true, duplicate: true, key: twins[0].Task_Key, message: `There is already an inquiry for ${plan.label}. Nothing was sent twice.` }); }
+    await strLog(ctx, row.Task_Key, '', 'pending_created', `${plan.date}${plan.note ? ' - ' + plan.note : ''}`);
+    const warnings = plan.warnings.slice();
+    let adv = null;
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
