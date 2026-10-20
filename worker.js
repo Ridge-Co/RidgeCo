@@ -28180,7 +28180,7 @@ async function ensureColumnsInner(env, tab, columns) {
         }],
       });
     }
-  } catch (e) { /* best-effort — if the grid genuinely can't grow, the write below reports the real error */ }
+  } catch (e) { softNote('ensure_columns_grid_grow_failed', e, 'P2', { tab }); /* best-effort — if the grid genuinely can't grow, the write below reports the real error */ }
 
   // Single-cell writes via batchUpdate, the same shape updateRow uses. Rewriting the entire
   // header row would mean two concurrent calls each read the old headers and the second
