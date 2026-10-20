@@ -24344,7 +24344,7 @@ function __invalidateFromWrite(path, body) {
     __inflight.clear(); __batchInflight.clear();
     return;
   }
-  tabs.forEach(t => __tabCache.delete(t));
+  tabs.forEach(t => { __tabCache.delete(t); __dropInflightFor(t); });
 }
 
 // Google throttles Sheets reads on a "read requests per minute per user" quota,
