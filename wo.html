@@ -413,7 +413,7 @@ function unlock(){
     if(res && res.success && res.token){
       VIEW=res.token;
       var exp=Math.floor(Date.now()/1000)+(res.expires_in||86400);
-      try{ localStorage.setItem(SESS_KEY, JSON.stringify({token:res.token,exp:exp})); }catch(e){}
+      try{ localStorage.setItem(SESS_KEY, JSON.stringify({token:res.token,exp:exp})); }catch(e){ /* silent-ok: storage blocked, session kept in memory */ }
       if(res.language==='es') setLang('es');
       msg.textContent=''; loadDoc();
     } else if(res && (res.error==='invalid_link'||res.error==='revoked'||res.error==='not_found'||res.error==='no_phone')){
