@@ -31226,7 +31226,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
   const tradeName = resolved.name;
   const trade = QB_TRADE_MAP[tradeName];
 
-  const warnings = ['Standalone bill — no work order.'];
+  const warnings = ['Standalone bill — no work order.']; const failWarnings = [];   // failWarnings: follow-up steps that FAILED (returned as failure_warnings); `warnings` stays informational only
   if (!resolved.matched) warnings.push('Vendor trade "' + (vendor.Trade || 'blank') + '" is not in the QuickBooks map — booking to General.');
   if (!billToRidgeco && !owner) warnings.push('No owner found for this property — set the property owner before sending, or bill it to Ridge Co instead.');
 
