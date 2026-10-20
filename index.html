@@ -869,18 +869,24 @@ window.addEventListener('pageshow', function(e){
     </details>
     </section>
 
-    <div class="section-title" style="margin-bottom:8px">🔑 VENDOR ACCESS DEFAULTS BY TRADE</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO will never receive access codes unless explicitly overridden on a specific WO. Trades not listed default to YES.</div>
-    <div id="trade-access-list" style="margin-bottom:10px"><span style="color:var(--muted);font-size:11px">Loading…</span></div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
-      <select id="trade-access-trade" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
-        <option value="">Select trade…</option></select>
-      <select id="trade-access-val" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
-        <option value="TRUE">YES — needs access</option>
-        <option value="FALSE">NO — no access needed</option>
-      </select>
-      <button class="btn small" onclick="saveTradeAccessDefault()">Save</button>
-    </div>
+    <section id="dl-lower" class="dl-section" aria-label="Settings and logs">
+      <h3 class="dl-h">⚙ Settings &amp; logs</h3>
+    <details class="dl-group" data-dl-key="access-defaults">
+      <summary><span class="dl-h">Vendor access by trade</span><span class="dl-sub">Which trades can see lockbox and access codes</span></summary>
+      <div class="dl-body">
+        <p class="dl-note">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO never receive access codes unless explicitly overridden on a specific work order. Trades not listed default to YES.</p>
+        <div id="trade-access-list" style="margin-bottom:12px"><span style="color:var(--dl-muted);font-size:13px">Loading…</span></div>
+        <div class="dl-row">
+          <select id="trade-access-trade" class="dl-select">
+            <option value="">Select trade…</option></select>
+          <select id="trade-access-val" class="dl-select">
+            <option value="TRUE">YES — needs access</option>
+            <option value="FALSE">NO — no access needed</option>
+          </select>
+          <button type="button" class="btn small" style="min-height:44px" onclick="saveTradeAccessDefault()">Save</button>
+        </div>
+      </div>
+    </details>
 
     <div class="section-title" style="margin-bottom:8px">🔔 ALERTING</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Both alerts page the admin phone via the existing SMS pattern — no new channel. Both ship OFF by default; flip them on here whenever you're ready to start getting paged.</div>
