@@ -40,6 +40,10 @@ function world() {
     json: (o, s) => jsonResp(o, s),
     fetchTab: async (env, t) => (tabs[t] || []).map(r => ({ ...r })),
     fetchConfig: async () => ({ qb_receipts_email: 'qb@example.com' }),
+    fetchTabSoft: async (env, t) => (tabs[t] || []).map(r => ({ ...r })),   // Phase C helpers (reporting only)
+    tryWrite: async (env, w, fn) => { try { return { ok: true, value: await fn() }; } catch (e) { return { ok: false, error: e.message }; } },
+    softNote: () => true, softFail: async () => ({ ok: false }), safeJson: async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } },
+    parseJsonCell: (raw, fb) => { try { return raw ? JSON.parse(raw) : fb; } catch (e) { return fb; } },
     ensureColumns: async () => {},
     updateRow: async (env, t, id, fields) => { updates.push({ t, id, fields }); const r = (tabs[t] || []).find(x => String(x.ID) === String(id)); if (r) Object.assign(r, fields); },
     addReceipt: async (env, body) => { const id = String(nextId++); tabs.Receipts.push({ ID: id, Active: 'TRUE', QB_Email_Sent: 'FALSE', Store: body.store, Amount: String(body.amount), WO_ID: body.wo_id, Property_ID: body.property_id, Category: body.category, Payment_Source: 'company_card', Source_File_ID: body.source_file_id }); return jsonResp({ success: true, id, amount: String(body.amount) }); },
