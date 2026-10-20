@@ -10674,7 +10674,13 @@ async function ensureLoanLedgerTab(env) {
 // logic below can never create — it stops exactly at 0, see computeLoanDeduction).
 async function getVendorLoanBalance(env, vendorId) {
   let rows = [];
-  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { return 0; } // tab doesn't exist yet → no loans
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); }
+  catch (e) {
+    // A tab that does not exist yet really does mean "no loans". Any OTHER read failure would make an outstanding loan look like zero
+    // (the vendor would be paid in full, the loan never docked), so that is reported before falling back.
+    if (!isMissingTabError(e)) await softFail(env, 'loan_balance_read_failed', e, 'P1', { vendor_id: vendorId });
+    return 0;
+  }
   return rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
     .reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
 }
