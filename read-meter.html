@@ -148,7 +148,7 @@ function render(d){
     + '<div class="tile"><b>' + (t.cache_hits + t.joined) + '</b><span>reads SAVED (cache + shared)</span></div>'
     + '<div class="tile"><b>' + t.requests + '</b><span>people/job requests</span></div>'
     + '<div class="tile ' + (d.minutes_at_or_over_alarm?'warn':'good') + '"><b>' + d.minutes_at_or_over_alarm + '</b><span>minutes at 40+ reads</span></div>'
-    + '</div><div class="muted" style="margin-top:8px">Counting for ' + up + ' min since the Worker last started (build ' + esc(d.build) + ', instance ' + esc(d.isolate) + ').</div></div>';
+    + '</div><div class="muted" style="margin-top:8px">Adding up ' + (d.instances || 1) + ' Worker instance' + ((d.instances || 1) === 1 ? '' : 's') + '. This page was answered by instance ' + esc(d.isolate) + ' (build ' + esc(d.build) + ', up ' + up + ' min). Instances save their counts about once a minute, so the newest minute can be a little behind.</div></div>';
   var maxm = Math.max.apply(null, pm.map(function(m){ return m.reads; }).concat([60]));
   h += '<div class="card"><h2>Reads per minute</h2><div class="muted">Red line = Google\'s 60/min limit. Bars at 40+ turn orange/red.</div><div class="chart">'
     + pm.map(function(m){ return '<div class="' + (m.reads>=60||m.r429?'hot':m.reads>=40?'warm':'') + '" style="height:' + Math.max(2, Math.round(100*m.reads/maxm)) + '%" title="' + esc(m.minute) + ': ' + m.reads + ' reads, ' + m.r429 + ' throttled"></div>'; }).join('')
