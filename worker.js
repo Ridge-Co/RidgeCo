@@ -4079,13 +4079,13 @@ async function scopeGet(env, url) {
   const id = url.searchParams.get('id'); if (!id) return json({ error: 'id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
+  const srcs = parseJsonCell(s.Source_Refs, [], 'Scopes.Source_Refs');
   return json(Object.assign({}, s, { line_items: scopeParseItems(s), source_refs: srcs }));
 }
 
 // GET /scope/drive-list?folder= — list image/pdf files in the handwriting scan folder to pick from.
 async function scopeDriveList(env, url) {
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env);
   const folder = (url && url.searchParams.get('folder')) || cfg.scope_scan_folder_id || env.SCOPE_SCAN_FOLDER_ID || SCOPE_SCAN_FOLDER_DEFAULT;
   try {
     const tok = await getAccessToken(env);
