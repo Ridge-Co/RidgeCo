@@ -36817,7 +36817,7 @@ async function inspOpenBlockReopen(env, body) {
 
     await ensureInspTabs(env);
     const wr = await updateRow(env, 'Insp_Open_Blocks', b.ID, { Active: 'TRUE', Book_By: sel.wall, Book_By_Hours: '' });
-    let wj = null; try { wj = await wr.json(); } catch (je) { console.error('insp: reopen save response unreadable:', je && je.message); }
+    let wj = null; try { wj = await wr.json(); } catch (je) { console.error('insp: reopen save response unreadable:', je && je.message); softNote('insp_reopen_save_response', je, 'P1', { block: b.ID }); }
     if (!wj || !wj.success) { await inspAlert(env, 'reopen_save', `Block #${b.ID} could not be ${mode === 'reopen' ? 'reopened' : 'extended'}: ${(wj && wj.error) || 'save failed'}`); return json({ ok: false, error: 'save_failed', message: 'Could not save — nothing was changed and nobody was notified.' + (wj && wj.error ? ' (' + wj.error + ')' : '') }, 500); }
     let after = null; try { after = (await fetchTab(env, 'Insp_Open_Blocks')).find(r => String(r.ID) === String(b.ID)); } catch (e) { after = null; }
     if (!after || String(after.Active || '').toUpperCase() === 'FALSE' || String(after.Book_By || '').trim() !== sel.wall || inspBlockExpiryMs(after, dh) !== sel.closeMs) {
