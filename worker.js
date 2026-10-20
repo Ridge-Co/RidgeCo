@@ -6232,9 +6232,12 @@ async function scopeProposalUnbook(env, body) {
       // OPEN_WO_STATUSES) — the correct inverse of the 'Invoiced' this same booking set.
       if (s.WO_ID) await updateWOFields(env, s.WO_ID, { Status: 'Pending Invoice' });
     }
-  } catch (e) {}
+  } catch (e) {
+    await softFail(env, 'scope_unbook_status_reset_failed', e, 'P1', { scope_signature: String(row.ID) });
+    unbookWarning = 'The QuickBooks invoice/bill were undone, but the scope / work order status could not be reset.';
+  }
 
-  return json({ ok: true, undone_invoice: row.QB_Invoice_ID || '', undone_bill: row.QB_Bill_ID || '' });
+  return json({ ok: true, undone_invoice: row.QB_Invoice_ID || '', undone_bill: row.QB_Bill_ID || '', ...(unbookWarning ? { failure_warning: unbookWarning } : {}) });
 }
 
 // POST /scope-proposal/book-final (admin) { id, preview_only }
