@@ -36903,6 +36903,9 @@ async function strAdminPendingConvert(env, body) {
     const r = await strPendingConvert(ctx, p, real, 'Brett: mark as booked now');
     if (!r.ok) return json({ ok: false, error: 'not_converted', message: `Could not convert: ${r.note}.` }, 409);
     const drain = await strPendingDrain(ctx, null); // the "now booked" text / invite first, then the calendar if this call still has room
+    try { if (strRoom(ctx, 14)) await strPendingDrain(ctx, await strReadFeed(ctx)); } catch (e) { warnings.push('The calendar could not be updated just now; it is fixed by the next scheduler run.'); }
+    await strPendingAlerts(ctx);
+    const after = ctx.st.pendings.find(x => x.Task_Key === p.Task_Key) || p;
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
