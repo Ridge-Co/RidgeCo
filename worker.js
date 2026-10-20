@@ -27078,7 +27078,11 @@ async function qbRepairInvoice(env, body) {
     }
 
     // Share the photo folder so the link in the memo actually opens for the customer.
-    if (folderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, folderId); } catch (e) {} }
+    let shareWarning = '';
+    if (folderId) {
+      try { const gtok = await getAccessToken(env); if (!(await driveShareAnyone(gtok, folderId))) throw new Error('Drive refused to share the photo folder'); }
+      catch (e) { shareWarning = 'The photo folder could not be shared, so the photo link in the invoice memo may not open for the customer: ' + String((e && e.message) || e).slice(0, 120); await softFail(env, 'repair_invoice_share_folder', e, 'P1', { wo: ir.WO_ID, folder: folderId }); }
+    }
 
     const r = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
     const updated = r && r.Invoice;
