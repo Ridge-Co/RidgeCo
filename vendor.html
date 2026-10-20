@@ -4471,11 +4471,12 @@ function isVendorBusy(){
   function check() {
     if (!session) return;
     loadWOsForCurrentTab().then(function(wos) {
+      bgOk('vendor:bgRefresh');
       if (!session) return; // logged out while the request was in flight
       if (woSignature(wos) === woSignature(window._allWos || window._wos)) return; // nothing changed -- leave the DOM alone
       if (isVendorBusy()) { pendingWos = wos; } // wait -- see the backgrounding handler below
       else { pendingWos = null; applyNow(wos); }
-    }).catch(function(){}); // silent -- this is a background check; a manual loadWorkOrders() still surfaces real errors
+    }).catch(function(e){ bgFailure('vendor:bgRefresh', e); }); // background check: a manual loadWorkOrders() surfaces the error to the vendor; repeated failures are reported
   }
 
   // A manual reload (tab switch, fresh login) always supersedes a background update that
