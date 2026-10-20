@@ -24643,6 +24643,7 @@ async function fetchTabs(env, tabs, opts) {
   if(!tabs||!tabs.length) return [];
   const now = Date.now();
   const missing = tabs.filter(t => !__cacheFresh(env, __tabCache.get(t)));
+  if (tabs.length > missing.length) __meterSaved(env, 'hit', tabs.length - missing.length);
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
     try {
