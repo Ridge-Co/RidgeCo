@@ -5029,7 +5029,7 @@ async function proposalOwnerSms(env, { scopeId, prop, owner, addr, ownerName, ov
   } catch (e) { out = { status: 'failed', note: String((e && e.message) || e).slice(0, 200) }; }
   await proposalStampSms(env, scopeId, out.status);
   if (out.status !== 'sent' && out.status !== 'held') {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (te) { softNote('telemetry_write_failed:proposal_owner_sms', te, 'P2'); }
   }
   return out;
 }
