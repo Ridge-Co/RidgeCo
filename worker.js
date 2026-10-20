@@ -34378,7 +34378,7 @@ function inspStrEventDays(ev) {
 function inspStrCleaningKind(title) {
   const t = String(title || '').toLowerCase();
   if (!/clean/.test(t)) return '';
-  if (/n\/a|not available|unavailable|cancel|not covered|uncovered|backup/.test(t)) return ''; // the Hub's own red "BOOKING NOT COVERED FOR CLEANING" block (and any backup note) must never count as a cleaner
+  if (/n\/a|not available|unavailable|cancel|not covered|uncovered|backup|pending|tentative/.test(t)) return ''; // the Hub's own red "BOOKING NOT COVERED FOR CLEANING" block (and any backup note) must never count as a cleaner
   if (/\bbrett\b/.test(t)) return 'brett';
   return 'cleaner';
 }
