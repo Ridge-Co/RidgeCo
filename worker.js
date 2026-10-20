@@ -7674,7 +7674,7 @@ async function intakeEnsureTab(env) {
 async function intakeAppendRow(env, row) {
   await intakeEnsureTab(env);
   const res = await addRow(env, INTAKE_TAB, row);
-  let j = null; try { j = await res.clone().json(); } catch (_) {}
+  let j = null; try { j = await res.clone().json(); } catch (_) { /* silent-ok: a non-JSON body is rejected by the explicit landed-check on the next line */ }
   if (!res || res.status !== 200 || !j || j.success !== true || !j.id) throw new Error('Intake_Queue row did not land: ' + (j && j.error ? j.error : (res && res.status)));
   const back = (await fetchTab(env, INTAKE_TAB)).find(q => String(q.ID) === String(j.id));
   if (!back || String(back.Message_ID || '') !== String(row.Message_ID || '')) throw new Error('Intake_Queue row ' + j.id + ' did not read back after write');
