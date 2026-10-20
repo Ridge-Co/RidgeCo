@@ -12810,7 +12810,7 @@ async function logWOAuditMany(env, entries) {
       return row;
     });
     await sheetsRequest(env, 'POST', `/values/WO_Audit:append?valueInputOption=RAW`, { values:newRows });
-  } catch(e) { /* never break main operation */ }
+  } catch(e) { softNote('wo_audit_write_failed', e, 'P1', { entries: entries.length, wo: entries[0] && entries[0].woId }); /* never break the main operation, but the audit row is lost: tell Brett */ }
 }
 
 // Thin wrapper matching logWOAudit's shape, for the message-send call sites (smsGatedSend,
