@@ -2621,7 +2621,7 @@ function openWODetail(woId) {
           }
         }
       }
-    }).catch(function(){});
+    }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-detail-lockboxes', e); });
   }
 
   // Master Key status (Aug 24, 2026, admin-only) — this Hub view always sees the full
