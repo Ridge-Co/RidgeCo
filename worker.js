@@ -3637,9 +3637,9 @@ async function receiptReconReassign(env, body) {
   if (!wo_id && addJson && addJson.success && !addJson.duplicate && addJson.id) {
     try {
       const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
-      const j = await r.json().catch(() => ({}));
+      const j = await r.json();   // Phase C: an unreadable body throws into the catch below (reported + shown as qb_email.error) instead of looking like "sent: false, no error"
       qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
-    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
+    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; softNote('receipt_qb_email_failed', e, 'P1', { receipt_id: String(addJson.id) }); }
   }
 
   if (addJson && addJson.success) {
