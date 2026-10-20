@@ -72,6 +72,7 @@ async function main() {
     if (status === 503) { t('SELFTEST_TOKEN configured on the Worker', false, 'Worker returned 503 — add the secret in the Cloudflare dashboard'); continue; }
     if (status === 401) { t('SELFTEST_TOKEN matches the Worker', false, 'Worker returned 401 — the CI secret and the Worker secret differ'); continue; }
     t('responds 200', status === 200, `got ${status}`);
+    if (status === 200 && !body) t('answer is readable JSON', false, 'HTTP 200 but the body was not JSON');
     if (status !== 200 || !body) continue;
 
     // A canary that reports success while the model is unreachable is worse than no canary:
