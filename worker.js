@@ -29978,7 +29978,7 @@ async function qbNotifyVendorPaid(env, body) {
   if (!vendor.Phone) return json({ ok: false, preview, error: (vendor.Name || 'This vendor') + ' has no phone number — no text can be sent.', message: m.text, warnings }, 400);
   if (preview) return json({ ok: true, preview: true, to: vendor.Name || '', phone: vendor.Phone, message: m.text, warnings });
   const r = await smsGatedSend(env, { message_type: 'vendor_paid', recipient_type: 'vendor', vendor, message_body: m.text });
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text', Skill_Or_Endpoint: '/qb/notify-vendor-paid', Success: r.sent || r.held_for_quiet_hours ? 'TRUE' : 'FALSE', Notes: ('vendor=' + vendor.ID + ' amount=' + amount + ' bills=' + ids.join(',') + ' ' + (r.gate_snapshot || '')).slice(0, 300) }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text', Skill_Or_Endpoint: '/qb/notify-vendor-paid', Success: r.sent || r.held_for_quiet_hours ? 'TRUE' : 'FALSE', Notes: ('vendor=' + vendor.ID + ' amount=' + amount + ' bills=' + ids.join(',') + ' ' + (r.gate_snapshot || '')).slice(0, 300) }); } catch (te) { softNote('telemetry_write_failed:vendor_paid_text', te, 'P2'); }
   const sent = !!r.sent, held = !!r.held_for_quiet_hours;
   return json({ ok: sent || held, sent, held, test_mode: !!r.test_mode, message: m.text, warnings,
     error: (sent || held) ? '' : ('Text not sent: ' + String(r.error || r.gate_snapshot || 'blocked by the SMS gate')) });
