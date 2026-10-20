@@ -34872,6 +34872,11 @@ const STR_DEFAULT_TEXTS = {
   str_swapped_backup: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover the {DateShort} turnover at {Property}, so you're off the hook - could you be the backup in case anything changes? No reply needed.",
   str_swapped_backup_multi: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover these turnovers at {Property}: {DateList}. So you're off the hook for those - could you be the backup in case anything changes? No reply needed.",
   str_admin_marked: "Hi {FirstName}, it's {AssistantName} with Ridge Co. I've marked you {MarkText} for {DateList} at {Property}. If that's not right, you can change it here: {Link}",
+  // Oct 20 2026 (pending cleaning: a date with no booking yet). Never says it is booked, never states a deadline, never a rank word.
+  str_pending_offer: "Hi {FirstName}, quick question - we may have a guest checking out {DateShort} at {Property}, but it isn't booked yet. Would you be available to clean it if it does book? An answer as soon as you can helps us decide whether to accept it. Tap here: {Link}",
+  str_pending_yes: "Thanks - we'll let you know if it books. Nothing is confirmed yet.",
+  str_pending_booked: "{FirstName}, good news - {DateShort} at {Property} is now booked and you're on the schedule. Checkout is 11 AM{NextLine}. Please update your availability if needed. Details and invite: {Link}",
+  str_pending_cancelled: "Hi {FirstName}, thanks for saying you could do {DateShort} at {Property}. It didn't book after all, so you don't need to keep that date open. We really appreciate it!",
 };
 function strNextLine(task) {
   if (!task.next) return ' (no booking after that yet)';
