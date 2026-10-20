@@ -24610,7 +24610,7 @@ function __meterSnapshot(url, extra) {
   }
   return {
     window_minutes: mins, isolate: __meter.isolate, isolate_started: new Date(__meter.since || Date.now()).toISOString(), instances: 1 + (extra && extra.store ? extra.store.remote_instances : 0), shared_store: __meterStoreInfo(extra), build: BUILD_VERSION,
-    note: 'Counts only THIS Worker instance since it started (a deploy or idle restart resets it). reads = real GET calls to Google incl. retries; r429 = Google said "too many".',
+    note: 'Adds up every Worker instance that saved its counts to the shared store (see shared_store; if it is not connected this is ONE instance only). reads = real GET calls to Google incl. retries; r429 = Google said "too many".',
     totals: tot, peak_reads_in_a_minute: rows.reduce((m, b) => Math.max(m, b.reads), 0), minutes_at_or_over_alarm: rows.filter(b => b.reads >= METER_ALARM_READS_PER_MIN).length,
     quota_limit_per_minute: 60, alarms_raised: __meter.alarms, meter_faults: __meter.faults,
     by_kind: Array.from(roles.entries()).map(([key, v]) => ({ key, reads: v[0], writes: v[1], r429: v[2], requests: v[3] })).sort((a, b) => b.reads - a.reads),
