@@ -26845,6 +26845,27 @@ async function qbPayables(env, url) {
         customer_clear_days: s.clear_days, customer_clears_on: s.clears_on, customer_clear_status: s.status, customer_payment_count: s.count };
     }
 
+    // Oct 20 2026: "owner paid in part" is judged against what QuickBooks' OWN invoice says it totals (TotalAmt) -- exactly like the vendor side -- and only falls back
+    // to the Hub's figure when QuickBooks gave no usable total. The Hub's Customer_Total is a gross/estimate figure; an invoice hand-corrected in QuickBooks (WO-1246,
+    // invoice 1764) is smaller, and an UNPAID invoice read as "part paid" -> a P0 "payment date unavailable" every sync. A true part-payment is still balance < TotalAmt.
+    function isPartiallyPaid(balance, qbTotal, hubTotal) {
+      if (balance == null || !(balance > 0.005)) return false;
+      const total = (qbTotal != null && isFinite(qbTotal) && qbTotal > 0) ? qbTotal : hubTotal;
+      return total > 0 && balance < (total - 0.005);
+    }
+    // The two "date unavailable" notices repeat on every call (every sync, every Who To Pay open) for the same invoices. The warning is ALWAYS returned to the page;
+    // only the Ops_Telemetry / failure-ledger write is skipped when this isolate already logged the same list in the last 6 h. A failed log write is retried next call.
+    const warnSeen = (qbPayables._warnSeen = qbPayables._warnSeen || new Map());
+    async function warnDateMissing(stage, ref, err) {
+      const key = stage + '|' + ref, nowMs = Date.now(), last = warnSeen.get(key);
+      if (last != null && nowMs - last < 6 * 3600 * 1000) { warnings.push({ stage, ref, error: String(err.message).slice(0, 300), repeat: true }); return; }
+      if (warnSeen.size > 200) warnSeen.clear();
+      warnSeen.set(key, nowMs);
+      const from = warnings.length;
+      await logAndCollectError(env, warnings, stage, '/qb/payables', ref, err);
+      if (warnings.slice(from).some(w => w.stage === 'telemetry')) warnSeen.delete(key);
+    }
+
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
     const candidates = irs.filter(ir => {
