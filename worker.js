@@ -32862,7 +32862,7 @@ async function qbSendCombinedInvoice(env, ctx) {
                 warnings.push('Fee credit: $' + used.applied.toFixed(2) + ' of the credit owed to ' + rb.vendDisplay + ' was taken off this bill\'s deduction (credit left $' + used.balance.toFixed(2) + ').');
               } catch (e) {
                 warnings.push('⚠ The bill for ' + rb.vendDisplay + ' went out with a $' + rb.adj.credit_applied.toFixed(2) + ' fee-credit line, but recording the credit as used failed (' + String((e && e.message) || e).slice(0, 120) + ') — post a matching negative entry on the fee-credit ledger by hand or it will be used twice.');
-                await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+                await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(te => softNote('telemetry_write_failed:fee_credit_apply_failed', te, 'P2'));
               }
             }
             if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
