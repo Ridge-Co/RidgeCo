@@ -15661,7 +15661,7 @@ async function smsGatedSend(env, opts) {
     try {
       const t = await translateForVendorDetailed(env, opts.vendor, messageBody);
       if (t.translated) { originalBody = t.original; translatedTo = 'es'; messageBody = t.text; }
-    } catch (e) { /* fail open: English goes out */ }
+    } catch (e) { softNote('vendor_sms_translation_failed', e, 'P2', { ref: opts.wo_id || '', note: 'a Spanish-speaking vendor was sent the English text' }); /* fail open: English goes out */ }
   }
   const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
 
