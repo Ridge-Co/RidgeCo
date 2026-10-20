@@ -257,7 +257,7 @@ function syncRules_(ss, cfg, me) {
     var key = 'filter:' + r.Rule_ID, saved = props.getProperty(key);
     var rec = saved ? JSON.parse(saved) : null;
     if (rec && rec.sig === sig) return;                                  // already in place
-    if (rec && rec.id) { try { Gmail.Users.Settings.Filters.remove('me', rec.id); result.removed++; } catch (e) {} }
+    if (rec && rec.id) removeFilter_(rec.id, result, 'rule ' + r.Rule_ID);
 
     var criteria = { from: r.From };
     if (r.Subject_Contains) criteria.subject = r.Subject_Contains;
