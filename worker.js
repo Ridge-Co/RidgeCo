@@ -36906,6 +36906,9 @@ async function strAdminPendingConvert(env, body) {
     try { if (strRoom(ctx, 14)) await strPendingDrain(ctx, await strReadFeed(ctx)); } catch (e) { warnings.push('The calendar could not be updated just now; it is fixed by the next scheduler run.'); }
     await strPendingAlerts(ctx);
     const after = ctx.st.pendings.find(x => x.Task_Key === p.Task_Key) || p;
+    return json({ ok: true, status: strPendingStatus(ctx, after), result: r, drain, message: r.conflict ? `Marked as booked, but ${r.conflict} is already on that date, so nobody was assigned from the inquiry. You have been told.` : (r.assigned ? `Marked as booked. ${r.assigned} is now on the schedule${/^sent:/.test(after.Pending_Text || '') ? ' and was texted' : (strInSendWindow(ctx.now, ctx.S) ? ' (the "now booked" text and calendar invite go out within a few minutes)' : ' (the "now booked" text and invite go out at 8 AM)')}.` : 'Marked as booked. Nobody had said yes, so it is now an ordinary open turnover and the cleaner queue takes over.'), warnings: warnings.concat(ctx.errors.map(e => e.error)) });
+  } catch (e) { return await strHandleErr(env, e, 'pending convert'); }
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
