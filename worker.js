@@ -11133,7 +11133,7 @@ async function editVendorBillReceipts(env, body) {
   const newTotal = laborOrFlat + truckStock + receiptsReimburse;
   const oldTotal = parseFloat(bill.Total) || 0;
 
-  try { await ensureColumns(env, 'Vendor_Bills', ['Receipts_Reimburse_Total']); } catch (e) {}
+  try { await ensureColumns(env, 'Vendor_Bills', ['Receipts_Reimburse_Total']); } catch (e) { await softFail(env, 'bill_receipts_ensure_columns', e, 'P1', { ref: billId }); }
 
   const fields = {
     Receipts_JSON: JSON.stringify(receipts),
