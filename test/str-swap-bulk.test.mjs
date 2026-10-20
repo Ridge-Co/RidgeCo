@@ -440,4 +440,105 @@ const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner
   t('40-date swap: Sheets calls stay far under the per-minute quota (batched, not per-date)', W.sheetCalls < 120, W.sheetCalls);
   t('41 dates are refused outright', (await preview(E, { action: 'swap', cleaner_id: '3', task_keys: keys.concat(['x']) })).error === 'too_many');
 }
-//@@T2@@
+
+// ═══ 9. mark action (admin-set availability) ═══
+{
+  const { W, E } = await setup();
+  const body = { action: 'mark', cleaner_id: '3', mark: 'out', dates: ['2026-10-27', '2026-10-28', '2026-11-02', '2026-10-01'] }, p = await preview(E, body);
+  t('mark preview: 3 change, the past date is skipped with a reason', p.counts.change === 3 && p.items.find(i => i.date === '2026-10-01').outcome === 'skip' && /passed/.test(p.items.find(i => i.date === '2026-10-01').reason), p.items);
+  t('mark preview: one optional acknowledgement text, NOT ticked by default', p.recipients.length === 1 && p.recipients[0].key === 'mark:3' && p.recipients[0].send_default === false && /marked you out for Tue, Oct 27; Wed, Oct 28; Mon, Nov 2/.test(p.recipients[0].text), p.recipients);
+  const r = await sendIt(E, p, body);
+  t('mark applied: three Out marks, source admin, audit rows, nobody texted (ack not ticked)', r.ok && ['2026-10-27', '2026-10-28', '2026-11-02'].every(d => markOf(W, '3', d) === 'out') && rowsOf(W, 'STR_Availability').filter(a => a.Source === 'admin').length === 3 && rowsOf(W, 'STR_Log').filter(l => l.Event === 'admin_mark').length === 3 && !W.sms.length && r.texts[0].status === 'not_sent', r);
+  // idempotent: marking the same again is a no-op preview
+  const p2 = await preview(E, body); t('same marks again: nothing to change', p2.counts.change === 0 && p2.items.filter(i => i.outcome === 'skip').length === 4);
+  // tick afterwards: Rachel is skipped as a candidate on those dates (the existing engine honours admin marks)
+  t('an admin Out mark is honoured by the queue (strNextCleaner reads it like a cleaner mark)', rowsOf(W, 'STR_Availability').some(a => a.Cleaner_ID === '3' && a.Mark === 'out'));
+  // tick the ack with the text ticked
+  const b2 = { action: 'mark', cleaner_id: '3', mark: 'can', dates: ['2026-10-27'] }, p3 = await preview(E, b2);
+  const r3 = await sendIt(E, p3, b2, { 'mark:3': { send: true, body: 'Rachel - you are now backup for Oct 27.' } });
+  t('mark can + ack ticked: sent exactly as typed; Out replaced by backup', r3.ok && markOf(W, '3', '2026-10-27') === 'can' && W.sms.length === 1 && W.sms[0].text === 'Rachel - you are now backup for Oct 27.', r3);
+  const b3 = { action: 'mark', cleaner_id: '3', mark: '', dates: ['2026-10-28', '2026-10-29'] }, p4 = await preview(E, b3), r4 = await sendIt(E, p4, b3);
+  t('clearing: removes the mark, no text offered for a clear', r4.ok && markOf(W, '3', '2026-10-28') === '' && p4.recipients.length === 0 && p4.items.find(i => i.date === '2026-10-29').outcome === 'skip');
+}
+{
+  // you cannot mark the person who is cleaning that day out (calendar or hub holder) - never let a mark drop a turnover to uncovered
+  const { W, E } = await setup();
+  const p = await preview(E, { action: 'mark', cleaner_id: '2', mark: 'out', dates: ['2026-10-25', '2026-10-26'] });
+  t('Kayla is on the calendar for Oct 25: marking her Out is blocked (swap first), Oct 26 is fine', p.items.find(i => i.date === '2026-10-25').outcome === 'blocked' && /Swap her out first/.test(p.items.find(i => i.date === '2026-10-25').reason) && p.items.find(i => i.date === '2026-10-26').outcome === 'change', p.items);
+  const body = { action: 'mark', cleaner_id: '2', mark: 'out', dates: ['2026-10-25', '2026-10-26'] };
+  const r = await sendIt(E, p, body);
+  t('apply: the blocked date is skipped, the other done, reported per item', r.counts.done === 1 && r.counts.skipped === 1 && !markOf(W, '2', '2026-10-25') && markOf(W, '2', '2026-10-26') === 'out' && r.status === 'done', r);
+  const pc = await preview(E, { action: 'mark', cleaner_id: '2', mark: 'can', dates: ['2026-10-25'] });
+  t('"available as backup" for the same day she is cleaning is blocked too', pc.items[0].outcome === 'blocked');
+}
+{
+  // marking out a cleaner with a waiting offer closes it; the scheduler then asks the next cleaner
+  const { W, E } = await setup();
+  const o = rowsOf(W, 'STR_Offers').find(x => x.Task_Key === K108 && x.Status === 'pending'); t('setup: Gina has a waiting offer for Nov 8', !!o && o.Cleaner_ID === '1');
+  const body = { action: 'mark', cleaner_id: '1', mark: 'out', dates: ['2026-11-08'] }, p = await preview(E, body);
+  t('preview says the waiting offer will be closed', p.items[0].offers_declined.length === 1 && p.items[0].notes.some(n => /waiting offer.*closed/.test(n)));
+  const r = await sendIt(E, p, body);
+  t('offer declined (note: marked out by Brett)', r.ok && rowsOf(W, 'STR_Offers').find(x => x.ID === o.ID).Status === 'declined' && /marked out by Brett/.test(rowsOf(W, 'STR_Offers').find(x => x.ID === o.ID).Note));
+  clock += 15 * 60000; await E.strTick({}, {});
+  t('the next tick asks the next cleaner (Kayla), skipping Gina', rowsOf(W, 'STR_Offers').some(x => x.Task_Key === K108 && x.Cleaner_ID === '2' && x.Status === 'pending'), rowsOf(W, 'STR_Offers').filter(x => x.Task_Key === K108));
+}
+
+// ═══ 10. held until 8 AM: parked in the Outbox, sent by the scheduler tick, never twice, never when stale ═══
+{
+  const { W, E } = await setup(); clock = at(E, '2026-10-20', '22:30');
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+  t('10:30pm: assignment + calendar happen now, texts are HELD (none sent)', r.status === 'done' && !W.sms.length && r.texts.every(x => x.status === 'held' && /8:00 AM/.test(x.detail)) && tr(W, K25).Assigned_Cleaner_ID === '1', r.texts);
+  const ob = rowsOf(W, 'STR_Outbox');
+  t('two parked rows with the exact text, expected state, and 8 AM release time', ob.length === 2 && ob.every(o => o.Status === 'parked' && o.Not_Before === new Date(at(E, '2026-10-21', '08:00')).toISOString() && o.Body && o.Expect.includes(K25)), ob);
+  const st = await J(E.strAdminState({})); t('the admin board lists the parked texts', st.ok && st.parked_texts.length === 2 && st.parked_texts[0].dates.join() === '2026-10-25', st.parked_texts);
+  clock = at(E, '2026-10-20', '23:30'); await E.strTick({}, {}); t('11:30pm tick: still held', !held(W).length);
+  clock = at(E, '2026-10-21', '07:50'); await E.strTick({}, {}); t('7:50am tick: still held', !held(W).length);
+  clock = at(E, '2026-10-21', '08:05'); const tk = await E.strTick({}, {});
+  t('8:05am tick sends both held texts, marks them sent', held(W).length === 2 && rowsOf(W, 'STR_Outbox').every(o => o.Status === 'sent' && o.Sent_At) && tk.detail.held_texts.sent === 2, { sms: W.sms.length, d: tk.detail.held_texts });
+  clock += 15 * 60000; await E.strTick({}, {}); t('a later tick never sends them again', held(W).length === 2);
+}
+{
+  // held text goes stale if the schedule changes while it waits: not sent, Brett told
+  const { W, E } = await setup(); clock = at(E, '2026-10-20', '22:30');
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body); await sendIt(E, p, body);
+  await J(E.strAdminAssign({}, { task_key: K25, cleaner_id: '3' })); W.sms.length = 0; W.brett.length = 0; W.emails.length = 0; W.telemetry.length = 0;
+  clock = at(E, '2026-10-21', '08:05'); const tk = await E.strTick({}, {});
+  t('stale held texts are NOT sent, marked stale, loud', !W.sms.some(s => /you're set|off the hook/.test(s.text)) && rowsOf(W, 'STR_Outbox').every(o => o.Status === 'stale') && tk.errors.some(e => e.step === 'held_text_stale') && W.telemetry.some(x => x.Success === 'FALSE'), tk.errors);
+}
+{
+  // a held text whose send fails after 8am is loud
+  const { W, E } = await setup(); clock = at(E, '2026-10-20', '22:30');
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body); await sendIt(E, p, body);
+  W.failSms = true; clock = at(E, '2026-10-21', '08:05'); const tk = await E.strTick({}, {});
+  t('held text send failure: row failed, error + alert, not retried blindly', rowsOf(W, 'STR_Outbox').every(o => o.Status === 'failed') && tk.errors.some(e => e.step === 'held_text_failed') && W.telemetry.some(x => x.Success === 'FALSE'), tk.errors);
+  W.failSms = false; clock += 15 * 60000; await E.strTick({}, {}); t('...and a failed held text is not auto-resent', !held(W).length);
+}
+{
+  const { W, E } = await setup({ STR_ENGINE_ENABLED: 'FALSE' }); clock = at(E, '2026-10-20', '22:30');
+  const p = await preview(E, { action: 'swap', task_keys: [K25], cleaner_id: '1' });
+  t('scheduler OFF + outside the window: preview warns held texts will not go until it is switched on', p.recipients.every(r => /scheduler is OFF/.test(r.timing.label)), p.recipients.map(r => r.timing.label));
+}
+
+// ═══ 11. concurrency: two Sends of the same plan at once ═══
+{
+  const { W, E } = await setup();
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  const texts = Object.fromEntries(p.recipients.map(x => [x.key, { send: true, body: x.text }])), payload = Object.assign({}, body, { plan_id: p.plan_id, sig: p.sig, texts });
+  const [a, b] = await Promise.all([J(E.strChangeApply({}, payload)), J(E.strChangeApply({}, payload))]);
+  const real = [a, b].filter(x => x && x.duplicate !== true && x.status);
+  t('double-tap race: at most ONE request actually applied; the other did nothing', real.length <= 1 && W.sms.filter(s => s.to === 'Regina Seville').length === 1 && W.sms.filter(s => s.to === 'Kayla').length === 1, { a: a.status || a.error || a.duplicate, b: b.status || b.error || b.duplicate });
+  t('only one live "Gina Cleaning" calendar entry and one assignment row', W.calEvents.filter(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-10-25').length === 1 && rowsOf(W, 'STR_Log').filter(l => l.Event === 'admin_swap').length === 1);
+  t('exactly one plan row is "done", the loser (if any) is marked duplicate', rowsOf(W, 'STR_Changes').filter(r => r.Status === 'done').length === 1);
+}
+
+// ═══ 12. state + load: the old flows still work ═══
+{
+  const { W, E } = await setup();
+  const st = await J(E.strAdminState({}));
+  t('admin state still shows the Oct 25 task as on_calendar / Kayla (what the page reads)', st.ok && st.tasks.find(x => x.key === K25).status === 'on_calendar' && st.tasks.find(x => x.key === K25).assigned_name === 'Kayla' && Array.isArray(st.parked_texts));
+  const a = await J(E.strAdminAssign({}, { task_key: K25, cleaner_id: '1' }));
+  t('the old assign endpoint still works unchanged', a.ok && tr(W, K25).Assigned_Cleaner_ID === '1');
+}
+
+console.log(`str-swap-bulk: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
