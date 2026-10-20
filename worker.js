@@ -13293,7 +13293,7 @@ async function releaseTurnoverByDate(env) {
     && w.Turnover_Release_Date && w.Turnover_Release_Date <= today);
   for (const w of due) {
     await updateWOFields(env, w.ID, { Status: 'New', Hold_Reason: '' });
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'scheduled/turnover-date', Success: 'TRUE', Notes: `wo=${w.ID} group=${w.Turnover_Group_ID} reason=date_fallback` }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'scheduled/turnover-date', Success: 'TRUE', Notes: `wo=${w.ID} group=${w.Turnover_Group_ID} reason=date_fallback` }); } catch (te) { softNote('telemetry_write_failed:turnover_release', te, 'P2'); }
   }
 }
 
