@@ -24455,7 +24455,8 @@ async function fetchTabs(env, tabs, opts) {
       // Concurrent callers needing the same set of tabs share ONE batchGet (see __inflight above). The leader writes
       // the result into __tabCache before the shared promise resolves, so followers just read the cache below.
       const bkey = missing.slice().sort().join('|');
-      let bp = __batchInflight.get(bkey);
+      const shared = !(env && env.__CRON__);   // background (cron) batches are paced: never shared with people
+      let bp = shared ? __batchInflight.get(bkey) : null;
       if (!bp) {
         bp = (async () => {
           const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
