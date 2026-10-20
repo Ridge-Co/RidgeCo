@@ -32502,7 +32502,7 @@ async function qbSendInvoice(env, body) {
 
     return json({ ok: errors.length === 0, invoice_id: invoiceId, bill_id: billId,
                   invoice_number: invoiceDocNumber, bill_number: billDocAssigned,
-                  status, errors, warnings, netted: applied ? { scope_id: applied.scope_id, credit_customer: creditCust, credit_vendor: creditVend, net_invoice: netCustTotal } : null });
+                  status, errors, warnings, ...(failWarnings.length ? { failure_warnings: failWarnings } : {}), netted: applied ? { scope_id: applied.scope_id, credit_customer: creditCust, credit_vendor: creditVend, net_invoice: netCustTotal } : null });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
