@@ -8317,10 +8317,11 @@ async function woVoid(env, body) {
       const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
       const prefix = `[${ts} — combined from ${woId}] `;
       const merged = target.Notes ? `${target.Notes}\n${prefix}${wo.Notes}` : `${prefix}${wo.Notes}`;
-      try { await updateWOFields(env, combinedInto, { Notes: merged }); } catch (e) {}
+      try { await updateWOFields(env, combinedInto, { Notes: merged }); }
+      catch (e) { await softFail(env, 'wo_void_merge_notes_failed', e, 'P1', { wo_id: String(woId), combined_into: String(combinedInto) }); voidWarning = (voidWarning ? voidWarning + ' ' : '') + 'The work order was voided, but its notes could not be copied onto ' + combinedInto + '.'; }
     }
   }
-  return json({ success: true });
+  return json({ success: true, ...(voidWarning ? { failure_warning: voidWarning } : {}) });
 }
 
 async function woUnvoid(env, body) {
