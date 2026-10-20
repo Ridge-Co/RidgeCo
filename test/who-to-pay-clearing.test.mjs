@@ -108,7 +108,8 @@ const HOLS = '2026-10-12:Columbus Day,2026-11-11:Veterans Day,2026-11-26:Thanksg
 const vendorRow = { ID: '9', QBO_Vendor_ID: '77', Company: 'Alex Busey' };
 const ir = (wo, inv, bill) => ({ ID: wo, Active: 'TRUE', WO_ID: wo, QB_Invoice_ID: inv, QB_Bill_ID: bill, Approved_Date: new Date().toISOString(), Customer_Total: '500.00', Vendor_Cost: '300.00', Vendor_ID: '9', Vendor_Name: '', QB_In_House: 'FALSE' });
 
-function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig }) {
+function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig, telemetryFails }) {
+  const flags = { telemetryFails: !!telemetryFails };
   const telemetry = [];
   const calls = [];
   const fetchTabs = async (env, tabs) => tabs.map(t => (t === 'Invoice_Review' ? irs : t === 'Vendors' ? [vendorRow] : []));
