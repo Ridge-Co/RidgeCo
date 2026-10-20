@@ -32114,7 +32114,7 @@ async function qbSendInvoice(env, body) {
 
     // Count receipts (with an image): all → customer invoice; reimbursable → also the vendor bill.
     let reimburseWithUrl = 0, allWithUrl = 0;
-    try { const _r = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); if (Array.isArray(_r)) { allWithUrl = _r.filter(x => x && x.url).length; reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } } catch (e) {}
+    { const _r = parseJsonCell(billRow && billRow.Receipts_JSON, [], 'Bill.Receipts_JSON'); if (Array.isArray(_r)) { allWithUrl = _r.filter(x => x && x.url).length; reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } }
 
     // DocNumber is deliberately NOT sent — QuickBooks assigns the next number in its own
     // sequence. Supplying one here would break that sequence and collide on a re-send.
