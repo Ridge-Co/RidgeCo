@@ -5171,7 +5171,7 @@ async function scopeProposalView(env, url, ua, ctx) {
   // Awaited (short) so a failed log is never lost; append &preview=1 to the link to look without counting.
   if (url.searchParams.get('preview') !== '1') await proposalRecordHit(env, s, 'page', ua);
   let addr = await scopeAddr(env, s);
-  let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  let rawItems = parseJsonCell(s.Proposal_Items_JSON, [], 'Scopes.Proposal_Items_JSON');
   const items = rawItems.map(it => ({
     id: it.id, area: it.area, trade: it.trade, description: it.description,
     // no vendor_cost, no rc_materials_cost (Ridge Co's own materials cost) — only the customer's
