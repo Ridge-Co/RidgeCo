@@ -10597,8 +10597,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
     linkRows.push(`<li><a href="${_escHtml(fileLink(billRow.Invoice_File_ID))}">${isEs ? 'Su factura' : 'Your invoice file'}</a></li>`);
   }
   if (fileToken) {
-    let receipts = [];
-    try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+    const receipts = parseJsonCell(billRow.Receipts_JSON, [], 'Vendor_Bills.Receipts_JSON', 'P1');
     (Array.isArray(receipts) ? receipts : []).forEach((r, i) => {
       if (!r || r.pay === 'account' || !r.url) return;
       const fid = driveIdFromUrl(r.url);
