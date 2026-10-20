@@ -36660,7 +36660,7 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
 // ── Admin (secret-gated) endpoints ─────────────────────────────────────────────────────────
 async function inspOpenBlocksList(env) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
-  let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for block list:', e && e.message); }
+  let dh = INSP_DEFAULT_BOOK_BY_HOURS; try { dh = inspDefaultBookByHours(await fetchConfig(env)); } catch (e) { console.error('insp: config read failed for block list:', e && e.message); softNote('insp_config_read_block_list', e, 'P2'); }
   const now = Date.now();
   let strSt = null, strErr = ''; try { const st = await inspStrStatus(env, await fetchConfig(env), {}); if (st.enabled) strSt = st; } catch (e) { strErr = e.message; console.error('insp: cleaning guard unavailable for block list:', e && e.message); }
   const todayEt = inspEtDate(now);
