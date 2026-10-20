@@ -31052,6 +31052,7 @@ async function driveIsSharedAnyone(token, fileId) {
     const perms = (data && data.permissions) || [];
     return perms.some(p => p.type === 'anyone');
   } catch (e) {
+    softNote('drive_is_shared_check_failed', e, 'P2', { file: String(fileId) });
     return false;
   }
 }
