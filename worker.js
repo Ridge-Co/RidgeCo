@@ -36870,6 +36870,9 @@ async function strAdminPendingCancel(env, body) {
     const holder = p.Status === 'pending_held' ? ctx.st.cmap[p.Assigned_Cleaner_ID] : null, reach = holder ? strReach(holder) : '';
     const text = holder ? await strRenderText(ctx, 'str_pending_cancelled', strTokens(ctx, holder, strRowToTask(p))) : '';
     if (body.preview === true) return json({ ok: true, preview: { holder: holder ? { id: holder.ID, name: holder.Name, first: strFirst(holder), can_text: !reach, why_not: reach ? `${holder.Name} ${reach}` : '' } : null, text, in_window: strInSendWindow(ctx.now, ctx.S), note: 'Only the cleaner who said yes can be told. Anyone still waiting to answer simply stops seeing the question.' } });
+    const notify = body.notify === true && !!holder && !reach, iso = new Date(ctx.now).toISOString(), custom = notify ? strCleanText(body.text || '') : '';
+    if (notify && custom.length > STR_TEXT_MAX) throw strErr('text_too_long', `The text is ${custom.length} characters; the most is ${STR_TEXT_MAX}.`, 400);
+    for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'inquiry cancelled by Brett' });
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
