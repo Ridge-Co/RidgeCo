@@ -40,7 +40,7 @@
       t.textContent = es ? 'Algo no funcionó. Ya nos avisaron y lo vamos a arreglar.' : "Something didn't work. We've been notified and will fix it.";
       t.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);max-width:92vw;background:#0e1621;color:#fff;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:10px 14px;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.35);z-index:2147483000';
       document.body.appendChild(t);
-      setTimeout(function () { try { t.remove(); } catch (e) { /* element already gone */ } }, 7000);
+      setTimeout(function () { try { t.remove(); } catch (e) { /* silent-ok: element already gone, nothing to remove */ } }, 7000);
     } catch (e) { consoleErr('[failure-reporter] toast failed', e); }
   }
 
