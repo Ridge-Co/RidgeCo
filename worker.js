@@ -18191,7 +18191,7 @@ async function logSMS(env, woId, recipientType, recipientId, phone, message) {
     const data=await sheetsRequest(env,'GET',`/values/SMS_Logs`);const rows=data.values||[[]];const headers=rows[0];const now=new Date().toISOString();
     const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId||'',Recipient_Type:recipientType||'',Recipient_ID:recipientId||'',Phone:phone||'',Message:message||'',Sent_Date:now,Status:'sent',Twilio_SID:''}[h]??''));
     await sheetsRequest(env,'POST',`/values/SMS_Logs:append?valueInputOption=RAW`,{values:[newRow]});
-  } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
+  } catch(e) { softNote('sms_log_write_failed', e, 'P1', { ref: woId }); /* the SMS already went out, but its SMS_Logs row is lost: tell Brett, never fail the send */ }
 }
 
 // ── DAILY DIGEST (Session 5) ─────────────────────────────────
