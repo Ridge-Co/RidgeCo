@@ -18415,7 +18415,7 @@ async function digestResponse(env, url) {
       Success: 'TRUE', Latency_ms: Date.now() - _t0,
       Notes: (delivery && delivery.delivered) ? 'delivered' : 'preview',
     });
-  } catch (_) { /* telemetry is best-effort; never let it take down the host job */ }
+  } catch (te) { softNote('telemetry_write_failed:daily_digest', te, 'P2'); }   // telemetry is best-effort; never take down the host job
   return json({ ok:true, text: formatDigestText(digest), digest, delivery });
 }
 
