@@ -12613,9 +12613,9 @@ async function addEstimateVersion(env, body) {
       const c = await estimateSmsContext(env, woId, body.vendor_id);
       await sendTemplatedSms(env, { type: 'admin_estimate_new', kind: 'admin', wo_id: woId, property: c.property,
         tokens: { Kind: (c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate'), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
-    } catch (_) {}
+    } catch (e) { await softFail(env, 'estimate_admin_sms_failed', e, 'P0', { ref: woId }); }
   }
-  return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
+  return json(Object.assign({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) }, estWarnings.length ? { failure_warnings: estWarnings } : {}));
 }
 
 // Pricing constants (tier markups, admin fee, card-fee multiplier, itemized hourly/min,
