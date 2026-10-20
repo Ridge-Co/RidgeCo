@@ -4,6 +4,7 @@
 import fs from 'fs';
 import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const src = fs.readFileSync('worker.js', 'utf8');
+const SOFT = "const softNote = () => true; const softFail = async () => ({ ok: false }); const safeJson = async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }; const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };\n";   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 
 function grabAny(prefix, name) {
   const i = src.indexOf(prefix + name + '(');
@@ -19,7 +20,7 @@ const grabAsync = n => grabAny('async function ', n);
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } };
 
-const grab0 = n => new Function(grab(n) + '\nreturn ' + n + ';')();
+const grab0 = n => new Function(SOFT + grab(n) + '\nreturn ' + n + ';')();
 const constLine = n => { const m = new RegExp('const ' + n + ' = [^;]+;').exec(src); if (!m) throw new Error('missing const ' + n); return m[0]; };
 
 // ── pure helpers ──────────────────────────────────────────────────────────────
@@ -64,7 +65,7 @@ function harness(state) {
     grab('addonParseItems'), grab('addonLatestEstimate'), grabAsync('addonStart'), grabAsync('addonSubmit'), grabAsync('addonWithdraw'),
   ].join('\n');
   const f = new Function('S', 'calls', 'json', 'fetchTab', 'findWO', 'ensureColumns', 'createWorkOrder', 'assignVendor', 'updateWOFields', 'addEstimateVersion', 'updateRow', 'logWOAudit', 'WO_VOID_COLUMNS',
-    body + '\nreturn { addonStart, addonSubmit, addonWithdraw };');
+    SOFT + body + '\nreturn { addonStart, addonSubmit, addonWithdraw };');
   const json = (d, s = 200) => ({ status: s, _d: d, clone() { return this; }, json: async () => d });
   const fns = f(state, calls, json,
     async (env, tab) => state[tab] || [],
@@ -346,7 +347,7 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
 
 // ── F. one call for the whole portal (executed) ─────────────────────────────────
 {
-  const mkList = new Function('json', 'fetchTabs', 'findWO', 'addonIsDraft', 'addonParseItems', 'addonLatestEstimate', 'addonPhotosByItem', 'ADDON_PHOTO_TYPES', grabAsync('addonList') + '\nreturn addonList;');
+  const mkList = new Function('json', 'fetchTabs', 'findWO', 'addonIsDraft', 'addonParseItems', 'addonLatestEstimate', 'addonPhotosByItem', 'ADDON_PHOTO_TYPES', SOFT + grabAsync('addonList') + '\nreturn addonList;');
   const W = [
     { ID: 'WO-1', Vendor_ID: 'V1', Type: 'manual' }, { ID: 'WO-2', Vendor_ID: 'V2', Type: 'manual' },
     { ID: 'WO-11', Vendor_ID: 'V1', Type: 'addon', Parent_WO_ID: 'WO-1', Addon_Status: 'Submitted', Addon_Items_JSON: '[{"index":0,"desc":"a"}]', Created_Date: '2' },
@@ -463,7 +464,7 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
   t('ready queue: a voided add-on row is flagged', rows[0].addon_unapproved === true);
 
   // woPushToScope guard — executed
-  const mkPush = new Function('json', 'scopesTab', 'ensureColumns', 'fetchTab', 'findWO', grabAsync('woPushToScope') + '\nreturn woPushToScope;');
+  const mkPush = new Function('json', 'scopesTab', 'ensureColumns', 'fetchTab', 'findWO', "const softNote=()=>true;const softFail=async()=>({ok:false});const parseJsonCell=(r,f)=>{if(r===undefined||r===null||(typeof r==='string'&&!r.trim()))return f;if(typeof r!=='string')return r;try{return JSON.parse(r)}catch(e){return f}};const safeJson=async(r,f)=>{try{return await r.json()}catch(e){return f}};const tryWrite=async(env,w,fn)=>{try{return{ok:true,value:await fn()}}catch(e){return{ok:false,error:String(e&&e.message)}}};" + grabAsync('woPushToScope') + '\nreturn woPushToScope;');
   const push = async w => { let est = 0; const f = mkPush(json, async () => {}, async () => {}, async (env, tab) => { if (tab === 'Estimates') est++; return tab === 'Work_Orders' ? [w] : []; }, findWO); const r = await f({}, { wo_id: w.ID }); return { r, est }; };
   for (const [label, w] of [['Voided', child({ Voided: 'TRUE' })], ['Withdrawn', child({ Addon_Status: 'Withdrawn', Voided: 'TRUE' })], ['Draft', child({ Addon_Status: 'Draft', Voided: 'TRUE' })], ['Withdrawn but un-voided', child({ Addon_Status: 'Withdrawn' })]]) {
     const { r, est } = await push(w);

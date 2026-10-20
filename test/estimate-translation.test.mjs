@@ -30,7 +30,7 @@ globalThis.fetch = async (url, init) => {
   return { json: async () => ({ content: [{ text: JSON.stringify(arr.map(t => DICT[t] || t)) }] }) };
 };
 const H = new Function(
-  aiCreditGuardPrelude() + ['plausiblyNonEnglish', 'englishOnly', 'translateBatchToEnglish', 'estimateEnglishFields', 'estimateLinesEnglish', 'vendorWantsSpanish', 'estimateLineItemsCanonical', 'findRecentDuplicate', 'scopeItemsFromEstimate', 'buildLaborDescription', 'buildInvoiceLines', 'invoiceInputsEnglish'].map(grab).join('\n') +
+  'const softNote = () => true, softFail = async () => ({ ok: false }), safeJson = async (r, f) => { try { return await r.json(); } catch (e) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (e) { return f; } };\n' + aiCreditGuardPrelude() + ['plausiblyNonEnglish', 'englishOnly', 'translateBatchToEnglish', 'estimateEnglishFields', 'estimateLinesEnglish', 'vendorWantsSpanish', 'estimateLineItemsCanonical', 'findRecentDuplicate', 'scopeItemsFromEstimate', 'buildLaborDescription', 'buildInvoiceLines', 'invoiceInputsEnglish'].map(grab).join('\n') +
   '\nreturn { plausiblyNonEnglish, englishOnly, translateBatchToEnglish, estimateEnglishFields, estimateLinesEnglish, vendorWantsSpanish, estimateLineItemsCanonical, findRecentDuplicate, scopeItemsFromEstimate, buildLaborDescription, buildInvoiceLines, invoiceInputsEnglish };'
 )();
 const env = { ANTHROPIC_API_KEY: 'k' };
@@ -91,6 +91,10 @@ function estHarness(existing, vendors) {
     ensureColumns: async (e, t, cols) => { state.ensure.push({ t, cols }); },
     updateWOField: async () => {}, updateWOFields: async () => {}, setApprovalStage: async (e, a) => { state.stage.push(a); },
     findWO: (l, id) => l.find(w => w.ID === id),
+    softNote: () => true, softFail: async () => ({ ok: false }),   // Phase C helpers (reporting only)
+    parseJsonCell: (r, f) => { if (r === undefined || r === null || (typeof r === 'string' && !r.trim())) return f; if (typeof r !== 'string') return r; try { return JSON.parse(r); } catch (e) { return f; } },
+    safeJson: async (r, f) => { try { return await r.json(); } catch (e) { return f; } }, tryWrite: async (env, w, fn) => { try { return { ok: true, value: await fn() }; } catch (e) { return { ok: false, error: String(e && e.message) }; } },
+    fetchTabSoft: async (e, t) => (t === 'Estimates' ? tabs.Estimates.concat(state.rows) : tabs[t] || []),
     bidGroupWriteBlock: async () => null,   // bid-group cancelled-copy guard (Oct 12 2026) is covered in wo-duplicate.test.mjs
   };
   curFetchTab = deps.fetchTab;
@@ -158,6 +162,9 @@ function retHarness(estimates, workorders) {
     ensureColumns: async (e, t, c) => { state.ensure.push({ t, c }); },
     updateRow: async (e, t, id, f) => { state.updates.push({ t, id, f }); return {}; },
     logTelemetry: async (e, t) => { state.tel.push(t); },
+    softNote: () => true, softFail: async () => ({ ok: false }),
+    parseJsonCell: (r, f) => { if (r === undefined || r === null || (typeof r === 'string' && !r.trim())) return f; if (typeof r !== 'string') return r; try { return JSON.parse(r); } catch (e) { return f; } },
+    tryWrite: async (env, w, fn) => { try { return { ok: true, value: await fn() }; } catch (e) { return { ok: false, error: String(e && e.message) }; } },
   };
   const names = Object.keys(deps);
   return { fn: new Function(...names, grab('retranslateEstimate') + '\nreturn retranslateEstimate;')(...names.map(k => deps[k])), state };

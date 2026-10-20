@@ -97,6 +97,7 @@ function setup() {
   var msg = 'Setup done for ' + me + '.\n' +
     'Sheet: ' + ss.getUrl() + '\n' +
     'Filters created/updated: ' + synced.created + ', past emails queued (since ' + cfg.Backfill_Since + '): ' + synced.labeled + '\n' +
+    (synced.failures.length ? 'PROBLEMS removing old Gmail filters (fix by hand in Gmail settings): ' + synced.failures.join('; ') + '\n' : '') +
     'New sender candidates added to the sheet for approval: ' + found + '\n' +
     'Files start landing in the Hub folder within 10 minutes (' + (Number(cfg.Max_Per_Run) || 25) + ' emails per run).';
   Logger.log(msg);
@@ -113,7 +114,8 @@ function processQueue() {
     var me = Session.getActiveUser().getEmail();
     var ss = getOrCreateSheet_(me);
     var cfg = readConfig_(ss);
-    syncRules_(ss, cfg, me);   // cheap when nothing changed: approvals take effect within 10 min
+    var sync = syncRules_(ss, cfg, me);   // cheap when nothing changed: approvals take effect within 10 min
+    // The cleanup report is sent AFTER the receipts are processed (an alert problem must never stop receipts from reaching the Hub).
 
     var rules = readRules_(ss).filter(function (r) { return r.Status === 'Approved'; });
     var logged = loggedIds_(ss);
@@ -156,6 +158,10 @@ function processQueue() {
         thread.removeLabel(qLabel);
         thread.addLabel(plan.hadHardError(logged) ? eLabel : dLabel);
       }
+    }
+    if (sync.failures.length) {
+      try { alertBrett_(cfg, 'Gmail filter cleanup failed', sync.failures.join('\n')); }
+      catch (ae) { Logger.log('FILTER CLEANUP ALERT COULD NOT BE SENT (' + ae + '). Failures: ' + sync.failures.join(' | ')); }
     }
     return out;
   } finally { lock.releaseLock(); }
@@ -223,7 +229,7 @@ function saveMessage_(m, rule, folder, minImgBytes, mailbox) {
     var existing = folder.getFilesByName(b.getName());         // belt-and-braces duplicate guard
     if (existing.hasNext()) { ids.push(existing.next().getId()); return; }
     var f = folder.createFile(b);
-    try { f.setDescription(desc.slice(0, 1000)); } catch (e) { /* description is nice-to-have */ }
+    try { f.setDescription(desc.slice(0, 1000)); } catch (e) { /* silent-ok: description is cosmetic metadata, the file and its Log row are still saved */ Logger.log('setDescription failed: ' + e); }
     ids.push(f.getId());
   });
   return ids;
@@ -242,7 +248,7 @@ function syncRules_(ss, cfg, me) {
   var props = PropertiesService.getScriptProperties();
   var rules = readRules_(ss);
   var queueLabelId = gmailLabelId_(LABEL_QUEUE);
-  var result = { created: 0, removed: 0, labeled: 0 };
+  var result = { created: 0, removed: 0, labeled: 0, failures: [] };   // failures: filters that could not be removed (stale filter keeps labeling mail)
   var wanted = {};
 
   rules.forEach(function (r) {
@@ -252,7 +258,7 @@ function syncRules_(ss, cfg, me) {
     var key = 'filter:' + r.Rule_ID, saved = props.getProperty(key);
     var rec = saved ? JSON.parse(saved) : null;
     if (rec && rec.sig === sig) return;                                  // already in place
-    if (rec && rec.id) { try { Gmail.Users.Settings.Filters.remove('me', rec.id); result.removed++; } catch (e) {} }
+    if (rec && rec.id) removeFilter_(rec.id, result, 'rule ' + r.Rule_ID);
 
     var criteria = { from: r.From };
     if (r.Subject_Contains) criteria.subject = r.Subject_Contains;
@@ -275,10 +281,42 @@ function syncRules_(ss, cfg, me) {
     if (k.indexOf('filter:') !== 0) return;
     var ruleId = k.slice(7);
     if (wanted[ruleId]) return;
-    try { Gmail.Users.Settings.Filters.remove('me', JSON.parse(props.getProperty(k)).id); result.removed++; } catch (e) {}
-    props.deleteProperty(k);
+    var oldId = '';
+    try { oldId = JSON.parse(props.getProperty(k)).id; } catch (e) { result.failures.push('rule ' + ruleId + ': saved filter record unreadable (' + e + ')'); return; }   // keep the record so the next run reports it again
+    // Forget the record only when the filter is really gone; a failed removal stays in the property list and is reported again next run.
+    if (!oldId || removeFilter_(oldId, result, 'rule ' + ruleId)) props.deleteProperty(k);
   });
   return result;
+}
+
+/** Remove one Gmail filter. Returns true when the filter is gone (removed now, or already gone); false when the removal failed (recorded in result.failures). */
+function removeFilter_(filterId, result, what) {
+  try { Gmail.Users.Settings.Filters.remove('me', filterId); result.removed++; return true; }
+  catch (e) {
+    if (/not ?found|404|does not exist/i.test(String(e && e.message || e))) return true;   // already gone: the goal is met
+    result.failures.push(what + ': could not remove Gmail filter ' + filterId + ' (' + String(e && e.message || e) + ')');
+    return false;
+  }
+}
+
+/**
+ * Tell Brett by email (Notify_Email) that something failed quietly inside a run. At most one email per distinct subject per 6 hours
+ * (processQueue runs every 10 minutes). Uncaught errors still reach Brett through Apps Script's own failed-trigger emails.
+ */
+function alertBrett_(cfg, subject, detail) {
+  var msg = subject + ': ' + detail;
+  Logger.log(msg);
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var key = 'ALERT_AT:' + subject, last = Number(props.getProperty(key)) || 0;
+    if (Date.now() - last < 6 * 3600 * 1000) return false;
+    MailApp.sendEmail({ to: (cfg && cfg.Notify_Email) || CONFIG_DEFAULTS.Notify_Email, subject: 'Receipt Mail to Hub problem: ' + subject, body: detail });
+    props.setProperty(key, String(Date.now()));
+    return true;
+  } catch (e) {
+    // Last-resort channel: when even the alert email fails, the execution log is all that is left, so fail the run loudly.
+    throw new Error('Receipt Mail to Hub could not send its alert (' + msg + '): ' + e);
+  }
 }
 
 function labelPast_(rule, since) {
@@ -399,7 +437,7 @@ function weeklyDigest() {
 function getOrCreateSheet_(me) {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty('SHEET_ID');
-  if (id) { try { return SpreadsheetApp.openById(id); } catch (e) { /* fall through and look again */ } }
+  if (id) { try { return SpreadsheetApp.openById(id); } catch (e) { /* silent-ok: falls through to the Drive search just below which throws if no sheet is found */ Logger.log('openById(' + id + ') failed, searching Drive: ' + e); } }
 
   // Another mailbox may already have created it and shared it with this one.
   var it = DriveApp.searchFiles('title = "' + SHEET_NAME + '" and mimeType = "application/vnd.google-apps.spreadsheet" and trashed = false');
@@ -499,7 +537,7 @@ function loggedIds_(ss) {
 }
 function isLogged_(lg, m) { return !!(lg.gmail[m.getId()] || (rfcId_(m) && lg.rfc[rfcId_(m)])); }
 function markLogged_(lg, m) { lg.gmail[m.getId()] = true; var r = rfcId_(m); if (r) lg.rfc[r] = true; }
-function rfcId_(m) { try { return String(m.getHeader('Message-ID') || '').trim(); } catch (e) { return ''; } }
+function rfcId_(m) { try { return String(m.getHeader('Message-ID') || '').trim(); } catch (e) { /* silent-ok: no header means dedupe falls back to the Gmail id only */ return ''; } }
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 // SMALL HELPERS (pure; covered by test/receipt-mail-to-hub.test.mjs)

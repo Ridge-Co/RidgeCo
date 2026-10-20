@@ -519,15 +519,16 @@ function onLoginSuccess(data, persist){
   show('screenLogin', false);
   show('screenDash', true);
   loadDashboard();
-  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ /* silent-ok: storage blocked, owner just signs in again next visit */ } }
 }
 (function restoreOwnerSession(){
-  try { var raw=localStorage.getItem(SESS_KEY); if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){}
+  var raw=''; try { raw=localStorage.getItem(SESS_KEY)||''; } catch(e){ /* silent-ok: storage blocked, owner just signs in again */ }
+  try { if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){ window.hubReportFailure && window.hubReportFailure('owner:restore-session', e); }
 })();
 
 function doLogout() {
   session = null; ownerProps = []; allWOs = [];
-  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ }
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
@@ -1170,7 +1171,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
         wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
         file_name: file.name, file_type: fileType || 'photo',
         mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
-      }).then(function(lr){ return !!(lr && !lr.error); }, function(){ return false; }).then(function(logged){
+      }).then(function(lr){ return !!(lr && !lr.error); }, function(){ /* silent-ok: false shows the 'not saved to the job' warning on the card */ return false; }).then(function(logged){
       var isVideo = file.type.startsWith('video/');
       var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
                  fileType === 'receipt' ? '🧾' : fileType === 'report' ? '\u26a0\ufe0f' :
@@ -1362,8 +1363,8 @@ function buildPhotoSection(woId, propAddr, opts) {
       if (booted === null){
         booted = d.version;
         var last = null;
-        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
-        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){ /* silent-ok: storage blocked, only the reload hint is lost */ }
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){ /* silent-ok: storage blocked, only the reload hint is lost */ }
         // This page already loaded and ran successfully just now (we're executing at the
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
@@ -1372,7 +1373,7 @@ function buildPhotoSection(woId, propAddr, opts) {
         return;
       }
       if (d.version !== booted){ autoReload(dirty); }
-    }).catch(function(){});
+    }).catch(function(e){ if(navigator.onLine!==false) window.hubReportFailure && window.hubReportFailure('owner:version-check', e); });
   }
   check();
   setInterval(check, 60000);
@@ -1429,7 +1430,7 @@ function buildPhotoSection(woId, propAddr, opts) {
       // permission error) actually ends it now.
       rec.onend = function(){
         base = ta.value;
-        if (!userStopped) { try { rec.start(); return; } catch (e) {} }
+        if (!userStopped) { try { rec.start(); return; } catch (e) { /* silent-ok: recognizer restart failed, falls through to stopUI below */ } }
         stopUI();
       };
       rec.onerror = function(e){

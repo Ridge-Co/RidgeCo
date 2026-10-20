@@ -167,7 +167,7 @@ function requestSlot(){
   btn.disabled=true; btn.textContent='Requesting…'; err.innerHTML='';
   call('POST','/insp-book/request',body).then(function(r){
     if(r.ok){
-      try{localStorage.setItem('insp_last_manage',r.manage_url);}catch(e){}
+      try{localStorage.setItem('insp_last_manage',r.manage_url);}catch(e){ /* silent-ok: storage blocked, manage link is still shown on screen */ }
       setMain('<div class="card">'+banner('good',r.message)+'<dl><dt>Property</dt><dd>'+esc(r.address)+'</dd><dt>When</dt><dd>'+esc(r.when)+'</dd><dt>Length</dt><dd>'+fmtDur(r.duration_min)+'</dd><dt>Status</dt><dd>Waiting for Brett’s approval</dd></dl>'
         +'<p class="muted">Bookmark this link to check status or cancel:</p><input readonly value="'+esc(r.manage_url)+'" onclick="this.select()"><a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="'+esc(r.manage_url)+'">Open booking</a>'
         +'<a class="btn" style="display:block;text-align:center;text-decoration:none" href="?k='+encodeURIComponent(K)+'">Book another</a></div>');

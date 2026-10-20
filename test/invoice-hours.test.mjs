@@ -7,6 +7,8 @@
 //       does NOT tie out — must fall back to the single combined line (never a fake $/hr);
 //   (4) a flat bill / missing rate / zero hours falls back unchanged.
 import fs from 'fs';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(name){
@@ -18,7 +20,7 @@ function grab(name){
 }
 // buildInvoiceLines now calls buildLaborDescription — grab it too so the isolated eval has
 // the dependency in scope (same pattern as grabbing buildInvoiceLines itself).
-const buildInvoiceLines = new Function(grab('englishOnly') + '\n' + grab('buildLaborDescription') + '\n' + grab('buildInvoiceLines') + '\nreturn buildInvoiceLines;')();
+const buildInvoiceLines = new Function(PHASE_C_SHIM + grab('englishOnly') + '\n' + grab('buildLaborDescription') + '\n' + grab('buildInvoiceLines') + '\nreturn buildInvoiceLines;')();
 
 let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? ('got ' + JSON.stringify(got)) : ''); } };

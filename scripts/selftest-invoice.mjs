@@ -63,7 +63,7 @@ async function main() {
         body: JSON.stringify({ token: TOKEN, image_b64: b64, mime: MIME[path.extname(file).toLowerCase()] }),
       });
       status = resp.status;
-      try { body = await resp.json(); } catch (_) { body = null; }
+      try { body = await resp.json(); } catch (_) { body = null; /* silent-ok: an unreadable body is failed by the check below */ }
     } catch (e) {
       t('endpoint reachable', false, String(e && e.message));
       continue;
@@ -72,6 +72,7 @@ async function main() {
     if (status === 503) { t('SELFTEST_TOKEN configured on the Worker', false, 'Worker returned 503 — add the secret in the Cloudflare dashboard'); continue; }
     if (status === 401) { t('SELFTEST_TOKEN matches the Worker', false, 'Worker returned 401 — the CI secret and the Worker secret differ'); continue; }
     t('responds 200', status === 200, `got ${status}`);
+    if (status === 200 && !body) t('answer is readable JSON', false, 'HTTP 200 but the body was not JSON');
     if (status !== 200 || !body) continue;
 
     // A canary that reports success while the model is unreachable is worse than no canary:

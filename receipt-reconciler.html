@@ -365,7 +365,7 @@ async function stmtPdfSelected(input){
     });
     if (!sess.success || !sess.upload_url) throw new Error(sess.error || 'Could not start upload.');
     const putRes = await fetch(sess.upload_url, { method:'PUT', headers:{'Content-Type': file.type||'application/octet-stream'}, body: file });
-    const fileData = await putRes.json().catch(() => null);
+    const fileData = await putRes.json().catch(() => null /* silent-ok: null makes the next line throw 'Upload did not complete' */);
     if (!fileData || !fileData.id) throw new Error('Upload did not complete.');
     statusEl.innerHTML = '<span class="info">Uploaded — reading statement (this can take a bit for a long one)…</span>';
     await stmtRunImport({ vendor, file_id: fileData.id, mime_type: file.type || 'application/octet-stream', source_file_name: file.name });
@@ -461,12 +461,13 @@ async function loadQueue(){
   if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
   if (curStatus === 'audit') { await loadAudit(status, list); return; }
   if (curStatus === 'search') { await loadSearchTab(status, list); return; }
+  const ctxFailed = []; const softGet = (label, path) => get(path).catch(e => { ctxFailed.push(label); window.hubReportFailure && window.hubReportFailure('receipt-reconciler:context-load ' + label, e); return []; });
   try {
     const [rows, wos, props, units] = await Promise.all([
       get('/receipt-recon/queue?status='+encodeURIComponent(curStatus)),
-      allWOs.length ? Promise.resolve(allWOs) : get('/workorders').catch(()=>[]),
-      allProperties.length ? Promise.resolve(allProperties) : get('/properties').catch(()=>[]),
-      allUnits.length ? Promise.resolve(allUnits) : get('/units').catch(()=>[]),
+      allWOs.length ? Promise.resolve(allWOs) : softGet('work orders','/workorders'),
+      allProperties.length ? Promise.resolve(allProperties) : softGet('properties','/properties'),
+      allUnits.length ? Promise.resolve(allUnits) : softGet('units','/units'),
     ]);
     allWOs = wos || [];
     allProperties = props || [];
@@ -477,7 +478,7 @@ async function loadQueue(){
     if (filterInput) filterInput.value = queueFilterText;
     toggleFilterBar(true);
     renderFiltered();
-    status.textContent = '✅ '+(rows||[]).length+' '+curStatus+(queueFilterText?' ('+filterQueueRows(queueFilterText).length+' shown, filtered)':'');
+    status.textContent = '✅ '+(rows||[]).length+' '+curStatus+(queueFilterText?' ('+filterQueueRows(queueFilterText).length+' shown, filtered)':'')+(ctxFailed.length?' ⚠ could not load '+ctxFailed.join(', ')+', so job and address names may be missing. Reload to retry.':'');
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
 }
 
@@ -685,37 +686,50 @@ async function runFullAudit(){
   auditRunning = true;
   const btn = document.getElementById('audit-run-btn'); if (btn) btn.disabled = true;
   const prog = document.getElementById('audit-progress');
-  const setProg = (s) => { if (prog) prog.textContent = s; };
+  const setProg = (s) => { if (prog) { prog.textContent = s; prog.style.color = /WARNING:/.test(s) ? '#c0392b' : ''; } };
   try {
     setProg('Rebuilding QuickBooks invoice-line cache…');
     let offset = 0, reset = true, invTotal = 0, invOpened = 0, lineCarried = null;
+    // Problems the Worker reports while indexing (never dropped): cache not cleared, invoices that could not be opened (so duplicate flags may be missing).
+    const warns = [], failedIds = []; let openFailures = 0;
+    const warnText = () => {
+      const out = warns.slice();
+      if (openFailures) out.push(openFailures + ' invoice(s) could not be opened, so duplicate flags may be missing' + (failedIds.length ? ': ' + failedIds.join(', ') + (openFailures > failedIds.length ? ' (and more)' : '') : ''));
+      return out.length ? ' WARNING: ' + out.join(' | ') : '';
+    };
     while (true) {
       const res = await post('/admin/receipt-duplicate-audit/build-index', { offset, reset });
       if (res.error) throw new Error(res.error);
       reset = false;
       invTotal = res.total_invoices; invOpened += res.opened_this_batch;
       if (lineCarried === null) lineCarried = res.list_query_carried_line;
-      setProg('Indexing invoices: ' + invOpened + ' / ' + invTotal + '…');
+      if (res.clear_warning && warns.indexOf(String(res.clear_warning)) < 0) warns.push(String(res.clear_warning));
+      const wtxt = res.failure_warning || res.warning;
+      if (wtxt && !res.open_failures && warns.indexOf(String(wtxt)) < 0) warns.push(String(wtxt));   // when open_failures is present it is summarised below with the ids
+      openFailures += Number(res.open_failures) || 0;
+      (Array.isArray(res.failed_invoice_ids) ? res.failed_invoice_ids : []).forEach((id) => { if (failedIds.indexOf(String(id)) < 0) failedIds.push(String(id)); });
+      setProg('Indexing invoices: ' + invOpened + ' / ' + invTotal + '…' + warnText());
       if (res.done) break;
       offset = res.next_offset;
     }
-    setProg('Invoice cache built (' + invOpened + '/' + invTotal + '). Scanning receipts…');
+    setProg('Invoice cache built (' + invOpened + '/' + invTotal + '). Scanning receipts…' + warnText());
     let sOffset = 0, recvTotal = 0, recvScanned = 0, flaggedNew = 0;
     while (true) {
       const res = await post('/admin/receipt-duplicate-audit/scan', { offset: sOffset });
       if (res.error) throw new Error(res.error);
       recvTotal = res.total_receipts; recvScanned += res.scanned_this_batch; flaggedNew += res.flagged_new;
-      setProg('Scanning receipts: ' + recvScanned + ' / ' + recvTotal + ' — ' + flaggedNew + ' new flag(s) so far…');
+      { const sw = res.failure_warning || res.warning; if (sw && warns.indexOf(String(sw)) < 0) warns.push(String(sw)); }
+      setProg('Scanning receipts: ' + recvScanned + ' / ' + recvTotal + ' — ' + flaggedNew + ' new flag(s) so far…' + warnText());
       if (res.done) break;
       sOffset = res.next_offset;
     }
-    const doneMsg = '✅ Done — ' + invOpened + ' invoices indexed' + (lineCarried!=null ? ' (list query carried Line: ' + (lineCarried?'yes':'no') + ')' : '') + ', ' + recvScanned + ' receipts scanned, ' + flaggedNew + ' new flag(s).';
+    const doneMsg = (warnText() ? '⚠ Done — ' : '✅ Done — ') + invOpened + ' invoices indexed' + (lineCarried!=null ? ' (list query carried Line: ' + (lineCarried?'yes':'no') + ')' : '') + ', ' + recvScanned + ' receipts scanned, ' + flaggedNew + ' new flag(s).' + warnText();
     auditStatusFilter = 'pending';
     // loadQueue() re-renders #list from scratch (a fresh #audit-progress node with empty text) —
     // write the done message into the NEW node afterward, or it's overwritten the instant it appears.
     await loadQueue();
     const prog2 = document.getElementById('audit-progress');
-    if (prog2) prog2.textContent = doneMsg;
+    if (prog2) { prog2.textContent = doneMsg; prog2.style.color = warnText() ? '#c0392b' : ''; prog2.style.fontWeight = warnText() ? '700' : ''; }
   } catch(e){ setProg('❌ ' + e.message); }
   finally { auditRunning = false; if (btn) btn.disabled = false; }
 }

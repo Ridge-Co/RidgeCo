@@ -5,6 +5,8 @@
 // not depend on what time of day the suite runs.
 import fs from 'fs';
 import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(src, sig) {
@@ -50,7 +52,7 @@ const S = {
   etHour: grab(wsrc, 'function etHour('), nyOff: grab(wsrc, 'function nyOffsetMinutes('),
   quietConsts: grabConst(wsrc, 'const QUIET_HOURS_START_ET') + '\n' + grabConst(wsrc, 'const QUIET_HOURS_END_ET'),
   isQuiet: grab(wsrc, 'function isQuietHoursNow('), nextQuiet: grab(wsrc, 'function nextQuietHoursEnd('),
-  sendRaw: grab(wsrc, 'async function sendSMSRaw('), updMq: grab(wsrc, 'async function updateMessageQueueRow('), fetchConfig: grab(wsrc, 'async function fetchConfig('),
+  sendRaw: grab(wsrc, 'async function sendSMSRaw('), updMq: grab(wsrc, 'async function updateMessageQueueRow('), fetchConfig: grab(wsrc, 'async function fetchConfig('), fetchConfigStrict: grab(wsrc, 'async function fetchConfigStrict('), smsSev: grab(wsrc, 'function smsFailSeverity('),
   smsGated: grab(wsrc, 'async function smsGatedSend(').replace('async function smsGatedSend(', 'async function __realSmsGatedSend('),
   quietQueue: grab(wsrc, 'async function processQuietHoursQueue('),
   notifyConsts: grabConst(wsrc, 'const OWNER_NOTIFY_DEFAULTS') + '\n' + grabConst(wsrc, 'const NOTIFY_TIERS'), shouldNotify: grab(wsrc, 'async function shouldNotifyOwner('),
@@ -98,8 +100,8 @@ function makeFetch(db, opts, log) {
     if (/api\.twilio\.com/.test(url)) {
       log.twilio.push(String(fopts.body || ''));
       if (!opts.allowTwilio) throw new Error('unexpected real Twilio call in a test');
-      if (opts.twilioFail) return { json: async () => ({ message: 'The \'To\' number is not a valid phone number', code: 21211 }) };
-      return { json: async () => ({ sid: 'SM_FAKE' + log.twilio.length }) };
+      if (opts.twilioFail) { const b = { message: 'The \'To\' number is not a valid phone number', code: 21211 }; return { ok: false, status: 400, text: async () => JSON.stringify(b), json: async () => b }; }
+      { const b = { sid: 'SM_FAKE' + log.twilio.length }; return { ok: true, status: 201, text: async () => JSON.stringify(b), json: async () => b }; }
     }
     const full = url.replace(/^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+/, '');
     const path = full.split('?')[0], method = fopts.method;
@@ -150,7 +152,7 @@ function build(db, o = {}) {
     'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'), S.cache, S.isMissing, S.sr, S.ensureInner, S.ensure, S.ensureTab, S.idc, S.col, S.json, S.fetchTab, S.fetchTabs, S.findWO,
     S.updateWOFields, S.nextSafeId, S.logAudit, S.logAuditMany, S.logMsgAudit, S.auditCols, S.addRow, S.invalidate, 'async function reportFailure() { return { ok: true }; }', S.telemetry, S.nonShare, S.block,
     S.addonLive, S.isTenantCurrent, S.currentTenant, S.tenantsFor, S.isBackground, S.isNotifiable, S.tenantMovedOut, S.smsGate, S.smsToggle, S.normPhone, S.mqTab, S.mqCols,
-    S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, S.sendRaw, S.updMq, S.fetchConfig, S.smsGated,
+    S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, S.sendRaw, S.updMq, S.fetchConfig, S.fetchConfigStrict, S.smsSev, 'async function reportFailure() { return { ok: true }; }', S.smsGated,
     'async function smsGatedSend(env, o) { __spy.push({ wo_id: o.wo_id, message_type: o.message_type, recipient_type: o.recipient_type, vendor_id: o.vendor && o.vendor.ID, vendor_name: o.vendor && o.vendor.Name, body: o.message_body, already_localized: o.already_localized, original_body: o.original_body, bypassQuietHours: o.bypassQuietHours === true }); return await __realSmsGatedSend(env, o); }',
     S.quietQueue, S.portalLink, S.unitLabel, S.phoneDisp, S.jobLabel, S.voidCols, S.splitMax, S.splitFields, S.testMarker, S.openStatuses,
     // stubs for unrelated collaborators (not under test here)
@@ -164,7 +166,7 @@ function build(db, o = {}) {
     'return { processQuietHoursQueue, bidCancelVendorMessage, bidCancelVendorPlan, bidWinnerNotifyPlan, bidWinnerNotifyDiff, vendorSmsDetailFromResult, woDuplicate, woBidGroupUnlink, woBidGroupGet, woBidGroupCancel, assignVendor, updateStatus, bidGroupWriteBlock, bidCancelClassify, nextBidGroupId, woDupResetChecklist, ownerWorkorders, woCombine, woSplit, hubTestWriteAllowed, isBidGroupWO, woDupAppendCopy, woDupSerialize, __woDupTapCache };',
   ].join('\n');
   class FD extends Date { constructor(...a) { if (a.length) super(...a); else super(fixed); } static now() { return fixed; } }
-  const api = new Function('getAccessToken', 'fetch', 'setTimeout', 'Date', '__spy', src)(async () => 'tok', makeFetch(db, o, log), (fn) => fn(), FD, log.sms);
+  const api = new Function('getAccessToken', 'fetch', 'setTimeout', 'Date', '__spy', PHASE_C_SHIM + src)(async () => 'tok', makeFetch(db, o, log), (fn) => fn(), FD, log.sms);
   return Object.assign({ log }, api);
 }
 

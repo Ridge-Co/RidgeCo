@@ -26,7 +26,7 @@ async function get(path) {
   const url = `${BASE}${path}${path.includes('?') ? '&' : '?'}cb=${Date.now()}`; // bust any edge cache
   const resp = await fetch(url);
   let body = null;
-  try { body = await resp.json(); } catch (_) { /* non-JSON response, leave null */ }
+  try { body = await resp.json(); } catch (e) { fail++; console.log(`  FAIL ${path} returned a non-JSON body (HTTP ${resp.status}) — ${e && e.message || e}`); }   // body stays null; the FAIL line says why
   return { status: resp.status, body };
 }
 

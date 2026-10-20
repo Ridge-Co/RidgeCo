@@ -197,6 +197,7 @@ footer a{color:var(--oak)}
 
 <footer id="foot">Questions? Text <a id="footPhone" href="sms:4439617927">443-961-7927</a></footer>
 
+<script src="../failure-reporter.js"></script>
 <script>
 (function(){
 'use strict';
@@ -207,7 +208,7 @@ var money = new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'});
 var $ = function(id){ return document.getElementById(id); };
 var state = { shop:null, methods:[], products:[], cart:{}, method:'', submitting:false };
 var source = '';
-try { source = (new URLSearchParams(location.search).get('src')||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,30); } catch(e){ console.warn('src param', e); }
+try { source = (new URLSearchParams(location.search).get('src')||'').replace(/[^A-Za-z0-9_-]/g,'').slice(0,30); } catch(e){ /* silent-ok: unparseable query string just means no campaign source */ console.warn('src param', e); }
 
 function h(tag, attrs){
   var el = document.createElement(tag);
@@ -266,7 +267,7 @@ function applyShop(){
 }
 
 /* ---------- products ---------- */
-function photoUrl(p){ try { return new URL(p, location.href).href; } catch(e){ console.warn('bad photo', p); return ''; } }
+function photoUrl(p){ try { return new URL(p, location.href).href; } catch(e){ console.warn('bad photo', p); /* silent-ok: a bad photo address just shows no picture */ return ''; } }
 function renderProducts(){
   var box = $('products'); box.textContent = '';
   if (!state.products.length){ box.appendChild(h('p',{class:'fine',text:'Nothing is listed right now.'})); return; }
@@ -395,7 +396,7 @@ function validate(){
   return !first;
 }
 function newToken(){
-  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){ console.warn('randomUUID', e); }
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(e){ /* silent-ok: feature-detect, falls back to getRandomValues just below */ console.warn('randomUUID', e); }
   var a = new Uint8Array(16); crypto.getRandomValues(a);
   return Array.prototype.map.call(a, function(b){ return ('0'+b.toString(16)).slice(-2); }).join('');
 }
@@ -408,10 +409,10 @@ function orderToken(sig){
   if (!saved) saved = state.tokenMem || null;
   if (saved && saved.h === h) return saved.t;
   var rec = {t:newToken(), h:h}; state.tokenMem = rec;
-  try { sessionStorage.setItem('mr_order_token', JSON.stringify(rec)); } catch(e){ console.warn('sessionStorage unavailable', e); }
+  try { sessionStorage.setItem('mr_order_token', JSON.stringify(rec)); } catch(e){ /* silent-ok: storage blocked, token kept in memory */ console.warn('sessionStorage unavailable', e); }
   return rec.t;
 }
-function resetToken(){ state.tokenMem = null; try { sessionStorage.removeItem('mr_order_token'); } catch(e){ console.warn('sessionStorage unavailable', e); } }
+function resetToken(){ state.tokenMem = null; try { sessionStorage.removeItem('mr_order_token'); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ console.warn('sessionStorage unavailable', e); } }
 
 $('orderForm').addEventListener('submit', function(ev){
   ev.preventDefault();
@@ -433,7 +434,7 @@ function submit(){
   payload.orderToken = orderToken(JSON.stringify(payload));
   var ctl = new AbortController(); var timer = setTimeout(function(){ ctl.abort(); }, 40000);
   fetch(API + '/public/order', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:ctl.signal})
-  .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(d){ return {status:r.status, d:d}; }); })
+  .then(function(r){ return r.json().catch(function(){ /* silent-ok: non-JSON reply falls through to the visible could-not-place-order message and is reported there */ return {}; }).then(function(d){ return {status:r.status, d:d}; }); })
   .then(function(res){
     var d = res.d;
     if (res.status === 200 && d.ok){ return success(d, lines, total, method); }
@@ -453,10 +454,12 @@ function submit(){
     if (res.status === 409 && d.error === 'closed'){ return loadShop().then(function(){ go('items'); }); }
     if (res.status === 429){ return formErr('We’re getting a lot of orders right now. Please text ' + phone() + ' to order.'); }
     console.error('order failed', res);
+    window.hubReportFailure && window.hubReportFailure('shop:placeOrder', 'order not accepted: HTTP ' + res.status + ' ' + String(res.d && (res.d.error || res.d.message) || 'no detail'));
     formErr('We couldn’t place your order — nothing was charged. Please try again, or text ' + phone() + '.', submit);
   })
   .catch(function(e){
     console.error('order request failed', e);
+    window.hubReportFailure && window.hubReportFailure('shop:placeOrder request', e);
     formErr(e && e.name==='AbortError' ? 'That took too long. Your order may or may not have gone through — please tap Try again (it will not double-order), or text ' + phone() + '.'
       : 'We couldn’t reach the shop — check your connection and try again (it will not double-order), or text ' + phone() + '.', submit);
   })
@@ -475,7 +478,7 @@ function payLink(m, total, orderId){
 function success(d, lines, total, methodId){
   var srvLines = (d.lines && d.lines.length) ? d.lines.map(function(l){ return {n:l.name,q:l.qty,t:l.total}; }) : lines.map(function(l){ return {n:l.p.name,q:l.qty,t:l.total}; });
   var snap = {orderId:d.orderId, total:d.total, methodId:methodId, lines:srvLines, ts:Date.now()};
-  try { sessionStorage.setItem('mr_last_order', JSON.stringify(snap)); } catch(e){ console.warn('could not save confirmation', e); }
+  try { sessionStorage.setItem('mr_last_order', JSON.stringify(snap)); } catch(e){ /* silent-ok: storage blocked, confirmation still shown on screen */ console.warn('could not save confirmation', e); }
   state.cart = {}; state.products.forEach(refreshCard); resetToken();
   $('orderForm').reset(); state.method = ''; renderMethods();
   renderDone(snap); go('done');
@@ -520,15 +523,15 @@ function renderDone(s){
   box.appendChild(pay);
   if (state.shop && state.shop.pickupNote) box.appendChild(h('p',{text:state.shop.pickupNote}));
   box.appendChild(h('p',{class:'fine',text:'A copy of your order was saved with ' + (state.shop && state.shop.name || 'Milam Ridge') + '. Questions? Text ' + phone() + '.'}));
-  box.appendChild(h('button',{type:'button',class:'btn alt',text:'Start a new order',onclick:function(){ try { sessionStorage.removeItem('mr_last_order'); } catch(e){ console.warn('sessionStorage unavailable', e); } go('items'); }}));
+  box.appendChild(h('button',{type:'button',class:'btn alt',text:'Start a new order',onclick:function(){ try { sessionStorage.removeItem('mr_last_order'); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ console.warn('sessionStorage unavailable', e); } go('items'); }}));
 }
 
 /* ---------- boot ---------- */
 loadShop().then(function(){
-  var raw = null; try { raw = sessionStorage.getItem('mr_last_order'); } catch(e){ console.warn('sessionStorage unavailable', e); }
+  var raw = null; try { raw = sessionStorage.getItem('mr_last_order'); } catch(e){ /* silent-ok: storage blocked, no saved confirmation to show */ console.warn('sessionStorage unavailable', e); }
   if (!raw) return;
   try { var s = JSON.parse(raw); if (s && s.orderId && Date.now() - s.ts < 6*3600*1000 && state.shop){ renderDone(s); go('done'); } }
-  catch(e){ console.warn('bad saved order', e); try { sessionStorage.removeItem('mr_last_order'); } catch(e){ console.warn('sessionStorage unavailable', e); } }
+  catch(e){ /* silent-ok: corrupt saved confirmation is discarded and the shop shows normally */ console.warn('bad saved order', e); try { sessionStorage.removeItem('mr_last_order'); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ console.warn('sessionStorage unavailable', e); } }
 });
 })();
 </script>

@@ -4,6 +4,8 @@
 import fs from 'fs';
 import assert from 'node:assert';
 import './_wo-status-global.mjs';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 const w = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 function grab(sig) {
   const i = w.indexOf(sig); if (i < 0) throw new Error('missing ' + sig);
@@ -61,7 +63,7 @@ function makeWorld(init) {
   };
   const names = Object.keys(deps);
   const src = helpers + '\n' + BLOCK + '\nreturn { classifyIssue, fuQuestionSpec, fuValidateAnswer, fuSuggestNext, fuResolveTenants, fuGateVerdict, fuMessage, fuTokenCheck, fuMintToken, fuAddHash, fuHashMatches, fuSha256, fuSweepDue, fuInReminderWindow, fuSendOutcome, fuDateLabel, fuLabelFor, fuWoLabel, followupPreview, followupSend, followupLink, followupClose, followupList, fixPage, fixAnswer, fixUploadSession, fixLogAttachment, followupSweep, fuDigestLines, makeSessionToken, FU_COLS, FU_DUE_DAYS, FU_WINDOW_DAYS };';
-  const api = new Function(...names, src)(...names.map(k => deps[k]));
+  const api = new Function(...names, PHASE_C_SHIM + src)(...names.map(k => deps[k]));
   return Object.assign(W, { api, env: { WORKER_SECRET: 'test-secret-123', __STAGING__: !!init.staging } });
 }
 const url = (path, params) => { const u = new URL('https://hub.test' + path); for (const [k, v] of Object.entries(params || {})) u.searchParams.set(k, v); return u; };

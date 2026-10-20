@@ -154,11 +154,13 @@ const STAGING=_params.has('staging')||_params.get('env')==='staging';
 const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';  // staging uses its own token, separate from prod
 let TOKEN='';
-try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }
+const CC_FAILED=[]; function ccFail(label,e){ if(CC_FAILED.indexOf(label)<0) CC_FAILED.push(label); window.hubReportFailure&&window.hubReportFailure('command-center:'+label,e); }
+function ccFailBanner(){ return CC_FAILED.length?'<div class="card" style="border-color:#ecc3c3;background:var(--redbg)"><p class="note" style="margin:0">⚠ Couldn’t load: '+h(CC_FAILED.join(', '))+'. Those cards are hidden until you reload. The problem was logged.</p></div>':''; }
 if(STAGING){try{document.title='BrettOS — Command Center (STAGING)';
   var _b=document.createElement('div');_b.textContent='🧪 STAGING SANDBOX — test data only, not your live Hub';
   _b.style.cssText='background:#7a3fb0;color:#fff;font-weight:800;font-size:12px;text-align:center;padding:7px;letter-spacing:.4px';
-  document.body.insertBefore(_b,document.body.firstChild);}catch(e){}}
+  document.body.insertBefore(_b,document.body.firstChild);}catch(e){ /* silent-ok: staging banner is cosmetic only */ }}
 
 // status model (from live code: index.html STA map + worker OPEN_WO_STATUSES)
 const NEEDS_BRETT={'New':1,'Declined':1,'On Hold':1,'Complete':1,'Pending Invoice':1};
@@ -175,17 +177,18 @@ async function getJSON(path){
   let r;
   try{ r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}}); }
   catch(e){ throw new Error(path+' → could not connect (network/CORS)'); }
-  let d=null,t='';
-  try{ t=await r.text(); d=JSON.parse(t); }catch(e){}
+  let d=null,t='',parseFail=null;
+  try{ t=await r.text(); d=JSON.parse(t); }catch(e){ parseFail=e; }
   if(!r.ok) throw new Error(path+' → HTTP '+r.status+' '+((d&&d.error)?d.error:t.slice(0,90)));
   if(d&&d.error) throw new Error(path+' → '+d.error);
+  if(parseFail&&t.trim()){ window.hubReportFailure&&window.hubReportFailure('command-center:unreadable-response '+path.split('?')[0],parseFail); throw new Error(path+' → the Hub answered with something unreadable'); }
   return d;
 }
 function daysSince(s){const t=Date.parse(s);if(isNaN(t))return null;return Math.floor((Date.now()-t)/86400000)}
 
 async function load(){
   if(!TOKEN){return sampleMode('no token yet')}
-  const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
+  CC_FAILED.length=0; const optP=loadOptimizer();   // best-effort, runs concurrently; never throws, never gates first paint
   const arP=loadAR();           // best-effort AR aging (QuickBooks)
   const staleP=loadStale();     // best-effort stuck-WO alert (greenlit #2)
   const tasksP=loadTasks();     // best-effort BrettOS Tasks Sheet summary (TASK_LINKING_BUILD_BRIEF #2)
@@ -199,7 +202,7 @@ async function load(){
 // The Sheet stays canonical; this is a glance card only. Best-effort: any failure (including the
 // endpoint 500ing because the sheet isn't shared with the runtime service account yet — see the
 // PR description) just omits the card, never trips sample mode.
-async function loadTasks(){ try{ return await getJSON('/brettos-tasks-summary?limit=6'); }catch(e){ return null; } }
+async function loadTasks(){ try{ return await getJSON('/brettos-tasks-summary?limit=6'); }catch(e){ ccFail('BrettOS Tasks',e); return null; } }
 const BRETTOS_TASKS_SHEET_FALLBACK_URL='https://docs.google.com/spreadsheets/d/1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA/edit';
 function tasksCard(t){
   if(!t||!t.ok) return '';
@@ -226,7 +229,7 @@ function tasksCard(t){
 // pulled READ-ONLY. Best-effort: any failure just omits the card, never trips sample mode.
 // Stuck-WO alert (greenlit #2 "wo_status polling"): open WOs sitting in an active status past the
 // threshold. READ-ONLY. Best-effort — any failure just omits the card, never trips sample mode.
-async function loadStale(){ try{ return await getJSON('/stale-wos?days=4'); }catch(e){ return null; } }
+async function loadStale(){ try{ return await getJSON('/stale-wos?days=4'); }catch(e){ ccFail('Stuck-work alert',e); return null; } }
 function staleCard(s){
   if(!s||!s.ok||!s.count) return '';
   var all=s.stale||[]; var SHOWN=8;
@@ -252,11 +255,11 @@ function staleCard(s){
 async function loadOptimizer(){
   try{
     const [rev,tel]=await Promise.all([
-      getJSON('/ops-review-log?limit=1').catch(()=>null),
-      getJSON('/ops-telemetry?days=7').catch(()=>null)
+      getJSON('/ops-review-log?limit=1').catch(e=>{ ccFail('Optimizer review',e); return null; }),
+      getJSON('/ops-telemetry?days=7').catch(e=>{ ccFail('Optimizer telemetry',e); return null; })
     ]);
     return {rev,tel};
-  }catch(e){ return null; }
+  }catch(e){ ccFail('Optimizer',e); return null; }
 }
 function optCard(opt){
   const rev=opt&&opt.rev&&opt.rev.rows&&opt.rev.rows[0];
@@ -317,13 +320,13 @@ async function runReview(){
   const el=document.getElementById('optbtn'); if(el){el.textContent='Running… (~15s)';el.disabled=true;}
   try{
     const r=await fetch(WORKER+'/ops-review',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:'{}'});
-    const d=await r.json().catch(()=>null);
+    const d=await r.json().catch(()=>null /* silent-ok: null body throws on the next line into the visible catch */);
     if(!r.ok||!d||d.ok!==true) throw new Error((d&&d.error)||('HTTP '+r.status));
     load();
   }catch(e){ if(el){el.textContent='Run failed — '+(e&&e.message||e);el.disabled=false;} }
 }
 // AR aging — best-effort read from QuickBooks; null on any failure (card falls back to Sheet).
-async function loadAR(){ try{ return await getJSON('/ar/aging'); }catch(e){ return null; } }
+async function loadAR(){ try{ return await getJSON('/ar/aging'); }catch(e){ ccFail('AR aging',e); return null; } }
 // AR reminders (Phase 2) — preview-first, per-customer, gated on Brett's tap. Sends via
 // QuickBooks (re-emails the invoice + pay link); paid invoices are re-checked and skipped.
 async function remindAR(i){
@@ -492,10 +495,10 @@ function render(d){
     +'<div class="row2"><span class="pdot a"></span><div class="t">Confirm Kingbee proof-of-claim filed<small>protects your funds pool</small></div><span class="vtag">FLEET</span></div>'
     +'<p class="note">These come from your backlog. Once the BrettOS sheet is wired (Phase 2) they’ll be live too.</p></div>';
 
-  document.getElementById('body').innerHTML=html;
+  document.getElementById('body').innerHTML=ccFailBanner()+html;
 }
 
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
 
 // emergency rollback — UI present, action gated until the preview/versioning lane exists
 function openSheet(t,b,red,go,reqCk){document.getElementById('shT').textContent=t;document.getElementById('shB').textContent=b;
@@ -535,7 +538,7 @@ load();
       if (!d || !d.version) return;
       if (booted === null){ booted = d.version; return; }
       if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
-    }).catch(function(){});
+    }).catch(function(e){ if(navigator.onLine!==false) window.hubReportFailure && window.hubReportFailure('command-center:version-check', e); });
   }
   check();
   setInterval(check, 60000);

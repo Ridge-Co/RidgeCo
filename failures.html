@@ -96,7 +96,7 @@ const STAGING=_params.has('staging')||_params.get('env')==='staging';
 const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';
 let TOKEN='';
-try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* storage blocked: the token box below handles it */ }
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* silent-ok: storage blocked, the token box below handles it */ }
 let DATA=null;
 
 function h(s){return (s==null?'':(''+s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -112,7 +112,7 @@ async function api(method,path,body){
   let r;
   try{ r=await fetch(WORKER+path,{method,headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:body?JSON.stringify(body):undefined}); }
   catch(e){ throw new Error('could not reach the Hub ('+(e&&e.message||'network')+')'); }
-  let d=null; try{ d=await r.json(); }catch(e){ /* non-JSON body: handled by the status check below */ }
+  let d=null; try{ d=await r.json(); }catch(e){ /* silent-ok: non-JSON body, the status check below reports it */ }
   if(r.status===401||r.status===403) throw new Error('this device\'s token is not allowed to see failures (admin token needed)');
   if(!r.ok||(d&&d.ok===false)) throw new Error((d&&d.error)||('HTTP '+r.status));
   return d;
@@ -123,7 +123,7 @@ function noToken(){
   document.getElementById('sSub').textContent='Enter the Hub token below.';
   document.getElementById('body').innerHTML='';
 }
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* token kept in memory for this visit only */ }
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* silent-ok: token kept in memory for this visit only */ }
   document.getElementById('tokbar').style.display='none';load();}
 
 async function load(){
@@ -132,7 +132,7 @@ async function load(){
   const all=document.getElementById('showAll').checked;
   try{
     DATA=await api('GET','/failures/open'+(all?'?all=1':''));
-    try{sessionStorage.removeItem('hub_fail_badge_v1')}catch(e){ /* cache is optional */ }
+    try{sessionStorage.removeItem('hub_fail_badge_v1')}catch(e){ /* silent-ok: the badge cache is optional, next load refetches */ }
     render();
   }catch(e){
     document.getElementById('summary').className='summary bad';

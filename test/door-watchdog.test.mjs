@@ -382,11 +382,12 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
 
 // ───────────────────────── cron wrapper: an unexpected throw is logged + alerted, never propagated ─────────────────────────
 {
-  const log = { tel: [], alerts: [] };
-  const mk = (runImpl, telFails, alertFails) => new Function('runDoorWatchdogPass', 'logTelemetry', 'alertAdminOnFailure', 'DOOR_WD_JOB',
+  const log = { tel: [], alerts: [], notes: [], fails: [] };
+  const mk = (runImpl, telFails, alertFails) => new Function('runDoorWatchdogPass', 'logTelemetry', 'alertAdminOnFailure', 'DOOR_WD_JOB', 'softNote', 'softFail',
     'return (' + src.slice(src.indexOf('async function doorWatchdogCron('), src.indexOf('// GET /watchdog/door-system - read-only')).trim() + ');')(runImpl,
     async (env, rec) => { if (telFails) throw new Error('tel down'); log.tel.push(rec); },
-    async (env, job, msg) => { if (alertFails) throw new Error('alert down'); log.alerts.push([job, msg]); }, 'door_watchdog');
+    async (env, job, msg) => { if (alertFails) throw new Error('alert down'); log.alerts.push([job, msg]); }, 'door_watchdog',
+    (w, e, sev) => { log.notes.push([w, sev]); }, async (env, w, e, sev) => { log.fails.push([w, sev]); return { ok: false }; });
   const restore = logsOff();
   let threw = false;
   try { await mk(async () => { throw new Error('kaboom'); }, false, false)({}); } catch (e) { threw = true; }
@@ -395,6 +396,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   threw = false;
   try { await mk(async () => { throw new Error('kaboom2'); }, true, true)({}); } catch (e) { threw = true; }
   t('even telemetry + alert failing cannot break the scheduler job', threw === false);
+  t('...and both secondary failures are reported (telemetry P2 note, admin-alert P0), not swallowed', log.notes.some(n => n[0] === 'telemetry_write_failed:door_watchdog' && n[1] === 'P2') && log.fails.some(f => f[0] === 'door_watchdog_admin_alert_failed' && f[1] === 'P0'));
   const okRes = await mk(async () => ({ ok: true, errors: [] }), false, false)({});
   restore();
   t('normal pass result passed through', okRes.ok === true);

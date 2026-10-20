@@ -4,6 +4,7 @@
 import fs from 'fs';
 import assert from 'node:assert';
 const src = fs.readFileSync('worker.js', 'utf8');
+const SOFT = "const softNote = () => true; const softFail = async () => ({ ok: false }); const safeJson = async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }; const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };\n";   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 const vendor = fs.readFileSync('vendor.html', 'utf8');
 const admin = fs.readFileSync('index.html', 'utf8');
 function grabAny(text, prefix, name) {
@@ -17,7 +18,7 @@ function grabAny(text, prefix, name) {
 }
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 const W = grabAny.bind(null, src, 'function '), WA = grabAny.bind(null, src, 'async function ');
-const grab0 = f => new Function(W(f) + '\nreturn ' + f + ';')();
+const grab0 = f => new Function(SOFT + W(f) + '\nreturn ' + f + ';')();
 
 // ---- real server output ----
 const json = d => ({ _d: d });
@@ -28,7 +29,7 @@ const wos = [
   { ID: 'WO-21', Vendor_ID: 'V2', Type: 'addon', Parent_WO_ID: 'WO-2', Addon_Status: 'Submitted', Addon_Items_JSON: '[{"index":0,"desc":"other vendor"}]', Created_Date: '1' },
 ];
 const ests = [['11', 'Approved'], ['12', 'Pending'], ['13', 'Needs Info'], ['14', 'Declined'], ['15', 'Converted'], ['21', 'Pending']].map(([i, s]) => ({ ID: 'E' + i, WO_ID: 'WO-' + i, Version: '1', Status: s, Subtotal: '100.00', Line_Items: '[]', Active: 'TRUE' }));
-const list = new Function('json', 'fetchTabs', 'findWO', 'addonIsDraft', 'addonParseItems', 'addonLatestEstimate', 'addonPhotosByItem', 'ADDON_PHOTO_TYPES', WA('addonList') + '\nreturn addonList;')(
+const list = new Function('json', 'fetchTabs', 'findWO', 'addonIsDraft', 'addonParseItems', 'addonLatestEstimate', 'addonPhotosByItem', 'ADDON_PHOTO_TYPES', SOFT + WA('addonList') + '\nreturn addonList;')(
   json, async () => [wos, ests, []], (l, id) => l.find(w => w.ID === id) || null, grab0('addonIsDraft'), grab0('addonParseItems'), grab0('addonLatestEstimate'), grab0('addonPhotosByItem'), ['before', 'photo']);
 const call = async (parent, role, id) => JSON.parse(JSON.stringify((await list({}, { searchParams: { get: k => (k === 'parent_wo_id' ? parent : null) } }, role, id))._d));   // round-trip = what the wire delivers
 const vendorJson = await call('', 'vendor', 'V1');

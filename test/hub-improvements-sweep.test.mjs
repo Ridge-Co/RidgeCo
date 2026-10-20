@@ -48,6 +48,7 @@ globalThis.fetch = async (url) => {
   throw new Error('unexpected fetch ' + url);
 };
 const helpers = {
+  softFail: async () => ({ ok: false }), softNote: () => true,   // Phase C helpers (reporting only)
   json,
   getAccessToken: async () => 'tok',
   ensureTab: async () => {}, ensureColumns: async () => {},

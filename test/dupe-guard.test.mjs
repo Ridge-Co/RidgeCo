@@ -8,6 +8,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workerSrc = readFileSync(join(here, '..', 'worker.js'), 'utf8');
@@ -33,7 +35,7 @@ const fetchTab = async (env, tab) => {
   if (TABS[tab] === undefined) throw new Error(`Unable to parse range: ${tab}`);
   return TABS[tab];
 };
-const findRecentDuplicate = new Function('fetchTab', `return (${extractFn('findRecentDuplicate')});`)(fetchTab);
+const findRecentDuplicate = new Function('fetchTab', `${PHASE_C_SHIM}return (${extractFn('findRecentDuplicate')});`)(fetchTab);
 
 const nowIso = () => new Date().toISOString();
 const agoIso = (secs) => new Date(Date.now() - secs * 1000).toISOString();

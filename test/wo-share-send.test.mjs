@@ -24,6 +24,8 @@ function harness(o) {
   const wos = o.wos || [WO];
   const deps = {
     ensureColumns: async () => {},
+    tryWrite: async (env, w, fn) => { try { return { ok: true, value: await fn() }; } catch (e) { return { ok: false, error: e.message }; } },   // Phase C helpers
+    softNote: () => true,
     fetchTabs: async () => [wos, [{ ID: 'P1', Address: '123 Main St' }], [{ ID: 'U1', Unit_Label: '2B' }], vendors],
     findWO: (list, id) => list.find(w => String(w.ID) === String(id)),
     _last4: p => String(p || '').replace(/\D/g, '').slice(-4),

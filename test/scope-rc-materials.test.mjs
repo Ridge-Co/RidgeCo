@@ -7,6 +7,7 @@
 import fs from 'fs';
 import assert from 'node:assert';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
+const SOFTO = { softNote: () => true, softFail: async () => ({ ok: false }), safeJson: async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }, parseJsonCell: (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } } };   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 function grab(name, isAsync) {
   const sig = (isAsync ? 'async function ' : 'function ') + name + '(';
   const i = src.indexOf(sig);
@@ -21,7 +22,7 @@ function grabConst(name) {
   return m[0];
 }
 const H = new Function(
-  [grab('calcTieredEstimate'), grab('scopeItemsPricing'), grab('scopeCleanVariants'), grab('scopeCleanItems'),
+  ["const softNote = () => true;", grab('calcTieredEstimate'), grab('scopeItemsPricing'), grab('scopeCleanVariants'), grab('scopeCleanItems'),
    grabConst('SCOPE_MATERIALS_MODES'), grab('scopeCleanMaterialsPricing'), grab('scopeParseMaterialsPricing'),
    grab('scopeComputeMilestoneAmounts'), grab('scopeMaterialsBudgetSummary'), grab('scopeCoveringSignature'),
    grab('gmailRefreshCandidates'), grab('gmailIdTokenEmail'), grab('findVendorPricingLeak')].join('\n') +
@@ -203,6 +204,7 @@ const r2 = x => Math.round(x * 100) / 100;
     { key: 'v1', label: '', price: 1650, vendor_cost: 800, rc_materials_cost: 400, materials_price: 550, materials_desc: 'LVP' },
   ] }, { id: 'li2', description: 'Faucet', selected_key: 'v1', variants: [{ key: 'v1', label: '', price: 255, vendor_cost: 150 }] }];
   const stubs = {
+    ...SOFTO,
     scopeProposalLinkAuth: async () => ({ s: { ID: '5', Property_ID: '1', Proposal_Items_JSON: JSON.stringify(stored) } }),
     scopeAddr: async () => '1 Main St', scopeProposalPhotos: async () => [],
     scopeParsePaymentSchedule: () => [{ label: 'Deposit', percent: 50, trigger: 'upfront' }, { label: 'Final', percent: 50, trigger: 'completion' }],

@@ -116,8 +116,10 @@ var BRETTOS_URL   = 'https://brett-os.brett-2f8.workers.dev';
 var PROBES = [
   { name: 'brett-os',       url: BRETTOS_URL },
   { name: 'barrel-co',      url: BARRELCO_URL },
-  { name: 'str-automation', url: STR_URL },
+  { name: 'str-automation', url: STR_URL, body: 'str' },   // body:'str' = also read the JSON answer: open problems / stale ticks become ledger items
   { name: 'pinterest-sync', url: PINTEREST_URL },
+  { name: 'gh-broker',      url: 'https://gh-broker.brett-2f8.workers.dev' },     // answers 401 to everything without its key: 401 proves the code is running
+  { name: 'listing-forge',  url: 'https://listing-forge.brett-2f8.workers.dev' }, // answers 200 to every path: proves only that the Worker is up
 ];
 var CONFIG_TAB    = 'Config';
 var TOKEN_KEY     = 'Scheduler_Token';
@@ -130,6 +132,11 @@ var HUB_SHARE     = 0.6;                   // the Hub loop may use at most this 
 var FAIL_REMIND_MS    = 60 * 60 * 1000;    // Hub unreachable: reminder at most hourly
 var LEDGER_REMIND_MS  = 6 * 60 * 60 * 1000;    // urgent problems in the Hub's failure ledger: email again at most every 6 h while the set is unchanged
 var PROBE_FAILS_BEFORE_ALERT = 2;          // a Worker must fail its health probe this many ticks in a row (about 30 min) before it is reported
+var WATCH_EVERY_MS = 25 * 60 * 1000;       // the GitHub-run check and the deployed-version check each look at most this often (not every tick)
+var WATCH_FAILS_BEFORE_ALERT = 3;          // if a watcher itself cannot get its answer this many times in a row, that is reported too
+var DEPLOY_DRIFT_GRACE_MS = 45 * 60 * 1000; // main and the live Worker may differ this long after a merge (deploy time) before it is a problem
+var MAIN_RUN_REMIND_MS = 24 * 60 * 60 * 1000; // a red run on main is re-reported at most once a day while it stays the latest result
+var MAIN_REPO = 'Ridge-Co/RidgeCo';
 var JOB_ALERT_MS      = 3 * 60 * 60 * 1000;
 var OVERDUE_ALERT_MS  = 3 * 60 * 60 * 1000;
 var NEEDS_ALERT_MS    = 24 * 60 * 60 * 1000;
@@ -264,6 +271,8 @@ function runScheduler() {
     if (hubStatus) checkOverdue_(mergeStatus_(hubStatus, script.status));
     else if (script.status.overdue.length) checkOverdue_(mergeStatus_({ overdue: [], jobs: {} }, script.status));
     if (Date.now() - started < MAX_RUN_MS) { try { probeWorkers_(); } catch (pe) { alertThrottled_('probe_script', FAIL_REMIND_MS, 'Hub scheduler: the Worker health probes crashed', 'probeWorkers_ threw: ' + pe + '\n\nThe other checks in this tick still ran.'); } }
+    if (Date.now() - started < MAX_RUN_MS) { try { checkMainRuns_(); } catch (me) { alertThrottled_('mainruns_script', FAIL_REMIND_MS, 'Hub scheduler: the main-branch run check crashed', 'checkMainRuns_ threw: ' + me + '\n\nThe other checks in this tick still ran.'); } }
+    if (Date.now() - started < MAX_RUN_MS) { try { checkDeploy_(); } catch (de) { alertThrottled_('deploy_script', FAIL_REMIND_MS, 'Hub scheduler: the deployed-version check crashed', 'checkDeploy_ threw: ' + de + '\n\nThe other checks in this tick still ran.'); } }
     if (!infraFailed) recovered_();
     Logger.log('Tick done: ' + (ran.length ? 'ran ' + ran.join(', ') : 'nothing was due') + (more ? ' (more still due; next tick)' : '') + '.');
     return { ok: !infraFailed, ran: ran, more: more, problem: problem };
@@ -371,7 +380,7 @@ function hub_(method, path, token, payload) {
   try { resp = UrlFetchApp.fetch(WORKER_URL + path, opts); }
   catch (e) { return { ok: false, problem: 'could not reach the Hub (' + path + '): ' + e }; }
   var code = resp.getResponseCode(), text = String(resp.getContentText() || ''), j = null;
-  try { j = JSON.parse(text); } catch (e) { /* handled below */ }
+  try { j = JSON.parse(text); } catch (e) { /* silent-ok: a non-JSON reply is handled below by the status check */ }
   if (code !== 200) return { ok: false, problem: 'the Hub answered HTTP ' + code + ' for ' + path + ': ' + text.slice(0, 400) + (code === 401 ? '  (401 = the token in the Hub Config sheet does not match this script; run setup() again)' : '') };
   if (!j || typeof j !== 'object') return { ok: false, problem: 'the Hub answered ' + path + ' with something that is not JSON: ' + text.slice(0, 300) };
   if (j.ok === false) return { ok: false, problem: 'the Hub reported a problem on ' + path + ': ' + String(j.error || text).slice(0, 500) };
@@ -622,7 +631,7 @@ function http_(method, url, headers, payload) {
   try { resp = UrlFetchApp.fetch(url, opts); }
   catch (e) { return { ok: false, code: 0, problem: 'could not reach ' + url.replace(/\?.*$/, '') + ': ' + e }; }
   var code = resp.getResponseCode(), text = String(resp.getContentText() || ''), j = null;
-  try { j = JSON.parse(text); } catch (e) { /* not JSON: handled by callers that need it */ }
+  try { j = JSON.parse(text); } catch (e) { /* silent-ok: not JSON, callers that need it check the status */ }
   if (code < 200 || code >= 300) return { ok: false, code: code, body: j, text: text, problem: 'answered HTTP ' + code + ' for ' + url.replace(/\?.*$/, '') + ': ' + text.slice(0, 300) };
   return { ok: true, code: code, body: j, text: text };
 }
@@ -858,8 +867,8 @@ function probeWorkers_() {
   var p = props_(), st = {};
   try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
   PROBES.forEach(function (pr) {
-    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '';
-    try { code = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }).getResponseCode(); }
+    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '', text = '';
+    try { var resp = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }); code = resp.getResponseCode(); if (pr.body) text = String(resp.getContentText() || ''); }
     catch (e) { err = String(e).slice(0, 200); }
     var down = !!err || code === 0 || code >= 500, why = err || ('HTTP ' + code);
     if (down) {
@@ -870,12 +879,97 @@ function probeWorkers_() {
         ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' health check failing (' + why + ', ' + s.fails + ' ticks in a row)');
       }
     } else {
+      // a crash while reading the body must not stop PROBE_STATE from being saved for every Worker: report it as a watcher miss instead
+      if (pr.body === 'str') { try { probeStrBody_(pr, code, text); } catch (be) { watcherMiss_('probe_body_' + pr.name, 'probe_body:' + pr.name, pr.name + ' /health body check crashed: ' + String(be).slice(0, 200)); } }
       if (s.alerted) alert_('Worker back up: ' + pr.name, 'The Worker "' + pr.name + '" is answering its health check again (HTTP ' + code + ').');
       s = { fails: 0, alerted: false };
     }
     st[pr.name] = s;
   });
   p.setProperty('PROBE_STATE', JSON.stringify(st));
+}
+// A watcher that cannot get its own answer must say so (3 misses in a row), or a broken watcher looks exactly like "all green".
+function watcherMiss_(key, where, why) {
+  var p = props_(), k = 'WATCH_FAILS_' + key, n = Number(p.getProperty(k) || 0) + 1;
+  p.setProperty(k, String(n));
+  if (n >= WATCH_FAILS_BEFORE_ALERT) {
+    ledgerThrottled_('watch_' + key, LEDGER_REMIND_MS, where, 'P2', why + ' (' + n + ' checks in a row)');
+    alertThrottled_('watch_' + key, MAIN_RUN_REMIND_MS, 'Hub scheduler watcher is blind: ' + where, why + '\n\nThis check has failed ' + n + ' times in a row, so problems it watches for would not be noticed.');
+  }
+}
+function watcherOk_(key) { props_().deleteProperty('WATCH_FAILS_' + key); }
+// Failed GitHub runs on main. The newest finished push-run of each workflow decides: red = P1 in the ledger + an email (once a day while it stays red).
+function checkMainRuns_() {
+  var p = props_(), now = Date.now();
+  if (now - Number(p.getProperty('MAINRUNS_AT') || 0) < WATCH_EVERY_MS) return;
+  var job = { repo: MAIN_REPO }, tokenKey = ghTokenProp_(job);
+  if (!p.getProperty(tokenKey)) {
+    ledgerThrottled_('mainruns_notoken', MAIN_RUN_REMIND_MS, 'main_runs_check', 'P2', 'Cannot watch for failed GitHub runs on main: the script property ' + tokenKey + ' is not set.');
+    return;
+  }
+  p.setProperty('MAINRUNS_AT', String(now));
+  var r = http_('get', 'https://api.github.com/repos/' + MAIN_REPO + '/actions/runs?branch=main&event=push&status=completed&per_page=100', ghHeaders_(job));
+  var runs = r.ok && r.body && Array.isArray(r.body.workflow_runs) ? r.body.workflow_runs : null;
+  if (!runs) { watcherMiss_('mainruns', 'main_runs_check', 'Could not read the GitHub run list for ' + MAIN_REPO + ': ' + String(r.problem || 'unexpected answer shape').slice(0, 250)); return; }
+  watcherOk_('mainruns');
+  var seen = {};
+  runs.forEach(function (x) {
+    if (!x) return;
+    var id = String(x.workflow_id || x.name);
+    if (seen[id]) return;               // newest first: the first JUDGEABLE run per workflow is its current state
+    // a cancelled / skipped / neutral run says nothing about whether main is healthy: look at the next older run of that workflow instead
+    if (['cancelled', 'skipped', 'neutral'].indexOf(x.conclusion) >= 0) return;
+    seen[id] = true;
+    if (['failure', 'timed_out', 'startup_failure'].indexOf(x.conclusion) < 0) return;
+    var msg = 'The newest run of "' + x.name + '" on main is ' + x.conclusion + ' (run #' + x.run_number + ', commit ' + String(x.head_sha || '').slice(0, 7) + '): ' + x.html_url;
+    ledgerThrottled_('mainrun_' + id, MAIN_RUN_REMIND_MS, 'main_run:' + x.name, 'P1', msg);
+    alertThrottled_('mainrun_' + id, MAIN_RUN_REMIND_MS, 'GitHub: "' + x.name + '" is failing on main', msg + '\n\nA red check on main usually means a test, a deploy or a sync is broken. Forward this to Claude to fix.');
+  });
+}
+// Is the live Worker running what main says it should? Compares BUILD_VERSION in main's worker.js with the live /health.
+function checkDeploy_() {
+  var p = props_(), now = Date.now();
+  if (now - Number(p.getProperty('DEPLOY_AT') || 0) < WATCH_EVERY_MS) return;
+  p.setProperty('DEPLOY_AT', String(now));
+  var hdr = { Range: 'bytes=0-60000' }, tok = p.getProperty(ghTokenProp_({ repo: MAIN_REPO }));
+  if (tok) hdr.Authorization = 'Bearer ' + tok;
+  var raw = http_('get', 'https://raw.githubusercontent.com/' + MAIN_REPO + '/main/worker.js', hdr);
+  var m = raw.ok ? /const BUILD_VERSION = '([^']+)'/.exec(raw.text || '') : null;
+  var live = http_('get', WORKER_URL + '/health');
+  var lv = live.ok && live.body ? live.body.build_version : null;
+  if (!m || !lv) {
+    watcherMiss_('deploy', 'deploy_check', 'Cannot compare main with the live Hub: ' + (!m ? 'main BUILD_VERSION unreadable (' + String(raw.problem || 'no BUILD_VERSION line in the first 60 KB').slice(0, 160) + ')' : '') + (!lv ? ' live /health gave no build_version (' + String(live.problem || 'field missing').slice(0, 160) + ')' : ''));
+    return;
+  }
+  watcherOk_('deploy');
+  if (m[1] === lv) { p.deleteProperty('DEPLOY_DRIFT'); return; }
+  var d = {}; try { d = JSON.parse(p.getProperty('DEPLOY_DRIFT') || '{}') || {}; } catch (e) { d = {}; Logger.log('DEPLOY_DRIFT was not valid JSON; starting fresh.'); }
+  if (d.main !== m[1] || d.live !== lv) { d = { main: m[1], live: lv, since: now }; p.setProperty('DEPLOY_DRIFT', JSON.stringify(d)); }
+  if (now - d.since < DEPLOY_DRIFT_GRACE_MS) return;
+  var msg = 'The live Hub is on build ' + lv + ' but main is on ' + m[1] + ' and has been for over ' + Math.round((now - d.since) / 60000) + ' minutes. Either the deploy failed or main moved without a deploy.';
+  ledgerThrottled_('deploy_drift', MAIN_RUN_REMIND_MS, 'deploy_drift', 'P1', msg);
+  alertThrottled_('deploy_drift', MAIN_RUN_REMIND_MS, 'Hub deploy is behind main', msg + '\n\nCheck the latest "Deploy" run in GitHub Actions. Forward this to Claude to fix.');
+}
+// str-automation answers /health with its own problem registry: { ok, last_tick, problems:[{key,count,at}], ... }. An answer of HTTP 200 with problems in it is NOT healthy,
+// and the Worker's own text alerts never reach the Hub ledger. Mirror them (P1, once a day per problem set); an unreadable body is reported by the same rule as a miss.
+function probeStrBody_(pr, code, text) {
+  var j = null;
+  try { j = JSON.parse(text); } catch (e) { watcherMiss_('probe_body_' + pr.name, 'probe_body:' + pr.name, pr.name + ' /health answered HTTP ' + code + ' but not with JSON (' + String(e).slice(0, 80) + '): ' + String(text).slice(0, 120)); return; }
+  watcherOk_('probe_body_' + pr.name);
+  var probs = (j && Array.isArray(j.problems)) ? j.problems : [];
+  var stale = [], p = props_(), sigKey = 'PROBE_BODY_SIG_' + pr.name;
+  if (j && j.ok === false) stale.push('ok:false');
+  Object.keys(j || {}).forEach(function (k) { if (/_stale$/.test(k) && j[k]) stale.push(k); });
+  var named = probs.filter(function (x) { return x && x.key; });             // a null / keyless entry must not throw before the rest is judged
+  var odd = probs.length - named.length;
+  if (odd > 0) stale.push('unreadable_problem_entry' + (odd > 1 ? ' (' + odd + 'x)' : ''));
+  if (!named.length && !stale.length) { p.deleteProperty(sigKey); return; }  // healthy again: a later recurrence is a new report
+  var names = named.map(function (x) { return x.key + (x.count > 1 ? ' (' + x.count + 'x)' : ''); }).concat(stale);
+  // ONE fixed throttle key + ONE signature property (sorted problem keys, WITHOUT counts): a count ticking up must neither re-report nor mint new Script Properties.
+  var sig = named.map(function (x) { return String(x.key); }).concat(stale).sort().join(',').slice(0, 400), last = null;
+  try { last = JSON.parse(p.getProperty(sigKey) || 'null'); } catch (e) { last = null; Logger.log(sigKey + ' was not valid JSON; re-reporting.'); }
+  if (last && last.sig === sig && Date.now() - Number(last.at || 0) < MAIN_RUN_REMIND_MS) return;
+  if (ledger_('worker_problem:' + pr.name, 'P1', pr.name + ' reports open problems in its own /health: ' + names.join(', ') + (j && j.last_tick ? ' (last tick ' + j.last_tick + ')' : ''))) p.setProperty(sigKey, JSON.stringify({ sig: sig, at: Date.now() }));
 }
 function fatal_(subject, body) { alert_('Hub scheduler setup: ' + subject, body); throw new Error('Hub scheduler setup failed: ' + subject + '. ' + body); }
 function alert_(subject, body) {

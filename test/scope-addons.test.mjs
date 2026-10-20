@@ -6,6 +6,7 @@
 import fs from 'fs';
 import assert from 'node:assert';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
+const SOFTO = { softNote: () => true, softFail: async () => ({ ok: false }), safeJson: async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }, parseJsonCell: (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } } };   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 const proposalHtml = fs.readFileSync(new URL('../scope-proposal.html', import.meta.url), 'utf8');
 const mqHtml = fs.readFileSync(new URL('../message-queue.html', import.meta.url), 'utf8');
 function grabFrom(text, name, isAsync) {
@@ -65,6 +66,7 @@ ok(P.subtotal + P.items[1].variants[0].price === whole, 'base + add-on lands exa
 // ---- customer boundary: add-on flag passes through, vendor cost never does ----
 const stored = P.items;
 const viewStubs = {
+  ...SOFTO,
   scopeProposalLinkAuth: async () => ({ s: { ID: '5', Property_ID: '1', Proposal_Items_JSON: JSON.stringify(stored) } }),
   scopeAddr: async () => '1 Main St', scopeProposalPhotos: async () => [],
   scopeParsePaymentSchedule: () => [{ label: 'Deposit', percent: 40, trigger: 'upfront' }, { label: 'Final', percent: 60, trigger: 'completion' }],
@@ -87,6 +89,7 @@ const tel2 = [];
 async function sign(selections, schedule) {
   const added = []; let signedRow = null; const mil = [];
   const stubs = {
+    ...SOFTO,
     scopeProposalLinkAuth: async () => ({ s: { ID: '5', Property_ID: '1', WO_ID: '', Vendor_ID: '3', Proposal_Items_JSON: JSON.stringify(stored), Line_Items: JSON.stringify(items) } }),
     scopeSigTab: async () => {}, fetchTab: async () => [], scopeParseItems: s => JSON.parse(s.Line_Items || '[]'),
     ensureColumns: async () => {}, paymentMilestonesTab: async () => {}, scopeMaxUpfrontPct: async () => 33.34,

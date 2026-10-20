@@ -109,7 +109,7 @@ function makeMailbox(world, email, fixtures) {
       WeekDay: { MONDAY: 'MON' },
       newTrigger: (fn) => { const t = { fn }; const b = { timeBased: () => b, everyMinutes: () => b, onWeekDay: () => b, atHour: () => b, create: () => { triggers.push(t); return t; } }; return b; },
     },
-    MailApp: { sendEmail: (o) => world.mailSent.push({ from: email, ...o }) },
+    MailApp: { sendEmail: (o) => { if (world.failMail) throw new Error('mail quota'); return world.mailSent.push({ from: email, ...o }); } },
     GmailApp: {
       getUserLabelByName: (n) => labels[n] ? labelObj(n) : null,
       createLabel: (n) => { labels[n] = labels[n] || new Set(); return labelObj(n); },
@@ -122,7 +122,7 @@ function makeMailbox(world, email, fixtures) {
       Settings: { Filters: {
         list: () => ({ filter: filters.slice() }),
         create: (f) => { const r = { id: 'F' + (++filterSeq), ...f }; filters.push(r); return r; },
-        remove: (_me, id) => { const i = filters.findIndex(f => f.id === id); if (i >= 0) filters.splice(i, 1); },
+        remove: (_me, id) => { if (world.failRemove) throw new Error(world.failRemove); const i = filters.findIndex(f => f.id === id); if (i >= 0) filters.splice(i, 1); },
       } } } },
     DriveApp: {
       getFolderById: (id) => {
@@ -296,6 +296,34 @@ ok(!brett.filters.some(f => /amazon|lowes/.test(f.criteria.from)), 'denied/unapp
 const before = ruleRows().length;
 brett.ctx.weeklyDiscovery();
 ok(ruleRows().length === before, 'weekly discovery does not re-propose denied senders');
+
+// ── 7b. Oct 20 review: a FAILED filter removal stays on the property list (reported again next run); an alert problem never blocks receipts ──
+{
+  const ruleId = ss._tabs.Rules._rows[lowesRow][0], propKey = 'filter:' + ruleId, cleanupMails = () => world.mailSent.filter(m => /filter cleanup failed/.test(m.subject || ''));
+  const resetAlertThrottle = () => { delete brett.props['ALERT_AT:Gmail filter cleanup failed']; };
+  ss._tabs.Rules._rows[lowesRow][1] = 'Approved'; brett.ctx.processQueue();
+  ok(!!brett.props[propKey] && brett.filters.some(f => f.criteria.from === 'do-not-reply@notifications.lowes.com'), '7b setup: re-approved rule has a filter and a saved record');
+  world.failRemove = 'Gmail API 500 backend error'; ss._tabs.Rules._rows[lowesRow][1] = 'Denied'; brett.ctx.processQueue();
+  ok(!!brett.props[propKey] && brett.filters.some(f => f.criteria.from === 'do-not-reply@notifications.lowes.com'), 'failed removal: the record stays in the property list (filter is still live)');
+  ok(cleanupMails().length === 1, '...and Brett is told');
+  resetAlertThrottle(); brett.ctx.processQueue();
+  ok(!!brett.props[propKey] && cleanupMails().length === 2, 'next run reports the same stuck filter again');
+  world.failRemove = null; brett.ctx.processQueue();
+  ok(!brett.props[propKey] && !brett.filters.some(f => f.criteria.from === 'do-not-reply@notifications.lowes.com'), 'once removal works the record and the filter are gone');
+  ss._tabs.Rules._rows[lowesRow][1] = 'Approved'; brett.ctx.processQueue();
+  brett.filters.splice(0, brett.filters.length, ...brett.filters.filter(f => f.criteria.from !== 'do-not-reply@notifications.lowes.com'));   // someone deleted it by hand in Gmail
+  world.failRemove = 'Requested entity was not found. (404)'; ss._tabs.Rules._rows[lowesRow][1] = 'Denied'; brett.ctx.processQueue();
+  ok(!brett.props[propKey], 'a filter that is already gone (404 / not found) is forgotten, not retried forever');
+  // alert failure must not stop receipts
+  ss._tabs.Rules._rows[lowesRow][1] = 'Approved'; world.failRemove = null; brett.ctx.processQueue();
+  world.failRemove = 'Gmail API 500 backend error'; ss._tabs.Rules._rows[lowesRow][1] = 'Denied';
+  brett.deliver(hd('hdAlertFail', '2026-09-22T09:00:00Z', '<hd-alertfail@hd>'));
+  resetAlertThrottle(); world.failMail = true;
+  let threw = null; try { brett.ctx.processQueue(); } catch (e) { threw = e; }
+  ok(!threw && world.files.some(f => /lertFail/.test(f.name)) && brett.labels['Receipts/Sent to Hub'].has('thdAlertFail'), 'the alert email failing does not throw and does not stop the receipt being saved');
+  world.failMail = false; world.failRemove = null; resetAlertThrottle(); brett.ctx.processQueue();
+  ok(!brett.props[propKey], '7b cleanup: filter removed once Gmail works again');
+}
 
 // ── 8. Manual tag (vendor forwarding an HD order screenshot, then a reply) ───────────────────
 const phoenix = [

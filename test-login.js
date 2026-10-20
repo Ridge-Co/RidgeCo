@@ -29,12 +29,20 @@
   var PROD = 'https://maintenance-hub.brett-2f8.workers.dev';
   var SENT = '__staging_ui_test__';
   var on = false;
+  // A swallowed error inside a test tool is a lie about the test run: record it where the tester can see it
+  // (window.__testLoginErrors + a console FAIL line) instead of continuing as if the shim worked.
+  window.__testLoginErrors = window.__testLoginErrors || [];
+  function tlFail(where, e) {
+    var m = '[test-login] FAIL ' + where + ': ' + (e && e.message || e);
+    window.__testLoginErrors.push(m);
+    console.error(m);
+  }
   try {
     var q = new URLSearchParams(location.search);
     if (q.get('testmode') === '1') sessionStorage.setItem('mh_testmode', '1');
     else if (q.get('testmode') === '0') sessionStorage.removeItem('mh_testmode');
     on = sessionStorage.getItem('mh_testmode') === '1';
-  } catch (e) {}
+  } catch (e) { tlFail('testmode flag', e); }
   if (!on) return;
   window.__testmode = true;
   window.__testDialogs = [];
@@ -76,7 +84,7 @@
           if (minted) return Promise.resolve(new Response(JSON.stringify(minted), { status: 200, headers: { 'Content-Type': 'application/json' } }));
         }
         if (u !== url) input = typeof input === 'string' ? u : new Request(u, input);
-      } catch (e) {}
+      } catch (e) { tlFail('fetch rewrite (request may hit PROD)', e); }
       return origFetch(input, init);
     };
   }
@@ -93,7 +101,7 @@
   var ADMIN_KEYS = { mh_auth: 1, mh_auth_staging: 1 };
   var SESSION_REDIRECT = /^(mh_vendor_sess|mh_owner_sess|mh_tenant_sess|mh_api_staging|mh_wo_share_.*)$/;
   var SP = Storage.prototype, gI = SP.getItem, sI = SP.setItem, rI = SP.removeItem;
-  function isLS(s) { try { return s === window.localStorage; } catch (e) { return false; } }
+  function isLS(s) { try { return s === window.localStorage; } catch (e) { /* silent-ok: storage access denied means it is not our localStorage */ return false; } }
   SP.getItem = function (k) {
     if (isLS(this)) {
       if (ADMIN_KEYS[k]) return SENT;
@@ -129,7 +137,7 @@
         var s = mintSync(pp[0]);
         if (s) { s._tm_ts = Date.now(); s._tm_id = qs.get('as') || ''; sI.call(window.sessionStorage, pp[1], JSON.stringify(s)); }
       }
-    } catch (e) {}
+    } catch (e) { tlFail('portal session mint', e); }
   }
 
   // ---- 4. dialogs ---------------------------------------------------------------------------
@@ -164,9 +172,9 @@
   function tryLogin(filled) {
     if (!filled) return;
     // Admin tools whose login screen never reads mh_auth: submit the sentinel through their own login.
-    if (document.getElementById('login-pw') && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) {} return; }
+    if (document.getElementById('login-pw') && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) { tlFail('doLogin', e); } return; }
     var pw = document.querySelector('input[type=password]');
-    if (pw && pw.offsetParent !== null && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) {} }
+    if (pw && pw.offsetParent !== null && typeof window.doLogin === 'function') { try { window.doLogin(); } catch (e) { tlFail('doLogin', e); } }
   }
   function banner() {
     var b = document.createElement('div');

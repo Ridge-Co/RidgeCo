@@ -103,7 +103,7 @@ function api(method,path,body){
   if(body){o.headers['Content-Type']='application/json';o.body=JSON.stringify(body);}
   return fetch(WORKER+path,o).then(function(r){
     // An unreadable body becomes null here and is turned into a visible error just below (never ignored).
-    return r.json().then(function(j){return j;},function(){return null;}).then(function(j){
+    return r.json().then(function(j){return j;},function(){/* silent-ok: null becomes a visible error on the next line */return null;}).then(function(j){
       if(!j||typeof j!=='object'){var e=new Error('The server sent an answer we could not read (code '+r.status+').');e.status=r.status;e.unreadable=true;throw e;}
       if(!r.ok||j.ok===false){var e2=new Error(j.message||('The server said no (code '+r.status+').'));e2.status=r.status;e2.code=j.error||'';e2.serverMessage=j.message||'';throw e2;}
       return j;

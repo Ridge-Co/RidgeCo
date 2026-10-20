@@ -1,5 +1,7 @@
 // ensureColumns must place new headers past the widest row, and write single cells.
 import fs from 'fs';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 const src = fs.readFileSync('worker.js','utf8');
 function grab(name){
   let i = src.indexOf('async function '+name+'(');
@@ -19,7 +21,7 @@ function grabCol(){
 // Telemetry row via logTelemetry on any failure — grab both, and stub logTelemetry/TELEMETRY_TAB
 // so the wrapper's dependencies resolve in this sandboxed scope same as sheetsRequest does.
 const { ensureColumns } = new Function('sheetsRequest', 'logTelemetry', 'TELEMETRY_TAB',
-  grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
+  PHASE_C_SHIM + grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
   async (env, method, path, body) => { calls.push({method, path, body}); return stub; },
   async () => {}, 'Ops_Telemetry');
 
@@ -68,7 +70,7 @@ t('empty tab writes at column A', w4 && w4.body.data[0].range==='New_Tab!A1');
 // leave the failure completely invisible.
 let telemetryCalls = [];
 const { ensureColumns: ensureColumnsFailing } = new Function('sheetsRequest', 'logTelemetry', 'TELEMETRY_TAB',
-  grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
+  PHASE_C_SHIM + grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
   async (env, method, path) => {
     if (method === 'GET' && !path.startsWith('?')) return { values: [['ID','Name'],['1','x']] };
     throw new Error('Sheets API error on POST /values:batchUpdate: quota exceeded');

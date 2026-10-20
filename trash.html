@@ -46,6 +46,8 @@
   .thumb{display:inline-flex;align-items:center;gap:4px;background:var(--chip);border:1px solid var(--border);border-radius:8px;padding:4px 8px;font-size:12px;color:var(--muted)}
   .banner{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
   .banner b{color:#5c4410}
+  .load-err{background:#fdecea;border:1px solid #e8a39b;color:var(--danger);border-radius:12px;padding:10px 14px;margin-bottom:12px;font-size:14px;font-weight:600}
+  .load-err div+div{margin-top:4px}
   .line{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);font-size:14px}
   .line:last-child{border-bottom:none}
   .total{font-size:20px;font-weight:700;margin-top:8px}
@@ -318,7 +320,7 @@ document.getElementById('login-input').addEventListener('keydown',function(e){ i
 function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').classList.remove('hide');
-  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){ /* silent-ok: cosmetic footer version label, Hub fetch failures are already reported by failure-reporter */ });
   document.getElementById('wk-tab-0').classList.add('active');
   loadProperties(); refreshWeek(); loadNudge();
 }
@@ -368,6 +370,16 @@ function switchWeekTab(offset){
 }
 function refreshWeek(){ return loadWeek(curWeekOffset); }
 
+// The Worker answers with `load_errors` (array of text) when a sheet tab could not be read. That must never look like "nothing to do":
+// show a persistent red note (text only, never HTML from the server).
+function loadErrorNote(errs, what){
+  if(!Array.isArray(errs)||!errs.length) return null;
+  var box=document.createElement('div'); box.className='load-err'; box.setAttribute('role','alert');
+  var h=document.createElement('div'); h.textContent='Some data did not load, so '+what+' may be incomplete (not "nothing to do"). Reload to try again.'; box.appendChild(h);
+  errs.forEach(function(m){ var d=document.createElement('div'); d.textContent=String(m); box.appendChild(d); });
+  return box;
+}
+
 function loadWeek(offset){
   offset = offset||0;
   var qs = '';
@@ -377,7 +389,12 @@ function loadWeek(offset){
     var wk=(d&&d.week)||''; var list=(d&&d.properties)||[];
     curWeekKey[offset]=wk; weekListCache[offset]=list;
     var label = offset===0 ? 'This week' : 'Last week';
-    if(!list.length){ el.innerHTML='<div class="card muted">Nothing on file for '+label.toLowerCase()+' yet.</div>'; renderBatchBar(offset); return; }
+    var wkErr = loadErrorNote(d&&d.load_errors, 'this week\'s list');
+    if(!list.length){
+      el.innerHTML = wkErr ? '' : '<div class="card muted">Nothing on file for '+label.toLowerCase()+' yet.</div>';
+      if(wkErr) el.appendChild(wkErr);
+      renderBatchBar(offset); return;
+    }
     el.innerHTML = '<div class="card"><div class="row"><b>'+label+'</b><span class="muted">'+esc(wk)+'</span></div>'
       + list.map(function(p){
           var status, checkbox='';
@@ -396,7 +413,14 @@ function loadWeek(offset){
                + '<div>'+status+'</div></div>';
         }).join('')
       + '</div>';
+    if(wkErr) el.insertBefore(wkErr, el.firstChild);
     renderBatchBar(offset);
+  }).catch(function(e){
+    window.hubReportFailure && window.hubReportFailure('trash:loadWeek', e);
+    var el=document.getElementById('week'); if(!el) return;
+    el.textContent='';
+    var box=loadErrorNote(['Could not load the week list ('+((e&&e.message)||'network error')+').'], 'this week\'s list');
+    if(box) el.appendChild(box);
   });
 }
 
@@ -482,10 +506,25 @@ function unmarkSkipped(pid, week){
 function loadNudge(){
   return api('GET','/trash/unbilled').then(function(d){
     var el=document.getElementById('nudge'); var items=(d&&d.items)||[];
-    if(!items.length){ el.innerHTML=''; return; }
-    el.innerHTML='<div class="banner"><b>Needs attention</b><ul style="margin:8px 0 0;padding-left:18px">'
-      + items.map(function(i){ return '<li>'+esc(i.message)+'</li>'; }).join('')+'</ul></div>';
-  }).catch(function(){});
+    el.textContent='';
+    var errNote=loadErrorNote(d&&d.load_errors, 'the Needs attention list');
+    if(errNote) el.appendChild(errNote);
+    if(!items.length) return;
+    var banner=document.createElement('div'); banner.className='banner';
+    var title=document.createElement('b'); title.textContent='Needs attention'; banner.appendChild(title);
+    var ul=document.createElement('ul'); ul.style.cssText='margin:8px 0 0;padding-left:18px';
+    items.forEach(function(i){
+      var li=document.createElement('li'); li.textContent=String((i&&i.message)||'');
+      if(i&&i.type==='load_error'){ li.style.color='var(--danger)'; li.style.fontWeight='700'; }   // a read that failed: red, never a normal to-do
+      ul.appendChild(li);
+    });
+    banner.appendChild(ul); el.appendChild(banner);
+  }).catch(function(e){
+    // Was swallowed: an empty box looked exactly like "nothing needs attention". Say it could not load, and report.
+    window.hubReportFailure && window.hubReportFailure('trash:loadNudge', e);
+    var el=document.getElementById('nudge');
+    if (el) el.innerHTML='<div class="banner"><b>Could not load the Needs attention list.</b> Reload the page to try again; do not assume nothing needs attention.</div>';
+  });
 }
 
 // ── Visit sheet ──────────────────────────────────────────────

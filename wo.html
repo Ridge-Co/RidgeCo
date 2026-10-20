@@ -297,7 +297,7 @@ var WORKER = (function(){
     // Oct 5 2026: per-tab (sessionStorage) so a staging test can never leave a real browser pointed at the
     // blank test Sheet. Retire any leftover persistent flag from the old localStorage behaviour.
     var qs = new URLSearchParams(location.search);
-    try { localStorage.removeItem('mh_api_staging'); } catch (e2) {}
+    try { localStorage.removeItem('mh_api_staging'); } catch (e2) { /* silent-ok: storage blocked so there is no stale flag to retire */ }
     if (qs.get('api') === 'staging') sessionStorage.setItem('mh_api_staging', '1');
     else if (qs.get('api') === 'prod') sessionStorage.removeItem('mh_api_staging');
     return sessionStorage.getItem('mh_api_staging') === '1' ? STAGING : PROD;
@@ -369,7 +369,7 @@ function setLang(l){
   document.getElementById('lang-en').className = l==='en'?'on':'';
   document.getElementById('lang-es').className = l==='es'?'on':'';
   document.querySelectorAll('[data-i18n]').forEach(function(el){ el.textContent = t(el.getAttribute('data-i18n')); });
-  try{ localStorage.setItem('mh_wo_lang', l); }catch(e){}
+  try{ localStorage.setItem('mh_wo_lang', l); }catch(e){ /* silent-ok: storage blocked, language not remembered */ }
   if(DATA) renderDoc();
 }
 
@@ -381,10 +381,10 @@ function open_(id){ document.getElementById(id).classList.add('open'); }
 
 // ── boot ──────────────────────────────────────────────────────
 (function boot(){
-  try{ var sl=localStorage.getItem('mh_wo_lang'); if(sl==='es') setLang('es'); }catch(e){}
+  try{ var sl=localStorage.getItem('mh_wo_lang'); if(sl==='es') setLang('es'); }catch(e){ /* silent-ok: storage blocked, default language used */ }
   if(!WO || !LINK){ showErr(t('Link problem'), 'This link is missing information. Please ask for a new one.'); return; }
   // existing 24h session?
-  var saved=null; try{ saved=JSON.parse(localStorage.getItem(SESS_KEY)||'null'); }catch(e){}
+  var saved=null; try{ saved=JSON.parse(localStorage.getItem(SESS_KEY)||'null'); }catch(e){ /* silent-ok: unreadable saved session just means sign in again */ }
   if(saved && saved.token && saved.exp && saved.exp*1000 > Date.now()){
     VIEW = saved.token; loadDoc(); return;
   }
@@ -413,7 +413,7 @@ function unlock(){
     if(res && res.success && res.token){
       VIEW=res.token;
       var exp=Math.floor(Date.now()/1000)+(res.expires_in||86400);
-      try{ localStorage.setItem(SESS_KEY, JSON.stringify({token:res.token,exp:exp})); }catch(e){}
+      try{ localStorage.setItem(SESS_KEY, JSON.stringify({token:res.token,exp:exp})); }catch(e){ /* silent-ok: storage blocked, session kept in memory */ }
       if(res.language==='es') setLang('es');
       msg.textContent=''; loadDoc();
     } else if(res && (res.error==='invalid_link'||res.error==='revoked'||res.error==='not_found'||res.error==='no_phone')){
@@ -432,7 +432,7 @@ function loadDoc(){
     .then(function(res){
       if(!res || !res.success){
         // token expired / invalid → back to gate
-        try{ localStorage.removeItem(SESS_KEY); }catch(e){}
+        try{ localStorage.removeItem(SESS_KEY); }catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ }
         VIEW=''; showGate();
         var m=document.getElementById('gate-msg'); if(res && res.message){ m.className='gate-msg err-red'; m.textContent=res.message; }
         return;
@@ -741,8 +741,8 @@ function msg(id,text,cls){ var el=document.getElementById(id); el.textContent=te
 
 <!-- auto-refresh onto new Worker code (idle only) -->
 <script>
-(function(){ var V=WORKER+'/version',booted=null;
-  function chk(){ fetch(V,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){ if(!d||!d.version)return; if(booted===null){booted=d.version;return;} if(d.version!==booted){ var el=document.activeElement; var busy=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')&&el.value; if(!busy) location.reload(true); } }).catch(function(){}); }
+(function(){ var V=WORKER+'/version',booted=null,fails=0;
+  function chk(){ fetch(V,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){ fails=0; if(!d||!d.version)return; if(booted===null){booted=d.version;return;} if(d.version!==booted){ var el=document.activeElement; var busy=el&&(el.tagName==='INPUT'||el.tagName==='TEXTAREA')&&el.value; if(!busy) location.reload(true); } }).catch(function(e){ if(navigator.onLine!==false&&!document.hidden&&++fails===5) window.hubReportFailure && window.hubReportFailure('wo:versionCheck failing repeatedly', e); }); }
   chk(); setInterval(chk,60000);
 })();
 </script>

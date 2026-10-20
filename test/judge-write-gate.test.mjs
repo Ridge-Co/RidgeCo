@@ -26,11 +26,12 @@ const floorSrc = grab('JUDGE_CONFIDENCE_FLOOR', 'const');
 // Build judge() with routeAI/logTelemetry as injectable mocks (free variables
 // inside judge() resolve to these Function parameters via the scope chain).
 function makeJudge({ routeAI, logTelemetry }) {
-  const factory = new Function('routeAI', 'logTelemetry',
+  const factory = new Function('routeAI', 'logTelemetry', 'softNote',
     floorSrc + '\n' + judgeSrc + '\nreturn judge;');
   return factory(
     routeAI || (async () => { throw new Error('routeAI mock not provided'); }),
     logTelemetry || (async () => {}),
+    () => true,   // Phase C: softNote (reporting only)
   );
 }
 

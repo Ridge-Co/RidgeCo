@@ -107,7 +107,7 @@ function makeFetch(db, delayMs, callLog) {
 
 function build(db, delayMs, callLog) {
   const src = [
-    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
+    'const CORS = {}; const softNote = () => true; const softFail = async () => ({ ok: false }); const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === \'string\' && !raw.trim())) return fb; if (typeof raw !== \'string\') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
     cacheSrc, srSrc, jsonSrc, fetchTabSrc, fetchTabsSrc, findRecentDupSrc, claimCacheSrc,
     'async function ensureColumns(){}',
     'async function addRow(){ return { success:true, id:"X" }; }', // WO_Tenants linking side-effect — not under test

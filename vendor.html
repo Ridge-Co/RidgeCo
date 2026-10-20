@@ -270,7 +270,7 @@ var WORKER = (function(){
     // at the blank test Sheet and a vendor saw an empty "Complete your info" form. Retire any
     // leftover persistent flag, so a vendor/tenant browser can never be stuck on staging.
     var qs = new URLSearchParams(location.search);
-    try { localStorage.removeItem('mh_api_staging'); } catch (e2) {}
+    try { localStorage.removeItem('mh_api_staging'); } catch (e2) { /* silent-ok: storage blocked so there is no stale flag to retire */ }
     if (qs.get('api') === 'staging') sessionStorage.setItem('mh_api_staging', '1');
     else if (qs.get('api') === 'prod') sessionStorage.removeItem('mh_api_staging');
     return sessionStorage.getItem('mh_api_staging') === '1' ? STAGING : PROD;
@@ -293,7 +293,7 @@ var _foldOpen = { paid: false, cancelled: false };   // Paid / Cancelled section
 var failCount = 0;
 // Deep-link support: an SMS can link straight to ?wo=WO-1234 so the vendor's portal opens
 // already filtered to the job the text was about, instead of making them search for it.
-var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ return ''; } })();
+var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ /* silent-ok: unparseable query string just means no deep link */ return ''; } })();
 var _deepLinkApplied = false;
 
 function api(path, opts) {
@@ -352,6 +352,16 @@ function apiGate(fn) {
 // A card section that could not load must SAY so and offer Retry. Before this, a failed estimate read looked exactly
 // like "No estimate submitted yet" (inviting a duplicate estimate) and a failed invoice read looked like "no invoice
 // yet" (inviting a double bill). Also reported (once per kind per page load) to the failure ledger so it is never silent.
+// Background polls (version / page freshness / work-order refresh) run every minute and a flaky job-site connection makes
+// single failures normal. Report only when one keeps failing (5 in a row), once, so a dead poll is never invisible.
+var _bgFails = {};
+function bgOk(where) { _bgFails[where] = 0; }
+function bgFailure(where, e) {
+  // offline / backgrounded tab / aborted or timed-out requests are ordinary network conditions, not Hub failures: do not count them
+  if (navigator.onLine === false || document.hidden || (e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) return;
+  _bgFails[where] = (_bgFails[where] || 0) + 1;
+  if (_bgFails[where] === 5) { window.hubReportFailure && window.hubReportFailure(where + ' failing repeatedly', e); }
+}
 var _loadRetry = {}, _loadReported = {};
 function showLoadFailed(wrapId, what, detail, retryFn, ref) {
   var wrap = document.getElementById(wrapId);
@@ -365,7 +375,7 @@ function showLoadFailed(wrapId, what, detail, retryFn, ref) {
     _loadReported[what] = true;
     fetch(WORKER + '/failure/report', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': SECRET },
       body: JSON.stringify({ system: 'vendor', where: 'portal_load', ref: String(ref || ''), message: 'Vendor portal could not load ' + what + ': ' + String(detail || '').slice(0, 200) }) })
-      .catch(function(e) { console.error('failure/report failed', e); });
+      .catch(function(e) { /* silent-ok: the failure report itself failed, nowhere left to report to */ console.error('failure/report failed', e); });
   }
 }
 function retryLoad(wrapId) {
@@ -388,7 +398,7 @@ function sessionExpired() {
 }
 function apiList(path) {
   return fetch(WORKER + path, { headers: { 'X-Auth-Token': SECRET } }).then(function(r) {
-    return r.json().catch(function(){ return null; }).then(function(data) {
+    return r.json().catch(function(){ /* silent-ok: non-JSON body is rejected just below as an unexpected response */ return null; }).then(function(data) {
       if (r.status === 401) { sessionExpired(); throw new Error('Session expired - please sign in again'); }
       if (!Array.isArray(data)) {
         throw new Error((data && data.error) ? data.error : ('Unexpected response (HTTP ' + r.status + ')'));
@@ -443,7 +453,7 @@ function onLoginSuccess(data, persist) {
   if (oneOffBtn) oneOffBtn.style.display = (data.can_create_own_wo === true || String(data.can_create_own_wo).toUpperCase() === 'TRUE') ? '' : 'none';
   loadWorkOrders();
   loadVendorTaskAlerts();
-  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ /* silent-ok: storage blocked, vendor just signs in again next visit */ } }
 }
 
 // ── Login ────────────────────────────────────────────────────
@@ -514,7 +524,7 @@ function doLogout() {
   document.getElementById('woList').innerHTML = '<div class="spinner">Loading work orders…</div>';
   show('screenDash', false);
   show('screenLogin', true);
-  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ }
 }
 
 // Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Needs Your Attention". A dedicated,
@@ -527,7 +537,11 @@ function loadVendorTaskAlerts() {
   if (!session) return;
   api('/vendor-task-requests?status=open').then(function(rows) {
     renderVendorTaskAlerts(rows || []);
-  }).catch(function(e) { console.error('[loadVendorTaskAlerts]', e); });
+  }).catch(function(e) {
+    console.error('[loadVendorTaskAlerts]', e);
+    // Brett's requests for this vendor must never just vanish: say so on screen (with Retry) and report it.
+    showLoadFailed('vtrBanner', 'requests that need your attention', e && e.message, loadVendorTaskAlerts, 'vendor-task-requests');
+  });
 }
 function renderVendorTaskAlerts(rows) {
   var el = document.getElementById('vtrBanner');
@@ -827,14 +841,14 @@ function awAddItem() {
 }
 function awRemoveItem(i) {
   if (!_aw || _aw.childId || _aw.busy || _aw.items.length < 2) return;
-  _aw.items[i].files.forEach(function(f) { try { URL.revokeObjectURL(f.url); } catch (e) {} });
+  _aw.items[i].files.forEach(function(f) { try { URL.revokeObjectURL(f.url); } catch (e) { /* silent-ok: preview URL already released */ } });
   _aw.items.splice(i, 1);
   awRender();
 }
 function awAddFiles(i, input) {
   if (!_aw || !_aw.items[i] || _aw.busy) { input.value = ''; return; }
   Array.from(input.files || []).forEach(function(file) {
-    var url = ''; try { url = URL.createObjectURL(file); } catch (e) {}
+    var url = ''; try { url = URL.createObjectURL(file); } catch (e) { window.hubReportFailure && window.hubReportFailure('vendor:awAddFiles preview', e); }
     _aw.items[i].files.push({ file: file, url: url, done: false, card: null });
   });
   input.value = '';
@@ -846,7 +860,7 @@ function awRemoveFile(i, j) {
   var f = _aw.items[i].files[j];
   if (!f) return;
   if (f.done) { toast(t('That photo is already uploaded.'), 'error'); return; }
-  try { URL.revokeObjectURL(f.url); } catch (e) {}
+  try { URL.revokeObjectURL(f.url); } catch (e) { /* silent-ok: preview URL already released */ }
   _aw.items[i].files.splice(j, 1);
   awRender();
 }
@@ -988,11 +1002,21 @@ function awSubmit() {
 // every add-on of the signed-in vendor, each row carrying parent_wo_id; rows are distributed to the cards here.
 function loadVendorAddons() {
   return api('GET', '/wo/additional-work').then(function(res) {
-    var all = (res && res.success && res.items) || [];
+    if (!(res && res.success)) throw new Error((res && (res.error || res.message)) || 'unexpected answer from /wo/additional-work');   // an error object is a failure, not "no add-ons"
+    var all = res.items || [];
     window._addons = {};
     all.forEach(function(a) { var p = a.parent_wo_id; if (p) (window._addons[p] = window._addons[p] || []).push(a); });
     (window._wos || []).forEach(function(wo, idx) { if (awEligible(wo)) renderVendorAddons(wo.ID, idx); });
-  }).catch(function() { /* non-critical: leave empty */ });
+  }).catch(function(e) {
+    // Was swallowed: a vendor with submitted extra-work items saw nothing and could re-send them. Say so, offer Retry, report.
+    // ONE request failed, so show ONE error box (in the first eligible card), not a copy under every job.
+    var shown = false;
+    (window._wos || []).forEach(function(wo, idx) {
+      if (!awEligible(wo)) return;
+      if (!shown) { shown = true; showLoadFailed('addon-wrap-' + idx, 'your extra-work requests', e && e.message, loadVendorAddons, wo.ID); }
+      else { var w = document.getElementById('addon-wrap-' + idx); if (w) w.textContent = ''; }
+    });
+  });
 }
 function awStatusInfo(a) {
   var s = String(a.estimate_status || '').toLowerCase();
@@ -1122,9 +1146,14 @@ function submitOneOffJob() {
 // applyTranslations -- has already run. Fix: defer the restore itself until DOMContentLoaded,
 // by which point the whole document (every <script> tag) has executed.
 function restoreVendorSession(){
-  try { var raw = localStorage.getItem(SESS_KEY);
+  var raw = null;
+  try { raw = localStorage.getItem(SESS_KEY); } catch(e){ /* silent-ok: storage blocked so vendor simply signs in */ }
+  try {
     if (raw) { var d = JSON.parse(raw); if (d && d.token) onLoginSuccess(d, false); }
-  } catch(e){}
+  } catch(e){
+    // A corrupt saved session or a crash while opening the dashboard used to leave a blank login with no trace.
+    window.hubReportFailure && window.hubReportFailure('vendor:restoreSession', e);
+  }
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreVendorSession);
@@ -1703,7 +1732,7 @@ function loadVendorNearbyWOs(woId, idx) {
       '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">You have other open WOs nearby in the same area:</div>' +
       cards +
       '</div>';
-  }).catch(function() { /* non-fatal */ });
+  }).catch(function(e) { window.hubReportFailure && window.hubReportFailure('vendor:nearbyWOs', e); /* optional panel; reported, nothing shown */ });
 }
 
 function scrollToCard(woId) {
@@ -1899,7 +1928,7 @@ function loadVendorBillSummary(woId, idx) {
       var truckLine = parseFloat(bill.Truck_Stock||0) > 0
         ? '<div>🚚 Truck stock' + (bill.Truck_Desc ? ' – ' + esc(bill.Truck_Desc) : '') + ': $' + parseFloat(bill.Truck_Stock).toFixed(2) + '</div>' : '';
       var receipts = [];
-      try { receipts = JSON.parse(bill.Receipts_JSON || '[]'); } catch(e) {}
+      try { receipts = JSON.parse(bill.Receipts_JSON || '[]'); } catch(e) { window.hubReportFailure && window.hubReportFailure('vendor:billReceiptsJson', e, { ref: String(bill.ID || bill.Bill_ID || '') }); }
       var receiptLines = receipts.map(function(r) {
         // Receipt files are deliberately never Drive-shared (rule 13) — a raw drive.google.com
         // link always blanks out, even for the vendor who uploaded it. This is what "once I
@@ -2122,7 +2151,7 @@ function submitStatus(woId, idx) {
   // Persist checklist state alongside the status change (best-effort) so reasons are saved.
   if (window._checklists && window._checklists[idx] && window._checklists[idx].length) {
     api('/wo/checklist', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) }).catch(function(){});
+      body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('vendor:saveChecklist', e, { ref: String(woId) }); });
   }
   showActionMsg(idx, 'Saving…', '');
   api('/status', {
@@ -2360,7 +2389,13 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
       // Additional-work photos carry the item they belong to; every other upload is unchanged.
       if (opts && opts.addonItem !== undefined && opts.addonItem !== null) logBody.addon_item = opts.addonItem;
       var logP = api('POST', '/log-attachment', logBody);
-      logP.catch(function(){});
+      // The file is on Drive but if logging it to the job fails it will not show on the work order: tell the vendor and report.
+      logP.then(function(r) {
+        if (r && (r.success === false || r.error)) throw new Error(String(r.error || 'log-attachment refused'));
+      }).catch(function(e) {
+        window.hubReportFailure && window.hubReportFailure('vendor:logAttachment', e, { ref: String(woId) });
+        card.innerHTML += ' <span style="color:var(--danger)">⚠ ' + esc(t('Uploaded, but not attached to the job. Please tell Ridge Co.')) + '</span>';
+      });
 
       var isVideo = file.type.startsWith('video/');
       var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
@@ -2440,7 +2475,7 @@ function driveIdFromDriveUrl(u) {
 function loadPortalAttachments(woId, opts) {
   opts = opts || { before: true, after: true, report: true, receipt: false };
   api('GET', '/attachments?wo_id=' + woId).then(function(items) {
-    if (!Array.isArray(items)) return;
+    if (!Array.isArray(items)) throw new Error((items && (items.error || items.message)) || 'unexpected answer from /attachments');   // shown by the catch below (was a silent return)
     var byType = {};
     items.filter(function(f){ return f.Active !== 'FALSE'; }).forEach(function(f) {
       var t = (f.File_Type || 'other').toLowerCase();
@@ -2521,7 +2556,12 @@ function loadPortalAttachments(woId, opts) {
       });
       runningIdx += typeCount;
     });
-  }).catch(function(){});
+  }).catch(function(e) {
+    // Photos/files failed to load: previously the job card just looked like it had none (inviting a re-upload).
+    // showLoadFailed shows the box AND reports it once (POST /failure/report); do not report a second time here.
+    var elB = document.getElementById('uploads-before-' + woId);
+    showLoadFailed(elB ? 'uploads-before-' + woId : 'wo-uploads-' + woId, 'your photos and files', e && e.message, function() { loadPortalAttachments(woId, opts); }, woId);
+  });
 }
 
 // -- Photo Lightbox -- in-app swipeable viewer --------------------------------
@@ -2543,7 +2583,7 @@ function rcCloseLightbox() {
   var lb = document.getElementById('rc-lightbox');
   if (lb) lb.style.display = 'none';
   var v = document.getElementById('rc-lb-video');
-  if (v) { try { v.pause(); } catch(e){} v.removeAttribute('src'); v.load(); }
+  if (v) { try { v.pause(); } catch(e){ /* silent-ok: video element already detached */ } v.removeAttribute('src'); v.load(); }
 }
 function rcLightboxNav(delta) {
   if (!_rcLbItems.length) return;
@@ -2747,7 +2787,7 @@ function submitMyInfo() {
     if (res.error) { document.getElementById("myInfoMsg").innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + res.error + '</div>'; return; }
     if (res.vendor) {
       session.vendor_phone = res.vendor.phone; session.vendor_email = res.vendor.email; session.vendor_company = res.vendor.company;
-      try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
+      try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){ /* silent-ok: storage blocked, session stays in memory */ }
     }
     var msg = (res.changed && res.changed.length) ? "✓ Saved" : "No changes to save";
     document.getElementById("myInfoMsg").innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">' + msg + '</div>';
@@ -2879,7 +2919,7 @@ function submitCompleteInfo() {
     release();
     if (res.error) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + esc(res.error) + '</div>'; return; }
     session.vendor_phone = phone;
-    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch (e) {}
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch (e) { /* silent-ok: storage blocked, session stays in memory */ }
     var woId = _ciWOId, vendorName = _ciVendorName;
     closeCompleteInfo();
     // Same tap: go straight into the real bill modal now that the gate is cleared.
@@ -4200,6 +4240,13 @@ var ES = {
   'Withdrawing…':'Retirando…',
   'Withdrawn':'Retirado',
   'Could not withdraw':'No se pudo retirar',
+  'Could not load':'No se pudo cargar',
+  'Retry':'Reintentar',
+  'The system is busy — tap Retry in a moment.':'El sistema está ocupado — toque Reintentar en un momento.',
+  'requests that need your attention':'las solicitudes que necesitan su atención',
+  'your extra-work requests':'sus solicitudes de trabajo adicional',
+  'your photos and files':'sus fotos y archivos',
+  'Uploaded, but not attached to the job. Please tell Ridge Co.':'Se subió, pero no quedó unido al trabajo. Avise a Ridge Co.',
 };
 
 function t(key) {
@@ -4298,12 +4345,13 @@ function isVendorBusy(){
   }
   function check(){
     fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      bgOk('vendor:versionCheck');
       if (!d || !d.version) return;
       if (booted === null){
         booted = d.version;
         var last = null;
-        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
-        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){ /* silent-ok: storage blocked, no previous version to compare */ }
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){ /* silent-ok: storage blocked, version not remembered */ }
         // This page already loaded and ran successfully just now (we're executing at the
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
@@ -4312,7 +4360,7 @@ function isVendorBusy(){
         return;
       }
       if (d.version !== booted){ autoReload(isVendorBusy); }
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('vendor:versionCheck', e); });
   }
   check();
   setInterval(check, 60000);
@@ -4339,12 +4387,13 @@ function isVendorBusy(){
     var url = location.pathname + (location.pathname.indexOf('?') >= 0 ? '&' : '?') + '_fresh=' + Date.now().toString(36);
     fetch(url, {cache: 'no-store', method: 'HEAD'}).then(function(r){
       var tag = r.headers.get('etag') || r.headers.get('last-modified');
+      bgOk('vendor:pageFreshness');
       if (!tag) return; // host doesn't expose either -- nothing to compare against, fail open
       if (pageEtagKnown === null){
         pageEtagKnown = tag;
         var last = null;
-        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){}
-        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){ /* silent-ok: storage blocked, no previous tag to compare */ }
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){ /* silent-ok: storage blocked, tag not remembered */ }
         // Same pattern as the version check's own first-run branch: if the last ETag this
         // browser saw differs from what's live right now, THIS load itself was already stale.
         if (last && last !== tag) { isVendorBusy() ? banner() : reloadFresh(); }
@@ -4352,10 +4401,10 @@ function isVendorBusy(){
       }
       if (tag !== pageEtagKnown){
         pageEtagKnown = tag;
-        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){ /* silent-ok: storage blocked, tag not remembered */ }
         isVendorBusy() ? banner() : reloadFresh();
       }
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('vendor:pageFreshness', e); });
   }
   checkPageFreshness();
   setInterval(checkPageFreshness, 60000);
@@ -4433,11 +4482,12 @@ function isVendorBusy(){
   function check() {
     if (!session) return;
     loadWOsForCurrentTab().then(function(wos) {
+      bgOk('vendor:bgRefresh');
       if (!session) return; // logged out while the request was in flight
       if (woSignature(wos) === woSignature(window._allWos || window._wos)) return; // nothing changed -- leave the DOM alone
       if (isVendorBusy()) { pendingWos = wos; } // wait -- see the backgrounding handler below
       else { pendingWos = null; applyNow(wos); }
-    }).catch(function(){}); // silent -- this is a background check; a manual loadWorkOrders() still surfaces real errors
+    }).catch(function(e){ bgFailure('vendor:bgRefresh', e); }); // background check: a manual loadWorkOrders() surfaces the error to the vendor; repeated failures are reported
   }
 
   // A manual reload (tab switch, fresh login) always supersedes a background update that
@@ -4516,7 +4566,7 @@ function isVendorBusy(){
       // permission error) actually ends it now.
       rec.onend = function(){
         base = ta.value;
-        if (!userStopped) { try { rec.start(); return; } catch (e) {} }
+        if (!userStopped) { try { rec.start(); return; } catch (e) { /* silent-ok: recognizer cannot restart so dictation stops via stopUI below */ } }
         stopUI();
       };
       rec.onerror = function(e){

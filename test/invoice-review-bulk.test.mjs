@@ -105,6 +105,7 @@ function makeFetch(db, callLog) {
 
 function build(db, callLog) {
   const src = [
+    'const softNote = () => false; async function softFail() { return { ok: false }; }', // Phase C helpers (reporting is covered by cw3-silent-failures.test.mjs)
     'const CORS = {};', // json() spreads this into response headers; irrelevant to these assertions
     cacheSrc, srSrc, ensureSrc, colSrc, idcSrc, nextIdSrc, jsonSrc, centsSrc, bulkSrc,
     'return { approveInvoiceReviewBulk };',

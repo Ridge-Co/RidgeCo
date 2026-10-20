@@ -31,6 +31,7 @@ function world(cfg = {}) {
   const deps = {
     json: (o, status) => ({ status: status || 200, body: o }),
     fetchConfig: async () => cfg,
+    fetchConfigStrict: async () => cfg,
     fetchTab: async () => tab.map(r => ({ ...r })),
     updateRow: async (env, t, id, f) => { writes.push({ id, f }); Object.assign(tab.find(r => r.ID === id), f); },
     RECEIPT_RECON_MIN_DATE_DEFAULT: '2026-07-01',

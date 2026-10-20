@@ -9,6 +9,7 @@ import assert from 'node:assert';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workerSrc = readFileSync(join(here, '..', 'worker.js'), 'utf8');
+const SOFT = "const softNote = () => true; const softFail = async () => ({ ok: false }); const safeJson = async (r, fb) => { try { return await r.json(); } catch (e) { return fb; } }; const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === 'string' && !raw.trim())) return fb; if (typeof raw !== 'string') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };\n";   // Phase C helpers stubbed (their behaviour is covered by soft-fail-helpers.test.mjs)
 
 let pass = 0, fail = 0;
 function ok(cond, msg) { if (cond) { pass++; } else { fail++; console.log('  ✗ FAIL: ' + msg); } assert.ok(cond, msg); }
@@ -32,7 +33,7 @@ function extractConst(name) {
 
 let TABS = {};
 const fetchTab = async (env, tab) => { if (TABS[tab] === undefined) throw new Error(`no fake table for ${tab}`); return TABS[tab]; };
-const scopeProposalPhotos = new Function('fetchTab', `${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(fetchTab);
+const scopeProposalPhotos = new Function('fetchTab', `${SOFT}${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(fetchTab);
 
 console.log('scopeProposalPhotos — offline tests\n');
 
@@ -81,7 +82,7 @@ ok(Array.isArray(photos3) && photos3.length === 0, 'no matching attachments → 
 
 // ---- 5. fetchTab throwing (e.g. Sheets hiccup) fails open to an empty array, never breaks the proposal ----
 const badFetchTab = async () => { throw new Error('Sheets API down'); };
-const scopeProposalPhotosFailOpen = new Function('fetchTab', `${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(badFetchTab);
+const scopeProposalPhotosFailOpen = new Function('fetchTab', `${SOFT}${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(badFetchTab);
 const photos4 = await scopeProposalPhotosFailOpen({}, s1);
 ok(Array.isArray(photos4) && photos4.length === 0, 'a Sheets read failure fails open (empty photos) rather than breaking the whole proposal load');
 

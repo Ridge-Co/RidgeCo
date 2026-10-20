@@ -1,0 +1,39 @@
+name: Unit tests
+
+# Runs every test/*.test.mjs and the Apps Script scheduler test on each pull request.
+# Added Oct 20 2026: ten test files had been RED on main for days (a merged feature changed worker.js, the test harnesses
+# were never re-run) and nobody noticed. A red test file now shows up as a red check on the PR.
+# No timer here (permanent rule: no cron anywhere); pull requests only.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run all unit tests
+        run: |
+          failed=""
+          for f in test/*.test.mjs apps-script/hub-scheduler/test/hub-scheduler.test.mjs; do
+            if ! timeout 300 node "$f" > "/tmp/out.txt" 2>&1; then
+              failed="$failed $f"
+              echo "::group::FAILED $f"; grep -iE "fail|error" /tmp/out.txt | head -20 || true; echo "::endgroup::"
+            fi
+          done
+          if [ -n "$failed" ]; then echo "::error::Red test files:$failed"; exit 1; fi
+          echo "All test files passed."

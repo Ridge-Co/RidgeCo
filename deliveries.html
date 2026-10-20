@@ -204,7 +204,7 @@ var DELS = [], TODAY = '';
 var PROPS = [], UNITS = [], TENANTS = [];
 var PREFILL = null; // from ?wo_id=&property_id=... when opened from a WO
 
-function qs(k){ try{ return new URLSearchParams(window.location.search).get(k)||''; }catch(e){ return ''; } }
+function qs(k){ try{ return new URLSearchParams(window.location.search).get(k)||''; }catch(e){ /* silent-ok: unparseable query string means no prefill */ return ''; } }
 function api(method, path, body){
   var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
   if (body) opts.body = JSON.stringify(body);
@@ -232,7 +232,7 @@ document.getElementById('login-input').addEventListener('keydown',function(e){ i
 function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').classList.remove('hide');
-  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){ /* silent-ok: cosmetic footer version label, Hub fetch failures are already reported by failure-reporter */ });
   loadEntities().then(function(){
     if (qs('wo_id') || qs('property_id')) { PREFILL = { wo_id:qs('wo_id'), property_id:qs('property_id'), unit_id:qs('unit_id'), tenant_id:qs('tenant_id') }; openAdd(); }
   });

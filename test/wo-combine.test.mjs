@@ -6,6 +6,7 @@
 // the endpoint actually runs, not a re-implementation.
 import './_midday-clock.mjs';
 import fs from 'fs';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 
 // Robust against a destructured first parameter (e.g. `function f({ a, b }) {`) — walks the
@@ -92,6 +93,8 @@ const isQuietHoursSrc       = grab(wsrc, 'function isQuietHoursNow(');
 const nextQuietHoursSrc     = grab(wsrc, 'function nextQuietHoursEnd(');
 const nyOffsetMinutesSrc    = grab(wsrc, 'function nyOffsetMinutes(');
 const fetchConfigSrc        = grab(wsrc, 'async function fetchConfig(');
+const fetchConfigStrictSrc  = grab(wsrc, 'async function fetchConfigStrict(');
+const smsFailSeveritySrc    = grab(wsrc, 'function smsFailSeverity(');
 const smsGatedSendSrc       = grab(wsrc, 'async function smsGatedSend(');
 const updateMsgQueueRowSrc  = grab(wsrc, 'async function updateMessageQueueRow(');
 const sendSMSRawSrc         = grab(wsrc, 'async function sendSMSRaw(');
@@ -227,7 +230,7 @@ function makeFetch(db, opts = {}) {
     // unexpectedly it would mean a real-send path leaked past staging.
     if (/api\.twilio\.com/.test(url)) {
       if (!opts.allowTwilio) throw new Error('unexpected real Twilio call in a test — staging guard failed');
-      return { json: async () => ({ sid: 'SM_TEST_FAKE_SID' }) };
+      { const b = { sid: 'SM_TEST_FAKE_SID' }; return { ok: true, status: 201, text: async () => JSON.stringify(b), json: async () => b }; }
     }
     const full = url.replace(/^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+/, '');
     const path = full.split('?')[0];
@@ -269,7 +272,7 @@ function makeFetch(db, opts = {}) {
 
 function build(db, fetchOpts) {
   const src = [
-    'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
+    'const CORS = {}; const softNote = () => true; const softFail = async () => ({ ok: false }); const parseJsonCell = (raw, fb) => { if (raw == null || (typeof raw === \'string\' && !raw.trim())) return fb; if (typeof raw !== \'string\') return raw; try { return JSON.parse(raw); } catch (e) { return fb; } };', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'),
     cacheSrc, isMissingTabSrc, srSrc, ensureInnerSrc, ensureSrc, ensureTabSrc,
     idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc, logMsgAuditSrc,
@@ -279,7 +282,7 @@ function build(db, fetchOpts) {
     isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
-    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
+    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, fetchConfigStrictSrc, smsFailSeveritySrc, 'async function reportFailure() { return { ok: true }; }', smsGatedSendSrc,
     grab(wsrc, 'function woJobLabel('), grab(wsrc, 'function propUnitText('), grab(wsrc, 'function formatUnitLabel('),
     getWorkOrdersListSrc,
     'return { woVoid, woUnvoid, woCombine, resolveCombineFields, getWorkOrdersList, smsGatedSend };',

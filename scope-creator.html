@@ -483,12 +483,12 @@ function showList(){ show('list'); loadScopes(); }
 
 async function boot(){
   setStatus('conn-status','Loading…');
-  try{
-    var res = await Promise.all([getRetry('/properties'),getRetry('/units'),getRetry('/owners'),getRetry('/vendors'),get('/config').catch(function(){return {};})]);
+  var cfgFailed=false; try{
+    var res = await Promise.all([getRetry('/properties'),getRetry('/units'),getRetry('/owners'),getRetry('/vendors'),get('/config').catch(function(e){ cfgFailed=true; window.hubReportFailure && window.hubReportFailure('scope-creator:config-load', e); return {}; })]);
     [0,1,2,3].forEach(function(i){ if(!Array.isArray(res[i])) throw new Error('Could not load data (unexpected response) — reload in a minute.'); });
     state.properties=res[0]||[]; state.units=res[1]||[]; state.owners=res[2]||[]; state.vendors=res[3]||[];
     var cfgVal=parseFloat((res[4]||{}).MAX_UPFRONT_DEPOSIT_PCT); if(isFinite(cfgVal)&&cfgVal>0&&cfgVal<=100) scheduleState.maxUpfrontPct=cfgVal;
-    setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok');
+    setStatus('conn-status','✅ connected — '+state.properties.length+' properties','ok'); if(cfgFailed) setStatus('conn-status','✅ connected — '+state.properties.length+' properties. ⚠ Settings did not load, so the default deposit limit is being used. Reload to retry.','warn');
     populateOwners(); populateVendors();
     await loadScopes();
     await handleDeepLink();
@@ -511,7 +511,7 @@ async function handleDeepLink(){
       if(match){ await openScope(match.id); }
       else{ setStatus('conn-status','No scope is linked to WO '+esc(woId)+' yet — push its approved estimate to a scope first (Work Order → 📋 Push estimate to Scope Proposal).','warn'); }
     }
-  }catch(e){ /* deep link is a convenience — never blocks the normal picker on failure */ }
+  }catch(e){ /* deep link is a convenience — never blocks the normal picker on failure */ window.hubReportFailure && window.hubReportFailure('scope-creator:deep-link', e); setStatus('conn-status','⚠ Could not open the linked scope. Pick it from the list below.','warn'); }
 }
 
 /* ---------- scope list ---------- */
@@ -1040,7 +1040,7 @@ async function loadScopePhotos(){
   try{
     var atts=await get('/attachments?wo_id='+encodeURIComponent(scopeKey()));
     (atts||[]).filter(function(a){ return a.Active!=='FALSE'; }).forEach(function(a){ addPhotoCard(a.File_Name||'photo', a.Drive_URL||'#'); });
-  }catch(e){}
+  }catch(e){ window.hubReportFailure && window.hubReportFailure('scope-creator:load-photos', e); box.innerHTML='<span style="font-size:11px;color:var(--danger)">⚠ Could not load the existing photos. Reload to retry.</span>'; }
 }
 function addPhotoCard(name,url){ var box=document.getElementById('photo-cards'); var c=document.createElement('div'); c.style.cssText='display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:3px 7px;font-size:11px;'; c.innerHTML='📷 <a class="link" href="'+esc(url)+'" target="_blank">'+esc(String(name).slice(0,18))+'</a>'; box.appendChild(c); }
 var uploadFolder=null;
@@ -1074,7 +1074,7 @@ async function uploadScopePhotos(input){
       var putR=await fetch(res.upload_url,{ method:'PUT', headers:{'Content-Type':file.type||'application/octet-stream'}, body:file });
       var fd=await putR.json();
       if(!fd || !fd.id) throw new Error('upload failed');
-      post('/log-attachment',{ wo_id:key, file_id:fd.id, file_url:fd.webViewLink||'', file_name:file.name, file_type:'before', mime_type:file.type||'', wo_folder_id:res.wo_folder_id, wo_folder_url:res.wo_folder_url }).catch(function(){});
+      post('/log-attachment',{ wo_id:key, file_id:fd.id, file_url:fd.webViewLink||'', file_name:file.name, file_type:'before', mime_type:file.type||'', wo_folder_id:res.wo_folder_id, wo_folder_url:res.wo_folder_url }).then(function(lr){ if (lr && (lr.error || lr.success === false)) throw new Error(String(lr.error || 'log-attachment refused')); }).catch(function(e2){ window.hubReportFailure && window.hubReportFailure('scope-creator:log-attachment', e2); card.insertAdjacentHTML('beforeend',' <span style="color:var(--danger)" title="Uploaded, but not linked to this scope">⚠ not linked to the scope, re-add</span>'); });
       card.style.borderColor='var(--accent2)'; card.style.color='var(--text)';
       card.innerHTML='📷 <a class="link" href="'+esc(fd.webViewLink||'#')+'" target="_blank">'+esc(file.name.substring(0,16))+'</a>';
       done++;
@@ -1130,7 +1130,7 @@ async function saveEstimate(){
 /* Ridge Co materials pricing (Sep 22 2026) — per proposal: same markup / at cost / flat %. */
 function currentMatMode(){
   var s=state.current||{}; var mp=null;
-  try{ mp=JSON.parse(s.Materials_Pricing_JSON||'null'); }catch(e){ mp=null; }
+  try{ mp=JSON.parse(s.Materials_Pricing_JSON||'null'); }catch(e){ /* silent-ok: unreadable saved pricing falls back to the default markup mode */ mp=null; }
   if(!mp || ['markup','at_cost','flat_pct'].indexOf(mp.mode)<0) mp={mode:'markup'};
   return mp;
 }

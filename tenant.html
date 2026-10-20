@@ -377,15 +377,18 @@ function onLoginSuccess(data, persist){
   show('screenLogin', false);
   show('screenDash', true);
   loadWOs();
-  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
+  if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ /* silent-ok: storage blocked, tenant just signs in again next visit */ } }
 }
 (function restoreTenantSession(){
-  try { var raw=localStorage.getItem(SESS_KEY); if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){}
+  var raw=null;
+  try { raw=localStorage.getItem(SESS_KEY); } catch(e){ /* silent-ok: storage blocked so tenant simply signs in */ }
+  try { if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } }
+  catch(e){ window.hubReportFailure && window.hubReportFailure('tenant:restoreSession', e); }
 })();
 
 function doLogout() {
   session = null; allWOs = [];
-  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){ /* silent-ok: storage blocked, nothing stored to remove */ }
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
@@ -435,14 +438,27 @@ function loadWOs() {
     });
 }
 
+// Background polls (version / session refresh) run every minute and a flaky connection makes single failures normal.
+// Report only when one keeps failing (5 in a row), once, so a dead poll is never invisible.
+var _bgFails = {};
+function bgOk(where) { _bgFails[where] = 0; }
+function bgFailure(where, e) {
+  // offline / backgrounded tab / aborted or timed-out requests are ordinary network conditions, not Hub failures: do not count them
+  if (navigator.onLine === false || document.hidden || (e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) return;
+  _bgFails[where] = (_bgFails[where] || 0) + 1;
+  if (_bgFails[where] === 5) { window.hubReportFailure && window.hubReportFailure(where + ' failing repeatedly', e); }
+}
+
 function showWOLoadError(err) {
-  try { console.error('[tenant loadWOs]', err); } catch (e) {}
+  console.error('[tenant loadWOs]', err);
   var so = document.getElementById('statOpen'), sd = document.getElementById('statDone');
   if (so) so.textContent = '—';
   if (sd) sd.textContent = '—';
   var status = err && err.http_status;
   var expired = status === 401 || status === 403 || /unauthor|forbidden|invalid token|expired/i.test(String((err && err.message) || ''));
-  var timedOut = err && err.name === 'AbortError';
+  var timedOut = err && (err.name === 'AbortError' || err.name === 'TimeoutError');
+  // An expired session is normal; anything else means a tenant could not see their requests: tell Brett, not just the tenant.
+  if (!expired && !timedOut && navigator.onLine !== false) window.hubReportFailure && window.hubReportFailure('tenant:loadWOs', err);
   var title = expired ? 'Your session has expired.' : "We couldn't load your work orders.";
   var msg = expired ? 'Please sign in again to see your requests.'
     : timedOut ? 'The connection timed out. Check your signal and try again. Your requests are safe — nothing was lost.'
@@ -465,7 +481,7 @@ function clearWOFilters() {
 // tenant lands on that job with the note box already open, instead of having to find it and dig
 // for how to ask a question. Mirrors vendor.html's own ?wo= pattern. Once-per-load, same as
 // vendor.html, so the tenant can freely browse/search afterward without it snapping back.
-var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ return ''; } })();
+var _deepLinkWoId = (function(){ try { return new URLSearchParams(location.search).get('wo') || ''; } catch(e){ /* silent-ok: unparseable query string just means no deep link */ return ''; } })();
 var _deepLinkApplied = false;
 function applyDeepLink() {
   if (!_deepLinkWoId || _deepLinkApplied) return;
@@ -696,8 +712,8 @@ function uploadTenantPhoto(file, woId, fileType) {
   fd.append('wo_id', woId);
   if (fileType) fd.append('file_type', fileType);
   return fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
-    .then(function(r){ return r.json().then(function(j){ return !!(r.ok && j && j.success); }, function(){ return false; }); })
-    .catch(function(){ return false; });
+    .then(function(r){ return r.json().then(function(j){ return !!(r.ok && j && j.success); }, function(){ /* silent-ok: false makes the caller show the failed-upload message */ return false; }); })
+    .catch(function(e){ window.hubReportFailure && window.hubReportFailure('tenant:uploadPhoto', e, { ref: String(woId) }); return false; });   // caller shows the tenant the failed-upload message
 }
 
 function submitNote() {
@@ -894,7 +910,7 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo) {
         wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
         file_name: file.name, file_type: fileType || 'photo',
         mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
-      }).then(function(lr){ return !!(lr && !lr.error); }, function(){ return false; }).then(function(logged){
+      }).then(function(lr){ return !!(lr && !lr.error); }, function(){ /* silent-ok: false shows the 'not saved to the job' warning on the card */ return false; }).then(function(logged){
       var isVideo = file.type.startsWith('video/');
       var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
                  fileType === 'receipt' ? '🧾' : fileType === 'report' ? '\u26a0\ufe0f' :
@@ -1081,12 +1097,13 @@ function buildPhotoSection(woId, propAddr, opts) {
   }
   function check(){
     fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      bgOk('tenant:versionCheck');
       if (!d || !d.version) return;
       if (booted === null){
         booted = d.version;
         var last = null;
-        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
-        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){ /* silent-ok: storage blocked, no previous version to compare */ }
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){ /* silent-ok: storage blocked, version not remembered */ }
         // This page already loaded and ran successfully just now (we're executing at the
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
@@ -1095,7 +1112,7 @@ function buildPhotoSection(woId, propAddr, opts) {
         return;
       }
       if (d.version !== booted){ autoReload(dirty); }
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('tenant:versionCheck', e); });
   }
   check();
   setInterval(check, 60000);
@@ -1142,7 +1159,7 @@ function buildPhotoSection(woId, propAddr, opts) {
     session.unit_label       = d.unit_label;
     session.owner_id         = d.owner_id;
     session.can_submit_wo    = d.can_submit_wo;
-    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){ /* silent-ok: storage blocked, session stays in memory */ }
     if (buttonChanged) {
       var nr = document.getElementById('newRequestBtn');
       if (nr) nr.style.display = d.can_submit_wo ? '' : 'none';
@@ -1158,8 +1175,9 @@ function buildPhotoSection(woId, propAddr, opts) {
     lastCheck = Date.now();
     api('/tenant-session-refresh').then(function(d){
       if (d && d.session_invalid) { doLogout(); showLoginMsg('Your session has ended. Please sign in again.', 'error'); return; }
+      bgOk('tenant:sessionRefresh');
       if (d && !d.error) applyRefresh(d);
-    }).catch(function(){});
+    }).catch(function(e){ bgFailure('tenant:sessionRefresh', e); });
   }
 
   // Catches Brett's exact reported case: a hard refresh re-runs restoreTenantSession() from
@@ -1224,7 +1242,7 @@ function buildPhotoSection(woId, propAddr, opts) {
       // permission error) actually ends it now.
       rec.onend = function(){
         base = ta.value;
-        if (!userStopped) { try { rec.start(); return; } catch (e) {} }
+        if (!userStopped) { try { rec.start(); return; } catch (e) { /* silent-ok: recognizer cannot restart so dictation stops via stopUI below */ } }
         stopUI();
       };
       rec.onerror = function(e){

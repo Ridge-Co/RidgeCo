@@ -58,18 +58,21 @@ const schedEffective = () => ({ jobs: [] });
 const schedStatus = () => ({ overdue: OVERDUE.map(o => o.name), jobs: Object.fromEntries(OVERDUE.map(o => [o.name, { overdue_reason: o.reason }])), tick_age_min: 3 });
 const SCHED_STATE_KEY = 'Scheduler_State';
 const OPS_QUEUE_TAB = 'Ops_Build_Queue', OPS_QUEUE_COLS = ['ID', 'Timestamp', 'Title', 'Rank', 'Problem', 'Impact', 'Effort', 'Tag', 'First_Step', 'Review_TS', 'Status', 'Approved_By', 'Risk_Class', 'Lens', 'Requires_Spend', 'Spend_Note', 'Workaround'];
-let TWILIO, QUEUE_FAIL;
+let TWILIO, QUEUE_FAIL, QB_ERR, GMAIL_ERR, STAGING_FLAG;
+const isStaging = () => !!STAGING_FLAG;
+const qbAccessToken = async () => { if (QB_ERR) throw QB_ERR; return 'tok'; };
+const gmailAccessToken = async () => { if (GMAIL_ERR) throw GMAIL_ERR; return 'g'; };
 const fetch = async (url) => { if (TWILIO instanceof Error) throw TWILIO; return { ok: TWILIO.status === undefined ? true : TWILIO.status < 400, status: TWILIO.status || 200, text: async () => JSON.stringify(TWILIO.body) }; };
 const ensureColumns = async () => {};
 const addRow = async (env, tab, obj) => { if (QUEUE_FAIL) return { status: 500, clone() { return this; }, async json() { return {}; } }; const t = SHEET[tab] || (SHEET[tab] = [OPS_QUEUE_COLS.slice()]); const id = String(t.length); t.push(OPS_QUEUE_COLS.map(c => c === 'ID' ? id : (obj[c] === undefined ? '' : String(obj[c])))); return { status: 200, clone() { return this; }, async json() { return { id }; } }; };
 const constLine = (n) => { const m = new RegExp('^const ' + n + ' = .*;$', 'm').exec(src); if (!m) throw new Error('missing const ' + n); return m[0]; };
 const pieces = [constLine('AI_CREDIT_KEYS'), constLine('AI_CREDIT_FIX'), grab('schedTokenOk'), grab('schedFindRow'), grab('schedCell'), grab('buildScoutQueueRow'), grab('col'), grab('configFromValues'), grab('appendedRowNumber'), grab('schedEtParts')].join('\n');
-const L = new Function('SCHED_TOKEN_MIN_LEN', 'SCHED_TOKEN_KEY', 'MSG_QUEUE_TAB', 'fetch', 'ensureColumns', 'addRow', 'OPS_QUEUE_TAB', 'OPS_QUEUE_COLS', 'sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY',
-  pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, failInvariantItems, failDuplicateIds, failMessageQueueStats, failInvariantConditions, failQueuePlan, failQueueItem, failStatusSummary, failStatusForScheduler, __reset: () => { _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
-  SCHED_TOKEN_MIN_LEN, SCHED_TOKEN_KEY, 'Message_Queue', fetch, ensureColumns, addRow, OPS_QUEUE_TAB, OPS_QUEUE_COLS, sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedEffective, schedStatus, SCHED_STATE_KEY);
+const L = new Function('SCHED_TOKEN_MIN_LEN', 'SCHED_TOKEN_KEY', 'MSG_QUEUE_TAB', 'fetch', 'ensureColumns', 'addRow', 'OPS_QUEUE_TAB', 'OPS_QUEUE_COLS', 'sheetsRequest', 'ensureTab', 'isMissingTabError', 'json', 'sendSMS', 'setConfigKey', 'schedReadConfigRows', 'schedParseState', 'schedEffective', 'schedStatus', 'SCHED_STATE_KEY', 'isStaging', 'qbAccessToken', 'gmailAccessToken',
+  'let _gmailTokenCache = { token: null, at: 0 };\n' + pieces + '\n' + block + '\nreturn { failSevRank, failNormalizeMessage, failFingerprint, failSeverity, failBuildEvent, failRollupPlan, failFormatP0Sms, failDigestPlan, failLegacyAlerted, reportFailure, failRollupRun, failOpenList, failUpdate, failReportEndpoint, failConditions, failInvariantItems, failDuplicateIds, failMessageQueueStats, failInvariantConditions, failQueuePlan, failQueueItem, failStatusSummary, failStatusForScheduler, _failPendingLen: () => _failPending.length, __reset: () => { _failPending.length = 0; _failTabsReady = false; for (const w of [_failWin, _failAnonWin]) { w.start = 0; w.n = 0; w.dropped = 0; } }, FAIL_EVENT_COLS, FAIL_LEDGER_COLS, FAIL_P0_REPEAT_MS, FAIL_P0_REMIND_MS };')(
+  SCHED_TOKEN_MIN_LEN, SCHED_TOKEN_KEY, 'Message_Queue', fetch, ensureColumns, addRow, OPS_QUEUE_TAB, OPS_QUEUE_COLS, sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedEffective, schedStatus, SCHED_STATE_KEY, isStaging, qbAccessToken, gmailAccessToken);
 const reset = (cfg) => {
   SHEET = { Config: [['failure_alert_enabled', 'TRUE'], ['admin_phone', '+15550001111'], ['dead_man_switch_enabled', 'TRUE']].concat(cfg || []) };
-  L.__reset(); TWILIO = new Error('no twilio'); QUEUE_FAIL = false; SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
+  L.__reset(); TWILIO = new Error('no twilio'); QUEUE_FAIL = false; QB_ERR = null; GMAIL_ERR = null; STAGING_FLAG = false; SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
 };
 const origErr = console.error; console.error = (...a) => { ERR.push(a.join(' ')); };
 const T0 = Date.UTC(2026, 9, 16, 12, 5);      // 8:05 AM ET
@@ -334,6 +337,45 @@ const pub = src.slice(src.indexOf('const PUBLIC_PATHS'), src.indexOf('if (!PUBLI
 ok(/'\/failure\/report'/.test(pub) && !/'\/failure\/update'/.test(pub) && !/'\/failures\/open'/.test(pub), 'only /failure/report is public; the list and update are admin-only');
 const scopes = src.slice(src.indexOf('const ROLE_SCOPES'), src.indexOf('const ROLE_SCOPES') + 200000);
 ok(!/\/failure\/update|\/failures\/open/.test(scopes.slice(0, scopes.indexOf('\n};'))), 'no portal role can list or change failures');
+
+console.log('\nC1: events the ledger could not save are kept; QuickBooks and Gmail sign-in checks');
+reset(); FAIL_APPEND = true;
+const lateA = await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_one', message: 'boom one', severity: 'P1' });
+ok(lateA.ok === false && L._failPendingLen() === 1, 'an event the ledger cannot write is kept in memory, not lost');
+const lateB = await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_two', message: 'boom two', severity: 'P1' });
+ok(lateB.ok === false && L._failPendingLen() === 2, 'a second one is kept too');
+FAIL_APPEND = false;
+const lateC = await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_three', message: 'boom three', severity: 'P1' });
+const evTab = SHEET.Failure_Events || [];
+ok(lateC.ok && lateC.flushed_late === 2 && L._failPendingLen() === 0, 'the next successful report writes the kept events too', lateC);
+ok(['late_one', 'late_two', 'late_three'].every(w => evTab.some(r => r.join('|').includes(w))) && evTab.some(r => r.join('|').includes('saved late')), 'all three rows are in the ledger and the late ones say so');
+reset(); FAIL_APPEND = true;
+await L.reportFailure(env, { system: 'hub', source: 'test', where: 'late_four', message: 'boom four', severity: 'P1' });
+FAIL_APPEND = false;
+await L.failRollupRun(env, { nowMs: T0 });
+ok(L._failPendingLen() === 0 && (SHEET.Failure_Events || []).some(r => r.join('|').includes('late_four')), 'the 15-minute rollup also writes kept events');
+reset(); FAIL_APPEND = true;
+for (let i = 0; i < 70; i++) await L.reportFailure(env, { system: 'hub', source: 'test', where: 'flood' + (i % 3), message: 'x' + i, severity: 'P2' });
+ok(L._failPendingLen() <= 50, 'the in-memory buffer is bounded (50)');
+FAIL_APPEND = false;
+
+ok(L.failInvariantItems({ qb: { ok: false, hard: true, error: 'QB refresh token expired or revoked' } }).some(i => i.key === 'inv:qb_auth' && i.severity === 'P0' && /reconnected/.test(i.message)), 'a broken QuickBooks sign-in (token refused) is an urgent (P0) condition');
+ok(L.failInvariantItems({ qb: { ok: false, error: 'Config tab read 429' } }).some(i => i.key === 'inv:qb_auth' && i.severity === 'P1'), 'a transient QuickBooks check failure (Sheets blip / Intuit hiccup) is only P1, not an urgent P0 held open for 20 h');
+ok(L.failInvariantItems({ gmail: { ok: false, error: 'Gmail token refresh failed' } }).some(i => i.key === 'inv:gmail_auth' && i.severity === 'P1'), 'a broken Gmail sign-in is a P1 condition');
+ok(L.failInvariantItems({ qb: { ok: true }, gmail: { ok: true } }).length === 0, 'healthy sign-ins add nothing');
+const envQ = { QB_CLIENT_ID: 'x' };
+reset(); QB_ERR = new Error('QB refresh token expired or revoked - reconnect QuickBooks (re-auth needed).');
+let items = await L.failInvariantConditions(envQ, {}, T0);
+ok(items.some(i => i.key === 'inv:qb_auth' && i.severity === 'P0'), 'daily check: a QuickBooks refresh that fails becomes a P0 item');
+reset(); GMAIL_ERR = new Error('Gmail needs to be reconnected');
+items = await L.failInvariantConditions(envQ, {}, T0);
+ok(items.some(i => i.key === 'inv:gmail_auth') && !items.some(i => i.key === 'inv:qb_auth'), 'daily check: Gmail failure reported, healthy QuickBooks not');
+reset(); STAGING_FLAG = true; QB_ERR = new Error('sandbox'); GMAIL_ERR = new Error('sandbox');
+items = await L.failInvariantConditions(envQ, {}, T0);
+ok(!items.some(i => /qb_auth|gmail_auth/.test(i.key)), 'staging never runs the sign-in checks');
+reset();
+items = await L.failInvariantConditions({}, {}, T0);
+ok(!items.some(i => i.key === 'inv:qb_auth'), 'no QB_CLIENT_ID configured: the QuickBooks check is skipped');
 
 console.error = origErr;
 console.log(`\n${pass} passed, ${fail} failed`);

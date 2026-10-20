@@ -8,6 +8,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert';
+// Phase C (Oct 20 2026): worker.js code now calls these shared never-swallow helpers; in this sandbox they are inert stand-ins.
+const PHASE_C_SHIM = 'const softNote = () => false, softFail = async () => ({ ok: false }), tryWrite = async (e, w, fn) => { try { return { ok: true, value: await fn() }; } catch (x) { return { ok: false, error: String(x && x.message || x) }; } }, safeJson = async (r, f) => { try { return await r.json(); } catch (x) { return f; } }, parseJsonCell = (r, f) => { if (r === undefined || r === null || (typeof r === "string" && !r.trim())) return f; if (typeof r !== "string") return r; try { return JSON.parse(r); } catch (x) { return f; } };\n';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workerSrc = readFileSync(join(here, '..', 'worker.js'), 'utf8');
@@ -39,7 +41,7 @@ const qbEscapeSrc = extractFn('qbEscape', false);
 const findFnSrc = extractFn('qbFindLikelyUnlinkedPayment', true);
 
 function build(qbApi) {
-  return new Function('qbApi', `${qbEscapeSrc}\n${findFnSrc}\nreturn qbFindLikelyUnlinkedPayment;`)(qbApi);
+  return new Function('qbApi', `${PHASE_C_SHIM}${qbEscapeSrc}\n${findFnSrc}\nreturn qbFindLikelyUnlinkedPayment;`)(qbApi);
 }
 
 // Brett's exact case: a $297.50 Venmo payment sitting in QuickBooks as an unlinked Purchase.
@@ -110,7 +112,7 @@ function buildQbPayables({ invoiceBalance, billBalance, billTotal, purchases, ir
   const paymentMilestonesTab = async () => {};
   const logTelemetry = async () => {};
   const src = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('parseHolidayMap', false)}\n${extractFn('nextBusinessDay', false)}\n${extractFn('etDateString', false)}\n${extractFn('paymentClearDaysMap', false)}\n${extractFn('classifyPaymentMethod', false)}\n${extractFn('addBusinessDays', false)}\n${extractFn('summarizeInvoicePayments', false)}\n${extractFn('money2', false)}\n${extractFn('vendorBillPaymentIds', false)}\n${extractFn('vendorBillPaidDate', false)}\n${extractFn('qbLoadInvoicePayments', true)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
-  return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', src)
+  return new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', PHASE_C_SHIM + src)
     (fetchTabs, fetchTab, paymentMilestonesTab, logTelemetry, qbAccessToken, qbApi, qbVendorDisplayName, vendorTermLabel, json, TEST_FETCH_CONFIG);
 }
 
@@ -157,7 +159,7 @@ const qbApiPaid = async (env, path) => {
   return {};
 };
 const srcPaid = `${extractFn('qbEscape', false)}\n${extractFn('qbFindLikelyUnlinkedPayment', true)}\n${extractFn('firstMilestoneForSignature', false)}\n${extractFn('depositMilestoneForSignature', false)}\n${extractFn('parseHolidayMap', false)}\n${extractFn('nextBusinessDay', false)}\n${extractFn('etDateString', false)}\n${extractFn('paymentClearDaysMap', false)}\n${extractFn('classifyPaymentMethod', false)}\n${extractFn('addBusinessDays', false)}\n${extractFn('summarizeInvoicePayments', false)}\n${extractFn('money2', false)}\n${extractFn('vendorBillPaymentIds', false)}\n${extractFn('vendorBillPaidDate', false)}\n${extractFn('qbLoadInvoicePayments', true)}\n${extractFn('logAndCollectError', true)}\n${extractFn('qbPayables', true)}\nreturn qbPayables;`;
-const qbPayablesAlreadyPaid = new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', srcPaid)
+const qbPayablesAlreadyPaid = new Function('fetchTabs', 'fetchTab', 'paymentMilestonesTab', 'logTelemetry', 'qbAccessToken', 'qbApi', 'qbVendorDisplayName', 'vendorTermLabel', 'json', 'fetchConfig', PHASE_C_SHIM + srcPaid)
   (fetchTabsPaid, async () => [], async () => {}, async () => {}, async () => 'x', qbApiPaid, (v) => (v && v.Company) || 'Vendor', () => 'Due on receipt', (b) => b, TEST_FETCH_CONFIG);
 const resPaid = await qbPayablesAlreadyPaid({}, new URL('http://x/?days=90'));
 ok(resPaid.rows[0].state === 'vendor paid', 'a genuinely already-paid vendor bill still says vendor paid');

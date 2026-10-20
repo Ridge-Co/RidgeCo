@@ -67,7 +67,7 @@ function fail(title, msg, cls){ show('<div class="msg '+(cls||'')+'"><h2 style="
 
 if (!TOKEN){ fail('Report link incomplete', 'This link is missing its access code. Please use the link you were sent.', 'err'); }
 else {
-  var headers = {}; try{ var a = localStorage.getItem('mh_auth'); if (a) headers['X-Auth-Token'] = a; }catch(e){ /* no stored admin code — public view */ }
+  var headers = {}; try{ var a = localStorage.getItem('mh_auth'); if (a) headers['X-Auth-Token'] = a; }catch(e){ /* silent-ok: no stored admin code so this is the public view */ }
   fetch(WORKER + '/fi/report?r=' + encodeURIComponent(TOKEN), { headers: headers }).then(function(res){
     return res.text().then(function(t){ var d; try{ d = JSON.parse(t); }catch(e){ throw new Error('The server sent an unreadable answer (HTTP '+res.status+').'); } return { ok:res.ok && d.ok !== false, d:d, status:res.status }; });
   }).then(function(r){

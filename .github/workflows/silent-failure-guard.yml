@@ -1,0 +1,73 @@
+name: Silent-failure guard
+
+# Brett's standing rule (Oct 1 + Oct 16 2026): nothing fails silently, in new code or old.
+#  1. RATCHET: scripts/silent-failure-lint.mjs counts empty catches, log-only catches, "return null" catches and
+#     swallowing .catch(() => ...) per file. A change may lower the counts, never raise them.
+#  2. PR BODY: a PR that changes code (worker.js, pages, scripts, Apps Script) must carry a line starting
+#     "Silent-failure check:" saying what failure was forced in a test and what surfaced (see the pull request template).
+# No timer here (permanent rule: no cron anywhere); this runs on pull requests only.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: silent-failure-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The ceiling comes from the BASE branch's baseline file, never from the PR head: a PR that edits the baseline to raise its own
+      # numbers still has to pass against what the base branch already promised. (No baseline on base yet = first introduction: use the head's.)
+      - name: Ratchet - no new silent failures
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          if git cat-file -e "origin/${BASE_REF}:scripts/silent-failure-baseline.json" 2>/dev/null; then
+            git show "origin/${BASE_REF}:scripts/silent-failure-baseline.json" > "${RUNNER_TEMP}/base-baseline.json"
+            echo "Comparing against the baseline on ${BASE_REF}."
+            node scripts/silent-failure-lint.mjs --baseline "${RUNNER_TEMP}/base-baseline.json"
+          else
+            echo "::warning::No scripts/silent-failure-baseline.json on ${BASE_REF}; comparing against this PR's own baseline."
+            node scripts/silent-failure-lint.mjs
+          fi
+
+      - name: Linter self-test
+        run: node test/silent-failure-lint.test.mjs
+
+      - name: PR body must say what failure was forced
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          changed=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          echo "$changed" | sed 's/^/  changed: /'
+          if echo "$changed" | grep -E '^(worker\.js|apps-script/.*\.gs|[^/]+\.(html|js)|shop/.*\.(html|js)|scripts/[^/]+\.(mjs|js))$' | grep -vE '^scripts/silent-failure-lint\.mjs$' >/dev/null; then
+            if printf '%s' "$PR_BODY" | grep -qiE '^[[:space:]>*_-]*Silent-failure check:[[:space:]]*\S'; then
+              echo "OK - PR body has a Silent-failure check line."
+            else
+              echo "::error::This PR changes code but its description has no 'Silent-failure check:' line."
+              echo "Add one line, e.g.:  Silent-failure check: forced the Sheets append to throw; a P1 ledger row is written and the page shows the error banner."
+              echo "If nothing here can fail (pure copy/style change) say so:  Silent-failure check: n/a - <why nothing can fail>."
+              exit 1
+            fi
+          else
+            echo "OK - no code files changed."
+          fi

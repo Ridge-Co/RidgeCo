@@ -517,7 +517,7 @@ document.getElementById('login-input').addEventListener('keydown',function(e){ i
 function enterApp(){
   document.getElementById('login').style.display='none';
   document.getElementById('app').classList.remove('hide');
-  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
+  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){ /* silent-ok: cosmetic footer version label, Hub fetch failures are already reported by failure-reporter */ });
   populateAnnualPicker();
   loadCustomers().then(function(){ fillCustomerSelects(); loadBlocks(); }); loadAvailability(); loadBookings(); sgLoad();
 }

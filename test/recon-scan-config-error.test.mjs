@@ -27,5 +27,5 @@ test('scan loop breaks on config error before recording a per-file failure', () 
 });
 test('stale config-error tracker entries self-heal on load', () => {
   const s = src.indexOf('async function receiptReconScan');
-  assert.match(src.slice(s, s + 4000), /receiptReconIsConfigError\(failures\[id\] && failures\[id\]\.error\)(?: \|\| aiCreditErrorTextIsOutage\(failures\[id\] && failures\[id\]\.error\))?\) \{ delete failures\[id\]/);
+  assert.match(src.slice(s, s + 6000), /receiptReconIsConfigError\(failures\[id\] && failures\[id\]\.error\)(?: \|\| aiCreditErrorTextIsOutage\(failures\[id\] && failures\[id\]\.error\))?\) \{ delete failures\[id\]/);
 });

@@ -2000,7 +2000,7 @@ var KEY_TYPE_LABEL = {
 function keyTypeLabel(type) { return KEY_TYPE_LABEL[type] || (type || 'Key'); }
 
 function processNotificationsBackground() {
-  api('GET','/notifications/pending').catch(function(){});
+  api('GET','/notifications/pending').catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:notifications-pending', e); });
 }
 
 var _names8 = ['properties','units','tenants','vendors','workorders','invoices','owners','keys'];
@@ -2302,7 +2302,7 @@ function renderWOPage() {
   if (priority) wos = wos.filter(function(w){ return (w.Priority||'normal').toLowerCase()===priority.toLowerCase(); });
   if (stage === '__needs__') wos = wos.filter(function(w){ return !!w.Approval_Stage && w.Approval_Stage !== 'Approved'; });
   else if (stage) wos = wos.filter(function(w){ return (w.Approval_Stage||'') === stage; });
-  try { var _ec = document.getElementById('estimatedWOsCount'); if (_ec) { var _n = safeArray(state.workorders).filter(function(w){ return w.Voided!=='TRUE' && w.Approval_Stage==='Estimated' && OPEN.includes(w.Status); }).length; _ec.textContent = _n ? '('+_n+')' : ''; } } catch(_) {}
+  try { var _ec = document.getElementById('estimatedWOsCount'); if (_ec) { var _n = safeArray(state.workorders).filter(function(w){ return w.Voided!=='TRUE' && w.Approval_Stage==='Estimated' && OPEN.includes(w.Status); }).length; _ec.textContent = _n ? '('+_n+')' : ''; } } catch(_) { window.hubReportFailure && window.hubReportFailure('index:estimated-count', _); }
   if (search) wos = wos.filter(function(w){
     var prop = state.properties.find(function(p){return p.ID===w.Property_ID;});
     var vendor = state.vendors.find(function(v){return v.ID===w.Vendor_ID;});
@@ -2368,7 +2368,7 @@ function maybeOpenWOFromURL() {
     }
     var wid = qs.get('wo');
     if (wid && typeof openWODetail === 'function') openWODetail(wid);
-  } catch (e) {}
+  } catch (e) { window.hubReportFailure && window.hubReportFailure('index:open-wo-from-url', e); }
 }
 
 function openWODetail(woId) {
@@ -2517,7 +2517,7 @@ function openWODetail(woId) {
     window._billCache = window._billCache || {};
     var billsHtml = bills.map(function(bill) {
       var items = [];
-      try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+      try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){ window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json', e, {ref: bill.ID}); }
       window._billCache[bill.ID] = bill;   // so the receipt editor below can read this bill's current fields without a re-fetch
       var qbSent = !!bill.QB_Invoice_ID;   // Vendor_Bills itself never carries this; harmless if absent — the real guard is server-side (Invoice_Review)
       var statusLabel = (bill.Status||'submitted').toUpperCase();
@@ -2621,7 +2621,7 @@ function openWODetail(woId) {
           }
         }
       }
-    }).catch(function(){});
+    }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-detail-lockboxes', e); });
   }
 
   // Master Key status (Aug 24, 2026, admin-only) — this Hub view always sees the full
@@ -2657,7 +2657,7 @@ function openWODetail(woId) {
           '<div style="font-size:10px;color:var(--muted);margin-top:4px">Never shown to the tenant. Only the vendor actually assigned to this WO ever sees this, and only their own status.</div>';
         var db2 = document.getElementById('detail-body');
         if (db2) db2.insertAdjacentElement('afterbegin', mkDiv);
-      }).catch(function(){});
+      }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-detail-master-key', e); });
     }
   }
 
@@ -2810,7 +2810,7 @@ function openWODetail(woId) {
         loadHubReceiptTracking(_woIdForPhoto, _db);
         loadHubTimeTracking(_woIdForPhoto, _db);
       }
-    } catch(e2) { /* photo section is non-critical */ }
+    } catch(e2) { window.hubReportFailure && window.hubReportFailure('index:wo-detail-photos', e2); }
   }, 50);
   // Post-render: make property name clickable after detail modal opens
   setTimeout(function(){
@@ -3264,7 +3264,7 @@ function loadVendorTaskRequestsForWO(woId) {
       return '<div style="font-size:11px;color:var(--muted);padding:4px 0;border-top:1px solid var(--border)">' +
         esc(VTR_TYPE_LABELS[r.Request_Type] || r.Request_Type) + ' (' + esc(r.Scope || '') + ') -- ' + statusLabel + '</div>';
     }).join('');
-  }).catch(function() { /* non-fatal -- this is a convenience view */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-vendor-requests', e); });
 }
 
 function requestFromVendor(woId, vendorId, requestType) {
@@ -3429,13 +3429,18 @@ function renderSplitCards() {
 }
 
 function loadSplitReassignRows(woId) {
+  var failed = [];
   Promise.all([
-    api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).catch(function(){ return []; }),
-    api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(woId)).catch(function(){ return []; }),
+    api('GET', '/time-entries?wo_id=' + encodeURIComponent(woId)).catch(function(e){ failed.push('time entries'); window.hubReportFailure && window.hubReportFailure('index:split-time-entries', e); return []; }),
+    api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(woId)).catch(function(e){ failed.push('vendor bills'); window.hubReportFailure && window.hubReportFailure('index:split-vendor-bills', e); return []; }),
   ]).then(function(results){
     _splitTimeEntries = safeArray(results[0]).filter(function(t){ return t.Active !== 'FALSE'; });
     _splitVendorBills = safeArray(results[1]);
     renderSplitReassignOptions();
+    if (failed.length) {
+      var _sw = document.getElementById('split-reassign-wrap'), _sr = document.getElementById('split-reassign-rows');
+      if (_sw && _sr) { _sw.style.display = ''; _sr.insertAdjacentHTML('afterbegin', '<div role="alert" style="color:var(--danger);font-size:12px;margin-bottom:6px">&#9888; Could not load the ' + failed.join(' and ') + ' for this work order, so this list is incomplete. Close and reopen to retry.</div>'); }
+    }
   });
 }
 
@@ -3700,7 +3705,7 @@ function openTenantSafetyScreen() {
 function checklistFromText(text, existingJson){
   var items = (text||'').split('\n').map(function(l){return l.trim();}).filter(function(l){return l.length;});
   if(!items.length) return '';
-  var prev=[]; try{ prev=JSON.parse(existingJson||'[]')||[]; }catch(e){}
+  var prev=[]; try{ prev=JSON.parse(existingJson||'[]')||[]; }catch(e){ window.hubReportFailure && window.hubReportFailure('index:checklist-existing', e); }
   return JSON.stringify(items.map(function(t){
     var m=prev.find(function(p){return (p.t||'')===t;});
     return m?{t:t,done:!!m.done,code:m.code||'',why:m.why||''}:{t:t,done:false,code:'',why:''};
@@ -3708,7 +3713,7 @@ function checklistFromText(text, existingJson){
 }
 // Read-only checklist progress for the Hub WO detail (so Brett sees what the vendor did).
 function hubChecklistHtml(wo){
-  var items=[]; try{ items=JSON.parse((wo&&wo.Checklist)||'[]')||[]; }catch(e){ return ''; }
+  var items=[]; try{ items=JSON.parse((wo&&wo.Checklist)||'[]')||[]; }catch(e){ window.hubReportFailure && window.hubReportFailure('index:checklist-render', e, {ref: wo&&wo.ID}); return ''; }
   if(!items.length) return '';
   var CODES={na:'Not applicable',separate:'Separate WO',estimate:'Needs estimate',access:'Couldn’t access',parts:'Needs parts'};
   var done=items.filter(function(i){return i.done;}).length;
@@ -3722,7 +3727,7 @@ function hubChecklistHtml(wo){
 // Turn stored checklist JSON back into editable text (one item per line).
 function checklistToText(json){
   try { var a=JSON.parse(json||'[]'); return (a||[]).map(function(i){return i.t||'';}).filter(Boolean).join('\n'); }
-  catch(e){ return ''; }
+  catch(e){ window.hubReportFailure && window.hubReportFailure('index:checklist-to-text', e); return ''; }
 }
 // ── Checklist quick entry (Oct 1 2026) ───────────────────────
 // parseChecklistPaste is the ONE parser for pasted/typed checklist text -> string[] of item titles
@@ -3769,7 +3774,7 @@ function clQuickKey(e, taId){
   if(e.key === 'Enter' && !e.isComposing){ e.preventDefault(); clQuickAdd(taId); }
 }
 function clQuickPaste(e, taId){
-  var t = ''; try{ t = (e.clipboardData || window.clipboardData).getData('text') || ''; }catch(x){}
+  var t = ''; try{ t = (e.clipboardData || window.clipboardData).getData('text') || ''; }catch(x){ /* silent-ok: clipboard read blocked, normal paste still works */ }
   if(!/[\r\n]/.test(t.replace(/[\r\n]+$/, ''))) return;   // single line: let the browser paste normally
   e.preventDefault();
   var inp = e.target;
@@ -4964,7 +4969,7 @@ function parseVCardText(text){
       else if (key.indexOf('TEL') === 0 && !out.phone) { out.phone = val.trim(); }
       else if (key.indexOf('EMAIL') === 0 && !out.email) { out.email = val.trim(); }
     });
-  } catch(e) {}
+  } catch(e) { window.hubReportFailure && window.hubReportFailure('index:vcard-parse', e); }
   return out;
 }
 function applyContactCardFields(fields, data){
@@ -5323,11 +5328,12 @@ function submitEditTenant() {
     if(res.error){logError('Edit tenant',res.error);toast('Error: '+res.error,'error');return;}
     if (!unitChanged) { toast('Tenant updated','success');closeModal('modal-edit-tenant');loadAll(); return; }
     // Relink both sides: clear the old unit's Tenant_ID (if any), set the new one's (if any).
-    var chain = Promise.resolve();
-    if (_etOriginalUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:_etOriginalUnitId,fields:{Tenant_ID:''}}).catch(function(){}); });
+    var chain = Promise.resolve(), _oldUnlinkErr = '';
+    if (_etOriginalUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:_etOriginalUnitId,fields:{Tenant_ID:''}}).catch(function(e){ _oldUnlinkErr = (e && e.message) || 'unknown error'; window.hubReportFailure && window.hubReportFailure('index:tenant-old-unit-unlink', e); }); });
     if (newUnitId) chain = chain.then(function(){ return api('POST','/unit/update',{id:newUnitId,fields:{Tenant_ID:id}}); });
     chain.then(function(unitRes){
       if (unitRes && unitRes.error) { toast('Tenant updated, but unit link failed: '+unitRes.error,'warn'); }
+      else if (_oldUnlinkErr) { toast('Tenant updated and moved, but the old unit may still show this tenant (' + _oldUnlinkErr + '). Check it.','warn'); }
       else { toast('Tenant updated and moved','success'); }
       closeModal('modal-edit-tenant');loadAll();
     }).catch(function(e){ toast('Tenant updated, but unit link failed: '+e.message,'warn'); closeModal('modal-edit-tenant');loadAll(); });
@@ -5710,7 +5716,7 @@ function loadTradeAccessDefaults() {
   if (!el) return;
   api('GET', '/config').then(function(cfg) {
     var defaults = {};
-    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:trade-defaults-parse', e); el.innerHTML = '<span style="color:var(--danger);font-size:11px">Trade defaults could not be read (the saved value is damaged). Do not edit them until this is fixed.</span>'; return; }
     var trades = Object.keys(defaults);
     if (!trades.length) {
       el.innerHTML = '<div style="color:var(--muted);font-size:12px">No trade defaults set — all trades currently default to YES (needs access).</div>';
@@ -5736,7 +5742,7 @@ function saveTradeAccessDefault() {
   if (!trade) { toast('Select a trade first', 'error'); return; }
   api('GET', '/config').then(function(cfg) {
     var defaults = {};
-    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:trade-defaults-parse-save', e); throw new Error('The saved trade defaults could not be read, so nothing was changed (saving now would erase them).'); }
     defaults[trade] = val;
     return api('POST', '/config/set', { key: 'Access_Trade_Defaults', value: JSON.stringify(defaults) });
   }).then(function(res) {
@@ -5748,13 +5754,13 @@ function saveTradeAccessDefault() {
 function removeTradeAccessDefault(trade) {
   api('GET', '/config').then(function(cfg) {
     var defaults = {};
-    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) {}
+    try { defaults = JSON.parse(cfg.Access_Trade_Defaults || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:trade-defaults-parse-remove', e); throw new Error('The saved trade defaults could not be read, so nothing was changed (saving now would erase them).'); }
     delete defaults[trade];
     return api('POST', '/config/set', { key: 'Access_Trade_Defaults', value: JSON.stringify(defaults) });
   }).then(function(res) {
     if (res && res.success) { toast('Removed default for ' + trade, 'success'); loadTradeAccessDefaults(); }
     else toast('Error: ' + ((res&&res.error)||''), 'error');
-  });
+  }).catch(function(e) { toast('Error: ' + (e && e.message || e), 'error'); });
 }
 
 function loadAlertFlags() {
@@ -5847,7 +5853,7 @@ function markVendorTaskReviewed(id) {
 function loadWishlist(){
   api('GET','/wishlist').then(function(items){
     wishlistItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderWishlist();
-  }).catch(function(e){console.log('Wishlist load error',e);});
+  }).catch(function(e){console.log('Wishlist load error',e); window.hubReportFailure && window.hubReportFailure('index:wishlist-load', e); toast('Could not load the wishlist. Reload to retry.','error');});
 }
 function addWishlistItem(){
   var input=document.getElementById('wishlist-input'); var val=input.value.trim(); if(!val)return;
@@ -5907,7 +5913,7 @@ function loadVendorAccessRequests(){
     vendorAccessRequests = Array.isArray(rows) ? rows : [];
     renderVendorAccessRequests();
     updateVendorAccessRequestBadges();
-  }).catch(function(e){ console.log('Vendor access requests load error', e); });
+  }).catch(function(e){ console.log('Vendor access requests load error', e); window.hubReportFailure && window.hubReportFailure('index:vendor-access-requests-load', e); var _vr = document.getElementById('vendor-access-requests-list'); if (_vr) _vr.innerHTML = '<div class="loading">Could not load requests. Reload to retry.</div>'; });
 }
 function renderVendorAccessRequests(){
   var el = document.getElementById('vendor-access-requests-list'); if (!el) return;
@@ -6297,7 +6303,7 @@ function bulkSendWelcomeFromTab(listId) {
   api('GET', '/message-templates').then(function(rows) {
     var row = Array.isArray(rows) && rows.find(function(r){ return r.Message_Type === templateType && r.Channel === 'sms'; });
     if (row && row.Body) document.getElementById('bulk-welcome-text').value = row.Body;
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:welcome-template-load', e); });
 }
 
 async function executeBulkSendWelcome() {
@@ -6572,7 +6578,7 @@ function renderOwnersPage() {
   if (!owners.length) { el.innerHTML='<div class="loading">No owners on file</div>'; return; }
 
   // Load Owner_Users too
-  api('GET', '/owner-users?owner_id=all').catch(function(){ return []; }).then(function() {});
+  api('GET', '/owner-users?owner_id=all').catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:owner-users-preload', e); return []; }).then(function() {});
 
   var search = ((document.getElementById('owner-search')||{}).value || '').trim().toLowerCase();
   var statusFilter = (document.getElementById('owner-filter-status')||{}).value || 'all';
@@ -7731,7 +7737,7 @@ var _woSnippets = [];
 var _RECUR_DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 var _RECUR_NTH = {1:'1st',2:'2nd',3:'3rd',4:'4th',5:'last'};
 function recurIsOn(v) { return String(v||'').toUpperCase()==='TRUE'; }
-function recurTargetsOf(t) { try { var a = JSON.parse(t.Targets||'[]'); return Array.isArray(a)?a.filter(function(x){return x&&x.p;}):[]; } catch(e) { return []; } }
+function recurTargetsOf(t) { try { var a = JSON.parse(t.Targets||'[]'); return Array.isArray(a)?a.filter(function(x){return x&&x.p;}):[]; } catch(e) { window.hubReportFailure && window.hubReportFailure('index:recurring-targets-parse', e, {ref: t&&t.ID}); return []; } }
 function recurTargetLabel(x) {
   var p = safeArray(state.properties).find(function(q){ return String(q.ID)===String(x.p); });
   var u = x.u ? safeArray(state.units).find(function(q){ return String(q.ID)===String(x.u); }) : null;
@@ -7849,7 +7855,7 @@ function loadSnippets() {
     _woSnippets = Array.isArray(items)?items:[];
     var sel = document.getElementById('tmpl-snippet'); if (!sel) return;
     sel.innerHTML = '<option value="">📎 Insert saved text snippet…</option>' + _woSnippets.map(function(x){ return '<option value="'+x.ID+'">'+esc(x.Name)+'</option>'; }).join('');
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-snippets-load', e); });
 }
 function insertTemplateSnippet() {
   var id = document.getElementById('tmpl-snippet').value; if (!id) return;
@@ -7912,7 +7918,7 @@ function loadUnitRecurring(propId, unitId) {
     el.innerHTML = '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">🔁 RECURRING WORK ORDERS</div>' +
       (here.length ? here.map(function(t){ return '<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px"><div style="flex:1"><b>'+esc(t.Name)+'</b><div style="color:var(--muted);font-size:11px">'+(recurIsOn(t.Recurrence_Enabled)?esc(recurDescribe(t)):'Manual only')+'</div></div><button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openManageTemplatesModal();setTimeout(function(){openEditTemplateModal(\''+t.ID+'\')},400)">Edit</button><button class="btn small danger" onclick="unitLinkTemplate(\''+t.ID+'\',\''+propId+'\',\''+(unitId||'')+'\',\'remove\')">Unlink</button></div>'; }).join('') : '<div style="color:var(--muted);font-size:12px;font-style:italic;margin-bottom:6px">None linked</div>') +
       (others.length ? '<div style="display:flex;gap:6px;margin-top:6px"><select id="unit-rec-add" style="flex:1"><option value="">Link a template…</option>'+others.map(function(t){ return '<option value="'+t.ID+'">'+esc(t.Name)+'</option>'; }).join('')+'</select><button class="btn small secondary" onclick="unitLinkTemplate(document.getElementById(\'unit-rec-add\').value,\''+propId+'\',\''+(unitId||'')+'\',\'add\')">Link</button></div>' : '');
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:unit-recurring-templates', e); });
 }
 function unitLinkTemplate(tid, propId, unitId, action) {
   if (!tid) return;
@@ -8365,7 +8371,7 @@ function refreshWOStatusBadge(woId, prevStatus) {
     state.workorders = wos;
     var wo = wos.find(function(w) { return String(w.ID) === String(woId); });
     if (wo && wo.Status && String(wo.Status) !== String(prevStatus)) toast('Work order moved to ' + wo.Status, 'info');
-  }).catch(function() { /* cosmetic only */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-status-refresh', e); });
 }
 
 var _hubBillSaving = {};
@@ -8698,7 +8704,7 @@ function loadInvoiceMaterials(k) {
   // up the same materials — the owner would see $100 of screws itemised twice.
   Promise.all([
     api('GET', '/receipts?wo_id=' + encodeURIComponent(woId)),
-    api('GET', '/receipts-billed?wo_id=' + encodeURIComponent(woId)).catch(function() { return { failed: true, billed: {} }; }),
+    api('GET', '/receipts-billed?wo_id=' + encodeURIComponent(woId)).catch(function() { /* silent-ok: failed:true is read just below and nothing gets ticked */ return { failed: true, billed: {} }; }),
   ]).then(function(both) {
     var rows = both[0];
     var billed = (both[1] && both[1].billed) || {};
@@ -9096,7 +9102,7 @@ function loadVendorBillForInvoice(k) {
       items.forEach(function(r) {
         rows += '<div>🧾 ' + esc(r.desc || 'Receipt') + ': <b>$' + parseFloat(r.amount || 0).toFixed(2) + '</b></div>';
       });
-    } catch(e) {}
+    } catch(e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-detail', e, {ref: bill.ID}); }
     var total = parseFloat(bill.Total || 0);
     rows += '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;color:var(--accent2)">Total owed: <b>$' + total.toFixed(2) + '</b></div>';
     var padRow = safeArray(state.vendors).find(function(v) { return String(v.ID) === String(bill.Vendor_ID); });
@@ -9161,7 +9167,7 @@ function invPricing(k) {
         if (r && r.pay === 'account') onAccount += amt; else reimburse += amt;
       });
     }
-  } catch (e) {}
+  } catch (e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-split', e, {ref: bill.ID}); }
 
   // Materials bought outside the vendor's bill. Money out of the business, so they belong
   // in the pricing basis — which is what makes the markup and the card fee apply to them, the
@@ -9759,8 +9765,8 @@ function invBillThisJob(k) {
     // invoices were going out with no description of the work.
     if (memo) {
       api('POST', '/workorder/update', { id: woId, fields: { Invoice_Memo: memo, Customer_Charge: charge.toFixed(2) } })
-        .then(function(r) { if (!woUpdateLanded(r)) console.warn('[invBillThisJob] memo save did not land', r); })
-        .catch(function(){});
+        .then(function(r) { if (!woUpdateLanded(r)) { console.warn('[invBillThisJob] memo save did not land', r); window.hubReportFailure && window.hubReportFailure('index:invoice-memo-save', 'memo save did not land', {ref: woId}); toast('Approved, but the invoice memo did not save, so the owner may see no description of the work. Re-enter it on the work order.', 'error'); } })
+        .catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:invoice-memo-save', e, {ref: woId}); toast('Approved, but the invoice memo did not save, so the owner may see no description of the work. Re-enter it on the work order.', 'error'); });
     }
 
     // The bill is now Status:'reviewed' on the server, so it will not come back on the next
@@ -10275,7 +10281,7 @@ function reloadHubAdditionalWork(woId) {
     _awAdmin[woId] = list;
     list.forEach(function(a) { _awAdminChildren[a.child_wo_id] = woId; });
     renderHubAdditionalWork(woId, list, holder);
-  }).catch(function() { /* non-critical — section simply stays hidden */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:additional-work-load', e); });
 }
 // Called from refreshHubEstimateView: any estimate action taken on a child (approve, needs-info,
 // decline, push-to-scope) re-renders its parent's Additional work section.
@@ -10395,7 +10401,7 @@ function awExtraBadgeHTML(w) {
     }
     var n = _awBadgeCache.counts[w.ID] || 0;
     return n ? '<span class="badge" style="background:#e8f0fb;border:1px solid var(--accent);color:var(--accent);margin-left:4px" title="Vendor-found additional work">+' + n + ' extra</span>' : '';
-  } catch (e) { return ''; }
+  } catch (e) { window.hubReportFailure && window.hubReportFailure('index:addon-badge', e); return ''; }
 }
 
 // ── Hub Receipt Tracking ──────────────────────────────────────
@@ -10842,7 +10848,7 @@ function loadHubNearbyWOs(woId, detailBody) {
       '</div>' +
       rows +
       '</div>';
-  }).catch(function() { /* non-fatal, proximity is supplemental */ });
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:nearby-wos', e); });
 }
 
 // Bundling opportunities: group open WOs by cluster, highlight clusters with 2+ WOs
@@ -11353,26 +11359,26 @@ function loadInvoiceReview() {
   // address), not on Vendor_Bills. If the page is opened before loadAll() finished — or
   // that call failed — the cards would silently render with no job context and the whole
   // point of the screen is lost. So top the state up first; never render context-blind.
-  var prep = [];
+  var prep = [], ctxFailed = []; function ctxFail(label) { return function(e) { ctxFailed.push(label); window.hubReportFailure && window.hubReportFailure('index:invoice-review-context ' + label, e); }; } function ctxBannerHtml() { return ctxFailed.length ? '<div role="alert" style="border:2px solid var(--danger);background:rgba(220,38,38,.10);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px"><b style="color:var(--danger)">&#9888; Could not load: ' + ctxFailed.join(', ') + '.</b> Job names, addresses and the in-house vendor flag may be missing, so the numbers below may be wrong. Reload before approving anything.</div>' : ''; }
   if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) {
-    if (Array.isArray(r)) state.workorders = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.workorders = r; else ctxFail('workorders')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('workorders')));
   if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) {
-    if (Array.isArray(r)) state.properties = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.properties = r; else ctxFail('properties')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('properties')));
   if (!safeArray(state.units).length) prep.push(api('GET', '/units').then(function(r) {
-    if (Array.isArray(r)) state.units = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.units = r; else ctxFail('units')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('units')));
   // Vendors is load-bearing for the money now, not just for names: the in-house flag lives
   // there, and without it an in-house job would quietly report the old profit — netting out
   // labour that never left the business.
   if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) {
-    if (Array.isArray(r)) state.vendors = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.vendors = r; else ctxFail('vendors')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('vendors')));
   // Owners power the Owner filter's labels (resolved property → owner). Top up if empty.
   if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) {
-    if (Array.isArray(r)) state.owners = r;
-  }).catch(function() {}));
+    if (Array.isArray(r)) state.owners = r; else ctxFail('owners')((r && r.error) || 'unexpected response');
+  }).catch(ctxFail('owners')));
 
   Promise.all(prep).then(function() {
     return api('GET', '/vendor-bills?status=submitted');
@@ -11388,10 +11394,10 @@ function loadInvoiceReview() {
     var fhost = document.getElementById('ir-filters');
     if (!_irBills.length) {
       if (fhost) fhost.innerHTML = '';
-      el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ No vendor bills pending review.</div>';
+      el.innerHTML = ctxBannerHtml() + '<div style="color:var(--muted);font-size:13px;padding:24px 0;text-align:center">✓ No vendor bills pending review.</div>';
       return;
     }
-    el.innerHTML = _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
+    el.innerHTML = ctxBannerHtml() + _irBills.map(function(b, i) { return renderIRCard(b, i); }).join('');
     // Card indexes are reused across renders, so clear panel state first — otherwise
     // 'ir0' could still be holding the bill or IR row from a previous load.
     _invBill = {}; _invPreferBill = {}; _invIRRow = {}; _invWO = {}; _invTime = {}; _invTimePicked = {}; _invTimeSeen = {}; _invTimeGen = {}; _invTimeMulti = {}; _invAutoPrice = {}; _invMode = {}; _invPass5 = {}; _invMat = {}; _invMatPicked = {}; _invMatSeen = {}; _invMatGen = {}; _invMatBilled = {}; _invMatMulti = {}; _invMatUnknown = {}; _qbAllPromise = null;
@@ -11574,7 +11580,7 @@ function irClearFilters() {
 // clear "no photo" flag), and whether it's Ridge Co's card or owed back to the vendor.
 function renderReceiptsJsonBreakdown(b) {
   var items = [];
-  try { items = JSON.parse(b.Receipts_JSON || '[]'); } catch (e) {}
+  try { items = JSON.parse(b.Receipts_JSON || '[]'); } catch (e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-breakdown', e, {ref: b.ID}); }
   if (!items.length) return '';
   var rows = items.map(function(it) {
     var onAccount = it.pay === 'account';
@@ -11933,7 +11939,7 @@ function irCalc(i) {
         if (r && r.pay === 'account') accountReceipts += amt; else reimburseReceipts += amt;
       });
     }
-  } catch(e) {}
+  } catch(e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-pricing', e, {ref: b.ID}); }
 
   var customerMaterials = truckStock + receiptsAll;                 // customer pays all materials
   var totalCost = laborTotal + truckStock + receiptsAll;           // money out of Brett's pocket
@@ -12236,7 +12242,7 @@ function irBulkApprove() {
           irHideCard(r.k);
           // Same memo-save the single path does — best-effort, doesn't block anything.
           if (r.built.memo) {
-            api('POST', '/workorder/update', { id: r.built.woId, fields: { Invoice_Memo: r.built.memo, Customer_Charge: r.built.payload.customer_total } }).catch(function(){});
+            api('POST', '/workorder/update', { id: r.built.woId, fields: { Invoice_Memo: r.built.memo, Customer_Charge: r.built.payload.customer_total } }).then(function(mr){ if (!woUpdateLanded(mr)) { window.hubReportFailure && window.hubReportFailure('index:bulk-invoice-memo-save', 'memo save did not land', {ref: r.built.woId}); toast('Invoice memo for ' + r.built.woId + ' did not save. Re-enter it on the work order.', 'error'); } }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:bulk-invoice-memo-save', e, {ref: r.built.woId}); toast('Invoice memo for ' + r.built.woId + ' did not save. Re-enter it on the work order.', 'error'); });
           }
           invRefreshMaterialsForWO(r.built.woId);
         }
@@ -12494,11 +12500,11 @@ function loadPayables(save) {
   if (fhost) fhost.innerHTML = '';
   // Job/property/owner context (WO → Property → Owner) powers the filter labels + search below —
   // same top-up-if-empty pattern loadInvoiceReview() already uses. Never render context-blind.
-  var prep = [];
-  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) { if (Array.isArray(r)) state.workorders = r; }).catch(function() {}));
-  if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) { if (Array.isArray(r)) state.properties = r; }).catch(function() {}));
-  if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) { if (Array.isArray(r)) state.vendors = r; }).catch(function() {}));
-  if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) { if (Array.isArray(r)) state.owners = r; }).catch(function() {}));
+  var prep = [], ctxFailed = []; function ctxFail(label) { return function(e) { ctxFailed.push(label); window.hubReportFailure && window.hubReportFailure('index:payables-context ' + label, e); }; }
+  if (!safeArray(state.workorders).length) prep.push(api('GET', '/workorders?include_voided=1').then(function(r) { if (Array.isArray(r)) state.workorders = r; else ctxFail('workorders')((r && r.error) || 'unexpected response'); }).catch(ctxFail('workorders')));
+  if (!safeArray(state.properties).length) prep.push(api('GET', '/properties').then(function(r) { if (Array.isArray(r)) state.properties = r; else ctxFail('properties')((r && r.error) || 'unexpected response'); }).catch(ctxFail('properties')));
+  if (!safeArray(state.vendors).length) prep.push(api('GET', '/vendors').then(function(r) { if (Array.isArray(r)) state.vendors = r; else ctxFail('vendors')((r && r.error) || 'unexpected response'); }).catch(ctxFail('vendors')));
+  if (!safeArray(state.owners).length) prep.push(api('GET', '/owners').then(function(r) { if (Array.isArray(r)) state.owners = r; else ctxFail('owners')((r && r.error) || 'unexpected response'); }).catch(ctxFail('owners')));
 
   Promise.all(prep).then(function() {
     return save ? api('POST', '/qb/sync-payments', { days: 90 })
@@ -12514,7 +12520,7 @@ function loadPayables(save) {
     _payablesRes = res;
     // Oct 1 2026: nothing may fail silently -- warnings/errors from the read or the save are shown, never dropped.
     _payablesAlerts.warnings = safeArray(res.warnings);
-    _payablesAlerts.errors = safeArray(res.errors);
+    _payablesAlerts.errors = safeArray(res.errors).concat(ctxFailed.map(function(l) { return { stage: 'context_load', error: 'Could not load ' + l + ', so names and filters below may be incomplete. Reload to retry.' }; }));
     if (res.deposit_sweep) _payablesAlerts.sweep = res.deposit_sweep;
     renderPayablesAlerts();
     _payablesRows = safeArray(res.rows);
@@ -13117,13 +13123,16 @@ function bulkSetVendorPermission(field, endpoint) {
   if (!checked.length) return;
   var ids = checked.map(function(cb) { return cb.dataset.id; });
   if (!confirm('Enable this for ' + ids.length + ' selected vendor(s)?')) return;
-  Promise.all(ids.map(function(id) { return api('POST', endpoint, { id: id, value: true }).catch(function(){ return null; }); }))
+  var failedIds = [];
+  Promise.all(ids.map(function(id) { return api('POST', endpoint, { id: id, value: true }).then(function(r) { if (r && r.error) throw new Error(r.error); return r; }).catch(function(e){ failedIds.push(id); window.hubReportFailure && window.hubReportFailure('index:bulk-vendor-permission', e, {ref: id}); return null; }); }))
     .then(function() {
-      ids.forEach(function(id) {
+      var okIds = ids.filter(function(id) { return failedIds.indexOf(id) < 0; });
+      okIds.forEach(function(id) {
         var v = safeArray(state.vendors).find(function(x) { return String(x.ID) === String(id); });
         if (v) v[field] = 'TRUE';
       });
-      toast('Updated ' + ids.length + ' vendor(s)', 'success');
+      if (failedIds.length) toast('Updated ' + okIds.length + ' vendor(s), but ' + failedIds.length + ' FAILED. Select those again and retry.', 'error');
+      else toast('Updated ' + ids.length + ' vendor(s)', 'success');
       clearPinChecks('vendors-list');
       renderVendorsPage();
     });
@@ -14944,7 +14953,7 @@ function loadOwnerInvites() {
     if (!rows.length) { el.innerHTML='<div style="color:var(--muted);font-size:12px">No links yet.</div>'; return; }
     var pill = {pending:'background:#e8f0fb;color:#1d4ed8',used:'background:#eaf6ee;color:#166534',expired:'background:#f3f5f8;color:#66707c',revoked:'background:#fdecea;color:#b42318',processing:'background:#fff3e0;color:#9a5b00'};
     el.innerHTML = rows.slice(0,25).map(function(r){
-      var s = {}; try { s = JSON.parse(r.summary || '{}'); } catch(e) {}
+      var s = {}; try { s = JSON.parse(r.summary || '{}'); } catch(e) { window.hubReportFailure && window.hubReportFailure('index:owner-invite-summary', e, {ref: r.id}); }
       var warn = safeArray(s.warnings);
       var ownerLbl = r.owner_id ? (function(){ var o = safeArray(state.owners).find(function(x){ return String(x.ID)===String(r.owner_id); }); return o ? ((o.Company||((o.First_Name||'')+' '+(o.Last_Name||'')).trim())) : ('Owner '+r.owner_id); })() : '';
       return '<div style="border-top:1px solid var(--border);padding:8px 0;font-size:12px">' +
@@ -15746,7 +15755,7 @@ function bvUpdateConfirmGate() {
 function bvRenderPreview() {
   var ids = _bulkVoidIds;
   Promise.all(ids.map(function(id) {
-    return api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(id)).catch(function() { return []; });
+    return api('GET', '/vendor-bills?wo_id=' + encodeURIComponent(id)).catch(function(e) { window.hubReportFailure && window.hubReportFailure('index:bulk-void-bill-lookup', e, {ref: id}); throw e; });
   })).then(function(billLists) {
     var voidable = [], skips = [];
     ids.forEach(function(id, i) {
@@ -15885,7 +15894,7 @@ function voidVendorBill(billId, woId) {
         if (!Array.isArray(bills)||!bills.length) return;
         var billsHtml = bills.filter(function(b){ return b.Active !== 'FALSE'; }).map(function(bill) {
           var items = [];
-          try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){}
+          try { items = JSON.parse(bill.Receipts_JSON||'[]'); } catch(e){ window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-list', e, {ref: bill.ID}); }
           var statusLabel = (bill.Status||'submitted').toUpperCase();
           var statusColor = bill.Status === 'reviewed' ? 'var(--accent2)' : 'var(--warning,#b45309)';
           var vendorLine = bill.Vendor_Name ? '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">From: <span style="color:var(--text)">' + esc(bill.Vendor_Name) + '</span>' + (bill.Created_Date ? ' · ' + esc(bill.Created_Date) : '') + '</div>' : '';
@@ -15912,7 +15921,7 @@ function voidVendorBill(billId, woId) {
           '</div>';
         }).join('');
         if (billsHtml) db.insertAdjacentHTML('beforeend', billsHtml);
-      }).catch(function(){});
+      }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-bills-refresh', e); });
     } else {
       toast('Could not void bill','error');
     }
@@ -15933,7 +15942,7 @@ function openEditReceiptsPanel(billId, woId) {
   var bill = (window._billCache || {})[billId];
   if (!bill) { toast('Bill data not loaded — reopen the work order and try again.', 'error'); return; }
   var items = [];
-  try { items = JSON.parse(bill.Receipts_JSON || '[]'); } catch (e) {}
+  try { items = JSON.parse(bill.Receipts_JSON || '[]'); } catch (e) { window.hubReportFailure && window.hubReportFailure('index:bill-receipts-json-edit', e, {ref: billId}); toast('This bill\'s receipt list is damaged and cannot be edited here. Nothing was changed.', 'error'); return; }
   // A fresh editable copy each time the panel opens, so Cancel truly discards unsaved edits.
   window._billReceiptsEdit[billId] = items.map(function(r) {
     return { amount: parseFloat(r.amount) || 0, desc: r.desc || '', pay: r.pay === 'account' ? 'account' : 'reimburse', url: r.url || '' };
@@ -16579,7 +16588,11 @@ function _uploadOneFile(file, card, woId, propAddr, fileType, folderInfo, attemp
         wo_id: woId, file_id: fileData.id, file_url: fileData.webViewLink || '',
         file_name: file.name, file_type: fileType || 'photo',
         mime_type: file.type || '', wo_folder_id: res.wo_folder_id, wo_folder_url: res.wo_folder_url,
-      }).catch(function(){});
+      }).then(function(lr) { if (lr && lr.error) throw new Error(lr.error); }).catch(function(e) {
+        window.hubReportFailure && window.hubReportFailure('index:log-attachment', e, {ref: woId});
+        card.insertAdjacentHTML('beforeend', ' <span style="color:var(--danger)" title="The file uploaded but was not linked to this work order">\u26a0 not linked to the work order, re-upload</span>');
+        toast('A file uploaded but could not be linked to the work order. Re-upload it.', 'error');
+      });
 
       var isVideo = file.type.startsWith('video/');
       var icon = fileType === 'after' ? '\u2705' : fileType === 'before' ? '📷' :
@@ -16746,7 +16759,7 @@ function loadPortalAttachments(woId, opts) {
       });
       runningIdx += typeCount;
     });
-  }).catch(function(){});
+  }).catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:wo-photos-load', e); });
 }
 
 // -- Photo Lightbox -- in-app swipeable viewer (mirrors vendor.html's) --------------------
@@ -16764,7 +16777,7 @@ function rcCloseLightbox() {
   var lb = document.getElementById('rc-lightbox');
   if (lb) lb.style.display = 'none';
   var v = document.getElementById('rc-lb-video');
-  if (v) { try { v.pause(); } catch(e){} v.removeAttribute('src'); v.load(); }
+  if (v) { try { v.pause(); } catch(e){ /* silent-ok: video element already stopped, nothing left to pause */ } v.removeAttribute('src'); v.load(); }
 }
 function rcLightboxNav(delta) {
   if (!_rcLbItems.length) return;
@@ -17191,8 +17204,8 @@ function submitScheduleMoveOut() {
       if (booted === null){
         booted = d.version;
         var last = null;
-        try { last = localStorage.getItem(LAST_KEY); } catch(e){}
-        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){}
+        try { last = localStorage.getItem(LAST_KEY); } catch(e){ /* silent-ok: storage blocked, only the reload hint is lost */ }
+        try { localStorage.setItem(LAST_KEY, d.version); } catch(e){ /* silent-ok: storage blocked, only the reload hint is lost */ }
         // This page already loaded and ran successfully just now (we're executing at the
         // end of <body>) — if the version we booted with is already behind what the
         // server has right now, THIS load was a stale cached copy. Catch it here, after
@@ -17201,7 +17214,7 @@ function submitScheduleMoveOut() {
         return;
       }
       if (d.version !== booted){ autoReload(dirty); }
-    }).catch(function(){});
+    }).catch(function(e){ if (navigator.onLine !== false) { window.hubReportFailure && window.hubReportFailure('index:version-check', e); } });
   }
   check();
   setInterval(check, 60000);
@@ -17258,7 +17271,7 @@ function submitScheduleMoveOut() {
       // permission error) actually ends it now.
       rec.onend = function(){
         base = ta.value;
-        if (!userStopped) { try { rec.start(); return; } catch (e) {} }
+        if (!userStopped) { try { rec.start(); return; } catch (e) { /* silent-ok: recognizer restart failed, falls through to stopUI below */ } }
         stopUI();
       };
       rec.onerror = function(e){

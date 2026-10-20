@@ -143,11 +143,11 @@ const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'ht
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';   // staging uses its own token, separate from prod
 const HUB='index.html', CC='command-center.html';
 let TOKEN='';
-try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
+try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }
 if(STAGING){try{document.title='BrettOS — Action Center (STAGING)';
   var _b=document.createElement('div');_b.textContent='🧪 STAGING SANDBOX — test data only, not your live Hub';
   _b.style.cssText='background:#7a3fb0;color:#fff;font-weight:800;font-size:12px;text-align:center;padding:7px;letter-spacing:.4px';
-  document.body.insertBefore(_b,document.body.firstChild);}catch(e){}}
+  document.body.insertBefore(_b,document.body.firstChild);}catch(e){ /* silent-ok: staging banner is cosmetic only */ }}
 
 function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function money(n){var v=Number(n); if(!isFinite(v))return '—'; return '$'+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});}
@@ -158,10 +158,11 @@ async function getJSON(path){
   let r;
   try{ r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}}); }
   catch(e){ throw new Error('could not connect (network/CORS)'); }
-  let d=null,t='';
-  try{ t=await r.text(); d=JSON.parse(t); }catch(e){}
+  let d=null,t='',parseFail=null;
+  try{ t=await r.text(); d=JSON.parse(t); }catch(e){ parseFail=e; }
   if(!r.ok) throw new Error((d&&d.error)?d.error:('HTTP '+r.status));
   if(d&&d.error) throw new Error(d.error);
+  if(parseFail&&t.trim()){ window.hubReportFailure&&window.hubReportFailure('action-center:unreadable-response '+path.split('?')[0],parseFail); throw new Error('the Hub answered with something unreadable'); }
   return d;
 }
 
@@ -174,7 +175,7 @@ function noToken(){
   document.getElementById('body').innerHTML='';
   document.getElementById('jump').innerHTML='';
 }
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}
+function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){ /* silent-ok: storage blocked, token just is not remembered */ }
   document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';document.getElementById('tokbar').style.display='none';load();}
 
 async function load(){
@@ -329,7 +330,7 @@ load();
       if(booted===null){booted=v.version;return;}
       if(v.version!==booted){ var el=document.activeElement;
         if(el&&(el.tagName==='INPUT'))return; location.reload(true); }
-    }).catch(function(){});
+    }).catch(function(e){ if(navigator.onLine!==false) window.hubReportFailure && window.hubReportFailure('action-center:version-check', e); });
   }
   check(); setInterval(check,60000);
 })();
