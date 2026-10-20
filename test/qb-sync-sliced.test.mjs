@@ -118,7 +118,7 @@ const sigRows = () => [irRow(1), irRow(2), sigRow(1), sigRow(2), sigRow(3), sigR
 {
   const X = build({ rows: sigRows(), transitionMs: 20 });
   const st = { done: [], totals: undefined };
-  const r1 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, now: X.clock }));
+  const r1 = await body(await X.qbSyncPayments(X.env, {}, { state: st, sliceMs: 50, minLoopMs: 0, now: X.clock }));
   t('slice 1: stops before the next row when the slice is spent, partial, no sweep yet', r1.partial === true && X.sweeps.length === 0 && !st.loop_done && X.transitions.length === 3 && st.ir_done === true, { r1, tr: X.transitions });
   t('slice 1: progress remembers which rows are done', st.done.length === 2 + 3 && st.done.includes('sig:1:deposit:') && st.done.includes('ir:IR1'), st.done);
   t('slice 1: does not return the big rows list', r1.rows === undefined);
