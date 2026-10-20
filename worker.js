@@ -2331,6 +2331,7 @@ async function addReceipt(env, body) {
   // when there's no wo_id (a no-WO company/1864-Kerns expense has nowhere to gallery it) or no
   // file (a manual receipt entry with no image). This never touches Receipts/Invoice_Review/
   // billing — additive-only, Attachments write failure never fails the receipt add itself.
+  let galleryWarning = '';
   if (wo_id && newId && (source_file_id || source_file_url)) {
     try {
       await ensureColumns(env, 'Attachments', ['Receipt_ID']);
