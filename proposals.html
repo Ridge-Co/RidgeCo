@@ -435,7 +435,7 @@ async function saveNote(el){
   try{ await postJSON('/ops-queue-update',{id:id,note:el.value.trim()}); if(window.__c&&window.__c.byId[id])window.__c.byId[id].Brett_Note=el.value.trim(); el.classList.add('saved'); setTimeout(function(){el.classList.remove('saved');},1500); }
   catch(e){ el.classList.add('bad'); toast('Your change wasn’t saved — '+h(e&&e.message||e)); }
 }
-function reviewAnyway(btn){ const id=btn.closest('[data-id]').getAttribute('data-id'); REVIEW_ANYWAY[id]=1; try{localStorage.setItem('prop_review_anyway',JSON.stringify(REVIEW_ANYWAY));}catch(e){} load(); }
+function reviewAnyway(btn){ const id=btn.closest('[data-id]').getAttribute('data-id'); REVIEW_ANYWAY[id]=1; try{localStorage.setItem('prop_review_anyway',JSON.stringify(REVIEW_ANYWAY));}catch(e){ /* silent-ok: storage blocked, choice just is not remembered */ } load(); }
 async function dropAllBuilt(btn){
   const list=(window.__c&&window.__c.built)||[]; if(!list.length)return;
   if(!btn.getAttribute('data-armed')){ const old=btn.textContent; btn.setAttribute('data-armed','1'); btn.textContent='Tap again to drop all '+list.length+' (still searchable later)'; setTimeout(function(){ btn.removeAttribute('data-armed'); btn.textContent=old; },4000); return; }
