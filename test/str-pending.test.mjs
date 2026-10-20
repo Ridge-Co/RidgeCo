@@ -513,4 +513,44 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
   t('expiry with a calendar delete that does not land: still expired (silently), the leftover event is reported and retried', pend(W).Status === 'pending_expired' && pend(W).Pending_Cal === 'del' && !W.sms.length && r.errors.some(e => e.step === 'pending_calendar'), { p: pend(W), errs: r.errors });
   W.calMode = 'ok'; await tick(E, null); t('removed on the next tick', !pendingEvents(W).length && pend(W).Pending_Cal === 'done');
 }
+{
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-sheet'); await answer(E, '1', 'decline', offerOf(W, '1', PK).ID);
+  const kOff = offerOf(W, '2', PK, 'pending'); W.sms.length = 0; W.brett.length = 0; W.telemetry.length = 0; W.failUpdateTab = 'STR_Turnovers';
+  const r = await answer(E, '2', 'accept', kOff.ID); W.failUpdateTab = null;
+  t('a hold that did not save is NOT reported as saved, Brett is told, and no "we will let you know" text claims otherwise', r.ok === false && pend(W).Status !== 'pending_held' && !smsTo(W, 'Kayla', 'str_pending_yes').length && (W.brett.length || W.telemetry.length), { r, p: pend(W) });
+  const r2 = await answer(E, '2', 'accept', kOff.ID);
+  t('pressing Yes again after the sheet is back works', r2.result === 'held' && pend(W).Status === 'pending_held', r2);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.attach.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.failUpdateTab = 'STR_Turnovers'; const r = await tick(E, null); W.failUpdateTab = null;
+  t('sheet write failing during conversion: the inquiry is NOT marked converted, nobody is texted, the failure is reported', pend(W).Status !== 'pending_converted' && !smsTo(W, 'Kayla', 'str_pending_booked').length && r.errors.length > 0, { p: pend(W), errs: r.errors });
+  await tick(E, null); await tick(E, null);
+  t('once the sheet is back it converts and Kayla is texted exactly once', pend(W).Status === 'pending_converted' && pend(W, RK).Assigned_Cleaner_ID === '2' && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && W.attach.length === 1, { p: pend(W), real: pend(W, RK), sms: W.sms });
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.brett.length = 0; W.sms.length = 0; BOOK(W, '2026-11-13', PD);
+  W.calMode = 'down'; const r = await tick(E, null); W.calMode = 'ok';
+  t('calendar unreadable: tick reports it, converts nothing, expires nothing, texts nobody', !r.ok && pend(W).Status === 'pending_held' && !W.sms.length, { r: r.errors, p: pend(W) });
+}
+{
+  const { W, E } = await world(); CUR = W; W.failSms = true;
+  const a = await ask(E, PD, 'TEST-textfail');
+  t('first-ask text failure: inquiry saved, offer marked failed, Brett told, the page says so', a.cr.ok && a.cr.advance.action === 'offer_failed' && offerOf(W, '1', PK).Status === 'failed' && (W.brett.length || W.telemetry.length) && /FAILED/.test(a.cr.message), a.cr);
+  W.failSms = false; const r = await J(E.strAdminPendingSendNow({}, { task_key: PK }));
+  t('"Send now" after the failure asks the next cleaner who can be reached (nobody is texted twice)', r.ok && W.sms.filter(s => s.type === 'str_pending_offer').length === 1, { r, sms: W.sms });
+}
+
+// ═══ 13. Coverage readers never treat a "(PENDING)" entry as real coverage ═══
+{
+  const { W, E } = await world(null, w => { w.calEvents.push(w.ev('hp', 'Gina Cleaning (PENDING)', '2026-11-08')); });
+  CUR = W; await tick(E, null);
+  const t108 = pend(W, K108); t('a hand-typed "Gina Cleaning (PENDING)" on a real turnover date does NOT count as covered', t108 && t108.Status !== 'ext_covered' && t108.Status !== 'covered', t108);
+  const st = await J(E.strAdminState({})); t('and the board still shows that real date as not covered', st.tasks.find(x => x.key === K108).covered === false);
+}
+
+// ═══ 14. Hold race: two cleaners say yes at nearly the same moment ═══
+{
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-race');
+  const g = offerOf(W, '1', PK, 'pending'); await tick(E, '2026-10-21', '09:00');
 //@@APPEND@@
