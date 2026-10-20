@@ -158,6 +158,10 @@ function processQueue() {
         thread.addLabel(plan.hadHardError(logged) ? eLabel : dLabel);
       }
     }
+    if (sync.failures.length) {
+      try { alertBrett_(cfg, 'Gmail filter cleanup failed', sync.failures.join('\n')); }
+      catch (ae) { Logger.log('FILTER CLEANUP ALERT COULD NOT BE SENT (' + ae + '). Failures: ' + sync.failures.join(' | ')); }
+    }
     return out;
   } finally { lock.releaseLock(); }
 }
