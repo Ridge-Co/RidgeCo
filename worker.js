@@ -23795,7 +23795,7 @@ async function woSharedRead(env, url){
     const vb = await fetchTab(env, 'Vendor_Bills');
     bills = vb.filter(b => b.Active!=='FALSE' && b.WO_ID===woId && String(b.Vendor_ID||'')===String(auth.vid||''))
       .map(b => ({ Total:b.Total||'', Status:b.Status||'', Created_Date:b.Created_Date||'', Notes:b.Notes||'' }));
-  } catch(e3){}
+  } catch(e3){ await softFail(env, 'vendor_share_bills_read', e3, 'P2', { wo: woId }); }
   // Spanish-speaking vendor → translate the free-text JOB CONTENT (not just the UI) so the
   // whole sheet reads in Spanish. Concurrent calls keep it to ~one round-trip of latency;
   // any failure leaves the English text in place (translateText returns its input on a miss).
