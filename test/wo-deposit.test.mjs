@@ -127,7 +127,9 @@ function build(db, qbState) {
     'const CORS = {};',
     'const qbState = ' + JSON.stringify(qbState) + ';',
     cacheSrc, srSrc, ensureSrc, ensureInnerSrc, idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
+    'async function fetchTabSoft(env, tab) { try { return await fetchTab(env, tab); } catch (e) { return []; } }',
     updateWOFieldsSrc, mockQbSrc(), depositApproveSrc, depositClearSrc,
+    'async function fetchTabSoft(env, tab) { return fetchTab(env, tab); }', // Phase C helper (reporting is covered by cw3-silent-failures.test.mjs)
     'return { depositApprove, depositClear, qbState };',
   ].join('\n');
   return new Function('getAccessToken', 'fetch', 'setTimeout',
