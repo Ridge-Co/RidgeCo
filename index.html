@@ -4969,7 +4969,7 @@ function parseVCardText(text){
       else if (key.indexOf('TEL') === 0 && !out.phone) { out.phone = val.trim(); }
       else if (key.indexOf('EMAIL') === 0 && !out.email) { out.email = val.trim(); }
     });
-  } catch(e) {}
+  } catch(e) { window.hubReportFailure && window.hubReportFailure('index:vcard-parse', e); }
   return out;
 }
 function applyContactCardFields(fields, data){
