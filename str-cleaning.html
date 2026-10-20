@@ -422,11 +422,11 @@ function turnoverCard(t){
   var urgent = !t.covered && t.uncovered_alert;
   var k = esc(t.key), acts = '';
   if(t.status === 'new'){
-    acts = '<p class="say">The scheduler hasn\'t picked this one up yet, so nothing can be done to it here. It appears after the next scheduler run (every 15 minutes while it is ON), or use "Preview" under Tools.</p>';
+    acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">The scheduler hasn\'t picked this one up yet. Assigning here adds it for you, texts the cleaner, and puts it on the cleaning calendar. You see the exact text first.</p>';
   } else if(t.status === 'covered'){
-    acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Change cleaner…</button><button class="btn sm" data-act="unassign" data-key="' + k + '">Unassign</button>';
+    acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Swap cleaner…</button><button class="btn sm" data-act="assign" data-key="' + k + '">Change cleaner…</button><button class="btn sm" data-act="unassign" data-key="' + k + '">Unassign</button><p class="say" style="flex:1 0 100%"><b>Swap cleaner</b> texts the new cleaner, tells the old one she is off the hook (and backup), and fixes the calendar. You check the texts first. <b>Change cleaner</b> only changes the Hub and tells nobody.</p>';
   } else if(t.status === 'on_calendar'){
-    acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">This is covered by an entry someone typed on the cleaning calendar. To undo that, change the calendar itself.</p>';
+    acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Swap cleaner…</button><button class="btn sm" data-act="assign" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">This is covered by an entry someone typed on the cleaning calendar. <b>Swap cleaner</b> replaces that entry with the new cleaner\'s, texts both of them, and makes the old one backup. You check everything first.</p>';
   } else {
     acts = '<button class="btn sm primary" data-act="assign" data-key="' + k + '">Assign…</button><button class="btn sm" data-act="offer" data-key="' + k + '">Ask next cleaner now</button><button class="btn sm" data-act="restart" data-key="' + k + '">Restart the queue</button>';
   }
