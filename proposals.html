@@ -223,7 +223,7 @@ async function maybeSync(q){
     // GitHub blocks the Hub's shared server address, so look the PRs up from this browser and hand them over.
     let prs=[]; try{ const ac=new AbortController(); const tm=setTimeout(function(){ac.abort();},6000); const g=await fetch('https://api.github.com/repos/Ridge-Co/RidgeCo/pulls?state=all&sort=updated&direction=desc&per_page=100',{headers:{'Accept':'application/vnd.github+json'},signal:ac.signal}); clearTimeout(tm); if(g.ok) prs=(await g.json()).map(function(p){return {number:p.number,state:p.state,merged_at:p.merged_at,title:p.title,body:(String(p.body||'').match(/ops[ -]?queue\s+(?:item\s+)?#?\d+/ig)||[]).join(' ')};}); }catch(e){ prs=[]; }
     const r=await fetch(WORKER+'/ops-queue/sync',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({prs:prs})});
-    const d=await r.json().catch(function(){return null;});
+    const d=await r.json().catch(function(){/* silent-ok: null body makes the next line throw to the caller */return null;});
     if(!d) throw new Error('HTTP '+r.status);
     if(d.errors&&d.errors.length) toast('Couldn’t check GitHub for '+d.errors.length+' build(s) ('+h(d.errors[0].error)+') — their status below may be out of date.');
     else if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
