@@ -1197,7 +1197,7 @@ const _hubWorkerCore = {
 export default {
   async fetch(request, env, ctx) {
     const res = await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
-    if (__meter.pending && ctx && ctx.waitUntil) ctx.waitUntil(__meterFlushAlarm(env));   // quota-pressure evidence -> failure ledger (never blocks the response)
+    if (ctx && ctx.waitUntil) { if (__meter.pending) ctx.waitUntil(__meterFlushAlarm(env)); if (__meter.dirty) ctx.waitUntil(__meterPersist(env)); }   // quota-pressure evidence -> failure ledger (never blocks the response)
     return res;
   },
   async scheduled(event, env, ctx) { return await _hubWorkerCore.scheduled(event, env, ctx); },
