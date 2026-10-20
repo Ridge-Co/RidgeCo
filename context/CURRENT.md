@@ -1,3 +1,9 @@
+# VENDOR PAID TAB + ESTIMATE SKIP-TEXT + PADDED FEE + FEE CREDITS + SWEEP — Oct 19, 2026 — branch `feat/estimate-skip-sms-vendor-paid-tab-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.05-paid-tab-pad-credit-sweep`.
+
+## 🟡 Built and tested (146 new checks across 3 test files; full suite = the 13 pre-existing failures). After merge: (1) Paid tab fills in dates after the next payment sync; (2) padded fee stays OFF until Config `instant_fee_pad_enabled` = TRUE; (3) WO-1227: when Cesar's $800 bill (id 124) is approved, pick Scope 8 and confirm net $733.26 BEFORE sending; (4) post a fee credit from Vendors > Fee credit when a statement shows an over-deduction. Details: FEATURE_LOG "VENDOR PORTAL PAID TAB ...".
+
+---
+
 # PROPOSAL NETTING + INSTANT-PAY FEE + PROPERTY/UNIT TEXTS — Oct 19, 2026 — Ridge-Co/RidgeCo, head `feat/proposal-netting-instant-fee-oct19`, PR into `main` NOT merged (Brett merges; money-adjacent). BUILD_VERSION `2026-10-19.04-proposal-netting-instant-fee`.
 
 ## 🟡 Built and tested (83 new checks; full suite shows only the 13 pre-existing failures); staging verification result is in the PR. After merge: (1) set Cesar's Vendors.Instant_Pay TRUE on the Vendors page; (2) Fort Ave (Eddie, bill WO-1154): in Preview & Send pick "Scope 4" and confirm the customer total reads $925 BEFORE sending; (3) backfill open Cesar bills 7923 (WO-1202 $750) and 7950 (WO-1236 $150) one at a time via Preview & Send. Brett already corrected invoice 1764 / bill 7970 by hand. See FEATURE_LOG "PROPOSAL NETTING + INSTANT-PAY FEE".

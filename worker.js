@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-19.04-proposal-netting-instant-fee';
+const BUILD_VERSION = '2026-10-19.05-paid-tab-pad-credit-sweep';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -540,7 +540,17 @@ const _hubWorkerCore = {
         if (path === '/keys')                   return await getSheet(env, 'Keys');
         if (path === '/keys-history')           return await getSheet(env, 'Keys_History');
         if (path === '/config')                 return await getConfig(env);
-        if (path === '/pricing-config')         return json({ configured: !!(await getPricingConfig(env)), config: (await getPricingConfig(env)) || null });
+        if (path === '/pricing-config') {
+          const _pcfg = await getPricingConfig(env);
+          // The instant-pay fee schedule + padded-pricing switch ride along so the invoice builder can fold the pad into its cost basis (Oct 19 2026).
+          let _instant = null;
+          try {
+            const _all = await fetchConfig(env), _fc = instantFeeConfig(_all);
+            const _ids = String(_all.instant_pay_default_vendor_ids != null && String(_all.instant_pay_default_vendor_ids).trim() !== '' ? _all.instant_pay_default_vendor_ids : '3').split(',').map(x => x.trim()).filter(Boolean);
+            _instant = { pad_enabled: !!_fc.pad_enabled, rate: _fc.rate, min: _fc.min, max: _fc.max, default_vendor_ids: _ids, warnings: _fc.warnings };
+          } catch (e) { _instant = { pad_enabled: false, error: String((e && e.message) || e).slice(0, 200) }; }
+          return json({ configured: !!_pcfg, config: _pcfg || null, instant_fee: _instant });
+        }
         if (path === '/property')               return await getPropertyFull(env, url);
         if (path === '/building-info')          return await getBuildingInfo(env, url);
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
@@ -595,6 +605,7 @@ const _hubWorkerCore = {
         if (path === '/returns')                return await getSheet(env, 'Returns');
         if (path === '/vendor-bills')           return await listVendorBills(env, url);
         if (path === '/vendor-loan')            return await vendorLoanGet(env, url);
+        if (path === '/vendor-fee-credit')      return await vendorFeeCreditGet(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
         if (path === '/vendor-access-requests') return await listVendorAccessRequests(env, url);
         if (path === '/estimates')              return await listEstimates(env, url);
@@ -616,6 +627,7 @@ const _hubWorkerCore = {
         if (path === '/qb/unit-audit')          return await qbUnitAudit(env, url);
         if (path === '/qb/repairable')          return await qbRepairable(env, url);
         if (path === '/qb/payables')            return await qbPayables(env, url);
+        if (path === '/qb/proposal-billing-sweep') return await proposalBillingSweep(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
         if (path === '/ops-review-log')         return await opsReviewLogRead(env, url);
@@ -925,6 +937,7 @@ const _hubWorkerCore = {
         if (path === '/log-attachment')           return await logAttachment(env, body);
         if (path === '/vendor-bill/add')          return await addVendorBill(env, body);
         if (path === '/vendor-loan/add')          return await vendorLoanAdd(env, body);
+        if (path === '/vendor-fee-credit/add')    return await vendorFeeCreditAdd(env, body);
         if (path === '/vendor-bill/add-standalone') return await addVendorBillStandalone(env, body);
         if (path === '/vendor/request-property-access') return await vendorRequestPropertyAccess(env, body);
         if (path === '/vendor-access-requests/approve') return await vendorAccessRequestApprove(env, body);
@@ -11404,6 +11417,10 @@ async function approveInvoiceReview(env, body) {
     if (covered) return json({ error: `This job is billed through signed proposal Scope #${covered.scope_id} (its payment milestones already include materials) — its receipts can't be invoiced again here. Reload and untick them.`, scope_covered: covered }, 409);
   }
   const today = new Date().toISOString().split('T')[0];
+  // Padded pricing (Oct 19 2026): the invoice builder folds the instant-pay pad into its cost basis and tells us the amount; we re-derive it from
+  // the fee schedule and refuse a mismatch loudly, so the pad on the bill always equals the pad the customer's price was built on.
+  const padRes = await resolveApprovalPad(env, body);
+  if (padRes.error) return json({ error: padRes.error, code: 'instant_pad_mismatch' }, 409);
 
   // Approving twice must not create a second Invoice_Review row — the Hub can now approve
   // straight from the work order, so the same bill is reachable from two places. If this
@@ -11433,6 +11450,7 @@ async function approveInvoiceReview(env, body) {
       ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit', 'Own_Materials', 'Own_Material_IDs']),
     ]);
   } catch (e) { /* the money fields below still land; only the split is lost */ }
+  if (padRes.pad > 0) { await ensureColumns(env, 'Invoice_Review', ['Instant_Pad']); }   // not in the try above: a pad that cannot be stored must stop the approval
 
   // 1. Update Vendor_Bills row: mark reviewed, save markup fields — only when there IS a
   //    vendor bill. A materials/time-only invoice has none to update.
@@ -11482,6 +11500,7 @@ async function approveInvoiceReview(env, body) {
     // only covers his wage is not a job that works once he pays someone else to do it.
     Own_Wage:           own_wage || '0',
     Profit:             profit   || '0',
+    ...(padRes.pad > 0 ? { Instant_Pad: String(padRes.pad) } : {}),
     QB_Invoice_Status:  'pending',
     QB_Invoice_ID:      '',
     QB_Bill_ID:         '',
@@ -11496,6 +11515,17 @@ async function approveInvoiceReview(env, body) {
     if (parsed && parsed.error) return addRes;      // missing tab / no header row — surface it
     realId = String(parsed && parsed.id || '');
   } catch (e) { /* fall through with an empty id rather than fail the whole approval */ }
+  if (padRes.pad > 0 && realId) {
+    // A pad that did not land would send the vendor a legacy deduction while the customer's price was built on a pad: say so, never go quiet.
+    try {
+      invalidateTabCache('Invoice_Review');
+      const back = (await fetchTab(env, 'Invoice_Review')).find(r => String(r.ID) === realId);
+      if (!back || Math.abs((+back.Instant_Pad || 0) - padRes.pad) > 0.005) throw new Error('Instant_Pad read back as "' + (back ? back.Instant_Pad : 'no row') + '"');
+    } catch (e) {
+      await logTelemetry(env, { Source: 'worker', Job_Type: 'approve_instant_pad_not_saved', Skill_Or_Endpoint: '/invoice-review/approve', Success: 'FALSE', Notes: ('ir=' + realId + ' wo=' + wo_id + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+      return json({ success: false, id: realId, error: 'The invoice was approved, but its $' + padRes.pad.toFixed(2) + ' instant-pay pad did not save (' + String((e && e.message) || e).slice(0, 120) + '). Withdraw the approval and approve again before sending to QuickBooks.' }, 500);
+    }
+  }
   // Sep 15 2026 — a WO carrying an unapplied vendor deposit (POST /wo/deposit-approve) has
   // now had its final bill reviewed and folded into vendor_cost (per the deposit banner
   // renderIRCard shows). Flip Deposit_Applied so a SECOND bill/review on this same WO never
@@ -11507,7 +11537,7 @@ async function approveInvoiceReview(env, body) {
       await updateWOFields(env, wo_id, { Deposit_Applied: 'TRUE' });
     }
   } catch (e) { /* non-fatal — the review itself is already saved */ }
-  return json({ success: true, id: realId });
+  return json({ success: true, id: realId, instant_pad: padRes.pad || 0 });
 }
 
 // POST /invoice-review/approve-bulk { approvals: [ {bill_id, wo_id, vendor_id, vendor_name,
@@ -25537,6 +25567,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return !!_ir2 && !!_ir2.WO_ID && await isTestWO(env, _ir2.WO_ID);
   }
   if (path === '/qb/vendor-in-house') return !!_b.id && await isTestRecord(env, 'Vendors', _b.id);
+  if (path === '/vendor-fee-credit/add') return !!_b.vendor_id && await isTestRecord(env, 'Vendors', _b.vendor_id);
   if (path === '/qb/reparent-unit') return !!_b.unit_id && await isTestRecord(env, 'Units', _b.unit_id);
   if (['/qb/send-invoice', '/qb/undo-send', '/qb/repair-invoice', '/qb/reprice-invoice', '/qb/relabel-invoice',
        '/qb/clear-ir-bill', '/qb/set-ir-bill'].includes(path)) {
@@ -26456,7 +26487,10 @@ async function qbPayables(env, url) {
       const inHouse = String(ir.QB_In_House || '').toUpperCase() === 'TRUE';
 
       // Partial detection: a balance that is neither zero nor the whole amount means part-paid.
-      const custTotal = Number(ir.Customer_Total) || 0;
+      // A send that netted an earlier deposit keeps the GROSS job total in Customer_Total (the credit is in Proposal_Credit_Customer), but the
+      // QuickBooks invoice is the NET amount -- compare balances to what was actually invoiced or an unpaid netted invoice reads "part paid".
+      const propCreditPay = String(ir.Proposal_Applied || '').toUpperCase() === 'TRUE' ? money2(+ir.Proposal_Credit_Customer || 0) : 0;
+      const custTotal = Math.max(0, money2((Number(ir.Customer_Total) || 0) - propCreditPay));
       const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
       const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
 
@@ -26486,7 +26520,7 @@ async function qbPayables(env, url) {
         vendor_id: ir.Vendor_ID || '', vendor_name: ir.Vendor_Name || (vendor ? qbVendorDisplayName(vendor) : ''),
         terms: vendorTermLabel(vendor),
         invoice_id: invId, invoice_number: invNumber,
-        customer_total: Number(ir.Customer_Total) || 0, customer_balance: customerBalance, customer_paid: customerPaid,
+        customer_total: custTotal, proposal_credit: propCreditPay, customer_balance: customerBalance, customer_paid: customerPaid,
         customer_partial: customerPartial,
         ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
@@ -29089,6 +29123,22 @@ async function qbSetIrBill(env, body) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// The one line Reprice/Relabel may change on a sent customer invoice. A plain invoice has exactly one sales line. A send that netted a signed
+// proposal's earlier deposit (Oct 19 2026) has TWO: the job's work line and a negative "already invoiced" credit line, which stays untouched. Anything
+// else is refused with a plain reason (never guessed at). `credit` is the proposal credit in force (0 for a plain invoice).
+function qbPickWorkLine(inv, ir) {
+  const itemLines = ((inv && inv.Line) || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+  const credit = String((ir && ir.Proposal_Applied) || '').toUpperCase() === 'TRUE' ? money2(+ir.Proposal_Credit_Customer || 0) : 0;
+  if (credit > 0) {
+    const credLines = itemLines.filter(l => Math.abs(Number(l.Amount) + credit) < 0.005);
+    const workLines = itemLines.filter(l => Number(l.Amount) > 0);
+    if (itemLines.length === 2 && credLines.length === 1 && workLines.length === 1) return { line: workLines[0], creditLine: credLines[0], credit };
+    return { error: `Expected one work line plus the $${credit.toFixed(2)} "already invoiced" credit line, found ${itemLines.length} sales line(s). Change this one in QuickBooks instead.` };
+  }
+  if (itemLines.length !== 1) return { error: `Expected one sales line, found ${itemLines.length}. Change this one in QuickBooks instead.` };
+  return { line: itemLines[0], creditLine: null, credit: 0 };
+}
+
 // POST /qb/reprice-invoice  { ir_id, new_total, new_markup?, new_fee? }
 // Changes the dollar amount of an ALREADY-SENT customer invoice (unlike /qb/repair-invoice,
 // which preserves the total and only fixes wording). Rewrites the single sales line to the new
@@ -29116,17 +29166,21 @@ async function qbRepriceInvoice(env, body) {
     if (Math.abs(bal - totalAmt) > 0.005)
       return json({ ok: false, error: `That invoice has a payment against it (balance $${bal.toFixed(2)} of $${totalAmt.toFixed(2)}). Not repricing a paid invoice.` }, 409);
 
-    const itemLines = (inv.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
-    if (itemLines.length !== 1)
-      return json({ ok: false, error: `Expected one sales line, found ${itemLines.length}. Reprice this one in QuickBooks instead.` }, 409);
-    const line = itemLines[0];
+    const pick = qbPickWorkLine(inv, ir);
+    if (pick.error) return json({ ok: false, error: pick.error }, 409);
+    const line = pick.line;
+    // new_total is the JOB total (what Customer_Total holds). On a netted invoice the work line carries all of it and the credit line takes the
+    // earlier deposit back off, so the invoice itself lands at new_total - credit.
     const amt = +newTotal.toFixed(2);
+    if (pick.credit > 0 && amt <= pick.credit + 0.004)
+      return json({ ok: false, error: `The new job total $${amt.toFixed(2)} must be more than the $${pick.credit.toFixed(2)} already invoiced on the signed proposal.` }, 409);
     const newLine = {
       Id: line.Id, DetailType: 'SalesItemLineDetail', Amount: amt,
       Description: line.Description,
       SalesItemLineDetail: Object.assign({}, line.SalesItemLineDetail, { Qty: 1, UnitPrice: amt }),
     };
-    const patch = { Id: qbInvId, SyncToken: inv.SyncToken, sparse: true, Line: [newLine] };
+    // Both lines are sent on a netted invoice so QuickBooks can never treat the credit line as dropped.
+    const patch = { Id: qbInvId, SyncToken: inv.SyncToken, sparse: true, Line: pick.creditLine ? [newLine, pick.creditLine] : [newLine] };
     const upd = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
     const updated = upd && upd.Invoice;
     if (!updated) return json({ ok: false, error: 'Invoice update failed: ' + (qbFault(upd) || 'unknown error') }, 502);
@@ -29137,7 +29191,7 @@ async function qbRepriceInvoice(env, body) {
     await updateRow(env, 'Invoice_Review', irId, fields);
 
     return json({ ok: true, ir_id: irId, wo_id: ir.WO_ID || '', invoice_id: qbInvId,
-      old_total: +totalAmt.toFixed(2), new_total: amt, qb_confirms: Number(updated.TotalAmt || 0) });
+      old_total: +totalAmt.toFixed(2), new_total: amt, proposal_credit: pick.credit || 0, new_invoice_total: +(amt - (pick.credit || 0)).toFixed(2), qb_confirms: Number(updated.TotalAmt || 0) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -29162,12 +29216,12 @@ async function qbRelabelInvoice(env, body) {
     const totalAmt = Number(inv.TotalAmt || 0), bal = Number(inv.Balance);
     if (isNaN(bal)) return json({ ok: false, error: 'No balance reported; cannot tell if paid.' }, 409);
     if (Math.abs(bal - totalAmt) > 0.005) return json({ ok: false, error: 'That invoice has a payment against it. Not touching it.' }, 409);
-    const itemLines = (inv.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
-    if (itemLines.length !== 1) return json({ ok: false, error: `Expected one sales line, found ${itemLines.length}.` }, 409);
-    const line = itemLines[0];
+    const pick = qbPickWorkLine(inv, ir);
+    if (pick.error) return json({ ok: false, error: pick.error }, 409);
+    const line = pick.line;
     const newLine = { Id: line.Id, DetailType: 'SalesItemLineDetail', Amount: line.Amount,
       Description: desc, SalesItemLineDetail: line.SalesItemLineDetail };
-    const patch = { Id: qbInvId, SyncToken: inv.SyncToken, sparse: true, Line: [newLine] };
+    const patch = { Id: qbInvId, SyncToken: inv.SyncToken, sparse: true, Line: pick.creditLine ? [newLine, pick.creditLine] : [newLine] };
     const upd = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
     if (!(upd && upd.Invoice)) return json({ ok: false, error: 'Update failed: ' + (qbFault(upd) || 'unknown') }, 502);
     return json({ ok: true, ir_id: irId, invoice_id: qbInvId, description: desc });
@@ -30366,6 +30420,12 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
 const INSTANT_FEE_DEFAULTS = { rate: 0.01, min: 10, max: 100 };
 const INSTANT_FEE_LABEL_EN = 'Instant/next-day payment processing fee recovery';
 const INSTANT_FEE_LABEL_ES = 'Recuperación de cargo por procesamiento de pago instantáneo/al día siguiente';
+// Padded-price variant (Oct 19 2026, brief v1.1 sec 3-6): the bill carries the pad as a +line (the "recovery" label above) and the same
+// amount as a -line (the "deduction" label below), so the vendor nets exactly what they quoted.
+const FEE_CREDIT_LABEL_EN = 'Fee credit from prior period';
+const FEE_CREDIT_LABEL_ES = 'Crédito de cargo de un período anterior';
+const INSTANT_FEE_PAD_DEDUCTION_EN = 'Instant/next-day payment processing fee deduction';
+const INSTANT_FEE_PAD_DEDUCTION_ES = 'Deducción de cargo por procesamiento de pago instantáneo/al día siguiente';
 
 // Half-up to cents. The 1e-7 nudge defeats binary float (1.005 -> 1.01, not 1.00).
 function money2(n) {
@@ -30377,7 +30437,11 @@ function money2(n) {
 // Fee schedule from Config (never hard-coded; a rate change is a Config edit, not a deploy).
 // A bad value falls back to the default AND says so in `warnings` so it is never silent.
 function instantFeeConfig(cfg) {
-  const out = { rate: INSTANT_FEE_DEFAULTS.rate, min: INSTANT_FEE_DEFAULTS.min, max: INSTANT_FEE_DEFAULTS.max, warnings: [] };
+  const out = { rate: INSTANT_FEE_DEFAULTS.rate, min: INSTANT_FEE_DEFAULTS.min, max: INSTANT_FEE_DEFAULTS.max, pad_enabled: false, warnings: [] };
+  // Padded-price mode is OFF until Config instant_fee_pad_enabled is TRUE: turning it on raises the suggested customer price on jobs
+  // for instant-pay vendors, so it is Brett's switch, not a deploy side effect.
+  { const raw = cfg ? (cfg.instant_fee_pad_enabled != null ? cfg.instant_fee_pad_enabled : cfg.INSTANT_FEE_PAD_ENABLED) : null;
+    out.pad_enabled = /^(true|1|yes|on)$/i.test(String(raw == null ? '' : raw).trim()); }
   const read = (key) => {
     if (!cfg) return null;
     const raw = cfg[key] != null ? cfg[key] : cfg[key.toUpperCase()];
@@ -30420,6 +30484,99 @@ function instantPayEnabled(vendor, cfg, override) {
   const raw = cfg && (cfg.instant_pay_default_vendor_ids != null ? cfg.instant_pay_default_vendor_ids : cfg.INSTANT_PAY_DEFAULT_VENDOR_IDS);
   const ids = String(raw != null && String(raw).trim() !== '' ? raw : '3').split(',').map(s => s.trim()).filter(Boolean);
   return !!(vendor && vendor.ID != null && ids.includes(String(vendor.ID)));
+}
+
+// ── Instant-pay fee CREDIT ledger (brief v1.1 sec 7) ─────────────────────────────────────────────────────
+// When bank statements show Cesar was deducted more than QuickBooks actually charged, the difference is posted here as a credit and comes off his
+// NEXT deduction(s) as a visible line until it is used up. One tab, signed entries (same shape as the loan ledger): 'credit' rows are +, 'applied'
+// rows are - and carry the IR + QuickBooks bill they were used on. Reading the statements is a separate project; credits are posted by hand here.
+const FEE_CREDIT_TAB = 'Instant_Fee_Credit';
+const FEE_CREDIT_HEADERS = ['ID','Vendor_ID','Vendor_Name','Entry_Type','Amount','Balance_After','IR_ID','QB_Bill_ID','WO_ID','Statement_Ref','Period','Date','Notes','Entered_By','Created_Date','Active'];
+async function ensureFeeCreditTab(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(x => x.properties && x.properties.title).filter(Boolean);
+  if (!titles.includes(FEE_CREDIT_TAB)) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: FEE_CREDIT_TAB } } }] });
+  await ensureColumns(env, FEE_CREDIT_TAB, FEE_CREDIT_HEADERS);
+}
+// Credit still owed to the vendor. A missing tab means none yet; ANY other read failure throws (never a quiet "no credit").
+async function feeCreditRows(env) {
+  try { return await fetchTab(env, FEE_CREDIT_TAB); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }
+}
+function feeCreditBalanceOf(rows, vendorId) {
+  const b = (rows || []).filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.Vendor_ID) === String(vendorId)).reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
+  return Math.max(0, money2(b));
+}
+async function feeCreditBalance(env, vendorId) { return feeCreditBalanceOf(await feeCreditRows(env), vendorId); }
+// Idempotent per Invoice_Review row: a retried send that already recorded its use of the credit records nothing more.
+async function feeCreditApplyOnce(env, o) {
+  await ensureFeeCreditTab(env);
+  const rows = await feeCreditRows(env);
+  const dup = rows.find(r => String(r.Active || '').toUpperCase() !== 'FALSE' && r.Entry_Type === 'applied' && String(r.IR_ID) === String(o.irId) && String(r.Vendor_ID) === String(o.vendorId));
+  if (dup) return { already: true, applied: Math.abs(parseFloat(dup.Amount) || 0), balance: feeCreditBalanceOf(rows, o.vendorId) };
+  const bal = feeCreditBalanceOf(rows, o.vendorId);
+  const amt = Math.min(money2(o.amount), bal);
+  if (!(amt > 0)) return { applied: 0, balance: bal, short: money2(o.amount) > 0 };
+  await addRow(env, FEE_CREDIT_TAB, { Vendor_ID: String(o.vendorId), Vendor_Name: o.vendorName || '', Entry_Type: 'applied', Amount: String(-amt), Balance_After: String(money2(bal - amt)),
+    IR_ID: String(o.irId), QB_Bill_ID: String(o.qbBillId || ''), WO_ID: o.woId || '', Date: new Date().toISOString().split('T')[0], Notes: 'Used on the instant-pay deduction of bill ' + (o.qbBillId || '') , Entered_By: 'system' });
+  invalidateTabCache(FEE_CREDIT_TAB);
+  const back = (await feeCreditRows(env)).find(r => r.Entry_Type === 'applied' && String(r.IR_ID) === String(o.irId) && String(r.Vendor_ID) === String(o.vendorId));
+  if (!back) throw new Error('the fee-credit use for IR ' + o.irId + ' did not read back');
+  return { applied: amt, balance: money2(bal - amt), short: amt < money2(o.amount) };
+}
+// POST /vendor-fee-credit/add { vendor_id, amount, notes?, statement_ref?, period?, date? }  — "Post fee credit".
+async function vendorFeeCreditAdd(env, body) {
+  const vendorId = String(body.vendor_id || '').trim();
+  const amount = money2(body.amount);
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  if (!(amount > 0)) return json({ error: 'amount must be a positive number' }, 400);
+  if (amount > 5000) return json({ error: 'A fee credit over $5,000 is almost certainly a typo. Nothing was saved.' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ error: 'No vendor ' + vendorId }, 404);
+  await ensureFeeCreditTab(env);
+  const prior = await feeCreditBalance(env, vendorId);
+  const res = await addRow(env, FEE_CREDIT_TAB, { Vendor_ID: vendorId, Vendor_Name: vendor.Name || '', Entry_Type: 'credit', Amount: String(amount), Balance_After: String(money2(prior + amount)),
+    Statement_Ref: String(body.statement_ref || '').slice(0, 200), Period: String(body.period || '').slice(0, 100), Date: String(body.date || new Date().toISOString().split('T')[0]).slice(0, 10),
+    Notes: String(body.notes || '').slice(0, 500), Entered_By: String(body.entered_by || 'Brett').slice(0, 60) });
+  let parsed = null; try { parsed = await res.clone().json(); } catch (_) {}
+  if (parsed && parsed.error) return res;
+  invalidateTabCache(FEE_CREDIT_TAB);
+  const after = await feeCreditBalance(env, vendorId);
+  if (Math.abs(after - money2(prior + amount)) > 0.005) return json({ error: 'The credit did not save correctly (balance reads $' + after.toFixed(2) + ', expected $' + money2(prior + amount).toFixed(2) + '). Check the ' + FEE_CREDIT_TAB + ' tab before trying again.' }, 500);
+  return json({ success: true, vendor_id: vendorId, balance: after });
+}
+// GET /vendor-fee-credit?vendor_id=X — balance + full history.
+async function vendorFeeCreditGet(env, url) {
+  const vendorId = (url.searchParams.get('vendor_id') || '').trim();
+  if (!vendorId) return json({ error: 'vendor_id required' }, 400);
+  const rows = await feeCreditRows(env);
+  const entries = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.Vendor_ID) === vendorId).sort((a, b) => (parseInt(a.ID) || 0) - (parseInt(b.ID) || 0));
+  return json({ vendor_id: vendorId, balance: feeCreditBalanceOf(rows, vendorId), entries });
+}
+
+// The pad folded into the customer's price for ONE payment to this vendor: 0 unless padded pricing is switched on in Config, the vendor
+// is paid instantly, is not in-house, and there is a net amount to pad. `net` = what the vendor quoted/nets for that payment.
+function instantPadFor(vendor, cfgAll, feeCfg, net) {
+  if (!feeCfg || !feeCfg.pad_enabled) return 0;
+  if (!vendor || String(vendor.In_House || '').toUpperCase() === 'TRUE') return 0;
+  if (!instantPayEnabled(vendor, cfgAll, undefined)) return 0;
+  return instantFeePad(net, feeCfg);
+}
+// Approval-time check of the pad the invoice builder says it priced in. null = fine (pad may be 0); { error } = refuse, nothing saved.
+async function resolveApprovalPad(env, body) {
+  const posted = body && body.instant_pad;
+  const postedNum = (posted == null || String(posted).trim() === '') ? 0 : Number(posted);
+  if (!isFinite(postedNum) || postedNum < 0) return { error: 'instant_pad must be a number of zero or more.' };
+  if (!(postedNum > 0)) return { pad: 0 };
+  const cfgAll = await fetchConfig(env);
+  const feeCfg = instantFeeConfig(cfgAll);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === String(body.vendor_id));
+  const expected = instantPadFor(vendor, cfgAll, feeCfg, +body.vendor_cost || 0);
+  if (!(expected > 0)) return { error: 'The price includes a $' + postedNum.toFixed(2) + ' instant-pay pad, but padded pricing does not apply to this vendor/bill right now (Config instant_fee_pad_enabled, the vendor\'s Instant Pay setting, or the amount). Reload the page and price it again. Nothing was saved.' };
+  if (Math.abs(expected - postedNum) > 0.01) return { error: 'The price includes a $' + postedNum.toFixed(2) + ' instant-pay pad but the fee schedule says $' + expected.toFixed(2) + ' for a $' + (+body.vendor_cost || 0).toFixed(2) + ' vendor bill. Reload the page and price it again. Nothing was saved.' };
+  return { pad: expected };
 }
 
 // "20 E Eager St Apt 3" — property + unit, for vendor bills and every text (Brett Oct 19).
@@ -30533,6 +30690,14 @@ function vendorBillAdjustments(o) {
   const { payable, credits, feeOn, cfg, lang, feeOverride } = o;
   const es = lang === 'es';
   const lines = [], notes = [];
+  // Padded jobs: `payable` is the vendor's NET quote; `pad` is the fee already folded into the customer's price. With instant pay ON the
+  // bill gets +pad and -pad (net unchanged); with it OFF neither line appears and the pad stays with Ridge Co. A proposal credit changes the
+  // amount actually sent (so QuickBooks' 1% no longer equals the pad) -> fall back to the legacy deduction and say so.
+  let padAmt = (typeof o.pad === 'number' && isFinite(o.pad) && o.pad > 0) ? money2(o.pad) : 0;
+  if (padAmt > 0 && (credits || []).some(c => money2(c && c.amount) > 0)) {
+    notes.push('A proposal credit changes the amount sent, so the $' + padAmt.toFixed(2) + ' pad is replaced by the standard instant-pay deduction on this bill.');
+    padAmt = 0;
+  }
   let running = money2(payable);
   for (const c of (credits || [])) {
     const amt = money2(c.amount);
@@ -30541,7 +30706,13 @@ function vendorBillAdjustments(o) {
     running = money2(running - amt);
   }
   let fee = 0;
-  if (feeOn && running > 0) {
+  if (feeOn && padAmt > 0 && running > 0) {
+    lines.push({ type: 'instant_fee_pad', desc: es ? INSTANT_FEE_LABEL_ES : INSTANT_FEE_LABEL_EN, amount: padAmt });
+    lines.push({ type: 'instant_fee', desc: es ? INSTANT_FEE_PAD_DEDUCTION_ES : INSTANT_FEE_PAD_DEDUCTION_EN, amount: -padAmt });
+    fee = padAmt;   // the deduction; the +pad line cancels it, so bill_total stays at the vendor's net quote
+  } else if (padAmt > 0 && !feeOn) {
+    notes.push('Instant pay is off for this bill: neither the $' + padAmt.toFixed(2) + ' fee line nor its deduction appears, and the pad stays with Ridge Co.');
+  } else if (feeOn && running > 0) {
     fee = (typeof feeOverride === 'number' && isFinite(feeOverride)) ? Math.min(money2(feeOverride), running) : instantFeeLegacyDeduction(running, cfg);
     if (fee > 0) {
       lines.push({ type: 'instant_fee', desc: es ? INSTANT_FEE_LABEL_ES : INSTANT_FEE_LABEL_EN, amount: -fee });
@@ -30551,7 +30722,63 @@ function vendorBillAdjustments(o) {
   } else if (feeOn) {
     notes.push('Nothing is payable on this bill after the adjustments, so no instant-pay fee applies.');
   }
-  return { lines, fee, bill_total: running, notes };
+  // Fee credit (brief v1.1 sec 7): money the vendor is owed back from earlier over-deductions reduces THIS deduction by min(credit, deduction),
+  // as its own visible line. Whatever is left stays in the ledger for the next bill. Only ever offsets a deduction -- never adds money to a bill
+  // that has none -- and is only RECORDED as used after the QuickBooks bill id comes back (feeCreditApplyOnce), so a failed send cannot double-credit.
+  let creditApplied = 0;
+  const availCredit = (typeof o.feeCredit === 'number' && isFinite(o.feeCredit) && o.feeCredit > 0) ? money2(o.feeCredit) : 0;
+  if (fee > 0 && availCredit > 0) {
+    creditApplied = Math.min(availCredit, fee);
+    lines.push({ type: 'fee_credit', desc: es ? FEE_CREDIT_LABEL_ES : FEE_CREDIT_LABEL_EN, amount: creditApplied });
+    running = money2(running + creditApplied);
+  }
+  return { lines, fee, pad: (feeOn && padAmt > 0 && fee === padAmt) ? padAmt : 0, credit_applied: creditApplied, credit_left: money2(availCredit - creditApplied), bill_total: running, notes };
+}
+
+// PURE — read-only sweep: which signed proposals have a payment already invoiced and another still open, and is any approved bill on that job in
+// danger of billing the whole job a second time (the 20 E Eager St / invoice 1764 mistake)? Changes nothing.
+//   flags: 'unsent_bill_would_double_bill' (an approved bill that is not yet in QuickBooks and, sent in full, would push the job past what was signed),
+//          'sent_unnetted_over_signed' (an invoice already went out in full on top of the earlier payment(s)),
+//          'netting_decision_pending' (Review Bills has not yet been told whether to net it).
+function proposalBillingSweepRows(o) {
+  const scopes = o.scopes || [], sigs = o.sigs || [], milestones = o.milestones || [], irs = o.irs || [];
+  const rows = [];
+  for (const scope of scopes) {
+    if (String(scope.Active || '').toUpperCase() === 'FALSE') continue;
+    const sig = sigs.filter(r => String(r.Scope_ID) === String(scope.ID) && String(r.Active || '').toUpperCase() !== 'FALSE').sort((a, b) => (+b.ID || 0) - (+a.ID || 0))[0];
+    if (!sig) continue;
+    const state = proposalBillingState(sig, milestones);
+    const billed = state.items.filter(i => i.billed), pending = state.items.filter(i => !i.billed);
+    if (!billed.length || !pending.length) continue;           // nothing partly billed: no double-bill exposure
+    const billedTotal = money2(billed.reduce((s, i) => s + i.customer_amount, 0)), signed = money2(state.signed_total);
+    const related = irs.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && scope.WO_ID && String(r.WO_ID) === String(scope.WO_ID));
+    const flags = [];
+    const irOut = related.map(r => {
+      const total = money2(+r.Customer_Total || 0);
+      const sent = !!String(r.QB_Invoice_ID || '').trim();
+      const decided = String(r.Proposal_Applied || '').toUpperCase();   // TRUE (netted) | SKIPPED | '' (never asked)
+      if (!sent && decided === '' && signed > 0 && money2(billedTotal + total) > signed + 0.01) flags.push('unsent_bill_would_double_bill');
+      if (!sent && decided === '') flags.push('netting_decision_pending');
+      if (sent && decided !== 'TRUE' && signed > 0 && money2(billedTotal + total) > signed + 0.01) flags.push('sent_unnetted_over_signed');
+      return { ir_id: String(r.ID), customer_total: total, in_quickbooks: sent, invoice_number: r.QB_Invoice_Number || '', netting: decided === 'TRUE' ? 'applied' : decided === 'SKIPPED' ? 'skipped' : 'not decided',
+        credit_customer: money2(+r.Proposal_Credit_Customer || 0) };
+    });
+    rows.push({ scope_id: String(scope.ID), wo_id: scope.WO_ID || '', title: scope.Title || '', signature_id: String(sig.ID), mode: state.mode, signed_total: signed, already_invoiced: billedTotal, still_open: money2(signed - billedTotal),
+      billed: billed.map(i => ({ label: i.label, amount: i.customer_amount, invoice: i.invoice_number || i.invoice_id, vendor_billed: !!i.bill_id })),
+      open: pending.map(i => ({ label: i.label, amount: i.customer_amount })),
+      related_bills: irOut, flags: Array.from(new Set(flags)) });
+  }
+  const first = (r) => (String(r.wo_id) === 'WO-1227' || String(r.scope_id) === '8') ? 0 : 1;
+  rows.sort((a, b) => first(a) - first(b) || (b.flags.length ? 1 : 0) - (a.flags.length ? 1 : 0) || ((+b.scope_id || 0) - (+a.scope_id || 0)));
+  return rows;
+}
+// GET /qb/proposal-billing-sweep — read-only (no QuickBooks call, no writes).
+async function proposalBillingSweep(env) {
+  const [scopes, sigs, irs] = await Promise.all([fetchTab(env, 'Scopes'), fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Invoice_Review')]);
+  let milestones = [];
+  try { milestones = await fetchTab(env, 'Payment_Milestones'); } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const rows = proposalBillingSweepRows({ scopes, sigs, milestones, irs });
+  return json({ ok: true, read_only: true, count: rows.length, flagged: rows.filter(r => r.flags.length).length, proposals: rows });
 }
 
 // ── I/O around the pure helpers ──────────────────────────────────────────────
@@ -30572,7 +30799,7 @@ async function updateRowVerified(env, tab, id, fields) {
 
 const NETTING_IR_COLS = ['Proposal_Applied', 'Proposal_Scope_ID', 'Proposal_Vendor_ID', 'Proposal_Signature_ID', 'Proposal_Mode', 'Proposal_Milestone_IDs',
   'Proposal_Credit_Customer', 'Proposal_Credit_Vendor', 'Proposal_Customer_Label', 'Proposal_Vendor_Label', 'Proposal_Vendor_Label_ES',
-  'Proposal_Closed', 'Instant_Pay', 'Instant_Fee'];
+  'Proposal_Closed', 'Instant_Pay', 'Instant_Fee', 'Instant_Pad'];
 
 // Summary of one candidate for the preview (never raw sheet rows).
 function nettingCandidateSummary(c, plan) {
@@ -30906,9 +31133,20 @@ async function qbSendInvoice(env, body) {
     const feeOn = storedFee ? storedFee.on : instantPayEnabled(vendor, cfgAll, body.instant_pay);
     const feeDefaultOn = instantPayEnabled(vendor, cfgAll, undefined);
     const vendorCostGross = vendorCost;   // snapshot: `vendorCost` is reduced by a loan deduction later on
+    const irPad = money2(+ir.Instant_Pad || 0);   // pad the customer's price was built on (0 = legacy deduction)
+    // Fee credit owed back to this vendor (only matters while a deduction is being taken). A failed READ stops a real send (it must never quietly
+    // skip money the vendor is owed); a preview just says so.
+    let feeCreditAvail = 0;
+    if (!haveBill && !vendorInHousePre && vendorCost > 0) {
+      try { feeCreditAvail = await feeCreditBalance(env, ir.Vendor_ID); }
+      catch (e) {
+        if (!previewOnly) return json({ ok: false, error: 'Could not read the instant-pay fee-credit ledger (' + String((e && e.message) || e).slice(0, 160) + '), so nothing was sent. Try again in a minute.' }, 503);
+        warnings.push('Could not read the instant-pay fee-credit ledger — any credit owed to this vendor is not shown here.');
+      }
+    }
     const buildAdj = (loanDed, forceFee) => vendorBillAdjustments({
       payable: money2(vendorCostGross - (loanDed || 0)), lang: vendorLang, feeOn: (forceFee === true || feeOn) && !vendorInHousePre && vendorCostGross > 0, cfg: feeCfg,
-      feeOverride: storedFee && storedFee.on ? storedFee.amount : undefined,
+      feeOverride: storedFee && storedFee.on ? storedFee.amount : undefined, pad: irPad, feeCredit: feeCreditAvail,
       credits: creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [],
     });
 
@@ -31026,7 +31264,7 @@ async function qbSendInvoice(env, body) {
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +netCustTotal.toFixed(2), gross_total: +custTotal.toFixed(2), credit: +creditCust.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         netting:  nres.block,
-        fee:      (() => { const a = buildAdj(previewLoanDeduction); return { applies: !vendorInHousePre && vendorCost > 0 && (feeDefaultOn || feeOn), on: feeOn, vendor_default_on: feeDefaultOn, amount: a.fee, amount_if_on: buildAdj(previewLoanDeduction, true).fee, send_amount: a.bill_total, vendor_credit: +creditVend.toFixed(2),
+        fee:      (() => { const a = buildAdj(previewLoanDeduction); return { applies: !vendorInHousePre && vendorCost > 0 && (feeDefaultOn || feeOn), on: feeOn, vendor_default_on: feeDefaultOn, amount: a.fee, pad: a.pad || 0, amount_if_on: buildAdj(previewLoanDeduction, true).fee, send_amount: a.bill_total, vendor_credit: +creditVend.toFixed(2),
           rate: feeCfg.rate, min: feeCfg.min, max: feeCfg.max, notes: a.notes,
           lines: a.lines.map(l => ({ type: l.type, desc: l.desc, amount: l.amount })) }; })(),
         bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
@@ -31251,6 +31489,16 @@ async function qbSendInvoice(env, body) {
           if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
         } else {
           billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (adjFinal.credit_applied > 0) {
+            // Mark the credit used ONLY now that QuickBooks returned the bill id. If this write fails the bill already carries the credit line, so say so loudly.
+            try {
+              const used = await feeCreditApplyOnce(env, { vendorId: vendor.ID, vendorName: vendDisplay, amount: adjFinal.credit_applied, irId: ir.ID, qbBillId: billId, woId: ir.WO_ID });
+              warnings.push('Fee credit: $' + used.applied.toFixed(2) + ' of the credit owed to ' + vendDisplay + ' was taken off this bill\'s deduction (credit left $' + used.balance.toFixed(2) + ').');
+            } catch (e) {
+              warnings.push('⚠ The bill went out with a $' + adjFinal.credit_applied.toFixed(2) + ' fee-credit line, but recording the credit as used failed (' + String((e && e.message) || e).slice(0, 120) + ') — post a matching negative entry on ' + vendDisplay + '\'s fee-credit ledger by hand or the credit will be used twice.');
+              await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+            }
+          }
           if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
           if (loanAdj.deduction > 0) {
             try {
@@ -31414,6 +31662,22 @@ async function qbSendCombinedInvoice(env, ctx) {
         SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: -creditCust } });
     }
     const netCombined = money2(combinedTotal - creditCust);
+    // Fee credit owed back, read once per vendor and shared out in order so two bills to the same vendor never spend the same credit twice.
+    const creditLeft = new Map();
+    {
+      let ledgerRows = null;
+      for (const rb of rowBuilds) {
+        if (rb.vendorInHouse || !(rb.vendorCost > 0) || (rb.row.QB_Bill_ID && String(rb.row.QB_Bill_ID).trim())) continue;
+        const vid = String(rb.row.Vendor_ID);
+        if (creditLeft.has(vid)) continue;
+        try { if (!ledgerRows) ledgerRows = await feeCreditRows(env); creditLeft.set(vid, feeCreditBalanceOf(ledgerRows, vid)); }
+        catch (e) {
+          if (!previewOnly) return json({ ok: false, error: 'Could not read the instant-pay fee-credit ledger (' + String((e && e.message) || e).slice(0, 160) + '), so nothing was sent. Try again in a minute.' }, 503);
+          warnings.push('Could not read the instant-pay fee-credit ledger — any credit owed to a vendor is not shown here.');
+          creditLeft.set(vid, 0);
+        }
+      }
+    }
     for (const rb of rowBuilds) {
       const feeDefaultOn = instantPayEnabled(rb.vendor, cfgAll, undefined);
       // The per-send toggle can only switch a vendor that is already on OFF here; to turn instant pay ON for another vendor, set it on that vendor.
@@ -31421,9 +31685,12 @@ async function qbSendCombinedInvoice(env, ctx) {
       rb.feeDefaultOn = feeDefaultOn;
       rb.vendorLang = String(rb.vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en';
       rb.credit = (creditRow === rb) ? applied.plan.credit_vendor : 0;
-      const mk = (forceOn) => vendorBillAdjustments({ payable: rb.vendorCost, lang: rb.vendorLang, feeOn: (forceOn === true || rb.feeOn) && !rb.vendorInHouse && rb.vendorCost > 0, cfg: feeCfg,
+      rb.pad = money2(+rb.row.Instant_Pad || 0);
+      rb.creditAvail = creditLeft.get(String(rb.row.Vendor_ID)) || 0;
+      const mk = (forceOn) => vendorBillAdjustments({ payable: rb.vendorCost, lang: rb.vendorLang, feeOn: (forceOn === true || rb.feeOn) && !rb.vendorInHouse && rb.vendorCost > 0, cfg: feeCfg, pad: rb.pad, feeCredit: rb.creditAvail,
         credits: rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [] });
       rb.adj = mk(false); rb.adjIfOn = mk(true);
+      if (rb.adj.credit_applied > 0) creditLeft.set(String(rb.row.Vendor_ID), money2(rb.creditAvail - rb.adj.credit_applied));
     }
 
     const photoFolderId  = wo.Drive_Folder_ID || '';
@@ -31458,7 +31725,7 @@ async function qbSendCombinedInvoice(env, ctx) {
             total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
             doc_number: rb.billDoc.number, doc_from: rb.billDoc.source,
             skipped: rb.vendorCost <= 0 || rb.vendorInHouse, in_house: rb.vendorInHouse,
-            fee: { applies: !rb.vendorInHouse && rb.vendorCost > 0 && rb.feeDefaultOn, on: rb.feeOn, vendor_default_on: rb.feeDefaultOn, amount: rb.adj.fee, amount_if_on: rb.adjIfOn.fee, send_amount: rb.adj.bill_total,
+            fee: { applies: !rb.vendorInHouse && rb.vendorCost > 0 && rb.feeDefaultOn, on: rb.feeOn, vendor_default_on: rb.feeDefaultOn, amount: rb.adj.fee, pad: rb.adj.pad || 0, amount_if_on: rb.adjIfOn.fee, send_amount: rb.adj.bill_total,
                    vendor_credit: +(rb.credit || 0).toFixed(2), rate: feeCfg.rate, min: feeCfg.min, max: feeCfg.max, notes: rb.adj.notes, lines: rb.adj.lines.map(l => ({ type: l.type, desc: l.desc, amount: l.amount })) },
           });
         }
@@ -31643,6 +31910,15 @@ async function qbSendCombinedInvoice(env, ctx) {
           if (!billId) errors.push('Bill (' + rb.vendDisplay + '): ' + (qbFault(br) || 'unknown error'));
           else {
             rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+            if (rb.adj.credit_applied > 0) {
+              try {
+                const used = await feeCreditApplyOnce(env, { vendorId: rb.vendor.ID, vendorName: rb.vendDisplay, amount: rb.adj.credit_applied, irId: rb.row.ID, qbBillId: billId, woId: rb.row.WO_ID });
+                warnings.push('Fee credit: $' + used.applied.toFixed(2) + ' of the credit owed to ' + rb.vendDisplay + ' was taken off this bill\'s deduction (credit left $' + used.balance.toFixed(2) + ').');
+              } catch (e) {
+                warnings.push('⚠ The bill for ' + rb.vendDisplay + ' went out with a $' + rb.adj.credit_applied.toFixed(2) + ' fee-credit line, but recording the credit as used failed (' + String((e && e.message) || e).slice(0, 120) + ') — post a matching negative entry on the fee-credit ledger by hand or it will be used twice.');
+                await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+              }
+            }
             if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
           }
         }
