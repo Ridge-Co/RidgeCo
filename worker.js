@@ -36633,6 +36633,19 @@ async function strPendingSendText(ctx, p) {
   await strSystemAlert(ctx.env, 'pending_text', `The ${p.Status === 'pending_cancelled' ? '"no booking after all"' : '"now booked"'} text to ${c.Name} for ${strFmtDate(p.Date)} failed (try ${n + 1}/3)${n + 1 >= 3 ? ' and will NOT be retried - tell them yourself' : ''}: ${r.detail}`);
   return { ok: false };
 }
+async function strPendingSendMail(ctx, p) {
+  const flag = p.Pending_Mail || '', iso = new Date(ctx.now).toISOString();
+  if (!(flag === 'due' || /^failed:[12]$/.test(flag))) return null;
+  const c = ctx.st.cmap[p.Assigned_Cleaner_ID], real = ctx.st.turnovers.find(t => t.Task_Key === p.Converted_To), n = (/^failed:(\d)$/.exec(flag) || [0, 0])[1] | 0;
+  if (!c || !real) { await strSetTurnover(ctx, p, { Pending_Mail: 'skipped:no_cleaner' }); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Mail: 'sending:' + iso });
+  const r = await strSwapEmail(ctx, c, [{ date: real.Date, kind_label: 'Checkout 11 AM', _t: { next: real.Next_Arrival || '' } }]);
+  if (r.status === 'sent' || r.status === 'staged') { await strSetTurnover(ctx, p, { Pending_Mail: 'sent:' + iso }); await strLog(ctx, p.Task_Key, c.ID, 'pending_invite_sent', r.status); return { ok: true }; }
+  if (r.status === 'skipped') { await strSetTurnover(ctx, p, { Pending_Mail: 'skipped:' + String(r.note || '').slice(0, 60) }); ctx.warnings.push(r.note); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Mail: 'failed:' + (n + 1) });
+  ctx.errors.push({ step: 'pending_invite', error: r.note }); await strSystemAlert(ctx.env, 'pending_invite', r.note + (n + 1 >= 3 ? ' (no more tries)' : ''));
+  return { ok: false };
+}
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
