@@ -69,7 +69,7 @@ const L = new Function('SCHED_TOKEN_MIN_LEN', 'SCHED_TOKEN_KEY', 'MSG_QUEUE_TAB'
   SCHED_TOKEN_MIN_LEN, SCHED_TOKEN_KEY, 'Message_Queue', fetch, ensureColumns, addRow, OPS_QUEUE_TAB, OPS_QUEUE_COLS, sheetsRequest, ensureTab, isMissingTabError, json, sendSMS, setConfigKey, schedReadConfigRows, schedParseState, schedEffective, schedStatus, SCHED_STATE_KEY);
 const reset = (cfg) => {
   SHEET = { Config: [['failure_alert_enabled', 'TRUE'], ['admin_phone', '+15550001111'], ['dead_man_switch_enabled', 'TRUE']].concat(cfg || []) };
-  L.__reset(); SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
+  L.__reset(); TWILIO = new Error('no twilio'); QUEUE_FAIL = false; SMS = []; SMS_RESULT = { sid: 'SM1' }; OVERDUE = []; FAIL_APPEND = false; ERR = [];
 };
 const origErr = console.error; console.error = (...a) => { ERR.push(a.join(' ')); };
 const T0 = Date.UTC(2026, 9, 16, 12, 5);      // 8:05 AM ET
