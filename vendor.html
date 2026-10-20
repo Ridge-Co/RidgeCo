@@ -2908,7 +2908,7 @@ function submitCompleteInfo() {
     release();
     if (res.error) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + esc(res.error) + '</div>'; return; }
     session.vendor_phone = phone;
-    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch (e) {}
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch (e) { /* silent-ok: storage blocked, session stays in memory */ }
     var woId = _ciWOId, vendorName = _ciVendorName;
     closeCompleteInfo();
     // Same tap: go straight into the real bill modal now that the gate is cleared.
