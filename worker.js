@@ -26794,9 +26794,28 @@ const QB_SANDBOX_API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/compan
 // real books. Production is unchanged. (Staging writes reach the sandbox only when QB_* creds are set.)
 function qbBase(env) { return (env && (env.__STAGING__ ?? isStaging(env))) ? QB_SANDBOX_API_BASE : QB_API_BASE; }
 
+// Oct 20 2026 (no-silent-failures): QuickBooks auth is a P0 path (every invoice, bill and payment sync). Intuit ROTATES the refresh token on every
+// refresh; if the new one is not saved, the next refresh uses a dead token and QuickBooks stays broken until someone re-authorises it. So:
+//   - the Config tab must be readable (no silent fallback to the old env seed),
+//   - the rotated token is saved AND read back, with one retry; it is also kept in memory for this Worker instance,
+//   - every failure is written to the failure ledger (P0 for auth/persist problems, P1 for transient network/5xx).
+let _qbRotated = null;       // { token, at } - newest refresh token this instance received, used if the Config copy is missing or older
+async function qbPersistRefreshToken(env, token) {
+  let lastErr = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await failSetConfig(env, 'QB_REFRESH_TOKEN', token);
+      const back = await fetchConfigStrict(env);
+      if (String(back.QB_REFRESH_TOKEN || '').trim() === token) return { ok: true };
+      lastErr = 'read-back did not match what was written';
+    } catch (e) { lastErr = String((e && e.message) || e).slice(0, 200); }
+  }
+  return { ok: false, error: lastErr };
+}
 async function qbAccessToken(env) {
+  const fail = async (where, msg, severity) => { await reportFailure(env, { system: 'hub', source: 'quickbooks', where, message: msg, severity: severity || 'P0' }); return new Error(msg); };
   if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REALM_ID)
-    throw new Error('QB env vars missing (need QB_CLIENT_ID, QB_CLIENT_SECRET, QB_REALM_ID)');
+    throw await fail('qb_auth', 'QB env vars missing (need QB_CLIENT_ID, QB_CLIENT_SECRET, QB_REALM_ID)');
   // Intuit rotates the refresh token. Prefer the rotated value persisted in the Config
   // tab; fall back to the env seed. After a successful refresh, persist the new token.
   let cfg = {}; try { cfg = await fetchConfig(env); } catch (e) {}
