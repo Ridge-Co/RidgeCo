@@ -23714,7 +23714,7 @@ async function woShareRevoke(env, body){
   if(!wo) return json({ error:'WO not found' }, 404);
   const next = String((parseInt(wo.Share_Rev||'0',10)||0) + 1);
   await updateWOFields(env, woId, { Share_Rev: next });
-  return json({ success:true, wo_id:woId, rev:next });
+  return json(ens.ok ? { success:true, wo_id:woId, rev:next } : { success:true, wo_id:woId, rev:next, failure_warning:'The Share_Rev column could not be confirmed (' + ens.error + ') - check that the old link really stopped working.' });
 }
 
 // PUBLIC: verify a link + the last 4 of the assigned vendor's phone → 24h view token.
