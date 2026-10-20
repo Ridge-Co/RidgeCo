@@ -1051,6 +1051,12 @@ function openPendSend(key){
       return { tone: errs.length || a === 'offer_failed' ? 'warn' : 'ok', head: (SEND_WORDS[a] || 'Done.') + (r.status ? ' ' + r.status.label + '.' : ''), extra: errs.length ? '<div class="msg err"><b>Problems</b>' + listHtml(errs) + '</div>' : '' };
     }); } });
 }
+function openPendConvert(key){
+  var p = findPend(key); if(!p) return;
+  openAction({ title: 'Mark ' + p.label + ' as booked now?', say: 'Use this only if the booking is real. It turns the inquiry into a normal turnover straight away, without waiting for the bookings feed.',
+    body: '<p class="say">' + (p.held_by ? '<b>' + esc(p.held_by) + '</b> becomes the assigned cleaner, gets a "now booked" text, and her calendar entry becomes the normal one. ' : 'Nobody has said yes yet, so it becomes an ordinary open turnover and the cleaner queue takes over. ') + 'Cleaners who passed are not texted. If the feed does not show the booking within about 3 days, the Hub treats it like any booking that left the feed and tells you.</p>',
+    go: 'Yes, it is booked', run: function(){ return api('POST', '/str/admin/pending/convert', { task_key: key }).then(function(r){ return pendDoneSheet('', r); }); } });
+}
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
   var out = $(outId); out.innerHTML = '<p class="muted">' + esc(loadingText) + '</p>';
