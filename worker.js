@@ -3234,7 +3234,7 @@ function receiptCutoffNote(receiptDate, cutoff) {
 // predate the cutoff (they were queued before the cutoff existed). Skips only; writes nothing
 // else, and every row it touches can be moved back with /receipt-recon/unskip.
 async function receiptReconSkipBeforeCutoff(env, body) {
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfigStrict(env);   // a WRITE path: a failed Config read must stop it, not silently use the default cutoff
   const cutoff = receiptReconCutoff(cfg);
   const rows = await fetchTab(env, 'Receipt_Recon_Queue');
   const hits = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (r.Status || 'pending') === 'pending' && receiptBeforeCutoff(r.Receipt_Date, cutoff));
