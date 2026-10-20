@@ -930,5 +930,113 @@ const runsBody = (w, list) => ({ code: 200, body: { workflow_runs: list.map(x =>
   ok(!/catch \((\w+)\) \{\s*\}/.test(SRC), 'still no empty catch blocks');
 }
 
+// ── A3c: failed GitHub runs on main + live Worker behind main ────────────────────────────────────────────────────────
+{
+  const MIN = 60000, GH = 'GITHUB_TOKEN_RIDGECO';
+  const BV = (v) => "// head\nconst BUILD_VERSION = '" + v + "';\nconst x = 1;";
+  const mkw = (o) => {
+    const w = world({ watchers: true }); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30); if (o.token !== false) w.props[GH] = 'g'.repeat(30);
+    w.state = Object.assign({ runs: [], main: '2026-10-20.01-a', live: '2026-10-20.01-a', runsCode: 200, rawCode: 200, healthCode: 200 }, o);
+    w.hub = (url) => {
+      const s = w.state;
+      if (/actions\/runs\?/.test(url)) return s.runsCode === 200 ? { code: 200, body: { workflow_runs: s.runs } } : { code: s.runsCode, body: 'nope' };
+      if (/raw\.githubusercontent\.com/.test(url)) return s.rawCode === 200 ? { code: 206, body: BV(s.main) } : { code: s.rawCode, body: 'nf' };
+      if (/\/health$/.test(url)) return s.healthCode === 200 ? { code: 200, body: { ok: true, build_version: s.live } } : { code: s.healthCode, body: 'x' };
+      if (/\/failure\/report$/.test(url)) return { code: 200, body: { ok: true } };
+      if (/\/cron\/status$/.test(url)) return { code: 200, body: GOOD_STATUS };
+      return { code: 200, body: { ran: 0, more: false } };
+    };
+    return w;
+  };
+  const tick = (w, n = 1) => { for (let i = 0; i < n; i++) { w.clock += 30 * MIN; w.run('runScheduler'); } };
+  const reports = (w, re) => w.fetches.filter(f => /\/failure\/report$/.test(f.url) && re.test(JSON.parse(f.o.payload).where));
+  const red = { workflow_id: 7, name: 'Tests', conclusion: 'failure', run_number: 41, head_sha: 'abcdef123', html_url: 'https://github.com/x/y/actions/runs/1' };
+  const green = Object.assign({}, red, { conclusion: 'success' });
+  let w = mkw({ runs: [red] }); tick(w);
+  const rr = reports(w, /^main_run:Tests$/);
+  ok(rr.length === 1 && JSON.parse(rr[0].o.payload).severity === 'P1' && /failure/.test(JSON.parse(rr[0].o.payload).message), 'a red newest run on main goes to the ledger as P1');
+  ok(mailsWith(w, /"Tests" is failing on main/).length === 1, '...and Brett is emailed');
+  tick(w); ok(reports(w, /^main_run:/).length === 1 && mailsWith(w, /failing on main/).length === 1, 'still red an hour later: not re-reported within 24h');
+  w = mkw({ runs: [green, red] }); tick(w);
+  ok(reports(w, /^main_run:/).length === 0 && mailsWith(w, /failing on main/).length === 0, 'a green newest run (older red one superseded) is quiet');
+  w = mkw({ runs: [Object.assign({}, red, { conclusion: 'cancelled' })] }); tick(w);
+  ok(reports(w, /^main_run:/).length === 0, 'cancelled is not a failure');
+  w = mkw({ token: false, runs: [red] }); tick(w);
+  ok(reports(w, /^main_runs_check$/).length === 1 && JSON.parse(reports(w, /^main_runs_check$/)[0].o.payload).severity === 'P2' && w.fetches.every(f => !/actions\/runs\?/.test(f.url)), 'no GitHub token: the blind spot itself is reported (P2), not skipped silently');
+  w = mkw({ runs: [], runsCode: 401 }); tick(w, 2);
+  ok(reports(w, /^main_runs_check$/).length === 0, 'two misses in a row: not yet');
+  tick(w);
+  ok(reports(w, /^main_runs_check$/).length === 1 && mailsWith(w, /watcher is blind: main_runs_check/).length === 1, 'three misses in a row: the watcher reports that it is blind (ledger + email)');
+  w.state.runsCode = 200; tick(w); w.state.runsCode = 401; tick(w, 2);
+  ok(reports(w, /^main_runs_check$/).length === 1, 'a success resets the miss counter');
+
+  // deployed version vs main
+  w = mkw({}); tick(w, 3);
+  ok(reports(w, /^deploy_drift$/).length === 0, 'live == main: quiet');
+  w = mkw({ main: '2026-10-20.02-b' }); tick(w);
+  ok(reports(w, /^deploy_drift$/).length === 0, 'just differs (deploy in progress): inside the grace window');
+  tick(w, 2);
+  const dd = reports(w, /^deploy_drift$/);
+  ok(dd.length === 1 && JSON.parse(dd[0].o.payload).severity === 'P1' && /2026-10-20\.01-a/.test(JSON.parse(dd[0].o.payload).message) && /2026-10-20\.02-b/.test(JSON.parse(dd[0].o.payload).message), 'still behind after the grace window: P1 naming both versions');
+  ok(mailsWith(w, /deploy is behind main/).length === 1, '...and Brett is emailed');
+  w.state.live = '2026-10-20.02-b'; tick(w); w.state.main = '2026-10-20.03-c'; tick(w);
+  ok(reports(w, /^deploy_drift$/).length === 1, 'catching up clears the drift clock (a new difference starts a fresh grace window)');
+  w = mkw({ rawCode: 404 }); tick(w, 3);
+  ok(reports(w, /^deploy_check$/).length === 1 && mailsWith(w, /blind: deploy_check/).length === 1, 'cannot read main: reported after 3 misses, not silently ignored');
+  w = mkw({ healthCode: 500 }); tick(w, 3);
+  ok(reports(w, /^deploy_check$/).length === 1, 'live /health down: reported by the deploy watcher too');
+  ok(/checkMainRuns_\(\)/.test(SRC.split('function runScheduler')[1].split('Tick done')[0]) && /checkDeploy_\(\)/.test(SRC.split('function runScheduler')[1].split('Tick done')[0]), 'both watchers are wired into every tick');
+  ok(!/catch \((\w+)\) \{\s*\}/.test(SRC), 'still no empty catch blocks after the watchers');
+
+  // str-automation /health body (open problems are not "healthy" just because the status is 200)
+  const strw = (text, code = 200) => { const x = mkw({}); x.probe = (u) => /str-automation/.test(u) ? { code, text } : { code: 200 }; return x; };
+  w = strw(JSON.stringify({ ok: true, last_tick: 'T', problems: [{ key: 'lock_set', count: 2, at: 'A' }] })); tick(w);
+  const sp = reports(w, /^worker_problem:str-automation$/);
+  ok(sp.length === 1 && JSON.parse(sp[0].o.payload).severity === 'P1' && /lock_set \(2x\)/.test(JSON.parse(sp[0].o.payload).message), 'a 200 /health that lists open problems is mirrored into the ledger (P1) with the problem keys');
+  tick(w); ok(reports(w, /^worker_problem:str-automation$/).length === 1, '...once a day while the same set stays open');
+  w = strw(JSON.stringify({ ok: true, problems: [] })); tick(w, 2);
+  ok(reports(w, /^worker_problem:/).length === 0, 'an empty problems list is quiet');
+  w = strw(JSON.stringify({ ok: true, problems: [], tick_stale: true })); tick(w);
+  ok(reports(w, /^worker_problem:str-automation$/).length === 1 && /tick_stale/.test(JSON.parse(reports(w, /^worker_problem:/)[0].o.payload).message), 'a *_stale flag in the body is reported too');
+  w = strw('<html>oops</html>'); tick(w, 3);
+  ok(reports(w, /^probe_body:str-automation$/).length === 1, 'a /health body that is not JSON is reported after 3 misses (the body check cannot go blind silently)');
+  ok(/gh-broker/.test(SRC) && /listing-forge/.test(SRC), 'gh-broker and listing-forge are in the PROBES table');
+
+  // Oct 20 review: the str-automation throttle must not depend on the problem COUNTS
+  const strLive = (obj) => { const x = mkw({}); x.cur = obj; x.probe = (u) => /str-automation/.test(u) ? { code: 200, text: JSON.stringify(x.cur) } : { code: 200 }; return x; };
+  const mk = (cnt, key = 'lock_set') => ({ ok: true, problems: [{ key, count: cnt, at: 'A' }] });
+  w = strLive(mk(1)); tick(w);
+  const propsBefore = Object.keys(w.props).length;
+  for (let n = 2; n < 12; n++) { w.cur = mk(n); tick(w); }
+  ok(reports(w, /^worker_problem:str-automation$/).length === 1, 'the problem COUNT ticking up (1..11) does not re-report');
+  ok(Object.keys(w.props).length === propsBefore, 'no new Script Property is created when only the count changes');
+  ok(Object.keys(w.props).filter(k => /probe_body/i.test(k) && !/WATCH_FAILS/.test(k)).length === 1, 'exactly one property holds the str-automation signature');
+  w.cur = mk(3, 'door_code'); tick(w);
+  ok(reports(w, /^worker_problem:str-automation$/).length === 2, 'a different problem KEY re-reports straight away');
+  tick(w, 50);
+  ok(reports(w, /^worker_problem:str-automation$/).length === 3, '...and the same set is re-reported after 24 h');
+  w.cur = { ok: true, problems: [] }; tick(w); w.cur = mk(1, 'door_code'); tick(w);
+  ok(reports(w, /^worker_problem:str-automation$/).length === 4, 'problems cleared then back again counts as a new report');
+  w = strLive({ ok: true, problems: [null, { key: 'lock_set', count: 1 }, { count: 2 }] }); tick(w);
+  const np = reports(w, /^worker_problem:str-automation$/);
+  ok(np.length === 1 && /lock_set/.test(JSON.parse(np[0].o.payload).message) && /unreadable_problem_entry \(2x\)/.test(JSON.parse(np[0].o.payload).message), 'null / keyless entries in problems[] do not throw; they are reported as unreadable');
+  ok(!!w.props.PROBE_STATE, 'PROBE_STATE is still saved after a malformed problems list');
+  w = strLive({ ok: true, problems: [null] }); tick(w);
+  ok(reports(w, /^worker_problem:str-automation$/).length === 1 && !!w.props.PROBE_STATE, 'a problems list holding only null is still a report, and PROBE_STATE is saved');
+  w = strLive(mk(1)); vm.runInContext("probeStrBody_ = function () { throw new Error('boom'); };", w.ctx); tick(w);
+  ok(!!w.props.PROBE_STATE, 'even if probeStrBody_ throws, PROBE_STATE is saved (the crash becomes a watcher miss)');
+
+  // Oct 20 review: checkMainRuns_ looks past cancelled / skipped / neutral runs and reads 100 runs
+  w = mkw({ runs: [Object.assign({}, red, { conclusion: 'cancelled', run_number: 43 }), Object.assign({}, red, { run_number: 42 })] }); tick(w);
+  ok(reports(w, /^main_run:Tests$/).length === 1 && /run #42/.test(JSON.parse(reports(w, /^main_run:Tests$/)[0].o.payload).message), 'newest run cancelled: the next older run of that workflow is judged (red -> reported)');
+  w = mkw({ runs: [Object.assign({}, red, { conclusion: 'cancelled', run_number: 44 }), Object.assign({}, red, { conclusion: 'skipped', run_number: 43 }), Object.assign({}, green, { run_number: 42 }), red] }); tick(w);
+  ok(reports(w, /^main_run:/).length === 0, 'cancelled + skipped on top of a green run: green is the state, the older red is superseded');
+  w = mkw({ runs: [Object.assign({}, red, { conclusion: 'neutral' })] }); tick(w);
+  ok(reports(w, /^main_run:/).length === 0, 'only a neutral run: nothing to judge, quiet');
+  w = mkw({ runs: [Object.assign({}, red, { workflow_id: 8, name: 'Deploy', conclusion: 'cancelled' }), Object.assign({}, red, { workflow_id: 9, name: 'Sync', run_number: 5 })] }); tick(w);
+  ok(reports(w, /^main_run:Sync$/).length === 1 && reports(w, /^main_run:Deploy$/).length === 0, 'each workflow is judged on its own');
+  ok(w.fetches.some(f => /actions\/runs\?.*per_page=100/.test(f.url)), 'the run list is requested with per_page=100');
+}
+
 console.log(`\nhub-scheduler: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
