@@ -775,7 +775,51 @@ function updateCount(idx){
   var n = ta.value.length; c.textContent = n + ' characters' + (n > 160 ? ' - long, may go out as several texts' : '');
   c.className = 'cnt' + (n > 320 ? ' long' : '');
 }
-/*@@H1@@*/
+/* step 1b: show the plan and the editable texts */
+function renderPlan(){
+  var p = CH.plan, req = CH.req, h = '';
+  (p.recipients||[]).forEach(function(r){ r.first_or_name = r.first || r.name || 'her'; });
+  var nChange = (p.counts && p.counts.change) || 0;
+  h += '<div class="msg info"><b>Nothing has been sent or changed yet.</b>This is a preview. Check it, edit the texts if you like, then press Send.</div>';
+  if(p.summary) h += '<p style="font-size:15px;margin:8px 0"><b>' + esc(p.summary) + '</b></p>';
+  if(p.confirm){
+    h += '<div class="msg err" role="alert"><b>A cleaner you picked marked herself out</b>' + esc(p.confirm.message || '') + '<label class="tog" style="margin-top:8px"><input type="checkbox" id="ch-confirm"' + (req.confirm_out ? ' checked' : '') + '>Yes, assign her anyway on those dates (this clears her Out mark)</label></div>';
+  }
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">What will happen, date by date</h4>' + (p.items||[]).map(planItemHtml).join('');
+  var cal = p.calendar || {};
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">The cleaning calendar</h4>';
+  if(cal.mode === 'write') h += '<div class="msg ok"><b>The Hub will fix the calendar</b>' + (cal.lines && cal.lines.length ? listHtml(cal.lines) : '') + (cal.note ? esc(cal.note) : '') + '</div>';
+  else if(cal.mode === 'staged') h += '<div class="msg info"><b>Test server</b>' + esc(cal.note || 'Calendar changes are pretend-only here.') + '</div>';
+  else h += '<div class="msg warn"><b>The Hub will NOT change the calendar</b>' + esc(cal.note || '') + ((cal.manual||[]).length ? '<div style="margin-top:6px">You would do this by hand in Google Calendar:</div>' + listHtml(cal.manual) : '') + '</div>';
+  if(p.email) h += '<p class="say" style="margin-top:8px">' + (p.email.skipped ? esc('Email invite: ' + p.email.skipped) : 'Email: ' + esc(p.email.to) + ' also gets the usual confirmation email with a calendar invite' + (p.email.subject ? ' ("' + esc(p.email.subject) + '")' : '') + '.') + '</p>';
+  if(!p.window_open && (p.recipients||[]).some(function(r){ return r.can_send; })) h += '<div class="msg warn"><b>It is outside 8 AM to 9 PM</b>The changes happen now. The texts are held and go out at the first scheduler run after ' + esc(p.held_until ? fmtET(p.held_until) : '8 AM') + '. If anything changes before then, a held text is NOT sent and you are told.</div>';
+  if((p.warnings||[]).length) h += '<div class="msg warn"><b>Heads up</b>' + listHtml(p.warnings) + '</div>';
+  h += '<h4 style="margin:14px 0 0;font-size:15px">Texts</h4>' + ((p.recipients||[]).length ? (p.recipients||[]).map(rcptHtml).join('') : '<p class="say">No texts will be sent for this change.</p>');
+  var can = nChange > 0;
+  var btns = '<div class="stk"><div id="sh-err2"></div><div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go"' + (can ? '' : ' disabled') + '>' + (can ? 'Send: make the changes' + ((p.recipients||[]).some(function(r){ return r.can_send; }) ? ' and send the texts' : '') : 'Nothing to change') + '</button></div></div>';
+  sheetShell('Check before it happens', '', h, btns);
+  (p.recipients||[]).forEach(function(r, idx){ if(r.can_send){ updateCount(idx); $('rc-body-' + idx).addEventListener('input', function(){ updateCount(idx); }); } });
+  $('sh-cancel').onclick = function(){ CH = null; closeSheet(); };
+  var cf = $('ch-confirm'); if(cf) cf.onchange = function(){ CH.req.confirm_out = cf.checked; cf.disabled = true; runPreview(null); };
+  $('sh-go').onclick = sendChange;
+}
+/* step 2: Send. One tap only; the same plan id can never be applied twice */
+function sendChange(){
+  if(!CH || CH.sending) return;
+  var p = CH.plan, texts = {}, bad = '';
+  (p.recipients||[]).forEach(function(r, idx){
+    var send = false, body = r.text;
+    if(r.can_send){ send = $('rc-send-' + idx).checked; body = $('rc-body-' + idx).value; if(send && !body.trim()) bad = 'The text to ' + r.first_or_name + ' is empty. Type something or untick "Send this text".'; }
+    texts[r.key] = { send: send, body: body };
+  });
+  if(bad){ chShowErr(esc(bad)); return; }
+  CH.sending = true; sheetBusy = true;
+  var go = $('sh-go'), cancel = $('sh-cancel'); go.disabled = true; cancel.disabled = true; go.textContent = 'Working… please wait';
+  $('sh-err').classList.add('hide');
+  var payload = Object.assign({}, CH.req, { plan_id: p.plan_id, sig: p.sig, texts: texts });
+  runApply(payload, 0);
+}
+/*@@H2@@*/
 /* ---------- the one confirm / result sheet ---------- */
 var sheetBusy = false;
 function openSheet(html){ var m = $('sheet'); $('sheet-box').innerHTML = html; m.classList.add('open'); m.setAttribute('aria-hidden', 'false'); var f = $('sheet-box').querySelector('input,select,button'); if(f) setTimeout(function(){ f.focus({preventScroll:true}); }, 30); }
