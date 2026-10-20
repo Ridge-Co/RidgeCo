@@ -477,7 +477,7 @@ async function loadQueue(){
     if (filterInput) filterInput.value = queueFilterText;
     toggleFilterBar(true);
     renderFiltered();
-    status.textContent = '✅ '+(rows||[]).length+' '+curStatus+(queueFilterText?' ('+filterQueueRows(queueFilterText).length+' shown, filtered)':'');
+    status.textContent = '✅ '+(rows||[]).length+' '+curStatus+(queueFilterText?' ('+filterQueueRows(queueFilterText).length+' shown, filtered)':'')+(ctxFailed.length?' ⚠ could not load '+ctxFailed.join(', ')+', so job and address names may be missing. Reload to retry.':'');
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
 }
 
