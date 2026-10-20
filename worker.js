@@ -36737,6 +36737,23 @@ async function strPendingMarkOut(ctx, c, date, warnings) {
     } catch (e) { warnings.push('Marked out, but the pending date could not be updated everywhere: ' + strErrText(e)); await strSystemAlert(ctx.env, 'pending_markout', strErrText(e)); }
   }
 }
+// A cleaner answers a pending offer. Yes = tentative hold (never an assignment). Returns the JSON response.
+async function strPendingRespond(ctx, c, offer, p, action) {
+  const env = ctx.env, label = strFmtDate(p.Date, true), iso = new Date(ctx.now).toISOString();
+  if (!strPendActive(p)) {
+    if (p.Status === 'pending_converted') return json({ ok: true, result: 'booked', message: `Good news: the ${label} turnover is now booked and Brett has it handled. Thank you for answering so quickly!` });
+    return json({ ok: true, result: 'cancelled', message: `The ${label} date is no longer being held, so there is nothing to do. Thank you!` });
+  }
+  const warnings = [];
+  if (action === 'decline') {
+    if (offer.Status !== 'pending' && offer.Status !== 'expired') return json({ ok: true, result: 'already', message: 'That one was already closed.' });
+    await strSetOffer(ctx, offer, { Status: 'declined', Responded_At: iso });
+    await strLog(ctx, p.Task_Key, c.ID, 'offer_declined', 'pending date');
+    await strPendingAdvance(ctx, p, warnings);
+    await strAlertsNow(ctx, warnings, 'pending_decline');
+    return json({ ok: true, result: 'declined', message: 'No problem - thank you for letting us know.', warnings });
+  }
+  if (p.Status === 'pending_held' && String(p.Assigned_Cleaner_ID) === c.ID) return json({ ok: true, result: 'already_yours', message: 'You already told us you could do this one. Nothing is confirmed yet - we will text you if it books.' });
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
