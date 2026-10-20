@@ -30907,8 +30907,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   const itemRef = itemRefOverride || { value: trade.item };
   const lines = [];
   let materialsTotal = 0;
-  let receipts = [];
-  try { receipts = JSON.parse(billRow?.Receipts_JSON || '[]'); } catch (e) {}
+  let receipts = parseJsonCell(billRow?.Receipts_JSON, [], 'Vendor_Bills.Receipts_JSON', 'P1');
   if (Array.isArray(receipts)) {
     for (const rc of receipts) {
       const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
