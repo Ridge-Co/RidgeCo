@@ -24998,7 +24998,7 @@ async function __meterFlushAlarm(env) {
         all = __meterTop(merged, 'bySrc', 5).map(x => x.key + ' ' + x.reads + 'r' + (x.r429 ? '/' + x.r429 + 'x429' : ''));
         allMin = merged.reduce((m, b) => Math.max(m, b.reads), 0);
       }
-    } catch (e) { /* the alarm still files with this instance's view */ }
+    } catch (e) { /* silent-ok: the alarm still files with this instance's view */ }
     const r = await reportFailure(env, {
       system: 'hub', source: 'read-meter', where: 'read_meter_quota', ref: p.isolate, severity: 'P2',
       message: 'Google Sheets read quota under pressure (' + (p.why === '429' ? 'Google throttled reads' : 'busy minute') + '): ' + p.reads + ' reads in one minute on one instance' + (allMin ? ' (' + allMin + ' across all instances)' : '') + ', ' + p.r429 + ' throttled. Top' + (all ? ' (all instances)' : '') + ': ' + (all || p.top).slice(0, 3).join('; '),
