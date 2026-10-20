@@ -469,14 +469,25 @@
     document.getElementById('done').style.display='block';
     document.getElementById('done').scrollIntoView({behavior:'smooth',block:'center'});
     window.__signed = {opt:opt,label:label,name:cname.value.trim(),date:document.getElementById('cdate').value,ts:when,sig:canvas.toDataURL('image/png')};
+    // If the signed copy cannot reach Ridge Co the signer MUST be told (and Brett notified), never left thinking it was sent.
+    function signNotSent(e){
+      window.hubReportFailure && window.hubReportFailure('proposal-sign', e, { ref: 'RC-ROOF-3101GIB-01' });
+      var d=document.getElementById('done');
+      if (d && !document.getElementById('signWarn')) {
+        var w=document.createElement('div'); w.id='signWarn'; w.setAttribute('role','alert');
+        w.style.cssText='margin:12px auto 0;max-width:520px;padding:10px 12px;border:2px solid #b42318;background:#fdecea;color:#7a1a12;border-radius:9px;font-size:13px;font-weight:700';
+        w.textContent='Your signature is recorded on this page, but we could not send it to Ridge Co automatically. Please tap "Save / Print signed PDF" and then "Email signed copy to Ridge Co" so we receive it.';
+        d.appendChild(w);
+      }
+    }
     try {
       var SIGN_ENDPOINT='https://maintenance-hub.brett-2f8.workers.dev/proposal/sign';
       var SIGN_TOKEN='psign_yh0nYZycTW05PD8fW4TcDVb';
       if (SIGN_TOKEN) {
         fetch(SIGN_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':SIGN_TOKEN},
-          body:JSON.stringify({proposal_id:'RC-ROOF-3101GIB-01',option:opt,signer_name:cname.value.trim(),signed_date:document.getElementById('cdate').value,signature_png:window.__signed.sig,signed_ts:when})}).catch(function(){});
+          body:JSON.stringify({proposal_id:'RC-ROOF-3101GIB-01',option:opt,signer_name:cname.value.trim(),signed_date:document.getElementById('cdate').value,signature_png:window.__signed.sig,signed_ts:when})}).then(function(r){ if(!r.ok) throw new Error('sign endpoint HTTP '+r.status); }).catch(signNotSent);
       }
-    } catch(e){}
+    } catch(e){ signNotSent(e); }
   });
 
   document.getElementById('btnPrint').addEventListener('click', function(){ window.print(); });
