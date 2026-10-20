@@ -7402,7 +7402,10 @@ async function createWorkOrder(env, body) {
       const t = tenants.find(x => x.ID === tid); if (!t) continue;
       await addRow(env, 'WO_Tenants', { WO_ID: woId, Tenant_ID: tid, Tenant_Name: ((t.First_Name||'')+' '+(t.Last_Name||'')).trim(), Tenant_Phone: t.Phone||'', Added_By: 'system-auto', Added_Date: now, Active: 'TRUE' });
     }
-  } catch(e) {}
+  } catch (e) {
+    await softFail(env, 'wo_create_link_tenants_failed', e, 'P1', { wo_id: woId });
+    woWarnings.push('The work order was created, but its tenants could not be linked to it.');
+  }
   // Owner Received + Tenant Received (Sep 14 2026, Brett) — fire only on WO creation, not on
   // later status changes (Scheduled/Complete/On_Hold already fire from updateStatus). Own
   // try/catch, non-fatal — WO creation itself already succeeded above regardless of this.
