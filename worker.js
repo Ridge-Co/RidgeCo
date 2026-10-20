@@ -27223,7 +27223,8 @@ async function qbPayables(env, url) {
           const vendor = vendors.find(v => String(v.ID) === String(c.sc.Vendor_ID));
           const inHouse = scopeSigSkipIsInHouse(c.skipReason);
           const custTotal = c.custTotal;
-          const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+          const qbInvTotal = q ? Number(q.TotalAmt) : NaN;
+          const customerPartial = isPartiallyPaid(customerBalance, qbInvTotal, custTotal);
           const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
 
           let state;
