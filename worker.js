@@ -8597,6 +8597,7 @@ async function woCombine(env, body) {
   }
 
   const voidedSoFar = [];
+  const combineWarnings = [];
   try {
     if (Object.keys(fieldsToApply).length) {
       await updateWOFields(env, survivorId, fieldsToApply);
