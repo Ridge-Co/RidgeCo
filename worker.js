@@ -32803,7 +32803,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           const hits = (dupR && dupR.QueryResponse && dupR.QueryResponse.Invoice) || [];
           const others = hits.filter(x => String(x.Id) !== String(invoiceId));
           if (others.length) warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}.`);
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qb_invoice_dup_check', e, 'P2', { ir: leadIr.ID, invoice: invoiceId }); }   // the invoice exists; the duplicate check is advisory
       }
     }
 
