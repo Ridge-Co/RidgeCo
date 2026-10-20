@@ -162,6 +162,9 @@ function retHarness(estimates, workorders) {
     ensureColumns: async (e, t, c) => { state.ensure.push({ t, c }); },
     updateRow: async (e, t, id, f) => { state.updates.push({ t, id, f }); return {}; },
     logTelemetry: async (e, t) => { state.tel.push(t); },
+    softNote: () => true, softFail: async () => ({ ok: false }),
+    parseJsonCell: (r, f) => { if (r === undefined || r === null || (typeof r === 'string' && !r.trim())) return f; if (typeof r !== 'string') return r; try { return JSON.parse(r); } catch (e) { return f; } },
+    tryWrite: async (env, w, fn) => { try { return { ok: true, value: await fn() }; } catch (e) { return { ok: false, error: String(e && e.message) }; } },
   };
   const names = Object.keys(deps);
   return { fn: new Function(...names, grab('retranslateEstimate') + '\nreturn retranslateEstimate;')(...names.map(k => deps[k])), state };
