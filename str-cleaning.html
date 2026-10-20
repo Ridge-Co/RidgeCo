@@ -783,6 +783,13 @@ document.addEventListener('click', function(ev){
   else if(a === 'offer') openOffer(key, false);
   else if(a === 'restart') openOffer(key, true);
   else if(a === 'copylink') copyLink(el);
+  else if(a === 'swap') openChange('swap', [key]);
+  else if(a === 'rangeassign' || a === 'bulk-range') openChange('range', []);
+  else if(a === 'seltoggle'){ selecting = !selecting; if(!selecting) picked = {}; if(S) renderTurnovers(); else updateBulkBar(); }
+  else if(a === 'sel'){ if(el.checked) picked[key] = true; else delete picked[key]; updateBulkBar(); }
+  else if(a === 'selclear'){ picked = {}; if(S) renderTurnovers(); }
+  else if(a === 'bulk-swap') openChange('swap', pickedKeys());
+  else if(a === 'bulk-mark') openChange('mark', pickedKeys());
   else if(a === 'newlink'){
     var c = findCleaner(id); if(!c) return;
     openAction({
