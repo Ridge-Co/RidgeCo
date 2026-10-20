@@ -10859,7 +10859,7 @@ async function addVendorBill(env, body) {
   // Invoice_Description — the customer-facing text (separate from Notes, which stays
   // private). Used directly on flat/no-time-entry bills, and as the lead-in when time
   // entries with their own Invoice_Description are also linked to this bill (buildInvoiceLines).
-  if (body.Invoice_Description) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_Description']); } catch (e) {} }
+  if (body.Invoice_Description) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_Description']); } catch (e) { await softFail(env, 'vendor_bill_ensure_columns:Invoice_Description', e, 'P1', { ref: dupeKey }); } }
 
   // B-20260916-1930-k7: real time-of-day, for the vendor confirmation email + a genuine audit
   // trail — Created_Date is date-only (matches this tab's existing business-date convention),
