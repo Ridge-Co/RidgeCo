@@ -11894,7 +11894,7 @@ async function listEstimates(env, url) {
   const woId = url.searchParams.get('wo_id') || '';
   if (!woId) return json({ error: 'wo_id required' }, 400);
   const all = await fetchTab(env, 'Estimates');
-  const results = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE').sort((a, b) => parseInt(a.Version||'1') - parseInt(b.Version||'1')).map(e => { try { e.Line_Items = JSON.parse(e.Line_Items||'[]'); } catch { e.Line_Items = []; } return e; });
+  const results = all.filter(e => e.WO_ID === woId && e.Active !== 'FALSE').sort((a, b) => parseInt(a.Version||'1') - parseInt(b.Version||'1')).map(e => { e.Line_Items = parseJsonCell(e.Line_Items, [], 'Estimates.Line_Items'); return e; });
   return json(results);
 }
 
