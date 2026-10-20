@@ -25721,7 +25721,7 @@ async function guardAppendedIds(env, tab, resp, rowsAtRead, idCol, ids, mint) {
   invalidateTabCache(tab);
   const after = ((await sheetsRequest(env, 'GET', `/values/${tab}`)).values || []).slice(1);
   for (const id of out) if (after.filter(r => String((r && r[idCol]) || '') === id).length !== 1) throw new Error(`${tab}: could not settle on a unique id (${id}) after an append race - check the tab for a duplicate row`);
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'append_id_race_repaired', Skill_Or_Endpoint: tab, Success: 'TRUE', Notes: `two rows were given the same id; this row was renumbered ${dup.map(x => ids[x.i] + '->' + out[x.i]).join(', ')}`.slice(0, 480) }); } catch (_) { console.warn('append race repaired but telemetry failed'); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'append_id_race_repaired', Skill_Or_Endpoint: tab, Success: 'TRUE', Notes: `two rows were given the same id; this row was renumbered ${dup.map(x => ids[x.i] + '->' + out[x.i]).join(', ')}`.slice(0, 480) }); } catch (te) { console.warn('append race repaired but telemetry failed'); softNote('telemetry_write_failed:append_id_race_repaired', te, 'P2', { tab }); }
   return { ids: out, row: first, repaired: true };
 }
 
