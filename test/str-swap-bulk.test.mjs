@@ -592,4 +592,10 @@ const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner
   const { W, E } = await setup();
   const st = await J(E.strAdminState({}));
   t('admin state still shows the Oct 25 task as on_calendar / Kayla (what the page reads)', st.ok && st.tasks.find(x => x.key === K25).status === 'on_calendar' && st.tasks.find(x => x.key === K25).assigned_name === 'Kayla' && Array.isArray(st.parked_texts));
-//@@T6@@
+  const a = await J(E.strAdminAssign({}, { task_key: K25, cleaner_id: '1' }));
+  t('the old assign endpoint still works unchanged', a.ok && tr(W, K25).Assigned_Cleaner_ID === '1');
+}
+
+console.log(`str-swap-bulk: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
+
