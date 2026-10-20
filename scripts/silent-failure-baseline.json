@@ -1,0 +1,17 @@
+{
+ "about": "Silent-failure ratchet. Counts may only go down. See scripts/silent-failure-lint.mjs.",
+ "notes": "Oct 20 2026: baseline locked at 0 under the strict rules (log-and-bail, return-literal, swallow-literal, then-noop, inline-handler; the silent-ok marker must sit inside the catch or on the catch line). CI compares against the BASE branch's copy of this file.",
+ "total": 0,
+ "totals": {
+  "empty": 0,
+  "log-only": 0,
+  "return-default": 0,
+  "swallow-catch": 0,
+  "log-and-bail": 0,
+  "return-literal": 0,
+  "swallow-literal": 0,
+  "then-noop": 0,
+  "inline-handler": 0
+ },
+ "files": {}
+}
