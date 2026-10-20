@@ -168,6 +168,8 @@
 
   // 3. manual reporting from catch blocks
   window.hubReportFailure = function (where, message, extra) {
+    // ordinary network conditions (offline, aborted, timed out) are not Hub failures: no report, no toast
+    if (navigator.onLine === false || (message && (message.name === 'AbortError' || message.name === 'TimeoutError'))) return false;
     var did = report(where || 'caught', message && message.message ? message.message : message, extra);
     if (did) toast();
     return did;
