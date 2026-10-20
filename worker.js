@@ -10881,7 +10881,7 @@ async function addVendorBill(env, body) {
     try {
       const created = await res.clone().json();
       if (created && created.id) await linkTimeEntriesToBill(env, timeIds, String(created.id), body.WO_ID || body.wo_id);
-    } catch (e) { /* the bill is saved; the link is not worth losing it over */ }
+    } catch (e) { await softFail(env, 'vendor_bill_link_time_entries', e, 'P1', { ref: body.WO_ID || body.wo_id }); }   // the bill is saved; the hours stay available (recoverable) but Brett is told
   }
   // Automation: entering a bill moves the WO to Complete (if still pre-complete).
   try {
