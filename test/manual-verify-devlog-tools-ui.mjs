@@ -17,6 +17,7 @@ const errors = [];
 async function open(vp, { failWishlist = false, blockStorage = false, failVAR = false, failVTR = false, blockErrorLog = false, populate = false, reports } = {}) {
   const ctx = await browser.newContext({ viewport: vp }); const page = await ctx.newPage();
   page.on('pageerror', e => errors.push(String(e)));
+  if (blockErrorLog) await page.addInitScript(() => { const st = Storage.prototype.setItem; /* quota-full style: reads work, writing the Error Log throws */ Storage.prototype.setItem = function (k, v) { if (k === 'mh_errors') throw new Error('QuotaExceededError'); return st.call(this, k, v); }; });
   await page.addInitScript(bs => { try { localStorage.setItem('mh_auth', 'TEST-TOKEN'); } catch (e) {}
     if (bs) { const boom = () => { throw new Error('storage blocked'); }; const g = Storage.prototype.getItem, st = Storage.prototype.setItem; Storage.prototype.getItem = function (k) { if (/^mh_dl_/.test(k)) boom(); return g.call(this, k); }; Storage.prototype.setItem = function (k, v) { if (/^mh_dl_/.test(k)) boom(); return st.call(this, k, v); }; } }, blockStorage);
   await page.route('**/*', async route => { const u = new URL(route.request().url()); if (!/workers\.dev$/.test(u.hostname)) return route.continue();
