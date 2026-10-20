@@ -438,14 +438,27 @@ function loadWOs() {
     });
 }
 
+// Background polls (version / session refresh) run every minute and a flaky connection makes single failures normal.
+// Report only when one keeps failing (5 in a row), once, so a dead poll is never invisible.
+var _bgFails = {};
+function bgOk(where) { _bgFails[where] = 0; }
+function bgFailure(where, e) {
+  // offline / backgrounded tab / aborted or timed-out requests are ordinary network conditions, not Hub failures: do not count them
+  if (navigator.onLine === false || document.hidden || (e && (e.name === 'AbortError' || e.name === 'TimeoutError'))) return;
+  _bgFails[where] = (_bgFails[where] || 0) + 1;
+  if (_bgFails[where] === 5) { window.hubReportFailure && window.hubReportFailure(where + ' failing repeatedly', e); }
+}
+
 function showWOLoadError(err) {
-  try { console.error('[tenant loadWOs]', err); } catch (e) {}
+  console.error('[tenant loadWOs]', err);
   var so = document.getElementById('statOpen'), sd = document.getElementById('statDone');
   if (so) so.textContent = '—';
   if (sd) sd.textContent = '—';
   var status = err && err.http_status;
   var expired = status === 401 || status === 403 || /unauthor|forbidden|invalid token|expired/i.test(String((err && err.message) || ''));
-  var timedOut = err && err.name === 'AbortError';
+  var timedOut = err && (err.name === 'AbortError' || err.name === 'TimeoutError');
+  // An expired session is normal; anything else means a tenant could not see their requests: tell Brett, not just the tenant.
+  if (!expired && !timedOut && navigator.onLine !== false) window.hubReportFailure && window.hubReportFailure('tenant:loadWOs', err);
   var title = expired ? 'Your session has expired.' : "We couldn't load your work orders.";
   var msg = expired ? 'Please sign in again to see your requests.'
     : timedOut ? 'The connection timed out. Check your signal and try again. Your requests are safe — nothing was lost.'
