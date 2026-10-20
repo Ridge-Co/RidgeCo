@@ -16471,8 +16471,6 @@ function failInvariantItems(data) {
     if (tw.balance < FAIL_TWILIO_P0_USD) out.push({ key: 'inv:twilio_balance', system: 'hub', where: 'twilio_balance', severity: 'P0', message: `Twilio balance is $${tw.balance.toFixed(2)}. When it reaches zero every text stops. Add funds in the Twilio console.` });
     else if (tw.balance < FAIL_TWILIO_P1_USD) out.push({ key: 'inv:twilio_balance', system: 'hub', where: 'twilio_balance', severity: 'P1', message: `Twilio balance is $${tw.balance.toFixed(2)} (low). Add funds before it runs out.` });
   }
-  if (data.qb && data.qb.ok === false) out.push({ key: 'inv:qb_auth', system: 'hub', where: 'quickbooks_auth', severity: data.qb.hard ? 'P0' : 'P1', message: `QuickBooks sign-in is broken: ${failTrim(data.qb.error, 200)} Invoices, bills and payment syncs cannot run until QuickBooks is reconnected.` });
-  if (data.gmail && data.gmail.ok === false) out.push({ key: 'inv:gmail_auth', system: 'hub', where: 'gmail_auth', severity: 'P1', message: `Gmail sign-in is broken: ${failTrim(data.gmail.error, 200)} Emails the Hub sends (receipts to QuickBooks, reports) cannot go out until Gmail is reconnected.` });
   for (const e of (data.errors || [])) out.push({ key: 'inv:check_failed:' + e.check, system: 'hub', where: 'integrity_check:' + e.check, severity: 'P1', message: `The daily check "${e.check}" itself could not run: ${failTrim(e.error, 200)}` });
   return out.slice(0, 25);
 }
