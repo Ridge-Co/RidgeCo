@@ -25615,8 +25615,7 @@ async function fetchConfig(env) {
 }
 async function fetchConfigStrict(env) {
   const data = await sheetsRequest(env, 'GET', `/values/Config`); if (!data.values) return {};
-    const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
-  } catch(e){return {};}
+  const config = {}; data.values.forEach(([k, v]) => { if (k) config[k] = v || ''; }); return config;
 }
 
 async function setConfigKey(env, body) {
