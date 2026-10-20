@@ -31,7 +31,7 @@ function grabConst(name){
   return src.slice(i, j + 1) + ';';
 }
 
-const M = new Function(`
+const M = new Function(aiCreditGuardPrelude() + `
   const _tenc = new TextEncoder(), _tdec = new TextDecoder();
   ${grabConst('CORS')}
   ${grabConst('MODEL_REGISTRY')}
