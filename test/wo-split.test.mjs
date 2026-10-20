@@ -160,7 +160,7 @@ function makeFetch(db, opts = {}) {
   return async (url, fopts) => {
     if (/api\.twilio\.com/.test(url)) {
       if (!opts.allowTwilio) throw new Error('unexpected real Twilio call in a test — staging guard failed');
-      return { json: async () => ({ sid: 'SM_TEST_FAKE_SID' }) };
+      { const b = { sid: 'SM_TEST_FAKE_SID' }; return { ok: true, status: 201, text: async () => JSON.stringify(b), json: async () => b }; }
     }
     const full = url.replace(/^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/[^/]+/, '');
     const path = full.split('?')[0];
