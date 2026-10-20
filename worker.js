@@ -2030,8 +2030,8 @@ async function handlePhotoUploadClean(env, request) {
         await updateWOField(env, woId, 'Drive_Folder_URL', woFolder.webViewLink);
         await updateWOField(env, woId, 'Drive_Folder_ID',  woFolder.id);
       }
-    } catch(woErr) { /* non-fatal */ }
-    return json({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '' });
+    } catch(woErr) { await softFail(env, 'upload_photo_wo_folder_link', woErr, 'P1', { wo_id: woId }); uploadWarnings.push('The work order photo-folder link could not be updated.'); }
+    return json(Object.assign({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '' }, uploadWarnings.length ? { failure_warnings: uploadWarnings } : {}));
   } catch(e) {
     return json({ error: e.message || 'Upload failed', step: step.current, stack: e.stack?.substring(0,300) }, 500);
   }
