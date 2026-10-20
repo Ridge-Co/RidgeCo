@@ -14873,7 +14873,12 @@ function smsFailSeverity(status, code) {
 // Config key reads as '', which is !== 'TRUE'), so nothing sends anywhere until Brett flips it.
 async function sendSMS(env, to, message) {
   let cfg;
-  try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
+  try { cfg = await fetchConfigStrict(env); }
+  catch (e) {   // Oct 20 2026: an unreadable Config used to look like "texting is switched off" and the text vanished with a plausible reason
+    const detail = 'could not read Config to check TWILIO_ENABLED, text NOT sent: ' + String((e && e.message) || e).slice(0, 200);
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_send', ref: 'config', message: detail, severity: 'P1' });
+    return { error: detail };
+  }
   if (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'TWILIO_ENABLED not TRUE' };
   return sendSMSRaw(env, to, message);
 }
