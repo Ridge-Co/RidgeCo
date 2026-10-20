@@ -8380,7 +8380,9 @@ async function woBulkVoid(env, body) {
   const combinedInto = reason === 'Combined' ? String(body.combined_into_wo_id || '') : '';
   if (reason === 'Combined' && !combinedInto) return json({ error: 'combined_into_wo_id required when reason is Combined' }, 400);
 
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  let bulkVoidWarning = '';
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); }
+  catch (e) { softNote('wo_bulk_void_ensure_columns_failed', e, 'P1'); bulkVoidWarning = 'The void columns could not be prepared, so some voids may not have been saved.'; }
   const workorders = await fetchTab(env, 'Work_Orders');
   if (combinedInto && !findWO(workorders, combinedInto)) return json({ error: `Target work order ${combinedInto} not found` }, 404);
 
