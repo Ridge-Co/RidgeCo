@@ -367,7 +367,7 @@ function safeRender(){
   catch(e){ $('loaderr').innerHTML = '<div class="msg err" role="alert"><b>This page hit a problem showing the information.</b>' + esc(errText(e)) + '<br><button class="btn" data-act="retry">Try again</button></div>'; }
 }
 function render(){
-  renderTop(); renderAlerts(); renderTurnovers(); renderCleaners(); renderSwitches(); renderLog();
+  renderTop(); renderAlerts(); renderPending(); renderTurnovers(); renderCleaners(); renderSwitches(); renderLog();
   $('soon').textContent = (S.coming_soon && S.coming_soon.length) ? 'Coming soon: ' + S.coming_soon.join(' · ') : '';
 }
 
