@@ -19000,7 +19000,7 @@ async function routeAI(env, job) {
       Est_Cost: estCost.toFixed(6), Latency_ms: ms, Success: attempt.error ? 'FALSE' : 'TRUE',
       Notes: (attempt.error ? String(attempt.error).slice(0, 200) : (escalated ? `escalated_from_cheap: ${cheapFailReason}` : (pinned ? 'pinned' : ''))) + cacheNote,
     });
-  } catch (_) { /* telemetry best-effort — never fail the caller's job over a logging miss */ }
+  } catch (te) { softNote('telemetry_write_failed:routeAI', te, 'P2'); }   // best-effort: never fail the caller's job over a logging miss
 
   if (attempt.error) throw new Error(`routeAI failed at tier ${tier}: ${attempt.error}`);
   return { result: attempt.text, model_used: reg.model, tier_used: tier, escalated, tokens_in: attempt.tokens_in, tokens_out: attempt.tokens_out, cache_read: cacheRead, cache_write: cacheWrite, ms };
