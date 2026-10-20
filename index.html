@@ -9765,8 +9765,8 @@ function invBillThisJob(k) {
     // invoices were going out with no description of the work.
     if (memo) {
       api('POST', '/workorder/update', { id: woId, fields: { Invoice_Memo: memo, Customer_Charge: charge.toFixed(2) } })
-        .then(function(r) { if (!woUpdateLanded(r)) console.warn('[invBillThisJob] memo save did not land', r); })
-        .catch(function(){});
+        .then(function(r) { if (!woUpdateLanded(r)) { console.warn('[invBillThisJob] memo save did not land', r); window.hubReportFailure && window.hubReportFailure('index:invoice-memo-save', 'memo save did not land', {ref: woId}); toast('Approved, but the invoice memo did not save, so the owner may see no description of the work. Re-enter it on the work order.', 'error'); } })
+        .catch(function(e){ window.hubReportFailure && window.hubReportFailure('index:invoice-memo-save', e, {ref: woId}); toast('Approved, but the invoice memo did not save, so the owner may see no description of the work. Re-enter it on the work order.', 'error'); });
     }
 
     // The bill is now Status:'reviewed' on the server, so it will not come back on the next
