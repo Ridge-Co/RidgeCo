@@ -33060,7 +33060,7 @@ async function deliveryRelay(env, body) {
       emailSent = true;
     } catch (e) { emailSent = false; }
   }
-  try { await logSMS(env, (d.Linked_WO_IDs || '').split(',')[0] || '', 'delivery_relay', id, targetPhone, message); } catch (_) {}
+  try { await logSMS(env, (d.Linked_WO_IDs || '').split(',')[0] || '', 'delivery_relay', id, targetPhone, message); } catch (le) { await softFail(env, 'delivery_relay_sms_log', le, 'P1', { delivery: id }); }
   return json({ success: true, sms_sent: smsSent, email_sent: emailSent, phone: targetPhone, email: tenantEmail });
 }
 
