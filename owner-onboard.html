@@ -371,7 +371,7 @@ function checkPin(){
     if (!j.available && !errs['owner.pin']) { errs['owner.pin'] = j.reason || 'That PIN is not available.'; }
     if (j.available) delete errs['owner.pin'];
     updatePinUI(); showErrs();
-  }).catch(function(){ /* the server re-checks on submit */ });
+  }).catch(function(e){ /* the server re-checks on submit */ window.hubReportFailure && window.hubReportFailure('owner-onboard:pin-check', e); });
 }
 function showErrs(){
   document.querySelectorAll('[data-e]').forEach(function(el){ var m = errs[el.getAttribute('data-e')]; el.textContent = m || ''; el.className = 'err' + (m ? ' show' : ''); });
