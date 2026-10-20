@@ -24449,8 +24449,26 @@ async function fetchTabs(env, tabs, opts) {
   const missing = tabs.filter(t => !__cacheFresh(env, __tabCache.get(t)));
   if (missing.length) {
     const qs=missing.map(t=>`ranges=${encodeURIComponent(t)}`).join('&');
-    let data = null;
-    try { data=await sheetsRequest(env,'GET',`/values:batchGet?${qs}`); }
+    try {
+      // Concurrent callers needing the same set of tabs share ONE batchGet (see __inflight above). The leader writes
+      // the result into __tabCache before the shared promise resolves, so followers just read the cache below.
+      const bkey = missing.slice().sort().join('|');
+      let bp = __batchInflight.get(bkey);
+      if (!bp) {
+        bp = (async () => {
+          const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
+          const ranges=d.valueRanges||[];
+          missing.forEach((t,i)=>{
+            const values=(ranges[i]&&ranges[i].values)||[];
+            const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
+          });
+        })();
+        __batchInflight.set(bkey, bp);
+        const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
+        bp.then(clear, clear);
+      }
+      await bp;
+    }
     catch (e) {
       // Opt-in, read-only callers only: if EVERY tab we still need has a recent good copy,
       // keep serving it (the final map below reads __tabCache regardless of expiry).
