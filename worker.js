@@ -11879,13 +11879,13 @@ async function retranslateEstimate(env, body) {
   else if (body && body.wo_id && body.version != null) est = all.find(e => e.WO_ID === String(body.wo_id) && String(e.Version) === String(body.version) && e.Active !== 'FALSE');
   else return json({ error: 'estimate_id, or wo_id + version, required' }, 400);
   if (!est) return json({ error: 'Estimate not found' }, 404);
-  let lines = []; try { lines = JSON.parse(est.Line_Items || '[]'); } catch (_) {}
+  const lines = parseJsonCell(est.Line_Items, [], 'Estimates.Line_Items');
   if (!Array.isArray(lines) || !lines.length) return json({ error: 'Estimate has no line items' }, 400);
   const en = await estimateEnglishFields(env, lines, est.Change_Reason || '', { force: true });
   if (!en.ok) return json({ ok: false, success: false, error: 'Translation is unavailable right now (' + (en.error || 'unknown') + ') — nothing was changed. Try again in a minute.' }, 502);
-  try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (_) {}
+  try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (e) { await softFail(env, 'estimate_retranslate_ensure_columns', e, 'P1', { ref: est.ID }); }   // the English change reason below would be dropped
   await updateRow(env, 'Estimates', est.ID, { Line_Items: JSON.stringify(en.line_items), Change_Reason_EN: en.change_reason_en || '' });
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_retranslate', Skill_Or_Endpoint: '/estimate/retranslate', Success: 'TRUE', Notes: `estimate=${est.ID} wo=${est.WO_ID} v${est.Version}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_retranslate', Skill_Or_Endpoint: '/estimate/retranslate', Success: 'TRUE', Notes: `estimate=${est.ID} wo=${est.WO_ID} v${est.Version}` }); } catch (te) { softNote('telemetry_write_failed:estimate_retranslate', te, 'P2'); }
   return json({ success: true, ok: true, estimate_id: est.ID, wo_id: est.WO_ID, version: est.Version, line_items: en.line_items, change_reason_en: en.change_reason_en || '',
     changed: en.line_items.some(li => li.desc_en) || !!en.change_reason_en });
 }
