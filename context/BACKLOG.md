@@ -18,11 +18,11 @@ findable by grep even though they never share a number. Example:
     B-20260915-1512-q3 · 🟠 **[vendor-payments]** Expedited vendor pay via QuickBooks Faster ACH — description...
 
 **Oct 19 2026 additions (proposal netting + instant-pay fee):**
-- B-20261019-1500-pf · 🟠 **[vendor-payments]** Padded-price instant-fee variant (fee added to the estimate before markup, brief v1.1 sec 3-4): `instantFeePad` is built and tested but NOT wired; today every instant payment uses the legacy deduction.
-- B-20261019-1501-fc · 🟠 **[vendor-payments]** Fee-credit ledger + bank-statement reconciliation (brief v1.1 sec 7): not built; credits would be a third bill-modifier type `fee_credit`.
-- B-20261019-1502-rp · 🟡 **[reports]** Invoice_Review.Customer_Total stays the gross job total on netted sends (credit in Proposal_Credit_Customer); any report that sums it needs to subtract the credit.
-- B-20261019-1503-rr · 🟡 **[qb-invoices]** Reprice/Relabel refuse invoices that carry the proposal credit line; make them credit-aware if Brett needs them on netted invoices.
-- B-20261019-1504-sc · 🟡 **[sweep]** Sweep other signed proposals with a deposit billed and a final still open (WO-1227 / Scope 8 first, read-only) for the same double-billing.
+- B-20261019-1500-pf · 🟡 **[vendor-payments]** Padded-price fee: built for Review Bills single + combined sends, OFF until Config `instant_fee_pad_enabled` = TRUE. Still legacy deduction on progress bills, legacy deposit/final booking, deposit-approve and bulk approve; pad is not yet folded into server-side estimate pricing / `scopeItemsPricing` (only the invoice builder's cost basis).
+- B-20261019-1501-fc · 🟡 **[vendor-payments]** Fee-credit ledger + manual "Post fee credit" built (Review Bills sends). Still open: parsing bank statements into credits (separate planning brief), and applying credits on progress-bill / deposit / legacy booking paths.
+- B-20261019-1502-rp · ✅ **[reports]** DONE Oct 19: Who To Pay uses the NET invoice. No other report sums Invoice_Review.Customer_Total.
+- B-20261019-1503-rr · ✅ **[qb-invoices]** DONE Oct 19: Reprice/Relabel handle the proposal credit line.
+- B-20261019-1504-sc · ✅ **[sweep]** DONE Oct 19 (read-only, prod data): only WO-1227 / Scope 8 is exposed - see FEATURE_LOG. `GET /qb/proposal-billing-sweep` re-runs it any time.
 
 **Reconciliation pass — Sep 7, 2026 (this file + CURRENT.md had both gone stale since Aug 24 despite real Sep 2/3/7 sessions shipping real work):**
 - ✅ B-142/143/144-equivalents (manual price override, final-balance invoicing, eager QB customer creation) — shipped Sep 2, confirmed live on `main`, none Brett-verified yet. See CURRENT.md.

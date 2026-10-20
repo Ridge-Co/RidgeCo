@@ -1324,6 +1324,26 @@ window.addEventListener('pageshow', function(e){
   </div>
 </div>
 
+<!-- INSTANT-PAY FEE CREDIT LEDGER (Oct 19 2026): credit owed back to a vendor; it comes off their next instant-pay deduction as its own bill line -->
+<div class="modal-overlay" id="modal-fee-credit">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">INSTANT-PAY FEE CREDIT — <span id="fc-vendor-name"></span></div><button class="modal-close" onclick="closeModal('modal-fee-credit')">✕</button></div>
+    <input type="hidden" id="fc-vendor-id">
+    <div style="font-size:22px;font-weight:bold;margin-bottom:6px">Credit owed back: <span id="fc-balance">$0.00</span></div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px;line-height:1.5">When a bank statement shows more was deducted from this vendor than QuickBooks charged, post the difference here. It comes off their next instant-pay deduction(s) as its own "Fee credit" line until it is used up. If QuickBooks charged you MORE than was deducted, post nothing.</div>
+    <div class="form-grid" style="margin-bottom:12px">
+      <div class="form-group"><label>Credit amount</label><input type="number" id="fc-amount" min="0.01" step="0.01" placeholder="0.00"></div>
+      <div class="form-group"><label>Statement / period</label><input type="text" id="fc-period" placeholder="e.g. Sept 2026 statement"></div>
+      <div class="form-group full"><label>Notes</label><input type="text" id="fc-notes" placeholder="e.g. fees on 7925 and 7923 were $10 each, deducted $12.38 + $7.43"></div>
+    </div>
+    <button class="btn" onclick="submitFeeCredit()">Post fee credit</button>
+    <div style="margin-top:14px;max-height:260px;overflow-y:auto">
+      <table class="data-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Left</th><th>Notes</th></tr></thead>
+      <tbody id="fc-entries"><tr><td colspan="5" class="loading">Loading…</td></tr></tbody></table>
+    </div>
+  </div>
+</div>
+
 <!-- EDIT TENANT MODAL -->
 <div class="modal-overlay" id="modal-edit-tenant">
   <div class="modal">
@@ -1516,11 +1536,25 @@ function internalReceiptUrl(woId, driveUrl) {
 // into PRICING_CFG. Mirrors the worker's config-driven calcTieredEstimate exactly.
 // Returns null when pricing isn't configured (suggestions hide; manual invoicing still works).
 var PRICING_CFG = null;
+// Instant-pay fee schedule + the padded-pricing switch (Config instant_fee_pad_enabled), from the same call. null = pad off.
+var INSTANT_FEE_CFG = null;
 function loadPricingConfig() {
   try {
-    return api('GET','/pricing-config').then(function(r){ PRICING_CFG = (r && r.configured) ? r.config : null; return PRICING_CFG; })
-      .catch(function(){ PRICING_CFG = null; });
-  } catch(e){ PRICING_CFG = null; }
+    return api('GET','/pricing-config').then(function(r){ PRICING_CFG = (r && r.configured) ? r.config : null; INSTANT_FEE_CFG = (r && r.instant_fee && r.instant_fee.pad_enabled) ? r.instant_fee : null; return PRICING_CFG; })
+      .catch(function(){ PRICING_CFG = null; INSTANT_FEE_CFG = null; });
+  } catch(e){ PRICING_CFG = null; INSTANT_FEE_CFG = null; }
+}
+// Mirrors worker.js instantFeePad + instantPadFor (pad = clamp(round(net x rate), min, max)); the server re-derives it on approve and refuses a mismatch.
+// Is this vendor paid instantly? Their own Instant_Pay, else the Config default vendor ids (Cesar, 3).
+function invPadFor(vendorRow, net) {
+  var c = INSTANT_FEE_CFG; var n = Number(net);
+  if (!c || !vendorRow || !(n > 0)) return 0;
+  if (String(vendorRow.In_House || '').toUpperCase() === 'TRUE') return 0;
+  var own = String(vendorRow.Instant_Pay || '').trim().toUpperCase();
+  var on = own === 'TRUE' ? true : own === 'FALSE' ? false : (c.default_vendor_ids || []).map(String).indexOf(String(vendorRow.ID)) !== -1;
+  if (!on) return 0;
+  var raw = Math.round(Math.abs(n * c.rate) * 100 + 1e-7) / 100;
+  return Math.round(Math.min(c.max, Math.max(c.min, raw)) * 100) / 100;
 }
 // Mirrors worker.js's calcTieredEstimate EXACTLY (Aug 18 2026: added per-tier minMarkupAmt —
 // tiers[i][2], a dollar floor on the markup — and adminFeeThreshold, so adminFee only applies
@@ -4479,7 +4513,7 @@ function renderVendorsPage() {
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
-        '<td style="text-align:center"><input type="checkbox"'+(String(v.Instant_Pay||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInstantPay(\''+v.ID+'\',this.checked)" title="Paid by QuickBooks Instant Payment — the fee comes off their bill as its own line" style="width:16px;height:16px;cursor:pointer"></td>' +
+        '<td style="text-align:center"><input type="checkbox"'+(String(v.Instant_Pay||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInstantPay(\''+v.ID+'\',this.checked)" title="Paid by QuickBooks Instant Payment — the fee comes off their bill as its own line" style="width:16px;height:16px;cursor:pointer"> <a href="javascript:void(0)" onclick="openFeeCreditModal(\''+v.ID+'\',\''+esc(nm).replace(/'/g,'&#39;')+'\')" title="Credit owed back to this vendor for instant-pay fees that were deducted but never charged" style="font-size:11px;color:var(--info);white-space:nowrap">💳 credit</a></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Bill_No_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanBillNoWO(\''+v.ID+'\',this.checked)" title="Can submit a standalone bill with no Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
@@ -9058,6 +9092,8 @@ function loadVendorBillForInvoice(k) {
     } catch(e) {}
     var total = parseFloat(bill.Total || 0);
     rows += '<div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;color:var(--accent2)">Total owed: <b>$' + total.toFixed(2) + '</b></div>';
+    var padRow = safeArray(state.vendors).find(function(v) { return String(v.ID) === String(bill.Vendor_ID); });
+    if (invPadFor(padRow, total) > 0) rows += '<div style="color:var(--muted);font-size:11px;margin-top:4px">⚡ This vendor is paid instantly: the fee is added to the cost the price is built on (see the line under the price box). Their bill shows a + and a − fee line and still nets what they quoted.</div>';
     el.innerHTML = rows;
     // Auto-suggest charge = tiered price off the bill total, if nothing is set yet.
     // setAttribute as well as .value: `innerHTML +=` elsewhere in the WO detail used to
@@ -9133,6 +9169,10 @@ function invPricing(k) {
   // is worth; but profit must not subtract money nobody paid out.
   var vendorRow = safeArray(state.vendors).find(function(v) { return String(v.ID) === String(bill.Vendor_ID); });
   var vendorInHouse = !!vendorRow && String(vendorRow.In_House || '').toUpperCase() === 'TRUE';
+  // Padded pricing: the instant-pay fee for this vendor's payment is part of what the job costs, so it goes into the pricing basis (and the
+  // markup/card fee apply to it like any other cost). The vendor still nets what they quoted -- the bill gets a +pad and a -pad line.
+  var instantPad = vendorInHouse ? 0 : invPadFor(vendorRow, vendorPayable);
+  totalCost += instantPad;
   var inHouseLabor  = vendorInHouse ? laborTotal : 0;
   // Materials you bought ARE cash out — they stay in cashOut even on an in-house job.
   var cashOut       = totalCost - inHouseLabor;                           // actually paid out
@@ -9178,7 +9218,7 @@ function invPricing(k) {
   return {
     billType: billType, hrs: hrs, laborTotal: laborTotal, truckStock: truckStock,
     receiptsAll: receiptsAll, reimburse: reimburse, onAccount: onAccount,
-    totalCost: totalCost, vendorPayable: vendorPayable, ownMaterials: ownMaterials,
+    totalCost: totalCost, vendorPayable: vendorPayable, instantPad: instantPad, ownMaterials: ownMaterials,
     vendorInHouse: vendorInHouse, inHouseLabor: inHouseLabor, cashOut: cashOut, ownWage: ownWage,
     brettTime: brettTime, brettHrs: brettHrs, travel: travel, loggedTime: loggedTime,
     configured: configured,
@@ -9340,6 +9380,7 @@ function calcInvoiceMarkup(k) {
         (p.vendorInHouse
           ? 'In-house — no vendor payable'
           : 'You owe the vendor $' + p.vendorPayable.toFixed(2)) +
+        (p.instantPad > 0 ? ' (cost includes $' + p.instantPad.toFixed(2) + ' instant-pay fee)' : '') +
         (wage > 0
           ? ' · $' + wage.toFixed(2) + ' your time · profit $' + profit.toFixed(2)
           : ' · your profit $' + profit.toFixed(2) + ' (' + pct + '% markup)') +
@@ -9636,6 +9677,7 @@ function invBuildApprovalPayload(k, opts) {
       vendor_name: bill ? bill.Vendor_Name : '',
       job_type: p.billType === 'flat' ? 'flat' : 'standard',
       vendor_cost: p.vendorPayable.toFixed(2),
+      instant_pad: (p.instantPad || 0).toFixed(2),
       own_materials: p.ownMaterials.toFixed(2),
       own_material_ids: invMatPickedIds(k).join(','),
       brett_time: p.brettTime.toFixed(2),
@@ -9882,7 +9924,10 @@ function renderHubEstimateView(woId, estimates, holder) {
         '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
         '<input type="checkbox" id="est-deposit-' + woId + '"> Request deposit from customer (skip for small/known-customer jobs — owner approval alone is enough)' +
         '</label>' +
-        '<button class="btn small" style="background:var(--accent2);color:#fff" title="Approves the estimate and texts the vendor that they are clear to proceed. No proposal, no owner contact." onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve (no proposal)</button> ' +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);cursor:pointer;margin-bottom:8px">' +
+        '<input type="checkbox" id="est-skip-sms-' + woId + '"> Do NOT text the vendor (job is already done — approving after the fact)' +
+        '</label>' +
+        '<button class="btn small" style="background:var(--accent2);color:#fff" title="Approves the estimate and texts the vendor that they are clear to proceed (unless the box above is ticked). No proposal, no owner contact." onclick="approveEstimateUI(\'' + woId + '\')">✓ Approve (no proposal)</button> ' +
         '<button class="btn small" style="background:var(--accent);color:#fff" title="Approves the estimate silently and moves it into a Scope Proposal. The vendor is NOT texted until the owner signs." onclick="openPushToScopeUI(\'' + woId + '\', true)">📋 Approve &amp; send to proposal</button> ' +
         '<button class="btn small secondary" title="Texts the vendor a short request for more info. Daily reminders pause for 3 days, then resume." onclick="estimateNeedsInfoUI(\'' + woId + '\')">❓ Needs more info</button> ' +
         '<button class="btn small secondary" style="color:var(--danger)" title="Texts the vendor that you are not moving forward. Stops reminders." onclick="estimateDeclineUI(\'' + woId + '\')">✕ Decline</button>' +
@@ -10059,10 +10104,12 @@ function estimateDeclineUI(woId) {
 function approveEstimateUI(woId) {
   var depositEl = document.getElementById('est-deposit-' + woId);
   var requestDeposit = !!(depositEl && depositEl.checked);
-  api('POST', '/estimate/approve', { wo_id: woId, approved_by: 'admin', request_deposit: requestDeposit })
+  var skipEl = document.getElementById('est-skip-sms-' + woId);
+  var skipSms = !!(skipEl && skipEl.checked);
+  api('POST', '/estimate/approve', { wo_id: woId, approved_by: 'admin', request_deposit: requestDeposit, skip_vendor_sms: skipSms })
     .then(function(res) {
       if (res.success) {
-        toast(requestDeposit ? 'Approved — deposit request will follow' : 'Approved — no deposit needed', 'success');
+        toast((requestDeposit ? 'Approved — deposit request will follow' : 'Approved — no deposit needed') + (skipSms ? ' · vendor NOT texted' : (res.vendor_sms && res.vendor_sms !== 'sent' ? ' · vendor text: ' + res.vendor_sms : '')), 'success');
         refreshHubEstimateView(woId);
       } else {
         toast(res.error || 'Approval failed', 'error');
@@ -12994,6 +13041,41 @@ function toggleVendorInHouse(id, on) {
 
 // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2) — same
 // inline-checkbox pattern as toggleVendorInHouse above, one dedicated endpoint per flag.
+function openFeeCreditModal(vendorId, vendorName) {
+  document.getElementById('fc-vendor-id').value = vendorId;
+  document.getElementById('fc-vendor-name').textContent = vendorName || '';
+  ['fc-amount', 'fc-period', 'fc-notes'].forEach(function(i) { document.getElementById(i).value = ''; });
+  document.getElementById('fc-balance').textContent = '…';
+  document.getElementById('fc-entries').innerHTML = '<tr><td colspan="5" class="loading">Loading…</td></tr>';
+  openModal('modal-fee-credit');
+  loadFeeCreditLedger(vendorId);
+}
+function loadFeeCreditLedger(vendorId) {
+  api('GET', '/vendor-fee-credit?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
+    if (!res || res.error) { document.getElementById('fc-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc((res && res.error) || 'Could not load the ledger') + '</td></tr>'; document.getElementById('fc-balance').textContent = '—'; return; }
+    document.getElementById('fc-balance').textContent = '$' + (Number(res.balance) || 0).toFixed(2);
+    var entries = safeArray(res.entries).slice().reverse();
+    document.getElementById('fc-entries').innerHTML = entries.length
+      ? entries.map(function(e) {
+          var amt = Number(e.Amount) || 0;
+          return '<tr><td>' + esc(e.Date || '') + '</td><td>' + (e.Entry_Type === 'applied' ? 'Used on a bill' : 'Credit posted') + '</td>' +
+            '<td style="color:' + (amt >= 0 ? 'var(--accent2)' : 'var(--muted)') + '">' + (amt >= 0 ? '+' : '') + '$' + amt.toFixed(2) + '</td>' +
+            '<td>$' + (Number(e.Balance_After) || 0).toFixed(2) + '</td><td>' + esc([e.Period, e.Notes, e.QB_Bill_ID ? 'bill ' + e.QB_Bill_ID : ''].filter(Boolean).join(' · ')) + '</td></tr>';
+        }).join('')
+      : '<tr><td colspan="5" class="loading">No entries yet.</td></tr>';
+  }).catch(function(e) { document.getElementById('fc-entries').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">' + esc(e.message) + '</td></tr>'; });
+}
+function submitFeeCredit() {
+  var vendorId = document.getElementById('fc-vendor-id').value;
+  var amount = parseFloat(document.getElementById('fc-amount').value);
+  if (!(amount > 0)) { toast('Enter a credit amount greater than 0', 'error'); return; }
+  api('POST', '/vendor-fee-credit/add', { vendor_id: vendorId, amount: amount, period: document.getElementById('fc-period').value.trim(), notes: document.getElementById('fc-notes').value.trim() }).then(function(res) {
+    if (!res || res.error) { toast('Not saved: ' + ((res && res.error) || 'unknown error'), 'error'); return; }
+    toast('Fee credit posted — balance $' + Number(res.balance).toFixed(2), 'success');
+    ['fc-amount', 'fc-period', 'fc-notes'].forEach(function(i) { document.getElementById(i).value = ''; });
+    loadFeeCreditLedger(vendorId);
+  }).catch(function(e) { toast('Not saved: ' + e.message, 'error'); });
+}
 function toggleVendorInstantPay(id, on) {
   api('POST', '/vendor/set-instant-pay', { id: id, value: on }).then(function(r) {
     if (r && r.error) { toast(r.error, 'error'); renderVendorsPage(); return; }
@@ -13604,7 +13686,7 @@ function renderQBFeePanel(fee, vendorName, single) {
   return '<div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:6px;font-size:12px;line-height:1.6">' +
     '<label style="font-weight:bold;cursor:pointer"><input type="checkbox" ' + (on ? 'checked ' : '') + 'onchange="qbFeeToggle(this.checked)"> Paying ' + esc(vendorName || 'this vendor') + ' instantly</label>' +
     (on
-      ? '<div>Instant-pay fee <b>−' + qbMoney(fee.amount) + '</b> shows as its own line on their bill. <b style="color:var(--accent2)">Send ' + qbMoney(fee.send_amount) + ' instant.</b></div>'
+      ? '<div>Instant-pay fee <b>−' + qbMoney(fee.amount) + '</b> shows as its own line on their bill' + (fee.pad > 0 ? ', with a matching <b>+' + qbMoney(fee.pad) + '</b> fee-recovery line (it was added to the price up front, so they net what they quoted)' : '') + '. <b style="color:var(--accent2)">Send ' + qbMoney(fee.send_amount) + ' instant.</b></div>'
       : '<div style="color:var(--muted)">No fee line. Send ' + qbMoney(fee.send_amount) + '. (Instant would take ' + qbMoney(fee.amount_if_on) + ' off the bill.)</div>') +
     safeArray(fee.notes).map(function(x){ return '<div style="color:var(--warn);font-size:11px">⚠ ' + esc(x) + '</div>'; }).join('') +
   '</div>';

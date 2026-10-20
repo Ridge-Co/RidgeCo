@@ -17,7 +17,7 @@ const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } }
 const eq = (n, a, b) => t(n + ' (got ' + JSON.stringify(a) + ', want ' + JSON.stringify(b) + ')', JSON.stringify(a) === JSON.stringify(b));
 
 const code = [
-  grabLine('const INSTANT_FEE_DEFAULTS'), grabLine('const INSTANT_FEE_LABEL_EN'), grabLine('const INSTANT_FEE_LABEL_ES'),
+  grabLine('const INSTANT_FEE_DEFAULTS'), grabLine('const INSTANT_FEE_LABEL_EN'), grabLine('const INSTANT_FEE_LABEL_ES'), grabLine('const FEE_CREDIT_LABEL_EN'), grabLine('const FEE_CREDIT_LABEL_ES'), grabLine('const INSTANT_FEE_PAD_DEDUCTION_EN'), grabLine('const INSTANT_FEE_PAD_DEDUCTION_ES'),
   grab('money2'), grab('instantFeeConfig'), grabLine('const clampFee'), grab('instantFeePad'), grab('instantFeeLegacyDeduction'),
   grab('instantPayEnabled'), grab('propUnitText'), grab('scopeVendorPayableSchedule'), grab('proposalBillingState'),
   grab('proposalCandidatesForBill'), grab('proposalNettingPlan'), grab('vendorBillAdjustments'),
