@@ -16700,6 +16700,7 @@ function schedStatus(state, now, jobs, aiPausedAt) {
     }
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
     let overdue = false, reason = '';
+    const grace = schedGrace(job, js, nowMs, !!(state && state.last_tick));   // Oct 20 2026: a new / just re-enabled job is not "overdue" for the first stretch
     if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
       overdue = true; reason = `started ${ageMin(js.last_start)} min ago and never finished (timed out or crashed)`;
     }
