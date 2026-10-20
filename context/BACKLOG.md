@@ -17,6 +17,11 @@ findable by grep even though they never share a number. Example:
 
     B-20260915-1512-q3 · 🟠 **[vendor-payments]** Expedited vendor pay via QuickBooks Faster ACH — description...
 
+**Oct 20 2026 additions (STR swap + bulk):**
+- B-20261020-1200-sw · 🟡 **[str-cleaning]** Admin SWAP / BULK built (FEATURE_LOG rule 222). After merge Brett must share the "TURNOVER COVERAGE MILAM RIDGE" calendar with the service account (Make changes to events) and turn on Switches > Cleaning calendar, otherwise a swap still works but returns a "do this by hand in Google Calendar" box.
+- B-20261020-1201-ub · 🟢 **[str-cleaning]** NOT built: Uplisting date blocking / check-in blocking on an uncovered day (roadmap item 10). Test with one real date first.
+- B-20261020-1202-bd · 🟢 **[str-cleaning]** NOT built: Phase 2 backup drip (staged backup asks).
+
 **Oct 19 2026 additions (proposal netting + instant-pay fee):**
 - B-20261019-1500-pf · 🟡 **[vendor-payments]** Padded-price fee: built for Review Bills single + combined sends, OFF until Config `instant_fee_pad_enabled` = TRUE. Still legacy deduction on progress bills, legacy deposit/final booking, deposit-approve and bulk approve; pad is not yet folded into server-side estimate pricing / `scopeItemsPricing` (only the invoice builder's cost basis).
 - B-20261019-1501-fc · 🟡 **[vendor-payments]** Fee-credit ledger + manual "Post fee credit" built (Review Bills sends). Still open: parsing bank statements into credits (separate planning brief), and applying credits on progress-bill / deposit / legacy booking paths.
