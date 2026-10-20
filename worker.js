@@ -5079,6 +5079,7 @@ async function scopeProposalSend(env, body) {
   const pixelUrl = `${String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '')}/scope-proposal/px?t=${encodeURIComponent(token)}`;
   const html = buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl });
   const subject = `Ridge Co — your estimate for ${addr}`;
+  const sendWarnings = [];   // Phase C: bookkeeping steps that failed AFTER the email went out; reported to the ledger and returned so the screen can say so
 
   try {
     await gmailSendEmail(env, { to: email, subject, html });
