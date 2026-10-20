@@ -22573,7 +22573,7 @@ async function sendReceiptsToQBEmail(env, opts) {
           const tok = await getAccessToken(env);
           const dl = await driveDownload(tok, src.id);
           attachment = { filename: `receipt_${r.ID}`, mimeType: dl.mime || 'application/octet-stream', base64Data: bytesToB64(dl.bytes) };
-        } catch (e) { /* fall through — send without an attachment rather than failing the row */ }
+        } catch (e) { softNote('qb_receipt_attachment_failed', e, 'P2', { receipt: String(r.ID) }); }   // send without an attachment rather than failing the row
       }
       const wo = r.WO_ID ? workorders.find(w => String(w.ID) === String(r.WO_ID)) : null;
       const prop = r.Property_ID ? properties.find(p => String(p.ID) === String(r.Property_ID)) : null;
