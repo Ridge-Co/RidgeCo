@@ -375,7 +375,7 @@ function showLoadFailed(wrapId, what, detail, retryFn, ref) {
     _loadReported[what] = true;
     fetch(WORKER + '/failure/report', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': SECRET },
       body: JSON.stringify({ system: 'vendor', where: 'portal_load', ref: String(ref || ''), message: 'Vendor portal could not load ' + what + ': ' + String(detail || '').slice(0, 200) }) })
-      .catch(function(e) { console.error('failure/report failed', e); });
+      .catch(function(e) { /* silent-ok: the failure report itself failed, nowhere left to report to */ console.error('failure/report failed', e); });
   }
 }
 function retryLoad(wrapId) {
