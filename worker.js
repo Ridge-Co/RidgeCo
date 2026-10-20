@@ -4655,6 +4655,7 @@ async function backfillReceiptAttachments(env, body) {
     success: true, applied: apply, receipts_scanned: scanned,
     eligible_missing_gallery_attachment: eligible, attachments_created: apply ? created : 0,
     details: details.slice(0, 500),
+    ...(writeFailed ? { attachments_failed: writeFailed, failure_warning: `${writeFailed} attachment row(s) could not be written; each was recorded as a failure. Re-run to retry just those.` } : {}),
   });
 }
 
