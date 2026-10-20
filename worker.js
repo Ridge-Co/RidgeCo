@@ -34223,7 +34223,8 @@ async function proposalUnbook(env, body) {
   if (!billRes.ok) return json({ ok: false, error: 'The invoice was undone, but the bill was NOT (' + billRes.error + ') — QuickBooks and the Hub now disagree on the bill; fix it in QuickBooks directly, or retry.' });
 
   await updateRow(env, 'Proposal_Signatures', row.ID, { Status: 'Signed', QB_Invoice_ID: '', QB_Invoice_Number: '', QB_Bill_ID: '', QB_Bill_Number: '' });
-  try { if (reg && reg.wo) await updateWOFields(env, reg.wo, { Status: 'Pending Invoice' }); } catch (e) {}
+  let woWarning = '';
+  if (reg && reg.wo) { const _wr = await tryWrite(env, 'proposal_unbook_wo_status', () => updateWOFields(env, reg.wo, { Status: 'Pending Invoice' }), 'P1'); if (!_wr.ok) woWarning = 'The work order ' + reg.wo + ' could not be set back to Pending Invoice (' + _wr.error + ') - set the status by hand.'; }
 
   return json({ ok: true, undone_invoice: row.QB_Invoice_ID || '', undone_bill: row.QB_Bill_ID || '' });
 }
