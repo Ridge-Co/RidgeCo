@@ -424,7 +424,7 @@ function turnoverCard(t){
   if(t.status === 'new'){
     acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">The scheduler hasn\'t picked this one up yet. Assigning here adds it for you, texts the cleaner, and puts it on the cleaning calendar. You see the exact text first.</p>';
   } else if(t.status === 'covered'){
-    acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Change cleaner…</button><button class="btn sm" data-act="unassign" data-key="' + k + '">Unassign</button>';
+    acts = '<button class="btn sm primary" data-act="swap" data-key="' + k + '">Swap cleaner…</button><button class="btn sm" data-act="assign" data-key="' + k + '">Change cleaner…</button><button class="btn sm" data-act="unassign" data-key="' + k + '">Unassign</button><p class="say" style="flex:1 0 100%"><b>Swap cleaner</b> texts the new cleaner, tells the old one she is off the hook (and backup), and fixes the calendar. You check the texts first. <b>Change cleaner</b> only changes the Hub and tells nobody.</p>';
   } else if(t.status === 'on_calendar'){
     acts = '<button class="btn sm" data-act="assign" data-key="' + k + '">Assign a cleaner…</button><p class="say" style="flex:1 0 100%">This is covered by an entry someone typed on the cleaning calendar. To undo that, change the calendar itself.</p>';
   } else {
