@@ -27097,7 +27097,7 @@ async function qbPayables(env, url) {
     } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
     if (vendorPaidDateMissing.length) {
-      await logAndCollectError(env, warnings, 'qb_payables_vendor_paid_date_missing', '/qb/payables', vendorPaidDateMissing.slice(0, 20).join(', '),
+      await warnDateMissing('qb_payables_vendor_paid_date_missing', vendorPaidDateMissing.slice(0, 20).join(', '),
         new Error(vendorPaidDateMissing.length + ' paid vendor bill(s) have no QuickBooks BillPayment with a usable date -- the vendor portal PAID tab lists them as "date unavailable": ' + vendorPaidDateMissing.slice(0, 20).join(', ')));
     }
     if (paymentDateMissing.length) {
