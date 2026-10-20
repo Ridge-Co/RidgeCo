@@ -22,7 +22,7 @@ function grabConst(name) {
   return m[0];
 }
 const H = new Function(
-  [grab('calcTieredEstimate'), grab('scopeItemsPricing'), grab('scopeCleanVariants'), grab('scopeCleanItems'),
+  ["const softNote = () => true;", grab('calcTieredEstimate'), grab('scopeItemsPricing'), grab('scopeCleanVariants'), grab('scopeCleanItems'),
    grabConst('SCOPE_MATERIALS_MODES'), grab('scopeCleanMaterialsPricing'), grab('scopeParseMaterialsPricing'),
    grab('scopeComputeMilestoneAmounts'), grab('scopeMaterialsBudgetSummary'), grab('scopeCoveringSignature'),
    grab('gmailRefreshCandidates'), grab('gmailIdTokenEmail'), grab('findVendorPricingLeak')].join('\n') +
