@@ -369,7 +369,7 @@ function setLang(l){
   document.getElementById('lang-en').className = l==='en'?'on':'';
   document.getElementById('lang-es').className = l==='es'?'on':'';
   document.querySelectorAll('[data-i18n]').forEach(function(el){ el.textContent = t(el.getAttribute('data-i18n')); });
-  try{ localStorage.setItem('mh_wo_lang', l); }catch(e){}
+  try{ localStorage.setItem('mh_wo_lang', l); }catch(e){ /* silent-ok: storage blocked, language not remembered */ }
   if(DATA) renderDoc();
 }
 
