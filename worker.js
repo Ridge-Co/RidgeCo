@@ -36875,6 +36875,11 @@ async function strAdminPendingCancel(env, body) {
     for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'inquiry cancelled by Brett' });
     await strSetTurnover(ctx, p, { Status: 'pending_cancelled', Pending_Cal: 'del', Pending_Text: notify ? 'due' : '', Pending_Body: custom && custom !== text ? custom : '', Note: 'cancelled by Brett' });
     await strLog(ctx, p.Task_Key, (holder && holder.ID) || '', 'pending_cancelled', notify ? `by Brett; ${strFirst(holder)} will be told` : 'by Brett; nobody texted');
+    const warnings = [];
+    if (holder && body.notify === true && reach) warnings.push(`${holder.Name} ${reach}, so they were NOT texted. Tell them yourself.`);
+    await strPendingDrain(ctx, null); // the held cleaner's text first (the important part), then the calendar if this call still has room
+    try { if (strRoom(ctx, 14)) await strPendingDrain(ctx, await strReadFeed(ctx)); } catch (e) { warnings.push('The calendar could not be updated just now; the tentative event is removed by the next scheduler run.'); }
+    await strPendingAlerts(ctx);
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
