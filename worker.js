@@ -26101,7 +26101,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
   if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/wo-snippet/update') {
-    const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    const _sn = (await fetchTabSoft(env, WO_SNIPPETS_TAB, 'staging_guard_wo_snippet')).find(x => String(x.ID) === String(body && body.id));
     return !!_sn && String(_sn.Name || '').startsWith('TEST-');
   }
   if (path === '/vendor/complete-onboarding') {
