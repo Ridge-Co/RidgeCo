@@ -22061,7 +22061,7 @@ async function arReportView(env, url) {
   // Best-effort enrichment: show the linked work order's description under each invoice line,
   // when one exists (Invoice_Review.QB_Invoice_ID → Invoice_Review.WO_ID → Work_Orders).
   let irs = [], wos = [];
-  try { [irs, wos] = await Promise.all([fetchTab(env, 'Invoice_Review'), fetchTab(env, 'Work_Orders')]); } catch (e) {}
+  [irs, wos] = await Promise.all([fetchTabSoft(env, 'Invoice_Review', 'arReportView'), fetchTabSoft(env, 'Work_Orders', 'arReportView')]);   // enrichment only: a failed read is reported, the report still renders
   const invoices = group.invoices.map(inv => {
     const ir = irs.find(r => String(r.QB_Invoice_ID || '').trim() === String(inv.id));
     const wo = ir ? wos.find(w => String(w.ID) === String(ir.WO_ID)) : null;
