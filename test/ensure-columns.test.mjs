@@ -68,7 +68,7 @@ t('empty tab writes at column A', w4 && w4.body.data[0].range==='New_Tab!A1');
 // leave the failure completely invisible.
 let telemetryCalls = [];
 const { ensureColumns: ensureColumnsFailing } = new Function('sheetsRequest', 'logTelemetry', 'TELEMETRY_TAB',
-  grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
+  PHASE_C_SHIM + grabCol() + '\n' + grab('ensureColumnsInner') + '\n' + grab('ensureColumns') + '\nreturn { ensureColumns };')(
   async (env, method, path) => {
     if (method === 'GET' && !path.startsWith('?')) return { values: [['ID','Name'],['1','x']] };
     throw new Error('Sheets API error on POST /values:batchUpdate: quota exceeded');
