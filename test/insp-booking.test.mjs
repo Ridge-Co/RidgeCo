@@ -331,7 +331,7 @@ t('quota: the exact Sheets error Brett got is recognised', GQ.inspIsSheetsQuotaE
 t('quota: ordinary failures are NOT treated as transient', !GQ.inspIsSheetsQuotaErr(new Error('Sheets API error: The caller does not have permission')) && !GQ.inspIsSheetsQuotaErr(new Error('Unable to parse range: Insp_Bookings')) && !GQ.inspIsSheetsQuotaErr(null));
 t('quota: grace is 45 min (about 3 ticks)', GQ.INSP_GUARD_QUOTA_GRACE_MS === 45 * 60000);
 t('guard tick reads its 3 tabs in ONE batchGet and routes failures through inspGuardFailure', has(/fetchTabs\(env, \['Insp_Open_Blocks', 'Insp_Bookings', 'Insp_Customers'\]\)/) && has(/inspGuardFailure\(env, 'str_guard_sheet'/) && has(/inspGuardFailure\(env, e\.code \|\| 'str_guard_unavailable'/));
-t('non-quota guard failures still alert immediately; quota ones log telemetry and only alert after the grace', /async function inspGuardFailure[\s\S]{0,300}if \(!inspIsSheetsQuotaErr\(e\)\) return inspAlert\(env, kind, msg\)[\s\S]{0,2200}insp-book\/' \+ kind \+ '_quota'[\s\S]{0,400}INSP_GUARD_QUOTA_GRACE_MS\) return inspAlert\(env, kind \+ '_persistent'/.test(src));
+t('non-quota guard failures still alert immediately; quota ones log telemetry and only alert after the grace', /async function inspGuardFailure[\s\S]{0,400}if \(!isQuota && !isFeed\) return inspAlert\(env, kind, msg\)[\s\S]{0,2200}insp-book\/' \+ kind \+ \(isFeed \? '_feed' : '_quota'\)[\s\S]{0,500}INSP_GUARD_QUOTA_GRACE_MS\) return inspAlert\(env, kind \+ '_persistent'/.test(src));
 t('guard clears the outage marker on a clean read (and a failed clear is logged, not swallowed)', has(/await inspGuardRecovered\(env, cfg\);/) && /async function inspGuardRecovered[\s\S]{0,600}logTelemetry/.test(src));
 
 
