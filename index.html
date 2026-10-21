@@ -772,22 +772,50 @@ window.addEventListener('pageshow', function(e){
   </div>
 
   <div class="page" id="page-devlog">
-    <!-- VENDOR TASK REQUESTS -- NEEDS YOUR REVIEW (CAP-036 #12, Sep 24 2026). A vendor marking
-         a Flag-Vendor-Issue request "done" from their portal does NOT resolve it -- it lands
-         here until Brett does his own manual check and clicks Reviewed. -->
-    <div id="vtr-review-wrap" style="margin-bottom:22px">
-      <div class="section-title" style="margin-bottom:6px">🚩 VENDOR TASK REQUESTS — NEEDS YOUR REVIEW</div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">A vendor marked these done from their portal. Nothing here is auto-resolved -- give each one a quick look, then mark it reviewed.</div>
-      <div id="vtr-review-list"><div style="font-size:12px;color:var(--muted)">Loading...</div></div>
+    <!-- TOOLS & LOG (was "Dev Log"). Order: search -> result of the last tool you ran -> things that need you ->
+         most-used tools (pin with the star) -> all tools in 4 groups -> settings & logs (collapsed).
+         Each tool is a <div class="dl-tool"> holding a real <button> with the SAME onclick it always had.
+         New tool page shipped? Add ONE .dl-tool tile to the right group in the SAME commit (FEATURE_LOG rule 57),
+         pick the button look by what it does (gray = opens/looks, blue = fixes data after showing you, red = Careful),
+         and give it a one-line plain description. test/devlog-tools.test.mjs fails if a tile has no description. -->
+    <div class="dl-top">
+      <h2 class="dl-title">Tools &amp; Log</h2>
+      <input type="search" id="dl-search" class="dl-search" placeholder="Search tools…" aria-label="Search tools" autocomplete="off">
     </div>
+    <div id="dl-search-status" class="dl-status" aria-live="polite"></div>
+    <div id="dl-storage-note" class="dl-storage" hidden>This browser won't let the page remember your pinned tools and open sections, so they reset each visit.</div>
+    <div id="admin-tool-result" class="dl-result" role="status" aria-live="polite"></div>
 
-    <!-- TOOLS — grouped so this page stays navigable as tools grow (FEATURE_LOG rule 57, extended
-         Aug 10: one TOOLS area, sub-grouped by purpose). Launcher buttons window.open a standalone
+    <!-- NEEDS YOUR ATTENTION: hidden while both lists are empty. The two lists keep their original ids/loaders. -->
+    <section id="dl-attn" class="dl-section dl-attn" aria-label="Needs your attention" hidden>
+      <h3 class="dl-h">⚠ Needs your attention <span id="dl-attn-count" class="dl-pill alert" hidden></span></h3>
+      <!-- VENDOR TASK REQUESTS -- NEEDS YOUR REVIEW (CAP-036 #12, Sep 24 2026). A vendor marking
+           a Flag-Vendor-Issue request "done" from their portal does NOT resolve it -- it lands
+           here until Brett does his own manual check and clicks Reviewed. -->
+      <div id="vtr-review-wrap" class="dl-block">
+        <p class="dl-sub-h">🚩 Vendor task requests to review</p>
+        <p class="dl-note">A vendor marked these done from their portal. Nothing here is auto-resolved. Give each one a quick look, then mark it reviewed.</p>
+        <div id="vtr-review-list"><div style="font-size:13px;color:var(--dl-muted)">Loading...</div></div>
+      </div>
+      <div id="dl-var-wrap" class="dl-block">
+        <p class="dl-sub-h">🔑 Vendor access requests <span id="var-nav-count-inline" style="display:none;color:var(--warn);font-weight:normal">— pending</span></p>
+        <p class="dl-note">Vendors asking to bill a property that is not on their access list. "Approve once" clears just this request; "Approve ongoing" also adds the property to their standing list.</p>
+        <div id="vendor-access-requests-list"><div class="loading">Loading…</div></div>
+      </div>
+    </section>
+
+    <section id="dl-pinned" class="dl-section" aria-label="Most used tools">
+      <h3 class="dl-h">★ Most used <span id="dl-pin-count" class="dl-pill" hidden></span></h3>
+      <p id="dl-pin-empty" class="dl-note" hidden>Nothing pinned yet. Tap the ☆ on any tool below to pin it here.</p>
+      <div id="dl-pin-grid" class="dl-pin-grid"></div>
+    </section>
+
+    <!-- TOOLS — grouped by purpose (FEATURE_LOG rule 57). Launcher buttons window.open a standalone
          page which inherits the Hub admin token (mh_auth, same origin) so it opens already logged in;
-         the in-Hub fix buttons call their handler directly and print to #admin-tool-result below.
-         New tool page shipped? Add its button to the right sub-group in the SAME commit. -->
-    <div class="section-title" style="margin-bottom:6px">🧰 TOOLS</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:14px">Everything in one place, grouped by what it's for. Launcher buttons open a standalone page already logged in; the rest run a fix right here and print the result at the bottom.</div>
+         the in-Hub fix buttons call their handler directly and print to #admin-tool-result at the top. -->
+    <section id="dl-tools" class="dl-section" aria-label="All tools">
+      <h3 class="dl-h">🧰 All tools <span id="dl-tool-total" class="dl-pill"></span></h3>
+      <p class="dl-legend"><span><i class="dl-dot open"></i>Gray: opens a page or runs a safe check</span><span><i class="dl-dot fix"></i>Blue: fixes data, after showing you first</span><span><i class="dl-dot careful"></i>Red: Careful, changes live data</span></p>
 
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">✅ ON-DEMAND WORK &amp; DASHBOARDS</div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
