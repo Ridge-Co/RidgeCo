@@ -34479,7 +34479,7 @@ async function inspStrStatus(env, cfg, opts) {
 }
 async function inspStrClosedOrThrow(env, cfg, fresh) {
   try { return new Set((await inspStrStatus(env, cfg, { fresh: !!fresh })).closed); }
-  catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', 'Cleaning-coverage check failed, so inspection booking is paused until it can be read: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+  catch (e) { await inspGuardFailure(env, e.code || 'str_guard_unavailable', new Error('Cleaning-coverage check failed, so inspection booking is paused until it can be read: ' + e.message)); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
 }
 function inspStrDayInfo(st, date) {
   const c = (st.checkouts || []).find(x => x.date === date); if (!c) return null;
