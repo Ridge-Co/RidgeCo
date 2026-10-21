@@ -31,10 +31,11 @@ action — no cheerleading. When corrected, change approach; never restate a ref
 When Brett says "update context" (or anything equivalent — end of session, wrapping up, log this),
 that means updating **both** of the following, not just one:
 1. **This repo's `context/` files** (and `brett332/data/business-context/` for cross-venture
-   topics) — `FEATURE_LOG.md` (numbered/tagged rule entry), `CURRENT.md` (status section), the
-   relevant `*_BUILD_BRIEF_v1.0.md` if one exists or is warranted, `SESSION_STATE.md` checkpoint.
-   Use `commit_patch` (old_str/new_str) for the large files (`FEATURE_LOG.md`, `CURRENT.md`) —
-   never try to round-trip their full content through `commit_file`.
+   topics) — **since Oct 21 2026 a PR writes ONE new note file `context/notes/YYYYMMDD-<branch-slug>.md`
+   (CURRENT status + FEATURE_LOG rule entry in one file, format in `context/notes/README.md`) and does
+   NOT edit `CURRENT.md` or `FEATURE_LOG.md`** (editing those shared files is what made every pair of
+   open PRs conflict), plus the relevant `*_BUILD_BRIEF_v1.0.md` if one exists or is warranted.
+   Create the note with `commit_file` (it is a small new file).
 2. **The claude.ai Project "Continuous Improvement"** (`Projects` tool, `project_write`) — the
    matching doc there, if one exists for this topic.
 
