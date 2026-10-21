@@ -36183,7 +36183,7 @@ async function strChangeBuild(ctx, req, feed) {
       const hand = i.cal.hand.map(h => `delete "${h.summary}"`).concat(i.cal.hub_create || i.cal.hub_patch ? [`add an all-day "${i.cal.title}"`] : []);
       if (hand.length) cal.manual.push(`${i.label}: ${hand.join(' and ')}`);
     }
-    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (the Hub\'s service account needs "Make changes to events" on that calendar) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
+    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (see Switches > Check calendar access) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
   }
 
   // ── who gets what text ──
