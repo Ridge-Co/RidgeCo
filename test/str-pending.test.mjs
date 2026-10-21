@@ -471,4 +471,101 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
   t('after ~3 days with no booking on the feed the manual turnover is cancelled and Brett + Kayla are told', pend(W, RK).Status === 'cancelled' && W.brett.some(b => /BOOKING CHANGED|Booking changed/i.test(b.text)) && smsTo(W, 'Kayla', 'str_task_cancelled').length === 1, { p: pend(W, RK), brett: W.brett, sms: W.sms });
 }
 {
-//@@PH3@@
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-nohold'); W.sms.length = 0;
+  const r = await J(E.strAdminPendingConvert({}, { task_key: PK }));
+  t('mark-as-booked with nobody having said yes: an ordinary open turnover, the Gina question moves to it, no "booked" text', r.ok && pend(W, RK).Status === 'offering' && offerOf(W, '1', RK, 'pending') && !W.sms.length && pend(W).Status === 'pending_converted', { r, real: pend(W, RK), o: offersOf(W, RK) });
+}
+
+// ═══ 12. FAULT INJECTION ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; W.telemetry.length = 0; BOOK(W, '2026-11-13', PD);
+  W.failSms = true; const r = await tick(E, null);
+  t('text failure: the booking is still converted and Kayla is assigned', pend(W, RK).Status === 'covered' && pend(W, RK).Assigned_Cleaner_ID === '2');
+  t('text failure: marked failed:1, Brett told (alert + telemetry), the error is in the tick result', pend(W).Pending_Text === 'failed:1' && W.brett.length >= 1 && W.telemetry.some(x => x.Success === 'FALSE') && r.errors.some(e => e.step === 'pending_text'), { p: pend(W), brett: W.brett, errs: r.errors });
+  W.failSms = false; await tick(E, null); await tick(E, null);
+  t('next tick sends it once; later ticks never again', smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && /^sent:/.test(pend(W).Pending_Text), { sms: W.sms, p: pend(W) });
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.failEmail = true; const r = await tick(E, null);
+  t('invite email failure: marked failed:1, Brett told, text still went out', pend(W).Pending_Mail === 'failed:1' && W.brett.length >= 1 && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && r.errors.some(e => e.step === 'pending_invite'), { p: pend(W), errs: r.errors });
+  W.failEmail = false; await tick(E, null); await tick(E, null);
+  t('email retried once and then never again', W.attach.length === 1 && /^sent:/.test(pend(W).Pending_Mail) && smsTo(W, 'Kayla', 'str_pending_booked').length === 1);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.calMode = 'perm'; const r = await tick(E, null);
+  t('calendar denied: conversion still happened and Kayla was told; the calendar problem is reported to Brett and in the result; still owed', pend(W, RK).Status === 'covered' && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && pend(W).Pending_Cal === 'conv' && r.errors.some(e => /calendar/.test(e.step)) && W.brett.some(b => /calendar/i.test(b.text)), { cal: pend(W).Pending_Cal, errs: r.errors, brett: W.brett });
+  W.calMode = 'ok'; await tick(E, null); await tick(E, null);
+  const evs = W.calEvents.filter(e => e.start.date === PD);
+  t('calendar back: exactly one normal "Kayla Cleaning" event, no (PENDING) left, Pending_Cal done, no extra texts', evs.length === 1 && evs[0].summary === 'Kayla Cleaning' && !pendingEvents(W).length && pend(W).Pending_Cal === 'done' && smsTo(W, 'Kayla').length === 1, { evs, p: pend(W) });
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.calMode = 'ghost'; const r = await tick(E, null);
+  t('calendar write not landing is caught by the re-read, not trusted: error + Brett told + still owed', pend(W).Pending_Cal === 'conv' && r.errors.some(e => e.step === 'pending_calendar' && /did not change|still there|confirm/.test(e.error)) && W.brett.some(b => /did not land/.test(b.text)), { errs: r.errors, brett: W.brett, cal: pend(W).Pending_Cal });
+  W.calMode = 'ok'; await tick(E, null); await tick(E, null);
+  t('and fixed once the calendar behaves: one normal event', W.calEvents.filter(e => e.start.date === PD).length === 1 && W.calEvents.find(e => e.start.date === PD).summary === 'Kayla Cleaning' && pend(W).Pending_Cal === 'done', W.calEvents);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.brett.length = 0;
+  W.calMode = 'ghost'; const r = await tick(E, '2026-11-16', '10:00');
+  t('expiry with a calendar delete that does not land: still expired (silently), the leftover event is reported and retried', pend(W).Status === 'pending_expired' && pend(W).Pending_Cal === 'del' && !W.sms.length && r.errors.some(e => e.step === 'pending_calendar'), { p: pend(W), errs: r.errors });
+  W.calMode = 'ok'; await tick(E, null); t('removed on the next tick', !pendingEvents(W).length && pend(W).Pending_Cal === 'done');
+}
+{
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-sheet'); await answer(E, '1', 'decline', offerOf(W, '1', PK).ID);
+  const kOff = offerOf(W, '2', PK, 'pending'); W.sms.length = 0; W.brett.length = 0; W.telemetry.length = 0; W.failUpdateTab = 'STR_Turnovers';
+  const r = await answer(E, '2', 'accept', kOff.ID); W.failUpdateTab = null;
+  t('a hold that did not save is NOT reported as saved, Brett is told, and no "we will let you know" text claims otherwise', r.ok === false && pend(W).Status !== 'pending_held' && !smsTo(W, 'Kayla', 'str_pending_yes').length && (W.brett.length || W.telemetry.length), { r, p: pend(W) });
+  const r2 = await answer(E, '2', 'accept', kOff.ID);
+  t('pressing Yes again after the sheet is back works', r2.result === 'held' && pend(W).Status === 'pending_held', r2);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.attach.length = 0; W.brett.length = 0; BOOK(W, '2026-11-13', PD);
+  W.failUpdateTab = 'STR_Turnovers'; const r = await tick(E, null); W.failUpdateTab = null;
+  t('sheet write failing during conversion: the inquiry is NOT marked converted, nobody is texted, the failure is reported', pend(W).Status !== 'pending_converted' && !smsTo(W, 'Kayla', 'str_pending_booked').length && r.errors.length > 0, { p: pend(W), errs: r.errors });
+  await tick(E, null); await tick(E, null);
+  t('once the sheet is back it converts and Kayla is texted exactly once', pend(W).Status === 'pending_converted' && pend(W, RK).Assigned_Cleaner_ID === '2' && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && W.attach.length === 1, { p: pend(W), real: pend(W, RK), sms: W.sms });
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.brett.length = 0; W.sms.length = 0; BOOK(W, '2026-11-13', PD);
+  W.calMode = 'down'; const r = await tick(E, null); W.calMode = 'ok';
+  t('calendar unreadable: tick reports it, converts nothing, expires nothing, texts nobody', !r.ok && pend(W).Status === 'pending_held' && !W.sms.length, { r: r.errors, p: pend(W) });
+}
+{
+  const { W, E } = await world(); CUR = W; W.failSms = true;
+  const a = await ask(E, PD, 'TEST-textfail');
+  t('first-ask text failure: inquiry saved, offer marked failed, Brett told, the page says so', a.cr.ok && a.cr.advance.action === 'offer_failed' && offerOf(W, '1', PK).Status === 'failed' && (W.brett.length || W.telemetry.length) && /FAILED/.test(a.cr.message), a.cr);
+  W.failSms = false; const r = await J(E.strAdminPendingSendNow({}, { task_key: PK }));
+  t('"Send now" after the failure asks the next cleaner who can be reached (nobody is texted twice)', r.ok && W.sms.filter(s => s.type === 'str_pending_offer').length === 1, { r, sms: W.sms });
+}
+
+// ═══ 13. Coverage readers never treat a "(PENDING)" entry as real coverage ═══
+{
+  const { W, E } = await world(null, w => { w.calEvents.push(w.ev('hp', 'Gina Cleaning (PENDING)', '2026-11-08')); });
+  CUR = W; await tick(E, null);
+  const t108 = pend(W, K108); t('a hand-typed "Gina Cleaning (PENDING)" on a real turnover date does NOT count as covered', t108 && t108.Status !== 'ext_covered' && t108.Status !== 'covered', t108);
+  const st = await J(E.strAdminState({})); t('and the board still shows that real date as not covered', st.tasks.find(x => x.key === K108).covered === false);
+}
+
+// ═══ 14. Hold race: two cleaners say yes at nearly the same moment ═══
+{
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-race');
+  const g = offerOf(W, '1', PK, 'pending'); await tick(E, '2026-10-21', '09:00');
+  const k = offerOf(W, '2', PK, 'pending'); t('(setup) Gina expired, Kayla asked', offerOf(W, '1', PK).Status === 'expired' && !!k, offersOf(W, PK));
+  W.sms.length = 0; E.__cold(); const [a, b] = await Promise.all([J(E.strOfferRespond({}, { k: tok(W, '2'), offer_id: k.ID, action: 'accept' })), J(E.strOfferRespond({}, { k: tok(W, '1'), offer_id: g.ID, action: 'accept' }))]);
+  const p = pend(W);
+  t('only one of two simultaneous yes answers holds the date; the other is told it is covered and offered backup', p.Status === 'pending_held' && [a, b].filter(x => x.result === 'held').length === 1 && [a, b].filter(x => x.result === 'filled').length === 1 && W.sms.filter(s => s.type === 'str_pending_yes').length === 1, { a, b, p });
+}
+
+// ═══ 15. Several inquiries at once; never "primary" ═══
+{
+  const { W, E } = await world(); CUR = W;
+  await ask(E, PD, 'TEST-a'); await ask(E, '2026-11-17', 'TEST-b'); await ask(E, '2026-11-19', 'TEST-c');
+  t('three inquiries at once each ask Gina (Brett asked on purpose; the per-cleaner cap is for the automatic backlog)', smsTo(W, 'Regina', 'str_pending_offer').length === 3, W.sms.length);
+  t('no pending text anywhere says primary / rank', !W.sms.some(s => /primary|rank/i.test(s.text)));
+}
+
+console.log(`str-pending: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
