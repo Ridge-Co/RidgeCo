@@ -34411,11 +34411,27 @@ function inspStrConfig(env, cfg) {
   return { fixture, sources, cleaningCal, on, missing, problems, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
 }
 function inspStrMask(src) { return /^https?:\/\//i.test(src) ? src.replace(/^(https?:\/\/[^/]+\/).*$/i, '$1…(link hidden)') : src; }
+// Oct 21 2026: Uplisting's iCal host answered a 504 once and that single blip texted Brett and closed slot requests. A 5xx / 408 / 429 / network error / timeout is
+// transient, so the read is tried up to INSP_FEED_TRIES times (short pause between, never past INSP_FEED_RETRY_BUDGET_MS). A permanent answer (a 4xx such as a
+// revoked link) is NOT retried. If every try fails the same coded error is thrown as before (still fails closed), now saying how many tries it took.
+const INSP_FEED_TRIES = 3;
+const INSP_FEED_TRY_TIMEOUT_MS = 10000;
+const INSP_FEED_RETRY_BUDGET_MS = 20000;
+const INSP_FEED_RETRY_PAUSE_MS = 800;
 async function inspStrReadIcs(env, src, fromDay, toDay) {
   if (!/^https:\/\//i.test(src)) throw inspErr('str_guard_unavailable', 'Bookings feed must be an https:// iCal link: ' + inspStrMask(src), 503);
-  let r;
-  try { r = await fetch(src, { headers: { Accept: 'text/calendar, text/plain, */*' } }); } catch (e) { throw inspErr('str_guard_unavailable', 'Could not reach the bookings feed (' + inspStrMask(src) + '): ' + e.message, 503); }
-  if (!r.ok) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) answered ${r.status}.`, 503);
+  const started = Date.now(); let r = null, failMsg = '', tries = 0;
+  for (let attempt = 1; attempt <= INSP_FEED_TRIES; attempt++) {
+    tries = attempt; r = null; failMsg = '';
+    try { r = await fetch(src, { headers: { Accept: 'text/calendar, text/plain, */*' }, signal: AbortSignal.timeout(INSP_FEED_TRY_TIMEOUT_MS) }); }
+    catch (e) { failMsg = 'Could not reach the bookings feed (' + inspStrMask(src) + '): ' + ((e && e.message) || e); }
+    if (r && r.ok) break;
+    if (r) { failMsg = `Bookings feed (${inspStrMask(src)}) answered ${r.status}.`; if (!(r.status >= 500 || r.status === 408 || r.status === 429)) break; }
+    if (attempt >= INSP_FEED_TRIES || Date.now() - started >= INSP_FEED_RETRY_BUDGET_MS) break;
+    await new Promise(res => setTimeout(res, INSP_FEED_RETRY_PAUSE_MS * attempt));
+  }
+  if (failMsg) throw inspErr('str_guard_unavailable', failMsg + (tries > 1 ? ' (tried ' + tries + ' times)' : ''), 503);
+  if (tries > 1) console.warn('insp: bookings feed needed ' + tries + ' tries but was read');
   const text = await r.text();
   if (!/BEGIN:VCALENDAR/.test(text)) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) did not return a calendar.`, 503);
   const evs = inspParseIcs(text);
