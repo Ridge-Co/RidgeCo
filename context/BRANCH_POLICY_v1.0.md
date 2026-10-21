@@ -24,6 +24,12 @@ the PR base was actually `staging`. Parallel Claude sessions are fine — those 
 5. Test on staging (confirm the deploy landed: compare `GET /version` `deployed_at`/`version_id` with the deploy, or grep the deployed source for a string your change adds; `BUILD_VERSION` itself is a frozen base and a PR must NOT edit it, the guard fails it).
 6. Brett merges the PR -> `main`. `Sync staging to main` then resets staging automatically. Nobody touches staging after that.
 
+## When a branch is behind main (Oct 21 2026)
+If the PR is only BEHIND main (`mergeable` true or unknown, no conflicts), bring it up to date with the GH Broker tool
+`update_pull_request_branch` (one call; it merges main into the PR branch). Do not re-cut. Re-cut only when it is genuinely dirty (below).
+To stop most dirty PRs in the first place: never edit the `BUILD_VERSION` line, and never edit `CURRENT.md` / `FEATURE_LOG.md`;
+add a `context/notes/` file instead (see `context/notes/README.md`).
+
 ## When a branch goes dirty (conflicts / "not mergeable")
 Do not content-patch the old branch — that does not fix mergeability. Cut a FRESH branch off the current `main` tip,
 re-apply the real change (cherry-pick or re-do the patch), open a new PR -> `main`, close the old PR. The guard warns
