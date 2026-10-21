@@ -118,5 +118,14 @@ function rig(over) {
   t('no empty/ignored catch in slice code', !/catch\s*(\([^)]*\))?\s*\{\s*\}/.test(body) && !/\.catch\(\s*\(\s*\)\s*=>\s*(\{\s*\})?\s*\)/.test(body));
 }
 
+// Oct 21 2026: the telemetry row (which the failure ledger mirrors) must NAME the failing checks, not just "37/39 passed"
+{
+  const r = rig({ failName: 'c4' });
+  let d; for (let k = 0; k < 4; k++) d = await r.tick();
+  const tel = r.log.telemetry[0] || {};
+  t('a failing run is logged as a failure naming the failing check', d.failed === 1 && tel.Success === 'FALSE' && /passed, trigger=.*; failing: c4/.test(tel.Notes));
+  const ok = rig(); let d2; for (let k = 0; k < 4; k++) d2 = await ok.tick();
+  t('a clean run has no failing list', !/failing/.test(ok.log.telemetry[0].Notes));
+}
 console.log(`selftest-slice: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -20561,16 +20561,21 @@ function selftestCheckPinFormatAndDedup(vendors, owners, ownerUsers, tenants) {
       const pin = (r && r.PIN) || '';
       if (!pin) continue; // a blank PIN is a separate, pre-existing gap — not this check's job
       if (!pinFormatOk(pin)) { badFormat++; badRows.push({ tab: g.tab, id: r.ID, pin }); }
-      const list = seen.get(pin) || []; list.push({ tab: g.tab, id: r.ID }); seen.set(pin, list);
+      const list = seen.get(pin) || []; list.push({ tab: g.tab, id: r.ID, phone: String((r && r.Phone) || '').replace(/\D/g, '').slice(-10) }); seen.set(pin, list);
     }
   }
-  const dupes = [...seen.entries()].filter(([, list]) => list.length > 1).map(([pin, list]) => ({ pin, holders: list }));
+  // Oct 21 2026: a PIN is GENERATED from the phone number (generatePIN), so one person who appears in two tabs (an owner who is also an Owner_Users login,
+  // or a test tenant that reuses the admin's phone) legitimately gets the same PIN. That is the by-design mirror, not a collision. Only a PIN shared by
+  // DIFFERENT phones (or by a row with no phone to prove it is the same person) is a real duplicate that could log someone into the wrong account.
+  const shared = [...seen.entries()].filter(([, list]) => list.length > 1).map(([pin, list]) => ({ pin, holders: list }));
+  const dupes = shared.filter(d => { const ph = d.holders.map(h => h.phone); return ph.some(p => !p) || new Set(ph).size > 1; });
+  const mirrored = shared.length - dupes.length;
   const ok = badFormat === 0 && dupes.length === 0;
   const example = badRows[0] ? `${badRows[0].tab} ${badRows[0].id} PIN "${badRows[0].pin}"` : (dupes[0] ? `PIN "${dupes[0].pin}" shared by ${dupes[0].holders.length}` : '');
   return {
     ok,
-    reason: ok ? `all PINs well-formed, no duplicates across ${groups.length} tabs` : `${badFormat} malformed PIN(s), ${dupes.length} duplicate PIN(s) — e.g. ${example}`,
-    bad_format_count: badFormat, duplicate_count: dupes.length,
+    reason: ok ? `all PINs well-formed, no duplicates across ${groups.length} tabs${mirrored ? ` (${mirrored} PIN(s) appear in two tabs for the same phone number - by design)` : ''}` : `${badFormat} malformed PIN(s), ${dupes.length} duplicate PIN(s) — e.g. ${example}`,
+    bad_format_count: badFormat, duplicate_count: dupes.length, mirrored_count: mirrored,
   };
 }
 
@@ -20748,7 +20753,7 @@ async function selftestFinish(env, endpointResults, goldenResults, opts, t0) {
   // Self-instrument (PAT-031 pattern, same as runWeeklyReview) — the selftest is itself a
   // measured job, and its OWN success reflects whether every check passed, not just whether the
   // function ran without throwing.
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}` }); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}${agg.failed ? '; failing: ' + agg.failures.map(f => f.name).join(', ') : ''}`.slice(0, 300) }); }   // Oct 21 2026: name the failing checks so Needs Attention says WHAT failed
   catch (e) { errors.push({ step: 'selftest_telemetry', error: schedErrText(e) }); }
   return { ok: true, total: agg.total, passed: agg.passed, failed: agg.failed, failures: agg.failures, digest: digestText, delivery, logged, errors, endpoint_results: endpointResults, golden_results: goldenResults };
 }

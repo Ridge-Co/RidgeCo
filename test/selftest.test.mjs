@@ -182,3 +182,15 @@ const { selftestComposeDigest } = new Function(grab('function selftestComposeDig
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
+
+// ── Oct 21 2026: PIN mirror (same phone => same generated PIN) is by design; different phones are a real duplicate ──
+{
+  const owners = [{ ID: '3', PIN: 'JEN45614', Phone: '(555) 010-1111', Active: 'TRUE' }];
+  const ownerUsers = [{ ID: '4', PIN: 'JEN45614', Phone: '+15550101111', Active: 'TRUE' }];
+  const r = selftestCheckPinFormatAndDedup([], owners, ownerUsers, []);
+  t('an owner mirrored into Owner_Users (same phone, same generated PIN) is not a duplicate', r.ok && r.duplicate_count === 0 && r.mirrored_count === 1);
+  const r2 = selftestCheckPinFormatAndDedup([], owners, [{ ID: '9', PIN: 'JEN45614', Phone: '+15559998888', Active: 'TRUE' }], []);
+  t('the same PIN on DIFFERENT phones is still a real duplicate and fails', !r2.ok && r2.duplicate_count === 1);
+  const r3 = selftestCheckPinFormatAndDedup([], owners, [{ ID: '9', PIN: 'JEN45614', Active: 'TRUE' }], []);
+  t('a shared PIN where one holder has no phone cannot be proven the same person, so it still fails', !r3.ok);
+}
