@@ -300,4 +300,175 @@ const pageOf = async (E, id) => J(E.strCleanerPage({}, new URL('https://x.test/s
   t('the real checkout turnover now exists and the HOLDER is assigned (via pending_converted)', real && real.Status === 'covered' && real.Assigned_Cleaner_ID === '2' && real.Assigned_Via === 'pending_converted', real);
   t('the pending row is marked converted and points to the real turnover', p.Status === 'pending_converted' && p.Converted_To === RK, p);
   t('Kayla got exactly one "now booked" text', smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && /now booked/.test(smsTo(W, 'Kayla')[0].text) && /update your availability/.test(smsTo(W, 'Kayla')[0].text), W.sms);
-//@@PH2@@
+  t('she got a calendar invite email (one)', W.attach.length === 1 && W.attach[0].to === 'kayla@x.test', W.attach.map(a => a.to));
+  t('nobody else was texted (Gina passed, Rachel never asked), and no "slot filled" texts', W.sms.length === 1 && !W.sms.some(s => /filled|backup/.test(s.type)), W.sms);
+  const evs = W.calEvents.filter(e => e.start && e.start.date === PD);
+  t('the (PENDING) event became the normal "Kayla Cleaning" event IN PLACE (same id, real key, no pending flag), no duplicate', evs.length === 1 && evs[0].id === evId && evs[0].summary === 'Kayla Cleaning' && evs[0].extendedProperties.private.ridgecoStrKey === RK && evs[0].extendedProperties.private.ridgecoStrKind === 'cover' && !evs[0].extendedProperties.private.ridgecoStrPending, evs);
+  t('the conversion was proven by a re-read of the event', W.cal.some(c => c.method === 'PATCH') && W.cal.some(c => c.method === 'GET' && /\/events\/[^?]+\?fields=id,status,summary/.test(c.url)));
+  t('Pending_Text / Pending_Mail show sent', /^sent:/.test(p.Pending_Text) && /^sent:/.test(p.Pending_Mail), p);
+  t('log has pending_converted and pending_booked_text_sent', logs(W, 'pending_converted').length === 1 && logs(W, 'pending_booked_text_sent').length === 1);
+  t('no NOT COVERED alert fired', alertsOf(W, /^unc\|/).filter(a => /11-15/.test(a.Alert_Key)).length === 0);
+  W.sms.length = 0; W.attach.length = 0; W.brett.length = 0; const w0 = calWrites(W), sig = () => JSON.stringify(rowsOf(W, 'STR_Turnovers').map(r => [r.Task_Key, r.Status, r.Assigned_Cleaner_ID, r.Pending_Text, r.Pending_Mail, r.Pending_Cal])), s0 = sig(), lg0 = rowsOf(W, 'STR_Log').length;
+  await tick(E, null); await tick(E, null); await tick(E, null, '10:20');
+  t('conversion run again and again: no text, no email, no calendar write, no state change, no new log rows', !W.sms.length && !W.attach.length && calWrites(W) === w0 && sig() === s0 && rowsOf(W, 'STR_Log').length === lg0, { sms: W.sms });
+  const st = await J(E.strAdminState({})); t('board shows "Booked - confirmed (Kayla is on the schedule)" and the real turnover as covered', /Booked - confirmed \(Kayla is on the schedule\)/.test(st.pending[0].status_label) && st.tasks.find(x => x.key === RK).status === 'covered', st.pending[0]);
+  const mc = await J(E.strAdminPendingConvert({}, { task_key: PK })); t('pressing "Mark as booked now" afterwards does nothing (already closed, no text)', mc.ok && mc.already && !W.sms.length, mc);
+  const cn = await J(E.strAdminPendingCancel({}, { task_key: PK, notify: true })); t('cancelling a converted inquiry does nothing (no text)', cn.ok && cn.already && !W.sms.length, cn);
+  const ics = await (await E.strCleanerIcs({}, new URL('https://x.test/str/c/ics?k=' + tok(W, '2')))).text(); t('her calendar file now carries the real date', /20261115/.test(ics));
+}
+
+// ═══ 6. Booking appears while Kayla is still being asked (nobody held it yet) ═══
+{
+  const { W, E } = await world(); CUR = W;
+  await ask(E, PD, 'TEST-mid'); await answer(E, '1', 'decline', offerOf(W, '1', PK).ID);
+  const kOff = offerOf(W, '2', PK, 'pending'); t('(setup) Kayla has the question out', !!kOff);
+  W.sms.length = 0; BOOK(W, '2026-11-13', PD);
+  const r = await tick(E, null); t('tick ok', r.ok, r.errors);
+  const real = pend(W, RK), p = pend(W);
+  t('inquiry converted with no holder; real turnover is an ordinary one with the offer moved onto it', p.Status === 'pending_converted' && real && real.Status === 'offering' && p.Pending_Text === '' && offerOf(W, '2', RK, 'pending') && offerOf(W, '2', RK, 'pending').ID === kOff.ID, { p, real, o: offersOf(W, RK) });
+  t('Gina, who passed, is remembered as passed on the real date; the conversion re-texts nobody', offerOf(W, '1', RK, 'declined') && !W.sms.length, W.sms);
+  t('no "now booked" text, no invite (nobody held it)', !W.sms.some(s => s.type === 'str_pending_booked') && !W.attach.length);
+  const ans = await answer(E, '2', 'accept', kOff.ID);
+  t("Kayla's reply to the (earlier) question now makes her the real assignee, with the normal 'you're set' text", ans.result === 'accepted' && pend(W, RK).Status === 'covered' && pend(W, RK).Assigned_Cleaner_ID === '2' && smsTo(W, 'Kayla', 'str_assigned').length === 1, ans);
+  await tick(E, null); t('the calendar then shows the normal event (no pending one)', W.calEvents.some(e => e.summary === 'Kayla Cleaning' && e.start.date === PD) && !pendingEvents(W).length);
+}
+{
+  const { W, E } = await world(); CUR = W;
+  await ask(E, PD, 'TEST-mid2'); await answer(E, '1', 'decline', offerOf(W, '1', PK).ID);
+  const kOff = offerOf(W, '2', PK, 'pending'); BOOK(W, '2026-11-13', PD); await tick(E, null);
+  W.sms.length = 0; await answer(E, '2', 'decline', kOff.ID);
+  t('after Kayla passes on the booked date Rachel is asked with the normal offer wording; Gina is never asked again', smsTo(W, 'Rachel', 'str_offer').length === 1 && !smsTo(W, 'Regina').length, W.sms);
+}
+{
+  const { W, E } = await world(); CUR = W; clock = at(E, '2026-10-20', '22:30');
+  await ask(E, PD, 'TEST-night'); BOOK(W, '2026-11-13', PD); await tick(E, '2026-10-20', '22:40');
+  t('converted with nobody asked: ordinary open turnover, no pending text went out, no assignment', pend(W).Status === 'pending_converted' && pend(W, RK).Status === 'open' && !W.sms.length, { p: pend(W), real: pend(W, RK) });
+  await tick(E, '2026-10-21', '08:05'); t('at 8 AM the normal queue asks Gina with the normal offer wording', smsTo(W, 'Regina', 'str_offer').length === 1 && !smsTo(W, 'Regina', 'str_pending_offer').length, W.sms);
+}
+
+// ═══ 7. Edge cases of matching ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W; W.sms.length = 0; W.attach.length = 0;
+  BOOK(W, '2026-11-13', PD, 'Pat'); BOOK(W, '2026-11-14', PD, 'Quinn');
+  const r = await tick(E, null); await tick(E, null);
+  t('two stays ending the same day: one real turnover, one conversion, one text, one invite', r.ok && rowsOf(W, 'STR_Turnovers').filter(x => x.Task_Key === RK).length === 1 && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && W.attach.length === 1 && logs(W, 'pending_converted').length === 1, { sms: W.sms });
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; W.sms.length = 0; W.brett.length = 0;
+  BOOK(W, '2026-11-14', '2026-11-16', 'Pat');
+  await tick(E, null); await tick(E, null);
+  t('adjacent-day booking: the inquiry is NOT converted and Kayla keeps a tentative hold', pend(W).Status === 'pending_held' && pend(W).Assigned_Cleaner_ID === '2' && !pend(W, RK));
+  t('Brett is told ONCE that a booking ends a day away and was not matched', alertsOf(W, /^padj\|/).length === 1 && W.brett.filter(b => /NOT matched|Not matched automatically|checks out on/.test(b.text)).length === 1, W.brett);
+  t('the new date goes through the normal path: a real turnover for Nov 16 exists, nobody is assigned to it from the inquiry, and no pending text is used', pend(W, 'milam-ridge|checkout|2026-11-16') && pend(W, 'milam-ridge|checkout|2026-11-16').Assigned_Via !== 'pending_converted' && !W.sms.some(s => /pending/.test(s.type)), pend(W, 'milam-ridge|checkout|2026-11-16'));
+  t('Kayla was not texted anything', !smsTo(W, 'Kayla').length);
+  const cn = await J(E.strAdminPendingCancel({}, { task_key: PK })); await tick(E, null);
+  t('cancelling it removes the tentative calendar event and texts nobody', cn.ok && !pendingEvents(W).length && !smsTo(W, 'Kayla').length && pend(W).Status === 'pending_cancelled', cn);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; W.sms.length = 0; W.brett.length = 0; W.attach.length = 0;
+  BOOK(W, '2026-11-13', PD, 'Pat'); W.calEvents.push(W.ev('hx', 'Rachel Cleaning', PD));
+  const r = await tick(E, null);
+  t('booked but already covered by a hand-typed entry: the real turnover keeps it; Kayla NOT assigned, NOT texted; Brett told', pend(W, RK).Status === 'ext_covered' && pend(W).Status === 'pending_converted' && /conflict/.test(pend(W).Pending_Text) && !W.sms.length && !W.attach.length && W.brett.some(b => /ALREADY COVERED/.test(b.text)), { r: r.errors, p: pend(W), real: pend(W, RK), brett: W.brett });
+}
+
+// ═══ 8. The held cleaner cancels (or marks herself out): the backup mechanism promotes the next one ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W;
+  await tick(E, null); t("(setup) Kayla's (PENDING) event exists", pendingEvents(W).length === 1);
+  W.sms.length = 0; W.brett.length = 0;
+  await J(E.strCleanerMark({}, { k: tok(W, '3'), marks: [{ date: PD, mark: 'can' }] }));
+  E.__cold(); const c0 = costNow(W), r = await J(E.strCleanerCancel({}, { k: tok(W, '2'), task_key: PK }));
+  t('Kayla gave the hold back: ok', r.ok, r); t('release stayed under the subrequest limit', costNow(W) - c0 <= 48, costNow(W) - c0);
+  await tick(E, null); // (anything the call had no room for is done by the scheduler)
+  t('Rachel (marked available as backup) is asked next - exactly once - with the pending wording, not the normal one', smsTo(W, 'Rachel', 'str_pending_offer').length === 1 && !W.sms.some(s => s.type === 'str_offer' || s.type === 'str_promote'), W.sms);
+  t('Kayla is marked out for that date; the pending row is back to offering, no holder', markOf(W, '2', PD) === 'out' && pend(W).Status === 'offering' && pend(W).Assigned_Cleaner_ID === '', pend(W));
+  t('Brett is told the hold was released', W.brett.some(b => /PENDING HOLD RELEASED: Kayla/.test(b.text)), W.brett);
+  await tick(E, null); t("the tentative event for Kayla is removed", pendingEvents(W).length === 0);
+  const rOff = offerOf(W, '3', PK, 'pending'); await answer(E, '3', 'accept', rOff.ID); await tick(E, null);
+  t('Rachel says yes: she now holds it and the (PENDING) event is hers', pend(W).Assigned_Cleaner_ID === '3' && pendingEvents(W).length === 1 && pendingEvents(W)[0].summary === 'Rachel Cleaning (PENDING)', pendingEvents(W));
+  const rr = await J(E.strCleanerCancel({}, { k: tok(W, '2'), task_key: PK })); t('someone who does not hold it cannot give it back', rr.ok === false && rr.error === 'not_yours', rr);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; W.sms.length = 0; W.brett.length = 0;
+  const r = await J(E.strCleanerMark({}, { k: tok(W, '2'), marks: [{ date: PD, mark: 'out' }] }));
+  await tick(E, null);
+  t('marking out on a held pending date gives the hold back and the next cleaner is asked', r.ok && pend(W).Assigned_Cleaner_ID === '' && smsTo(W, 'Rachel', 'str_pending_offer').length === 1 && W.brett.some(b => /HOLD RELEASED/.test(b.text)), { r, sms: W.sms });
+}
+{
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-markout'); W.sms.length = 0;
+  await J(E.strCleanerMark({}, { k: tok(W, '1'), marks: [{ date: PD, mark: 'out' }] }));
+  t('marking out while she is the one being asked counts as a pass: Kayla is asked next', offerOf(W, '1', PK).Status === 'declined' && smsTo(W, 'Kayla', 'str_pending_offer').length === 1, W.sms);
+}
+
+// ═══ 9. Expiry: the date passes with no booking ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); t('(setup) tentative event present', pendingEvents(W).length === 1);
+  W.sms.length = 0; W.brett.length = 0; W.attach.length = 0;
+  const r = await tick(E, '2026-11-16', '10:00'); t('tick ok', r.ok, r.errors);
+  t('inquiry marked expired; nobody texted; no email', pend(W).Status === 'pending_expired' && !W.sms.length && !W.attach.length, { p: pend(W), sms: W.sms });
+  t('the (PENDING) calendar event is removed (and proven gone)', pendingEvents(W).length === 0 && pend(W).Pending_Cal === 'done', { ev: W.calEvents, p: pend(W) });
+  t('expiry is logged', logs(W, 'pending_expired').length === 1);
+  t("the 'Kayla CAN do it' alert is closed", alertsOf(W, /^pyes\|/).every(a => a.Resolved_At), alertsOf(W, /^pyes\|/));
+  const sig = () => JSON.stringify(rowsOf(W, 'STR_Turnovers').map(r => [r.Task_Key, r.Status, r.Pending_Cal])), s0 = sig(), w0 = calWrites(W), l0 = rowsOf(W, 'STR_Log').length;
+  await tick(E, null); await tick(E, '2026-11-17', '09:00');
+  t('expiry sweep run twice more: no change, no texts, no calendar writes, no new log row', sig() === s0 && !W.sms.length && calWrites(W) === w0 && rowsOf(W, 'STR_Log').length === l0, { sms: W.sms });
+  const st = await J(E.strAdminState({})); t('board says "Date passed - no booking"', st.pending.every(x => x.status_label === 'Date passed - no booking'), st.pending);
+}
+{
+  const { W, E } = await world(); CUR = W; clock = at(E, '2026-10-20', '22:30'); await ask(E, PD, 'TEST-exp-open');
+  W.sms.length = 0; await tick(E, '2026-11-16', '09:00'); t('an unasked inquiry whose date passed expires without texting anyone', pend(W).Status === 'pending_expired' && !W.sms.length, W.sms);
+}
+
+// ═══ 10. Brett cancels an inquiry ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0;
+  E.__cold(); const c0 = costNow(W), pv = await J(E.strAdminPendingCancel({}, { task_key: PK, preview: true }));
+  t('cancel preview shows who would be told and the exact text, and changes nothing', pv.ok && pv.preview.holder.first === 'Kayla' && /didn't book after all/.test(pv.preview.text) && pend(W).Status === 'pending_held' && !W.sms.length, pv);
+  E.__cold(); const c1 = costNow(W), cn = await J(E.strAdminPendingCancel({}, { task_key: PK, notify: true, text: pv.preview.text + ' Enjoy your week!' })); const c2 = costNow(W) - c1; await tick(E, null);
+  t('cancel with the opt-in: the held cleaner gets the (edited) polite text once; the inquiry is cancelled', cn.ok && pend(W).Status === 'pending_cancelled' && smsTo(W, 'Kayla', 'str_pending_cancelled').length === 1 && /Enjoy your week/.test(smsTo(W, 'Kayla')[0].text), { cn, sms: W.sms });
+  t('cancel stayed under the subrequest limit', c2 <= 48, c2);
+  t('the tentative event was removed', pendingEvents(W).length === 0);
+  const cn2 = await J(E.strAdminPendingCancel({}, { task_key: PK, notify: true })); t('cancelling again does nothing and texts nobody', cn2.already && smsTo(W, 'Kayla').length === 1, cn2);
+  await tick(E, null); await tick(E, null); t('later ticks do not text her again', smsTo(W, 'Kayla').length === 1 && !W.sms.some(s => s.type === 'str_pending_booked'));
+  BOOK(W, '2026-11-13', PD); await tick(E, null); t('a booking arriving after the cancel is just a normal new turnover (no hold, no "booked" text)', !smsTo(W, 'Kayla', 'str_pending_booked').length && !(pend(W, RK) && pend(W, RK).Status === 'covered'));
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; W.sms.length = 0;
+  const cn = await J(E.strAdminPendingCancel({}, { task_key: PK }));
+  t('cancel WITHOUT the opt-in texts nobody', cn.ok && !W.sms.length && pend(W).Pending_Text === '', cn);
+}
+{
+  const { W, E } = await world(); CUR = W; await ask(E, PD, 'TEST-wait'); W.sms.length = 0;
+  const cn = await J(E.strAdminPendingCancel({}, { task_key: PK, notify: true }));
+  const pg = await pageOf(E, '1');
+  t('cancel while Gina is still deciding: her question just closes; nobody is texted; her page stops showing it', cn.ok && !W.sms.length && offerOf(W, '1', PK).Status === 'superseded' && !pg.pending.length, cn);
+  const late = await answer(E, '1', 'accept', offerOf(W, '1', PK).ID); t('a late "yes" to a cancelled inquiry is politely refused and changes nothing', late.result === 'cancelled' && pend(W).Status === 'pending_cancelled' && !W.sms.length, late);
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; clock = at(E, '2026-10-20', '22:30'); W.sms.length = 0;
+  const cn = await J(E.strAdminPendingCancel({}, { task_key: PK, notify: true }));
+  t('night cancel: the opt-in text is held (not sent at 10:30 PM)', cn.ok && !W.sms.length && pend(W).Pending_Text === 'due', cn);
+  await tick(E, '2026-10-21', '08:05'); await tick(E, null); t('sent once after 8 AM', smsTo(W, 'Kayla', 'str_pending_cancelled').length === 1 && /^sent:/.test(pend(W).Pending_Text));
+}
+
+// ═══ 11. "Mark as booked now" (the feed is lagging) ═══
+{
+  const { W, E } = await heldByKayla(); CUR = W; await tick(E, null); W.sms.length = 0; W.attach.length = 0;
+  E.__cold(); const c0 = costNow(W), r = await J(E.strAdminPendingConvert({}, { task_key: PK }));
+  const cc = costNow(W) - c0; await tick(E, null);
+  t('convert ok: real turnover created, Kayla assigned, one "now booked" text, one invite (whatever the call had no room for is done by the next scheduler run)', r.ok && pend(W, RK).Status === 'covered' && pend(W, RK).Assigned_Cleaner_ID === '2' && smsTo(W, 'Kayla', 'str_pending_booked').length === 1 && W.attach.length === 1, { r, sms: W.sms });
+  t('convert stayed under the subrequest limit', cc <= 48, cc);
+  t('the real turnover is protected for ~3 days while the feed catches up (Manual_Until set)', pend(W, RK).Manual_Until && Date.parse(pend(W, RK).Manual_Until) > clock + 2.5 * 86400000, pend(W, RK));
+  t('calendar: the (PENDING) event is already the normal event', W.calEvents.filter(e => e.start.date === PD).length === 1 && W.calEvents.find(e => e.start.date === PD).summary === 'Kayla Cleaning', W.calEvents);
+  await tick(E, null); await tick(E, null); await tick(E, null);
+  t('three ticks with the feed still behind: the manual turnover is NOT cancelled and nobody is re-texted', pend(W, RK).Status === 'covered' && smsTo(W, 'Kayla').length === 1, pend(W, RK));
+  BOOK(W, '2026-11-13', PD); await tick(E, null);
+  t('when the feed catches up the protection is lifted and nothing changes for Kayla', pend(W, RK).Manual_Until === '' && pend(W, RK).Status === 'covered' && smsTo(W, 'Kayla').length === 1, pend(W, RK));
+}
+{
+  const { W, E } = await heldByKayla(); CUR = W; await J(E.strAdminPendingConvert({}, { task_key: PK })); W.sms.length = 0; W.brett.length = 0;
+  await tick(E, '2026-10-24', '10:00'); await tick(E, null); await tick(E, null);
+  t('after ~3 days with no booking on the feed the manual turnover is cancelled and Brett + Kayla are told', pend(W, RK).Status === 'cancelled' && W.brett.some(b => /BOOKING CHANGED|Booking changed/i.test(b.text)) && smsTo(W, 'Kayla', 'str_task_cancelled').length === 1, { p: pend(W, RK), brett: W.brett, sms: W.sms });
+}
+{
+//@@PH3@@
