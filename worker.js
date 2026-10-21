@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-20.15-str-swap-bulk-pending';
+const BUILD_VERSION = '2026-10-21.02-failure-ledger-self-heal';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -34403,9 +34403,12 @@ async function inspAlert(env, kind, message) {
 // (about 3 ticks in a row) the normal alert (SMS + email) fires, because by then cabin cleaning coverage is genuinely unchecked.
 const INSP_GUARD_QUOTA_GRACE_MS = 45 * 60000;
 function inspIsSheetsQuotaErr(e) { return /quota exceeded|read requests per minute|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(String((e && e.message) || e || '')); }
+// Oct 21 2026: the same grace covers a bookings feed (Uplisting iCal) that answered 5xx/408/429 or could not be reached even after the in-read retries.
+function inspIsTransientFeedErr(e) { const m = String((e && e.message) || e || ''); return /Bookings feed \(.*?\) answered (5\d\d|408|429)\./.test(m) || /Could not reach the bookings feed/.test(m); }
 async function inspGuardFailure(env, kind, e) {
   const msg = String((e && e.message) || e || '');
-  if (!inspIsSheetsQuotaErr(e)) return inspAlert(env, kind, msg);   // a real problem: alert exactly as before
+  const isQuota = inspIsSheetsQuotaErr(e), isFeed = !isQuota && inspIsTransientFeedErr(e);
+  if (!isQuota && !isFeed) return inspAlert(env, kind, msg);   // a real problem: alert exactly as before
   const now = Date.now(); let since = NaN, cfgNote = '';
   try { const cfg = await fetchConfig(env); since = Date.parse(String(cfg.STR_GUARD_FAIL_SINCE || '')); }
   catch (ce) { cfgNote = ' [could not read Config to time the outage: ' + String((ce && ce.message) || ce).slice(0, 120) + ']'; console.error('insp guard: Config unreadable while handling a quota failure:', ce && ce.message); }
@@ -34415,9 +34418,9 @@ async function inspGuardFailure(env, kind, e) {
     catch (se) { cfgNote = ' [could not record outage start: ' + String((se && se.message) || se).slice(0, 120) + ']'; console.error('insp guard: could not save STR_GUARD_FAIL_SINCE:', se && se.message); }
   }
   const mins = Number.isFinite(since) ? Math.round((now - since) / 60000) : 0;
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + '_quota', Success: 'FALSE', Notes: ('Sheets read quota hit, will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
   catch (te) { console.error('insp guard: telemetry write failed:', te && te.message, '| original:', kind, msg); }
-  if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the sheet for ' + mins + ' minutes (Sheets read quota). ' + msg);
+  if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the ' + (isFeed ? 'bookings feed for ' + mins + ' minutes. ' : 'sheet for ' + mins + ' minutes (Sheets read quota). ') + msg);
 }
 async function inspGuardRecovered(env, cfg) {
   if (!cfg.STR_GUARD_FAIL_SINCE) return;
@@ -34533,11 +34536,27 @@ function inspStrConfig(env, cfg) {
   return { fixture, sources, cleaningCal, on, missing, problems, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
 }
 function inspStrMask(src) { return /^https?:\/\//i.test(src) ? src.replace(/^(https?:\/\/[^/]+\/).*$/i, '$1…(link hidden)') : src; }
+// Oct 21 2026: Uplisting's iCal host answered a 504 once and that single blip texted Brett and closed slot requests. A 5xx / 408 / 429 / network error / timeout is
+// transient, so the read is tried up to INSP_FEED_TRIES times (short pause between, never past INSP_FEED_RETRY_BUDGET_MS). A permanent answer (a 4xx such as a
+// revoked link) is NOT retried. If every try fails the same coded error is thrown as before (still fails closed), now saying how many tries it took.
+const INSP_FEED_TRIES = 3;
+const INSP_FEED_TRY_TIMEOUT_MS = 10000;
+const INSP_FEED_RETRY_BUDGET_MS = 20000;
+const INSP_FEED_RETRY_PAUSE_MS = 800;
 async function inspStrReadIcs(env, src, fromDay, toDay) {
   if (!/^https:\/\//i.test(src)) throw inspErr('str_guard_unavailable', 'Bookings feed must be an https:// iCal link: ' + inspStrMask(src), 503);
-  let r;
-  try { r = await fetch(src, { headers: { Accept: 'text/calendar, text/plain, */*' } }); } catch (e) { throw inspErr('str_guard_unavailable', 'Could not reach the bookings feed (' + inspStrMask(src) + '): ' + e.message, 503); }
-  if (!r.ok) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) answered ${r.status}.`, 503);
+  const started = Date.now(); let r = null, failMsg = '', tries = 0;
+  for (let attempt = 1; attempt <= INSP_FEED_TRIES; attempt++) {
+    tries = attempt; r = null; failMsg = '';
+    try { r = await fetch(src, { headers: { Accept: 'text/calendar, text/plain, */*' }, signal: AbortSignal.timeout(INSP_FEED_TRY_TIMEOUT_MS) }); }
+    catch (e) { failMsg = 'Could not reach the bookings feed (' + inspStrMask(src) + '): ' + ((e && e.message) || e); }
+    if (r && r.ok) break;
+    if (r) { failMsg = `Bookings feed (${inspStrMask(src)}) answered ${r.status}.`; if (!(r.status >= 500 || r.status === 408 || r.status === 429)) break; }
+    if (attempt >= INSP_FEED_TRIES || Date.now() - started >= INSP_FEED_RETRY_BUDGET_MS) break;
+    await new Promise(res => setTimeout(res, INSP_FEED_RETRY_PAUSE_MS * attempt));
+  }
+  if (failMsg) throw inspErr('str_guard_unavailable', failMsg + (tries > 1 ? ' (tried ' + tries + ' times)' : ''), 503);
+  if (tries > 1) console.warn('insp: bookings feed needed ' + tries + ' tries but was read');
   const text = await r.text();
   if (!/BEGIN:VCALENDAR/.test(text)) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) did not return a calendar.`, 503);
   const evs = inspParseIcs(text);
@@ -34585,7 +34604,7 @@ async function inspStrStatus(env, cfg, opts) {
 }
 async function inspStrClosedOrThrow(env, cfg, fresh) {
   try { return new Set((await inspStrStatus(env, cfg, { fresh: !!fresh })).closed); }
-  catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', 'Cleaning-coverage check failed, so inspection booking is paused until it can be read: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+  catch (e) { await inspGuardFailure(env, e.code || 'str_guard_unavailable', new Error('Cleaning-coverage check failed, so inspection booking is paused until it can be read: ' + e.message)); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
 }
 function inspStrDayInfo(st, date) {
   const c = (st.checkouts || []).find(x => x.date === date); if (!c) return null;
