@@ -34910,6 +34910,10 @@ const STR_CAL_SCOPE_SHARED = 'https://www.googleapis.com/auth/calendar', STR_CAL
 const STR_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
 function strCalAs(cfg) {
   const raw = String((cfg && cfg.STR_CAL_IMPERSONATE) || '').trim();
+  if (!raw) return { mode: 'shared', sub: '', scope: STR_CAL_SCOPE_SHARED };
+  return { mode: 'acting_as', sub: raw, scope: STR_CAL_SCOPE_EVENTS, bad: !STR_EMAIL_RE.test(raw) };
+}
+let __strCalAs = strCalAs({}); // strCalFetch has no cfg: strSettings (which every caller goes through for the calendar id) remembers it per request
 function strSettings(cfg) {
   cfg = cfg || {};
   return {
