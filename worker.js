@@ -15854,6 +15854,9 @@ const FAIL_EVENT_COLS = ['ID', 'Timestamp', 'System', 'Source', 'Where', 'Ref', 
 const FAIL_LEDGER_COLS = ['ID', 'Fingerprint', 'Severity', 'System', 'Where', 'Message', 'Source', 'First_Seen', 'Last_Seen', 'Count', 'Status', 'Notified_At', 'Notified_Count', 'Last_Event_ID', 'Fixed_In', 'Notes'];
 const FAIL_OPEN = ['open', 'acknowledged'];
 const FAIL_STATUSES = ['open', 'acknowledged', 'fixed', 'wontfix'];
+// Oct 21 2026: an EVENT row (not a condition) that has not recurred for this long closes itself, and reopens (and alerts) the moment it happens again.
+// Before this, a failure that was fixed in code stayed on Needs Attention forever because nothing told the ledger. P0s get longer because they are money/door/text failures.
+const FAIL_QUIET_CLOSE_MS = { P0: 7 * 86400000, P1: 3 * 86400000, P2: 3 * 86400000 };
 const FAIL_P0_REPEAT_MS = 6 * 3600000;      // a P0 whose count keeps growing is re-texted at most this often
 const FAIL_P0_REMIND_MS = 24 * 3600000;     // an unacknowledged P0 is re-texted once a day even if it stopped growing
 const FAIL_LEGACY_ALERT_MS = 90 * 60000;    // alertAdminOnFailure already texted about this job this recently: do not text twice
@@ -15941,7 +15944,12 @@ function failRollupPlan(inp) {
       touch(row);
     } else {
       row.Count = (Number(row.Count) || 0) + fresh.length; row.Last_Seen = last.Timestamp; row.Message = last.Message; row.Last_Event_ID = lastId;
-      if (row.Status !== 'wontfix' && failSevRank(sev) < failSevRank(row.Severity)) row.Severity = sev;
+      // Oct 21 2026: severity follows the latest batch in BOTH directions. It used to only escalate, so a failure that the code now classes as P2
+      // (e.g. qb_payables_payment_date_missing) stayed a red P0 forever because it had been P0 on its first sighting.
+      if (row.Status !== 'wontfix' && sev !== row.Severity) {
+        if (failSevRank(sev) > failSevRank(row.Severity)) row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `severity ${row.Severity} -> ${sev} ${day} (latest occurrences are ${sev})`;
+        row.Severity = sev;
+      }
       touch(row);
     }
   }
@@ -15956,6 +15964,13 @@ function failRollupPlan(inp) {
   }
   for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
     r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
+  }
+  // Event rows that have gone quiet close themselves (see FAIL_QUIET_CLOSE_MS). A row touched by new events this run is by definition not quiet.
+  for (const r of ledger) {
+    if (r.Source === 'condition' || FAIL_OPEN.indexOf(r.Status) < 0 || updates.has(r._row)) continue;
+    const seen = Date.parse(r.Last_Seen || ''), limit = FAIL_QUIET_CLOSE_MS[r.Severity] || FAIL_QUIET_CLOSE_MS.P2;
+    if (isNaN(seen) || now - seen < limit) continue;
+    r.Status = 'fixed'; r.Fixed_In = 'quiet - closed automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `closed ${day}: not seen since ${String(r.Last_Seen).slice(0, 10)}; reopens if it happens again`; touch(r);
   }
   const all = ledger.concat(created);
   // Whom to text now: open P0s never texted, grown since the last text (at most every 6 h), or unacknowledged for a day.
@@ -16025,11 +16040,11 @@ function failSmsOk(r) { return !!(r && (r.sid || r.staged)); }
 // Conditions = things wrong right now that no code path "failed" at: a scheduler job that stopped, alerts switched off.
 async function failConditions(env, cfg, nowMs) {
   const out = [];
-  if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });
+  if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P2', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });   // Oct 21 2026: P2 - OFF is Brett's standing choice (texts only for physical-world failures), not an emergency
   else if (!cfg.admin_phone) out.push({ key: 'no_admin_phone', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Config admin_phone is not set, so failure alerts have nowhere to go.' });
   // Oct 16 2026: the AI-credit pause is a CONDITION (true right now), so its urgent Needs Attention row clears itself the moment AI resumes.
   if (String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE') out.push({ key: 'ai_credit_paused', system: 'hub', where: 'ai_credit_paused', severity: 'P0', message: `AI reading is PAUSED (${cfg[AI_CREDIT_KEYS.kind] === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}) since ${cfg[AI_CREDIT_KEYS.at] || '?'}: ${String(cfg[AI_CREDIT_KEYS.err] || '').slice(0, 160)} Fix: ${AI_CREDIT_FIX}, then tap Resume on the Hub banner.` });
-  if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P1', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
+  if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P2', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
   try {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
