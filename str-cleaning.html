@@ -403,7 +403,7 @@ function renderAlerts(){
 }
 
 /* ---------- turnovers ---------- */
-var ALERT_KIND = { uncovered:'Turnover not covered', cancel:'A cleaner cancelled', mark:'Availability change', event:'Event' };
+var ALERT_KIND = { uncovered:'Turnover not covered', cancel:'A cleaner cancelled', mark:'Availability change', event:'Event', pending:'Pending date (not booked yet)' };
 var OFFER_WORDS = { queued:'text being sent', pending:'waiting for a reply', accepted:'said yes', declined:'said no', expired:'no reply', superseded:'replaced by a newer ask', failed:'text did not go through', cancelled:'cancelled' };
 function statusPill(t){
   var pend = (t.offers||[]).filter(function(o){ return o.status === 'pending' || o.status === 'queued'; })[0];
