@@ -35822,7 +35822,7 @@ async function strAdminPreview(env) {
     const ctx = await strHandlerCtx(env), c = ctx.st.cleaners[0] || { Name: 'Gina Sample', Nickname: 'Gina', Token: 'SAMPLE-TOKEN-SAMPLE-TOKEN-0000' };
     const d = inspAddDays(inspEtDate(ctx.now), 9), task = { key: 'sample', kind: 'checkout', date: d, next: inspAddDays(d, 2), winStart: d, winEnd: d };
     const out = [];
-    for (const type of Object.keys(STR_DEFAULT_TEXTS)) { const text = await strRenderText(ctx, type, strTokens(ctx, c, task)); out.push({ type, text, length: text.length }); }
+    for (const type of Object.keys(STR_DEFAULT_TEXTS)) { const text = await strRenderText(ctx, type, strTokens(ctx, c, task, { DateList: strDateList([d, inspAddDays(d, 5)]), NewFirst: 'Kayla', MarkText: 'out' })); out.push({ type, text, length: text.length }); }
     return json({ ok: true, previews: out, warnings: ctx.warnings });
   } catch (e) { return await strHandleErr(env, e, 'preview'); }
 }
