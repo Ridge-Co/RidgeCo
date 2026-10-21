@@ -258,7 +258,7 @@ t('compute: past checkouts are ignored', R6.checkouts.length === 0 && R6.closed.
 t('multi-day all-day cleaning spans days (end exclusive)', JSON.stringify(SG.inspStrEventDays(API('Gina Cleaning', '2026-10-13', '2026-10-15'))) === JSON.stringify(['2026-10-13', '2026-10-14']));
 // wiring
 t('slot engine skips closed days; availability reads the guard fresh for real bookings', has(/o\.closedDates && o\.closedDates\.has\(b\.Date\)\) continue/) && has(/inspStrClosedOrThrow\(env, cfg, input\.freshGuard\)/) && has(/input\.freshGuard = true/));
-t('guard read failure pauses booking + alerts (never silently offers days)', /async function inspStrClosedOrThrow[\s\S]{0,500}inspAlert[\s\S]{0,300}calendar_unavailable/.test(src));
+t('guard read failure pauses booking + alerts (never silently offers days)', /async function inspStrClosedOrThrow[\s\S]{0,500}inspGuardFailure[\s\S]{0,400}calendar_unavailable/.test(src));  // Oct 21 2026: alerts via inspGuardFailure (transient feed errors get the grace); still throws calendar_unavailable = fails closed
 t('approve + approval page include the no-cleaner conflict', has(/inspStrBookingConflict\(env, await fetchConfig\(env\), b, true\); if \(nc\) conf\.push\(nc\)/) && has(/if \(nc\) conflicts\.push\(nc\)/));
 t('open-block add returns str_warnings; block list marks closed days', has(/str_warnings: strWarnings/) && has(/Str_Closed:/));
 t('scheduler job insp_guard (every ~15 min, no cron) runs the guard tick and alerts on its failure', /name: 'insp_guard',\s+kind: 'interval'/.test(src) && /async function schedRunInspGuard[\s\S]{0,700}inspStrGuardTick\(env\)[\s\S]{0,300}inspGuardFailure\(env, 'str_guard_tick'/.test(src));
