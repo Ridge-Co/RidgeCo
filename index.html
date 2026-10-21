@@ -6201,10 +6201,12 @@ function deleteWishlistItem(id){
 var vendorAccessRequests = [];
 function loadVendorAccessRequests(){
   api('GET','/vendor-access-requests?status=pending').then(function(rows){
-    vendorAccessRequests = Array.isArray(rows) ? rows : [];
+    // Same as the wishlist: an {error} answer used to look like "No pending requests." Now it is shown as a failure.
+    if(!Array.isArray(rows)) throw new Error((rows&&rows.error)||'unexpected answer from the server');
+    vendorAccessRequests = rows;
     renderVendorAccessRequests();
     updateVendorAccessRequestBadges();
-  }).catch(function(e){ console.log('Vendor access requests load error', e); });
+  }).catch(function(e){ console.log('Vendor access requests load error', e); dlLoadFailed('vendor-access-requests-list','Could not load vendor access requests','vendor_access_requests_load',e,'loadVendorAccessRequests()'); });
 }
 function renderVendorAccessRequests(){
   var el = document.getElementById('vendor-access-requests-list'); if (!el) return;
