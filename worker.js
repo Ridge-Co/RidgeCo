@@ -36087,7 +36087,7 @@ async function schedRunStrDigest(env) {
 const STR_CHANGE_MAX = 40, STR_TEXT_MAX = 800, STR_MARK_HORIZON = 120, STR_SUB_LIMIT = 40;
 let __strCalCount = 0; // Google Calendar calls made by this isolate (the Sheets ones are counted by sheetsRequest as __sheetsFetchCount)
 const STR_ACTIONS = ['swap', 'assign_range', 'mark'];
-const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled'];
+const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled', 'calendar_delegation_not_authorized', 'calendar_impersonate_bad_user', 'calendar_impersonate_invalid', 'calendar_scope_too_narrow'];
 function strHash(s) { let a = 5381, b = 52711; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = ((a * 33) ^ c) >>> 0; b = ((b * 31) + c) >>> 0; } return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0'); }
 // Text Brett typed: a plain string only. Control characters and runs of whitespace collapse exactly like the stock texts do (strRenderText).
 function strCleanText(s) { return String(s == null ? '' : s).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim(); }
