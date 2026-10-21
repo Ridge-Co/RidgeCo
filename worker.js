@@ -35046,6 +35046,10 @@ async function strLoad(ctx, fresh) {
 function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date, winStart: r.Win_Start || r.Date, winEnd: r.Win_End || r.Date, next: r.Next_Arrival || null, guests: r.Guests || '', status: r.Status, assigned: r.Assigned_Cleaner_ID || '' }; }
 
 // Calendar reads/writes against the CLEANING calendar (not the main inspection calendar).
+// Cleaning-calendar API failures in plain English. They never tell Brett to share the calendar (his Google Workspace will not allow edit sharing); the fix is the act-as setting.
+function strCalClassify(status, text, as) {
+  const t = String(text || ''), who = (as && as.sub) || '', via = who ? `(the Hub is acting as ${who})` : '(the Hub is using its own Google login)';
+  const fix = who ? `Check that ${who} owns the cleaning calendar or can edit it.` : 'Turn on the act-as setting: set Config STR_CAL_IMPERSONATE to brett@bmoremanagement.com (cleaning board > Switches > Check calendar access explains the one-time Google admin step).';
 async function strCalFetch(env, calId, method, pathAndQuery, body) {
   __strCalCount++;
   const token = await getCalendarAccessToken(env);
