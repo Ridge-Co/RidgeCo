@@ -34751,8 +34751,9 @@ function strCalAs(cfg) {
 }
 let __strCalAs = strCalAs({}); // strCalFetch has no cfg: strSettings (which every caller goes through for the calendar id) remembers it per request
 function strSettings(cfg) {
-  cfg = cfg || {};
+  cfg = cfg || {}; __strCalAs = strCalAs(cfg);
   return {
+    calAs: String(cfg.STR_CAL_IMPERSONATE || '').trim(),
     engine: strBool(cfg.STR_ENGINE_ENABLED, false), sms: strBool(cfg.STR_SMS_ENABLED, false),
     // Cleaning-only test mode (Oct 14 2026, Brett): DEFAULTS TO TRUE, so a missing/blank key can never text a real cleaner.
     // While TRUE every cleaning text goes to the Hub test phone (TWILIO_TEST_RECIPIENT) with a [TEST - for <name>] prefix,
