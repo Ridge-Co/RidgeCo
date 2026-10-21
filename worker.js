@@ -34165,6 +34165,11 @@ function inspEventsToBusy(items) {
 // inspection calendar and the inspection guard. With sub = domain-wide delegation: the service account acts as that user (the CLEANING calendar
 // only, Config STR_CAL_IMPERSONATE). The cache key holds service account + sub + scope, so one mode's token is never handed to another.
 let __calTokens = {};
+function calJwtClaim(env, now, opts) {
+  const sub = String((opts && opts.sub) || '').trim(), c = { iss: env.GOOGLE_SA_EMAIL, scope: (opts && opts.scope) || 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now };
+  if (sub) c.sub = sub;
+  return c;
+}
 async function getCalendarAccessToken(env, opts) {
   const now = Math.floor(Date.now() / 1000), cs = calJwtClaim(env, now, opts), cacheKey = [env.GOOGLE_SA_EMAIL || '', cs.sub || '', cs.scope].join('|'), hit = __calTokens[cacheKey];
   if (hit && hit.exp > now + 60) return hit.token;
