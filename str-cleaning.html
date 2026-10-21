@@ -192,6 +192,15 @@
     <details class="sec" id="sec-turn" open>
       <summary>Turnovers <span class="meta" id="m-turn"></span></summary>
       <div class="body">
+        <div class="toolbar">
+          <button class="btn sm" id="sel-toggle" data-act="seltoggle">Select dates…</button>
+          <button class="btn sm" data-act="rangeassign">Assign a date range…</button>
+        </div>
+        <p class="say" style="margin:0 0 10px">Select dates: tick several turnovers, then swap the cleaner, or mark someone out or available as backup for all of them at once. Assign a date range: give one cleaner every turnover between two dates. Both show you exactly what will happen, and the exact texts, and nothing is done until you press Send.</p>
+        <div id="selhelp" class="msg info selhelp hide"><b>Tick the dates you want to change, then use the buttons at the bottom.</b><ul>
+          <li><b>Swap cleaner:</b> the cleaner you pick takes the ticked dates. Whoever had them is told they are off the hook and becomes backup. The cleaning calendar is fixed too.</li>
+          <li><b>Assign a range:</b> one cleaner gets every turnover between two dates you choose.</li>
+          <li><b>Mark out / backup:</b> sets a cleaner as Out or Available-as-backup for the ticked dates, or clears it.</li></ul></div>
         <div class="seg"><button data-act="filter" data-v="all" class="sel">Everything</button><button data-act="filter" data-v="open">Needs a cleaner</button></div>
         <div id="turn-list"><p class="muted">Loading…</p></div>
       </div>
