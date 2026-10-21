@@ -1165,6 +1165,14 @@ const _hubWorkerCore = {
       // Oct 16 2026: an AI step reached while Anthropic credit is out / paused is a DESIGNED, already-alerted state, not a bug: a typed 503
       // with a plain message (no unhandled_500 row per request, no stack) so every page can say "automatic reading is paused - enter it by hand".
       if (aiCreditIsPausedError(err)) return aiCreditPausedJson({});
+      // Oct 21 2026: Google's shared per-minute READ quota ran out mid-request. That is a "busy, try again in a few seconds" state, not a bug: it used to leave as a
+      // generic 500 (one unhandled_500 P1 row per page, and the portals' busy-retry never recognised it because the message was generic).
+      // Now: a typed 429 whose text the portals already retry on, plus one calm P2 row.
+      if (sheetsQuotaBusyError(err)) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${callerRole || 'none'} ${String((err && err.message) || err)}`.slice(0, 480) }); }
+        catch (te) { console.error('[sheets_quota_busy] could not log to Ops_Telemetry', path, String((te && te.message) || te)); }
+        return new Response(JSON.stringify({ error: 'The system is busy right now (Google Sheets read quota). Please wait a few seconds and try again.', busy: true, retry_after_seconds: 8 }), { status: 429, headers: { ...CORS, 'Content-Type': 'application/json', 'Retry-After': '8' } });
+      }
       // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
       // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
       //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
@@ -15878,6 +15886,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^failure_ledger/, 'P1'],
   [/^qb_payables_(vendor_)?(paid_)?(payment_)?date_missing/, 'P2'],   // Oct 20 2026: display-only warning ("payment date unavailable"); no money moves. Recorded once with a count, not a P0 on every page load.
   [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
+  [/^ai_credit_flag_read_busy/, 'P2'],                    // Oct 21 2026: Google was busy for a minute; the last known flag value kept being honoured
+  [/^sheets_quota_busy/, 'P2'],                           // Oct 21 2026: a request met the shared Sheets read quota; the caller got a typed "busy, retry" answer
   [/^ai_credit_(exhausted|resume)/, 'P2'],                // the event record; the urgent row is the auto-clearing "ai_credit_paused" condition (failConditions)
 ];
 
@@ -18356,6 +18366,11 @@ function aiCreditResetForTests() { _aiCreditCache = null; _aiCreditTripP = null;
 class AiCreditPausedError extends Error {
   constructor(message, info) { super(message); this.name = 'AiCreditPausedError'; this.code = AI_CREDIT_CODE; this.paused = true; this.info = info || null; this.userMessage = AI_PAUSED_USER_MSG; }
 }
+// True for a Sheets error that is the shared per-minute READ quota (or its 429), as opposed to a bug. Pure.
+function sheetsQuotaBusyError(e) {
+  const m = String((e && e.message) || e || '');
+  return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
+}
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
 // PURE. Is this Anthropic error response a "credit exhausted" or "key/account refused" one? -> { kind, status, type, message } | null.
@@ -18405,16 +18420,27 @@ async function aiCreditCheck(env, opts) {
   const now = Date.now();
   if (!opts.fresh && _aiCreditCache && now - _aiCreditCache.at < AI_CREDIT_CACHE_MS) return _aiCreditCache.state;
   let state;
-  try { state = aiCreditStateFromRows(await schedReadConfigRows(env, !!opts.fresh)); }
+  try {
+    // Oct 21 2026: one retry after a short wait. The usual cause is a busy minute on the shared Sheets read quota, which clears in seconds.
+    try { state = aiCreditStateFromRows(await schedReadConfigRows(env, !!opts.fresh)); }
+    catch (e1) {
+      await new Promise(r => setTimeout(r, opts.retryDelayMs == null ? 1500 : opts.retryDelayMs));
+      state = aiCreditStateFromRows(await schedReadConfigRows(env, true));
+    }
+  }
   catch (e) {
     const msg = schedErrText(e);
-    console.error('ai-credit: could not read the pause flag (AI calls are allowed through):', msg);
+    // Quota/busy is not "the flag is unreadable in a way that matters": say so with a calm P2 row, and keep honouring the last flag we DID read
+    // (a paused AI must not quietly un-pause just because Google was busy for a minute). A real read failure stays the urgent P0 row.
+    const busy = /quota exceeded|read requests per minute|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(msg);
+    const lastKnown = _aiCreditCache && _aiCreditCache.state ? _aiCreditCache.state : null;
+    console.error('ai-credit: could not read the pause flag (' + (lastKnown ? 'using the last value read' : 'AI calls are allowed through') + '):', msg);
     if (now - _aiCreditReadFailMs > 10 * 60 * 1000) {
       _aiCreditReadFailMs = now;
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: busy ? 'ai_credit_flag_read_busy' : 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
       catch (te) { console.error('ai-credit: flag-read failure and its telemetry write both failed:', msg, schedErrText(te)); }
     }
-    return { paused: false, read_error: msg };
+    return lastKnown ? Object.assign({}, lastKnown, { read_error: msg }) : { paused: false, read_error: msg };
   }
   _aiCreditCache = { at: now, state };
   return state;
