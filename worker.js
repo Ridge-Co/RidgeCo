@@ -36588,6 +36588,235 @@ async function strPendingConvert(ctx, p, real, how) {
     if (takenBy) {
       const head = `PENDING DATE NOW BOOKED - ALREADY COVERED: ${when} is booked, but ${takenBy} is already on it, so ${strFirst(holder)}'s tentative yes was NOT turned into an assignment.`;
       await strRaiseAlert(ctx, { key: `pconf|${key}|${ctx.now}`, kind: 'pending', severity: 'high', taskKey: key, message: [head, `${strFirst(holder)} was NOT texted. Tell them if you want to.`, 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head} ${strFirst(holder)} was not texted.` });
+      for (const o of st.offers.filter(o => o.Task_Key === key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'date booked' });
+      await finish({ Pending_Cal: 'del', Pending_Text: 'skipped:conflict', Pending_Mail: 'skipped:conflict', Pending_Note: ((p.Pending_Note || '') + ' [booked, but already covered by ' + takenBy + ']').trim().slice(0, 240) }, `already covered by ${takenBy}; ${strFirst(holder)} not texted`);
+      return { ok: true, conflict: takenBy };
+    }
+    // anything already running on the real turnover (a normal offer made before this ran) closes quietly: nobody else is texted
+    for (const o of st.offers.filter(o => o.Task_Key === real.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: String(o.Cleaner_ID) === holder.ID ? 'accepted' : 'superseded', Responded_At: iso, Note: 'pending hold became the booking' });
+    for (const o of st.offers.filter(o => o.Task_Key === key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'date booked' });
+    await finish({ Pending_Text: p.Pending_Text && p.Pending_Text !== '' ? p.Pending_Text : 'due', Pending_Mail: p.Pending_Mail && p.Pending_Mail !== '' ? p.Pending_Mail : 'due' }, `${strFirst(holder)} is now assigned`);
+    return { ok: true, assigned: holder.Name };
+  }
+  // Nobody held it: whoever is mid-offer keeps their offer (now about the real booking); cleaners who already passed are not asked again; the normal path takes over.
+  if (['open', 'offering', 'exhausted'].includes(real.Status)) {
+    let moved = 0;
+    for (const o of st.offers.filter(o => o.Task_Key === key)) {
+      if (STR_OFFER_ACTIVE.includes(o.Status)) { await strSetOffer(ctx, o, { Task_Key: real.Task_Key, Note: 'asked while pending; the date is now booked' }); moved++; }
+      else if (['declined', 'cancelled'].includes(o.Status) && !st.offers.some(x => x.Task_Key === real.Task_Key && String(x.Cleaner_ID) === String(o.Cleaner_ID) && STR_OFFER_BLOCKS.includes(x.Status))) {
+        const id = await strAddRow(ctx.env, 'STR_Offers', { Task_Key: real.Task_Key, Cleaner_ID: o.Cleaner_ID, Round: '0', Created_At: iso, Status: o.Status, Mode: 'pending', Responded_At: o.Responded_At || iso, Note: 'passed while the date was pending' });
+        st.offers.push({ ID: id, Task_Key: real.Task_Key, Cleaner_ID: o.Cleaner_ID, Status: o.Status, Mode: 'pending' });
+      }
+    }
+    if (moved && real.Status !== 'offering') await strSetTurnover(ctx, real, { Status: 'offering', Note: '' });
+  }
+  await finish({ Pending_Text: '', Pending_Mail: '' }, 'nobody had held it');
+  return { ok: true, assigned: '' };
+}
+
+// The calendar half of a close-out (also retried every tick until it lands): "del" removes the (PENDING) event; "conv" turns it into the normal
+// "<Name> Cleaning" event IN PLACE. Both re-read the event to prove it. Only events carrying this pending date's own ridgecoStrKey are touched.
+async function strPendingCalFix(ctx, feed, p) {
+  const mode = p.Pending_Cal || ''; if (mode !== 'del' && mode !== 'conv') return null;
+  const { env, S } = ctx, enc = encodeURIComponent, done = async note => { await strSetTurnover(ctx, p, { Pending_Cal: 'done' }); return { done: true, note }; };
+  if (!S.calWrite) return await done('calendar writes are off');
+  if (feed.fixture || inspCalStaged(env, ctx.cfg)) return await done('staging: calendar writes are stubbed');
+  const ev = feed.cal.find(e => e.ext && e.ext.ridgecoStr && e.ext.ridgecoStrKey === p.Task_Key && e.ext.ridgecoStrKind === 'pending' && String(e.status || '').toUpperCase() !== 'CANCELLED');
+  if (!ev) return await done('no pending event on the calendar');
+  const gone = async () => { try { const r = await strCalFetch(env, S.cleaningCal, 'GET', '/events/' + enc(ev.id) + '?fields=id,status'); return String((r && r.status) || '').toLowerCase() === 'cancelled'; } catch (er) { if (er.httpStatus === 404 || er.httpStatus === 410) return true; throw er; } };
+  if (mode === 'del' || p.Status !== 'pending_converted') {
+    try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(ev.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; }
+    if (!(await gone())) throw strErr('calendar_verify', `The (PENDING) event for ${strFmtDate(p.Date)} was deleted but is still there when re-read.`);
+    ev.status = 'CANCELLED';
+    return await done('event removed');
+  }
+  const real = ctx.st.turnovers.find(t => t.Task_Key === p.Converted_To), c = real && real.Status === 'covered' ? ctx.st.cmap[real.Assigned_Cleaner_ID] : null;
+  if (!real || !c) { // not (or no longer) assigned: no normal event to turn it into, so remove the tentative one
+    try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(ev.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; }
+    if (!(await gone())) throw strErr('calendar_verify', `The (PENDING) event for ${strFmtDate(p.Date)} could not be removed.`);
+    ev.status = 'CANCELLED'; return await done('event removed (no assignment)');
+  }
+  const want = strDesiredCalendar([{ key: real.Task_Key, kind: real.Kind, date: real.Date, next: real.Next_Arrival || null, status: 'covered', assigned: real.Assigned_Cleaner_ID, coveredAny: true }], ctx.st.cmap, inspEtDate(ctx.now), S)[0];
+  const body = strCalBody(want, INSP_TZ); body.extendedProperties.private.ridgecoStrPending = null;
+  const r = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(ev.id), body);
+  if (!r || !r.id) throw strErr('calendar_verify', `Google did not confirm turning the (PENDING) event for ${strFmtDate(p.Date)} into the normal event.`);
+  const back = await strCalFetch(env, S.cleaningCal, 'GET', '/events/' + enc(ev.id) + '?fields=id,status,summary,extendedProperties(private)'), pr = (back && back.extendedProperties && back.extendedProperties.private) || {};
+  if (!back || back.summary !== want.title || pr.ridgecoStrKey !== real.Task_Key || pr.ridgecoStrKind !== 'cover' || pr.ridgecoStrPending) throw strErr('calendar_verify', `The calendar event for ${strFmtDate(p.Date)} did not change as asked when re-read (title "${back && back.summary}").`);
+  ev.summary = want.title; ev.ext = Object.assign({}, ev.ext, { ridgecoStrKey: real.Task_Key, ridgecoStrKind: 'cover' }); delete ev.ext.ridgecoStrPending;
+  return await done('event converted in place');
+}
+
+// The held cleaner's "that date is now booked" text (or Brett's opted-in "no booking after all" text): claim first, then send, so a crash can never send it twice.
+async function strPendingSendText(ctx, p) {
+  const flag = p.Pending_Text || '', iso = new Date(ctx.now).toISOString();
+  if (/^sending:/.test(flag)) { if (ctx.now - Date.parse(flag.slice(8)) > 15 * 60000 && !(p.Note || '').includes('stuck-told')) { await strSystemAlert(ctx.env, 'pending_text_stuck', `The text to the held cleaner for ${strFmtDate(p.Date)} was claimed but never confirmed. It is NOT being resent; check whether ${strFirst(ctx.st.cmap[p.Assigned_Cleaner_ID]) || 'they'} got it.`); await strSetTurnover(ctx, p, { Note: ((p.Note || '') + ' stuck-told').trim() }); } return null; }
+  if (!(flag === 'due' || /^failed:[12]$/.test(flag))) return null;
+  const c = ctx.st.cmap[p.Assigned_Cleaner_ID], n = (/^failed:(\d)$/.exec(flag) || [0, 0])[1] | 0;
+  if (!c) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:no_cleaner' }); return { skipped: true }; }
+  if (!ctx.S.sms) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:sms_off' }); await strLog(ctx, p.Task_Key, c.ID, 'pending_text_skipped', 'STR_SMS_ENABLED is FALSE'); return { skipped: true }; }
+  if (!strInSendWindow(ctx.now, ctx.S)) return { held: true };
+  const why = strReach(c); if (why) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:unreachable' }); ctx.errors.push({ step: 'pending_text', error: `${c.Name} ${why}, so they were NOT texted about ${strFmtDate(p.Date)}.` }); await strSystemAlert(ctx.env, 'pending_text', `${c.Name} ${why}: not texted about ${strFmtDate(p.Date)}. Tell them yourself.`); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Text: 'sending:' + iso });
+  let r;
+  if (p.Status === 'pending_cancelled') r = p.Pending_Body ? await strSendCleanerText(ctx, c, 'str_pending_cancelled', p.Pending_Body) : await strTextCleaner(ctx, c, 'str_pending_cancelled', strTokens(ctx, c, strRowToTask(p)), strRowToTask(p));
+  else { const real = ctx.st.turnovers.find(t => t.Task_Key === p.Converted_To), task = real ? strRowToTask(real) : strRowToTask(p); r = await strTextCleaner(ctx, c, 'str_pending_booked', strTokens(ctx, c, task), task); }
+  if (r.ok) { await strSetTurnover(ctx, p, { Pending_Text: 'sent:' + iso }); await strLog(ctx, p.Task_Key, c.ID, p.Status === 'pending_cancelled' ? 'pending_cancel_text_sent' : 'pending_booked_text_sent', r.detail); return { ok: true }; }
+  if (r.off) { await strSetTurnover(ctx, p, { Pending_Text: 'skipped:sms_off' }); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Text: 'failed:' + (n + 1) });
+  ctx.errors.push({ step: 'pending_text', error: `Could not text ${c.Name} about ${strFmtDate(p.Date)} (try ${n + 1}/3): ${r.detail}` });
+  await strSystemAlert(ctx.env, 'pending_text', `The ${p.Status === 'pending_cancelled' ? '"no booking after all"' : '"now booked"'} text to ${c.Name} for ${strFmtDate(p.Date)} failed (try ${n + 1}/3)${n + 1 >= 3 ? ' and will NOT be retried - tell them yourself' : ''}: ${r.detail}`);
+  return { ok: false };
+}
+async function strPendingSendMail(ctx, p) {
+  const flag = p.Pending_Mail || '', iso = new Date(ctx.now).toISOString();
+  if (!(flag === 'due' || /^failed:[12]$/.test(flag))) return null;
+  const c = ctx.st.cmap[p.Assigned_Cleaner_ID], real = ctx.st.turnovers.find(t => t.Task_Key === p.Converted_To), n = (/^failed:(\d)$/.exec(flag) || [0, 0])[1] | 0;
+  if (!c || !real) { await strSetTurnover(ctx, p, { Pending_Mail: 'skipped:no_cleaner' }); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Mail: 'sending:' + iso });
+  const r = await strSwapEmail(ctx, c, [{ date: real.Date, kind_label: 'Checkout 11 AM', _t: { next: real.Next_Arrival || '' } }]);
+  if (r.status === 'sent' || r.status === 'staged') { await strSetTurnover(ctx, p, { Pending_Mail: 'sent:' + iso }); await strLog(ctx, p.Task_Key, c.ID, 'pending_invite_sent', r.status); return { ok: true }; }
+  if (r.status === 'skipped') { await strSetTurnover(ctx, p, { Pending_Mail: 'skipped:' + String(r.note || '').slice(0, 60) }); ctx.warnings.push(r.note); return { skipped: true }; }
+  await strSetTurnover(ctx, p, { Pending_Mail: 'failed:' + (n + 1) });
+  ctx.errors.push({ step: 'pending_invite', error: r.note }); await strSystemAlert(ctx.env, 'pending_invite', r.note + (n + 1 >= 3 ? ' (no more tries)' : ''));
+  return { ok: false };
+}
+// Everything a closed-out pending row still owes: its text, its invite email, its calendar clean-up. Each piece is skipped (left for the next tick)
+// when this call is short of subrequests, and never blocks the others.
+async function strPendingDrain(ctx, feed) {
+  if (ctx.dry) return { skipped: 'dry run' };
+  const out = { texts: 0, mails: 0, cal: 0 };
+  for (const p of ctx.st.pendings.filter(p => ['pending_converted', 'pending_cancelled', 'pending_expired'].includes(p.Status))) {
+    const owes = (p.Pending_Text === 'due' || /^failed:[12]$/.test(p.Pending_Text || '') || /^sending:/.test(p.Pending_Text || '')), oweMail = p.Pending_Mail === 'due' || /^failed:[12]$/.test(p.Pending_Mail || ''), oweCal = p.Pending_Cal === 'del' || p.Pending_Cal === 'conv';
+    if (!owes && !oweMail && !oweCal) continue;
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'pending-date follow-up(s)'); continue; }
+    if (owes && strRoom(ctx, 22)) { try { if ((await strPendingSendText(ctx, p) || {}).ok) out.texts++; } catch (e) { ctx.errors.push({ step: 'pending_text', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_text', strErrText(e)); } }
+    if (oweMail && strRoom(ctx, 24)) { try { if ((await strPendingSendMail(ctx, p) || {}).ok) out.mails++; } catch (e) { ctx.errors.push({ step: 'pending_invite', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_invite', strErrText(e)); } }
+    if (oweCal && feed && strRoom(ctx, 16)) { try { if ((await strPendingCalFix(ctx, feed, p) || {}).done) out.cal++; } catch (e) { ctx.errors.push({ step: 'pending_calendar', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_calendar', `The cleaning calendar change for the pending ${strFmtDate(p.Date)} date did not land: ${strErrText(e)}. It will be retried.`); } }
+  }
+  return out;
+}
+
+// Expire: the date passed with no booking. Silent (no texts), the calendar event is removed (retried until proven), the standing alerts close, it is logged.
+async function strPendingExpire(ctx, p) {
+  if (!strPendActive(p)) return false;
+  const iso = new Date(ctx.now).toISOString();
+  for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'date passed' });
+  await strSetTurnover(ctx, p, { Status: 'pending_expired', Pending_Cal: 'del', Pending_Text: '', Pending_Mail: '', Note: 'date passed with no booking' });
+  await strLog(ctx, p.Task_Key, p.Assigned_Cleaner_ID || '', 'pending_expired', `${p.Date} passed with no booking`);
+  ctx.pendChanged = true;
+  return true;
+}
+
+// The tick's pending step: expire, convert, follow up on anything owed, then ask the next cleaner for each inquiry still waiting.
+async function strPendingTick(ctx, feed, built, builtMap) {
+  const st = ctx.st, today = inspEtDate(ctx.now), out = { expired: 0, converted: 0, conflicts: 0, offers: [] };
+  if (!st.pendings.length) return out;
+  const active = () => st.pendings.filter(strPendActive);
+  for (const p of active().filter(p => p.Date < today)) {
+    if (ctx.dry) { ctx.actions.push({ pending: p.Task_Key, would_expire: true }); continue; }
+    try { if (await strPendingExpire(ctx, p)) out.expired++; } catch (e) { ctx.errors.push({ step: 'pending_expire', error: `${p.Task_Key}: ${strErrText(e)}` }); }
+  }
+  for (const p of active().filter(p => p.Date >= today)) {
+    const real = st.turnovers.find(t => t.Kind === 'checkout' && t.Date === p.Date && t.Status !== 'cancelled' && !String(t.ID).startsWith('dry-') && (builtMap.has(t.Task_Key) || strManualHold(t, ctx.now)));
+    if (real) {
+      if (ctx.dry) { ctx.actions.push({ pending: p.Task_Key, would_convert_to: real.Task_Key }); continue; }
+      if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'pending date(s) to convert'); continue; }
+      try { const r = await strPendingConvert(ctx, p, real, 'bookings feed'); if (r.ok && !r.already) { out.converted++; if (r.conflict) out.conflicts++; } else if (!r.ok) ctx.warnings.push(`Pending ${strFmtDate(p.Date)}: not converted (${r.note}).`); }
+      catch (e) { ctx.errors.push({ step: 'pending_convert', error: `${p.Task_Key}: ${strErrText(e)}` }); await strSystemAlert(ctx.env, 'pending_convert', `The pending ${strFmtDate(p.Date)} date could not be turned into the real booking yet (it will be retried): ${strErrText(e)}`); }
+      continue;
+    }
+    // no exact match: a booking one day either side, or a pre-arrival clean on the date, is NOT treated as the same booking - Brett decides
+    if (!ctx.dry) for (const t of built.filter(t => (t.kind === 'checkout' && Math.abs(strDaysBetween(p.Date, t.date)) === 1) || (t.kind === 'prearrival' && t.date === p.Date))) {
+      try {
+        const head = `PENDING DATE ${strFmtDate(p.Date)}: a real booking now ${t.kind === 'prearrival' ? 'needs a pre-arrival clean that same day' : 'checks out on ' + strFmtDate(t.date)}, not on the date you asked cleaners about.`;
+        await strRaiseAlert(ctx, { key: `padj|${p.Task_Key}|${t.key}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, 'It was NOT treated as the same booking, so nobody was assigned. If the guest just changed dates, cancel the inquiry on the board; the new date goes through the normal cleaner queue. If the feed is simply behind, tap "Mark as booked now".', 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head} Not matched automatically - see the board. ${PORTAL_BASE}/str-cleaning.html` });
+      } catch (e) { ctx.errors.push({ step: 'pending_adjacent', error: strErrText(e) }); }
+    }
+  }
+  if (!ctx.dry) { try { out.drain = await strPendingDrain(ctx, feed); } catch (e) { ctx.errors.push({ step: 'pending_followup', error: strErrText(e) }); } }
+  for (const p of active().filter(p => p.Date >= today && ['open', 'offering', 'exhausted'].includes(p.Status))) {
+    if (!strBudgetLeft(ctx, STR_NEW_WORK_MS)) { strDefer(ctx, 'pending date(s) to check for offers'); continue; }
+    try { const r = await strAdvanceTask(ctx, p); out.offers.push(Object.assign({ task: p.Task_Key }, r)); }
+    catch (e) { ctx.errors.push({ step: 'pending_offers', error: `${p.Task_Key}: ${strErrText(e)}` }); }
+  }
+  return out;
+}
+
+// ── A held cleaner gives the date back (or marks herself out on it) ─────────────────────────────────────────────────────────────
+async function strPendingRelease(ctx, p, c, who) {
+  const iso = new Date(ctx.now).toISOString(), days = strDaysBetween(inspEtDate(ctx.now), p.Date);
+  await strSetTurnover(ctx, p, { Status: 'open', Assigned_Cleaner_ID: '', Assigned_Via: '', Note: `hold released by ${c.Name} ${iso}` });
+  const mine = ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && String(o.Cleaner_ID) === c.ID && o.Status === 'accepted').pop(); // her "yes" offer becomes "cancelled" (still blocks asking her again)
+  if (mine) await strSetOffer(ctx, mine, { Status: 'cancelled', Responded_At: iso, Note: who });
+  else { const id = await strAddRow(ctx.env, 'STR_Offers', { Task_Key: p.Task_Key, Cleaner_ID: c.ID, Round: '0', Created_At: iso, Status: 'cancelled', Mode: 'cancel', Responded_At: iso, Note: who }); ctx.st.offers.push({ ID: id, Task_Key: p.Task_Key, Cleaner_ID: c.ID, Status: 'cancelled', Mode: 'cancel' }); }
+  await strLog(ctx, p.Task_Key, c.ID, 'pending_hold_released', who);
+  await strSetMark(ctx, c, p.Date, 'out', 'cancel');
+  const pic = strBackupLine(strBackupPicture({ date: p.Date }, ctx.st.cleaners.filter(x => String(x.Active).toUpperCase() !== 'FALSE'), ctx.st.marks, c.ID));
+  const head = `PENDING HOLD RELEASED: ${strFirst(c)} can no longer hold ${strFmtDate(p.Date)} (tentative, not booked) - ${days <= 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}`;
+  await strRaiseAlert(ctx, { key: `prel|${p.Task_Key}|${c.ID}|${ctx.now}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, pic + '.', 'The next cleaner is asked next.'].join('\n'), sms: `${head}. ${pic}. ${PORTAL_BASE}/str-cleaning.html` });
+  return { days };
+}
+// Ask the next cleaner right now when this call still has subrequests to spare; otherwise the scheduler does it within ~15 minutes (never skipped).
+async function strPendingAdvance(ctx, p, warnings) {
+  if (ctx.subS0 !== undefined && strSubUsed(ctx) + 22 > 46) { warnings.push('The next cleaner will be asked by the scheduler within about 15 minutes.'); return null; }
+  try { return await strAdvanceTask(ctx, p); } catch (e) { warnings.push('The next cleaner could not be asked right away (' + strErrText(e) + '); the scheduler will retry.'); await strSystemAlert(ctx.env, 'advance_pending', strErrText(e)); return null; }
+}
+// Marking out on a pending date: a waiting offer is declined, a held date is given back. Returns warnings.
+async function strPendingMarkOut(ctx, c, date, warnings) {
+  for (const p of ctx.st.pendings.filter(p => p.Date === date && strPendActive(p))) {
+    try {
+      if (p.Status === 'pending_held' && String(p.Assigned_Cleaner_ID) === c.ID) { await strPendingRelease(ctx, p, c, 'marked out on the cleaner page'); await strPendingAdvance(ctx, p, warnings); }
+      else for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && String(o.Cleaner_ID) === c.ID && o.Status === 'pending')) { await strSetOffer(ctx, o, { Status: 'declined', Responded_At: new Date(ctx.now).toISOString(), Note: 'marked out' }); await strPendingAdvance(ctx, p, warnings); }
+      if (strRoom(ctx, 14)) { await strPendingAlerts(ctx); await strDeliverAlerts(ctx); }
+    } catch (e) { warnings.push('Marked out, but the pending date could not be updated everywhere: ' + strErrText(e)); await strSystemAlert(ctx.env, 'pending_markout', strErrText(e)); }
+  }
+}
+// A cleaner answers a pending offer. Yes = tentative hold (never an assignment). Returns the JSON response.
+async function strPendingRespond(ctx, c, offer, p, action) {
+  const env = ctx.env, label = strFmtDate(p.Date, true), iso = new Date(ctx.now).toISOString();
+  if (!strPendActive(p)) {
+    if (p.Status === 'pending_converted') return json({ ok: true, result: 'booked', message: `Good news: the ${label} turnover is now booked and Brett has it handled. Thank you for answering so quickly!` });
+    return json({ ok: true, result: 'cancelled', message: `The ${label} date is no longer being held, so there is nothing to do. Thank you!` });
+  }
+  const warnings = [];
+  if (action === 'decline') {
+    if (offer.Status !== 'pending' && offer.Status !== 'expired') return json({ ok: true, result: 'already', message: 'That one was already closed.' });
+    await strSetOffer(ctx, offer, { Status: 'declined', Responded_At: iso });
+    await strLog(ctx, p.Task_Key, c.ID, 'offer_declined', 'pending date');
+    await strPendingAdvance(ctx, p, warnings);
+    await strAlertsNow(ctx, warnings, 'pending_decline');
+    return json({ ok: true, result: 'declined', message: 'No problem - thank you for letting us know.', warnings });
+  }
+  if (p.Status === 'pending_held' && String(p.Assigned_Cleaner_ID) === c.ID) return json({ ok: true, result: 'already_yours', message: 'You already told us you could do this one. Nothing is confirmed yet - we will text you if it books.' });
+  const filled = () => json({ ok: true, result: 'filled', backup_date: p.Date, message: `Thanks for the quick answer - another cleaner already said they could do ${label}, so it is covered for now. Could you be the backup for that date? Tap "Yes, backup" and we will keep you in mind.` });
+  if (!['pending', 'expired'].includes(offer.Status)) return filled();
+  invalidateTabCache('STR_Turnovers');
+  const cur = (await fetchTab(env, 'STR_Turnovers')).find(r => String(r.ID) === String(p.ID));
+  if (!cur || !strPendActive(cur)) return json({ ok: true, result: 'cancelled', message: `The ${label} date is no longer being held. Thank you!` });
+  if (cur.Status === 'pending_held' && String(cur.Assigned_Cleaner_ID) !== c.ID) return filled();
+  Object.assign(p, cur);
+  let werr = null;
+  try { await strSetTurnover(ctx, p, { Status: 'pending_held', Assigned_Cleaner_ID: c.ID, Assigned_Via: 'pending_yes', Note: '' }); } catch (e) { if (!e || e.code !== 'write_not_landed') throw e; werr = e; }
+  invalidateTabCache('STR_Turnovers');
+  const back = (await fetchTab(env, 'STR_Turnovers')).find(r => String(r.ID) === String(p.ID));
+  if (back && back.Status === 'pending_held' && String(back.Assigned_Cleaner_ID) !== c.ID) return filled(); // another cleaner said yes at the same moment and won
+  if (werr || !back || String(back.Assigned_Cleaner_ID) !== c.ID) throw werr || strErr('write_not_landed', 'The tentative hold did not save.');
+  Object.assign(p, back);
+  await strSetOffer(ctx, offer, { Status: 'accepted', Responded_At: iso });
+  await strLog(ctx, p.Task_Key, c.ID, 'pending_held', 'said yes (tentative)');
+  for (const o of ctx.st.offers.filter(o => o.Task_Key === p.Task_Key && STR_OFFER_ACTIVE.includes(o.Status) && o !== offer)) await strSetOffer(ctx, o, { Status: 'superseded', Responded_At: iso, Note: 'someone else said yes' });
+  const t = await strTextCleaner(ctx, c, 'str_pending_yes', strTokens(ctx, c, strRowToTask(p)), strRowToTask(p));
+  if (!t.ok && !t.off) { warnings.push(`The "we'll let you know" text could not be sent: ${t.detail}`); ctx.errors.push({ step: 'pending_yes_text', error: `Could not text ${c.Name} the tentative-yes confirmation: ${t.detail}` }); await strSystemAlert(env, 'pending_yes_text', `Could not text ${c.Name} the "nothing is confirmed yet" reply for ${strFmtDate(p.Date)}: ${t.detail}`); }
+  const days = strDaysBetween(inspEtDate(ctx.now), p.Date), head = `PENDING DATE: ${strFirst(c)} CAN clean ${strFmtDate(p.Date)} if it books (tentative, not booked yet) - ${days === 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'}`;
+  try { await strRaiseAlert(ctx, { key: `pyes|${p.Task_Key}|${c.ID}|${ctx.now}`, kind: 'pending', severity: 'normal', taskKey: p.Task_Key, message: [head, 'You can accept the booking: a cleaner is lined up.' + (p.Pending_Note ? ' Your note: ' + p.Pending_Note : ''), 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head}. You can accept the booking. ${PORTAL_BASE}/str-cleaning.html` }); }
+  catch (e) { warnings.push('Brett could not be told right away: ' + strErrText(e)); await strSystemAlert(env, 'pending_yes_alert', strErrText(e)); }
+  await strAlertsNow(ctx, warnings, 'pending_yes');
+  return json({ ok: true, result: 'held', date: p.Date, message: `Thanks - we'll let you know if it books. Nothing is confirmed yet.`, warnings });
+}
+
+// ── Admin: ask about a date (preview, then create) ────────────────────────────────────────────────────────────────────────────
+async function strPendingPlan(ctx, body) {
+  const today = inspEtDate(ctx.now), date = String((body && body.date) || '').trim(), note = strCleanText((body && body.note) || '').slice(0, 200), st = ctx.st, warnings = [];
 //@@PH@@
 // ═══ STR-BLOCK-END
 
