@@ -21,7 +21,7 @@ the PR base was actually `staging`. Parallel Claude sessions are fine — those 
 4. To verify on staging: open a SECOND PR from the SAME branch into `staging`, and put this exact line in its body:
    `staging-test-only: true`. Merge that PR (test-only; staging is only a test copy). It is never how a change reaches main.
    (A test-only PR merged within the last 72h counts as explained staging content for the drift check.)
-5. Test on staging (confirm the deploy landed: `BUILD_VERSION` in the deployed worker matches).
+5. Test on staging (confirm the deploy landed: compare `GET /version` `deployed_at`/`version_id` with the deploy, or grep the deployed source for a string your change adds; `BUILD_VERSION` itself is a frozen base and a PR must NOT edit it, the guard fails it).
 6. Brett merges the PR -> `main`. `Sync staging to main` then resets staging automatically. Nobody touches staging after that.
 
 ## When a branch goes dirty (conflicts / "not mergeable")
