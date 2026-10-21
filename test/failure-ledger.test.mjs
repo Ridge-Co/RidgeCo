@@ -144,6 +144,42 @@ ok(p.updates.length === 1 && p.updates[0].Count === 1 && p.updates[0].Message ==
 p = plan([], [crow], { conditions: [] });
 ok(p.updates[0].Status === 'fixed' && /cleared/.test(p.updates[0].Notes), 'a condition that stops being true clears itself');
 
+// ── Oct 21 2026: ledger self-healing (the 32 open problems on Needs Attention) ──
+console.log('\nSelf-healing (Oct 21 2026)');
+const DAY = 86400000;
+const old = (sev, days, extra) => Object.assign({}, row, { _row: 7, Severity: sev, Source: 'worker', Last_Seen: new Date(T0 - days * DAY).toISOString(), Notified_At: new Date(T0 - days * DAY).toISOString(), Notified_Count: 1 }, extra || {});
+p = plan([], [old('P1', 4)]);
+ok(p.updates.length === 1 && p.updates[0].Status === 'fixed' && /quiet/.test(p.updates[0].Fixed_In) && /reopens if it happens again/.test(p.updates[0].Notes), 'a P1 that has not recurred for 4 days closes itself and says it will reopen');
+p = plan([], [old('P1', 2)]); ok(p.updates.length === 0, 'a P1 quiet for only 2 days stays open');
+p = plan([], [old('P2', 4)]); ok(p.updates.length === 1 && p.updates[0].Status === 'fixed', 'a quiet P2 closes after 3 days');
+p = plan([], [old('P0', 5)]); ok(p.updates.length === 0, 'a P0 is NOT closed after 5 quiet days (money/door/text failures wait 7)');
+p = plan([], [old('P0', 8)]); ok(p.updates.length === 1 && p.updates[0].Status === 'fixed', 'a P0 quiet for 8 days closes');
+p = plan([], [old('P1', 9, { Status: 'acknowledged' })]); ok(p.updates.length === 1 && p.updates[0].Status === 'fixed', 'an acknowledged row also closes when quiet');
+p = plan([], [old('P1', 9, { Status: 'wontfix' })]); ok(p.updates.length === 0, "won't-fix rows are left alone");
+p = plan([], [old('P1', 9, { Source: 'condition', Fingerprint: 'cond|x' })], { conditions: [{ key: 'x', where: 'w', severity: 'P1', message: 'still true' }] });
+ok(p.updates.every(u => u.Status !== 'fixed'), 'condition rows are never quiet-closed (they follow whether they are still true)');
+const closed = plan([], [old('P1', 4)]).updates[0];
+p = plan([evt('900-z', 'sms', 'twilio down', 'P0')], [Object.assign({}, closed, { Last_Event_ID: '100-a' })]);
+ok(p.updates[0].Status === 'open' && /reopened/.test(p.updates[0].Notes) && p.sms.length === 1, 'a quiet-closed problem that happens again reopens and alerts again');
+p = plan([evt('950-q', 'qb_payables_payment_date_missing', 'WO-1246 err=1 paid invoice(s) have no QuickBooks Payment', 'P2')], [Object.assign({}, row, { Severity: 'P0', Where: 'qb_payables_payment_date_missing', Fingerprint: L.failFingerprint('hub', 'qb_payables_payment_date_missing', 'WO-1246 err=1 paid invoice(s) have no QuickBooks Payment'), Last_Event_ID: '900-a' })]);
+ok(p.updates.length === 1 && p.updates[0].Severity === 'P2' && /severity P0 -> P2/.test(p.updates[0].Notes), 'a row that is a P0 only because it was classed P0 when first seen drops to P2 once the latest events are P2 (F-1792452838483)');
+ok(L.failSeverity('qb_payables_payment_date_missing', 'WO-1246 err=1 paid invoice(s) have no QuickBooks Payment with a usable date') === 'P2', 'the code classes the display-only QuickBooks date warning as P2');
+p = plan([evt('960-q', 'sms', 'twilio down', 'P0')], [Object.assign({}, row, { Severity: 'P2', Last_Event_ID: '900-a' })]);
+ok(p.updates[0].Severity === 'P0', 'escalation still works');
+// the two switches Brett controls
+reset([]); SHEET.Config[0][1] = 'FALSE'; SHEET.Config.push(['dead_man_switch_enabled', 'FALSE']);
+await L.failRollupRun(env, { nowMs: T0 });
+const sw = SHEET.Failures.slice(1);
+ok(sw.find(x => x[1] === 'cond|alerts_off')[2] === 'P2' && sw.find(x => x[1] === 'cond|dead_man_off')[2] === 'P2', 'alerts-off and dead-man-off appear in the ledger as P2 (F-c1792189002339-1 / -2), not as red P0/P1');
+ok(SMS.length === 0, '... and cause no text');
+// end to end: a quota failure recorded as an event, quiet for 4 days, then closes in the real rollup
+reset();
+await L.reportFailure(env, { where: 'insp_guard', message: "Sheets API error on GET /values/Insp_Bookings: Quota exceeded for quota metric 'Read requests'" });
+await L.failRollupRun(env, { nowMs: T0 });
+ok(SHEET.Failures.slice(1).some(x => x[4] === 'insp_guard' && x[10] === 'open'), 'a Sheets quota failure shows up in the ledger as open');
+await L.failRollupRun(env, { nowMs: Date.now() + 4 * DAY });
+ok(SHEET.Failures.slice(1).find(x => x[4] === 'insp_guard')[10] === 'fixed', '... and closes itself after 4 quiet days in the real rollup');
+
 console.log('\nTexts');
 ok(/Hub problem \(3x\)/.test(L.failFormatP0Sms([{ Count: 3, Where: 'scheduler_job', Message: 'deposit' }])), 'single-problem text includes the count');
 const multi = L.failFormatP0Sms([1, 2, 3, 4, 5].map(i => ({ Count: 1, Where: 'w' + i, Message: 'm' + i })));
@@ -179,7 +215,7 @@ reset([]); SHEET.Config[0][1] = 'FALSE';
 await L.reportFailure(env, { where: 'scheduler_job', message: 'boom' });
 res = await L.failRollupRun(env, { nowMs: T0 });
 ok(SMS.length === 0 && res.alerts_on === false, 'alerts switched off: nothing texted');
-ok(SHEET.Failures.slice(1).some(x => x[1] === 'cond|alerts_off' && x[2] === 'P0'), '... but a P0 "alerts are OFF" row explains why on screen');
+ok(SHEET.Failures.slice(1).some(x => x[1] === 'cond|alerts_off' && x[2] === 'P2'), '... but a P2 "alerts are OFF" row explains why on screen (Oct 21 2026: OFF is Brett\'s standing choice, not an emergency)');
 SHEET.Config[0][1] = 'TRUE';
 res = await L.failRollupRun(env, { nowMs: T0 + 900000 });
 ok(SMS.length === 1, 'when Brett switches alerts on, the backlog of urgent problems is texted (once)');
