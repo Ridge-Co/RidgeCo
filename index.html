@@ -863,12 +863,14 @@ window.addEventListener('pageshow', function(e){
         <div class="dl-tool" data-tool="share-photos" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="shareAttachments(false)">🖼 Fix Photo/Video Sharing</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Make older job photos and videos open for vendors without a Google login.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
       </div></div>
     </details>
-    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🔎 DIAGNOSTICS</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-      <button class="btn small" onclick="runOpsReview()">🔎 Run Ops Review (test)</button>
-      <button class="btn small" onclick="logTestTelemetry()">📊 Log test telemetry row</button>
-    </div>
-    <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
+    <details class="dl-group" data-dl-key="checks" data-tools="1" open>
+      <summary><span class="dl-h">Checks &amp; diagnostics</span><span class="dl-sub">Make sure the system itself is healthy</span><span class="dl-count"></span></summary>
+      <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="ops-review" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="runOpsReview()">🔎 Run Ops Review</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Run the weekly Optimizer review now. It reads the usage log, saves its findings, and may use AI credits.</p></div>
+        <div class="dl-tool" data-tool="test-telemetry" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="logTestTelemetry()">📊 Log Test Telemetry Row</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Adds one test row to the usage log to confirm logging works.</p></div>
+      </div></div>
+    </details>
+    </section>
 
     <div class="section-title" style="margin-bottom:8px">🔑 VENDOR ACCESS DEFAULTS BY TRADE</div>
     <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO will never receive access codes unless explicitly overridden on a specific WO. Trades not listed default to YES.</div>
