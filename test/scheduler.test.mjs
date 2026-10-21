@@ -102,7 +102,7 @@ function load(store, over) {
   };
   Object.assign(stubs, over.stubs || {});
   const names = Object.keys(stubs);
-  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
+  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedStampFirstSeen, schedGrace, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
   return Object.assign(fn(...names.map(n => stubs[n])), { telemetry, alerts, stubs });
 }
 const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
@@ -264,6 +264,76 @@ function mkJobs(log, spec) {
 }
 const fast = (c, extra) => Object.assign({ now: c.now, sleep: async () => {}, verifyDelayMs: 0, budgetMs: 5000 }, extra || {});
 const stateOf = (store) => JSON.parse(store.cfg().Scheduler_State);
+// Oct 20 2026: pretend every job's grace clock started long ago (the grace window is what these tests are NOT about).
+const ageGrace = (store) => { const s = JSON.parse(store.cfg().Scheduler_State); for (const j of Object.values(s.jobs)) { if (j.grace_from) j.grace_from = '2026-01-01T00:00:00.000Z'; } store.setCfg('Scheduler_State', JSON.stringify(s)); };
+
+// 1g NEW-JOB GRACE (Oct 20 2026): a brand-new / just re-enabled job is not "overdue" until its own limit has passed
+{
+  const NOW = iso('2026-10-20T16:00:00Z');                       // Tue 12:00 ET
+  const minAgo = (m) => new Date(NOW.getTime() - m * 60000).toISOString();
+  const sw = job('sweep'), dg = job('daily_digest');             // sweep: every 15 min -> limit max(45, 3x15) = 45; daily_digest: 07:00 ET, grace 180
+  // stamping
+  const st = { v: 1, last_tick: minAgo(1), jobs: { sweep: { last_ok: minAgo(5) }, door_watchdog: {} } };
+  const jobsL = P.SCHED_JOBS.map(j => j.name === 'sweep_work' ? Object.assign({}, j, { disabled: true }) : j);
+  const ch = P.schedStampFirstSeen(st, NOW, jobsL);
+  t('stamp: every job is stamped once', ch.length === jobsL.length && st.jobs.sweep.seen_at === NOW.toISOString());
+  t('stamp: a job that already had a success gets NO grace clock (stays strict)', st.jobs.sweep.grace_from === undefined && st.jobs.sweep.last_ok === minAgo(5));
+  t('stamp: a never-run job gets seen_at + grace_from', st.jobs.door_watchdog.grace_from === NOW.toISOString() && st.jobs.sweep_checks.grace_from === NOW.toISOString());
+  t('stamp: a disabled job is marked seen-disabled (seen_at "") with no grace', st.jobs.sweep_work.seen_at === '' && !st.jobs.sweep_work.grace_from);
+  t('stamp: second pass changes nothing', P.schedStampFirstSeen(st, new Date(NOW.getTime() + 60000), jobsL).length === 0 && st.jobs.sweep.seen_at === NOW.toISOString());
+  const re = P.schedStampFirstSeen(st, new Date(NOW.getTime() + 120000), P.SCHED_JOBS);   // sweep_work switched back on
+  t('stamp: re-enabling a job gets a fresh grace clock', re.join() === 'sweep_work' && st.jobs.sweep_work.grace_from === new Date(NOW.getTime() + 120000).toISOString() && st.jobs.sweep_work.seen_at === new Date(NOW.getTime() + 120000).toISOString());
+  // interval job
+  const base = { v: 1, last_tick: minAgo(1) };
+  const s1 = P.schedStatus(Object.assign({ jobs: { sweep: { seen_at: minAgo(10), grace_from: minAgo(10) } } }, base), NOW, [sw]);
+  t('status: new interval job 10 min in is NOT overdue, shows grace', s1.jobs.sweep.overdue === false && s1.jobs.sweep.grace === true && s1.overdue.length === 0 && /new job/.test(s1.jobs.sweep.grace_reason), s1.jobs.sweep);
+  const s2 = P.schedStatus(Object.assign({ jobs: { sweep: { seen_at: minAgo(50), grace_from: minAgo(50) } } }, base), NOW, [sw]);
+  t('status: new interval job 50 min in (past its 45 min limit) IS overdue - "never completed"', s2.jobs.sweep.overdue === true && /never completed/.test(s2.jobs.sweep.overdue_reason) && s2.overdue.join() === 'sweep', s2.jobs.sweep);
+  const slow = Object.assign({}, sw, { every_min: 119, every_human: 120 });   // every 2h -> 3x = 360 min
+  const s2b = P.schedStatus(Object.assign({ jobs: { sweep: { seen_at: minAgo(200), grace_from: minAgo(200) } } }, base), NOW, [slow]);
+  t('grace scales with cadence: a 2-hour job is still in grace at 200 min (limit 360)', s2b.jobs.sweep.overdue === false && s2b.jobs.sweep.grace === true, s2b.jobs.sweep);
+  // re-enabled with an old success
+  const reen = { seen_at: minAgo(10), grace_from: minAgo(10), last_ok: minAgo(3 * 24 * 60) };
+  const s3 = P.schedStatus(Object.assign({ jobs: { sweep: reen } }, base), NOW, [sw]);
+  t('status: a job re-enabled 10 min ago with a 3-day-old success is in grace, not overdue', s3.jobs.sweep.overdue === false && s3.jobs.sweep.grace === true && /switched back on|new job/.test(s3.jobs.sweep.grace_reason), s3.jobs.sweep);
+  const s3b = P.schedStatus(Object.assign({ jobs: { sweep: Object.assign({}, reen, { seen_at: '', grace_from: minAgo(10) }) } }, base), NOW, [sw]);
+  t('status: re-enable reason says so', /switched back on/.test(s3b.jobs.sweep.grace_reason), s3b.jobs.sweep);
+  const s3c = P.schedStatus(Object.assign({ jobs: { sweep: Object.assign({}, reen, { grace_from: minAgo(60) }) } }, base), NOW, [sw]);
+  t('status: re-enabled but still no run after 60 min -> overdue "last success was ... min ago"', s3c.jobs.sweep.overdue === true && /last success was/.test(s3c.jobs.sweep.overdue_reason), s3c.jobs.sweep);
+  // success since the clock started ends the grace and normal judgment resumes
+  const s4 = P.schedStatus(Object.assign({ jobs: { sweep: { seen_at: minAgo(100), grace_from: minAgo(100), last_ok: minAgo(90) } } }, base), NOW, [sw]);
+  t('status: it ran OK after grace_from, then went quiet 90 min -> overdue (grace does not hide a real outage)', s4.jobs.sweep.overdue === true && !s4.jobs.sweep.grace, s4.jobs.sweep);
+  // an established job (success, no grace clock) keeps the strict rule
+  const s5 = P.schedStatus(Object.assign({ jobs: { sweep: { seen_at: minAgo(5000), last_ok: minAgo(90) } } }, base), NOW, [sw]);
+  t('status: an established job that stopped is overdue immediately (no grace)', s5.jobs.sweep.overdue === true && !s5.jobs.sweep.grace, s5.jobs.sweep);
+  // a started-never-finished job is overdue even inside grace
+  const s6 = P.schedStatus(Object.assign({ jobs: { sweep: { seen_at: minAgo(20), grace_from: minAgo(20), last_start: minAgo(15), last_status: 'running' } } }, base), NOW, [sw]);
+  t('status: grace does not hide "started and never finished"', s6.jobs.sweep.overdue === true && /never finished/.test(s6.jobs.sweep.overdue_reason), s6.jobs.sweep);
+  // unstamped
+  const s7 = P.schedStatus(Object.assign({ jobs: {} }, base), NOW, [sw]);
+  t('status: a job the dispatcher has not stamped yet (ticking, never ran) is in grace - the deploy that added it is not an outage', s7.jobs.sweep.overdue === false && s7.jobs.sweep.grace === true, s7.jobs.sweep);
+  const s8 = P.schedStatus({ v: 1, last_tick: null, jobs: {} }, NOW, [sw]);
+  t('status: with NO tick at all there is no excuse - never-run stays overdue', s8.jobs.sweep.overdue === true, s8.jobs.sweep);
+  // daily job: due 07:00 ET, "overdue" from 10:00 ET
+  const d1 = P.schedStatus(Object.assign({ jobs: { daily_digest: { seen_at: minAgo(60), grace_from: minAgo(60) } } }, base), NOW, [dg]);
+  t('status: a daily job added 60 min ago (already 5h past its slot) is in grace, not overdue', d1.jobs.daily_digest.overdue === false && d1.jobs.daily_digest.grace === true, d1.jobs.daily_digest);
+  const d2 = P.schedStatus(Object.assign({ jobs: { daily_digest: { seen_at: minAgo(200), grace_from: minAgo(200) } } }, base), NOW, [dg]);
+  t('status: the same daily job 200 min after being added (limit 180) and still not run -> overdue', d2.jobs.daily_digest.overdue === true && /has not run for/.test(d2.jobs.daily_digest.overdue_reason), d2.jobs.daily_digest);
+  const d3 = P.schedStatus(Object.assign({ jobs: { daily_digest: { seen_at: minAgo(60), grace_from: minAgo(60), last_failed_final: '2026-10-20', last_error: 'boom' } } }, base), NOW, [dg]);
+  t('status: grace does not hide a daily job that FAILED for good today', d3.jobs.daily_digest.overdue === true && /failed today/.test(d3.jobs.daily_digest.overdue_reason), d3.jobs.daily_digest);
+  // dispatcher end to end: the first real tick persists the stamps
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval']]);
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  const s = stateOf(store);
+  t('dispatcher: first tick stamps seen_at + grace_from for every job in the state it persists, and reports grace_stamped', r1.body.grace_stamped.join() === 'a,b' && s.jobs.a.seen_at && s.jobs.b.seen_at && s.jobs.b.grace_from === s.jobs.b.seen_at, [r1.body, s.jobs]);
+  t('dispatcher: a job that ran keeps its stamps AND gets last_ok', !!s.jobs.a.last_ok && !!s.jobs.a.seen_at, s.jobs.a);
+  c.v += 20 * 60000;
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('dispatcher: stamps are only written once (second tick reports none)', !r2.body.grace_stamped, r2.body);
+  const dry = await L.schedRunNext({}, null, fast(c, { jobs, dry: true, preflight: false }));
+  t('dry run stamps nothing to the sheet', dry.status === 200 && JSON.stringify(stateOf(store).jobs.b.grace_from) === JSON.stringify(s.jobs.b.grace_from));
+}
 
 // 2a first run, one job per call, more flag, then idle
 {
@@ -483,6 +553,38 @@ for (const N of [2, 5, 8]) {
   const s = stateOf(store).jobs.dq;
   t('a job that never finishes becomes a loud FAILURE on slice 13 (not a forever-green "partial")', log.length === 13 && s.last_status === 'failed' && /after 12 slices/.test(s.last_error || '') && L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dq'), { n: log.length, s });
 }
+// 2k-e Oct 20 2026: a job that REPORTS progress_made on its partial slices (daily_qb_sync) is judged on progress, not a flat 12 slices
+{
+  const runN = async (seq, extra) => {
+    const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+    let i = 0;
+    const jobs = mkJobs(log, [['dq', 'daily', { run: async () => { log.push('dq'); const step = seq[Math.min(i++, seq.length - 1)];
+      return step === 'done' ? { ok: true, errors: [] } : (step === undefined ? { ok: true, partial: true, errors: [] } : { ok: true, partial: true, progress_made: step === 'p', errors: [] }); } }]]);
+    let last = null;
+    for (let k = 0; k < (extra || 100); k++) { last = await L.schedRunNext({}, null, fast(c, { jobs })); c.v += 6 * 60000; if (last.body.ran !== 'dq') break; }
+    return { store, L, c, log, last, s: stateOf(store).jobs.dq };
+  };
+  // 3 slices in a row with no progress -> failure on the 3rd
+  const a = await runN(['n', 'n', 'n', 'n']);
+  t('3 no-progress slices in a row = loud FAILURE on slice 3 ("made no progress")', a.log.length === 3 && a.s.last_status === 'failed' && /made no progress in its last 3 slices/.test(a.s.last_error || '') && a.L.telemetry.some(x => x.Success === 'FALSE' && x.Skill_Or_Endpoint === 'dq'), { n: a.log.length, s: a.s });
+  // two stalls then progress resets the counter; 20 progress slices sail past the old flat cap of 12
+  const b = await runN(['n', 'n', 'p', 'n', 'n', 'p', ...Array(14).fill('p'), 'done']);
+  t('stalls that are followed by progress never fail; 21 slices pass the old flat 12-slice cap and the day completes', b.log.length === 21 && b.s.last_status === 'ok' && !!b.s.last_key && b.s.partials === null, { n: b.log.length, s: b.s });
+  const c2 = await runN(['n', 'n', 'p'], 4);
+  t('stalled counter is stored (partials.stalled) and reset by a progress slice', c2.log.length === 4 && c2.s.last_status === 'partial' && c2.s.partials.stalled === 0, c2.s);
+  const store2 = primeState(makeStore()), L2 = load(store2), clk2 = clock(T0), log2 = [];
+  const jobs2 = mkJobs(log2, [['dq', 'daily', { run: async () => { log2.push('dq'); return { ok: true, partial: true, progress_made: false, errors: [] }; } }]]);
+  await L2.schedRunNext({}, null, fast(clk2, { jobs: jobs2 })); clk2.v += 6 * 60000; await L2.schedRunNext({}, null, fast(clk2, { jobs: jobs2 }));
+  t('after 2 stalled slices the state holds partials {n:2, stalled:2} and the job is still "partial", not failed', stateOf(store2).jobs.dq.partials.stalled === 2 && stateOf(store2).jobs.dq.partials.n === 2 && stateOf(store2).jobs.dq.last_status === 'partial', stateOf(store2).jobs.dq);
+  clk2.v += 6 * 60000; await L2.schedRunNext({}, null, fast(clk2, { jobs: jobs2 }));   // 3rd stalled slice -> failed
+  t('3rd stalled slice fails and is retried by the normal 30 min rule (attempt counted)', stateOf(store2).jobs.dq.last_status === 'failed' && stateOf(store2).jobs.dq.attempts.n === 1, stateOf(store2).jobs.dq);
+  // a job that creeps (always progress) hits the absolute backstop, loudly
+  const e = await runN(['p']);
+  t('always-progress-but-never-finishing job fails at the hard backstop (slice 61), not forever', e.log.length === 61 && e.s.last_status === 'failed' && /after 60 slices/.test(e.s.last_error || ''), { n: e.log.length, s: e.s });
+  // a job that does NOT report progress keeps the old flat cap (the daily self-test)
+  const f = await runN([undefined]);
+  t('a partial job that does not report progress_made keeps the flat 12-slice cap', f.log.length === 13 && /after 12 slices/.test(f.s.last_error || ''), { n: f.log.length, s: f.s });
+}
 {
   const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
   const jobs = mkJobs(log, [['dq', 'daily', { run: async () => { log.push('dq'); return { ok: false, partial: true, errors: [{ step: 'x', error: 'boom' }] }; } }]]);
@@ -603,7 +705,7 @@ const drain = async (L, c, extra) => {
   t('first tick reports first_run + seeded:[the 5 dailies and the two Monday weeklies]', a.first.body.first_run === true && a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon'].join(), a.first.body);
   const s = stateOf(store);
   t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
-  t('review_wed (Wednesday job) is not seeded on a Monday', !s.jobs.review_wed);
+  t('review_wed (Wednesday job) is not seeded on a Monday (it only gets the grace stamp)', !s.jobs.review_wed || (!s.jobs.review_wed.last_key && !s.jobs.review_wed.last_seeded), s.jobs.review_wed);
   t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 11 && !!s.seeded.at);
   const st = L.schedStatus(s, new Date(c.v), L.SCHED_JOBS);
   t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 11 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
@@ -789,8 +891,11 @@ store.setCfg('admin_phone', '+15555550100');
   t('state landed in the single Config key with last_ok', s.jobs.insp_guard && s.jobs.insp_guard.last_status === 'ok' && !!s.jobs.insp_guard.last_ok && s.claim_id === '');
   const again = await call('POST', '/cron/run', H, { only: 'insp_guard' });
   t('calling it again immediately is a no-op (interval gate)', again.json.ran === null);
+  const stat0 = await call('GET', '/cron/status', H);
+  t('status right after the first ticks: never-run jobs are in GRACE (new job, first run pending), not overdue', stat0.json.jobs.insp_guard.overdue === false && stat0.json.jobs.sweep.overdue === false && stat0.json.jobs.sweep.grace === true && !stat0.json.overdue.includes('sweep'), stat0.json.jobs.sweep);
+  ageGrace(store);
   const stat = await call('GET', '/cron/status', H);
-  t('status: insp_guard fine, never-run jobs overdue', stat.json.jobs.insp_guard.overdue === false && stat.json.overdue.includes('sweep') && stat.json.tick_age_min <= 2, stat.json.overdue);
+  t('status: insp_guard fine, never-run jobs overdue (once their grace has run out)', stat.json.jobs.insp_guard.overdue === false && stat.json.overdue.includes('sweep') && stat.json.tick_age_min <= 2, stat.json.overdue);
   const h = await call('GET', '/health', {});
   t('public /health carries a coarse scheduler summary (age + overdue NAMES only)', h.status === 200 && h.json.scheduler && typeof h.json.scheduler.last_tick_age_min === 'number' && Array.isArray(h.json.scheduler.overdue) && h.json.scheduler.overdue.includes('sweep') && !('jobs' in h.json.scheduler) && !JSON.stringify(h.json.scheduler).includes('last_error'), h.json && h.json.scheduler);
   const noauth = await call('POST', '/cron/run', {}, {});
@@ -847,6 +952,7 @@ store.setCfg('admin_phone', '+15555550100');
   t('preflight with a schedule: previews it (digest disabled -> not in the due list / preflight jobs), writes nothing', dry.status === 200 && dry.json.disabled.join() === 'daily_digest' && !dry.json.due.includes('daily_digest') && !(pf.jobs.daily_digest) && store.calls.filter(x => x.startsWith('POST')).length === posts && !JSON.parse(store.cfg().Scheduler_State || '{}').schedule);
   const live = await call('POST', '/cron/run', H, { only: 'insp_guard', schedule: { door_watchdog: { enabled: false }, sweep: { every_min: 30 } } });
   t('live call with a schedule is accepted, and remembers it in Scheduler_State', live.status === 200 && live.json.schedule_overrides.join() === 'door_watchdog,sweep' && live.json.disabled.join() === 'door_watchdog' && JSON.stringify(JSON.parse(store.cfg().Scheduler_State).schedule) === '{"door_watchdog":{"enabled":false},"sweep":{"every_min":30}}', live.json);
+  ageGrace(store);
   const stat = await call('GET', '/cron/status', H);
   t('/cron/status uses the remembered schedule: door_watchdog DISABLED and not overdue, sweep "every 30 min"', stat.json.jobs.door_watchdog.enabled === false && stat.json.jobs.door_watchdog.overdue === false && !stat.json.overdue.includes('door_watchdog') && stat.json.jobs.sweep.expected === 'every 30 min' && stat.json.overdue.includes('sweep_work'), stat.json.jobs.door_watchdog);
   const health = await call('GET', '/health', {});

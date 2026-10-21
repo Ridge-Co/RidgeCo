@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-21.01-str-cal-impersonate';
+const BUILD_VERSION = '2026-10-21.03-failure-ledger-self-heal-stg';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -1166,6 +1166,14 @@ const _hubWorkerCore = {
       // Oct 16 2026: an AI step reached while Anthropic credit is out / paused is a DESIGNED, already-alerted state, not a bug: a typed 503
       // with a plain message (no unhandled_500 row per request, no stack) so every page can say "automatic reading is paused - enter it by hand".
       if (aiCreditIsPausedError(err)) return aiCreditPausedJson({});
+      // Oct 21 2026: Google's shared per-minute READ quota ran out mid-request. That is a "busy, try again in a few seconds" state, not a bug: it used to leave as a
+      // generic 500 (one unhandled_500 P1 row per page, and the portals' busy-retry never recognised it because the message was generic).
+      // Now: a typed 429 whose text the portals already retry on, plus one calm P2 row.
+      if (sheetsQuotaBusyError(err)) {
+        try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${callerRole || 'none'} ${String((err && err.message) || err)}`.slice(0, 480) }); }
+        catch (te) { console.error('[sheets_quota_busy] could not log to Ops_Telemetry', path, String((te && te.message) || te)); }
+        return new Response(JSON.stringify({ error: 'The system is busy right now (Google Sheets read quota). Please wait a few seconds and try again.', busy: true, retry_after_seconds: 8 }), { status: 429, headers: { ...CORS, 'Content-Type': 'application/json', 'Retry-After': '8' } });
+      }
       // Oct 14 2026: this used to hand err.message + err.stack + the error class to ANY caller
       // (tenants, vendors, anonymous public routes) - internals, sheet names and code paths. Now:
       //   - every 500 is logged to Ops_Telemetry (it used to be invisible unless a wrapper caught it),
@@ -14835,6 +14843,7 @@ async function adminNotify(env, body) {
 // would see a permanent http_404 and cry wolf.
 const DOOR_WD_URL = 'https://str-automation.brett-2f8.workers.dev/health';
 const DOOR_WD_TIMEOUT_MS = 8000;
+const DOOR_WD_SMS_TIMEOUT_MS = 20000;   // Oct 21 2026: deadline for the alert text itself (see runDoorWatchdogPass)
 const DOOR_WD_STALE_MS = 75 * 60000;
 const DOOR_WD_DEDUPE_MS = 6 * 3600000;
 const DOOR_WD_ABSENT_GRACE_MS = 24 * 3600000;
@@ -15067,7 +15076,12 @@ async function runDoorWatchdogPass(env, opts) {
     else if (!phone) smsDetail = 'Config admin_phone not set';
     else {
       try {
-        const r = await (io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text));
+        // Oct 21 2026: the text itself gets a deadline. A hung Twilio call used to hold the whole watchdog pass until the scheduler cut it off, so the email
+        // fallback below never ran and Brett heard nothing about a dead door-code system. On timeout we fall through to the email.
+        const smsWait = (io && io.smsTimeoutMs) || DOOR_WD_SMS_TIMEOUT_MS; let smsTimer;
+        const smsTimeout = new Promise((_, rej) => { smsTimer = setTimeout(() => rej(new Error('text message did not finish within ' + Math.round(smsWait / 1000) + 's')), smsWait); });
+        let r;
+        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text), smsTimeout]); } finally { clearTimeout(smsTimer); }
         if (r && r.skipped) smsDetail = 'skipped: ' + scrubPhones(r.reason || 'sending disabled');
         else if (r && r.staged) { smsOk = true; smsOutcome = 'staged'; }
         else if (r && r.sid && !r.error && !r.code) { smsOk = true; smsOutcome = 'sent'; }
@@ -15855,6 +15869,9 @@ const FAIL_EVENT_COLS = ['ID', 'Timestamp', 'System', 'Source', 'Where', 'Ref', 
 const FAIL_LEDGER_COLS = ['ID', 'Fingerprint', 'Severity', 'System', 'Where', 'Message', 'Source', 'First_Seen', 'Last_Seen', 'Count', 'Status', 'Notified_At', 'Notified_Count', 'Last_Event_ID', 'Fixed_In', 'Notes'];
 const FAIL_OPEN = ['open', 'acknowledged'];
 const FAIL_STATUSES = ['open', 'acknowledged', 'fixed', 'wontfix'];
+// Oct 21 2026: an EVENT row (not a condition) that has not recurred for this long closes itself, and reopens (and alerts) the moment it happens again.
+// Before this, a failure that was fixed in code stayed on Needs Attention forever because nothing told the ledger. P0s get longer because they are money/door/text failures.
+const FAIL_QUIET_CLOSE_MS = { P0: 7 * 86400000, P1: 3 * 86400000, P2: 3 * 86400000 };
 const FAIL_P0_REPEAT_MS = 6 * 3600000;      // a P0 whose count keeps growing is re-texted at most this often
 const FAIL_P0_REMIND_MS = 24 * 3600000;     // an unacknowledged P0 is re-texted once a day even if it stopped growing
 const FAIL_LEGACY_ALERT_MS = 90 * 60000;    // alertAdminOnFailure already texted about this job this recently: do not text twice
@@ -15870,6 +15887,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^failure_ledger/, 'P1'],
   [/^qb_payables_(vendor_)?(paid_)?(payment_)?date_missing/, 'P2'],   // Oct 20 2026: display-only warning ("payment date unavailable"); no money moves. Recorded once with a count, not a P0 on every page load.
   [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
+  [/^ai_credit_flag_read_busy/, 'P2'],                    // Oct 21 2026: Google was busy for a minute; the last known flag value kept being honoured
+  [/^sheets_quota_busy/, 'P2'],                           // Oct 21 2026: a request met the shared Sheets read quota; the caller got a typed "busy, retry" answer
   [/^ai_credit_(exhausted|resume)/, 'P2'],                // the event record; the urgent row is the auto-clearing "ai_credit_paused" condition (failConditions)
 ];
 
@@ -15942,7 +15961,12 @@ function failRollupPlan(inp) {
       touch(row);
     } else {
       row.Count = (Number(row.Count) || 0) + fresh.length; row.Last_Seen = last.Timestamp; row.Message = last.Message; row.Last_Event_ID = lastId;
-      if (row.Status !== 'wontfix' && failSevRank(sev) < failSevRank(row.Severity)) row.Severity = sev;
+      // Oct 21 2026: severity follows the latest batch in BOTH directions. It used to only escalate, so a failure that the code now classes as P2
+      // (e.g. qb_payables_payment_date_missing) stayed a red P0 forever because it had been P0 on its first sighting.
+      if (row.Status !== 'wontfix' && sev !== row.Severity) {
+        if (failSevRank(sev) > failSevRank(row.Severity)) row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `severity ${row.Severity} -> ${sev} ${day} (latest occurrences are ${sev})`;
+        row.Severity = sev;
+      }
       touch(row);
     }
   }
@@ -15957,6 +15981,13 @@ function failRollupPlan(inp) {
   }
   for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
     r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
+  }
+  // Event rows that have gone quiet close themselves (see FAIL_QUIET_CLOSE_MS). A row touched by new events this run is by definition not quiet.
+  for (const r of ledger) {
+    if (r.Source === 'condition' || FAIL_OPEN.indexOf(r.Status) < 0 || updates.has(r._row)) continue;
+    const seen = Date.parse(r.Last_Seen || ''), limit = FAIL_QUIET_CLOSE_MS[r.Severity] || FAIL_QUIET_CLOSE_MS.P2;
+    if (isNaN(seen) || now - seen < limit) continue;
+    r.Status = 'fixed'; r.Fixed_In = 'quiet - closed automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `closed ${day}: not seen since ${String(r.Last_Seen).slice(0, 10)}; reopens if it happens again`; touch(r);
   }
   const all = ledger.concat(created);
   // Whom to text now: open P0s never texted, grown since the last text (at most every 6 h), or unacknowledged for a day.
@@ -16026,11 +16057,11 @@ function failSmsOk(r) { return !!(r && (r.sid || r.staged)); }
 // Conditions = things wrong right now that no code path "failed" at: a scheduler job that stopped, alerts switched off.
 async function failConditions(env, cfg, nowMs) {
   const out = [];
-  if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });
+  if (String(cfg.failure_alert_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'alerts_off', system: 'hub', where: 'failure_alerts', severity: 'P2', message: 'Failure alerts are switched OFF (Config failure_alert_enabled). Problems are recorded here but you will not be texted. Turn it on in Hub Settings.' });   // Oct 21 2026: P2 - OFF is Brett's standing choice (texts only for physical-world failures), not an emergency
   else if (!cfg.admin_phone) out.push({ key: 'no_admin_phone', system: 'hub', where: 'failure_alerts', severity: 'P0', message: 'Config admin_phone is not set, so failure alerts have nowhere to go.' });
   // Oct 16 2026: the AI-credit pause is a CONDITION (true right now), so its urgent Needs Attention row clears itself the moment AI resumes.
   if (String(cfg[AI_CREDIT_KEYS.paused] || '').toUpperCase() === 'TRUE') out.push({ key: 'ai_credit_paused', system: 'hub', where: 'ai_credit_paused', severity: 'P0', message: `AI reading is PAUSED (${cfg[AI_CREDIT_KEYS.kind] === 'auth' ? 'Anthropic is refusing the API key/account' : 'Anthropic credit is out'}) since ${cfg[AI_CREDIT_KEYS.at] || '?'}: ${String(cfg[AI_CREDIT_KEYS.err] || '').slice(0, 160)} Fix: ${AI_CREDIT_FIX}, then tap Resume on the Hub banner.` });
-  if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P1', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
+  if (String(cfg.dead_man_switch_enabled || '').toUpperCase() !== 'TRUE') out.push({ key: 'dead_man_off', system: 'hub', where: 'dead_man_switch', severity: 'P2', message: 'The dead-man switch is OFF (Config dead_man_switch_enabled): nothing warns you if all Hub jobs go quiet for a day.' });
   try {
     const rows = await schedReadConfigRows(env, false);
     const parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY));
@@ -16424,6 +16455,10 @@ const SCHED_VERIFY_DELAY_MS = 700;
 const SCHED_RETRY_GAP_MS = 30 * 60 * 1000;  // failed daily/weekly job: retry no sooner than this ...
 const SCHED_PARTIAL_GAP_MS = 5 * 60 * 1000;  // a job that returned {partial:true} (finished a slice, more to do) resumes no sooner than this ...
 const SCHED_MAX_PARTIALS = 12;              // ... and a daily/weekly job may take at most this many slices per ET day before it counts as FAILED
+// Oct 20 2026: a job that REPORTS progress (progress_made true/false on each partial slice, today only daily_qb_sync) is judged on that instead of the flat cap:
+// it fails after SCHED_MAX_STALLED_PARTIALS slices in a row that moved nothing, and only hits a (much higher) absolute backstop if it keeps creeping.
+const SCHED_MAX_STALLED_PARTIALS = 3;
+const SCHED_MAX_PARTIALS_PROGRESS = 60;
 const SCHED_MAX_ATTEMPTS = 3;               // ... and at most this many tries per ET day
 const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
@@ -16593,6 +16628,43 @@ function schedSeedFirstRun(state, nowDate, jobs) {
   if (seeded.length) state.seeded = { at: nowDate.toISOString(), jobs: seeded.slice() };
   return seeded;
 }
+// ── NEW-JOB GRACE (Oct 20 2026) ──────────────────────────────────────────────────────────────────────────────
+// A job that is brand new in the registry (or was just switched back on in the JOBS table) has had no chance to run yet, so "has never
+// completed successfully" / "last success was N days ago" is not news - it was opening a P0 "overdue" row on every deploy that added a job.
+// Each tick the dispatcher stamps every ENABLED job once (`seen_at`); a job with no success yet, or one that was seen DISABLED (`seen_at: ''`)
+// and is now enabled, also gets `grace_from`. schedStatus then holds the "overdue" verdict back for the job's own limit (interval jobs:
+// 3 x cadence, at least 45 min; daily/weekly: SCHED_OVERDUE_GRACE_MIN) after `grace_from`, unless the job has succeeded since. A job that already had
+// a success before this build keeps its old, strict behaviour. Pure on `state`: mutates it in place and returns the names it changed.
+function schedStampFirstSeen(state, nowDate, jobs) {
+  const iso = nowDate.toISOString(), changed = [];
+  if (!state.jobs || typeof state.jobs !== 'object') state.jobs = {};
+  for (const job of (jobs || SCHED_JOBS)) {
+    const js = state.jobs[job.name] || {};
+    if (job.disabled) {
+      if (js.seen_at !== '') { state.jobs[job.name] = Object.assign({}, js, { seen_at: '', grace_from: null }); changed.push(job.name); }
+      continue;
+    }
+    if (js.seen_at) continue;                                                     // already stamped while enabled
+    const rec = Object.assign({}, js, { seen_at: iso });
+    if (js.seen_at === '' || !js.last_ok) rec.grace_from = iso;                    // re-enabled, or never succeeded: start the clock now
+    state.jobs[job.name] = rec; changed.push(job.name);
+  }
+  return changed;
+}
+// Pure. Is this enabled job still inside its grace window? -> { in_grace, until_min, why }
+function schedGrace(job, js, nowMs, ticking) {
+  const limit = job.kind === 'interval' ? schedOverdueLimitMin(job) : SCHED_OVERDUE_GRACE_MIN;
+  const okMs = Date.parse(js.last_ok || ''), fromMs = Date.parse(js.grace_from || '');
+  if (!isNaN(fromMs)) {
+    if (!isNaN(okMs) && okMs >= fromMs) return { in_grace: false };                // it has run fine since the clock started: judge it normally
+    const left = limit - Math.round((nowMs - fromMs) / 60000);
+    return left > 0 ? { in_grace: true, until_min: left, why: js.seen_at === '' ? 'just switched back on' : 'new job, first run pending' } : { in_grace: false };
+  }
+  // Never stamped and never succeeded, but the dispatcher IS ticking (state has a last_tick): the job was added by a deploy and the next tick has not stamped it yet.
+  // (With no tick at all there is no such excuse - that stays overdue.)
+  if (ticking && isNaN(okMs) && !js.seen_at && js.seen_at !== '' && !js.last_start) return { in_grace: true, until_min: limit, why: 'new job, waiting for its first tick' };
+  return { in_grace: false };
+}
 // ── SCHEDULE OVERRIDES (Oct 13 2026) ─────────────────────────────────────────────────────────────────────────
 // Brett wants every schedule visible and editable in ONE place: the JOBS table at the top of HubScheduler.gs. The
 // registry above holds the DEFAULTS; each tick the Apps Script sends its JOBS table as `schedule` in POST /cron/run
@@ -16685,16 +16757,18 @@ function schedStatus(state, now, jobs, aiPausedAt) {
     }
     const startMs = Date.parse(js.last_start || ''), endMs = Date.parse(js.last_end || '');
     let overdue = false, reason = '';
+    const grace = schedGrace(job, js, nowMs, !!(state && state.last_tick));   // Oct 20 2026: a new / just re-enabled job is not "overdue" for the first stretch
     if (!isNaN(startMs) && (isNaN(endMs) || endMs < startMs) && nowMs - startMs > SCHED_CLAIM_TTL_MS + 60000) {
       overdue = true; reason = `started ${ageMin(js.last_start)} min ago and never finished (timed out or crashed)`;
     }
     if (job.kind === 'interval') {
       const okAge = ageMin(js.last_ok);
-      if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
+      if (grace.in_grace) { /* still inside its grace window - not overdue yet */ }
+      else if (okAge === null) { overdue = true; reason = reason || 'has never completed successfully'; }
       else if (okAge > schedOverdueLimitMin(job)) { overdue = true; reason = reason || `last success was ${okAge} min ago (limit ${schedOverdueLimitMin(job)})`; }
     } else {
       const expectedToday = job.kind === 'daily' || et.dow === job.dow;
-      if (expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
+      if (!grace.in_grace && expectedToday && et.minutes >= schedAtMinutes(job.at) + SCHED_OVERDUE_GRACE_MIN && js.last_key !== et.date) {
         overdue = true; reason = reason || `has not run for ${et.date} (was due ${job.at} ET)`;
       }
       if (js.last_failed_final === et.date) { overdue = true; reason = reason || 'failed today and will not be retried automatically: ' + (js.last_error || '?'); }
@@ -16702,7 +16776,7 @@ function schedStatus(state, now, jobs, aiPausedAt) {
     // Oct 16 2026: skipped on purpose because AI credit is paused -> shown as "paused: AI credit", NOT overdue (the pause itself is the loud, already-alerted problem).
     const pausedNow = !!aiPausedAt && job.kind !== 'interval' && js.paused_key === et.date && js.paused_ep === aiPausedAt && js.last_key !== et.date;
     if (pausedNow) { overdue = false; reason = ''; }
-    out.jobs[job.name] = Object.assign({ expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' }, pausedNow ? { paused: true, paused_reason: js.last_error || 'paused: AI credit' } : {});
+    out.jobs[job.name] = Object.assign({ expected: schedExpected(job), enabled: true, last_ok: js.last_ok || null, last_end: js.last_end || null, last_status: js.last_status || null, last_error: js.last_error || null, seeded: !!js.last_seeded, overdue, overdue_reason: overdue ? reason : '' }, pausedNow ? { paused: true, paused_reason: js.last_error || 'paused: AI credit' } : {}, grace.in_grace && !overdue ? { grace: true, grace_reason: `${grace.why}; judged overdue after another ~${grace.until_min} min if it still has not run` } : {});
     if (overdue) out.overdue.push(job.name);
   }
   return out;
@@ -16868,9 +16942,9 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
   catch (e) { return { ok: false, errors: [{ step: 'qb_sync_progress', error: schedErrText(e) }], detail }; }
   if (!prog || prog.date !== today) prog = { date: today, started: new Date().toISOString(), done: [], ir_done: false, loop_done: false, sweep_done: false, complete: false, slices: 0, totals: { written: 0, failed: 0, closed: 0, closed_wos: [] } };
   if (prog.complete) return { ok: true, errors, detail: { skipped: `already finished today (${today})` } };
-  let partial = false;
+  let partial = false, progressMade;
   try {
-    const res = await qbSyncPayments(env, {}, { state: prog, sliceMs: opts.sliceMs, now: opts.now });
+    const res = await qbSyncPayments(env, {}, { state: prog, sliceMs: opts.sliceMs, minLoopMs: opts.minLoopMs, now: opts.now });
     const u = await schedUnwrap(res);
     const b = u.body;
     // Same condition scheduled() always used (ok:false or a non-empty errors list), plus a non-2xx status.
@@ -16881,7 +16955,8 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
       catch (e2) { errors.push({ step: 'qb_sync_payments_telemetry', error: schedErrText(e2) }); }
     }
     partial = !!(b && b.partial);
-    detail.qb_sync = { status: u.status, slice: prog.slices, partial, done_rows: prog.done.length, timings_ms: b && b.timings_ms, deposit_sweep: !!prog.sweep_done };
+    if (b && typeof b.progress_made === 'boolean') progressMade = b.progress_made;
+    detail.qb_sync = { status: u.status, slice: prog.slices, partial, progress_made: progressMade, rows_this_slice: b && b.rows_this_slice, done_rows: prog.done.length, timings_ms: b && b.timings_ms, deposit_sweep: !!prog.sweep_done };
   } catch (e) {
     errors.push({ step: 'qb_sync_payments', error: schedErrText(e) });
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'daily_qb_sync_payments', Skill_Or_Endpoint: 'scheduler/qb-sync-payments', Success: 'FALSE', Notes: schedErrText(e) }); }
@@ -16892,7 +16967,7 @@ async function schedRunDailyQbSync(env, jobCtx, opts) {
   try { await write(prog); }
   catch (e) { errors.push({ step: 'qb_sync_progress', error: 'could not save progress' + (prog.complete ? ' (the pass finished but is not marked done, so it may run again)' : '') + ': ' + schedErrText(e) }); }
   if (errors.length) return { ok: false, errors, detail };
-  return partial ? { ok: true, partial: true, errors, detail } : { ok: true, errors, detail };
+  return partial ? { ok: true, partial: true, progress_made: progressMade, errors, detail } : { ok: true, errors, detail };
 }
 async function schedRunWeeklyReview(env, deliver) {
   const errors = [];
@@ -17276,6 +17351,8 @@ async function schedRunNext(env, ctx, opts) {
   const firstRun = !schedCell(rows, SCHED_STATE_KEY).trim();
   const seeded = firstRun ? schedSeedFirstRun(st, now, jobs) : [];
   if (firstRun && !opts.dry) { base.first_run = true; base.seeded = seeded; }
+  const stamped = schedStampFirstSeen(st, now, jobs);   // Oct 20 2026: new / re-enabled jobs get a grace clock (persisted by the claim or heartbeat write below)
+  if (stamped.length) base.grace_stamped = stamped;
   const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
   const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
   base.due = force ? only.slice() : dueNow.map(d => d.name);
@@ -17333,9 +17410,15 @@ async function schedRunNext(env, ctx, opts) {
     // marked done for the day (no last_key); it resumes after SCHED_PARTIAL_GAP_MS. Taking more than SCHED_MAX_PARTIALS slices in one ET day
     // is a failure (loud), so a job that can never finish cannot look healthy forever.
     const etDayP = force ? schedEtParts(new Date(nowMs())).date : key;
-    const partialN = (jobRes.partial === true && job.kind !== 'interval') ? ((prev.partials && prev.partials.key === etDayP ? prev.partials.n : 0) + 1) : 0;
-    if (partialN > SCHED_MAX_PARTIALS) { jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${SCHED_MAX_PARTIALS} slices today (it needs a person to look)` }] }; }
-    const isPartial = partialN > 0 && partialN <= SCHED_MAX_PARTIALS;
+    const prevP = (prev.partials && prev.partials.key === etDayP) ? prev.partials : null;
+    const partialN = (jobRes.partial === true && job.kind !== 'interval') ? ((prevP ? prevP.n : 0) + 1) : 0;
+    const reportsProgress = partialN > 0 && typeof jobRes.progress_made === 'boolean';
+    const stalledN = reportsProgress ? (jobRes.progress_made ? 0 : ((prevP && prevP.stalled) || 0) + 1) : 0;
+    const partialCap = reportsProgress ? SCHED_MAX_PARTIALS_PROGRESS : SCHED_MAX_PARTIALS;
+    let partialFailed = false;
+    if (partialN > partialCap) { partialFailed = true; jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} still had work left after ${partialCap} slices today (it needs a person to look)` }] }; }
+    else if (reportsProgress && stalledN >= SCHED_MAX_STALLED_PARTIALS) { partialFailed = true; jobRes = { ok: false, errors: [{ step: 'job', error: `${job.name} made no progress in its last ${stalledN} slices today (slice ${partialN}; it needs a person to look)` }] }; }
+    const isPartial = partialN > 0 && !partialFailed;
     const errors = Array.isArray(jobRes.errors) ? jobRes.errors : [];
     // Oct 16 2026: {ok:false, paused:true, reason} = "skipped on purpose because AI credit is paused". NOT a failure (Brett was already alerted once, and the
     // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
@@ -17378,7 +17461,7 @@ async function schedRunNext(env, ctx, opts) {
             rec.attempts = null;
             if (aiPausedFinal && !force) { rec.paused_key = etDay; rec.paused_ep = aiPausedFinal; }
           } else if (jobOk && isPartial) {
-            rec.partials = { key: etDay, n: partialN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
+            rec.partials = { key: etDay, n: partialN, stalled: stalledN }; rec.attempts = null; rec.partial_at = rec.last_end;   // progress made; NOT done for the day
           } else if (jobOk || finalFail) {
             rec.last_key = etDay; rec.attempts = null; rec.partials = null;
             rec.last_failed_final = finalFail ? etDay : null;
@@ -18284,6 +18367,11 @@ function aiCreditResetForTests() { _aiCreditCache = null; _aiCreditTripP = null;
 class AiCreditPausedError extends Error {
   constructor(message, info) { super(message); this.name = 'AiCreditPausedError'; this.code = AI_CREDIT_CODE; this.paused = true; this.info = info || null; this.userMessage = AI_PAUSED_USER_MSG; }
 }
+// True for a Sheets error that is the shared per-minute READ quota (or its 429), as opposed to a bug. Pure.
+function sheetsQuotaBusyError(e) {
+  const m = String((e && e.message) || e || '');
+  return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
+}
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
 // PURE. Is this Anthropic error response a "credit exhausted" or "key/account refused" one? -> { kind, status, type, message } | null.
@@ -18333,16 +18421,27 @@ async function aiCreditCheck(env, opts) {
   const now = Date.now();
   if (!opts.fresh && _aiCreditCache && now - _aiCreditCache.at < AI_CREDIT_CACHE_MS) return _aiCreditCache.state;
   let state;
-  try { state = aiCreditStateFromRows(await schedReadConfigRows(env, !!opts.fresh)); }
+  try {
+    // Oct 21 2026: one retry after a short wait. The usual cause is a busy minute on the shared Sheets read quota, which clears in seconds.
+    try { state = aiCreditStateFromRows(await schedReadConfigRows(env, !!opts.fresh)); }
+    catch (e1) {
+      await new Promise(r => setTimeout(r, opts.retryDelayMs == null ? 1500 : opts.retryDelayMs));
+      state = aiCreditStateFromRows(await schedReadConfigRows(env, true));
+    }
+  }
   catch (e) {
     const msg = schedErrText(e);
-    console.error('ai-credit: could not read the pause flag (AI calls are allowed through):', msg);
+    // Quota/busy is not "the flag is unreadable in a way that matters": say so with a calm P2 row, and keep honouring the last flag we DID read
+    // (a paused AI must not quietly un-pause just because Google was busy for a minute). A real read failure stays the urgent P0 row.
+    const busy = /quota exceeded|read requests per minute|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(msg);
+    const lastKnown = _aiCreditCache && _aiCreditCache.state ? _aiCreditCache.state : null;
+    console.error('ai-credit: could not read the pause flag (' + (lastKnown ? 'using the last value read' : 'AI calls are allowed through') + '):', msg);
     if (now - _aiCreditReadFailMs > 10 * 60 * 1000) {
       _aiCreditReadFailMs = now;
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: busy ? 'ai_credit_flag_read_busy' : 'ai_credit_flag_read_failed', Skill_Or_Endpoint: 'aiCreditCheck', Success: 'FALSE', Notes: msg.slice(0, 400) }); }
       catch (te) { console.error('ai-credit: flag-read failure and its telemetry write both failed:', msg, schedErrText(te)); }
     }
-    return { paused: false, read_error: msg };
+    return lastKnown ? Object.assign({}, lastKnown, { read_error: msg }) : { paused: false, read_error: msg };
   }
   _aiCreditCache = { at: now, state };
   return state;
@@ -20495,16 +20594,21 @@ function selftestCheckPinFormatAndDedup(vendors, owners, ownerUsers, tenants) {
       const pin = (r && r.PIN) || '';
       if (!pin) continue; // a blank PIN is a separate, pre-existing gap — not this check's job
       if (!pinFormatOk(pin)) { badFormat++; badRows.push({ tab: g.tab, id: r.ID, pin }); }
-      const list = seen.get(pin) || []; list.push({ tab: g.tab, id: r.ID }); seen.set(pin, list);
+      const list = seen.get(pin) || []; list.push({ tab: g.tab, id: r.ID, phone: String((r && r.Phone) || '').replace(/\D/g, '').slice(-10) }); seen.set(pin, list);
     }
   }
-  const dupes = [...seen.entries()].filter(([, list]) => list.length > 1).map(([pin, list]) => ({ pin, holders: list }));
+  // Oct 21 2026: a PIN is GENERATED from the phone number (generatePIN), so one person who appears in two tabs (an owner who is also an Owner_Users login,
+  // or a test tenant that reuses the admin's phone) legitimately gets the same PIN. That is the by-design mirror, not a collision. Only a PIN shared by
+  // DIFFERENT phones (or by a row with no phone to prove it is the same person) is a real duplicate that could log someone into the wrong account.
+  const shared = [...seen.entries()].filter(([, list]) => list.length > 1).map(([pin, list]) => ({ pin, holders: list }));
+  const dupes = shared.filter(d => { const ph = d.holders.map(h => h.phone); return ph.some(p => !p) || new Set(ph).size > 1; });
+  const mirrored = shared.length - dupes.length;
   const ok = badFormat === 0 && dupes.length === 0;
   const example = badRows[0] ? `${badRows[0].tab} ${badRows[0].id} PIN "${badRows[0].pin}"` : (dupes[0] ? `PIN "${dupes[0].pin}" shared by ${dupes[0].holders.length}` : '');
   return {
     ok,
-    reason: ok ? `all PINs well-formed, no duplicates across ${groups.length} tabs` : `${badFormat} malformed PIN(s), ${dupes.length} duplicate PIN(s) — e.g. ${example}`,
-    bad_format_count: badFormat, duplicate_count: dupes.length,
+    reason: ok ? `all PINs well-formed, no duplicates across ${groups.length} tabs${mirrored ? ` (${mirrored} PIN(s) appear in two tabs for the same phone number - by design)` : ''}` : `${badFormat} malformed PIN(s), ${dupes.length} duplicate PIN(s) — e.g. ${example}`,
+    bad_format_count: badFormat, duplicate_count: dupes.length, mirrored_count: mirrored,
   };
 }
 
@@ -20682,7 +20786,7 @@ async function selftestFinish(env, endpointResults, goldenResults, opts, t0) {
   // Self-instrument (PAT-031 pattern, same as runWeeklyReview) — the selftest is itself a
   // measured job, and its OWN success reflects whether every check passed, not just whether the
   // function ran without throwing.
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}` }); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}${agg.failed ? '; failing: ' + agg.failures.map(f => f.name).join(', ') : ''}`.slice(0, 300) }); }   // Oct 21 2026: name the failing checks so Needs Attention says WHAT failed
   catch (e) { errors.push({ step: 'selftest_telemetry', error: schedErrText(e) }); }
   return { ok: true, total: agg.total, passed: agg.passed, failed: agg.failed, failures: agg.failures, digest: digestText, delivery, logged, errors, endpoint_results: endpointResults, golden_results: goldenResults };
 }
@@ -27000,6 +27104,27 @@ async function qbPayables(env, url) {
         customer_clear_days: s.clear_days, customer_clears_on: s.clears_on, customer_clear_status: s.status, customer_payment_count: s.count };
     }
 
+    // Oct 20 2026: "owner paid in part" is judged against what QuickBooks' OWN invoice says it totals (TotalAmt) -- exactly like the vendor side -- and only falls back
+    // to the Hub's figure when QuickBooks gave no usable total. The Hub's Customer_Total is a gross/estimate figure; an invoice hand-corrected in QuickBooks (WO-1246,
+    // invoice 1764) is smaller, and an UNPAID invoice read as "part paid" -> a P0 "payment date unavailable" every sync. A true part-payment is still balance < TotalAmt.
+    function isPartiallyPaid(balance, qbTotal, hubTotal) {
+      if (balance == null || !(balance > 0.005)) return false;
+      const total = (qbTotal != null && isFinite(qbTotal) && qbTotal > 0) ? qbTotal : hubTotal;
+      return total > 0 && balance < (total - 0.005);
+    }
+    // The two "date unavailable" notices repeat on every call (every sync, every Who To Pay open) for the same invoices. The warning is ALWAYS returned to the page;
+    // only the Ops_Telemetry / failure-ledger write is skipped when this isolate already logged the same list in the last 6 h. A failed log write is retried next call.
+    const warnSeen = (qbPayables._warnSeen = qbPayables._warnSeen || new Map());
+    async function warnDateMissing(stage, ref, err) {
+      const key = stage + '|' + ref, nowMs = Date.now(), last = warnSeen.get(key);
+      if (last != null && nowMs - last < 6 * 3600 * 1000) { warnings.push({ stage, ref, error: String(err.message).slice(0, 300), repeat: true }); return; }
+      if (warnSeen.size > 200) warnSeen.clear();
+      warnSeen.set(key, nowMs);
+      const from = warnings.length;
+      await logAndCollectError(env, warnings, stage, '/qb/payables', ref, err);
+      if (warnings.slice(from).some(w => w.stage === 'telemetry')) warnSeen.delete(key);
+    }
+
     // Which rows are even in scope for this window — same Active/QB_Invoice_ID/Approved_Date
     // gate as before, just pulled out so the id lists below are built off exactly this set.
     const candidates = irs.filter(ir => {
@@ -27085,7 +27210,8 @@ async function qbPayables(env, url) {
       // QuickBooks invoice is the NET amount -- compare balances to what was actually invoiced or an unpaid netted invoice reads "part paid".
       const propCreditPay = String(ir.Proposal_Applied || '').toUpperCase() === 'TRUE' ? money2(+ir.Proposal_Credit_Customer || 0) : 0;
       const custTotal = Math.max(0, money2((Number(ir.Customer_Total) || 0) - propCreditPay));
-      const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+      const qbInvTotal = q ? Number(q.TotalAmt) : NaN;
+      const customerPartial = isPartiallyPaid(customerBalance, qbInvTotal, custTotal);
       const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
 
       // The state that matters: money in, money not yet out.
@@ -27115,7 +27241,7 @@ async function qbPayables(env, url) {
         terms: vendorTermLabel(vendor),
         invoice_id: invId, invoice_number: invNumber,
         customer_total: custTotal, proposal_credit: propCreditPay, customer_balance: customerBalance, customer_paid: customerPaid,
-        customer_partial: customerPartial,
+        customer_partial: customerPartial, qb_invoice_total: isFinite(qbInvTotal) ? qbInvTotal : null,
         ...clearFields(ir.WO_ID, q, customerPaid === true || customerPartial, invPayments),
         bill_id: billId, vendor_ref: vendorRef, vendor_cost: Number(ir.Vendor_Cost) || 0,
         vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
@@ -27186,7 +27312,8 @@ async function qbPayables(env, url) {
           const vendor = vendors.find(v => String(v.ID) === String(c.sc.Vendor_ID));
           const inHouse = scopeSigSkipIsInHouse(c.skipReason);
           const custTotal = c.custTotal;
-          const customerPartial = customerBalance != null && customerBalance > 0.005 && custTotal > 0 && customerBalance < (custTotal - 0.005);
+          const qbInvTotal = q ? Number(q.TotalAmt) : NaN;
+          const customerPartial = isPartiallyPaid(customerBalance, qbInvTotal, custTotal);
           const vendorPartial = vendorBalance != null && vendorBalance > 0.005 && vendorTotal != null && vendorTotal > 0 && vendorBalance < (vendorTotal - 0.005);
 
           let state;
@@ -27218,7 +27345,7 @@ async function qbPayables(env, url) {
             wo_id: c.sc.WO_ID, vendor_id: c.sc.Vendor_ID || '', vendor_name: vendor ? qbVendorDisplayName(vendor) : '',
             terms: vendorTermLabel(vendor),
             invoice_id: c.invId, invoice_number: invNumber,
-            customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial,
+            customer_total: custTotal, customer_balance: customerBalance, customer_paid: customerPaid, customer_partial: customerPartial, qb_invoice_total: isFinite(qbInvTotal) ? qbInvTotal : null,
             ...clearFields(c.sc.WO_ID + ' (' + c.phase + ')', q, customerPaid === true || customerPartial, sigPayments),
             bill_id: c.billId, vendor_ref: vendorRef, vendor_cost: c.vendorCost,
             vendor_balance: vendorBalance, vendor_paid: vendorPaid, vendor_partial: vendorPartial, vendor_paid_date: vendorPaidDate,
@@ -27229,11 +27356,11 @@ async function qbPayables(env, url) {
     } catch (e) { await logAndCollectError(env, warnings, 'qb_payables_signed_proposals', '/qb/payables', 'signed-proposal rows', e); /* additive only — never break the Invoice_Review-based rows above, but it is reported now */ }
 
     if (vendorPaidDateMissing.length) {
-      await logAndCollectError(env, warnings, 'qb_payables_vendor_paid_date_missing', '/qb/payables', vendorPaidDateMissing.slice(0, 20).join(', '),
+      await warnDateMissing('qb_payables_vendor_paid_date_missing', vendorPaidDateMissing.slice(0, 20).join(', '),
         new Error(vendorPaidDateMissing.length + ' paid vendor bill(s) have no QuickBooks BillPayment with a usable date -- the vendor portal PAID tab lists them as "date unavailable": ' + vendorPaidDateMissing.slice(0, 20).join(', ')));
     }
     if (paymentDateMissing.length) {
-      await logAndCollectError(env, warnings, 'qb_payables_payment_date_missing', '/qb/payables', paymentDateMissing.slice(0, 20).join(', '),
+      await warnDateMissing('qb_payables_payment_date_missing', paymentDateMissing.slice(0, 20).join(', '),
         new Error(paymentDateMissing.length + ' paid/part-paid invoice(s) have no QuickBooks Payment with a usable date (credit memo, journal entry or lookup problem) -- shown as "payment date unavailable": ' + paymentDateMissing.slice(0, 20).join(', ')));
     }
     const owed = rows.filter(r => r.state === 'PAY THE VENDOR');
@@ -27257,6 +27384,11 @@ async function qbPayables(env, url) {
 // the scheduler runs this in resumable slices: opts.state (progress, mutated) + opts.sliceMs. With no opts it is the same one-pass call it
 // always was (Who To Pay "sync", manual POST). A row that could not be written is now reported (before, updateRow's 404 was ignored).
 const QB_SYNC_SLICE_MS = 30 * 1000;
+// Oct 20 2026: the slice budget used to be measured from the START of the slice, but the QuickBooks payables read + its ~8 paced Sheets reads can
+// eat all of it, so some slices processed ZERO rows and the day ran out of slices (14 slices, 115 of 120 rows). The row loop now gets its own window
+// (at least this long, measured from when the loop starts) AND always processes at least one row per slice, so every slice makes progress.
+const QB_SYNC_MIN_LOOP_MS = 12 * 1000;
+const QB_SYNC_LOG_KEEP = 20;      // per-slice timings kept in the qb_sync_progress cell (the evidence for the next "why is it slow")
 function qbSyncRowKey(r) { return r.source === 'scope_signature' ? ['sig', r.signature_id || '', r.phase || '', r.milestone_id || ''].join(':') : 'ir:' + (r.ir_id || ''); }
 async function qbSyncWriteInvoiceReview(env, rows, nowISO) {
   const targets = rows.filter(r => r.source !== 'scope_signature');   // Signed-Proposal rows have no Invoice_Review row (QuickBooks' own Balance is their source of truth)
@@ -27309,6 +27441,8 @@ async function qbSyncPayments(env, body, opts) {
   const closedWOs = [];
   const doneKeys = new Set(sync && Array.isArray(sync.done) ? sync.done : []);
   let stoppedEarly = false;
+  const before = { done: doneKeys.size, ir: !!(sync && sync.ir_done), loop: !!(sync && sync.loop_done), sweep: !!(sync && sync.sweep_done) };   // for progress_made
+  let rowsThisSlice = 0, rowsLeft = null;
 
   if (!(sync && sync.loop_done)) {
     const tp = clock();
@@ -27340,11 +27474,14 @@ async function qbSyncPayments(env, body, opts) {
 
     const woPaidDateSeen = new Map(); let woPaidDateColReady = false;
     const tl = clock();
+    // The loop's own window: the rest of the slice, but never less than QB_SYNC_MIN_LOOP_MS after the loop starts (payables may have used the slice up).
+    const loopDeadline = sync ? Math.max(deadline, tl + (opts.minLoopMs != null ? opts.minLoopMs : QB_SYNC_MIN_LOOP_MS)) : Infinity;
     for (const r of data.rows) {
       const rk = qbSyncRowKey(r);
       if (doneKeys.has(rk)) continue;
-      // Time-slice: stop BEFORE starting a row's side effects when the slice is spent; the next tick carries on from the saved keys.
-      if (clock() >= deadline) { stoppedEarly = true; break; }
+      // Time-slice: stop BEFORE starting another row's side effects when the window is spent -- but only after at least ONE row this slice, so a
+      // slow payables read can never again produce a slice that does nothing. The next tick carries on from the saved keys.
+      if (rowsThisSlice > 0 && clock() >= loopDeadline) { stoppedEarly = true; break; }
 
       // Approval stage: the signed proposal's DEPOSIT invoice positively paid → Approved (was
       // Pre-approved). Strictly customer_paid === true; only lifts Pre-approved, never downgrades.
@@ -27395,9 +27532,10 @@ async function qbSyncPayments(env, body, opts) {
           }
         } catch (e) { await logAndCollectError(env, syncErrors, 'qb_sync_vendor_paid_date', '/qb/sync-payments', 'wo=' + r.wo_id + ' date=' + r.vendor_paid_date + ' (vendor portal PAID tab date not saved)', e); }
       }
-      doneKeys.add(rk);
+      doneKeys.add(rk); rowsThisSlice++;
     }
     timings.rows_ms = clock() - tl;
+    rowsLeft = data.rows.filter(x => !doneKeys.has(qbSyncRowKey(x))).length;
     if (sync) { sync.done = [...doneKeys]; if (!stoppedEarly) sync.loop_done = true; }
   }
 
@@ -27416,8 +27554,15 @@ async function qbSyncPayments(env, body, opts) {
     if (data) T.checked = data.count;
     sync.slices = (sync.slices || 0) + 1;
   }
+  // Oct 20 2026: did this slice move the pass forward? (a row finished, or a stage -- stored-copy write, row loop, deposit sweep -- completed.) The dispatcher
+  // fails a job that reports progress_made:false several slices in a row instead of letting it burn a flat number of slices; slice_log keeps the timings.
+  const progressMade = !!(sync && (doneKeys.size > before.done || (sync.ir_done && !before.ir) || (sync.loop_done && !before.loop) || (sync.sweep_done && !before.sweep)));
+  if (sync) {
+    const entry = { n: sync.slices, at: new Date().toISOString(), total_ms: clock() - t0, rows_done: rowsThisSlice, rows_left: rowsLeft, stopped_early: stoppedEarly, progress: progressMade, t: timings };
+    sync.slice_log = (Array.isArray(sync.slice_log) ? sync.slice_log : []).concat(entry).slice(-QB_SYNC_LOG_KEEP);
+  }
   const T2 = sync ? sync.totals : null;
-  return json({ ok: true, partial: !!(sync && (stoppedEarly || !sync.sweep_done)), timings_ms: timings, slice: sync ? sync.slices : undefined,
+  return json({ ok: true, partial: !!(sync && (stoppedEarly || !sync.sweep_done)), progress_made: sync ? progressMade : undefined, rows_this_slice: sync ? rowsThisSlice : undefined, timings_ms: timings, slice: sync ? sync.slices : undefined,
                 checked: T2 ? T2.checked : (data ? data.count : 0), written: T2 ? T2.written : written, failed: T2 ? T2.failed : failed, closed: T2 ? T2.closed : closed, closed_wos: T2 ? T2.closed_wos : closedWOs,
                 owed_now: data ? data.owed_now : undefined, owed_total: data ? data.owed_total : undefined, warnings: data ? (data.warnings || []) : [], errors: syncErrors,
                 deposit_sweep: depositSweep, rows: sync ? undefined : (data ? data.rows : []) });
@@ -34332,9 +34477,12 @@ async function inspAlert(env, kind, message) {
 // (about 3 ticks in a row) the normal alert (SMS + email) fires, because by then cabin cleaning coverage is genuinely unchecked.
 const INSP_GUARD_QUOTA_GRACE_MS = 45 * 60000;
 function inspIsSheetsQuotaErr(e) { return /quota exceeded|read requests per minute|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(String((e && e.message) || e || '')); }
+// Oct 21 2026: the same grace covers a bookings feed (Uplisting iCal) that answered 5xx/408/429 or could not be reached even after the in-read retries.
+function inspIsTransientFeedErr(e) { const m = String((e && e.message) || e || ''); return /Bookings feed \(.*?\) answered (5\d\d|408|429)\./.test(m) || /Could not reach the bookings feed/.test(m); }
 async function inspGuardFailure(env, kind, e) {
   const msg = String((e && e.message) || e || '');
-  if (!inspIsSheetsQuotaErr(e)) return inspAlert(env, kind, msg);   // a real problem: alert exactly as before
+  const isQuota = inspIsSheetsQuotaErr(e), isFeed = !isQuota && inspIsTransientFeedErr(e);
+  if (!isQuota && !isFeed) return inspAlert(env, kind, msg);   // a real problem: alert exactly as before
   const now = Date.now(); let since = NaN, cfgNote = '';
   try { const cfg = await fetchConfig(env); since = Date.parse(String(cfg.STR_GUARD_FAIL_SINCE || '')); }
   catch (ce) { cfgNote = ' [could not read Config to time the outage: ' + String((ce && ce.message) || ce).slice(0, 120) + ']'; console.error('insp guard: Config unreadable while handling a quota failure:', ce && ce.message); }
@@ -34344,9 +34492,9 @@ async function inspGuardFailure(env, kind, e) {
     catch (se) { cfgNote = ' [could not record outage start: ' + String((se && se.message) || se).slice(0, 120) + ']'; console.error('insp guard: could not save STR_GUARD_FAIL_SINCE:', se && se.message); }
   }
   const mins = Number.isFinite(since) ? Math.round((now - since) / 60000) : 0;
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + '_quota', Success: 'FALSE', Notes: ('Sheets read quota hit, will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
   catch (te) { console.error('insp guard: telemetry write failed:', te && te.message, '| original:', kind, msg); }
-  if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the sheet for ' + mins + ' minutes (Sheets read quota). ' + msg);
+  if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the ' + (isFeed ? 'bookings feed for ' + mins + ' minutes. ' : 'sheet for ' + mins + ' minutes (Sheets read quota). ') + msg);
 }
 async function inspGuardRecovered(env, cfg) {
   if (!cfg.STR_GUARD_FAIL_SINCE) return;
@@ -34462,11 +34610,27 @@ function inspStrConfig(env, cfg) {
   return { fixture, sources, cleaningCal, on, missing, problems, enabled: on && (!!fixture || !missing.length), label: String((cfg && cfg.STR_GUARD_PROPERTY_LABEL) || 'Milam Ridge').slice(0, 40) };
 }
 function inspStrMask(src) { return /^https?:\/\//i.test(src) ? src.replace(/^(https?:\/\/[^/]+\/).*$/i, '$1…(link hidden)') : src; }
+// Oct 21 2026: Uplisting's iCal host answered a 504 once and that single blip texted Brett and closed slot requests. A 5xx / 408 / 429 / network error / timeout is
+// transient, so the read is tried up to INSP_FEED_TRIES times (short pause between, never past INSP_FEED_RETRY_BUDGET_MS). A permanent answer (a 4xx such as a
+// revoked link) is NOT retried. If every try fails the same coded error is thrown as before (still fails closed), now saying how many tries it took.
+const INSP_FEED_TRIES = 3;
+const INSP_FEED_TRY_TIMEOUT_MS = 10000;
+const INSP_FEED_RETRY_BUDGET_MS = 20000;
+const INSP_FEED_RETRY_PAUSE_MS = 800;
 async function inspStrReadIcs(env, src, fromDay, toDay) {
   if (!/^https:\/\//i.test(src)) throw inspErr('str_guard_unavailable', 'Bookings feed must be an https:// iCal link: ' + inspStrMask(src), 503);
-  let r;
-  try { r = await fetch(src, { headers: { Accept: 'text/calendar, text/plain, */*' } }); } catch (e) { throw inspErr('str_guard_unavailable', 'Could not reach the bookings feed (' + inspStrMask(src) + '): ' + e.message, 503); }
-  if (!r.ok) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) answered ${r.status}.`, 503);
+  const started = Date.now(); let r = null, failMsg = '', tries = 0;
+  for (let attempt = 1; attempt <= INSP_FEED_TRIES; attempt++) {
+    tries = attempt; r = null; failMsg = '';
+    try { r = await fetch(src, { headers: { Accept: 'text/calendar, text/plain, */*' }, signal: AbortSignal.timeout(INSP_FEED_TRY_TIMEOUT_MS) }); }
+    catch (e) { failMsg = 'Could not reach the bookings feed (' + inspStrMask(src) + '): ' + ((e && e.message) || e); }
+    if (r && r.ok) break;
+    if (r) { failMsg = `Bookings feed (${inspStrMask(src)}) answered ${r.status}.`; if (!(r.status >= 500 || r.status === 408 || r.status === 429)) break; }
+    if (attempt >= INSP_FEED_TRIES || Date.now() - started >= INSP_FEED_RETRY_BUDGET_MS) break;
+    await new Promise(res => setTimeout(res, INSP_FEED_RETRY_PAUSE_MS * attempt));
+  }
+  if (failMsg) throw inspErr('str_guard_unavailable', failMsg + (tries > 1 ? ' (tried ' + tries + ' times)' : ''), 503);
+  if (tries > 1) console.warn('insp: bookings feed needed ' + tries + ' tries but was read');
   const text = await r.text();
   if (!/BEGIN:VCALENDAR/.test(text)) throw inspErr('str_guard_unavailable', `Bookings feed (${inspStrMask(src)}) did not return a calendar.`, 503);
   const evs = inspParseIcs(text);
@@ -34514,7 +34678,7 @@ async function inspStrStatus(env, cfg, opts) {
 }
 async function inspStrClosedOrThrow(env, cfg, fresh) {
   try { return new Set((await inspStrStatus(env, cfg, { fresh: !!fresh })).closed); }
-  catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', 'Cleaning-coverage check failed, so inspection booking is paused until it can be read: ' + e.message); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
+  catch (e) { await inspGuardFailure(env, e.code || 'str_guard_unavailable', new Error('Cleaning-coverage check failed, so inspection booking is paused until it can be read: ' + e.message)); throw inspErr('calendar_unavailable', 'Scheduling is temporarily unavailable. Brett has been notified — please try again shortly.', 503); }
 }
 function inspStrDayInfo(st, date) {
   const c = (st.checkouts || []).find(x => x.date === date); if (!c) return null;
