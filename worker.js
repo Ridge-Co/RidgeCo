@@ -35450,6 +35450,7 @@ async function strTick(env, opts) {
         const patch = {};
         if (r.Status === 'cancelled') { patch.Status = 'open'; patch.Note = 'booking restored'; }
         if ((parseInt(r.Missing_Count, 10) || 0) > 0) patch.Missing_Count = '0';
+        if (r.Manual_Until) patch.Manual_Until = ''; // the feed has caught up with a "Mark as booked now" turnover
         if ((r.Next_Arrival || '') !== (b.next || '')) patch.Next_Arrival = b.next || '';
         if ((r.Win_End || '') !== b.winEnd) patch.Win_End = b.winEnd;
         if ((r.Guests || '') !== b.guests) patch.Guests = b.guests;
