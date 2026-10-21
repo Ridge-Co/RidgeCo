@@ -108,7 +108,8 @@ const HOLS = '2026-10-12:Columbus Day,2026-11-11:Veterans Day,2026-11-26:Thanksg
 const vendorRow = { ID: '9', QBO_Vendor_ID: '77', Company: 'Alex Busey' };
 const ir = (wo, inv, bill) => ({ ID: wo, Active: 'TRUE', WO_ID: wo, QB_Invoice_ID: inv, QB_Bill_ID: bill, Approved_Date: new Date().toISOString(), Customer_Total: '500.00', Vendor_Cost: '300.00', Vendor_ID: '9', Vendor_Name: '', QB_In_House: 'FALSE' });
 
-function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig }) {
+function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig, telemetryFails }) {
+  const flags = { telemetryFails: !!telemetryFails };
   const telemetry = [];
   const calls = [];
   const fetchTabs = async (env, tabs) => tabs.map(t => (t === 'Invoice_Review' ? irs : t === 'Vendors' ? [vendorRow] : []));
@@ -127,7 +128,7 @@ function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig }
     return { QueryResponse: {} };
   };
   const stubs = {
-    fetchTabs, fetchTab, paymentMilestonesTab: async () => {}, logTelemetry: async (env, row) => { telemetry.push(row); },
+    fetchTabs, fetchTab, paymentMilestonesTab: async () => {}, logTelemetry: async (env, row) => { if (flags.telemetryFails) throw new Error('telemetry sheet down'); telemetry.push(row); },
     fetchConfig: async () => config || { US_HOLIDAYS: HOLS },
     etDateString: () => NOW,
     qbAccessToken: async () => 't', qbApi, qbVendorDisplayName: (v) => (v && v.Company) || 'Vendor', vendorTermLabel: () => 'Due on receipt', json: (b) => b,
@@ -135,7 +136,7 @@ function build({ irs, invoices, payments, paymentMethods, config, throwOn, sig }
   };
   const names = Object.keys(stubs);
   const fn = new Function(...names, qbpSrc + '\nreturn qbPayables;')(...names.map(n => stubs[n]));
-  return { run: () => fn({}, new URL('http://x/?days=90')), telemetry, calls };
+  return { run: () => fn({}, new URL('http://x/?days=90')), telemetry, calls, flags };
 }
 const PM = [{ Id: '4', Name: 'ACH', Type: 'NON_CREDIT_CARD' }, { Id: '2', Name: 'Check', Type: 'NON_CREDIT_CARD' }, { Id: '3', Name: 'Visa', Type: 'CREDIT_CARD' }];
 const paidInv = (id, pays, extra) => ({ Id: id, Balance: 0, TotalAmt: 500, DocNumber: id, LinkedTxn: pays.map(x => ({ TxnId: x, TxnType: 'Payment' })), CustomerRef: { value: 'C-' + id }, ...extra });
@@ -253,6 +254,59 @@ const paidInv = (id, pays, extra) => ({ Id: id, Balance: 0, TotalAmt: 500, DocNu
   const res = await t.run();
   const r = res.rows.find(x => x.source === 'scope_signature');
   ok(r && r.customer_clear_status === 'clearing' && r.customer_clears_on === '2026-10-16' && r.customer_pay_method === 'ach', 'signed-proposal (deposit) row also carries the clearing indicator');
+}
+
+// ═════════════════ Oct 20 2026: part-paid is judged against QuickBooks' OWN invoice total; "date unavailable" is a deduped P2 ═════════════════
+console.log('\nqbPayables — QuickBooks-total partial check + date-missing dedupe — offline tests\n');
+{
+  // WO-1246 shape: the Hub still says Customer_Total 3810.00 (gross), but the invoice was corrected by hand in QuickBooks to 3100 and nothing has been paid.
+  const hand = (id, bal) => ({ Id: id, Balance: bal, TotalAmt: 3100, DocNumber: '1764', LinkedTxn: [], CustomerRef: { value: 'C-' + id } });
+  const irBig = (wo, inv) => Object.assign(ir(wo, inv, 'B1'), { Customer_Total: '3810.00' });
+  const t = build({ irs: [irBig('WO-1246', 'IH1')], invoices: [hand('IH1', 3100)], payments: [], paymentMethods: PM });
+  const res = await t.run(); const r = res.rows[0];
+  ok(r.state === 'waiting on the owner' && r.customer_partial === false && r.customer_paid === false, 'hand-corrected, UNPAID invoice (QB total 3100 < Hub 3810) is "waiting on the owner", NOT "owner paid in part"');
+  ok(r.qb_invoice_total === 3100 && r.customer_total === 3810, 'row shows both numbers: the Hub total unchanged, plus QuickBooks\' own invoice total');
+  ok(r.customer_clear_status === '' && !res.warnings.length && !t.telemetry.some(x => /date_missing/.test(x.Job_Type)), 'so there is no "payment date unavailable" warning and nothing in Ops_Telemetry');
+  const t2 = build({ irs: [irBig('WO-1247', 'IH2')], invoices: [Object.assign(hand('IH2', 0), { LinkedTxn: [{ TxnId: 'PH2', TxnType: 'Payment' }] })], payments: [{ Id: 'PH2', TxnDate: '2026-10-13', PaymentMethodRef: { value: '4' } }], paymentMethods: PM });
+  const r2 = (await t2.run()).rows[0];
+  ok(r2.state === 'PAY THE VENDOR' && r2.customer_partial === false && r2.customer_clear_status === 'clearing', 'hand-corrected invoice paid in full -> PAY THE VENDOR with its clearing date');
+  const t3 = build({ irs: [irBig('WO-1248', 'IH3')], invoices: [Object.assign(hand('IH3', 1000), { LinkedTxn: [{ TxnId: 'PH3', TxnType: 'Payment' }] })], payments: [{ Id: 'PH3', TxnDate: '2026-10-13', PaymentMethodRef: { value: '4' } }], paymentMethods: PM });
+  const r3 = (await t3.run()).rows[0];
+  ok(r3.state === 'owner paid in part' && r3.customer_partial === true && r3.customer_clear_status === 'clearing', 'a REAL part-payment (balance 1000 of QB total 3100) is still "owner paid in part"');
+  const t4 = build({ irs: [irBig('WO-1249', 'IH4')], invoices: [{ Id: 'IH4', Balance: 3000, DocNumber: '1', LinkedTxn: [{ TxnId: 'PH4', TxnType: 'Payment' }] }], payments: [{ Id: 'PH4', TxnDate: '2026-10-13', PaymentMethodRef: { value: '4' } }], paymentMethods: PM });
+  const r4 = (await t4.run()).rows[0];
+  ok(r4.state === 'owner paid in part' && r4.qb_invoice_total === null, 'QuickBooks gave no usable TotalAmt -> falls back to the Hub total (old behaviour), qb_invoice_total null');
+  const t5 = build({ irs: [], invoices: [{ Id: 'IS9', Balance: 500, TotalAmt: 500, DocNumber: '9', LinkedTxn: [], CustomerRef: { value: 'C9' } }], payments: [], paymentMethods: PM,
+    sig: { signatures: [{ ID: 'S9', Scope_ID: '9', Active: 'TRUE', QB_Invoice_ID: 'IS9', QB_Bill_ID: 'B1', Subtotal: '1000', Deposit_Amount: '800', Vendor_Cost_Total: '600' }], scopes: [{ ID: '9', WO_ID: 'WO-SIG9', Vendor_ID: '9' }] } });
+  const r5 = (await t5.run()).rows.find(x => x.source === 'scope_signature');
+  ok(r5 && r5.customer_partial === false && r5.state === 'waiting on the owner' && r5.qb_invoice_total === 500, 'signed-proposal rows use the same rule (Hub deposit 800, QB invoice 500, unpaid -> waiting on the owner)');
+}
+{
+  // "payment date unavailable": still returned to the page every time; Ops_Telemetry / ledger write only once per isolate per 6 h; a failed log write is retried
+  const mk = (wo, extra) => build(Object.assign({ irs: [ir(wo, 'ID-' + wo, 'B1')], invoices: [{ Id: 'ID-' + wo, Balance: 0, TotalAmt: 500, DocNumber: '7', LinkedTxn: [{ TxnId: 'CM1', TxnType: 'CreditMemo' }], CustomerRef: { value: 'C7' } }], payments: [], paymentMethods: PM }, extra || {}));
+  const a = mk('WO-D1'), r1 = await a.run();
+  const nLogged = () => a.telemetry.filter(x => x.Job_Type === 'qb_payables_payment_date_missing').length;
+  ok(r1.warnings.some(w => w.stage === 'qb_payables_payment_date_missing' && !w.repeat) && nLogged() === 1, 'first call: warning returned AND logged once');
+  const r2 = await a.run();   // same function = same isolate
+  ok(r2.warnings.some(w => w.stage === 'qb_payables_payment_date_missing' && /WO-D1/.test(w.ref) && w.repeat === true) && nLogged() === 1, 'same list again (same isolate): warning STILL returned to the page, but no second Ops_Telemetry row');
+  ok(r2.rows[0].customer_clear_status === 'unknown', '...and the row still says unknown, never blank');
+  const c = mk('WO-D2'), r3 = await c.run();
+  ok(c.telemetry.filter(x => x.Job_Type === 'qb_payables_payment_date_missing').length === 1 && !r3.warnings.some(w => w.repeat), 'a different list of invoices is logged (dedupe is per list)');
+  // fault injection: the telemetry write fails -> the failure is returned, and the NEXT call tries to log again
+  const f = mk('WO-D3', { telemetryFails: true }), rf1 = await f.run();
+  ok(rf1.warnings.some(w => w.stage === 'telemetry' && /telemetry sheet down/.test(w.error)) && rf1.warnings.some(w => w.stage === 'qb_payables_payment_date_missing'), 'telemetry write failing is reported in the warnings (never swallowed)');
+  f.flags.telemetryFails = false;
+  const rf2 = await f.run();
+  ok(f.telemetry.filter(x => x.Job_Type === 'qb_payables_payment_date_missing').length === 1 && !rf2.warnings.some(w => w.repeat), 'a log write that failed is not marked as done: the next call logs it');
+}
+{
+  // severity: both notices are P2 (money is settled; only a label is missing); an unrelated qb_payables failure stays urgent
+  const sevSrc = wsrc.slice(wsrc.indexOf('const FAIL_SEVERITY_BY_WHERE = ['), wsrc.indexOf('\n];', wsrc.indexOf('const FAIL_SEVERITY_BY_WHERE = [')) + 3) + '\n' + extractFn('failSeverity', false) + '\n' + extractFn('failSevRank', false);
+  const { failSeverity } = new Function(`${sevSrc}\nreturn { failSeverity };`)();
+  ok(failSeverity('qb_payables_payment_date_missing', '2 paid/part-paid invoice(s) have no QuickBooks Payment with a usable date') === 'P2', 'qb_payables_payment_date_missing is P2 (was P0 via the /payment/ area rule)');
+  ok(failSeverity('qb_payables_vendor_paid_date_missing', '1 paid vendor bill(s) have no QuickBooks BillPayment') === 'P2', 'qb_payables_vendor_paid_date_missing is P2');
+  ok(failSeverity('qb_payables_batch_fetch', 'QuickBooks 500') === 'P0' && failSeverity('qb_payables_payment_fetch', 'QuickBooks 500') === 'P0', 'a real QuickBooks lookup failure on the same page is still P0');
+  ok(failSeverity('qb_payables_payment_date_missing', 'credit balance is too low') === 'P0', 'billing wording still escalates (rule order unchanged)');
 }
 
 // ═════════════════ Part 3: the page chip (real payFmtDate / payClearChip from index.html) ═════════════════
