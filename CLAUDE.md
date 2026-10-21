@@ -11,7 +11,8 @@ pushes to GitHub. Deliver complete files, never snippets. Scannable, direct, nex
 action — no cheerleading. When corrected, change approach; never restate a refuted plan.
 
 ## MANDATORY: load context before writing code
-1. Read ALL files in `/context/`, starting with `/context/CURRENT.md` (it names the active
+1. Read ALL files in `/context/`, starting with `/context/CURRENT.md`, **then every file in `/context/notes/`** (newest
+   first; one note per PR since Oct 21 2026, newer than CURRENT.md; see `context/notes/README.md`) (CURRENT.md names the active
    versions of the Context Document, Best Practices, CREDENTIALS_MAP, VENTURES, FEATURE_LOG,
    BACKLOG, CAPTURE_INBOX, HANDWRITING_KEY). Read every file it lists. **Exception:**
    `CREDENTIALS_MAP.md` itself now lives in `brett332/data/CREDENTIALS_MAP.md` (private repo,
