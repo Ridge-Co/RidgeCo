@@ -34305,11 +34305,14 @@ function inspEventsToBusy(items) {
   return out;
 }
 
-// ── Google Calendar (service account; calendar shared with the SA, scope=calendar) ─────────
-let __calToken = { key: '', token: '', exp: 0 };
-async function getCalendarAccessToken(env) {
-  const now = Math.floor(Date.now() / 1000), cacheKey = env.GOOGLE_SA_EMAIL || '';
-  if (__calToken.token && __calToken.key === cacheKey && __calToken.exp > now + 60) return __calToken.token;
+// ── Google Calendar (service account; scope=calendar) ─────────
+// Oct 21 2026: opts = { sub, scope }. No sub = the service account itself (calendar shared with it): the original behaviour, still used by the
+// inspection calendar and the inspection guard. With sub = domain-wide delegation: the service account acts as that user (the CLEANING calendar
+// only, Config STR_CAL_IMPERSONATE). The cache key holds service account + sub + scope, so one mode's token is never handed to another.
+let __calTokens = {};
+async function getCalendarAccessToken(env, opts) {
+  const now = Math.floor(Date.now() / 1000), cs = calJwtClaim(env, now, opts), cacheKey = [env.GOOGLE_SA_EMAIL || '', cs.sub || '', cs.scope].join('|'), hit = __calTokens[cacheKey];
+  if (hit && hit.exp > now + 60) return hit.token;
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claim = b64url(JSON.stringify({ iss: env.GOOGLE_SA_EMAIL, scope: 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now }));
   const sigInput = `${header}.${claim}`, key = await importPrivateKey(env.GOOGLE_SA_KEY);
