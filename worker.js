@@ -35065,7 +35065,7 @@ async function strCalFetch(env, calId, method, pathAndQuery, body, asOverride) {
   const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}${pathAndQuery}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (resp.status === 204) return {};
   const text = await resp.text();
-  if (!resp.ok) { const err = inspClassifyCalError(resp.status, text); err.message = `Cleaning calendar: ` + err.message; err.httpStatus = resp.status; throw err; }
+  if (!resp.ok) { const err = strCalClassify(resp.status, text, as); err.message = `Cleaning calendar: ` + err.message; err.httpStatus = resp.status; throw err; }
   try { return JSON.parse(text); } catch (e) { throw inspErr('calendar_error', 'Google Calendar returned unreadable JSON', 503); }
 }
 async function strReadCleaningCal(env, cfg, calId, fromDay, toDay) {
