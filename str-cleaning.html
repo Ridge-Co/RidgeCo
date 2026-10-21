@@ -287,7 +287,7 @@ function fmtDay(ymd){
   var m = /^(\d{4})-(\d\d)-(\d\d)$/.exec(String(ymd||'')); if(!m) return String(ymd||'');
   return new Intl.DateTimeFormat('en-US',{timeZone:'UTC',weekday:'short',month:'short',day:'numeric'}).format(new Date(Date.UTC(+m[1],+m[2]-1,+m[3],12)));
 }
-function taskName(key){ var p = String(key||'').split('|'); if(p.length===3) return (p[1]==='prearrival'?'pre-arrival clean ':'checkout clean ') + fmtDay(p[2]); return String(key||''); }
+function taskName(key){ var p = String(key||'').split('|'); if(p.length>=3 && p[1]==='pending') return 'pending inquiry ' + fmtDay(p[2]); if(p.length===3) return (p[1]==='prearrival'?'pre-arrival clean ':'checkout clean ') + fmtDay(p[2]); return String(key||''); }
 function fmtPhone(p){ var d = String(p||'').replace(/\D/g,''); if(d.length===11 && d.charAt(0)==='1') d = d.slice(1); return d.length===10 ? '('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6) : String(p||''); }
 function daysText(n){ n = parseInt(n,10); if(isNaN(n)) return ''; if(n===0) return 'today'; if(n===1) return 'tomorrow'; if(n<0) return Math.abs(n)+' day'+(n===-1?'':'s')+' ago'; return 'in '+n+' days'; }
 function human(s){ s = String(s||'').replace(/_/g,' '); return s.charAt(0).toUpperCase()+s.slice(1); }
