@@ -35834,6 +35834,8 @@ async function strCalCheck(env, cfg, opts) {
   opts = opts || {};
   const as = strCalAs(cfg), calId = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim(), steps = [];
   const add = (step, ok, detail, fix) => { steps.push({ step, ok: !!ok, detail: detail || '', fix: fix || '' }); return !!ok; };
+  const finish = async (extra) => { const bad = steps.find(s => !s.ok), r = Object.assign({ passed: !bad, mode: as.sub ? 'acting_as' : 'shared', as: as.sub, scope: as.scope, wrote: !!opts.write, steps, summary: bad ? (bad.detail + (bad.fix ? ' ' + bad.fix : '')) : '' }, extra || {}); if (bad) await strCalCheckLog(env, new Error(r.summary), 'check'); return r; };
+  add('How the Hub signs in', true, as.sub ? `Acting as ${as.sub} (domain-wide delegation, scope calendar.events).` : "Its own Google login (scope calendar). That can read the cleaning calendar but cannot change it, because your Google Workspace will not let you give it edit access. Turn on the act-as setting.");
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
