@@ -302,4 +302,169 @@ const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner
   const p2 = await preview(E, b2);
   t('an unknown calendar name (Michele) is shown as replaced with no text and no mark', p2.items[0].unmatched.join() === 'Michele' && p2.items[0].displaced.length === 0 && p2.recipients.length === 1 && p2.recipients[0].key === 'new:1' && /not one of your cleaners/.test(p2.items[0].sentence), p2.items[0]);
   const r2 = await sendIt(E, p2, b2);
-//@@PH2@@
+  t('...and applying removes her entry and texts only Gina', r2.ok && !W.calEvents.some(e => e.id === 'mm') && W.sms.length === 1 && W.sms[0].to === 'Regina Seville', r2);
+}
+{
+  // 4g. the red "not covered" block is removed when an uncovered turnover is assigned
+  const { W, E } = await setup({}, w => { w.stays.push({ start: '2026-11-13', end: '2026-11-15', guest: 'Q' }); });
+  const K = 'milam-ridge|checkout|2026-11-12';
+  // make it uncovered and inside the 14-day red-block window by moving "today" next to it
+  clock = at(E, '2026-10-31', '10:00'); await E.strTick({}, {});
+  const reds = W.calEvents.filter(e => e.summary === 'BOOKING NOT COVERED FOR CLEANING' && e.extendedProperties.private.ridgecoStrKey === K);
+  t('setup: the Hub put a red block on Nov 12', reds.length === 1, W.calEvents.map(e => e.summary));
+  const body = { action: 'swap', task_keys: [K], cleaner_id: '1' }, p = await preview(E, body);
+  t('open turnover: preview plans to remove the red block and add Gina Cleaning', p.items[0].cal.hub_delete.length === 1 && p.items[0].cal.hub_create === true && p.items[0].displaced.length === 0, p.items[0].cal);
+  const r = await sendIt(E, p, body);
+  t('after applying: red block gone, one Gina Cleaning, no "backup" text (nobody displaced)', r.ok && !W.calEvents.some(e => e.summary === 'BOOKING NOT COVERED FOR CLEANING' && e.extendedProperties.private.ridgecoStrKey === K) && W.calEvents.filter(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-11-12').length === 1 && r.texts.length === 1, r);
+}
+
+// ═══ 5. text faults ═══
+{
+  const { W, E } = await setup(); W.failSms = true;
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+  t('text failure: the swap itself stands (state + calendar done)', tr(W, K25).Assigned_Cleaner_ID === '1' && r.calendar.status === 'done' && r.counts.done === 1);
+  t('text failure: shown as FAILED with "tell them yourself", status partial, not ok', r.ok === false && r.status === 'partial' && r.texts.every(x => x.status === 'failed') && r.errors.some(e => e.step === 'text_failed' && /Tell them yourself/.test(e.error)) && /FAILED for Gina, Kayla/.test(r.summary), r);
+  t('text failure: telemetry + Brett alerted + audit row', W.telemetry.some(x => x.Success === 'FALSE' && /text/i.test(x.Skill_Or_Endpoint + x.Notes)) && rowsOf(W, 'STR_Log').some(l => l.Event === 'swap_text_failed'), W.telemetry.map(x => x.Skill_Or_Endpoint));
+}
+{
+  // Twilio globally off / STR texts off: preview warns, apply does the work and says nobody was texted
+  for (const [over, mode, rx] of [[{ TWILIO_ENABLED: 'FALSE' }, 'twilio_off', /switched off for the whole Hub/], [{ STR_SMS_ENABLED: 'FALSE' }, 'off', /switched OFF/]]) {
+    const { W, E } = await setup(over); const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    t(mode + ': preview shows nobody can be texted and why', p.send_mode === mode && p.recipients.every(r => !r.can_send && rx.test(r.reason)) && p.warnings.length >= 0, p.recipients.map(r => r.reason));
+    const r = await sendIt(E, p, body);
+    t(mode + ': changes applied, nobody texted, loud warnings (not a silent skip)', tr(W, K25).Assigned_Cleaner_ID === '1' && !W.sms.length && r.texts.every(x => x.status === 'not_sent') && r.warnings.filter(w => /was NOT texted/.test(w)).length === 2, r);
+  }
+}
+{
+  // a cleaner who cannot be texted (no phone / opted out) - the rest still works
+  const { W, E } = await setup({}, w => { w.tabs.get('Vendors')[2][2] = ''; }); // Kayla's phone removed
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  const kay = p.recipients.find(r => r.key === 'back:2');
+  t('no phone: Kayla shown as "no text possible" (reason), Gina still texted', !kay.can_send && /no phone number/.test(kay.reason) && p.recipients.find(r => r.key === 'new:1').can_send, kay);
+  const r = await sendIt(E, p, body);
+  t('...and she is still marked backup, with a warning to tell her yourself', markOf(W, '2', '2026-10-25') === 'can' && W.sms.length === 1 && r.warnings.some(w => /Kayla was NOT texted/.test(w)));
+  const emailOff = await setup({}, w => { w.tabs.get('Vendors')[1][3] = ''; });
+  const pe = await preview(emailOff.E, body); t('no email on file: preview says no invite goes out', pe.email && /no email on file/.test(pe.email.skipped), pe.email);
+}
+
+// ═══ 6. Sheets writes that do not land ═══
+{
+  const { W, E } = await setup(); W.failBatchTab = 'STR_Turnovers';
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+  t('turnover write does not land: item FAILED (not success), reason says it did not save', r.counts.failed === 1 && r.counts.done === 0 && r.status === 'failed' && r.ok === false && /did not save/.test(r.items[0].reason), r.items);
+  t('...and NOTHING downstream fired: no text, no calendar change, no backup mark, no email', !W.sms.length && !W.cal.some(c => c.method !== 'GET') && !markOf(W, '2', '2026-10-25') && !W.attach.length && W.calEvents.some(e => e.id === 'h2') && !W.calEvents.some(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-10-25'));
+  t('...and Brett was told (telemetry + alert), audit row says failed', W.telemetry.some(x => x.Success === 'FALSE') && (W.brett.length || W.emails.length) && rowsOf(W, 'STR_Log').some(l => l.Event === 'admin_swap_failed'));
+  t('the record of the attempt says failed', rowsOf(W, 'STR_Changes')[0].Status === 'failed');
+}
+{
+  const { W, E } = await setup(); W.failAppendTab = 'STR_Availability';
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+  t('backup mark does not land: the assignment stands but the result is partial + names the problem', tr(W, K25).Assigned_Cleaner_ID === '1' && r.status === 'partial' && r.errors.some(e => e.step === 'backup_mark') && !markOf(W, '2', '2026-10-25') && r.errors.some(e => e.step === 'backup_mark') && W.telemetry.length > 0, r);
+}
+
+// ═══ 7. out-marked cleaner needs an explicit OK ═══
+{
+  const { W, E } = await setup();
+  await J(E.strCleanerMark({}, { k: GINA, marks: [{ date: '2026-10-25', mark: 'out' }] })); W.sms.length = 0; W.brett.length = 0;
+  const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+  t('Gina marked OUT: preview blocks the item and shows a visible confirm box', p.items[0].outcome === 'blocked' && p.items[0].needs_confirm && p.confirm && p.confirm.kind === 'out_marked' && /explicit OK/.test(p.confirm.message), p.confirm);
+  const r = await sendIt(E, p, body);
+  t('apply without the OK: skipped, nothing changed, nobody texted', r.counts.skipped === 1 && r.counts.done === 0 && tr(W, K25).Status === 'ext_covered' && !W.sms.length && !W.cal.some(c => c.method !== 'GET'), r);
+  const b2 = Object.assign({}, body, { confirm_out: true }), p2 = await preview(E, b2);
+  t('with the OK the item is allowed and her Out mark will be cleared (shown)', p2.items[0].outcome === 'change' && p2.items[0].notes.some(n => /Out mark for this date is cleared/.test(n)), p2.items[0]);
+  const r2 = await sendIt(E, p2, b2);
+  t('assigned anyway; her Out mark cleared; Kayla backup', r2.ok && tr(W, K25).Assigned_Cleaner_ID === '1' && markOf(W, '1', '2026-10-25') === '' && markOf(W, '2', '2026-10-25') === 'can', r2);
+}
+
+// ═══ 8. bulk: swap many dates, one grouped text per person, partial failure, cap ═══
+{
+  const { W, E } = await setup();
+  const keys = [K20, K25, K30, 'milam-ridge|checkout|2026-12-31', K108];
+  const body = { action: 'swap', task_keys: keys, cleaner_id: '3' }, p = await preview(E, body);
+  t('bulk preview: 4 dates will change, 1 not found (reported per item, others not aborted)', p.counts.change === 4 && p.counts.not_found === 1 && p.items.find(i => i.task_key.endsWith('2026-12-31')).outcome === 'not_found', p.counts);
+  t('ONE grouped text per person: Rachel (new), Gina (Oct 20 + Oct 30 + ... multi), Kayla (single date)', p.recipients.length === 3 && p.recipients.find(r => r.key === 'new:3').dates.length === 4 && p.recipients.find(r => r.key === 'back:1').dates.length === 2 && p.recipients.find(r => r.key === 'back:2').dates.length === 1, p.recipients.map(r => [r.key, r.dates.length]));
+  const rach = p.recipients.find(r => r.key === 'new:3'), gin = p.recipients.find(r => r.key === 'back:1');
+  t('grouped wording lists the dates in one text', /you're set for these turnovers at Milam Ridge: Tue, Oct 20; Sun, Oct 25; Fri, Oct 30; Sun, Nov 8/.test(rach.text) && /Rachel's going to cover these turnovers at Milam Ridge: Tue, Oct 20; Fri, Oct 30/.test(gin.text), [rach.text, gin.text]);
+  t('Rachel has no email, so the preview says no invite goes out', p.email && /no email on file/.test(p.email.skipped));
+  const r = await sendIt(E, p, body);
+  t('apply: 4 done, 1 failed(not found) -> partial, never silently dropped, summary says exactly what happened', r.status === 'partial' && r.counts.done === 4 && r.counts.failed === 1 && r.items.find(i => i.task_key.endsWith('12-31')).status === 'failed' && /4 of 5/.test(r.summary) && /1 FAILED/.test(r.summary), r.summary);
+  t('exactly 3 texts total (one per person), not one per date', W.sms.length === 3 && W.sms.filter(s => s.to === 'Rachel Twigg').length === 1, W.sms.map(s => s.to));
+  t('all four turnovers are Rachel\'s; Gina backup on 2 dates, Kayla on 1; Nov 8 (hub-open) had no displaced', [K20, K25, K30, K108].every(k => tr(W, k).Assigned_Cleaner_ID === '3' && tr(W, k).Status === 'covered') && markOf(W, '1', '2026-10-20') === 'can' && markOf(W, '1', '2026-10-30') === 'can' && markOf(W, '2', '2026-10-25') === 'can');
+  t('Nov 8 had Gina\'s pending offer: closed quietly (superseded), and NO slot-filled text went out', rowsOf(W, 'STR_Offers').filter(o => o.Task_Key === K108).every(o => o.Status !== 'pending') && rowsOf(W, 'STR_Offers').some(o => o.Task_Key === K108 && o.Status === 'superseded' && /admin swap/.test(o.Note)) && !W.sms.some(s => s.type === 'str_filled_backup'));
+  t('calendar: Gina/Kayla hand entries replaced by Rachel entries on 4 dates', W.calEvents.filter(e => e.summary === 'Rachel Cleaning').length === 4 && !W.calEvents.some(e => ['h1', 'h2', 'h3'].includes(e.id)));
+  t('per-date audit rows', rowsOf(W, 'STR_Log').filter(l => l.Event === 'admin_swap').length === 4 && rowsOf(W, 'STR_Log').filter(l => l.Event === 'admin_swap_failed').length === 1);
+  t('batching: a 5-date change used a bounded number of Sheets calls, each HTTP call under the limit (quota-safe)', W.sheetCalls < 200 && W.maxCall <= 48, { calls: W.sheetCalls, maxCall: W.maxCall });
+}
+{
+  // a cancelled / past task and a pre-existing "already hers" are skipped, not errors
+  const { W, E } = await setup();
+  await J(E.strAdminAssign({}, { task_key: K30, cleaner_id: '3' }));
+  const p = await preview(E, { action: 'swap', cleaner_id: '3', task_keys: [K30, K25] });
+  t('already hers -> skipped (no text for it)', p.items.find(i => i.task_key === K30).outcome === 'skip' && p.counts.change === 1 && p.recipients.find(r => r.key === 'new:3').dates.length === 1);
+  const rows = rowsOf(W, 'STR_Turnovers'); const idx = rows.findIndex(r => r.Task_Key === K20) + 1;
+  const h = W.tabs.get('STR_Turnovers')[0]; W.tabs.get('STR_Turnovers')[idx][h.indexOf('Status')] = 'cancelled';
+  const p2 = await preview(E, { action: 'swap', cleaner_id: '3', task_keys: [K20] });
+  t('cancelled booking -> skipped with the reason', p2.items[0].outcome === 'skip' && /cancelled/.test(p2.items[0].reason));
+  clock = at(E, '2026-10-26', '10:00');
+  const p3 = await preview(E, { action: 'swap', cleaner_id: '3', task_keys: [K25] });
+  t('a date that has already passed is skipped', p3.items[0].outcome === 'skip' && /passed/.test(p3.items[0].reason));
+}
+{
+  // an unstored ("new") turnover is materialised the way the engine does, then assigned
+  const { W, E } = await setup();
+  W.stays.push({ start: '2026-11-20', end: '2026-11-23', guest: 'New Guest' });
+  const KN = 'milam-ridge|checkout|2026-11-23';
+  t('setup: the new booking is not stored yet', !tr(W, KN));
+  const body = { action: 'swap', task_keys: [KN], cleaner_id: '1' }, p = await preview(E, body);
+  t('preview knows it (status new) and offers to assign it', p.items[0].is_new === true && p.items[0].outcome === 'change');
+  const r = await sendIt(E, p, body);
+  const row = tr(W, KN);
+  t('materialised as a real row, covered by Gina, with the same fields the engine writes', r.ok && row && row.Status === 'covered' && row.Assigned_Cleaner_ID === '1' && row.Kind === 'checkout' && row.Date === '2026-11-23' && row.Property_Key === 'milam-ridge' && row.Win_End && row.Missing_Count === '0', row);
+  clock += 15 * 60000; await E.strTick({}, {});
+  t('the next tick does not create a duplicate row for it', rowsOf(W, 'STR_Turnovers').filter(x => x.Task_Key === KN).length === 1);
+}
+{
+  // assign a date range
+  const { W, E } = await setup();
+  const body = { action: 'assign_range', cleaner_id: '2', from: '2026-10-21', to: '2026-11-15' }, p = await preview(E, body);
+  t('range preview: every turnover from Oct 21 to Nov 15 listed', p.items.map(i => i.date).join() === '2026-10-25,2026-10-30,2026-11-08,2026-11-12', p.items.map(i => i.date));
+  t('range: Kayla already holds Oct 25? no - calendar says Kayla there: she is not displaced from her own date (skipped as nothing to change is NOT assumed)', p.items.find(i => i.date === '2026-10-25').displaced.length === 0, p.items[0]);
+  const r = await sendIt(E, p, body);
+  t('range applied: all dates Kayla\'s; Gina (hand entry Oct 30) becomes backup and is told once', r.ok && p.items.every(i => tr(W, i.task_key).Assigned_Cleaner_ID === '2') && markOf(W, '1', '2026-10-30') === 'can' && W.sms.filter(s => s.to === 'Regina Seville').length === 1, r.summary);
+  const toolong = await preview(E, { action: 'assign_range', cleaner_id: '2', from: '2026-10-01', to: '2027-06-01' });
+  t('a range longer than 120 days is refused', toolong.error === 'bad_range');
+  const none = await preview(E, { action: 'assign_range', cleaner_id: '2', from: '2027-01-01', to: '2027-01-10' });
+  t('a range with no turnovers says so', none.error === 'no_dates' && /no turnovers/i.test(none.message));
+  const rev = await preview(E, { action: 'assign_range', cleaner_id: '2', from: '2026-11-10', to: '2026-11-01' });
+  t('an end date before the start date is refused', rev.error === 'bad_range');
+}
+{
+  // 40 dates at once stays inside the limits (cap + batching)
+  const W = makeWorld(); seed(W); const stays = []; for (let i = 0; i < 40; i++) { const d0 = new Date(Date.UTC(2026, 9, 21 + i * 2)), d1 = new Date(Date.UTC(2026, 9, 22 + i * 2)); stays.push({ start: d0.toISOString().slice(0, 10), end: d1.toISOString().slice(0, 10), guest: 'G' + i }); }
+  W.stays = stays; W.cfg.STR_LOOKAHEAD_DAYS = '90'; W.calEvents = [];
+  const E = build(W); clock = at(E, '2026-10-20', '10:00'); await E.strTick({}, {});
+  const keys = rowsOf(W, 'STR_Turnovers').map(r => r.Task_Key).slice(0, 40); W.sms.length = 0; W.sheetCalls = 0;
+  t('setup: 40 turnovers exist', keys.length === 40, keys.length);
+  const body = { action: 'swap', task_keys: keys, cleaner_id: '3' }, p = await preview(E, body);
+  const r = await sendIt(E, p, body);
+  t('40-date swap: all done, ONE text to the new cleaner listing all dates', r.ok && r.counts.done === 40 && W.sms.length >= 1 && W.sms.filter(s => s.to === 'Rachel Twigg').length === 1, { c: r.counts, e: r.errors.slice(0, 2) });
+  t('40-date swap: Sheets calls stay far under the per-minute quota (batched, not per-date)', W.sheetCalls < 200 && W.maxCall <= 48, { calls: W.sheetCalls, maxCall: W.maxCall });
+  t('41 dates are refused outright', (await preview(E, { action: 'swap', cleaner_id: '3', task_keys: keys.concat(['x']) })).error === 'too_many');
+}
+
+// ═══ 9. mark action (admin-set availability) ═══
+{
+  const { W, E } = await setup();
+  const body = { action: 'mark', cleaner_id: '3', mark: 'out', dates: ['2026-10-27', '2026-10-28', '2026-11-02', '2026-10-01'] }, p = await preview(E, body);
+  t('mark preview: 3 change, the past date is skipped with a reason', p.counts.change === 3 && p.items.find(i => i.date === '2026-10-01').outcome === 'skip' && /passed/.test(p.items.find(i => i.date === '2026-10-01').reason), p.items);
+  t('mark preview: one optional acknowledgement text, NOT ticked by default', p.recipients.length === 1 && p.recipients[0].key === 'mark:3' && p.recipients[0].send_default === false && /marked you out for Tue, Oct 27; Wed, Oct 28; Mon, Nov 2/.test(p.recipients[0].text), p.recipients);
+  const r = await sendIt(E, p, body);
+  t('mark applied: three Out marks, source admin, audit rows, nobody texted (ack not ticked)', r.ok && ['2026-10-27', '2026-10-28', '2026-11-02'].every(d => markOf(W, '3', d) === 'out') && rowsOf(W, 'STR_Availability').filter(a => a.Source === 'admin').length === 3 && rowsOf(W, 'STR_Log').filter(l => l.Event === 'admin_mark').length === 3 && !W.sms.length && r.texts[0].status === 'not_sent', r);
+  // idempotent: marking the same again is a no-op preview
+  const p2 = await preview(E, body); t('same marks again: nothing to change', p2.counts.change === 0 && p2.items.filter(i => i.outcome === 'skip').length === 4);
+  // tick afterwards: Rachel is skipped as a candidate on those dates (the existing engine honours admin marks)
+  t('an admin Out mark is honoured by the queue (strNextCleaner reads it like a cleaner mark)', rowsOf(W, 'STR_Availability').some(a => a.Cleaner_ID === '3' && a.Mark === 'out'));
+  // tick the ack with the text ticked
+  const b2 = { action: 'mark', cleaner_id: '3', mark: 'can', dates: ['2026-10-27'] }, p3 = await preview(E, b2);
+  const r3 = await sendIt(E, p3, b2, { 'mark:3': { send: true, body: 'Rachel - you are now backup for Oct 27.' } });
+//@@PH3@@
