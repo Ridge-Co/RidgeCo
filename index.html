@@ -850,18 +850,19 @@ window.addEventListener('pageshow', function(e){
         <div class="dl-tool" data-tool="qb-mapping" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="goToQBMapping()">🔗 QB Mapping</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Link properties and units to their QuickBooks customers.</p></div>
       </div></div>
     </details>
-    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🧹 DATA HYGIENE</div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('bulk-importer.html','_blank')">📥 Bulk import properties/units/tenants</button>
-      <button class="btn small" onclick="runAdminTool('fix-pins')">🔑 Fix PINs + Phones</button>
-      <button class="btn small" onclick="checkStaleTenants(false)">🏠 Check units / moved-out tenants</button>
-      <button class="btn small" onclick="migrateTrades(false)">🔧 Update old trade names</button>
-      <button class="btn small" onclick="checkDuplicateProperties()">🏢 Find duplicate properties</button>
-      <button class="btn small" onclick="checkDuplicateOwners()">👤 Find duplicate owners</button>
-      <button class="btn small" onclick="runAdminTool('reformat-sheets')">🗂 Reformat All Sheets</button>
-      <button class="btn small" onclick="shareAttachments(false)">🖼 Fix photo/video sharing</button>
-    </div>
-
+    <details class="dl-group" data-dl-key="cleanup" data-tools="1" open>
+      <summary><span class="dl-h">Data cleanup</span><span class="dl-sub">Fix and tidy the records in the Hub</span><span class="dl-count"></span></summary>
+      <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="bulk-import" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="window.open('bulk-importer.html','_blank')">📥 Bulk Import</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Load properties, units and tenants from a spreadsheet.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="fix-pins" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="runAdminTool('fix-pins')">🔑 Fix PINs + Phones</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Standardize phone numbers and replace badly formatted PINs for vendors, owners and tenants.</p><p class="dl-kind careful">Careful: changes live data right away. No preview.</p></div>
+        <div class="dl-tool" data-tool="stale-tenants" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="checkStaleTenants(false)">🏠 Check Units for Moved-Out Tenants</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">List units still naming a tenant who left, then clear them if you agree.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="migrate-trades" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="migrateTrades(false)">🔧 Update Old Trade Names</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Rename old trade names (like Electric to Electrical) so filters find old jobs.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="dup-properties" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="checkDuplicateProperties()">🏢 Find Duplicate Properties</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Spot the same address entered twice. Merging asks first.</p></div>
+        <div class="dl-tool" data-tool="dup-owners" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="checkDuplicateOwners()">👤 Find Duplicate Owners</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Spot the same owner entered twice. Merging asks first.</p></div>
+        <div class="dl-tool" data-tool="reformat-sheets" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="runAdminTool('reformat-sheets')">🗂 Reformat All Sheets</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Fill missing IDs and PINs and standardize phones across the main sheets.</p><p class="dl-kind careful">Careful: changes live data right away. No preview.</p></div>
+        <div class="dl-tool" data-tool="share-photos" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="shareAttachments(false)">🖼 Fix Photo/Video Sharing</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Make older job photos and videos open for vendors without a Google login.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+      </div></div>
+    </details>
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🔎 DIAGNOSTICS</div>
     <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <button class="btn small" onclick="runOpsReview()">🔎 Run Ops Review (test)</button>
