@@ -179,6 +179,16 @@
     <div id="loaderr"></div>
     <div id="alerts"></div>
 
+    <details class="sec" id="sec-pend" open>
+      <summary>Pending (not booked) <span class="meta" id="m-pend"></span></summary>
+      <div class="body">
+        <p class="say" style="margin:0 0 10px">For a date that might book but is NOT booked yet. Cleaners are asked one at a time, in queue order. A yes is only a tentative hold, never an assignment. When the booking really shows up, the Hub turns the hold into a normal booked clean by itself.</p>
+        <button class="btn primary full" data-act="pend-new">Ask about a date…</button>
+        <p class="say">Opens a form. Nothing is sent until you check the exact text and press Send.</p>
+        <div id="pend-list"><p class="muted">Loading…</p></div>
+      </div>
+    </details>
+
     <details class="sec" id="sec-turn" open>
       <summary>Turnovers <span class="meta" id="m-turn"></span></summary>
       <div class="body">
