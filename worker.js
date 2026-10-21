@@ -35053,6 +35053,10 @@ function strCalClassify(status, text, as) {
   if (status === 403 && /insufficient.*scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(t)) return inspErr('calendar_scope_too_narrow', `Google says the narrow calendar.events permission is not enough for this calendar call ${via}. Tell Claude: the permission must not be widened without a decision.`, 503);
   if (status === 403 && /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(t)) return inspErr('calendar_error', 'Google Calendar is rate limiting the Hub right now (403). It is retried on the next scheduler run.', 503);
   if (status === 404) return inspErr('calendar_not_shared', `Google cannot find the cleaning calendar ${via}. ${fix} Also check that Config STR_GUARD_CLEANING_CAL is the right calendar id.`, 503);
+  if (status === 403 && !/accessNotConfigured|has not been used in project|is disabled/i.test(t)) return inspErr('calendar_no_write_permission', `Google will not let the Hub change the cleaning calendar ${via}. ${fix}`, 503);
+  if (status === 401) return inspErr('calendar_auth', `Google rejected the Hub's calendar login ${via} (401).` + (who ? ' Press "Check calendar access" on the cleaning board.' : ''), 503);
+  return inspClassifyCalError(status, text);
+}
 async function strCalFetch(env, calId, method, pathAndQuery, body) {
   __strCalCount++;
   const token = await getCalendarAccessToken(env);
