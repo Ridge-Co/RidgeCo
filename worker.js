@@ -36004,6 +36004,12 @@ async function strCalCheck(env, cfg, opts) {
   if (!calId) { add('Cleaning calendar', false, 'No cleaning calendar id is set.', 'Set it on the Inspection Scheduler page (Open blocks tab, "Cabin cleaning protection") or Config STR_GUARD_CLEANING_CAL.'); return await finish(); }
   if (inspCalStaged(env, cfg)) { add('Staging', true, 'This is the test server: calendar calls are pretend-only here, so access was NOT really tested.'); return await finish({ stubbed: true }); }
   try { await getCalendarAccessToken(env, { sub: as.sub, scope: as.scope }); add('Google sign-in', true, as.sub ? `Google approved acting as ${as.sub}.` : "Google accepted the Hub's own login."); }
+  catch (e) { add('Google sign-in', false, strErrText(e), as.sub ? '' : 'Check GOOGLE_SA_EMAIL / GOOGLE_SA_KEY on the Worker.'); return await finish(); }
+  try { const d = await strCalFetch(env, calId, 'GET', '/events?singleEvents=true&maxResults=5&timeMin=' + encodeURIComponent(new Date().toISOString()) + '&fields=items(id)', null, as); add('Read the cleaning calendar', true, `Can read it (${(d.items || []).length} upcoming event(s) on the first page).`); }
+  catch (e) { add('Read the cleaning calendar', false, strErrText(e)); return await finish(); }
+  if (opts.write) {
+    let id = '';
+    try {
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
