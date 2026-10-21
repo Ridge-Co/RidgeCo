@@ -35423,6 +35423,7 @@ async function strReconcileCalendar(ctx, feed, views) {
   for (const e of plan.remove) await run('delete', async () => { try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(e.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; } });
   for (const w of plan.create) await run('create', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(w, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id for ' + w.key); });
   for (const p of plan.patch) await run('patch', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(p.ev.id), strCalBody(p.want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update for ' + p.want.key); });
+  if (d.fatal) await strCalAccessAlert(ctx, d.fatal); else if (d.applied && !d.failed) await strCalAccessResolve(ctx);
   if (d.failed) await strSystemAlert(env, 'calendar_write', `${d.failed} cleaning-calendar change(s) failed: ${ctx.errors.filter(e => /^calendar_/.test(e.step)).map(e => e.error).slice(0, 2).join(' | ')}`);
   return d;
 }
