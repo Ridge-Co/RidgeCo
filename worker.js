@@ -102,10 +102,35 @@ function __makeWOStatus() {
 const WOStatus = __makeWOStatus();
 const OPEN_WO_STATUSES = WOStatus.sets.ACTIVE;
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
-// BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
-// Portals poll GET /version and refresh themselves onto new code when this changes
-// (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
+// BUILD_VERSION: FROZEN BASE LABEL. DO NOT EDIT IT IN A PR (Oct 21 2026). Every PR used to bump this one line, so any two open PRs
+// conflicted and sessions kept re-cutting branches by hand. The version portals actually see is now stamped by Cloudflare at deploy
+// time: GET /version = buildVersion(env) = this base + '+' + deploy time + '.' + Cloudflare's version id (the `version_metadata`
+// binding in wrangler.toml), so EVERY deploy gets a new version automatically and a PR never needs to touch this line.
+// Portals poll GET /version and refresh themselves onto new code when it changes (B-093 auto-refresh).
+// The Branch policy guard fails a PR into main that changes this line (override: put `allow-build-version-edit: true` in the PR body).
 const BUILD_VERSION = '2026-10-21.02-failure-ledger-self-heal';
+let __unstampedReported = false;
+// buildVersion(env) -> { version, base, stamped, version_id, deployed_at }. Never throws. If the Cloudflare binding is missing the answer
+// says so ('+unstamped', stamped:false) AND files one failure-ledger row per isolate, because an unstamped Worker would otherwise never
+// make open portals refresh (a silent failure).
+function buildVersion(env) {
+  const m = env && env.CF_VERSION_METADATA;
+  if (m && m.id) {
+    const ts = String(m.timestamp || ''), digits = ts.replace(/\D/g, '').slice(0, 12);
+    return { version: BUILD_VERSION + '+' + (digits || 'x') + '.' + String(m.id).slice(0, 8), base: BUILD_VERSION, stamped: true, version_id: String(m.id), deployed_at: ts || null };
+  }
+  return { version: BUILD_VERSION + '+unstamped', base: BUILD_VERSION, stamped: false, version_id: null, deployed_at: null };
+}
+function buildVersionJson(env, ctx) {
+  const v = buildVersion(env);
+  if (!v.stamped && !__unstampedReported) {
+    __unstampedReported = true;
+    const p = reportFailure(env, { system: 'hub', source: 'worker', where: 'build_version_unstamped', severity: 'P2',
+      message: 'The Worker has no CF_VERSION_METADATA binding, so /version never changes on deploy and open portals will not refresh themselves. Check wrangler.toml [version_metadata].' });
+    if (ctx && ctx.waitUntil) ctx.waitUntil(p);
+  }
+  return json(v.stamped ? v : Object.assign({ warning: 'unstamped: no CF_VERSION_METADATA binding; portals will not auto-refresh on deploy' }, v));
+}
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
