@@ -1042,7 +1042,56 @@ function pendDoneSheet(title, r){
   var warn = (r.warnings||[]).filter(Boolean);
   return { tone: warn.length ? 'warn' : 'ok', head: r.message || 'Done.', extra: warn.length ? '<div class="msg warn"><b>Heads up</b>' + listHtml(warn) + '</div>' : '' };
 }
-/*@@PH@@*/
+var SEND_WORDS = { offered:'Asked now.', promoted:'Asked now.', waiting_send_window:'Still waiting for 8 AM.', exhausted:'Nobody left to ask. You have been told.', sms_off:'No text sent because texting is switched off.', twilio_off:'No text sent because texting is switched off.', would_offer:'No text sent because texting is switched off.', offer_failed:'The text FAILED. You have been told.' };
+function openPendSend(key){
+  var p = findPend(key); if(!p) return;
+  openAction({ title: 'Ask now for ' + p.label + '?', say: 'Sends the question to the next cleaner right now, even if it is outside 8 AM - 9 PM. Use it only if it cannot wait until morning.', go: 'Yes, ask now', body: p.next_up ? '<p class="say">Next to ask: <b>' + esc(p.next_up) + '</b>.</p>' : '',
+    run: function(){ return api('POST', '/str/admin/pending/send-now', { task_key: key }, { allowFail: true }).then(function(r){
+      var a = r.result && r.result.action, errs = stepErrs(r.errors);
+      return { tone: errs.length || a === 'offer_failed' ? 'warn' : 'ok', head: (SEND_WORDS[a] || 'Done.') + (r.status ? ' ' + r.status.label + '.' : ''), extra: errs.length ? '<div class="msg err"><b>Problems</b>' + listHtml(errs) + '</div>' : '' };
+    }); } });
+}
+function openPendConvert(key){
+  var p = findPend(key); if(!p) return;
+  openAction({ title: 'Mark ' + p.label + ' as booked now?', say: 'Use this only if the booking is real. It turns the inquiry into a normal turnover straight away, without waiting for the bookings feed.',
+    body: '<p class="say">' + (p.held_by ? '<b>' + esc(p.held_by) + '</b> becomes the assigned cleaner, gets a "now booked" text, and her calendar entry becomes the normal one. ' : 'Nobody has said yes yet, so it becomes an ordinary open turnover and the cleaner queue takes over. ') + 'Cleaners who passed are not texted. If the feed does not show the booking within about 3 days, the Hub treats it like any booking that left the feed and tells you.</p>',
+    go: 'Yes, it is booked', run: function(){ return api('POST', '/str/admin/pending/convert', { task_key: key }).then(function(r){ return pendDoneSheet('', r); }); } });
+}
+function openPendCancel(key){
+  var p = findPend(key); if(!p) return;
+  openSheet('<h2 id="sh-title">Cancel the ' + esc(p.label) + ' inquiry?</h2><p class="muted" style="margin-top:8px">Checking who is affected…</p>');
+  api('POST', '/str/admin/pending/cancel', { task_key: key, preview: true }).then(function(r){
+    if(r.already){ openAction({ title: 'Already closed', say: r.message || 'That inquiry is already closed.', go: null, run: null }); loadState(); return; }
+    var pv = r.preview || {}, hold = pv.holder, body = '';
+    body += '<p class="say" style="font-size:15px;color:var(--text)">Closes the inquiry and takes the tentative entry off the calendar. Anyone still waiting to answer just stops seeing the question. <b>Nobody is texted unless you choose it below.</b></p>';
+    if(hold && hold.can_text){
+      body += '<label class="tog"><input type="checkbox" id="pc-notify">Also tell ' + esc(hold.first) + ' it did not book</label><p class="say">' + esc(hold.first) + ' said yes, so she may be keeping the date open. Untick to cancel quietly.</p>'
+        + '<div id="pc-txt" class="hide"><div class="rcpt"><label class="fld" for="pc-body" style="margin-top:2px">What she will get (you can edit it)</label><textarea id="pc-body" maxlength="' + (S && S.text_max ? S.text_max : 800) + '">' + esc(pv.text) + '</textarea><div class="cnt" id="pc-cnt"></div>' + (pv.in_window ? '' : '<p class="say">It is outside 8 AM - 9 PM, so this text goes out at 8 AM.</p>') + '</div></div>';
+    } else if(hold) body += '<div class="msg warn"><b>Cannot text ' + esc(hold.first) + '.</b>' + esc(hold.why_not || 'No text possible.') + ' Tell her yourself if you want her to know.</div>';
+    else body += '<p class="say">Nobody has said yes, so there is nobody to tell.</p>';
+    sheetShell('Cancel the ' + p.label + ' inquiry?', '', body, '<div class="btnrow"><button class="btn ghost" id="sh-cancel">Keep it</button><button class="btn danger" id="sh-go">Cancel this inquiry</button></div>');
+    $('sh-cancel').onclick = closeSheet;
+    var nf = $('pc-notify'), ta = $('pc-body');
+    if(nf) nf.onchange = function(){ $('pc-txt').classList.toggle('hide', !nf.checked); if(nf.checked){ var upd = function(){ var n = ta.value.length; $('pc-cnt').textContent = n + ' characters'; $('pc-cnt').className = 'cnt' + (n > 320 ? ' long' : ''); }; upd(); ta.oninput = upd; } };
+    $('sh-go').onclick = function(){
+      var notify = !!(nf && nf.checked);
+      if(notify && !ta.value.trim()){ chShowErr('The text is empty. Type something or untick "Also tell".'); return; }
+      sheetBusy = true; var go = $('sh-go'), cn = $('sh-cancel'); go.disabled = true; cn.disabled = true; go.textContent = 'Working…'; $('sh-err').classList.add('hide');
+      api('POST', '/str/admin/pending/cancel', { task_key: key, notify: notify, text: notify ? ta.value : '' }).then(function(res){
+        sheetBusy = false; var x = pendDoneSheet('', res);
+        $('sheet-box').innerHTML = '<h2 id="sh-title">Done.</h2><div class="msg ' + x.tone + '" role="status"><b style="margin:0">' + esc(x.head) + '</b></div>' + x.extra + '<div class="btnrow"><button class="btn primary" id="sh-done">Done</button></div>';
+        $('sh-done').onclick = closeSheet; $('sh-done').focus(); loadState();
+      }, function(e){
+        sheetBusy = false; if(e.code === 'unauthorized'){ authFailed(); return; }
+        var g = $('sh-go'), c = $('sh-cancel'); if(g){ g.disabled = false; g.textContent = 'Try again'; } if(c) c.disabled = false;
+        chShowErr('<b>Not done.</b>' + esc(errText(e)) + '<br>If you are not sure whether it went through, close this and press Refresh to check.');
+      });
+    };
+  }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    openAction({ title: 'Could not check', say: errText(e) + ' Nothing was changed.', go: null, run: null });
+  });
+}
 
 /* ---------- tools ---------- */
 function toolRun(btn, outId, loadingText, fn){
