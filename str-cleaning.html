@@ -819,6 +819,79 @@ function renderPlan(){
   var cf = $('ch-confirm'); if(cf) cf.onchange = function(){ CH.req.confirm_out = cf.checked; cf.disabled = true; runPreview(null); };
   $('sh-go').onclick = sendChange;
 }
+/* step 2: Send. One tap only; the same plan id can never be applied twice */
+function sendChange(){
+  if(!CH || CH.sending) return;
+  var p = CH.plan, texts = {}, bad = '';
+  (p.recipients||[]).forEach(function(r, idx){
+    var send = false, body = r.text;
+    if(r.can_send){ send = $('rc-send-' + idx).checked; body = $('rc-body-' + idx).value; if(send && !body.trim()) bad = 'The text to ' + r.first_or_name + ' is empty. Type something or untick "Send this text".'; }
+    texts[r.key] = { send: send, body: body };
+  });
+  if(bad){ chShowErr(esc(bad)); return; }
+  CH.sending = true; sheetBusy = true;
+  var go = $('sh-go'), cancel = $('sh-cancel'); go.disabled = true; cancel.disabled = true; go.textContent = 'Working… please wait';
+  $('sh-err').classList.add('hide');
+  var payload = Object.assign({}, CH.req, { plan_id: p.plan_id, sig: p.sig, texts: texts });
+  runApply(payload, 0);
+}
+/* The Hub does a change in several short steps (a phone-sized request can only do so much at once).
+   Each answer says "applying" until the last step; this page then asks it to carry on by itself.
+   If anything interrupts, the Continue button picks up exactly where it stopped (nothing is ever done twice). */
+function runApply(body, n){
+  var go = $('sh-go'), cancel = $('sh-cancel'); if(!CH) return;
+  CH.sending = true; sheetBusy = true;
+  api('POST', '/str/admin/change/apply', body, { allowFail: true }).then(function(r){
+    if(r && r.status === 'applying' && n < 40){
+      var g = $('sh-go'); if(g) g.textContent = (r.message ? String(r.message).replace(/^Working\.\.\.\s*/, 'Working… ') : 'Working… step ' + (r.step || '?') + ' of ' + (r.steps || '?'));
+      return runApply({ plan_id: CH.plan.plan_id, resume: true }, n + 1);
+    }
+    if(r && r.status === 'applying'){ throw mkErr('It is taking longer than expected.', 'slow', 0); }
+    sheetBusy = false; CH.sending = false; renderResult(r); loadState();
+  }, function(e){ throw e; }).catch(function(e){
+    sheetBusy = false; if(CH) CH.sending = false;
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    var go2 = $('sh-go'), cancel2 = $('sh-cancel'); if(!go2) return;
+    if(e.code === 'stale_preview'){
+      go2.disabled = true; cancel2.disabled = false; go2.textContent = 'Out of date';
+      chShowErr('<b>Not done. Nothing was changed.</b>' + esc(errText(e)) + '<br><button class="btn sm" id="ch-again" style="margin-top:8px">Preview again</button>');
+      $('ch-again').onclick = function(){ runPreview(null); }; return;
+    }
+    if(n > 0 || body.resume === true || e.code === 'slow' || e.code === 'progress_not_saved'){
+      /* it had already started: the safe move is Continue (same plan), never a fresh Send */
+      go2.disabled = false; cancel2.disabled = true; go2.textContent = 'Continue';
+      go2.onclick = function(){ $('sh-err').classList.add('hide'); go2.disabled = true; go2.textContent = 'Working… please wait'; runApply({ plan_id: CH.plan.plan_id, resume: true }, 0); };
+      chShowErr('<b>Stopped part-way. The change is only partly done.</b>' + esc(errText(e)) + '<br>Press Continue. The Hub remembers where it stopped and will not do anything twice or text anyone twice. Do not close this page until it says Done.');
+      return;
+    }
+    go2.disabled = false; cancel2.disabled = false; go2.textContent = 'Try Send again';
+    var unsure = e.code === 'network' || e.code === 'bad_response' || /^http_5/.test(e.code);
+    chShowErr('<b>' + (unsure ? 'Not sure if that went through.' : 'Not done.') + '</b>' + esc(errText(e)) + (unsure ? '<br>It is safe to press Send again: the Hub remembers this exact request and will not do it twice or text anyone twice. Or press Cancel, then Refresh, and check the Activity log.' : ''));
+  });
+}
+var TXT_PILL = { sent: ['ok', 'Text sent'], held: ['warn', 'Text held'], not_sent: ['warn', 'Not texted'], failed: ['bad', 'TEXT FAILED'] };
+var ITM_PILL = { done: ['ok', 'Done'], skipped: ['warn', 'Skipped'], failed: ['bad', 'FAILED'] };
+function renderResult(r){
+  var dup = !!r.duplicate; if(dup && r.result) r = r.result;
+  var tone = r.status === 'done' ? 'ok' : (r.status === 'failed' ? 'err' : 'warn');
+  var head = dup ? 'This was already done earlier. Nothing was done again.' : (r.status === 'done' ? 'Done.' : (r.status === 'failed' ? 'It did NOT go through.' : 'Done, but with problems. Read them below.'));
+  var h = '<h2 id="sh-title">' + esc(head) + '</h2>';
+  if(r.summary) h += '<div class="msg ' + tone + '" role="status"><b style="margin:0">' + esc(r.summary) + '</b></div>';
+  var errs = stepErrs(r.errors);
+  if(errs.length) h += '<div class="msg err" role="alert"><b>Problems</b>' + listHtml(errs) + '</div>';
+  var cal = r.calendar || {};
+  if((cal.manual||[]).length && cal.status !== 'staged') h += '<div class="msg warn" role="alert"><b>Do this by hand in Google Calendar</b>' + (cal.message ? '<div>' + esc(cal.message) + '</div>' : '') + listHtml(cal.manual) + '</div>';
+  var wr = (r.warnings||[]).map(String); if(wr.length) h += '<div class="msg warn"><b>Heads up</b>' + listHtml(wr) + '</div>';
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">Date by date</h4>' + (r.items||[]).map(function(i){
+    var pl = ITM_PILL[i.status] || ['', human(i.status)];
+    return '<div class="chg-item"><span class="pill ' + pl[0] + '">' + esc(pl[1]) + '</span><b>' + esc(i.label || i.date || taskName(i.task_key || i.ref)) + '</b>' + (i.status === 'done' && i.sentence ? '<div>' + esc(i.sentence) + '</div>' : '') + (i.reason ? '<div class="why">' + esc(i.reason) + '</div>' : '') + (i.calendar && i.calendar.message ? '<div class="why">Calendar: ' + esc(i.calendar.message) + '</div>' : '') + '</div>';
+  }).join('');
+  if((r.texts||[]).length) h += '<h4 style="margin:14px 0 4px;font-size:15px">Texts</h4>' + r.texts.map(function(x){ var pl = TXT_PILL[x.status] || ['', human(x.status)]; return '<div class="chg-item"><span class="pill ' + pl[0] + '">' + esc(pl[1]) + '</span><b>' + esc(x.name || x.first || '') + '</b><div class="why">' + esc(x.detail || '') + '</div></div>'; }).join('');
+  if(r.email) h += '<p class="say">Email invite: ' + esc(typeof r.email === 'string' ? r.email : (r.email.message || r.email.status || '')) + '</p>';
+  h += '<div class="btnrow"><button class="btn primary" id="sh-done">Done</button></div>';
+  openSheet(h);
+  $('sh-done').onclick = function(){ CH = null; closeSheet(); }; $('sh-done').focus();
+}
 /* ---------- the one confirm / result sheet ---------- */
 var sheetBusy = false;
 function openSheet(html){ var m = $('sheet'); $('sheet-box').innerHTML = html; m.classList.add('open'); m.setAttribute('aria-hidden', 'false'); var f = $('sheet-box').querySelector('input,select,button'); if(f) setTimeout(function(){ f.focus({preventScroll:true}); }, 30); }
