@@ -1227,6 +1227,8 @@ document.addEventListener('click', function(ev){
   else if(a === 'addcleaner') openCleanerForm(null);
   else if(a === 'switch') openSwitch(el.getAttribute('data-k'));
   else if(a === 'editnums') openNums();
+  else if(a === 'cal-as') openCalAs();
+  else if(a === 'cal-check' || a === 'cal-check-write') toolRun(el, 'out-cal', 'Signing in to Google and reading the calendar… this can take a few seconds.', function(){ return api('POST', '/str/admin/calendar-check', { write: a === 'cal-check-write' }).then(renderCalCheck); });
   else if(a === 'run-dry') toolRun(el, 'out-run', 'Reading your bookings and calendar… this can take a few seconds.', function(){ return api('POST', '/str/admin/run', { dry: true }, { allowFail: true }).then(renderRun); });
   else if(a === 'preview-msgs') previewMsgs(el);
   else if(a === 'digest-dry') digestDry(el);
