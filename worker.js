@@ -34278,9 +34278,12 @@ async function inspAlert(env, kind, message) {
 // (about 3 ticks in a row) the normal alert (SMS + email) fires, because by then cabin cleaning coverage is genuinely unchecked.
 const INSP_GUARD_QUOTA_GRACE_MS = 45 * 60000;
 function inspIsSheetsQuotaErr(e) { return /quota exceeded|read requests per minute|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(String((e && e.message) || e || '')); }
+// Oct 21 2026: the same grace covers a bookings feed (Uplisting iCal) that answered 5xx/408/429 or could not be reached even after the in-read retries.
+function inspIsTransientFeedErr(e) { const m = String((e && e.message) || e || ''); return /Bookings feed \(.*?\) answered (5\d\d|408|429)\./.test(m) || /Could not reach the bookings feed/.test(m); }
 async function inspGuardFailure(env, kind, e) {
   const msg = String((e && e.message) || e || '');
-  if (!inspIsSheetsQuotaErr(e)) return inspAlert(env, kind, msg);   // a real problem: alert exactly as before
+  const isQuota = inspIsSheetsQuotaErr(e), isFeed = !isQuota && inspIsTransientFeedErr(e);
+  if (!isQuota && !isFeed) return inspAlert(env, kind, msg);   // a real problem: alert exactly as before
   const now = Date.now(); let since = NaN, cfgNote = '';
   try { const cfg = await fetchConfig(env); since = Date.parse(String(cfg.STR_GUARD_FAIL_SINCE || '')); }
   catch (ce) { cfgNote = ' [could not read Config to time the outage: ' + String((ce && ce.message) || ce).slice(0, 120) + ']'; console.error('insp guard: Config unreadable while handling a quota failure:', ce && ce.message); }
