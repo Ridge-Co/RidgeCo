@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-21.02-failure-ledger-self-heal';
+const BUILD_VERSION = '2026-10-21.03-failure-ledger-self-heal-stg';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -1142,6 +1142,7 @@ const _hubWorkerCore = {
         if (path === '/str/admin/cleaner/save')    return await strAdminCleanerSave(env, body);
         if (path === '/str/admin/cleaner/new-link') return await strAdminNewLink(env, body);
         if (path === '/str/admin/config')          return await strAdminConfig(env, body);
+        if (path === '/str/admin/calendar-check')  return await strAdminCalendarCheck(env, body);
         if (path === '/str/admin/assign')          return await strAdminAssign(env, body);
         if (path === '/str/admin/change/preview')  return await strChangePreview(env, body);
         if (path === '/str/admin/change/apply')    return await strChangeApply(env, body);
@@ -25938,7 +25939,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/str/admin/pending/create') return String((body && body.note) || '').startsWith('TEST-');
   if (path === '/str/admin/pending/cancel' || path === '/str/admin/pending/convert' || path === '/str/admin/pending/send-now') { const _p = (await fetchTab(env, 'STR_Turnovers')).find(x => x.Task_Key === String((body && body.task_key) || '')); return !!_p && String(_p.Pending || '').toUpperCase() === 'TRUE' && String(_p.Pending_Note || '').startsWith('TEST-'); }
   if (path === '/str/admin/change/apply') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
-  if (path === '/str/admin/config' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
+  if (path === '/str/admin/config' || path === '/str/admin/calendar-check' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
   if (path === '/str/admin/digest-run') return !!(body && body.dry);
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
@@ -34305,19 +34306,40 @@ function inspEventsToBusy(items) {
   return out;
 }
 
-// ── Google Calendar (service account; calendar shared with the SA, scope=calendar) ─────────
-let __calToken = { key: '', token: '', exp: 0 };
-async function getCalendarAccessToken(env) {
-  const now = Math.floor(Date.now() / 1000), cacheKey = env.GOOGLE_SA_EMAIL || '';
-  if (__calToken.token && __calToken.key === cacheKey && __calToken.exp > now + 60) return __calToken.token;
+// ── Google Calendar (service account; scope=calendar) ─────────
+// Oct 21 2026: opts = { sub, scope }. No sub = the service account itself (calendar shared with it): the original behaviour, still used by the
+// inspection calendar and the inspection guard. With sub = domain-wide delegation: the service account acts as that user (the CLEANING calendar
+// only, Config STR_CAL_IMPERSONATE). The cache key holds service account + sub + scope, so one mode's token is never handed to another.
+let __calTokens = {};
+function calJwtClaim(env, now, opts) {
+  const sub = String((opts && opts.sub) || '').trim(), c = { iss: env.GOOGLE_SA_EMAIL, scope: (opts && opts.scope) || 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now };
+  if (sub) c.sub = sub;
+  return c;
+}
+// Plain-English fix when Google answers unauthorized_client / access_denied to the impersonated sign-in (domain-wide delegation not set up yet).
+function calDelegationHelp(env, sub, scope) {
+  const sa = env.GOOGLE_SA_EMAIL || 'the Hub service account';
+  return `Google has not approved the Hub to act as ${sub} yet (domain-wide delegation is not authorized). One-time fix in Google Admin (admin.google.com): Security > Access and data control > API controls > Domain-wide delegation > Manage Domain Wide Delegation > Add new. Client ID: the service account's "Unique ID" (a long number) - Google Cloud console > IAM & Admin > Service Accounts > ${sa} > Details. OAuth scope (copy exactly): ${scope} - then Authorize. Wait a few minutes, then press "Check calendar access" on the cleaning board.`;
+}
+function calBadUserHelp(sub, data) {
+  return `Google would not let the Hub act as ${sub} (${String((data && data.error_description) || 'invalid_grant').slice(0, 120)}). Check that Config STR_CAL_IMPERSONATE is the exact email of a real user in your Google Workspace, then press "Check calendar access" on the cleaning board.`;
+}
+async function getCalendarAccessToken(env, opts) {
+  const now = Math.floor(Date.now() / 1000), cs = calJwtClaim(env, now, opts), cacheKey = [env.GOOGLE_SA_EMAIL || '', cs.sub || '', cs.scope].join('|'), hit = __calTokens[cacheKey];
+  if (hit && hit.exp > now + 60) return hit.token;
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claim = b64url(JSON.stringify({ iss: env.GOOGLE_SA_EMAIL, scope: 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now }));
+  const claim = b64url(JSON.stringify(cs));
   const sigInput = `${header}.${claim}`, key = await importPrivateKey(env.GOOGLE_SA_KEY);
   const jwt = `${sigInput}.${await signRS256(sigInput, key)}`;
   const resp = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}` });
   const data = await resp.json();
-  if (!data.access_token) throw inspErr('calendar_auth', 'Google Calendar auth failed: ' + JSON.stringify(data).slice(0, 300), 503);
-  __calToken = { key: cacheKey, token: data.access_token, exp: now + 3600 };
+  if (!data.access_token) {
+    const ge = String((data && data.error) || '');
+    if (cs.sub && (ge === 'unauthorized_client' || ge === 'access_denied')) throw inspErr('calendar_delegation_not_authorized', calDelegationHelp(env, cs.sub, cs.scope), 503);
+    if (cs.sub && ge === 'invalid_grant') throw inspErr('calendar_impersonate_bad_user', calBadUserHelp(cs.sub, data), 503);
+    throw inspErr('calendar_auth', 'Google Calendar auth failed: ' + JSON.stringify(data).slice(0, 300), 503);
+  }
+  __calTokens[cacheKey] = { token: data.access_token, exp: now + 3600 };
   return data.access_token;
 }
 function inspCalStaged(env, cfg) { return (env.__STAGING__ ?? isStaging(env)) && String(cfg.INSP_CALENDAR_STAGING_MODE || '').toUpperCase() !== 'LIVE'; }
@@ -34879,12 +34901,24 @@ const STR_OFFER_ACTIVE = ['queued', 'pending'];
 const STR_OFFER_BLOCKS = ['declined', 'expired', 'failed', 'cancelled', 'accepted', 'pending', 'queued']; // a cleaner with one of these on a task is not offered it again
 
 function strErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
-function strErrText(e) { return String((e && e.message) || e).slice(0, 300); }
+function strErrText(e) { return String((e && e.message) || e).slice(0, (e && /^calendar_/.test(String(e.code || ''))) ? 900 : 300); } // calendar-access errors carry the exact fix steps, so they are not cut short
 function strBool(v, dflt) { const s = String(v == null ? '' : v).trim().toUpperCase(); if (!s) return !!dflt; return s === 'TRUE' || s === '1' || s === 'YES'; }
 function strInt(v, d, lo, hi) { const n = parseInt(String(v == null ? '' : v).trim(), 10); if (!Number.isFinite(n)) return d; return Math.min(hi, Math.max(lo, n)); }
+// Oct 21 2026: who the Hub acts as on the CLEANING calendar only (the inspection calendar keeps the service account's own login). Config STR_CAL_IMPERSONATE
+// blank = the service account itself, scope calendar (needs the calendar shared with it: not possible on Brett's Google Workspace). An email = domain-wide
+// delegation: the same service account acts as that user (the calendar owner), scope calendar.events, so nothing has to be shared on the calendar.
+const STR_CAL_SCOPE_SHARED = 'https://www.googleapis.com/auth/calendar', STR_CAL_SCOPE_EVENTS = 'https://www.googleapis.com/auth/calendar.events';
+const STR_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+function strCalAs(cfg) {
+  const raw = String((cfg && cfg.STR_CAL_IMPERSONATE) || '').trim();
+  if (!raw) return { mode: 'shared', sub: '', scope: STR_CAL_SCOPE_SHARED };
+  return { mode: 'acting_as', sub: raw, scope: STR_CAL_SCOPE_EVENTS, bad: !STR_EMAIL_RE.test(raw) };
+}
+let __strCalAs = strCalAs({}); // strCalFetch has no cfg: strSettings (which every caller goes through for the calendar id) remembers it per request
 function strSettings(cfg) {
-  cfg = cfg || {};
+  cfg = cfg || {}; __strCalAs = strCalAs(cfg);
   return {
+    calAs: String(cfg.STR_CAL_IMPERSONATE || '').trim(),
     engine: strBool(cfg.STR_ENGINE_ENABLED, false), sms: strBool(cfg.STR_SMS_ENABLED, false),
     // Cleaning-only test mode (Oct 14 2026, Brett): DEFAULTS TO TRUE, so a missing/blank key can never text a real cleaner.
     // While TRUE every cleaning text goes to the Hub test phone (TWILIO_TEST_RECIPIENT) with a [TEST - for <name>] prefix,
@@ -35177,13 +35211,26 @@ async function strLoad(ctx, fresh) {
 function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date, winStart: r.Win_Start || r.Date, winEnd: r.Win_End || r.Date, next: r.Next_Arrival || null, guests: r.Guests || '', status: r.Status, assigned: r.Assigned_Cleaner_ID || '' }; }
 
 // Calendar reads/writes against the CLEANING calendar (not the main inspection calendar).
-async function strCalFetch(env, calId, method, pathAndQuery, body) {
+// Cleaning-calendar API failures in plain English. They never tell Brett to share the calendar (his Google Workspace will not allow edit sharing); the fix is the act-as setting.
+function strCalClassify(status, text, as) {
+  const t = String(text || ''), who = (as && as.sub) || '', via = who ? `(the Hub is acting as ${who})` : '(the Hub is using its own Google login)';
+  const fix = who ? `Check that ${who} owns the cleaning calendar or can edit it.` : 'Turn on the act-as setting: set Config STR_CAL_IMPERSONATE to brett@bmoremanagement.com (cleaning board > Switches > Check calendar access explains the one-time Google admin step).';
+  if (status === 403 && /insufficient.*scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(t)) return inspErr('calendar_scope_too_narrow', `Google says the narrow calendar.events permission is not enough for this calendar call ${via}. Tell Claude: the permission must not be widened without a decision.`, 503);
+  if (status === 403 && /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(t)) return inspErr('calendar_error', 'Google Calendar is rate limiting the Hub right now (403). It is retried on the next scheduler run.', 503);
+  if (status === 404) return inspErr('calendar_not_shared', `Google cannot find the cleaning calendar ${via}. ${fix} Also check that Config STR_GUARD_CLEANING_CAL is the right calendar id.`, 503);
+  if (status === 403 && !/accessNotConfigured|has not been used in project|is disabled/i.test(t)) return inspErr('calendar_no_write_permission', `Google will not let the Hub change the cleaning calendar ${via}. ${fix}`, 503);
+  if (status === 401) return inspErr('calendar_auth', `Google rejected the Hub's calendar login ${via} (401).` + (who ? ' Press "Check calendar access" on the cleaning board.' : ''), 503);
+  return inspClassifyCalError(status, text);
+}
+async function strCalFetch(env, calId, method, pathAndQuery, body, asOverride) {
   __strCalCount++;
-  const token = await getCalendarAccessToken(env);
+  const as = asOverride || __strCalAs; // events endpoints only (list/get/insert/patch/delete), so the narrow calendar.events scope is enough
+  if (as.bad) throw inspErr('calendar_impersonate_invalid', `Config STR_CAL_IMPERSONATE ("${as.sub}") is not an email address, so the cleaning calendar cannot be reached. Fix it on the cleaning board (Switches).`, 503);
+  const token = await getCalendarAccessToken(env, { sub: as.sub, scope: as.scope });
   const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}${pathAndQuery}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (resp.status === 204) return {};
   const text = await resp.text();
-  if (!resp.ok) { const err = inspClassifyCalError(resp.status, text); err.message = `Cleaning calendar: ` + err.message; err.httpStatus = resp.status; throw err; }
+  if (!resp.ok) { const err = strCalClassify(resp.status, text, as); err.message = `Cleaning calendar: ` + err.message; err.httpStatus = resp.status; throw err; }
   try { return JSON.parse(text); } catch (e) { throw inspErr('calendar_error', 'Google Calendar returned unreadable JSON', 503); }
 }
 async function strReadCleaningCal(env, cfg, calId, fromDay, toDay) {
@@ -35238,7 +35285,7 @@ async function strRaiseAlert(ctx, a) {
     }
     return open;
   }
-  const fields = { Alert_Key: a.key, Kind: a.kind, Severity: a.severity, Task_Key: a.taskKey || '', Message: a.message, Sms_Text: a.sms, Send_Count: '0', Last_Sent_At: '', Next_Send_At: '', Resolved_At: '', Acked_At: '', Created_At: new Date(ctx.now).toISOString() };
+  const fields = { Alert_Key: a.key, Kind: a.kind, Severity: a.severity, Task_Key: a.taskKey || '', Message: a.message, Sms_Text: a.sms, Send_Count: a.told ? '1' : '0', Last_Sent_At: a.told ? new Date(ctx.now).toISOString() : '', Next_Send_At: '', Resolved_At: '', Acked_At: '', Created_At: new Date(ctx.now).toISOString() };
   const id = await strAddRow(ctx.env, 'STR_Alerts', fields);
   const row = Object.assign({ ID: id }, fields); ctx.st.alerts.push(row); return row;
 }
@@ -35536,15 +35583,27 @@ async function strReconcileCalendar(ctx, feed, views) {
   const run = async (label, fn) => {
     if (ops >= MAX) { d.deferred = (d.deferred || 0) + 1; return; }
     ops++;
-    try { await fn(); d.applied++; } catch (e) { ctx.errors.push({ step: 'calendar_' + label, error: strErrText(e) }); d.failed = (d.failed || 0) + 1; }
+    try { await fn(); d.applied++; } catch (e) { ctx.errors.push({ step: 'calendar_' + label, error: strErrText(e) }); d.failed = (d.failed || 0) + 1; if (STR_CAL_FATAL.includes(e.code)) d.fatal = d.fatal || strErrText(e); }
   };
   for (const e of plan.remove) await run('delete', async () => { try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(e.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; } });
   for (const w of plan.create) await run('create', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(w, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id for ' + w.key); });
   for (const p of plan.patch) await run('patch', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(p.ev.id), strCalBody(p.want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update for ' + p.want.key); });
+  if (d.fatal) await strCalAccessAlert(ctx, d.fatal); else if (d.applied && !d.failed) await strCalAccessResolve(ctx);
   if (d.failed) await strSystemAlert(env, 'calendar_write', `${d.failed} cleaning-calendar change(s) failed: ${ctx.errors.filter(e => /^calendar_/.test(e.step)).map(e => e.error).slice(0, 2).join(' | ')}`);
   return d;
 }
 
+// A calendar-ACCESS failure stays on the board as a banner until a real calendar write works again (STR_Alerts row cal|access). Brett is already texted/emailed by
+// strSystemAlert (and the telemetry row feeds the failure ledger), so the row is created as already-told (Send_Count 1) and never texts a second time.
+async function strCalAccessAlert(ctx, msg) {
+  try { await strRaiseAlert(ctx, { key: 'cal|access', kind: 'calendar', severity: 'high', told: true, message: 'The cleaning calendar cannot be changed. ' + msg, sms: 'Cleaning calendar blocked: ' + String(msg).slice(0, 200) }); }
+  catch (e) { ctx.errors.push({ step: 'alert_state', error: 'Could not put the calendar warning on the board: ' + strErrText(e) }); }
+}
+async function strCalAccessResolve(ctx) {
+  const open = ctx.st.alerts.find(x => x.Alert_Key === 'cal|access' && !x.Resolved_At); if (!open || ctx.dry) return;
+  try { Object.assign(open, await strSetRow(ctx.env, 'STR_Alerts', open.ID, { Resolved_At: new Date(ctx.now).toISOString() })); }
+  catch (e) { ctx.errors.push({ step: 'alert_resolve', error: 'Could not clear the calendar warning: ' + strErrText(e) }); }
+}
 // ── Checkout-day text (11 AM ET checkout; 9 AM for a pre-arrival clean) ──────────────────────
 async function strCheckoutTexts(ctx, views) {
   const { S } = ctx, today = inspEtDate(ctx.now), out = [];
@@ -35841,7 +35900,7 @@ async function strCleanerIcs(env, url) {
 function strSettingsOut(cfg) {
   const S = strSettings(cfg), g = k => String((cfg && cfg[k]) == null ? '' : cfg[k]);
   return { engine: S.engine, sms: S.sms, sms_test_mode: S.smsTest, cal_write: S.calWrite, digest: S.digest, alert_days: S.alertDays, lookahead_days: S.lookahead, red_block_days: S.redDays, reply_4h_days: S.reply4hDays, reply_2h_days: S.reply2hDays, alert_repeat_hours: S.alertRepeatH, mark_alert_days: S.markAlertDays, prearrival_gap_days: S.preGap, max_pending_per_cleaner: S.maxPending,
-    twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
+    twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, cal_mode: S.calAs ? 'acting_as' : 'shared', cal_as: S.calAs, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
 }
 function strCleanerOut(c, pool) {
   const p = pool.find(x => String(x.Cleaner_ID) === c.ID) || {};
@@ -35910,19 +35969,66 @@ async function strAdminNewLink(env, body) {
 // POST /str/admin/config {values:{STR_ENGINE_ENABLED:'TRUE', ...}}  — allow-listed keys only
 async function strAdminConfig(env, body) {
   try {
-    const vals = (body && body.values) || {}, sets = {};
+    const vals = (body && body.values) || {}, sets = {}; let actAs = '';
     for (const [k, v] of Object.entries(vals)) {
-      if (STR_CFG_BOOL.includes(k)) { const s = String(v).toUpperCase(); if (s !== 'TRUE' && s !== 'FALSE') return json({ ok: false, error: 'bad_value', message: `${k} must be TRUE or FALSE.` }, 400); sets[k] = s; }
+      if (k === 'STR_CAL_IMPERSONATE') { const s = String(v == null ? '' : v).trim(); if (s && !STR_EMAIL_RE.test(s)) return json({ ok: false, error: 'bad_value', message: 'Who to act as must be an email address like brett@bmoremanagement.com (or blank to go back to the old way).' }, 400); sets[k] = s; actAs = s; }
+      else if (STR_CFG_BOOL.includes(k)) { const s = String(v).toUpperCase(); if (s !== 'TRUE' && s !== 'FALSE') return json({ ok: false, error: 'bad_value', message: `${k} must be TRUE or FALSE.` }, 400); sets[k] = s; }
       else if (STR_CFG_INT[k]) { const n = parseInt(v, 10), [lo, hi] = STR_CFG_INT[k]; if (!Number.isFinite(n) || n < lo || n > hi) return json({ ok: false, error: 'bad_value', message: `${k} must be a whole number from ${lo} to ${hi}.` }, 400); sets[k] = String(n); }
       else return json({ ok: false, error: 'not_allowed', message: `${k} cannot be changed here.` }, 400);
     }
     if (!Object.keys(sets).length) return json({ ok: false, error: 'nothing_to_save', message: 'No settings were sent.' }, 400);
+    if (actAs && !inspCalStaged(env, await fetchConfig(env))) { // never save a setting that would break the calendar: Google must approve acting as this user first
+      try { await getCalendarAccessToken(env, { sub: actAs, scope: STR_CAL_SCOPE_EVENTS }); }
+      catch (e) { await strCalCheckLog(env, e, 'save'); return json({ ok: false, error: e.code || 'calendar_auth', message: 'NOT saved. ' + strErrText(e) }, 409); }
+    }
     for (const [k, v] of Object.entries(sets)) { const r = await setConfigKey(env, { key: k, value: v }), j = await r.json(); if (!j || !j.success) throw strErr('config_write', `Could not save ${k}`); }
     invalidateTabCache('Config');
     const cfg = await fetchConfig(env);
     for (const [k, v] of Object.entries(sets)) if (String(cfg[k] || '') !== v) throw strErr('config_not_landed', `${k} did not save (it reads back as "${cfg[k] || ''}")`);
     return json({ ok: true, settings: strSettingsOut(cfg) });
   } catch (e) { return await strHandleErr(env, e, 'save settings'); }
+}
+// A failed calendar check/save goes to Ops_Telemetry (the failure ledger reads it). No text to Brett: he is looking at the result on the board.
+async function strCalCheckLog(env, e, where) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/calendar_check_' + where, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); }
+  catch (te) { console.error('calendar check: telemetry failed:', te && te.message, '| original:', strErrText(e)); }
+}
+// "Check calendar access" (cleaning board): signs in the way the Hub is set up, reads the cleaning calendar and, with write:true, also adds + deletes one
+// 1-minute test event. A pass on reading alone does NOT prove the Hub may change the calendar, and the result says so. Plain-English pass/fail per step.
+async function strCalCheck(env, cfg, opts) {
+  opts = opts || {};
+  const as = strCalAs(cfg), calId = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim(), steps = [];
+  const add = (step, ok, detail, fix) => { steps.push({ step, ok: !!ok, detail: detail || '', fix: fix || '' }); return !!ok; };
+  const finish = async (extra) => { const bad = steps.find(s => !s.ok), r = Object.assign({ passed: !bad, mode: as.sub ? 'acting_as' : 'shared', as: as.sub, scope: as.scope, wrote: !!opts.write, steps, summary: bad ? (bad.detail + (bad.fix ? ' ' + bad.fix : '')) : '' }, extra || {}); if (bad) await strCalCheckLog(env, new Error(r.summary), 'check'); return r; };
+  add('How the Hub signs in', true, as.sub ? `Acting as ${as.sub} (domain-wide delegation, scope calendar.events).` : "Its own Google login (scope calendar). That can read the cleaning calendar but cannot change it, because your Google Workspace will not let you give it edit access. Turn on the act-as setting.");
+  if (as.bad) { add('Who to act as', false, `"${as.sub}" is not an email address.`, 'Fix Config STR_CAL_IMPERSONATE.'); return await finish(); }
+  if (!calId) { add('Cleaning calendar', false, 'No cleaning calendar id is set.', 'Set it on the Inspection Scheduler page (Open blocks tab, "Cabin cleaning protection") or Config STR_GUARD_CLEANING_CAL.'); return await finish(); }
+  if (inspCalStaged(env, cfg)) { add('Staging', true, 'This is the test server: calendar calls are pretend-only here, so access was NOT really tested.'); return await finish({ stubbed: true }); }
+  try { await getCalendarAccessToken(env, { sub: as.sub, scope: as.scope }); add('Google sign-in', true, as.sub ? `Google approved acting as ${as.sub}.` : "Google accepted the Hub's own login."); }
+  catch (e) { add('Google sign-in', false, strErrText(e), as.sub ? '' : 'Check GOOGLE_SA_EMAIL / GOOGLE_SA_KEY on the Worker.'); return await finish(); }
+  try { const d = await strCalFetch(env, calId, 'GET', '/events?singleEvents=true&maxResults=5&timeMin=' + encodeURIComponent(new Date().toISOString()) + '&fields=items(id)', null, as); add('Read the cleaning calendar', true, `Can read it (${(d.items || []).length} upcoming event(s) on the first page).`); }
+  catch (e) { add('Read the cleaning calendar', false, strErrText(e)); return await finish(); }
+  if (opts.write) {
+    let id = '';
+    try {
+      const t0 = Date.now() + 3 * 86400000, ev = await strCalFetch(env, calId, 'POST', '/events', { summary: 'Ridge Co calendar test (safe to ignore - deleting now)', start: { dateTime: new Date(t0).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(t0 + 60000).toISOString(), timeZone: INSP_TZ }, transparency: 'transparent', extendedProperties: { private: { ridgecoStrTest: '1' } } }, as);
+      if (!ev || !ev.id) throw new Error('Google did not return an id for the test event');
+      id = ev.id; await strCalFetch(env, calId, 'DELETE', '/events/' + encodeURIComponent(id), null, as); id = '';
+      add('Add and remove a test event', true, 'Added one 1-minute test event and removed it again. The Hub can change the cleaning calendar.');
+    } catch (e) { add('Add and remove a test event', false, strErrText(e) + (id ? ` A test event may still be on the calendar (id ${id}); delete it by hand.` : '')); }
+  }
+  return await finish();
+}
+// POST /str/admin/calendar-check {write?: true}
+async function strAdminCalendarCheck(env, body) {
+  try {
+    const cfg = await fetchConfig(env), r = await strCalCheck(env, cfg, { write: !!(body && body.write) });
+    if (r.passed && r.wrote && !r.stubbed) {
+      try { await strEnsureTabs(env); const al = (await fetchTab(env, 'STR_Alerts')).find(a => a.Alert_Key === 'cal|access' && !a.Resolved_At); if (al) await strSetRow(env, 'STR_Alerts', al.ID, { Resolved_At: new Date().toISOString() }); }
+      catch (e) { r.steps.push({ step: 'Clear the old board warning', ok: false, detail: 'Could not clear the old calendar warning: ' + strErrText(e), fix: 'Press Acknowledge on it.' }); r.passed = false; r.summary = r.steps[r.steps.length - 1].detail; }
+    }
+    return json(Object.assign({ ok: true }, r));
+  } catch (e) { return await strHandleErr(env, e, 'calendar check'); }
 }
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
@@ -36041,7 +36147,7 @@ async function schedRunStrDigest(env) {
 const STR_CHANGE_MAX = 40, STR_TEXT_MAX = 800, STR_MARK_HORIZON = 120, STR_SUB_LIMIT = 40;
 let __strCalCount = 0; // Google Calendar calls made by this isolate (the Sheets ones are counted by sheetsRequest as __sheetsFetchCount)
 const STR_ACTIONS = ['swap', 'assign_range', 'mark'];
-const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled'];
+const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled', 'calendar_delegation_not_authorized', 'calendar_impersonate_bad_user', 'calendar_impersonate_invalid', 'calendar_scope_too_narrow'];
 function strHash(s) { let a = 5381, b = 52711; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = ((a * 33) ^ c) >>> 0; b = ((b * 31) + c) >>> 0; } return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0'); }
 // Text Brett typed: a plain string only. Control characters and runs of whitespace collapse exactly like the stock texts do (strRenderText).
 function strCleanText(s) { return String(s == null ? '' : s).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -36242,7 +36348,7 @@ async function strChangeBuild(ctx, req, feed) {
       const hand = i.cal.hand.map(h => `delete "${h.summary}"`).concat(i.cal.hub_create || i.cal.hub_patch ? [`add an all-day "${i.cal.title}"`] : []);
       if (hand.length) cal.manual.push(`${i.label}: ${hand.join(' and ')}`);
     }
-    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (the Hub\'s service account needs "Make changes to events" on that calendar) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
+    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (see Switches > Check calendar access) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
   }
 
   // ── who gets what text ──
@@ -37870,6 +37976,9 @@ async function inspCalendarTest(env, url) {
   const cfg = await fetchConfig(env), steps = [], calId = await inspCalendarId(env, cfg);
   const add = (name, ok, detail, fix) => steps.push({ step: name, ok, detail: detail || '', fix: fix || '' });
   add('Calendar to use', true, calId + (cfg.INSP_CALENDAR_ID ? ' (Config INSP_CALENDAR_ID)' : ' (default)'));
+  const csAs = strCalAs(cfg); // the CLEANING calendar only; the inspection calendar above always uses the service account's own login
+  add('Cleaning calendar: who the Hub acts as', true, csAs.sub ? `Acting as ${csAs.sub} (domain-wide delegation, scope calendar.events). The inspection calendar still uses the service account's own login.` : "The service account's own login (Config STR_CAL_IMPERSONATE is blank). That can read the cleaning calendar but not change it: see Cleaning scheduler > Switches > Check calendar access.");
+  if (csAs.sub && !inspCalStaged(env, cfg)) { try { await getCalendarAccessToken(env, { sub: csAs.sub, scope: csAs.scope }); add('Google sign-in (acting as ' + csAs.sub + ')', true, 'Google approved it.'); } catch (e) { add('Google sign-in (acting as ' + csAs.sub + ')', false, `${e.code}: ${e.message}`, 'Follow the steps in the message.'); } }
   if (inspCalStaged(env, cfg)) { add('Staging', true, 'Calendar calls are stubbed on staging (Config INSP_CALENDAR_STAGING_MODE=LIVE to test for real).'); }
   else {
     try { await getCalendarAccessToken(env); add('Google sign-in (service account)', true, env.GOOGLE_SA_EMAIL); }
