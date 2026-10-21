@@ -34324,7 +34324,7 @@ async function getCalendarAccessToken(env, opts) {
   const now = Math.floor(Date.now() / 1000), cs = calJwtClaim(env, now, opts), cacheKey = [env.GOOGLE_SA_EMAIL || '', cs.sub || '', cs.scope].join('|'), hit = __calTokens[cacheKey];
   if (hit && hit.exp > now + 60) return hit.token;
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claim = b64url(JSON.stringify({ iss: env.GOOGLE_SA_EMAIL, scope: 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now }));
+  const claim = b64url(JSON.stringify(cs));
   const sigInput = `${header}.${claim}`, key = await importPrivateKey(env.GOOGLE_SA_KEY);
   const jwt = `${sigInput}.${await signRS256(sigInput, key)}`;
   const resp = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}` });
