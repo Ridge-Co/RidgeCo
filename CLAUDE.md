@@ -108,8 +108,11 @@ this session's own test. `main` and `gh-broker` both auto-deploy on push (confir
 session — Brett has never had to open the dashboard for this and shouldn't be asked to):**
 1. `workers_get_worker_code(scriptName: "maintenance-hub-staging")` — pulls the ACTUAL deployed
    source directly from Cloudflare's API (the ground truth, not `hub_test_get('/health')`'s
-   `build_version`, which is just as reliable but slower to grep through). Grep it for
-   `BUILD_VERSION =` and compare against the `staging` branch's own current value. This is the
+   `build_version`, which is just as reliable but slower to grep through). Since Oct 21 2026
+   `BUILD_VERSION` in the source is a FROZEN base label that PRs must not edit; the real per-deploy
+   version is `GET /version` (`version_id`, `deployed_at`, `stamped`). To tell whether the deployed
+   code is current, grep the deployed source for a string only your change adds (or compare `base`),
+   not for a bumped `BUILD_VERSION`. This is the
    right first move whenever a staging test isn't showing an expected change — before assuming
    the code push failed, before asking Brett anything.
 2. `workers_list()` / `workers_get_worker(scriptName: ...)` for basic metadata (a recent
