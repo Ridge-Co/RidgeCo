@@ -836,19 +836,20 @@ window.addEventListener('pageshow', function(e){
         <div class="dl-tool" data-tool="read-meter" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('read-meter.html','_blank')">📈 Read Meter</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">See who is using up the Google Sheets read limit.</p></div>
       </div></div>
     </details>
-    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">💵 MONEY &amp; QUICKBOOKS</div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('vendor-reconcile.html','_blank')">💵 Vendor reconciliation</button>
-      <button class="btn small" onclick="window.open('receipt-reconciler.html','_blank')">🧾 Receipt Reconciler</button>
-      <button class="btn small" onclick="window.open('ar-report-admin.html','_blank')">📋 Open Item Report</button>
-      <button class="btn small" onclick="window.open('qb-email-backfill.html','_blank')">📧 Fill missing QuickBooks emails</button>
-      <button class="btn small" onclick="window.open('qb-invoice-email-backfill.html','_blank')">🧾 Fix unsent invoice emails</button>
-      <button class="btn small" onclick="findRepairableInvoices()">🔧 Fix invoices already in QuickBooks</button>
-      <button class="btn small" onclick="window.open('signed-proposals.html','_blank')">🖊 Signed proposals → QB</button>
-      <button class="btn small" onclick="window.open('trash.html','_blank')">🗑 Trash Service billing</button>
-      <button class="btn small" onclick="goToQBMapping()">🔗 QB Mapping — link properties/units to QuickBooks</button>
-    </div>
-
+    <details class="dl-group" data-dl-key="money" data-tools="1" open>
+      <summary><span class="dl-h">Money &amp; QuickBooks</span><span class="dl-sub">Bills, invoices, receipts and reconciling</span><span class="dl-count"></span></summary>
+      <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="vendor-reconcile" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('vendor-reconcile.html','_blank')">💵 Vendor Reconciliation</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Compare every bill and payment QuickBooks has for one vendor.</p></div>
+        <div class="dl-tool" data-tool="receipt-reconciler" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('receipt-reconciler.html','_blank')">🧾 Receipt Reconciler</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Match scanned receipts to jobs and expenses.</p></div>
+        <div class="dl-tool" data-tool="open-item-report" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('ar-report-admin.html','_blank')">📋 Open Item Report</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">See open and overdue customer invoices.</p></div>
+        <div class="dl-tool" data-tool="qb-emails" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="window.open('qb-email-backfill.html','_blank')">📧 Fill Missing QuickBooks Emails</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Add email addresses to QuickBooks customers that have none.</p><p class="dl-kind careful">Careful: changes QuickBooks. Shows a preview first.</p></div>
+        <div class="dl-tool" data-tool="unsent-invoice-emails" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="window.open('qb-invoice-email-backfill.html','_blank')">🧾 Fix Unsent Invoice Emails</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Find invoices that never reached the customer and fix them.</p><p class="dl-kind careful">Careful: changes QuickBooks. Shows a preview first.</p></div>
+        <div class="dl-tool" data-tool="repair-invoices" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="findRepairableInvoices()">🔧 Fix Invoices Already in QuickBooks</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Patch recent invoices in place (description, photo link, number). Same invoice, same total.</p><p class="dl-kind careful">Careful: changes QuickBooks. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="signed-proposals" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('signed-proposals.html','_blank')">🖊 Signed Proposals → QuickBooks</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Bill signed proposals and their milestone payments.</p></div>
+        <div class="dl-tool" data-tool="trash-billing" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('trash.html','_blank')">🗑 Trash Service Billing</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Log and bill trash service jobs.</p></div>
+        <div class="dl-tool" data-tool="qb-mapping" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="goToQBMapping()">🔗 QB Mapping</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Link properties and units to their QuickBooks customers.</p></div>
+      </div></div>
+    </details>
     <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🧹 DATA HYGIENE</div>
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
       <button class="btn small" onclick="window.open('bulk-importer.html','_blank')">📥 Bulk import properties/units/tenants</button>
