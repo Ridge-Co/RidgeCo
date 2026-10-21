@@ -36014,6 +36014,16 @@ async function strCalCheck(env, cfg, opts) {
       if (!ev || !ev.id) throw new Error('Google did not return an id for the test event');
       id = ev.id; await strCalFetch(env, calId, 'DELETE', '/events/' + encodeURIComponent(id), null, as); id = '';
       add('Add and remove a test event', true, 'Added one 1-minute test event and removed it again. The Hub can change the cleaning calendar.');
+    } catch (e) { add('Add and remove a test event', false, strErrText(e) + (id ? ` A test event may still be on the calendar (id ${id}); delete it by hand.` : '')); }
+  }
+  return await finish();
+}
+// POST /str/admin/calendar-check {write?: true}
+async function strAdminCalendarCheck(env, body) {
+  try {
+    const cfg = await fetchConfig(env), r = await strCalCheck(env, cfg, { write: !!(body && body.write) });
+    if (r.passed && r.wrote && !r.stubbed) {
+      try { await strEnsureTabs(env); const al = (await fetchTab(env, 'STR_Alerts')).find(a => a.Alert_Key === 'cal|access' && !a.Resolved_At); if (al) await strSetRow(env, 'STR_Alerts', al.ID, { Resolved_At: new Date().toISOString() }); }
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
