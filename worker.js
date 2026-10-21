@@ -35181,6 +35181,7 @@ async function strAdvanceTask(ctx, trow, opts) {
   }
   if (mine().some(o => o.Status === 'pending')) return { action: 'waiting_reply' };
   if (trow.Status === 'covered' || trow.Status === 'cancelled' || trow.Status === 'ext_covered') return { action: 'none' };
+  if (pend && (!strPendActive(trow) || trow.Status === 'pending_held' || trow.Date < today)) return { action: 'none' }; // held, converted, expired, cancelled or past: nobody more to ask
   const nx = strNextCleaner({ pool: st.pool, cleaners: st.cmap, marks: st.marks, offers: st.offers, task });
   for (const s of nx.skipped.filter(s => s.reason === 'sms_opted_out' || s.reason === 'no_phone')) ctx.warnings.push(`${(st.cmap[s.id] || {}).Name || 'Cleaner ' + s.id} is in the queue but cannot be texted (${s.reason === 'no_phone' ? 'no phone number' : 'texts are switched off for them'}).`);
   if (!nx.cleaner) {
