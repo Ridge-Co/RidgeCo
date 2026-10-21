@@ -35359,7 +35359,7 @@ async function strSetMark(ctx, c, date, mark, source) {
 // ── Calendar ─────────────────────────────────────────────────────────────────────────────────
 async function strReconcileCalendar(ctx, feed, views) {
   const { env, cfg, S } = ctx, today = inspEtDate(ctx.now);
-  const desired = strDesiredCalendar(views.map(v => ({ key: v.key, kind: v.kind, date: v.date, next: v.next, status: v.status, assigned: v.assigned, coveredAny: v.coveredAny })), ctx.st.cmap, today, S);
+  const desired = strDesiredCalendar(views.map(v => ({ key: v.key, kind: v.kind, date: v.date, next: v.next, status: v.status, assigned: v.assigned, coveredAny: v.coveredAny })), ctx.st.cmap, today, S).concat(strPendingDesired(ctx, today));
   const mine = feed.cal.filter(e => e.ext && e.ext.ridgecoStr && String(e.status || '').toUpperCase() !== 'CANCELLED').map(e => ({ id: e.id, key: e.ext.ridgecoStrKey, kind: e.ext.ridgecoStrKind, date: inspStrEvDay(e.start), title: e.summary || '' }));
   // Only ever touch events inside the window we manage: past events stay as history.
   const plan = strPlanCalendar(desired, mine.filter(e => e.date >= today));
