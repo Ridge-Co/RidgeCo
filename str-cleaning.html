@@ -624,6 +624,11 @@ function openCalAs(){
 function renderCalCheck(r){
   var ok = !!r.passed, head = ok ? (r.stubbed ? 'Not really tested: this is the test server.' : (r.wrote ? 'Passed: the Hub can read and change the cleaning calendar.' : 'Passed: the Hub can sign in and read the cleaning calendar.')) : 'Failed: ' + (r.summary || 'see the steps below.');
   var h = '<div class="msg ' + (ok ? (r.stubbed ? 'warn' : 'ok') : 'err') + '" role="' + (ok ? 'status' : 'alert') + '"><b>' + esc(head) + '</b></div><ul>';
+  (r.steps || []).forEach(function(x){ h += '<li>' + (x.ok ? 'OK: ' : 'PROBLEM: ') + '<b>' + esc(x.step) + '</b>. ' + esc(x.detail) + (x.fix ? ' <i>' + esc(x.fix) + '</i>' : '') + '</li>'; });
+  h += '</ul>';
+  if(ok && !r.wrote && !r.stubbed) h += '<div class="msg warn"><b>Reading is not the same as changing.</b>' + (r.as ? 'To prove the Hub can also change the calendar, press "Check and test a write".' : 'The Hub\'s own login can read the calendar but cannot change it. Turn on "act as Brett" above.') + '</div>';
+  return h;
+}
 function openNums(){
   var s = S.settings || {};
   var body = NUMS.map(function(n){ return '<label class="fld" for="n-' + n.f + '">' + esc(n.label) + '</label><input type="number" inputmode="numeric" id="n-' + n.f + '" value="' + esc(s[n.f]) + '">'; }).join('');
