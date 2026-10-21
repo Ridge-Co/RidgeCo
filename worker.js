@@ -35418,7 +35418,7 @@ async function strReconcileCalendar(ctx, feed, views) {
   const run = async (label, fn) => {
     if (ops >= MAX) { d.deferred = (d.deferred || 0) + 1; return; }
     ops++;
-    try { await fn(); d.applied++; } catch (e) { ctx.errors.push({ step: 'calendar_' + label, error: strErrText(e) }); d.failed = (d.failed || 0) + 1; }
+    try { await fn(); d.applied++; } catch (e) { ctx.errors.push({ step: 'calendar_' + label, error: strErrText(e) }); d.failed = (d.failed || 0) + 1; if (STR_CAL_FATAL.includes(e.code)) d.fatal = d.fatal || strErrText(e); }
   };
   for (const e of plan.remove) await run('delete', async () => { try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(e.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; } });
   for (const w of plan.create) await run('create', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(w, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id for ' + w.key); });
