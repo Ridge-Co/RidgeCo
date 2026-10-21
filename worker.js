@@ -35987,6 +35987,11 @@ async function strAdminConfig(env, body) {
     return json({ ok: true, settings: strSettingsOut(cfg) });
   } catch (e) { return await strHandleErr(env, e, 'save settings'); }
 }
+// A failed calendar check/save goes to Ops_Telemetry (the failure ledger reads it). No text to Brett: he is looking at the result on the board.
+async function strCalCheckLog(env, e, where) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/calendar_check_' + where, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); }
+  catch (te) { console.error('calendar check: telemetry failed:', te && te.message, '| original:', strErrText(e)); }
+}
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
