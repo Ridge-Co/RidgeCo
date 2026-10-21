@@ -603,6 +603,15 @@ function openSwitch(key){
     }
   });
 }
+function openCalAs(){
+  var s = S.settings || {}, cur = s.cal_as || '';
+  openAction({
+    title: cur ? 'Change who the Hub acts as' : 'Turn on "act as Brett"',
+    say: 'The Hub signs in to Google as this person to change the cleaning calendar, so nothing has to be given edit access. It checks with Google first and does NOT save this if Google says no. A one-time Google admin step is needed before it works (the message tells you exactly what). Leave it blank to go back to the old login.',
+    body: '<label class="fld" for="cal-as-in">Email of the calendar owner</label><input type="email" id="cal-as-in" value="' + esc(cur || 'brett@bmoremanagement.com') + '" autocapitalize="off" autocomplete="off">',
+    go: 'Check with Google, then save',
+    validate: function(){ var v = $('cal-as-in').value.trim(); if(v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'That does not look like an email address.'; return v === cur ? 'Nothing has changed yet.' : ''; },
+    run: function(){
 function openNums(){
   var s = S.settings || {};
   var body = NUMS.map(function(n){ return '<label class="fld" for="n-' + n.f + '">' + esc(n.label) + '</label><input type="number" inputmode="numeric" id="n-' + n.f + '" value="' + esc(s[n.f]) + '">'; }).join('');
