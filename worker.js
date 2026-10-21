@@ -35214,6 +35214,9 @@ function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date,
 function strCalClassify(status, text, as) {
   const t = String(text || ''), who = (as && as.sub) || '', via = who ? `(the Hub is acting as ${who})` : '(the Hub is using its own Google login)';
   const fix = who ? `Check that ${who} owns the cleaning calendar or can edit it.` : 'Turn on the act-as setting: set Config STR_CAL_IMPERSONATE to brett@bmoremanagement.com (cleaning board > Switches > Check calendar access explains the one-time Google admin step).';
+  if (status === 403 && /insufficient.*scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(t)) return inspErr('calendar_scope_too_narrow', `Google says the narrow calendar.events permission is not enough for this calendar call ${via}. Tell Claude: the permission must not be widened without a decision.`, 503);
+  if (status === 403 && /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(t)) return inspErr('calendar_error', 'Google Calendar is rate limiting the Hub right now (403). It is retried on the next scheduler run.', 503);
+  if (status === 404) return inspErr('calendar_not_shared', `Google cannot find the cleaning calendar ${via}. ${fix} Also check that Config STR_GUARD_CLEANING_CAL is the right calendar id.`, 503);
 async function strCalFetch(env, calId, method, pathAndQuery, body) {
   __strCalCount++;
   const token = await getCalendarAccessToken(env);
