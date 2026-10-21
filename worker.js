@@ -34184,8 +34184,13 @@ async function getCalendarAccessToken(env, opts) {
   const jwt = `${sigInput}.${await signRS256(sigInput, key)}`;
   const resp = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}` });
   const data = await resp.json();
-  if (!data.access_token) throw inspErr('calendar_auth', 'Google Calendar auth failed: ' + JSON.stringify(data).slice(0, 300), 503);
-  __calToken = { key: cacheKey, token: data.access_token, exp: now + 3600 };
+  if (!data.access_token) {
+    const ge = String((data && data.error) || '');
+    if (cs.sub && (ge === 'unauthorized_client' || ge === 'access_denied')) throw inspErr('calendar_delegation_not_authorized', calDelegationHelp(env, cs.sub, cs.scope), 503);
+    if (cs.sub && ge === 'invalid_grant') throw inspErr('calendar_impersonate_bad_user', calBadUserHelp(cs.sub, data), 503);
+    throw inspErr('calendar_auth', 'Google Calendar auth failed: ' + JSON.stringify(data).slice(0, 300), 503);
+  }
+  __calTokens[cacheKey] = { token: data.access_token, exp: now + 3600 };
   return data.access_token;
 }
 function inspCalStaged(env, cfg) { return (env.__STAGING__ ?? isStaging(env)) && String(cfg.INSP_CALENDAR_STAGING_MODE || '').toUpperCase() !== 'LIVE'; }
