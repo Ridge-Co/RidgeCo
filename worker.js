@@ -1142,6 +1142,7 @@ const _hubWorkerCore = {
         if (path === '/str/admin/cleaner/save')    return await strAdminCleanerSave(env, body);
         if (path === '/str/admin/cleaner/new-link') return await strAdminNewLink(env, body);
         if (path === '/str/admin/config')          return await strAdminConfig(env, body);
+        if (path === '/str/admin/calendar-check')  return await strAdminCalendarCheck(env, body);
         if (path === '/str/admin/assign')          return await strAdminAssign(env, body);
         if (path === '/str/admin/change/preview')  return await strChangePreview(env, body);
         if (path === '/str/admin/change/apply')    return await strChangeApply(env, body);
