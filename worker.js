@@ -36359,6 +36359,235 @@ function strChangeSummaryText(plan, res) {
 }
 const strByIdAsc = (a, b) => (parseInt(a.ID, 10) || 0) - (parseInt(b.ID, 10) || 0);
 function strReplay(planId, r) {
+  let result = null; try { result = JSON.parse(r.Result || 'null'); } catch (e) { result = null; } // silent-ok: a bad stored result just means no replay detail
+  const busy = r.Status === 'applying';
+  return json({ ok: true, duplicate: true, plan_id: planId, status: r.Status, stage: r.Stage || '', message: busy ? 'This exact change is already being applied. Nothing was sent or changed a second time. The page carries on by itself; if it stopped, press Continue.' : 'This exact change was already applied. Nothing was sent or changed a second time.', result });
+}
+async function strChangeApply(env, body) {
+  try {
+    body = body || {};
+    const planId = String(body.plan_id || ''), sigIn = String(body.sig || '');
+    if (!/^[a-f0-9]{16}$/.test(planId)) throw strErr('bad_plan', 'This request has no valid preview. Press Preview first.', 400);
+    const ctx = await strHandlerCtx(env), prior = (await fetchTab(env, 'STR_Changes')).filter(r => r.Plan_ID === planId).sort(strByIdAsc);
+    if (prior.length) { const f = prior[0]; return f.Status === 'applying' && body.resume === true ? await strChangeContinue(ctx, f) : strReplay(planId, f); }
+    if (body.resume === true) throw strErr('plan_not_found', 'That change was not found. Press Preview again.', 404);
+    const req = strChangeReq(body);
+    if (!sigIn) throw strErr('bad_plan', 'This request has no preview signature. Press Preview first.', 400);
+    const feed = await strChangeFeed(ctx), plan = await strChangeBuild(ctx, req, feed);
+    if (plan.sig !== sigIn) throw strErr('stale_preview', 'Things changed since you pressed Preview (a date was assigned, cancelled or edited). Nothing was done. Press Preview again to see the current picture.', 409);
+    // texts: one entry per recipient, exactly as previewed (edited or not)
+    const tin = body.texts && typeof body.texts === 'object' ? body.texts : {}, texts = {};
+    for (const k of Object.keys(tin)) if (!plan.recipients.some(r => r.key === k)) throw strErr('texts_unknown', `The page sent a text for "${k}" that is not part of this change. Press Preview again.`, 400);
+    for (const r of plan.recipients) {
+      const e = tin[r.key]; if (!e || typeof e.send !== 'boolean') throw strErr('texts_missing', `The page did not say what to do with the text for ${r.name}. Press Preview again.`, 400);
+      const txt = strCleanText(e.body); if (e.send && r.can_send && !txt) throw strErr('text_empty', `The text for ${r.name} is empty. Type something or untick "Send this text".`, 400);
+      if (txt.length > STR_TEXT_MAX) throw strErr('text_too_long', `The text for ${r.name} is ${txt.length} characters; the most is ${STR_TEXT_MAX}.`, 400);
+      texts[r.key] = { send: e.send, text: txt };
+    }
+    const items = plan.items.map(strPackItem);
+    const payload = JSON.stringify({ v: 1, req, plan: { action: plan.action, cleaner: plan.cleaner, mark: req.mark || '', calendar: { mode: plan.calendar.mode, note: plan.calendar.note || '' }, warnings: plan.warnings, summary: plan.summary }, items, recipients: plan.recipients.map(r => ({ key: r.key, kind: r.kind, cleaner_id: r.cleaner_id, name: r.name, first: r.first, dates: r.dates, refs: r.refs, type: r.type, can_send: r.can_send, reason: r.reason })), texts });
+    if (payload.length > 44000) throw strErr('too_big', 'This change is too big to apply in one go. Pick fewer dates (or a shorter range) and try again. Nothing was done.', 400);
+    // claim the plan BEFORE changing anything: the lowest STR_Changes id for this plan wins; the loser does nothing
+    const iso = new Date(ctx.now).toISOString(), myId = await strAddRow(env, 'STR_Changes', { Plan_ID: planId, Action: req.action, Status: 'applying', Created_At: iso, Summary: plan.summary, Stage: 'sheets', Payload: payload, State: JSON.stringify(strNewState(items)) });
+    const mine = (await fetchTab(env, 'STR_Changes')).filter(r => r.Plan_ID === planId).sort(strByIdAsc);
+    if (mine.length && String(mine[0].ID) !== String(myId)) { try { await strSetRow(env, 'STR_Changes', myId, { Status: 'duplicate', Finished_At: iso, Payload: '', State: '' }); } catch (e) { ctx.errors.push({ step: 'claim', error: strErrText(e) }); } return strReplay(planId, mine[0]); }
+    return await strChangeContinue(ctx, mine.find(r => String(r.ID) === String(myId)) || mine[0]);
+  } catch (e) { return await strHandleErr(env, e, 'change apply'); }
+}
+async function strChangeContinue(ctx, row) {
+  const { env } = ctx; let P, state;
+  try { P = JSON.parse(row.Payload); state = JSON.parse(row.State || '{}'); } catch (e) { throw strErr('plan_unreadable', 'The saved change could not be read back (' + strErrText(e) + '). Do not press Send again; check the Activity log and tell Brett.', 500); }
+  if (!P || !state || !state.stage || !state.ires) throw strErr('plan_unreadable', 'The saved change is incomplete. Do not press Send again; check the Activity log and tell Brett.', 500);
+  const cleaner = ctx.st.cmap[P.req.cleaner_id];
+  const J = { row, planId: row.Plan_ID, req: P.req, plan: P.plan, items: P.items.map(strUnpackItem), recipients: P.recipients, texts: P.texts, state, cleaner };
+  state.calls = (state.calls || 0) + 1;
+  const stageFns = { sheets: strStageSheets, audit: strStageAudit, calendar: strStageCalendar, queue: strStageQueue, send: strStageSend, email: strStageEmail, alerts: strStageAlerts };
+  let ran = 0, final = null;
+  if (!cleaner) { state.errors.push({ step: 'cleaner_missing', error: 'The cleaner for this change no longer exists, so it cannot be finished.' }); state.stage = 'finish'; }
+  while (state.stage !== 'done') {
+    const stage = state.stage;
+    if (ran && !strRoom(ctx, STR_STAGE_EST[stage])) break;
+    state.tries[stage] = (state.tries[stage] || 0) + 1; ran++;
+    let complete = false;
+    try {
+      if (stage === 'finish') { final = await strStageFinish(ctx, J); complete = true; }
+      else complete = await stageFns[stage](ctx, J);
+    } catch (e) {
+      state.errors.push({ step: 'stage_' + stage, error: `The step "${STR_STAGE_TEXT[stage]}" hit a problem: ${strErrText(e)}` });
+      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending') state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; }
+      else { const er = state.errors.pop(); state.warnings.push('Hiccup (tried again): ' + er.error); break; }
+    }
+    state.errors.push(...ctx.errors.splice(0));
+    if (final) return json(final);
+    if (!complete) break;
+    state.stage = STR_STAGES[STR_STAGES.indexOf(stage) + 1] || 'done';
+  }
+  // not finished: save where we got to, so the next call carries on from here
+  try { await strSetRow(env, 'STR_Changes', row.ID, { Stage: state.stage, State: JSON.stringify(state).slice(0, 46000) }); }
+  catch (e) { return json({ ok: false, status: 'applying', plan_id: J.planId, stage: state.stage, error: 'progress_not_saved', message: `The change is partly done but its progress could not be saved (${strErrText(e)}). Press Continue; nothing will be done twice.` }, 500); }
+  const idx = STR_STAGES.indexOf(state.stage);
+  return json({ ok: true, status: 'applying', plan_id: J.planId, stage: state.stage, step: idx + 1, steps: STR_STAGES.length, calls: state.calls, message: `Working... ${STR_STAGE_TEXT[state.stage] || 'almost there'} (step ${idx + 1} of ${STR_STAGES.length}).` });
+}
+async function strStageFinish(ctx, J) {
+  const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), errors = state.errors, warnings = state.warnings, plan = J.plan;
+  await strFresh(ctx);
+  // text results come from the Outbox rows themselves: that is the truth about what was sent
+  const ob = (ctx.st.outbox || []).filter(o => o.Plan_ID === J.planId), textRes = [];
+  for (const t of state.texts) {
+    if (t.status !== 'queued') { textRes.push(t); continue; }
+    const o = ob.find(x => String(x.ID) === String(t.ob)), out = Object.assign({}, t);
+    if (!o) { out.status = 'failed'; out.detail = 'The queued text could not be found again.'; }
+    else if (o.Status === 'sent') { out.status = 'sent'; out.detail = o.Note || 'sent'; }
+    else if (o.Status === 'failed') { out.status = 'failed'; out.detail = o.Note || 'did not go out'; }
+    else if (o.Status === 'stale') { out.status = 'failed'; out.detail = 'Not sent: the schedule changed while it waited.'; }
+    else if (o.Status === 'parked') { out.status = 'held'; out.detail = `Outside 8 AM-9 PM ET, so it is held and goes out at 8:00 AM ET (${strFmtDate(inspEtDate(Date.parse(o.Not_Before) || ctx.now))})${ctx.S.engine ? '' : ' - but the scheduler is OFF, so it will NOT go until you switch it on'}.`; }
+    else { out.status = 'failed'; out.detail = 'It may or may not have gone out (it is stuck "sending"). Check with them before sending it again.'; }
+    if (out.status === 'failed') errors.push({ step: 'text_failed', error: `${t.name} was NOT texted: ${out.detail}. Tell them yourself.` });
+    textRes.push(out);
+  }
+  const items = J.items.map(it => { const r = state.ires[it.ref], ci = state.cal.items[it.ref]; return { ref: it.ref, task_key: it.task_key || '', date: it.date, label: it.label, status: r.status, reason: r.reason || '', flag: r.flag || '', notes: it.notes || [], sentence: it.sentence || '', calendar: ci || null }; });
+  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length };
+  const anyProblem = errors.length > 0 || counts.failed > 0, status = !anyProblem ? 'done' : (counts.done > 0 ? 'partial' : 'failed');
+  const cal = Object.assign({ mode: plan.calendar.mode }, state.cal); delete cal.done; delete cal.fatal;
+  const res = { ok: status === 'done', status, plan_id: J.planId, action: req.action, cleaner: plan.cleaner, mark: req.mark, items, counts, texts: textRes, email: state.email, calendar: cal, warnings: warnings.concat(plan.warnings || []), errors, calls: state.calls, duplicate: false };
+  res.summary = strChangeSummaryText({ action: plan.action, cleaner: plan.cleaner, mark: req.mark }, res);
+  // one telemetry row and one alert for the whole change (a failed change must reach Brett, but not as a dozen separate messages)
+  if (errors.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/change/' + [...new Set(errors.map(e => e.step))].slice(0, 4).join('+'), Success: 'FALSE', Notes: errors.map(e => `${e.step}: ${e.error}`).join(' | ').slice(0, 480) }); } catch (te) { console.error('str change: telemetry failed:', te && te.message, '| original:', errors.length, 'error(s)'); } }
+  if (status !== 'done') await strSystemAlert(env, 'swap_' + J.planId, `Admin ${req.action} was ${status === 'failed' ? 'NOT done' : 'only partly done'}: ${res.summary} ${errors.slice(0, 3).map(e => e.error).join(' | ')}`);
+  const logs = textRes.filter(t => ['sent', 'held', 'failed'].includes(t.status)).map(t => ({ Timestamp: iso, Task_Key: '', Cleaner_ID: (t.key.split(':')[1] || ''), Event: t.status === 'sent' ? 'swap_text_sent' : (t.status === 'held' ? 'swap_text_held' : 'swap_text_failed'), Detail: `plan ${J.planId}: ${t.kind} text for ${t.dates.length} date(s): ${t.detail}`.slice(0, 480) }));
+  logs.push({ Timestamp: iso, Task_Key: '', Cleaner_ID: cleaner.ID, Event: 'admin_change', Detail: `plan ${J.planId} ${req.action} -> ${status}: ${res.summary}`.slice(0, 480) });
+  try { await strAddRows(env, 'STR_Log', logs); } catch (e) { res.errors.push({ step: 'audit_log', error: 'Could not write the summary rows to the Activity log: ' + strErrText(e) }); }
+  try { await strSetRow(env, 'STR_Changes', J.row.ID, { Status: res.status, Finished_At: new Date().toISOString(), Stage: 'done', Result: JSON.stringify(res).slice(0, 45000), Payload: '', State: '' }); }
+  catch (e) { res.errors.push({ step: 'save_result', error: `The change was applied but its record did not save (${strErrText(e)}). Do NOT press Send again; check the Activity log.` }); res.ok = false; if (res.status === 'done') res.status = 'partial'; await strSystemAlert(env, 'swap_record_' + J.planId, strErrText(e)); }
+  return res;
+}
+
+// ── Held texts: sent by the scheduler tick once 8 AM ET has arrived (no clock of their own: NO CRON). The apply job lines its texts up here too and
+// sends the due ones itself (opts.plan); the tick sends whatever is still parked, so a text is never lost when the page is closed half way. ──
+async function strOutboxDrain(ctx, opts) {
+  opts = opts || {};
+  const out = { sent: 0, stale: 0, failed: 0, pending: 0, more: false };
+  const all = ctx.st.outbox || [], iso = new Date(ctx.now).toISOString(), rows = opts.plan ? all.filter(o => o.Plan_ID === opts.plan) : all, quiet = !!opts.quiet;
+  out.pending = rows.filter(o => o.Status === 'parked').length;
+  if (ctx.dry || !strInSendWindow(ctx.now, ctx.S)) return out;
+  if (!opts.plan) for (const o of rows.filter(o => o.Status === 'sending' && ctx.now - Date.parse(o.Created_At || iso) > 15 * 60000)) { ctx.errors.push({ step: 'held_text_stuck', error: `Held text #${o.ID} has been "sending" for over 15 minutes - it may or may not have gone out. It is NOT being resent automatically.` }); await strSystemAlert(ctx.env, 'held_text_stuck', `Held cleaner text #${o.ID} is stuck "sending"; check whether the cleaner got it before resending.`); }
+  let n = 0;
+  for (const o of rows.filter(o => o.Status === 'parked' && Date.parse(o.Not_Before || '') <= ctx.now)) {
+    if (opts.budget ? (n > 0 && !strRoom(ctx, 17)) : n >= 2) { out.more = true; break; } // the budget / two a tick: the rest go next call
+    n++;
+    try {
+      const c = ctx.st.cmap[o.Cleaner_ID]; let expect = []; try { expect = JSON.parse(o.Expect || '[]'); } catch (e) { expect = null; } // silent-ok: an unreadable Expect is treated as stale just below, which alerts Brett
+      const stale = !c || !Array.isArray(expect) || !expect.length || expect.some(e => e.mark !== undefined ? (ctx.st.marks[c.ID + '|' + e.date] || '') !== e.mark : !ctx.st.turnovers.some(t => t.Task_Key === e.task_key && t.Status === 'covered' && String(t.Assigned_Cleaner_ID) === String(e.assigned_id)));
+      if (stale) { Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'stale', Note: 'not sent: the schedule changed while it was held' })); out.stale++; if (!quiet) { const msg = `A held text to ${c ? c.Name : 'cleaner #' + o.Cleaner_ID} was NOT sent because the schedule changed while it waited: "${String(o.Body).slice(0, 120)}". Tell them yourself if it still matters.`; ctx.errors.push({ step: 'held_text_stale', error: msg }); await strSystemAlert(ctx.env, 'held_text_stale', msg); } continue; }
+      Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'sending', Note: 'claimed ' + iso })); // claim first: a crash after sending must never resend
+      const s = await strSendCleanerText(ctx, c, o.Msg_Type || 'str_swap_held', o.Body);
+      if (s.ok) { Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'sent', Sent_At: iso, Note: String(s.detail).slice(0, 200) })); out.sent++; if (opts.log !== false) await strLog(ctx, '', c.ID, 'swap_text_sent', `held text sent: ${s.detail}`); }
+      else { Object.assign(o, await strSetRow(ctx.env, 'STR_Outbox', o.ID, { Status: 'failed', Note: String(s.detail).slice(0, 200) })); out.failed++; if (!quiet) { ctx.errors.push({ step: 'held_text_failed', error: `The held text to ${c.Name} did not go out: ${s.detail}. Tell them yourself.` }); await strSystemAlert(ctx.env, 'held_text_failed', `The held text to ${c.Name} did not go out: ${s.detail}`); } }
+    } catch (e) { if (!quiet) ctx.errors.push({ step: 'held_text', error: `Held text #${o.ID}: ${strErrText(e)}` }); else throw e; }
+  }
+  return out;
+}
+// ── Pending cleaning (Oct 20 2026, Brett) ────────────────────────────────────────────────────────────────────────────────────────────
+// A "pending cleaning" is a cleaning DATE with no booking yet (a last-minute inquiry). Cleaners are asked about it as if it were real, one at
+// a time in queue order, but the words never say it is booked: "may be checking out ... if it does book". A cleaner's Yes is a TENTATIVE
+// HOLD (never an assignment) and tells Brett he can accept the booking. When the bookings feed produces a real checkout on that same date
+// the hold becomes the real assignment (one "now booked" text + invite); if the date passes the inquiry expires silently.
+// The pending row lives in STR_Turnovers (Pending=TRUE, Kind "pending", Task_Key milam-ridge|pending|DATE) but is kept OUT of ctx.st.turnovers
+// (it is in ctx.st.pendings), so the NOT COVERED alerts, red calendar blocks, checkout-day texts, digest, .ics and the swap / bulk engine can
+// never mistake it for a real turnover. Statuses: open | offering | exhausted | pending_held | pending_converted | pending_expired | pending_cancelled.
+const STR_PEND_OPEN = ['open', 'offering', 'exhausted', 'pending_held'];
+function strIsPendRow(r) { return String((r && r.Pending) || '').toUpperCase() === 'TRUE'; }
+function strPendActive(r) { return !!r && STR_PEND_OPEN.includes(r.Status); }
+function strPendKey(date, n) { return `${STR_PROP}|pending|${date}` + (n > 1 ? '|' + n : ''); }
+function strManualHold(r, now) { return !!(r && r.Manual_Until) && Date.parse(r.Manual_Until) > now; }
+function strPendFillLink(text, link) { const t = String(text || ''); return /\{Link\}/.test(t) ? t.replace(/\{Link\}/g, link) : (t + ' Tap here: ' + link).trim(); }
+function strLiveOffer(ctx, key) { return ctx.st.offers.filter(o => o.Task_Key === key && STR_OFFER_ACTIVE.includes(o.Status)).sort((a, b) => (parseInt(b.ID, 10) || 0) - (parseInt(a.ID, 10) || 0))[0] || null; }
+
+// One-line status Brett can read at a glance.
+function strPendingStatus(ctx, p) {
+  const st = ctx.st, who = id => strFirst(st.cmap[id]) || 'a cleaner';
+  if (p.Status === 'pending_held') return { code: 'held', label: `Held by ${who(p.Assigned_Cleaner_ID)} - tentative` };
+  if (p.Status === 'pending_converted') {
+    const real = st.turnovers.find(t => t.Task_Key === p.Converted_To), mine = real && real.Status === 'covered' && p.Assigned_Cleaner_ID && String(real.Assigned_Cleaner_ID) === String(p.Assigned_Cleaner_ID);
+    return { code: 'booked', label: 'Booked - confirmed' + (mine ? ` (${who(p.Assigned_Cleaner_ID)} is on the schedule)` : (real && real.Status === 'covered' ? ` (${who(real.Assigned_Cleaner_ID)} is on the schedule)` : '')) };
+  }
+  if (p.Status === 'pending_expired') return { code: 'expired', label: 'Date passed - no booking' };
+  if (p.Status === 'pending_cancelled') return { code: 'cancelled', label: 'Inquiry cancelled' };
+  if (p.Status === 'exhausted') return { code: 'nobody', label: 'Nobody available' };
+  const live = strLiveOffer(ctx, p.Task_Key);
+  if (live) return { code: 'waiting', label: `Waiting on ${who(live.Cleaner_ID)}` };
+  return st.offers.some(o => o.Task_Key === p.Task_Key && o.Mode !== 'cancel') ? { code: 'not_asked', label: 'Waiting to ask the next cleaner' } : { code: 'not_asked', label: 'Not asked yet' };
+}
+function strPendingPublic(ctx, p, act) {
+  const st = ctx.st, today = inspEtDate(ctx.now), s = strPendingStatus(ctx, p), held = p.Status === 'pending_held' ? st.cmap[p.Assigned_Cleaner_ID] : null, active = strPendActive(p);
+  const nx = active && !held ? strNextCleaner({ pool: st.pool, cleaners: st.cmap, marks: st.marks, offers: st.offers, task: { key: p.Task_Key, date: p.Date } }) : null;
+  const live = active ? strLiveOffer(ctx, p.Task_Key) : null;
+  return { key: p.Task_Key, date: p.Date, label: strFmtDate(p.Date), days_out: strDaysBetween(today, p.Date), note: p.Pending_Note || '', status: p.Status, code: s.code, status_label: s.label, active,
+    held_by_id: held ? held.ID : '', held_by: held ? strFirst(held) : '', next_up: nx && nx.cleaner && !live ? strFirst(nx.cleaner) : '',
+    waiting_for_window: active && !held && !live && p.Status !== 'exhausted' && !strInSendWindow(ctx.now, ctx.S),
+    asked: st.offers.filter(o => o.Task_Key === p.Task_Key && o.Mode !== 'cancel').map(o => ({ id: o.ID, cleaner: strFirst(st.cmap[o.Cleaner_ID]) || o.Cleaner_ID, status: o.Status, sent_at: o.Sent_At || '' })),
+    backups: strBackupPicture({ date: p.Date }, act, st.marks, held ? held.ID : ''), converted_to: p.Converted_To || '', text_state: p.Pending_Text || '', mail_state: p.Pending_Mail || '', cal_state: p.Pending_Cal || '',
+    can_convert: active, can_cancel: active, can_send_now: active && !held };
+}
+
+// All-day "<Name> Cleaning (PENDING)" events, one per HELD pending date. (Not-yet-held inquiries have no calendar event.)
+function strPendingDesired(ctx, today) {
+  const out = [];
+  for (const p of ctx.st.pendings) {
+    if (p.Status !== 'pending_held' || p.Date < today) continue;
+    const c = ctx.st.cmap[p.Assigned_Cleaner_ID]; if (!c) continue;
+    out.push({ key: p.Task_Key, kind: 'pending', date: p.Date, title: `${strFirst(c) || 'Cleaner'} Cleaning (PENDING)`, desc: `${ctx.S.label}: TENTATIVE hold - this date is NOT booked yet. ${strFirst(c)} said they could clean it if it books. The Ridge Co Hub turns this into the normal cleaning event when the booking arrives, or removes it if it does not.` });
+  }
+  return out;
+}
+
+// Standing alerts for pending dates. "Nobody said yes" (queue exhausted) is raised here; "a cleaner said yes" is raised the moment she answers.
+// Kind "pending" is delivered right away (exempt from Brett's quiet hours) and never repeats. The NOT COVERED red alerts never apply to these.
+async function strPendingAlerts(ctx) {
+  if (ctx.dry) return;
+  const st = ctx.st, today = inspEtDate(ctx.now);
+  for (const p of st.pendings.filter(strPendActive)) {
+    if (p.Date < today || p.Status !== 'exhausted') continue;
+    const days = strDaysBetween(today, p.Date), tried = strTriedLine(st.offers, p.Task_Key, st.cmap), head = `PENDING DATE: nobody can clean ${strFmtDate(p.Date)} (not booked yet, ${days === 0 ? 'TODAY' : days + ' day' + (days === 1 ? '' : 's') + ' out'})`;
+    await strRaiseAlert(ctx, { key: 'pnone|' + p.Task_Key, kind: 'pending', severity: 'high', taskKey: p.Task_Key, message: [head, `${tried}.`, 'Nobody has said yes, so think twice before accepting this booking.' + (p.Pending_Note ? ' Your note: ' + p.Pending_Note : ''), 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head}. ${tried}. Think twice before accepting it. ${PORTAL_BASE}/str-cleaning.html` });
+  }
+  for (const al of st.alerts) {
+    if (al.Resolved_At || !/^(pnone|pyes)\|/.test(al.Alert_Key || '')) continue;
+    const p = st.pendings.find(x => x.Task_Key === al.Task_Key), closed = !p || !strPendActive(p) || p.Date < today, stale = al.Alert_Key.startsWith('pnone|') && p && p.Status !== 'exhausted';
+    if (!((closed && (parseInt(al.Send_Count, 10) || 0) > 0) || stale)) continue;
+    try { Object.assign(al, await strSetRow(ctx.env, 'STR_Alerts', al.ID, { Resolved_At: new Date(ctx.now).toISOString() })); }
+    catch (e) { ctx.errors.push({ step: 'pending_alert_resolve', error: `Could not close alert ${al.Alert_Key}: ${strErrText(e)}` }); }
+  }
+}
+
+// ── Converting a pending date into the real turnover ─────────────────────────────────────────────────────────────────────────
+// MATCH RULE: an ACTIVE pending date matches a real "checkout" turnover whose Date is EXACTLY the pending date (the stay's end date) that is
+// currently on the bookings feed (or was just made by "Mark as booked now"). Nothing else matches: a booking ending the day before / after, or a
+// pre-arrival clean on that date, only alerts Brett. Two stays ending the same day are already one task, so it converts once.
+// Safe to run twice: the pending row flips to pending_converted only AFTER the real row is assigned (or the offers are moved), every step is
+// re-read, and a half-finished run simply finishes next time. The held cleaner is texted ONCE (Pending_Text claim marker), never the others.
+async function strPendingConvert(ctx, p, real, how) {
+  const { st } = ctx, iso = new Date(ctx.now).toISOString(), key = p.Task_Key, when = strFmtDate(p.Date);
+  if (!strPendActive(p)) return { ok: true, already: true };
+  if (real.Status === 'cancelled') return { ok: false, note: 'the real turnover is cancelled' };
+  const holder = p.Status === 'pending_held' ? st.cmap[p.Assigned_Cleaner_ID] : null;
+  const finish = async (fields, detail) => {
+    await strSetTurnover(ctx, p, Object.assign({ Status: 'pending_converted', Converted_To: real.Task_Key, Pending_Cal: holder ? 'conv' : 'del', Pending_Body: '' }, fields));
+    await strLog(ctx, key, (holder && holder.ID) || '', 'pending_converted', `${how}: ${detail}`.slice(0, 460));
+    ctx.pendChanged = true;
+  };
+  if (holder) {
+    let takenBy = '';
+    if (real.Status === 'ext_covered') takenBy = 'a hand-typed calendar entry';
+    else if (real.Status === 'covered' && String(real.Assigned_Cleaner_ID) !== holder.ID) takenBy = strFirst(st.cmap[real.Assigned_Cleaner_ID]) || 'someone else';
+    else if (!(real.Status === 'covered' && String(real.Assigned_Cleaner_ID) === holder.ID)) {
+      const r = await strAssign(ctx, real, holder, 'pending_converted', null);
+      if (r.cancelled) return { ok: false, note: 'the real turnover was cancelled' };
+      if (!r.ok) takenBy = r.by || 'someone else';
+    }
+    if (takenBy) {
+      const head = `PENDING DATE NOW BOOKED - ALREADY COVERED: ${when} is booked, but ${takenBy} is already on it, so ${strFirst(holder)}'s tentative yes was NOT turned into an assignment.`;
+      await strRaiseAlert(ctx, { key: `pconf|${key}|${ctx.now}`, kind: 'pending', severity: 'high', taskKey: key, message: [head, `${strFirst(holder)} was NOT texted. Tell them if you want to.`, 'Board: ' + PORTAL_BASE + '/str-cleaning.html'].join('\n'), sms: `${head} ${strFirst(holder)} was not texted.` });
 //@@PH@@
 // ═══ STR-BLOCK-END
 
