@@ -35599,6 +35599,10 @@ async function strCalAccessAlert(ctx, msg) {
   catch (e) { ctx.errors.push({ step: 'alert_state', error: 'Could not put the calendar warning on the board: ' + strErrText(e) }); }
 }
 async function strCalAccessResolve(ctx) {
+  const open = ctx.st.alerts.find(x => x.Alert_Key === 'cal|access' && !x.Resolved_At); if (!open || ctx.dry) return;
+  try { Object.assign(open, await strSetRow(ctx.env, 'STR_Alerts', open.ID, { Resolved_At: new Date(ctx.now).toISOString() })); }
+  catch (e) { ctx.errors.push({ step: 'alert_resolve', error: 'Could not clear the calendar warning: ' + strErrText(e) }); }
+}
 // ── Checkout-day text (11 AM ET checkout; 9 AM for a pre-arrival clean) ──────────────────────
 async function strCheckoutTexts(ctx, views) {
   const { S } = ctx, today = inspEtDate(ctx.now), out = [];
