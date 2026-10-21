@@ -394,7 +394,7 @@ function renderAlerts(){
     var lines = String(a.message||'').split('\n').filter(function(x){ return x.trim(); });
     var meta = 'Sent ' + plural(a.sent||0, 'time', 'times') + (a.last_sent ? ', last ' + fmtET(a.last_sent) : '');
     var urgent = a.severity === 'urgent';
-    h += '<div class="msg err alert ' + (urgent?'urgent':'') + '" role="alert"><b>' + (urgent ? 'URGENT: ' : '') + esc(ALERT_KIND[a.kind] || human(a.kind)) + '</b><div class="lines">' + lines.map(function(l){ return '<div>' + esc(l) + '</div>'; }).join('') + '</div><div class="say">' + esc(meta) + '</div>';
+    h += '<div class="msg ' + (a.kind === 'pending' ? 'warn' : 'err') + ' alert ' + (urgent?'urgent':'') + '" role="alert"><b>' + (urgent ? 'URGENT: ' : '') + esc(ALERT_KIND[a.kind] || human(a.kind)) + '</b><div class="lines">' + lines.map(function(l){ return '<div>' + esc(l) + '</div>'; }).join('') + '</div><div class="say">' + esc(meta) + '</div>';
     if(a.acked) h += '<div class="say"><b style="display:inline">Acknowledged.</b> The repeat texts for this alert have stopped.</div>';
     else h += '<button class="btn sm" style="margin-top:10px" data-act="ack" data-id="' + esc(a.id) + '">Acknowledge (stop repeating)</button><p class="say">Stops the repeat texts for this alert. It does not cover the turnover.</p>';
     h += '</div>';
