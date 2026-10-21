@@ -11,7 +11,8 @@ pushes to GitHub. Deliver complete files, never snippets. Scannable, direct, nex
 action — no cheerleading. When corrected, change approach; never restate a refuted plan.
 
 ## MANDATORY: load context before writing code
-1. Read ALL files in `/context/`, starting with `/context/CURRENT.md` (it names the active
+1. Read ALL files in `/context/`, starting with `/context/CURRENT.md`, **then every file in `/context/notes/`** (newest
+   first; one note per PR since Oct 21 2026, newer than CURRENT.md; see `context/notes/README.md`) (CURRENT.md names the active
    versions of the Context Document, Best Practices, CREDENTIALS_MAP, VENTURES, FEATURE_LOG,
    BACKLOG, CAPTURE_INBOX, HANDWRITING_KEY). Read every file it lists. **Exception:**
    `CREDENTIALS_MAP.md` itself now lives in `brett332/data/CREDENTIALS_MAP.md` (private repo,
@@ -30,10 +31,11 @@ action — no cheerleading. When corrected, change approach; never restate a ref
 When Brett says "update context" (or anything equivalent — end of session, wrapping up, log this),
 that means updating **both** of the following, not just one:
 1. **This repo's `context/` files** (and `brett332/data/business-context/` for cross-venture
-   topics) — `FEATURE_LOG.md` (numbered/tagged rule entry), `CURRENT.md` (status section), the
-   relevant `*_BUILD_BRIEF_v1.0.md` if one exists or is warranted, `SESSION_STATE.md` checkpoint.
-   Use `commit_patch` (old_str/new_str) for the large files (`FEATURE_LOG.md`, `CURRENT.md`) —
-   never try to round-trip their full content through `commit_file`.
+   topics) — **since Oct 21 2026 a PR writes ONE new note file `context/notes/YYYYMMDD-<branch-slug>.md`
+   (CURRENT status + FEATURE_LOG rule entry in one file, format in `context/notes/README.md`) and does
+   NOT edit `CURRENT.md` or `FEATURE_LOG.md`** (editing those shared files is what made every pair of
+   open PRs conflict), plus the relevant `*_BUILD_BRIEF_v1.0.md` if one exists or is warranted.
+   Create the note with `commit_file` (it is a small new file).
 2. **The claude.ai Project "Continuous Improvement"** (`Projects` tool, `project_write`) — the
    matching doc there, if one exists for this topic.
 
@@ -106,8 +108,11 @@ this session's own test. `main` and `gh-broker` both auto-deploy on push (confir
 session — Brett has never had to open the dashboard for this and shouldn't be asked to):**
 1. `workers_get_worker_code(scriptName: "maintenance-hub-staging")` — pulls the ACTUAL deployed
    source directly from Cloudflare's API (the ground truth, not `hub_test_get('/health')`'s
-   `build_version`, which is just as reliable but slower to grep through). Grep it for
-   `BUILD_VERSION =` and compare against the `staging` branch's own current value. This is the
+   `build_version`, which is just as reliable but slower to grep through). Since Oct 21 2026
+   `BUILD_VERSION` in the source is a FROZEN base label that PRs must not edit; the real per-deploy
+   version is `GET /version` (`version_id`, `deployed_at`, `stamped`). To tell whether the deployed
+   code is current, grep the deployed source for a string only your change adds (or compare `base`),
+   not for a bumped `BUILD_VERSION`. This is the
    right first move whenever a staging test isn't showing an expected change — before assuming
    the code push failed, before asking Brett anything.
 2. `workers_list()` / `workers_get_worker(scriptName: ...)` for basic metadata (a recent

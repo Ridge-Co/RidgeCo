@@ -152,6 +152,18 @@ def main():
     log = sh(f'git log --since="{since} 00:00" --format="%h|%ad|%s" --date=format:"%Y-%m-%d %H:%M" --no-merges')
     commits = [l.split('|', 2) for l in log.splitlines() if l.strip() and l.count('|') >= 2]
     entries = load_entries('context/FEATURE_LOG.md')
+    # Oct 21 2026: PRs now write their notes to context/notes/<one file per PR>.md instead of editing the shared FEATURE_LOG.md
+    # (every PR editing the same file made PRs conflict). One note file = one entry for the clustering check below.
+    import glob
+    for note in sorted(glob.glob('context/notes/*.md')):
+        if note.endswith('README.md'):
+            continue
+        try:
+            with open(note, encoding='utf-8') as f:
+                entries.append(f.read().lower())
+        except OSError as e:
+            print(f"Audit could not read {note}: {e}")
+            sys.exit(2)
 
     flagged = []
     for sha, date, subject in commits:

@@ -40,6 +40,14 @@ if [ "$BASE_REF" = "main" ]; then
     err "PR into main contains temp/sync commits that must not reach main (matched /${BAD_MSG_RE}/i). Cut a fresh branch off main and re-apply only the real change. Offending commits:"
     printf '%s\n' "$bad"
   fi
+  # Rule (Oct 21 2026): a PR must not edit the BUILD_VERSION line. It is a frozen base label; Cloudflare stamps every deploy
+  # (buildVersion() in worker.js). That one line was edited by every PR, so any two open PRs conflicted.
+  # Override for a deliberate change to the base: put `allow-build-version-edit: true` in the PR body.
+  bv="$(git diff -U0 origin/main...HEAD -- worker.js | grep -E '^[+-]const BUILD_VERSION = ' || true)"
+  if [ -n "$bv" ] && ! printf '%s\n' "$PR_BODY" | tr -d '\r' | grep -Eiq '^[[:space:]]*allow-build-version-edit:[[:space:]]*true[[:space:]]*$'; then
+    err "This PR edits the BUILD_VERSION line in worker.js. Do not: it is a frozen base label and every deploy is stamped automatically, so a bump only creates merge conflicts with other PRs. Revert that line to what main has (git show origin/main:worker.js). To change the base on purpose, add 'allow-build-version-edit: true' to the PR body. Changed lines:"
+    printf '%s\n' "$bv"
+  fi
   behind="$(git rev-list --count HEAD..origin/main)"
   if [ "$behind" -gt "$BEHIND_LIMIT" ]; then
     echo "::warning::This branch is ${behind} commits behind main (limit ${BEHIND_LIMIT}). Consider cutting a fresh branch off the current main tip and re-applying the change."
