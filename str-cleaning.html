@@ -921,6 +921,43 @@ function openAction(o){
     });
   };
 }
+
+/* ---------- pending (not booked) dates ---------- */
+var PEND_PILL = { held:'warn', waiting:'info', nobody:'bad', not_asked:'warn', booked:'ok', expired:'', cancelled:'' };
+var PEND_ST = { sent:'', due:'the text is queued', sending:'the text is going out now' };
+function pendTextNote(p){
+  var t = p.text_state || '', m = p.mail_state || '', out = [];
+  if(/^failed/.test(t)) out.push('The follow-up text to her has not gone out yet (' + t + '). The Hub keeps retrying and has told you if it gives up.');
+  else if(t === 'due' || t === 'sending') out.push('A follow-up text to her is queued and goes out at the next scheduler run');
+  if(/^failed/.test(m)) out.push('Her calendar invite email has not gone out yet (' + m + '). The Hub keeps retrying.');
+  return out.map(function(x){ return '<div class="msg warn" style="margin:8px 0 0"><b style="display:inline">Heads up. </b>' + esc(x) + '</div>'; }).join('');
+}
+function pendCard(p){
+  var k = esc(p.key), done = !p.active, tone = PEND_PILL[p.code];
+  var pill = '<span class="pill' + (tone ? ' ' + tone : '') + '">' + esc(p.status_label) + '</span>';
+  var h = '<div class="tcard pendc' + (done ? ' done' : '') + '"><div class="t-head"><div><b class="t-date">' + esc(p.label || fmtDay(p.date)) + '</b> <span class="chip">Not booked yet</span></div>' + pill + '</div>'
+    + '<div class="muted" style="margin-top:4px">' + esc(daysText(p.days_out)) + '</div>'
+    + (p.note ? '<div class="pendnote">Your note (only you see it): ' + esc(p.note) + '</div>' : '');
+  if(p.code === 'held') h += '<div class="pendnote"><b>' + esc(p.held_by) + '</b> said yes. It is a tentative hold, NOT an assignment. She has been told nothing is confirmed.</div>';
+  else if(p.code === 'nobody') h += '<div class="pendnote"><b>Everyone in the queue was asked or is out.</b> Think twice before accepting this booking.</div>';
+  else if(p.active && p.next_up) h += '<div class="pendnote">' + (p.waiting_for_window ? 'Next to ask: <b>' + esc(p.next_up) + '</b>. It is outside 8 AM - 9 PM, so she is asked at 8 AM.' : 'Next to ask: <b>' + esc(p.next_up) + '</b>.') + '</div>';
+  if(p.code === 'booked' && p.converted_to) h += '<div class="pendnote">It is now an ordinary turnover on the board below.</div>';
+  var asked = p.asked || [];
+  if(asked.length) h += '<div class="muted" style="margin-top:8px">Who was asked</div><ul class="offers">' + asked.map(function(o){
+    var w = OFFER_WORDS[o.status] || o.status; if(o.status === 'accepted') w = 'said yes (tentative)';
+    return '<li><b>' + esc(o.cleaner) + '</b>: ' + esc(w) + '</li>'; }).join('') + '</ul>';
+  h += backupsHtml({ backups: p.backups });
+  h += pendTextNote(p);
+  if(p.active){
+    h += '<div class="t-actions"><button class="btn sm primary" data-act="pend-convert" data-key="' + k + '">Mark as booked now</button>'
+      + (p.can_send_now ? '<button class="btn sm" data-act="pend-send" data-key="' + k + '">Ask now, even if late</button>' : '')
+      + '<button class="btn sm" data-act="pend-cancel" data-key="' + k + '">Cancel this inquiry</button>'
+      + '<p class="say" style="flex:1 0 100%"><b>Mark as booked now:</b> use it when you already accepted the booking but the bookings feed has not shown it yet. The holder becomes the assigned cleaner and is texted. '
+      + (p.can_send_now ? '<b>Ask now:</b> sends the question to the next cleaner immediately instead of waiting for 8 AM. ' : '')
+      + '<b>Cancel:</b> closes the inquiry. You choose whether the cleaner who said yes is told.</p></div>';
+  }
+  return h + '</div>';
+}
 /*@@PH@@*/
 
 /* ---------- tools ---------- */
