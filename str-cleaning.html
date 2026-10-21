@@ -958,6 +958,42 @@ function pendCard(p){
   }
   return h + '</div>';
 }
+function renderPending(){
+  var list = S.pending || [], act = list.filter(function(p){ return p.active; });
+  $('m-pend').textContent = act.length ? plural(act.length, 'open inquiry', 'open inquiries') : '';
+  if(!list.length){ $('pend-list').innerHTML = '<p class="muted">No pending dates. Use "Ask about a date" when a possible booking comes in.</p>'; return; }
+  var open = list.filter(function(p){ return p.active; }), shut = list.filter(function(p){ return !p.active; });
+  $('pend-list').innerHTML = (open.length ? '<div class="grid">' + open.map(pendCard).join('') + '</div>' : '')
+    + (shut.length ? '<div class="muted" style="margin:12px 0 4px">Closed recently</div><div class="grid">' + shut.map(pendCard).join('') + '</div>' : '');
+}
+function findPend(key){ return (S.pending||[]).filter(function(p){ return p.key === key; })[0]; }
+function etToday(){ return (S && S.today) || new Intl.DateTimeFormat('en-CA',{timeZone:ET}).format(new Date()); }
+function addDaysYmd(ymd, n){ var m = /^(\d{4})-(\d\d)-(\d\d)$/.exec(ymd), d = new Date(Date.UTC(+m[1], +m[2]-1, +m[3] + n, 12)); return d.toISOString().slice(0,10); }
+var PD = null;   // the pending-inquiry flow in progress
+function openPendNew(){
+  var today = etToday();
+  sheetShell('Ask about a date', 'Use this when a booking MIGHT come in for a checkout date but is not booked. The first cleaner in the queue is asked as soon as you press Send. If she says yes it is only a tentative hold. <b>Nothing happens yet:</b> next you see the exact text and press Send.',
+    '<label class="fld" for="pd-date">Date of the possible checkout</label><input type="date" id="pd-date" min="' + esc(today) + '" max="' + esc(addDaysYmd(today, 120)) + '">'
+    + '<label class="fld" for="pd-note">Note for yourself (optional, the cleaner never sees it)</label><input type="text" id="pd-note" maxlength="200" placeholder="e.g. family of 6, waiting on their deposit">',
+    '<div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go">Preview the text</button></div>');
+  $('sh-cancel').onclick = closeSheet;
+  $('sh-go').onclick = function(){
+    var d = $('pd-date').value; if(!d){ chShowErr('Pick the date first.'); return; }
+    PD = { req: { date: d, note: $('pd-note').value.trim() }, plan: null, sending: false };
+    pendPreview($('sh-go'));
+  };
+}
+function pendPreview(btn){
+  var label = btn ? btn.textContent : '';
+  if($('sh-err')) $('sh-err').classList.add('hide');
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  api('POST', '/str/admin/pending/preview', PD.req).then(function(r){ PD.plan = r.plan; renderPendPlan(); }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    if(btn){ btn.disabled = false; btn.textContent = label; }
+    if($('sh-err')) chShowErr('<b>Could not build the preview. Nothing was changed.</b>' + esc(errText(e)));
+    else openAction({ title: 'Could not check', say: errText(e) + ' Nothing was changed.', go: null, run: null });
+  });
+}
 /*@@PH@@*/
 
 /* ---------- tools ---------- */
