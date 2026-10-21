@@ -35865,6 +35865,248 @@ async function schedRunStrDigest(env) {
   const errors = [], warnings = [], r = await schedStep('str_digest', async () => { const o = await strRunDigest(env); errors.push(...o.errors); warnings.push(...o.warnings); return { ok: true, no_retry: o.no_retry, detail: o.detail }; }, errors);
   return { ok: !errors.length, errors, warnings, no_retry: !!(r && r.no_retry), detail: r && r.detail };
 }
+// ── Admin swap + bulk changes (Oct 20 2026, Brett) ───────────────────────────────────────────────
+// ONE preview-then-send engine behind three admin actions, all with the same safety rules:
+//   swap          swap the cleaner on one or many turnovers (works on hub-covered AND hand-typed calendar coverage)
+//   assign_range  give one cleaner every turnover between two dates (same effect as a swap on each)
+//   mark          mark one cleaner out / available-as-backup / cleared for several dates (admin-set availability)
+// Step 1 (POST /str/admin/change/preview) writes and sends NOTHING: it returns what would happen and the exact text each person would get.
+// Step 2 (POST /str/admin/change/apply) claims the plan_id FIRST (a second Send of the same plan returns the first result and does nothing),
+// applies every date on its own (one bad date never aborts the others), re-reads every write, fixes the cleaning calendar, then sends the
+// texts Brett edited. Nothing is silent: every failure is in the result, in Ops_Telemetry, and (when partial) alerts Brett.
+const STR_CHANGE_MAX = 40, STR_TEXT_MAX = 800, STR_MARK_HORIZON = 120, STR_SUB_LIMIT = 40;
+let __strCalCount = 0; // Google Calendar calls made by this isolate (the Sheets ones are counted by sheetsRequest as __sheetsFetchCount)
+const STR_ACTIONS = ['swap', 'assign_range', 'mark'];
+const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled'];
+function strHash(s) { let a = 5381, b = 52711; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = ((a * 33) ^ c) >>> 0; b = ((b * 31) + c) >>> 0; } return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0'); }
+// Text Brett typed: a plain string only. Control characters and runs of whitespace collapse exactly like the stock texts do (strRenderText).
+function strCleanText(s) { return String(s == null ? '' : s).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function strNorm(s) { return String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+// "Kayla" on a hand-typed "Kayla Cleaning" entry -> the one cleaner with that nickname / first name / full name. Ambiguous or unknown -> null.
+function strMatchCleaner(name, cleaners) {
+  const n = strNorm(name); if (!n) return null;
+  const hits = (cleaners || []).filter(c => [c.Nickname, String(c.Name || '').split(/\s+/)[0], c.Name].some(k => strNorm(k) === n));
+  const ids = [...new Set(hits.map(c => String(c.ID)))];
+  return ids.length === 1 ? hits.find(c => String(c.ID) === ids[0]) : null;
+}
+function strDateList(dates) { return [...new Set(dates)].sort().map(d => strFmtDate(d)).join('; '); }
+// Outside 8am-9pm ET: the next 8:00 AM ET.
+function strNextWindowOpenMs(now, S) { const today = inspEtDate(now); return inspEtMinutes(now) < S.sendStartMin ? inspEtWallToMs(today, '08:00') : inspEtWallToMs(inspAddDays(today, 1), '08:00'); }
+function strReach(c) { if (!c) return 'was not found'; if (String(c.Active).toUpperCase() === 'FALSE') return 'is not active'; if (!c.Phone) return 'has no phone number on file'; if (c.SmsOk === false) return 'has texts switched off'; return ''; }
+function strSendMode(cfg, S) { return !S.sms ? 'off' : (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE' ? 'twilio_off' : (S.smsTest ? 'test' : 'live')); }
+function strOutboxDates(o) { try { return [...new Set((JSON.parse(o.Expect || '[]') || []).map(e => e.date).filter(Boolean))].sort(); } catch (e) { return []; } } // silent-ok: display only; a bad Expect blob is caught (stale) when the row is processed
+function strChangeId() { return Array.from(crypto.getRandomValues(new Uint8Array(8))).map(b => b.toString(16).padStart(2, '0')).join(''); }
+
+// Calendar entries on the task's window that are NOT the Hub's own and that name a cleaner ("Kayla Cleaning"). `deletable` is true only when the
+// entry is positively a one-day all-day "<Name> Cleaning" on the task's own date - anything else is reported for Brett to fix by hand.
+function strExternalEvents(task, foreign) {
+  const days = new Set(); for (let d = task.winStart || task.date, i = 0; d <= (task.winEnd || task.date) && i < 40; d = inspAddDays(d, 1), i++) days.add(d);
+  const out = [];
+  for (const ev of (foreign || [])) {
+    if (!ev || String(ev.status || '').toUpperCase() === 'CANCELLED' || inspStrCleaningKind(ev.summary) !== 'cleaner') continue;
+    const evDays = inspStrEventDays(ev); if (!evDays.some(d => days.has(d))) continue;
+    const m = /^\s*([A-Za-z][A-Za-z'.\- ]{0,40}?)\s+cleaning\s*$/i.exec(String(ev.summary || '')), name = String(ev.summary || '').replace(/clean(ing|er|ers)?/ig, '').replace(/\s+/g, ' ').trim() || 'cleaner';
+    out.push({ id: ev.id || '', summary: String(ev.summary || ''), name: m ? m[1].trim() : name, days: evDays, onDate: evDays.includes(task.date), deletable: !!(m && ev.id && ev.start && ev.start.date && evDays.length === 1 && evDays[0] === task.date) });
+  }
+  return out;
+}
+
+// ── Batched, verified Sheets writes (one read + one write + one re-read per tab, however many rows: a 40-date change must not burn the per-minute read quota) ──
+async function strBatchSet(env, tab, updates) {
+  const out = { ok: [], failed: [] }; if (!updates.length) return out;
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [], headers = rows[0] || [];
+  if (!headers.length) throw strErr('sheet_write', `Tab ${tab} has no header row`);
+  const idc = idColIndex(headers), cells = [], sent = [];
+  for (const u of updates) {
+    const ri = rows.findIndex((r, i) => i > 0 && String((r || [])[idc]) === String(u.id));
+    if (ri < 0) { out.failed.push({ id: u.id, error: `${tab} #${u.id} was not found` }); continue; }
+    const bad = Object.keys(u.fields).filter(k => headers.indexOf(k) < 0);
+    if (bad.length) { out.failed.push({ id: u.id, error: `${tab} has no column ${bad.join(', ')}` }); continue; }
+    for (const [k, v] of Object.entries(u.fields)) cells.push({ range: `${tab}!${col(headers.indexOf(k))}${ri + 1}`, values: [[String(v == null ? '' : v)]] });
+    sent.push(u);
+  }
+  if (!cells.length) return out;
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: cells });
+  invalidateTabCache(tab);
+  const back = await fetchTab(env, tab);
+  for (const u of sent) {
+    const row = back.find(r => String(r.ID) === String(u.id)), badk = row ? Object.keys(u.fields).filter(k => String(row[k] == null ? '' : row[k]) !== String(u.fields[k] == null ? '' : u.fields[k])) : ['(row missing)'];
+    if (badk.length) out.failed.push({ id: u.id, error: `${tab} #${u.id}: ${badk.join(', ')} did not save` }); else out.ok.push(u.id);
+  }
+  return out;
+}
+// Admin-set availability marks, many at once. changes: [{cleaner, date, mark:'can'|'out'|'', source}]. Returns { ok:[key], failed:[{key,error}] } and keeps ctx.st in step.
+async function strMarkBatch(ctx, changes) {
+  const iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [] }, upd = [], add = [];
+  for (const ch of changes) {
+    const k = ch.cleaner.ID + '|' + ch.date, m = ch.mark || '', ex = ctx.st.availRows.find(a => String(a.Cleaner_ID) === String(ch.cleaner.ID) && a.Property_Key === STR_PROP && a.Date === ch.date);
+    if (ex) upd.push({ id: ex.ID, k, ex, fields: { Mark: m, Updated_At: iso, Source: ch.source || 'admin' } });
+    else if (m) add.push({ k, f: { Cleaner_ID: ch.cleaner.ID, Property_Key: STR_PROP, Date: ch.date, Mark: m, Updated_At: iso, Source: ch.source || 'admin' } });
+    else res.ok.push(k); // clearing a mark that was never there: nothing to do
+  }
+  const keep = (k, mark) => { if (mark) ctx.st.marks[k] = mark; else delete ctx.st.marks[k]; };
+  if (upd.length) {
+    let r; try { r = await strBatchSet(ctx.env, 'STR_Availability', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; }
+    for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) res.failed.push({ key: u.k, error: f.error }); else { Object.assign(u.ex, u.fields); keep(u.k, u.fields.Mark); res.ok.push(u.k); } }
+  }
+  if (add.length) {
+    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f)); add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
+    catch (e) { for (const a of add) res.failed.push({ key: a.k, error: strErrText(e) }); }
+  }
+  return res;
+}
+
+// ── Request + plan ───────────────────────────────────────────────────────────────────────────────
+function strChangeReq(body) {
+  body = body || {};
+  const action = String(body.action || '');
+  if (!STR_ACTIONS.includes(action)) throw strErr('bad_action', 'action must be swap, assign_range or mark.', 400);
+  const cleaner_id = String(body.cleaner_id == null ? '' : body.cleaner_id).trim(); if (!cleaner_id) throw strErr('cleaner_required', 'Pick a cleaner first.', 400);
+  const ymd = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')), req = { action, cleaner_id, confirm_out: body.confirm_out === true };
+  const many = n => { if (n > STR_CHANGE_MAX) throw strErr('too_many', `That is ${n} dates. The most you can change at once is ${STR_CHANGE_MAX}; pick fewer or do it in two goes.`, 400); };
+  if (action === 'swap') {
+    const keys = [...new Set((Array.isArray(body.task_keys) ? body.task_keys : []).map(k => String(k || '').trim()).filter(Boolean))];
+    if (!keys.length) throw strErr('no_dates', 'Pick at least one turnover.', 400); many(keys.length);
+    if (keys.some(k => k.length > 80)) throw strErr('bad_task_key', 'A turnover key looks wrong. Refresh the page and try again.', 400);
+    req.task_keys = keys;
+  } else if (action === 'assign_range') {
+    if (!ymd(body.from) || !ymd(body.to)) throw strErr('bad_range', 'Pick a start date and an end date.', 400);
+    if (body.to < body.from) throw strErr('bad_range', 'The end date is before the start date.', 400);
+    if (strDaysBetween(body.from, body.to) > STR_MARK_HORIZON) throw strErr('bad_range', `Pick a range of ${STR_MARK_HORIZON} days or less.`, 400);
+    req.from = body.from; req.to = body.to;
+  } else {
+    const mark = String(body.mark == null ? '' : body.mark); if (!['out', 'can', ''].includes(mark)) throw strErr('bad_mark', 'mark must be out, can or empty (clear).', 400);
+    const dates = [...new Set((Array.isArray(body.dates) ? body.dates : []).map(d => String(d || '')))];
+    if (!dates.length) throw strErr('no_dates', 'Pick at least one date.', 400); many(dates.length);
+    if (dates.some(d => !ymd(d))) throw strErr('bad_date', 'Each date must look like 2026-11-05.', 400);
+    req.mark = mark; req.dates = dates.sort();
+  }
+  return req;
+}
+const strCoverTitle = (S, st, cleaner, t, today) => (strDesiredCalendar([{ key: t.key, kind: t.kind, date: t.date, next: t.next, status: 'covered', assigned: cleaner.ID, coveredAny: true }], st.cmap, today, S)[0] || {});
+
+// Everything that WOULD happen, computed without writing a thing. feed = strReadFeed(ctx).
+async function strChangeBuild(ctx, req, feed) {
+  const { S, st, cfg } = ctx, today = inspEtDate(ctx.now), cleaner = st.cmap[req.cleaner_id];
+  if (!cleaner) throw strErr('cleaner_not_found', 'That cleaner was not found.', 404);
+  if (String(cleaner.Active).toUpperCase() === 'FALSE' && req.action !== 'mark') throw strErr('cleaner_inactive', `${cleaner.Name} is not active. Make them active under Cleaners first.`, 409);
+  const first = strFirst(cleaner), foreign = feed.cal.filter(e => !(e.ext && e.ext.ridgecoStr)), hubEvents = feed.cal.filter(e => e.ext && e.ext.ridgecoStr && String(e.status || '').toUpperCase() !== 'CANCELLED').map(e => ({ id: e.id, key: e.ext.ridgecoStrKey, kind: e.ext.ridgecoStrKind, date: inspStrEvDay(e.start), title: e.summary || '' }));
+  const sendMode = strSendMode(cfg, S), win = strInSendWindow(ctx.now, S), heldUntil = win ? 0 : strNextWindowOpenMs(ctx.now, S);
+  const plan = { action: req.action, cleaner: { id: cleaner.ID, name: cleaner.Name, first }, items: [], recipients: [], warnings: [], confirm: null, send_mode: sendMode, window_open: win, held_until: heldUntil ? new Date(heldUntil).toISOString() : '', email: null, calendar: { mode: '', lines: [], manual: [] } };
+  const views = strComputeViews(ctx, foreign), tasks = new Map(views.map(v => [v.key, v]));
+  for (const t of strBuildTasks(feed.stays, today, S)) if (!tasks.has(t.key) && !st.turnovers.some(r => r.Task_Key === t.key)) tasks.set(t.key, Object.assign({}, t, { row: null, status: 'new', assigned: '', ext: [] }));
+  const refOf = it => it.task_key || it.date;
+  const nm = c => c ? strFirst(c) : '?';
+
+  if (req.action === 'mark') {
+    const allTasks = [...tasks.values()];
+    for (const date of req.dates) {
+      const it = { date, label: strFmtDate(date), current: st.marks[cleaner.ID + '|' + date] || '', to: req.mark, outcome: 'change', reason: '', notes: [], offers_declined: [] };
+      const word = m => m === 'out' ? 'Out' : (m === 'can' ? 'Available as backup' : 'nothing');
+      if (date < today) { it.outcome = 'skip'; it.reason = 'That date has already passed.'; }
+      else if (strDaysBetween(today, date) > STR_MARK_HORIZON) { it.outcome = 'skip'; it.reason = `More than ${STR_MARK_HORIZON} days away.`; }
+      else {
+        const holding = allTasks.filter(t => t.date === date).filter(t => (t.row && t.row.Status === 'covered' && String(t.row.Assigned_Cleaner_ID) === cleaner.ID) || strExternalEvents(t, foreign).some(e => { const c = strMatchCleaner(e.name, st.cleaners); return c && String(c.ID) === cleaner.ID; }));
+        if (holding.length && req.mark !== '') { it.outcome = 'blocked'; it.reason = `${first} is the one cleaning on ${strFmtDate(date)}, so she cannot be marked ${word(req.mark)} that day. Swap her out first.`; }
+        else if (it.current === req.mark) { it.outcome = 'skip'; it.reason = `Already ${word(req.mark)}.`; }
+        else {
+          it.sentence = `${first}: ${word(it.current)} -> ${word(req.mark)} on ${it.label}.`;
+          if (req.mark === 'out') for (const o of st.offers.filter(o => String(o.Cleaner_ID) === cleaner.ID && o.Status === 'pending')) { const tr = st.turnovers.find(x => x.Task_Key === o.Task_Key && x.Date === date); if (tr) { it.offers_declined.push({ id: o.ID, task_key: o.Task_Key }); it.notes.push(`${first}'s waiting offer for this date is closed; the scheduler asks the next cleaner on its next run (about 15 minutes).`); } }
+        }
+      }
+      plan.items.push(it);
+    }
+  } else {
+    let keys = req.task_keys;
+    if (req.action === 'assign_range') keys = [...tasks.values()].filter(t => t.date >= req.from && t.date <= req.to).sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind)).map(t => t.key);
+    if (!keys.length) throw strErr('no_dates', `There are no turnovers between ${strFmtDate(req.from)} and ${strFmtDate(req.to)}.`, 404);
+    if (keys.length > STR_CHANGE_MAX) throw strErr('too_many', `That is ${keys.length} turnovers. The most you can change at once is ${STR_CHANGE_MAX}; pick a shorter range.`, 400);
+    for (const key of keys) {
+      const t = tasks.get(key);
+      if (!t) {
+        const r = st.turnovers.find(x => x.Task_Key === key);
+        if (!r) plan.items.push({ task_key: key, date: String(key).split('|')[2] || '', label: key, outcome: 'not_found', reason: 'That turnover was not found (it may have left the bookings feed).', notes: [] });
+        else plan.items.push({ task_key: key, date: r.Date, label: strFmtDate(r.Date), outcome: 'skip', reason: r.Status === 'cancelled' ? 'That booking was cancelled.' : 'That date has already passed.', notes: [] });
+        continue;
+      }
+      const it = { task_key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), kind_label: t.kind === 'prearrival' ? 'pre-arrival clean' : 'checkout clean', days_out: strDaysBetween(today, t.date), is_new: !t.row, row_id: t.row ? t.row.ID : '', outcome: 'change', reason: '', notes: [], displaced: [], unmatched: [], offers_closed: [], marks: [], needs_confirm: false, cal: { hand: [], manual: [], fyi: [], hub_delete: [], hub_create: false, hub_patch: '', title: '' }, _t: t };
+      const hub = t.row && t.row.Status === 'covered' ? (st.cmap[t.row.Assigned_Cleaner_ID] || null) : null, ext = strExternalEvents(t, foreign);
+      it.sbefore = t.row ? `${t.row.Status}:${t.row.Assigned_Cleaner_ID || ''}` : 'new';
+      if (t.row && t.row.Status === 'covered' && String(t.row.Assigned_Cleaner_ID) === cleaner.ID) { it.outcome = 'skip'; it.reason = `${first} already has this one.`; plan.items.push(it); continue; }
+      const seen = new Set(), addD = (c, source) => { if (c && String(c.ID) !== cleaner.ID && !seen.has(String(c.ID))) { seen.add(String(c.ID)); it.displaced.push({ id: String(c.ID), name: strFirst(c), source, cleaner: c }); } };
+      addD(hub, 'hub');
+      if (t.row && t.row.Status === 'covered' && !hub) plan.warnings.push(`${it.label}: the Hub shows a cleaner (id ${t.row.Assigned_Cleaner_ID}) who is no longer in your list, so nobody is told about the change.`);
+      for (const e of ext) { const c = strMatchCleaner(e.name, st.cleaners); if (c) addD(c, 'calendar'); else it.unmatched.push(e.name); if (e.deletable && !it.cal.hand.some(x => x.id === e.id)) it.cal.hand.push({ id: e.id, summary: e.summary }); else if (!e.deletable) { if (e.onDate) it.cal.manual.push(`"${e.summary}" on ${it.label} is not a plain one-day "<Name> Cleaning" entry, so the Hub will not touch it. Delete or fix it by hand.`); else it.cal.fyi.push(`"${e.summary}" (${strDateList(e.days)}) is also on the calendar near this date; the Hub does not change it.`); } }
+      it.sbefore += ':' + ext.map(e => e.id + '/' + e.name).sort().join(',');
+      for (const o of st.offers.filter(o => o.Task_Key === t.key && STR_OFFER_ACTIVE.includes(o.Status))) it.offers_closed.push({ id: o.ID, status: o.Status, name: nm(st.cmap[o.Cleaner_ID]) });
+      if (it.offers_closed.length) it.notes.push(`Waiting offer(s) to ${it.offers_closed.map(o => o.name).join(', ')} are closed quietly (no text), the same as when someone accepts.`);
+      if (st.marks[cleaner.ID + '|' + t.date] === 'out') { it.needs_confirm = true; if (!req.confirm_out) { it.outcome = 'blocked'; it.reason = `${first} marked herself OUT on ${it.label}. Tick the box to assign her anyway.`; } else { it.marks.push({ cleaner_id: cleaner.ID, date: t.date, mark: '' }); it.notes.push(`${first}'s Out mark for this date is cleared.`); } }
+      for (const d of it.displaced) {
+        const cur = st.marks[d.id + '|' + t.date] || '';
+        if (cur === 'out') it.notes.push(`${d.name} is marked OUT that day, so she stays Out (not made backup).`);
+        else if (cur !== 'can') it.marks.push({ cleaner_id: d.id, date: t.date, mark: 'can' });
+      }
+      if (it.cal.manual.length) it.notes.push(...it.cal.manual);
+      const dd = strCoverTitle(S, st, cleaner, t, today); it.cal.title = dd.title || `${first} Cleaning`;
+      const mine = hubEvents.filter(e => e.key === t.key);
+      for (const g of mine.filter(e => e.kind === 'gap')) it.cal.hub_delete.push(g.id);
+      const covers = mine.filter(e => e.kind === 'cover'), same = covers.find(e => e.date === t.date && e.title === it.cal.title);
+      if (same) covers.filter(e => e.id !== same.id).forEach(e => it.cal.hub_delete.push(e.id));
+      else if (covers.length) { it.cal.hub_patch = covers[0].id; covers.slice(1).forEach(e => it.cal.hub_delete.push(e.id)); }
+      else it.cal.hub_create = true;
+      const dn = it.displaced.map(d => d.name);
+      it.sentence = `${first} takes ${it.label} (${it.kind_label})` + (dn.length ? `; ${dn.join(' and ')} becomes backup` : (it.unmatched.length ? `; replaces ${it.unmatched.join(', ')} on the calendar (not one of your cleaners, so no text and no backup mark)` : (t.row && t.row.Status === 'covered' ? '' : '; nobody was on it before'))) + '.';
+      plan.items.push(it);
+    }
+    const blockedOut = plan.items.filter(i => i.needs_confirm);
+    if (blockedOut.length) plan.confirm = { kind: 'out_marked', checked: req.confirm_out, dates: blockedOut.map(i => i.label), message: `${first} marked herself OUT on ${blockedOut.map(i => i.label).join(', ')}. Assigning her anyway needs your explicit OK.` };
+  }
+
+  // ── what happens to the calendar (swap / assign_range) ──
+  const changed = plan.items.filter(i => i.outcome === 'change');
+  if (req.action !== 'mark') {
+    const cal = plan.calendar;
+    cal.mode = !S.calWrite ? 'off' : (feed.fixture || inspCalStaged(ctx.env, cfg) ? 'staged' : (!S.cleaningCal ? 'unconfigured' : 'write'));
+    for (const i of changed) {
+      const steps = [];
+      for (const h of i.cal.hand) steps.push(`remove the hand-typed "${h.summary}"`);
+      if (i.cal.hub_delete.length) steps.push(`remove ${i.cal.hub_delete.length} old Hub calendar entr${i.cal.hub_delete.length === 1 ? 'y' : 'ies'}`);
+      if (i.cal.hub_patch) steps.push(`rename the Hub entry to "${i.cal.title}"`);
+      if (i.cal.hub_create) steps.push(`add an all-day "${i.cal.title}"`);
+      cal.lines.push(`${i.label}: ${steps.join(', ') || 'already correct'}`);
+      const hand = i.cal.hand.map(h => `delete "${h.summary}"`).concat(i.cal.hub_create || i.cal.hub_patch ? [`add an all-day "${i.cal.title}"`] : []);
+      if (hand.length) cal.manual.push(`${i.label}: ${hand.join(' and ')}`);
+    }
+    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (the Hub\'s service account needs "Make changes to events" on that calendar) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
+  }
+
+  // ── who gets what text ──
+  const spec = (kind, c, refs, dates, task, extra) => ({ kind, c, refs, dates, task, extra: extra || {} });
+  const recs = [];
+  if (req.action === 'mark') {
+    const ch = plan.items.filter(i => i.outcome === 'change');
+    if (ch.length && req.mark !== '') recs.push(spec('mark', cleaner, ch.map(i => i.date), ch.map(i => i.date), { key: 'x', kind: 'checkout', date: ch[0].date, next: '' }, { mark: req.mark }));
+  } else if (changed.length) {
+    recs.push(spec('new', cleaner, changed.map(refOf), changed.map(i => i.date), changed[0]._t));
+    const byD = new Map(); for (const i of changed) for (const d of i.displaced) { if (!byD.has(d.id)) byD.set(d.id, { c: d.cleaner, items: [] }); byD.get(d.id).items.push(i); }
+    for (const [id, v] of byD) recs.push(spec('back', v.c, v.items.map(refOf), v.items.map(i => i.date), v.items[0]._t, { newC: cleaner }));
+  }
+  for (const r of recs) {
+    const rr = await strRenderRecipient(ctx, r.kind, r.c, r.dates, r.task, r.extra), why = (sendMode === 'off' ? 'Texts to cleaners are switched OFF (Switches).' : (sendMode === 'twilio_off' ? 'Twilio is switched off for the whole Hub, so no text can go out.' : '')) || (strReach(r.c) ? `${strFirst(r.c)} ${strReach(r.c)}.` : '');
+    const rec = { key: r.kind + ':' + r.c.ID, kind: r.kind, cleaner_id: String(r.c.ID), name: r.c.Name, first: strFirst(r.c), channel: 'sms', dates: [...new Set(r.dates)].sort(), refs: r.refs, type: rr.type, text: rr.text, chars: rr.text.length, can_send: !why, reason: why, send_default: !why && r.kind !== 'mark', language_note: r.c.Language === 'es' ? 'She gets texts in Spanish: this English wording is translated automatically when it is sent.' : '' };
+    rec.timing = !rec.can_send ? { mode: 'none', label: 'No text will be sent.' } : (win ? { mode: 'now', label: sendMode === 'test' ? 'Goes out right now, to YOUR test phone only (cleaning test mode is ON).' : 'Goes out right now.' } : { mode: 'hold', not_before: plan.held_until, label: `Held until 8:00 AM ET ${strFmtDate(inspEtDate(heldUntil), false)} (cleaner texts only go 8 AM-9 PM ET).` + (S.engine ? '' : ' The scheduler is OFF, so the held text will not go out until you switch it on.') });
+    if (rec.chars > STR_TEXT_MAX) rec.reason = rec.reason || 'Longer than the limit.';
+    plan.recipients.push(rec);
+  }
+  const nr = plan.recipients.find(r => r.kind === 'new');
+  if (req.action !== 'mark' && nr) plan.email = cleaner.Email && S.engine ? { to: cleaner.Email, subject: changed.length === 1 ? `You're set: ${S.label} cleaning ${strFmtDate(changed[0].date)}` : `You're set: ${S.label} cleaning (${changed.length} dates)`, note: 'Calendar invite (.ics) with every date she is cleaning or backing up. Sent automatically, as for any assignment.' } : { skipped: !cleaner.Email ? `${cleaner.Name} has no email on file, so no calendar invite goes out (the text and her page still work).` : 'The scheduler is OFF, so no calendar invite email goes out.' };
+  if (!plan.recipients.length && changed.length) plan.warnings.push('Nobody can be told about this change.');
+  if (!S.sms) plan.warnings.push('Texts to cleaners are switched OFF, so the changes happen but NOBODY is texted. Tell them yourself.');
+  const sigParts = [req.action, cleaner.ID, req.mark || '', ...plan.items.map(i => [refOf(i), i.outcome, i.row_id || '', i.sbefore || i.current || '', (i.displaced || []).map(d => d.id).join(','), (i.cal ? i.cal.hand.map(h => h.id).join(',') : ''), (i.offers_closed || []).map(o => o.id + o.status).join(',')].join('~'))];
+  plan.sig = strHash(sigParts.join('|'));
+  plan.counts = { change: plan.items.filter(i => i.outcome === 'change').length, skip: plan.items.filter(i => i.outcome === 'skip').length, blocked: plan.items.filter(i => i.outcome === 'blocked').length, not_found: plan.items.filter(i => i.outcome === 'not_found').length };
+//@@PH@@
 // ═══ STR-BLOCK-END
 
 // ── Tabs / small helpers ───────────────────────────────────────────────────────────────────
