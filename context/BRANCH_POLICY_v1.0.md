@@ -53,7 +53,7 @@ when a PR head is more than 20 commits behind main.
   `\bTEMP\b|Nudge staging|stg-sync|Resync` (case-insensitive); warns if >20 commits behind main.
 - `drift-check.yml` (daily): staging content != main and no test-only PR explains it -> issue "staging drift detected".
 
-## CURRENT.md entry checklist (every session that opens a PR)
+## Notes entry checklist (every session that opens a PR; the entry is your `context/notes/` file, not CURRENT.md, since Oct 21 2026)
 - [ ] States the PR number AND its base branch explicitly ("PR #N -> main"). Any "PR to main" claim must be verified with `get_pull_request`.
 - [ ] States the head branch and that it was cut from main tip <sha>.
 - [ ] If a staging test-only PR exists, lists it separately as "test-only, not the path to main".
