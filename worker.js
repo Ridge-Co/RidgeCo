@@ -34315,6 +34315,11 @@ function calJwtClaim(env, now, opts) {
   if (sub) c.sub = sub;
   return c;
 }
+// Plain-English fix when Google answers unauthorized_client / access_denied to the impersonated sign-in (domain-wide delegation not set up yet).
+function calDelegationHelp(env, sub, scope) {
+  const sa = env.GOOGLE_SA_EMAIL || 'the Hub service account';
+  return `Google has not approved the Hub to act as ${sub} yet (domain-wide delegation is not authorized). One-time fix in Google Admin (admin.google.com): Security > Access and data control > API controls > Domain-wide delegation > Manage Domain Wide Delegation > Add new. Client ID: the service account's "Unique ID" (a long number) - Google Cloud console > IAM & Admin > Service Accounts > ${sa} > Details. OAuth scope (copy exactly): ${scope} - then Authorize. Wait a few minutes, then press "Check calendar access" on the cleaning board.`;
+}
 async function getCalendarAccessToken(env, opts) {
   const now = Math.floor(Date.now() / 1000), cs = calJwtClaim(env, now, opts), cacheKey = [env.GOOGLE_SA_EMAIL || '', cs.sub || '', cs.scope].join('|'), hit = __calTokens[cacheKey];
   if (hit && hit.exp > now + 60) return hit.token;
