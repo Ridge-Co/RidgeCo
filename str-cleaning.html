@@ -691,6 +691,134 @@ function openOffer(key, restart){
   });
 }
 
+/* ---------- swap + bulk changes (preview first, then Send) ---------- */
+var CH = null;   // the change in progress: { req, plan, sending }
+function pickedKeys(){ return Object.keys(picked).filter(function(k){ return picked[k] && findTask(k); }).sort(); }
+function updateBulkBar(){
+  var n = pickedKeys().length;
+  $('bulkbar').classList.toggle('hide', !selecting);
+  document.body.classList.toggle('selecting', selecting);
+  $('bb-count').textContent = n === 0 ? 'No dates ticked yet' : plural(n, 'date', 'dates') + ' ticked';
+  $('selhelp').classList.toggle('hide', !selecting);
+  $('sel-toggle').textContent = selecting ? 'Stop selecting' : 'Select dates…';
+  Array.prototype.forEach.call(document.querySelectorAll('.tcard'), function(c){ var i = c.querySelector('input[data-act=sel]'); if(i) c.classList.toggle('picked', i.checked); });
+}
+function cleanerOptions(selId){
+  var act = (S.cleaners||[]).filter(function(c){ return c.active; });
+  return act.map(function(c){ return '<option value="' + esc(c.id) + '"' + (String(c.id) === String(selId) ? ' selected' : '') + '>' + esc(c.name + (c.nickname ? ' (' + c.nickname + ')' : '') + (c.sms_ok === false ? ' - texts off' : '')) + '</option>'; }).join('');
+}
+function datesChips(keys){ return '<div class="chips">' + keys.map(function(k){ var t = findTask(k); return '<span class="chip">' + esc(t ? (t.label || fmtDay(t.date)) + (t.kind === 'prearrival' ? ' (pre-arrival)' : '') : taskName(k)) + '</span>'; }).join('') + '</div>'; }
+function sheetShell(title, say, body, btns){
+  openSheet('<h2 id="sh-title">' + esc(title) + '</h2>' + (say ? '<p class="say" style="font-size:15px;color:var(--text)">' + say + '</p>' : '') + body + '<div id="sh-err" class="msg err hide" role="alert" style="margin-top:12px"></div>' + btns);
+}
+function chShowErr(html){ var e = $('sh-err'); if(!e) return; e.innerHTML = html; e.classList.remove('hide'); try { e.scrollIntoView({block:'nearest'}); } catch(x){} }
+
+/* step 0: choose who and what */
+function openChange(kind, keys){
+  if(!(S.cleaners||[]).some(function(c){ return c.active; })){ openAction({ title: 'Change cleaners', say: 'There are no active cleaners to choose from. Add or re-activate one under Cleaners first.', go: null, run: null }); return; }
+  var title, say, body = '<label class="fld" for="ch-c">Which cleaner?</label><select id="ch-c">' + cleanerOptions('') + '</select>', validate = function(){ return ''; }, make;
+  if(kind === 'swap'){
+    if(!keys.length){ toast('Tick at least one date first'); return; }
+    title = keys.length === 1 ? 'Swap the cleaner' : 'Swap the cleaner on ' + keys.length + ' dates';
+    say = 'The cleaner you pick takes these dates. Whoever had them is told they are off the hook and becomes backup, and the cleaning calendar is fixed. <b>Nothing happens yet:</b> next you see exactly what will change and the exact texts, and you press Send.';
+    body += '<div class="muted" style="margin-top:12px">Dates</div>' + datesChips(keys);
+    make = function(){ return { action: 'swap', cleaner_id: $('ch-c').value, task_keys: keys }; };
+  } else if(kind === 'range'){
+    title = 'Assign a date range';
+    say = 'Gives one cleaner every turnover between two dates (including both). Whoever had them is told and becomes backup. <b>Nothing happens yet:</b> next you see the list and the exact texts, and you press Send.';
+    var first = ((S.tasks||[]).filter(function(t){ return t.status !== 'cancelled'; }).map(function(t){ return t.date; }).sort()[0]) || '';
+    body += '<label class="fld" for="ch-from">From (first date)</label><input type="date" id="ch-from" value="' + esc(first) + '"><label class="fld" for="ch-to">To (last date)</label><input type="date" id="ch-to" value="">';
+    validate = function(){ var f = $('ch-from').value, t = $('ch-to').value; if(!f || !t) return 'Pick both a first date and a last date.'; if(t < f) return 'The last date is before the first date.'; return ''; };
+    make = function(){ return { action: 'assign_range', cleaner_id: $('ch-c').value, from: $('ch-from').value, to: $('ch-to').value }; };
+  } else {
+    var dates = []; keys.forEach(function(k){ var t = findTask(k); if(t && dates.indexOf(t.date) < 0) dates.push(t.date); }); dates.sort();
+    if(!dates.length){ toast('Tick at least one date first'); return; }
+    title = dates.length === 1 ? 'Mark a cleaner out or backup' : 'Mark a cleaner for ' + dates.length + ' dates';
+    say = 'Sets what the scheduler believes about one cleaner on these dates. <b>Out</b> means do not ask her. <b>Available as backup</b> means she can be asked if someone cancels. <b>Clear</b> removes the mark. <b>Nothing happens yet:</b> next you see what will change, and you press Send.';
+    body += '<label class="fld" for="ch-m">Mark her as</label><select id="ch-m"><option value="out">Out (not available)</option><option value="can">Available as backup</option><option value="">Clear the mark</option></select><div class="muted" style="margin-top:12px">Dates</div><div class="chips">' + dates.map(function(d){ return '<span class="chip">' + esc(fmtDay(d)) + '</span>'; }).join('') + '</div>';
+    make = function(){ return { action: 'mark', cleaner_id: $('ch-c').value, mark: $('ch-m').value, dates: dates }; };
+  }
+  sheetShell(title, say, body, '<div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go">Preview what will happen</button></div>');
+  $('sh-cancel').onclick = closeSheet;
+  $('sh-go').onclick = function(){
+    var v = validate(); if(v){ chShowErr(esc(v)); return; }
+    CH = { req: make(), plan: null, sending: false, kind: kind };
+    runPreview($('sh-go'));
+  };
+}
+
+/* step 1: ask the server for the plan (nothing is written or sent) */
+function runPreview(btn){
+  var req = CH.req;
+  $('sh-err') && $('sh-err').classList.add('hide');
+  var label = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  api('POST', '/str/admin/change/preview', req).then(function(p){
+    CH.plan = p; renderPlan();
+  }, function(e){
+    if(e.code === 'unauthorized'){ authFailed(); return; }
+    if(btn){ btn.disabled = false; btn.textContent = label; }
+    if($('sh-err')) chShowErr('<b>Could not build the preview. Nothing was changed.</b>' + esc(errText(e)));
+    else openAction({ title: 'Could not check', say: errText(e) + ' Nothing was changed.', go: null, run: null });
+  });
+}
+var ITEM_PILL = { change: ['ok', 'Will change'], skip: ['', 'Skipped'], blocked: ['bad', 'Blocked'], not_found: ['bad', 'Not found'] };
+function planItemHtml(i){
+  var pl = ITEM_PILL[i.outcome] || ['', human(i.outcome)];
+  var h = '<div class="chg-item"><span class="pill ' + pl[0] + '">' + esc(pl[1]) + '</span><b>' + esc(i.label || i.date || taskName(i.task_key)) + '</b>';
+  if(i.outcome === 'change' && i.sentence) h += '<div>' + esc(i.sentence) + '</div>';
+  else if(i.reason) h += '<div class="why">' + esc(i.reason) + '</div>';
+  (i.notes||[]).forEach(function(n){ h += '<div class="why">' + esc(n) + '</div>'; });
+  return h + '</div>';
+}
+function timingHtml(r){
+  var tm = r.timing || {};
+  if(tm.mode === 'hold') return '<span class="pill warn">' + esc(tm.label || 'Held') + '</span>';
+  if(tm.mode === 'now') return '<span class="pill ok">' + esc(tm.label || 'Sends right away') + '</span>';
+  return '<span class="pill">' + esc(tm.label || '') + '</span>';
+}
+function rcptHtml(r, idx){
+  var title = r.kind === 'new' ? 'Text to ' + r.first_or_name : (r.kind === 'back' ? 'Text to ' + r.first_or_name + ' (told she is off the hook)' : 'Text to ' + r.first_or_name + ' (optional note)');
+  var h = '<div class="rcpt" data-ri="' + idx + '"><div><b>' + esc(title) + '</b> <span class="chip">Text message</span></div>';
+  if(!r.can_send) return h + '<div class="msg warn" style="margin:8px 0 0"><b>No text can go to ' + esc(r.first_or_name) + '</b>' + esc(r.reason || 'Not possible right now.') + ' Tell her yourself.</div></div>';
+  h += '<div style="margin-top:6px">' + timingHtml(r) + '</div>' + (r.language_note ? '<div class="say">' + esc(r.language_note) + '</div>' : '');
+  h += '<label class="tog" style="min-height:44px"><input type="checkbox" id="rc-send-' + idx + '"' + (r.send_default ? ' checked' : '') + '>Send this text</label>';
+  h += '<label class="fld" for="rc-body-' + idx + '" style="margin-top:2px">What she will get (you can edit it)</label><textarea id="rc-body-' + idx + '" maxlength="' + (S && S.text_max ? S.text_max : 800) + '">' + esc(r.text) + '</textarea><div class="cnt" id="rc-cnt-' + idx + '"></div></div>';
+  return h;
+}
+function updateCount(idx){
+  var ta = $('rc-body-' + idx), c = $('rc-cnt-' + idx); if(!ta || !c) return;
+  var n = ta.value.length; c.textContent = n + ' characters' + (n > 160 ? ' - long, may go out as several texts' : '');
+  c.className = 'cnt' + (n > 320 ? ' long' : '');
+}
+/* step 1b: show the plan and the editable texts */
+function renderPlan(){
+  var p = CH.plan, req = CH.req, h = '';
+  (p.recipients||[]).forEach(function(r){ r.first_or_name = r.first || r.name || 'her'; });
+  var nChange = (p.counts && p.counts.change) || 0;
+  h += '<div class="msg info"><b>Nothing has been sent or changed yet.</b>This is a preview. Check it, edit the texts if you like, then press Send.</div>';
+  if(p.summary) h += '<p style="font-size:15px;margin:8px 0"><b>' + esc(p.summary) + '</b></p>';
+  if(p.confirm){
+    h += '<div class="msg err" role="alert"><b>A cleaner you picked marked herself out</b>' + esc(p.confirm.message || '') + '<label class="tog" style="margin-top:8px"><input type="checkbox" id="ch-confirm"' + (req.confirm_out ? ' checked' : '') + '>Yes, assign her anyway on those dates (this clears her Out mark)</label></div>';
+  }
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">What will happen, date by date</h4>' + (p.items||[]).map(planItemHtml).join('');
+  var cal = p.calendar || {};
+  h += '<h4 style="margin:14px 0 4px;font-size:15px">The cleaning calendar</h4>';
+  if(cal.mode === 'write') h += '<div class="msg ok"><b>The Hub will fix the calendar</b>' + (cal.lines && cal.lines.length ? listHtml(cal.lines) : '') + (cal.note ? esc(cal.note) : '') + '</div>';
+  else if(cal.mode === 'staged') h += '<div class="msg info"><b>Test server</b>' + esc(cal.note || 'Calendar changes are pretend-only here.') + '</div>';
+  else h += '<div class="msg warn"><b>The Hub will NOT change the calendar</b>' + esc(cal.note || '') + ((cal.manual||[]).length ? '<div style="margin-top:6px">You would do this by hand in Google Calendar:</div>' + listHtml(cal.manual) : '') + '</div>';
+  if(p.email) h += '<p class="say" style="margin-top:8px">' + (p.email.skipped ? esc('Email invite: ' + p.email.skipped) : 'Email: ' + esc(p.email.to) + ' also gets the usual confirmation email with a calendar invite' + (p.email.subject ? ' ("' + esc(p.email.subject) + '")' : '') + '.') + '</p>';
+  if(!p.window_open && (p.recipients||[]).some(function(r){ return r.can_send; })) h += '<div class="msg warn"><b>It is outside 8 AM to 9 PM</b>The changes happen now. The texts are held and go out at the first scheduler run after ' + esc(p.held_until ? fmtET(p.held_until) : '8 AM') + '. If anything changes before then, a held text is NOT sent and you are told.</div>';
+  if((p.warnings||[]).length) h += '<div class="msg warn"><b>Heads up</b>' + listHtml(p.warnings) + '</div>';
+  h += '<h4 style="margin:14px 0 0;font-size:15px">Texts</h4>' + ((p.recipients||[]).length ? (p.recipients||[]).map(rcptHtml).join('') : '<p class="say">No texts will be sent for this change.</p>');
+  var can = nChange > 0;
+  var btns = '<div class="stk"><div id="sh-err2"></div><div class="btnrow"><button class="btn ghost" id="sh-cancel">Cancel</button><button class="btn primary" id="sh-go"' + (can ? '' : ' disabled') + '>' + (can ? 'Send: make the changes' + ((p.recipients||[]).some(function(r){ return r.can_send; }) ? ' and send the texts' : '') : 'Nothing to change') + '</button></div></div>';
+  sheetShell('Check before it happens', '', h, btns);
+  (p.recipients||[]).forEach(function(r, idx){ if(r.can_send){ updateCount(idx); $('rc-body-' + idx).addEventListener('input', function(){ updateCount(idx); }); } });
+  $('sh-cancel').onclick = function(){ CH = null; closeSheet(); };
+  var cf = $('ch-confirm'); if(cf) cf.onchange = function(){ CH.req.confirm_out = cf.checked; cf.disabled = true; runPreview(null); };
+  $('sh-go').onclick = sendChange;
+}
 /* ---------- the one confirm / result sheet ---------- */
 var sheetBusy = false;
 function openSheet(html){ var m = $('sheet'); $('sheet-box').innerHTML = html; m.classList.add('open'); m.setAttribute('aria-hidden', 'false'); var f = $('sheet-box').querySelector('input,select,button'); if(f) setTimeout(function(){ f.focus({preventScroll:true}); }, 30); }
