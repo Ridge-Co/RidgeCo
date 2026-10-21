@@ -14834,6 +14834,7 @@ async function adminNotify(env, body) {
 // would see a permanent http_404 and cry wolf.
 const DOOR_WD_URL = 'https://str-automation.brett-2f8.workers.dev/health';
 const DOOR_WD_TIMEOUT_MS = 8000;
+const DOOR_WD_SMS_TIMEOUT_MS = 20000;   // Oct 21 2026: deadline for the alert text itself (see runDoorWatchdogPass)
 const DOOR_WD_STALE_MS = 75 * 60000;
 const DOOR_WD_DEDUPE_MS = 6 * 3600000;
 const DOOR_WD_ABSENT_GRACE_MS = 24 * 3600000;
@@ -15066,7 +15067,12 @@ async function runDoorWatchdogPass(env, opts) {
     else if (!phone) smsDetail = 'Config admin_phone not set';
     else {
       try {
-        const r = await (io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text));
+        // Oct 21 2026: the text itself gets a deadline. A hung Twilio call used to hold the whole watchdog pass until the scheduler cut it off, so the email
+        // fallback below never ran and Brett heard nothing about a dead door-code system. On timeout we fall through to the email.
+        const smsWait = (io && io.smsTimeoutMs) || DOOR_WD_SMS_TIMEOUT_MS; let smsTimer;
+        const smsTimeout = new Promise((_, rej) => { smsTimer = setTimeout(() => rej(new Error('text message did not finish within ' + Math.round(smsWait / 1000) + 's')), smsWait); });
+        let r;
+        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text), smsTimeout]); } finally { clearTimeout(smsTimer); }
         if (r && r.skipped) smsDetail = 'skipped: ' + scrubPhones(r.reason || 'sending disabled');
         else if (r && r.staged) { smsOk = true; smsOutcome = 'staged'; }
         else if (r && r.sid && !r.error && !r.code) { smsOk = true; smsOutcome = 'sent'; }

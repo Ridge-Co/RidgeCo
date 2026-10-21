@@ -277,6 +277,18 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   restore();
   t('SMS throws -> caught, logged, email fallback', r.delivery.sms.ok === false && /threw/.test(r.delivery.sms.detail) && h.emails.length === 1);
 }
+{ // Oct 21 2026: a text that never finishes must not stall the pass - it times out, the email goes, and the failure is recorded (so it reaches the failure ledger)
+  W.setMem(null);
+  const restore = logsOff();
+  const h = harness({ sendSms: () => new Promise(() => {}), smsTimeoutMs: 30 });
+  h.health = good({ ok: false });
+  const t0 = Date.now();
+  const r = await h.run(NOW);
+  restore();
+  t('hung SMS -> times out quickly instead of hanging the pass', Date.now() - t0 < 3000 && r.delivery.sms.ok === false && /did not finish within/.test(r.delivery.sms.detail));
+  t('hung SMS -> email fallback still goes out', h.emails.length === 1 && r.delivered === true);
+  t('hung SMS -> FALSE telemetry row sms_alert (mirrored into the failure ledger)', h.tel.some(x => x.Success === 'FALSE' && /sms_alert/.test(x.Notes) && /did not finish within/.test(x.Notes)));
+}
 { // FAILURE PATH: admin_phone missing
   W.setMem(null);
   const restore = logsOff();
