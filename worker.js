@@ -35992,6 +35992,12 @@ async function strCalCheckLog(env, e, where) {
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/calendar_check_' + where, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); }
   catch (te) { console.error('calendar check: telemetry failed:', te && te.message, '| original:', strErrText(e)); }
 }
+// "Check calendar access" (cleaning board): signs in the way the Hub is set up, reads the cleaning calendar and, with write:true, also adds + deletes one
+// 1-minute test event. A pass on reading alone does NOT prove the Hub may change the calendar, and the result says so. Plain-English pass/fail per step.
+async function strCalCheck(env, cfg, opts) {
+  opts = opts || {};
+  const as = strCalAs(cfg), calId = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim(), steps = [];
+  const add = (step, ok, detail, fix) => { steps.push({ step, ok: !!ok, detail: detail || '', fix: fix || '' }); return !!ok; };
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
