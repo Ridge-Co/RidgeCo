@@ -35620,6 +35620,7 @@ async function strCleanerMark(env, body) {
       if (!(await strSetMark(ctx, c, it.date, mark, 'cleaner'))) continue;
       changes.push({ date: it.date, from: prev, to: mark });
       await strLog(ctx, '', c.ID, 'mark', `${it.date}: ${prev || '-'} -> ${mark || 'cleared'}`);
+      if (mark === 'out') await strPendingMarkOut(ctx, c, it.date, warnings);
       if (mark === 'out') for (const o of ctx.st.offers.filter(o => String(o.Cleaner_ID) === c.ID && o.Status === 'pending')) {
         const tr = ctx.st.turnovers.find(t => t.Task_Key === o.Task_Key && t.Date === it.date); if (!tr) continue;
         try { await strSetOffer(ctx, o, { Status: 'declined', Responded_At: new Date(ctx.now).toISOString(), Note: 'marked out' }); await strAdvanceTask(ctx, tr); } catch (e) { warnings.push('Marked out, but the next cleaner could not be asked right away: ' + strErrText(e)); await strSystemAlert(env, 'advance_after_mark', strErrText(e)); }
