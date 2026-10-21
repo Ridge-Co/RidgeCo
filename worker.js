@@ -35860,6 +35860,11 @@ async function strAdminCalendarCheck(env, body) {
     const cfg = await fetchConfig(env), r = await strCalCheck(env, cfg, { write: !!(body && body.write) });
     if (r.passed && r.wrote && !r.stubbed) {
       try { await strEnsureTabs(env); const al = (await fetchTab(env, 'STR_Alerts')).find(a => a.Alert_Key === 'cal|access' && !a.Resolved_At); if (al) await strSetRow(env, 'STR_Alerts', al.ID, { Resolved_At: new Date().toISOString() }); }
+      catch (e) { r.steps.push({ step: 'Clear the old board warning', ok: false, detail: 'Could not clear the old calendar warning: ' + strErrText(e), fix: 'Press Acknowledge on it.' }); r.passed = false; r.summary = r.steps[r.steps.length - 1].detail; }
+    }
+    return json(Object.assign({ ok: true }, r));
+  } catch (e) { return await strHandleErr(env, e, 'calendar check'); }
+}
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
