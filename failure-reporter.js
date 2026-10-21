@@ -26,6 +26,12 @@
 
   window.addEventListener('beforeunload', function () { unloading = true; });
   window.addEventListener('pagehide', function () { unloading = true; });
+  // Oct 21 2026: phones and browsers kill in-flight requests when a tab is backgrounded, the screen locks or the page navigates ("Load failed" on
+  // Safari, "Failed to fetch" on Chrome). Those are not Hub failures. Remember when the page was last hidden so such an error can be recognised.
+  var lastHiddenAt = 0;
+  function noteHidden() { try { if (document.visibilityState === 'hidden') lastHiddenAt = Date.now(); } catch (e) { /* no visibility API: the Hub check below still decides */ } }
+  try { document.addEventListener('visibilitychange', noteHidden); window.addEventListener('pageshow', function () { unloading = false; }); noteHidden(); } catch (e) { consoleErr('[failure-reporter] visibility watch failed', e); }
+  function recentlyHidden() { try { return document.visibilityState === 'hidden' || (lastHiddenAt && Date.now() - lastHiddenAt < 15000); } catch (e) { return false; } }
 
   function consoleErr() { try { console.error.apply(console, arguments); } catch (e) { /* console unavailable: nothing else exists to tell */ } }
   function clip(s, n) { s = (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
@@ -104,7 +110,22 @@
         try {
           if (e && e.name === 'AbortError') return;
           if (navigator.onLine === false) return;
-          if (report('api ' + path, 'network error calling ' + path + ': ' + (e && e.message || e))) toast();
+          if (unloading || recentlyHidden()) return;                  // the browser cut the request off (tab hidden / page leaving), not the Hub
+          var msg = 'network error calling ' + path + ': ' + (e && e.message || e);
+          // A single failed request is only a Hub problem if the Hub is unreachable RIGHT NOW. Ask it (GET /version, ~0 Sheets reads): if it answers,
+          // this was a blip on this device's connection and is not reported; if it does not, the failure is real and is reported as before.
+          setTimeout(function () {
+            try {
+              if (unloading || recentlyHidden()) return;
+              realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
+                if (r && r.status < 500) { try { console.warn('[failure-reporter] one request failed but the Hub answers; not reported:', path); } catch (w) { /* console unavailable */ } return; }
+                if (report('api ' + path, msg + ' (Hub check: HTTP ' + (r && r.status) + ')')) toast();
+              }, function (probeErr) {
+                if (unloading || recentlyHidden()) return;
+                if (report('api ' + path, msg + ' (and the Hub did not answer a check: ' + (probeErr && probeErr.message || probeErr) + ')')) toast();
+              });
+            } catch (x2) { consoleErr('[failure-reporter] hub check failed', x2); report('api ' + path, msg); }
+          }, 3000);
         } catch (x) { consoleErr('[failure-reporter] network check failed', x); }
       });
       return p;
