@@ -20536,7 +20536,7 @@ async function selftestCallEndpoint(env, name) {
   const u = (p) => new URL('https://selftest.internal' + p);
   switch (name) {
     case 'health': return await health(env);
-    case 'version': return json({ version: BUILD_VERSION });
+    case 'version': return json({ version: buildVersion(env).version });
     case 'config': return await getConfig(env);
     case 'properties': return await getSheet(env, 'Properties');
     case 'units': return await getSheet(env, 'Units');
