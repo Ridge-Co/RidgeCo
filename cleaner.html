@@ -75,6 +75,12 @@
   .soon div{border:1px dashed var(--border);border-radius:12px;padding:12px;color:var(--muted);font-size:15px;opacity:.85;user-select:none}
   .soon small{display:block;font-size:12px;margin-top:2px}
   .cal p{margin:8px 0 0}
+  .offer.pend{border:2px dashed var(--accent)}
+  .eyebrow.pend{text-transform:none;letter-spacing:0;font-size:14px;color:var(--warn-t);background:var(--warn-bg);display:inline-block;border:1px solid var(--warn-bd);border-radius:8px;padding:3px 8px}
+  .task.pend{border-left:6px dashed #d98a00;background:var(--surface)}
+  .task.pend.mine{border-left-color:var(--ok)}
+  .pill.pend{background:var(--warn-bg);color:var(--warn-t);border:1px dashed #d98a00}
+  .nb{margin-top:8px;font-size:15px}
   .full{max-width:420px;margin:18vh auto 0;text-align:center;padding:0 24px;font-size:20px;font-weight:600}
 </style>
 </head>
@@ -90,7 +96,7 @@ var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(
 var K=Q.get('k')||'', OFFER=Q.get('offer')||'', BACKUP=/^\d{4}-\d{2}-\d{2}$/.test(Q.get('backup')||'')?Q.get('backup'):'', HL_DATE=Q.get('date')||'';
 var ET='America/New_York';
 var S={data:null, loading:true, loadErr:'', fatal:false, seq:0, marksInflight:0, scrolled:false,
-  offerRes:{}, offerBusy:{}, offerErr:{}, bk:{}, rowMsg:{}, markBusy:{}, confirmKey:'', cancelBusy:''};
+  offerRes:{}, offerBusy:{}, offerErr:{}, pendRes:{}, bk:{}, rowMsg:{}, markBusy:{}, confirmKey:'', cancelBusy:''};
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function $(id){return document.getElementById(id);}
@@ -172,7 +178,7 @@ function render(){
     if(!S.loadErr) h+='<div class="card"><p class="muted" style="margin:0">Loading your schedule…</p></div>';
     main.innerHTML=h; return;
   }
-  h+=offersHtml(d)+backupTopHtml(d)+scheduleHtml(d)+calendarHtml(d)+soonHtml(d);
+  h+=offersHtml(d)+pendingAsksHtml(d)+backupTopHtml(d)+pendingListHtml(d)+scheduleHtml(d)+calendarHtml(d)+soonHtml(d);
   main.innerHTML=h;
   window.scrollTo(0,y);
   if(fid){var n=main.querySelector('[data-fid="'+fid.replace(/"/g,'')+'"]'); if(n&&!n.disabled) n.focus({preventScroll:true});}
@@ -257,6 +263,59 @@ function taskRow(t){
   }
   return h+msgs(S.rowMsg[key])+'</article>';
 }
+// ── pending (not booked yet) dates ──────────────────────────
+// A pending date is a possible checkout that has NOT been booked. Saying yes only holds it tentatively; it is never an assignment.
+function pendAskItems(d){
+  var seen={}, list=arr(d.pending).filter(function(p){return p.offer_id&&!p.held_by_me&&!p.held_by_other;});
+  list.forEach(function(p){seen[String(p.offer_id)]=1;});
+  Object.keys(S.pendRes).forEach(function(id){ if(!seen[id]) list.push(S.pendRes[id].item); });   // keep an answered card on screen after the reload drops it
+  return list;
+}
+function pendingAsksHtml(d){ return pendAskItems(d).map(function(p){return pendAskCard(p);}).join(''); }
+function pendAskCard(p){
+  var id=String(p.offer_id), res=S.pendRes[id], busy=!!S.offerBusy['p'+id], err=S.offerErr['p'+id];
+  var h='<section class="card offer pend'+(OFFER===id?' hl':'')+'" id="offer-'+esc(id)+'" data-offer="'+esc(id)+'" data-pend="'+esc(p.key)+'">';
+  h+='<div class="eyebrow pend">NOT BOOKED YET - tentative</div><h2>Could you clean '+esc(p.long_label||p.label)+' if it books?</h2>';
+  if(!res){
+    h+='<div class="muted">Checkout is 11 AM. This date is <b>not booked yet</b>. Saying yes does <b>not</b> put you on the schedule - it just tells us you would be free. We will text you if it books.</div>';
+    if(err) h+='<div class="msg err" role="alert">'+esc(err)+'</div>';
+    h+='<button class="btn ok" data-act="pend-offer" data-id="'+esc(id)+'" data-do="accept" data-fid="p|'+esc(id)+'|a"'+(busy?' disabled':'')+'>'+(busy&&S.offerBusy['p'+id]==='accept'?'Saving…':'Yes, I’d be available')+'</button>'
+      +'<button class="btn ghost" data-act="pend-offer" data-id="'+esc(id)+'" data-do="decline" data-fid="p|'+esc(id)+'|d"'+(busy?' disabled':'')+'>'+(busy&&S.offerBusy['p'+id]==='decline'?'Saving…':'No')+'</button>';
+  }else{
+    var kind={held:'good',declined:'info',filled:'warn',already:'info',already_yours:'good',cancelled:'info',booked:'good'}[res.result]||'info';
+    h+='<div class="msg '+kind+'" role="status">'+esc(res.message||'Saved.')+'</div>'+msgs(warnMsgs(res.warnings));
+    if(res.result==='filled'&&res.backup_date) h+=backupPair(res.backup_date,'p'+id);
+  }
+  return h+'</section>';
+}
+function pendingListHtml(d){
+  var list=arr(d.pending).filter(function(p){return !(p.offer_id&&!p.held_by_me&&!p.held_by_other);});   // a live question shows as its own card above
+  if(!list.length) return '';
+  return '<div class="sched-h"><h2>Pending - not booked</h2></div>'
+    +'<p class="muted help">These dates are <b>not booked yet</b>, so nothing here is confirmed. If one books, Brett will text you. Mark when you are free or out so he knows who he can count on.</p>'
+    +list.map(pendRow).join('');
+}
+function pendRow(p){
+  var key=String(p.key), di=inDays(p.days_out), mine=!!p.held_by_me;
+  var h='<article class="task pend'+(mine?' mine':'')+(HL_DATE&&HL_DATE===p.date?' hl':'')+'" data-date="'+esc(p.date)+'" data-key="'+esc(key)+'">'
+    +'<div class="t-top"><div><div class="t-date">'+esc(p.label)+'</div><div class="t-kind">Possible checkout 11 AM'+(di?' · '+di:'')+'</div></div><span class="pill pend">'+esc(mine?'You said yes - tentative':'Pending - not booked')+'</span></div>';
+  if(mine){
+    h+='<div class="nb"><b>NOT BOOKED YET.</b> You told us you could do this one. You are <b>not</b> on the schedule. We will text you if it books.</div>';
+    if(S.confirmKey===key){
+      var cb=S.cancelBusy===key;
+      h+='<div class="confirm" role="alertdialog" aria-label="Confirm"><b>Stop holding '+esc(p.label)+'?</b><div class="muted">Brett will be told right away so he can ask someone else.</div>'
+        +'<button class="btn badfill small" data-act="cancel-yes" data-key="'+esc(key)+'" data-fid="c|'+esc(key)+'|y"'+(cb?' disabled':'')+'>'+(cb?'Working…':'Yes, I can’t hold it')+'</button>'
+        +'<button class="btn ghost small" data-act="cancel-no" data-fid="c|'+esc(key)+'|n"'+(cb?' disabled':'')+'>No, keep holding</button></div>';
+    }else h+='<button class="btn bad small" data-act="cancel-ask" data-key="'+esc(key)+'" data-fid="c|'+esc(key)+'">I can’t hold this date anymore</button>';
+  }else{
+    var mk=p.my_mark||'', busy=!!S.markBusy[p.date];
+    h+='<div class="seg-l" id="sl-'+esc(key)+'">Your availability if it books</div><div class="seg" role="radiogroup" aria-labelledby="sl-'+esc(key)+'">'
+      +[['can','Available as backup',''],['out','Out','out'],['','Not marked','none']].map(function(o){
+        return '<button type="button" role="radio" class="'+o[2]+'" aria-checked="'+(mk===o[0]?'true':'false')+'" data-act="mark" data-key="'+esc(key)+'" data-date="'+esc(p.date)+'" data-mark="'+o[0]+'" data-fid="m|'+esc(key)+'|'+o[0]+'"'+(busy?' disabled':'')+'>'+o[1]+'</button>';
+      }).join('')+'</div>';
+  }
+  return h+msgs(S.rowMsg[key])+'</article>';
+}
 function calendarHtml(d){
   var ok=typeof d.ics_url==='string'&&/^https?:\/\//.test(d.ics_url);
   return '<div class="card cal" style="margin-top:20px">'
@@ -278,12 +337,12 @@ function doMark(date,mark){   // resolves {ok:true,res} or {ok:false,err}
 function onMark(key,date,mark){
   if(S.markBusy[date]) return;
   var prev={}, d=S.data;
-  arr(d.tasks).forEach(function(t){ if(t.date===date){prev[t.key]=t.my_mark||''; t.my_mark=mark;} });
+  arr(d.tasks).concat(arr(d.pending)).forEach(function(t){ if(t.date===date){prev[t.key]=t.my_mark||''; t.my_mark=mark;} });
   S.markBusy[date]=1; S.marksInflight++; setRow(key,[]); render();
   doMark(date,mark).then(function(r){
     S.marksInflight--; delete S.markBusy[date];
     if(!r.ok){
-      arr(S.data.tasks).forEach(function(t){ if(t.date===date&&prev.hasOwnProperty(t.key)) t.my_mark=prev[t.key]; });
+      arr(S.data.tasks).concat(arr(S.data.pending)).forEach(function(t){ if(t.date===date&&prev.hasOwnProperty(t.key)) t.my_mark=prev[t.key]; });
       setRow(key,[{kind:'err',text:failText(r.err)}]);
       render();
       if(r.err&&r.err.status===409) loadPage();   // e.g. they actually hold that date
@@ -304,6 +363,20 @@ function onOffer(id,action){
   },function(e){
     delete S.offerBusy[id];
     S.offerErr[id]=failText(e);
+    render();
+  });
+}
+function onPendOffer(id,action){
+  var bk='p'+id; if(S.offerBusy[bk]) return;
+  S.offerBusy[bk]=action; delete S.offerErr[bk]; render();
+  var p=pendAskItems(S.data).filter(function(x){return String(x.offer_id)===id;})[0];
+  api('POST','/str/c/offer',{k:K,offer_id:id,action:action}).then(function(res){
+    delete S.offerBusy[bk];
+    S.pendRes[id]={item:p,result:res.result,message:res.message,backup_date:res.backup_date||'',warnings:res.warnings};
+    render(); loadPage();
+  },function(e){
+    delete S.offerBusy[bk];
+    S.offerErr[bk]=failText(e);
     render();
   });
 }
@@ -337,6 +410,7 @@ $('main').addEventListener('click',function(ev){
   if(a==='retry'){S.loadErr='';loadPage();}
   else if(a==='mark') onMark(b.getAttribute('data-key'),b.getAttribute('data-date'),b.getAttribute('data-mark'));
   else if(a==='offer') onOffer(b.getAttribute('data-id'),b.getAttribute('data-do'));
+  else if(a==='pend-offer') onPendOffer(b.getAttribute('data-id'),b.getAttribute('data-do'));
   else if(a==='backup') onBackup(b.getAttribute('data-date'),b.getAttribute('data-do'));
   else if(a==='cancel-ask'){S.confirmKey=b.getAttribute('data-key');setRow(S.confirmKey,[]);render();}
   else if(a==='cancel-no'){S.confirmKey='';render();}

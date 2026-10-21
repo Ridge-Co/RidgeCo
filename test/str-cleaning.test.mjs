@@ -367,7 +367,7 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   const on = await resJson(E.strAdminOfferNow({}, { task_key: st.tasks.find(x => x.date === '2026-10-21').key, restart: true }));
   t('offer-now restarts the queue', on.ok, on);
   const pv = await resJson(E.strAdminPreview({}));
-  t('preview renders all 6 texts under 320 chars with no leftover {tokens}', pv.ok && pv.previews.length === 6 && pv.previews.every(p => p.length < 320 && !/\{/.test(p.text)), pv.previews);
+  t('preview renders all 14 texts (6 original + 4 swap/bulk + 4 pending-cleaning) under 320 chars with no leftover {tokens}', pv.ok && pv.previews.length === 14 && pv.previews.every(p => p.length < 320 && !/\{/.test(p.text)), pv.previews);
   const sv = await resJson(E.strAdminCleanerSave({}, { name: 'TEST-Cleaner', phone: '3045550142', email: 'a@b.co', nickname: 'T' }));
   t('save cleaner creates vendor (Short-Term Rental Cleaner / Milam Ridge), cleaner, pool entry with a link', sv.ok && rowsOf(W, 'Vendors').some(v => v.Name === 'TEST-Cleaner' && v.Trade === 'Short-Term Rental Cleaner' && v.Service_Area === 'Milam Ridge') && rowsOf(W, 'STR_Cleaner_Pool').length === 4 && /cleaner\.html\?k=/.test(sv.cleaner.link) && sv.cleaner.priority === 4, sv);
   const dup = await resJson(E.strAdminCleanerSave({}, { name: 'TEST-Dup', phone: '304-555-0142' }));
