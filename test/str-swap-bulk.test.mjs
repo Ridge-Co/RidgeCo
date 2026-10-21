@@ -598,3 +598,4 @@ const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner
 
 console.log(`str-swap-bulk: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
