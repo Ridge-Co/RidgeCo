@@ -35505,7 +35505,7 @@ async function strTick(env, opts) {
   if (strBudgetLeft(ctx, STR_TAIL_MS)) ctx.detail.checkout_texts = await strCheckoutTexts(ctx, views); else strDefer(ctx, 'checkout-day text check(s)');
   // 6. alerts to Brett
   if (!strBudgetLeft(ctx, STR_TAIL_MS)) strDefer(ctx, 'alert check(s)');
-  else try { await strEvalAlerts(ctx, views); ctx.detail.alerts_sent = (await strDeliverAlerts(ctx)).sent; } catch (e) { ctx.errors.push({ step: 'alerts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'alerts', 'Cleaning alerts could not be evaluated: ' + strErrText(e)); }
+  else try { await strEvalAlerts(ctx, views); await strPendingAlerts(ctx); ctx.detail.alerts_sent = (await strDeliverAlerts(ctx)).sent; } catch (e) { ctx.errors.push({ step: 'alerts', error: strErrText(e) }); if (!ctx.dry) await strSystemAlert(env, 'alerts', 'Cleaning alerts could not be evaluated: ' + strErrText(e)); }
   const by = {}; for (const v of views) by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] = (by[v.coveredAny ? (v.via === 'calendar' ? 'on_calendar' : 'covered') : v.status] || 0) + 1;
   ctx.detail.summary = { turnovers: views.length, by_status: by, uncovered: views.filter(v => !v.coveredAny).length, next_14_days_uncovered: views.filter(v => !v.coveredAny && strDaysBetween(today, v.date) <= 14).length };
   if (ctx.actions.length) ctx.detail.actions = ctx.actions.slice(0, 40);
