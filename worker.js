@@ -536,7 +536,7 @@ const _hubWorkerCore = {
         if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
-        if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/version')                return buildVersionJson(env, ctx);
         if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
         if (path === '/read-meter')             return json(await __meterSnapshotAll(env, url)); // Oct 19 2026: who/what is spending the Sheets read quota (in-memory, zero Sheets reads)
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
