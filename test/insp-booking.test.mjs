@@ -258,7 +258,7 @@ t('compute: past checkouts are ignored', R6.checkouts.length === 0 && R6.closed.
 t('multi-day all-day cleaning spans days (end exclusive)', JSON.stringify(SG.inspStrEventDays(API('Gina Cleaning', '2026-10-13', '2026-10-15'))) === JSON.stringify(['2026-10-13', '2026-10-14']));
 // wiring
 t('slot engine skips closed days; availability reads the guard fresh for real bookings', has(/o\.closedDates && o\.closedDates\.has\(b\.Date\)\) continue/) && has(/inspStrClosedOrThrow\(env, cfg, input\.freshGuard\)/) && has(/input\.freshGuard = true/));
-t('guard read failure pauses booking + alerts (never silently offers days)', /async function inspStrClosedOrThrow[\s\S]{0,500}inspAlert[\s\S]{0,300}calendar_unavailable/.test(src));
+t('guard read failure pauses booking + alerts (never silently offers days)', /async function inspStrClosedOrThrow[\s\S]{0,500}inspGuardFailure[\s\S]{0,400}calendar_unavailable/.test(src));  // Oct 21 2026: alerts via inspGuardFailure (transient feed errors get the grace); still throws calendar_unavailable = fails closed
 t('approve + approval page include the no-cleaner conflict', has(/inspStrBookingConflict\(env, await fetchConfig\(env\), b, true\); if \(nc\) conf\.push\(nc\)/) && has(/if \(nc\) conflicts\.push\(nc\)/));
 t('open-block add returns str_warnings; block list marks closed days', has(/str_warnings: strWarnings/) && has(/Str_Closed:/));
 t('scheduler job insp_guard (every ~15 min, no cron) runs the guard tick and alerts on its failure', /name: 'insp_guard',\s+kind: 'interval'/.test(src) && /async function schedRunInspGuard[\s\S]{0,700}inspStrGuardTick\(env\)[\s\S]{0,300}inspGuardFailure\(env, 'str_guard_tick'/.test(src));
@@ -331,9 +331,37 @@ t('quota: the exact Sheets error Brett got is recognised', GQ.inspIsSheetsQuotaE
 t('quota: ordinary failures are NOT treated as transient', !GQ.inspIsSheetsQuotaErr(new Error('Sheets API error: The caller does not have permission')) && !GQ.inspIsSheetsQuotaErr(new Error('Unable to parse range: Insp_Bookings')) && !GQ.inspIsSheetsQuotaErr(null));
 t('quota: grace is 45 min (about 3 ticks)', GQ.INSP_GUARD_QUOTA_GRACE_MS === 45 * 60000);
 t('guard tick reads its 3 tabs in ONE batchGet and routes failures through inspGuardFailure', has(/fetchTabs\(env, \['Insp_Open_Blocks', 'Insp_Bookings', 'Insp_Customers'\]\)/) && has(/inspGuardFailure\(env, 'str_guard_sheet'/) && has(/inspGuardFailure\(env, e\.code \|\| 'str_guard_unavailable'/));
-t('non-quota guard failures still alert immediately; quota ones log telemetry and only alert after the grace', /async function inspGuardFailure[\s\S]{0,300}if \(!inspIsSheetsQuotaErr\(e\)\) return inspAlert\(env, kind, msg\)[\s\S]{0,2200}insp-book\/' \+ kind \+ '_quota'[\s\S]{0,400}INSP_GUARD_QUOTA_GRACE_MS\) return inspAlert\(env, kind \+ '_persistent'/.test(src));
+t('non-quota guard failures still alert immediately; quota ones log telemetry and only alert after the grace', /async function inspGuardFailure[\s\S]{0,400}if \(!isQuota && !isFeed\) return inspAlert\(env, kind, msg\)[\s\S]{0,2200}insp-book\/' \+ kind \+ \(isFeed \? '_feed' : '_quota'\)[\s\S]{0,500}INSP_GUARD_QUOTA_GRACE_MS\) return inspAlert\(env, kind \+ '_persistent'/.test(src));
 t('guard clears the outage marker on a clean read (and a failed clear is logged, not swallowed)', has(/await inspGuardRecovered\(env, cfg\);/) && /async function inspGuardRecovered[\s\S]{0,600}logTelemetry/.test(src));
 
+
+// ── Oct 21 2026: one Uplisting 504 must not text Brett or close slot requests: retry the feed, then the same 45-min grace ──
+const mkErr = (code, msg, status) => Object.assign(new Error(msg), { code, status });
+const FEEDSRC = 'https://ical.uplisting.io/secret-token-123';
+const FEEDCFG = ['INSP_FEED_TRIES', 'INSP_FEED_TRY_TIMEOUT_MS', 'INSP_FEED_RETRY_BUDGET_MS'].map(n => grab(n, 'const')).join('\n') + '\nconst INSP_FEED_RETRY_PAUSE_MS = 1;\n';
+const mkReader = fetchImpl => new Function('fetch', 'inspErr', 'inspStrMask', 'inspParseIcs', 'inspStrEvDay', 'console', FEEDCFG + 'return async ' + grab('inspStrReadIcs'))(fetchImpl, mkErr, new Function(grab('inspStrMask') + '\nreturn inspStrMask;')(), () => [], () => '2026-10-21', { warn() {} });
+const okResp = () => ({ ok: true, status: 200, text: async () => 'BEGIN:VCALENDAR\nEND:VCALENDAR' });
+const bad = status => ({ ok: false, status, text: async () => '' });
+let calls;
+calls = 0; await mkReader(async () => (++calls < 3 ? bad(504) : okResp()))({}, FEEDSRC, '2026-10-20', '2026-12-31');
+t('feed: a 504 then a 504 then success is read (3 tries)', calls === 3, calls);
+calls = 0; await mkReader(async () => { if (++calls === 1) throw new Error('network reset'); return okResp(); })({}, FEEDSRC, '2026-10-20', '2026-12-31');
+t('feed: a network error then success is read', calls === 2, calls);
+calls = 0; let e1; try { await mkReader(async () => { calls++; return bad(504); })({}, FEEDSRC, '2026-10-20', '2026-12-31'); } catch (e) { e1 = e; }
+t('feed: three 504s still fail CLOSED with the same coded error (never silent), after exactly 3 tries', !!e1 && e1.code === 'str_guard_unavailable' && e1.status === 503 && calls === 3 && /answered 504\./.test(e1.message) && /tried 3 times/.test(e1.message), [calls, e1 && e1.message]);
+t('feed: the error masks the secret link', !!e1 && !/secret-token-123/.test(e1.message));
+calls = 0; let e2; try { await mkReader(async () => { calls++; return bad(404); })({}, FEEDSRC, '2026-10-20', '2026-12-31'); } catch (e) { e2 = e; }
+t('feed: a permanent 404 (revoked link) is NOT retried and not treated as transient', !!e2 && calls === 1 && e2.code === 'str_guard_unavailable' && !/tried/.test(e2.message), [calls, e2 && e2.message]);
+calls = 0; try { await mkReader(async () => { calls++; return bad(429); })({}, FEEDSRC, '2026-10-20', '2026-12-31'); } catch {}
+t('feed: a 429 is retried', calls === 3, calls);
+calls = 0; let e3; try { await mkReader(async () => { calls++; return { ok: true, status: 200, text: async () => '<html>maintenance</html>' }; })({}, FEEDSRC, '2026-10-20', '2026-12-31'); } catch (e) { e3 = e; }
+t('feed: HTTP 200 that is not a calendar is a hard failure, not retried', !!e3 && calls === 1 && /did not return a calendar/.test(e3.message), [calls, e3 && e3.message]);
+const TF = new Function(grab('inspIsTransientFeedErr') + '\nreturn inspIsTransientFeedErr;')();
+t('grace: the exact message Brett got is recognised as transient', TF(new Error('Cleaning-coverage check could not run: Bookings feed (https://ical.uplisting.io/…(link hidden)) answered 504.')));
+t('grace: 502/503, 408, 429, "could not reach" are transient; also with the tries suffix', ['502', '503', '408', '429'].every(c => TF(new Error('Bookings feed (https://x/…(link hidden)) answered ' + c + '. (tried 3 times)'))) && TF(new Error('Could not reach the bookings feed (https://x/…(link hidden)): boom')));
+t('grace: 404/401/403, "not a calendar", "must be https", sheet-permission errors are NOT transient (alert at once)', ['404', '401', '403', '410'].every(c => !TF(new Error('Bookings feed (https://x/…(link hidden)) answered ' + c + '.'))) && !TF(new Error('Bookings feed (https://x/…(link hidden)) did not return a calendar.')) && !TF(new Error('Bookings feed must be an https:// iCal link: x')) && !TF(new Error('Sheets API error: The caller does not have permission')) && !TF(null));
+t('grace: feed transients log telemetry (…_feed) and only alert after the 45-min grace, wording names the feed', /isFeed \? 'bookings feed for ' \+ mins/.test(src) && /'Bookings feed unreadable'/.test(src));
+t('feed: both readers (guard tick/slot requests AND the cleaning scheduler) share the one retrying reader', (src.match(/await inspStrReadIcs\(env, src, fromDay, toDay\)/g) || []).length === 2);
 
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
