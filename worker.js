@@ -35899,7 +35899,7 @@ async function strCleanerIcs(env, url) {
 function strSettingsOut(cfg) {
   const S = strSettings(cfg), g = k => String((cfg && cfg[k]) == null ? '' : cfg[k]);
   return { engine: S.engine, sms: S.sms, sms_test_mode: S.smsTest, cal_write: S.calWrite, digest: S.digest, alert_days: S.alertDays, lookahead_days: S.lookahead, red_block_days: S.redDays, reply_4h_days: S.reply4hDays, reply_2h_days: S.reply2hDays, alert_repeat_hours: S.alertRepeatH, mark_alert_days: S.markAlertDays, prearrival_gap_days: S.preGap, max_pending_per_cleaner: S.maxPending,
-    twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
+    twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, cal_mode: S.calAs ? 'acting_as' : 'shared', cal_as: S.calAs, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
 }
 function strCleanerOut(c, pool) {
   const p = pool.find(x => String(x.Cleaner_ID) === c.ID) || {};
