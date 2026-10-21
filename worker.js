@@ -35846,6 +35846,10 @@ async function strCalCheck(env, cfg, opts) {
   if (opts.write) {
     let id = '';
     try {
+      const t0 = Date.now() + 3 * 86400000, ev = await strCalFetch(env, calId, 'POST', '/events', { summary: 'Ridge Co calendar test (safe to ignore - deleting now)', start: { dateTime: new Date(t0).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(t0 + 60000).toISOString(), timeZone: INSP_TZ }, transparency: 'transparent', extendedProperties: { private: { ridgecoStrTest: '1' } } }, as);
+      if (!ev || !ev.id) throw new Error('Google did not return an id for the test event');
+      id = ev.id; await strCalFetch(env, calId, 'DELETE', '/events/' + encodeURIComponent(id), null, as); id = '';
+      add('Add and remove a test event', true, 'Added one 1-minute test event and removed it again. The Hub can change the cleaning calendar.');
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
