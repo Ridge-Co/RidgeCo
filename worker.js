@@ -25835,7 +25835,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/str/admin/pending/create') return String((body && body.note) || '').startsWith('TEST-');
   if (path === '/str/admin/pending/cancel' || path === '/str/admin/pending/convert' || path === '/str/admin/pending/send-now') { const _p = (await fetchTab(env, 'STR_Turnovers')).find(x => x.Task_Key === String((body && body.task_key) || '')); return !!_p && String(_p.Pending || '').toUpperCase() === 'TRUE' && String(_p.Pending_Note || '').startsWith('TEST-'); }
   if (path === '/str/admin/change/apply') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
-  if (path === '/str/admin/config' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
+  if (path === '/str/admin/config' || path === '/str/admin/calendar-check' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
   if (path === '/str/admin/digest-run') return !!(body && body.dry);
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
