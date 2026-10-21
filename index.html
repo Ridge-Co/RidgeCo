@@ -81,6 +81,69 @@ window.addEventListener('pageshow', function(e){
   .stat-card .num { font-size: 2rem; font-weight: bold; color: var(--accent); }
   .stat-card .label { color: var(--muted); font-size: 11px; letter-spacing: 0.1em; margin-top: 4px; }
   .section-title { color: var(--muted); font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  /* ── TOOLS & LOG page (was "Dev Log"; Oct 20 2026). Everything is scoped to #page-devlog so no other page changes.
+     Reuses the one .btn family: gray .secondary = opens a page / only looks, blue = fixes data (shows you first),
+     red .danger = Careful (changes live data). Spacing steps: 4 / 8 / 12 / 16 / 24. Text never below 13px. ── */
+  #page-devlog { --dl-muted: #4b5563; }
+  #page-devlog [hidden] { display: none !important; }
+  #page-devlog .dl-top { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-bottom: 8px; }
+  #page-devlog .dl-title { font-size: 22px; font-weight: 700; margin: 0; }
+  #page-devlog .dl-search { flex: 1 1 260px; max-width: 440px; min-height: 44px; font: 16px var(--font); padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); }
+  #page-devlog .dl-search:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #page-devlog .dl-status { font-size: 13px; color: var(--dl-muted); min-height: 20px; margin-bottom: 8px; }
+  #page-devlog .dl-status button { background: none; border: 0; color: var(--accent); text-decoration: underline; font: inherit; cursor: pointer; min-height: 36px; padding: 0 4px; }
+  #page-devlog .dl-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--dl-muted); margin: 0 0 16px; }
+  #page-devlog .dl-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; border: 1px solid var(--border); }
+  #page-devlog .dl-dot.fix { background: var(--accent); border-color: var(--accent); }
+  #page-devlog .dl-dot.careful { background: var(--danger); border-color: var(--danger); }
+  #page-devlog .dl-dot.open { background: var(--surface2); border-color: var(--muted); }
+  #page-devlog .dl-note { font-size: 13px; line-height: 1.5; color: var(--dl-muted); margin: 0 0 12px; }
+  /* Buttons drawn by the page's own loaders (access requests, review queue, wishlist) get the same 44px touch size; long words wrap instead of being clipped. */
+  #page-devlog #vendor-access-requests-list .btn, #page-devlog #vtr-review-list .btn, #page-devlog #wishlist-filters .btn, #page-devlog #wishlist-list .btn { min-height: 44px; }
+  #page-devlog #wishlist-list { overflow-wrap: anywhere; }
+  #page-devlog .dl-h { font-size: 16px; font-weight: 700; margin: 0; color: var(--text); }
+  #page-devlog .dl-section { margin-bottom: 24px; }
+  #page-devlog .dl-section > .dl-h { margin-bottom: 12px; }
+  #page-devlog .dl-pill { display: inline-block; min-width: 22px; padding: 1px 8px; border-radius: 12px; background: var(--surface2); border: 1px solid var(--border); font-size: 13px; font-weight: 700; color: var(--text); text-align: center; }
+  #page-devlog .dl-pill.alert { background: var(--danger); border-color: var(--danger); color: #fff; }
+  #page-devlog .dl-result { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 14px; line-height: 1.5; scroll-margin-top: 16px; }
+  #page-devlog .dl-result:empty { display: none; }
+  #page-devlog .dl-result:not(:empty)::before { content: "Result"; display: block; font-size: 13px; font-weight: 700; color: var(--dl-muted); margin-bottom: 4px; }
+  #page-devlog .dl-attn { background: #fdf2e2; border: 1px solid var(--warn); border-radius: 8px; padding: 16px; }
+  #page-devlog .dl-attn > .dl-h { margin-bottom: 12px; }
+  #page-devlog .dl-attn .dl-sub-h { font-size: 14px; font-weight: 700; margin: 0 0 4px; }
+  #page-devlog .dl-attn .dl-block + .dl-block { margin-top: 16px; }
+  #page-devlog details.dl-group { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; }
+  #page-devlog details.dl-group > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 16px; min-height: 48px; }
+  #page-devlog details.dl-group > summary::-webkit-details-marker { display: none; }
+  #page-devlog details.dl-group > summary::before { content: "▸"; color: var(--dl-muted); font-size: 14px; width: 12px; transition: transform .15s; }
+  #page-devlog details.dl-group[open] > summary::before { transform: rotate(90deg); }
+  #page-devlog details.dl-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+  #page-devlog .dl-sub { flex: 1 1 200px; font-size: 13px; color: var(--dl-muted); }
+  #page-devlog .dl-count { margin-left: auto; font-size: 13px; color: var(--dl-muted); }
+  #page-devlog .dl-body { padding: 0 16px 16px; }
+  #page-devlog .dl-grid, #page-devlog .dl-pin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: 12px; }
+  #page-devlog .dl-tool { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  #page-devlog .dl-tool .dl-tool-btn { flex: 1 1 0; min-width: 0; min-height: 44px; text-align: left; font-size: 14px; letter-spacing: 0; line-height: 1.3; }
+  #page-devlog .dl-pin-grid { grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr)); gap: 8px; }
+  #page-devlog .dl-pin-grid .dl-tool { padding: 8px; gap: 4px 8px; }
+  #page-devlog .dl-pin-grid .dl-desc { display: none; }
+  #page-devlog .dl-star { flex: 0 0 44px; min-height: 44px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); font-size: 20px; line-height: 1; cursor: pointer; color: var(--dl-muted); }
+  #page-devlog .dl-star[aria-pressed="true"] { color: var(--warn); border-color: var(--warn); }
+  #page-devlog:not(.dl-js) .dl-star { display: none; }
+  #page-devlog .dl-desc { flex: 1 1 100%; margin: 0; font-size: 13px; line-height: 1.45; color: var(--dl-muted); }
+  #page-devlog .dl-kind { flex: 1 1 100%; margin: 0; font-size: 13px; font-weight: 700; }
+  #page-devlog .dl-kind.fix { color: var(--accent); }
+  #page-devlog .dl-kind.careful { color: var(--danger); }
+  #page-devlog .dl-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; }
+  #page-devlog .dl-field, #page-devlog .dl-select { min-height: 44px; font: 16px var(--font); padding: 8px 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); }
+  #page-devlog .dl-field { width: 100%; resize: vertical; }
+  #page-devlog .dl-check { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; line-height: 1.4; cursor: pointer; min-height: 44px; }
+  #page-devlog .dl-check input { width: 22px; height: 22px; margin-top: 1px; flex: 0 0 auto; }
+  #page-devlog .dl-panel { display: flex; flex-direction: column; gap: 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
+  #page-devlog .dl-storage { font-size: 13px; color: var(--danger); margin-bottom: 8px; }
+  /* Text that the page's own scripts write (wishlist cards, error log, requests) carries inline 10-11.5px sizes; lift them to a readable 13px without touching those scripts. */
+  #page-devlog [style*="font-size:10px"], #page-devlog [style*="font-size:10.5px"], #page-devlog [style*="font-size:11px"], #page-devlog [style*="font-size:11.5px"], #page-devlog [style*="font-size:12px"], #page-devlog .btn.small, #page-devlog .loading { font-size: 13px !important; }
   .wo-list { display: flex; flex-direction: column; gap: 8px; }
   .wo-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: border-color 0.15s; }
   .wo-card:hover { border-color: var(--accent); }
@@ -233,7 +296,7 @@ window.addEventListener('pageshow', function(e){
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
       <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
       <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
-      <button class="nav-btn" onclick="showPage('devlog',this)">DEV LOG <span id="devlog-nav-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span></button>
+      <button class="nav-btn" onclick="showPage('devlog',this)">TOOLS &amp; LOG <span id="devlog-nav-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span></button>
       <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
       <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
     </nav>
@@ -249,7 +312,7 @@ window.addEventListener('pageshow', function(e){
     </div>
     <div id="dashboard-var-tile" style="display:none;background:#fdf2e2;border:1px solid var(--warn);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;cursor:pointer" onclick="goToVendorAccessRequests()">
       <span style="color:var(--warn);font-weight:bold;font-size:13px">⚠ <span id="dashboard-var-count">0</span> vendor access request(s) pending</span>
-      <span style="color:var(--muted);font-size:11px;margin-left:6px">— review in Dev Log</span>
+      <span style="color:var(--muted);font-size:11px;margin-left:6px">— review in Tools &amp; Log</span>
     </div>
     <div class="section-title">ACTIVE WORK ORDERS</div>
     <div class="wo-list" id="dashboard-wo-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
@@ -709,125 +772,357 @@ window.addEventListener('pageshow', function(e){
   </div>
 
   <div class="page" id="page-devlog">
-    <!-- VENDOR TASK REQUESTS -- NEEDS YOUR REVIEW (CAP-036 #12, Sep 24 2026). A vendor marking
-         a Flag-Vendor-Issue request "done" from their portal does NOT resolve it -- it lands
-         here until Brett does his own manual check and clicks Reviewed. -->
-    <div id="vtr-review-wrap" style="margin-bottom:22px">
-      <div class="section-title" style="margin-bottom:6px">🚩 VENDOR TASK REQUESTS — NEEDS YOUR REVIEW</div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">A vendor marked these done from their portal. Nothing here is auto-resolved -- give each one a quick look, then mark it reviewed.</div>
-      <div id="vtr-review-list"><div style="font-size:12px;color:var(--muted)">Loading...</div></div>
+    <!-- TOOLS & LOG (was "Dev Log"). Order: search -> result of the last tool you ran -> things that need you ->
+         most-used tools (pin with the star) -> all tools in 4 groups -> settings & logs (collapsed).
+         Each tool is a <div class="dl-tool"> holding a real <button> with the SAME onclick it always had.
+         New tool page shipped? Add ONE .dl-tool tile to the right group in the SAME commit (FEATURE_LOG rule 57),
+         pick the button look by what it does (gray = opens/looks, blue = fixes data after showing you, red = Careful),
+         and give it a one-line plain description. test/devlog-tools.test.mjs fails if a tile has no description. -->
+    <div class="dl-top">
+      <h2 class="dl-title">Tools &amp; Log</h2>
+      <input type="search" id="dl-search" class="dl-search" placeholder="Search tools…" aria-label="Search tools" autocomplete="off">
     </div>
+    <div id="dl-search-status" class="dl-status" aria-live="polite"></div>
+    <div id="dl-storage-note" class="dl-storage" hidden>This browser won't let the page remember your pinned tools and open sections, so they reset each visit.</div>
+    <div id="admin-tool-result" class="dl-result" role="status" aria-live="polite"></div>
 
-    <!-- TOOLS — grouped so this page stays navigable as tools grow (FEATURE_LOG rule 57, extended
-         Aug 10: one TOOLS area, sub-grouped by purpose). Launcher buttons window.open a standalone
+    <!-- NEEDS YOUR ATTENTION: hidden while both lists are empty. The two lists keep their original ids/loaders. -->
+    <section id="dl-attn" class="dl-section dl-attn" aria-label="Needs your attention" hidden>
+      <h3 class="dl-h">⚠ Needs your attention <span id="dl-attn-count" class="dl-pill alert" hidden></span></h3>
+      <!-- VENDOR TASK REQUESTS -- NEEDS YOUR REVIEW (CAP-036 #12, Sep 24 2026). A vendor marking
+           a Flag-Vendor-Issue request "done" from their portal does NOT resolve it -- it lands
+           here until Brett does his own manual check and clicks Reviewed. -->
+      <div id="vtr-review-wrap" class="dl-block">
+        <p class="dl-sub-h">🚩 Vendor task requests to review</p>
+        <p class="dl-note">A vendor marked these done from their portal. Nothing here is auto-resolved. Give each one a quick look, then mark it reviewed.</p>
+        <div id="vtr-review-list"><div style="font-size:13px;color:var(--dl-muted)">Loading...</div></div>
+      </div>
+      <div id="dl-var-wrap" class="dl-block">
+        <p class="dl-sub-h">🔑 Vendor access requests <span id="var-nav-count-inline" style="display:none;color:var(--warn);font-weight:normal">— pending</span></p>
+        <p class="dl-note">Vendors asking to bill a property that is not on their access list. "Approve once" clears just this request; "Approve ongoing" also adds the property to their standing list.</p>
+        <div id="vendor-access-requests-list"><div class="loading">Loading…</div></div>
+      </div>
+    </section>
+
+    <section id="dl-pinned" class="dl-section" aria-label="Most used tools">
+      <h3 class="dl-h">★ Most used <span id="dl-pin-count" class="dl-pill" hidden></span></h3>
+      <p id="dl-pin-empty" class="dl-note" hidden>Nothing pinned yet. Tap the ☆ on any tool below to pin it here.</p>
+      <div id="dl-pin-grid" class="dl-pin-grid"></div>
+    </section>
+
+    <!-- TOOLS — grouped by purpose (FEATURE_LOG rule 57). Launcher buttons window.open a standalone
          page which inherits the Hub admin token (mh_auth, same origin) so it opens already logged in;
-         the in-Hub fix buttons call their handler directly and print to #admin-tool-result below.
-         New tool page shipped? Add its button to the right sub-group in the SAME commit. -->
-    <div class="section-title" style="margin-bottom:6px">🧰 TOOLS</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:14px">Everything in one place, grouped by what it's for. Launcher buttons open a standalone page already logged in; the rest run a fix right here and print the result at the bottom.</div>
+         the in-Hub fix buttons call their handler directly and print to #admin-tool-result at the top. -->
+    <section id="dl-tools" class="dl-section" aria-label="All tools">
+      <h3 class="dl-h">🧰 All tools <span id="dl-tool-total" class="dl-pill"></span></h3>
+      <p class="dl-legend"><span><i class="dl-dot open"></i>Gray: opens a page or runs a safe check</span><span><i class="dl-dot fix"></i>Blue: fixes data, after showing you first</span><span><i class="dl-dot careful"></i>Red: Careful, changes live data</span></p>
 
-    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">✅ ON-DEMAND WORK &amp; DASHBOARDS</div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('scope-creator.html','_blank')">📝 Scope Creator — notes → scope → WO → proposal</button>
-      <button class="btn small" onclick="window.open('inspect.html','_blank')">🔍 Inspection Scheduler — customers, properties, availability</button>
-      <button class="btn small" onclick="window.open('field-inspect.html','_blank')">📋 Field Inspection — inspect on site, dictate, branded report</button>
-      <button class="btn small" onclick="window.open('action-center.html','_blank')">✅ Action Center — who to pay / to process</button>
-      <button class="btn small" onclick="window.open('failures.html','_blank')">⚠ Needs Attention — everything that is failing</button>
-      <button class="btn small" onclick="window.open('command-center.html','_blank')">📊 Command Center</button>
-      <button class="btn small" onclick="window.open('https://script.google.com/a/macros/bmoremanagement.com/s/AKfycbw9-FjmVfm86mQpzjvTDzrnHOy1HGCGvR4MIVBbEK6yHiYOoIaK1PQ0MWDCzhCEWLpT/exec','_blank')">🗒️ Tasks Manager — categorize inbox tasks (BrettOS)</button>
-      <button class="btn small" onclick="window.open('https://docs.google.com/spreadsheets/d/1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA/edit','_blank')">📋 BrettOS Tasks — open the Sheet (canonical, read-only here)</button>
-      <button class="btn small" onclick="window.open('proposals.html','_blank')">💡 Proposals / greenlit queue</button>
-      <button class="btn small" onclick="window.open('deliveries.html','_blank')">🚚 Deliveries</button>
-      <button class="btn small" onclick="window.open('tenant-wo-access.html','_blank')">🔓 Tenant Work Order Access</button>
-      <button class="btn small" onclick="openManageTemplatesModal()">📄 WO Templates — manage custom templates</button>
-      <button class="btn small" onclick="window.open('message-queue.html','_blank')">📱 Message Queue — SMS review &amp; release</button>
-      <button class="btn small" onclick="window.open('read-meter.html','_blank')">📈 Read Meter — who is using the Google read quota</button>
-    </div>
+    <details class="dl-group" data-dl-key="work" data-tools="1" open>
+      <summary><span class="dl-h">Daily work</span><span class="dl-sub">Pages you open to get things done</span><span class="dl-count"></span></summary>
+      <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="scope-creator" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('scope-creator.html','_blank')">📝 Scope Creator</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Turn your notes into a scope, then a work order and a proposal.</p></div>
+        <div class="dl-tool" data-tool="inspection-scheduler" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('inspect.html','_blank')">🔍 Inspection Scheduler</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Set your availability and manage inspection customers and properties.</p></div>
+        <div class="dl-tool" data-tool="field-inspection" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('field-inspect.html','_blank')">📋 Field Inspection</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Inspect on site, dictate notes, and make a branded report.</p></div>
+        <div class="dl-tool" data-tool="action-center" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('action-center.html','_blank')">✅ Action Center</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">See who to pay and what to process next.</p></div>
+        <div class="dl-tool" data-tool="needs-attention" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('failures.html','_blank')">⚠ Needs Attention</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">See everything that is failing in the Hub, worst first.</p></div>
+        <div class="dl-tool" data-tool="command-center" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('command-center.html','_blank')">📊 Command Center</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">The big-picture dashboard.</p></div>
+        <div class="dl-tool" data-tool="tasks-manager" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('https://script.google.com/a/macros/bmoremanagement.com/s/AKfycbw9-FjmVfm86mQpzjvTDzrnHOy1HGCGvR4MIVBbEK6yHiYOoIaK1PQ0MWDCzhCEWLpT/exec','_blank')">🗒️ Tasks Manager</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Sort your inbox tasks into categories (BrettOS).</p></div>
+        <div class="dl-tool" data-tool="brettos-tasks-sheet" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('https://docs.google.com/spreadsheets/d/1X2oYjDfnGzJWDI84e1t4p7cbt9iWxq5qbPmNFI9auuA/edit','_blank')">📋 BrettOS Tasks Sheet</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Open the master tasks spreadsheet. It is the original; read-only from here.</p></div>
+        <div class="dl-tool" data-tool="proposals" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('proposals.html','_blank')">💡 Proposals</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Review the Optimizer’s ideas and the greenlit build queue.</p></div>
+        <div class="dl-tool" data-tool="deliveries" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('deliveries.html','_blank')">🚚 Deliveries</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Track material deliveries and relay them to tenants.</p></div>
+        <div class="dl-tool" data-tool="tenant-wo-access" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('tenant-wo-access.html','_blank')">🔓 Tenant Work Order Access</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Control tenant access to work orders.</p></div>
+        <div class="dl-tool" data-tool="wo-templates" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="openManageTemplatesModal()">📄 WO Templates</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Create and edit your reusable work order templates.</p></div>
+        <div class="dl-tool" data-tool="message-queue" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('message-queue.html','_blank')">📱 Message Queue</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Review texts waiting to go out, then release or skip them.</p></div>
+        <div class="dl-tool" data-tool="read-meter" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('read-meter.html','_blank')">📈 Read Meter</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">See who is using up the Google Sheets read limit.</p></div>
+      </div></div>
+    </details>
+    <details class="dl-group" data-dl-key="money" data-tools="1" open>
+      <summary><span class="dl-h">Money &amp; QuickBooks</span><span class="dl-sub">Bills, invoices, receipts and reconciling</span><span class="dl-count"></span></summary>
+      <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="vendor-reconcile" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('vendor-reconcile.html','_blank')">💵 Vendor Reconciliation</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Compare every bill and payment QuickBooks has for one vendor.</p></div>
+        <div class="dl-tool" data-tool="receipt-reconciler" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('receipt-reconciler.html','_blank')">🧾 Receipt Reconciler</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Match scanned receipts to jobs and expenses.</p></div>
+        <div class="dl-tool" data-tool="open-item-report" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('ar-report-admin.html','_blank')">📋 Open Item Report</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">See open and overdue customer invoices.</p></div>
+        <div class="dl-tool" data-tool="qb-emails" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="window.open('qb-email-backfill.html','_blank')">📧 Fill Missing QuickBooks Emails</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Add email addresses to QuickBooks customers that have none.</p><p class="dl-kind careful">Careful: changes QuickBooks. Shows a preview first.</p></div>
+        <div class="dl-tool" data-tool="unsent-invoice-emails" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="window.open('qb-invoice-email-backfill.html','_blank')">🧾 Fix Unsent Invoice Emails</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Find invoices that never reached the customer and fix them.</p><p class="dl-kind careful">Careful: changes QuickBooks. Shows a preview first.</p></div>
+        <div class="dl-tool" data-tool="repair-invoices" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="findRepairableInvoices()">🔧 Fix Invoices Already in QuickBooks</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Patch recent invoices in place (description, photo link, number). Same invoice, same total.</p><p class="dl-kind careful">Careful: changes QuickBooks. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="signed-proposals" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('signed-proposals.html','_blank')">🖊 Signed Proposals → QuickBooks</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Bill signed proposals and their milestone payments.</p></div>
+        <div class="dl-tool" data-tool="trash-billing" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('trash.html','_blank')">🗑 Trash Service Billing</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Log and bill trash service jobs.</p></div>
+        <div class="dl-tool" data-tool="qb-mapping" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="goToQBMapping()">🔗 QB Mapping</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Link properties and units to their QuickBooks customers.</p></div>
+      </div></div>
+    </details>
+    <details class="dl-group" data-dl-key="cleanup" data-tools="1" open>
+      <summary><span class="dl-h">Data cleanup</span><span class="dl-sub">Fix and tidy the records in the Hub</span><span class="dl-count"></span></summary>
+      <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="bulk-import" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="window.open('bulk-importer.html','_blank')">📥 Bulk Import</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Load properties, units and tenants from a spreadsheet.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="fix-pins" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="runAdminTool('fix-pins')">🔑 Fix PINs + Phones</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Standardize phone numbers and replace badly formatted PINs for vendors, owners and tenants.</p><p class="dl-kind careful">Careful: changes live data right away. No preview.</p></div>
+        <div class="dl-tool" data-tool="stale-tenants" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="checkStaleTenants(false)">🏠 Check Units for Moved-Out Tenants</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">List units still naming a tenant who left, then clear them if you agree.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="migrate-trades" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="migrateTrades(false)">🔧 Update Old Trade Names</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Rename old trade names (like Electric to Electrical) so filters find old jobs.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+        <div class="dl-tool" data-tool="dup-properties" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="checkDuplicateProperties()">🏢 Find Duplicate Properties</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Spot the same address entered twice. Merging asks first.</p></div>
+        <div class="dl-tool" data-tool="dup-owners" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="checkDuplicateOwners()">👤 Find Duplicate Owners</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Spot the same owner entered twice. Merging asks first.</p></div>
+        <div class="dl-tool" data-tool="reformat-sheets" data-kind="careful"><button type="button" class="btn small danger dl-tool-btn" onclick="runAdminTool('reformat-sheets')">🗂 Reformat All Sheets</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Fill missing IDs and PINs and standardize phones across the main sheets.</p><p class="dl-kind careful">Careful: changes live data right away. No preview.</p></div>
+        <div class="dl-tool" data-tool="share-photos" data-kind="fix"><button type="button" class="btn small dl-tool-btn" onclick="shareAttachments(false)">🖼 Fix Photo/Video Sharing</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Make older job photos and videos open for vendors without a Google login.</p><p class="dl-kind fix">Fixes data. Shows you first, then asks.</p></div>
+      </div></div>
+    </details>
+    <details class="dl-group" data-dl-key="checks" data-tools="1" open>
+      <summary><span class="dl-h">Checks &amp; diagnostics</span><span class="dl-sub">Make sure the system itself is healthy</span><span class="dl-count"></span></summary>
+      <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="ops-review" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="runOpsReview()">🔎 Run Ops Review</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Run the weekly Optimizer review now. It reads the usage log, saves its findings, and may use AI credits.</p></div>
+        <div class="dl-tool" data-tool="test-telemetry" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="logTestTelemetry()">📊 Log Test Telemetry Row</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Adds one test row to the usage log to confirm logging works.</p></div>
+      </div></div>
+    </details>
+    </section>
 
-    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">💵 MONEY &amp; QUICKBOOKS</div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('vendor-reconcile.html','_blank')">💵 Vendor reconciliation</button>
-      <button class="btn small" onclick="window.open('receipt-reconciler.html','_blank')">🧾 Receipt Reconciler</button>
-      <button class="btn small" onclick="window.open('ar-report-admin.html','_blank')">📋 Open Item Report</button>
-      <button class="btn small" onclick="window.open('qb-email-backfill.html','_blank')">📧 Fill missing QuickBooks emails</button>
-      <button class="btn small" onclick="window.open('qb-invoice-email-backfill.html','_blank')">🧾 Fix unsent invoice emails</button>
-      <button class="btn small" onclick="findRepairableInvoices()">🔧 Fix invoices already in QuickBooks</button>
-      <button class="btn small" onclick="window.open('signed-proposals.html','_blank')">🖊 Signed proposals → QB</button>
-      <button class="btn small" onclick="window.open('trash.html','_blank')">🗑 Trash Service billing</button>
-      <button class="btn small" onclick="goToQBMapping()">🔗 QB Mapping — link properties/units to QuickBooks</button>
-    </div>
+    <section id="dl-lower" class="dl-section" aria-label="Settings and logs">
+      <h3 class="dl-h">⚙ Settings &amp; logs</h3>
+    <details class="dl-group" data-dl-key="access-defaults">
+      <summary><span class="dl-h">Vendor access by trade</span><span class="dl-sub">Which trades can see lockbox and access codes</span></summary>
+      <div class="dl-body">
+        <p class="dl-note">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO never receive access codes unless explicitly overridden on a specific work order. Trades not listed default to YES.</p>
+        <div id="trade-access-list" style="margin-bottom:12px"><span style="color:var(--dl-muted);font-size:13px">Loading…</span></div>
+        <div class="dl-row">
+          <select id="trade-access-trade" class="dl-select">
+            <option value="">Select trade…</option></select>
+          <select id="trade-access-val" class="dl-select">
+            <option value="TRUE">YES — needs access</option>
+            <option value="FALSE">NO — no access needed</option>
+          </select>
+          <button type="button" class="btn small" style="min-height:44px" onclick="saveTradeAccessDefault()">Save</button>
+        </div>
+      </div>
+    </details>
 
-    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🧹 DATA HYGIENE</div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      <button class="btn small" onclick="window.open('bulk-importer.html','_blank')">📥 Bulk import properties/units/tenants</button>
-      <button class="btn small" onclick="runAdminTool('fix-pins')">🔑 Fix PINs + Phones</button>
-      <button class="btn small" onclick="checkStaleTenants(false)">🏠 Check units / moved-out tenants</button>
-      <button class="btn small" onclick="migrateTrades(false)">🔧 Update old trade names</button>
-      <button class="btn small" onclick="checkDuplicateProperties()">🏢 Find duplicate properties</button>
-      <button class="btn small" onclick="checkDuplicateOwners()">👤 Find duplicate owners</button>
-      <button class="btn small" onclick="runAdminTool('reformat-sheets')">🗂 Reformat All Sheets</button>
-      <button class="btn small" onclick="shareAttachments(false)">🖼 Fix photo/video sharing</button>
-    </div>
+    <details class="dl-group" data-dl-key="alerting">
+      <summary><span class="dl-h">Alerting</span><span class="dl-sub">Page the admin phone when something breaks</span></summary>
+      <div class="dl-body">
+        <p class="dl-note">Both alerts page the admin phone using the existing SMS setup, with no new channel. Both ship OFF; switch them on here whenever you are ready to be paged.</p>
+        <div class="dl-panel">
+          <label class="dl-check">
+            <input type="checkbox" id="alert-flag-failure">
+            <span>Failure alerts: page me when a wo_create or wo_status job fails (at most once an hour per job type)</span>
+          </label>
+          <label class="dl-check">
+            <input type="checkbox" id="alert-flag-deadman">
+            <span>Dead man's switch: page me if the Worker goes 24 hours or more with zero completed jobs (at most once a day)</span>
+          </label>
+        </div>
+        <div class="dl-row">
+          <button type="button" class="btn small" style="min-height:44px" onclick="saveAlertFlags()">Save</button>
+          <span id="alert-flags-status" style="font-size:13px;color:var(--dl-muted)"></span>
+        </div>
+      </div>
+    </details>
 
-    <div style="font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--text);margin-bottom:6px">🔎 DIAGNOSTICS</div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-      <button class="btn small" onclick="runOpsReview()">🔎 Run Ops Review (test)</button>
-      <button class="btn small" onclick="logTestTelemetry()">📊 Log test telemetry row</button>
-    </div>
-    <div id="admin-tool-result" style="color:var(--muted);font-size:11px;margin-bottom:16px;min-height:16px"></div>
-
-    <div class="section-title" style="margin-bottom:8px">🔑 VENDOR ACCESS DEFAULTS BY TRADE</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Controls whether vendors see lockbox/access codes on work orders when set to "Auto". Trades marked NO will never receive access codes unless explicitly overridden on a specific WO. Trades not listed default to YES.</div>
-    <div id="trade-access-list" style="margin-bottom:10px"><span style="color:var(--muted);font-size:11px">Loading…</span></div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
-      <select id="trade-access-trade" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
-        <option value="">Select trade…</option></select>
-      <select id="trade-access-val" style="background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 8px;border-radius:4px;font-family:var(--font);font-size:12px">
-        <option value="TRUE">YES — needs access</option>
-        <option value="FALSE">NO — no access needed</option>
-      </select>
-      <button class="btn small" onclick="saveTradeAccessDefault()">Save</button>
-    </div>
-
-    <div class="section-title" style="margin-bottom:8px">🔔 ALERTING</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Both alerts page the admin phone via the existing SMS pattern — no new channel. Both ship OFF by default; flip them on here whenever you're ready to start getting paged.</div>
-    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
-        <input type="checkbox" id="alert-flag-failure">
-        <span>Failure Alerts — page me when a wo_create/wo_status job fails (debounced to once/hour per job type)</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer">
-        <input type="checkbox" id="alert-flag-deadman">
-        <span>Dead Man's Switch — page me if the Worker goes 24h+ with zero completed jobs (debounced to once/24h)</span>
-      </label>
-    </div>
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
-      <button class="btn small" onclick="saveAlertFlags()">Save</button>
-      <span id="alert-flags-status" style="font-size:11px;color:var(--muted)"></span>
-    </div>
-
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center">
-      <button class="btn danger small" onclick="clearErrorLog()">Clear Errors</button>
-      <button class="btn secondary small" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button>
-    </div>
-    <div class="section-title">ERROR LOG</div>
-    <div id="error-log-list" style="margin-bottom:24px"><div class="loading">No errors logged</div></div>
-    <div class="section-title">WISHLIST / DEV LOG</div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Every idea/improvement, with a live status. As things get built or stop mattering, mark them ✓ Done or ✗ N-A so this list always reflects reality. Filter by status below; "Clear Done / N-A" archives the finished ones without touching what's still open.</div>
-    <div style="display:flex;gap:8px;margin-bottom:12px">
-      <textarea id="wishlist-input" placeholder="Type an idea or improvement..." style="flex:1;min-height:60px;resize:vertical;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:var(--radius)"></textarea>
-      <button class="btn" onclick="addWishlistItem()">Add</button>
-    </div>
-    <div id="wishlist-filters" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap"></div>
-    <div id="wishlist-list" style="margin-bottom:24px"><div class="loading">No items yet</div></div>
-    <div class="section-title">VENDOR ACCESS REQUESTS <span id="var-nav-count-inline" style="display:none;color:var(--warn);font-size:11px;font-weight:normal">— pending</span></div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:10px">Vendors requesting billing access to a property not already on their Billing_Property_Access list (Vendor Standalone Billing, §3d). "Approve once" clears just this request; "Approve ongoing" also adds the property to their standing list.</div>
-    <div id="vendor-access-requests-list" style="margin-bottom:24px"><div class="loading">Loading…</div></div>
-    <div class="section-title">TROUBLESHOOTING CACHE</div>
-    <p style="color:var(--muted);font-size:11px;margin-bottom:12px">Cached AI responses. Flag entries that need review.</p>
-    <button class="btn secondary small" onclick="loadCache()" style="margin-bottom:12px">↻ Refresh Cache List</button>
-    <div id="cache-list"><div class="loading">Click refresh to load</div></div>
+    <details class="dl-group" data-dl-key="errors">
+      <summary><span class="dl-h">Error log</span><span class="dl-sub">Problems this browser has recorded</span><span id="dl-errors-count" class="dl-count"></span></summary>
+      <div class="dl-body">
+        <div class="dl-row"><button type="button" class="btn danger small" style="min-height:44px" onclick="clearErrorLog()">Clear Errors</button></div>
+        <div id="error-log-list"><div class="loading">No errors logged</div></div>
+      </div>
+    </details>
+    <details class="dl-group" data-dl-key="wishlist">
+      <summary><span class="dl-h">Wishlist</span><span class="dl-sub">Ideas and improvements, each with a live status</span><span id="dl-wishlist-count" class="dl-count"></span></summary>
+      <div class="dl-body">
+        <p class="dl-note">Mark items ✓ Done or ✗ N-A as they get built or stop mattering, so this list always reflects reality. "Clear Done / N-A" archives the finished ones and leaves everything still open.</p>
+        <div class="dl-row" style="align-items:stretch">
+          <textarea id="wishlist-input" class="dl-field" placeholder="Type an idea or improvement..." rows="2" style="flex:1 1 260px;width:auto;min-height:64px"></textarea>
+          <button type="button" class="btn" style="min-height:44px" onclick="addWishlistItem()">Add</button>
+        </div>
+        <div id="wishlist-filters" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"></div>
+        <div id="wishlist-list" style="margin-bottom:16px"><div class="loading">No items yet</div></div>
+        <div class="dl-row"><button type="button" class="btn secondary small" style="min-height:44px" onclick="clearWishlistDone()">🧹 Clear Done / N-A</button></div>
+      </div>
+    </details>
+    <details class="dl-group" data-dl-key="cache">
+      <summary><span class="dl-h">Troubleshooting cache</span><span class="dl-sub">Saved AI answers, flag the ones that need review</span></summary>
+      <div class="dl-body">
+        <div class="dl-row"><button type="button" class="btn secondary small" style="min-height:44px" onclick="loadCache()">↻ Refresh Cache List</button></div>
+        <div id="cache-list"><div class="loading">Click refresh to load</div></div>
+      </div>
+    </details>
+    </section>
   </div>
+  <script>
+  // TOOLS & LOG page behaviour (Oct 20 2026): pinned "Most used", tool search, collapsible sections remembered per viewer.
+  // Progressive enhancement: every tool button works with none of this running. Saved layout lives in localStorage
+  // (mh_dl_pins, mh_dl_open), always inside try/catch; if the browser refuses storage the page says so instead of hiding it.
+  function dlLoadFailed(elId, what, where, err, retryCall) {
+    // Never silent (Oct 1 rule): shown on screen with a Retry, written to the Error Log, and reported to the failure ledger.
+    var el = document.getElementById(elId);
+    var msg = (err && err.message) || String(err || 'unknown error');
+    // 1) Put the red message on screen FIRST, so nothing below (blocked storage, a reporter fault) can stop the person seeing the failure.
+    if (el) el.innerHTML = '<div style="padding:12px;border:2px solid var(--danger);border-radius:8px;color:var(--danger);font-size:13px">⚠ ' + esc(what) + ': ' + esc(msg) +
+      ' <button type="button" class="btn small" style="margin-left:8px;min-height:44px" onclick="' + retryCall + '">Retry</button></div>';
+    function side(why, e) { // a failure while recording the failure is shown on the page too, never swallowed
+      if (el) el.insertAdjacentHTML('beforeend', '<div style="margin-top:8px;font-size:13px;color:var(--danger)">' + esc(why + ' (' + ((e && e.message) || e) + ')') + '</div>');
+    }
+    // 2) Error Log (its storage can be blocked) and 3) failure ledger, each guarded on its own.
+    try { if (typeof logError === 'function') logError(what, msg); } catch (e1) { side('Could not save this to the Error Log', e1); }
+    try {
+      // Prefer the Hub's shared reporter (failure-reporter.js: de-duplicated, capped); fall back to posting the report directly.
+      if (typeof window.hubReportFailure === 'function') window.hubReportFailure(where, what + ': ' + msg, { ref: 'devlog' });
+      else api('POST', '/failure/report', { system: 'hub', where: where, ref: 'devlog', message: what + ': ' + msg }).catch(function (e2) { side('Could not report this failure', e2); });
+    } catch (e3) { side('Could not report this failure', e3); }
+  }
+  (function () {
+    var page = document.getElementById('page-devlog'); if (!page) return;
+    var LS_PINS = 'mh_dl_pins', LS_OPEN = 'mh_dl_open';
+    var DEFAULT_PINS = ['action-center', 'scope-creator', 'receipt-reconciler', 'message-queue', 'proposals', 'field-inspection', 'signed-proposals', 'command-center'];
+    var query = '';
+    // First visit on a phone: tool groups start closed so the page is short (pinned tools are right at the top). Change to false to open them.
+    var PHONE_GROUPS_START_CLOSED = true;
+    function startsOpen() { return !(PHONE_GROUPS_START_CLOSED && window.matchMedia && window.matchMedia('(max-width: 600px)').matches); }
+    function $(id) { return document.getElementById(id); }
+    function note(msg) { if (typeof logError === 'function') logError('Tools page', msg); }
+    function storageFailed() { var n = $('dl-storage-note'); if (n) n.hidden = false; }
+    function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { storageFailed(); return null; } }
+    function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { storageFailed(); } }
+    function readJSON(k, fallback) {
+      var raw = lsGet(k); if (raw == null) return fallback;
+      try { var v = JSON.parse(raw); return v == null ? fallback : v; }
+      catch (e) { note('Saved layout "' + k + '" was unreadable, using the default. ' + e.message); return fallback; }
+    }
+    function safe(label, fn) { return function () { try { return fn.apply(this, arguments); } catch (e) { note(label + ' failed: ' + ((e && e.message) || e)); } }; }
+    function slice(list) { return Array.prototype.slice.call(list); }
+
+    // ── pins ──
+    function getPins() { var p = readJSON(LS_PINS, null); return Array.isArray(p) ? p : DEFAULT_PINS.slice(); }
+    function tileByKey(k) { return page.querySelector('.dl-grid .dl-tool[data-tool="' + k + '"]'); }
+    function syncStars() {
+      var pins = getPins();
+      slice(page.querySelectorAll('.dl-tool')).forEach(function (t) {
+        var star = t.querySelector('.dl-star'), btn = t.querySelector('.dl-tool-btn'); if (!star || !btn) return;
+        var on = pins.indexOf(t.getAttribute('data-tool')) >= 0, label = btn.textContent.trim();
+        star.setAttribute('aria-pressed', on ? 'true' : 'false');
+        star.textContent = on ? '★' : '☆';
+        star.title = on ? 'Unpin from Most used' : 'Pin to Most used';
+        star.setAttribute('aria-label', (on ? 'Unpin ' : 'Pin ') + label + (on ? ' from Most used' : ' to Most used'));
+      });
+    }
+    function renderPins() {
+      var host = $('dl-pin-grid'); if (!host) return;
+      var pins = getPins(), n = 0; host.innerHTML = '';
+      pins.forEach(function (k) {
+        var t = tileByKey(k);
+        if (!t) { note('Pinned tool "' + k + '" no longer exists; skipped.'); return; }
+        var c = t.cloneNode(true); c.removeAttribute('hidden'); c.setAttribute('data-clone', '1');
+        var cb = c.querySelector('.dl-tool-btn'), cd = t.querySelector('.dl-desc'); if (cb && cd) cb.title = cd.textContent;
+        host.appendChild(c); n++;
+      });
+      var empty = $('dl-pin-empty'); if (empty) empty.hidden = n > 0;
+      var cnt = $('dl-pin-count'); if (cnt) { cnt.textContent = String(n); cnt.hidden = !n; }
+      syncStars();
+    }
+    page.addEventListener('click', safe('Pin toggle', function (e) {
+      var star = e.target.closest && e.target.closest('.dl-star'); if (!star) return;
+      var t = star.closest('.dl-tool'), key = t && t.getAttribute('data-tool'); if (!key) return;
+      var pins = getPins(), i = pins.indexOf(key);
+      if (i >= 0) pins.splice(i, 1); else pins.push(key);
+      lsSet(LS_PINS, JSON.stringify(pins)); renderPins();
+    }));
+
+    // ── open / closed sections, remembered per viewer ──
+    function savedOpen() { var s = readJSON(LS_OPEN, {}); return (s && typeof s === 'object' && !Array.isArray(s)) ? s : {}; }
+    function restoreOpen() {
+      var s = savedOpen();
+      slice(page.querySelectorAll('details[data-dl-key]')).forEach(function (d) {
+        var k = d.getAttribute('data-dl-key');
+        if (Object.prototype.hasOwnProperty.call(s, k)) d.open = !!s[k]; else if (d.hasAttribute('data-tools')) d.open = startsOpen();
+      });
+    }
+    page.addEventListener('click', safe('Remember section', function (e) {
+      var sm = e.target.closest && e.target.closest('summary'); if (!sm || query) return;
+      var d = sm.parentNode, k = d && d.getAttribute && d.getAttribute('data-dl-key'); if (!k) return;
+      setTimeout(function () { var s = savedOpen(); s[k] = d.open; lsSet(LS_OPEN, JSON.stringify(s)); }, 0);
+    }));
+
+    // ── search ──
+    var groups = slice(page.querySelectorAll('details.dl-group[data-tools]'));
+    var allTiles = slice(page.querySelectorAll('.dl-grid .dl-tool'));
+    allTiles.forEach(function (t) {
+      var g = t.closest('details'), gt = g ? g.querySelector('.dl-h').textContent : '';
+      t.setAttribute('data-search', (t.querySelector('.dl-tool-btn').textContent + ' ' + t.querySelector('.dl-desc').textContent + ' ' + gt).toLowerCase());
+    });
+    var total = $('dl-tool-total'); if (total) total.textContent = String(allTiles.length);
+    function applySearch() {
+      var words = query.toLowerCase().split(/\s+/).filter(Boolean), shown = 0, saved = savedOpen();
+      groups.forEach(function (g) {
+        var ts = slice(g.querySelectorAll('.dl-tool')), m = 0;
+        ts.forEach(function (t) {
+          var hay = t.getAttribute('data-search') || '', ok = words.every(function (w) { return hay.indexOf(w) >= 0; });
+          t.hidden = !ok; if (ok) m++;
+        });
+        shown += m;
+        g.hidden = words.length > 0 && m === 0;
+        var c = g.querySelector('.dl-count'); if (c) c.textContent = words.length ? (m + ' of ' + ts.length) : (ts.length + ' tools');
+        if (words.length) g.open = m > 0;
+        else { var k = g.getAttribute('data-dl-key'); g.open = Object.prototype.hasOwnProperty.call(saved, k) ? !!saved[k] : startsOpen(); }
+      });
+      var pinned = $('dl-pinned'); if (pinned) pinned.hidden = words.length > 0;
+      var st = $('dl-search-status');
+      if (st) {
+        if (!words.length) st.textContent = '';
+        else if (!shown) st.innerHTML = 'No tool matches "' + esc(query) + '". <button type="button" id="dl-clear-search">Clear search</button>';
+        else st.textContent = 'Showing ' + shown + ' of ' + allTiles.length + ' tools';
+      }
+    }
+    var box = $('dl-search');
+    if (box) {
+      box.addEventListener('input', safe('Search', function () { query = box.value.trim(); applySearch(); }));
+      box.addEventListener('keydown', safe('Search', function (e) { if (e.key === 'Escape' && box.value) { box.value = ''; query = ''; applySearch(); } }));
+    }
+    page.addEventListener('click', safe('Clear search', function (e) {
+      if (e.target && e.target.id === 'dl-clear-search' && box) { box.value = ''; query = ''; applySearch(); box.focus(); }
+    }));
+
+    // ── counts in the section headers (read what the page's own loaders already drew) ──
+    var updateCounts = safe('Counts', function () {
+      var el = $('error-log-list'), g = page.querySelector('details[data-dl-key="errors"]'), c = $('dl-errors-count');
+      if (el && c) {
+        var n = slice(el.children).filter(function (x) { return !x.classList.contains('loading'); }).length;
+        c.textContent = n ? (n + ' recorded') : 'none';
+        c.style.color = n ? 'var(--danger)' : ''; c.style.fontWeight = n ? '700' : '';
+        if (g && !Object.prototype.hasOwnProperty.call(savedOpen(), 'errors') && !query) g.open = n > 0;
+      }
+      var wc = $('dl-wishlist-count');
+      if (wc && Array.isArray(window.wishlistItems)) {
+        var open = window.wishlistItems.filter(function (i) { var s = (typeof wlStatusOf === 'function') ? wlStatusOf(i) : (i.Status || 'Active'); return s !== 'Done' && s !== 'Not applicable'; }).length;
+        wc.textContent = open + ' open';
+      }
+    });
+    ['error-log-list', 'wishlist-list'].forEach(function (id) { var el = $(id); if (el) new MutationObserver(updateCounts).observe(el, { childList: true, subtree: true }); });
+
+    // ── "Needs your attention": shown only while a list has something to show (or failed to load) ──
+    var QUIET = { 'vtr-review-list': 'Nothing waiting on your review.', 'vendor-access-requests-list': 'No pending requests.' };
+    function listShows(id) {
+      var el = $(id); if (!el) return false;
+      var t = (el.textContent || '').trim();
+      // Anything that is not clearly "empty" or "still loading" stays visible, so an error or a new message is never hidden.
+      return !(t === '' || /^Loading/i.test(t) || t === QUIET[id]);
+    }
+    var updateAttn = safe('Needs-attention strip', function () {
+      var a = listShows('vtr-review-list'), b = listShows('vendor-access-requests-list');
+      var w1 = $('vtr-review-wrap'), w2 = $('dl-var-wrap'), sec = $('dl-attn'), pill = $('dl-attn-count');
+      if (w1) w1.hidden = !a; if (w2) w2.hidden = !b; if (sec) sec.hidden = !(a || b);
+      var n = 0;
+      if (a) n += slice(document.querySelectorAll('#vtr-review-list button[id^="vtr-review-btn-"]')).length;
+      if (b && Array.isArray(window.vendorAccessRequests)) n += window.vendorAccessRequests.length;
+      if (pill) { pill.textContent = n ? String(n) : '!'; pill.hidden = !(a || b); }
+    });
+    ['vtr-review-list', 'vendor-access-requests-list'].forEach(function (id) { var el = $(id); if (el) new MutationObserver(updateAttn).observe(el, { childList: true, subtree: true, characterData: true }); });
+
+    // ── bring the result of a tool you just ran into view ──
+    var resultEl = $('admin-tool-result'), scrollTimer = null;
+    if (resultEl) new MutationObserver(safe('Show result', function () {
+      if (!(resultEl.textContent || '').trim()) return;
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(function () { if (resultEl.scrollIntoView) resultEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 60);
+    })).observe(resultEl, { childList: true, subtree: true, characterData: true });
+
+    // ── start ──
+    restoreOpen(); renderPins(); applySearch(); updateCounts(); updateAttn();
+    page.classList.add('dl-js');
+  })();
+  </script>
 </div>
 
 <!-- NEW WORK ORDER MODAL -->
@@ -5788,7 +6083,7 @@ function renderErrorLog(){
   var logs=JSON.parse(localStorage.getItem('mh_errors')||'[]');
   var el=document.getElementById('error-log-list'); if(!el) return;
   if(!logs.length){el.innerHTML='<div class="loading">No errors logged</div>';return;}
-  el.innerHTML=logs.map(function(l){return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:8px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+l.time.replace('T',' ').split('.')[0]+' — '+l.context+'</div><div style="font-size:12px;color:var(--danger)">'+l.message+'</div></div>';}).join('');
+  el.innerHTML=logs.map(function(l){return '<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:var(--radius);padding:12px;margin-bottom:8px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">'+esc(l.time.replace('T',' ').split('.')[0])+' — '+esc(l.context)+'</div><div style="font-size:12px;color:var(--danger)">'+esc(l.message)+'</div></div>';}).join('');
 }
 function clearErrorLog(){if(!confirm('Clear all error logs?'))return;localStorage.removeItem('mh_errors');renderErrorLog();toast('Error log cleared','info');}
 
@@ -5810,8 +6105,10 @@ function loadVendorTaskReviewQueue() {
   var el = document.getElementById('vtr-review-list');
   if (!el) return;
   api('GET', '/vendor-task-requests/pending-review').then(function(rows) {
-    renderVendorTaskReviewQueue(rows || []);
-  }).catch(function(e) { el.innerHTML = '<div style="color:#e55;font-size:12px">Failed to load: ' + esc(e.message || '') + '</div>'; });
+    // api() resolves with {error:...} on a server-side failure: that must show as a failure, not as "Nothing waiting on your review."
+    if (!Array.isArray(rows)) throw new Error((rows && rows.error) || 'unexpected answer from the server');
+    renderVendorTaskReviewQueue(rows);
+  }).catch(function(e) { dlLoadFailed('vtr-review-list', 'Vendor task review queue', 'vendor_task_review_load', e, 'loadVendorTaskReviewQueue()'); });
 }
 function renderVendorTaskReviewQueue(rows) {
   var el = document.getElementById('vtr-review-list');
@@ -5846,8 +6143,10 @@ function markVendorTaskReviewed(id) {
 
 function loadWishlist(){
   api('GET','/wishlist').then(function(items){
-    wishlistItems=Array.isArray(items)?items.filter(function(i){return i.Active!=='FALSE';}):[]; renderWishlist();
-  }).catch(function(e){console.log('Wishlist load error',e);});
+    // api() hands back {error:"..."} for a server-side failure instead of rejecting; that used to draw an empty list. Now it is shown as a failure.
+    if(!Array.isArray(items)) throw new Error((items&&items.error)||'unexpected answer from the server');
+    wishlistItems=items.filter(function(i){return i.Active!=='FALSE';}); renderWishlist();
+  }).catch(function(e){console.log('Wishlist load error',e); dlLoadFailed('wishlist-list','Could not load the wishlist','wishlist_load',e,'loadWishlist()');});
 }
 function addWishlistItem(){
   var input=document.getElementById('wishlist-input'); var val=input.value.trim(); if(!val)return;
@@ -5904,10 +6203,12 @@ function deleteWishlistItem(id){
 var vendorAccessRequests = [];
 function loadVendorAccessRequests(){
   api('GET','/vendor-access-requests?status=pending').then(function(rows){
-    vendorAccessRequests = Array.isArray(rows) ? rows : [];
+    // Same as the wishlist: an {error} answer used to look like "No pending requests." Now it is shown as a failure.
+    if(!Array.isArray(rows)) throw new Error((rows&&rows.error)||'unexpected answer from the server');
+    vendorAccessRequests = rows;
     renderVendorAccessRequests();
     updateVendorAccessRequestBadges();
-  }).catch(function(e){ console.log('Vendor access requests load error', e); });
+  }).catch(function(e){ console.log('Vendor access requests load error', e); dlLoadFailed('vendor-access-requests-list','Could not load vendor access requests','vendor_access_requests_load',e,'loadVendorAccessRequests()'); });
 }
 function renderVendorAccessRequests(){
   var el = document.getElementById('vendor-access-requests-list'); if (!el) return;
