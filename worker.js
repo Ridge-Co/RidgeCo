@@ -35976,6 +35976,10 @@ async function strAdminConfig(env, body) {
       else return json({ ok: false, error: 'not_allowed', message: `${k} cannot be changed here.` }, 400);
     }
     if (!Object.keys(sets).length) return json({ ok: false, error: 'nothing_to_save', message: 'No settings were sent.' }, 400);
+    if (actAs && !inspCalStaged(env, await fetchConfig(env))) { // never save a setting that would break the calendar: Google must approve acting as this user first
+      try { await getCalendarAccessToken(env, { sub: actAs, scope: STR_CAL_SCOPE_EVENTS }); }
+      catch (e) { await strCalCheckLog(env, e, 'save'); return json({ ok: false, error: e.code || 'calendar_auth', message: 'NOT saved. ' + strErrText(e) }, 409); }
+    }
     for (const [k, v] of Object.entries(sets)) { const r = await setConfigKey(env, { key: k, value: v }), j = await r.json(); if (!j || !j.success) throw strErr('config_write', `Could not save ${k}`); }
     invalidateTabCache('Config');
     const cfg = await fetchConfig(env);
