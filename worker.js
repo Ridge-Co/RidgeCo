@@ -39417,7 +39417,7 @@ function insbPlan(o) {
   if (billable) for (const p of rec.problems) blockers.push(p);
   const addr = String(b.Formatted_Address || b.Address || '');
   const cleanKind = String((o && o.kind) || '');
-  const desc = 'Comprehensive property inspection' + (cleanKind === 'zero_access' ? ' - zero access (no unit could be inspected)' : ' (' + trip.units + ' unit' + (trip.units === 1 ? '' : 's') + ')') + (addr ? ' - ' + addr : '') + (wo ? ' - Work Order ' + wo : '');
+  const desc = 'Comprehensive property inspection' + (cleanKind === 'zero_access' ? ' - zero access (no unit could be inspected)' : (trip.ok ? ' (' + trip.units + ' unit' + (trip.units === 1 ? '' : 's') + ')' : '')) + (addr ? ' - ' + addr : '') + (wo ? ' - Work Order ' + wo : '');
   const ownerOn = String(c.Owner_Invoice || '').toUpperCase() === 'TRUE';
   let owner = { enabled: ownerOn, status: 'off', number: '', pct: '', markup_cents: 0, total_cents: 0 };
   if (ownerOn && billable) {
@@ -39565,7 +39565,7 @@ async function insbQbInvoicePdf(env, token, invoiceId) {
   return buf;
 }
 // The shared "Property Inspection" service item (found or created ONCE, id cached in Config insp_qb_item_id). Its income account is copied from the
-// existing General item (40), never guessed; if that cannot be read the invoice bills the General item and says so.
+// existing General item (40), or failing that any existing service item; if neither can be read it stops loudly - an item id is never guessed.
 async function insbQbItem(env, token) {
   const cfg = await fetchConfig(env);
   if (cfg.insp_qb_item_id) return { id: String(cfg.insp_qb_item_id), note: '' };
@@ -39575,8 +39575,15 @@ async function insbQbItem(env, token) {
   let it = ((d && d.QueryResponse && d.QueryResponse.Item) || [])[0];
   if (!it) {
     const gen = await qbApi(env, 'item/40?minorversion=73', 'GET', null, token);
-    const inc = gen && gen.Item && gen.Item.IncomeAccountRef && gen.Item.IncomeAccountRef.value;
-    if (!inc) return { id: '40', note: 'Could not find the General item income account, so this invoice bills the General item (40).' };
+    let inc = gen && gen.Item && gen.Item.IncomeAccountRef && gen.Item.IncomeAccountRef.value;
+    if (!inc) {
+      // Item 40 (General) is not in this QuickBooks company (e.g. the Intuit sandbox): borrow the income account of any existing service item instead of guessing an item id.
+      const sq = encodeURIComponent("select Id, IncomeAccountRef from Item where Type = 'Service' maxresults 1");
+      const sd = await qbApi(env, 'query?query=' + sq + '&minorversion=73', 'GET', null, token);
+      const svc = ((sd && sd.QueryResponse && sd.QueryResponse.Item) || [])[0];
+      inc = svc && svc.IncomeAccountRef && svc.IncomeAccountRef.value;
+    }
+    if (!inc) throw new Error('Could not find an income account for the Property Inspection item (the General item and every service item were unreadable). Nothing was created.');
     const r = await qbApi(env, 'item?minorversion=73', 'POST', { Name: 'Property Inspection', Type: 'Service', IncomeAccountRef: { value: String(inc) } }, token);
     it = (r && r.Item) || (qbDupId(r) ? { Id: qbDupId(r) } : null);
     if (!it) throw new Error('Could not create the Property Inspection item: ' + (qbFault(r) || 'no id returned'));

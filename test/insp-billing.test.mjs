@@ -42,9 +42,9 @@ function world(opts = {}) {
     qbApi: async (env, p, method, body) => {
       w.qbCalls.push({ p, method });
       if (method === 'POST' && p.startsWith('invoice?')) { w.qbPosts.push({ p, body }); if (w.failNext.invoice) { const f = w.failNext.invoice; w.failNext.invoice = null; return f; } if (w.invoiceByReq && w.invoiceByReq[p.match(/requestid=([^&]+)/)[1]]) return w.invoiceByReq[p.match(/requestid=([^&]+)/)[1]]; const res = { Invoice: { Id: String(77 + w.qbPosts.length), DocNumber: String(++w.invoiceSeq) } }; (w.invoiceByReq = w.invoiceByReq || {})[p.match(/requestid=([^&]+)/)[1]] = res; return res; }
-      if (p.startsWith('query?')) return { QueryResponse: { Item: [] } };
-      if (p.startsWith('item/40')) return { Item: { Id: '40', IncomeAccountRef: { value: '198' } } };
-      if (method === 'POST' && p.startsWith('item?')) return { Item: { Id: '901', Name: 'Property Inspection' } };
+      if (p.startsWith('query?')) { if (decodeURIComponent(p).includes("Type = 'Service'")) return { QueryResponse: { Item: opts.noServiceItem ? [] : [{ Id: '5', IncomeAccountRef: { value: '321' } }] } }; return { QueryResponse: { Item: [] } }; }
+      if (p.startsWith('item/40')) return opts.noItem40 ? { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } } : { Item: { Id: '40', IncomeAccountRef: { value: '198' } } };
+      if (method === 'POST' && p.startsWith('item?')) { w.itemPosts = (w.itemPosts || []).concat([body]); return { Item: { Id: '901', Name: 'Property Inspection' } }; }
       return {};
     },
     qbAccessToken: async () => 'tok', qbBase: () => 'https://qb.test/v3/company',
@@ -307,6 +307,13 @@ async function main() {
     const buf = Buffer.from(await dlb.arrayBuffer()); eq(buf.slice(0, 5).toString(), '%PDF-', 'valid PDF bytes');
     const dla = await api.insbPdfDownload(env, new URL('https://x.test/insp/billing/pdf?id=2&which=a')); ok(dla.status === 200, 'our invoice downloads (QuickBooks PDF)');
     const pdfp = path.join(tmp, 'b.pdf'); fs.writeFileSync(pdfp, buf); const t2 = spawnSync('pdftotext', ['-layout', pdfp, '-']); if (t2.status === 0) ok(String(t2.stdout).includes('Total Amount: $211.50'), '2 units $180 at 17.5% = $211.50 on the owner PDF'); else ok(true, 'skipped');
+  }
+  // 17) the QuickBooks company has no General item 40 (e.g. the Intuit sandbox): borrow a service item's income account; if there is none, stop loudly - never guess an item id
+  {
+    const a = world({ noItem40: true }); const ra = await call(a.api, a.env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(ra.body.ok, 'sandbox-style company completes: ' + JSON.stringify(ra.body).slice(0, 200)); eq(a.w.itemPosts[0].IncomeAccountRef.value, '321', 'item created on the income account of an existing service item'); eq(a.w.qbPosts[0].body.Line[0].SalesItemLineDetail.ItemRef.value, '901', 'invoice uses the new item, not a guessed id');
+    const b = world({ noItem40: true, noServiceItem: true }); const rb = await call(b.api, b.env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!rb.body.ok && /income account/.test(rb.body.message), 'no usable income account: stops with a clear message'); eq(b.w.qbPosts.length, 0, 'no invoice posted'); eq(b.w.mails.length, 0, 'no email'); eq(b.w.tabs.Insp_Bookings[0].Billing_Lock, '', 'lock cleared'); ok(b.w.telemetry.some(t => t.Success === 'FALSE'), 'logged to Needs Attention');
   }
 }
 await main();
