@@ -898,6 +898,7 @@ const _hubWorkerCore = {
         if (path === '/owner-user/update')        return await updateRow(env, 'Owner_Users', body.id, body.fields);
         if (path === '/send-pin')                 return await sendPinMessage(env, body);
         if (path === '/welcome/send')              return await welcomeSend(env, body);
+        if (path === '/portal-access/backfill')    return await portalBackfillApply(env);
         if (path === '/regenerate-pin')           return await regeneratePIN(env, body);
         if (path === '/message-template/update')  return await updateMessageTemplate(env, body);
         if (path === '/property/notice')          return await sendPropertyNotice(env, body);
