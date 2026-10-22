@@ -15891,6 +15891,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^selftest/, 'P1'],
   [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
   [/^failure_ledger/, 'P1'],
+  [/^insp_billing_money/, 'P0'],            // Oct 22 2026: a failed QuickBooks invoice / email / stamp on inspection billing is money
+  [/^insp_billing_write/, 'P1'],            // Oct 22 2026: a failed customer-config / work-order-number write
   [/^qb_payables_(vendor_)?(paid_)?(payment_)?date_missing/, 'P2'],   // Oct 20 2026: display-only warning ("payment date unavailable"); no money moves. Recorded once with a count, not a P0 on every page load.
   [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
   [/^ai_credit_flag_read_busy/, 'P2'],                    // Oct 21 2026: Google was busy for a minute; the last known flag value kept being honoured
