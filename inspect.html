@@ -1209,20 +1209,29 @@ function billConfirm(btn){
     err.classList.remove('hide'); loadBookings();
   }).catch(function(e){ bill.busy=false; btn.disabled=false; btn.textContent=label; err.innerHTML='Could not reach the Hub: '+esc(e.message)+'. Check Approvals before trying again — it may have gone through.'; err.classList.remove('hide'); });
 }
-function billResume(id,btn){
-  var b=bookingsById[id]; if(!b) return; btn.disabled=true;
-  api('POST','/insp/billing/complete',{ id:id, kind:b.Completion_Kind, units:b.Units_Billed, confirm:true }).then(function(r){
-    if(r&&r.ok) toast('Sent'); else alert((r&&(r.message||r.error))||'Could not finish.');
-    loadBookings();
-  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
-}
-function billRelease(id,btn){
-  if(!confirm('Email the owner-facing invoice to the customer now?')) return;
+// force=true only after a person has checked that an email never arrived (or that a QuickBooks total has been fixed): it is the ONLY way an unclear send is repeated.
+function billResume(id,btn,force,why){
+  var b=bookingsById[id]; if(!b) return;
+  if(force && !confirm(why==='review' ? 'Have you fixed the invoice in QuickBooks so its total matches? Send it to the customer now?' : 'Did you check that this email NEVER arrived (Sent folder / ask the customer)? Sending again could give them a duplicate.')) return;
   btn.disabled=true;
-  api('POST','/insp/billing/release-owner',{ id:id }).then(function(r){
-    if(r&&r.ok) toast('Owner invoice sent'); else alert((r&&(r.message||r.error))||'Could not send.');
+  api('POST','/insp/billing/complete',{ id:id, kind:b.Completion_Kind||'inspected', units:b.Units_Billed, confirm:true, force_resend:force===true }).then(function(r){
+    if(r&&r.ok) toast('Sent'); else { btn.disabled=false; alert((r&&(r.message||r.error))||'Could not finish.'); }
     loadBookings();
-  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message+'. Check the booking before trying again: it may have gone through.'); loadBookings(); });
+}
+// Look first (who, how much), then send exactly the amount that was shown.
+function billRelease(id,btn,force){
+  btn.disabled=true;
+  var f=force===true?{ force:true }:{};
+  api('POST','/insp/billing/release-owner',Object.assign({ id:id },f)).then(function(r){
+    if(!r||!r.ok||!r.preview){ btn.disabled=false; alert((r&&(r.message||r.error))||'Could not check the owner invoice.'); loadBookings(); return; }
+    var msg='Email owner-facing invoice '+r.owner_number+' for '+money(r.owner_cents)+' ('+r.markup_pct+'% on our '+money(r.base_cents)+') to '+(r.would_send_to||[]).join(', ')+((r.would_cc&&r.would_cc.length)?' (cc '+r.would_cc.join(', ')+')':'')+'?'+(force?'\n\nOnly continue if you checked that the earlier email never arrived.':'');
+    if(!confirm(msg)){ btn.disabled=false; return; }
+    return api('POST','/insp/billing/release-owner',Object.assign({ id:id, confirm:true, expected_cents:r.owner_cents },f)).then(function(r2){
+      if(r2&&r2.ok) toast('Owner invoice sent'); else { btn.disabled=false; alert((r2&&(r2.message||r2.error))||'Could not send.'); }
+      loadBookings();
+    });
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message+'. Check the booking before trying again.'); loadBookings(); });
 }
 function billSetWO(id,btn){
   var v=document.getElementById('wo-in-'+id).value.trim(); if(!v){ toast('Enter the work order number'); return; }
