@@ -39583,9 +39583,13 @@ async function insbSendMail(env, o) {
     head.push('--' + boundary, 'Content-Type: application/pdf; name="' + safe + '"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: attachment; filename="' + safe + '"', '', insbB64(a.bytes).replace(/(.{76})/g, '$1\r\n'), '');
   }
   head.push('--' + boundary + '--');
-  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(head.join('\r\n')) }) });
-  const data = await resp.json().catch(() => null);
-  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  let resp, data;
+  try {
+    resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(head.join('\r\n')) }) });
+    data = await resp.json().catch(() => null);
+  } catch (e) { throw Object.assign(new Error('Gmail did not answer (' + e.message + ') - the email may or may not have been sent'), { definite: false }); }
+  // Only a 4xx is a definite refusal; a 5xx, or a 2xx without a message id, may still have been delivered.
+  if (!resp.ok || !data || !data.id) throw Object.assign(new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200)), { definite: resp.status >= 400 && resp.status < 500 });
   return { sent: true, message_id: data.id };
 }
 // QuickBooks' own PDF of an invoice, so the file Premier gets is exactly the invoice in the books. Throws unless real PDF bytes came back.
