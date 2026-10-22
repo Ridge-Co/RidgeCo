@@ -2,7 +2,10 @@
 
 **Read this on any `resume ridgeco` (light load first, then this file, then continue from "Next step").**
 
-## Checkpoint: Oct 19, 2026 (evening) — vendor Paid tab, estimate skip-text, padded fee, fee credits, credit-aware reprice/Who To Pay, sweep built on `feat/estimate-skip-sms-vendor-paid-tab-oct19`
+## Checkpoint: Oct 22, 2026 (afternoon) — Premier inspection billing built, reviewed, verified on staging (`feat/insp-billing-premier-oct22`)
+**State:** code, tests (367), brief, FEATURE_LOG rule 228 and CURRENT.md done; staging PR #418 merged and build `2026-10-22.03-insp-billing` verified deployed; staging scenarios passed (see brief section 8). **Next:** Brett's go/no-go to open and merge the `main` PR. Then (only with his say-so) set up the Premier customer row on prod, get the Smart Bill Entry address + markup + owner-invoice phone/email from Premier, and complete WO 43945-1. Do not send the stale Gmail draft 43945-1-6131. Details: `context/INSPECTION_BILLING_BUILD_BRIEF_v1.0.md`, Project doc `claude/premier-inspection-invoicing-oct22.md`.
+
+## Earlier checkpoint: Oct 19, 2026 (evening) — vendor Paid tab, estimate skip-text, padded fee, fee credits, credit-aware reprice/Who To Pay, sweep built on `feat/estimate-skip-sms-vendor-paid-tab-oct19`
 **State:** code + tests + docs done; next: staging verification (staging PR), Brett's go/no-go on the `main` PR. Details: FEATURE_LOG "VENDOR PORTAL PAID TAB ...".
 
 ## Earlier checkpoint: Oct 19, 2026 — proposal netting + instant-pay fee + property/unit texts built on `feat/proposal-netting-instant-fee-oct19`
