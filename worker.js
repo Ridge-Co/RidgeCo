@@ -39946,10 +39946,12 @@ async function insbQueue(env) {
     const wo = new Set(cu.filter(x => String(x.Billing_Mode || '') === 'wo').map(x => String(x.ID))), now = Date.now();
     const rows = bk.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && wo.has(String(r.Customer_ID)));
     const out = rows.map(r => {
-      const done = String(r.Completed_At || '') !== '', start = Date.parse(r.Start_ISO);
+      const done = String(r.Completed_At || '') !== '', start = Date.parse(r.Start_ISO), ist = String(r.Invoice_Status || ''), bst = String(r.InvB_Status || '');
+      const aSent = String(r.Invoice_Emailed_At || '').trim() !== '', bSent = String(r.InvB_Emailed_At || '').trim() !== '';
       return { booking: insbPublicBooking(r), needs_completion: r.Status === 'approved' && !done && Number.isFinite(start) && start <= now + 6 * 3600000,
-        owner_held: String(r.InvB_Status || '').startsWith('held'), needs_attention: done && String(r.Invoice_Status || '') === 'invoiced' };
-    }).filter(x => x.needs_completion || x.owner_held || x.needs_attention);
+        owner_held: done && !bSent && bst.startsWith('held'), owner_unsent: done && !bSent && bst === 'ready' && aSent, owner_hold: done && !bSent && insbIsHold(bst),
+        invoice_hold: done && !aSent && insbIsHold(ist), needs_attention: done && !aSent && (ist === 'invoiced' || /^creating/.test(ist)) };
+    }).filter(x => x.needs_completion || x.owner_held || x.owner_unsent || x.owner_hold || x.invoice_hold || x.needs_attention);
     return json({ ok: true, items: out, customers: cu.filter(x => wo.has(String(x.ID))).map(x => ({ id: x.ID, name: x.Name, markup_pct: x.Markup_Pct || '', appfolio: !!String(x.AppFolio_Email || '').trim() })) });
   } catch (e) { await insbFail(env, 'queue', e.message, ''); return json({ ok: false, error: 'queue_failed', message: e.message }, 500); }
 }
