@@ -16135,6 +16135,12 @@ function failSeverity(where, message, explicit) {
   if (/write|append|update|queue|duplicate|sheet|integrity|sweep|id_race/i.test(w) || /quota exceeded|did not land|not found after|duplicate/i.test(m)) return 'P1';
   return 'P2';
 }
+// PURE. The severity a Where is FIXED at on purpose (FAIL_SEVERITY_BY_WHERE), or null when it has no fixed value.
+function failTableSeverity(where) {
+  const w = String(where || '');
+  for (const [re, sev] of FAIL_SEVERITY_BY_WHERE) if (re.test(w)) return sev;
+  return null;
+}
 // Builds one Failure_Events row from whatever a caller has. Never throws.
 function failBuildEvent(f, nowMs, rand) {
   f = f || {};
@@ -16203,10 +16209,29 @@ function failRollupPlan(inp) {
     const row = findRow(fp);
     if (!row) created.push({ ID: 'F-c' + now + '-' + created.length, Fingerprint: fp, Severity: c.severity, System: c.system || 'hub', Where: c.where, Message: String(c.message).slice(0, 400), Source: 'condition', First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: '', Fixed_In: '', Notes: '' });
     else if (row.Status === 'fixed') { Object.assign(row, { Severity: c.severity, Message: String(c.message).slice(0, 400), First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Notes: (row.Notes ? row.Notes + ' | ' : '') + `came back ${day}` }); touch(row); }
-    else { row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400); if (failSevRank(c.severity) < failSevRank(row.Severity)) row.Severity = c.severity; touch(row); }
+    else {
+      row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400);
+      // Oct 22 2026: severity follows the CURRENT rule in both directions. For conditions it only ever escalated, so "alerts OFF" and "dead-man OFF"
+      // (P2 since Oct 21, Brett's standing choice) stayed on Needs Attention as a P0 / P1 because that is what they were when first seen.
+      if (row.Status !== 'wontfix' && c.severity !== row.Severity) {
+        if (failSevRank(c.severity) > failSevRank(row.Severity)) row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `severity ${row.Severity} -> ${c.severity} ${day} (current rule)`;
+        row.Severity = c.severity;
+      }
+      touch(row);
+    }
   }
   for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
     r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
+  }
+  // Oct 22 2026: an open event row whose Where has a fixed severity (FAIL_SEVERITY_BY_WHERE) is brought down to it even when no new event arrived. Rows that
+  // were filed before a Where was classed P2 (e.g. qb_payables_payment_date_missing, WO-1246) kept their first-sighting P0 for as long as they stayed quiet,
+  // and a quiet P0 takes 7 days to close. Only ever DOWN here (never escalates); rows with new events this run were already re-derived above.
+  for (const r of ledger) {
+    if (r.Source === 'condition' || FAIL_OPEN.indexOf(r.Status) < 0 || updates.has(r._row)) continue;
+    // Only a table value of P2, and only when the row's own message does not trip the "always urgent" billing/auth wording (failSeverity agrees with the table):
+    // "credit balance too low" on receipt_parse is a P0 on purpose even though receipt_parse is normally P2.
+    const ts = failTableSeverity(r.Where);
+    if (ts === 'P2' && failSeverity(r.Where, r.Message) === 'P2' && failSevRank(ts) > failSevRank(r.Severity)) { r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `severity ${r.Severity} -> ${ts} ${day} (fixed severity for ${String(r.Where).slice(0, 40)})`; r.Severity = ts; touch(r); }
   }
   // Event rows that have gone quiet close themselves (see FAIL_QUIET_CLOSE_MS). A row touched by new events this run is by definition not quiet.
   for (const r of ledger) {
@@ -17657,10 +17682,16 @@ async function schedRunNext(env, ctx, opts) {
     if (errors.length) out.errors = errors;
     if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
     if (!jobOk) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
+      // Oct 22 2026: Google's shared per-minute read quota ran out during the run. Still recorded (P2 row, job state "failed", retried next tick, the
+      // run's answer says quota_busy), but it is not a P0 scheduler failure and nobody is paged for it.
+      const quotaBusy = schedErrorsAreQuotaBusy(errors);
+      if (quotaBusy) out.quota_busy = true;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: quotaBusy ? 'sheets_quota_busy' : 'scheduler_job', Skill_Or_Endpoint: quotaBusy ? 'scheduler/' + job.name : job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
-      try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
-      catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
+      if (!quotaBusy) {
+        try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
+        catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
+      }
     }
     // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
     let landed = false, stateErr = null, finalState = null, aiPausedFinal = aiPausedAt;
@@ -18597,6 +18628,12 @@ class AiCreditPausedError extends Error {
 function sheetsQuotaBusyError(e) {
   const m = String((e && e.message) || e || '');
   return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
+}
+// Oct 22 2026. PURE. A scheduler job's errors ([{step, error}]) where EVERY entry is the shared Sheets read quota ("busy"), not a bug in the job.
+// Such a run is retried on the next tick; it is a calm P2 "sheets_quota_busy" row, not a P0 "scheduler_job" failure that pages Brett.
+// (A job that stays unable to run is still caught loudly: the "Scheduled job X is overdue" condition is P0.)
+function schedErrorsAreQuotaBusy(errors) {
+  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && sheetsQuotaBusyError(x.error));
 }
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
@@ -25015,6 +25052,16 @@ function __meterTop(rows, which, n) {
 }
 function __meterMaybeAlarm(b, why) {
   const now = Date.now();
+  if (why !== '429') {
+    // (own timer: a busy-minute log line must never use up the gap that a real throttle row needs)
+    if (now - (__meter.lastBusyLogAt || 0) < METER_ALARM_GAP_MS) return;
+    // Oct 22 2026: a busy minute in which Google throttled NOTHING is not a failure - nobody got an error. It used to file a P2 "Needs Attention" row that
+    // re-opened every time it was marked fixed (F-1792553535622-hzqa). It is still counted and shown on read-meter.html and in the Worker log; the moment
+    // Google actually throttles a read ("429") the P2 row is filed as before.
+    __meter.lastBusyLogAt = now;
+    console.warn('[read-meter] busy minute (not filed: nothing throttled): ' + b.reads + ' reads on this instance. See read-meter.html.');
+    return;
+  }
   if (__meter.pending || now - __meter.lastAlarmAt < METER_ALARM_GAP_MS) return;
   __meter.lastAlarmAt = now;
   const rows = __meterWindow(2);
@@ -31228,6 +31275,7 @@ async function qbReadyQueue(env, url) {
     // Was `return json([])`. A Sheets outage or a renamed tab then rendered as a green
     // "✓ Nothing waiting for QuickBooks" — a read returning [] is not proof the tab exists
     // (FEATURE_LOG rule 16). Fail loudly instead.
+    if (sheetsQuotaBusyError(e)) throw e;   // Oct 22 2026: Google's shared read quota is "busy, retry" (typed 429 + one calm P2 row), not an HTTP 500 that every open Hub page reports as a failure
     return json({ error: 'Could not read the QuickBooks queue: ' + (e && e.message || 'unknown error') }, 500);
   }
 }
@@ -35338,6 +35386,10 @@ async function strEnsureTabs(env) {
   const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
   const need = Object.keys(STR_TABS).filter(t => !titles.includes(t));
   if (need.length) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  // Oct 22 2026: ONE batched read of every cleaning tab warms the tab cache, so the nine ensureColumns checks below are cache hits. Each of them used to be
+  // its own whole-tab Google read, so every cold Worker instance spent about 11 of the Hub's 60 reads per minute just to start the cleaning scheduler
+  // (and Cloudflare starts new instances all the time) - that is how the scheduler's own first read kept hitting the quota.
+  await fetchTabs(env, Object.keys(STR_TABS));
   for (const [tab, headers] of Object.entries(STR_TABS)) await ensureColumns(env, tab, headers);
   await ensureColumns(env, 'Vendors', ['Service_Area']);
   __strTabsReady = true;
@@ -35376,6 +35428,13 @@ async function strLog(ctx, taskKey, cleanerId, event, detail) {
 const __strSysAt = {};
 // Failure Brett must see. Never throws; telemetry row first (Success=FALSE), then throttled SMS + email.
 async function strSystemAlert(env, kind, message) {
+  // Oct 22 2026: the shared Sheets read quota ran out under the cleaning scheduler. Recorded as the calm P2 "sheets_quota_busy" row; no text or email
+  // (the next tick retries, and a scheduler that stays unable to run is still the P0 "overdue" condition).
+  if (sheetsQuotaBusyError(message)) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); }
+    catch (te) { /* silent-ok: alert code must not report its own failure (it would loop); the full text goes to the Worker log */ console.error('str alert: quota-busy telemetry failed:', te && te.message, '| original:', kind, message); }
+    return;
+  }
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
   const now = Date.now();
   if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
@@ -35927,6 +35986,7 @@ async function schedRunStrCleaning(env) {
 // ── HTTP handlers ────────────────────────────────────────────────────────────────────────────
 async function strHandleErr(env, e, where) {
   if (e && e.code && e.status && e.status < 500) return json({ ok: false, error: e.code, message: e.message }, e.status);
+  if (sheetsQuotaBusyError(e)) throw e;   // Oct 22 2026: Google's read quota is a "busy, try again" answer (typed 429 + one P2 row from the top-level handler), not "something went wrong, Brett has been told" + a text/email to Brett
   await strSystemAlert(env, 'handler_' + (where || 'error'), `${where || 'handler'} failed: ${strErrText(e)}`); // a real failure: Brett is told (the old "Brett has been notified" message was a lie)
   return json({ ok: false, error: (e && e.code) || 'internal', message: 'Something went wrong on our side and Brett has been told. Please try again in a few minutes.' }, 500);
 }
