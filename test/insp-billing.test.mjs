@@ -253,9 +253,9 @@ async function main() {
     ok(toA.includes('name="Invoice_1801_') && !toA.includes('_owner'), 'the AppFolio PDF is OUR invoice, never the owner one'); ok(/_owner\.pdf|Invoice_43945-1-\d{4}\.pdf/.test(toB) && !toB.includes('Invoice_1801'), 'the people get the owner invoice only');
     eq([latest(w).Invoice_Emailed_To, latest(w).InvB_Status], ['bills.premier@appfolio.test.com', 'sent'], 'recorded');
   }
-  // 6) email failure: invoice stays created, loud, and the retry sends ONLY the email
+  // 6) EMAIL FAILURES. Only a DEFINITE Gmail refusal (4xx) may be retried on its own; anything unclear holds the invoice until a person confirms it never arrived.
   {
-    const { w, api, env } = world(); w.failNext.mail = true;
+    const { w, api, env } = world(); w.failNext.mail = 'definite';
     const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
     ok(!res.body.ok && res.body.invoice_created && res.body.stage === 'email', 'a definite Gmail refusal is reported with the invoice noted as created'); ok(res.body.error.includes('Tap Complete again'), 'and says what to do');
     eq(w.qbPosts.length, 1, 'one invoice so far'); eq(latest(w).Invoice_Status, 'invoiced', 'not marked emailed'); ok(w.telemetry.some(t => t.Success === 'FALSE' && /insp-billing\/email/.test(t.Skill_Or_Endpoint)), 'failure logged (Needs Attention)'); eq(latest(w).Billing_Lock, '', 'lock cleared even after failure');
