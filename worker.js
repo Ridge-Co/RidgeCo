@@ -37278,6 +37278,15 @@ async function inspBookRequest(env, body) {
     const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
     if (!contactName) throw inspErr('bad_contact', 'Please enter your name.', 400);
     if (!contactPhone && !contactEmail) throw inspErr('bad_contact', 'Please enter a phone number or email so you get the confirmation.', 400);
+    // Billed-by-work-order customers (Premier): the work order number is required, and one work order = one booking at a time (Oct 22 2026).
+    let woNumber = '';
+    if (String(c.Billing_Mode || '') === 'wo') {
+      woNumber = insbNormWO(body.wo_number);
+      if (!woNumber) throw inspErr('bad_wo', 'Please enter the work order number (for example 43945-1).', 400);
+      await insbEnsureColumns(env);
+      const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && INSP_ACTIVE_BOOKING.includes(r.Status) && String(r.Active || '').toUpperCase() !== 'FALSE');
+      if (dupe) throw inspErr('wo_in_use', 'Work order ' + woNumber + ' already has a booking (' + (dupe.Status === 'pending' ? 'waiting for approval' : 'approved') + '). Cancel it first, or use the manage link to change it.', 409);
+    }
     if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw inspErr('bad_contact', 'That email address does not look right.', 400);
     const startMs = Date.parse(body.start_iso);
     if (!Number.isFinite(startMs)) throw inspErr('bad_slot', 'Please pick a time.', 400);
