@@ -16214,6 +16214,16 @@ function failRollupPlan(inp) {
   for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
     r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
   }
+  // Oct 22 2026: an open event row whose Where has a fixed severity (FAIL_SEVERITY_BY_WHERE) is brought down to it even when no new event arrived. Rows that
+  // were filed before a Where was classed P2 (e.g. qb_payables_payment_date_missing, WO-1246) kept their first-sighting P0 for as long as they stayed quiet,
+  // and a quiet P0 takes 7 days to close. Only ever DOWN here (never escalates); rows with new events this run were already re-derived above.
+  for (const r of ledger) {
+    if (r.Source === 'condition' || FAIL_OPEN.indexOf(r.Status) < 0 || updates.has(r._row)) continue;
+    // Only a table value of P2, and only when the row's own message does not trip the "always urgent" billing/auth wording (failSeverity agrees with the table):
+    // "credit balance too low" on receipt_parse is a P0 on purpose even though receipt_parse is normally P2.
+    const ts = failTableSeverity(r.Where);
+    if (ts === 'P2' && failSeverity(r.Where, r.Message) === 'P2' && failSevRank(ts) > failSevRank(r.Severity)) { r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `severity ${r.Severity} -> ${ts} ${day} (fixed severity for ${String(r.Where).slice(0, 40)})`; r.Severity = ts; touch(r); }
+  }
   // Event rows that have gone quiet close themselves (see FAIL_QUIET_CLOSE_MS). A row touched by new events this run is by definition not quiet.
   for (const r of ledger) {
     if (r.Source === 'condition' || FAIL_OPEN.indexOf(r.Status) < 0 || updates.has(r._row)) continue;
