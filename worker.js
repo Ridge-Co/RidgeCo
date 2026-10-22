@@ -1622,6 +1622,7 @@ async function ownerByPin(env, url) {
     if (user) {
       const uFirst = (user.First_Name||'').toLowerCase();
       if (uFirst !== enteredName && !uFirst.startsWith(enteredName)) return null;
+      _m.login = { tab: 'Owner_Users', id: user.ID, row: user };
       const owner = owners.find(o => o.ID === user.Owner_ID);
       return json({
         owner_id: user.Owner_ID, owner_user_id: user.ID,
