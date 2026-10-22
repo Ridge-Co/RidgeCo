@@ -1535,6 +1535,7 @@ async function pinLookup(env, pin, finder) {
     return json({ error: `PIN not found. ${left} attempt${left !== 1 ? 's' : ''} remaining.` }, 404);
   }
   await clearPinLockout(env, pin);
+  if (_meta.login) await stampPortalLogin(env, _meta.login);   // first/last login + count; never blocks the login, failures go to Ops_Telemetry
   return result;
 }
 
