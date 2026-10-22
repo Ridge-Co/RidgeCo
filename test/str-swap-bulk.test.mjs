@@ -29,7 +29,7 @@ function makeWorld(opts) {
   const objs = tab => { if (!tabs.has(tab)) throw new Error('Unable to parse range: ' + tab); const [h, ...rows] = tabs.get(tab); return rows.map(r => { const o = {}; h.forEach((k, i) => o[k] = r[i] == null ? '' : r[i]); return o; }); };
   const json = (b, s) => ({ ok: !s || s < 400, status: s || 200, json: async () => b });
   const stubs = {
-    fetchConfig: async () => Object.assign({}, W.cfg), fetchTab: async (env, tab) => (W.sheetCalls++, W.reads++, objs(tab)), fetchTabs: async (env, ts) => (W.sheetCalls++, W.reads++, ts.map(x => objs(x))), /* real addRow / updateRow / ensureColumns each make 1-2 Sheets calls; the fakes below charge the same */
+    fetchConfig: async () => Object.assign({}, W.cfg), fetchTab: async (env, tab) => (W.sheetCalls++, W.reads++, objs(tab)), fetchTabs: async (env, ts) => (W.sheetCalls++, W.reads++, (W.warm = W.warm || new Set(), ts.forEach(x => W.warm.add(x))), ts.map(x => objs(x))), /* real addRow / updateRow / ensureColumns each make 1-2 Sheets calls; the fakes below charge the same */
     invalidateTabCache: () => {}, json,
     sheetsRequest: async (env, method, path, body) => {
       W.sheetCalls++; let m; if (method === 'GET') W.reads++;
