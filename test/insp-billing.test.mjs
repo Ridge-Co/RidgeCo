@@ -262,6 +262,49 @@ async function main() {
     const q = await api.insbQueue(env); ok(q.body.items.some(x => x.needs_attention), 'the failed one shows on the Needs-billing list');
     const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(retry.body.ok, 'retry ok'); eq(w.qbPosts.length, 1, 'retry did not create a second invoice'); eq(w.mails.length, 1, 'retry sent the one email'); eq(latest(w).Invoice_Status, 'emailed', 'now emailed');
   }
+  // 6b) UNCLEAR failure (Gmail 500): the mail may have gone out, so it is held and NOT resent on a plain retry
+  {
+    const { w, api, env } = world(); w.failNext.mail = true;
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!res.body.ok && res.body.stage === 'unconfirmed' && res.body.invoice_created, 'an unclear Gmail failure is reported as unconfirmed'); ok(/Sent folder/.test(res.body.error), 'and tells the person where to look');
+    ok(/^sending\|/.test(latest(w).Invoice_Status), 'the invoice is held as "sending"'); ok(w.telemetry.some(t => t.Success === 'FALSE' && /email_unconfirmed/.test(t.Skill_Or_Endpoint) && t.Job_Type === 'insp_billing_money'), 'logged as a money failure');
+    const q = await api.insbQueue(env); ok(q.body.items.some(x => x.invoice_hold), 'the held invoice shows on the list');
+    const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(!retry.body.ok && retry.body.stage === 'unconfirmed', 'a plain retry is REFUSED'); eq(w.mails.length, 0, 'and nothing was sent by it'); eq(w.qbPosts.length, 1, 'no second invoice');
+    const forced = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true, force_resend: true }); ok(forced.body.ok, 'after a person confirms it never arrived, force sends it: ' + JSON.stringify(forced.body).slice(0, 200)); eq(w.mails.length, 1, 'exactly one email'); eq(latest(w).Invoice_Status, 'emailed', 'now emailed'); eq(w.qbPosts.length, 1, 'still one invoice');
+  }
+  // 6c) Gmail never answers (network drop) is also unclear
+  {
+    const { w, api, env } = world(); w.failNext.mailThrow = true;
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!res.body.ok && res.body.stage === 'unconfirmed', 'a network drop is unconfirmed'); const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(!retry.body.ok && w.mails.length === 0, 'and is not retried on its own');
+  }
+  // 6d) the email WENT OUT but the Hub cannot record it: it stays "sending" and is never emailed a second time
+  {
+    const { w, api, env } = world(); w.failAlways = ['Invoice_Emailed_At'];
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!res.body.ok && res.body.stage === 'stamp' && /DO NOT send/.test(res.body.error), 'a failed record after a good send says DO NOT send it again'); eq(w.mails.length, 1, 'the one email went out'); ok(/^sending\|/.test(latest(w).Invoice_Status), 'still marked sending');
+    ok(w.telemetry.some(t => t.Success === 'FALSE' && /stamp_after_send/.test(t.Skill_Or_Endpoint)), 'logged'); w.failAlways = null;
+    const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(!retry.body.ok, 'a retry is refused'); eq(w.mails.length, 1, 'no second email');
+  }
+  // 6e) the claim cannot be saved: nothing is emailed at all
+  {
+    const { w, api, env } = world(); w.failWhen = f => String(f.Invoice_Status || '').startsWith('sending');
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!res.body.ok && res.body.stage === 'in_progress', 'no claim, no send'); eq(w.mails.length, 0, 'nothing emailed'); ok(w.telemetry.some(t => t.Success === 'FALSE' && /email_claim/.test(t.Skill_Or_Endpoint)), 'logged');
+  }
+  // 6f) another request grabs the lock right after ours: we step aside, create nothing, and leave THEIR lock alone
+  {
+    const { w, api, env } = world(); w.stealLock = true;
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!res.body.ok && res.body.error === 'in_progress' && res.status === 409, 'lost the lock = in_progress'); eq(w.qbPosts.length, 0, 'no invoice created'); eq(w.mails.length, 0, 'no email'); ok(String(latest(w).Billing_Lock).startsWith('Tother|'), "the other request's lock was not cleared");
+  }
+  // 6g) the screen shows $95 but the amount is now different: refused, nothing created
+  {
+    const { w, api, env } = world();
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 2, expected_cents: 9500, confirm: true });
+    ok(!res.body.ok && res.body.error === 'amount_changed' && res.status === 409, 'a stale amount is refused'); eq(w.qbPosts.length, 0, 'nothing posted');
+    const good = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 2, expected_cents: 18000, confirm: true }); ok(good.body.ok, 'the right amount goes through');
+  }
   // 7) QuickBooks PDF failure: nothing is emailed, loud, retry works
   {
     const { w, api, env } = world(); w.failNext.pdf = true;
