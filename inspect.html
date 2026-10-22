@@ -1198,7 +1198,7 @@ function billConfirm(btn){
   bill.busy=true; btn.disabled=true; var label=btn.textContent; btn.textContent='Working…';
   var err=document.getElementById('bill-err'); err.classList.add('hide');
   var units=bill.kind==='inspected'?document.getElementById('bill-units').value:'0';
-  api('POST','/insp/billing/complete',{ id:bill.id, kind:bill.kind, units:units, confirm:true }).then(function(r){
+  api('POST','/insp/billing/complete',{ id:bill.id, kind:bill.kind, units:units, expected_cents:bill.plan.base_cents, confirm:true }).then(function(r){
     bill.busy=false;
     if(r&&r.ok){
       document.getElementById('bill-preview').innerHTML='<div class="bill-box"><b>Done.</b>'+(r.invoice_number?' QuickBooks invoice #'+esc(r.invoice_number)+'.':'')+'<br>'+((r.steps||[]).map(esc).join('<br>'))+'</div>'+((r.warnings||[]).map(function(w){return '<div class="banner" style="margin-top:8px">'+esc(w)+'</div>';}).join(''));
