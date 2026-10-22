@@ -307,6 +307,10 @@
     <!-- ── APPROVALS (partner booking requests) ── -->
     <div class="page" id="page-approvals">
       <div id="appr-error" class="banner hide"></div>
+      <div class="card hide" id="appr-billing-card">
+        <div class="row"><b>Needs billing</b><span class="pill due" id="appr-billing-count">0</span></div>
+        <div id="appr-billing" style="margin-top:6px"></div>
+      </div>
       <div class="card">
         <div class="row"><b>Waiting for your OK</b><button class="btn sm" onclick="loadBookings()">Refresh</button></div>
         <div id="appr-pending" style="margin-top:10px"><p class="muted">Loading…</p></div>
