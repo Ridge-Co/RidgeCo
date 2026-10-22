@@ -35370,6 +35370,10 @@ async function strEnsureTabs(env) {
   const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
   const need = Object.keys(STR_TABS).filter(t => !titles.includes(t));
   if (need.length) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  // Oct 22 2026: ONE batched read of every cleaning tab warms the tab cache, so the nine ensureColumns checks below are cache hits. Each of them used to be
+  // its own whole-tab Google read, so every cold Worker instance spent about 11 of the Hub's 60 reads per minute just to start the cleaning scheduler
+  // (and Cloudflare starts new instances all the time) - that is how the scheduler's own first read kept hitting the quota.
+  await fetchTabs(env, Object.keys(STR_TABS));
   for (const [tab, headers] of Object.entries(STR_TABS)) await ensureColumns(env, tab, headers);
   await ensureColumns(env, 'Vendors', ['Service_Area']);
   __strTabsReady = true;
