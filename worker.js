@@ -1555,6 +1555,7 @@ async function tenantByPin(env, url) {
     }
     const tFirst = (tenant.First_Name||'').toLowerCase();
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
+    _m.login = { tab: 'Tenants', id: tenant.ID, row: tenant };
     const [props, units, owners] = await fetchTabs(env, ['Properties','Units','Owners']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
