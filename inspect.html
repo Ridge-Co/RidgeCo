@@ -459,6 +459,20 @@
     </div>
     <label class="fld">Contact email</label><input id="ce-cemail" type="email">
     <label class="fld">Notes</label><textarea id="ce-notes" rows="2"></textarea>
+    <details class="bill-cfg" id="ce-billing">
+      <summary>Billing (invoice when I tap Complete)</summary>
+      <label class="chk"><input type="checkbox" id="ce-bm"><span><b>Bill automatically by work order.</b> Booking requires their work order number; Complete creates the QuickBooks invoice and emails it.</span></label>
+      <label class="fld">Bill-to name (as it should read on invoices)</label><input id="ce-btn" placeholder="Premier Property Management Investment, LLC">
+      <label class="fld">Bill-to address (street, city, ST zip)</label><input id="ce-baddr" placeholder="400 W. Franklin Street #400, Baltimore, MD 21201">
+      <label class="fld">Send invoices to (comma separated)</label><input id="ce-bto" inputmode="email" placeholder="josiah.speed@ppmillc.com">
+      <label class="fld">Copy (cc)</label><input id="ce-bcc" inputmode="email" placeholder="starr.byrd@ppmillc.com, office@ppmillc.com">
+      <label class="fld">AppFolio Smart Bill Entry address (optional)</label><input id="ce-af" inputmode="email" placeholder="leave blank until they send it">
+      <p class="muted" style="margin:4px 0 0">With this set, OUR invoice goes only to that inbox (one PDF per email) and nobody else is copied on it.</p>
+      <label class="chk"><input type="checkbox" id="ce-oi"><span><b>Also build the owner-facing invoice</b> (their specimen layout, our price plus their markup). Held until the markup below is set.</span></label>
+      <label class="fld">Their markup % on our price</label><input id="ce-mk" type="number" step="0.01" min="0" max="200" inputmode="decimal" placeholder="e.g. 20 (leave blank until they tell you)">
+      <label class="fld">Their phone (shown at top of the owner invoice)</label><input id="ce-iph" type="tel">
+      <label class="fld">Their email (shown at top of the owner invoice)</label><input id="ce-iem" inputmode="email">
+    </details>
     <div style="display:flex;gap:10px;margin-top:16px">
       <button class="btn ghost" style="flex:1" onclick="closeModal('cust-edit-modal')">Cancel</button>
       <button class="btn primary" style="flex:2" onclick="saveCustomerEdit(this)">Save changes</button>
