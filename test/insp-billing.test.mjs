@@ -86,7 +86,7 @@ function world(opts = {}) {
     },
   };
   const names = Object.keys(dep);
-  const factory = new Function(...names, 'INSP_TZ', 'INSP_ACTIVE_BOOKING', block + '\nreturn { insbPlan, insbComplete, insbPreview, insbReleaseOwner, insbCustomerConfig, insbQueue, insbPdfDownload, insbOwnerPdf, insbQbStubbed };');
+  const factory = new Function(...names, 'INSP_TZ', 'INSP_ACTIVE_BOOKING', block + '\nreturn { insbPlan, insbComplete, insbPreview, insbReleaseOwner, insbCustomerConfig, insbCustomerUpdate, insbSetWO, insbWoInUse, insbQueue, insbPdfDownload, insbOwnerPdf, insbQbStubbed };');
   const api = factory(...names.map(k => dep[k]), 'America/New_York', ['pending', 'approved']);
   const env = { QB_CLIENT_ID: w.qbCreds ? 'x' : '', QB_CLIENT_SECRET: w.qbCreds ? 'y' : '', QB_REALM_ID: w.qbCreds ? 'z' : '', GMAIL_SENDER: 'ridgeco@test', __STAGING__: w.staging, __INSB_SETTLE_MS: 0, __INSB_RETRY_MS: 0 };
   return { w, api, env };
