@@ -39560,7 +39560,8 @@ function insbB64(bytes) { let s = _b64urlBytes(bytes).replace(/-/g, '+').replace
 // goes to GMAIL_TEST_RECIPIENT only (same policy as gmailSendEmail). Returns { sent, staged, message_id }. Throws on any failure.
 async function insbSendMail(env, o) {
   const to = (o.to || []).filter(Boolean), cc = (o.cc || []).filter(Boolean);
-  if (!to.length) throw new Error('insbSendMail: no recipient');
+  // Every throw below carries `definite`: true = Gmail did NOT send it (safe to try again), false = unknown (it may have been delivered: never resend on its own).
+  if (!to.length) throw Object.assign(new Error('insbSendMail: no recipient'), { definite: true });
   let realTo = to, realCc = cc, subject = o.subject;
   if (env.__STAGING__ ?? isStaging(env)) {
     const cfg = await fetchConfig(env);
