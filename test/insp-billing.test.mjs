@@ -35,8 +35,12 @@ function world(opts = {}) {
     fetchTab: async (env, t) => w.tabs[t].map(r => Object.assign({}, r)),
     ensureColumns: async () => {}, invalidateTabCache: () => {},
     updateRowVerified: async (env, t, id, f) => {
+      if (w.failWhen && w.failWhen(f)) throw new Error('Sheets said no (forced)');
+      if (w.failAlways && Object.keys(f).some(k => w.failAlways.includes(k))) throw new Error('Sheets said no (forced, every time)');
       if (w.failNext.updateRowVerified && Object.keys(f).some(k => w.failNext.updateRowVerified.includes(k))) { const e = new Error('Sheets said no'); w.failNext.updateRowVerified = null; throw e; }
-      const r = w.tabs[t].find(x => String(x.ID) === String(id)); if (!r) throw new Error('no row'); Object.assign(r, f); return Object.assign({}, r);
+      const r = w.tabs[t].find(x => String(x.ID) === String(id)); if (!r) throw new Error('no row'); Object.assign(r, f);
+      if (w.stealLock && f.Billing_Lock && String(f.Billing_Lock).startsWith('T')) { r.Billing_Lock = 'Tother|' + Date.now(); w.stealLock = false; }   // another request grabbed the lock right after ours
+      return Object.assign({}, r);
     },
     logTelemetry: async (env, rec) => { w.telemetry.push(rec); },
     qbApi: async (env, p, method, body) => {
