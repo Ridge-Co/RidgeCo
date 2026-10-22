@@ -42,9 +42,9 @@ function world(opts = {}) {
     qbApi: async (env, p, method, body) => {
       w.qbCalls.push({ p, method });
       if (method === 'POST' && p.startsWith('invoice?')) { w.qbPosts.push({ p, body }); if (w.failNext.invoice) { const f = w.failNext.invoice; w.failNext.invoice = null; return f; } if (w.invoiceByReq && w.invoiceByReq[p.match(/requestid=([^&]+)/)[1]]) return w.invoiceByReq[p.match(/requestid=([^&]+)/)[1]]; const res = { Invoice: { Id: String(77 + w.qbPosts.length), DocNumber: String(++w.invoiceSeq) } }; (w.invoiceByReq = w.invoiceByReq || {})[p.match(/requestid=([^&]+)/)[1]] = res; return res; }
-      if (p.startsWith('query?')) return { QueryResponse: { Item: [] } };
-      if (p.startsWith('item/40')) return { Item: { Id: '40', IncomeAccountRef: { value: '198' } } };
-      if (method === 'POST' && p.startsWith('item?')) return { Item: { Id: '901', Name: 'Property Inspection' } };
+      if (p.startsWith('query?')) { if (decodeURIComponent(p).includes("Type = 'Service'")) return { QueryResponse: { Item: opts.noServiceItem ? [] : [{ Id: '5', IncomeAccountRef: { value: '321' } }] } }; return { QueryResponse: { Item: [] } }; }
+      if (p.startsWith('item/40')) return opts.noItem40 ? { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } } : { Item: { Id: '40', IncomeAccountRef: { value: '198' } } };
+      if (method === 'POST' && p.startsWith('item?')) { w.itemPosts = (w.itemPosts || []).concat([body]); return { Item: { Id: '901', Name: 'Property Inspection' } }; }
       return {};
     },
     qbAccessToken: async () => 'tok', qbBase: () => 'https://qb.test/v3/company',
