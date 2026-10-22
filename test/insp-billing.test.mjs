@@ -387,6 +387,99 @@ async function main() {
     const b = world({ noItem40: true, noServiceItem: true }); const rb = await call(b.api, b.env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
     ok(!rb.body.ok && /income account/.test(rb.body.message), 'no usable income account: stops with a clear message'); eq(b.w.qbPosts.length, 0, 'no invoice posted'); eq(b.w.mails.length, 0, 'no email'); eq(b.w.tabs.Insp_Bookings[0].Billing_Lock, '', 'lock cleared'); ok(b.w.telemetry.some(t => t.Success === 'FALSE'), 'logged to Needs Attention');
   }
+  // 18) QUICKBOOKS DOUBLE-CREATE GUARDS
+  {
+    // the post times out AFTER QuickBooks created the invoice: the intent is on the row, and the retry finds the invoice instead of posting again
+    const { w, api, env } = world(); w.failNext.invoiceAfterCreate = true;
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!res.body.ok && res.body.error === 'qb_unconfirmed', 'an unclear QuickBooks answer is reported as unconfirmed'); ok(/^creating\|/.test(latest(w).Invoice_Status), 'the intent to create is recorded'); eq(w.mails.length, 0, 'nothing emailed');
+    const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(retry.body.ok, 'retry completes: ' + JSON.stringify(retry.body).slice(0, 200)); eq(w.qbPosts.length, 1, 'NO second POST: the invoice QuickBooks already had was adopted'); eq(w.qbInvoices.length, 1, 'one invoice in QuickBooks'); eq(w.mails.length, 1, 'one email'); ok(retry.body.steps.some(x => /already had invoice/.test(x)), 'the steps say so');
+  }
+  {
+    // the retry cannot LOOK in QuickBooks: it must not post blind
+    const { w, api, env } = world(); w.failNext.invoiceAfterCreate = true;
+    await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    w.failNext.invoiceQuery = true;
+    const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!retry.body.ok && retry.body.error === 'qb_unconfirmed', 'cannot check QuickBooks = stop'); eq(w.qbPosts.length, 1, 'no blind second POST'); eq(w.mails.length, 0, 'no email'); ok(w.telemetry.some(t => t.Success === 'FALSE' && t.Job_Type === 'insp_billing_money' && /qb_unconfirmed/.test(t.Skill_Or_Endpoint)), 'logged as a money failure');
+  }
+  {
+    // two invoices for one booking in QuickBooks: stop and say so
+    const { w, api, env } = world(); w.failNext.invoiceAfterCreate = true;
+    await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    w.qbInvoices.push(Object.assign({}, w.qbInvoices[0], { Id: '999', DocNumber: '1999' }));
+    const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!retry.body.ok && retry.body.error === 'qb_duplicate' && /1999/.test(retry.body.message), 'duplicates in QuickBooks are surfaced'); eq(w.mails.length, 0, 'nothing sent');
+  }
+  {
+    // QuickBooks total differs from ours: stamped for review, NOT emailed, loud; force sends once a person has checked
+    const { w, api, env } = world(); w.failNext.invoiceTotal = 99;
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!res.body.ok && res.body.stage === 'review' && res.body.invoice_created, 'a total mismatch is reported'); ok(/^review\|total 9900 vs 9500/.test(latest(w).Invoice_Status), 'stamped for review with both figures'); eq(w.mails.length, 0, 'nothing emailed'); ok(w.telemetry.some(t => t.Success === 'FALSE' && /qb_total_mismatch/.test(t.Skill_Or_Endpoint) && t.Job_Type === 'insp_billing_money'), 'money failure logged');
+    const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(!retry.body.ok && w.mails.length === 0, 'a plain retry does not send it');
+    const forced = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true, force_resend: true }); ok(forced.body.ok && w.mails.length === 1 && latest(w).Invoice_Status === 'emailed', 'after "I checked - send it" it goes out once');
+  }
+  // 19) the owner-facing invoice: stuck states and release rules
+  {
+    const { w, api, env } = world({ customer: { Markup_Pct: '20' } }); w.failNext.mail = true;
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(res.body.stage === 'unconfirmed', 'combined email unclear -> both held');
+    const q = await api.insbQueue(env); ok(q.body.items.some(x => x.owner_hold && x.invoice_hold), 'both holds show on the list');
+    const rel = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 11400 }); ok(!rel.body.ok && rel.body.error === 'a_not_sent', 'the owner invoice is not sent before ours'); eq(w.mails.length, 0, 'nothing sent');
+  }
+  {
+    // owner invoice stamped ready but never sent (our invoice went out): it shows as unsent and can be released with the stamped amount
+    const { w, api, env } = world({ customer: { Markup_Pct: '20', AppFolio_Email: 'bills@af.test.com' } });
+    await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    const r = w.tabs.Insp_Bookings[0]; r.InvB_Status = 'ready'; r.InvB_Emailed_At = ''; w.mails.length = 0;
+    const q = await api.insbQueue(env); ok(q.body.items.some(x => x.owner_unsent), 'a ready-but-unsent owner invoice is listed');
+    w.tabs.Insp_Customers[0].Markup_Pct = '50';
+    const rp = await call(api, env, 'insbReleaseOwner', { id: '2' }); eq(rp.body.owner_cents, 11400, 'the stamped amount ($114.00), not today\'s markup');
+    const rel = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 11400 }); ok(rel.body.ok && w.mails.length === 1 && !w.mails[0].includes('To: bills@af.test.com'), 'sent to the people, never the AppFolio inbox, and never our own invoice again');
+    eq((w.mails[0].match(/Content-Type: application\/pdf/g) || []).length, 1, 'one PDF');
+  }
+  {
+    // an unconfirmed owner send needs force
+    const { w, api, env } = world({ customer: { Markup_Pct: '20', AppFolio_Email: 'bills@af.test.com' } });
+    await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    const r = w.tabs.Insp_Bookings[0]; r.InvB_Status = 'sending|T1|x'; r.InvB_Emailed_At = ''; w.mails.length = 0;
+    const no = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 11400 }); ok(!no.body.ok && no.body.error === 'unconfirmed' && w.mails.length === 0, 'a "sending" owner invoice is not resent without force');
+    const yes = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 11400, force: true }); ok(yes.body.ok && w.mails.length === 1 && w.tabs.Insp_Bookings[0].InvB_Status === 'sent', 'with force it goes once');
+  }
+  // 20) plan blockers + recipients
+  {
+    const c2 = Object.assign({}, cust, { Markup_Pct: '20', AppFolio_Email: 'bills@af.test.com', Bill_Email_To: '' });
+    ok(!P.insbPlan({ booking: bk, customer: c2, kind: 'inspected', units: 1, todayIso: '2026-10-22' }).ok, 'AppFolio set but nobody for the owner invoice = blocked');
+    const c3 = Object.assign({}, cust, { AppFolio_Email: 'Josiah@P.com', Bill_Email_To: 'josiah@p.com' });
+    ok(P.insbRecipients(c3).problems.some(x => /AppFolio address is also/.test(x)), 'AppFolio address also in the people list is a problem'); ok(!P.insbPlan({ booking: bk, customer: c3, kind: 'inspected', units: 1, todayIso: '2026-10-22' }).ok, 'and blocks billing');
+  }
+  // 21) strict markup parsing
+  for (const bad of ['1e1', '0x10', ' ', '20%', '', '-5', '1,5', '12.345', 'NaN']) ok(!P.insbMarkup(9500, bad).ok, 'markup "' + bad + '" refused');
+  eq(P.insbMarkup(9500, ' 7.25 ').markup_cents, 689, 'padded plain number accepted'); eq(P.insbMarkup(9500, '20').total_cents, 11400, '"20" accepted');
+  // 22) set-wo + WO in use + plain customer update
+  {
+    const { w, api, env } = world();
+    const a1 = await call(api, env, 'insbSetWO', { id: '2', wo: '50000-1' }); ok(a1.body.ok && w.tabs.Insp_Bookings[0].WO_Number === '50000-1', 'WO fixed on an unbilled booking');
+    w.tabs.Insp_Bookings[0].Invoice_Status = 'creating|r|2026-10-22'; const a2 = await call(api, env, 'insbSetWO', { id: '2', wo: '50000-2' }); ok(!a2.body.ok && a2.body.error === 'already_billed', 'refused once billing has started (even before an invoice id exists)');
+    w.tabs.Insp_Bookings[0].Invoice_Status = '';
+    w.tabs.Insp_Bookings.push({ ID: '3', Customer_ID: '5', Status: 'cancelled', Active: 'TRUE', WO_Number: '60000-1', Completed_At: '2026-10-01T10:00:00Z' });
+    ok(api.insbWoInUse(w.tabs.Insp_Bookings[1]), 'a billed booking keeps its WO taken even if later cancelled'); ok(!api.insbWoInUse({ Status: 'cancelled', Active: 'TRUE', WO_Number: 'X', Completed_At: '' }), 'a cancelled unbilled one frees it');
+    const a3 = await call(api, env, 'insbSetWO', { id: '2', wo: '60000-1' }); ok(!a3.body.ok && a3.body.error === 'wo_in_use', 'cannot take a WO that was already billed');
+    const u1 = await call(api, env, 'insbCustomerUpdate', { id: '5', fields: { Markup_Pct: '99' } }); ok(!u1.body.ok && u1.body.error === 'use_billing_config' && u1.status === 400 && !w.plainUpdates, 'billing fields are refused on the plain customer update');
+    ok(w.telemetry.some(t => t.Success === 'FALSE' && /customer_config/.test(t.Skill_Or_Endpoint)), 'and the refusal is logged');
+    const u2 = await call(api, env, 'insbCustomerUpdate', { id: '5', fields: { Name: 'Premier 2' } }); ok(u2.body.ok && w.plainUpdates.length === 1, 'ordinary fields still save');
+  }
+  // 23) a long work order number still fits inside the page
+  {
+    const wo = 'ABCDEFGHIJ-1234567890-1234567890'.slice(0, 30), num = wo + '-5513';
+    const ops2 = P.insbOwnerInvoiceOps({ issuer: ['P'], number: num, date: '2026-10-22', wo, service: ['1 A St', 'B, MD 21201'], description: 'Comprehensive property inspection', cents: 9500 });
+    const over = ops2.filter(o => o.t === 'text' && !o.align && o.x + P.insbTextWidth(o.s, o.size, o.bold) > 560.5);
+    eq(over.length, 0, 'no text runs past the right margin with a 30-character work order');
+  }
+  // 24) severity of the new failure stages
+  {
+    for (const k of ['qb_unconfirmed', 'qb_duplicate', 'qb_total_mismatch', 'unconfirmed_send', 'email_unconfirmed', 'email_claim', 'email_claim_revert', 'stamp_after_send', 'complete_readback', 'release_readback', 'billing', 'something_new']) eq(P.insbJobType(k), 'insp_billing_money', k + ' ranks as money');
+  }
 }
 await main();
 console.log('insp-billing: ' + n + ' checks passed');
