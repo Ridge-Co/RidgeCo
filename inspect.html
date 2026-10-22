@@ -640,11 +640,22 @@ function saveCustomerEdit(btn){
   var fields={ Name:document.getElementById('ce-name').value.trim(), Line:document.getElementById('ce-line').value,
     Contact_Name:document.getElementById('ce-cname').value.trim(), Contact_Phone:document.getElementById('ce-cphone').value.trim(),
     Contact_Email:document.getElementById('ce-cemail').value.trim(), Notes:document.getElementById('ce-notes').value.trim() };
+  var cur=customers.find(function(x){return x.ID===id;})||{};
+  var billing={ customer_id:id, Billing_Mode:document.getElementById('ce-bm').checked?'wo':'', Owner_Invoice:document.getElementById('ce-oi').checked?'TRUE':'FALSE',
+    Bill_To_Name:document.getElementById('ce-btn').value.trim(), Bill_To_Address:document.getElementById('ce-baddr').value.trim(),
+    Bill_Email_To:document.getElementById('ce-bto').value.trim(), Bill_Email_Cc:document.getElementById('ce-bcc').value.trim(), AppFolio_Email:document.getElementById('ce-af').value.trim(),
+    Markup_Pct:document.getElementById('ce-mk').value.trim(), InvB_Phone:document.getElementById('ce-iph').value.trim(), InvB_Email:document.getElementById('ce-iem').value.trim() };
+  var billingTouched = cur.Billing_Mode==='wo' || billing.Billing_Mode==='wo' || billing.Bill_To_Name || billing.Bill_Email_To || billing.AppFolio_Email || billing.Markup_Pct;
   btn.disabled=true; btn.textContent='Saving…';
   api('POST','/insp/customer/update',{ id:id, fields:fields }).then(function(r){
-    btn.disabled=false; btn.textContent='Save changes';
-    if(r&&r.success){ toast('Saved'); closeModal('cust-edit-modal'); loadCustomers(); }
-    else toast((r&&r.error)||'Could not save');
+    if(!(r&&r.success)){ btn.disabled=false; btn.textContent='Save changes'; toast((r&&r.error)||'Could not save'); return; }
+    if(!billingTouched){ btn.disabled=false; btn.textContent='Save changes'; toast('Saved'); closeModal('cust-edit-modal'); loadCustomers(); return; }
+    return api('POST','/insp/billing/customer-config',billing).then(function(b){
+      btn.disabled=false; btn.textContent='Save changes';
+      if(b&&b.ok){ toast('Saved'); closeModal('cust-edit-modal'); loadCustomers().then(loadBookings);
+        if(b.held_owner_invoices&&b.held_owner_invoices.length) alert(b.held_owner_invoices.length+' owner-facing invoice(s) were waiting on this. Open Approvals and tap "Send owner invoice" on each.'); }
+      else { alert('The customer was saved, but the billing settings were NOT: '+((b&&(b.message||b.error))||'unknown error')); }
+    });
   }).catch(function(e){ btn.disabled=false; btn.textContent='Save changes'; toast('Error: '+e.message); });
 }
 function removeCustomer(){
