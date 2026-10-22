@@ -116,6 +116,8 @@ function updEst(){
 function findTimes(){
   var addr=$('f-addr').value.trim(), u=Math.floor(+$('f-units').value), b=Math.floor(+$('f-bldg').value)||1;
   var res=$('results');
+  var woEl=$('f-wo'), wo=woEl?woEl.value.trim().replace(/\s+/g,'').toUpperCase():'';
+  if(woEl&&!/^[A-Z0-9][A-Z0-9-]{1,29}$/.test(wo)){res.innerHTML=banner('err','Please enter the work order number (letters, numbers and dashes, like 43945-1).');return;}
   if(addr.length<6){res.innerHTML=banner('err','Please enter the full street address.');return;}
   if(!(u>=1)){res.innerHTML=banner('err','Please enter the number of units.');return;}
   if(b>u){res.innerHTML=banner('err','Buildings can’t be more than units.');return;}
