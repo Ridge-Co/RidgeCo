@@ -39874,6 +39874,11 @@ async function insbComplete(env, body) {
           // Stamp IMMEDIATELY and verified — before anything slower — so a later failure can never leave a created invoice that the Hub does not know about.
           try { b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Completed_At: new Date().toISOString(), Completion_Kind: plan.kind, Units_Billed: String(plan.units), Invoice_Base_Cents: String(plan.base_cents), QB_Invoice_ID: String(invId), QB_Invoice_Number: num, Invoice_Status: totalOff ? 'review|total ' + qbTotal + ' vs ' + plan.base_cents : 'invoiced', InvB_Number: plan.owner.number, InvB_Markup_Pct: plan.owner.pct, InvB_Cents: plan.owner.total_cents ? String(plan.owner.total_cents) : '', InvB_Status: plan.owner.status === 'off' ? '' : plan.owner.status, Billing_Log: insbLogLine(b, 'QB invoice ' + (num || invId)) }); }
           catch (e) { await insbFail(env, 'stamp', 'Invoice ' + (num || invId) + ' WAS created in QuickBooks for booking ' + b.ID + ' but the Hub could not record it: ' + e.message + '. DO NOT create it again.', b.ID); return json({ ok: false, invoice_created: true, invoice_id: invId, invoice_number: num, error: 'Invoice ' + (num || invId) + ' WAS created in QuickBooks, but the Hub could not record it (' + e.message + '). DO NOT tap Complete again - Brett needs to link it by hand.', steps }, 500); }
+          if (totalOff) {
+            const why = 'QuickBooks invoice ' + (num || invId) + ' for booking ' + b.ID + ' has total ' + insbDollars(qbTotal) + ' but our amount is ' + insbDollars(plan.base_cents) + '. Nothing was emailed.';
+            await insbFail(env, 'qb_total_mismatch', why, b.ID);
+            return json({ ok: false, invoice_created: true, invoice_number: num, stage: 'review', error: why + ' Fix the invoice in QuickBooks, then use "I checked - send it".', steps, warnings, booking: insbPublicBooking(b) }, 502);
+          }
         }
       }
       // 4-6) PDF, email, owner invoice
