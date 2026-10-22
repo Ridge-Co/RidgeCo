@@ -17673,7 +17673,11 @@ async function schedRunNext(env, ctx, opts) {
     if (errors.length) out.errors = errors;
     if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
     if (!jobOk) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
+      // Oct 22 2026: Google's shared per-minute read quota ran out during the run. Still recorded (P2 row, job state "failed", retried next tick, the
+      // run's answer says quota_busy), but it is not a P0 scheduler failure and nobody is paged for it.
+      const quotaBusy = schedErrorsAreQuotaBusy(errors);
+      if (quotaBusy) out.quota_busy = true;
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: quotaBusy ? 'sheets_quota_busy' : 'scheduler_job', Skill_Or_Endpoint: quotaBusy ? 'scheduler/' + job.name : job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
       try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
       catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
