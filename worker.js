@@ -18620,6 +18620,12 @@ function sheetsQuotaBusyError(e) {
   const m = String((e && e.message) || e || '');
   return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
 }
+// Oct 22 2026. PURE. A scheduler job's errors ([{step, error}]) where EVERY entry is the shared Sheets read quota ("busy"), not a bug in the job.
+// Such a run is retried on the next tick; it is a calm P2 "sheets_quota_busy" row, not a P0 "scheduler_job" failure that pages Brett.
+// (A job that stays unable to run is still caught loudly: the "Scheduled job X is overdue" condition is P0.)
+function schedErrorsAreQuotaBusy(errors) {
+  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && sheetsQuotaBusyError(x.error));
+}
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
 // PURE. Is this Anthropic error response a "credit exhausted" or "key/account refused" one? -> { kind, status, type, message } | null.
