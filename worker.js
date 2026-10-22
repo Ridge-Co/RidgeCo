@@ -26132,6 +26132,12 @@ async function hubTestWriteAllowed(env, path, body) {
     const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_sn && String(_sn.Name || '').startsWith('TEST-');
   }
+  // Portal access tracking (Oct 22 2026): the staging token may send or preview a PIN / welcome text, or regenerate a PIN, only for a TEST- person
+  // (staging stubs every SMS, so nothing is really texted). Owner_Users has no TEST marker field, so it is not reachable with this token.
+  if (path === '/send-pin' || path === '/welcome/send' || path === '/regenerate-pin') {
+    const _pt = PORTAL_TAB_BY_TYPE[body && body.type];
+    return !!_pt && _pt !== 'Owner_Users' && await isTestRecord(env, _pt, body && body.id);
+  }
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
