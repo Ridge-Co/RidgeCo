@@ -39426,6 +39426,7 @@ function insbPlan(o) {
   const cleanKind = String((o && o.kind) || '');
   const desc = 'Comprehensive property inspection' + (cleanKind === 'zero_access' ? ' - zero access (no unit could be inspected)' : (trip.ok ? ' (' + trip.units + ' unit' + (trip.units === 1 ? '' : 's') + ')' : '')) + (addr ? ' - ' + addr : '') + (wo ? ' - Work Order ' + wo : '');
   const ownerOn = String(c.Owner_Invoice || '').toUpperCase() === 'TRUE';
+  if (ownerOn && billable && !rec.b_to.length) blockers.push('The owner-facing invoice has nobody to go to: with an AppFolio address set, the people list (Bill email to) must still hold the addresses that get the owner-facing invoice.');
   let owner = { enabled: ownerOn, status: 'off', number: '', pct: '', markup_cents: 0, total_cents: 0 };
   if (ownerOn && billable) {
     owner.number = insbOwnerInvoiceNumber(wo, b.ID);
