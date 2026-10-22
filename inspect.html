@@ -1085,42 +1085,66 @@ function custOf(id){ return customers.find(function(c){return String(c.ID)===Str
 function isBillable(b){ var c=custOf(b.Customer_ID); return !!c && c.Billing_Mode==='wo'; }
 function money(cents){ return '$'+(Math.round(+cents||0)/100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
 function needsCompletion(b){ var st=Date.parse(b.Start_ISO); return b.Status==='approved' && isBillable(b) && !b.Completed_At && isFinite(st) && st<=Date.now()+6*3600000; }
+// What state is billing in? One place decides, so the card, the booking and the buttons always agree.
+function billState(b){
+  var st=String(b.Invoice_Status||''), ib=String(b.InvB_Status||''), aSent=!!String(b.Invoice_Emailed_At||'').trim(), bSent=!!String(b.InvB_Emailed_At||'').trim();
+  return { st:st, ib:ib, aSent:aSent, bSent:bSent,
+    creating: /^creating/.test(st), review: /^review/.test(st), aSending: /^sending/.test(st) && !aSent, notEmailed: !!b.Completed_At && !aSent && st==='invoiced',
+    ownerHeld: !!b.Completed_At && !bSent && ib.indexOf('held')===0, ownerUnsent: !!b.Completed_At && !bSent && ib==='ready' && aSent, ownerSending: !!b.Completed_At && !bSent && /^sending/.test(ib) };
+}
+function billStuck(b){ var s=billState(b); return s.creating||s.review||s.aSending||s.notEmailed||s.ownerHeld||s.ownerUnsent||s.ownerSending; }
 function billBlock(b){
   if(b.Status!=='approved' || !isBillable(b)) return '';
-  var h='', wo=b.WO_Number||'';
+  var h='', wo=b.WO_Number||'', s=billState(b), id=esc(b.ID);
   if(!b.Completed_At){
-    if(!wo) h+='<div class="bill-bad"><b>No work order number on this booking.</b> Billing is blocked until you add it.<div class="two-col" style="margin-top:6px"><div><input id="wo-in-'+esc(b.ID)+'" placeholder="e.g. 43945-1"></div><div><button class="btn sm" style="width:100%" onclick="billSetWO(\''+esc(b.ID)+'\',this)">Save</button></div></div></div>';
+    if(s.creating) h+='<div class="bill-bad"><b>An earlier attempt may have created a QuickBooks invoice.</b> Tap Complete &amp; bill again with the same units: QuickBooks is checked first, so nothing is created twice.</div>';
+    if(!wo) h+='<div class="bill-bad"><b>No work order number on this booking.</b> Billing is blocked until you add it.<div class="two-col" style="margin-top:6px"><div><input id="wo-in-'+id+'" placeholder="e.g. 43945-1"></div><div><button class="btn sm" style="width:100%" onclick="billSetWO(\''+id+'\',this)">Save</button></div></div></div>';
     else h+='<div class="muted" style="margin-top:6px">Work order <b>'+esc(wo)+'</b></div>';
-    h+='<div style="margin-top:8px"><button class="btn go sm" onclick="billOpen(\''+esc(b.ID)+'\')">Complete &amp; bill</button></div>';
+    h+='<div style="margin-top:8px"><button class="btn go sm" onclick="billOpen(\''+id+'\')">Complete &amp; bill</button></div>';
     return h;
   }
-  var st=b.Invoice_Status||'';
+  var st=s.st;
   if(st==='none') return '<div class="bill-box">Completed with no charge.</div>';
-  var cls=(st==='invoiced')?'bill-bad':'bill-box';
+  var cls=(s.notEmailed||s.review||s.aSending||s.ownerSending)?'bill-bad':'bill-box';
   h+='<div class="'+cls+'"><b>'+esc(b.Units_Billed==='0'?'Zero access':(b.Units_Billed+' unit'+(b.Units_Billed==='1'?'':'s')))+' · '+money(b.Invoice_Base_Cents)+'</b> · WO '+esc(wo);
   if(b.QB_Invoice_ID) h+='<div>QuickBooks invoice <b>#'+esc(b.QB_Invoice_Number||b.QB_Invoice_ID)+'</b></div>';
-  if(st==='emailed') h+='<div>Emailed '+esc((b.Invoice_Emailed_At||'').slice(0,10))+' to '+esc(b.Invoice_Emailed_To||'')+'</div>';
+  if(s.aSent && st==='emailed') h+='<div>Emailed '+esc((b.Invoice_Emailed_At||'').slice(0,10))+' to '+esc(b.Invoice_Emailed_To||'')+'</div>';
   else if(st==='staged') h+='<div>Staging test: nothing real was created or sent.</div>';
+  else if(s.review) h+='<div><b>NOT emailed: QuickBooks shows a different total than ours</b> ('+esc(st.replace(/^review\|/,''))+'). Fix the invoice in QuickBooks first, then tap "I checked - send it".</div>';
+  else if(s.aSending) h+='<div><b>An email may or may not have gone out.</b> Look in the Sent folder of ridgecomaintenance@gmail.com or ask Premier. Only if it never went out, tap "Not sent - send it".</div>';
   else h+='<div><b>Not emailed yet.</b> Tap the button to finish sending (nothing is created twice).</div>';
-  var ib=b.InvB_Status||'';
+  var ib=s.ib;
   if(ib==='sent') h+='<div>Owner invoice <b>'+esc(b.InvB_Number)+'</b> · '+money(b.InvB_Cents)+' ('+esc(b.InvB_Markup_Pct)+'% markup) sent</div>';
   else if(ib==='staged') h+='<div>Owner invoice '+esc(b.InvB_Number)+' · '+money(b.InvB_Cents)+' (staging)</div>';
-  else if(ib.indexOf('held')===0) h+='<div><b>Owner invoice held:</b> '+esc(({held_no_markup:"Premier's markup is not set yet",held_no_contact:"Premier's address/phone/email lines are not set",held_bad_markup:'the markup is not a valid percent',held_no_wo:'no work order number'})[ib]||ib)+'.</div>';
+  else if(s.ownerHeld) h+='<div><b>Owner invoice held:</b> '+esc(({held_no_markup:"Premier's markup is not set yet",held_no_contact:"Premier's address/phone/email lines are not set",held_bad_markup:'the markup is not a valid percent',held_no_wo:'no work order number'})[ib]||ib)+'.</div>';
+  else if(s.ownerUnsent) h+='<div><b>Owner invoice '+esc(b.InvB_Number)+' ('+money(b.InvB_Cents)+') is ready but NOT sent.</b></div>';
+  else if(s.ownerSending) h+='<div><b>Owner invoice send is unconfirmed.</b> Check the Sent folder; only if it never went out, tap "Not sent - send it".</div>';
   h+='<div>';
-  if(b.QB_Invoice_ID) h+='<button class="btn sm" onclick="billPdf(\''+esc(b.ID)+'\',\'a\',this)">Our invoice PDF</button>';
-  if(b.InvB_Number && +b.InvB_Cents>0) h+='<button class="btn sm" onclick="billPdf(\''+esc(b.ID)+'\',\'b\',this)">Owner invoice PDF</button>';
-  if(st==='invoiced') h+='<button class="btn go sm" onclick="billResume(\''+esc(b.ID)+'\',this)">Finish sending</button>';
-  if(ib.indexOf('held')===0 && ib!=='held_no_wo') h+='<button class="btn sm" onclick="billRelease(\''+esc(b.ID)+'\',this)">Send owner invoice</button>';
+  if(b.QB_Invoice_ID) h+='<button class="btn sm" onclick="billPdf(\''+id+'\',\'a\',this)">Our invoice PDF</button>';
+  if(b.InvB_Number && +b.InvB_Cents>0) h+='<button class="btn sm" onclick="billPdf(\''+id+'\',\'b\',this)">Owner invoice PDF</button>';
+  if(s.notEmailed||s.creating) h+='<button class="btn go sm" onclick="billResume(\''+id+'\',this,false)">Finish sending</button>';
+  if(s.review) h+='<button class="btn go sm" onclick="billResume(\''+id+'\',this,true,\'review\')">I checked - send it</button>';
+  if(s.aSending) h+='<button class="btn sm" onclick="billResume(\''+id+'\',this,true,\'sending\')">Not sent - send it</button>';
+  if((s.ownerHeld && ib!=='held_no_wo') || s.ownerUnsent) h+='<button class="btn sm" onclick="billRelease(\''+id+'\',this,false)">Send owner invoice</button>';
+  if(s.ownerSending) h+='<button class="btn sm" onclick="billRelease(\''+id+'\',this,true)">Not sent - send it</button>';
   return h+'</div></div>';
 }
 function renderBillingCard(list){
-  var need=list.filter(needsCompletion), held=list.filter(function(b){return b.Completed_At && (b.InvB_Status||'').indexOf('held')===0;}), stuck=list.filter(function(b){return b.Completed_At && b.Invoice_Status==='invoiced';});
-  var card=document.getElementById('appr-billing-card'), n=need.length+held.length+stuck.length;
+  var need=list.filter(needsCompletion), stuck=list.filter(function(b){return isBillable(b) && b.Status==='approved' && b.Completed_At && billStuck(b);});
+  var card=document.getElementById('appr-billing-card'), n=need.length+stuck.length;
   card.classList.toggle('hide',!n); document.getElementById('appr-billing-count').textContent=n;
   var h='';
-  need.forEach(function(b){ h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted">'+esc(b.when)+' · WO '+esc(b.WO_Number||'(none)')+'</div></div><button class="btn go sm" onclick="billOpen(\''+esc(b.ID)+'\')">Complete &amp; bill</button></div>'; });
-  stuck.forEach(function(b){ h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted" style="color:var(--danger)">Invoice #'+esc(b.QB_Invoice_Number||b.QB_Invoice_ID)+' created but NOT emailed</div></div><button class="btn go sm" onclick="billResume(\''+esc(b.ID)+'\',this)">Finish sending</button></div>'; });
-  held.forEach(function(b){ h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted">Owner invoice held · WO '+esc(b.WO_Number||'')+'</div></div><button class="btn sm" onclick="billRelease(\''+esc(b.ID)+'\',this)">Send owner invoice</button></div>'; });
+  need.forEach(function(b){ var s=billState(b); h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted">'+esc(b.when)+' · WO '+esc(b.WO_Number||'(none)')+'</div>'+(s.creating?'<div class="muted" style="color:var(--danger)">An earlier attempt may have created an invoice: tap again, QuickBooks is checked first</div>':'')+'</div><button class="btn go sm" onclick="billOpen(\''+esc(b.ID)+'\')">Complete &amp; bill</button></div>'; });
+  stuck.forEach(function(b){
+    var s=billState(b), id=esc(b.ID), inv='Invoice #'+esc(b.QB_Invoice_Number||b.QB_Invoice_ID), msg, btn;
+    if(s.review){ msg=inv+': QuickBooks total differs, NOT emailed'; btn='<button class="btn go sm" onclick="billResume(\''+id+'\',this,true,\'review\')">I checked - send it</button>'; }
+    else if(s.aSending){ msg=inv+': email may or may not have gone out'; btn='<button class="btn sm" onclick="billResume(\''+id+'\',this,true,\'sending\')">Not sent - send it</button>'; }
+    else if(s.notEmailed){ msg=inv+' created but NOT emailed'; btn='<button class="btn go sm" onclick="billResume(\''+id+'\',this,false)">Finish sending</button>'; }
+    else if(s.ownerSending){ msg='Owner invoice: send is unconfirmed'; btn='<button class="btn sm" onclick="billRelease(\''+id+'\',this,true)">Not sent - send it</button>'; }
+    else if(s.ownerUnsent){ msg='Owner invoice ready but NOT sent'; btn='<button class="btn sm" onclick="billRelease(\''+id+'\',this,false)">Send owner invoice</button>'; }
+    else { msg='Owner invoice held · WO '+esc(b.WO_Number||''); btn=(s.ib!=='held_no_wo')?'<button class="btn sm" onclick="billRelease(\''+id+'\',this,false)">Send owner invoice</button>':''; }
+    h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted"'+((s.ownerHeld)?'':' style="color:var(--danger)"')+'>'+msg+'</div></div>'+btn+'</div>';
+  });
   document.getElementById('appr-billing').innerHTML=h;
 }
 var bill={ id:'', kind:'inspected', plan:null, seq:0, busy:false };
