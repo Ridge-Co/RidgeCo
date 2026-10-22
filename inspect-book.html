@@ -73,6 +73,7 @@ function bookInit(){
     var ex=(r.example_durations||[]).map(function(d){return d.units+' unit'+(d.units>1?'s':'')+' ≈ '+fmtDur(d.minutes);}).join(' · ');
     setMain('<div id="mine"></div><div class="card"><b>Where and how big?</b>'
       +(r.open_block_count? openDays(r.open_days) : banner('warn','No time slots are open right now. Brett opens blocks of time — check back or ask him.'))
+      +(r.require_wo?'<label>Work order number <span class="muted">(required)</span></label><input id="f-wo" placeholder="e.g. 43945-1" autocomplete="off" autocapitalize="characters">':'')
       +'<label>Property address</label><input id="f-addr" placeholder="123 N Main St, Baltimore, MD 21201" autocomplete="street-address">'
       +'<div class="row2"><div><label>Total units</label><input id="f-units" type="number" min="1" max="60" inputmode="numeric" placeholder="e.g. 2"></div>'
       +'<div><label>Buildings</label><input id="f-bldg" type="number" min="1" inputmode="numeric" placeholder="1"></div></div>'
@@ -115,10 +116,12 @@ function updEst(){
 function findTimes(){
   var addr=$('f-addr').value.trim(), u=Math.floor(+$('f-units').value), b=Math.floor(+$('f-bldg').value)||1;
   var res=$('results');
+  var woEl=$('f-wo'), wo=woEl?woEl.value.trim().replace(/\s+/g,'').toUpperCase():'';
+  if(woEl&&!/^[A-Z0-9][A-Z0-9-]{1,29}$/.test(wo)){res.innerHTML=banner('err','Please enter the work order number (letters, numbers and dashes, like 43945-1).');return;}
   if(addr.length<6){res.innerHTML=banner('err','Please enter the full street address.');return;}
   if(!(u>=1)){res.innerHTML=banner('err','Please enter the number of units.');return;}
   if(b>u){res.innerHTML=banner('err','Buildings can’t be more than units.');return;}
-  state.address=addr;state.units=u;state.buildings=b;state.picked=null;
+  state.address=addr;state.units=u;state.buildings=b;state.picked=null;state.wo=wo;
   var btn=$('f-go'); btn.disabled=true; btn.textContent='Checking Brett’s calendar and drive times…';
   res.innerHTML='';
   call('POST','/insp-book/slots',{k:K,address:addr,units:u,buildings:b}).then(function(r){
@@ -163,12 +166,12 @@ function pick(i){
 }
 function requestSlot(){
   var s=state.slots[state.picked], err=$('c-err'), btn=$('c-go');
-  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
+  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,wo_number:state.wo||'',start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
   btn.disabled=true; btn.textContent='Requesting…'; err.innerHTML='';
   call('POST','/insp-book/request',body).then(function(r){
     if(r.ok){
       try{localStorage.setItem('insp_last_manage',r.manage_url);}catch(e){}
-      setMain('<div class="card">'+banner('good',r.message)+'<dl><dt>Property</dt><dd>'+esc(r.address)+'</dd><dt>When</dt><dd>'+esc(r.when)+'</dd><dt>Length</dt><dd>'+fmtDur(r.duration_min)+'</dd><dt>Status</dt><dd>Waiting for Brett’s approval</dd></dl>'
+      setMain('<div class="card">'+banner('good',r.message)+'<dl><dt>Property</dt><dd>'+esc(r.address)+'</dd>'+(state.wo?'<dt>Work order</dt><dd>'+esc(state.wo)+'</dd>':'')+'<dt>When</dt><dd>'+esc(r.when)+'</dd><dt>Length</dt><dd>'+fmtDur(r.duration_min)+'</dd><dt>Status</dt><dd>Waiting for Brett’s approval</dd></dl>'
         +'<p class="muted">Bookmark this link to check status or cancel:</p><input readonly value="'+esc(r.manage_url)+'" onclick="this.select()"><a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="'+esc(r.manage_url)+'">Open booking</a>'
         +'<a class="btn" style="display:block;text-align:center;text-decoration:none" href="?k='+encodeURIComponent(K)+'">Book another</a></div>');
       return;
