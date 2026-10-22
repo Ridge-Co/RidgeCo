@@ -25954,6 +25954,13 @@ async function hubTestWriteAllowed(env, path, body) {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
   }
+  // Inspection billing (Oct 22 2026): a preview writes nothing; every real step may only touch a booking / customer that is a TEST- customer.
+  if (path === '/insp/billing/preview') return true;
+  if (path === '/insp/billing/complete' || path === '/insp/billing/release-owner' || path === '/insp/billing/set-wo') {
+    const _bb = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(body && body.id));
+    return !!_bb && await isTestRecord(env, 'Insp_Customers', _bb.Customer_ID);
+  }
+  if (path === '/insp/billing/customer-config') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/admin/sync-vendors-from-qbo') {
     // Single-vendor runs on a TEST- vendor only; a bulk run would touch real vendors.
     return !!(body && body.vendor_id) && await isTestRecord(env, 'Vendors', body.vendor_id);
