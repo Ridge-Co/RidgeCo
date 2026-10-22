@@ -252,7 +252,7 @@ async function main() {
   {
     const { w, api, env } = world(); w.failNext.invoice = { Fault: { Error: [{ code: '6000', Message: 'Business Validation Error' }] } };
     const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
-    ok(!res.body.ok && res.status === 502, 'QuickBooks refusal is an error'); ok(res.body.message.includes('Business Validation Error'), 'with QuickBooks\' own words'); eq(latest(w).QB_Invoice_ID, undefined, 'nothing stamped'); eq(w.mails.length, 0, 'nothing emailed'); eq(latest(w).Billing_Lock, '', 'lock cleared'); ok(w.telemetry.length >= 1, 'logged');
+    ok(w.telemetry.some(t => t.Success === 'FALSE' && t.Job_Type === 'insp_billing_money'), 'a failed QuickBooks invoice is filed as a MONEY failure'); ok(!res.body.ok && res.status === 502, 'QuickBooks refusal is an error'); ok(res.body.message.includes('Business Validation Error'), 'with QuickBooks\' own words'); eq(latest(w).QB_Invoice_ID, undefined, 'nothing stamped'); eq(w.mails.length, 0, 'nothing emailed'); eq(latest(w).Billing_Lock, '', 'lock cleared'); ok(w.telemetry.length >= 1, 'logged');
   }
   // 9) the invoice is created but the Hub cannot record it: say DO NOT resend
   {
