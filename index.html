@@ -491,6 +491,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary" onclick="window.open('vendor-setup.html','_blank')" title="Opens a full page with a contact-card upload — same link you can send to a new vendor">+ Add Vendor (full page / shareable link)</button>
     </div>
     <div id="vendors-pending-section"></div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-stuck" onchange="renderVendorsPage()"> Only show vendors sent a link+PIN who never logged in (follow-ups)</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-unwelcomed" onchange="renderVendorsPage()"> Only show vendors who haven't received a welcome message</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-inactive" onchange="renderVendorsPage()"> Show inactive (deactivated) vendors instead of active ones</label>
     <div id="vendors-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
