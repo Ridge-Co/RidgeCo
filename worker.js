@@ -39417,7 +39417,7 @@ function insbPlan(o) {
   if (billable) for (const p of rec.problems) blockers.push(p);
   const addr = String(b.Formatted_Address || b.Address || '');
   const cleanKind = String((o && o.kind) || '');
-  const desc = 'Comprehensive property inspection' + (cleanKind === 'zero_access' ? ' - zero access (no unit could be inspected)' : ' (' + trip.units + ' unit' + (trip.units === 1 ? '' : 's') + ')') + (addr ? ' - ' + addr : '') + (wo ? ' - Work Order ' + wo : '');
+  const desc = 'Comprehensive property inspection' + (cleanKind === 'zero_access' ? ' - zero access (no unit could be inspected)' : (trip.ok ? ' (' + trip.units + ' unit' + (trip.units === 1 ? '' : 's') + ')' : '')) + (addr ? ' - ' + addr : '') + (wo ? ' - Work Order ' + wo : '');
   const ownerOn = String(c.Owner_Invoice || '').toUpperCase() === 'TRUE';
   let owner = { enabled: ownerOn, status: 'off', number: '', pct: '', markup_cents: 0, total_cents: 0 };
   if (ownerOn && billable) {
