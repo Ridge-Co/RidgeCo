@@ -39783,11 +39783,20 @@ async function insbComplete(env, body) {
     let b = L.b; const c = L.c;
     if (String(c.Billing_Mode || '') !== 'wo') return json({ ok: false, error: 'not_billed_here', message: 'This customer is not set up for automatic inspection billing (Billing mode).' }, 409);
     // A repeat tap on a booking that already completed must not recompute anything from what is typed now: it only finishes what is unfinished.
-    const resume = !!String(b.QB_Invoice_ID || '').trim() || String(b.Invoice_Status || '') === 'staged';
-    const kind = resume ? (b.Completion_Kind || body.kind) : body.kind, units = resume ? b.Units_Billed : body.units;
-    const plan = insbPlan({ booking: Object.assign({}, b, resume ? { Status: 'approved' } : {}), customer: c, kind, units, todayIso: insbTodayEt() });
+    let resume, plan;
+    const derive = () => {   // everything that depends on the row is derived here, so it can be derived AGAIN from a fresh row once the lock is ours
+      resume = !!String(b.QB_Invoice_ID || '').trim() || String(b.Invoice_Status || '') === 'staged';
+      plan = insbPlan({ booking: Object.assign({}, b, resume ? { Status: 'approved' } : {}), customer: c, kind: resume ? (b.Completion_Kind || body.kind) : body.kind, units: resume ? b.Units_Billed : body.units, todayIso: insbTodayEt() });
+    };
+    derive();
+    if (!resume && String(b.Completed_At || '').trim()) {   // completed with no charge: it can be repeated as "no charge" but never billed afterwards
+      if (String(b.Completion_Kind || '') === 'no_charge' && String(body.kind || '') === 'no_charge') return json({ ok: true, completed: true, billed: false, message: 'Already marked complete with no charge.', booking: insbPublicBooking(b) });
+      return json({ ok: false, error: 'already_completed', message: 'This booking was already completed (' + (b.Completion_Kind || 'no charge') + '), so it cannot be billed now.' }, 409);
+    }
     if (resume && String(b.Invoice_Base_Cents || '') !== '' && +b.Invoice_Base_Cents !== plan.base_cents) { await insbFail(env, 'resume_mismatch', 'Stored amount ' + b.Invoice_Base_Cents + ' differs from recomputed ' + plan.base_cents, b.ID); return json({ ok: false, error: 'amount_mismatch', message: 'The amount stored on this booking does not match the rate card any more. Nothing was changed. Brett needs to look.' }, 409); }
     if (!plan.ok) return json({ ok: false, error: 'blocked', message: plan.blockers.join(' '), plan }, 409);
+    // What was on screen is what gets billed: the page sends the amount it showed, and a different amount is refused (a stale preview must never be billed).
+    if (!resume && body.expected_cents != null && +body.expected_cents !== plan.base_cents) return json({ ok: false, error: 'amount_changed', message: 'The amount changed: your screen showed ' + insbDollars(body.expected_cents) + ' but it is now ' + insbDollars(plan.base_cents) + '. Nothing was billed. Look at the preview again.' }, 409);
     warnings.push(...plan.warnings);
     // no charge: completed, nothing to bill
     if (plan.kind === 'no_charge') {
