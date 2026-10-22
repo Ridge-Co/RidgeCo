@@ -121,7 +121,7 @@ function findTimes(){
   if(addr.length<6){res.innerHTML=banner('err','Please enter the full street address.');return;}
   if(!(u>=1)){res.innerHTML=banner('err','Please enter the number of units.');return;}
   if(b>u){res.innerHTML=banner('err','Buildings can’t be more than units.');return;}
-  state.address=addr;state.units=u;state.buildings=b;state.picked=null;
+  state.address=addr;state.units=u;state.buildings=b;state.picked=null;state.wo=wo;
   var btn=$('f-go'); btn.disabled=true; btn.textContent='Checking Brett’s calendar and drive times…';
   res.innerHTML='';
   call('POST','/insp-book/slots',{k:K,address:addr,units:u,buildings:b}).then(function(r){
