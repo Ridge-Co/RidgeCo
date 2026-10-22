@@ -1719,7 +1719,7 @@ async function vendorByPin(env, url) {
   const pin  = url.searchParams.get('pin')  || '';
   const name = (url.searchParams.get('name') || '').trim().toLowerCase();
   if (!name) return json({ error: 'Name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const vendors = await fetchTab(env, 'Vendors');
     const vendor = vendors.find(v => v.PIN && v.PIN.toLowerCase() === p.toLowerCase() && v.Active !== 'FALSE');
     if (!vendor) return null;
