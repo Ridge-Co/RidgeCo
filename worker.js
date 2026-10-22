@@ -566,6 +566,8 @@ const _hubWorkerCore = {
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
+        if (path === '/portal-access')          return await portalAccessList(env, url);
+        if (path === '/portal-access/backfill-preview') return await portalBackfillPreview(env);
         // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
         // tenant-by-pin payload are cached in the client's mh_tenant_sess at login and never
         // re-checked otherwise -- a tenant's own hard refresh restores that same stale cached
@@ -896,6 +898,7 @@ const _hubWorkerCore = {
         if (path === '/owner-user/update')        return await updateRow(env, 'Owner_Users', body.id, body.fields);
         if (path === '/send-pin')                 return await sendPinMessage(env, body);
         if (path === '/welcome/send')              return await welcomeSend(env, body);
+        if (path === '/portal-access/backfill')    return await portalBackfillApply(env);
         if (path === '/regenerate-pin')           return await regeneratePIN(env, body);
         if (path === '/message-template/update')  return await updateMessageTemplate(env, body);
         if (path === '/property/notice')          return await sendPropertyNotice(env, body);
@@ -1360,11 +1363,174 @@ async function clearPinLockout(env, pin) {
   } catch(e) { /* non-fatal */ }
 }
 
+// ── Portal access tracking (Oct 22 2026, Brett) ──────────────────────────────────────────────────
+// Per person, on their own row (Tenants / Vendors / Owners / Owner_Users): was the link+PIN text really sent
+// (PIN_Sent_Date / PIN_Sent_Count / PIN_Send_Result) and have they ever logged in with it (First_Login_Date /
+// Last_Login_Date / Login_Count). "Sent" is written ONLY when Twilio accepted the text; a failed or skipped
+// send writes PIN_Send_Result with the reason and leaves the sent mark off. Login_Evidence marks people
+// with proven past portal use who predate this tracking (their login date is unknowable, so none is invented).
+const PORTAL_LOGIN_COLS = ['First_Login_Date', 'Last_Login_Date', 'Login_Count', 'Login_Evidence'];
+const PORTAL_PIN_COLS = ['PIN_Sent_Date', 'PIN_Sent_Count', 'PIN_Send_Result'];
+const PORTAL_WELCOME_COLS = ['Welcome_Sent', 'Welcome_Sent_Date', 'Welcome_Send_Result'];
+const PORTAL_TAB_BY_TYPE = { tenant: 'Tenants', vendor: 'Vendors', owner: 'Owners', owner_user: 'Owner_Users' };
+
+// Pure: did Twilio really accept this text? Takes whatever sendSMS returned.
+function smsSendVerdict(r) {
+  if (!r || typeof r !== 'object') return { ok: false, result: 'error: no response from the text sender' };
+  if (r.staged) return { ok: true, staged: true, result: 'staged (test environment, no real text)' };
+  if (r.skipped) return { ok: false, result: 'not sent: ' + (r.reason || 'texting is switched off') };
+  if (r.code || (typeof r.status === 'number' && r.status >= 400)) return { ok: false, result: 'Twilio error ' + (r.code || r.status) + ': ' + String(r.message || '').slice(0, 200) };
+  if (r.error && !r.sid) return { ok: false, result: 'error: ' + String(r.error).slice(0, 200) };
+  if (r.sid) return { ok: true, result: 'sent', sid: r.sid };
+  return { ok: false, result: 'error: unrecognized response from Twilio' };
+}
+
+// Pure: one person's portal-access state. level: ok | waiting | amber | red | none.
+// logged_in = a recorded login OR proven past use. amber/red = link+PIN sent but never logged in for N days.
+function portalAccessStatus(rec, nowMs, opt) {
+  const amberDays = (opt && opt.amberDays) || 14, redDays = (opt && opt.redDays) || 30;
+  const ms = (s) => { const t = Date.parse(String(s || '')); return isNaN(t) ? null : t; };
+  const T = (v) => String(v == null ? '' : v).toUpperCase() === 'TRUE';
+  const first = ms(rec.First_Login_Date), last = ms(rec.Last_Login_Date), pinAt = ms(rec.PIN_Sent_Date);
+  const proven = !!String(rec.Login_Evidence || '').trim();
+  const verified = String(rec.PIN_Send_Result || '') === 'sent';
+  const out = {
+    welcome_sent: T(rec.Welcome_Sent), welcome_date: rec.Welcome_Sent_Date || '',
+    pin_sent: pinAt != null, pin_sent_date: rec.PIN_Sent_Date || '', pin_sent_count: parseInt(rec.PIN_Sent_Count, 10) || 0,
+    pin_send_result: rec.PIN_Send_Result || '', pin_verified: verified,
+    logged_in: first != null || proven, first_login: rec.First_Login_Date || '', last_login: rec.Last_Login_Date || '',
+    login_count: parseInt(rec.Login_Count, 10) || 0, login_evidence: rec.Login_Evidence || '', days_since_pin: null, level: 'none', state: '',
+  };
+  if (out.logged_in) { out.level = 'ok'; out.state = first != null ? 'logged_in' : 'logged_in_prior_use'; return out; }
+  if (pinAt == null) { out.state = 'pin_not_sent'; return out; }
+  const days = Math.floor((nowMs - pinAt) / 86400000);
+  out.days_since_pin = days;
+  out.level = days >= redDays ? 'red' : days >= amberDays ? 'amber' : 'waiting';
+  out.state = out.level === 'waiting' ? 'sent_waiting' : 'sent_never_logged_in';
+  return out;
+}
+
+// Never blocks a login and never fails silently: any failure is logged to Ops_Telemetry (-> Needs Attention).
+async function stampPortalLogin(env, login) {
+  try {
+    await ensureColumns(env, login.tab, PORTAL_LOGIN_COLS);
+    const row = login.row || {}, now = new Date().toISOString();
+    await updateRowVerified(env, login.tab, login.id, {
+      First_Login_Date: row.First_Login_Date || now, Last_Login_Date: now, Login_Count: String((parseInt(row.Login_Count, 10) || 0) + 1),
+    });
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_login_stamp_failed', Skill_Or_Endpoint: login.tab, Success: 'FALSE', Notes: login.tab + ' ' + login.id + ': ' + String((e && e.message) || e).slice(0, 300) }); }
+    catch (e2) { console.error('portal_login_stamp_failed AND telemetry failed:', login.tab, login.id, String((e && e.message) || e), String((e2 && e2.message) || e2)); }
+  }
+}
+
+// Records the outcome of a link+PIN text on the person's row. Returns { ok, error? } - a failed mark is surfaced to the caller.
+async function stampPinSend(env, type, id, verdict) {
+  const tab = PORTAL_TAB_BY_TYPE[type];
+  try {
+    await ensureColumns(env, tab, PORTAL_PIN_COLS);
+    const cur = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id)) || {};
+    const f = { PIN_Send_Result: verdict.result };
+    if (verdict.ok) { f.PIN_Sent_Date = new Date().toISOString(); f.PIN_Sent_Count = String((parseInt(cur.PIN_Sent_Count, 10) || 0) + 1); }
+    await updateRowVerified(env, tab, id, f);
+    return { ok: true };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_pin_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + msg }); }
+    catch (e2) { console.error('portal_pin_stamp_failed AND telemetry failed:', tab, id, msg, String((e2 && e2.message) || e2)); }
+    return { ok: false, error: msg };
+  }
+}
+
+// GET /portal-access — every active tenant / vendor / owner / owner sub-user with welcome + link&PIN + login state,
+// worst follow-up first. Thresholds: Config PORTAL_FOLLOWUP_AMBER_DAYS (14) / PORTAL_FOLLOWUP_RED_DAYS (30).
+async function portalAccessList(env, url) {
+  const cfg = await fetchConfig(env);
+  const opt = { amberDays: parseInt(cfg.PORTAL_FOLLOWUP_AMBER_DAYS, 10) || 14, redDays: parseInt(cfg.PORTAL_FOLLOWUP_RED_DAYS, 10) || 30 };
+  const [tenants, vendors, owners, ownerUsers] = await fetchTabs(env, ['Tenants', 'Vendors', 'Owners', 'Owner_Users']);
+  const now = Date.now(), people = [];
+  const add = (type, r, name, extra) => people.push(Object.assign({ type, id: String(r.ID), name: name || '', has_phone: !!String(r.Phone || '').trim(), has_pin: !!String(r.PIN || '').trim() }, extra || {}, portalAccessStatus(r, now, opt)));
+  const full = (r) => ((r.First_Name || '') + ' ' + (r.Last_Name || '')).trim();
+  for (const t of tenants) {
+    if (t.Active === 'FALSE') continue;
+    if (t.Move_Out_Date && new Date(t.Move_Out_Date + 'T23:59:59') < new Date()) continue;
+    add('tenant', t, full(t));
+  }
+  for (const v of vendors) if (v.Active !== 'FALSE') add('vendor', v, v.Name || full(v), { company: v.Company || '' });
+  for (const o of owners) if (o.Active !== 'FALSE') add('owner', o, full(o) || o.Company || '', { company: o.Company || '' });
+  for (const u of ownerUsers) if (u.Active !== 'FALSE') add('owner_user', u, full(u), { owner_id: u.Owner_ID || '' });
+  const rank = { red: 0, amber: 1, waiting: 2, none: 3, ok: 4 };
+  people.sort((a, b) => (rank[a.level] - rank[b.level]) || ((b.days_since_pin || 0) - (a.days_since_pin || 0)));
+  const count = (f) => people.filter(f).length;
+  return json({ ok: true, thresholds: opt, counts: {
+    total: people.length, logged_in: count(p => p.logged_in), pin_not_sent: count(p => p.state === 'pin_not_sent'),
+    waiting: count(p => p.level === 'waiting'), amber: count(p => p.level === 'amber'), red: count(p => p.level === 'red'),
+  }, people });
+}
+
+// One-time backfill from SMS_Logs: anyone whose log shows a PIN text gets PIN_Sent_* with result 'logged_unverified'
+// (the old sender logged even when the text may not have gone out). Never overwrites a verified mark.
+// GET /portal-access/backfill-preview shows what would change; POST /portal-access/backfill applies it in one batch per tab.
+async function portalBackfillPlan(env) {
+  const logs = await fetchTab(env, 'SMS_Logs');
+  const byKey = new Map();
+  for (const l of logs) {
+    const m = /^pin_send_(tenant|vendor|owner|owner_user)$/.exec(String(l.Recipient_Type || ''));
+    if (!m || !l.Recipient_ID) continue;
+    const k = m[1] + '|' + l.Recipient_ID, e = byKey.get(k) || { type: m[1], id: String(l.Recipient_ID), count: 0, last: '' };
+    e.count++; if (!e.last || String(l.Sent_Date) > e.last) e.last = String(l.Sent_Date);
+    byKey.set(k, e);
+  }
+  const plan = [];
+  for (const type of Object.keys(PORTAL_TAB_BY_TYPE)) {
+    const rows = await fetchTab(env, PORTAL_TAB_BY_TYPE[type]);
+    for (const e of byKey.values()) {
+      if (e.type !== type) continue;
+      const r = rows.find(x => String(x.ID) === e.id);
+      if (!r) { plan.push({ type, id: e.id, action: 'skip', why: 'person no longer in ' + PORTAL_TAB_BY_TYPE[type] }); continue; }
+      if (String(r.PIN_Sent_Date || '').trim()) { plan.push({ type, id: e.id, action: 'skip', why: 'already has a PIN-sent mark' }); continue; }
+      plan.push({ type, id: e.id, action: 'set', fields: { PIN_Sent_Date: e.last, PIN_Sent_Count: String(e.count), PIN_Send_Result: 'logged_unverified' } });
+    }
+  }
+  return plan;
+}
+async function portalBackfillPreview(env) {
+  const plan = await portalBackfillPlan(env);
+  return json({ ok: true, read_only: true, would_set: plan.filter(p => p.action === 'set').length, skipped: plan.filter(p => p.action === 'skip').length, plan });
+}
+async function portalBackfillApply(env) {
+  const plan = (await portalBackfillPlan(env)).filter(p => p.action === 'set');
+  const errors = [];
+  let written = 0;
+  for (const type of Object.keys(PORTAL_TAB_BY_TYPE)) {
+    const items = plan.filter(p => p.type === type);
+    if (!items.length) continue;
+    const tab = PORTAL_TAB_BY_TYPE[type];
+    try {
+      await ensureColumns(env, tab, PORTAL_PIN_COLS);
+      const data = await sheetsRequest(env, 'GET', '/values/' + tab);
+      const [headers, ...rows] = data.values || [[]];
+      const idc = idColIndex(headers), batch = [];
+      for (const it of items) {
+        const ri = rows.findIndex(r => String(r[idc]) === it.id);
+        if (ri < 0) { errors.push(type + ' ' + it.id + ': row not found'); continue; }
+        for (const [f, v] of Object.entries(it.fields)) { const ci = headers.indexOf(f); if (ci < 0) { errors.push(type + ' ' + it.id + ': column ' + f + ' missing'); continue; } batch.push({ range: tab + '!' + col(ci) + (ri + 2), values: [[v]] }); }
+        written++;
+      }
+      if (batch.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
+      invalidateTabCache(tab);
+    } catch (e) { errors.push(tab + ': ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+  if (errors.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_backfill_failed', Success: 'FALSE', Notes: errors.join(' | ').slice(0, 500) }); } catch (e2) { console.error('portal_backfill_failed AND telemetry failed:', errors.join(' | '), String((e2 && e2.message) || e2)); } }
+  return json({ ok: errors.length === 0, written, errors });
+}
+
 async function pinLookup(env, pin, finder) {
   if (!pin || pin.length < 5) return json({ error: 'Invalid PIN' }, 400);
   const lock = await checkPinLockout(env, pin);
   if (lock.locked) return json({ error: 'Too many failed attempts', locked: true, minutes_remaining: lock.minutes_remaining }, 429);
-  const result = await finder(pin);
+  const _meta = {};   // the finder fills _meta.login = { tab, id, row } for the person who matched (portal login tracking)
+  const result = await finder(pin, _meta);
   if (!result) {
     const fail = await recordPinFailure(env, pin);
     const left = PIN_MAX_ATTEMPTS - fail.fail_count;
@@ -1372,6 +1538,7 @@ async function pinLookup(env, pin, finder) {
     return json({ error: `PIN not found. ${left} attempt${left !== 1 ? 's' : ''} remaining.` }, 404);
   }
   await clearPinLockout(env, pin);
+  if (_meta.login) await stampPortalLogin(env, _meta.login);   // first/last login + count; never blocks the login, failures go to Ops_Telemetry
   return result;
 }
 
@@ -1381,7 +1548,7 @@ async function tenantByPin(env, url) {
   const pin  = url.searchParams.get('pin')  || '';
   const name = (url.searchParams.get('name') || '').trim().toLowerCase();
   if (!name) return json({ error: 'First name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const tenants = await fetchTab(env, 'Tenants');
     const tenant = tenants.find(t => t.PIN && t.PIN.toLowerCase() === p.toLowerCase() && t.Active !== 'FALSE');
     if (!tenant) return null;
@@ -1391,6 +1558,7 @@ async function tenantByPin(env, url) {
     }
     const tFirst = (tenant.First_Name||'').toLowerCase();
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
+    _m.login = { tab: 'Tenants', id: tenant.ID, row: tenant };
     const [props, units, owners] = await fetchTabs(env, ['Properties','Units','Owners']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
@@ -1449,7 +1617,7 @@ async function ownerByPin(env, url) {
   const pin = url.searchParams.get('pin') || '';
   const _ownerName = (url.searchParams.get('name') || '').trim();
   if (!_ownerName) return json({ error: 'First name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const [ownerUsers, owners] = await fetchTabs(env, ['Owner_Users','Owners']);
     const enteredName = (url?.searchParams?.get('name')||'').trim().toLowerCase();
     if (!enteredName) return null;
@@ -1457,6 +1625,7 @@ async function ownerByPin(env, url) {
     if (user) {
       const uFirst = (user.First_Name||'').toLowerCase();
       if (uFirst !== enteredName && !uFirst.startsWith(enteredName)) return null;
+      _m.login = { tab: 'Owner_Users', id: user.ID, row: user };
       const owner = owners.find(o => o.ID === user.Owner_ID);
       return json({
         owner_id: user.Owner_ID, owner_user_id: user.ID,
@@ -1468,6 +1637,7 @@ async function ownerByPin(env, url) {
     }
     const owner = owners.find(o => o.PIN && o.PIN.toLowerCase() === p.toLowerCase() && o.Active !== 'FALSE');
     if (!owner) return null;
+    _m.login = { tab: 'Owners', id: owner.ID, row: owner };
     return json({
       owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
       owner_company: owner.Company||'', owner_phone: owner.Phone||'',
@@ -1552,12 +1722,13 @@ async function vendorByPin(env, url) {
   const pin  = url.searchParams.get('pin')  || '';
   const name = (url.searchParams.get('name') || '').trim().toLowerCase();
   if (!name) return json({ error: 'Name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const vendors = await fetchTab(env, 'Vendors');
     const vendor = vendors.find(v => v.PIN && v.PIN.toLowerCase() === p.toLowerCase() && v.Active !== 'FALSE');
     if (!vendor) return null;
     const loginName = ((vendor.First_Name||'').trim() || (vendor.Name||'').split(' ')[0]).toLowerCase();
     if (loginName !== name && !loginName.startsWith(name)) return null;
+    _m.login = { tab: 'Vendors', id: vendor.ID, row: vendor };
     return json({
       vendor_id: vendor.ID, vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
@@ -10120,7 +10291,13 @@ async function regeneratePIN(env, body) {
   if (!record[phoneField]) return json({ error: 'Phone number required to generate PIN' }, 400);
   const newPIN = generatePIN(record[phoneField]);
   await updateRow(env, tab, id, { PIN: newPIN });
-  if (send) { const sendResult = await sendPinMessage(env, { type, id }); return json({ success: true, pin: newPIN, sms_sent: !!sendResult }); }
+  if (send) {
+    // sendPinMessage returns a Response (always truthy), so read what it actually said - sms_sent is only true when the text really went out.
+    const sendResult = await sendPinMessage(env, { type, id });
+    let sj;
+    try { sj = await sendResult.clone().json(); } catch (e) { sj = { error: 'Could not read the send result: ' + ((e && e.message) || e) }; }
+    return json({ success: true, pin: newPIN, sms_sent: !!(sj && sj.success), sms_error: (sj && !sj.success) ? (sj.error || 'send failed') : '', sms_warning: (sj && sj.warning) || '' });
+  }
   return json({ success: true, pin: newPIN });
 }
 
@@ -10186,9 +10363,14 @@ async function sendPinMessage(env, body) {
   // PIN, portal link and amounts are verified intact or the English original is sent.
   let outMessage = message, translatedTo = '';
   if (vendorRec) { const t = await translateForVendorDetailed(env, vendorRec, message); if (t.translated) { outMessage = t.text; translatedTo = 'es'; } }
-  await sendSMS(env, phone, outMessage);
+  // Oct 22 2026: the old code ignored sendSMS's answer and logged "sent" regardless, so a switched-off or rejected text still looked sent.
+  // Now the real result decides: the person's row gets PIN_Sent_Date/Count only when Twilio accepted it, and a failure is returned honestly.
+  const verdict = smsSendVerdict(await sendSMS(env, phone, outMessage));
+  const mark = await stampPinSend(env, type, id, verdict);
+  if (!verdict.ok) return json({ error: 'PIN text NOT sent: ' + verdict.result, name: firstName, mark_saved: mark.ok }, 502);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
-  return json({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo });
+  return json(Object.assign({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo, staged: !!verdict.staged },
+    mark.ok ? {} : { warning: 'The PIN text WAS sent, but the "sent" mark could not be saved: ' + mark.error }));
 }
 
 // POST /welcome/send { type: 'tenant'|'vendor', id, preview_only?, message? } — Sep 14 2026,
@@ -10200,9 +10382,40 @@ async function sendPinMessage(env, body) {
 // PERSONALIZED (real name/address) for the single-send preview; body.message, if provided,
 // overrides it entirely — the Hub always lets Brett edit before sending (single: pre-filled
 // textarea; bulk: one shared editable text for the whole batch, deliberately generic/unnamed).
+// POST /welcome/send for type owner | owner_user (Oct 22 2026): same warm intro as tenants/vendors, but sent through sendSMS and
+// judged by the real Twilio answer; Welcome_Sent is written ONLY when the text went out.
+async function welcomeSendOwner(env, body) {
+  const { type, id } = body, tab = PORTAL_TAB_BY_TYPE[type];
+  const rec = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+  if (!rec) return json({ error: (type === 'owner' ? 'Owner' : 'Owner user') + ' not found' }, 404);
+  if (!rec.Phone) return json({ error: 'No phone number on file', name: rec.First_Name || '' }, 400);
+  const firstName = rec.First_Name || 'there';
+  const cfg = await fetchConfig(env), assistantName = cfg.ASSISTANT_NAME || 'Riley';
+  const tokens = { FirstName: firstName, AssistantName: assistantName };
+  const tpl = await getMessageTemplate(env, 'owner_welcome', 'sms');
+  const defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
+    : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on your properties. Save this number - we'll only text about maintenance here, never marketing.`;
+  if (body.preview_only) return json({ preview: defaultMsg, phone: rec.Phone, name: firstName });
+  const finalMsg = body.message ? renderTemplate(String(body.message), tokens) : defaultMsg;
+  const verdict = smsSendVerdict(await sendSMS(env, rec.Phone, finalMsg));
+  const f = { Welcome_Send_Result: verdict.result };
+  if (verdict.ok) { f.Welcome_Sent = 'TRUE'; f.Welcome_Sent_Date = new Date().toISOString(); }
+  let markError = '';
+  try { await ensureColumns(env, tab, PORTAL_WELCOME_COLS); await updateRowVerified(env, tab, id, f); }
+  catch (e) {
+    markError = String((e && e.message) || e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_welcome_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + markError }); }
+    catch (e2) { console.error('portal_welcome_stamp_failed AND telemetry failed:', tab, id, markError, String((e2 && e2.message) || e2)); }
+  }
+  if (!verdict.ok) return json({ error: 'Send failed: ' + verdict.result, name: firstName }, 502);
+  await logSMS(env, '', 'welcome_send_' + type, id, rec.Phone, '[welcome sent to ' + firstName + ']');
+  return json(Object.assign({ success: true, sent_to: rec.Phone, name: firstName }, markError ? { warning: 'The welcome text WAS sent, but the "welcomed" mark could not be saved: ' + markError } : {}));
+}
+
 async function welcomeSend(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
+  if (type === 'owner' || type === 'owner_user') return await welcomeSendOwner(env, body);
   let recipient, firstName, phone, defaultMsg, property = null, owner = null;
   // Sep 17 2026 (Brett): a bulk welcome send lets Brett edit the shared text before sending —
   // that edited text (body.message) needs the SAME {FirstName}/{Owner}/{Address}/{AssistantName}
@@ -10276,8 +10489,13 @@ async function welcomeSend(env, body) {
   // returned before reaching the Welcome_Sent write below, a person with a legitimately queued
   // welcome message would still show as "not yet welcomed" in the Hub's own filter.
   if (!r.sent && !r.held_for_quiet_hours) return json({ error: r.send_ok ? 'Send failed' : ('Blocked: ' + r.gate_snapshot), name: firstName }, r.send_ok ? 502 : 400);
-  await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']);
-  const _wf = { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() };
+  await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', PORTAL_WELCOME_COLS);
+  // Oct 22 2026: Test Mode sends to Brett's test phone, not to the person - that is NOT a welcome. Record why, leave them un-welcomed.
+  if (r.test_mode && !r.held_for_quiet_hours) {
+    const _tr = await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, { Welcome_Send_Result: 'test mode: went to the test phone, not to the person' });
+    return json({ success: true, test_mode: true, name: firstName, warning: 'Test Mode is ON, so that text went to your test phone, not to ' + firstName + '. NOT marked as welcomed.' + (_tr.ok ? '' : ' (also could not save the note: ' + await respErrText(_tr) + ')') }, 200);
+  }
+  const _wf = { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString(), Welcome_Send_Result: r.held_for_quiet_hours ? 'queued (quiet hours)' : 'sent' };
   // Oct 14 2026: Brett sending the welcome to a roster-added tenant (consent pending) IS the go-ahead: switch their texts on and
   // record it. The tenant can still reply STOP (SMS_OptOut, which this never touches).
   const _consentFlip = type === 'tenant' && String(recipient.SMS_Consent || '') === 'pending';
@@ -25906,6 +26124,12 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/wo-snippet/update') {
     const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_sn && String(_sn.Name || '').startsWith('TEST-');
+  }
+  // Portal access tracking (Oct 22 2026): the staging token may send or preview a PIN / welcome text, or regenerate a PIN, only for a TEST- person
+  // (staging stubs every SMS, so nothing is really texted). Owner_Users has no TEST marker field, so it is not reachable with this token.
+  if (path === '/send-pin' || path === '/welcome/send' || path === '/regenerate-pin') {
+    const _pt = PORTAL_TAB_BY_TYPE[body && body.type];
+    return !!_pt && _pt !== 'Owner_Users' && await isTestRecord(env, _pt, body && body.id);
   }
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);

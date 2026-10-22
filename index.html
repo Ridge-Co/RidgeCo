@@ -491,6 +491,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary" onclick="window.open('vendor-setup.html','_blank')" title="Opens a full page with a contact-card upload — same link you can send to a new vendor">+ Add Vendor (full page / shareable link)</button>
     </div>
     <div id="vendors-pending-section"></div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-stuck" onchange="renderVendorsPage()"> Only show vendors sent a link+PIN who never logged in (follow-ups)</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-unwelcomed" onchange="renderVendorsPage()"> Only show vendors who haven't received a welcome message</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-inactive" onchange="renderVendorsPage()"> Show inactive (deactivated) vendors instead of active ones</label>
     <div id="vendors-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
@@ -516,6 +517,7 @@ window.addEventListener('pageshow', function(e){
       </select>
       <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px"><input type="checkbox" id="tenant-filter-owner-exclude" onchange="renderTenantsPage()"> Exclude this owner instead of showing only them</label>
     </div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-stuck" onchange="renderTenantsPage()"> Only show tenants sent a link+PIN who never logged in (follow-ups)</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-unwelcomed" onchange="renderTenantsPage()"> Only show tenants who haven't received a welcome message</label>
     <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
@@ -4783,8 +4785,76 @@ function rejectVendorRequest(id){
     toast('Vendor request rejected','success'); loadAll();
   }).catch(function(e){toast('Error: '+e.message,'error');});
 }
+// ── Portal access tracking (Oct 22 2026, Brett) ─────────────────────────────────────────────────────────
+// One GET /portal-access gives every person's welcome / link+PIN / login state. The colours follow the Worker's own
+// thresholds (Config PORTAL_FOLLOWUP_AMBER_DAYS / PORTAL_FOLLOWUP_RED_DAYS, default 14 / 30 days), so the Hub never re-derives them.
+var _paLoading = false;
+function loadPortalAccess(force) {
+  if (_paLoading) return;
+  if (!force && (state.portalAccess || state.portalAccessError)) return;
+  _paLoading = true;
+  api('GET', '/portal-access').then(function(res) {
+    _paLoading = false;
+    if (!res || res.ok !== true) { state.portalAccessError = (res && res.error) || 'Could not load login tracking'; }
+    else {
+      state.portalAccessError = ''; state.portalAccess = {}; state.portalAccessList = res;
+      safeArray(res.people).forEach(function(p) { state.portalAccess[p.type + '|' + p.id] = p; });
+    }
+    paRerender();
+  }).catch(function(e) { _paLoading = false; state.portalAccessError = 'Could not load login tracking: ' + e.message; paRerender(); });
+}
+function paRerender() {
+  try { renderVendorsPage(); renderTenantsPage(); renderOwnersPage(); }
+  catch (e) { console.error('portal access re-render failed', e); toast('Login tracking loaded but the page could not redraw: ' + e.message, 'error'); }
+}
+function paNeedsFollowUp(type, id) {
+  var p = state.portalAccess && state.portalAccess[type + '|' + id];
+  return !!(p && (p.level === 'amber' || p.level === 'red'));
+}
+function paBadge(type, id, withWelcome) {
+  if (state.portalAccessError) return '<span style="color:var(--danger);font-size:11px" title="' + esc(state.portalAccessError) + '">⚠ tracking unavailable</span>';
+  if (!state.portalAccess) return '<span style="color:var(--muted);font-size:11px">…</span>';
+  var p = state.portalAccess[type + '|' + id];
+  if (!p) return '<span style="color:var(--muted);font-size:11px">—</span>';
+  var d10 = function(s) { return s ? esc(String(s).slice(0, 10)) : ''; };
+  var line;
+  if (p.logged_in) {
+    line = p.state === 'logged_in'
+      ? '<span style="color:var(--accent2)" title="First login ' + d10(p.first_login) + ', last ' + d10(p.last_login) + '">✅ in ' + p.login_count + '× · last ' + d10(p.last_login) + '</span>'
+      : '<span style="color:var(--accent2)" title="Has used the portal before login tracking began (' + esc(p.login_evidence) + ')">✅ used before</span>';
+  } else if (!p.pin_sent) {
+    line = '<span style="color:var(--muted)">📵 link+PIN not sent</span>';
+  } else {
+    var col = p.level === 'red' ? 'var(--danger)' : p.level === 'amber' ? 'var(--warn)' : 'var(--muted)';
+    var ic = p.level === 'red' ? '🔴' : p.level === 'amber' ? '🟠' : '📱';
+    var unv = p.pin_verified ? '' : ' <span style="opacity:.75" title="Taken from the old text log, which was written even when a text may not have gone out. Not confirmed.">(unconfirmed)</span>';
+    line = '<span style="color:' + col + '" title="Link+PIN sent ' + d10(p.pin_sent_date) + ' — never logged in">' + ic + ' sent ' + p.days_since_pin + 'd ago, not in yet' + unv + '</span>';
+  }
+  if (withWelcome) {
+    line = '<span style="color:' + (p.welcome_sent ? 'var(--accent2)' : 'var(--muted)') + '" title="' + esc(p.welcome_date || '') + '">' + (p.welcome_sent ? '👋 welcomed' + (p.welcome_date ? ' ' + d10(p.welcome_date) : '') : '👋 not welcomed') + '</span><br>' + line;
+  }
+  return '<span style="font-size:11px">' + line + '</span>';
+}
+function paSummary(types) {
+  if (state.portalAccessError) return '<div style="color:var(--danger);font-size:12px;margin-bottom:8px">⚠ ' + esc(state.portalAccessError) + ' <a href="#" onclick="state.portalAccessError=\'\';loadPortalAccess(true);return false">Retry</a></div>';
+  if (!state.portalAccessList) return '';
+  var th = state.portalAccessList.thresholds || {};
+  var ppl = safeArray(state.portalAccessList.people).filter(function(p) { return types.indexOf(p.type) >= 0; });
+  var n = function(f) { return ppl.filter(f).length; };
+  var stuck = ppl.filter(function(p) { return p.level === 'amber' || p.level === 'red'; }).sort(function(a, b) { return b.days_since_pin - a.days_since_pin; });
+  var h = '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.6">' +
+    '<b>Login tracking</b> · ✅ ' + n(function(p) { return p.logged_in; }) + ' logged in · 📱 ' + n(function(p) { return p.level === 'waiting'; }) + ' waiting · ' +
+    '<span style="color:var(--warn)">🟠 ' + n(function(p) { return p.level === 'amber'; }) + ' (' + (th.amberDays || 14) + 'd+)</span> · ' +
+    '<span style="color:var(--danger)">🔴 ' + n(function(p) { return p.level === 'red'; }) + ' (' + (th.redDays || 30) + 'd+)</span> · ' +
+    '📵 ' + n(function(p) { return p.state === 'pin_not_sent'; }) + ' link+PIN not sent';
+  if (stuck.length) {
+    h += '<div style="margin-top:4px;color:var(--muted)">Follow up: ' + stuck.slice(0, 10).map(function(p) { return esc(p.name || p.company || p.id) + ' (' + p.days_since_pin + 'd)'; }).join(', ') + (stuck.length > 10 ? ' … +' + (stuck.length - 10) + ' more' : '') + '</div>';
+  }
+  return h + '</div>';
+}
 function renderVendorsPage() {
   renderVendorsPendingSection();
+  loadPortalAccess();
   var el = document.getElementById('vendors-list');
   var onlyUnwelcomed = !!((document.getElementById('vendor-filter-unwelcomed')||{}).checked);
   var showInactive = !!((document.getElementById('vendor-filter-inactive')||{}).checked);
@@ -4793,10 +4863,12 @@ function renderVendorsPage() {
     return showInactive ? v.Active==='FALSE' : v.Active!=='FALSE';
   });
   if (!showInactive && onlyUnwelcomed) vendors = vendors.filter(function(v){ return v.Welcome_Sent !== 'TRUE'; });
-  if (!vendors.length) { el.innerHTML='<div class="loading">'+(showInactive?'No inactive vendors.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet'))+'</div>'; return; }
-  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+  var onlyStuckV = !!((document.getElementById('vendor-filter-stuck')||{}).checked);
+  if (!showInactive && onlyStuckV) vendors = vendors.filter(function(v){ return paNeedsFollowUp('vendor', v.ID); });
+  if (!vendors.length) { el.innerHTML=paSummary(['vendor'])+'<div class="loading">'+(showInactive?'No inactive vendors.':(onlyStuckV?'No vendors need a login follow-up.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet')))+'</div>'; return; }
+  el.innerHTML = paSummary(['vendor']) + '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Paid by QuickBooks Instant Payment — the fee (1%, $10 min, $100 max) comes off their bill as its own line">Instant pay</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th>Link+PIN / login</th><th title="Paid by QuickBooks Instant Payment — the fee (1%, $10 min, $100 max) comes off their bill as its own line">Instant pay</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!WOStatus.sets.COMPLETE_INVOICED_PAID.includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
@@ -4815,6 +4887,7 @@ function renderVendorsPage() {
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
+        '<td>'+paBadge('vendor', v.ID)+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Instant_Pay||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInstantPay(\''+v.ID+'\',this.checked)" title="Paid by QuickBooks Instant Payment — the fee comes off their bill as its own line" style="width:16px;height:16px;cursor:pointer"> <a href="javascript:void(0)" onclick="openFeeCreditModal(\''+v.ID+'\',\''+esc(nm).replace(/'/g,'&#39;')+'\')" title="Credit owed back to this vendor for instant-pay fees that were deducted but never charged" style="font-size:11px;color:var(--info);white-space:nowrap">💳 credit</a></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Bill_No_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanBillNoWO(\''+v.ID+'\',this.checked)" title="Can submit a standalone bill with no Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
@@ -5012,6 +5085,9 @@ function renderTenantsPage() {
   var onlyUnwelcomed = !!((document.getElementById('tenant-filter-unwelcomed')||{}).checked);
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
   if (onlyUnwelcomed) allTenants = allTenants.filter(function(t){ return t.Welcome_Sent !== 'TRUE'; });
+  loadPortalAccess();
+  var onlyStuckT = !!((document.getElementById('tenant-filter-stuck')||{}).checked);
+  if (onlyStuckT) allTenants = allTenants.filter(function(t){ return paNeedsFollowUp('tenant', t.ID); });
   if (ownerFilter) {
     allTenants = allTenants.filter(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
@@ -5033,11 +5109,11 @@ function renderTenantsPage() {
            (prop&&(prop.City||'').toLowerCase().includes(search));
   }) : allTenants;
 
-  if (!tenants.length) { el.innerHTML='<div class="loading">'+(onlyUnwelcomed?'Everyone has been welcomed.':'No tenants match "'+esc(search)+'" — try name, address, phone, or unit')+'</div>'; return; }
-  el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
+  if (!tenants.length) { el.innerHTML=paSummary(['tenant'])+'<div class="loading">'+(onlyStuckT?'No tenants need a login follow-up.':onlyUnwelcomed?'Everyone has been welcomed.':'No tenants match "'+esc(search)+'" — try name, address, phone, or unit')+'</div>'; return; }
+  el.innerHTML = paSummary(['tenant']) + '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
     '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
-    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th>Welcome</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th>Welcome</th><th>Link+PIN / login</th><th></th></tr></thead><tbody>' +
     tenants.map(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
       var propId = t.Property_ID || (unit&&unit.Property_ID) || '';
@@ -5061,6 +5137,7 @@ function renderTenantsPage() {
         '<td>'+moveIn+'</td>' +
         '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
+        '<td>'+paBadge('tenant', t.ID)+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
         '<button class="btn small secondary" onclick="openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅</button>' +
@@ -6374,8 +6451,9 @@ function confirmSendPin() {
   api('POST', '/send-pin', { type: _currentPinSend.type, id: _currentPinSend.id }).then(function(res) {
     btn.textContent = 'SEND SMS';
     if (res.success) {
-      document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
-      setTimeout(function(){ closeModal('modal-send-pin'); }, 1800);
+      document.getElementById('send-pin-msg').innerHTML = (res.staged ? '<div style="color:var(--warn);font-size:12px;margin-top:6px">🧪 Test environment: nothing was really texted.</div>' : '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>') + (res.warning ? '<div style="color:var(--warn);font-size:12px;margin-top:6px">⚠ ' + esc(res.warning) + '</div>' : '');
+      loadPortalAccess(true);
+      setTimeout(function(){ closeModal('modal-send-pin'); }, res.warning ? 6000 : 1800);
     } else {
       btn.disabled = false;
       document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
@@ -6553,9 +6631,12 @@ function confirmSendWelcome() {
   document.getElementById('send-welcome-msg').innerHTML = '';
   api('POST', '/welcome/send', { type: _currentWelcomeSend.type, id: _currentWelcomeSend.id, message: text }).then(function(res) {
     btn.textContent = 'SEND SMS';
-    if (res.success) {
+    if (res.success && res.warning) {
+      document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:6px">⚠ ' + esc(res.warning) + '</div>';
+      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); loadPortalAccess(true); }, 6000);
+    } else if (res.success) {
       document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
-      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); }, 1800);
+      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); loadPortalAccess(true); }, 1800);
     } else {
       btn.disabled = false;
       document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
@@ -6905,7 +6986,7 @@ function renderOwnersPage() {
     var canSend = !!(o.PIN && o.Phone);
     var nm = (o.First_Name+' '+(o.Last_Name||'')).trim();
     var badge = isInactive ? ' <span style="background:var(--danger);color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;letter-spacing:.05em;font-weight:bold;vertical-align:middle">INACTIVE</span>' : '';
-    var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
+    var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '') + (isInactive ? '' : '<br>' + paBadge('owner', o.ID, true));
     return '<tr'+(isInactive?' style="opacity:0.65"':'')+'>' +
       '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-haspin="'+(o.PIN?'1':'0')+'" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
       '<td>'+display+'</td>' +
@@ -6919,11 +7000,13 @@ function renderOwnersPage() {
       '<button class="btn small secondary" onclick="goToQBMapping(\''+esc((nm || o.Company || '').replace(/\'/g,''))+'\')" title="View/link this owner\'s properties and units to QuickBooks">🔗</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+      (o.Phone ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\',\''+esc(o.Phone||'')+'\')" title="Send Welcome">👋</button>' : '') +
       '<button class="btn small secondary" onclick="openSendMessageModal(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Send a one-off message">✉️</button>' +
       '</td></tr>';
   }
 
-  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
+  loadPortalAccess();
+  var html = paSummary(['owner', 'owner_user']) + '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
     'Several people at one company belong on <b>one</b> owner record — use <b>+ Contact</b> to give each their own login. ' +
     'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
 
