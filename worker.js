@@ -39931,7 +39931,8 @@ async function insbSetWO(env, body) {
     const wo = insbNormWO(body && body.wo);
     if (!wo) return json({ ok: false, error: 'bad_wo', message: 'That does not look like a work order number (letters, numbers and dashes, like 43945-1).' }, 400);
     if (String(L.b.Completed_At || '').trim() || String(L.b.QB_Invoice_ID || '').trim()) return json({ ok: false, error: 'already_billed', message: 'This booking was already billed under work order ' + (L.b.WO_Number || '?') + ', so the number cannot be changed here.' }, 409);
-    const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) !== String(L.b.ID) && String(r.Customer_ID) === String(L.b.Customer_ID) && insbNormWO(r.WO_Number) === wo && INSP_ACTIVE_BOOKING.includes(r.Status) && String(r.Active || '').toUpperCase() !== 'FALSE');
+    if (String(L.b.Invoice_Status || '').trim()) return json({ ok: false, error: 'already_billed', message: 'Billing has already started on this booking (' + String(L.b.Invoice_Status).split('|')[0] + '), so the work order number cannot be changed here.' }, 409);
+    const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) !== String(L.b.ID) && String(r.Customer_ID) === String(L.b.Customer_ID) && insbNormWO(r.WO_Number) === wo && insbWoInUse(r));
     if (dupe) return json({ ok: false, error: 'wo_in_use', message: 'Work order ' + wo + ' is already on another live booking (#' + dupe.ID + ').' }, 409);
     const back = await updateRowVerified(env, 'Insp_Bookings', L.b.ID, { WO_Number: wo, Billing_Log: insbLogLine(L.b, 'WO set to ' + wo) });
     return json({ ok: true, booking: insbPublicBooking(back) });
