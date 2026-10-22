@@ -1165,7 +1165,7 @@ function billKind(k){
   billPreview();
 }
 var billTimer=null;
-function billUnitsChanged(){ clearTimeout(billTimer); billTimer=setTimeout(billPreview,350); }
+function billUnitsChanged(){ clearTimeout(billTimer); bill.plan=null; var g=document.getElementById('bill-go'); g.disabled=true; document.getElementById('bill-preview').innerHTML='<p class="muted">Working out the bill…</p>'; billTimer=setTimeout(billPreview,350); }
 function billPreview(){
   var go=document.getElementById('bill-go'); go.disabled=true; bill.plan=null;
   var box=document.getElementById('bill-preview'); box.innerHTML='<p class="muted">Working out the bill…</p>';
