@@ -133,6 +133,30 @@
   }
 
   // 3. manual reporting from catch blocks
+  // Oct 22 2026: a page's own catch block that says "could not reach the Hub (Failed to fetch)" (failures.html load) is the same kind of one-off
+  // connection blip as 1c, and it was reported straight away - so Needs Attention showed a "problem" every time a phone woke up with no signal.
+  // A message that is only a network failure now gets the same two checks as 1c (offline / tab hidden or leaving = not a Hub failure; otherwise ask the
+  // Hub with GET /version after 3 s and report only if it does not answer). Every other message is reported at once, as before.
+  var NETWORK_ONLY = /^(?:could not reach the Hub(?:\s*\([^)]*\))?|network error calling [^:]*:\s*(?:Failed to fetch|Load failed|NetworkError[^:]*)|Failed to fetch|Load failed|NetworkError[^:]*)\.?\s*$/i;
+  function reportAfterHubCheck(where, msg, extra) {
+    try {
+      if (navigator.onLine === false) return false;
+      if (unloading || recentlyHidden()) return false;
+      setTimeout(function () {
+        try {
+          if (unloading || recentlyHidden() || navigator.onLine === false) return;
+          realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
+            if (r && r.status < 500) { try { console.warn('[failure-reporter] a request failed but the Hub answers; not reported:', where); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; }
+            if (report(where, msg + ' (Hub check: HTTP ' + (r && r.status) + ')', extra)) toast();
+          }, function (probeErr) {
+            if (unloading || recentlyHidden()) return;
+            if (report(where, msg + ' (and the Hub did not answer a check: ' + (probeErr && probeErr.message || probeErr) + ')', extra)) toast();
+          });
+        } catch (x2) { consoleErr('[failure-reporter] hub check failed', x2); if (report(where, msg, extra)) toast(); }
+      }, 3000);
+      return true;
+    } catch (x) { consoleErr('[failure-reporter] network check failed', x); return report(where, msg, extra); }
+  }
   window.hubReportFailure = function (where, message, extra) {
     var msg = message && message.message ? message.message : message;
     if (realFetch && typeof msg === 'string' && NETWORK_ONLY.test(msg.replace(/^\s+/, ''))) return reportAfterHubCheck(where || 'caught', msg, extra);
