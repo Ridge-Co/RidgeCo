@@ -39318,3 +39318,126 @@ async function fiFolderOrganize(env, body) {
 }
 
 // ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══ INSB-BLOCK-START ══════════════════════════════════════════════════════
+// INSPECTION BILLING (Oct 22 2026) — "complete the inspection, everything else follows".
+// Brett: Premier Property Management books inspections by work order; when he taps Complete on an approved booking the Hub
+//   (1) prices the trip from the rate card, (2) creates the QuickBooks invoice (customer created on first use), (3) pulls QuickBooks' own
+//   PDF of it, (4) emails it to Premier (or, once Premier gives us the address, to their AppFolio Smart Bill Entry inbox), and (5) builds the
+//   owner-facing invoice in Premier's specimen layout (Premier's WO number + a suffix, amount = ours + Premier's markup), held until Premier's
+//   markup is on file. Nothing in here runs on a schedule: the tap is the trigger and the confirmation (Brett, Oct 22).
+// Rate card (proposal-inspection-pricing): unit 1 $95, unit 2 $85, units 3-4 $75 each, unit 5+ $65 each; Net 15; $85 zero-access fee only when no unit
+//   was inspected; tenant no-shows are simply not billed; every visit (booking) starts again at the $95 rate.
+// All money is whole CENTS in the pure functions below (test/insp-billing.test.mjs); dollars only appear at the QuickBooks / PDF edge.
+// Nothing fails silently: every step's result is inspected, every failure is a Telemetry row (-> Needs Attention) AND is in the response.
+const INSB_BOOKING_COLS = ['WO_Number','Completed_At','Completion_Kind','Units_Billed','Invoice_Base_Cents','Invoice_Status','QB_Invoice_ID','QB_Invoice_Number','Invoice_Emailed_At','Invoice_Emailed_To','InvB_Number','InvB_Markup_Pct','InvB_Cents','InvB_Status','InvB_Emailed_At','Billing_Lock','Billing_Log'];
+const INSB_CUSTOMER_COLS = ['Billing_Mode','Owner_Invoice','QBO_Customer_ID','Bill_To_Name','Bill_To_Address','Bill_Email_To','Bill_Email_Cc','AppFolio_Email','Markup_Pct','InvB_Phone','InvB_Email'];
+const INSB_RATE_CENTS = [9500, 8500, 7500, 7500];      // unit 1, 2, 3, 4
+const INSB_RATE_5PLUS_CENTS = 6500;                   // unit 5 and above
+const INSB_ZERO_ACCESS_CENTS = 8500;
+const INSB_NET_DAYS = 15;
+const INSB_MAX_UNITS = 60;
+const INSB_LOCK_MS = 120000;
+const INSB_PAID_STATES = ['invoiced', 'emailed', 'staged'];
+
+// PURE — price of the nth (1-based) unit inspected on one visit.
+function insbRateCents(n) { n = Math.floor(+n); if (!(n >= 1)) return 0; return n <= INSB_RATE_CENTS.length ? INSB_RATE_CENTS[n - 1] : INSB_RATE_5PLUS_CENTS; }
+// PURE — { kind: 'inspected'|'zero_access'|'no_charge', units } -> { ok, cents, units, breakdown:[{unit,cents}], error }
+function insbTripCents(o) {
+  const kind = String((o && o.kind) || ''), raw = o && o.units, units = (raw === '' || raw == null) ? NaN : Number(raw);
+  if (kind === 'no_charge') return { ok: true, cents: 0, units: 0, breakdown: [], note: 'No charge' };
+  if (kind === 'zero_access') {
+    if (Number.isFinite(units) && units !== 0) return { ok: false, error: 'A zero-access visit has no inspected units (got ' + units + ').' };
+    return { ok: true, cents: INSB_ZERO_ACCESS_CENTS, units: 0, breakdown: [], note: 'Zero-access fee' };
+  }
+  if (kind !== 'inspected') return { ok: false, error: 'Pick what happened: units inspected, zero access, or no charge.' };
+  if (!Number.isFinite(units) || units !== Math.floor(units) || units < 1 || units > INSB_MAX_UNITS) return { ok: false, error: 'Units inspected must be a whole number from 1 to ' + INSB_MAX_UNITS + ' (use zero access if nobody could be inspected).' };
+  const breakdown = []; let cents = 0;
+  for (let i = 1; i <= units; i++) { const c = insbRateCents(i); breakdown.push({ unit: i, cents: c }); cents += c; }
+  return { ok: true, cents, units, breakdown, note: units + ' unit' + (units === 1 ? '' : 's') + ' inspected' };
+}
+// PURE — markup on a base amount. pct may have up to 2 decimals (20, 12.5, 7.25). Half-cents round UP. -> { ok, markup_cents, total_cents, pct }
+function insbMarkup(baseCents, pct) {
+  const base = Number(baseCents), p = Number(pct);
+  if (!Number.isInteger(base) || base < 0) return { ok: false, error: 'Base amount must be whole cents.' };
+  if (pct === '' || pct == null || !Number.isFinite(p) || p < 0 || p > 200) return { ok: false, error: 'Markup must be a percent from 0 to 200.' };
+  const hundredths = Math.round(p * 100);
+  if (Math.abs(hundredths - p * 100) > 1e-6) return { ok: false, error: 'Markup can have at most 2 decimals.' };
+  const markup = Math.floor((base * hundredths + 5000) / 10000);
+  return { ok: true, markup_cents: markup, total_cents: base + markup, pct: hundredths / 100 };
+}
+// PURE — Premier's work order number, cleaned. '' = not usable.
+function insbNormWO(raw) { const s = String(raw == null ? '' : raw).trim().replace(/\s+/g, '').toUpperCase(); return /^[A-Z0-9][A-Z0-9-]{1,29}$/.test(s) ? s : ''; }
+// PURE — owner-facing invoice number = WO number + a 4-digit suffix that is the same every time it is rebuilt for the same booking.
+function insbOwnerInvoiceNumber(wo, bookingId) {
+  const w = insbNormWO(wo); if (!w) return '';
+  let h = 2166136261; const s = w + '|' + String(bookingId);
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return w + '-' + String(1000 + (h % 9000));
+}
+function insbDollars(cents) { return (Math.round(+cents) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }); }
+function insbMDY(iso) { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[2] + '/' + m[3] + '/' + m[1] : String(iso || ''); }
+function insbEmails(s) { return String(s || '').split(/[,;\s]+/).map(x => x.trim()).filter(Boolean); }
+function insbEmailOk(e) { return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e) && e.length <= 100; }
+// PURE — "122 S Gilmor St, Baltimore, MD 21223, USA" -> ['122 S Gilmor St', 'Baltimore, MD 21223']
+function insbAddrLines(formatted) {
+  let parts = String(formatted || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (parts.length && /^(USA|US|United States)$/i.test(parts[parts.length - 1])) parts.pop();
+  if (parts.length < 3) return parts.length ? [parts.join(', ')] : [];
+  return [parts.slice(0, parts.length - 2).join(', '), parts[parts.length - 2] + ', ' + parts[parts.length - 1]];
+}
+// PURE — who gets what. cust = Insp_Customers row. Returns { appfolio, a_to, a_cc, b_to, b_cc, problems }.
+// With an AppFolio Smart Bill Entry address, OUR invoice goes to that inbox alone (one PDF, one invoice per email, so nobody keys it in twice) and the
+// owner-facing invoice goes to the people. Without one, both go to the people in one email.
+function insbRecipients(cust) {
+  cust = cust || {}; const problems = [];
+  const people = insbEmails(cust.Bill_Email_To), cc = insbEmails(cust.Bill_Email_Cc), af = insbEmails(cust.AppFolio_Email);
+  for (const e of [].concat(people, cc, af)) if (!insbEmailOk(e)) problems.push('"' + e + '" is not a valid email address.');
+  if (af.length > 1) problems.push('Only one AppFolio Smart Bill Entry address is allowed (got ' + af.length + ').');
+  if (!people.length && !af.length) problems.push('No billing email is set for this customer.');
+  const appfolio = af[0] || '';
+  return { appfolio, a_to: appfolio ? [appfolio] : people, a_cc: appfolio ? [] : cc, b_to: people, b_cc: cc, problems };
+}
+// PURE — the whole plan for one Complete tap. Nothing is written. o = { booking, customer, kind, units, todayIso }
+// -> { ok, blockers[], warnings[], resume, kind, units, base_cents, base_label, invoice{date,due,wo,description}, owner{enabled,status,number,pct,markup_cents,total_cents}, recipients }
+function insbPlan(o) {
+  const b = (o && o.booking) || {}, c = (o && o.customer) || {}, blockers = [], warnings = [];
+  const today = (o && o.todayIso) || '';
+  const wo = insbNormWO(b.WO_Number), needWo = String(c.Billing_Mode || '') === 'wo';
+  const trip = insbTripCents({ kind: o && o.kind, units: o && o.units });
+  if (!trip.ok) blockers.push(trip.error);
+  if (b.Status !== 'approved') blockers.push('This booking is ' + (b.Status || 'not found') + ', so it cannot be completed. Only an approved booking can.');
+  const already = INSB_PAID_STATES.includes(String(b.Invoice_Status || ''));
+  const resume = !!String(b.QB_Invoice_ID || '').trim();
+  if (needWo && !wo) blockers.push('This customer bills by work order and this booking has no usable work order number. Enter it first.');
+  if (trip.ok && trip.cents === 0 && String((o && o.kind) || '') !== 'no_charge') blockers.push('The amount is $0.00, so there is nothing to invoice.');
+  if (trip.ok && trip.units > (+b.Units || 0) && +b.Units > 0) warnings.push('You are billing ' + trip.units + ' units but the booking was for ' + (+b.Units) + '. Check that is right.');
+  const rec = insbRecipients(c);
+  const billable = trip.ok && trip.cents > 0;
+  if (billable) for (const p of rec.problems) blockers.push(p);
+  const addr = String(b.Formatted_Address || b.Address || '');
+  const cleanKind = String((o && o.kind) || '');
+  const desc = 'Comprehensive property inspection' + (cleanKind === 'zero_access' ? ' - zero access (no unit could be inspected)' : ' (' + trip.units + ' unit' + (trip.units === 1 ? '' : 's') + ')') + (addr ? ' - ' + addr : '') + (wo ? ' - Work Order ' + wo : '');
+  const ownerOn = String(c.Owner_Invoice || '').toUpperCase() === 'TRUE';
+  let owner = { enabled: ownerOn, status: 'off', number: '', pct: '', markup_cents: 0, total_cents: 0 };
+  if (ownerOn && billable) {
+    owner.number = insbOwnerInvoiceNumber(wo, b.ID);
+    const pctRaw = String(c.Markup_Pct == null ? '' : c.Markup_Pct).trim();
+    if (!owner.number) { owner.status = 'held_no_wo'; warnings.push('Owner-facing invoice needs a work order number.'); }
+    else if (pctRaw === '') { owner.status = 'held_no_markup'; warnings.push("Owner-facing invoice is HELD: Premier's markup is not set yet. Your invoice still goes out."); }
+    else {
+      const mk = insbMarkup(trip.cents, pctRaw);
+      if (!mk.ok) { owner.status = 'held_bad_markup'; warnings.push('Owner-facing invoice is HELD: ' + mk.error); }
+      else { owner.pct = String(mk.pct); owner.markup_cents = mk.markup_cents; owner.total_cents = mk.total_cents; owner.status = 'ready'; }
+    }
+    if (owner.status === 'ready' && (!String(c.InvB_Phone || '').trim() || !String(c.InvB_Email || '').trim() || !insbAddrLines(c.Bill_To_Address).length)) { owner.status = 'held_no_contact'; warnings.push("Owner-facing invoice is HELD: Premier's address, phone and email lines (shown at the top of that invoice, like their specimen) are not all set."); }
+  }
+  if (rec.appfolio) warnings.push('Your invoice goes to the AppFolio Smart Bill Entry inbox only.');
+  return {
+    ok: blockers.length === 0, blockers, warnings, resume, already, kind: cleanKind, units: trip.ok ? trip.units : 0,
+    base_cents: trip.ok ? trip.cents : 0, base_label: trip.ok ? trip.note : '', breakdown: trip.ok ? trip.breakdown : [],
+    invoice: { date: today, due: today ? inspAddDays(today, INSB_NET_DAYS) : '', wo, description: desc, address: addr },
+    owner, recipients: rec,
+  };
+}
+// INSB-CONT-MARKER
