@@ -626,6 +626,13 @@ function openCustomerEdit(id){
   document.getElementById('ce-cphone').value=c.Contact_Phone||'';
   document.getElementById('ce-cemail').value=c.Contact_Email||'';
   document.getElementById('ce-notes').value=c.Notes||'';
+  document.getElementById('ce-bm').checked=(c.Billing_Mode==='wo');
+  document.getElementById('ce-oi').checked=(String(c.Owner_Invoice||'').toUpperCase()==='TRUE');
+  document.getElementById('ce-btn').value=c.Bill_To_Name||''; document.getElementById('ce-baddr').value=c.Bill_To_Address||'';
+  document.getElementById('ce-bto').value=c.Bill_Email_To||''; document.getElementById('ce-bcc').value=c.Bill_Email_Cc||'';
+  document.getElementById('ce-af').value=c.AppFolio_Email||''; document.getElementById('ce-mk').value=c.Markup_Pct||'';
+  document.getElementById('ce-iph').value=c.InvB_Phone||''; document.getElementById('ce-iem').value=c.InvB_Email||'';
+  document.getElementById('ce-billing').open=(c.Billing_Mode==='wo');
   document.getElementById('cust-edit-modal').classList.add('open');
 }
 function saveCustomerEdit(btn){
