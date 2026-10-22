@@ -45,7 +45,19 @@ function world(opts = {}) {
     logTelemetry: async (env, rec) => { w.telemetry.push(rec); },
     qbApi: async (env, p, method, body) => {
       w.qbCalls.push({ p, method });
-      if (method === 'POST' && p.startsWith('invoice?')) { w.qbPosts.push({ p, body }); if (w.failNext.invoice) { const f = w.failNext.invoice; w.failNext.invoice = null; return f; } if (w.invoiceByReq && w.invoiceByReq[p.match(/requestid=([^&]+)/)[1]]) return w.invoiceByReq[p.match(/requestid=([^&]+)/)[1]]; const res = { Invoice: { Id: String(77 + w.qbPosts.length), DocNumber: String(++w.invoiceSeq) } }; (w.invoiceByReq = w.invoiceByReq || {})[p.match(/requestid=([^&]+)/)[1]] = res; return res; }
+      if (method === 'POST' && p.startsWith('invoice?')) {
+        w.qbPosts.push({ p, body });
+        if (w.failNext.invoice) { const f = w.failNext.invoice; w.failNext.invoice = null; return f; }
+        const rid = p.match(/requestid=([^&]+)/)[1];
+        w.invoiceByReq = w.invoiceByReq || {};
+        if (!w.invoiceByReq[rid]) {
+          const inv = { Id: String(77 + w.qbInvoices.length + 1), DocNumber: String(++w.invoiceSeq), TotalAmt: w.failNext.invoiceTotal != null ? w.failNext.invoiceTotal : body.Line[0].Amount, TxnDate: body.TxnDate, PrivateNote: body.PrivateNote, CustomerRef: body.CustomerRef };
+          w.failNext.invoiceTotal = null; w.qbInvoices.push(inv); w.invoiceByReq[rid] = { Invoice: inv };
+        }
+        if (w.failNext.invoiceAfterCreate) { w.failNext.invoiceAfterCreate = null; throw new Error('timeout talking to QuickBooks'); }   // QuickBooks DID create it, but the answer never arrived
+        return w.invoiceByReq[rid];
+      }
+      if (p.startsWith('query?') && decodeURIComponent(p).includes('from Invoice')) { if (w.failNext.invoiceQuery) throw new Error('QuickBooks is down'); return { QueryResponse: { Invoice: w.qbInvoices.slice() } }; }
       if (p.startsWith('query?')) { if (decodeURIComponent(p).includes("Type = 'Service'")) return { QueryResponse: { Item: opts.noServiceItem ? [] : [{ Id: '5', IncomeAccountRef: { value: '321' } }] } }; return { QueryResponse: { Item: [] } }; }
       if (p.startsWith('item/40')) return opts.noItem40 ? { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } } : { Item: { Id: '40', IncomeAccountRef: { value: '198' } } };
       if (method === 'POST' && p.startsWith('item?')) { w.itemPosts = (w.itemPosts || []).concat([body]); return { Item: { Id: '901', Name: 'Property Inspection' } }; }
