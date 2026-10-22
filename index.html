@@ -7000,7 +7000,8 @@ function renderOwnersPage() {
       '</td></tr>';
   }
 
-  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
+  loadPortalAccess();
+  var html = paSummary(['owner', 'owner_user']) + '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
     'Several people at one company belong on <b>one</b> owner record — use <b>+ Contact</b> to give each their own login. ' +
     'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
 
