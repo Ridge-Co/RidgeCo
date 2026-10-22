@@ -234,7 +234,7 @@ async function main() {
     const rel = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 11400 }); ok(rel.body.ok, 'release ok: ' + JSON.stringify(rel.body).slice(0, 200));
     eq(w.mails.length, 2, 'owner invoice email sent'); const m2 = w.mails[1]; ok(m2.includes('To: josiah.speed@ppmillc.com'), 'owner invoice goes to the people'); eq((m2.match(/Content-Type: application\/pdf/g) || []).length, 1, 'exactly the owner invoice attached, NOT ours again'); ok(m2.includes('$114.00') && m2.includes('20% markup'), 'email states the amount and markup');
     eq([latest(w).InvB_Status, latest(w).InvB_Cents, latest(w).InvB_Markup_Pct], ['sent', '11400', '20'], 'owner invoice stamped'); eq(w.qbPosts.length, 1, 'still only one QuickBooks invoice');
-    const rel2 = await call(api, env, 'insbReleaseOwner', { id: '2' }); ok(!rel2.body.ok && rel2.status === 409, 'cannot release a sent owner invoice again'); eq(w.mails.length, 2, 'and nothing was sent');
+    const rel2 = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 11400 }); ok(!rel2.body.ok && rel2.status === 409, 'cannot release a sent owner invoice again'); eq(w.mails.length, 2, 'and nothing was sent');
   }
   // 4) markup already on file at completion: both go in one email, owner PDF built from the stamped numbers
   {
