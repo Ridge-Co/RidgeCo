@@ -39440,4 +39440,77 @@ function insbPlan(o) {
     owner, recipients: rec,
   };
 }
+// ── Minimal PDF writer (no libraries on a Worker). One US-Letter page, Helvetica + Helvetica-Bold, text + lines + rectangles. ──
+const INSB_W_REG = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+const INSB_W_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+function insbAscii(s) {
+  return String(s == null ? '' : s).replace(/[‘’ʼ]/g, "'").replace(/[“”]/g, '"').replace(/[–—−]/g, '-').replace(/ /g, ' ').replace(/[^\x20-\x7e]/g, '?');
+}
+function insbTextWidth(s, size, bold) { const t = bold ? INSB_W_BOLD : INSB_W_REG; let w = 0; for (const ch of insbAscii(s)) w += t[ch.charCodeAt(0) - 32]; return w * size / 1000; }
+function insbWrap(text, size, bold, maxW) {
+  const words = insbAscii(text).split(/\s+/).filter(Boolean), out = []; let cur = '';
+  for (const w of words) { const t = cur ? cur + ' ' + w : w; if (cur && insbTextWidth(t, size, bold) > maxW) { out.push(cur); cur = w; } else cur = t; }
+  if (cur) out.push(cur); return out;
+}
+function insbPdfEsc(s) { return insbAscii(s).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)'); }
+// ops: { t:'text', x, y, size, bold, gray, align:'left'|'right', s } | { t:'line', x1, y1, x2, y2, w, gray } | { t:'rect', x, y, w, h, gray, fillGray }  (y from the BOTTOM, points)
+function insbPdfBytes(ops, title) {
+  const f = n => String(Math.round(n * 100) / 100);
+  let c = '';
+  for (const op of ops) {
+    if (op.t === 'text') {
+      const x = op.align === 'right' ? op.x - insbTextWidth(op.s, op.size, op.bold) : op.x;
+      c += `BT ${f(op.gray == null ? 0 : op.gray)} g /${op.bold ? 'F2' : 'F1'} ${f(op.size)} Tf ${f(x)} ${f(op.y)} Td (${insbPdfEsc(op.s)}) Tj ET\n`;
+    } else if (op.t === 'line') {
+      c += `${f(op.gray == null ? 0 : op.gray)} G ${f(op.w || 1)} w ${f(op.x1)} ${f(op.y1)} m ${f(op.x2)} ${f(op.y2)} l S\n`;
+    } else if (op.t === 'rect') {
+      if (op.fillGray != null) c += `${f(op.fillGray)} g ${f(op.x)} ${f(op.y)} ${f(op.w)} ${f(op.h)} re f\n`;
+      if (op.gray != null) c += `${f(op.gray)} G 0.75 w ${f(op.x)} ${f(op.y)} ${f(op.w)} ${f(op.h)} re S\n`;
+    }
+  }
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>',
+    `<< /Length ${c.length} >>\nstream\n${c}endstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+    `<< /Title (${insbPdfEsc(title || 'Invoice')}) /Producer (RidgeCo Hub) >>`,
+  ];
+  let out = '%PDF-1.4\n'; const offs = [];
+  objs.forEach((o, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 7 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const bytes = new Uint8Array(out.length); for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 0xff;
+  return bytes;
+}
+// PURE — Premier's owner-facing invoice, laid out like the specimen they supplied (issuer block top-left, grey INVOICE top-right, three columns:
+// Bill to | Service Address | Invoice #/Bill Date/Work Order, then a Description / Quantity / Amount table and the Total Amount).
+// inv = { issuer:[lines], number, date (YYYY-MM-DD), wo, service:[lines], description, cents }. Bill to shows ONLY the service address (Brett's rule).
+function insbOwnerInvoiceOps(inv) {
+  const L = 52, R = 560, top = 792, ops = [], g = 0.88;
+  let y = top - 62;
+  (inv.issuer || []).forEach((line, i) => { ops.push({ t: 'text', x: L, y, size: 11, bold: i === 0, s: line }); y -= 14.5; });
+  ops.push({ t: 'text', x: 430, y: top - 70, size: 22, bold: true, gray: 0.8, s: 'INVOICE' });
+  const colTop = Math.min(y, top - 62 - 14.5 * 4) - 28, cols = [L, 230, 408];
+  let y1 = colTop;
+  ops.push({ t: 'text', x: cols[0], y: y1, size: 11, bold: true, s: 'Bill to:' });
+  for (const w of (inv.service || []).flatMap(s => insbWrap(s, 11, false, 160))) { y1 -= 14.5; ops.push({ t: 'text', x: cols[0], y: y1, size: 11, s: w }); }
+  let y2 = colTop;
+  ops.push({ t: 'text', x: cols[1], y: y2, size: 11, bold: true, s: 'Service Address:' });
+  for (const w of (inv.service || []).flatMap(s => insbWrap(s, 11, false, 160))) { y2 -= 14.5; ops.push({ t: 'text', x: cols[1], y: y2, size: 11, s: w }); }
+  let y3 = colTop;
+  [['Invoice #: ', inv.number], ['Bill Date: ', insbMDY(inv.date)], ['Work Order: ', inv.wo]].forEach(([k, v], i) => {
+    const yy = colTop - i * 14.5; ops.push({ t: 'text', x: cols[2], y: yy, size: 11, bold: true, s: k }); ops.push({ t: 'text', x: cols[2] + insbTextWidth(k, 11, true), y: yy, size: 11, s: v });
+  });
+  const tblTop = Math.min(y1, y2, colTop - 3 * 14.5) - 34, hH = 26, rH = 26;
+  ops.push({ t: 'rect', x: L, y: tblTop - hH - rH, w: R - L, h: hH + rH, gray: g });
+  ops.push({ t: 'rect', x: L, y: tblTop - hH, w: R - L, h: hH, gray: g, fillGray: 0.97 });
+  const hy = tblTop - hH + 9, ry = tblTop - hH - rH + 9;
+  ops.push({ t: 'text', x: L + 7, y: hy, size: 11, s: 'Description' }, { t: 'text', x: 300, y: hy, size: 11, s: 'Quantity' }, { t: 'text', x: 426, y: hy, size: 11, s: 'Amount' });
+  ops.push({ t: 'text', x: L + 7, y: ry, size: 11, s: inv.description }, { t: 'text', x: 300, y: ry, size: 11, s: '1' }, { t: 'text', x: 426, y: ry, size: 11, s: insbDollars(inv.cents) });
+  ops.push({ t: 'text', x: R, y: tblTop - hH - rH - 16, size: 11, bold: true, align: 'right', s: 'Total Amount: ' + insbDollars(inv.cents) });
+  return ops;
+}
 // INSB-CONT-MARKER
