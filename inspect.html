@@ -1204,7 +1204,7 @@ function billConfirm(btn){
       document.getElementById('bill-preview').innerHTML='<div class="bill-box"><b>Done.</b>'+(r.invoice_number?' QuickBooks invoice #'+esc(r.invoice_number)+'.':'')+'<br>'+((r.steps||[]).map(esc).join('<br>'))+'</div>'+((r.warnings||[]).map(function(w){return '<div class="banner" style="margin-top:8px">'+esc(w)+'</div>';}).join(''));
       btn.textContent='Done'; toast('Done'); loadBookings(); return;
     }
-    btn.disabled=false; btn.textContent='Try again';
+    btn.disabled=false; btn.textContent=(r&&r.error==='amount_changed')?'Bill & send':'Try again'; if(r&&r.error==='amount_changed') billPreview();
     err.innerHTML='<b>'+(r&&r.invoice_created?'The invoice IS in QuickBooks, but: ':'Nothing was finished: ')+'</b>'+esc((r&&(r.message||r.error))||'unknown error')+((r&&r.steps&&r.steps.length)?'<br><span class="muted">Done so far: '+r.steps.map(esc).join('; ')+'</span>':'');
     err.classList.remove('hide'); loadBookings();
   }).catch(function(e){ bill.busy=false; btn.disabled=false; btn.textContent=label; err.innerHTML='Could not reach the Hub: '+esc(e.message)+'. Check Approvals before trying again — it may have gone through.'; err.classList.remove('hide'); });
