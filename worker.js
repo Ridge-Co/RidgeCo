@@ -39360,7 +39360,10 @@ function insbTripCents(o) {
 }
 // PURE — markup on a base amount. pct may have up to 2 decimals (20, 12.5, 7.25). Half-cents round UP. -> { ok, markup_cents, total_cents, pct }
 function insbMarkup(baseCents, pct) {
-  const base = Number(baseCents), p = Number(pct);
+  const base = Number(baseCents);
+  // Strict: a typed value must look like a plain number ("20", "12.5", "7.25"). Number() alone would accept "1e1", "0x10" or " " and quietly turn them into a markup.
+  if (typeof pct === 'string' && !/^\d{1,3}(\.\d{1,2})?$/.test(pct.trim())) return { ok: false, error: 'Markup must be a plain percent like 20 or 12.5.' };
+  const p = typeof pct === 'string' ? Number(pct.trim()) : Number(pct);
   if (!Number.isInteger(base) || base < 0) return { ok: false, error: 'Base amount must be whole cents.' };
   if (pct === '' || pct == null || !Number.isFinite(p) || p < 0 || p > 200) return { ok: false, error: 'Markup must be a percent from 0 to 200.' };
   const hundredths = Math.round(p * 100);
