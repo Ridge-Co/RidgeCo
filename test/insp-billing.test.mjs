@@ -257,7 +257,7 @@ async function main() {
   {
     const { w, api, env } = world(); w.failNext.mail = true;
     const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
-    ok(!res.body.ok && res.body.invoice_created && res.body.stage === 'email', 'email failure is reported with the invoice noted as created'); ok(res.body.error.includes('Tap Complete again'), 'and says what to do');
+    ok(!res.body.ok && res.body.invoice_created && res.body.stage === 'email', 'a definite Gmail refusal is reported with the invoice noted as created'); ok(res.body.error.includes('Tap Complete again'), 'and says what to do');
     eq(w.qbPosts.length, 1, 'one invoice so far'); eq(latest(w).Invoice_Status, 'invoiced', 'not marked emailed'); ok(w.telemetry.some(t => t.Success === 'FALSE' && /insp-billing\/email/.test(t.Skill_Or_Endpoint)), 'failure logged (Needs Attention)'); eq(latest(w).Billing_Lock, '', 'lock cleared even after failure');
     const q = await api.insbQueue(env); ok(q.body.items.some(x => x.needs_attention), 'the failed one shows on the Needs-billing list');
     const retry = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(retry.body.ok, 'retry ok'); eq(w.qbPosts.length, 1, 'retry did not create a second invoice'); eq(w.mails.length, 1, 'retry sent the one email'); eq(latest(w).Invoice_Status, 'emailed', 'now emailed');
