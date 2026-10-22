@@ -5137,6 +5137,7 @@ function renderTenantsPage() {
         '<td>'+moveIn+'</td>' +
         '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
+        '<td>'+paBadge('tenant', t.ID)+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
         '<button class="btn small secondary" onclick="openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅</button>' +
