@@ -677,6 +677,8 @@ const _hubWorkerCore = {
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
         if (path === '/insp/open-blocks')       return await inspOpenBlocksList(env);
         if (path === '/insp/bookings')          return await inspBookingsList(env, url);
+        if (path === '/insp/billing/queue')     return await insbQueue(env);
+        if (path === '/insp/billing/pdf')       return await insbPdfDownload(env, url);
         if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
         if (path === '/insp/str-guard/status')  return await inspStrGuardStatusRoute(env, url);
         if (path === '/insp/str-guard/uplisting-probe') { try { return await inspUplProbe(env); } catch (e) { return inspHandleErr(e); } }
