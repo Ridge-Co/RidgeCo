@@ -325,7 +325,7 @@ async function main() {
     ok(!res.body.ok && res.body.invoice_created === true && /DO NOT/.test(res.body.error), 'a failed stamp after creation says DO NOT create it again'); eq(res.status, 500, '500'); eq(w.mails.length, 0, 'no email after a failed stamp'); ok(w.telemetry.some(t => /DO NOT create it again/.test(t.Notes)), 'logged with the warning');
     // even if someone taps again, QuickBooks' request id returns the SAME invoice
     const again = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
-    eq(new Set(w.qbPosts.map(p => p.p.match(/requestid=([^&]+)/)[1])).size, 1, 'a second try reuses the same QuickBooks request id, so QuickBooks cannot double-post'); ok(again.body.ok, 'and the second try completes: ' + JSON.stringify(again.body).slice(0, 160));
+    eq(new Set(w.qbPosts.map(p => p.p.match(/requestid=([^&]+)/)[1])).size, 1, 'a second try reuses the same QuickBooks request id, so QuickBooks cannot double-post'); ok(again.body.ok, 'and the second try completes: ' + JSON.stringify(again.body).slice(0, 160)); eq(w.qbPosts.length, 1, 'it adopted the invoice already in QuickBooks instead of posting again');
   }
   // 10) blockers
   {
