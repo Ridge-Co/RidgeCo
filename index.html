@@ -6996,6 +6996,7 @@ function renderOwnersPage() {
       '<button class="btn small secondary" onclick="goToQBMapping(\''+esc((nm || o.Company || '').replace(/\'/g,''))+'\')" title="View/link this owner\'s properties and units to QuickBooks">🔗</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+      (o.Phone ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\',\''+esc(o.Phone||'')+'\')" title="Send Welcome">👋</button>' : '') +
       '<button class="btn small secondary" onclick="openSendMessageModal(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Send a one-off message">✉️</button>' +
       '</td></tr>';
   }
