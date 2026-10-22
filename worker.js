@@ -1725,6 +1725,7 @@ async function vendorByPin(env, url) {
     if (!vendor) return null;
     const loginName = ((vendor.First_Name||'').trim() || (vendor.Name||'').split(' ')[0]).toLowerCase();
     if (loginName !== name && !loginName.startsWith(name)) return null;
+    _m.login = { tab: 'Vendors', id: vendor.ID, row: vendor };
     return json({
       vendor_id: vendor.ID, vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
