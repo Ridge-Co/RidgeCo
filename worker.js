@@ -1614,7 +1614,7 @@ async function ownerByPin(env, url) {
   const pin = url.searchParams.get('pin') || '';
   const _ownerName = (url.searchParams.get('name') || '').trim();
   if (!_ownerName) return json({ error: 'First name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const [ownerUsers, owners] = await fetchTabs(env, ['Owner_Users','Owners']);
     const enteredName = (url?.searchParams?.get('name')||'').trim().toLowerCase();
     if (!enteredName) return null;
