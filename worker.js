@@ -39509,10 +39509,14 @@ function insbOwnerInvoiceOps(inv) {
   ops.push({ t: 'text', x: cols[1], y: y2, size: 11, bold: true, s: 'Service Address:' });
   for (const w of (inv.service || []).flatMap(s => insbWrap(s, 11, false, 160))) { y2 -= 14.5; ops.push({ t: 'text', x: cols[1], y: y2, size: 11, s: w }); }
   let y3 = colTop;
-  [['Invoice #: ', inv.number], ['Bill Date: ', insbMDY(inv.date)], ['Work Order: ', inv.wo]].forEach(([k, v], i) => {
-    const yy = colTop - i * 14.5; ops.push({ t: 'text', x: cols[2], y: yy, size: 11, bold: true, s: k }); ops.push({ t: 'text', x: cols[2] + insbTextWidth(k, 11, true), y: yy, size: 11, s: v });
+  [['Invoice #: ', inv.number], ['Bill Date: ', insbMDY(inv.date)], ['Work Order: ', inv.wo]].forEach(([k, v]) => {
+    // A long work order number would run off the page: if "label value" does not fit on one line, the value goes on its own line, shrunk (down to 6pt) until it fits the margin.
+    const kw = insbTextWidth(k, 11, true);
+    if (cols[2] + kw + insbTextWidth(v, 11, false) <= R) { ops.push({ t: 'text', x: cols[2], y: y3, size: 11, bold: true, s: k }, { t: 'text', x: cols[2] + kw, y: y3, size: 11, s: v }); y3 -= 14.5; return; }
+    let sz = 11; while (sz > 6 && cols[2] + insbTextWidth(v, sz, false) > R) sz -= 0.5;
+    ops.push({ t: 'text', x: cols[2], y: y3, size: 11, bold: true, s: k.trim() }, { t: 'text', x: cols[2], y: y3 - 13, size: sz, s: v }); y3 -= 27.5;
   });
-  const tblTop = Math.min(y1, y2, colTop - 3 * 14.5) - 34, hH = 26, rH = 26;
+  const tblTop = Math.min(y1, y2, y3) - 34, hH = 26, rH = 26;
   ops.push({ t: 'rect', x: L, y: tblTop - hH - rH, w: R - L, h: hH + rH, gray: g });
   ops.push({ t: 'rect', x: L, y: tblTop - hH, w: R - L, h: hH, gray: g, fillGray: 0.97 });
   const hy = tblTop - hH + 9, ry = tblTop - hH - rH + 9;
