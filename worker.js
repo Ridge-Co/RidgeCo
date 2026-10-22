@@ -39832,14 +39832,31 @@ async function insbComplete(env, body) {
           // 2) item
           item = await insbQbItem(env, token); if (item.note) warnings.push(item.note);
         }
-        // 3) invoice (QuickBooks de-duplicates retries of the same requestid, so even a crash between create and save cannot double-post)
+        // 3) invoice. Two guards against a double post: QuickBooks de-duplicates retries of the same requestid, AND the intent ("creating|<requestid>|<date>") is written and read back
+        // BEFORE the post, so a retry after an unclear attempt reuses the same requestid and date and first looks in QuickBooks for the invoice instead of posting blind.
         const dollars = Number((plan.base_cents / 100).toFixed(2));
-        const payload = stubbed ? null : { CustomerRef: { value: String(custId) }, TxnDate: plan.invoice.date, DueDate: plan.invoice.due,
+        const prior = String(b.Invoice_Status || '').match(/^creating\|([^|]*)\|(\d{4}-\d{2}-\d{2})$/);
+        const txnDate = prior ? prior[2] : plan.invoice.date, dueDate = prior ? inspAddDays(prior[2], INSB_NET_DAYS) : plan.invoice.due;
+        const reqId = prior ? prior[1] : ('insp-bk-' + b.ID + '-' + plan.invoice.wo).slice(0, 48);
+        const payload = stubbed ? null : { CustomerRef: { value: String(custId) }, TxnDate: txnDate, DueDate: dueDate,
           Line: [{ DetailType: 'SalesItemLineDetail', Amount: dollars, Description: plan.invoice.description.slice(0, 4000), SalesItemLineDetail: { ItemRef: { value: item.id }, Qty: 1, UnitPrice: dollars } }],
           CustomerMemo: { value: ('WO ' + plan.invoice.wo + ' - ' + plan.invoice.address).slice(0, 1000) }, PrivateNote: 'RidgeCo inspection booking #' + b.ID + ' WO ' + plan.invoice.wo };
         const em = insbEmails(c.Bill_Email_To)[0]; if (payload && em && insbEmailOk(em)) payload.BillEmail = { Address: em };
-        const reqId = ('insp-bk-' + b.ID + '-' + plan.invoice.wo).slice(0, 48);
-        let r = stubbed ? { staged: true } : await qbApi(env, 'invoice?minorversion=73&requestid=' + encodeURIComponent(reqId), 'POST', payload, token);
+        let r = null;
+        if (stubbed) r = { staged: true };
+        else {
+          if (!prior) {
+            try { b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Invoice_Status: 'creating|' + reqId + '|' + txnDate }); }
+            catch (e) { throw Object.assign(new Error('Could not record the intent to create the invoice (' + e.message + '). Nothing was created.'), { stage: 'qb_claim' }); }
+          } else {
+            const found = await insbQbFindInvoice(env, token, custId, txnDate, b.ID);
+            if (found) { r = { Invoice: found }; steps.push('QuickBooks already had invoice ' + (found.DocNumber || '#' + found.Id) + ' for this booking from an earlier attempt: using it, not creating another'); }
+          }
+          if (!r) {
+            try { r = await qbApi(env, 'invoice?minorversion=73&requestid=' + encodeURIComponent(reqId), 'POST', payload, token); }
+            catch (e) { throw Object.assign(new Error('QuickBooks did not answer clearly (' + e.message + '), so the invoice may or may not exist. Tap Complete again: QuickBooks is checked first, so nothing is created twice.'), { stage: 'qb_unconfirmed' }); }
+          }
+        }
         let invId = (r && r.Invoice && r.Invoice.Id) || '';
         if (!invId && r && r.staged) {
           steps.push('QuickBooks is stubbed on staging - no invoice created');
