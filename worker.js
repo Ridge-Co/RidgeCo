@@ -10379,9 +10379,40 @@ async function sendPinMessage(env, body) {
 // PERSONALIZED (real name/address) for the single-send preview; body.message, if provided,
 // overrides it entirely — the Hub always lets Brett edit before sending (single: pre-filled
 // textarea; bulk: one shared editable text for the whole batch, deliberately generic/unnamed).
+// POST /welcome/send for type owner | owner_user (Oct 22 2026): same warm intro as tenants/vendors, but sent through sendSMS and
+// judged by the real Twilio answer; Welcome_Sent is written ONLY when the text went out.
+async function welcomeSendOwner(env, body) {
+  const { type, id } = body, tab = PORTAL_TAB_BY_TYPE[type];
+  const rec = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+  if (!rec) return json({ error: (type === 'owner' ? 'Owner' : 'Owner user') + ' not found' }, 404);
+  if (!rec.Phone) return json({ error: 'No phone number on file', name: rec.First_Name || '' }, 400);
+  const firstName = rec.First_Name || 'there';
+  const cfg = await fetchConfig(env), assistantName = cfg.ASSISTANT_NAME || 'Riley';
+  const tokens = { FirstName: firstName, AssistantName: assistantName };
+  const tpl = await getMessageTemplate(env, 'owner_welcome', 'sms');
+  const defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
+    : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on your properties. Save this number - we'll only text about maintenance here, never marketing.`;
+  if (body.preview_only) return json({ preview: defaultMsg, phone: rec.Phone, name: firstName });
+  const finalMsg = body.message ? renderTemplate(String(body.message), tokens) : defaultMsg;
+  const verdict = smsSendVerdict(await sendSMS(env, rec.Phone, finalMsg));
+  const f = { Welcome_Send_Result: verdict.result };
+  if (verdict.ok) { f.Welcome_Sent = 'TRUE'; f.Welcome_Sent_Date = new Date().toISOString(); }
+  let markError = '';
+  try { await ensureColumns(env, tab, PORTAL_WELCOME_COLS); await updateRowVerified(env, tab, id, f); }
+  catch (e) {
+    markError = String((e && e.message) || e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_welcome_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + markError }); }
+    catch (e2) { console.error('portal_welcome_stamp_failed AND telemetry failed:', tab, id, markError, String((e2 && e2.message) || e2)); }
+  }
+  if (!verdict.ok) return json({ error: 'Send failed: ' + verdict.result, name: firstName }, 502);
+  await logSMS(env, '', 'welcome_send_' + type, id, rec.Phone, '[welcome sent to ' + firstName + ']');
+  return json(Object.assign({ success: true, sent_to: rec.Phone, name: firstName }, markError ? { warning: 'The welcome text WAS sent, but the "welcomed" mark could not be saved: ' + markError } : {}));
+}
+
 async function welcomeSend(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
+  if (type === 'owner' || type === 'owner_user') return await welcomeSendOwner(env, body);
   let recipient, firstName, phone, defaultMsg, property = null, owner = null;
   // Sep 17 2026 (Brett): a bulk welcome send lets Brett edit the shared text before sending —
   // that edited text (body.message) needs the SAME {FirstName}/{Owner}/{Address}/{AssistantName}
