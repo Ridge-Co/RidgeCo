@@ -37286,8 +37286,8 @@ async function inspBookRequest(env, body) {
       woNumber = insbNormWO(body.wo_number);
       if (!woNumber) throw inspErr('bad_wo', 'Please enter the work order number (for example 43945-1).', 400);
       await insbEnsureColumns(env);
-      const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && INSP_ACTIVE_BOOKING.includes(r.Status) && String(r.Active || '').toUpperCase() !== 'FALSE');
-      if (dupe) throw inspErr('wo_in_use', 'Work order ' + woNumber + ' already has a booking (' + (dupe.Status === 'pending' ? 'waiting for approval' : 'approved') + '). Cancel it first, or use the manage link to change it.', 409);
+      const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && insbWoInUse(r));
+      if (dupe) throw inspErr('wo_in_use', 'Work order ' + woNumber + ' already has a booking (' + (String(dupe.Completed_At || '').trim() ? 'already completed and billed' : dupe.Status === 'pending' ? 'waiting for approval' : 'approved') + '). Cancel it first, or use the manage link to change it.', 409);
     }
     if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw inspErr('bad_contact', 'That email address does not look right.', 400);
     const startMs = Date.parse(body.start_iso);
