@@ -10360,9 +10360,14 @@ async function sendPinMessage(env, body) {
   // PIN, portal link and amounts are verified intact or the English original is sent.
   let outMessage = message, translatedTo = '';
   if (vendorRec) { const t = await translateForVendorDetailed(env, vendorRec, message); if (t.translated) { outMessage = t.text; translatedTo = 'es'; } }
-  await sendSMS(env, phone, outMessage);
+  // Oct 22 2026: the old code ignored sendSMS's answer and logged "sent" regardless, so a switched-off or rejected text still looked sent.
+  // Now the real result decides: the person's row gets PIN_Sent_Date/Count only when Twilio accepted it, and a failure is returned honestly.
+  const verdict = smsSendVerdict(await sendSMS(env, phone, outMessage));
+  const mark = await stampPinSend(env, type, id, verdict);
+  if (!verdict.ok) return json({ error: 'PIN text NOT sent: ' + verdict.result, name: firstName, mark_saved: mark.ok }, 502);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
-  return json({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo });
+  return json(Object.assign({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo, staged: !!verdict.staged },
+    mark.ok ? {} : { warning: 'The PIN text WAS sent, but the "sent" mark could not be saved: ' + mark.error }));
 }
 
 // POST /welcome/send { type: 'tenant'|'vendor', id, preview_only?, message? } — Sep 14 2026,
