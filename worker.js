@@ -16200,7 +16200,16 @@ function failRollupPlan(inp) {
     const row = findRow(fp);
     if (!row) created.push({ ID: 'F-c' + now + '-' + created.length, Fingerprint: fp, Severity: c.severity, System: c.system || 'hub', Where: c.where, Message: String(c.message).slice(0, 400), Source: 'condition', First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: '', Fixed_In: '', Notes: '' });
     else if (row.Status === 'fixed') { Object.assign(row, { Severity: c.severity, Message: String(c.message).slice(0, 400), First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Notes: (row.Notes ? row.Notes + ' | ' : '') + `came back ${day}` }); touch(row); }
-    else { row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400); if (failSevRank(c.severity) < failSevRank(row.Severity)) row.Severity = c.severity; touch(row); }
+    else {
+      row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400);
+      // Oct 22 2026: severity follows the CURRENT rule in both directions. For conditions it only ever escalated, so "alerts OFF" and "dead-man OFF"
+      // (P2 since Oct 21, Brett's standing choice) stayed on Needs Attention as a P0 / P1 because that is what they were when first seen.
+      if (row.Status !== 'wontfix' && c.severity !== row.Severity) {
+        if (failSevRank(c.severity) > failSevRank(row.Severity)) row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `severity ${row.Severity} -> ${c.severity} ${day} (current rule)`;
+        row.Severity = c.severity;
+      }
+      touch(row);
+    }
   }
   for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
     r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
