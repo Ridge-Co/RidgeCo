@@ -6982,7 +6982,7 @@ function renderOwnersPage() {
     var canSend = !!(o.PIN && o.Phone);
     var nm = (o.First_Name+' '+(o.Last_Name||'')).trim();
     var badge = isInactive ? ' <span style="background:var(--danger);color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;letter-spacing:.05em;font-weight:bold;vertical-align:middle">INACTIVE</span>' : '';
-    var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
+    var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '') + (isInactive ? '' : '<br>' + paBadge('owner', o.ID, true));
     return '<tr'+(isInactive?' style="opacity:0.65"':'')+'>' +
       '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-haspin="'+(o.PIN?'1':'0')+'" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
       '<td>'+display+'</td>' +
