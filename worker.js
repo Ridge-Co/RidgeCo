@@ -35412,6 +35412,13 @@ async function strLog(ctx, taskKey, cleanerId, event, detail) {
 const __strSysAt = {};
 // Failure Brett must see. Never throws; telemetry row first (Success=FALSE), then throttled SMS + email.
 async function strSystemAlert(env, kind, message) {
+  // Oct 22 2026: the shared Sheets read quota ran out under the cleaning scheduler. Recorded as the calm P2 "sheets_quota_busy" row; no text or email
+  // (the next tick retries, and a scheduler that stays unable to run is still the P0 "overdue" condition).
+  if (sheetsQuotaBusyError(message)) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); }
+    catch (te) { /* silent-ok: alert code must not report its own failure (it would loop); the full text goes to the Worker log */ console.error('str alert: quota-busy telemetry failed:', te && te.message, '| original:', kind, message); }
+    return;
+  }
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
   const now = Date.now();
   if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
