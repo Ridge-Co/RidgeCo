@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-21.02-failure-ledger-self-heal';
+const BUILD_VERSION = '2026-10-22.03-insp-billing';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -679,6 +679,8 @@ const _hubWorkerCore = {
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
         if (path === '/insp/open-blocks')       return await inspOpenBlocksList(env);
         if (path === '/insp/bookings')          return await inspBookingsList(env, url);
+        if (path === '/insp/billing/queue')     return await insbQueue(env);
+        if (path === '/insp/billing/pdf')       return await insbPdfDownload(env, url);
         if (path === '/insp/calendar-test')     return await inspCalendarTest(env, url);
         if (path === '/insp/str-guard/status')  return await inspStrGuardStatusRoute(env, url);
         if (path === '/insp/str-guard/uplisting-probe') { try { return await inspUplProbe(env); } catch (e) { return inspHandleErr(e); } }
@@ -1120,7 +1122,7 @@ const _hubWorkerCore = {
         if (path === '/fi/property/create')       return await fiRoute(env, 'property-create', () => fiPropertyCreate(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
-        if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
+        if (path === '/insp/customer/update')     return await insbCustomerUpdate(env, body);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
         if (path === '/insp/property/update')     return await updateRow(env, 'Insp_Properties', body.id, body.fields);
         if (path === '/insp/unit/add')             return await inspUnitAdd(env, body);
@@ -1135,6 +1137,11 @@ const _hubWorkerCore = {
         if (path === '/insp/open-block/reopen')    return await inspOpenBlockReopen(env, body);
         if (path === '/insp/booking/decide')       return await inspBookingAdminDecide(env, body);
         if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
+        if (path === '/insp/billing/preview')      return await insbPreview(env, body);
+        if (path === '/insp/billing/complete')     return await insbComplete(env, body);
+        if (path === '/insp/billing/release-owner') return await insbReleaseOwner(env, body);
+        if (path === '/insp/billing/customer-config') return await insbCustomerConfig(env, body);
+        if (path === '/insp/billing/set-wo')       return await insbSetWO(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
@@ -16102,6 +16109,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^selftest/, 'P1'],
   [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
   [/^failure_ledger/, 'P1'],
+  [/^insp_billing_money/, 'P0'],            // Oct 22 2026: a failed QuickBooks invoice / email / stamp on inspection billing is money
+  [/^insp_billing_write/, 'P1'],            // Oct 22 2026: a failed customer-config / work-order-number write
   [/^qb_payables_(vendor_)?(paid_)?(payment_)?date_missing/, 'P2'],   // Oct 20 2026: display-only warning ("payment date unavailable"); no money moves. Recorded once with a count, not a P0 on every page load.
   [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
   [/^ai_credit_flag_read_busy/, 'P2'],                    // Oct 21 2026: Google was busy for a minute; the last known flag value kept being honoured
@@ -26171,6 +26180,13 @@ async function hubTestWriteAllowed(env, path, body) {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
   }
+  // Inspection billing (Oct 22 2026): a preview writes nothing; every real step may only touch a booking / customer that is a TEST- customer.
+  if (path === '/insp/billing/preview') return true;
+  if (path === '/insp/billing/complete' || path === '/insp/billing/release-owner' || path === '/insp/billing/set-wo') {
+    const _bb = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(body && body.id));
+    return !!_bb && await isTestRecord(env, 'Insp_Customers', _bb.Customer_ID);
+  }
+  if (path === '/insp/billing/customer-config') return await isTestRecord(env, 'Insp_Customers', body && body.customer_id);
   if (path === '/admin/sync-vendors-from-qbo') {
     // Single-vendor runs on a TEST- vendor only; a bulk run would touch real vendors.
     return !!(body && body.vendor_id) && await isTestRecord(env, 'Vendors', body.vendor_id);
@@ -37464,7 +37480,7 @@ async function inspBookInfo(env, url) {
     .map(x => ({ date: x.b.Date, from: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.Start_Time)), to: inspFmtEtTime(inspBlockWindowEndMs(x.b)), last_start: !!String(x.b.Last_Start || '').trim(), closes_iso: new Date(x.exp).toISOString(), closes_label: inspFmtEt(x.exp) }));
   let open = open_days;
   try { const closed = await inspStrClosedOrThrow(env, await fetchConfig(env), false); open = open_days.filter(d => !closed.has(d.date)); } catch (e) { console.error('insp: cleaning guard unavailable for open-days list (slots will report it):', e && e.message); }
-  return json({ ok: true, customer: c.Name, open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
+  return json({ ok: true, customer: c.Name, require_wo: String(c.Billing_Mode || '') === 'wo', open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
 }
 async function inspBookSlots(env, body) {
   try {
@@ -37488,6 +37504,15 @@ async function inspBookRequest(env, body) {
     const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
     if (!contactName) throw inspErr('bad_contact', 'Please enter your name.', 400);
     if (!contactPhone && !contactEmail) throw inspErr('bad_contact', 'Please enter a phone number or email so you get the confirmation.', 400);
+    // Billed-by-work-order customers (Premier): the work order number is required, and one work order = one booking at a time (Oct 22 2026).
+    let woNumber = '';
+    if (String(c.Billing_Mode || '') === 'wo') {
+      woNumber = insbNormWO(body.wo_number);
+      if (!woNumber) throw inspErr('bad_wo', 'Please enter the work order number (for example 43945-1).', 400);
+      await insbEnsureColumns(env);
+      const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && insbWoInUse(r));
+      if (dupe) throw inspErr('wo_in_use', 'Work order ' + woNumber + ' already has a booking (' + (String(dupe.Completed_At || '').trim() ? 'already completed and billed' : dupe.Status === 'pending' ? 'waiting for approval' : 'approved') + '). Cancel it first, or use the manage link to change it.', 409);
+    }
     if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw inspErr('bad_contact', 'That email address does not look right.', 400);
     const startMs = Date.parse(body.start_iso);
     if (!Number.isFinite(startMs)) throw inspErr('bad_slot', 'Please pick a time.', 400);
@@ -37508,7 +37533,7 @@ async function inspBookRequest(env, body) {
       Start_ISO: new Date(slot.startMs).toISOString(), End_ISO: new Date(slot.endMs).toISOString(),
       Drive_Before_Min: adj.before ? adj.before.min : '', Drive_After_Min: adj.after ? adj.after.min : '', Drive_Source: a.driveSource,
       Contact_Name: contactName, Contact_Phone: contactPhone, Contact_Email: contactEmail, Notes: String(body.notes || '').trim().slice(0, 500),
-      Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote,
+      Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote, WO_Number: woNumber,
     };
     // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
     let ev;
@@ -39519,3 +39544,708 @@ async function fiFolderOrganize(env, body) {
 }
 
 // ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════
+
+// ═══ INSB-BLOCK-START ══════════════════════════════════════════════════════
+// INSPECTION BILLING (Oct 22 2026) — "complete the inspection, everything else follows".
+// Brett: Premier Property Management books inspections by work order; when he taps Complete on an approved booking the Hub
+//   (1) prices the trip from the rate card, (2) creates the QuickBooks invoice (customer created on first use), (3) pulls QuickBooks' own
+//   PDF of it, (4) emails it to Premier (or, once Premier gives us the address, to their AppFolio Smart Bill Entry inbox), and (5) builds the
+//   owner-facing invoice in Premier's specimen layout (Premier's WO number + a suffix, amount = ours + Premier's markup), held until Premier's
+//   markup is on file. Nothing in here runs on a schedule: the tap is the trigger and the confirmation (Brett, Oct 22).
+// Rate card (proposal-inspection-pricing): unit 1 $95, unit 2 $85, units 3-4 $75 each, unit 5+ $65 each; Net 15; $85 zero-access fee only when no unit
+//   was inspected; tenant no-shows are simply not billed; every visit (booking) starts again at the $95 rate.
+// All money is whole CENTS in the pure functions below (test/insp-billing.test.mjs); dollars only appear at the QuickBooks / PDF edge.
+// Nothing fails silently: every step's result is inspected, every failure is a Telemetry row (-> Needs Attention) AND is in the response.
+const INSB_BOOKING_COLS = ['WO_Number','Completed_At','Completion_Kind','Units_Billed','Invoice_Base_Cents','Invoice_Status','QB_Invoice_ID','QB_Invoice_Number','Invoice_Emailed_At','Invoice_Emailed_To','InvB_Number','InvB_Markup_Pct','InvB_Cents','InvB_Status','InvB_Emailed_At','Billing_Lock','Billing_Log'];
+const INSB_CUSTOMER_COLS = ['Billing_Mode','Owner_Invoice','QBO_Customer_ID','Bill_To_Name','Bill_To_Address','Bill_Email_To','Bill_Email_Cc','AppFolio_Email','Markup_Pct','InvB_Phone','InvB_Email'];
+const INSB_RATE_CENTS = [9500, 8500, 7500, 7500];      // unit 1, 2, 3, 4
+const INSB_RATE_5PLUS_CENTS = 6500;                   // unit 5 and above
+const INSB_ZERO_ACCESS_CENTS = 8500;
+const INSB_NET_DAYS = 15;
+const INSB_MAX_UNITS = 60;
+const INSB_LOCK_MS = 120000;
+const INSB_PAID_STATES = ['invoiced', 'emailed', 'staged'];
+
+// PURE — price of the nth (1-based) unit inspected on one visit.
+function insbRateCents(n) { n = Math.floor(+n); if (!(n >= 1)) return 0; return n <= INSB_RATE_CENTS.length ? INSB_RATE_CENTS[n - 1] : INSB_RATE_5PLUS_CENTS; }
+// PURE — { kind: 'inspected'|'zero_access'|'no_charge', units } -> { ok, cents, units, breakdown:[{unit,cents}], error }
+function insbTripCents(o) {
+  const kind = String((o && o.kind) || ''), raw = o && o.units, units = (raw === '' || raw == null) ? NaN : Number(raw);
+  if (kind === 'no_charge') return { ok: true, cents: 0, units: 0, breakdown: [], note: 'No charge' };
+  if (kind === 'zero_access') {
+    if (Number.isFinite(units) && units !== 0) return { ok: false, error: 'A zero-access visit has no inspected units (got ' + units + ').' };
+    return { ok: true, cents: INSB_ZERO_ACCESS_CENTS, units: 0, breakdown: [], note: 'Zero-access fee' };
+  }
+  if (kind !== 'inspected') return { ok: false, error: 'Pick what happened: units inspected, zero access, or no charge.' };
+  if (!Number.isFinite(units) || units !== Math.floor(units) || units < 1 || units > INSB_MAX_UNITS) return { ok: false, error: 'Units inspected must be a whole number from 1 to ' + INSB_MAX_UNITS + ' (use zero access if nobody could be inspected).' };
+  const breakdown = []; let cents = 0;
+  for (let i = 1; i <= units; i++) { const c = insbRateCents(i); breakdown.push({ unit: i, cents: c }); cents += c; }
+  return { ok: true, cents, units, breakdown, note: units + ' unit' + (units === 1 ? '' : 's') + ' inspected' };
+}
+// PURE — markup on a base amount. pct may have up to 2 decimals (20, 12.5, 7.25). Half-cents round UP. -> { ok, markup_cents, total_cents, pct }
+function insbMarkup(baseCents, pct) {
+  const base = Number(baseCents);
+  // Strict: a typed value must look like a plain number ("20", "12.5", "7.25"). Number() alone would accept "1e1", "0x10" or " " and quietly turn them into a markup.
+  if (typeof pct === 'string' && !/^\d{1,3}(\.\d{1,2})?$/.test(pct.trim())) return { ok: false, error: 'Markup must be a plain percent like 20 or 12.5.' };
+  const p = typeof pct === 'string' ? Number(pct.trim()) : Number(pct);
+  if (!Number.isInteger(base) || base < 0) return { ok: false, error: 'Base amount must be whole cents.' };
+  if (pct === '' || pct == null || !Number.isFinite(p) || p < 0 || p > 200) return { ok: false, error: 'Markup must be a percent from 0 to 200.' };
+  const hundredths = Math.round(p * 100);
+  if (Math.abs(hundredths - p * 100) > 1e-6) return { ok: false, error: 'Markup can have at most 2 decimals.' };
+  const markup = Math.floor((base * hundredths + 5000) / 10000);
+  return { ok: true, markup_cents: markup, total_cents: base + markup, pct: hundredths / 100 };
+}
+// PURE — Premier's work order number, cleaned. '' = not usable.
+function insbNormWO(raw) { const s = String(raw == null ? '' : raw).trim().replace(/\s+/g, '').toUpperCase(); return /^[A-Z0-9][A-Z0-9-]{1,29}$/.test(s) ? s : ''; }
+// PURE — owner-facing invoice number = WO number + a 4-digit suffix that is the same every time it is rebuilt for the same booking.
+function insbOwnerInvoiceNumber(wo, bookingId) {
+  const w = insbNormWO(wo); if (!w) return '';
+  let h = 2166136261; const s = w + '|' + String(bookingId);
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return w + '-' + String(1000 + (h % 9000));
+}
+function insbDollars(cents) { return (Math.round(+cents) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }); }
+function insbMDY(iso) { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[2] + '/' + m[3] + '/' + m[1] : String(iso || ''); }
+function insbEmails(s) { return String(s || '').split(/[,;\s]+/).map(x => x.trim()).filter(Boolean); }
+function insbEmailOk(e) { return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e) && e.length <= 100; }
+// PURE — "122 S Gilmor St, Baltimore, MD 21223, USA" -> ['122 S Gilmor St', 'Baltimore, MD 21223']
+function insbAddrLines(formatted) {
+  let parts = String(formatted || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (parts.length && /^(USA|US|United States)$/i.test(parts[parts.length - 1])) parts.pop();
+  if (parts.length < 3) return parts.length ? [parts.join(', ')] : [];
+  return [parts.slice(0, parts.length - 2).join(', '), parts[parts.length - 2] + ', ' + parts[parts.length - 1]];
+}
+// PURE — who gets what. cust = Insp_Customers row. Returns { appfolio, a_to, a_cc, b_to, b_cc, problems }.
+// With an AppFolio Smart Bill Entry address, OUR invoice goes to that inbox alone (one PDF, one invoice per email, so nobody keys it in twice) and the
+// owner-facing invoice goes to the people. Without one, both go to the people in one email.
+function insbRecipients(cust) {
+  cust = cust || {}; const problems = [];
+  const people = insbEmails(cust.Bill_Email_To), cc = insbEmails(cust.Bill_Email_Cc), af = insbEmails(cust.AppFolio_Email);
+  for (const e of [].concat(people, cc, af)) if (!insbEmailOk(e)) problems.push('"' + e + '" is not a valid email address.');
+  if (af.length > 1) problems.push('Only one AppFolio Smart Bill Entry address is allowed (got ' + af.length + ').');
+  if (!people.length && !af.length) problems.push('No billing email is set for this customer.');
+  const appfolio = af[0] || '';
+  // The owner-facing invoice must never reach the AppFolio inbox (it would be keyed in as a second bill).
+  if (appfolio && [].concat(people, cc).some(e => e.toLowerCase() === appfolio.toLowerCase())) problems.push('The AppFolio address is also in the people list or Cc. Remove it there: the owner-facing invoice must not go to AppFolio.');
+  return { appfolio, a_to: appfolio ? [appfolio] : people, a_cc: appfolio ? [] : cc, b_to: people, b_cc: cc, problems };
+}
+// PURE — the whole plan for one Complete tap. Nothing is written. o = { booking, customer, kind, units, todayIso }
+// -> { ok, blockers[], warnings[], resume, kind, units, base_cents, base_label, invoice{date,due,wo,description}, owner{enabled,status,number,pct,markup_cents,total_cents}, recipients }
+function insbPlan(o) {
+  const b = (o && o.booking) || {}, c = (o && o.customer) || {}, blockers = [], warnings = [];
+  const today = (o && o.todayIso) || '';
+  const wo = insbNormWO(b.WO_Number), needWo = String(c.Billing_Mode || '') === 'wo';
+  const trip = insbTripCents({ kind: o && o.kind, units: o && o.units });
+  if (!trip.ok) blockers.push(trip.error);
+  if (b.Status !== 'approved') blockers.push('This booking is ' + (b.Status || 'not found') + ', so it cannot be completed. Only an approved booking can.');
+  const already = INSB_PAID_STATES.includes(String(b.Invoice_Status || ''));
+  const resume = !!String(b.QB_Invoice_ID || '').trim();
+  if (needWo && !wo) blockers.push('This customer bills by work order and this booking has no usable work order number. Enter it first.');
+  if (trip.ok && trip.cents === 0 && String((o && o.kind) || '') !== 'no_charge') blockers.push('The amount is $0.00, so there is nothing to invoice.');
+  if (trip.ok && trip.units > (+b.Units || 0) && +b.Units > 0) warnings.push('You are billing ' + trip.units + ' units but the booking was for ' + (+b.Units) + '. Check that is right.');
+  const rec = insbRecipients(c);
+  const billable = trip.ok && trip.cents > 0;
+  if (billable) for (const p of rec.problems) blockers.push(p);
+  const addr = String(b.Formatted_Address || b.Address || '');
+  const cleanKind = String((o && o.kind) || '');
+  const desc = 'Comprehensive property inspection' + (cleanKind === 'zero_access' ? ' - zero access (no unit could be inspected)' : (trip.ok ? ' (' + trip.units + ' unit' + (trip.units === 1 ? '' : 's') + ')' : '')) + (addr ? ' - ' + addr : '') + (wo ? ' - Work Order ' + wo : '');
+  const ownerOn = String(c.Owner_Invoice || '').toUpperCase() === 'TRUE';
+  if (ownerOn && billable && !rec.b_to.length) blockers.push('The owner-facing invoice has nobody to go to: with an AppFolio address set, the people list (Bill email to) must still hold the addresses that get the owner-facing invoice.');
+  let owner = { enabled: ownerOn, status: 'off', number: '', pct: '', markup_cents: 0, total_cents: 0 };
+  if (ownerOn && billable) {
+    owner.number = insbOwnerInvoiceNumber(wo, b.ID);
+    const pctRaw = String(c.Markup_Pct == null ? '' : c.Markup_Pct).trim();
+    if (!owner.number) { owner.status = 'held_no_wo'; warnings.push('Owner-facing invoice needs a work order number.'); }
+    else if (pctRaw === '') { owner.status = 'held_no_markup'; warnings.push("Owner-facing invoice is HELD: Premier's markup is not set yet. Your invoice still goes out."); }
+    else {
+      const mk = insbMarkup(trip.cents, pctRaw);
+      if (!mk.ok) { owner.status = 'held_bad_markup'; warnings.push('Owner-facing invoice is HELD: ' + mk.error); }
+      else { owner.pct = String(mk.pct); owner.markup_cents = mk.markup_cents; owner.total_cents = mk.total_cents; owner.status = 'ready'; }
+    }
+    if (owner.status === 'ready' && (!String(c.InvB_Phone || '').trim() || !String(c.InvB_Email || '').trim() || !insbAddrLines(c.Bill_To_Address).length)) { owner.status = 'held_no_contact'; warnings.push("Owner-facing invoice is HELD: Premier's address, phone and email lines (shown at the top of that invoice, like their specimen) are not all set."); }
+  }
+  if (rec.appfolio) warnings.push('Your invoice goes to the AppFolio Smart Bill Entry inbox only.');
+  return {
+    ok: blockers.length === 0, blockers, warnings, resume, already, kind: cleanKind, units: trip.ok ? trip.units : 0,
+    base_cents: trip.ok ? trip.cents : 0, base_label: trip.ok ? trip.note : '', breakdown: trip.ok ? trip.breakdown : [],
+    invoice: { date: today, due: today ? inspAddDays(today, INSB_NET_DAYS) : '', wo, description: desc, address: addr },
+    owner, recipients: rec,
+  };
+}
+// ── Minimal PDF writer (no libraries on a Worker). One US-Letter page, Helvetica + Helvetica-Bold, text + lines + rectangles. ──
+const INSB_W_REG = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+const INSB_W_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+function insbAscii(s) {
+  return String(s == null ? '' : s).replace(/[‘’ʼ]/g, "'").replace(/[“”]/g, '"').replace(/[–—−]/g, '-').replace(/ /g, ' ').replace(/[^\x20-\x7e]/g, '?');
+}
+function insbTextWidth(s, size, bold) { const t = bold ? INSB_W_BOLD : INSB_W_REG; let w = 0; for (const ch of insbAscii(s)) w += t[ch.charCodeAt(0) - 32]; return w * size / 1000; }
+function insbWrap(text, size, bold, maxW) {
+  const words = insbAscii(text).split(/\s+/).filter(Boolean), out = []; let cur = '';
+  for (const w of words) { const t = cur ? cur + ' ' + w : w; if (cur && insbTextWidth(t, size, bold) > maxW) { out.push(cur); cur = w; } else cur = t; }
+  if (cur) out.push(cur); return out;
+}
+function insbPdfEsc(s) { return insbAscii(s).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)'); }
+// ops: { t:'text', x, y, size, bold, gray, align:'left'|'right', s } | { t:'line', x1, y1, x2, y2, w, gray } | { t:'rect', x, y, w, h, gray, fillGray }  (y from the BOTTOM, points)
+function insbPdfBytes(ops, title) {
+  const f = n => String(Math.round(n * 100) / 100);
+  let c = '';
+  for (const op of ops) {
+    if (op.t === 'text') {
+      const x = op.align === 'right' ? op.x - insbTextWidth(op.s, op.size, op.bold) : op.x;
+      c += `BT ${f(op.gray == null ? 0 : op.gray)} g /${op.bold ? 'F2' : 'F1'} ${f(op.size)} Tf ${f(x)} ${f(op.y)} Td (${insbPdfEsc(op.s)}) Tj ET\n`;
+    } else if (op.t === 'line') {
+      c += `${f(op.gray == null ? 0 : op.gray)} G ${f(op.w || 1)} w ${f(op.x1)} ${f(op.y1)} m ${f(op.x2)} ${f(op.y2)} l S\n`;
+    } else if (op.t === 'rect') {
+      if (op.fillGray != null) c += `${f(op.fillGray)} g ${f(op.x)} ${f(op.y)} ${f(op.w)} ${f(op.h)} re f\n`;
+      if (op.gray != null) c += `${f(op.gray)} G 0.75 w ${f(op.x)} ${f(op.y)} ${f(op.w)} ${f(op.h)} re S\n`;
+    }
+  }
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>',
+    `<< /Length ${c.length} >>\nstream\n${c}endstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+    `<< /Title (${insbPdfEsc(title || 'Invoice')}) /Producer (RidgeCo Hub) >>`,
+  ];
+  let out = '%PDF-1.4\n'; const offs = [];
+  objs.forEach((o, i) => { offs.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map(o => String(o).padStart(10, '0') + ' 00000 n \n').join('');
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R /Info 7 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  const bytes = new Uint8Array(out.length); for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 0xff;
+  return bytes;
+}
+// PURE — Premier's owner-facing invoice, laid out like the specimen they supplied (issuer block top-left, grey INVOICE top-right, three columns:
+// Bill to | Service Address | Invoice #/Bill Date/Work Order, then a Description / Quantity / Amount table and the Total Amount).
+// inv = { issuer:[lines], number, date (YYYY-MM-DD), wo, service:[lines], description, cents }. Bill to shows ONLY the service address (Brett's rule).
+function insbOwnerInvoiceOps(inv) {
+  const L = 52, R = 560, top = 792, ops = [], g = 0.88;
+  let y = top - 62;
+  (inv.issuer || []).forEach((line, i) => { ops.push({ t: 'text', x: L, y, size: 11, bold: i === 0, s: line }); y -= 14.5; });
+  ops.push({ t: 'text', x: 430, y: top - 70, size: 22, bold: true, gray: 0.8, s: 'INVOICE' });
+  const colTop = Math.min(y, top - 62 - 14.5 * 4) - 28, cols = [L, 230, 408];
+  let y1 = colTop;
+  ops.push({ t: 'text', x: cols[0], y: y1, size: 11, bold: true, s: 'Bill to:' });
+  for (const w of (inv.service || []).flatMap(s => insbWrap(s, 11, false, 160))) { y1 -= 14.5; ops.push({ t: 'text', x: cols[0], y: y1, size: 11, s: w }); }
+  let y2 = colTop;
+  ops.push({ t: 'text', x: cols[1], y: y2, size: 11, bold: true, s: 'Service Address:' });
+  for (const w of (inv.service || []).flatMap(s => insbWrap(s, 11, false, 160))) { y2 -= 14.5; ops.push({ t: 'text', x: cols[1], y: y2, size: 11, s: w }); }
+  let y3 = colTop;
+  [['Invoice #: ', inv.number], ['Bill Date: ', insbMDY(inv.date)], ['Work Order: ', inv.wo]].forEach(([k, v]) => {
+    // A long work order number would run off the page: if "label value" does not fit on one line, the value goes on its own line, shrunk (down to 6pt) until it fits the margin.
+    const kw = insbTextWidth(k, 11, true);
+    if (cols[2] + kw + insbTextWidth(v, 11, false) <= R) { ops.push({ t: 'text', x: cols[2], y: y3, size: 11, bold: true, s: k }, { t: 'text', x: cols[2] + kw, y: y3, size: 11, s: v }); y3 -= 14.5; return; }
+    let sz = 11; while (sz > 6 && cols[2] + insbTextWidth(v, sz, false) > R) sz -= 0.5;
+    ops.push({ t: 'text', x: cols[2], y: y3, size: 11, bold: true, s: k.trim() }, { t: 'text', x: cols[2], y: y3 - 13, size: sz, s: v }); y3 -= 27.5;
+  });
+  const tblTop = Math.min(y1, y2, y3) - 34, hH = 26, rH = 26;
+  ops.push({ t: 'rect', x: L, y: tblTop - hH - rH, w: R - L, h: hH + rH, gray: g });
+  ops.push({ t: 'rect', x: L, y: tblTop - hH, w: R - L, h: hH, gray: g, fillGray: 0.97 });
+  const hy = tblTop - hH + 9, ry = tblTop - hH - rH + 9;
+  ops.push({ t: 'text', x: L + 7, y: hy, size: 11, s: 'Description' }, { t: 'text', x: 300, y: hy, size: 11, s: 'Quantity' }, { t: 'text', x: 426, y: hy, size: 11, s: 'Amount' });
+  ops.push({ t: 'text', x: L + 7, y: ry, size: 11, s: inv.description }, { t: 'text', x: 300, y: ry, size: 11, s: '1' }, { t: 'text', x: 426, y: ry, size: 11, s: insbDollars(inv.cents) });
+  ops.push({ t: 'text', x: R, y: tblTop - hH - rH - 16, size: 11, bold: true, align: 'right', s: 'Total Amount: ' + insbDollars(inv.cents) });
+  return ops;
+}
+// ── Sheet schema (additive only — ensureColumns appends, never reorders) ──
+async function insbEnsureColumns(env) {
+  await ensureColumns(env, 'Insp_Bookings', INSB_BOOKING_COLS);
+  await ensureColumns(env, 'Insp_Customers', INSB_CUSTOMER_COLS);
+}
+// A failure is always a Telemetry row (which also files it on Needs Attention) — never a text from here, never swallowed.
+// Severity rides on Job_Type (failSeverity reads it): money-path failures are P0, data-write failures P1, reads / previews P2.
+// Anything that is not explicitly a read/preview or a plain data write is treated as MONEY (P0): an unknown failure stage must never rank low (Oct 22 review).
+const INSB_READ_KINDS = ['queue', 'pdf_download', 'preview', 'preview_qb_lookup'], INSB_WRITE_KINDS = ['customer_config', 'set_wo'];
+function insbJobType(kind) { return INSB_READ_KINDS.includes(kind) ? 'insp_billing' : INSB_WRITE_KINDS.includes(kind) ? 'insp_billing_write' : 'insp_billing_money'; }
+async function insbFail(env, kind, message, ref) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: insbJobType(kind), Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'FALSE', Notes: (ref ? '[booking ' + ref + '] ' : '') + String(message).slice(0, 440) }); }
+  catch (te) { console.error('insp billing: telemetry write failed:', te && te.message, '| original:', kind, message); }
+}
+// Success is a Telemetry row too (with latency), so the job shows up in the cost / health view next to its failures.
+async function insbOk(env, kind, t0, ref) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_billing', Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'TRUE', Latency_ms: Date.now() - t0, Notes: ref ? '[booking ' + ref + ']' : '' }); }
+  catch (te) { console.error('insp billing: success telemetry write failed:', te && te.message); }
+}
+// Clear OUR lock only: if another request has taken the lock since, leave theirs alone.
+async function insbUnlock(env, id, tok) {
+  try {
+    invalidateTabCache('Insp_Bookings');
+    const cur = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(id));
+    if (cur && String(cur.Billing_Lock || '') !== '' && String(cur.Billing_Lock).split('|')[0] !== tok) return;
+    await updateRowVerified(env, 'Insp_Bookings', id, { Billing_Lock: '' });
+  } catch (e2) { await insbFail(env, 'unlock', 'Could not clear the billing lock on booking ' + id + ': ' + e2.message + ' (it clears itself after 2 minutes)', id); }
+}
+function insbLogLine(b, line) { return ((b.Billing_Log ? b.Billing_Log + ' | ' : '') + new Date().toISOString().slice(0, 16) + ' ' + line).slice(-900); }
+// Standard base64 (with padding) of raw bytes, built on the existing _b64urlBytes so this block adds no new base64 call of its own.
+function insbB64(bytes) { let s = _b64urlBytes(bytes).replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return s; }
+// Mail with real To/Cc headers and any number of PDF attachments. STAGING NEVER REACHES A REAL INBOX: stubbed unless Config GMAIL_STAGING_MODE=REDIRECT, then it
+// goes to GMAIL_TEST_RECIPIENT only (same policy as gmailSendEmail). Returns { sent, staged, message_id }. Throws on any failure.
+async function insbSendMail(env, o) {
+  const to = (o.to || []).filter(Boolean), cc = (o.cc || []).filter(Boolean);
+  // Every throw below carries `definite`: true = Gmail did NOT send it (safe to try again), false = unknown (it may have been delivered: never resend on its own).
+  if (!to.length) throw Object.assign(new Error('insbSendMail: no recipient'), { definite: true });
+  let realTo = to, realCc = cc, subject = o.subject;
+  if (env.__STAGING__ ?? isStaging(env)) {
+    const cfg = await fetchConfig(env);
+    if (String(cfg.GMAIL_STAGING_MODE || 'STUB').toUpperCase() !== 'REDIRECT') {
+      console.log('STAGING - invoice email stubbed (not sent) -> ' + to.join(',') + ': ' + subject);
+      return { staged: true, sent: false, would_have: { to, cc, subject, attachments: (o.attachments || []).map(a => a.filename) } };
+    }
+    realTo = [cfg.GMAIL_TEST_RECIPIENT || 'brett@bmoremanagement.com']; realCc = []; subject = '[TEST -> was: ' + to.join(',') + '] ' + subject;
+  }
+  let accessToken; try { accessToken = await gmailAccessToken(env); } catch (e) { throw Object.assign(new Error('Gmail sign-in failed: ' + e.message), { definite: true }); }
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const enc = s => '=?UTF-8?B?' + insbB64(new TextEncoder().encode(s || '')) + '?=';
+  const boundary = 'insb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const head = ['From: Ridge Co <' + from + '>', 'To: ' + realTo.join(', ')];
+  if (realCc.length) head.push('Cc: ' + realCc.join(', '));
+  head.push('Subject: ' + enc(subject), 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="' + boundary + '"', '', '--' + boundary, 'Content-Type: text/html; charset="UTF-8"', '', o.html || '', '');
+  for (const a of (o.attachments || [])) {
+    const safe = String(a.filename || 'invoice.pdf').replace(/[^\w .-]/g, '_').slice(0, 80);
+    head.push('--' + boundary, 'Content-Type: application/pdf; name="' + safe + '"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: attachment; filename="' + safe + '"', '', insbB64(a.bytes).replace(/(.{76})/g, '$1\r\n'), '');
+  }
+  head.push('--' + boundary + '--');
+  let resp, data;
+  try {
+    resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(head.join('\r\n')) }) });
+    data = await resp.json().catch(() => null);
+  } catch (e) { throw Object.assign(new Error('Gmail did not answer (' + e.message + ') - the email may or may not have been sent'), { definite: false }); }
+  // Only a 4xx is a definite refusal; a 5xx, or a 2xx without a message id, may still have been delivered.
+  if (!resp.ok || !data || !data.id) throw Object.assign(new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200)), { definite: resp.status >= 400 && resp.status < 500 });
+  return { sent: true, message_id: data.id };
+}
+// QuickBooks' own PDF of an invoice, so the file Premier gets is exactly the invoice in the books. Throws unless real PDF bytes came back.
+async function insbQbInvoicePdf(env, token, invoiceId) {
+  const res = await fetch(qbBase(env) + '/' + env.QB_REALM_ID + '/invoice/' + encodeURIComponent(invoiceId) + '/pdf?minorversion=73', { headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/pdf' } });
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (!res.ok) throw new Error('QuickBooks would not give the invoice PDF (HTTP ' + res.status + '): ' + new TextDecoder().decode(buf.subarray(0, 160)));
+  if (buf.length < 200 || String.fromCharCode(buf[0], buf[1], buf[2], buf[3]) !== '%PDF') throw new Error('QuickBooks answered but it was not a PDF (' + buf.length + ' bytes).');
+  return buf;
+}
+// The shared "Property Inspection" service item (found or created ONCE, id cached in Config insp_qb_item_id). Its income account is copied from the
+// existing General item (40), or failing that any existing service item; if neither can be read it stops loudly - an item id is never guessed.
+async function insbQbItem(env, token) {
+  const cfg = await fetchConfig(env);
+  if (cfg.insp_qb_item_id) return { id: String(cfg.insp_qb_item_id), note: '' };
+  const q = encodeURIComponent("select Id, Name from Item where Name = 'Property Inspection'");
+  const d = await qbApi(env, 'query?query=' + q + '&minorversion=73', 'GET', null, token);
+  if (d && d.Fault) throw new Error('Could not look up the Property Inspection item: ' + qbFault(d));
+  let it = ((d && d.QueryResponse && d.QueryResponse.Item) || [])[0];
+  if (!it) {
+    const gen = await qbApi(env, 'item/40?minorversion=73', 'GET', null, token);
+    let inc = gen && gen.Item && gen.Item.IncomeAccountRef && gen.Item.IncomeAccountRef.value;
+    if (!inc) {
+      // Item 40 (General) is not in this QuickBooks company (e.g. the Intuit sandbox): borrow the income account of any existing service item instead of guessing an item id.
+      const sq = encodeURIComponent("select Id, IncomeAccountRef from Item where Type = 'Service' maxresults 1");
+      const sd = await qbApi(env, 'query?query=' + sq + '&minorversion=73', 'GET', null, token);
+      const svc = ((sd && sd.QueryResponse && sd.QueryResponse.Item) || [])[0];
+      inc = svc && svc.IncomeAccountRef && svc.IncomeAccountRef.value;
+    }
+    if (!inc) throw new Error('Could not find an income account for the Property Inspection item (the General item and every service item were unreadable). Nothing was created.');
+    const r = await qbApi(env, 'item?minorversion=73', 'POST', { Name: 'Property Inspection', Type: 'Service', IncomeAccountRef: { value: String(inc) } }, token);
+    it = (r && r.Item) || (qbDupId(r) ? { Id: qbDupId(r) } : null);
+    if (!it) throw new Error('Could not create the Property Inspection item: ' + (qbFault(r) || 'no id returned'));
+  }
+  try { await failSetConfig(env, 'insp_qb_item_id', String(it.Id)); } catch (e) { await insbFail(env, 'item_cache', 'Could not save the QuickBooks item id to Config (will look it up again next time): ' + e.message); }
+  return { id: String(it.Id), note: '' };
+}
+// Look in QuickBooks for the invoice an earlier, unclear attempt may have created for this booking (same customer, same date, our private note). Throws if QuickBooks cannot be asked:
+// the caller must NOT post a new invoice when it could not look.
+async function insbQbFindInvoice(env, token, custId, txnDate, bookingId) {
+  const q = encodeURIComponent("select Id, DocNumber, TotalAmt, TxnDate, PrivateNote from Invoice where CustomerRef = '" + String(custId).replace(/[^0-9]/g, '') + "' and TxnDate = '" + String(txnDate).replace(/[^0-9-]/g, '') + "' maxresults 50");
+  let d;
+  try { d = await qbApi(env, 'query?query=' + q + '&minorversion=73', 'GET', null, token); }
+  catch (e) { throw Object.assign(new Error('Could not check QuickBooks for an earlier invoice (' + e.message + '). Nothing was created. Tap Complete again.'), { stage: 'qb_unconfirmed' }); }
+  if (d && d.Fault) throw Object.assign(new Error('Could not check QuickBooks for an earlier invoice: ' + qbFault(d) + '. Nothing was created. Tap Complete again.'), { stage: 'qb_unconfirmed' });
+  const tag = 'RidgeCo inspection booking #' + bookingId + ' WO ';
+  const hits = ((d && d.QueryResponse && d.QueryResponse.Invoice) || []).filter(i => String(i.PrivateNote || '').startsWith(tag));
+  if (hits.length > 1) throw Object.assign(new Error('QuickBooks has ' + hits.length + ' invoices for booking ' + bookingId + ' (' + hits.map(h => h.DocNumber || h.Id).join(', ') + '). Brett needs to look: nothing was sent.'), { stage: 'qb_duplicate' });
+  return hits[0] || null;
+}
+function insbWoInUse(r) { return String(r.Completed_At || '').trim() !== '' || (INSP_ACTIVE_BOOKING.includes(r.Status) && String(r.Active || '').toUpperCase() !== 'FALSE'); }
+function insbCustomerRow(cust) {
+  const lines = insbAddrLines(cust.Bill_To_Address), m = String(lines[1] || '').match(/^(.*?),\s*([A-Za-z]{2})\s+(\d{5})/);
+  return { ID: '', QBO_Customer_ID: String(cust.QBO_Customer_ID || '').trim(), Company: String(cust.Bill_To_Name || cust.Name || '').trim(),
+    Billing_Email: insbEmails(cust.Bill_Email_To)[0] || '', Billing_Address: lines[0] || '', Billing_City: m ? m[1] : '', Billing_State: m ? m[2].toUpperCase() : '', Billing_Zip: m ? m[3] : '' };
+}
+// True when this Worker is staging WITHOUT QuickBooks sandbox credentials: every QuickBooks write is a stub there, so the flow takes its "staged" path.
+function insbQbStubbed(env) { return !!((env.__STAGING__ ?? isStaging(env)) && !(env.QB_CLIENT_ID && env.QB_CLIENT_SECRET && env.QB_REALM_ID)); }
+function insbPublicBooking(b) { const o = inspAdminBooking(b); delete o.Billing_Lock; return o; }
+
+// ── Endpoints (all admin-gated; nothing here is in PUBLIC_PATHS) ──
+async function insbLoad(env, id) {
+  await insbEnsureColumns(env);
+  invalidateTabCache('Insp_Bookings'); invalidateTabCache('Insp_Customers');
+  const b = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(id));
+  if (!b) return { err: json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404) };
+  const c = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID));
+  if (!c) return { err: json({ ok: false, error: 'customer_missing', message: 'The customer on this booking was not found.' }, 404) };
+  return { b, c };
+}
+function insbTodayEt() { return inspEtDate(Date.now()); }
+// POST /insp/billing/preview { id, kind, units } — writes nothing. Read-only look at QuickBooks for the customer.
+async function insbPreview(env, body) {
+  try {
+    const L = await insbLoad(env, body && body.id); if (L.err) return L.err;
+    const plan = insbPlan({ booking: L.b, customer: L.c, kind: body && body.kind, units: body && body.units, todayIso: insbTodayEt() });
+    const qb = { customer: L.c.QBO_Customer_ID ? 'linked' : 'unknown', name: String(L.c.Bill_To_Name || L.c.Name || '') };
+    if (plan.ok && !plan.resume && !L.c.QBO_Customer_ID && String(L.c.Billing_Mode || '') === 'wo') {
+      try { const id = await qbLookupExisting(env, 'customer', qb.name, insbEmails(L.c.Bill_Email_To)[0] || '', await qbAccessToken(env)); qb.customer = id ? 'found' : 'will_create'; if (id) qb.id = id; }
+      catch (e) { qb.customer = 'unknown'; plan.warnings.push('Could not check QuickBooks for the customer (' + e.message + '). It will be looked up again when you confirm.'); await insbFail(env, 'preview_qb_lookup', 'QuickBooks customer lookup failed during a billing preview: ' + e.message, body && body.id); }
+    }
+    return json({ ok: true, plan, qb, booking: insbPublicBooking(L.b) });
+  } catch (e) { await insbFail(env, 'preview', e.message, body && body.id); return json({ ok: false, error: 'preview_failed', message: 'Could not build the preview: ' + e.message }, 500); }
+}
+// The owner-facing invoice: build the PDF bytes from a booking + customer row that already carry the numbers.
+function insbOwnerPdf(b, c, cents, number, dateIso) {
+  const issuer = [String(c.Bill_To_Name || c.Name || '')].concat(insbAddrLines(c.Bill_To_Address), ['Phone: ' + String(c.InvB_Phone || ''), 'Email: ' + String(c.InvB_Email || '')]);
+  const wo = insbNormWO(b.WO_Number);
+  return insbPdfBytes(insbOwnerInvoiceOps({ issuer, number, date: dateIso, wo, service: insbAddrLines(b.Formatted_Address || b.Address), description: 'Comprehensive property inspection', cents }), 'Invoice ' + number);
+}
+// Everything between "the invoice exists in QuickBooks" and "Premier has it", resumable: each step is skipped when its stamp is already on the row.
+// DOUBLE-SEND GUARD (Oct 22 review): before every Gmail call the row is stamped "sending|<lock>|<time>" (verified). Only a DEFINITE refusal by Gmail puts the old status back.
+// Anything unclear (network drop, 5xx, no message id, a failed stamp after a good send) leaves "sending" in place, and that invoice is NOT emailed again until a person
+// confirms it never arrived (opts.force). "review" is the same hold for a QuickBooks total that did not match ours.
+function insbIsHold(s) { return /^(sending|review)/.test(String(s || '')); }
+async function insbDeliver(env, b, c, plan, token, steps, warnings, opts) {
+  opts = opts || {};
+  const rec = plan.recipients, addr = plan.invoice.address || '', wo = plan.invoice.wo;
+  const staged = String(b.Invoice_Status || '') === 'staged';
+  const attachmentsA = [];
+  const aHold = opts.only !== 'B' && insbIsHold(b.Invoice_Status) && !String(b.Invoice_Emailed_At || '').trim(), bHold = insbIsHold(b.InvB_Status) && !String(b.InvB_Emailed_At || '').trim();
+  if ((aHold || bHold) && !opts.force) {
+    const review = /^review/.test(String(b.Invoice_Status || '')), what = aHold && bHold ? 'both invoices' : (aHold ? 'our invoice' : 'the owner-facing invoice');
+    const msg = review ? 'QuickBooks invoice ' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + ' has a different total than our amount, so it was NOT emailed. Fix it in QuickBooks, then tap "I checked - send it".'
+      : 'An earlier email of ' + what + ' may or may not have been delivered, so it was NOT sent again. Check the Sent folder of ridgecomaintenance@gmail.com (or ask Premier). If it never went out, tap "Not sent - send it".';
+    await insbFail(env, 'unconfirmed_send', 'Booking ' + b.ID + ': ' + msg, b.ID);
+    return { ok: false, stage: 'unconfirmed', error: msg };
+  }
+  const prevA = aHold ? 'invoiced' : String(b.Invoice_Status || ''), prevB = bHold ? 'ready' : String(b.InvB_Status || '');
+  const needA = opts.only !== 'B' && !String(b.Invoice_Emailed_At || '').trim() && (staged || !!String(b.QB_Invoice_ID || '').trim());
+  if (needA && !staged) {
+    let pdfA;
+    try { pdfA = await insbQbInvoicePdf(env, token, b.QB_Invoice_ID); steps.push('QuickBooks PDF fetched (' + pdfA.length + ' bytes)'); }
+    catch (e) { await insbFail(env, 'pdf', 'Invoice ' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + ' is in QuickBooks but its PDF could not be fetched: ' + e.message, b.ID); return { ok: false, stage: 'pdf', error: 'The invoice is in QuickBooks but its PDF could not be fetched, so nothing was emailed: ' + e.message }; }
+    attachmentsA.push({ filename: 'Invoice_' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + '_' + addr.split(',')[0].replace(/[^\w]+/g, '_') + '.pdf', bytes: pdfA });
+  }
+  // The owner invoice is rebuilt from what was STAMPED at completion when it was ready then, so a retry can never show a different markup.
+  const stamped = (String(b.InvB_Status || '') === 'ready' || insbIsHold(b.InvB_Status)) && +b.InvB_Cents > 0;
+  const oCents = stamped ? +b.InvB_Cents : plan.owner.total_cents, oNum = stamped ? String(b.InvB_Number) : plan.owner.number, oPct = stamped ? String(b.InvB_Markup_Pct) : plan.owner.pct;
+  const ownerReady = !String(b.InvB_Emailed_At || '').trim() && (stamped || plan.owner.status === 'ready');
+  let bPdf = null;
+  if (ownerReady) { bPdf = insbOwnerPdf(b, c, oCents, oNum, plan.invoice.date); steps.push('Owner-facing invoice ' + oNum + ' built (' + insbDollars(oCents) + ')'); }
+  const totalTxt = insbDollars(plan.base_cents);
+  const htmlA = '<p>Attached is our invoice for the inspection of ' + _escHtml(addr) + (wo ? ' (Work Order ' + _escHtml(wo) + ')' : '') + '.</p><p>' + _escHtml(plan.base_label) + ', <b>' + totalTxt + '</b>, due Net ' + INSB_NET_DAYS + '.</p>' + (rec.appfolio ? '' : '<p>Thank you,<br>Ridge Co</p>');
+  const htmlB = '<p>Attached is the owner-facing invoice for Work Order ' + _escHtml(wo) + ' (' + _escHtml(addr) + '): <b>' + insbDollars(oCents) + '</b> = our invoice ' + totalTxt + ' plus your ' + _escHtml(oPct) + '% markup. It is a separate document from our invoice to you - do not enter it as a bill.</p><p>Thank you,<br>Ridge Co</p>';
+  const subjA = 'Invoice for inspection of ' + addr.split(',')[0] + (wo ? ' - WO ' + wo : '');
+  const sends = [];
+  if (rec.appfolio) {
+    if (needA) sends.push({ which: 'A', to: rec.a_to, cc: [], subject: subjA, html: htmlA, attachments: attachmentsA });
+    if (bPdf) sends.push({ which: 'B', to: rec.b_to, cc: rec.b_cc, subject: 'Owner-facing invoice ' + oNum + ' - WO ' + wo, html: htmlB, attachments: [{ filename: 'Invoice_' + oNum + '.pdf', bytes: bPdf }] });
+  } else {
+    const atts = attachmentsA.slice(); if (bPdf) atts.push({ filename: 'Invoice_' + oNum + '_owner.pdf', bytes: bPdf });
+    if (needA || bPdf) sends.push({ which: needA && bPdf ? 'AB' : (bPdf ? 'B' : 'A'), to: rec.a_to, cc: rec.a_cc, subject: needA ? subjA : 'Owner-facing invoice ' + oNum + ' - WO ' + wo, html: (needA ? htmlA : '') + (bPdf ? htmlB : ''), attachments: atts });
+  }
+  let allOk = true; const errors = [];
+  const lockTok = String(b.Billing_Lock || '').split('|')[0];
+  for (const s of sends) {
+    const hasA = s.which.includes('A'), hasB = s.which.includes('B'), claim = {}, revert = {}, mark = 'sending|' + lockTok + '|' + new Date().toISOString();
+    if (hasA) { claim.Invoice_Status = mark; revert.Invoice_Status = prevA; }
+    if (hasB) { claim.InvB_Status = mark; revert.InvB_Status = prevB; }
+    // 1) claim: re-read the row (we must still own the lock; nobody may have sent or claimed this invoice since we looked), then write the claim and read it back.
+    try {
+      invalidateTabCache('Insp_Bookings');
+      const fr = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(b.ID));
+      if (!fr) throw new Error('the booking row was not found');
+      if (lockTok && String(fr.Billing_Lock || '').split('|')[0] !== lockTok) throw new Error('another request took over this booking');
+      if (!opts.force && ((hasA && (String(fr.Invoice_Emailed_At || '').trim() || insbIsHold(fr.Invoice_Status))) || (hasB && (String(fr.InvB_Emailed_At || '').trim() || insbIsHold(fr.InvB_Status))))) throw new Error('this invoice was already sent, or is being sent by another request');
+      Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, claim));
+    } catch (e) { await insbFail(env, 'email_claim', 'Booking ' + b.ID + ': could not claim the send of invoice ' + s.which + ' (' + e.message + '). Nothing was emailed.', b.ID); return { ok: false, stage: 'in_progress', error: 'Nothing was emailed: ' + e.message + '. Check the booking, then try again.' }; }
+    // 2) send
+    let r;
+    try { r = await insbSendMail(env, s); }
+    catch (e) {
+      allOk = false; errors.push(s.which + ': ' + e.message);
+      if (e && e.definite === true) {
+        await insbFail(env, 'email', 'Email of invoice ' + s.which + ' for booking ' + b.ID + ' failed (Gmail refused it): ' + e.message, b.ID);
+        try { Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, revert)); continue; }
+        catch (e2) { await insbFail(env, 'email_claim_revert', 'Gmail refused invoice ' + s.which + ' for booking ' + b.ID + ' but the Hub could not put its status back (' + e2.message + '). It is marked "sending" and will not be resent until you confirm.', b.ID); return { ok: false, stage: 'unconfirmed', error: 'Gmail refused the email (' + e.message + '), but the Hub could not reset the booking. Nothing was sent. Tap "Not sent - send it" to try again.' }; }
+      }
+      await insbFail(env, 'email_unconfirmed', 'Email of invoice ' + s.which + ' for booking ' + b.ID + ' may or may not have been delivered (' + e.message + '). It will NOT be sent again until you confirm.', b.ID);
+      return { ok: false, stage: 'unconfirmed', error: 'The email may or may not have been delivered (' + e.message + '). It was NOT sent again. Check the Sent folder of ridgecomaintenance@gmail.com or ask Premier; if it never went out, tap "Not sent - send it".' };
+    }
+    steps.push((r.staged ? 'Email STUBBED on staging' : 'Email sent') + ' to ' + s.to.join(', ') + ' (' + s.which + ')');
+    // 3) record it (verified, retried): the claim above stays "sending" if this cannot be saved, so a failed record can never lead to a second email.
+    const at = new Date().toISOString(), f = {};
+    if (hasA) { f.Invoice_Emailed_At = at; f.Invoice_Emailed_To = s.to.join(', '); f.Invoice_Status = r.staged ? 'staged' : 'emailed'; }
+    if (hasB) { f.InvB_Emailed_At = at; f.InvB_Status = r.staged ? 'staged' : 'sent'; }
+    f.Billing_Log = insbLogLine(b, steps.slice(-3).join('; '));
+    let saved = false, lastErr = '';
+    for (let i = 0; i < 3 && !saved; i++) {
+      try { Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, f)); saved = true; }
+      catch (e) { lastErr = e.message; if (i < 2) await new Promise(res => setTimeout(res, (env.__INSB_RETRY_MS ?? 400) * (i + 1))); }
+    }
+    if (!saved) { await insbFail(env, 'stamp_after_send', 'Email of invoice ' + s.which + ' went out for booking ' + b.ID + ' but the Hub could not record it (' + lastErr + '). It is marked "sending"; DO NOT resend.', b.ID); return { ok: false, stage: 'stamp', error: 'The email was sent, but the Hub could not record that (' + lastErr + '). DO NOT send it again.' }; }
+  }
+  const fields = {};
+  if (plan.owner.enabled && plan.owner.status !== 'ready' && plan.owner.status !== 'off' && !String(b.InvB_Status || '').startsWith('held') && String(b.InvB_Status || '') !== plan.owner.status) fields.InvB_Status = plan.owner.status;
+  if (Object.keys(fields).length) {
+    try { Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, fields)); }
+    catch (e) { await insbFail(env, 'stamp', 'Could not save the owner invoice status for booking ' + b.ID + ': ' + e.message, b.ID); return { ok: false, stage: 'stamp', error: 'The emails went out, but the owner invoice status could not be saved (' + e.message + ').' }; }
+  }
+  if (!allOk) return { ok: false, stage: 'email', error: 'The invoice is in QuickBooks, but an email failed: ' + errors.join(' | ') + '. Tap Complete again to retry only the email.' };
+  return { ok: true };
+}
+// POST /insp/billing/complete { id, kind, units, confirm:true } — the tap. Idempotent and resumable: tapping again after a failure picks up where it stopped.
+async function insbComplete(env, body) {
+  const steps = [], warnings = [], t0 = Date.now();
+  try {
+    if (!body || body.confirm !== true) return json({ ok: false, error: 'confirm_required', message: 'Send confirm:true (the tap is the confirmation).' }, 400);
+    const L = await insbLoad(env, body.id); if (L.err) return L.err;
+    let b = L.b; const c = L.c;
+    if (String(c.Billing_Mode || '') !== 'wo') return json({ ok: false, error: 'not_billed_here', message: 'This customer is not set up for automatic inspection billing (Billing mode).' }, 409);
+    // A repeat tap on a booking that already completed must not recompute anything from what is typed now: it only finishes what is unfinished.
+    let resume, plan;
+    const derive = () => {   // everything that depends on the row is derived here, so it can be derived AGAIN from a fresh row once the lock is ours
+      resume = !!String(b.QB_Invoice_ID || '').trim() || String(b.Invoice_Status || '') === 'staged';
+      plan = insbPlan({ booking: Object.assign({}, b, resume ? { Status: 'approved' } : {}), customer: c, kind: resume ? (b.Completion_Kind || body.kind) : body.kind, units: resume ? b.Units_Billed : body.units, todayIso: insbTodayEt() });
+    };
+    derive();
+    if (!resume && String(b.Completed_At || '').trim()) {   // completed with no charge: it can be repeated as "no charge" but never billed afterwards
+      if (String(b.Completion_Kind || '') === 'no_charge' && String(body.kind || '') === 'no_charge') return json({ ok: true, completed: true, billed: false, message: 'Already marked complete with no charge.', booking: insbPublicBooking(b) });
+      return json({ ok: false, error: 'already_completed', message: 'This booking was already completed (' + (b.Completion_Kind || 'no charge') + '), so it cannot be billed now.' }, 409);
+    }
+    if (resume && String(b.Invoice_Base_Cents || '') !== '' && +b.Invoice_Base_Cents !== plan.base_cents) { await insbFail(env, 'resume_mismatch', 'Stored amount ' + b.Invoice_Base_Cents + ' differs from recomputed ' + plan.base_cents, b.ID); return json({ ok: false, error: 'amount_mismatch', message: 'The amount stored on this booking does not match the rate card any more. Nothing was changed. Brett needs to look.' }, 409); }
+    if (!plan.ok) return json({ ok: false, error: 'blocked', message: plan.blockers.join(' '), plan }, 409);
+    // What was on screen is what gets billed: the page sends the amount it showed, and a different amount is refused (a stale preview must never be billed).
+    if (!resume && body.expected_cents != null && +body.expected_cents !== plan.base_cents) return json({ ok: false, error: 'amount_changed', message: 'The amount changed: your screen showed ' + insbDollars(body.expected_cents) + ' but it is now ' + insbDollars(plan.base_cents) + '. Nothing was billed. Look at the preview again.' }, 409);
+    warnings.push(...plan.warnings);
+    // no charge: completed, nothing to bill
+    if (plan.kind === 'no_charge') {
+      b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Completed_At: new Date().toISOString(), Completion_Kind: 'no_charge', Units_Billed: '0', Invoice_Base_Cents: '0', Invoice_Status: 'none', Billing_Log: insbLogLine(b, 'completed with no charge') });
+      return json({ ok: true, completed: true, billed: false, message: 'Marked complete with no charge.', booking: insbPublicBooking(b) });
+    }
+    // Lock (write, re-read, confirm) so two quick taps cannot both create an invoice.
+    const lockTok = inspRandToken(8), nowMs = Date.now();
+    const lockOld = String(b.Billing_Lock || ''), lockAt = +lockOld.split('|')[1] || 0;
+    if (lockOld && nowMs - lockAt < INSB_LOCK_MS) return json({ ok: false, error: 'in_progress', message: 'This booking is already being billed. Wait a minute and check its status.' }, 409);
+    b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Billing_Lock: lockTok + '|' + nowMs });
+    let lostLock = false;
+    const stubbed = insbQbStubbed(env);
+    try {
+      // A Sheet has no atomic compare-and-set, so: settle briefly, re-read, go on only if the lock is still OURS, then derive everything again from the fresh row.
+      await new Promise(res => setTimeout(res, env.__INSB_SETTLE_MS ?? 800));
+      const L2 = await insbLoad(env, body.id); if (L2.err) return L2.err;
+      if (String(L2.b.Billing_Lock || '').split('|')[0] !== lockTok) { lostLock = true; return json({ ok: false, error: 'in_progress', message: 'Another tap on this booking is being processed. Wait a minute and check its status.' }, 409); }
+      b = L2.b; derive();
+      if (!plan.ok) return json({ ok: false, error: 'blocked', message: plan.blockers.join(' '), plan }, 409);
+      if (!resume && String(b.Completed_At || '').trim()) return json({ ok: false, error: 'already_completed', message: 'This booking was completed while you were tapping. Check its status.' }, 409);
+      const token = stubbed ? null : await qbAccessToken(env);
+      if (!resume) {
+        // 1) customer (look before create; first use creates Premier and the id is saved on the customer row)
+        let custId = String(c.QBO_Customer_ID || '').trim(), item = null;
+        if (!stubbed) {
+          if (!custId) {
+            custId = String(await qbFindOrCreateCustomer(env, insbCustomerRow(c), String(c.Bill_To_Name || c.Name || ''), token) || '').trim();
+            if (!custId) throw new Error('QuickBooks did not return a customer id.');
+            await updateRowVerified(env, 'Insp_Customers', c.ID, { QBO_Customer_ID: custId }); c.QBO_Customer_ID = custId;
+            steps.push('QuickBooks customer ' + custId + ' linked to the customer');
+          }
+          // 2) item
+          item = await insbQbItem(env, token); if (item.note) warnings.push(item.note);
+        }
+        // 3) invoice. Two guards against a double post: QuickBooks de-duplicates retries of the same requestid, AND the intent ("creating|<requestid>|<date>") is written and read back
+        // BEFORE the post, so a retry after an unclear attempt reuses the same requestid and date and first looks in QuickBooks for the invoice instead of posting blind.
+        const dollars = Number((plan.base_cents / 100).toFixed(2));
+        const prior = String(b.Invoice_Status || '').match(/^creating\|([^|]*)\|(\d{4}-\d{2}-\d{2})$/);
+        const txnDate = prior ? prior[2] : plan.invoice.date, dueDate = prior ? inspAddDays(prior[2], INSB_NET_DAYS) : plan.invoice.due;
+        const reqId = prior ? prior[1] : ('insp-bk-' + b.ID + '-' + plan.invoice.wo).slice(0, 48);
+        const payload = stubbed ? null : { CustomerRef: { value: String(custId) }, TxnDate: txnDate, DueDate: dueDate,
+          Line: [{ DetailType: 'SalesItemLineDetail', Amount: dollars, Description: plan.invoice.description.slice(0, 4000), SalesItemLineDetail: { ItemRef: { value: item.id }, Qty: 1, UnitPrice: dollars } }],
+          CustomerMemo: { value: ('WO ' + plan.invoice.wo + ' - ' + plan.invoice.address).slice(0, 1000) }, PrivateNote: 'RidgeCo inspection booking #' + b.ID + ' WO ' + plan.invoice.wo };
+        const em = insbEmails(c.Bill_Email_To)[0]; if (payload && em && insbEmailOk(em)) payload.BillEmail = { Address: em };
+        let r = null;
+        if (stubbed) r = { staged: true };
+        else {
+          if (!prior) {
+            try { b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Invoice_Status: 'creating|' + reqId + '|' + txnDate }); }
+            catch (e) { throw Object.assign(new Error('Could not record the intent to create the invoice (' + e.message + '). Nothing was created.'), { stage: 'qb_claim' }); }
+          } else {
+            const found = await insbQbFindInvoice(env, token, custId, txnDate, b.ID);
+            if (found) { r = { Invoice: found }; steps.push('QuickBooks already had invoice ' + (found.DocNumber || '#' + found.Id) + ' for this booking from an earlier attempt: using it, not creating another'); }
+          }
+          if (!r) {
+            try { r = await qbApi(env, 'invoice?minorversion=73&requestid=' + encodeURIComponent(reqId), 'POST', payload, token); }
+            catch (e) { throw Object.assign(new Error('QuickBooks did not answer clearly (' + e.message + '), so the invoice may or may not exist. Tap Complete again: QuickBooks is checked first, so nothing is created twice.'), { stage: 'qb_unconfirmed' }); }
+          }
+        }
+        let invId = (r && r.Invoice && r.Invoice.Id) || '';
+        if (!invId && r && r.staged) {
+          steps.push('QuickBooks is stubbed on staging - no invoice created');
+          b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Completed_At: new Date().toISOString(), Completion_Kind: plan.kind, Units_Billed: String(plan.units), Invoice_Base_Cents: String(plan.base_cents), Invoice_Status: 'staged', InvB_Number: plan.owner.number, InvB_Markup_Pct: plan.owner.pct, InvB_Cents: plan.owner.total_cents ? String(plan.owner.total_cents) : '', InvB_Status: plan.owner.status === 'off' ? '' : plan.owner.status, Billing_Log: insbLogLine(b, 'staged (QB stubbed)') });
+        } else {
+          if (!invId && payload.BillEmail && /e-?mail/i.test(qbFault(r) || '')) { const tried = payload.BillEmail.Address; delete payload.BillEmail; r = await qbApi(env, 'invoice?minorversion=73&requestid=' + encodeURIComponent(reqId + 'n'), 'POST', payload, token); invId = (r && r.Invoice && r.Invoice.Id) || ''; if (invId) warnings.push('QuickBooks rejected the email "' + tried + '", so the invoice has no saved send-to address (the emailed copy is unaffected).'); }
+          if (!invId) {
+            // QuickBooks answered with a refusal: no invoice exists, so the "creating" intent is cleared (if that cannot be saved the retry will look in QuickBooks first anyway).
+            try { b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Invoice_Status: '' }); } catch (e) { warnings.push('Could not clear the "creating" mark (' + e.message + '). A retry will check QuickBooks before creating anything.'); await insbFail(env, 'stamp', 'Could not clear the creating mark on booking ' + b.ID + ': ' + e.message, b.ID); }
+            throw Object.assign(new Error('QuickBooks refused the invoice: ' + (qbFault(r) || 'no invoice id returned')), { stage: 'qb' });
+          }
+          const num = String((r.Invoice && r.Invoice.DocNumber) || '');
+          const qbTotal = r.Invoice && r.Invoice.TotalAmt != null ? Math.round(Number(r.Invoice.TotalAmt) * 100) : null, totalOff = qbTotal != null && qbTotal !== plan.base_cents;
+          steps.push('QuickBooks invoice ' + (num || '#' + invId) + ' created for ' + insbDollars(plan.base_cents));
+          // Stamp IMMEDIATELY and verified — before anything slower — so a later failure can never leave a created invoice that the Hub does not know about.
+          try { b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Completed_At: new Date().toISOString(), Completion_Kind: plan.kind, Units_Billed: String(plan.units), Invoice_Base_Cents: String(plan.base_cents), QB_Invoice_ID: String(invId), QB_Invoice_Number: num, Invoice_Status: totalOff ? 'review|total ' + qbTotal + ' vs ' + plan.base_cents : 'invoiced', InvB_Number: plan.owner.number, InvB_Markup_Pct: plan.owner.pct, InvB_Cents: plan.owner.total_cents ? String(plan.owner.total_cents) : '', InvB_Status: plan.owner.status === 'off' ? '' : plan.owner.status, Billing_Log: insbLogLine(b, 'QB invoice ' + (num || invId)) }); }
+          catch (e) { await insbFail(env, 'stamp', 'Invoice ' + (num || invId) + ' WAS created in QuickBooks for booking ' + b.ID + ' but the Hub could not record it: ' + e.message + '. DO NOT create it again.', b.ID); return json({ ok: false, invoice_created: true, invoice_id: invId, invoice_number: num, error: 'Invoice ' + (num || invId) + ' WAS created in QuickBooks, but the Hub could not record it (' + e.message + '). DO NOT tap Complete again - Brett needs to link it by hand.', steps }, 500); }
+          if (totalOff) {
+            const why = 'QuickBooks invoice ' + (num || invId) + ' for booking ' + b.ID + ' has total ' + insbDollars(qbTotal) + ' but our amount is ' + insbDollars(plan.base_cents) + '. Nothing was emailed.';
+            await insbFail(env, 'qb_total_mismatch', why, b.ID);
+            return json({ ok: false, invoice_created: true, invoice_number: num, stage: 'review', error: why + ' Fix the invoice in QuickBooks, then use "I checked - send it".', steps, warnings, booking: insbPublicBooking(b) }, 502);
+          }
+        }
+      }
+      // 4-6) PDF, email, owner invoice
+      const planNow = insbPlan({ booking: Object.assign({}, b, { Status: 'approved' }), customer: c, kind: b.Completion_Kind, units: b.Units_Billed, todayIso: String(b.Completed_At || '').slice(0, 10) && inspEtDate(Date.parse(b.Completed_At)) || insbTodayEt() });
+      const d = await insbDeliver(env, b, c, planNow, token, steps, warnings, { force: body.force_resend === true });
+      if (!d.ok) return json({ ok: false, invoice_created: true, invoice_number: b.QB_Invoice_Number, stage: d.stage, error: d.error, steps, warnings, booking: insbPublicBooking(b) }, 502);
+    } catch (e) {
+      const st = e && e.stage ? e.stage : 'billing';
+      await insbFail(env, st, 'Complete failed for booking ' + b.ID + ': ' + e.message, b.ID);
+      return json({ ok: false, error: st, invoice_created: !!String(b.QB_Invoice_ID || '').trim(), message: e.message, steps, warnings }, 502);
+    } finally {
+      if (!lostLock) await insbUnlock(env, b.ID, lockTok);
+    }
+    invalidateTabCache('Insp_Bookings');
+    let fin = b;
+    try { fin = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(b.ID)) || b; }
+    catch (e) { warnings.push('Billed and sent, but the booking could not be re-read for the screen (' + e.message + '). Refresh the page.'); await insbFail(env, 'complete_readback', 'Booking ' + b.ID + ' was billed but could not be re-read: ' + e.message, b.ID); }
+    await insbOk(env, 'complete', t0, b.ID);
+    return json({ ok: true, completed: true, billed: true, invoice_number: b.QB_Invoice_Number, base: insbDollars(plan.base_cents), owner_status: b.InvB_Status || '', steps, warnings, booking: insbPublicBooking(fin) });
+  } catch (e) {
+    await insbFail(env, 'complete', 'Complete crashed: ' + e.message, body && body.id);
+    return json({ ok: false, error: 'complete_failed', message: e.message, steps }, 500);
+  }
+}
+// POST /insp/billing/customer-config { customer_id, ...fields } — validated, ensured, verified. Returns the held owner invoices that the change released.
+async function insbCustomerConfig(env, body) {
+  try {
+    if (!body || !body.customer_id) return json({ ok: false, error: 'customer_id required' }, 400);
+    await insbEnsureColumns(env);
+    const f = {}, errs = [];
+    const txt = (k, max) => { if (body[k] !== undefined) f[k] = String(body[k] == null ? '' : body[k]).trim().slice(0, max || 200); };
+    ['Bill_To_Name', 'Bill_To_Address', 'InvB_Phone'].forEach(k => txt(k, 160));
+    ['Bill_Email_To', 'Bill_Email_Cc', 'AppFolio_Email', 'InvB_Email'].forEach(k => txt(k, 300));
+    if (body.Billing_Mode !== undefined) { const v = String(body.Billing_Mode || ''); if (v !== '' && v !== 'wo') errs.push('Billing mode must be blank or "wo".'); f.Billing_Mode = v; }
+    if (body.Owner_Invoice !== undefined) f.Owner_Invoice = String(body.Owner_Invoice).toUpperCase() === 'TRUE' ? 'TRUE' : 'FALSE';
+    if (body.Markup_Pct !== undefined) { const raw = String(body.Markup_Pct == null ? '' : body.Markup_Pct).trim(); if (raw !== '') { const mk = insbMarkup(10000, raw); if (!mk.ok) errs.push(mk.error); else f.Markup_Pct = String(mk.pct); } else f.Markup_Pct = ''; }
+    for (const k of ['Bill_Email_To', 'Bill_Email_Cc', 'AppFolio_Email', 'InvB_Email']) if (f[k]) for (const e of insbEmails(f[k])) if (!insbEmailOk(e)) errs.push('"' + e + '" is not a valid email address.');
+    if (f.AppFolio_Email && insbEmails(f.AppFolio_Email).length > 1) errs.push('Only one AppFolio address.');
+    if (errs.length) return json({ ok: false, error: 'invalid', message: errs.join(' ') }, 400);
+    if (!Object.keys(f).length) return json({ ok: false, error: 'nothing_to_save' }, 400);
+    const back = await updateRowVerified(env, 'Insp_Customers', body.customer_id, f);
+    const held = (await fetchTab(env, 'Insp_Bookings')).filter(r => String(r.Customer_ID) === String(body.customer_id) && String(r.InvB_Status || '').startsWith('held') && String(r.Invoice_Status || '') !== '');
+    return json({ ok: true, customer: back, held_owner_invoices: held.map(r => ({ id: r.ID, wo: r.WO_Number, address: r.Formatted_Address || r.Address, status: r.InvB_Status })) });
+  } catch (e) { await insbFail(env, 'customer_config', e.message, ''); return json({ ok: false, error: 'save_failed', message: e.message }, 500); }
+}
+// POST /insp/billing/set-wo { id, wo } — add / fix the work order number on a booking that has NOT been billed. One work order = one live booking.
+async function insbSetWO(env, body) {
+  try {
+    const L = await insbLoad(env, body && body.id); if (L.err) return L.err;
+    const wo = insbNormWO(body && body.wo);
+    if (!wo) return json({ ok: false, error: 'bad_wo', message: 'That does not look like a work order number (letters, numbers and dashes, like 43945-1).' }, 400);
+    if (String(L.b.Completed_At || '').trim() || String(L.b.QB_Invoice_ID || '').trim()) return json({ ok: false, error: 'already_billed', message: 'This booking was already billed under work order ' + (L.b.WO_Number || '?') + ', so the number cannot be changed here.' }, 409);
+    if (String(L.b.Invoice_Status || '').trim()) return json({ ok: false, error: 'already_billed', message: 'Billing has already started on this booking (' + String(L.b.Invoice_Status).split('|')[0] + '), so the work order number cannot be changed here.' }, 409);
+    const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) !== String(L.b.ID) && String(r.Customer_ID) === String(L.b.Customer_ID) && insbNormWO(r.WO_Number) === wo && insbWoInUse(r));
+    if (dupe) return json({ ok: false, error: 'wo_in_use', message: 'Work order ' + wo + ' is already on another live booking (#' + dupe.ID + ').' }, 409);
+    const back = await updateRowVerified(env, 'Insp_Bookings', L.b.ID, { WO_Number: wo, Billing_Log: insbLogLine(L.b, 'WO set to ' + wo) });
+    return json({ ok: true, booking: insbPublicBooking(back) });
+  } catch (e) { await insbFail(env, 'set_wo', e.message, body && body.id); return json({ ok: false, error: 'save_failed', message: e.message }, 500); }
+}
+// GET /insp/billing/queue — approved bookings whose start has passed and are not completed, plus held owner invoices. Drives the "Needs billing" card.
+async function insbQueue(env) {
+  try {
+    await insbEnsureColumns(env);
+    const [bk, cu] = [await fetchTab(env, 'Insp_Bookings'), await fetchTab(env, 'Insp_Customers')];
+    const wo = new Set(cu.filter(x => String(x.Billing_Mode || '') === 'wo').map(x => String(x.ID))), now = Date.now();
+    const rows = bk.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && wo.has(String(r.Customer_ID)));
+    const out = rows.map(r => {
+      const done = String(r.Completed_At || '') !== '', start = Date.parse(r.Start_ISO), ist = String(r.Invoice_Status || ''), bst = String(r.InvB_Status || '');
+      const aSent = String(r.Invoice_Emailed_At || '').trim() !== '', bSent = String(r.InvB_Emailed_At || '').trim() !== '';
+      return { booking: insbPublicBooking(r), needs_completion: r.Status === 'approved' && !done && Number.isFinite(start) && start <= now + 6 * 3600000,
+        owner_held: done && !bSent && bst.startsWith('held'), owner_unsent: done && !bSent && bst === 'ready' && aSent, owner_hold: done && !bSent && insbIsHold(bst),
+        invoice_hold: done && !aSent && insbIsHold(ist), needs_attention: done && !aSent && (ist === 'invoiced' || /^creating/.test(ist)) };
+    }).filter(x => x.needs_completion || x.owner_held || x.owner_unsent || x.owner_hold || x.invoice_hold || x.needs_attention);
+    return json({ ok: true, items: out, customers: cu.filter(x => wo.has(String(x.ID))).map(x => ({ id: x.ID, name: x.Name, markup_pct: x.Markup_Pct || '', appfolio: !!String(x.AppFolio_Email || '').trim() })) });
+  } catch (e) { await insbFail(env, 'queue', e.message, ''); return json({ ok: false, error: 'queue_failed', message: e.message }, 500); }
+}
+// POST /insp/billing/release-owner { id, confirm?, expected_cents?, force? } — send an owner-facing invoice that has NOT gone out: held (markup / contact lines were missing), stamped "ready"
+// but unsent, or a "sending" hold the person has checked and found never arrived (force). Without confirm it only LOOKS (who it would go to, what amount); with confirm the screen must
+// send the amount it showed (expected_cents), so a markup edited in between is never billed unseen.
+async function insbReleaseOwner(env, body) {
+  const steps = [], warnings = [], t0 = Date.now();
+  try {
+    const L = await insbLoad(env, body && body.id); if (L.err) return L.err;
+    let b = L.b; const c = L.c, force = body.force === true, st = String(b.InvB_Status || '');
+    const held = st.startsWith('held'), unsent = st === 'ready', hold = insbIsHold(st);
+    if (!String(b.Completed_At || '') || !(held || unsent || hold) || String(b.InvB_Emailed_At || '').trim()) return json({ ok: false, error: 'not_held', message: 'This booking has no owner-facing invoice waiting to be sent.' }, 409);
+    if (!String(b.Invoice_Emailed_At || '').trim()) return json({ ok: false, error: 'a_not_sent', message: 'Our own invoice has not been emailed yet. Finish that first (tap Complete & bill again), then send the owner-facing one.' }, 409);
+    if (hold && !force) return json({ ok: false, error: 'unconfirmed', message: 'An earlier email of this owner-facing invoice may or may not have been delivered, so it was NOT sent again. Check the Sent folder of ridgecomaintenance@gmail.com (or ask Premier). If it never went out, tap "Not sent - send it".' }, 409);
+    const plan = insbPlan({ booking: Object.assign({}, b, { Status: 'approved' }), customer: c, kind: b.Completion_Kind, units: b.Units_Billed, todayIso: inspEtDate(Date.parse(b.Completed_At)) || insbTodayEt() });
+    if (!plan.ok) return json({ ok: false, error: 'blocked', message: plan.blockers.join(' '), plan }, 409);
+    if (plan.base_cents !== +b.Invoice_Base_Cents) return json({ ok: false, error: 'amount_mismatch', message: 'The stored amount no longer matches the rate card. Nothing was changed.' }, 409);
+    const stamped = (unsent || hold) && +b.InvB_Cents > 0;
+    if (!stamped && plan.owner.status !== 'ready') return json({ ok: false, error: 'still_held', message: plan.warnings.join(' ') || 'Still held.', plan }, 409);
+    const ownerCents = stamped ? +b.InvB_Cents : plan.owner.total_cents, ownerNum = stamped ? String(b.InvB_Number) : plan.owner.number, ownerPct = stamped ? String(b.InvB_Markup_Pct) : plan.owner.pct;
+    if (body.confirm !== true) return json({ ok: true, preview: true, would_send_to: plan.recipients.b_to, would_cc: plan.recipients.b_cc, owner_cents: ownerCents, owner_number: ownerNum, markup_pct: ownerPct, base_cents: plan.base_cents, plan });
+    if (body.expected_cents == null) return json({ ok: false, error: 'expected_required', message: 'Send expected_cents (the amount the screen showed).' }, 400);
+    if (+body.expected_cents !== ownerCents) return json({ ok: false, error: 'amount_changed', message: 'The owner-facing amount changed: your screen showed ' + insbDollars(body.expected_cents) + ' but it is now ' + insbDollars(ownerCents) + '. Nothing was sent. Look at it again.' }, 409);
+    const lockTok = inspRandToken(8), lockOld = String(b.Billing_Lock || ''), lockAt = +lockOld.split('|')[1] || 0;
+    if (lockOld && Date.now() - lockAt < INSB_LOCK_MS) return json({ ok: false, error: 'in_progress', message: 'Already being processed. Wait a minute.' }, 409);
+    const lockFields = { Billing_Lock: lockTok + '|' + Date.now() };
+    if (!stamped) Object.assign(lockFields, { InvB_Number: ownerNum, InvB_Markup_Pct: ownerPct, InvB_Cents: String(ownerCents) });
+    await updateRowVerified(env, 'Insp_Bookings', b.ID, lockFields);
+    let lostLock = false;
+    try {
+      await new Promise(res => setTimeout(res, env.__INSB_SETTLE_MS ?? 800));
+      const L2 = await insbLoad(env, body.id); if (L2.err) return L2.err;
+      if (String(L2.b.Billing_Lock || '').split('|')[0] !== lockTok) { lostLock = true; return json({ ok: false, error: 'in_progress', message: 'Another tap on this booking is being processed. Wait a minute.' }, 409); }
+      b = L2.b;
+      if (String(b.InvB_Emailed_At || '').trim()) return json({ ok: false, error: 'not_held', message: 'The owner-facing invoice was sent while you were tapping. Nothing more was sent.' }, 409);
+      const d = await insbDeliver(env, b, c, plan, null, steps, warnings, { only: 'B', force });
+      if (!d.ok) return json({ ok: false, error: d.stage, message: d.error, steps, warnings }, 502);
+    } catch (e) {
+      await insbFail(env, 'release', 'Release of the owner-facing invoice failed for booking ' + b.ID + ': ' + e.message, b.ID);
+      return json({ ok: false, error: 'release_failed', message: e.message, steps, warnings }, 502);
+    } finally { if (!lostLock) await insbUnlock(env, b.ID, lockTok); }
+    invalidateTabCache('Insp_Bookings');
+    let fin = b;
+    try { fin = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(b.ID)) || b; }
+    catch (e) { warnings.push('Sent, but the booking could not be re-read for the screen (' + e.message + '). Refresh the page.'); await insbFail(env, 'release_readback', 'Booking ' + b.ID + ' owner invoice was sent but could not be re-read: ' + e.message, b.ID); }
+    await insbOk(env, 'release', t0, b.ID);
+    return json({ ok: true, released: true, steps, warnings, booking: insbPublicBooking(fin) });
+  } catch (e) { await insbFail(env, 'release', e.message, body && body.id); return json({ ok: false, error: 'release_failed', message: e.message }, 500); }
+}
+// /insp/customer/update is the plain customer editor. The billing fields have their own validated route, so they are refused here (never quietly dropped).
+async function insbCustomerUpdate(env, body) {
+  const bad = Object.keys((body && body.fields) || {}).filter(k => INSB_CUSTOMER_COLS.includes(k));
+  if (bad.length) { await insbFail(env, 'customer_config', 'Billing fields (' + bad.join(', ') + ') were sent to the plain customer update and refused: use /insp/billing/customer-config.', body && body.id); return json({ ok: false, error: 'use_billing_config', message: 'Billing fields (' + bad.join(', ') + ') are saved on the billing route, not here. Nothing was saved.' }, 400); }
+  return await updateRow(env, 'Insp_Customers', body.id, body.fields);
+}
+// GET /insp/billing/pdf?id=&which=a|b — the PDF for a manual AppFolio upload. a = QuickBooks' own PDF of the invoice, b = the owner-facing invoice.
+async function insbPdfDownload(env, url) {
+  try {
+    const L = await insbLoad(env, url.searchParams.get('id')); if (L.err) return L.err;
+    const b = L.b, c = L.c, which = url.searchParams.get('which') === 'b' ? 'b' : 'a';
+    let bytes, name;
+    if (which === 'a') {
+      if (!String(b.QB_Invoice_ID || '').trim()) return json({ ok: false, error: 'no_invoice', message: 'No QuickBooks invoice exists for this booking yet.' }, 404);
+      bytes = await insbQbInvoicePdf(env, await qbAccessToken(env), b.QB_Invoice_ID); name = 'Invoice_' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + '.pdf';
+    } else {
+      if (!String(b.InvB_Number || '') || !+b.InvB_Cents) return json({ ok: false, error: 'not_ready', message: 'The owner-facing invoice is not ready (' + (b.InvB_Status || 'not created') + ').' }, 409);
+      bytes = insbOwnerPdf(b, c, +b.InvB_Cents, b.InvB_Number, inspEtDate(Date.parse(b.Completed_At) || Date.now())); name = 'Invoice_' + b.InvB_Number + '.pdf';
+    }
+    return new Response(bytes, { status: 200, headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': 'attachment; filename="' + name + '"', 'Access-Control-Allow-Origin': '*', 'Access-Control-Expose-Headers': 'Content-Disposition' } });
+  } catch (e) { await insbFail(env, 'pdf_download', e.message, url.searchParams.get('id')); return json({ ok: false, error: 'pdf_failed', message: e.message }, 502); }
+}
+// ═══ INSB-BLOCK-END ════════════════════════════════════════════════════════
