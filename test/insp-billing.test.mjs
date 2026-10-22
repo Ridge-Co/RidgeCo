@@ -308,6 +308,13 @@ async function main() {
     const dla = await api.insbPdfDownload(env, new URL('https://x.test/insp/billing/pdf?id=2&which=a')); ok(dla.status === 200, 'our invoice downloads (QuickBooks PDF)');
     const pdfp = path.join(tmp, 'b.pdf'); fs.writeFileSync(pdfp, buf); const t2 = spawnSync('pdftotext', ['-layout', pdfp, '-']); if (t2.status === 0) ok(String(t2.stdout).includes('Total Amount: $211.50'), '2 units $180 at 17.5% = $211.50 on the owner PDF'); else ok(true, 'skipped');
   }
+  // 17) the QuickBooks company has no General item 40 (e.g. the Intuit sandbox): borrow a service item's income account; if there is none, stop loudly - never guess an item id
+  {
+    const a = world({ noItem40: true }); const ra = await call(a.api, a.env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(ra.body.ok, 'sandbox-style company completes: ' + JSON.stringify(ra.body).slice(0, 200)); eq(a.w.itemPosts[0].IncomeAccountRef.value, '321', 'item created on the income account of an existing service item'); eq(a.w.qbPosts[0].body.Line[0].SalesItemLineDetail.ItemRef.value, '901', 'invoice uses the new item, not a guessed id');
+    const b = world({ noItem40: true, noServiceItem: true }); const rb = await call(b.api, b.env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(!rb.body.ok && /income account/.test(rb.body.message), 'no usable income account: stops with a clear message'); eq(b.w.qbPosts.length, 0, 'no invoice posted'); eq(b.w.mails.length, 0, 'no email'); eq(b.w.tabs.Insp_Bookings[0].Billing_Lock, '', 'lock cleared'); ok(b.w.telemetry.some(t => t.Success === 'FALSE'), 'logged to Needs Attention');
+  }
 }
 await main();
 console.log('insp-billing: ' + n + ' checks passed');
