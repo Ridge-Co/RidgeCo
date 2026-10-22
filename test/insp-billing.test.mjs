@@ -78,7 +78,8 @@ function world(opts = {}) {
     fetch: async (url, o) => {
       if (url.includes('/invoice/') && url.includes('/pdf')) { if (w.failNext.pdf) { w.failNext.pdf = null; return { ok: false, status: 503, arrayBuffer: async () => new TextEncoder().encode('busy').buffer }; } const pdf = Buffer.from('%PDF-1.4\n' + 'x'.repeat(400)); return { ok: true, status: 200, arrayBuffer: async () => pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.length) }; }
       if (url.includes('gmail.googleapis.com')) {
-        if (w.failNext.mail) { w.failNext.mail = null; return { ok: false, status: 500, json: async () => ({ error: 'boom' }) }; }
+        if (w.failNext.mailThrow) { w.failNext.mailThrow = null; throw new Error('network dropped'); }
+        if (w.failNext.mail) { const st = w.failNext.mail === 'definite' ? 400 : 500; w.failNext.mail = null; return { ok: false, status: st, json: async () => ({ error: 'boom' }) }; }
         const raw = Buffer.from(JSON.parse(o.body).raw, 'base64url').toString('utf8'); w.mails.push(raw); return { ok: true, status: 200, json: async () => ({ id: 'm' + w.mails.length }) };
       }
       throw new Error('unexpected fetch ' + url);
