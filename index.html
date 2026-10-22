@@ -4783,8 +4783,76 @@ function rejectVendorRequest(id){
     toast('Vendor request rejected','success'); loadAll();
   }).catch(function(e){toast('Error: '+e.message,'error');});
 }
+// ── Portal access tracking (Oct 22 2026, Brett) ─────────────────────────────────────────────────────────
+// One GET /portal-access gives every person's welcome / link+PIN / login state. The colours follow the Worker's own
+// thresholds (Config PORTAL_FOLLOWUP_AMBER_DAYS / PORTAL_FOLLOWUP_RED_DAYS, default 14 / 30 days), so the Hub never re-derives them.
+var _paLoading = false;
+function loadPortalAccess(force) {
+  if (_paLoading) return;
+  if (!force && (state.portalAccess || state.portalAccessError)) return;
+  _paLoading = true;
+  api('GET', '/portal-access').then(function(res) {
+    _paLoading = false;
+    if (!res || res.ok !== true) { state.portalAccessError = (res && res.error) || 'Could not load login tracking'; }
+    else {
+      state.portalAccessError = ''; state.portalAccess = {}; state.portalAccessList = res;
+      safeArray(res.people).forEach(function(p) { state.portalAccess[p.type + '|' + p.id] = p; });
+    }
+    paRerender();
+  }).catch(function(e) { _paLoading = false; state.portalAccessError = 'Could not load login tracking: ' + e.message; paRerender(); });
+}
+function paRerender() {
+  try { renderVendorsPage(); renderTenantsPage(); renderOwnersPage(); }
+  catch (e) { console.error('portal access re-render failed', e); toast('Login tracking loaded but the page could not redraw: ' + e.message, 'error'); }
+}
+function paNeedsFollowUp(type, id) {
+  var p = state.portalAccess && state.portalAccess[type + '|' + id];
+  return !!(p && (p.level === 'amber' || p.level === 'red'));
+}
+function paBadge(type, id, withWelcome) {
+  if (state.portalAccessError) return '<span style="color:var(--danger);font-size:11px" title="' + esc(state.portalAccessError) + '">⚠ tracking unavailable</span>';
+  if (!state.portalAccess) return '<span style="color:var(--muted);font-size:11px">…</span>';
+  var p = state.portalAccess[type + '|' + id];
+  if (!p) return '<span style="color:var(--muted);font-size:11px">—</span>';
+  var d10 = function(s) { return s ? esc(String(s).slice(0, 10)) : ''; };
+  var line;
+  if (p.logged_in) {
+    line = p.state === 'logged_in'
+      ? '<span style="color:var(--accent2)" title="First login ' + d10(p.first_login) + ', last ' + d10(p.last_login) + '">✅ in ' + p.login_count + '× · last ' + d10(p.last_login) + '</span>'
+      : '<span style="color:var(--accent2)" title="Has used the portal before login tracking began (' + esc(p.login_evidence) + ')">✅ used before</span>';
+  } else if (!p.pin_sent) {
+    line = '<span style="color:var(--muted)">📵 link+PIN not sent</span>';
+  } else {
+    var col = p.level === 'red' ? 'var(--danger)' : p.level === 'amber' ? 'var(--warn)' : 'var(--muted)';
+    var ic = p.level === 'red' ? '🔴' : p.level === 'amber' ? '🟠' : '📱';
+    var unv = p.pin_verified ? '' : ' <span style="opacity:.75" title="Taken from the old text log, which was written even when a text may not have gone out. Not confirmed.">(unconfirmed)</span>';
+    line = '<span style="color:' + col + '" title="Link+PIN sent ' + d10(p.pin_sent_date) + ' — never logged in">' + ic + ' sent ' + p.days_since_pin + 'd ago, not in yet' + unv + '</span>';
+  }
+  if (withWelcome) {
+    line = '<span style="color:' + (p.welcome_sent ? 'var(--accent2)' : 'var(--muted)') + '" title="' + esc(p.welcome_date || '') + '">' + (p.welcome_sent ? '👋 welcomed' + (p.welcome_date ? ' ' + d10(p.welcome_date) : '') : '👋 not welcomed') + '</span><br>' + line;
+  }
+  return '<span style="font-size:11px">' + line + '</span>';
+}
+function paSummary(types) {
+  if (state.portalAccessError) return '<div style="color:var(--danger);font-size:12px;margin-bottom:8px">⚠ ' + esc(state.portalAccessError) + ' <a href="#" onclick="state.portalAccessError=\'\';loadPortalAccess(true);return false">Retry</a></div>';
+  if (!state.portalAccessList) return '';
+  var th = state.portalAccessList.thresholds || {};
+  var ppl = safeArray(state.portalAccessList.people).filter(function(p) { return types.indexOf(p.type) >= 0; });
+  var n = function(f) { return ppl.filter(f).length; };
+  var stuck = ppl.filter(function(p) { return p.level === 'amber' || p.level === 'red'; }).sort(function(a, b) { return b.days_since_pin - a.days_since_pin; });
+  var h = '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.6">' +
+    '<b>Login tracking</b> · ✅ ' + n(function(p) { return p.logged_in; }) + ' logged in · 📱 ' + n(function(p) { return p.level === 'waiting'; }) + ' waiting · ' +
+    '<span style="color:var(--warn)">🟠 ' + n(function(p) { return p.level === 'amber'; }) + ' (' + (th.amberDays || 14) + 'd+)</span> · ' +
+    '<span style="color:var(--danger)">🔴 ' + n(function(p) { return p.level === 'red'; }) + ' (' + (th.redDays || 30) + 'd+)</span> · ' +
+    '📵 ' + n(function(p) { return p.state === 'pin_not_sent'; }) + ' link+PIN not sent';
+  if (stuck.length) {
+    h += '<div style="margin-top:4px;color:var(--muted)">Follow up: ' + stuck.slice(0, 10).map(function(p) { return esc(p.name || p.company || p.id) + ' (' + p.days_since_pin + 'd)'; }).join(', ') + (stuck.length > 10 ? ' … +' + (stuck.length - 10) + ' more' : '') + '</div>';
+  }
+  return h + '</div>';
+}
 function renderVendorsPage() {
   renderVendorsPendingSection();
+  loadPortalAccess();
   var el = document.getElementById('vendors-list');
   var onlyUnwelcomed = !!((document.getElementById('vendor-filter-unwelcomed')||{}).checked);
   var showInactive = !!((document.getElementById('vendor-filter-inactive')||{}).checked);
