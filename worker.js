@@ -39955,30 +39955,58 @@ async function insbQueue(env) {
     return json({ ok: true, items: out, customers: cu.filter(x => wo.has(String(x.ID))).map(x => ({ id: x.ID, name: x.Name, markup_pct: x.Markup_Pct || '', appfolio: !!String(x.AppFolio_Email || '').trim() })) });
   } catch (e) { await insbFail(env, 'queue', e.message, ''); return json({ ok: false, error: 'queue_failed', message: e.message }, 500); }
 }
-// POST /insp/billing/release-owner { id, preview? } — build + email a HELD owner invoice once its blocker (markup / contact lines) is fixed.
+// POST /insp/billing/release-owner { id, confirm?, expected_cents?, force? } — send an owner-facing invoice that has NOT gone out: held (markup / contact lines were missing), stamped "ready"
+// but unsent, or a "sending" hold the person has checked and found never arrived (force). Without confirm it only LOOKS (who it would go to, what amount); with confirm the screen must
+// send the amount it showed (expected_cents), so a markup edited in between is never billed unseen.
 async function insbReleaseOwner(env, body) {
-  const steps = [], warnings = [];
+  const steps = [], warnings = [], t0 = Date.now();
   try {
     const L = await insbLoad(env, body && body.id); if (L.err) return L.err;
-    let b = L.b; const c = L.c;
-    if (!String(b.Completed_At || '') || !String(b.InvB_Status || '').startsWith('held')) return json({ ok: false, error: 'not_held', message: 'This booking has no held owner invoice.' }, 409);
-    const plan = insbPlan({ booking: Object.assign({}, b, { Status: 'approved' }), customer: c, kind: b.Completion_Kind, units: b.Units_Billed, todayIso: insbTodayEt() });
+    let b = L.b; const c = L.c, force = body.force === true, st = String(b.InvB_Status || '');
+    const held = st.startsWith('held'), unsent = st === 'ready', hold = insbIsHold(st);
+    if (!String(b.Completed_At || '') || !(held || unsent || hold) || String(b.InvB_Emailed_At || '').trim()) return json({ ok: false, error: 'not_held', message: 'This booking has no owner-facing invoice waiting to be sent.' }, 409);
+    if (!String(b.Invoice_Emailed_At || '').trim()) return json({ ok: false, error: 'a_not_sent', message: 'Our own invoice has not been emailed yet. Finish that first (tap Complete & bill again), then send the owner-facing one.' }, 409);
+    if (hold && !force) return json({ ok: false, error: 'unconfirmed', message: 'An earlier email of this owner-facing invoice may or may not have been delivered, so it was NOT sent again. Check the Sent folder of ridgecomaintenance@gmail.com (or ask Premier). If it never went out, tap "Not sent - send it".' }, 409);
+    const plan = insbPlan({ booking: Object.assign({}, b, { Status: 'approved' }), customer: c, kind: b.Completion_Kind, units: b.Units_Billed, todayIso: inspEtDate(Date.parse(b.Completed_At)) || insbTodayEt() });
+    if (!plan.ok) return json({ ok: false, error: 'blocked', message: plan.blockers.join(' '), plan }, 409);
     if (plan.base_cents !== +b.Invoice_Base_Cents) return json({ ok: false, error: 'amount_mismatch', message: 'The stored amount no longer matches the rate card. Nothing was changed.' }, 409);
-    if (plan.owner.status !== 'ready') return json({ ok: false, error: 'still_held', message: plan.warnings.join(' ') || 'Still held.', plan }, 409);
-    if (body.preview === true) return json({ ok: true, preview: true, plan, would_send_to: plan.recipients.b_to, owner_cents: plan.owner.total_cents });
+    const stamped = (unsent || hold) && +b.InvB_Cents > 0;
+    if (!stamped && plan.owner.status !== 'ready') return json({ ok: false, error: 'still_held', message: plan.warnings.join(' ') || 'Still held.', plan }, 409);
+    const ownerCents = stamped ? +b.InvB_Cents : plan.owner.total_cents, ownerNum = stamped ? String(b.InvB_Number) : plan.owner.number, ownerPct = stamped ? String(b.InvB_Markup_Pct) : plan.owner.pct;
+    if (body.confirm !== true) return json({ ok: true, preview: true, would_send_to: plan.recipients.b_to, would_cc: plan.recipients.b_cc, owner_cents: ownerCents, owner_number: ownerNum, markup_pct: ownerPct, base_cents: plan.base_cents, plan });
+    if (body.expected_cents == null) return json({ ok: false, error: 'expected_required', message: 'Send expected_cents (the amount the screen showed).' }, 400);
+    if (+body.expected_cents !== ownerCents) return json({ ok: false, error: 'amount_changed', message: 'The owner-facing amount changed: your screen showed ' + insbDollars(body.expected_cents) + ' but it is now ' + insbDollars(ownerCents) + '. Nothing was sent. Look at it again.' }, 409);
     const lockTok = inspRandToken(8), lockOld = String(b.Billing_Lock || ''), lockAt = +lockOld.split('|')[1] || 0;
     if (lockOld && Date.now() - lockAt < INSB_LOCK_MS) return json({ ok: false, error: 'in_progress', message: 'Already being processed. Wait a minute.' }, 409);
-    b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Billing_Lock: lockTok + '|' + Date.now(), InvB_Number: plan.owner.number, InvB_Markup_Pct: plan.owner.pct, InvB_Cents: String(plan.owner.total_cents) });
+    const lockFields = { Billing_Lock: lockTok + '|' + Date.now() };
+    if (!stamped) Object.assign(lockFields, { InvB_Number: ownerNum, InvB_Markup_Pct: ownerPct, InvB_Cents: String(ownerCents) });
+    await updateRowVerified(env, 'Insp_Bookings', b.ID, lockFields);
+    let lostLock = false;
     try {
-      // Only the owner invoice is (re)sent: blank A's stamp view so insbDeliver does not touch our own invoice again.
-      const view = Object.assign({}, b, { Invoice_Emailed_At: b.Invoice_Emailed_At || 'done', InvB_Emailed_At: '' });
-      const planV = Object.assign({}, plan, { recipients: Object.assign({}, plan.recipients, { appfolio: plan.recipients.appfolio }) });
-      const d = await insbDeliver(env, view, c, planV, null, steps, warnings);
-      Object.assign(b, view);
-      if (!d.ok) return json({ ok: false, error: d.stage, message: d.error, steps }, 502);
-    } finally { try { await updateRowVerified(env, 'Insp_Bookings', b.ID, { Billing_Lock: '' }); } catch (e2) { await insbFail(env, 'unlock', 'Could not clear the billing lock on booking ' + b.ID + ': ' + e2.message, b.ID); } }
-    return json({ ok: true, released: true, steps });
+      await new Promise(res => setTimeout(res, env.__INSB_SETTLE_MS ?? 800));
+      const L2 = await insbLoad(env, body.id); if (L2.err) return L2.err;
+      if (String(L2.b.Billing_Lock || '').split('|')[0] !== lockTok) { lostLock = true; return json({ ok: false, error: 'in_progress', message: 'Another tap on this booking is being processed. Wait a minute.' }, 409); }
+      b = L2.b;
+      if (String(b.InvB_Emailed_At || '').trim()) return json({ ok: false, error: 'not_held', message: 'The owner-facing invoice was sent while you were tapping. Nothing more was sent.' }, 409);
+      const d = await insbDeliver(env, b, c, plan, null, steps, warnings, { only: 'B', force });
+      if (!d.ok) return json({ ok: false, error: d.stage, message: d.error, steps, warnings }, 502);
+    } catch (e) {
+      await insbFail(env, 'release', 'Release of the owner-facing invoice failed for booking ' + b.ID + ': ' + e.message, b.ID);
+      return json({ ok: false, error: 'release_failed', message: e.message, steps, warnings }, 502);
+    } finally { if (!lostLock) await insbUnlock(env, b.ID, lockTok); }
+    invalidateTabCache('Insp_Bookings');
+    let fin = b;
+    try { fin = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(b.ID)) || b; }
+    catch (e) { warnings.push('Sent, but the booking could not be re-read for the screen (' + e.message + '). Refresh the page.'); await insbFail(env, 'release_readback', 'Booking ' + b.ID + ' owner invoice was sent but could not be re-read: ' + e.message, b.ID); }
+    await insbOk(env, 'release', t0, b.ID);
+    return json({ ok: true, released: true, steps, warnings, booking: insbPublicBooking(fin) });
   } catch (e) { await insbFail(env, 'release', e.message, body && body.id); return json({ ok: false, error: 'release_failed', message: e.message }, 500); }
+}
+// /insp/customer/update is the plain customer editor. The billing fields have their own validated route, so they are refused here (never quietly dropped).
+async function insbCustomerUpdate(env, body) {
+  const bad = Object.keys((body && body.fields) || {}).filter(k => INSB_CUSTOMER_COLS.includes(k));
+  if (bad.length) { await insbFail(env, 'customer_config', 'Billing fields (' + bad.join(', ') + ') were sent to the plain customer update and refused: use /insp/billing/customer-config.', body && body.id); return json({ ok: false, error: 'use_billing_config', message: 'Billing fields (' + bad.join(', ') + ') are saved on the billing route, not here. Nothing was saved.' }, 400); }
+  return await updateRow(env, 'Insp_Customers', body.id, body.fields);
 }
 // GET /insp/billing/pdf?id=&which=a|b — the PDF for a manual AppFolio upload. a = QuickBooks' own PDF of the invoice, b = the owner-facing invoice.
 async function insbPdfDownload(env, url) {
