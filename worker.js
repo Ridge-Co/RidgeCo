@@ -1526,7 +1526,8 @@ async function pinLookup(env, pin, finder) {
   if (!pin || pin.length < 5) return json({ error: 'Invalid PIN' }, 400);
   const lock = await checkPinLockout(env, pin);
   if (lock.locked) return json({ error: 'Too many failed attempts', locked: true, minutes_remaining: lock.minutes_remaining }, 429);
-  const result = await finder(pin);
+  const _meta = {};   // the finder fills _meta.login = { tab, id, row } for the person who matched (portal login tracking)
+  const result = await finder(pin, _meta);
   if (!result) {
     const fail = await recordPinFailure(env, pin);
     const left = PIN_MAX_ATTEMPTS - fail.fail_count;
