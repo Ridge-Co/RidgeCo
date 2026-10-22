@@ -62,7 +62,12 @@ function build() {
   for (let i = 0; i < 39; i++) api.__meterGoogle(e, 'GET', '/values/Estimates', 'ok');
   t('39 reads in a minute: no alarm yet', api.__meter.pending === null);
   api.__meterGoogle(e, 'GET', '/values/Estimates', 'ok');
-  t('40 reads in a minute: alarm raised', api.__meter.pending && api.__meter.pending.why === 'volume');
+  t('40 reads in a minute with nothing throttled: NO alarm is raised (it is not a failure)', api.__meter.pending === null);
+  t('... but it is still logged to the Worker log', st.warns.some(x => /busy minute \(not filed/.test(x)));
+  await api.__meterFlushAlarm({});
+  t('... and nothing reaches the failure ledger', st.failures.length === 0);
+  api.__meterGoogle(e, 'GET', '/values/Estimates', '429');
+  t('the busy-minute log does not use up the gap: a real 429 right after still raises the alarm', api.__meter.pending && api.__meter.pending.why === '429');
   const first = api.__meter.pending;
   api.__meterGoogle(e, 'GET', '/values/Estimates', '429');
   t('further pressure while an alarm is pending does not make another', api.__meter.pending === first);
