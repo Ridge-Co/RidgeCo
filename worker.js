@@ -39575,8 +39575,15 @@ async function insbQbItem(env, token) {
   let it = ((d && d.QueryResponse && d.QueryResponse.Item) || [])[0];
   if (!it) {
     const gen = await qbApi(env, 'item/40?minorversion=73', 'GET', null, token);
-    const inc = gen && gen.Item && gen.Item.IncomeAccountRef && gen.Item.IncomeAccountRef.value;
-    if (!inc) return { id: '40', note: 'Could not find the General item income account, so this invoice bills the General item (40).' };
+    let inc = gen && gen.Item && gen.Item.IncomeAccountRef && gen.Item.IncomeAccountRef.value;
+    if (!inc) {
+      // Item 40 (General) is not in this QuickBooks company (e.g. the Intuit sandbox): borrow the income account of any existing service item instead of guessing an item id.
+      const sq = encodeURIComponent("select Id, IncomeAccountRef from Item where Type = 'Service' maxresults 1");
+      const sd = await qbApi(env, 'query?query=' + sq + '&minorversion=73', 'GET', null, token);
+      const svc = ((sd && sd.QueryResponse && sd.QueryResponse.Item) || [])[0];
+      inc = svc && svc.IncomeAccountRef && svc.IncomeAccountRef.value;
+    }
+    if (!inc) throw new Error('Could not find an income account for the Property Inspection item (the General item and every service item were unreadable). Nothing was created.');
     const r = await qbApi(env, 'item?minorversion=73', 'POST', { Name: 'Property Inspection', Type: 'Service', IncomeAccountRef: { value: String(inc) } }, token);
     it = (r && r.Item) || (qbDupId(r) ? { Id: qbDupId(r) } : null);
     if (!it) throw new Error('Could not create the Property Inspection item: ' + (qbFault(r) || 'no id returned'));
