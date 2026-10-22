@@ -5109,7 +5109,7 @@ function renderTenantsPage() {
            (prop&&(prop.City||'').toLowerCase().includes(search));
   }) : allTenants;
 
-  if (!tenants.length) { el.innerHTML='<div class="loading">'+(onlyUnwelcomed?'Everyone has been welcomed.':'No tenants match "'+esc(search)+'" — try name, address, phone, or unit')+'</div>'; return; }
+  if (!tenants.length) { el.innerHTML=paSummary(['tenant'])+'<div class="loading">'+(onlyStuckT?'No tenants need a login follow-up.':onlyUnwelcomed?'Everyone has been welcomed.':'No tenants match "'+esc(search)+'" — try name, address, phone, or unit')+'</div>'; return; }
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
     '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
