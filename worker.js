@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-22.01-insp-billing';
+const BUILD_VERSION = '2026-10-22.02-insp-billing';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -16109,6 +16109,8 @@ const FAIL_SEVERITY_BY_WHERE = [
   [/^selftest/, 'P1'],
   [/^(receipt_parse|invoice_parse|fi_read_label|fi_route_error|receipt_recon_scan)/, 'P2'],
   [/^failure_ledger/, 'P1'],
+  [/^insp_billing_money/, 'P0'],            // Oct 22 2026: a failed QuickBooks invoice / email / stamp on inspection billing is money
+  [/^insp_billing_write/, 'P1'],            // Oct 22 2026: a failed customer-config / work-order-number write
   [/^qb_payables_(vendor_)?(paid_)?(payment_)?date_missing/, 'P2'],   // Oct 20 2026: display-only warning ("payment date unavailable"); no money moves. Recorded once with a count, not a P0 on every page load.
   [/^ai_credit_(alert_failed|flag_read_failed)/, 'P0'],   // Oct 16 2026: Brett could not be told the AI credit is out / the pause flag cannot be read
   [/^ai_credit_flag_read_busy/, 'P2'],                    // Oct 21 2026: Google was busy for a minute; the last known flag value kept being honoured
@@ -39743,8 +39745,11 @@ async function insbEnsureColumns(env) {
   await ensureColumns(env, 'Insp_Customers', INSB_CUSTOMER_COLS);
 }
 // A failure is always a Telemetry row (which also files it on Needs Attention) — never a text from here, never swallowed.
+// Severity rides on Job_Type (failSeverity reads it): money-path failures are P0, data-write failures P1, reads / previews P2.
+const INSB_MONEY_KINDS = ['qb', 'pdf', 'email', 'stamp', 'stamp_after_send', 'resume_mismatch', 'complete', 'release', 'item_cache', 'unlock'], INSB_WRITE_KINDS = ['customer_config', 'set_wo'];
+function insbJobType(kind) { return INSB_MONEY_KINDS.includes(kind) ? 'insp_billing_money' : INSB_WRITE_KINDS.includes(kind) ? 'insp_billing_write' : 'insp_billing'; }
 async function insbFail(env, kind, message, ref) {
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_billing', Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'FALSE', Notes: (ref ? '[booking ' + ref + '] ' : '') + String(message).slice(0, 440) }); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: insbJobType(kind), Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'FALSE', Notes: (ref ? '[booking ' + ref + '] ' : '') + String(message).slice(0, 440) }); }
   catch (te) { console.error('insp billing: telemetry write failed:', te && te.message, '| original:', kind, message); }
 }
 function insbLogLine(b, line) { return ((b.Billing_Log ? b.Billing_Log + ' | ' : '') + new Date().toISOString().slice(0, 16) + ' ' + line).slice(-900); }

@@ -75,7 +75,7 @@ function world(opts = {}) {
 }
 
 // ───────────────────────── pure functions ─────────────────────────
-const P = new Function('inspAddDays', '_b64urlBytes', block + '\nreturn { insbRateCents, insbTripCents, insbMarkup, insbNormWO, insbOwnerInvoiceNumber, insbDollars, insbMDY, insbEmails, insbEmailOk, insbAddrLines, insbRecipients, insbPlan, insbAscii, insbTextWidth, insbWrap, insbPdfBytes, insbOwnerInvoiceOps, insbCustomerRow, insbB64 };')(new Function(grab('inspAddDays') + '\nreturn inspAddDays;')(), bytes => Buffer.from(bytes).toString('base64url'));
+const P = new Function('inspAddDays', '_b64urlBytes', block + '\nreturn { insbRateCents, insbTripCents, insbMarkup, insbNormWO, insbOwnerInvoiceNumber, insbDollars, insbMDY, insbEmails, insbEmailOk, insbAddrLines, insbRecipients, insbPlan, insbAscii, insbTextWidth, insbWrap, insbPdfBytes, insbOwnerInvoiceOps, insbCustomerRow, insbB64, insbJobType };')(new Function(grab('inspAddDays') + '\nreturn inspAddDays;')(), bytes => Buffer.from(bytes).toString('base64url'));
 
 // rate card: 1st $95, 2nd $85, 3rd and 4th $75, 5th and up $65
 eq([1, 2, 3, 4, 5, 6, 12].map(P.insbRateCents), [9500, 8500, 7500, 7500, 6500, 6500, 6500], 'rate for each unit position');
@@ -172,6 +172,14 @@ if (pt.status === 0) {
 } else ok(true, 'pdftotext not installed here: PDF text checks skipped');
 const ov = P.insbPdfBytes([{ t: 'text', x: 10, y: 700, size: 10, s: 'a (b) \\ c' }], 't'); ok(Buffer.from(ov).toString('latin1').includes('(a \\(b\\) \\\\ c)'), 'parentheses and backslashes are escaped in the PDF');
 
+// ───────────────────────── Failure severity (money = P0, data write = P1, read = P2) ─────────────────────────
+{
+  const sev = new Function(/const FAIL_SEVERITY_BY_WHERE = \[[\s\S]*?\n\];/.exec(src)[0] + '\n' + /function failSeverity[\s\S]*?\n}\n/.exec(src)[0] + '\nreturn failSeverity;')();
+  for (const k of ['qb', 'pdf', 'email', 'stamp', 'stamp_after_send', 'resume_mismatch', 'complete', 'release', 'item_cache', 'unlock']) eq(sev(P.insbJobType(k), 'x'), 'P0', k + ' failure is P0');
+  for (const k of ['customer_config', 'set_wo']) eq(sev(P.insbJobType(k), 'x'), 'P1', k + ' failure is P1');
+  for (const k of ['queue', 'pdf_download', 'preview', 'preview_qb_lookup']) eq(sev(P.insbJobType(k), 'x'), 'P2', k + ' failure is P2');
+}
+
 // ───────────────────────── Complete: the whole flow against fakes ─────────────────────────
 const call = async (api, env, fn, body) => await api[fn](env, body);
 const latest = w => w.tabs.Insp_Bookings[0];
@@ -244,7 +252,7 @@ async function main() {
   {
     const { w, api, env } = world(); w.failNext.invoice = { Fault: { Error: [{ code: '6000', Message: 'Business Validation Error' }] } };
     const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
-    ok(!res.body.ok && res.status === 502, 'QuickBooks refusal is an error'); ok(res.body.message.includes('Business Validation Error'), 'with QuickBooks\' own words'); eq(latest(w).QB_Invoice_ID, undefined, 'nothing stamped'); eq(w.mails.length, 0, 'nothing emailed'); eq(latest(w).Billing_Lock, '', 'lock cleared'); ok(w.telemetry.length >= 1, 'logged');
+    ok(w.telemetry.some(t => t.Success === 'FALSE' && t.Job_Type === 'insp_billing_money'), 'a failed QuickBooks invoice is filed as a MONEY failure'); ok(!res.body.ok && res.status === 502, 'QuickBooks refusal is an error'); ok(res.body.message.includes('Business Validation Error'), 'with QuickBooks\' own words'); eq(latest(w).QB_Invoice_ID, undefined, 'nothing stamped'); eq(w.mails.length, 0, 'nothing emailed'); eq(latest(w).Billing_Lock, '', 'lock cleared'); ok(w.telemetry.length >= 1, 'logged');
   }
   // 9) the invoice is created but the Hub cannot record it: say DO NOT resend
   {
