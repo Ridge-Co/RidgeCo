@@ -5113,7 +5113,7 @@ function renderTenantsPage() {
   el.innerHTML = paSummary(['tenant']) + '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
     '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
-    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th>Welcome</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th>Welcome</th><th>Link+PIN / login</th><th></th></tr></thead><tbody>' +
     tenants.map(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
       var propId = t.Property_ID || (unit&&unit.Property_ID) || '';
