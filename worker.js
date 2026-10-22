@@ -39808,9 +39808,17 @@ async function insbComplete(env, body) {
     const lockOld = String(b.Billing_Lock || ''), lockAt = +lockOld.split('|')[1] || 0;
     if (lockOld && nowMs - lockAt < INSB_LOCK_MS) return json({ ok: false, error: 'in_progress', message: 'This booking is already being billed. Wait a minute and check its status.' }, 409);
     b = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Billing_Lock: lockTok + '|' + nowMs });
+    let lostLock = false;
     const stubbed = insbQbStubbed(env);
-    const token = stubbed ? null : await qbAccessToken(env);
     try {
+      // A Sheet has no atomic compare-and-set, so: settle briefly, re-read, go on only if the lock is still OURS, then derive everything again from the fresh row.
+      await new Promise(res => setTimeout(res, env.__INSB_SETTLE_MS ?? 800));
+      const L2 = await insbLoad(env, body.id); if (L2.err) return L2.err;
+      if (String(L2.b.Billing_Lock || '').split('|')[0] !== lockTok) { lostLock = true; return json({ ok: false, error: 'in_progress', message: 'Another tap on this booking is being processed. Wait a minute and check its status.' }, 409); }
+      b = L2.b; derive();
+      if (!plan.ok) return json({ ok: false, error: 'blocked', message: plan.blockers.join(' '), plan }, 409);
+      if (!resume && String(b.Completed_At || '').trim()) return json({ ok: false, error: 'already_completed', message: 'This booking was completed while you were tapping. Check its status.' }, 409);
+      const token = stubbed ? null : await qbAccessToken(env);
       if (!resume) {
         // 1) customer (look before create; first use creates Premier and the id is saved on the customer row)
         let custId = String(c.QBO_Customer_ID || '').trim(), item = null;
