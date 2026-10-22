@@ -39681,11 +39681,25 @@ function insbOwnerPdf(b, c, cents, number, dateIso) {
   return insbPdfBytes(insbOwnerInvoiceOps({ issuer, number, date: dateIso, wo, service: insbAddrLines(b.Formatted_Address || b.Address), description: 'Comprehensive property inspection', cents }), 'Invoice ' + number);
 }
 // Everything between "the invoice exists in QuickBooks" and "Premier has it", resumable: each step is skipped when its stamp is already on the row.
-async function insbDeliver(env, b, c, plan, token, steps, warnings) {
+// DOUBLE-SEND GUARD (Oct 22 review): before every Gmail call the row is stamped "sending|<lock>|<time>" (verified). Only a DEFINITE refusal by Gmail puts the old status back.
+// Anything unclear (network drop, 5xx, no message id, a failed stamp after a good send) leaves "sending" in place, and that invoice is NOT emailed again until a person
+// confirms it never arrived (opts.force). "review" is the same hold for a QuickBooks total that did not match ours.
+function insbIsHold(s) { return /^(sending|review)/.test(String(s || '')); }
+async function insbDeliver(env, b, c, plan, token, steps, warnings, opts) {
+  opts = opts || {};
   const rec = plan.recipients, addr = plan.invoice.address || '', wo = plan.invoice.wo;
   const staged = String(b.Invoice_Status || '') === 'staged';
   const attachmentsA = [];
-  const needA = !String(b.Invoice_Emailed_At || '').trim() && (staged || !!String(b.QB_Invoice_ID || '').trim());
+  const aHold = opts.only !== 'B' && insbIsHold(b.Invoice_Status) && !String(b.Invoice_Emailed_At || '').trim(), bHold = insbIsHold(b.InvB_Status) && !String(b.InvB_Emailed_At || '').trim();
+  if ((aHold || bHold) && !opts.force) {
+    const review = /^review/.test(String(b.Invoice_Status || '')), what = aHold && bHold ? 'both invoices' : (aHold ? 'our invoice' : 'the owner-facing invoice');
+    const msg = review ? 'QuickBooks invoice ' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + ' has a different total than our amount, so it was NOT emailed. Fix it in QuickBooks, then tap "I checked - send it".'
+      : 'An earlier email of ' + what + ' may or may not have been delivered, so it was NOT sent again. Check the Sent folder of ridgecomaintenance@gmail.com (or ask Premier). If it never went out, tap "Not sent - send it".';
+    await insbFail(env, 'unconfirmed_send', 'Booking ' + b.ID + ': ' + msg, b.ID);
+    return { ok: false, stage: 'unconfirmed', error: msg };
+  }
+  const prevA = aHold ? 'invoiced' : String(b.Invoice_Status || ''), prevB = bHold ? 'ready' : String(b.InvB_Status || '');
+  const needA = opts.only !== 'B' && !String(b.Invoice_Emailed_At || '').trim() && (staged || !!String(b.QB_Invoice_ID || '').trim());
   if (needA && !staged) {
     let pdfA;
     try { pdfA = await insbQbInvoicePdf(env, token, b.QB_Invoice_ID); steps.push('QuickBooks PDF fetched (' + pdfA.length + ' bytes)'); }
