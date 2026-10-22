@@ -517,6 +517,7 @@ window.addEventListener('pageshow', function(e){
       </select>
       <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px"><input type="checkbox" id="tenant-filter-owner-exclude" onchange="renderTenantsPage()"> Exclude this owner instead of showing only them</label>
     </div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-stuck" onchange="renderTenantsPage()"> Only show tenants sent a link+PIN who never logged in (follow-ups)</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-unwelcomed" onchange="renderTenantsPage()"> Only show tenants who haven't received a welcome message</label>
     <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
