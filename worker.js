@@ -39532,11 +39532,26 @@ async function insbEnsureColumns(env) {
 }
 // A failure is always a Telemetry row (which also files it on Needs Attention) — never a text from here, never swallowed.
 // Severity rides on Job_Type (failSeverity reads it): money-path failures are P0, data-write failures P1, reads / previews P2.
-const INSB_MONEY_KINDS = ['qb', 'pdf', 'email', 'stamp', 'stamp_after_send', 'resume_mismatch', 'complete', 'release', 'item_cache', 'unlock'], INSB_WRITE_KINDS = ['customer_config', 'set_wo'];
-function insbJobType(kind) { return INSB_MONEY_KINDS.includes(kind) ? 'insp_billing_money' : INSB_WRITE_KINDS.includes(kind) ? 'insp_billing_write' : 'insp_billing'; }
+// Anything that is not explicitly a read/preview or a plain data write is treated as MONEY (P0): an unknown failure stage must never rank low (Oct 22 review).
+const INSB_READ_KINDS = ['queue', 'pdf_download', 'preview', 'preview_qb_lookup'], INSB_WRITE_KINDS = ['customer_config', 'set_wo'];
+function insbJobType(kind) { return INSB_READ_KINDS.includes(kind) ? 'insp_billing' : INSB_WRITE_KINDS.includes(kind) ? 'insp_billing_write' : 'insp_billing_money'; }
 async function insbFail(env, kind, message, ref) {
   try { await logTelemetry(env, { Source: 'worker', Job_Type: insbJobType(kind), Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'FALSE', Notes: (ref ? '[booking ' + ref + '] ' : '') + String(message).slice(0, 440) }); }
   catch (te) { console.error('insp billing: telemetry write failed:', te && te.message, '| original:', kind, message); }
+}
+// Success is a Telemetry row too (with latency), so the job shows up in the cost / health view next to its failures.
+async function insbOk(env, kind, t0, ref) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_billing', Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'TRUE', Latency_ms: Date.now() - t0, Notes: ref ? '[booking ' + ref + ']' : '' }); }
+  catch (te) { console.error('insp billing: success telemetry write failed:', te && te.message); }
+}
+// Clear OUR lock only: if another request has taken the lock since, leave theirs alone.
+async function insbUnlock(env, id, tok) {
+  try {
+    invalidateTabCache('Insp_Bookings');
+    const cur = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(id));
+    if (cur && String(cur.Billing_Lock || '') !== '' && String(cur.Billing_Lock).split('|')[0] !== tok) return;
+    await updateRowVerified(env, 'Insp_Bookings', id, { Billing_Lock: '' });
+  } catch (e2) { await insbFail(env, 'unlock', 'Could not clear the billing lock on booking ' + id + ': ' + e2.message + ' (it clears itself after 2 minutes)', id); }
 }
 function insbLogLine(b, line) { return ((b.Billing_Log ? b.Billing_Log + ' | ' : '') + new Date().toISOString().slice(0, 16) + ' ' + line).slice(-900); }
 // Standard base64 (with padding) of raw bytes, built on the existing _b64urlBytes so this block adds no new base64 call of its own.
