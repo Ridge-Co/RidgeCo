@@ -39513,4 +39513,165 @@ function insbOwnerInvoiceOps(inv) {
   ops.push({ t: 'text', x: R, y: tblTop - hH - rH - 16, size: 11, bold: true, align: 'right', s: 'Total Amount: ' + insbDollars(inv.cents) });
   return ops;
 }
+// ── Sheet schema (additive only — ensureColumns appends, never reorders) ──
+async function insbEnsureColumns(env) {
+  await ensureColumns(env, 'Insp_Bookings', INSB_BOOKING_COLS);
+  await ensureColumns(env, 'Insp_Customers', INSB_CUSTOMER_COLS);
+}
+// A failure is always a Telemetry row (which also files it on Needs Attention) — never a text from here, never swallowed.
+async function insbFail(env, kind, message, ref) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_billing', Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'FALSE', Notes: (ref ? '[booking ' + ref + '] ' : '') + String(message).slice(0, 440) }); }
+  catch (te) { console.error('insp billing: telemetry write failed:', te && te.message, '| original:', kind, message); }
+}
+function insbLogLine(b, line) { return ((b.Billing_Log ? b.Billing_Log + ' | ' : '') + new Date().toISOString().slice(0, 16) + ' ' + line).slice(-900); }
+// Standard base64 (with padding) of raw bytes, built on the existing _b64urlBytes so this block adds no new base64 call of its own.
+function insbB64(bytes) { let s = _b64urlBytes(bytes).replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; return s; }
+// Mail with real To/Cc headers and any number of PDF attachments. STAGING NEVER REACHES A REAL INBOX: stubbed unless Config GMAIL_STAGING_MODE=REDIRECT, then it
+// goes to GMAIL_TEST_RECIPIENT only (same policy as gmailSendEmail). Returns { sent, staged, message_id }. Throws on any failure.
+async function insbSendMail(env, o) {
+  const to = (o.to || []).filter(Boolean), cc = (o.cc || []).filter(Boolean);
+  if (!to.length) throw new Error('insbSendMail: no recipient');
+  let realTo = to, realCc = cc, subject = o.subject;
+  if (env.__STAGING__ ?? isStaging(env)) {
+    const cfg = await fetchConfig(env);
+    if (String(cfg.GMAIL_STAGING_MODE || 'STUB').toUpperCase() !== 'REDIRECT') {
+      console.log('STAGING - invoice email stubbed (not sent) -> ' + to.join(',') + ': ' + subject);
+      return { staged: true, sent: false, would_have: { to, cc, subject, attachments: (o.attachments || []).map(a => a.filename) } };
+    }
+    realTo = [cfg.GMAIL_TEST_RECIPIENT || 'brett@bmoremanagement.com']; realCc = []; subject = '[TEST -> was: ' + to.join(',') + '] ' + subject;
+  }
+  const accessToken = await gmailAccessToken(env), from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const enc = s => '=?UTF-8?B?' + insbB64(new TextEncoder().encode(s || '')) + '?=';
+  const boundary = 'insb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const head = ['From: Ridge Co <' + from + '>', 'To: ' + realTo.join(', ')];
+  if (realCc.length) head.push('Cc: ' + realCc.join(', '));
+  head.push('Subject: ' + enc(subject), 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="' + boundary + '"', '', '--' + boundary, 'Content-Type: text/html; charset="UTF-8"', '', o.html || '', '');
+  for (const a of (o.attachments || [])) {
+    const safe = String(a.filename || 'invoice.pdf').replace(/[^\w .-]/g, '_').slice(0, 80);
+    head.push('--' + boundary, 'Content-Type: application/pdf; name="' + safe + '"', 'Content-Transfer-Encoding: base64', 'Content-Disposition: attachment; filename="' + safe + '"', '', insbB64(a.bytes).replace(/(.{76})/g, '$1\r\n'), '');
+  }
+  head.push('--' + boundary + '--');
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(head.join('\r\n')) }) });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
+}
+// QuickBooks' own PDF of an invoice, so the file Premier gets is exactly the invoice in the books. Throws unless real PDF bytes came back.
+async function insbQbInvoicePdf(env, token, invoiceId) {
+  const res = await fetch(qbBase(env) + '/' + env.QB_REALM_ID + '/invoice/' + encodeURIComponent(invoiceId) + '/pdf?minorversion=73', { headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/pdf' } });
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (!res.ok) throw new Error('QuickBooks would not give the invoice PDF (HTTP ' + res.status + '): ' + new TextDecoder().decode(buf.subarray(0, 160)));
+  if (buf.length < 200 || String.fromCharCode(buf[0], buf[1], buf[2], buf[3]) !== '%PDF') throw new Error('QuickBooks answered but it was not a PDF (' + buf.length + ' bytes).');
+  return buf;
+}
+// The shared "Property Inspection" service item (found or created ONCE, id cached in Config insp_qb_item_id). Its income account is copied from the
+// existing General item (40), never guessed; if that cannot be read the invoice bills the General item and says so.
+async function insbQbItem(env, token) {
+  const cfg = await fetchConfig(env);
+  if (cfg.insp_qb_item_id) return { id: String(cfg.insp_qb_item_id), note: '' };
+  const q = encodeURIComponent("select Id, Name from Item where Name = 'Property Inspection'");
+  const d = await qbApi(env, 'query?query=' + q + '&minorversion=73', 'GET', null, token);
+  if (d && d.Fault) throw new Error('Could not look up the Property Inspection item: ' + qbFault(d));
+  let it = ((d && d.QueryResponse && d.QueryResponse.Item) || [])[0];
+  if (!it) {
+    const gen = await qbApi(env, 'item/40?minorversion=73', 'GET', null, token);
+    const inc = gen && gen.Item && gen.Item.IncomeAccountRef && gen.Item.IncomeAccountRef.value;
+    if (!inc) return { id: '40', note: 'Could not find the General item income account, so this invoice bills the General item (40).' };
+    const r = await qbApi(env, 'item?minorversion=73', 'POST', { Name: 'Property Inspection', Type: 'Service', IncomeAccountRef: { value: String(inc) } }, token);
+    it = (r && r.Item) || (qbDupId(r) ? { Id: qbDupId(r) } : null);
+    if (!it) throw new Error('Could not create the Property Inspection item: ' + (qbFault(r) || 'no id returned'));
+  }
+  try { await failSetConfig(env, 'insp_qb_item_id', String(it.Id)); } catch (e) { await insbFail(env, 'item_cache', 'Could not save the QuickBooks item id to Config (will look it up again next time): ' + e.message); }
+  return { id: String(it.Id), note: '' };
+}
+function insbCustomerRow(cust) {
+  const lines = insbAddrLines(cust.Bill_To_Address), m = String(lines[1] || '').match(/^(.*?),\s*([A-Za-z]{2})\s+(\d{5})/);
+  return { ID: '', QBO_Customer_ID: String(cust.QBO_Customer_ID || '').trim(), Company: String(cust.Bill_To_Name || cust.Name || '').trim(),
+    Billing_Email: insbEmails(cust.Bill_Email_To)[0] || '', Billing_Address: lines[0] || '', Billing_City: m ? m[1] : '', Billing_State: m ? m[2].toUpperCase() : '', Billing_Zip: m ? m[3] : '' };
+}
+// True when this Worker is staging WITHOUT QuickBooks sandbox credentials: every QuickBooks write is a stub there, so the flow takes its "staged" path.
+function insbQbStubbed(env) { return !!((env.__STAGING__ ?? isStaging(env)) && !(env.QB_CLIENT_ID && env.QB_CLIENT_SECRET && env.QB_REALM_ID)); }
+function insbPublicBooking(b) { const o = inspAdminBooking(b); delete o.Billing_Lock; return o; }
+
+// ── Endpoints (all admin-gated; nothing here is in PUBLIC_PATHS) ──
+async function insbLoad(env, id) {
+  await insbEnsureColumns(env);
+  invalidateTabCache('Insp_Bookings'); invalidateTabCache('Insp_Customers');
+  const b = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(id));
+  if (!b) return { err: json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404) };
+  const c = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID));
+  if (!c) return { err: json({ ok: false, error: 'customer_missing', message: 'The customer on this booking was not found.' }, 404) };
+  return { b, c };
+}
+function insbTodayEt() { return inspEtDate(Date.now()); }
+// POST /insp/billing/preview { id, kind, units } — writes nothing. Read-only look at QuickBooks for the customer.
+async function insbPreview(env, body) {
+  try {
+    const L = await insbLoad(env, body && body.id); if (L.err) return L.err;
+    const plan = insbPlan({ booking: L.b, customer: L.c, kind: body && body.kind, units: body && body.units, todayIso: insbTodayEt() });
+    const qb = { customer: L.c.QBO_Customer_ID ? 'linked' : 'unknown', name: String(L.c.Bill_To_Name || L.c.Name || '') };
+    if (plan.ok && !plan.resume && !L.c.QBO_Customer_ID && String(L.c.Billing_Mode || '') === 'wo') {
+      try { const id = await qbLookupExisting(env, 'customer', qb.name, insbEmails(L.c.Bill_Email_To)[0] || '', await qbAccessToken(env)); qb.customer = id ? 'found' : 'will_create'; if (id) qb.id = id; }
+      catch (e) { qb.customer = 'unknown'; plan.warnings.push('Could not check QuickBooks for the customer (' + e.message + '). It will be looked up again when you confirm.'); await insbFail(env, 'preview_qb_lookup', 'QuickBooks customer lookup failed during a billing preview: ' + e.message, body && body.id); }
+    }
+    return json({ ok: true, plan, qb, booking: insbPublicBooking(L.b) });
+  } catch (e) { await insbFail(env, 'preview', e.message, body && body.id); return json({ ok: false, error: 'preview_failed', message: 'Could not build the preview: ' + e.message }, 500); }
+}
+// The owner-facing invoice: build the PDF bytes from a booking + customer row that already carry the numbers.
+function insbOwnerPdf(b, c, cents, number, dateIso) {
+  const issuer = [String(c.Bill_To_Name || c.Name || '')].concat(insbAddrLines(c.Bill_To_Address), ['Phone: ' + String(c.InvB_Phone || ''), 'Email: ' + String(c.InvB_Email || '')]);
+  const wo = insbNormWO(b.WO_Number);
+  return insbPdfBytes(insbOwnerInvoiceOps({ issuer, number, date: dateIso, wo, service: insbAddrLines(b.Formatted_Address || b.Address), description: 'Comprehensive property inspection', cents }), 'Invoice ' + number);
+}
+// Everything between "the invoice exists in QuickBooks" and "Premier has it", resumable: each step is skipped when its stamp is already on the row.
+async function insbDeliver(env, b, c, plan, token, steps, warnings) {
+  const rec = plan.recipients, addr = plan.invoice.address || '', wo = plan.invoice.wo;
+  const staged = String(b.Invoice_Status || '') === 'staged';
+  const attachmentsA = [];
+  const needA = !String(b.Invoice_Emailed_At || '').trim() && (staged || !!String(b.QB_Invoice_ID || '').trim());
+  if (needA && !staged) {
+    let pdfA;
+    try { pdfA = await insbQbInvoicePdf(env, token, b.QB_Invoice_ID); steps.push('QuickBooks PDF fetched (' + pdfA.length + ' bytes)'); }
+    catch (e) { await insbFail(env, 'pdf', 'Invoice ' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + ' is in QuickBooks but its PDF could not be fetched: ' + e.message, b.ID); return { ok: false, stage: 'pdf', error: 'The invoice is in QuickBooks but its PDF could not be fetched, so nothing was emailed: ' + e.message }; }
+    attachmentsA.push({ filename: 'Invoice_' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + '_' + addr.split(',')[0].replace(/[^\w]+/g, '_') + '.pdf', bytes: pdfA });
+  }
+  const stampA = {}, stampB = {};
+  // The owner invoice is rebuilt from what was STAMPED at completion when it was ready then, so a retry can never show a different markup.
+  const stamped = String(b.InvB_Status || '') === 'ready' && +b.InvB_Cents > 0;
+  const oCents = stamped ? +b.InvB_Cents : plan.owner.total_cents, oNum = stamped ? String(b.InvB_Number) : plan.owner.number, oPct = stamped ? String(b.InvB_Markup_Pct) : plan.owner.pct;
+  const ownerReady = !String(b.InvB_Emailed_At || '').trim() && (stamped || plan.owner.status === 'ready');
+  let bPdf = null;
+  if (ownerReady) { bPdf = insbOwnerPdf(b, c, oCents, oNum, plan.invoice.date); steps.push('Owner-facing invoice ' + oNum + ' built (' + insbDollars(oCents) + ')'); }
+  const totalTxt = insbDollars(plan.base_cents);
+  const htmlA = '<p>Attached is our invoice for the inspection of ' + _escHtml(addr) + (wo ? ' (Work Order ' + _escHtml(wo) + ')' : '') + '.</p><p>' + _escHtml(plan.base_label) + ', <b>' + totalTxt + '</b>, due Net ' + INSB_NET_DAYS + '.</p>' + (rec.appfolio ? '' : '<p>Thank you,<br>Ridge Co</p>');
+  const htmlB = '<p>Attached is the owner-facing invoice for Work Order ' + _escHtml(wo) + ' (' + _escHtml(addr) + '): <b>' + insbDollars(oCents) + '</b> = our invoice ' + totalTxt + ' plus your ' + _escHtml(oPct) + '% markup. It is a separate document from our invoice to you - do not enter it as a bill.</p><p>Thank you,<br>Ridge Co</p>';
+  const subjA = 'Invoice for inspection of ' + addr.split(',')[0] + (wo ? ' - WO ' + wo : '');
+  const sends = [];
+  if (rec.appfolio) {
+    if (needA) sends.push({ which: 'A', to: rec.a_to, cc: [], subject: subjA, html: htmlA, attachments: attachmentsA });
+    if (bPdf) sends.push({ which: 'B', to: rec.b_to, cc: rec.b_cc, subject: 'Owner-facing invoice ' + oNum + ' - WO ' + wo, html: htmlB, attachments: [{ filename: 'Invoice_' + oNum + '.pdf', bytes: bPdf }] });
+  } else {
+    const atts = attachmentsA.slice(); if (bPdf) atts.push({ filename: 'Invoice_' + oNum + '_owner.pdf', bytes: bPdf });
+    if (needA || bPdf) sends.push({ which: needA && bPdf ? 'AB' : (bPdf ? 'B' : 'A'), to: rec.a_to, cc: rec.a_cc, subject: needA ? subjA : 'Owner-facing invoice ' + oNum + ' - WO ' + wo, html: (needA ? htmlA : '') + (bPdf ? htmlB : ''), attachments: atts });
+  }
+  let allOk = true; const errors = [];
+  for (const s of sends) {
+    try {
+      const r = await insbSendMail(env, s);
+      steps.push((r.staged ? 'Email STUBBED on staging' : 'Email sent') + ' to ' + s.to.join(', ') + ' (' + s.which + ')');
+      const at = new Date().toISOString();
+      if (s.which.includes('A')) { stampA.Invoice_Emailed_At = at; stampA.Invoice_Emailed_To = s.to.join(', '); stampA.Invoice_Status = r.staged ? 'staged' : 'emailed'; }
+      if (s.which.includes('B')) { stampB.InvB_Emailed_At = at; stampB.InvB_Status = r.staged ? 'staged' : 'sent'; }
+    } catch (e) { allOk = false; errors.push(s.which + ': ' + e.message); await insbFail(env, 'email', 'Email of invoice ' + s.which + ' for booking ' + b.ID + ' failed: ' + e.message, b.ID); }
+  }
+  const fields = Object.assign({}, stampA, stampB);
+  if (plan.owner.enabled && plan.owner.status !== 'ready' && plan.owner.status !== 'off' && !String(b.InvB_Status || '').startsWith('held')) fields.InvB_Status = plan.owner.status;
+  if (Object.keys(fields).length) {
+    fields.Billing_Log = insbLogLine(b, steps.slice(-3).join('; ') + (errors.length ? ' ERRORS: ' + errors.join('; ') : ''));
+    try { Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, fields)); }
+    catch (e) { await insbFail(env, 'stamp_after_send', 'Emails went out for booking ' + b.ID + ' but the Hub could not record it (' + e.message + '). DO NOT resend.', b.ID); return { ok: false, stage: 'stamp', error: 'The email(s) were sent, but the Hub could not record that (' + e.message + '). DO NOT send again.' }; }
+  }
+  if (!allOk) return { ok: false, stage: 'email', error: 'The invoice is in QuickBooks, but an email failed: ' + errors.join(' | ') + '. Tap Complete again to retry only the email.' };
+  return { ok: true };
+}
 // INSB-CONT-MARKER
