@@ -39725,21 +39725,51 @@ async function insbDeliver(env, b, c, plan, token, steps, warnings, opts) {
     if (needA || bPdf) sends.push({ which: needA && bPdf ? 'AB' : (bPdf ? 'B' : 'A'), to: rec.a_to, cc: rec.a_cc, subject: needA ? subjA : 'Owner-facing invoice ' + oNum + ' - WO ' + wo, html: (needA ? htmlA : '') + (bPdf ? htmlB : ''), attachments: atts });
   }
   let allOk = true; const errors = [];
+  const lockTok = String(b.Billing_Lock || '').split('|')[0];
   for (const s of sends) {
+    const hasA = s.which.includes('A'), hasB = s.which.includes('B'), claim = {}, revert = {}, mark = 'sending|' + lockTok + '|' + new Date().toISOString();
+    if (hasA) { claim.Invoice_Status = mark; revert.Invoice_Status = prevA; }
+    if (hasB) { claim.InvB_Status = mark; revert.InvB_Status = prevB; }
+    // 1) claim: re-read the row (we must still own the lock; nobody may have sent or claimed this invoice since we looked), then write the claim and read it back.
     try {
-      const r = await insbSendMail(env, s);
-      steps.push((r.staged ? 'Email STUBBED on staging' : 'Email sent') + ' to ' + s.to.join(', ') + ' (' + s.which + ')');
-      const at = new Date().toISOString();
-      if (s.which.includes('A')) { stampA.Invoice_Emailed_At = at; stampA.Invoice_Emailed_To = s.to.join(', '); stampA.Invoice_Status = r.staged ? 'staged' : 'emailed'; }
-      if (s.which.includes('B')) { stampB.InvB_Emailed_At = at; stampB.InvB_Status = r.staged ? 'staged' : 'sent'; }
-    } catch (e) { allOk = false; errors.push(s.which + ': ' + e.message); await insbFail(env, 'email', 'Email of invoice ' + s.which + ' for booking ' + b.ID + ' failed: ' + e.message, b.ID); }
+      invalidateTabCache('Insp_Bookings');
+      const fr = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(b.ID));
+      if (!fr) throw new Error('the booking row was not found');
+      if (lockTok && String(fr.Billing_Lock || '').split('|')[0] !== lockTok) throw new Error('another request took over this booking');
+      if (!opts.force && ((hasA && (String(fr.Invoice_Emailed_At || '').trim() || insbIsHold(fr.Invoice_Status))) || (hasB && (String(fr.InvB_Emailed_At || '').trim() || insbIsHold(fr.InvB_Status))))) throw new Error('this invoice was already sent, or is being sent by another request');
+      Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, claim));
+    } catch (e) { await insbFail(env, 'email_claim', 'Booking ' + b.ID + ': could not claim the send of invoice ' + s.which + ' (' + e.message + '). Nothing was emailed.', b.ID); return { ok: false, stage: 'in_progress', error: 'Nothing was emailed: ' + e.message + '. Check the booking, then try again.' }; }
+    // 2) send
+    let r;
+    try { r = await insbSendMail(env, s); }
+    catch (e) {
+      allOk = false; errors.push(s.which + ': ' + e.message);
+      if (e && e.definite === true) {
+        await insbFail(env, 'email', 'Email of invoice ' + s.which + ' for booking ' + b.ID + ' failed (Gmail refused it): ' + e.message, b.ID);
+        try { Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, revert)); continue; }
+        catch (e2) { await insbFail(env, 'email_claim_revert', 'Gmail refused invoice ' + s.which + ' for booking ' + b.ID + ' but the Hub could not put its status back (' + e2.message + '). It is marked "sending" and will not be resent until you confirm.', b.ID); return { ok: false, stage: 'unconfirmed', error: 'Gmail refused the email (' + e.message + '), but the Hub could not reset the booking. Nothing was sent. Tap "Not sent - send it" to try again.' }; }
+      }
+      await insbFail(env, 'email_unconfirmed', 'Email of invoice ' + s.which + ' for booking ' + b.ID + ' may or may not have been delivered (' + e.message + '). It will NOT be sent again until you confirm.', b.ID);
+      return { ok: false, stage: 'unconfirmed', error: 'The email may or may not have been delivered (' + e.message + '). It was NOT sent again. Check the Sent folder of ridgecomaintenance@gmail.com or ask Premier; if it never went out, tap "Not sent - send it".' };
+    }
+    steps.push((r.staged ? 'Email STUBBED on staging' : 'Email sent') + ' to ' + s.to.join(', ') + ' (' + s.which + ')');
+    // 3) record it (verified, retried): the claim above stays "sending" if this cannot be saved, so a failed record can never lead to a second email.
+    const at = new Date().toISOString(), f = {};
+    if (hasA) { f.Invoice_Emailed_At = at; f.Invoice_Emailed_To = s.to.join(', '); f.Invoice_Status = r.staged ? 'staged' : 'emailed'; }
+    if (hasB) { f.InvB_Emailed_At = at; f.InvB_Status = r.staged ? 'staged' : 'sent'; }
+    f.Billing_Log = insbLogLine(b, steps.slice(-3).join('; '));
+    let saved = false, lastErr = '';
+    for (let i = 0; i < 3 && !saved; i++) {
+      try { Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, f)); saved = true; }
+      catch (e) { lastErr = e.message; if (i < 2) await new Promise(res => setTimeout(res, (env.__INSB_RETRY_MS ?? 400) * (i + 1))); }
+    }
+    if (!saved) { await insbFail(env, 'stamp_after_send', 'Email of invoice ' + s.which + ' went out for booking ' + b.ID + ' but the Hub could not record it (' + lastErr + '). It is marked "sending"; DO NOT resend.', b.ID); return { ok: false, stage: 'stamp', error: 'The email was sent, but the Hub could not record that (' + lastErr + '). DO NOT send it again.' }; }
   }
-  const fields = Object.assign({}, stampA, stampB);
-  if (plan.owner.enabled && plan.owner.status !== 'ready' && plan.owner.status !== 'off' && !String(b.InvB_Status || '').startsWith('held')) fields.InvB_Status = plan.owner.status;
+  const fields = {};
+  if (plan.owner.enabled && plan.owner.status !== 'ready' && plan.owner.status !== 'off' && !String(b.InvB_Status || '').startsWith('held') && String(b.InvB_Status || '') !== plan.owner.status) fields.InvB_Status = plan.owner.status;
   if (Object.keys(fields).length) {
-    fields.Billing_Log = insbLogLine(b, steps.slice(-3).join('; ') + (errors.length ? ' ERRORS: ' + errors.join('; ') : ''));
     try { Object.assign(b, await updateRowVerified(env, 'Insp_Bookings', b.ID, fields)); }
-    catch (e) { await insbFail(env, 'stamp_after_send', 'Emails went out for booking ' + b.ID + ' but the Hub could not record it (' + e.message + '). DO NOT resend.', b.ID); return { ok: false, stage: 'stamp', error: 'The email(s) were sent, but the Hub could not record that (' + e.message + '). DO NOT send again.' }; }
+    catch (e) { await insbFail(env, 'stamp', 'Could not save the owner invoice status for booking ' + b.ID + ': ' + e.message, b.ID); return { ok: false, stage: 'stamp', error: 'The emails went out, but the owner invoice status could not be saved (' + e.message + ').' }; }
   }
   if (!allOk) return { ok: false, stage: 'email', error: 'The invoice is in QuickBooks, but an email failed: ' + errors.join(' | ') + '. Tap Complete again to retry only the email.' };
   return { ok: true };
