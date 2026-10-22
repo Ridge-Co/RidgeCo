@@ -16126,6 +16126,12 @@ function failSeverity(where, message, explicit) {
   if (/write|append|update|queue|duplicate|sheet|integrity|sweep|id_race/i.test(w) || /quota exceeded|did not land|not found after|duplicate/i.test(m)) return 'P1';
   return 'P2';
 }
+// PURE. The severity a Where is FIXED at on purpose (FAIL_SEVERITY_BY_WHERE), or null when it has no fixed value.
+function failTableSeverity(where) {
+  const w = String(where || '');
+  for (const [re, sev] of FAIL_SEVERITY_BY_WHERE) if (re.test(w)) return sev;
+  return null;
+}
 // Builds one Failure_Events row from whatever a caller has. Never throws.
 function failBuildEvent(f, nowMs, rand) {
   f = f || {};
