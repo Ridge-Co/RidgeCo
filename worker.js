@@ -10488,8 +10488,13 @@ async function welcomeSend(env, body) {
   // returned before reaching the Welcome_Sent write below, a person with a legitimately queued
   // welcome message would still show as "not yet welcomed" in the Hub's own filter.
   if (!r.sent && !r.held_for_quiet_hours) return json({ error: r.send_ok ? 'Send failed' : ('Blocked: ' + r.gate_snapshot), name: firstName }, r.send_ok ? 502 : 400);
-  await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']);
-  const _wf = { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() };
+  await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', PORTAL_WELCOME_COLS);
+  // Oct 22 2026: Test Mode sends to Brett's test phone, not to the person - that is NOT a welcome. Record why, leave them un-welcomed.
+  if (r.test_mode && !r.held_for_quiet_hours) {
+    const _tr = await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, { Welcome_Send_Result: 'test mode: went to the test phone, not to the person' });
+    return json({ success: true, test_mode: true, name: firstName, warning: 'Test Mode is ON, so that text went to your test phone, not to ' + firstName + '. NOT marked as welcomed.' + (_tr.ok ? '' : ' (also could not save the note: ' + await respErrText(_tr) + ')') }, 200);
+  }
+  const _wf = { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString(), Welcome_Send_Result: r.held_for_quiet_hours ? 'queued (quiet hours)' : 'sent' };
   // Oct 14 2026: Brett sending the welcome to a roster-added tenant (consent pending) IS the go-ahead: switch their texts on and
   // record it. The tenant can still reply STOP (SMS_OptOut, which this never touches).
   const _consentFlip = type === 'tenant' && String(recipient.SMS_Consent || '') === 'pending';
