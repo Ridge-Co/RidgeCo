@@ -39627,6 +39627,20 @@ async function insbQbItem(env, token) {
   try { await failSetConfig(env, 'insp_qb_item_id', String(it.Id)); } catch (e) { await insbFail(env, 'item_cache', 'Could not save the QuickBooks item id to Config (will look it up again next time): ' + e.message); }
   return { id: String(it.Id), note: '' };
 }
+// Look in QuickBooks for the invoice an earlier, unclear attempt may have created for this booking (same customer, same date, our private note). Throws if QuickBooks cannot be asked:
+// the caller must NOT post a new invoice when it could not look.
+async function insbQbFindInvoice(env, token, custId, txnDate, bookingId) {
+  const q = encodeURIComponent("select Id, DocNumber, TotalAmt, TxnDate, PrivateNote from Invoice where CustomerRef = '" + String(custId).replace(/[^0-9]/g, '') + "' and TxnDate = '" + String(txnDate).replace(/[^0-9-]/g, '') + "' maxresults 50");
+  let d;
+  try { d = await qbApi(env, 'query?query=' + q + '&minorversion=73', 'GET', null, token); }
+  catch (e) { throw Object.assign(new Error('Could not check QuickBooks for an earlier invoice (' + e.message + '). Nothing was created. Tap Complete again.'), { stage: 'qb_unconfirmed' }); }
+  if (d && d.Fault) throw Object.assign(new Error('Could not check QuickBooks for an earlier invoice: ' + qbFault(d) + '. Nothing was created. Tap Complete again.'), { stage: 'qb_unconfirmed' });
+  const tag = 'RidgeCo inspection booking #' + bookingId + ' WO ';
+  const hits = ((d && d.QueryResponse && d.QueryResponse.Invoice) || []).filter(i => String(i.PrivateNote || '').startsWith(tag));
+  if (hits.length > 1) throw Object.assign(new Error('QuickBooks has ' + hits.length + ' invoices for booking ' + bookingId + ' (' + hits.map(h => h.DocNumber || h.Id).join(', ') + '). Brett needs to look: nothing was sent.'), { stage: 'qb_duplicate' });
+  return hits[0] || null;
+}
+function insbWoInUse(r) { return String(r.Completed_At || '').trim() !== '' || (INSP_ACTIVE_BOOKING.includes(r.Status) && String(r.Active || '').toUpperCase() !== 'FALSE'); }
 function insbCustomerRow(cust) {
   const lines = insbAddrLines(cust.Bill_To_Address), m = String(lines[1] || '').match(/^(.*?),\s*([A-Za-z]{2})\s+(\d{5})/);
   return { ID: '', QBO_Customer_ID: String(cust.QBO_Customer_ID || '').trim(), Company: String(cust.Bill_To_Name || cust.Name || '').trim(),
