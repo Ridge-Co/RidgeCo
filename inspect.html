@@ -424,6 +424,27 @@
   </div>
 </div>
 
+<!-- Complete & bill sheet -->
+<div class="modal" id="bill-modal">
+  <div class="sheet">
+    <h2 id="bill-title">Complete &amp; bill</h2>
+    <div id="bill-sub" class="muted"></div>
+    <label class="fld">What happened?</label>
+    <div class="seg" id="bill-kind">
+      <button type="button" data-k="inspected" onclick="billKind('inspected')">Inspected</button>
+      <button type="button" data-k="zero_access" onclick="billKind('zero_access')">Zero access</button>
+      <button type="button" data-k="no_charge" onclick="billKind('no_charge')">No charge</button>
+    </div>
+    <div id="bill-units-wrap"><label class="fld">Units inspected</label><input id="bill-units" type="number" min="1" max="60" inputmode="numeric" oninput="billUnitsChanged()"></div>
+    <div id="bill-preview"><p class="muted">Loading…</p></div>
+    <div id="bill-err" class="bill-bad hide"></div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn ghost" style="flex:1" onclick="closeModal('bill-modal')">Close</button>
+      <button class="btn go" id="bill-go" style="flex:2" onclick="billConfirm(this)" disabled>Bill &amp; send</button>
+    </div>
+  </div>
+</div>
+
 <!-- Edit customer sheet -->
 <div class="modal" id="cust-edit-modal">
   <div class="sheet">
