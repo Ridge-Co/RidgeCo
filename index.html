@@ -5085,6 +5085,9 @@ function renderTenantsPage() {
   var onlyUnwelcomed = !!((document.getElementById('tenant-filter-unwelcomed')||{}).checked);
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
   if (onlyUnwelcomed) allTenants = allTenants.filter(function(t){ return t.Welcome_Sent !== 'TRUE'; });
+  loadPortalAccess();
+  var onlyStuckT = !!((document.getElementById('tenant-filter-stuck')||{}).checked);
+  if (onlyStuckT) allTenants = allTenants.filter(function(t){ return paNeedsFollowUp('tenant', t.ID); });
   if (ownerFilter) {
     allTenants = allTenants.filter(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
