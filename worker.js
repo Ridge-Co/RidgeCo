@@ -39776,7 +39776,7 @@ async function insbDeliver(env, b, c, plan, token, steps, warnings, opts) {
 }
 // POST /insp/billing/complete { id, kind, units, confirm:true } — the tap. Idempotent and resumable: tapping again after a failure picks up where it stopped.
 async function insbComplete(env, body) {
-  const steps = [], warnings = [];
+  const steps = [], warnings = [], t0 = Date.now();
   try {
     if (!body || body.confirm !== true) return json({ ok: false, error: 'confirm_required', message: 'Send confirm:true (the tap is the confirmation).' }, 400);
     const L = await insbLoad(env, body.id); if (L.err) return L.err;
