@@ -1077,7 +1077,144 @@ function bookingCard(b,pending){
   return '<div class="prop-card"><div class="row"><b>'+esc(b.Formatted_Address||b.Address)+'</b><span class="pill '+cls+'">'+esc(b.Status)+'</span></div>'
     +'<div>'+esc(b.when)+' · '+esc(b.Units)+' unit'+(+b.Units===1?'':'s')+' / '+esc(b.Buildings)+' bldg · '+esc(b.Duration_Min)+' min</div>'
     +'<div class="muted">'+esc(b.Contact_Name||'')+(b.Contact_Phone?' · '+esc(b.Contact_Phone):'')+(b.Contact_Email?' · '+esc(b.Contact_Email):'')+'</div>'
-    +(b.Notes?'<div class="muted">Note: '+esc(b.Notes)+'</div>':'')+drive+warn+btns+'</div>';
+    +(b.Notes?'<div class="muted">Note: '+esc(b.Notes)+'</div>':'')+drive+warn+billBlock(b)+btns+'</div>';
+}
+
+// ── Billing (Oct 22 2026): Complete & bill, owner invoice, PDFs ──────────────
+function custOf(id){ return customers.find(function(c){return String(c.ID)===String(id);})||null; }
+function isBillable(b){ var c=custOf(b.Customer_ID); return !!c && c.Billing_Mode==='wo'; }
+function money(cents){ return '$'+(Math.round(+cents||0)/100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
+function needsCompletion(b){ var st=Date.parse(b.Start_ISO); return b.Status==='approved' && isBillable(b) && !b.Completed_At && isFinite(st) && st<=Date.now()+6*3600000; }
+function billBlock(b){
+  if(b.Status!=='approved' || !isBillable(b)) return '';
+  var h='', wo=b.WO_Number||'';
+  if(!b.Completed_At){
+    if(!wo) h+='<div class="bill-bad"><b>No work order number on this booking.</b> Billing is blocked until you add it.<div class="two-col" style="margin-top:6px"><div><input id="wo-in-'+esc(b.ID)+'" placeholder="e.g. 43945-1"></div><div><button class="btn sm" style="width:100%" onclick="billSetWO(\''+esc(b.ID)+'\',this)">Save</button></div></div></div>';
+    else h+='<div class="muted" style="margin-top:6px">Work order <b>'+esc(wo)+'</b></div>';
+    h+='<div style="margin-top:8px"><button class="btn go sm" onclick="billOpen(\''+esc(b.ID)+'\')">Complete &amp; bill</button></div>';
+    return h;
+  }
+  var st=b.Invoice_Status||'';
+  if(st==='none') return '<div class="bill-box">Completed with no charge.</div>';
+  var cls=(st==='invoiced')?'bill-bad':'bill-box';
+  h+='<div class="'+cls+'"><b>'+esc(b.Units_Billed==='0'?'Zero access':(b.Units_Billed+' unit'+(b.Units_Billed==='1'?'':'s')))+' · '+money(b.Invoice_Base_Cents)+'</b> · WO '+esc(wo);
+  if(b.QB_Invoice_ID) h+='<div>QuickBooks invoice <b>#'+esc(b.QB_Invoice_Number||b.QB_Invoice_ID)+'</b></div>';
+  if(st==='emailed') h+='<div>Emailed '+esc((b.Invoice_Emailed_At||'').slice(0,10))+' to '+esc(b.Invoice_Emailed_To||'')+'</div>';
+  else if(st==='staged') h+='<div>Staging test: nothing real was created or sent.</div>';
+  else h+='<div><b>Not emailed yet.</b> Tap the button to finish sending (nothing is created twice).</div>';
+  var ib=b.InvB_Status||'';
+  if(ib==='sent') h+='<div>Owner invoice <b>'+esc(b.InvB_Number)+'</b> · '+money(b.InvB_Cents)+' ('+esc(b.InvB_Markup_Pct)+'% markup) sent</div>';
+  else if(ib==='staged') h+='<div>Owner invoice '+esc(b.InvB_Number)+' · '+money(b.InvB_Cents)+' (staging)</div>';
+  else if(ib.indexOf('held')===0) h+='<div><b>Owner invoice held:</b> '+esc(({held_no_markup:"Premier's markup is not set yet",held_no_contact:"Premier's address/phone/email lines are not set",held_bad_markup:'the markup is not a valid percent',held_no_wo:'no work order number'})[ib]||ib)+'.</div>';
+  h+='<div>';
+  if(b.QB_Invoice_ID) h+='<button class="btn sm" onclick="billPdf(\''+esc(b.ID)+'\',\'a\',this)">Our invoice PDF</button>';
+  if(b.InvB_Number && +b.InvB_Cents>0) h+='<button class="btn sm" onclick="billPdf(\''+esc(b.ID)+'\',\'b\',this)">Owner invoice PDF</button>';
+  if(st==='invoiced') h+='<button class="btn go sm" onclick="billResume(\''+esc(b.ID)+'\',this)">Finish sending</button>';
+  if(ib.indexOf('held')===0 && ib!=='held_no_wo') h+='<button class="btn sm" onclick="billRelease(\''+esc(b.ID)+'\',this)">Send owner invoice</button>';
+  return h+'</div></div>';
+}
+function renderBillingCard(list){
+  var need=list.filter(needsCompletion), held=list.filter(function(b){return b.Completed_At && (b.InvB_Status||'').indexOf('held')===0;}), stuck=list.filter(function(b){return b.Completed_At && b.Invoice_Status==='invoiced';});
+  var card=document.getElementById('appr-billing-card'), n=need.length+held.length+stuck.length;
+  card.classList.toggle('hide',!n); document.getElementById('appr-billing-count').textContent=n;
+  var h='';
+  need.forEach(function(b){ h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted">'+esc(b.when)+' · WO '+esc(b.WO_Number||'(none)')+'</div></div><button class="btn go sm" onclick="billOpen(\''+esc(b.ID)+'\')">Complete &amp; bill</button></div>'; });
+  stuck.forEach(function(b){ h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted" style="color:var(--danger)">Invoice #'+esc(b.QB_Invoice_Number||b.QB_Invoice_ID)+' created but NOT emailed</div></div><button class="btn go sm" onclick="billResume(\''+esc(b.ID)+'\',this)">Finish sending</button></div>'; });
+  held.forEach(function(b){ h+='<div class="row" style="padding:6px 0;border-top:1px solid var(--border)"><div><b>'+esc(b.Formatted_Address||b.Address)+'</b><div class="muted">Owner invoice held · WO '+esc(b.WO_Number||'')+'</div></div><button class="btn sm" onclick="billRelease(\''+esc(b.ID)+'\',this)">Send owner invoice</button></div>'; });
+  document.getElementById('appr-billing').innerHTML=h;
+}
+var bill={ id:'', kind:'inspected', plan:null, seq:0, busy:false };
+function billOpen(id){
+  var b=bookingsById[id]; if(!b) return;
+  bill={ id:id, kind:'inspected', plan:null, seq:0, busy:false };
+  document.getElementById('bill-title').textContent='Complete & bill';
+  document.getElementById('bill-sub').textContent=(b.Formatted_Address||b.Address)+' · '+b.when+' · booked for '+b.Units+' unit'+(+b.Units===1?'':'s')+(b.WO_Number?' · WO '+b.WO_Number:'');
+  document.getElementById('bill-units').value=b.Units||'1';
+  document.getElementById('bill-err').classList.add('hide');
+  document.getElementById('bill-modal').classList.add('open');
+  billKind('inspected');
+}
+function billKind(k){
+  bill.kind=k;
+  Array.prototype.forEach.call(document.querySelectorAll('#bill-kind button'),function(x){ x.classList.toggle('sel', x.getAttribute('data-k')===k); });
+  document.getElementById('bill-units-wrap').classList.toggle('hide', k!=='inspected');
+  billPreview();
+}
+var billTimer=null;
+function billUnitsChanged(){ clearTimeout(billTimer); billTimer=setTimeout(billPreview,350); }
+function billPreview(){
+  var go=document.getElementById('bill-go'); go.disabled=true; bill.plan=null;
+  var box=document.getElementById('bill-preview'); box.innerHTML='<p class="muted">Working out the bill…</p>';
+  var my=++bill.seq, units=bill.kind==='inspected'?document.getElementById('bill-units').value:'0';
+  api('POST','/insp/billing/preview',{ id:bill.id, kind:bill.kind, units:units }).then(function(r){
+    if(my!==bill.seq) return;
+    if(!r||!r.ok){ box.innerHTML='<div class="bill-bad">'+esc((r&&(r.message||r.error))||'Could not build the preview.')+'</div>'; return; }
+    var p=r.plan; bill.plan=p; var h='';
+    if(p.blockers.length) h+='<div class="bill-bad"><b>Cannot bill yet:</b><br>'+p.blockers.map(esc).join('<br>')+'</div>';
+    if(p.kind==='no_charge'){ h+='<div class="bill-box">Marks this booking complete. <b>No invoice, no email.</b></div>'; }
+    else if(p.base_cents>0){
+      h+='<div class="bill-box">';
+      (p.breakdown||[]).forEach(function(x){ h+='<div class="bill-line"><span>Unit '+x.unit+'</span><span>'+money(x.cents)+'</span></div>'; });
+      if(p.kind==='zero_access') h+='<div class="bill-line"><span>Zero-access fee</span><span>'+money(p.base_cents)+'</span></div>';
+      h+='<div class="bill-line bill-total"><span>Our invoice to '+esc((r.qb&&r.qb.name)||'customer')+'</span><span>'+money(p.base_cents)+'</span></div>';
+      h+='<div class="muted">Due '+esc(p.invoice.due)+' (Net 15)'+(p.invoice.wo?' · WO '+esc(p.invoice.wo):'')+'</div>';
+      var q=r.qb||{}; h+='<div class="muted">QuickBooks customer: '+({linked:'already linked',found:'found in QuickBooks (will link)',will_create:'<b>not in QuickBooks yet — will be created</b>',unknown:'will be looked up'})[q.customer||'unknown']+'</div>';
+      var rc=p.recipients||{}; h+='<div class="muted">Emails: '+(rc.appfolio?'<b>AppFolio inbox only</b> ('+esc(rc.appfolio)+')':esc((rc.a_to||[]).join(', '))+(rc.a_cc&&rc.a_cc.length?' (cc '+esc(rc.a_cc.join(', '))+')':''))+'</div>';
+      if(p.owner&&p.owner.enabled){ h+= p.owner.status==='ready' ? '<div class="bill-line" style="margin-top:6px"><span>Owner-facing invoice '+esc(p.owner.number)+' ('+esc(p.owner.pct)+'%)</span><span>'+money(p.owner.total_cents)+'</span></div>' : '<div class="muted" style="margin-top:6px"><b>Owner-facing invoice will be HELD</b> ('+esc(p.owner.status.replace('held_','').replace(/_/g,' '))+').</div>'; }
+      h+='</div>';
+    }
+    if(p.resume) h+='<div class="bill-box"><b>This booking already has an invoice.</b> Confirming only finishes whatever is unfinished; nothing is created twice.</div>';
+    (p.warnings||[]).forEach(function(w){ h+='<div class="banner" style="margin-top:8px">'+esc(w)+'</div>'; });
+    box.innerHTML=h; go.disabled=!p.ok;
+    go.textContent = p.kind==='no_charge' ? 'Mark complete' : (p.resume ? 'Finish' : 'Bill & send');
+  }).catch(function(e){ if(my!==bill.seq) return; box.innerHTML='<div class="bill-bad">Could not reach the Hub: '+esc(e.message)+'</div>'; });
+}
+function billConfirm(btn){
+  if(bill.busy||!bill.plan||!bill.plan.ok) return;
+  bill.busy=true; btn.disabled=true; var label=btn.textContent; btn.textContent='Working…';
+  var err=document.getElementById('bill-err'); err.classList.add('hide');
+  var units=bill.kind==='inspected'?document.getElementById('bill-units').value:'0';
+  api('POST','/insp/billing/complete',{ id:bill.id, kind:bill.kind, units:units, confirm:true }).then(function(r){
+    bill.busy=false;
+    if(r&&r.ok){
+      document.getElementById('bill-preview').innerHTML='<div class="bill-box"><b>Done.</b>'+(r.invoice_number?' QuickBooks invoice #'+esc(r.invoice_number)+'.':'')+'<br>'+((r.steps||[]).map(esc).join('<br>'))+'</div>'+((r.warnings||[]).map(function(w){return '<div class="banner" style="margin-top:8px">'+esc(w)+'</div>';}).join(''));
+      btn.textContent='Done'; toast('Done'); loadBookings(); return;
+    }
+    btn.disabled=false; btn.textContent='Try again';
+    err.innerHTML='<b>'+(r&&r.invoice_created?'The invoice IS in QuickBooks, but: ':'Nothing was finished: ')+'</b>'+esc((r&&(r.message||r.error))||'unknown error')+((r&&r.steps&&r.steps.length)?'<br><span class="muted">Done so far: '+r.steps.map(esc).join('; ')+'</span>':'');
+    err.classList.remove('hide'); loadBookings();
+  }).catch(function(e){ bill.busy=false; btn.disabled=false; btn.textContent=label; err.innerHTML='Could not reach the Hub: '+esc(e.message)+'. Check Approvals before trying again — it may have gone through.'; err.classList.remove('hide'); });
+}
+function billResume(id,btn){
+  var b=bookingsById[id]; if(!b) return; btn.disabled=true;
+  api('POST','/insp/billing/complete',{ id:id, kind:b.Completion_Kind, units:b.Units_Billed, confirm:true }).then(function(r){
+    if(r&&r.ok) toast('Sent'); else alert((r&&(r.message||r.error))||'Could not finish.');
+    loadBookings();
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+}
+function billRelease(id,btn){
+  if(!confirm('Email the owner-facing invoice to the customer now?')) return;
+  btn.disabled=true;
+  api('POST','/insp/billing/release-owner',{ id:id }).then(function(r){
+    if(r&&r.ok) toast('Owner invoice sent'); else alert((r&&(r.message||r.error))||'Could not send.');
+    loadBookings();
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+}
+function billSetWO(id,btn){
+  var v=document.getElementById('wo-in-'+id).value.trim(); if(!v){ toast('Enter the work order number'); return; }
+  btn.disabled=true;
+  api('POST','/insp/billing/set-wo',{ id:id, wo:v }).then(function(r){
+    if(r&&r.ok) toast('Saved'); else { btn.disabled=false; alert((r&&(r.message||r.error))||'Could not save.'); }
+    loadBookings();
+  }).catch(function(e){ btn.disabled=false; alert('Error: '+e.message); });
+}
+function billPdf(id,which,btn){
+  btn.disabled=true;
+  fetch(WORKER+'/insp/billing/pdf?id='+encodeURIComponent(id)+'&which='+which,{ headers:{'X-Auth-Token':AUTH_TOKEN} }).then(function(res){
+    if(!res.ok) return res.json().then(function(j){ throw new Error((j&&(j.message||j.error))||('HTTP '+res.status)); });
+    var cd=res.headers.get('Content-Disposition')||'', m=cd.match(/filename="([^"]+)"/), name=m?m[1]:'invoice.pdf';
+    return res.blob().then(function(blob){ var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },4000); });
+  }).then(function(){ btn.disabled=false; }).catch(function(e){ btn.disabled=false; alert('Could not get the PDF: '+e.message); });
 }
 function decideBooking(id,decision,btn,override){
   var note='';
