@@ -1360,6 +1360,168 @@ async function clearPinLockout(env, pin) {
   } catch(e) { /* non-fatal */ }
 }
 
+// ── Portal access tracking (Oct 22 2026, Brett) ──────────────────────────────────────────────────
+// Per person, on their own row (Tenants / Vendors / Owners / Owner_Users): was the link+PIN text really sent
+// (PIN_Sent_Date / PIN_Sent_Count / PIN_Send_Result) and have they ever logged in with it (First_Login_Date /
+// Last_Login_Date / Login_Count). "Sent" is written ONLY when Twilio accepted the text; a failed or skipped
+// send writes PIN_Send_Result with the reason and leaves the sent mark off. Login_Evidence marks people
+// with proven past portal use who predate this tracking (their login date is unknowable, so none is invented).
+const PORTAL_LOGIN_COLS = ['First_Login_Date', 'Last_Login_Date', 'Login_Count', 'Login_Evidence'];
+const PORTAL_PIN_COLS = ['PIN_Sent_Date', 'PIN_Sent_Count', 'PIN_Send_Result'];
+const PORTAL_WELCOME_COLS = ['Welcome_Sent', 'Welcome_Sent_Date', 'Welcome_Send_Result'];
+const PORTAL_TAB_BY_TYPE = { tenant: 'Tenants', vendor: 'Vendors', owner: 'Owners', owner_user: 'Owner_Users' };
+
+// Pure: did Twilio really accept this text? Takes whatever sendSMS returned.
+function smsSendVerdict(r) {
+  if (!r || typeof r !== 'object') return { ok: false, result: 'error: no response from the text sender' };
+  if (r.staged) return { ok: true, staged: true, result: 'staged (test environment, no real text)' };
+  if (r.skipped) return { ok: false, result: 'not sent: ' + (r.reason || 'texting is switched off') };
+  if (r.code || (typeof r.status === 'number' && r.status >= 400)) return { ok: false, result: 'Twilio error ' + (r.code || r.status) + ': ' + String(r.message || '').slice(0, 200) };
+  if (r.error && !r.sid) return { ok: false, result: 'error: ' + String(r.error).slice(0, 200) };
+  if (r.sid) return { ok: true, result: 'sent', sid: r.sid };
+  return { ok: false, result: 'error: unrecognized response from Twilio' };
+}
+
+// Pure: one person's portal-access state. level: ok | waiting | amber | red | none.
+// logged_in = a recorded login OR proven past use. amber/red = link+PIN sent but never logged in for N days.
+function portalAccessStatus(rec, nowMs, opt) {
+  const amberDays = (opt && opt.amberDays) || 14, redDays = (opt && opt.redDays) || 30;
+  const ms = (s) => { const t = Date.parse(String(s || '')); return isNaN(t) ? null : t; };
+  const T = (v) => String(v == null ? '' : v).toUpperCase() === 'TRUE';
+  const first = ms(rec.First_Login_Date), last = ms(rec.Last_Login_Date), pinAt = ms(rec.PIN_Sent_Date);
+  const proven = !!String(rec.Login_Evidence || '').trim();
+  const verified = String(rec.PIN_Send_Result || '') === 'sent';
+  const out = {
+    welcome_sent: T(rec.Welcome_Sent), welcome_date: rec.Welcome_Sent_Date || '',
+    pin_sent: pinAt != null, pin_sent_date: rec.PIN_Sent_Date || '', pin_sent_count: parseInt(rec.PIN_Sent_Count, 10) || 0,
+    pin_send_result: rec.PIN_Send_Result || '', pin_verified: verified,
+    logged_in: first != null || proven, first_login: rec.First_Login_Date || '', last_login: rec.Last_Login_Date || '',
+    login_count: parseInt(rec.Login_Count, 10) || 0, login_evidence: rec.Login_Evidence || '', days_since_pin: null, level: 'none', state: '',
+  };
+  if (out.logged_in) { out.level = 'ok'; out.state = first != null ? 'logged_in' : 'logged_in_prior_use'; return out; }
+  if (pinAt == null) { out.state = 'pin_not_sent'; return out; }
+  const days = Math.floor((nowMs - pinAt) / 86400000);
+  out.days_since_pin = days;
+  out.level = days >= redDays ? 'red' : days >= amberDays ? 'amber' : 'waiting';
+  out.state = out.level === 'waiting' ? 'sent_waiting' : 'sent_never_logged_in';
+  return out;
+}
+
+// Never blocks a login and never fails silently: any failure is logged to Ops_Telemetry (-> Needs Attention).
+async function stampPortalLogin(env, login) {
+  try {
+    await ensureColumns(env, login.tab, PORTAL_LOGIN_COLS);
+    const row = login.row || {}, now = new Date().toISOString();
+    await updateRowVerified(env, login.tab, login.id, {
+      First_Login_Date: row.First_Login_Date || now, Last_Login_Date: now, Login_Count: String((parseInt(row.Login_Count, 10) || 0) + 1),
+    });
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_login_stamp_failed', Skill_Or_Endpoint: login.tab, Success: 'FALSE', Notes: login.tab + ' ' + login.id + ': ' + String((e && e.message) || e).slice(0, 300) }); }
+    catch (e2) { console.error('portal_login_stamp_failed AND telemetry failed:', login.tab, login.id, String((e && e.message) || e), String((e2 && e2.message) || e2)); }
+  }
+}
+
+// Records the outcome of a link+PIN text on the person's row. Returns { ok, error? } - a failed mark is surfaced to the caller.
+async function stampPinSend(env, type, id, verdict) {
+  const tab = PORTAL_TAB_BY_TYPE[type];
+  try {
+    await ensureColumns(env, tab, PORTAL_PIN_COLS);
+    const cur = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id)) || {};
+    const f = { PIN_Send_Result: verdict.result };
+    if (verdict.ok) { f.PIN_Sent_Date = new Date().toISOString(); f.PIN_Sent_Count = String((parseInt(cur.PIN_Sent_Count, 10) || 0) + 1); }
+    await updateRowVerified(env, tab, id, f);
+    return { ok: true };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_pin_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + msg }); }
+    catch (e2) { console.error('portal_pin_stamp_failed AND telemetry failed:', tab, id, msg, String((e2 && e2.message) || e2)); }
+    return { ok: false, error: msg };
+  }
+}
+
+// GET /portal-access — every active tenant / vendor / owner / owner sub-user with welcome + link&PIN + login state,
+// worst follow-up first. Thresholds: Config PORTAL_FOLLOWUP_AMBER_DAYS (14) / PORTAL_FOLLOWUP_RED_DAYS (30).
+async function portalAccessList(env, url) {
+  const cfg = await fetchConfig(env);
+  const opt = { amberDays: parseInt(cfg.PORTAL_FOLLOWUP_AMBER_DAYS, 10) || 14, redDays: parseInt(cfg.PORTAL_FOLLOWUP_RED_DAYS, 10) || 30 };
+  const [tenants, vendors, owners, ownerUsers] = await fetchTabs(env, ['Tenants', 'Vendors', 'Owners', 'Owner_Users']);
+  const now = Date.now(), people = [];
+  const add = (type, r, name, extra) => people.push(Object.assign({ type, id: String(r.ID), name: name || '', has_phone: !!String(r.Phone || '').trim(), has_pin: !!String(r.PIN || '').trim() }, extra || {}, portalAccessStatus(r, now, opt)));
+  const full = (r) => ((r.First_Name || '') + ' ' + (r.Last_Name || '')).trim();
+  for (const t of tenants) {
+    if (t.Active === 'FALSE') continue;
+    if (t.Move_Out_Date && new Date(t.Move_Out_Date + 'T23:59:59') < new Date()) continue;
+    add('tenant', t, full(t));
+  }
+  for (const v of vendors) if (v.Active !== 'FALSE') add('vendor', v, v.Name || full(v), { company: v.Company || '' });
+  for (const o of owners) if (o.Active !== 'FALSE') add('owner', o, full(o) || o.Company || '', { company: o.Company || '' });
+  for (const u of ownerUsers) if (u.Active !== 'FALSE') add('owner_user', u, full(u), { owner_id: u.Owner_ID || '' });
+  const rank = { red: 0, amber: 1, waiting: 2, none: 3, ok: 4 };
+  people.sort((a, b) => (rank[a.level] - rank[b.level]) || ((b.days_since_pin || 0) - (a.days_since_pin || 0)));
+  const count = (f) => people.filter(f).length;
+  return json({ ok: true, thresholds: opt, counts: {
+    total: people.length, logged_in: count(p => p.logged_in), pin_not_sent: count(p => p.state === 'pin_not_sent'),
+    waiting: count(p => p.level === 'waiting'), amber: count(p => p.level === 'amber'), red: count(p => p.level === 'red'),
+  }, people });
+}
+
+// One-time backfill from SMS_Logs: anyone whose log shows a PIN text gets PIN_Sent_* with result 'logged_unverified'
+// (the old sender logged even when the text may not have gone out). Never overwrites a verified mark.
+// GET /portal-access/backfill-preview shows what would change; POST /portal-access/backfill applies it in one batch per tab.
+async function portalBackfillPlan(env) {
+  const logs = await fetchTab(env, 'SMS_Logs');
+  const byKey = new Map();
+  for (const l of logs) {
+    const m = /^pin_send_(tenant|vendor|owner|owner_user)$/.exec(String(l.Recipient_Type || ''));
+    if (!m || !l.Recipient_ID) continue;
+    const k = m[1] + '|' + l.Recipient_ID, e = byKey.get(k) || { type: m[1], id: String(l.Recipient_ID), count: 0, last: '' };
+    e.count++; if (!e.last || String(l.Sent_Date) > e.last) e.last = String(l.Sent_Date);
+    byKey.set(k, e);
+  }
+  const plan = [];
+  for (const type of Object.keys(PORTAL_TAB_BY_TYPE)) {
+    const rows = await fetchTab(env, PORTAL_TAB_BY_TYPE[type]);
+    for (const e of byKey.values()) {
+      if (e.type !== type) continue;
+      const r = rows.find(x => String(x.ID) === e.id);
+      if (!r) { plan.push({ type, id: e.id, action: 'skip', why: 'person no longer in ' + PORTAL_TAB_BY_TYPE[type] }); continue; }
+      if (String(r.PIN_Sent_Date || '').trim()) { plan.push({ type, id: e.id, action: 'skip', why: 'already has a PIN-sent mark' }); continue; }
+      plan.push({ type, id: e.id, action: 'set', fields: { PIN_Sent_Date: e.last, PIN_Sent_Count: String(e.count), PIN_Send_Result: 'logged_unverified' } });
+    }
+  }
+  return plan;
+}
+async function portalBackfillPreview(env) {
+  const plan = await portalBackfillPlan(env);
+  return json({ ok: true, read_only: true, would_set: plan.filter(p => p.action === 'set').length, skipped: plan.filter(p => p.action === 'skip').length, plan });
+}
+async function portalBackfillApply(env) {
+  const plan = (await portalBackfillPlan(env)).filter(p => p.action === 'set');
+  const errors = [];
+  let written = 0;
+  for (const type of Object.keys(PORTAL_TAB_BY_TYPE)) {
+    const items = plan.filter(p => p.type === type);
+    if (!items.length) continue;
+    const tab = PORTAL_TAB_BY_TYPE[type];
+    try {
+      await ensureColumns(env, tab, PORTAL_PIN_COLS);
+      const data = await sheetsRequest(env, 'GET', '/values/' + tab);
+      const [headers, ...rows] = data.values || [[]];
+      const idc = idColIndex(headers), batch = [];
+      for (const it of items) {
+        const ri = rows.findIndex(r => String(r[idc]) === it.id);
+        if (ri < 0) { errors.push(type + ' ' + it.id + ': row not found'); continue; }
+        for (const [f, v] of Object.entries(it.fields)) { const ci = headers.indexOf(f); if (ci < 0) { errors.push(type + ' ' + it.id + ': column ' + f + ' missing'); continue; } batch.push({ range: tab + '!' + col(ci) + (ri + 2), values: [[v]] }); }
+        written++;
+      }
+      if (batch.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
+      invalidateTabCache(tab);
+    } catch (e) { errors.push(tab + ': ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+  if (errors.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_backfill_failed', Success: 'FALSE', Notes: errors.join(' | ').slice(0, 500) }); } catch (e2) { console.error('portal_backfill_failed AND telemetry failed:', errors.join(' | '), String((e2 && e2.message) || e2)); } }
+  return json({ ok: errors.length === 0, written, errors });
+}
+
 async function pinLookup(env, pin, finder) {
   if (!pin || pin.length < 5) return json({ error: 'Invalid PIN' }, 400);
   const lock = await checkPinLockout(env, pin);
