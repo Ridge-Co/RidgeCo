@@ -25043,6 +25043,16 @@ function __meterTop(rows, which, n) {
 }
 function __meterMaybeAlarm(b, why) {
   const now = Date.now();
+  if (why !== '429') {
+    // (own timer: a busy-minute log line must never use up the gap that a real throttle row needs)
+    if (now - (__meter.lastBusyLogAt || 0) < METER_ALARM_GAP_MS) return;
+    // Oct 22 2026: a busy minute in which Google throttled NOTHING is not a failure - nobody got an error. It used to file a P2 "Needs Attention" row that
+    // re-opened every time it was marked fixed (F-1792553535622-hzqa). It is still counted and shown on read-meter.html and in the Worker log; the moment
+    // Google actually throttles a read ("429") the P2 row is filed as before.
+    __meter.lastBusyLogAt = now;
+    console.warn('[read-meter] busy minute (not filed: nothing throttled): ' + b.reads + ' reads on this instance. See read-meter.html.');
+    return;
+  }
   if (__meter.pending || now - __meter.lastAlarmAt < METER_ALARM_GAP_MS) return;
   __meter.lastAlarmAt = now;
   const rows = __meterWindow(2);
