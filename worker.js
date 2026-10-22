@@ -39565,7 +39565,7 @@ async function insbQbInvoicePdf(env, token, invoiceId) {
   return buf;
 }
 // The shared "Property Inspection" service item (found or created ONCE, id cached in Config insp_qb_item_id). Its income account is copied from the
-// existing General item (40), never guessed; if that cannot be read the invoice bills the General item and says so.
+// existing General item (40), or failing that any existing service item; if neither can be read it stops loudly - an item id is never guessed.
 async function insbQbItem(env, token) {
   const cfg = await fetchConfig(env);
   if (cfg.insp_qb_item_id) return { id: String(cfg.insp_qb_item_id), note: '' };
