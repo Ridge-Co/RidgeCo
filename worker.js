@@ -1634,6 +1634,7 @@ async function ownerByPin(env, url) {
     }
     const owner = owners.find(o => o.PIN && o.PIN.toLowerCase() === p.toLowerCase() && o.Active !== 'FALSE');
     if (!owner) return null;
+    _m.login = { tab: 'Owners', id: owner.ID, row: owner };
     return json({
       owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
       owner_company: owner.Company||'', owner_phone: owner.Phone||'',
