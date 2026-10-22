@@ -6630,9 +6630,12 @@ function confirmSendWelcome() {
   document.getElementById('send-welcome-msg').innerHTML = '';
   api('POST', '/welcome/send', { type: _currentWelcomeSend.type, id: _currentWelcomeSend.id, message: text }).then(function(res) {
     btn.textContent = 'SEND SMS';
-    if (res.success) {
+    if (res.success && res.warning) {
+      document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:6px">⚠ ' + esc(res.warning) + '</div>';
+      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); loadPortalAccess(true); }, 6000);
+    } else if (res.success) {
       document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
-      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); }, 1800);
+      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); loadPortalAccess(true); }, 1800);
     } else {
       btn.disabled = false;
       document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
