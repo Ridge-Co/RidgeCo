@@ -35970,6 +35970,7 @@ async function schedRunStrCleaning(env) {
 // ── HTTP handlers ────────────────────────────────────────────────────────────────────────────
 async function strHandleErr(env, e, where) {
   if (e && e.code && e.status && e.status < 500) return json({ ok: false, error: e.code, message: e.message }, e.status);
+  if (sheetsQuotaBusyError(e)) throw e;   // Oct 22 2026: Google's read quota is a "busy, try again" answer (typed 429 + one P2 row from the top-level handler), not "something went wrong, Brett has been told" + a text/email to Brett
   await strSystemAlert(env, 'handler_' + (where || 'error'), `${where || 'handler'} failed: ${strErrText(e)}`); // a real failure: Brett is told (the old "Brett has been notified" message was a lie)
   return json({ ok: false, error: (e && e.code) || 'internal', message: 'Something went wrong on our side and Brett has been told. Please try again in a few minutes.' }, 500);
 }
