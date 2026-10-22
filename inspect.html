@@ -1052,11 +1052,14 @@ function confirmBulkImport(btn){
 
 // ── Inspection booking (Oct 7 2026) ─────────────────────────
 var obDates=[];
+var bookingsById = {};
 function loadBookings(){
   var err=document.getElementById('appr-error');
-  return api('GET','/insp/bookings').then(function(list){
+  return (customers.length ? Promise.resolve() : loadCustomers()).then(function(){ return api('GET','/insp/bookings'); }).then(function(list){
     if(!Array.isArray(list)){ throw new Error((list&&list.error)||'Could not load bookings'); }
     err.classList.add('hide');
+    bookingsById = {}; list.forEach(function(b){ bookingsById[b.ID]=b; });
+    renderBillingCard(list);
     var pend=list.filter(function(b){return b.Status==='pending';}).sort(function(a,b){return String(a.Start_ISO).localeCompare(String(b.Start_ISO));});
     var rest=list.filter(function(b){return b.Status!=='pending';});
     var badge=document.getElementById('appr-badge'); badge.textContent=pend.length; badge.classList.toggle('hide',!pend.length);
