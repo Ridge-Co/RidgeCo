@@ -39571,7 +39571,8 @@ async function insbSendMail(env, o) {
     }
     realTo = [cfg.GMAIL_TEST_RECIPIENT || 'brett@bmoremanagement.com']; realCc = []; subject = '[TEST -> was: ' + to.join(',') + '] ' + subject;
   }
-  const accessToken = await gmailAccessToken(env), from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  let accessToken; try { accessToken = await gmailAccessToken(env); } catch (e) { throw Object.assign(new Error('Gmail sign-in failed: ' + e.message), { definite: true }); }
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
   const enc = s => '=?UTF-8?B?' + insbB64(new TextEncoder().encode(s || '')) + '?=';
   const boundary = 'insb_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
   const head = ['From: Ridge Co <' + from + '>', 'To: ' + realTo.join(', ')];
