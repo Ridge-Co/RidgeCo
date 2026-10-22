@@ -70,6 +70,7 @@ function world(opts = {}) {
     isStaging: () => w.staging, fetchConfig: async () => w.config, failSetConfig: async (env, k, v) => { w.config[k] = v; },
     inspEtDate: ms => new Date(ms - 4 * 3600000).toISOString().slice(0, 10), inspAddDays: (new Function(grab('inspAddDays') + '\nreturn inspAddDays;'))(),
     inspRandToken: () => 'T' + (++w.ids), inspAdminBooking: b => { const o = Object.assign({}, b); delete o.Manage_Token; return o; },
+    updateRow: async (env, t, id, f) => { w.plainUpdates = (w.plainUpdates || []).concat([f]); return { body: { ok: true }, status: 200 }; },
     json: (body, status) => ({ body, status: status || 200 }), _escHtml: s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     _b64urlBytes: bytes => Buffer.from(bytes).toString('base64url'),
     gmailAccessToken: async () => 'gtok', _utf8B64url: s => Buffer.from(s, 'utf8').toString('base64url'),
