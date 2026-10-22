@@ -39706,9 +39706,8 @@ async function insbDeliver(env, b, c, plan, token, steps, warnings, opts) {
     catch (e) { await insbFail(env, 'pdf', 'Invoice ' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + ' is in QuickBooks but its PDF could not be fetched: ' + e.message, b.ID); return { ok: false, stage: 'pdf', error: 'The invoice is in QuickBooks but its PDF could not be fetched, so nothing was emailed: ' + e.message }; }
     attachmentsA.push({ filename: 'Invoice_' + (b.QB_Invoice_Number || b.QB_Invoice_ID) + '_' + addr.split(',')[0].replace(/[^\w]+/g, '_') + '.pdf', bytes: pdfA });
   }
-  const stampA = {}, stampB = {};
   // The owner invoice is rebuilt from what was STAMPED at completion when it was ready then, so a retry can never show a different markup.
-  const stamped = String(b.InvB_Status || '') === 'ready' && +b.InvB_Cents > 0;
+  const stamped = (String(b.InvB_Status || '') === 'ready' || insbIsHold(b.InvB_Status)) && +b.InvB_Cents > 0;
   const oCents = stamped ? +b.InvB_Cents : plan.owner.total_cents, oNum = stamped ? String(b.InvB_Number) : plan.owner.number, oPct = stamped ? String(b.InvB_Markup_Pct) : plan.owner.pct;
   const ownerReady = !String(b.InvB_Emailed_At || '').trim() && (stamped || plan.owner.status === 'ready');
   let bPdf = null;
