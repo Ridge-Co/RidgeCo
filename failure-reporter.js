@@ -134,7 +134,9 @@
 
   // 3. manual reporting from catch blocks
   window.hubReportFailure = function (where, message, extra) {
-    var did = report(where || 'caught', message && message.message ? message.message : message, extra);
+    var msg = message && message.message ? message.message : message;
+    if (realFetch && typeof msg === 'string' && NETWORK_ONLY.test(msg.replace(/^\s+/, ''))) return reportAfterHubCheck(where || 'caught', msg, extra);
+    var did = report(where || 'caught', msg, extra);
     if (did) toast();
     return did;
   };
