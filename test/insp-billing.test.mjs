@@ -172,6 +172,14 @@ if (pt.status === 0) {
 } else ok(true, 'pdftotext not installed here: PDF text checks skipped');
 const ov = P.insbPdfBytes([{ t: 'text', x: 10, y: 700, size: 10, s: 'a (b) \\ c' }], 't'); ok(Buffer.from(ov).toString('latin1').includes('(a \\(b\\) \\\\ c)'), 'parentheses and backslashes are escaped in the PDF');
 
+// ───────────────────────── Failure severity (money = P0, data write = P1, read = P2) ─────────────────────────
+{
+  const sev = new Function(/const FAIL_SEVERITY_BY_WHERE = \[[\s\S]*?\n\];/.exec(src)[0] + '\n' + /function failSeverity[\s\S]*?\n}\n/.exec(src)[0] + '\nreturn failSeverity;')();
+  for (const k of ['qb', 'pdf', 'email', 'stamp', 'stamp_after_send', 'resume_mismatch', 'complete', 'release', 'item_cache', 'unlock']) eq(sev(P.insbJobType(k), 'x'), 'P0', k + ' failure is P0');
+  for (const k of ['customer_config', 'set_wo']) eq(sev(P.insbJobType(k), 'x'), 'P1', k + ' failure is P1');
+  for (const k of ['queue', 'pdf_download', 'preview', 'preview_qb_lookup']) eq(sev(P.insbJobType(k), 'x'), 'P2', k + ' failure is P2');
+}
+
 // ───────────────────────── Complete: the whole flow against fakes ─────────────────────────
 const call = async (api, env, fn, body) => await api[fn](env, body);
 const latest = w => w.tabs.Insp_Bookings[0];
