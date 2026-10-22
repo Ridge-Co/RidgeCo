@@ -25,7 +25,7 @@ const eq = (x, y, m) => { assert.deepStrictEqual(x, y, m); n++; };
 function world(opts = {}) {
   const w = {
     tabs: { Insp_Bookings: [], Insp_Customers: [] }, telemetry: [], mails: [], qbPosts: [], qbCalls: [], config: {}, staging: !!opts.staging, qbCreds: opts.qbCreds !== false,
-    failNext: {}, locks: 0, ids: 0, invoiceSeq: 1800,
+    failNext: {}, locks: 0, ids: 0, invoiceSeq: 1800, qbInvoices: [], failWhen: null, failAlways: null, stealLock: false,
   };
   w.tabs.Insp_Customers.push(Object.assign({ ID: '5', Name: 'Premier Property Management', Active: 'TRUE', Billing_Mode: 'wo', Owner_Invoice: 'TRUE', QBO_Customer_ID: '', Bill_To_Name: 'Premier Property Management Investment, LLC',
     Bill_To_Address: '400 W. Franklin Street #400, Baltimore, MD 21201', Bill_Email_To: 'josiah.speed@ppmillc.com', Bill_Email_Cc: 'starr.byrd@ppmillc.com, office@ppmillc.com', AppFolio_Email: '', Markup_Pct: '', InvB_Phone: '(410) 555-0100', InvB_Email: 'office@ppmillc.com' }, opts.customer || {}));
