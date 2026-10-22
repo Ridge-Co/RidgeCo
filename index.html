@@ -6451,8 +6451,9 @@ function confirmSendPin() {
   api('POST', '/send-pin', { type: _currentPinSend.type, id: _currentPinSend.id }).then(function(res) {
     btn.textContent = 'SEND SMS';
     if (res.success) {
-      document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
-      setTimeout(function(){ closeModal('modal-send-pin'); }, 1800);
+      document.getElementById('send-pin-msg').innerHTML = (res.staged ? '<div style="color:var(--warn);font-size:12px;margin-top:6px">🧪 Test environment: nothing was really texted.</div>' : '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>') + (res.warning ? '<div style="color:var(--warn);font-size:12px;margin-top:6px">⚠ ' + esc(res.warning) + '</div>' : '');
+      loadPortalAccess(true);
+      setTimeout(function(){ closeModal('modal-send-pin'); }, res.warning ? 6000 : 1800);
     } else {
       btn.disabled = false;
       document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
