@@ -628,6 +628,32 @@ for (const N of [2, 5, 8]) {
   const s = stateOf(store), st = L.schedStatus(s, new Date(c.v), jobs);
   t('...but they are loudly overdue with the error in /cron/status', st.overdue.join() === 'noretry,after_send' && /smtp 500/.test(st.jobs.noretry.overdue_reason), st);
 }
+// 2l-bis (Oct 22 2026, Needs Attention #2/#3): a job whose ONLY errors are Google's shared Sheets READ quota is a calm P2 "sheets_quota_busy" row, not a P0
+// "scheduler_job" failure that texts Brett. Anything else (including a mix) is unchanged: P0 scheduler_job + admin alert.
+{
+  const Q = (tab) => `Sheets API error on GET /values/${tab}: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664428332384'.`;
+  const runOne = async (errors, extra) => {
+    const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+    const jobs = mkJobs(log, [['q', 'interval', { run: async () => ({ ok: false, errors }) }]]);
+    const r = await L.schedRunNext({}, null, fast(c, { jobs, only: ['q'], force: true }));
+    return { r, L, store };
+  };
+  const a = await runOne([{ step: 'pending_notifications', error: Q('Notification_Queue') }, { step: 'vendor_nudges', error: Q('Vendor_Requests') }]);
+  t('quota-only job failure: still recorded as failed and retried (state says failed)', a.r.body.job_ok === false && stateOf(a.store).jobs.q.last_status === 'failed', a.r.body);
+  t('quota-only job failure: the answer says quota_busy and keeps the error text', a.r.body.quota_busy === true && /Quota exceeded/.test(a.r.body.error));
+  t('quota-only job failure: ONE telemetry row, Job_Type sheets_quota_busy (a P2 in the ledger), naming the job', a.L.telemetry.length === 1 && a.L.telemetry[0].Job_Type === 'sheets_quota_busy' && a.L.telemetry[0].Skill_Or_Endpoint === 'scheduler/q' && a.L.telemetry[0].Success === 'FALSE', a.L.telemetry);
+  t('quota-only job failure: nobody is paged (alertAdminOnFailure never called)', a.L.alerts.length === 0 && !a.r.body.admin_alerted, a.L.alerts);
+  const b = await runOne([{ step: 'pending_notifications', error: Q('Notification_Queue') }, { step: 'vendor_nudges', error: 'Sheets API error on GET /values/Vendor_Requests: injected sheets failure' }]);
+  t('mixed (one quota + one real error): NOT treated as quota - P0 scheduler_job row and the admin alert', b.r.body.quota_busy !== true && b.L.telemetry[0].Job_Type === 'scheduler_job' && b.L.alerts.length === 1, { tel: b.L.telemetry, alerts: b.L.alerts });
+  const c2 = await runOne([{ step: 'job', error: 'Cannot read properties of undefined' }]);
+  t('a real bug: unchanged - P0 scheduler_job row, admin alert', c2.L.telemetry[0].Job_Type === 'scheduler_job' && c2.L.telemetry[0].Skill_Or_Endpoint === 'q' && c2.L.alerts.length === 1);
+  const d = await runOne([{ step: 'x', error: Q('Config').replace('on GET', 'on POST') }]);
+  t('a WRITE that hit quota is a real failure (not "busy"): P0 scheduler_job + alert', d.L.telemetry[0].Job_Type === 'scheduler_job' && d.L.alerts.length === 1);
+  const e = await runOne([]);
+  t('ok:false with no errors listed is still a plain failure (not "quota")', e.L.telemetry[0].Job_Type === 'scheduler_job' && e.r.body.quota_busy !== true);
+  const ok = await (async () => { const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')); const jobs = mkJobs([], [['q', 'interval']]); const r = await L.schedRunNext({}, null, fast(c, { jobs, only: ['q'], force: true })); return { r, L }; })();
+  t('happy path: nothing recorded, nobody paged', ok.r.body.job_ok === true && ok.L.telemetry.length === 0 && ok.L.alerts.length === 0);
+}
 // 2m only / force / unknown / dry
 {
   const store = makeStore(), L = load(store), c = clock(T0), log = [];
