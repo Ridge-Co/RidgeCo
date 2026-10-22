@@ -39888,12 +39888,16 @@ async function insbComplete(env, body) {
     } catch (e) {
       const st = e && e.stage ? e.stage : 'billing';
       await insbFail(env, st, 'Complete failed for booking ' + b.ID + ': ' + e.message, b.ID);
-      return json({ ok: false, error: st, message: e.message, steps, warnings }, 502);
+      return json({ ok: false, error: st, invoice_created: !!String(b.QB_Invoice_ID || '').trim(), message: e.message, steps, warnings }, 502);
     } finally {
-      try { await updateRowVerified(env, 'Insp_Bookings', b.ID, { Billing_Lock: '' }); } catch (e2) { await insbFail(env, 'unlock', 'Could not clear the billing lock on booking ' + b.ID + ': ' + e2.message + ' (it clears itself after 2 minutes)', b.ID); }
+      if (!lostLock) await insbUnlock(env, b.ID, lockTok);
     }
     invalidateTabCache('Insp_Bookings');
-    return json({ ok: true, completed: true, billed: true, invoice_number: b.QB_Invoice_Number, base: insbDollars(plan.base_cents), owner_status: b.InvB_Status || '', steps, warnings, booking: insbPublicBooking((await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(b.ID)) || b) });
+    let fin = b;
+    try { fin = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(b.ID)) || b; }
+    catch (e) { warnings.push('Billed and sent, but the booking could not be re-read for the screen (' + e.message + '). Refresh the page.'); await insbFail(env, 'complete_readback', 'Booking ' + b.ID + ' was billed but could not be re-read: ' + e.message, b.ID); }
+    await insbOk(env, 'complete', t0, b.ID);
+    return json({ ok: true, completed: true, billed: true, invoice_number: b.QB_Invoice_Number, base: insbDollars(plan.base_cents), owner_status: b.InvB_Status || '', steps, warnings, booking: insbPublicBooking(fin) });
   } catch (e) {
     await insbFail(env, 'complete', 'Complete crashed: ' + e.message, body && body.id);
     return json({ ok: false, error: 'complete_failed', message: e.message, steps }, 500);
