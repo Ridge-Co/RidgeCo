@@ -228,7 +228,10 @@ async function main() {
     const cfgRes = await call(api, env, 'insbCustomerConfig', { customer_id: '5', Markup_Pct: '20' });
     ok(cfgRes.body.ok && cfgRes.body.held_owner_invoices.length === 1, 'saving the markup lists the held owner invoice'); eq(w.tabs.Insp_Customers[0].Markup_Pct, '20', 'markup saved');
     const rp = await call(api, env, 'insbReleaseOwner', { id: '2', preview: true }); ok(rp.body.ok && rp.body.preview && rp.body.owner_cents === 11400, 'release preview shows $114.00'); eq(w.mails.length, 1, 'release preview sent nothing');
-    const rel = await call(api, env, 'insbReleaseOwner', { id: '2' }); ok(rel.body.ok, 'release ok: ' + JSON.stringify(rel.body).slice(0, 200));
+    const noc = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true }); ok(!noc.body.ok && noc.body.error === 'expected_required' && w.mails.length === 1, 'releasing without the amount the screen showed is refused');
+    const stale = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 9999 }); ok(!stale.body.ok && stale.body.error === 'amount_changed' && stale.status === 409 && w.mails.length === 1, 'a stale amount is refused, nothing sent');
+    const prev2 = await call(api, env, 'insbReleaseOwner', { id: '2' }); ok(prev2.body.ok && prev2.body.preview && w.mails.length === 1, 'no confirm = look only');
+    const rel = await call(api, env, 'insbReleaseOwner', { id: '2', confirm: true, expected_cents: 11400 }); ok(rel.body.ok, 'release ok: ' + JSON.stringify(rel.body).slice(0, 200));
     eq(w.mails.length, 2, 'owner invoice email sent'); const m2 = w.mails[1]; ok(m2.includes('To: josiah.speed@ppmillc.com'), 'owner invoice goes to the people'); eq((m2.match(/Content-Type: application\/pdf/g) || []).length, 1, 'exactly the owner invoice attached, NOT ours again'); ok(m2.includes('$114.00') && m2.includes('20% markup'), 'email states the amount and markup');
     eq([latest(w).InvB_Status, latest(w).InvB_Cents, latest(w).InvB_Markup_Pct], ['sent', '11400', '20'], 'owner invoice stamped'); eq(w.qbPosts.length, 1, 'still only one QuickBooks invoice');
     const rel2 = await call(api, env, 'insbReleaseOwner', { id: '2' }); ok(!rel2.body.ok && rel2.status === 409, 'cannot release a sent owner invoice again'); eq(w.mails.length, 2, 'and nothing was sent');
