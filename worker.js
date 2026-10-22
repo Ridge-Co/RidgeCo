@@ -39401,6 +39401,8 @@ function insbRecipients(cust) {
   if (af.length > 1) problems.push('Only one AppFolio Smart Bill Entry address is allowed (got ' + af.length + ').');
   if (!people.length && !af.length) problems.push('No billing email is set for this customer.');
   const appfolio = af[0] || '';
+  // The owner-facing invoice must never reach the AppFolio inbox (it would be keyed in as a second bill).
+  if (appfolio && [].concat(people, cc).some(e => e.toLowerCase() === appfolio.toLowerCase())) problems.push('The AppFolio address is also in the people list or Cc. Remove it there: the owner-facing invoice must not go to AppFolio.');
   return { appfolio, a_to: appfolio ? [appfolio] : people, a_cc: appfolio ? [] : cc, b_to: people, b_cc: cc, problems };
 }
 // PURE — the whole plan for one Complete tap. Nothing is written. o = { booking, customer, kind, units, todayIso }
