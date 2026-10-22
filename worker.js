@@ -1545,7 +1545,7 @@ async function tenantByPin(env, url) {
   const pin  = url.searchParams.get('pin')  || '';
   const name = (url.searchParams.get('name') || '').trim().toLowerCase();
   if (!name) return json({ error: 'First name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const tenants = await fetchTab(env, 'Tenants');
     const tenant = tenants.find(t => t.PIN && t.PIN.toLowerCase() === p.toLowerCase() && t.Active !== 'FALSE');
     if (!tenant) return null;
