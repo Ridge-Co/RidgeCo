@@ -1,3 +1,13 @@
+# INSPECTION BILLING (PREMIER) — Oct 22, 2026 — head `feat/insp-billing-premier-oct22`, staging PR #418 merged into `staging`; the `main` PR is NOT opened/merged (Brett's go/no-go). BUILD_VERSION `2026-10-22.03-insp-billing`. FEATURE_LOG rule 228 [FL-20261022-insp-billing-premier]. Brief: `context/INSPECTION_BILLING_BUILD_BRIEF_v1.0.md`.
+
+## 🟡 Built, independently reviewed, review fixes applied, tested on staging. Waiting on Brett's go to merge to `main`.
+What Brett gets: tap Complete on an approved Premier inspection booking and it creates our QuickBooks invoice (QuickBooks' own format), emails QuickBooks' PDF to Premier (to the AppFolio Smart Bill Entry address alone once we have it), and builds the owner-facing invoice in Premier's layout (held until Premier's markup is on file). Rate card $95 / $85 / $75 / $75 / $65, zero access $85, no-shows not billed, net 15. One Premier WO = one visit.
+Safety: claim-before-send (an unclear email result never resends by itself), QuickBooks intent recorded before create and looked up on retry, QuickBooks total must equal ours, stale-amount guards (`expected_cents`), failures P0 when money, unknown stage defaults to P0.
+Verified: `test/insp-billing.test.mjs` 367/0, failure-ledger 121/0, tripwires 8/8; staging (sandbox, Gmail stubbed) 1 / 3 units, zero access, repeat tap, held owner invoice + release, stale amounts, forced QuickBooks refusal (clean row, nothing sent, P0) then clean retry; mocked UI at 390 wide clean. NOT verified: real email delivery, real QuickBooks company.
+**After merge (Brett):** poll prod `/version`; add the Premier Insp_Customers row (Billing_Mode=wo, Owner_Invoice=TRUE, Bill To, Bill_Email_To/Cc); still unknown from Premier: InvB phone/email, Markup_Pct, AppFolio Smart Bill Entry address. Do NOT complete WO 43945-1 (Gilmor) until Brett says so; the old Gmail draft 43945-1-6131 is stale.
+
+---
+
 # MESSAGE QUEUE PAGE: SEARCH + FILTER + SORT + AGE GROUPS — Oct 21, 2026 — head `feat/message-queue-search-filter-oct21` (cut from main tip 9d3f130), PR into `main`. Pages only (`message-queue.html`); no Worker change, no BUILD_VERSION bump. FEATURE_LOG rule 227 [FL-20261021-message-queue-search-filter].
 
 ## 🟢 Built and tested; merged Oct 21 (see PR). `test/message-queue-page.test.mjs` 175/0; full suite 186 files, 0 failing (185 and 0 on the base). Playwright (mocked Worker, 304 synthetic rows) at 1280, 390 and 360 wide: no sideways scroll, controls at least 44 px.
