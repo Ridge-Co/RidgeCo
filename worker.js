@@ -1134,6 +1134,11 @@ const _hubWorkerCore = {
         if (path === '/insp/open-block/reopen')    return await inspOpenBlockReopen(env, body);
         if (path === '/insp/booking/decide')       return await inspBookingAdminDecide(env, body);
         if (path === '/insp/booking/cancel')       return await inspBookingAdminCancel(env, body);
+        if (path === '/insp/billing/preview')      return await insbPreview(env, body);
+        if (path === '/insp/billing/complete')     return await insbComplete(env, body);
+        if (path === '/insp/billing/release-owner') return await insbReleaseOwner(env, body);
+        if (path === '/insp/billing/customer-config') return await insbCustomerConfig(env, body);
+        if (path === '/insp/billing/set-wo')       return await insbSetWO(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
