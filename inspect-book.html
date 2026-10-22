@@ -166,7 +166,7 @@ function pick(i){
 }
 function requestSlot(){
   var s=state.slots[state.picked], err=$('c-err'), btn=$('c-go');
-  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
+  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,wo_number:state.wo||'',start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
   btn.disabled=true; btn.textContent='Requesting…'; err.innerHTML='';
   call('POST','/insp-book/request',body).then(function(r){
     if(r.ok){
