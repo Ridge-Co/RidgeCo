@@ -57,7 +57,7 @@ function build() {
   snap = api.__meterSnapshot(new URL('https://x/read-meter'));
   t('cache hits and coalesced joins are counted (reads SAVED)', snap.totals.cache_hits === 3 && snap.totals.joined === 1);
 }
-{ // alarm
+{ // alarm (Oct 22 2026: a busy-but-not-throttled minute is no longer filed; only a real 429 files the P2 row)
   const { st, api } = build(); const e = api.__meterReqEnv({}, { method: 'GET' }, '/estimates'); api.__meterIdentify(e, 'vendor', '7');
   for (let i = 0; i < 39; i++) api.__meterGoogle(e, 'GET', '/values/Estimates', 'ok');
   t('39 reads in a minute: no alarm yet', api.__meter.pending === null);
