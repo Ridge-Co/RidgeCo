@@ -10288,7 +10288,13 @@ async function regeneratePIN(env, body) {
   if (!record[phoneField]) return json({ error: 'Phone number required to generate PIN' }, 400);
   const newPIN = generatePIN(record[phoneField]);
   await updateRow(env, tab, id, { PIN: newPIN });
-  if (send) { const sendResult = await sendPinMessage(env, { type, id }); return json({ success: true, pin: newPIN, sms_sent: !!sendResult }); }
+  if (send) {
+    // sendPinMessage returns a Response (always truthy), so read what it actually said - sms_sent is only true when the text really went out.
+    const sendResult = await sendPinMessage(env, { type, id });
+    let sj;
+    try { sj = await sendResult.clone().json(); } catch (e) { sj = { error: 'Could not read the send result: ' + ((e && e.message) || e) }; }
+    return json({ success: true, pin: newPIN, sms_sent: !!(sj && sj.success), sms_error: (sj && !sj.success) ? (sj.error || 'send failed') : '', sms_warning: (sj && sj.warning) || '' });
+  }
   return json({ success: true, pin: newPIN });
 }
 
