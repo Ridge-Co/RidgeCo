@@ -75,7 +75,7 @@ function world(opts = {}) {
 }
 
 // ───────────────────────── pure functions ─────────────────────────
-const P = new Function('inspAddDays', '_b64urlBytes', block + '\nreturn { insbRateCents, insbTripCents, insbMarkup, insbNormWO, insbOwnerInvoiceNumber, insbDollars, insbMDY, insbEmails, insbEmailOk, insbAddrLines, insbRecipients, insbPlan, insbAscii, insbTextWidth, insbWrap, insbPdfBytes, insbOwnerInvoiceOps, insbCustomerRow, insbB64 };')(new Function(grab('inspAddDays') + '\nreturn inspAddDays;')(), bytes => Buffer.from(bytes).toString('base64url'));
+const P = new Function('inspAddDays', '_b64urlBytes', block + '\nreturn { insbRateCents, insbTripCents, insbMarkup, insbNormWO, insbOwnerInvoiceNumber, insbDollars, insbMDY, insbEmails, insbEmailOk, insbAddrLines, insbRecipients, insbPlan, insbAscii, insbTextWidth, insbWrap, insbPdfBytes, insbOwnerInvoiceOps, insbCustomerRow, insbB64, insbJobType };')(new Function(grab('inspAddDays') + '\nreturn inspAddDays;')(), bytes => Buffer.from(bytes).toString('base64url'));
 
 // rate card: 1st $95, 2nd $85, 3rd and 4th $75, 5th and up $65
 eq([1, 2, 3, 4, 5, 6, 12].map(P.insbRateCents), [9500, 8500, 7500, 7500, 6500, 6500, 6500], 'rate for each unit position');
