@@ -39883,7 +39883,7 @@ async function insbComplete(env, body) {
       }
       // 4-6) PDF, email, owner invoice
       const planNow = insbPlan({ booking: Object.assign({}, b, { Status: 'approved' }), customer: c, kind: b.Completion_Kind, units: b.Units_Billed, todayIso: String(b.Completed_At || '').slice(0, 10) && inspEtDate(Date.parse(b.Completed_At)) || insbTodayEt() });
-      const d = await insbDeliver(env, b, c, planNow, token, steps, warnings);
+      const d = await insbDeliver(env, b, c, planNow, token, steps, warnings, { force: body.force_resend === true });
       if (!d.ok) return json({ ok: false, invoice_created: true, invoice_number: b.QB_Invoice_Number, stage: d.stage, error: d.error, steps, warnings, booking: insbPublicBooking(b) }, 502);
     } catch (e) {
       const st = e && e.stage ? e.stage : 'billing';
