@@ -31259,6 +31259,7 @@ async function qbReadyQueue(env, url) {
     // Was `return json([])`. A Sheets outage or a renamed tab then rendered as a green
     // "✓ Nothing waiting for QuickBooks" — a read returning [] is not proof the tab exists
     // (FEATURE_LOG rule 16). Fail loudly instead.
+    if (sheetsQuotaBusyError(e)) throw e;   // Oct 22 2026: Google's shared read quota is "busy, retry" (typed 429 + one calm P2 row), not an HTTP 500 that every open Hub page reports as a failure
     return json({ error: 'Could not read the QuickBooks queue: ' + (e && e.message || 'unknown error') }, 500);
   }
 }
