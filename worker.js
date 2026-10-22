@@ -1119,7 +1119,7 @@ const _hubWorkerCore = {
         if (path === '/fi/property/create')       return await fiRoute(env, 'property-create', () => fiPropertyCreate(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
-        if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
+        if (path === '/insp/customer/update')     return await insbCustomerUpdate(env, body);
         if (path === '/insp/property/add')        return await inspPropertyAdd(env, body);
         if (path === '/insp/property/update')     return await updateRow(env, 'Insp_Properties', body.id, body.fields);
         if (path === '/insp/unit/add')             return await inspUnitAdd(env, body);
