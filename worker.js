@@ -39521,8 +39521,11 @@ async function insbEnsureColumns(env) {
   await ensureColumns(env, 'Insp_Customers', INSB_CUSTOMER_COLS);
 }
 // A failure is always a Telemetry row (which also files it on Needs Attention) — never a text from here, never swallowed.
+// Severity rides on Job_Type (failSeverity reads it): money-path failures are P0, data-write failures P1, reads / previews P2.
+const INSB_MONEY_KINDS = ['qb', 'pdf', 'email', 'stamp', 'stamp_after_send', 'resume_mismatch', 'complete', 'release', 'item_cache', 'unlock'], INSB_WRITE_KINDS = ['customer_config', 'set_wo'];
+function insbJobType(kind) { return INSB_MONEY_KINDS.includes(kind) ? 'insp_billing_money' : INSB_WRITE_KINDS.includes(kind) ? 'insp_billing_write' : 'insp_billing'; }
 async function insbFail(env, kind, message, ref) {
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_billing', Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'FALSE', Notes: (ref ? '[booking ' + ref + '] ' : '') + String(message).slice(0, 440) }); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: insbJobType(kind), Skill_Or_Endpoint: 'insp-billing/' + kind, Success: 'FALSE', Notes: (ref ? '[booking ' + ref + '] ' : '') + String(message).slice(0, 440) }); }
   catch (te) { console.error('insp billing: telemetry write failed:', te && te.message, '| original:', kind, message); }
 }
 function insbLogLine(b, line) { return ((b.Billing_Log ? b.Billing_Log + ' | ' : '') + new Date().toISOString().slice(0, 16) + ' ' + line).slice(-900); }
