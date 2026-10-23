@@ -31694,6 +31694,41 @@ async function invoiceInputsEnglish(env, billRow, timeEntries) {
   return { billRow: bill, timeEntries: entries };
 }
 
+// Oct 23 2026 (Brett: "split these billable hours into line items. That way it makes more sense"):
+// Brett's own hours on a job with NO vendor bill become one invoice line per logged visit, each
+// with its own description and hours x rate, instead of one lump "Billable hours" line. ONLY when
+// the visits' stored Billable_Amounts add up to the labor amount to the cent; otherwise (a flat
+// price, a markup, anything that does not reconcile) it returns null and the single combined line
+// is used, so the invoice TOTAL is never changed by this.
+function hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef) {
+  const woId = String((ir && ir.WO_ID) || '');
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE'
+    && !String(e.Bill_ID || '').trim()
+    && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)
+    && (!e.WO_ID || !woId || String(e.WO_ID) === woId)
+    && Math.round((Number(e.Billable_Amount) || 0) * 100) > 0);
+  if (!list.length) return null;
+  const cents = list.reduce((n, e) => n + Math.round((Number(e.Billable_Amount) || 0) * 100), 0);
+  if (cents !== Math.round(laborAmt * 100)) return null;
+  list.sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0));
+  return list.map(e => {
+    const amt = +(Number(e.Billable_Amount) || 0).toFixed(2);
+    const hrs = +((parseFloat(e.Duration_Minutes) || 0) / 60).toFixed(2);
+    const rate = +(Number(e.Hourly_Rate) || 0).toFixed(2);
+    const parts = [tradeName];
+    const text = laborEntryText(e);
+    if (text) parts.push(text);
+    parts.push('WO ' + (ir.WO_ID || ''));
+    let label = parts.join(' — ');
+    let detail = { ItemRef: itemRef, Qty: 1, UnitPrice: amt };
+    if (hrs > 0 && rate > 0 && Math.abs(+(hrs * rate).toFixed(2) - amt) < 0.01) {
+      detail = { ItemRef: itemRef, Qty: hrs, UnitPrice: rate };
+      label += ' — ' + hrs + ' hr' + (hrs === 1 ? '' : 's') + ' × $' + rate.toFixed(2) + '/hr';
+    }
+    return { DetailType: 'SalesItemLineDetail', Amount: amt, Description: label.slice(0, 4000), SalesItemLineDetail: detail };
+  });
+}
+
 function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
