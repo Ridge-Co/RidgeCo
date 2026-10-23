@@ -17571,6 +17571,23 @@ async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
 
 function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 // Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
+// Oct 23 2026. PURE. Given the stored cooldown marker, which of the due jobs may start now? Returns { cooling, until, runnable, held }.
+// Only a marker in the future cools; a forced run is never held; a job flagged critical always runs.
+function schedCooldownPlan(state, nowMs, due, jobs, force) {
+  const untilMs = Date.parse((state && state.quota_hot_until) || '');
+  const cooling = !force && !isNaN(untilMs) && untilMs > nowMs;
+  if (!cooling) return { cooling: false, until: null, runnable: due, held: [] };
+  const crit = (name) => { const j = (jobs || []).find(x => x.name === name); return !!(j && j.critical); };
+  return { cooling: true, until: new Date(untilMs).toISOString(), runnable: due.filter(d => crit(d.name)), held: due.filter(d => !crit(d.name)).map(d => d.name) };
+}
+// Oct 23 2026. PURE. The marker to store after a run: a throttled run sets it to now+cooldown (never shortens one already in force); an un-throttled
+// run keeps a still-future marker as it is and drops an expired one (returns '').
+function schedCooldownNext(prevIso, nowMs, throttled, cooldownMs) {
+  const prevMs = Date.parse(prevIso || '');
+  const prevFuture = !isNaN(prevMs) && prevMs > nowMs ? prevMs : 0;
+  if (throttled) return new Date(Math.max(prevFuture, nowMs + cooldownMs)).toISOString();
+  return prevFuture ? new Date(prevFuture).toISOString() : '';
+}
 async function schedRunNext(env, ctx, opts) {
   opts = opts || {};
   const baseJobs = opts.jobs || SCHED_JOBS;
