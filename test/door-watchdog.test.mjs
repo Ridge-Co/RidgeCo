@@ -184,7 +184,7 @@ const jres = (obj, status) => new Response(typeof obj === 'string' ? obj : JSON.
 
 // ───────────────────────── full passes with injected io ─────────────────────────
 function harness(over) {
-  const h = { cell: '', sms: [], emails: [], tel: [], writes: 0, cfg: { admin_phone: '410-555-0100' }, health: good(), fetchImpl: null };
+  const h = { cell: '', sms: [], emails: [], tel: [], smsLog: [], writes: 0, cfg: { admin_phone: '410-555-0100' }, health: good(), fetchImpl: null };
   h.io = {
     // the default fixture's last_tick is "20 min before NOW"; keep it "20 min before the simulated pass time" so a long simulated sequence stays fresh
     fetch: async () => {
