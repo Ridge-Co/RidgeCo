@@ -9642,16 +9642,15 @@ function invComposeMemo(billId, timeEntries, billObj, wo) {
   var parts = [];
   var billDesc = enOnly((billObj && billObj.Invoice_Description) || '').trim();   // customer-facing memo = English half of any [ES]/[EN] text
   if (billDesc) parts.push(billDesc);
-  // Mirrors worker.js laborEntryText (Oct 23 2026): an entry's own Invoice_Description leads; Brett's OWN billable hours
-  // logged before that field existed fall back to their Notes. Vendor notes and non-billable hours are never used.
+  // Mirrors worker.js laborEntryText (Oct 23 2026): only an entry's own Invoice_Description is ever used (private Notes
+  // are copied into it by the opt-in "Use notes as invoice descriptions" button, never automatically). Brett's own
+  // hours show a date only when a work date (Start_DateTime) was recorded; vendor entries keep the old rule.
   function entryText(e) {
     var inv = enOnly(e.Invoice_Description || '').trim();
-    if (inv) { var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0]; return d ? (d + ' — ' + inv) : inv; }
-    if (String(e.Role || '').toLowerCase() === 'hub' && String(e.Billable).toUpperCase() === 'TRUE') {
-      var note = enOnly(e.Notes || '').trim();
-      if (note) { var d2 = (e.Start_DateTime || '').split('T')[0]; return d2 ? (d2 + ' — ' + note) : note; }
-    }
-    return '';
+    if (!inv) return '';
+    var isHub = String(e.Role || '').toLowerCase() === 'hub';
+    var d = (isHub ? (e.Start_DateTime || '') : (e.Start_DateTime || e.Created_Date || '')).split('T')[0];
+    return d ? (d + ' — ' + inv) : inv;
   }
   safeArray(timeEntries).filter(function(e) {
     return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && entryText(e);
