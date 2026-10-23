@@ -15260,11 +15260,11 @@ async function sendSMSRaw(env, to, message, opts) {
 // own stated intent (kept off until he's run live tests) at the one place that can enforce it
 // for every SMS in the codebase, not just the 6 new ones. TWILIO_ENABLED defaults OFF (missing
 // Config key reads as '', which is !== 'TRUE'), so nothing sends anywhere until Brett flips it.
-async function sendSMS(env, to, message) {
+async function sendSMS(env, to, message, opts) {
   let cfg;
   try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
   if (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'TWILIO_ENABLED not TRUE' };
-  return sendSMSRaw(env, to, message);
+  return sendSMSRaw(env, to, message, opts);   // opts (D-16): { allowRepeat, keepAccents, context } - see sendSMSRaw
 }
 
 // ── POST /admin-notify (Oct 12 2026) — narrow server-to-server "text Brett" endpoint ─────────────
