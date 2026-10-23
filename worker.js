@@ -31611,15 +31611,22 @@ function buildLaborDescription(billRow, timeEntries, wo) {
   const billDesc = englishOnly((billRow && billRow.Invoice_Description) || '').trim();   // customer-facing = English (Sep 28 2026): [ES]/[EN] tags resolve to the EN half
   if (billDesc) parts.push(billDesc);
   (Array.isArray(timeEntries) ? timeEntries : [])
-    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && String(e.Invoice_Description || '').trim())
+    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && laborEntryText(e))
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
-    .forEach(e => {
-      const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
-      const desc = englishOnly(e.Invoice_Description || '').trim();
-      parts.push(d ? (d + ' — ' + desc) : desc);
-    });
+    .forEach(e => parts.push(laborEntryText(e)));
   if (parts.length) return parts.join('; ');
   return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+}
+
+// True when billable hours exist on this job but NONE of them (nor the bill) said anything the
+// customer can read — the invoice would go out with only the generic work-order text. Used to
+// warn loudly in the send preview instead of letting a vague invoice go out silently.
+function laborDescriptionIsGeneric(billRow, timeEntries) {
+  const billId = String((billRow && billRow.ID) || '').trim();
+  if (englishOnly((billRow && billRow.Invoice_Description) || '').trim()) return false;
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId);
+  if (!list.some(e => isTrueish(e.Billable) || String(e.Role || '').toLowerCase() === 'vendor')) return false;   // no billable hours: nothing to explain
+  return !list.some(e => laborEntryText(e));
 }
 
 // Async pre-pass for the invoice builders (Sep 28 2026): returns COPIES of the bill row and time
