@@ -16267,10 +16267,42 @@ async function smsGatedSend(env, opts) {
         messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
-    } catch (e) {}
+    } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'message_audit', ref: opts.wo_id, severity: 'P2', message: 'could not write the WO audit row for a text (' + outcome + '): ' + String((e && e.message) || e).slice(0, 160) }); }
   }
   return Object.assign({ queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
+    errorCode ? { error_code: errorCode, error_reason: errorReason } : {}, outcome === 'duplicate_suppressed' ? { duplicate_suppressed: true } : {},
     queueSaveWarning ? { warning: queueSaveWarning } : {});
+}
+
+// Sends one ALREADY-QUEUED Message_Queue row (a quiet-hours release or a manual release) the safe way (D-16 item 4). The row is first marked "sending"
+// (a durable marker written BEFORE the text goes out); if that mark cannot be saved the text is NOT sent (it stays pending and is retried next sweep, and
+// the failure is reported). Because of the mark, a failed save of "sent" afterwards leaves the row "sending", never "pending", so no later sweep can
+// send it a second time. Returns { sent, claim_failed, outcome } and never throws.
+async function mqSendQueuedRow(env, row, deliverTo, extraFields) {
+  const id = row.ID;
+  const claimed = await updateMessageQueueRow(env, id, { Status: 'sending', Sent_Date: new Date().toISOString() }, { retryWaitsMs: [2500] });
+  if (claimed === false) return { sent: false, claim_failed: true, outcome: smsSendOutcome({ error: 'could not mark the row as sending, so the text was not sent (it will be tried again next sweep)' }) };
+  const dc = smsDestinationCheck(deliverTo);
+  let result;
+  if (!dc.ok) { await smsReportRegionBlocked(env, id, dc); result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dc.reason + ')' }; }
+  else {
+    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
+    catch (e) { result = { error: 'no answer from Twilio: ' + String((e && e.message) || e).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+  const o = smsSendOutcome(result);
+  const fin = Object.assign({ Status: o.status, Delivered_To: o.sent ? deliverTo : '', Sent_Date: new Date().toISOString(), Twilio_Message_SID: o.sid }, extraFields || {});
+  if (!o.sent) { fin.Error_Code = o.errorCode; fin.Error_Reason = o.reason; }
+  await updateMessageQueueRow(env, id, fin);   // reports (P0) by itself if it cannot save; the row then stays "sending", not "pending"
+  if (!o.sent && o.permanent && !o.regionBlocked) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_undeliverable', ref: 'Message_Queue ' + id, severity: 'P2', message: 'text not delivered, Twilio error ' + o.errorCode + ' (Message_Queue row ' + id + ', number ending ' + String(row.Recipient_Phone || '').replace(/\D/g, '').slice(-4) + '): ' + o.reason });
+  return { sent: o.sent, outcome: o };
+}
+// Pure. Rows left "sending" for 15-45 minutes: a text was claimed and its result never confirmed. Reported once or twice, never every sweep.
+function mqStuckSending(rows, nowMs) {
+  return (rows || []).filter(r => {
+    if (String(r.Status || '').toLowerCase() !== 'sending') return false;
+    const t = Date.parse(r.Sent_Date || r.Created_Date || '');
+    return isFinite(t) && nowMs - t >= 15 * 60000 && nowMs - t < 45 * 60000;
+  });
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
