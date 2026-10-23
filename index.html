@@ -9642,15 +9642,22 @@ function invComposeMemo(billId, timeEntries, billObj, wo) {
   var parts = [];
   var billDesc = enOnly((billObj && billObj.Invoice_Description) || '').trim();   // customer-facing memo = English half of any [ES]/[EN] text
   if (billDesc) parts.push(billDesc);
+  // Mirrors worker.js laborEntryText (Oct 23 2026): an entry's own Invoice_Description leads; Brett's OWN billable hours
+  // logged before that field existed fall back to their Notes. Vendor notes and non-billable hours are never used.
+  function entryText(e) {
+    var inv = enOnly(e.Invoice_Description || '').trim();
+    if (inv) { var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0]; return d ? (d + ' — ' + inv) : inv; }
+    if (String(e.Role || '').toLowerCase() === 'hub' && String(e.Billable).toUpperCase() === 'TRUE') {
+      var note = enOnly(e.Notes || '').trim();
+      if (note) { var d2 = (e.Start_DateTime || '').split('T')[0]; return d2 ? (d2 + ' — ' + note) : note; }
+    }
+    return '';
+  }
   safeArray(timeEntries).filter(function(e) {
-    return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && String(e.Invoice_Description || '').trim();
+    return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && entryText(e);
   }).sort(function(a, b) {
     return new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0);
-  }).forEach(function(e) {
-    var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0];
-    var desc = enOnly(e.Invoice_Description || '').trim();
-    parts.push(d ? (d + ' — ' + desc) : desc);
-  });
+  }).forEach(function(e) { parts.push(entryText(e)); });
   if (parts.length) return parts.join('; ');
   return (wo && (wo.Invoice_Memo || wo.Description)) || '';
 }
