@@ -152,7 +152,7 @@ const codes = (ev) => ev.reasons.map(r => r.code);
   t('absent_since is kept, not re-stamped', s2.absent_since === s1.absent_since);
   const s3 = W.doorWdNextState(s2, healthy, 'none', false, NOW + 2 * HR);
   t('absent_since cleared once last_tick appears', s3.absent_since === null);
-  t('old sent entries pruned', Object.keys(W.doorWdPrune({ active: true, sent: { a: new Date(NOW - 7 * HR).toISOString(), b: new Date(NOW - HR).toISOString() }, absent_since: null }, NOW).sent).join() === 'b');
+  t('old sent entries pruned (older than 24h)', Object.keys(W.doorWdPrune({ active: true, sent: { a: new Date(NOW - 25 * HR).toISOString(), b: new Date(NOW - 7 * HR).toISOString() }, absent_since: null }, NOW).sent).join() === 'b');
 }
 
 // ───────────────────────── fetch wrapper ─────────────────────────
