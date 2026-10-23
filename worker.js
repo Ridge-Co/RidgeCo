@@ -31578,6 +31578,33 @@ function qbGroupOpenRows(irRows, ir, woRows, estRows) {
 // the bill's own Invoice_Description leads if set (the flat-rate / no-time-entry case). Only
 // when NEITHER exists — old bills, or nobody filled either field in — does this fall back to
 // wo.Invoice_Memo/Description, so nothing already sent regresses.
+//
+// Oct 23 2026 (invoice 1767 / WO-1169, owner asked "more detail of the larger amounts"): Brett's
+// own billable hours logged BEFORE the Invoice Description field existed carry their detail only
+// in Notes. The invoice read "Billable hours" and said nothing about 4 visits. Those hours now
+// describe themselves from Notes — but ONLY for Brett's own (role 'hub') billable hours that have
+// no Invoice_Description of their own, so a vendor's private notes can never reach a customer and
+// a filled-in Invoice_Description is never mixed with the private note. Non-billable hours are
+// never listed. Such an entry gets no date prefix: its Created_Date is when it was LOGGED, not
+// when the work happened, and the note usually carries its own date.
+function isTrueish(v) { return v === true || String(v == null ? '' : v).trim().toUpperCase() === 'TRUE'; }
+
+function laborEntryText(e) {
+  const inv = englishOnly((e && e.Invoice_Description) || '').trim();
+  if (inv) {
+    const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
+    return d ? (d + ' — ' + inv) : inv;
+  }
+  if (e && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)) {
+    const note = englishOnly(e.Notes || '').trim();
+    if (note) {
+      const d = String(e.Start_DateTime || '').split('T')[0];
+      return d ? (d + ' — ' + note) : note;
+    }
+  }
+  return '';
+}
+
 function buildLaborDescription(billRow, timeEntries, wo) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
