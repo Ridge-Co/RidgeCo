@@ -17687,6 +17687,7 @@ async function schedRunNext(env, ctx, opts) {
   const jobEnv = __meterCronEnv(__cronEnv(env), job.name);
   if (job.critical) jobEnv.__CRON_CRITICAL__ = true;
   const t0 = Date.now();
+  const hit429Before = __cronLast429At();
   const work = (async () => {
     let jobRes;
     try { jobRes = await job.run(jobEnv, { now }); }
