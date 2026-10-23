@@ -6780,6 +6780,47 @@ async function addTimeEntry(env, body) {
   return json({ success: true, duration_minutes: durationMinutes, hourly_rate: rate });
 }
 
+// POST /time-entry/use-notes { wo_id, ids? } — Oct 23 2026 (Brett: opt in to use the billable-hour
+// notes as the invoice descriptions "without having to retype them"). Copies the private Notes of
+// Brett's own billable hours that have NO Invoice_Description into Invoice_Description, so the
+// invoice (and the repair tool) can print them. Only Brett's own (role 'hub') billable hours; vendor
+// notes are never touched; an entry that already has an Invoice_Description is never overwritten.
+// Every write is read back; any failure is returned per entry AND filed in Ops_Telemetry.
+async function useTimeEntryNotes(env, body) {
+  const woId = String((body && body.wo_id) || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  const only = Array.isArray(body && body.ids) ? body.ids.map(String) : null;
+  const warnings = [];
+  // A failed audit row is reported to the caller (never swallowed); the copy result itself still stands.
+  const audit = async (rec) => {
+    try { await logTelemetry(env, Object.assign({ Source: 'worker', Job_Type: 'time_entry_use_notes', Skill_Or_Endpoint: '/time-entry/use-notes' }, rec)); }
+    catch (e) { warnings.push('Could not file the audit row in Ops_Telemetry: ' + String((e && e.message) || e).slice(0, 160)); }
+  };
+  let eligible;
+  try {
+    const all = await fetchTab(env, 'Time_Entries');
+    eligible = timeEntriesWithUsableNotes(all.filter(e => String(e.WO_ID) === woId), null).filter(e => !only || only.includes(String(e.ID)));
+  } catch (e) {
+    const msg = 'Could not read Time_Entries: ' + String((e && e.message) || e).slice(0, 200);
+    await audit({ Success: 'FALSE', Notes: 'wo=' + woId + ' ' + msg });
+    return json({ ok: false, error: msg, updated: [], errors: [{ id: '', error: msg }], warnings }, 500);
+  }
+  if (!eligible.length) return json({ ok: true, updated: [], errors: [], warnings, message: 'Nothing to copy: every billable hour entry on this job already has an Invoice Description, or has no note.' });
+  const updated = [], errors = [];
+  try { await ensureColumns(env, 'Time_Entries', ['Invoice_Description']); }
+  catch (e) { errors.push({ id: '', error: 'Could not make sure the Invoice_Description column exists: ' + String((e && e.message) || e).slice(0, 160) }); }
+  if (!errors.length) {
+    for (const e of eligible) {
+      const text = String(e.Notes || '').trim().slice(0, 1000);
+      try { await updateRowVerified(env, 'Time_Entries', e.ID, { Invoice_Description: text }); updated.push({ id: String(e.ID), text }); }
+      catch (err) { errors.push({ id: String(e.ID), error: String((err && err.message) || err).slice(0, 200) }); }
+    }
+  }
+  await audit({ Success: errors.length ? 'FALSE' : 'TRUE',
+    Notes: ('wo=' + woId + ' copied=' + updated.map(u => u.id).join(',') + (errors.length ? ' FAILED=' + errors.map(x => (x.id || 'all') + ':' + x.error).join(' | ') : '')).slice(0, 480) });
+  return json({ ok: errors.length === 0, updated, errors, warnings }, errors.length ? 500 : 200);
+}
+
 async function listWOTenants(env, url) {
   const woId = url.searchParams.get('wo_id') || '';
   if (!woId) return json({ error: 'wo_id required' }, 400);
