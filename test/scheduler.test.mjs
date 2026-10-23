@@ -102,7 +102,7 @@ function load(store, over) {
   };
   Object.assign(stubs, over.stubs || {});
   const names = Object.keys(stubs);
-  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedStampFirstSeen, schedGrace, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
+  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedStampFirstSeen, schedGrace, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, schedCooldownPlan, schedCooldownNext, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
   return Object.assign(fn(...names.map(n => stubs[n])), { telemetry, alerts, stubs });
 }
 const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
