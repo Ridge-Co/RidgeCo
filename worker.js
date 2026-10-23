@@ -15288,6 +15288,11 @@ async function sendSMS(env, to, message, opts) {
   let cfg;
   try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
   if (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'TWILIO_ENABLED not TRUE' };
+  // D-16: the 10-minute identical-text guard protects people (tenants, vendors, owners) from a double send. A text to Brett himself (admin alerts, admin-notify,
+  // door / cabin / inspection alerts, failure alerts, the digest) is NEVER held back by it: a repeat alert must always reach him.
+  const _toNorm = normalizePhone(to);
+  const _alertToBrett = !!_toNorm && (smsIsOwnNumber(_toNorm, cfg, null) || (!!cfg.digest_sms_to && normalizePhone(cfg.digest_sms_to) === _toNorm));
+  if (_alertToBrett && !(opts && opts.allowRepeat)) opts = Object.assign({}, opts || {}, { allowRepeat: true });
   return sendSMSRaw(env, to, message, opts);   // opts (D-16): { allowRepeat, keepAccents, context } - see sendSMSRaw
 }
 
