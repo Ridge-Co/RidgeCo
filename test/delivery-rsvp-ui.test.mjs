@@ -179,9 +179,11 @@ test('copy: the three buttons, the "no" wording, one gentle mention of reschedul
   for (const label of ['I’ll be there', 'I can’t be there', 'Not sure yet']) assert.ok(pageJs.includes(label), 'button label: ' + label);
   assert.ok(pageJs.includes('No problem at all, thank you for letting us know.'));
   assert.ok(pageJs.includes('We’ll do our best to be there instead.'));
-  assert.equal((visibleCopy.match(/reschedul/gi) || []).length, 1, 'the possible reschedule is mentioned exactly once, in the "can\'t be there" confirmation');
+  assert.equal((visibleCopy.match(/reschedul/gi) || []).length, 2, 'rescheduling is mentioned twice in total: once, gently, in the intro shown BEFORE answering, and once in the "can\'t be there" confirmation');
   const done = grab(pageJs, 'viewDone');
-  assert.ok(/reschedul/i.test(done.slice(done.indexOf("S.current==='no'"), done.indexOf("else{t='Thanks"))), 'and it is in the "no" branch');
+  assert.ok(/reschedul/i.test(done.slice(done.indexOf("S.current==='no'"), done.indexOf("else{t='Thanks"))), 'the confirmation mention is in the "no" branch');
+  assert.ok(!/reschedul/i.test(done.slice(done.indexOf("S.current==='yes'"), done.indexOf("else if(S.current==='no'"))), 'not in the "yes" confirmation');
+  assert.ok(!/reschedul/i.test(done.slice(done.indexOf("else{t='Thanks"))), 'not in the "not sure" confirmation');
   const banned = /\b(must|required|mandatory|unfortunately|penalt|fee|charged?|fined|fines|failure|failed|violation|deadline|last chance|final notice|urgent|immediately|warning|you need to|you have to|you should|no[- ]show|lazy|irresponsible)\b/i;
   const copy = visibleCopy.replace(/failure-reporter/g, '');
   assert.ok(!banned.test(copy), 'scolding / pressuring word found: ' + (copy.match(banned) || [])[0]);
