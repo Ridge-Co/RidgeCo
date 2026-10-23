@@ -34927,11 +34927,18 @@ function formatPhoneDisplay(phone) {
 // WO card list already uses (woCard(), index.html) — doesn't need to be the full description,
 // just enough that two jobs at the same address/trade never read the same. No trade -> falls
 // back to "General" (matches the same default used elsewhere for an unset Trade).
+// Pure. Cuts pulled-in text (a tenant's description, a hold reason) to n characters with a plain "..." (first line only). D-16.
+function smsShort(s, n) {
+  const first = String(s == null ? '' : s).split(/\r?\n/)[0].trim();
+  return first.length > n ? first.slice(0, n).trim() + '...' : first;
+}
 function woJobLabel(wo) {
   const trade = (wo && wo.Trade) || 'General';
   const desc = String((wo && wo.Description) || '').trim();
   if (!desc) return `${trade} job`;
-  const short = desc.length > 60 ? desc.slice(0, 60).trim() + '…' : desc;
+  // D-16 (Oct 23 2026): plain "..." instead of the ellipsis character (which made the whole text bill in 70-character pieces), first line only, 40 characters.
+  const first = desc.split(/\r?\n/)[0].trim();
+  const short = first.length > 40 ? first.slice(0, 40).trim() + '...' : first;
   return `${trade} job (${short})`;
 }
 
