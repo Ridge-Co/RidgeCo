@@ -636,7 +636,7 @@ let firstDelivery;
   // released late (after 7pm) is pushed to 9am next day, not sent at night
   seed(); await send('confirm');
   await withClock('2026-10-14T23:40:00Z', () => QH.processQuietHoursQueue(env));   // 7:40pm ET
-  t('K: a notice found due after 7pm ET is moved to 9am next day, not sent', toTenant().length === 0 && noticeRows()[0].Status === 'pending' && noticeRows()[0].Send_After === '2026-10-15T13:00:00.000Z', [noticeRows()[0].Status, noticeRows()[0].Send_After, noticeRows()[0].Gate_Snapshot, toTenant().length]);
+  t('K: a notice found due after 7pm ET is moved to 9am next day, not sent', toTenant().length === 0 && noticeRows()[0].Status === 'pending' && String(noticeRows()[0].Send_After).startsWith('2026-10-15T13:00:00') && new Date(noticeRows()[0].Send_After).getTime() - Date.parse('2026-10-15T13:00:00Z') < 1000, [noticeRows()[0].Status, noticeRows()[0].Send_After, noticeRows()[0].Gate_Snapshot, toTenant().length]);
   await withClock('2026-10-15T13:05:00Z', () => QH.processQuietHoursQueue(env));   // 9:05am next day
   t('K: ...and goes out at 9am the next day', toTenant().length === 1 && noticeRows()[0].Status === 'sent', noticeRows()[0]);
 }

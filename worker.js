@@ -33823,6 +33823,8 @@ async function deliveryEnsureWO(env, row, p, msgId, adminName) {
   const existing = String(row.Linked_WO_IDs || '').split(',').map(x => x.trim()).filter(Boolean)[0];
   if (existing) return { wo_id: existing, created: false, error: '' };
   if (!row.Property_ID) return { wo_id: '', created: false, error: '' };
+  // PLACEHOLDER (Phase 2 size check): later, compare the new unit's dimensions (New_Dims) with the old unit / opening and flag a mismatch BEFORE the WO is created. Not built; no dimension logic here.
+  // PLACEHOLDER (Phase 4 voice routing): later, route the driver's phone call (store gives Brett's number) through the Hub voice line. Not built; the store-facing contact is Brett's own number for now.
   try {
     const what = [row.Item_Type, row.New_Make_Model].filter(Boolean).join(' ') || 'appliance';
     const desc = ('Receive appliance delivery (' + (row.Store || 'store') + (row.Order_Number ? ' order ' + row.Order_Number : '') + '): ' + what + '. Ridge Co receives the delivery; the delivery crew must haul away the old unit and leave the new one. Tenant should be there if they can; otherwise ' + adminName + ' opens the door and lets the crew in. ' + adminName + ' installs (tenant does not install). Driver calls ' + adminName + '.').slice(0, 1500);
