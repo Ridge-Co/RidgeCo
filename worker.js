@@ -25391,8 +25391,13 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
   // Reads get a much longer retry budget than writes (6 tries, ~0.5/1/2/4/8s waits = ~15s)
   // because Google's quota is per MINUTE: the old ~2s of total waiting gave up long before
   // the limit could clear. Writes keep 4 tries / 300ms base (a vendor staring at a Save button).
-  const MAX_ATTEMPTS = method === 'GET' ? 6 : 4;
-  const BACKOFF_BASE_MS = method === 'GET' ? 500 : 300;
+  // Oct 23 2026 (cron cooldown): a BACKGROUND (cron) read that is not door-critical gives up after ONE retry. Six tries x ~15 s of waiting, from
+  // several jobs in a row, re-spent the same exhausted per-minute quota again and again (a retry storm that kept people locked out). The failed read
+  // is reported by the job as a calm quota-busy row and the dispatcher cools the non-critical jobs down (schedRunNext). People and door_watchdog
+  // keep the full 6 tries.
+  const __cronFast = method === 'GET' && !!(env && env.__CRON__) && !(env && env.__CRON_CRITICAL__);
+  const MAX_ATTEMPTS = method === 'GET' ? (__cronFast ? CRON_FAST_ATTEMPTS : 6) : 4;
+  const BACKOFF_BASE_MS = method === 'GET' ? (__cronFast ? CRON_FAST_BACKOFF_MS : 500) : 300;
   for(let attempt=1;;attempt++){
     const token=await getAccessToken(env);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
