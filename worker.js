@@ -15657,7 +15657,7 @@ async function runDoorWatchdogPass(env, opts) {
         const smsWait = (io && io.smsTimeoutMs) || DOOR_WD_SMS_TIMEOUT_MS; let smsTimer;
         const smsTimeout = new Promise((_, rej) => { smsTimer = setTimeout(() => rej(new Error('text message did not finish within ' + Math.round(smsWait / 1000) + 's')), smsWait); });
         let r;
-        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text), smsTimeout]); } finally { clearTimeout(smsTimer); }
+        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text, { allowRepeat: true, context: { message_type: 'door_watchdog_' + decision, recipient_type: 'admin' } }), smsTimeout]); } finally { clearTimeout(smsTimer); }
         if (r && r.skipped) smsDetail = 'skipped: ' + scrubPhones(r.reason || 'sending disabled');
         else if (r && r.staged) { smsOk = true; smsOutcome = 'staged'; }
         else if (r && r.sid && !r.error && !r.code) { smsOk = true; smsOutcome = 'sent'; }
