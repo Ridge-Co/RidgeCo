@@ -216,7 +216,7 @@ const vendorEs = { ID: '9', Name: 'Alex Perez', Phone: '4105551212', Language: '
   const assign = src.slice(src.indexOf("message_type: 'vendor_job_assigned'") - 200, src.indexOf("message_type: 'vendor_job_assigned'") + 260);
   ok(assign.includes('already_localized: true'), 'assignVendor (hand-built bilingual) is marked already_localized');
   const pin = grab('sendPinMessage');
-  ok(pin.includes('translateForVendorDetailed(env, vendorRec, message)') && pin.includes('sendSMS(env, phone, outMessage)'), 'PIN/welcome-style direct sendSMS to a vendor is translated');
+  ok(pin.includes('translateForVendorDetailed(env, vendorRec, message)') && pin.includes('sendSMS(env, phone, outMessage,'), 'PIN/welcome-style direct sendSMS to a vendor is translated');
   const un = grab('unapproveEstimate'), ap = grab('approveEstimate');
   ok(un.includes('translateForVendorDetailed(env, vendor, msgEn)'), 'estimate unapprove hold text to the vendor is translated');
   ok(ap.includes('notifyVendorTemplated(') && grab('sendTemplatedSms').includes('smsGatedSend(env, opts)') && !/already_localized/.test(grab('sendTemplatedSms')), 'estimate approve text goes via the templated smsGatedSend path (translated by the gate hook, not marked already_localized)');
