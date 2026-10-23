@@ -1569,6 +1569,17 @@ async function portalBackfillPlan(env) {
       plan.push({ type, id: e.id, action: 'set', fields: { PIN_Sent_Date: e.last, PIN_Sent_Count: String(e.count), PIN_Send_Result: 'logged_unverified' } });
     }
   }
+  // Proof of use: people who provably did things in their portal before login tracking existed (never overwrites a login or earlier evidence).
+  const [vendors, tenants, timeEntries, receipts, estimates, woAudit, workOrders] = await fetchTabs(env, ['Vendors', 'Tenants', 'Time_Entries', 'Receipts', 'Estimates', 'WO_Audit', 'Work_Orders']);
+  const evidence = portalEvidenceFromRecords({ vendors, tenants, timeEntries, receipts, estimates, woAudit, workOrders });
+  const rowsByType = { vendor: vendors, tenant: tenants };
+  for (const [k, ev] of evidence) {
+    const [type, id] = k.split('|');
+    const r = (rowsByType[type] || []).find(x => String(x.ID) === id);
+    if (!r) continue;
+    if (String(r.First_Login_Date || '').trim() || String(r.Login_Evidence || '').trim()) { plan.push({ type, id, kind: 'evidence', action: 'skip', why: 'already counted as logged in' }); continue; }
+    plan.push({ type, id, kind: 'evidence', action: 'set', name: String(r.Name || ((r.First_Name || '') + ' ' + (r.Last_Name || ''))).trim(), fields: { Login_Evidence: ev.text } });
+  }
   return plan;
 }
 async function portalBackfillPreview(env) {
