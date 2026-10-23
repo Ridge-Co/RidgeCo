@@ -15772,7 +15772,8 @@ async function smsGatedSend(env, opts) {
       const sendAfter = _holdUntil.toISOString();
       const _holdSaved = await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
-      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+      return Object.assign({ queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
+        _holdSaved === false ? { warning: 'The text was held for quiet hours but its Message_Queue row could not be marked (Send_After). It will not release by itself - see Needs Attention (message_queue_update).' } : {});
     }
     // opts.redirectTo (Oct 14 2026): a caller may send THIS text to a safe test phone while the global
     // TWILIO_TEST_MODE stays off, so one feature (the Milam Ridge cleaning scheduler) can be tested live without
