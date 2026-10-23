@@ -198,6 +198,7 @@ function harness(over) {
     sendSms: async (phone, text) => { h.sms.push(text); return { sid: 'SMtest' }; },
     sendEmail: async (m) => { h.emails.push(m); return { sent: true }; },
     logTelemetry: async (env, rec) => { h.tel.push(rec); },
+    logSms: async (rec) => { h.smsLog.push(rec); return { ok: true }; },   // D-16: SMS_Logs writer (attempts and suppressed repeats)
   };
   Object.assign(h.io, over || {});
   h.run = (nowMs, extra) => (h.nowMs = nowMs, W.runDoorWatchdogPass({}, Object.assign({ nowMs, io: h.io, retryDelayMs: 1, timeoutMs: 100 }, extra || {})));
