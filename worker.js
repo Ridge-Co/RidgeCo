@@ -496,6 +496,7 @@ const _hubWorkerCore = {
       if (callerRole) {
         const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
         if (_mm) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mm);
+        { const _act = stampPortalActivity(env, callerRole, callerSessionId, path); if (ctx && ctx.waitUntil) ctx.waitUntil(_act); }   // Oct 23 2026: doing anything in the portal = proof of use (never blocks, never throws)
         if (request.method === 'GET') {
           url.searchParams.set(SESSION_IDENTITY_PARAM[callerRole], String(callerSessionId));
           if (WO_KEYED_READ_PATHS.includes(path)) {
@@ -1425,6 +1426,83 @@ async function stampPortalLogin(env, login) {
   }
 }
 
+// ---- Proof of use (Oct 23 2026): anyone who DOES something in their portal obviously has access and is using it.
+// Every request carrying a valid tenant / vendor / owner session counts. It fills Login_Evidence once (never overwrites a
+// recorded login or earlier evidence), so the person leaves the follow-up list. Checked at most once per person per 12 h
+// per Worker instance, so it costs at most one Sheets read per active person. Never blocks the request, never silent.
+const PORTAL_TAB_BY_ROLE = { tenant: 'Tenants', vendor: 'Vendors', owner: 'Owners' };
+const PORTAL_ACT_RECHECK_MS = 12 * 3600 * 1000;
+const __portalActSeen = new Map();
+async function stampPortalActivity(env, role, id, path) {
+  const tab = PORTAL_TAB_BY_ROLE[role];
+  if (!tab || id == null || String(id) === '') return;
+  const key = role + '|' + id, now = Date.now();
+  const seen = __portalActSeen.get(key);
+  if (seen && now - seen < PORTAL_ACT_RECHECK_MS) return;
+  __portalActSeen.set(key, now);
+  try {
+    const row = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+    if (!row) return;
+    if (String(row.First_Login_Date || '').trim() || String(row.Login_Evidence || '').trim()) return;
+    await ensureColumns(env, tab, PORTAL_LOGIN_COLS);
+    await updateRowVerified(env, tab, id, { Login_Evidence: 'portal use: ' + role + ' session called ' + String(path || '').slice(0, 60) + ' on ' + new Date(now).toISOString().slice(0, 10) });
+  } catch (e) {
+    __portalActSeen.delete(key);   // try again on the next request
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_activity_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + String((e && e.message) || e).slice(0, 300) }); }
+    catch (e2) { console.error('portal_activity_stamp_failed AND telemetry failed:', tab, id, String((e && e.message) || e), String((e2 && e2.message) || e2)); }
+  }
+}
+
+// Pure: who has provably used their portal BEFORE login tracking existed? d = { vendors, tenants, timeEntries, receipts,
+// estimates, woAudit, workOrders } (row objects). Returns Map "type|id" -> { kinds:[...], last:'YYYY-MM-DD', text }.
+// Only actions a portal session can do count. A vendor's YES/NO text reply also logs a vendor "Accepted/Declined" audit row,
+// so those rows are NOT counted. Admin entries (Entered_By 'Admin', Created_By 'admin') are not counted.
+function portalEvidenceFromRecords(d) {
+  const norm = (s) => String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' ');
+  const isTest = (s) => /^test[-\s]/i.test(String(s || '').trim());
+  const out = new Map();
+  const add = (type, id, kind, date) => {
+    id = String(id == null ? '' : id).trim(); if (!id) return;
+    const k = type + '|' + id, e = out.get(k) || { kinds: [], last: '' };
+    if (!e.kinds.includes(kind)) e.kinds.push(kind);
+    const dd = String(date || '').slice(0, 10); if (dd && dd > e.last) e.last = dd;
+    out.set(k, e);
+  };
+  const uniq = (m, key, id) => { if (!key) return; m.set(key, m.has(key) ? null : id); };   // null = ambiguous name, never matched
+  const vByName = new Map(), tFull = new Map(), tFirst = new Map(), tById = new Map();
+  for (const v of d.vendors || []) if (!isTest(v.Name)) uniq(vByName, norm(v.Name), String(v.ID));
+  for (const t of d.tenants || []) {
+    if (isTest(t.First_Name) || isTest(t.Last_Name)) continue;
+    tById.set(String(t.ID), t);
+    uniq(tFull, norm((t.First_Name || '') + ' ' + (t.Last_Name || '')), String(t.ID));
+    uniq(tFirst, norm(t.First_Name), String(t.ID));
+  }
+  for (const te of d.timeEntries || []) if (norm(te.Role) === 'vendor') add('vendor', te.Entered_By_ID, 'time entries', te.Start_DateTime);
+  for (const r of d.receipts || []) if (norm(r.Role) === 'vendor') add('vendor', r.Added_By_ID, 'receipts', r.Date);
+  for (const e of d.estimates || []) { const id = vByName.get(norm(e.Created_By)); if (id) add('vendor', id, 'estimates', e.Created_Date); }
+  for (const a of d.woAudit || []) {
+    const role = norm(a.Changed_By_Role);
+    if (role === 'vendor') {
+      const id = vByName.get(norm(a.Changed_By)); if (!id) continue;
+      if (/sms|text/i.test(String(a.Notes || ''))) continue;
+      const nv = norm(a.New_Value);
+      if (norm(a.Field) === 'status' && (nv === 'accepted' || nv === 'declined')) continue;
+      add('vendor', id, norm(a.Field) === 'status' ? 'job status updates' : (norm(a.Field) || 'job updates'), a.Timestamp);
+    } else if (role === 'tenant' && norm(a.Field) === 'notes') {
+      const nm = norm(a.Changed_By), id = tFull.get(nm) || tFirst.get(nm);
+      if (id) add('tenant', id, 'notes/photos on a work order', a.Timestamp);
+    }
+  }
+  for (const w of d.workOrders || []) {
+    if (norm(w.Type) !== 'tenant' || !String(w.Tenant_ID || '').trim()) continue;
+    const t = tById.get(String(w.Tenant_ID).trim()); if (!t) continue;
+    const cb = norm(w.Created_By);
+    if (cb && (cb === norm((t.First_Name || '') + ' ' + (t.Last_Name || '')) || cb === norm(t.First_Name))) add('tenant', t.ID, 'created work orders', w.Created_Date);
+  }
+  for (const e of out.values()) e.text = 'prior use (before login tracking): ' + e.kinds.join(', ') + (e.last ? '; last ' + e.last : '');
+  return out;
+}
+
 // Records the outcome of a link+PIN text on the person's row. Returns { ok, error? } - a failed mark is surfaced to the caller.
 async function stampPinSend(env, type, id, verdict) {
   const tab = PORTAL_TAB_BY_TYPE[type];
@@ -1493,11 +1571,22 @@ async function portalBackfillPlan(env) {
       plan.push({ type, id: e.id, action: 'set', fields: { PIN_Sent_Date: e.last, PIN_Sent_Count: String(e.count), PIN_Send_Result: 'logged_unverified' } });
     }
   }
+  // Proof of use: people who provably did things in their portal before login tracking existed (never overwrites a login or earlier evidence).
+  const [vendors, tenants, timeEntries, receipts, estimates, woAudit, workOrders] = await fetchTabs(env, ['Vendors', 'Tenants', 'Time_Entries', 'Receipts', 'Estimates', 'WO_Audit', 'Work_Orders']);
+  const evidence = portalEvidenceFromRecords({ vendors, tenants, timeEntries, receipts, estimates, woAudit, workOrders });
+  const rowsByType = { vendor: vendors, tenant: tenants };
+  for (const [k, ev] of evidence) {
+    const [type, id] = k.split('|');
+    const r = (rowsByType[type] || []).find(x => String(x.ID) === id);
+    if (!r) continue;
+    if (String(r.First_Login_Date || '').trim() || String(r.Login_Evidence || '').trim()) { plan.push({ type, id, kind: 'evidence', action: 'skip', why: 'already counted as logged in' }); continue; }
+    plan.push({ type, id, kind: 'evidence', action: 'set', name: String(r.Name || ((r.First_Name || '') + ' ' + (r.Last_Name || ''))).trim(), fields: { Login_Evidence: ev.text } });
+  }
   return plan;
 }
 async function portalBackfillPreview(env) {
   const plan = await portalBackfillPlan(env);
-  return json({ ok: true, read_only: true, would_set: plan.filter(p => p.action === 'set').length, skipped: plan.filter(p => p.action === 'skip').length, plan });
+  return json({ ok: true, read_only: true, would_set: plan.filter(p => p.action === 'set').length, skipped: plan.filter(p => p.action === 'skip').length, would_credit_prior_use: plan.filter(p => p.kind === 'evidence' && p.action === 'set').length, plan });
 }
 async function portalBackfillApply(env) {
   const plan = (await portalBackfillPlan(env)).filter(p => p.action === 'set');
@@ -1508,7 +1597,7 @@ async function portalBackfillApply(env) {
     if (!items.length) continue;
     const tab = PORTAL_TAB_BY_TYPE[type];
     try {
-      await ensureColumns(env, tab, PORTAL_PIN_COLS);
+      await ensureColumns(env, tab, PORTAL_PIN_COLS.concat(PORTAL_LOGIN_COLS));
       const data = await sheetsRequest(env, 'GET', '/values/' + tab);
       const [headers, ...rows] = data.values || [[]];
       const idc = idColIndex(headers), batch = [];
