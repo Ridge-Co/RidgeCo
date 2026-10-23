@@ -64,7 +64,7 @@ function __makeWOStatus() {
     STALE_ACTIVE: ['New', 'Assigned', 'Accepted', 'In Progress'],         // can go stale (On Hold is waiting on purpose)
     // --- command-center dashboard counts ---
     DASH_NOT_OPEN: ['Complete', 'Paid', 'Pending Invoice', 'Invoiced', 'Pending Payment', 'Paid by Customer', 'Cancelled', 'Canceled', 'Closed', 'Void'],
-    DASH_OPEN_LEGACY: ['New', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],
+    DASH_OPEN_LEGACY: ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],   // admin WO list 'Open' filter
     // --- what a tenant sees ---
     TENANT_OPEN: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Pending Invoice'],
     TENANT_TIMELINE: ['New', 'Assigned', 'Accepted', 'In Progress', 'Complete'],
