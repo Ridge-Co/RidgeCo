@@ -16129,6 +16129,39 @@ async function smsGatedSend(env, opts) {
   const rows = data.values || [];
   const headers = rows[0] && rows[0].length ? rows[0] : MSG_QUEUE_COLS;
   let id = String(nextSafeId(rows));
+  // ── D-16 guards. They use the Message_Queue rows read just above (no extra Sheets read) and run BEFORE the new queue row is written. ──
+  const _nowMs = Date.now();
+  const _qObjs = mqRowsToObjects(rows);
+  const _isNudge = String(opts.message_type || '').indexOf('vendor_nudge_') === 0;
+  const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
+  if (sendOk && recipientPhone) {
+    let _sup = null;
+    if (_isNudge && smsIsOwnNumber(recipientPhone, cfg, opts.vendor)) _sup = { reason: 'own_number', status: 'suppressed_own_number', note: 'automatic nudge to the account owner\'s own number is never sent' };
+    else if (_isNudge) {
+      const _rn = mqFindRecentNudge(_qObjs, { family: 'vendor_nudge_', woId: opts.wo_id || '', phone: recipientPhone, gapMs: SMS_NUDGE_MIN_GAP_MS, nowMs: _nowMs });
+      if (_rn) _sup = { reason: 'nudge_cap', status: 'suppressed_nudge_cap', next_allowed_at: new Date(_rn.at + SMS_NUDGE_MIN_GAP_MS).toISOString(), note: 'one automatic nudge per person per work order every 3 days; last one is Message_Queue row ' + _rn.id };
+    }
+    if (!_sup && !testMode && !_redirect) {
+      const _kb = mqFindKnownBad(_qObjs, { phone: recipientPhone, nowMs: _nowMs, windowMs: SMS_KNOWN_BAD_WINDOW_MS });
+      if (_kb) _sup = { reason: 'known_undeliverable', status: 'suppressed_known_bad', note: 'Twilio permanently refused this number (error ' + _kb.code + ', Message_Queue row ' + _kb.id + '); not tried again' };
+    }
+    if (!_sup && !opts.allowRepeat) {
+      const _dup = mqFindDuplicate(_qObjs, { phone: recipientPhone, body: messageBody, nowMs: _nowMs });
+      if (_dup) _sup = { reason: 'duplicate', status: 'suppressed_duplicate', note: 'the same text to this number is already ' + _dup.status + ' (Message_Queue row ' + _dup.id + ')' };
+    }
+    if (_sup) {
+      const _se = smsEstimate(messageBody);
+      await smsLogRecord(env, { WO_ID: opts.wo_id || '', Recipient_Type: kind || '', Phone: recipientPhone, Message: messageBody, Status: _sup.status, Est_Segments: _se.pieces, Encoding: _se.encoding, Chars: _se.units, Message_Type: opts.message_type || '', Log_Source: 'gated', Note: _sup.note });
+      return { queued_id: '', send_ok: sendOk, sent: false, suppressed: true, suppress_reason: _sup.reason, duplicate_suppressed: _sup.reason === 'duplicate', next_allowed_at: _sup.next_allowed_at || '', test_mode: testMode, gate_snapshot: gateSnapshot + ' - not sent: ' + _sup.note, delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+    }
+  }
+  // Will this text go out right now (not held for quiet hours, not blocked)? Then its queue row is born "sending": the durable marker is written BEFORE
+  // the send, so a failed status save afterwards can never leave a sent text looking "pending" and be sent again.
+  const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+  const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
+  const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+  const _holdNow = !!(_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk);
+  const _sendNow = !!(sendOk && recipientPhone && !_holdNow);
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
