@@ -36253,9 +36253,10 @@ async function strAdminNewLink(env, body) {
 // POST /str/admin/config {values:{STR_ENGINE_ENABLED:'TRUE', ...}}  — allow-listed keys only
 async function strAdminConfig(env, body) {
   try {
-    const vals = (body && body.values) || {}, sets = {};
+    const vals = (body && body.values) || {}, sets = {}; let actAs = '';
     for (const [k, v] of Object.entries(vals)) {
-      if (STR_CFG_BOOL.includes(k)) { const s = String(v).toUpperCase(); if (s !== 'TRUE' && s !== 'FALSE') return json({ ok: false, error: 'bad_value', message: `${k} must be TRUE or FALSE.` }, 400); sets[k] = s; }
+      if (k === 'STR_CAL_IMPERSONATE') { const s = String(v == null ? '' : v).trim(); if (s && !STR_EMAIL_RE.test(s)) return json({ ok: false, error: 'bad_value', message: 'Who to act as must be an email address like brett@bmoremanagement.com (or blank to go back to the old way).' }, 400); sets[k] = s; actAs = s; }
+      else if (STR_CFG_BOOL.includes(k)) { const s = String(v).toUpperCase(); if (s !== 'TRUE' && s !== 'FALSE') return json({ ok: false, error: 'bad_value', message: `${k} must be TRUE or FALSE.` }, 400); sets[k] = s; }
       else if (STR_CFG_INT[k]) { const n = parseInt(v, 10), [lo, hi] = STR_CFG_INT[k]; if (!Number.isFinite(n) || n < lo || n > hi) return json({ ok: false, error: 'bad_value', message: `${k} must be a whole number from ${lo} to ${hi}.` }, 400); sets[k] = String(n); }
       else return json({ ok: false, error: 'not_allowed', message: `${k} cannot be changed here.` }, 400);
     }
