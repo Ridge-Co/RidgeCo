@@ -35173,7 +35173,7 @@ const STR_OFFER_ACTIVE = ['queued', 'pending'];
 const STR_OFFER_BLOCKS = ['declined', 'expired', 'failed', 'cancelled', 'accepted', 'pending', 'queued']; // a cleaner with one of these on a task is not offered it again
 
 function strErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
-function strErrText(e) { return String((e && e.message) || e).slice(0, 300); }
+function strErrText(e) { return String((e && e.message) || e).slice(0, (e && /^calendar_/.test(String(e.code || ''))) ? 900 : 300); } // calendar-access errors carry the exact fix steps, so they are not cut short
 function strBool(v, dflt) { const s = String(v == null ? '' : v).trim().toUpperCase(); if (!s) return !!dflt; return s === 'TRUE' || s === '1' || s === 'YES'; }
 function strInt(v, d, lo, hi) { const n = parseInt(String(v == null ? '' : v).trim(), 10); if (!Number.isFinite(n)) return d; return Math.min(hi, Math.max(lo, n)); }
 function strSettings(cfg) {
