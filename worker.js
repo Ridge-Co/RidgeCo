@@ -32805,6 +32805,13 @@ async function qbSendInvoice(env, body) {
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
+    // Oct 23 2026 (invoice 1767): say so in the preview when the customer would read only the generic work-order text
+    // even though hours were billed, or when the wording is coming from private Notes rather than a written Invoice Description.
+    if (laborDescriptionIsGeneric(_inEn.billRow, _inEn.timeEntries)) {
+      warnings.push('⚠ Hours are billed on this job but none of them has an Invoice Description, so the owner will read only the generic work-order text. Add an Invoice Description to the time entries (or the bill) before sending.');
+    } else if ((Array.isArray(_inEn.timeEntries) ? _inEn.timeEntries : []).some(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === String(_inEn.billRow.ID || '').trim() && !String(e.Invoice_Description || '').trim() && laborEntryText(e))) {
+      warnings.push('ℹ Some billable hours have no Invoice Description, so their private note is being used as the invoice wording. Read the labor line below and make sure it is fit for the owner.');
+    }
 
     // ── Signed-proposal netting + instant-pay fee (Oct 19 2026) ──────────────────────────────
     // Before this, a job on a signed proposal was billed in FULL here even when its deposit had
