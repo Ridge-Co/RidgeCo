@@ -2435,7 +2435,7 @@ function woCard(w) {
   var addr = prop ? prop.Address : (w.Property_ID||'—');
   var sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s+/g,'');
   // Aging calculation
-  var OPEN_WO = WOStatus.sets.FIELD_OPEN;
+  var OPEN_WO = WOStatus.sets.OPEN_WORK;
   var daysOpen = w.Created_Date ? Math.floor((Date.now()-new Date(w.Created_Date))/(86400000)) : 0;
   var agingBadge = '';
   if (OPEN_WO.includes(w.Status)) {
