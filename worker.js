@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-23.03-queue-all-active-estimate-open-photo-pick';
+const BUILD_VERSION = '2026-10-23.05-invoice-visit-lines-use-notes';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -816,6 +816,7 @@ const _hubWorkerCore = {
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
         if (path === '/time-entry/add')           return await addTimeEntry(env, body);
         if (path === '/time-entry/delete')        return await updateRow(env, 'Time_Entries', body.id, { Active: 'FALSE' });
+        if (path === '/time-entry/use-notes')     return await useTimeEntryNotes(env, body);
         if (path === '/receipt/add')              return await addReceipt(env, body);
         if (path === '/receipt/suggest')          return await receiptSuggest(env, body);
         if (path === '/receipt/delete')           return await updateRow(env, 'Receipts', body.id, { Active: 'FALSE' });
@@ -6777,6 +6778,47 @@ async function addTimeEntry(env, body) {
 
   await addRow(env, 'Time_Entries', { WO_ID: wo_id, Entered_By: entered_by||'', Entered_By_ID: String(entered_by_id||''), Role: role, Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'), Start_DateTime: start_datetime||'', End_DateTime: end_datetime||'', Duration_Minutes: String(durationMinutes), Notes: notes||'', Invoice_Description: invoice_description||'', Billable: role === 'hub' ? String(billable === 'TRUE' || billable === true) : 'TRUE', Hourly_Rate: String(rate), Billable_Amount: String(billableAmt.toFixed(2)), Created_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true, duration_minutes: durationMinutes, hourly_rate: rate });
+}
+
+// POST /time-entry/use-notes { wo_id, ids? } — Oct 23 2026 (Brett: opt in to use the billable-hour
+// notes as the invoice descriptions "without having to retype them"). Copies the private Notes of
+// Brett's own billable hours that have NO Invoice_Description into Invoice_Description, so the
+// invoice (and the repair tool) can print them. Only Brett's own (role 'hub') billable hours; vendor
+// notes are never touched; an entry that already has an Invoice_Description is never overwritten.
+// Every write is read back; any failure is returned per entry AND filed in Ops_Telemetry.
+async function useTimeEntryNotes(env, body) {
+  const woId = String((body && body.wo_id) || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  const only = Array.isArray(body && body.ids) ? body.ids.map(String) : null;
+  const warnings = [];
+  // A failed audit row is reported to the caller (never swallowed); the copy result itself still stands.
+  const audit = async (rec) => {
+    try { await logTelemetry(env, Object.assign({ Source: 'worker', Job_Type: 'time_entry_use_notes', Skill_Or_Endpoint: '/time-entry/use-notes' }, rec)); }
+    catch (e) { warnings.push('Could not file the audit row in Ops_Telemetry: ' + String((e && e.message) || e).slice(0, 160)); }
+  };
+  let eligible;
+  try {
+    const all = await fetchTab(env, 'Time_Entries');
+    eligible = timeEntriesWithUsableNotes(all.filter(e => String(e.WO_ID) === woId), null).filter(e => !only || only.includes(String(e.ID)));
+  } catch (e) {
+    const msg = 'Could not read Time_Entries: ' + String((e && e.message) || e).slice(0, 200);
+    await audit({ Success: 'FALSE', Notes: 'wo=' + woId + ' ' + msg });
+    return json({ ok: false, error: msg, updated: [], errors: [{ id: '', error: msg }], warnings }, 500);
+  }
+  if (!eligible.length) return json({ ok: true, updated: [], errors: [], warnings, message: 'Nothing to copy: every billable hour entry on this job already has an Invoice Description, or has no note.' });
+  const updated = [], errors = [];
+  try { await ensureColumns(env, 'Time_Entries', ['Invoice_Description']); }
+  catch (e) { errors.push({ id: '', error: 'Could not make sure the Invoice_Description column exists: ' + String((e && e.message) || e).slice(0, 160) }); }
+  if (!errors.length) {
+    for (const e of eligible) {
+      const text = String(e.Notes || '').trim().slice(0, 1000);
+      try { await updateRowVerified(env, 'Time_Entries', e.ID, { Invoice_Description: text }); updated.push({ id: String(e.ID), text }); }
+      catch (err) { errors.push({ id: String(e.ID), error: String((err && err.message) || err).slice(0, 200) }); }
+    }
+  }
+  await audit({ Success: errors.length ? 'FALSE' : 'TRUE',
+    Notes: ('wo=' + woId + ' copied=' + updated.map(u => u.id).join(',') + (errors.length ? ' FAILED=' + errors.map(x => (x.id || 'all') + ':' + x.error).join(' | ') : '')).slice(0, 480) });
+  return json({ ok: errors.length === 0, updated, errors, warnings }, errors.length ? 500 : 200);
 }
 
 async function listWOTenants(env, url) {
@@ -27201,7 +27243,7 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
     '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
-    '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
+    '/create-upload-session', '/receipt/add', '/time-entry/add', '/time-entry/use-notes', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
   if (_WO_KEYED.includes(path)) {
     const woId = _b.wo_id || _b.wo;
     if (woId) { if (!(await isTestWO(env, woId))) return false; }
@@ -27685,7 +27727,7 @@ async function qbRepairable(env, url) {
         paid, balance: isNaN(qBal) ? null : qBal,
         customer: (q.CustomerRef && q.CustomerRef.name) || '',
         issues,
-        new_description: rebuilt.lines[0] ? rebuilt.lines[0].Description : '',
+        new_description: (() => { const lab = rebuilt.lines.filter(l => !/^Materials — /.test(String(l.Description || ''))); return (lab.length ? lab : rebuilt.lines.slice(0, 1)).map(l => l.Description).join(' | '); })(),
         photo_url: folderUrl,
       });
     }
@@ -31578,21 +31620,57 @@ function qbGroupOpenRows(irRows, ir, woRows, estRows) {
 // the bill's own Invoice_Description leads if set (the flat-rate / no-time-entry case). Only
 // when NEITHER exists — old bills, or nobody filled either field in — does this fall back to
 // wo.Invoice_Memo/Description, so nothing already sent regresses.
+//
+// Oct 23 2026 (invoice 1767 / WO-1169, owner asked "more detail of the larger amounts"): Brett's own
+// billable hours logged BEFORE the Invoice Description field existed carry their detail only in
+// Notes, which are PRIVATE. Notes NEVER reach an invoice on their own. Brett opts in with the
+// "Use notes as invoice descriptions" action (POST /time-entry/use-notes), which COPIES a hub
+// billable entry's Notes into its Invoice_Description (verified write) so nothing is retyped and
+// nothing private goes out unseen. After that the entry is described like any other.
+function isTrueish(v) { return v === true || String(v == null ? '' : v).trim().toUpperCase() === 'TRUE'; }
+
+function laborEntryText(e) {
+  const inv = englishOnly((e && e.Invoice_Description) || '').trim();
+  if (!inv) return '';
+  // Brett's own hours print a date only when a work date was recorded: Created_Date is when the entry
+  // was LOGGED (often days after the work), so it is never shown for him. Vendor entries keep the old rule.
+  const isHub = String((e && e.Role) || '').toLowerCase() === 'hub';
+  const d = String(isHub ? (e.Start_DateTime || '') : (e.Start_DateTime || e.Created_Date || '')).split('T')[0];
+  return d ? (d + ' — ' + inv) : inv;
+}
+
+// Brett's own billable hours that have a private note but no Invoice Description (the ones the
+// opt-in action can copy). billId: a string limits to entries on that bill ('' = not on any bill);
+// null = every entry passed in.
+function timeEntriesWithUsableNotes(timeEntries, billId) {
+  return (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE'
+    && (billId === null || billId === undefined || String(e.Bill_ID || '').trim() === String(billId))
+    && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)
+    && !String(e.Invoice_Description || '').trim() && String(e.Notes || '').trim());
+}
+
 function buildLaborDescription(billRow, timeEntries, wo) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
   const billDesc = englishOnly((billRow && billRow.Invoice_Description) || '').trim();   // customer-facing = English (Sep 28 2026): [ES]/[EN] tags resolve to the EN half
   if (billDesc) parts.push(billDesc);
   (Array.isArray(timeEntries) ? timeEntries : [])
-    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && String(e.Invoice_Description || '').trim())
+    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && laborEntryText(e))
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
-    .forEach(e => {
-      const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
-      const desc = englishOnly(e.Invoice_Description || '').trim();
-      parts.push(d ? (d + ' — ' + desc) : desc);
-    });
+    .forEach(e => parts.push(laborEntryText(e)));
   if (parts.length) return parts.join('; ');
   return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+}
+
+// True when billable hours exist on this job but NONE of them (nor the bill) said anything the
+// customer can read — the invoice would go out with only the generic work-order text. Used to
+// warn loudly in the send preview instead of letting a vague invoice go out silently.
+function laborDescriptionIsGeneric(billRow, timeEntries) {
+  const billId = String((billRow && billRow.ID) || '').trim();
+  if (englishOnly((billRow && billRow.Invoice_Description) || '').trim()) return false;
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId);
+  if (!list.some(e => isTrueish(e.Billable) || String(e.Role || '').toLowerCase() === 'vendor')) return false;   // no billable hours: nothing to explain
+  return !list.some(e => laborEntryText(e));
 }
 
 // Async pre-pass for the invoice builders (Sep 28 2026): returns COPIES of the bill row and time
@@ -31614,6 +31692,41 @@ async function invoiceInputsEnglish(env, billRow, timeEntries) {
     } catch (_) {}
   }
   return { billRow: bill, timeEntries: entries };
+}
+
+// Oct 23 2026 (Brett: "split these billable hours into line items. That way it makes more sense"):
+// Brett's own hours on a job with NO vendor bill become one invoice line per logged visit, each
+// with its own description and hours x rate, instead of one lump "Billable hours" line. ONLY when
+// the visits' stored Billable_Amounts add up to the labor amount to the cent; otherwise (a flat
+// price, a markup, anything that does not reconcile) it returns null and the single combined line
+// is used, so the invoice TOTAL is never changed by this.
+function hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef) {
+  const woId = String((ir && ir.WO_ID) || '');
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE'
+    && !String(e.Bill_ID || '').trim()
+    && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)
+    && (!e.WO_ID || !woId || String(e.WO_ID) === woId)
+    && Math.round((Number(e.Billable_Amount) || 0) * 100) > 0);
+  if (!list.length) return null;
+  const cents = list.reduce((n, e) => n + Math.round((Number(e.Billable_Amount) || 0) * 100), 0);
+  if (cents !== Math.round(laborAmt * 100)) return null;
+  list.sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0));
+  return list.map(e => {
+    const amt = +(Number(e.Billable_Amount) || 0).toFixed(2);
+    const hrs = +((parseFloat(e.Duration_Minutes) || 0) / 60).toFixed(2);
+    const rate = +(Number(e.Hourly_Rate) || 0).toFixed(2);
+    const parts = [tradeName];
+    const text = laborEntryText(e);
+    if (text) parts.push(text);
+    parts.push('WO ' + (ir.WO_ID || ''));
+    let label = parts.join(' — ');
+    let detail = { ItemRef: itemRef, Qty: 1, UnitPrice: amt };
+    if (hrs > 0 && rate > 0 && Math.abs(+(hrs * rate).toFixed(2) - amt) < 0.01) {
+      detail = { ItemRef: itemRef, Qty: hrs, UnitPrice: rate };
+      label += ' — ' + hrs + ' hr' + (hrs === 1 ? '' : 's') + ' × $' + rate.toFixed(2) + '/hr';
+    }
+    return { DetailType: 'SalesItemLineDetail', Amount: amt, Description: label.slice(0, 4000), SalesItemLineDetail: detail };
+  });
 }
 
 function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
@@ -31667,6 +31780,13 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   }
   const total = +(Number(ir.Customer_Total) || 0).toFixed(2);
   const laborAmt = +(total - materialsTotal).toFixed(2);
+  if (!String((billRow && billRow.ID) || '').trim()) {
+    const visitLines = hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef);
+    if (visitLines) {
+      visitLines.slice().reverse().forEach(l => lines.unshift(l));
+      return { lines, materialsTotal: +materialsTotal.toFixed(2), laborAmt, total };
+    }
+  }
   // Say what was actually done. The description belongs on the line the owner is paying,
   // not buried in a note under the total — an invoice reading "Labor & service —
   // Landscaping" tells them nothing about the job.
@@ -32771,6 +32891,19 @@ async function qbSendInvoice(env, body) {
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
+    // Oct 23 2026 (invoice 1767): say so in the preview when the customer would read only the generic work-order text
+    // even though hours were billed, and point at the opt-in that copies the private notes (nothing is copied automatically).
+    {
+      const _usable = timeEntriesWithUsableNotes(_inEn.timeEntries, String(_inEn.billRow.ID || '').trim());
+      const _n = _usable.length;
+      if (laborDescriptionIsGeneric(_inEn.billRow, _inEn.timeEntries)) {
+        warnings.push(_n
+          ? ('⚠ ' + _n + ' billable hour ' + (_n === 1 ? 'entry has a private note but no Invoice Description' : 'entries have a private note but no Invoice Description') + ', so the owner would read only the generic work-order text. Open this job\'s Time Tracking and tap "Use notes as invoice descriptions", then preview again.')
+          : '⚠ Hours are billed on this job but none of them has an Invoice Description, so the owner will read only the generic work-order text. Add an Invoice Description to the time entries (or the bill) before sending.');
+      } else if (_n) {
+        warnings.push('ℹ ' + _n + ' billable hour ' + (_n === 1 ? 'entry still has' : 'entries still have') + ' a private note but no Invoice Description, so ' + (_n === 1 ? 'it prints' : 'they print') + ' without a description. Time Tracking > "Use notes as invoice descriptions" copies them over.');
+      }
+    }
 
     // ── Signed-proposal netting + instant-pay fee (Oct 19 2026) ──────────────────────────────
     // Before this, a job on a signed proposal was billed in FULL here even when its deposit had

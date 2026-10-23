@@ -9642,15 +9642,21 @@ function invComposeMemo(billId, timeEntries, billObj, wo) {
   var parts = [];
   var billDesc = enOnly((billObj && billObj.Invoice_Description) || '').trim();   // customer-facing memo = English half of any [ES]/[EN] text
   if (billDesc) parts.push(billDesc);
+  // Mirrors worker.js laborEntryText (Oct 23 2026): only an entry's own Invoice_Description is ever used (private Notes
+  // are copied into it by the opt-in "Use notes as invoice descriptions" button, never automatically). Brett's own
+  // hours show a date only when a work date (Start_DateTime) was recorded; vendor entries keep the old rule.
+  function entryText(e) {
+    var inv = enOnly(e.Invoice_Description || '').trim();
+    if (!inv) return '';
+    var isHub = String(e.Role || '').toLowerCase() === 'hub';
+    var d = (isHub ? (e.Start_DateTime || '') : (e.Start_DateTime || e.Created_Date || '')).split('T')[0];
+    return d ? (d + ' — ' + inv) : inv;
+  }
   safeArray(timeEntries).filter(function(e) {
-    return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && String(e.Invoice_Description || '').trim();
+    return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && entryText(e);
   }).sort(function(a, b) {
     return new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0);
-  }).forEach(function(e) {
-    var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0];
-    var desc = enOnly(e.Invoice_Description || '').trim();
-    parts.push(d ? (d + ' — ' + desc) : desc);
-  });
+  }).forEach(function(e) { parts.push(entryText(e)); });
   if (parts.length) return parts.join('; ');
   return (wo && (wo.Invoice_Memo || wo.Description)) || '';
 }
@@ -10954,18 +10960,31 @@ function renderHubTimeSection(woId, entries, holder) {
         ? '<span style="background:#eaf6ee;color:#166534;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
         : '');
     var dateStr = e.Start_DateTime ? esc(e.Start_DateTime.split('T')[0]) : (e.Created_Date||'').split('T')[0];
+    var useNoteBtn = hubNoteUsable(e)
+      ? '<div style="margin-top:3px"><button onclick="hubUseNotes(\''+esc(String(woId))+'\',[\''+esc(String(e.ID))+'\'],this)" style="background:none;border:1px solid var(--accent);color:var(--accent);border-radius:4px;font-size:10px;padding:1px 6px;cursor:pointer">Use this note as the invoice description</button></div>'
+      : '';
     return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
       '<div style="flex:1">' +
         '<span style="color:'+(isHub?'var(--accent)':'var(--info)')+';font-weight:bold">'+label+'</span>' +
         ' <span style="color:var(--muted)">'+type+'</span>'+billBadge +
         (invDesc ? '<div style="color:var(--text);margin-top:2px">📝 '+invDesc+'</div>' : '') +
         (note ? '<div style="color:var(--muted);margin-top:2px;font-style:italic">'+note+'</div>' : '') +
+        useNoteBtn +
       '</div>' +
       '<span style="font-weight:bold;color:var(--text);white-space:nowrap">'+dur+'</span>' +
       '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+dateStr+'</span>' +
       '<button onclick="deleteTimeEntry(\''+e.ID+'\',\''+woId+'\')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;padding:0 2px" title="Delete">✕</button>' +
     '</div>';
   }).join('');
+
+  var usableNotes = hubEntries.filter(hubNoteUsable);
+  var useNotesBanner = usableNotes.length
+    ? '<div style="background:#fff7e6;border:1px solid #f0c36d;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#7a4b00">' +
+        '<b>' + usableNotes.length + ' billable ' + (usableNotes.length === 1 ? 'entry has' : 'entries have') + ' a private note but no invoice description</b>, so the owner would not see ' + (usableNotes.length === 1 ? 'it' : 'them') + ' on the invoice. ' +
+        '<button onclick="hubUseNotes(\''+esc(String(woId))+'\',null,this)" style="margin-left:6px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:11px;padding:3px 8px;cursor:pointer">Use notes as invoice descriptions</button>' +
+        '<div style="margin-top:4px;color:#8a6a2f">Copies each note over word for word. Nothing is copied until you tap.</div>' +
+      '</div>'
+    : '';
 
   holder.innerHTML =
     '<div style="margin-top:16px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
@@ -10976,6 +10995,7 @@ function renderHubTimeSection(woId, entries, holder) {
           (vendorTotal ? '<span>Vendor: <b style="color:var(--info)">'+minToStr(vendorTotal)+'</b></span>' : '') +
         '</div>' +
       '</div>' +
+      useNotesBanner +
       (entries.length ? entryRows : '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No time logged yet.</div>') +
       '<div id="time-next-' + esc(String(woId)) + '"></div>' +
       buildHubTimeForm(woId) +
@@ -11100,6 +11120,13 @@ function submitHubTimeEntry(woId) {
   var bill   = (document.getElementById('ht-bill-'+woId)||{}).checked;
   var msgEl  = document.getElementById('ht-msg-'+woId);
 
+  // Oct 23 2026 (invoice 1767): billable time with no customer-facing description is how an owner ends up with an invoice
+  // that just says "Billable hours". Stop it here, at entry, instead of discovering it after the invoice has gone out.
+  if (bill && !String(invDesc || '').trim()) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Billable time needs an Invoice Description — it is what the owner reads on the invoice. Say what was done.</span>';
+    return;
+  }
+
   // Determine duration source
   var durMinRaw = null;
   var startDT = null, endDT = null;
@@ -11139,6 +11166,42 @@ function submitHubTimeEntry(woId) {
       if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
     }
   }).catch(function(e) { if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
+}
+
+// Brett's own billable hours that have a private note but no invoice description (what the opt-in button can copy).
+function hubNoteUsable(e) {
+  return !!e && e.Active !== 'FALSE' && String(e.Role || '').toLowerCase() === 'hub'
+    && String(e.Billable).toUpperCase() === 'TRUE'
+    && !String(e.Invoice_Description || '').trim() && !!String(e.Notes || '').trim();
+}
+
+// Opt-in (Oct 23 2026): copy private Notes into Invoice Description for one entry (ids = [id]) or
+// every eligible entry on the job (ids = null). The server reads each write back; every failure is shown.
+function hubUseNotes(woId, ids, btn) {
+  var label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
+  api('POST', '/time-entry/use-notes', { wo_id: woId, ids: ids || undefined }).then(function(res) {
+    var done = (res && res.updated && res.updated.length) || 0;
+    var errs = (res && res.errors) || [];
+    if (res && res.warnings && res.warnings.length) toast('Copied, but: ' + res.warnings.join(' | '), 'error');
+    if (!res || res.ok === false || errs.length || res.error) {
+      var why = errs.length ? errs.map(function(x){ return (x.id ? 'entry ' + x.id + ': ' : '') + x.error; }).join(' | ') : ((res && res.error) || 'no answer from the server');
+      toast('Copied ' + done + ' note' + (done === 1 ? '' : 's') + ', but it did not finish: ' + why, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    } else if (!done) {
+      toast((res && res.message) || 'Nothing to copy.', 'info');
+    } else {
+      toast('Copied ' + done + ' note' + (done === 1 ? '' : 's') + ' into the invoice description' + (done === 1 ? '' : 's'), 'success');
+    }
+    return api('GET', '/time-entries?wo_id=' + woId).then(function(entries) {
+      var holder = document.getElementById('time-track-' + woId);
+      if (holder) renderHubTimeSection(woId, Array.isArray(entries) ? entries : [], holder);
+      invRefreshTimeForWO(woId);
+    });
+  }).catch(function(e) {
+    toast('Could not copy the notes: ' + ((e && e.message) || e), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  });
 }
 
 function deleteTimeEntry(entryId, woId) {
