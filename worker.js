@@ -35568,7 +35568,7 @@ async function strRaiseAlert(ctx, a) {
     }
     return open;
   }
-  const fields = { Alert_Key: a.key, Kind: a.kind, Severity: a.severity, Task_Key: a.taskKey || '', Message: a.message, Sms_Text: a.sms, Send_Count: '0', Last_Sent_At: '', Next_Send_At: '', Resolved_At: '', Acked_At: '', Created_At: new Date(ctx.now).toISOString() };
+  const fields = { Alert_Key: a.key, Kind: a.kind, Severity: a.severity, Task_Key: a.taskKey || '', Message: a.message, Sms_Text: a.sms, Send_Count: a.told ? '1' : '0', Last_Sent_At: a.told ? new Date(ctx.now).toISOString() : '', Next_Send_At: '', Resolved_At: '', Acked_At: '', Created_At: new Date(ctx.now).toISOString() };
   const id = await strAddRow(ctx.env, 'STR_Alerts', fields);
   const row = Object.assign({ ID: id }, fields); ctx.st.alerts.push(row); return row;
 }
