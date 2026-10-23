@@ -194,6 +194,8 @@ The recurring failure: the appliance arrives but **can't be installed** — a si
 | **4** | AI voice routing agent (ConversationRelay): answer → disambiguate → answer driver Qs / bridge / cascade | Yes | GATED |
 | **5** | Related-WO combine/split invoicing + owner approval (B-126) + asset-lifecycle log (B-194 repair-vs-replace) + receipt→QB (B-216) + damage-claim loop | No | GATED (money) |
 
+> **Status note (Oct 23 2026): Phase 1 SHIPPED (PR open for merge).** The email watcher is built in two halves: the Hub endpoint `POST /intake/delivery-email` (parser, record logic, Brett text, gated tenant notice; FEATURE_LOG rule 229) and the Apps Script that reads info@ and brett@ (`apps-script/delivery-intake/`). Differences from section 7 as written: it is NOT on the B-103 engine (a separate endpoint reusing its address matchers), and it is built for Home Depot and Lowe's first. **Phases 2, 4 and 5 are still placeholders only** (`// PLACEHOLDER (Phase 2 size check)` and `// PLACEHOLDER (Phase 4 voice routing)` in `deliveryEnsureWO`; nothing for Phase 5). Phase 3 is partly done through the existing Twilio path (tenant notice, Brett alerts), but inbound SMS parsing is not built.
+
 ---
 
 ## 11. Backlog cross-reference — what this graduates or reuses

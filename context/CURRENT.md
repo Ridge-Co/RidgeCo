@@ -1,3 +1,11 @@
+# DELIVERY EMAIL WATCHER, HUB SIDE (Phase 1) — Oct 23, 2026 — head `feat/delivery-email-intake-oct23` cut from main tip 883b868 (after PR #426). PR into `main` ("Delivery email watcher: Hub endpoint + parser (Phase 1)"). BUILD_VERSION `2026-10-23.03-delivery-email-watcher`. FEATURE_LOG rule 229.
+
+## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Pairs with PR #430 (Apps Script that reads info@ and brett@) and PR #431 (Deliveries UI). Merge order does not matter for safety: the endpoint does nothing until the Apps Script posts to it.
+**What it does:** `POST /intake/delivery-email` reads a Home Depot / Lowe's email, keeps one Deliveries row per order, creates one install work order, texts Brett on real news, and queues a low-priority tenant heads-up (default ON, batched to the 6pm window; same-day deliveries go at once). Returns the calendar event for the Apps Script to write.
+**To turn it on after merge:** nothing new in Cloudflare (the Apps Script reuses the same `INTAKE_TOKEN` as the Buildium intake), then follow `context/DELIVERY_INTAKE_SETUP_v1.0.md` from PR #430. To keep tenants from being texted while testing, set Config `Delivery_Tenant_Notice` to `draft` or `off`.
+**Known limit:** parser untested on a real store email. First real email: check the Deliveries row, then tighten the `DEP` table and add the email as a test fixture.
+**Not built:** Phase 2 size check, Phase 4 voice routing (placeholders only); the general 9am / 12pm / 6pm text batching (BACKLOG B-20261023-0302-mb) is still a plan, only this one notice rides a 6pm hold.
+
 # LOST TEXT + CRON COOLDOWN — Oct 23, 2026 — head `fix/mq-update-quota-cron-cooldown-oct23` cut from main tip 9c64e362 (after PR #423). BUILD_VERSION `2026-10-23.02-mq-save-cron-cooldown`. FEATURE_LOG rule 228.
 
 ## 🟡 Built and tested; PR open for Brett's merge. Full suite 192 files, 0 failing.
