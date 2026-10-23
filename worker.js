@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-23.03-queue-all-active-estimate-open-photo-pick';
+const BUILD_VERSION = '2026-10-23.04-invoice-labor-detail';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -31578,21 +31578,55 @@ function qbGroupOpenRows(irRows, ir, woRows, estRows) {
 // the bill's own Invoice_Description leads if set (the flat-rate / no-time-entry case). Only
 // when NEITHER exists — old bills, or nobody filled either field in — does this fall back to
 // wo.Invoice_Memo/Description, so nothing already sent regresses.
+//
+// Oct 23 2026 (invoice 1767 / WO-1169, owner asked "more detail of the larger amounts"): Brett's
+// own billable hours logged BEFORE the Invoice Description field existed carry their detail only
+// in Notes. The invoice read "Billable hours" and said nothing about 4 visits. Those hours now
+// describe themselves from Notes — but ONLY for Brett's own (role 'hub') billable hours that have
+// no Invoice_Description of their own, so a vendor's private notes can never reach a customer and
+// a filled-in Invoice_Description is never mixed with the private note. Non-billable hours are
+// never listed. Such an entry gets no date prefix: its Created_Date is when it was LOGGED, not
+// when the work happened, and the note usually carries its own date.
+function isTrueish(v) { return v === true || String(v == null ? '' : v).trim().toUpperCase() === 'TRUE'; }
+
+function laborEntryText(e) {
+  const inv = englishOnly((e && e.Invoice_Description) || '').trim();
+  if (inv) {
+    const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
+    return d ? (d + ' — ' + inv) : inv;
+  }
+  if (e && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)) {
+    const note = englishOnly(e.Notes || '').trim();
+    if (note) {
+      const d = String(e.Start_DateTime || '').split('T')[0];
+      return d ? (d + ' — ' + note) : note;
+    }
+  }
+  return '';
+}
+
 function buildLaborDescription(billRow, timeEntries, wo) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
   const billDesc = englishOnly((billRow && billRow.Invoice_Description) || '').trim();   // customer-facing = English (Sep 28 2026): [ES]/[EN] tags resolve to the EN half
   if (billDesc) parts.push(billDesc);
   (Array.isArray(timeEntries) ? timeEntries : [])
-    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && String(e.Invoice_Description || '').trim())
+    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && laborEntryText(e))
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
-    .forEach(e => {
-      const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
-      const desc = englishOnly(e.Invoice_Description || '').trim();
-      parts.push(d ? (d + ' — ' + desc) : desc);
-    });
+    .forEach(e => parts.push(laborEntryText(e)));
   if (parts.length) return parts.join('; ');
   return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+}
+
+// True when billable hours exist on this job but NONE of them (nor the bill) said anything the
+// customer can read — the invoice would go out with only the generic work-order text. Used to
+// warn loudly in the send preview instead of letting a vague invoice go out silently.
+function laborDescriptionIsGeneric(billRow, timeEntries) {
+  const billId = String((billRow && billRow.ID) || '').trim();
+  if (englishOnly((billRow && billRow.Invoice_Description) || '').trim()) return false;
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId);
+  if (!list.some(e => isTrueish(e.Billable) || String(e.Role || '').toLowerCase() === 'vendor')) return false;   // no billable hours: nothing to explain
+  return !list.some(e => laborEntryText(e));
 }
 
 // Async pre-pass for the invoice builders (Sep 28 2026): returns COPIES of the bill row and time
@@ -32771,6 +32805,13 @@ async function qbSendInvoice(env, body) {
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
+    // Oct 23 2026 (invoice 1767): say so in the preview when the customer would read only the generic work-order text
+    // even though hours were billed, or when the wording is coming from private Notes rather than a written Invoice Description.
+    if (laborDescriptionIsGeneric(_inEn.billRow, _inEn.timeEntries)) {
+      warnings.push('⚠ Hours are billed on this job but none of them has an Invoice Description, so the owner will read only the generic work-order text. Add an Invoice Description to the time entries (or the bill) before sending.');
+    } else if ((Array.isArray(_inEn.timeEntries) ? _inEn.timeEntries : []).some(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === String(_inEn.billRow.ID || '').trim() && !String(e.Invoice_Description || '').trim() && laborEntryText(e))) {
+      warnings.push('ℹ Some billable hours have no Invoice Description, so their private note is being used as the invoice wording. Read the labor line below and make sure it is fit for the owner.');
+    }
 
     // ── Signed-proposal netting + instant-pay fee (Oct 19 2026) ──────────────────────────────
     // Before this, a job on a signed proposal was billed in FULL here even when its deposit had
