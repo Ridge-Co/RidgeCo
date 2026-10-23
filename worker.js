@@ -16475,7 +16475,7 @@ async function processQuietHoursQueue(env) {
   ]);
   const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
   const results = [];
-  for (const r of mqStuckSending(rows, +now)) await mqReportFailure(env, r.ID, 'a text was marked "sending" ' + Math.round((+now - Date.parse(r.Sent_Date || r.Created_Date)) / 60000) + ' minutes ago and its result was never saved (Twilio SID on the row: ' + (r.Twilio_Message_SID || 'none') + '). It was NOT sent again. Check the Twilio log, then fix the row by hand.');
+  for (const r of mqStuckSending(rows, +now)) await reportFailure(env, { system: 'hub', source: 'worker', where: 'message_queue_stuck_sending', ref: 'Message_Queue ' + r.ID, severity: 'P2', message: 'a text was marked "sending" ' + Math.round((+now - Date.parse(r.Sent_Date || r.Created_Date)) / 60000) + ' minutes ago and its result was never saved (Twilio SID on the row: ' + (r.Twilio_Message_SID || 'none') + '). It was NOT sent again. Check the Twilio log, then fix the row by hand.' });
   let _scopesForSkip = null;   // loaded lazily, only when a due row carries Skip_If_Seen
   for (const row of due) {
     const id = row.ID, kind = row.Recipient_Type;
