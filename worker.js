@@ -15826,8 +15826,9 @@ async function smsGatedSend(env, opts) {
 // throws: this runs right after a text has really gone out, and crashing there would hide that from the caller.
 async function mqReportFailure(env, id, msg) {
   console.error('Message_Queue update problem (#' + id + '): ' + msg);
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (_) {}
-  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (_) {}
+  // Reporting code must not report on itself (loop): if the ledger write or the alert fails, the console is the last resort.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (e) { console.error('Message_Queue failure report: telemetry write failed (#' + id + '):', (e && e.message) || e); }   // silent-ok: reporting code must not recurse
+  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (e) { console.error('Message_Queue failure report: admin alert failed (#' + id + '):', (e && e.message) || e); }   // silent-ok: reporting code must not recurse
 }
 // opts.sheetRow: edit exactly this sheet row (used right after our own append). Otherwise find the row by id; if an old duplicate id
 // exists, prefer the one still "pending" (the one a person is waiting to act on). Returns true when every field landed.
