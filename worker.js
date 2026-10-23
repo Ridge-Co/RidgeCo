@@ -16472,9 +16472,9 @@ async function processQuietHoursQueue(env) {
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
-    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
-    const sent = !!(result && result.sid);
-    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
+    const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot, Send_After: '' });
+    const sent = _r.sent;
+    if (_r.claim_failed) { results.push({ id, sent: false, failed: false, claim_failed: true, error: _r.outcome.reason, gate_snapshot: gateSnapshot }); continue; }   // still pending: tried again next sweep
     if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), sent ? 'sent' : 'failed');
     results.push({ id, sent, failed: !sent, gate_snapshot: gateSnapshot });
   }
