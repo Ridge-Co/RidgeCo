@@ -14718,8 +14718,8 @@ async function processVendorNudges(env) {
     if (nudgeCount >= VENDOR_NUDGE_MAX) {
       await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'flagged' });
       const property = properties.find(p => p.ID === wo.Property_ID);
-      const flagMsg = `⚠️ ${vendor.Name||vendor.First_Name||'Vendor'} hasn't responded after ${VENDOR_NUDGE_MAX} reminders on ${row.WO_ID}${property?' at '+property.Address:''} (${row.Request_Type}). May need a personal follow-up.`;
-      if (config.admin_phone) await sendSMS(env, config.admin_phone, flagMsg);
+      const flagMsg = `${vendor.Name||vendor.First_Name||'Vendor'} has not responded after ${VENDOR_NUDGE_MAX} reminders on ${row.WO_ID}${property?' at '+property.Address:''} (${row.Request_Type}). May need a personal follow-up.`;
+      if (config.admin_phone) await smsReportIfFailed(env, 'sms_vendor_nudge_flag', row.WO_ID, await sendSMS(env, config.admin_phone, flagMsg, { context: { wo_id: row.WO_ID, message_type: 'admin_vendor_nudge_flag', recipient_type: 'admin' } }));
       results.push({ id: row.ID, action: 'flagged_to_brett' }); continue;
     }
     const property = properties.find(p => p.ID === wo.Property_ID);
