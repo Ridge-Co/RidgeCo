@@ -199,10 +199,14 @@ function hi(){var f=S.d&&S.d.first;return f?'Hi '+esc(f)+',':'Hi there,';}
 function banner(){return S.banner?'<div class="msg warm" role="note">'+esc(S.banner)+'</div>':'';}
 
 function viewForm(){
-  var d=S.d||{}, item=d.item?('Your new '+esc(d.item.toLowerCase())):'Your delivery';
-  var lead=S.editing
-    ? 'You can change your answer any time before the delivery. Whatever works for you is fine.'
-    : item+' is scheduled to be delivered. It helps if someone can let the delivery team in and have the old one hauled away. If that is not possible, no worries at all.';
+  var d=S.d||{}, thing=d.item?('A new '+esc(d.item.toLowerCase())):'A delivery';
+  var top=S.editing
+    ? '<p class="lead">You can change your answer any time before the delivery. Whatever works for you is fine.</p>'+banner()+facts()
+    : '<div class="intro"><p class="lead">'+thing+' is scheduled to be delivered to you. Here are the details:</p>'+banner()+facts()
+      +'<h2>What we are hoping for</h2>'
+      +'<ul><li>Someone home to open the door and let the delivery team in</li><li>The old appliance taken away</li><li>The new one left in place</li></ul>'
+      +'<p>You do not need to install anything. We take care of that. Having someone there really helps, and we would be grateful.</p>'
+      +'<p class="gentle">If you can’t make it, that’s completely okay. We’ll do our best to be there instead, though the delivery may need to be rescheduled.</p></div>';
   var btns=ANSWERS.map(function(x){
     var pressed=S.current===x.a;
     return '<button type="button" class="ans '+(x.a==='yes'?'yes':'')+'" id="ans-'+x.a+'" data-a="'+x.a+'" aria-pressed="'+(pressed?'true':'false')+'"'+(S.busy?' aria-disabled="true"':'')+'>'
