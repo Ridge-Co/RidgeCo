@@ -7613,7 +7613,7 @@ async function createWorkOrder(env, body) {
     if ((body.type || '') === 'tenant' && owner?.Phone && property) {
       const notify = await shouldNotifyOwner(env, woLike, 'Received');
       if (notify) {
-        const msg = `Hi ${owner.First_Name}, we've received a new ${woLike.Trade || 'General'} request from your tenant at ${propUnitText(property, unit)}: ${woLike.Description || '(no description)'}. We'll follow up once it's scheduled. Ref: ${woId}.`;
+        const msg = `Hi ${owner.First_Name}, new ${woLike.Trade || 'General'} request from your tenant at ${propUnitText(property, unit)}: ${smsShort(woLike.Description, 80) || '(no description)'}. We'll update you once it's scheduled. Ref: ${woId}.`;   // D-16: shortened, description cut to 80
         const r = await smsGatedSend(env, { wo_id: woId, message_type: 'owner_job_received', recipient_type: 'owner', owner, property, message_body: msg });
         if (r.sent) await updateWOFields(env, woId, { Owner_Notified: 'TRUE' });
       }
@@ -9969,6 +9969,7 @@ async function updateStatus(env, body) {
     if (_live.length) return json({ error: addonLiveChildrenMessage(_live, body.wo_id, 'cancel'), open_additional_work: _live }, 409);
   }
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
+  const _repeatStatus = String(wo.Status || '') === String(body.status || '');   // D-16 item 4: the same status posted twice must not re-send the one-off texts
   const fields = { Status: body.status };
   if (body.notes) {
     let statusNote = body.notes;
@@ -10011,7 +10012,8 @@ async function updateStatus(env, body) {
       const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-    if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${woJobLabel(wo)} at ${address}. Pending invoice.`);
+    // D-16: the same status posted again (a double tap, a retry) must not text Brett twice. The transport also refuses an identical text inside 10 minutes.
+    if (config.admin_phone && !_repeatStatus) await smsReportIfFailed(env, 'sms_admin_complete', body.wo_id, await sendSMS(env, config.admin_phone, `${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${woJobLabel(wo)} at ${address}. Pending invoice.`, { context: { wo_id: body.wo_id, message_type: 'admin_wo_complete', recipient_type: 'admin' } }));
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
   }
   // Vendor accepted → notify the tenant that a technician has accepted and will reach out.
@@ -10022,7 +10024,9 @@ async function updateStatus(env, body) {
     if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
       if (!isTenantNotifiable(tenant, wo)) continue;
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${woJobLabel(wo)} at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
-      await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
+      if (_repeatStatus) continue;   // D-16: already Accepted - the tenant has been told
+      const _ra = await sendSMS(env, tenant.Phone, msg, { context: { wo_id: body.wo_id, message_type: 'tenant_accepted', recipient_type: 'tenant' } });
+      if (await smsReportIfFailed(env, 'sms_tenant_accepted', body.wo_id, _ra)) await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
   }
   // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
@@ -10049,8 +10053,8 @@ async function updateStatus(env, body) {
     const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
       const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is complete. Ref: ${body.wo_id}.`,
-        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
+        Complete: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is complete.`,
+        On_Hold: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is on hold: ${smsShort(holdReason, 80)}.`,   // D-16: shortened
       };
       const msg = ownerMsgs[ownerEvent];
       const msgType = ownerEvent === 'On_Hold' ? 'owner_job_on_hold' : `owner_job_${ownerEvent.toLowerCase()}`;
@@ -10455,7 +10459,7 @@ async function sendPinMessage(env, body) {
   if (vendorRec) { const t = await translateForVendorDetailed(env, vendorRec, message); if (t.translated) { outMessage = t.text; translatedTo = 'es'; } }
   // Oct 22 2026: the old code ignored sendSMS's answer and logged "sent" regardless, so a switched-off or rejected text still looked sent.
   // Now the real result decides: the person's row gets PIN_Sent_Date/Count only when Twilio accepted it, and a failure is returned honestly.
-  const verdict = smsSendVerdict(await sendSMS(env, phone, outMessage));
+  const verdict = smsSendVerdict(await sendSMS(env, phone, outMessage, { redact: true, keepAccents: translatedTo === 'es', context: { message_type: 'pin_send_' + type, recipient_type: type } }));
   const mark = await stampPinSend(env, type, id, verdict);
   if (!verdict.ok) return json({ error: 'PIN text NOT sent: ' + verdict.result, name: firstName, mark_saved: mark.ok }, 502);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
@@ -10541,7 +10545,7 @@ async function welcomeSend(env, body) {
       const tpl = await getMessageTemplate(env, 'tenant_welcome', 'sms');
       tokens = { FirstName: firstName, Address: address, Owner: ownerLabel, AssistantName: assistantName };
       defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
-        : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of ${ownerLabel} at ${address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing.`;
+        : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance. We handle maintenance for ${ownerLabel} at ${address}. Please save this number; we only text about maintenance.`;
     }
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors');
@@ -10659,7 +10663,7 @@ async function sendPropertyNotice(env, body) {
     try {
       const r = await smsGatedSend(env, { wo_id: body.wo_id || '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
       if (r.sent) results.sms_sent++; else if (r.held_for_quiet_hours) results.sms_queued_quiet_hours++; else results.sms_failed++;
-    } catch (e) { results.sms_failed++; }
+    } catch (e) { results.sms_failed++; await reportFailure(env, { system: 'hub', source: 'worker', where: 'property_notice_sms', ref: body.wo_id || property.ID || '', severity: 'P0', message: 'a property notice text threw: ' + String((e && e.message) || e).slice(0, 200) }); }
   }
   if (channels.includes('email')) {
     for (const tenant of emailRecipients) {
@@ -14440,8 +14444,8 @@ async function scheduleWO(env, body) {
   if (property && owner?.Phone) {
     const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
     if (notify) {
-      const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
-      const ownerMsg = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${propUnitText(property, unit)} — is scheduled for ${dateStr}, ${body.window}, subject to change. Ref: ${body.wo_id}.`;
+      const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+      const ownerMsg = `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${propUnitText(property, unit)} is scheduled for ${dateStr}, ${body.window}, subject to change.`;   // D-16: shortened
       const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_scheduled', recipient_type: 'owner', owner, property, message_body: ownerMsg });
       ownerSMSSent = r.sent;
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
@@ -14524,7 +14528,12 @@ async function processPendingNotifications(env) {
       const rowIndex=rows.indexOf(row);await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`${NOTIF_QUEUE_TAB}!${col(iSent)}${rowIndex+2}`,values:[['TRUE']]}]});processed++;
     }
     return json({processed});
-  } catch(e){return json({processed:0,error:e.message});}
+  } catch(e){
+    // D-16: a failure part-way (e.g. the "Sent" mark could not be saved) used to be returned and forgotten, and the same row was texted again next sweep.
+    // The gated texts are now protected by the Message_Queue duplicate check; the failure itself is reported so it is never silent.
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'process_pending_notifications', severity: 'P0', message: 'the deferred-text sweep stopped part-way: ' + String((e && e.message) || e).slice(0, 200) });
+    return json({processed:0,error:e.message});
+  }
 }
 
 // ── Vendor nudge/request system (Sep 14 2026, Brett) ───────────────────────────────────────
@@ -14535,8 +14544,8 @@ async function processPendingNotifications(env) {
 const VENDOR_REQ_TAB = 'Vendor_Requests';
 const VENDOR_REQ_COLS = ['ID','WO_ID','Vendor_ID','Request_Type','Status','Nudge_Count','First_Nudge_At','Next_Nudge_At','Last_Activity_At','Satisfied_Date','Created_Date','Active'];
 const VENDOR_NUDGE_MAX = 5;           // after this many sends with no resolution, flag Brett instead of nudging again
-const VENDOR_NUDGE_REPEAT_HOURS = 24; // status_update: daily, per Brett
-const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a cadence for
+const VENDOR_NUDGE_REPEAT_HOURS = 72; // status_update: every 3 days (Oct 23 2026, D-16: was daily; smsGatedSend also enforces one nudge per person per work order per 3 days)
+const VENDOR_MANUAL_REPEAT_HOURS = 72; // photos/invoice: was 48; 3 days to match the cap above. Brett didn't specify a cadence for
   // these two — 2 days is a reasonable middle ground between the daily auto-clock (which
   // exists specifically to chase a QUIET vendor) and a full week; easy to tune if wrong.
 // Satisfied-condition status sets (Sep 16 2026, Brett — replaces the earlier Vendor_Bills-row
@@ -14709,8 +14718,8 @@ async function processVendorNudges(env) {
     if (nudgeCount >= VENDOR_NUDGE_MAX) {
       await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'flagged' });
       const property = properties.find(p => p.ID === wo.Property_ID);
-      const flagMsg = `⚠️ ${vendor.Name||vendor.First_Name||'Vendor'} hasn't responded after ${VENDOR_NUDGE_MAX} reminders on ${row.WO_ID}${property?' at '+property.Address:''} (${row.Request_Type}). May need a personal follow-up.`;
-      if (config.admin_phone) await sendSMS(env, config.admin_phone, flagMsg);
+      const flagMsg = `${vendor.Name||vendor.First_Name||'Vendor'} has not responded after ${VENDOR_NUDGE_MAX} reminders on ${row.WO_ID}${property?' at '+property.Address:''} (${row.Request_Type}). May need a personal follow-up.`;
+      if (config.admin_phone) await smsReportIfFailed(env, 'sms_vendor_nudge_flag', row.WO_ID, await sendSMS(env, config.admin_phone, flagMsg, { context: { wo_id: row.WO_ID, message_type: 'admin_vendor_nudge_flag', recipient_type: 'admin' } }));
       results.push({ id: row.ID, action: 'flagged_to_brett' }); continue;
     }
     const property = properties.find(p => p.ID === wo.Property_ID);
@@ -14723,7 +14732,7 @@ async function processVendorNudges(env) {
       // above already peeled off anything Complete-or-later into an invoice chase instead).
       // Coaching language per Brett (Sep 16 2026): walk the vendor through the actual portal
       // steps we're waiting on, not just a bare "any update?" ask.
-      msg = `Hi ${vname}, checking in on ${row.WO_ID} — ${woJobLabel(wo)} at ${address}. Remember to add the schedule for the job in your portal, and mark it Complete once the work's done — then you'll just need to submit your invoice. ${vendorPortalLink(row.WO_ID)}`;
+      msg = `Hi ${vname}, checking in on ${row.WO_ID}: ${woJobLabel(wo)} at ${address}. Please add the schedule in your portal, mark it Complete when done, then submit your invoice. ${vendorPortalLink(row.WO_ID)}`;   // D-16: was about 6 pieces, now 2
       msgType = 'vendor_nudge_status'; repeatHours = VENDOR_NUDGE_REPEAT_HOURS;
     } else if (row.Request_Type === 'photos') {
       msg = `Hi ${vname}, following up — could you upload before/after photos for ${row.WO_ID} at ${address}? ${vendorPortalLink(row.WO_ID)}`;
@@ -14736,6 +14745,10 @@ async function processVendorNudges(env) {
     // Same dispatched-vs-sent distinction as createVendorRequest above — a quiet-hours hold
     // still counts and still advances the timer, since the message IS queued to go out.
     const dispatched = r.sent || r.held_for_quiet_hours;
+    // D-16 (Oct 23 2026): a nudge to the account owner's own number is never sent, so its clock is closed, not re-armed every day. A nudge held back by the
+    // 3-day cap is pushed to the moment it is next allowed (no count used). Both were logged to SMS_Logs by smsGatedSend.
+    if (r.suppress_reason === 'own_number') { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_own_number' }); continue; }
+    if (r.suppress_reason === 'nudge_cap' && r.next_allowed_at) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Next_Nudge_At: r.next_allowed_at }); results.push({ id: row.ID, action: 'nudge_capped', next_allowed_at: r.next_allowed_at }); continue; }
     await updateRow(env, VENDOR_REQ_TAB, row.ID, {
       Nudge_Count: String(nudgeCount + (dispatched ? 1 : 0)),
       Next_Nudge_At: new Date(now.getTime() + repeatHours*3600000).toISOString(),
@@ -14962,31 +14975,277 @@ async function handleInboundSMS(env, request) {
   return twilioResponse(`Message received. Your coordinator will follow up.`);
 }
 
-// Raw Twilio transport — no gating, sends if credentials are present. Only ever called by
+// ========== SMS COST CONTROL (D-16, Oct 23 2026) ==========
+// Twilio bills a text in 70-character pieces (67 once it needs more than one) if it holds ANY character outside the GSM-7 set (em dash, curly
+// quote, ellipsis character, bullet, most accented letters, emoji), versus 160 (153) per piece for plain text. One central sanitizer
+// (smsSanitize, run in smsGatedSend before the queue write AND again in sendSMSRaw as the net) keeps every outbound text plain. Spanish
+// vendor texts keep their accents (stripping a/n changes meaning) but still get plain dashes, quotes and dots. smsEstimate says how many
+// pieces a text will bill as; it is used in the SMS_Logs row and in the tests. Marker for deploy checks: sms-cost-d16-2026-10-23.
+const SMS_COST_D16_MARKER = 'sms-cost-d16-2026-10-23';
+const SMS_GSM7_BASIC = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const SMS_GSM7_EXT = "^{}\\[~]|€\f";
+const SMS_GSM_SET = new Set(Array.from(SMS_GSM7_BASIC));
+const SMS_GSM_EXT_SET = new Set(Array.from(SMS_GSM7_EXT));
+// Pure. How will Twilio bill this text? { encoding:'GSM-7'|'UCS-2', units, pieces, non_gsm:[chars that force UCS-2] }.
+function smsEstimate(text) {
+  const s = String(text == null ? '' : text);
+  let gsm = true, units = 0; const bad = [];
+  for (const ch of s) {
+    if (SMS_GSM_SET.has(ch)) units += 1;
+    else if (SMS_GSM_EXT_SET.has(ch)) units += 2;
+    else { gsm = false; if (bad.length < 12 && bad.indexOf(ch) < 0) bad.push(ch); }
+  }
+  if (gsm) return { encoding: 'GSM-7', units, pieces: units === 0 ? 0 : (units <= 160 ? 1 : Math.ceil(units / 153)), non_gsm: [] };
+  const u = s.length;   // UTF-16 code units: an emoji counts 2, exactly as Twilio counts it
+  return { encoding: 'UCS-2', units: u, pieces: u <= 70 ? 1 : Math.ceil(u / 67), non_gsm: bad };
+}
+// Punctuation and symbols that have a safe plain equivalent. '' = drop.
+const SMS_CHAR_MAP = {
+  '—': '-', '–': '-', '‒': '-', '―': '-', '−': '-', '‐': '-', '‑': '-',
+  '‘': "'", '’': "'", '‚': "'", '‛': "'", '′': "'", '`': "'", '´': "'",
+  '“': '"', '”': '"', '„': '"', '‟': '"', '″': '"', '«': '"', '»': '"',
+  '…': '...',
+  ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', '　': ' ',
+  '•': '-', '·': '-', '●': '-', '◦': '-', '▪': '-', '‣': '-', '⁃': '-', '∙': '-',
+  '×': 'x', '÷': '/', '±': '+/-', '°': 'deg', '™': 'TM', '©': '(c)', '®': '(R)', '№': 'No.',
+  '½': '1/2', '¼': '1/4', '¾': '3/4', '→': '->', '←': '<-', '✓': '', '✔': '', '✅': '', '❌': '', '✖': '',
+  '⚠': 'WARNING:', '🔴': 'ALERT:',
+};
+// Dropped outright: zero-width characters, variation selectors, soft hyphen, emoji and pictographs.
+const SMS_DROP_RE = /[​-‍﻿⁠­︀-️⃣]|\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}]|[\u{1F1E6}-\u{1F1FF}]/u;
+const SMS_LATIN_ACCENT_RE = /[À-ɏḀ-ỿ]/;
+const SMS_LETTER_SPECIAL = { 'œ': 'oe', 'Œ': 'OE', 'ł': 'l', 'Ł': 'L', 'đ': 'd', 'Đ': 'D', 'ð': 'd', 'Ð': 'D', 'þ': 'th', 'Þ': 'Th', 'ı': 'i', 'ħ': 'h' };
+// Pure. Plain unaccented form of an accented Latin letter, or '' when there is no safe one.
+function smsBaseLetter(ch) {
+  if (SMS_LETTER_SPECIAL[ch]) return SMS_LETTER_SPECIAL[ch];
+  const n = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return (n !== ch && /^[\x20-\x7E]+$/.test(n)) ? n : '';
+}
+// Pure. { text, changed, unmapped:[chars with no safe plain form, left alone], before, after } (before/after = smsEstimate).
+// Only characters OUTSIDE GSM-7 are touched, so a name with an e-acute (which GSM-7 has) is never altered.
+// opts.keepAccents (Spanish vendor texts): Latin letters keep their accents; everything else is still normalised.
+function smsSanitize(text, opts) {
+  const keepAccents = !!(opts && opts.keepAccents);
+  const before = String(text == null ? '' : text);
+  let out = ''; const unmapped = [];
+  for (const ch of before) {
+    if (SMS_GSM_SET.has(ch) || SMS_GSM_EXT_SET.has(ch)) { out += ch; continue; }
+    if (Object.prototype.hasOwnProperty.call(SMS_CHAR_MAP, ch)) { out += SMS_CHAR_MAP[ch]; continue; }
+    if (SMS_DROP_RE.test(ch)) continue;
+    if (SMS_LATIN_ACCENT_RE.test(ch)) {
+      if (keepAccents) { out += ch; continue; }
+      const b = smsBaseLetter(ch);
+      if (b) { out += b; continue; }
+    }
+    out += ch; if (unmapped.length < 12 && unmapped.indexOf(ch) < 0) unmapped.push(ch);   // e.g. Chinese or Arabic: no safe plain form, sent as written
+  }
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/g, '');
+  return { text: out, changed: out !== before, unmapped, before: smsEstimate(before), after: smsEstimate(out) };
+}
+const smsSanitizeText = (text, opts) => smsSanitize(text, opts).text;
+
+// -- Where a text may go (Oct 23 2026, D-16 item 6). Brett enabled US, Canada, Puerto Rico and the US Virgin Islands in Twilio Geo Permissions. --
+// +1 numbers are allowed EXCEPT the area codes of other Caribbean countries (they are a different country to Twilio). Anything not +1 is refused.
+const SMS_FOREIGN_NANP_AREAS = ['242', '246', '264', '268', '284', '345', '441', '473', '649', '658', '664', '721', '758', '767', '784', '809', '829', '849', '868', '869', '876'];
+// Pure. { ok:true } or { ok:false, reason, last4 }. `phone` is E.164 (normalizePhone output).
+function smsDestinationCheck(phone) {
+  const p = String(phone == null ? '' : phone).trim();
+  const last4 = p.replace(/\D/g, '').slice(-4);
+  if (!/^\+1\d{10}$/.test(p)) return { ok: false, last4, reason: /^\+1/.test(p) ? 'not a 10-digit US/Canada/PR/USVI number' : 'not a +1 number (outside the regions enabled in Twilio)' };
+  if (SMS_FOREIGN_NANP_AREAS.indexOf(p.slice(2, 5)) >= 0) return { ok: false, last4, reason: 'area code ' + p.slice(2, 5) + ' is another Caribbean country, not enabled in Twilio' };
+  return { ok: true, last4 };
+}
+// Twilio errors that will never succeed on a retry. 21408 (region) is permanent only until Geo Permissions change, so it is never remembered.
+const SMS_PERMANENT_ERRORS = {
+  21408: 'Twilio is not allowed to text that region (Geo Permissions)',
+  21211: 'that is not a valid phone number',
+  21614: 'that is not a valid mobile number',
+  21610: 'the person replied STOP and opted out',
+  21612: 'Twilio cannot route a text to that number',
+  30003: 'the handset is unreachable',
+  30005: 'unknown destination handset',
+  30006: 'that is a landline or an unreachable carrier',
+};
+const SMS_NEVER_REMEMBER_CODES = [21408, 21610];   // fixed by a settings change / the person texting START: do not block future sends because of them
+// Pure. { code, permanent, reason } from a Twilio send response (or '' code when it was a success).
+function smsErrorInfo(r) {
+  const raw = r && (r.code != null ? r.code : r.error_code);
+  const code = raw == null || raw === '' ? 0 : parseInt(raw, 10) || 0;
+  if (!code) return { code: 0, permanent: false, reason: '' };
+  return { code, permanent: Object.prototype.hasOwnProperty.call(SMS_PERMANENT_ERRORS, code), reason: SMS_PERMANENT_ERRORS[code] || String((r && r.message) || 'Twilio error ' + code).slice(0, 160) };
+}
+
+// -- Never send the same text twice (D-16 item 4). Per-isolate memory + the Message_Queue rows smsGatedSend already reads. --
+const SMS_DEDUPE_WINDOW_MS = 10 * 60000;
+const __smsRecent = new Map();   // "<to>|<hash>" -> ms it was sent (or started)
+function smsHash(s) { let h = 2166136261; const t = String(s); for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36) + ':' + t.length; }
+function smsDedupeKey(to, body) { return String(to) + '|' + smsHash(body); }
+// Pure over the map. { dup, ageMs }.
+function smsDedupeCheck(map, key, nowMs, windowMs) {
+  const at = map.get(key);
+  if (at != null && nowMs - at < windowMs) return { dup: true, ageMs: nowMs - at };
+  return { dup: false, ageMs: 0 };
+}
+function smsDedupeRemember(map, key, nowMs, windowMs) {
+  map.set(key, nowMs);
+  if (map.size > 300) for (const [k, t] of map) if (nowMs - t >= (windowMs || SMS_DEDUPE_WINDOW_MS)) map.delete(k);
+}
+// Pure. Is there already a row in Message_Queue for this exact text to this number that is sent, sending, or waiting to go? `rows` = array of
+// objects; `selfRow` = a sheet row number to ignore (our own). A held (Send_After) pending row counts at any age; everything else within windowMs.
+// With opts.earlierThanRow, only rows ABOVE that sheet row count (the earlier row wins a race, so two racers never both stand down).
+function mqFindDuplicate(rows, o) {
+  const nowMs = o.nowMs, win = o.windowMs || SMS_DEDUPE_WINDOW_MS;
+  for (let i = 0; i < (rows || []).length; i++) {
+    const r = rows[i], sheetRow = i + 2;
+    if (o.selfRow && sheetRow === o.selfRow) continue;
+    if (o.earlierThanRow && sheetRow >= o.earlierThanRow) continue;
+    if (String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() === 'FALSE') continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone || String(r.Message_Body || '') !== o.body) continue;
+    const st = String(r.Status || '').toLowerCase();
+    if (st === 'sent' || st === 'sending') { const t = Date.parse(r.Sent_Date || r.Created_Date || ''); if (isFinite(t) && nowMs - t < win) return { id: r.ID, status: st, sheetRow }; continue; }
+    if (st === 'pending') {
+      if (r.Send_After) return { id: r.ID, status: 'held', sheetRow };
+      const t = Date.parse(r.Created_Date || ''); if (isFinite(t) && nowMs - t < win) return { id: r.ID, status: 'pending', sheetRow };
+    }
+  }
+  return null;
+}
+// Pure. Automatic nudges: has this number already been nudged about this work order (any nudge type) inside gapMs? { at, id } or null.
+function mqFindRecentNudge(rows, o) {
+  let best = null;
+  for (const r of rows || []) {
+    if (String(r.Message_Type || '').indexOf(o.family) !== 0 || String(r.WO_ID || '') !== o.woId) continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone) continue;
+    const st = String(r.Status || '').toLowerCase();
+    if (st !== 'sent' && st !== 'sending' && !(st === 'pending')) continue;
+    const t = Date.parse(r.Sent_Date || r.Created_Date || '');
+    if (!isFinite(t) || o.nowMs - t >= o.gapMs) continue;
+    if (!best || t > best.at) best = { at: t, id: r.ID };
+  }
+  return best;
+}
+// Pure. Has this number already failed with a permanent Twilio error (not region / opt-out) recently? { code, id } or null.
+function mqFindKnownBad(rows, o) {
+  for (const r of rows || []) {
+    if (String(r.Status || '').toLowerCase() !== 'failed') continue;
+    const code = parseInt(r.Error_Code, 10) || 0;
+    if (!code || !SMS_PERMANENT_ERRORS[code] || SMS_NEVER_REMEMBER_CODES.indexOf(code) >= 0) continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone) continue;
+    const t = Date.parse(r.Created_Date || '');
+    if (isFinite(t) && o.nowMs - t < o.windowMs) return { code, id: r.ID };
+  }
+  return null;
+}
+
+// -- SMS_Logs: one row per real send / refusal, with what Twilio billed (D-16 item 5) --
+const SMS_LOG_TAB = 'SMS_Logs';
+const SMS_LOG_BASE_COLS = ['ID', 'WO_ID', 'Recipient_Type', 'Recipient_ID', 'Phone', 'Message', 'Sent_Date', 'Status', 'Twilio_SID'];
+const SMS_LOG_COST_COLS = ['Segments', 'Est_Segments', 'Encoding', 'Chars', 'Price', 'Price_Unit', 'Message_Type', 'Queue_ID', 'Log_Source', 'Error_Code', 'Note'];
+let __smsLogHeaders = null;   // { at, headers } per isolate: no per-send read
+async function smsLogHeaders(env) {
+  const now = Date.now();
+  if (__smsLogHeaders && now - __smsLogHeaders.at < COLS_OK_MS) return __smsLogHeaders.headers;
+  const want = SMS_LOG_BASE_COLS.concat(SMS_LOG_COST_COLS);
+  try { await ensureColumns(env, SMS_LOG_TAB, want); }
+  catch (e) { if (!isMissingTabError(e)) throw e; await ensureTab(env, SMS_LOG_TAB, want); }   // a brand-new sheet (staging) only; the live tab exists, so it is never created over
+  const h = (((await sheetsRequest(env, 'GET', `/values/${SMS_LOG_TAB}!1:1`)).values || [])[0]) || [];
+  if (!h.length) throw new Error('SMS_Logs has no header row');
+  __smsLogHeaders = { at: now, headers: h };
+  return h;
+}
+let __smsLogSeq = 0;
+// Appends one SMS_Logs row. WRITE ONLY (headers cached per isolate). Never throws: returns { ok } or { ok:false, error }.
+async function smsLogAppend(env, rec) {
+  try {
+    const headers = await smsLogHeaders(env);
+    const row = Object.assign({ ID: 'T' + Date.now().toString(36) + (++__smsLogSeq).toString(36), Sent_Date: new Date().toISOString(), Log_Source: 'transport' }, rec);
+    const resp = await sheetsRequest(env, 'POST', `/values/${SMS_LOG_TAB}:append?valueInputOption=RAW`, { values: [headers.map(h => row[h] == null ? '' : String(row[h]).slice(0, 2000))] });
+    if (!resp || !resp.updates) return { ok: false, error: 'append gave no confirmation' };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 300) }; }
+}
+// Logs and, if the log write itself fails, reports it to the failure ledger (never silent). Never throws.
+async function smsLogRecord(env, rec) {
+  const r = await smsLogAppend(env, rec);
+  if (!r.ok) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_log_write', ref: String(rec.Message_Type || rec.Log_Source || ''), message: 'could not write an SMS_Logs row (' + String(rec.Status || '') + '): ' + r.error, severity: 'P1' });
+  return r;
+}
+// The refusal for a destination outside the enabled regions: ONE calm P2 ledger row, the row id and the LAST FOUR digits only.
+async function smsReportRegionBlocked(env, rowId, check) {
+  return reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_destination_region', ref: rowId ? 'Message_Queue ' + rowId : '', severity: 'P2',
+    message: 'text not sent: destination outside enabled regions (' + (rowId ? 'Message_Queue row ' + rowId : 'no queue row') + ', number ending ' + check.last4 + ')', context: { reason: check.reason } });
+}
+
+// Raw Twilio transport - no gating, sends if credentials are present. Only ever called by
 // (a) sendSMS below, once the global kill switch has already been checked, and (b)
-// smsGatedSend, which has already run the full four/two-layer gate + Test Mode redirect.
-// Never call this directly from a new call site — call sendSMS (legacy/ungated sites) or
-// smsGatedSend (the 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types) instead.
+// smsGatedSend / the queue release paths, which have already run the full gate + Test Mode redirect.
+// Never call this directly from a new call site - call sendSMS (legacy/ungated sites) or
+// smsGatedSend (the gated message types) instead.
 // Auth: Twilio accepts Basic auth with EITHER (Account SID : Auth Token) OR (API Key SID :
 // API Key Secret) — Brett's Cloudflare secrets are the API-Key pair (TWILIO_API_SID /
 // TWILIO_API_KEY), not a classic Auth Token (no TWILIO_AUTH var exists), so this uses that
 // pair. The URL path always uses the Account SID (TWILIO_SID) regardless of which credential
-// authenticates the request — that part is unchanged.
-async function sendSMSRaw(env, to, message) {
+// authenticates the request - that part is unchanged.
+// D-16 (Oct 23 2026): the ONE place every text passes. It (1) makes the text plain (smsSanitize), (2) refuses a destination outside the enabled
+// regions, (3) refuses an identical text to the same number inside 10 minutes (opts.allowRepeat to override on a deliberate resend), (4) sends,
+// (5) reads Twilio's answer (segments, price, error code) and (6) writes one SMS_Logs row. opts: { keepAccents, allowRepeat, context:{wo_id,
+// message_type, recipient_type, queue_id} }. Result = Twilio's JSON (sid on success), or { skipped, duplicate|region_blocked, reason }.
+async function sendSMSRaw(env, to, message, opts) {
+  opts = opts || {};
+  const ctx = opts.context || {};
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
+  const san = smsSanitize(message, { keepAccents: opts.keepAccents === true });
+  message = san.text;
+  const est = san.after;
+  const redact = opts.redact === true || /^pin_/.test(String(ctx.message_type || ''));   // a text that carries a login PIN is never copied into the log
+  const logBase = { WO_ID: ctx.wo_id || '', Recipient_Type: ctx.recipient_type || '', Phone: to, Message: redact ? '[text not copied here: it contains a login PIN]' : message, Est_Segments: est.pieces, Encoding: est.encoding, Chars: est.units, Message_Type: ctx.message_type || '', Queue_ID: ctx.queue_id || '' };
+  const dest = smsDestinationCheck(to);
+  if (!dest.ok) {
+    if (!ctx.queue_id) await smsReportRegionBlocked(env, '', dest);   // a queue-backed send reports with its row id from smsGatedSend
+    await smsLogRecord(env, Object.assign({}, logBase, { Phone: '***' + dest.last4, Message: '[not sent] ' + message.slice(0, 40), Status: 'blocked_region', Note: dest.reason }));
+    return { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dest.reason + ')' };
+  }
+  const key = smsDedupeKey(to, message), nowMs = Date.now();
+  if (!opts.allowRepeat) {
+    const d = smsDedupeCheck(__smsRecent, key, nowMs, SMS_DEDUPE_WINDOW_MS);
+    if (d.dup) {
+      await smsLogRecord(env, Object.assign({}, logBase, { Status: 'suppressed_duplicate', Note: 'the same text to this number went out ' + Math.round(d.ageMs / 1000) + 's ago (10-minute guard)' }));
+      return { skipped: true, duplicate: true, reason: 'the same text to the same number was already sent ' + Math.round(d.ageMs / 1000) + 's ago' };
+    }
+  }
+  smsDedupeRemember(__smsRecent, key, nowMs);   // marked BEFORE the call, so a second caller in the same isolate cannot slip in while Twilio is answering
   if (env.__STAGING__ ?? isStaging(env)) {
     console.log(`🧪 STAGING — SMS stubbed (not sent via Twilio) → ${to}: ${message}`);
-    return { staged: true, would_have: { to, message }, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'staged', Segments: est.pieces, Note: 'staging stub: pieces are our estimate' }));
+    return { staged: true, would_have: { to, message }, segments_est: est.pieces, encoding: est.encoding, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
   }
-  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM)
+  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM) {
+    __smsRecent.delete(key);
     return { error: 'Twilio not configured (missing TWILIO_SID/TWILIO_API_SID/TWILIO_API_KEY/TWILIO_FROM)' };
-  const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
-    method: 'POST',
-    headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
-  });
-  return resp.json();
+  }
+  let resp, j;
+  try {
+    resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
+    });
+    j = await resp.json();
+  } catch (e) {
+    __smsRecent.delete(key);   // no answer from Twilio: a deliberate retry must be possible
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'failed', Note: 'no usable answer from Twilio: ' + String((e && e.message) || e).slice(0, 200) }));
+    throw e;
+  }
+  const ok = !!(resp.ok && j && j.sid);
+  if (!ok) __smsRecent.delete(key);   // Twilio refused it: nothing went out, a later fix-and-resend is allowed
+  const einfo = smsErrorInfo(j);
+  await smsLogRecord(env, Object.assign({}, logBase, {
+    Status: ok ? 'sent' : 'failed', Twilio_SID: (j && j.sid) || '',
+    Segments: ok && j.num_segments != null ? j.num_segments : '', Price: ok && j.price != null ? j.price : '', Price_Unit: ok && j.price_unit ? j.price_unit : '',
+    Error_Code: einfo.code || '', Note: ok ? (j.num_segments != null && String(j.num_segments) !== String(est.pieces) ? 'Twilio billed ' + j.num_segments + ' piece(s), we estimated ' + est.pieces : '') : (einfo.reason || String((j && j.message) || 'HTTP ' + resp.status)).slice(0, 200),
+  }));
+  return j;
 }
 
 // sendSMS — the long-standing chokepoint every pre-existing call site in this file already
@@ -15001,11 +15260,11 @@ async function sendSMSRaw(env, to, message) {
 // own stated intent (kept off until he's run live tests) at the one place that can enforce it
 // for every SMS in the codebase, not just the 6 new ones. TWILIO_ENABLED defaults OFF (missing
 // Config key reads as '', which is !== 'TRUE'), so nothing sends anywhere until Brett flips it.
-async function sendSMS(env, to, message) {
+async function sendSMS(env, to, message, opts) {
   let cfg;
   try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
   if (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'TWILIO_ENABLED not TRUE' };
-  return sendSMSRaw(env, to, message);
+  return sendSMSRaw(env, to, message, opts);   // opts (D-16): { allowRepeat, keepAccents, context } - see sendSMSRaw
 }
 
 // ── POST /admin-notify (Oct 12 2026) — narrow server-to-server "text Brett" endpoint ─────────────
@@ -15152,7 +15411,7 @@ const DOOR_WD_URL = 'https://str-automation.brett-2f8.workers.dev/health';
 const DOOR_WD_TIMEOUT_MS = 8000;
 const DOOR_WD_SMS_TIMEOUT_MS = 20000;   // Oct 21 2026: deadline for the alert text itself (see runDoorWatchdogPass)
 const DOOR_WD_STALE_MS = 75 * 60000;
-const DOOR_WD_DEDUPE_MS = 6 * 3600000;
+const DOOR_WD_DEDUPE_MS = 24 * 3600000;   // Oct 23 2026 (D-16): one text per problem key per 24 hours (was 6 hours: lock_set texted every 6h since Oct 17). A changed key or a recovery still sends at once.
 const DOOR_WD_ABSENT_GRACE_MS = 24 * 3600000;
 const DOOR_WD_STATE_KEY = 'door_watchdog_state';
 const DOOR_WD_JOB = 'door_watchdog';
@@ -15371,6 +15630,16 @@ async function runDoorWatchdogPass(env, opts) {
   const ev = evaluateDoorHealth(fr, nowMs, { absentSinceMs: absentMs });
   const decision = doorWdDecide(ev, state, nowMs);
   res.healthy = ev.healthy; res.reason_key = ev.key; res.reasons = ev.reasons; res.action = decision;
+  // D-16: every alert attempt and every suppressed repeat is written to SMS_Logs (a row each), so a text that was NOT sent is as visible as one that was.
+  const logSms = async (status, note, text) => {
+    const rec = { Recipient_Type: 'admin', Phone: 'admin', Message: String(text || '').slice(0, 300), Status: status, Message_Type: 'door_watchdog', Log_Source: 'door_watchdog', Note: String(note || '').slice(0, 300) };
+    try { const lr = await (io.logSms ? io.logSms(rec) : smsLogRecord(env, rec)); if (lr && lr.ok === false) fail('sms_log', lr.error || 'log write failed'); }
+    catch (e) { fail('sms_log', e); }
+  };
+  if (decision === 'suppressed') {
+    const lastIso = state.sent && state.sent[ev.key];
+    await logSms('alert_suppressed_24h', 'key=' + ev.key + '; the same problem was already texted ' + (lastIso ? doorWdAge(nowMs - Date.parse(lastIso)) + ' ago' : 'inside the last 24h') + '; next text allowed after 24h or when the problem changes', doorWdComposeAlert(ev.reasons));
+  }
 
   // 4. deliver
   let delivered = null;
@@ -15388,7 +15657,7 @@ async function runDoorWatchdogPass(env, opts) {
         const smsWait = (io && io.smsTimeoutMs) || DOOR_WD_SMS_TIMEOUT_MS; let smsTimer;
         const smsTimeout = new Promise((_, rej) => { smsTimer = setTimeout(() => rej(new Error('text message did not finish within ' + Math.round(smsWait / 1000) + 's')), smsWait); });
         let r;
-        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text), smsTimeout]); } finally { clearTimeout(smsTimer); }
+        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text, { allowRepeat: true, context: { message_type: 'door_watchdog_' + decision, recipient_type: 'admin' } }), smsTimeout]); } finally { clearTimeout(smsTimer); }
         if (r && r.skipped) smsDetail = 'skipped: ' + scrubPhones(r.reason || 'sending disabled');
         else if (r && r.staged) { smsOk = true; smsOutcome = 'staged'; }
         else if (r && r.sid && !r.error && !r.code) { smsOk = true; smsOutcome = 'sent'; }
@@ -15413,6 +15682,7 @@ async function runDoorWatchdogPass(env, opts) {
     }
     delivered = smsOk || emailOk;
     res.delivered = delivered;
+    await logSms(decision === 'alert' ? 'alert_attempted' : 'recovery_attempted', 'key=' + ev.key + '; sms=' + (smsOk ? smsOutcome : 'failed: ' + smsDetail) + (smsOk ? '' : '; email=' + (emailOk ? 'sent' : 'failed')) + '; delivered=' + (delivered ? 'yes' : 'NO'), text);
     if (!delivered) {
       fail('delivery', 'neither SMS nor email delivered the ' + decision + '; it will be retried next pass');
       await tel(false, 'delivery_failed_' + decision, 'key=' + ev.key + ' - no channel delivered; retrying next pass');
@@ -15537,7 +15807,8 @@ async function doorWatchdogTest(env, url, body) {
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
 // Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
 const MSG_QUEUE_TAB = 'Message_Queue';
-const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To','Skip_If_Seen'];
+// Error_Code / Error_Reason were added Oct 23 2026 (D-16 item 6), at the END; ensureColumns adds them to the live tab.
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To','Skip_If_Seen','Error_Code','Error_Reason'];
 const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
 let _msgQueueTabReady = false, _smsTogglesReady = false;
 
@@ -15572,11 +15843,11 @@ const DEFAULT_MESSAGE_TEMPLATES = [
   { Message_Type: 'pin_owner', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}! This is {AssistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: {PortalUrl} PIN: {PIN}. Log in to check on your work orders, submit requests, and manage your notification settings." },
   { Message_Type: 'tenant_welcome', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of {Owner} at {Address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing." },
+    "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance. We handle maintenance for {Owner} at {Address}. Please save this number; we only text about maintenance." },
   { Message_Type: 'vendor_welcome', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal ({PortalUrl}) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)" },
   { Message_Type: 'property_notice', Channel: 'sms', Subject: '', Body:
-    "This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}, with an update about {Address}: [describe the issue here] (This line is outbound-only for now - a reply won't reach us.)" },
+    "{AssistantName} with Ridge Co, for {Owner}: update about {Address}. [describe the issue here] (Replies are not read.)" },
   // Estimate / proposal notifications (Sep 28 2026, FEATURE_LOG rule 201). Editable in Message_Templates.
   // Vendor texts deliberately contain NO dollar amounts. {Job} is "work order WO-1234" or "proposal #7".
   { Message_Type: 'admin_estimate_new', Channel: 'sms', Subject: '', Body:
@@ -15766,6 +16037,40 @@ function tenantForQueuedText(tenants, phone, propertyId) {
   return m.find(t => !tenantMovedOut(t)) || m[0] || null;
 }
 
+// Pure. Message_Queue values grid (header row first) -> array of row objects. Index i is sheet row i + 2.
+function mqRowsToObjects(values) {
+  const v = values || [], h = v[0] || [];
+  return v.slice(1).map(r => { const o = {}; h.forEach((k, i) => { o[k] = r && r[i] != null ? r[i] : ''; }); return o; });
+}
+// Pure. Is `phone` Brett's own? Config admin_phone is the account owner's number; a Vendors row with In_House = TRUE is Brett himself.
+function smsIsOwnNumber(phone, cfg, vendor) {
+  const p = normalizePhone(phone);
+  if (!p) return false;
+  if (cfg && cfg.admin_phone && normalizePhone(cfg.admin_phone) === p) return true;
+  return !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
+}
+const SMS_NUDGE_MIN_GAP_MS = 72 * 3600000;        // Brett, Oct 23 2026: at most one automatic nudge per person per work order every 3 days
+const SMS_KNOWN_BAD_WINDOW_MS = 30 * 86400000;    // a number Twilio permanently refused (invalid, not mobile, cannot route) is not retried for 30 days
+// Pure. What happened to a send, as Message_Queue wants it written: { sent, status, sid, errorCode, reason, duplicate, regionBlocked, permanent }.
+function smsSendOutcome(result) {
+  if (result && result.sid) return { sent: true, status: 'sent', sid: result.sid, errorCode: '', reason: '' };
+  if (result && result.duplicate) return { sent: false, status: 'skipped', sid: '', errorCode: '', reason: 'duplicate: ' + (result.reason || 'the same text was already sent'), duplicate: true };
+  if (result && result.region_blocked) return { sent: false, status: 'failed', sid: '', errorCode: 'blocked_region', reason: result.reason || 'text not sent: destination outside enabled regions', regionBlocked: true };
+  if (result && result.staged) return { sent: false, status: 'failed', sid: '', errorCode: '', reason: 'staging stub: nothing was really sent' };
+  const e = smsErrorInfo(result);
+  const why = e.code ? 'Twilio error ' + e.code + ': ' + e.reason + (e.permanent ? ' (final - this text will not be retried)' : '') : String((result && (result.error || result.message)) || 'Twilio gave no message sid').slice(0, 160);
+  return { sent: false, status: 'failed', sid: '', errorCode: e.code ? String(e.code) : '', reason: why, permanent: e.permanent };
+}
+
+// For the legacy sendSMS call sites that used to ignore Twilio's answer. A text that was switched off (skipped), stubbed (staging), held back as a
+// duplicate or refused for its region is not a failure; anything else without a message sid is reported to the ledger (P0, it is a text). Returns true when it went.
+async function smsReportIfFailed(env, where, ref, r) {
+  if (r && (r.sid || r.staged || r.skipped)) return !!(r && r.sid);
+  const o = smsSendOutcome(r);
+  await reportFailure(env, { system: 'hub', source: 'worker', where: where, ref: ref || '', severity: o.permanent ? 'P2' : 'P0', message: 'a text was not sent: ' + o.reason });
+  return false;
+}
+
 // The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types. Always writes a
 // Message_Queue row first (queue-write-first, per the brief's Build Order step 3), regardless
 // of gate outcome — then sends immediately only if every applicable gate is open, redirecting
@@ -15812,6 +16117,11 @@ async function smsGatedSend(env, opts) {
       if (t.translated) { originalBody = t.original; translatedTo = 'es'; messageBody = t.text; }
     } catch (e) { /* fail open: English goes out */ }
   }
+  // D-16 (Oct 23 2026): make the text plain BEFORE it is queued, so the Message_Queue row shows exactly what is sent and Twilio bills 160-character
+  // pieces. A Spanish vendor text keeps its accents (stripping them changes meaning) but still gets plain dashes, quotes and dots.
+  const _spanish = translatedTo === 'es' || (kind === 'vendor' && !!opts.vendor && /^es/i.test(String(opts.vendor.Language || '')));   // a Spanish-language vendor keeps accents even when the body was hand-built in Spanish (already_localized)
+  messageBody = smsSanitizeText(messageBody, { keepAccents: _spanish });
+  if (originalBody) originalBody = smsSanitizeText(originalBody);
   const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
 
   const now = new Date().toISOString();
@@ -15819,12 +16129,45 @@ async function smsGatedSend(env, opts) {
   const rows = data.values || [];
   const headers = rows[0] && rows[0].length ? rows[0] : MSG_QUEUE_COLS;
   let id = String(nextSafeId(rows));
+  // ── D-16 guards. They use the Message_Queue rows read just above (no extra Sheets read) and run BEFORE the new queue row is written. ──
+  const _nowMs = Date.now();
+  const _qObjs = mqRowsToObjects(rows);
+  const _isNudge = String(opts.message_type || '').indexOf('vendor_nudge_') === 0;
+  const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
+  if (sendOk && recipientPhone) {
+    let _sup = null;
+    if (_isNudge && smsIsOwnNumber(recipientPhone, cfg, opts.vendor)) _sup = { reason: 'own_number', status: 'suppressed_own_number', note: 'automatic nudge to the account owner\'s own number is never sent' };
+    else if (_isNudge) {
+      const _rn = mqFindRecentNudge(_qObjs, { family: 'vendor_nudge_', woId: opts.wo_id || '', phone: recipientPhone, gapMs: SMS_NUDGE_MIN_GAP_MS, nowMs: _nowMs });
+      if (_rn) _sup = { reason: 'nudge_cap', status: 'suppressed_nudge_cap', next_allowed_at: new Date(_rn.at + SMS_NUDGE_MIN_GAP_MS).toISOString(), note: 'one automatic nudge per person per work order every 3 days; last one is Message_Queue row ' + _rn.id };
+    }
+    if (!_sup && !testMode && !_redirect) {
+      const _kb = mqFindKnownBad(_qObjs, { phone: recipientPhone, nowMs: _nowMs, windowMs: SMS_KNOWN_BAD_WINDOW_MS });
+      if (_kb) _sup = { reason: 'known_undeliverable', status: 'suppressed_known_bad', note: 'Twilio permanently refused this number (error ' + _kb.code + ', Message_Queue row ' + _kb.id + '); not tried again' };
+    }
+    if (!_sup && !opts.allowRepeat) {
+      const _dup = mqFindDuplicate(_qObjs, { phone: recipientPhone, body: messageBody, nowMs: _nowMs });
+      if (_dup) _sup = { reason: 'duplicate', status: 'suppressed_duplicate', note: 'the same text to this number is already ' + _dup.status + ' (Message_Queue row ' + _dup.id + ')' };
+    }
+    if (_sup) {
+      const _se = smsEstimate(messageBody);
+      await smsLogRecord(env, { WO_ID: opts.wo_id || '', Recipient_Type: kind || '', Phone: recipientPhone, Message: messageBody, Status: _sup.status, Est_Segments: _se.pieces, Encoding: _se.encoding, Chars: _se.units, Message_Type: opts.message_type || '', Log_Source: 'gated', Note: _sup.note });
+      return { queued_id: '', send_ok: sendOk, sent: false, suppressed: true, suppress_reason: _sup.reason, duplicate_suppressed: _sup.reason === 'duplicate', next_allowed_at: _sup.next_allowed_at || '', test_mode: testMode, gate_snapshot: gateSnapshot + ' - not sent: ' + _sup.note, delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+    }
+  }
+  // Will this text go out right now (not held for quiet hours, not blocked)? Then its queue row is born "sending": the durable marker is written BEFORE
+  // the send, so a failed status save afterwards can never leave a sent text looking "pending" and be sent again.
+  const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+  const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
+  const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+  const _holdNow = !!(_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk);
+  const _sendNow = !!(sendOk && recipientPhone && !_holdNow);
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
     Property_ID: (opts.property && opts.property.ID) || '',
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
-    Message_Body: messageBody, Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
+    Message_Body: messageBody, Status: _sendNow ? 'sending' : 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
     Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
@@ -15839,7 +16182,24 @@ async function smsGatedSend(env, opts) {
   } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
   const mqOpts = mqRow ? { sheetRow: mqRow, headers } : undefined;   // headers: the save needs no second read of the whole tab (Oct 23 2026)
 
-  let sent = false, deliveredTo = '', outcome = 'blocked', queueSaveWarning = '';
+  // D-16 race check: if our row did not land right after the rows we read, another request wrote in the gap - possibly the SAME text (a double tap, a client
+  // retry). Look again; the EARLIER row wins, so two racers never both stand down. A failed look is reported (P0) and the text still goes out: a rare
+  // duplicate costs a few cents, a lost text costs a tenant or a vendor.
+  if (_sendNow && !opts.allowRepeat && mqRow && mqRow !== rows.length + 1) {
+    try {
+      invalidateTabCache(MSG_QUEUE_TAB);
+      const _again = mqRowsToObjects((await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`)).values);
+      const _dup2 = mqFindDuplicate(_again, { phone: recipientPhone, body: messageBody, nowMs: Date.now(), selfRow: mqRow, earlierThanRow: mqRow });
+      if (_dup2) {
+        await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: gateSnapshot + ' - duplicate of Message_Queue row ' + _dup2.id + ' (two requests at once); not sent' }, mqOpts);
+        const _se2 = smsEstimate(messageBody);
+        await smsLogRecord(env, { WO_ID: opts.wo_id || '', Recipient_Type: kind || '', Phone: recipientPhone, Message: messageBody, Status: 'suppressed_duplicate', Est_Segments: _se2.pieces, Encoding: _se2.encoding, Chars: _se2.units, Message_Type: opts.message_type || '', Queue_ID: id, Log_Source: 'gated', Note: 'two requests at once; the earlier Message_Queue row ' + _dup2.id + ' sent it' });
+        return { queued_id: id, send_ok: sendOk, sent: false, suppressed: true, suppress_reason: 'duplicate', duplicate_suppressed: true, test_mode: testMode, gate_snapshot: gateSnapshot, delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+      }
+    } catch (e) { await mqReportFailure(env, id, 'duplicate check after a write race failed, sending anyway: ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+
+  let sent = false, deliveredTo = '', outcome = 'blocked', queueSaveWarning = '', errorCode = '', errorReason = '';
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
@@ -15852,15 +16212,13 @@ async function smsGatedSend(env, opts) {
     // allowEarlyMorning (Sep 28 2026, Brett): recurring/auto-posted WOs go out at 8:00am ET, an
     // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
     // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
-    const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+    // (_earlyMorningOk / _qw / _holdUntil / _holdNow are worked out above, before the queue row is written - D-16.)
     // opts.quietWindow {start,end} (Oct 14 2026): a caller may use its own ET window instead of the
     // global 7pm-9am (owner proposal heads-up text: 8pm-8am). Default path is unchanged.
-    const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
-    const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
-    if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
+    if (_holdNow) {
       const sendAfter = _holdUntil.toISOString();
       const _holdSaved = await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
-      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
+      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'message_audit', ref: opts.wo_id, severity: 'P2', message: 'could not write the WO audit row for a held text: ' + String((e && e.message) || e).slice(0, 160) }); } }
       return Object.assign({ queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
         _holdSaved === false ? { warning: 'The text was held for quiet hours but its Message_Queue row could not be marked (Send_After). It will not release by itself - see Needs Attention (message_queue_update).' } : {});
     }
@@ -15868,23 +16226,31 @@ async function smsGatedSend(env, opts) {
     // TWILIO_TEST_MODE stays off, so one feature (the Milam Ridge cleaning scheduler) can be tested live without
     // redirecting every other Hub text. Only a valid, already-normalized phone is accepted; any other value
     // fails the send closed (nothing goes to the real recipient) - never silently falls through to the real phone.
-    const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
     if (opts.redirectTo && !_redirect) {
       outcome = 'failed';
       await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' }, mqOpts);
       return { queued_id: id, send_ok: sendOk, sent: false, test_mode: true, gate_snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent', delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
     deliveredTo = _redirect || (testMode ? testRecipient : recipientPhone);
-    const result = await sendSMSRaw(env, deliveredTo, messageBody);
-    sent = !!(result && result.sid);
-    outcome = sent ? 'sent' : 'failed';
-    const _sentSaved = await updateMessageQueueRow(env, id, {
-      Status: sent ? 'sent' : 'failed',
-      Delivered_To: deliveredTo,
-      Sent_Date: new Date().toISOString(),
-      Twilio_Message_SID: (result && result.sid) || '',
-    }, mqOpts);
-    if (_sentSaved === false) queueSaveWarning = (sent ? 'The text WAS sent' : 'The text was NOT sent') + ' but its Message_Queue row could not be updated and may still say "pending" (see Needs Attention: message_queue_update, it names the Twilio SID).';
+    // Destination region (D-16 item 6): refuse BEFORE calling Twilio. One calm ledger row with the row id and the last four digits only.
+    const _dc = smsDestinationCheck(deliveredTo);
+    let result;
+    if (!_dc.ok) {
+      await smsReportRegionBlocked(env, id, _dc);
+      result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + _dc.reason + ')' };
+    } else {
+      try { result = await sendSMSRaw(env, deliveredTo, messageBody, { keepAccents: _spanish, allowRepeat: opts.allowRepeat === true, context: { wo_id: opts.wo_id || '', message_type: opts.message_type || '', recipient_type: kind || '', queue_id: id } }); }
+      catch (e) { result = { error: 'no answer from Twilio: ' + String((e && e.message) || e).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + String((e && e.message) || e).slice(0, 200)); }
+    }
+    const _o = smsSendOutcome(result);
+    sent = _o.sent; errorCode = _o.errorCode; errorReason = _o.reason;
+    outcome = sent ? 'sent' : (_o.duplicate ? 'duplicate_suppressed' : 'failed');
+    const _fin = { Status: _o.status, Delivered_To: sent ? deliveredTo : '', Sent_Date: new Date().toISOString(), Twilio_Message_SID: _o.sid };
+    if (!sent) { _fin.Error_Code = _o.errorCode; _fin.Error_Reason = _o.reason; }
+    const _sentSaved = await updateMessageQueueRow(env, id, _fin, mqOpts);
+    // A permanent Twilio refusal is recorded ONCE as a calm P2 ledger row (the queue row says failed, with the code and the reason); it is never retried.
+    if (!sent && _o.permanent && !_o.regionBlocked) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_undeliverable', ref: 'Message_Queue ' + id, severity: 'P2', message: 'text not delivered, Twilio error ' + _o.errorCode + ' (Message_Queue row ' + id + ', number ending ' + String(recipientPhone).replace(/\D/g, '').slice(-4) + '): ' + _o.reason });
+    if (_sentSaved === false) queueSaveWarning = (sent ? 'The text WAS sent' : 'The text was NOT sent') + ' but its Message_Queue row could not be updated and may still say "sending" (see Needs Attention: message_queue_update, it names the Twilio SID).';
   } else if (sendOk && !recipientPhone) {
     outcome = 'failed_no_phone';
     await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' }, mqOpts);
@@ -15901,10 +16267,42 @@ async function smsGatedSend(env, opts) {
         messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
-    } catch (e) {}
+    } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'message_audit', ref: opts.wo_id, severity: 'P2', message: 'could not write the WO audit row for a text (' + outcome + '): ' + String((e && e.message) || e).slice(0, 160) }); }
   }
   return Object.assign({ queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
+    errorCode ? { error_code: errorCode, error_reason: errorReason } : {}, outcome === 'duplicate_suppressed' ? { duplicate_suppressed: true } : {},
     queueSaveWarning ? { warning: queueSaveWarning } : {});
+}
+
+// Sends one ALREADY-QUEUED Message_Queue row (a quiet-hours release or a manual release) the safe way (D-16 item 4). The row is first marked "sending"
+// (a durable marker written BEFORE the text goes out); if that mark cannot be saved the text is NOT sent (it stays pending and is retried next sweep, and
+// the failure is reported). Because of the mark, a failed save of "sent" afterwards leaves the row "sending", never "pending", so no later sweep can
+// send it a second time. Returns { sent, claim_failed, outcome } and never throws.
+async function mqSendQueuedRow(env, row, deliverTo, extraFields) {
+  const id = row.ID;
+  const claimed = await updateMessageQueueRow(env, id, { Status: 'sending', Sent_Date: new Date().toISOString() }, { retryWaitsMs: [2500] });
+  if (claimed === false) return { sent: false, claim_failed: true, outcome: smsSendOutcome({ error: 'could not mark the row as sending, so the text was not sent (it will be tried again next sweep)' }) };
+  const dc = smsDestinationCheck(deliverTo);
+  let result;
+  if (!dc.ok) { await smsReportRegionBlocked(env, id, dc); result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dc.reason + ')' }; }
+  else {
+    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
+    catch (e) { result = { error: 'no answer from Twilio: ' + String((e && e.message) || e).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+  const o = smsSendOutcome(result);
+  const fin = Object.assign({ Status: o.status, Delivered_To: o.sent ? deliverTo : '', Sent_Date: new Date().toISOString(), Twilio_Message_SID: o.sid }, extraFields || {});
+  if (!o.sent) { fin.Error_Code = o.errorCode; fin.Error_Reason = o.reason; }
+  await updateMessageQueueRow(env, id, fin);   // reports (P0) by itself if it cannot save; the row then stays "sending", not "pending"
+  if (!o.sent && o.permanent && !o.regionBlocked) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_undeliverable', ref: 'Message_Queue ' + id, severity: 'P2', message: 'text not delivered, Twilio error ' + o.errorCode + ' (Message_Queue row ' + id + ', number ending ' + String(row.Recipient_Phone || '').replace(/\D/g, '').slice(-4) + '): ' + o.reason });
+  return { sent: o.sent, outcome: o };
+}
+// Pure. Rows left "sending" for 15-45 minutes: a text was claimed and its result never confirmed. Reported once or twice, never every sweep.
+function mqStuckSending(rows, nowMs) {
+  return (rows || []).filter(r => {
+    if (String(r.Status || '').toLowerCase() !== 'sending') return false;
+    const t = Date.parse(r.Sent_Date || r.Created_Date || '');
+    return isFinite(t) && nowMs - t >= 15 * 60000 && nowMs - t < 45 * 60000;
+  });
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
@@ -15934,7 +16332,7 @@ async function updateMessageQueueRow(env, id, fields, opts) {
     if (opts && opts.sheetRow && Array.isArray(opts.headers) && opts.headers.length) headers = opts.headers;   // nothing to read
     else { const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`); [headers, ...rows] = data.values || [[]]; }
     const idCol = Math.max(0, headers.indexOf('ID'));
-    const isPending = r => r[headers.indexOf('Status')] === 'pending';   // -1 (no Status column) -> undefined -> not pending
+    const isPending = r => { const s = r[headers.indexOf('Status')]; return s === 'pending' || s === 'sending'; };   // -1 (no Status column) -> undefined -> not pending; 'sending' = claimed by a release (D-16)
     let sheetRow = opts && opts.sheetRow ? opts.sheetRow : 0;
     if (!sheetRow) {
       const hits = []; rows.forEach((r, i) => { if (String(r[idCol]) === String(id)) hits.push(i); });
@@ -16012,10 +16410,8 @@ async function releaseMessageQueue(env, body) {
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
-    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
-    const sent = !!(result && result.sid);
-    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot });
-    results.push({ id, sent, gate_snapshot: gateSnapshot });
+    const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot });
+    results.push(Object.assign({ id, sent: _r.sent, gate_snapshot: gateSnapshot }, _r.claim_failed ? { error: _r.outcome.reason } : {}, !_r.sent && _r.outcome.errorCode ? { error_code: _r.outcome.errorCode, error_reason: _r.outcome.reason } : {}));
   }
   return json({ ok: true, results });
 }
@@ -16040,6 +16436,7 @@ async function processQuietHoursQueue(env) {
   ]);
   const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
   const results = [];
+  for (const r of mqStuckSending(rows, +now)) await mqReportFailure(env, r.ID, 'a text was marked "sending" ' + Math.round((+now - Date.parse(r.Sent_Date || r.Created_Date)) / 60000) + ' minutes ago and its result was never saved (Twilio SID on the row: ' + (r.Twilio_Message_SID || 'none') + '). It was NOT sent again. Check the Twilio log, then fix the row by hand.');
   let _scopesForSkip = null;   // loaded lazily, only when a due row carries Skip_If_Seen
   for (const row of due) {
     const id = row.ID, kind = row.Recipient_Type;
@@ -16075,9 +16472,9 @@ async function processQuietHoursQueue(env) {
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
-    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
-    const sent = !!(result && result.sid);
-    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
+    const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot, Send_After: '' });
+    const sent = _r.sent;
+    if (_r.claim_failed) { results.push({ id, sent: false, failed: false, claim_failed: true, error: _r.outcome.reason, gate_snapshot: gateSnapshot }); continue; }   // still pending: tried again next sweep
     if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), sent ? 'sent' : 'failed');
     results.push({ id, sent, failed: !sent, gate_snapshot: gateSnapshot });
   }
@@ -16650,14 +17047,21 @@ async function failInvariantsCollect(env, nowMs) {
   return data;
 }
 // IO. Stored result if fresh, else re-check. Returns condition items. Never throws.
-async function failInvariantConditions(env, cfg, nowMs) {
+async function failInvariantConditions(env, cfg, nowMs, out) {   // `out` (optional, D-16): receives { balance, balance_at } for the daily Twilio balance snapshot
   let stored = null;
   try { const p = JSON.parse(cfg[FAIL_INV_KEY] || 'null'); if (p && typeof p.at === 'number' && Array.isArray(p.items)) stored = p; } catch (e) { stored = null; }
-  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) return stored.items;
+  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) {
+    const hasBal = typeof stored.balance === 'number' && isFinite(stored.balance);
+    if (hasBal && out) { out.balance = stored.balance; out.balance_at = stored.at; }
+    if (hasBal || !out) return stored.items;   // a snapshot caller whose stored copy has no balance lets the check run once (that is the one Twilio call)
+  }
   try {
-    const items = failInvariantItems(await failInvariantsCollect(env, nowMs));
+    const data = await failInvariantsCollect(env, nowMs);
+    const items = failInvariantItems(data);
     const compact = items.map(i => ({ key: i.key, system: i.system, where: i.where, severity: i.severity, message: failTrim(i.message, 300) }));
-    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact }));
+    const balance = data.twilio && typeof data.twilio.balance === 'number' ? data.twilio.balance : null;
+    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact, balance }));
+    if (out && balance != null) { out.balance = balance; out.balance_at = nowMs; }
     return compact;
   } catch (e) {
     const old = stored ? stored.items : [];
@@ -16817,7 +17221,7 @@ const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
 const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
-const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'str_cleaning', 'followup_sweep', 'ai_credit_probe']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'twilio_balance_log', 'str_cleaning', 'followup_sweep', 'ai_credit_probe']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
 
 // Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
 // Fails closed for a blank/short/missing secret, an empty header, any other method or path.
@@ -16910,6 +17314,7 @@ const SCHED_JOBS = [
   { name: 'daily_turnover',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyTurnover(env) },
   { name: 'daily_qb_sync',      kind: 'daily',    at: '07:00', run: (env) => schedRunDailyQbSync(env) },
   { name: 'sms_delivery_check', kind: 'daily',    at: '07:00', run: (env) => schedRunSmsDeliveryCheck(env) },
+  { name: 'twilio_balance_log', kind: 'daily',    at: '07:00', run: (env) => schedRunTwilioBalanceLog(env) },   // D-16 (Oct 23 2026): saves the Twilio balance once a day in Twilio_Balance_Log (reuses the integrity check's balance fetch)
   { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
   { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
   { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
@@ -17389,7 +17794,7 @@ function smsDcLast4(n) { const d = String(n == null ? '' : n).replace(/\D/g, '')
 // Pure. `messages` = Twilio Message resources (JSON). Only OUTBOUND messages sent in the lookback window are counted.
 function smsDcClassify(messages, nowMs) {
   const since = nowMs - SMS_DC_LOOKBACK_MS;
-  const out = { total: 0, delivered: 0, failed: 0, in_flight: 0, stuck: 0, filter_hits: [], other_errors: {}, with_link: smsDcBucket(), no_link: smsDcBucket(), by_from: {} };
+  const out = { total: 0, delivered: 0, failed: 0, in_flight: 0, stuck: 0, filter_hits: [], other_errors: {}, with_link: smsDcBucket(), no_link: smsDcBucket(), by_from: {}, pieces: 0, price_usd: 0, priced: 0 };   // pieces / price_usd: what Twilio billed for these texts (D-16 item 5)
   for (const m of (Array.isArray(messages) ? messages : [])) {
     if (!m || typeof m !== 'object') continue;
     if (!/^outbound/i.test(String(m.direction || ''))) continue;
@@ -17400,6 +17805,8 @@ function smsDcClassify(messages, nowMs) {
     const status = String(m.status || '').toLowerCase();
     const code = m.error_code == null ? '' : String(m.error_code);
     out.total++; b.sent++; fb.sent++;
+    const _segs = parseInt(m.num_segments, 10); if (isFinite(_segs) && _segs > 0) out.pieces += _segs;
+    const _pr = parseFloat(m.price); if (isFinite(_pr)) { out.price_usd += Math.abs(_pr); out.priced++; }
     if (status === 'delivered' || status === 'read') { out.delivered++; b.delivered++; fb.delivered++; continue; }
     if (status === 'failed' || status === 'undelivered') {
       out.failed++; b.failed++; fb.failed++;
@@ -17473,6 +17880,7 @@ function smsDcCompose(s, ev, state, etDate, truncated) {
     parts.push('<p><b>What to do:</b> tell Claude. The fix is to move this number onto the new campaign that allows links (and to send vendor links through bmoremanagement.com), and meanwhile to stop sending link texts from it.</p>');
   }
   if (ev.notes.length) parts.push('<ul>' + ev.notes.map(n => `<li>${_escHtml(n)}</li>`).join('') + '</ul>');
+  if (s.pieces) parts.push(`<p>Cost: ${s.total} texts billed as ${s.pieces} piece(s) (${(s.pieces / Math.max(1, s.total)).toFixed(2)} per text)${s.priced ? `, $${s.price_usd.toFixed(2)} for the ${s.priced} that Twilio has priced so far` : ''}.</p>`);
   if (truncated) parts.push('<p><i>Note: Twilio returned more messages than this check reads in one run; counts may be incomplete.</i></p>');
   parts.push(`<p>Clean-day streak: ${state.clean_days}. ${smsDcCanRetire(state) ? `<b>${state.clean_days} clean days with ${state.clean_link_texts} link texts: this looks resolved. Tell Claude to turn this check off (or set enabled:false on the sms_delivery_check row of the Apps Script JOBS table).</b>` : `The check keeps running daily until it has ${SMS_DC_RETIRE_CLEAN_DAYS} clean days and ${SMS_DC_RETIRE_LINK_TEXTS} link texts.`}</p>`);
   return { subject, html: parts.join('\n') };
@@ -17548,6 +17956,52 @@ async function smsDeliveryCheckPass(env, deps) {
   return { ok: !errors.length, errors, warnings, no_retry, detail: { level: ev.level, total: summary.total, delivered: summary.delivered, failed: summary.failed, filtered: summary.filter_hits.length, stuck: summary.stuck, with_link: summary.with_link, no_link: summary.no_link, clean_days: nextState.clean_days, emailed, truncated: fetched.truncated, pages: fetched.pages } };
 }
 async function schedRunSmsDeliveryCheck(env) { return smsDeliveryCheckPass(env); }
+
+// -- Twilio balance snapshot (D-16 item 5, Oct 23 2026) --
+// Once a day the Hub saves (date, Twilio balance) in the small Twilio_Balance_Log tab, so the daily burn can be read off a column instead of
+// guessed. It adds NO Twilio call of its own: it reuses the balance the daily integrity check (failInvariantsCollect) already fetches and
+// stores in Config (failure_invariants_json), and only if that stored value is missing or stale does it let that same check run once.
+// Runs as the scheduler job `twilio_balance_log` (Apps Script clock, daily 07:00 ET). NO CRON.
+const TWILIO_BAL_TAB = 'Twilio_Balance_Log';
+const TWILIO_BAL_COLS = ['ID', 'Date', 'Balance_USD', 'Change_USD', 'Recorded_At', 'Source', 'Note'];
+// Pure. rows = existing Twilio_Balance_Log objects. -> { skip:true, reason } | { row }. One row per ET date; Change_USD = this balance minus the
+// last recorded one (negative = spent, positive = money added).
+function twilioBalancePlan(rows, etDate, balance, nowIso, source) {
+  if (typeof balance !== 'number' || !isFinite(balance)) return { skip: true, reason: 'no balance number available' };
+  const list = (rows || []).filter(r => r && r.Date);
+  if (list.some(r => String(r.Date) === etDate)) return { skip: true, reason: 'already recorded for ' + etDate };
+  const prev = list.slice().sort((a, b) => String(a.Date).localeCompare(String(b.Date))).filter(r => String(r.Date) < etDate).pop();
+  const pb = prev ? parseFloat(prev.Balance_USD) : NaN;
+  return { row: { Date: etDate, Balance_USD: balance.toFixed(2), Change_USD: isFinite(pb) ? (balance - pb).toFixed(2) : '', Recorded_At: nowIso, Source: source || 'integrity check', Note: isFinite(pb) ? 'since ' + prev.Date : 'first row' } };
+}
+async function twilioBalanceSnapshotPass(env, io) {
+  io = io || {};
+  const errors = [], t0 = Date.now(), nowMs = io.nowMs || Date.now();
+  const etDate = schedEtParts(new Date(nowMs)).date;
+  const fail = async (step, e, sev) => { const m = schedErrText(e); errors.push({ step, error: m }); await (io.reportFailure || reportFailure)(env, { system: 'hub', source: 'worker', where: 'twilio_balance_log', ref: step, severity: sev || 'P1', message: 'Twilio balance snapshot: ' + step + ': ' + m.slice(0, 200) }); };
+  if (!io.skipCredsCheck && !(env.TWILIO_SID && env.TWILIO_API_SID && env.TWILIO_API_KEY)) return { ok: true, errors, detail: { skipped: 'no Twilio credentials in this environment' } };
+  let cfg;
+  try { cfg = configFromValues(await (io.readConfigRows ? io.readConfigRows() : schedReadConfigRows(env, true))); }
+  catch (e) { await fail('read_config', e); return { ok: false, errors, detail: {} }; }
+  const out = {};
+  await (io.conditions || failInvariantConditions)(env, cfg, nowMs, out);   // never throws; fills out.balance from the stored check or from the one fetch it makes when stale
+  if (typeof out.balance !== 'number' || !isFinite(out.balance)) { await fail('no_balance', 'the integrity check had no Twilio balance to record (see the open "integrity_check:twilio_balance" item)'); return { ok: false, errors, detail: {} }; }
+  let existing;
+  try {
+    if (!io.readRows) await ensureTab(env, TWILIO_BAL_TAB, TWILIO_BAL_COLS);   // creates ONLY a missing tab (this one is new); never touches a tab that exists
+    existing = io.readRows ? await io.readRows() : await fetchTab(env, TWILIO_BAL_TAB);
+  } catch (e) { await fail('read_log_tab', e); return { ok: false, errors, detail: {} }; }
+  const age = out.balance_at ? Math.round((nowMs - out.balance_at) / 3600000) : null;
+  const plan = twilioBalancePlan(existing, etDate, out.balance, new Date(nowMs).toISOString(), 'integrity check' + (age != null ? ' (' + age + 'h old)' : ''));
+  if (plan.skip) return { ok: true, errors, detail: { skipped: plan.reason, date: etDate, balance: out.balance } };
+  try {
+    const wr = io.appendRow ? await io.appendRow(plan.row) : await (await addRow(env, TWILIO_BAL_TAB, plan.row)).json();
+    if (!wr || wr.success !== true) throw new Error('append not confirmed: ' + JSON.stringify(wr || {}).slice(0, 160));
+  } catch (e) { await fail('write_row', e); return { ok: false, errors, detail: { date: etDate, balance: out.balance } }; }
+  return { ok: true, errors, detail: { date: etDate, balance: out.balance, change: plan.row.Change_USD, ms: Date.now() - t0 } };
+}
+async function schedRunTwilioBalanceLog(env) { return twilioBalanceSnapshotPass(env); }
+
 // ── END SMS delivery check ───────────────────────────────────────────────────────────────────────────────────────
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
@@ -17566,6 +18020,7 @@ const SCHED_PF_WHAT = {
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
   sms_delivery_check: 'reads the last day of outbound texts from Twilio, flags carrier-filtered / unregistered / link texts that fail, and emails Brett the result',
+  twilio_balance_log: 'saves today\'s Twilio balance as one row in the Twilio_Balance_Log tab (uses the balance the daily integrity check already fetched; no extra Twilio call)',
   review_mon: 'runs the Monday weekly review and delivers it',
   review_wed: 'runs the Wednesday weekly review (logged only)',
   ar_report_mon: 'builds and delivers the Monday AR aging report',
@@ -18385,12 +18840,11 @@ async function sendCustomMessage(env, body) {
   });
 }
 
+// D-16 (Oct 23 2026): the old version read the WHOLE SMS_Logs tab on every call (a quota burner, and a swallowed failure). It now appends one
+// row using the cached header list (a write only) and reports a failed write to the failure ledger. The transport row (Log_Source 'transport',
+// written by sendSMSRaw) carries the cost; this row carries who the text was for (Recipient_Type/ID), which the portal-access backfill reads.
 async function logSMS(env, woId, recipientType, recipientId, phone, message) {
-  try {
-    const data=await sheetsRequest(env,'GET',`/values/SMS_Logs`);const rows=data.values||[[]];const headers=rows[0];const now=new Date().toISOString();
-    const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId||'',Recipient_Type:recipientType||'',Recipient_ID:recipientId||'',Phone:phone||'',Message:message||'',Sent_Date:now,Status:'sent',Twilio_SID:''}[h]??''));
-    await sheetsRequest(env,'POST',`/values/SMS_Logs:append?valueInputOption=RAW`,{values:[newRow]});
-  } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
+  return smsLogRecord(env, { WO_ID: woId || '', Recipient_Type: recipientType || '', Recipient_ID: recipientId || '', Phone: phone || '', Message: message || '', Status: 'sent', Log_Source: 'logSMS', Message_Type: recipientType || '' });
 }
 
 // ── DAILY DIGEST (Session 5) ─────────────────────────────────
@@ -34453,6 +34907,9 @@ function normalizePhone(phone) {
   const digits = String(phone).replace(/\D/g, '');
   if (!digits) return '';
   if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  // D-16 (Oct 23 2026): an explicit "+" with a country code other than 1 (e.g. Cuba +53 with 8 digits = 10 digits in all) is an international number, NOT a US
+  // number missing its "+1". Without this, '+5352123456' became '+15352123456' and was sent to Twilio as if it were American.
+  if (/^\s*\+/.test(String(phone)) && !digits.startsWith('1')) return '+' + digits;
   if (digits.length === 10) return '+1' + digits;
   return '+' + digits;
 }
@@ -34473,11 +34930,18 @@ function formatPhoneDisplay(phone) {
 // WO card list already uses (woCard(), index.html) — doesn't need to be the full description,
 // just enough that two jobs at the same address/trade never read the same. No trade -> falls
 // back to "General" (matches the same default used elsewhere for an unset Trade).
+// Pure. Cuts pulled-in text (a tenant's description, a hold reason) to n characters with a plain "..." (first line only). D-16.
+function smsShort(s, n) {
+  const first = String(s == null ? '' : s).split(/\r?\n/)[0].trim();
+  return first.length > n ? first.slice(0, n).trim() + '...' : first;
+}
 function woJobLabel(wo) {
   const trade = (wo && wo.Trade) || 'General';
   const desc = String((wo && wo.Description) || '').trim();
   if (!desc) return `${trade} job`;
-  const short = desc.length > 60 ? desc.slice(0, 60).trim() + '…' : desc;
+  // D-16 (Oct 23 2026): plain "..." instead of the ellipsis character (which made the whole text bill in 70-character pieces), first line only, 40 characters.
+  const first = desc.split(/\r?\n/)[0].trim();
+  const short = first.length > 40 ? first.slice(0, 40).trim() + '...' : first;
   return `${trade} job (${short})`;
 }
 

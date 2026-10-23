@@ -3,6 +3,7 @@
 // Fault injection: every failure below is FORCED (Google 429s, a dead Message_Queue write) and we assert it is reported with the right
 // severity, the caller sees it, and the happy path reports nothing.
 import fs from 'fs';
+import { d16Deps } from './_d16-support.mjs';
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 function grab(src, sig) {
   const start = src.indexOf(sig); if (start < 0) throw new Error('not found: ' + sig);
@@ -145,6 +146,7 @@ const SENT = { Status: 'sent', Delivered_To: '+14105550100', Sent_Date: 'now', T
       sendSMSRaw: async () => ({ sid: 'SM999' }), logMessageAudit: async () => {},
       updateMessageQueueRow: async (env, id, fields, opts) => { calls.push({ id, fields, opts }); return over.saveFails ? false : true; },
     };
+    Object.assign(stubs, d16Deps());   // D-16 helpers smsGatedSend now uses
     const names = Object.keys(stubs);
     return { run: new Function(...names, sg + '\nreturn smsGatedSend;')(...names.map(n => stubs[n])), calls };
   }
@@ -153,7 +155,7 @@ const SENT = { Status: 'sent', Delivered_To: '+14105550100', Sent_Date: 'now', T
   t('smsGatedSend passes the queue headers + row number to the save (no second read)', h.calls.length === 1 && Array.isArray(h.calls[0].opts.headers) && h.calls[0].opts.headers.join() === 'ID,Status' && h.calls[0].opts.sheetRow === 3, h.calls);
   t('HAPPY path: sent, and the result has NO warning field', r.sent === true && !('warning' in r), r);
   const h2 = buildSG({ saveFails: true }); const r2 = await h2.run({}, opts);
-  t('FAULT save fails after the send: result still says sent=true (it WAS sent) AND carries a warning naming the stale "pending" row', r2.sent === true && /WAS sent/.test(r2.warning) && /pending/.test(r2.warning) && /message_queue_update/.test(r2.warning), r2);
+  t('FAULT save fails after the send: result still says sent=true (it WAS sent) AND carries a warning naming the stale "pending" row', r2.sent === true && /WAS sent/.test(r2.warning) && /sending/.test(r2.warning) && /message_queue_update/.test(r2.warning), r2);
   const h3 = buildSG({ quiet: true, saveFails: true }); const r3 = await h3.run({}, opts);
   t('FAULT the quiet-hours hold mark fails: result says held but warns it will not release by itself', r3.held_for_quiet_hours === true && /will not release by itself/.test(r3.warning), r3);
   const h4 = buildSG({ quiet: true }); const r4 = await h4.run({}, opts);
