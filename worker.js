@@ -1584,7 +1584,7 @@ async function portalBackfillPlan(env) {
 }
 async function portalBackfillPreview(env) {
   const plan = await portalBackfillPlan(env);
-  return json({ ok: true, read_only: true, would_set: plan.filter(p => p.action === 'set').length, skipped: plan.filter(p => p.action === 'skip').length, plan });
+  return json({ ok: true, read_only: true, would_set: plan.filter(p => p.action === 'set').length, skipped: plan.filter(p => p.action === 'skip').length, would_credit_prior_use: plan.filter(p => p.kind === 'evidence' && p.action === 'set').length, plan });
 }
 async function portalBackfillApply(env) {
   const plan = (await portalBackfillPlan(env)).filter(p => p.action === 'set');
