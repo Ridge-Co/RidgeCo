@@ -35176,6 +35176,17 @@ function strErr(code, message, status) { const e = new Error(message); e.code = 
 function strErrText(e) { return String((e && e.message) || e).slice(0, (e && /^calendar_/.test(String(e.code || ''))) ? 900 : 300); } // calendar-access errors carry the exact fix steps, so they are not cut short
 function strBool(v, dflt) { const s = String(v == null ? '' : v).trim().toUpperCase(); if (!s) return !!dflt; return s === 'TRUE' || s === '1' || s === 'YES'; }
 function strInt(v, d, lo, hi) { const n = parseInt(String(v == null ? '' : v).trim(), 10); if (!Number.isFinite(n)) return d; return Math.min(hi, Math.max(lo, n)); }
+// Oct 21 2026: who the Hub acts as on the CLEANING calendar only (the inspection calendar keeps the service account's own login). Config STR_CAL_IMPERSONATE
+// blank = the service account itself, scope calendar (needs the calendar shared with it: not possible on Brett's Google Workspace). An email = domain-wide
+// delegation: the same service account acts as that user (the calendar owner), scope calendar.events, so nothing has to be shared on the calendar.
+const STR_CAL_SCOPE_SHARED = 'https://www.googleapis.com/auth/calendar', STR_CAL_SCOPE_EVENTS = 'https://www.googleapis.com/auth/calendar.events';
+const STR_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+function strCalAs(cfg) {
+  const raw = String((cfg && cfg.STR_CAL_IMPERSONATE) || '').trim();
+  if (!raw) return { mode: 'shared', sub: '', scope: STR_CAL_SCOPE_SHARED };
+  return { mode: 'acting_as', sub: raw, scope: STR_CAL_SCOPE_EVENTS, bad: !STR_EMAIL_RE.test(raw) };
+}
+let __strCalAs = strCalAs({}); // strCalFetch has no cfg: strSettings (which every caller goes through for the calendar id) remembers it per request
 function strSettings(cfg) {
   cfg = cfg || {};
   return {
