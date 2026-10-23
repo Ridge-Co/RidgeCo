@@ -19725,10 +19725,18 @@ async function opsQueueRead(env, url) {
   // that's already been queued or built instead of re-offering it as fresh. Same read-only data
   // (titles/problems, no money/PII), so the narrow OPS_QUEUE_TOKEN may read it too.
   if (url && url.searchParams && url.searchParams.get('all') === '1') {
-    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 400) });
+    // Oct 23 2026: a cap that drops rows must say so. `truncated` is true when older rows were left out.
+    return json({ ok: true, all: true, count: rows.length, truncated: rows.length > 400, queue: rows.slice().reverse().slice(0, 400) });
   }
   const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
-  return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
+  // Oct 23 2026 (Brett: "fix the invisible old items issue"): this used to be active.reverse().slice(0, 50), i.e. only
+  // the 50 NEWEST active rows, so the overnight Prepare agent (and anything else reading /ops-queue) could never see an
+  // older greenlit item. Now every active row comes back, newest first. A caller that wants fewer can pass ?limit=N
+  // (1-1000); the response then says `truncated: true` if rows were left out, so a cut-off list is never silent.
+  const lim = parseInt((url && url.searchParams && url.searchParams.get('limit')) || '', 10);
+  const newestFirst = active.reverse();
+  const capped = lim > 0 ? newestFirst.slice(0, Math.min(lim, 1000)) : newestFirst;
+  return json({ ok: true, count: active.length, truncated: capped.length < active.length, queue: capped });
 }
 
 // POST /ops-queue-update {id, status} — advance a greenlit item along its lifecycle
