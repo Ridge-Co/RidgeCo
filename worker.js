@@ -10053,8 +10053,8 @@ async function updateStatus(env, body) {
     const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
       const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is complete. Ref: ${body.wo_id}.`,
-        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
+        Complete: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is complete.`,
+        On_Hold: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is on hold: ${smsShort(holdReason, 80)}.`,   // D-16: shortened
       };
       const msg = ownerMsgs[ownerEvent];
       const msgType = ownerEvent === 'On_Hold' ? 'owner_job_on_hold' : `owner_job_${ownerEvent.toLowerCase()}`;
