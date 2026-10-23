@@ -17314,6 +17314,7 @@ const SCHED_JOBS = [
   { name: 'daily_turnover',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyTurnover(env) },
   { name: 'daily_qb_sync',      kind: 'daily',    at: '07:00', run: (env) => schedRunDailyQbSync(env) },
   { name: 'sms_delivery_check', kind: 'daily',    at: '07:00', run: (env) => schedRunSmsDeliveryCheck(env) },
+  { name: 'twilio_balance_log', kind: 'daily',    at: '07:00', run: (env) => schedRunTwilioBalanceLog(env) },   // D-16 (Oct 23 2026): saves the Twilio balance once a day in Twilio_Balance_Log (reuses the integrity check's balance fetch)
   { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
   { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
   { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
