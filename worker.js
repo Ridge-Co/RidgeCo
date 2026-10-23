@@ -16206,7 +16206,7 @@ async function smsGatedSend(env, opts) {
   // D-16 race check: if our row did not land right after the rows we read, another request wrote in the gap - possibly the SAME text (a double tap, a client
   // retry). Look again; the EARLIER row wins, so two racers never both stand down. A failed look is reported (P0) and the text still goes out: a rare
   // duplicate costs a few cents, a lost text costs a tenant or a vendor.
-  if (_sendNow && !opts.allowRepeat && mqRow && mqRow !== rows.length + 1) {
+  if (_sendNow && !_repeatOk && mqRow && mqRow !== rows.length + 1) {
     try {
       invalidateTabCache(MSG_QUEUE_TAB);
       const _again = mqRowsToObjects((await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`)).values);
