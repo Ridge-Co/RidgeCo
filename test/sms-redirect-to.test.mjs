@@ -29,6 +29,7 @@ function makeGate(cfg) {
     translateForVendorDetailed: async () => ({ translated: false }),
     MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: QCOLS,
   };
+  Object.assign(deps, d16Deps());   // D-16: the sanitizer, duplicate / nudge guards and SMS_Logs writer smsGatedSend now uses
   const names = Object.keys(deps);
   return { fn: new Function(...names, grab('smsGatedSend') + '\nreturn smsGatedSend;')(...names.map(k => deps[k])), state };
 }
