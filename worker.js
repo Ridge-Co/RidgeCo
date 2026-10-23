@@ -15847,7 +15847,7 @@ const DEFAULT_MESSAGE_TEMPLATES = [
   { Message_Type: 'vendor_welcome', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal ({PortalUrl}) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)" },
   { Message_Type: 'property_notice', Channel: 'sms', Subject: '', Body:
-    "This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}, with an update about {Address}: [describe the issue here] (This line is outbound-only for now - a reply won't reach us.)" },
+    "{AssistantName} with Ridge Co, for {Owner}: update about {Address}. [describe the issue here] (Replies are not read.)" },
   // Estimate / proposal notifications (Sep 28 2026, FEATURE_LOG rule 201). Editable in Message_Templates.
   // Vendor texts deliberately contain NO dollar amounts. {Job} is "work order WO-1234" or "proposal #7".
   { Message_Type: 'admin_estimate_new', Channel: 'sms', Subject: '', Body:
