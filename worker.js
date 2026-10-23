@@ -33792,7 +33792,7 @@ function deliveryTenantText(o) {
   if (o.kind === 'cancel') {
     msg = "Hi " + first + ", it's Ridge Co. The delivery of your new " + item + " at " + street + " is no longer scheduled, so there is no need to be home. We will let you know if a new date is set. Thank you!";
   } else if (o.kind === 'changed') {
-    msg = "Hi " + first + ", it's Ridge Co. The delivery of your new " + item + " at " + street + " has changed" + (when ? ' to ' + when : '') + ". Could you still be home to let the delivery team in? Please tap here to update your answer: " + o.link +
+    msg = "Hi " + first + ", it's Ridge Co. The delivery of your new " + item + " at " + street + " has changed" + (when ? ' to ' + when.replace(/^on /, '') : '') + ". Could you still be home to let the delivery team in? Please tap here to update your answer: " + o.link +
       "\nIf you can't make it, no worries. We'll do our best to be there instead. Thank you!";
   } else {
     msg = "Hi " + first + ", it's " + (o.assistant || 'Riley') + " with Ridge Co Property Maintenance, on behalf of " + (o.owner || 'your property owner') + ". A new " + item + " is scheduled for delivery at " + street + (when ? ' ' + when : '') +
@@ -34329,8 +34329,18 @@ async function deliveryEmailIntake(env, body) {
       } else {
         f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, 'Older email ignored for status/date (arrived after a newer one): ' + subject.slice(0, 100), recvIso);
       }
-      await updateRowVerified(env, 'Deliveries', deliveryId, f);
-      if (claim) {
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, f); }
+      catch (e) {
+        // Two mailboxes writing the same row at once can each fail the other's read-back. If the row now carries the very news we were applying, the other run
+        // did the job: this is a duplicate, not an error (anything else is still a loud failure).
+        invalidateTabCache('Deliveries');
+        const r1 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (claim && r1 && String(r1.Last_Event_Sig || '') === sig && r1.Event_Claim && r1.Event_Claim !== claim) lostClaim = true; else throw e;
+      }
+      if (claim && !lostClaim) {
+        // Settle, then look again: a run that wrote in the same moment is visible by now, and only the LAST writer alerts (default 600 ms, Config Delivery_Claim_Settle_Ms).
+        const settle = Math.max(0, Math.min(3000, parseInt(cfg.Delivery_Claim_Settle_Ms, 10) >= 0 ? parseInt(cfg.Delivery_Claim_Settle_Ms, 10) : 600));
+        if (settle) await new Promise(r => setTimeout(r, settle));
         invalidateTabCache('Deliveries');
         const r2 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
         if (r2 && r2.Event_Claim && r2.Event_Claim !== claim && String(r2.Last_Event_Sig || '') === sig) lostClaim = true;   // another run wrote the same news after us: it alerts, we stay quiet

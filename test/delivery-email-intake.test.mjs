@@ -27,7 +27,7 @@ function grabFn(sig) {
 const pa = src.indexOf('// ═══ DELIVERY-EMAIL-PURE-START'), pb = src.indexOf('// ═══ DELIVERY-EMAIL-PURE-END');
 t('pure block markers exist', pa > 0 && pb > pa);
 const P = new Function(grabFn('function nyOffsetMinutes(') + '\n' + grabFn('function etHour(') + '\n' + src.slice(pa, pb) +
-  '\nreturn { DEP, deliverySenderDomain, deliveryParseEmail, deliveryNextStatus, deliveryNoticeHoldUntil, deliveryCalendarObject, deliveryPlainSms, deliveryBrettText, deliveryParseWindow, deliveryParseDate, deliveryParseOrderNumber, deliveryEmailText, deliveryParseAddress, deliveryEtWallToUtc };')();
+  '\nreturn { DEP, deliverySenderDomain, deliveryParseEmail, deliveryNextStatus, deliveryNoticeHoldUntil, deliveryCalendarObject, deliveryPlainSms, deliveryBrettText, deliveryParseWindow, deliveryParseDate, deliveryParseOrderNumber, deliveryEmailText, deliveryParseAddress, deliveryEtWallToUtc, deliveryWindowHuman, deliveryStreet, deliveryLongDate, deliverySmsSegments, deliveryTenantText };')();
 
 // ── B. sender check ──
 {
@@ -208,6 +208,29 @@ const parse = (k, over) => P.deliveryParseEmail(Object.assign({ received_at: REC
   t('a runaway note is capped at 300', P.deliveryBrettText({ event: 'review', note: 'x'.repeat(900) }).length <= 300);
 }
 
+// ── tenant wording (addendum): warm, brief, plain characters, link present ──
+{
+  const LINK = 'https://ridge-co.github.io/RidgeCo/rsvp.html?t=42.AbCdEfGhIjKlMnOp';
+  const base = { first: 'Tam', assistant: 'Riley', owner: 'Phoenix Estate Rentals', item: 'Refrigerator', street: '5425 Belle Vista Ave', date: '2026-10-16', window: '9a-1p', link: LINK };
+  const rq = P.deliveryTenantText(Object.assign({ kind: 'request' }, base));
+  console.log('SAMPLE request text (' + rq.length + ' chars, ' + P.deliverySmsSegments(rq) + ' segments):\n' + rq + '\n');
+  t('request: greeting, owner convention, item, street, date, human window', /^Hi Tam, it's Riley with Ridge Co Property Maintenance, on behalf of Phoenix Estate Rentals\. A new refrigerator is scheduled for delivery at 5425 Belle Vista Ave on Fri 10\/16, 9am-1pm\./.test(rq), rq);
+  t('request: asks politely (could you be home / let the team in / old one hauled away) and carries the link', /Could you be home to let the delivery team in and have the old one hauled away\? Please tap here to let us know: https:\/\/ridge-co\.github\.io\/RidgeCo\/rsvp\.html\?t=42\.AbCdEfGhIjKlMnOp\n/.test(rq), rq);
+  t('request: the "no worries / may be rescheduled" line, no pressure words', /If you can't make it, no worries\. We'll do our best to be there instead, though the delivery may need to be rescheduled\. Thank you!$/.test(rq) && !/must|required|mandatory|you need to|failure|penalt|fee|charge/i.test(rq), rq);
+  t('request: plain GSM characters only (no emoji / curly quotes / unicode)', /^[\x20-\x7e\n]+$/.test(rq));
+  t('request: at most 4 segments, link intact', P.deliverySmsSegments(rq) <= 4 && rq.indexOf(LINK) > 0, P.deliverySmsSegments(rq));
+  const noWin = P.deliveryTenantText(Object.assign({ kind: 'request' }, base, { window: '' }));
+  t('request without a window: date only', /delivery at 5425 Belle Vista Ave on Fri 10\/16\. Could you be home/.test(noWin), noWin);
+  const ch = P.deliveryTenantText(Object.assign({ kind: 'changed' }, base, { date: '2026-10-19', window: '11a-3p' }));
+  t('changed: says the date changed to the new one, still asks, same link, still no worries', /has changed to on Mon 10\/19, 11am-3pm/.test(ch) === false && /has changed to Mon 10\/19, 11am-3pm\./.test(ch) && /update your answer: https:/.test(ch) && ch.indexOf(LINK) > 0 && /no worries/.test(ch) && P.deliverySmsSegments(ch) <= 3, ch);
+  const cx = P.deliveryTenantText(Object.assign({ kind: 'cancel' }, base, { link: '' }));
+  t('cancel: courteous, no link, says no need to be home', /no longer scheduled, so there is no need to be home\./.test(cx) && !/http/.test(cx) && P.deliverySmsSegments(cx) <= 2, cx);
+  eq('window words', [P.deliveryWindowHuman('9a-1p'), P.deliveryWindowHuman('11a-3p'), P.deliveryWindowHuman('9:30a-1p'), P.deliveryWindowHuman('')], ['9am-1pm', '11am-3pm', '9:30am-1pm', '']);
+  eq('street only', [P.deliveryStreet('5425 Belle Vista Ave, Baltimore, MD 21206'), P.deliveryStreet('928 N Calvert St Apt 2, Baltimore, MD 21202'), P.deliveryStreet('')], ['5425 Belle Vista Ave', '928 N Calvert St Apt 2', '']);
+  eq('long date', [P.deliveryLongDate('2026-10-16'), P.deliveryLongDate('2026-12-01'), P.deliveryLongDate('')], ['Friday, October 16', 'Tuesday, December 1', '']);
+  eq('segments', [P.deliverySmsSegments(''), P.deliverySmsSegments('a'.repeat(160)), P.deliverySmsSegments('a'.repeat(161)), P.deliverySmsSegments('a'.repeat(306)), P.deliverySmsSegments('a'.repeat(307))], [0, 1, 2, 2, 3]);
+}
+
 // ════════════════════════════════ PART 2: the real worker over fake Sheets + Twilio ════════════════════════════════
 const tick = (ms) => new Promise(r => setTimeout(r, ms));
 function makeStore() {
@@ -265,8 +288,9 @@ const QH = await (async () => {
   try { return await import(url.pathToFileURL(f).href); } finally { try { fs.unlinkSync(f); } catch (_) {} }
 })();
 // Run fn with "now" set to an exact instant (the clock keeps advancing from there).
+let clockBump = 0;   // each use starts 10 s later than the last so the release module's 6 s tab cache can never serve a previous store's rows
 async function withClock(iso, fn) {
-  const D0 = globalThis.Date, n0 = D0.now, start = n0.call(D0), target = Date.parse(iso);
+  const D0 = globalThis.Date, n0 = D0.now, start = n0.call(D0), target = Date.parse(iso) + (clockBump += 10000);
   class Fixed extends D0 { constructor(...a) { if (a.length === 0) super(target + (n0.call(D0) - start)); else super(...a); } static now() { return target + (n0.call(D0) - start); } }
   const dn = D0.now; globalThis.Date = Fixed;
   try { return await fn(); } finally { globalThis.Date = D0; D0.now = dn; }
@@ -292,7 +316,7 @@ function seed(over) {
   // (exactly what the live sheet looks like after the first email): carry headers over, drop the data.
   const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok';
   for (const [name, rows] of prev.tabs) if (rows.length && rows[0].length) store.tabs.set(name, [rows[0].slice()]);
-  tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
+  tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', Delivery_Claim_Settle_Ms: '40' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
   tab('Owners', ['ID', 'First_Name', 'Company', 'SMS_Enabled', 'Phone'], [{ ID: 'O1', First_Name: 'Olly', Company: 'Phoenix Estate Rentals', SMS_Enabled: 'TRUE' }]);
   tab('Properties', ['ID', 'Owner_ID', 'Address', 'City', 'Type', 'Unit_Count', 'Active', 'Access_Notes', 'SMS_Enabled'], [
     { ID: 'P1', Owner_ID: 'O1', Address: '5425 Belle Vista Ave', City: 'Baltimore', Type: 'house', Unit_Count: '1', Active: 'TRUE' },
@@ -679,6 +703,235 @@ let firstDelivery;
   seed(); store.failWhen = (m, p) => /Config/.test(p);
   const cf = await send('confirm');
   t('loud: an unreadable Config is a 500, not silently the default list', cf.status === 500 && cf.json.success === false && /Config/.test(cf.json.error) && twilio.length === 0, cf);
+}
+
+// ═════════════ ADDENDUM 1 (Oct 23 2026): tenant request + RSVP link, cross-mailbox dedupe ═════════════
+const pub = async (method, path, body, ip, e) => {
+  skew += 10000;
+  const res = await worker.fetch(new Request(BASE + path, { method, headers: Object.assign({ 'Content-Type': 'application/json' }, ip ? { 'CF-Connecting-IP': ip } : {}), body: body === undefined ? undefined : JSON.stringify(body) }), e || env, { waitUntil() {} });
+  let j = null; try { j = JSON.parse(await res.clone().text()); } catch (_) {}
+  return { status: res.status, json: j };
+};
+const tokenOf = () => { const m = /rsvp\.html\?t=([A-Za-z0-9_.%-]+)/.exec((noticeRows().filter(x => x.Status !== 'skipped').slice(-1)[0] || {}).Message_Body || ''); return m ? decodeURIComponent(m[1]) : ''; };
+const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\n', '') };
+
+// ── P. tenant request: no date -> nothing; date later -> one request; reschedule -> short "changed"; cancel -> courteous; once per event ──
+{
+  seed();
+  let r = await send('confirm', NODATE);
+  t('P: order email with NO date: no tenant text and nothing queued', r.json.expected_date === '' && r.json.tenant_sms === 'skipped' && /no delivery date yet/.test(r.json.tenant_sms_detail) && noticeRows().length === 0 && toTenant().length === 0, r.json);
+  t('P: ...and Brett is told the tenant was not texted yet because there is no date', /tenant NOT texted yet: no delivery date/.test(toAdmin()[0].body), toAdmin()[0] && toAdmin()[0].body);
+  r = await send('scheduled');
+  t('P: a later email sets the date -> ONE request queued (6pm hold), nothing sent yet', r.json.tenant_sms === 'queued' && noticeRows().length === 1 && noticeRows()[0].Send_After === '2026-10-14T22:00:00.000Z' && toTenant().length === 0, [r.json.tenant_sms, noticeRows()]);
+  t('P: request text has the link, the ask, the no-worries line, 9am-1pm style window absent (date only)', /rsvp\.html\?t=1\./.test(noticeRows()[0].Message_Body) && /Could you be home/.test(noticeRows()[0].Message_Body) && /no worries/.test(noticeRows()[0].Message_Body), noticeRows()[0].Message_Body);
+  eq('P: Tenant_Notice_Sent_At recorded and the status says queued', [!!dels()[0].Tenant_Notice_Sent_At, /^queued/.test(dels()[0].Tenant_Notice_Status)], [true, true]);
+  const n0 = noticeRows().length;
+  await send('scheduled'); await send('confirm');
+  t('P: the same news again (new Message-IDs): still ONE request', noticeRows().length === n0 && noticeRows().filter(x => x.Status === 'pending').length === 1);
+  await send('enroute'); await send('approaching'); await send('delivered');
+  t('P: en route / approaching / delivered never text the tenant', noticeRows().length === n0 && toTenant().length === 0);
+}
+{
+  // sent request, then reschedule -> short "changed" text with the SAME link, RSVP reset; then cancel -> courteous text
+  seed(); await send('confirm');
+  await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));   // 6:05pm: the request goes out
+  t('P: request released to the tenant at 6pm', toTenant().length === 1 && /Could you be home/.test(toTenant()[0].body));
+  const tok1 = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(toTenant()[0].body) || [])[1];
+  const ans = await pub('POST', '/delivery/rsvp', { t: tok1, answer: 'no' }, '10.0.0.1');
+  t('P: (setup) tenant declines', ans.json.ok === true && dels()[0].Tenant_RSVP === 'Declined' && dels()[0].Onsite_Contact === 'me');
+  await send('reschedule');
+  const ch = noticeRows().filter(x => x.Status === 'pending').slice(-1)[0];
+  t('P: reschedule after a sent request -> a short CHANGED text is queued (not the long request), same link, new date/window', ch && /has changed to Mon 10\/19, 11am-3pm/.test(ch.Message_Body) && ch.Message_Body.indexOf(tok1) > 0, ch && ch.Message_Body);
+  t('P: ...and the RSVP is reset to none and Declined no longer makes Brett the on-site contact', dels()[0].Tenant_RSVP === '' && dels()[0].Tenant_RSVP_At === '' && dels()[0].Onsite_Contact === 'tenant' && /Tenant answer reset \(was Declined\)/.test(dels()[0].Delivery_Notes), dels()[0]);
+  const tw = toTenant().length;
+  await withClock('2026-10-15T13:05:00Z', () => QH.processQuietHoursQueue(env));   // 9:05am next day... (7pm hold passed) the changed text goes out
+  t('P: the changed text is released at the next window', toTenant().length === tw + 1 && /has changed to/.test(toTenant().slice(-1)[0].body), toTenant().map(x => x.body.slice(0, 40)));
+  await send('cancel');
+  const cx = noticeRows().filter(x => x.Status === 'pending').slice(-1)[0];
+  t('P: cancel after a request was sent -> courteous "no longer scheduled, no need to be home" queued', cx && /no longer scheduled, so there is no need to be home/.test(cx.Message_Body) && !/rsvp\.html/.test(cx.Message_Body), cx && cx.Message_Body);
+  const nr = noticeRows().length;
+  await send('cancel');
+  t('P: a repeat cancel email -> no second cancel text', noticeRows().length === nr);
+}
+{
+  // cancel while the request is still waiting for 6pm: withdrawn, the tenant is never texted
+  seed(); await send('confirm');
+  await send('cancel');
+  t('P: cancel BEFORE the request went out: the waiting request is withdrawn and nothing is sent to the tenant', toTenant().length === 0 && noticeRows().every(x => x.Status !== 'pending') && /withdrawn/.test(dels()[0].Tenant_Notice_Status), [noticeRows().map(x => x.Status), dels()[0].Tenant_Notice_Status]);
+  await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
+  t('P: ...and the 6pm sweep sends nothing', toTenant().length === 0);
+}
+{
+  // mode switch still rules, unknown fails safe, consent still gates the new text
+  seed({ config: { Delivery_Tenant_Notice: 'off' } }); let r = await send('confirm');
+  t('P: Delivery_Tenant_Notice=off -> no request', r.json.tenant_sms === 'off' && noticeRows().length === 0);
+  seed({ config: { Delivery_Tenant_Notice: 'draft' } }); r = await send('confirm');
+  t('P: draft -> request text saved with the link, not queued', r.json.tenant_sms === 'draft' && /rsvp\.html\?t=1\./.test(dels()[0].Tenant_Notice_Draft) && noticeRows().length === 0);
+  seed({}, undefined); r = await send('confirm', { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16', 'Estimated Delivery: Wed, Oct 14') });
+  t('P: same-day delivery -> sent at once', r.json.tenant_sms === 'sent' && toTenant().length === 1 && /rsvp\.html/.test(toTenant()[0].body));
+  seed({ t1: { SMS_Enabled: 'FALSE' } }); r = await send('confirm');
+  t('P: no tenant consent -> no request is queued or sent', r.json.tenant_sms === 'skipped' && toTenant().length === 0);
+}
+
+// ── Q. RSVP token + page data ──
+{
+  seed(); await send('confirm'); await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
+  const tok = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(toTenant()[0].body) || [])[1];
+  t('Q: token format is "<delivery id>.<16 url-safe chars>"', /^1\.[A-Za-z0-9_-]{16}$/.test(tok), tok);
+  const g = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.1');
+  const allowed = ['ok', 'closed', 'message', 'first_name', 'item_type', 'date_text', 'window_text', 'street', 'current', 'note'];
+  t('Q: valid token -> exactly the allowed fields', g.status === 200 && g.json.ok === true && JSON.stringify(Object.keys(g.json).sort()) === JSON.stringify(allowed.slice().sort()), g.json);
+  eq('Q: values', [g.json.first_name, g.json.item_type, g.json.date_text, g.json.window_text, g.json.street, g.json.current, g.json.note, g.json.closed], ['Tam', 'refrigerator', 'Friday, October 16', '', '5425 Belle Vista Ave', '', '', false]);
+  const flat = JSON.stringify(g.json);
+  t('Q: nothing else leaks (no phone numbers, order number, other tenants, ids, sheet id, owner)', !/\+?1?4\d{9}|H2345|Tia|Tom|TESTSHEET|Phoenix|O1|P1|U1|T1/.test(flat), flat);
+  const dead = [];
+  dead.push(['empty', await pub('GET', '/delivery/rsvp?t=', undefined, '10.1.0.2')]);
+  dead.push(['garbage', await pub('GET', '/delivery/rsvp?t=hello', undefined, '10.1.0.2')]);
+  dead.push(['tampered sig', await pub('GET', '/delivery/rsvp?t=' + tok.slice(0, -1) + (tok.slice(-1) === 'A' ? 'B' : 'A'), undefined, '10.1.0.2')]);
+  dead.push(['wrong delivery id, valid-looking sig', await pub('GET', '/delivery/rsvp?t=2.' + tok.split('.')[1], undefined, '10.1.0.2')]);
+  dead.push(['id of a delivery that does not exist, correctly signed for it? (unsigned)', await pub('GET', '/delivery/rsvp?t=99.AAAAAAAAAAAAAAAA', undefined, '10.1.0.2')]);
+  dead.push(['sql/script junk', await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent("1.'; DROP--<script>"), undefined, '10.1.0.2')]);
+  t('Q: bad / tampered / wrong-delivery tokens all fail safely with the SAME friendly answer (no leak)', dead.every(([, d]) => d.status === 200 && d.json.ok === false && d.json.expired === true && JSON.stringify(d.json) === JSON.stringify(dead[0][1].json)), dead.map(([n, d]) => [n, d.status, d.json]));
+  const exp = await withClock('2026-10-20T16:00:00Z', () => pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.3'));
+  t('Q: expired (3 days after the date) -> the same friendly answer as a bad token', exp.status === 200 && JSON.stringify(exp.json) === JSON.stringify(dead[0][1].json), exp.json);
+  const stillOk = await withClock('2026-10-19T16:00:00Z', () => pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.3'));
+  t('Q: still valid on the 3rd day after', stillOk.json.ok === true, stillOk.json);
+  const expPost = await withClock('2026-10-20T16:00:00Z', () => pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.1.0.3'));
+  t('Q: POST with an expired link writes nothing', expPost.json.expired === true && dels()[0].Tenant_RSVP === '');
+  // a reschedule moves the expiry but the SAME token keeps working
+  await send('reschedule');
+  const g2 = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.4');
+  t('Q: token survives a reschedule (tied to the delivery, not the date); page shows the NEW date/window', g2.json.ok === true && g2.json.date_text === 'Monday, October 19' && g2.json.window_text === '11am-3pm', g2.json);
+  const later = await withClock('2026-10-20T16:00:00Z', () => pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.4'));
+  t('Q: ...and its expiry follows the new date', later.json.ok === true);
+  // no secret configured: nothing validates
+  const g3 = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.5', Object.assign({}, env, { WORKER_SECRET: undefined }));
+  t('Q: with no WORKER_SECRET nothing validates (friendly dead answer)', g3.json.ok === false && g3.json.expired === true);
+  // note escaping
+  const tokN = tok;
+  await pub('POST', '/delivery/rsvp', { t: tokN, answer: 'unsure', note: '<script>alert(1)</script>\u0000 <b>hi</b>' + 'x'.repeat(400) }, '10.1.0.6');
+  const noteStored = dels()[0].Tenant_RSVP_Note;
+  t('Q: note is stripped of tags/control characters and capped at 300', !/[<>\u0000]/.test(noteStored) && noteStored.length <= 300 && /script/.test(noteStored), noteStored);
+  const g4 = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tokN), undefined, '10.1.0.6');
+  t('Q: the page gets the (safe) note back', g4.json.note === noteStored && g4.json.current === 'unsure');
+}
+
+// ── R. answers: effects, Brett texts, flipping, closed deliveries, validation, rate limits, staging guard ──
+{
+  seed(); await send('confirm'); await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
+  const tok = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(toTenant()[0].body) || [])[1];
+  const T = encodeURIComponent(tok), a0 = toAdmin().length;
+  let r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.2.0.1');
+  t('R: yes -> Confirmed, warm message, NO text to Brett', r.json.ok === true && r.json.current === 'yes' && /Thank you/.test(r.json.message) && dels()[0].Tenant_RSVP === 'Confirmed' && !!dels()[0].Tenant_RSVP_At && toAdmin().length === a0 && dels()[0].Onsite_Contact === 'tenant', [r.json, dels()[0].Tenant_RSVP]);
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.2.0.1');
+  t('R: tapping yes again changes nothing (idempotent)', r.json.ok === true && r.json.unchanged === true && toAdmin().length === a0);
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'no', note: 'Working that day' }, '10.2.0.1');
+  t('R: no -> Declined, Onsite_Contact becomes Brett, notes updated, the tenant message is warm and mentions a possible reschedule once', r.json.ok === true && r.json.current === 'no' && dels()[0].Tenant_RSVP === 'Declined' && dels()[0].Onsite_Contact === 'me' && dels()[0].Onsite_Contact_Phone === ADMIN && /Tenant can't be present\. Driver calls Brett\./.test(dels()[0].Delivery_Notes) && /^No problem at all, thank you for letting us know\. We'll do our best to be there instead\./.test(r.json.message) && (r.json.message.match(/reschedul/g) || []).length === 1 && dels()[0].Tenant_RSVP_Note === 'Working that day', [r.json, dels()[0]]);
+  t('R: ...and Brett is texted ONCE with the street, date and "driver will call you"', toAdmin().length === a0 + 1 && toAdmin().slice(-1)[0].body === "5425 Belle Vista Ave: tenant can't be there for Fri 10/16. Driver will call you. Update the order if needed.", toAdmin().slice(-1)[0].body);
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'no', note: 'Working that day' }, '10.2.0.1');
+  t('R: tapping no again -> still ONE text to Brett', toAdmin().length === a0 + 1 && r.json.unchanged === true);
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'no', note: 'Working that day, sorry' }, '10.2.0.1');
+  t('R: same answer with a new note updates the note but does not text Brett again', toAdmin().length === a0 + 1 && dels()[0].Tenant_RSVP_Note === 'Working that day, sorry');
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.2.0.1');
+  t('R: re-answering yes flips Onsite_Contact back to the tenant (Brett stays backup) with no text', dels()[0].Tenant_RSVP === 'Confirmed' && dels()[0].Onsite_Contact === 'tenant' && dels()[0].Onsite_Contact_Phone === '' && dels()[0].Backup_Contact === 'Brett' && toAdmin().length === a0 + 1);
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'unsure' }, '10.2.0.1');
+  t('R: unsure -> Unsure, short text to Brett, tenant stays the on-site contact', dels()[0].Tenant_RSVP === 'Unsure' && dels()[0].Onsite_Contact === 'tenant' && toAdmin().length === a0 + 2 && /tenant is not sure yet about Fri 10\/16/.test(toAdmin().slice(-1)[0].body), toAdmin().slice(-1)[0].body);
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'no' }, '10.2.0.1');
+  t('R: declining again after a flip texts Brett again (a new decline)', toAdmin().length === a0 + 3 && dels()[0].Onsite_Contact === 'me');
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'maybe' }, '10.2.0.1');
+  t('R: an unknown answer is a polite 400 and writes nothing', r.status === 400 && /three buttons/.test(r.json.message) && dels()[0].Tenant_RSVP === 'Declined');
+  t('R: every answer left a telemetry row', rowsOf('Ops_Telemetry').filter(x => x.Job_Type === 'delivery_email_intake' && /rsvp delivery/.test(x.Notes)).length >= 6);
+  // delivered / cancelled refuse politely
+  await send('delivered');
+  const a1 = toAdmin().length;
+  r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.2.0.1');
+  t('R: a Delivered delivery refuses the answer politely and changes nothing', r.json.ok === false && r.json.closed === true && /already arrived/.test(r.json.message) && dels()[0].Tenant_RSVP === 'Declined' && toAdmin().length === a1, r.json);
+  const g = await pub('GET', '/delivery/rsvp?t=' + T, undefined, '10.2.0.1');
+  t('R: ...and the page says so (closed:true, message)', g.json.ok === true && g.json.closed === true && /already arrived/.test(g.json.message));
+  seed(); await send('confirm'); const tok2 = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
+  await send('cancel'); const a2 = toAdmin().length;
+  r = await pub('POST', '/delivery/rsvp', { t: tok2, answer: 'no' }, '10.2.0.2');
+  t('R: a Cancelled delivery also refuses politely, nothing written, Brett not texted', r.json.ok === false && r.json.closed === true && /no longer scheduled/.test(r.json.message) && toAdmin().length === a2 && dels()[0].Tenant_RSVP === '', r.json);
+}
+{
+  // Brett text failing does not lose the tenant's answer, and is visible
+  seed(); await send('confirm'); const tok = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
+  twilioMode = 'fail';
+  const r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'no' }, '10.3.0.1');
+  t('R: the answer is saved even if the text to Brett fails, and the failure is recorded (telemetry FALSE + Brett_SMS_Status)', r.json.ok === true && dels()[0].Tenant_RSVP === 'Declined' && /FAILED|BLOCKED/.test(dels()[0].Brett_SMS_Status) && rowsOf('Ops_Telemetry').some(x => /rsvp delivery/.test(x.Notes) && x.Success === 'FALSE'), [dels()[0].Brett_SMS_Status, rowsOf('Ops_Telemetry').slice(-2)]);
+  twilioMode = 'ok';
+  // a Sheets write failure is a friendly 500, not a stack trace, and nothing half-written
+  const r2 = await (async () => { store.failWhen = (m, p) => m === 'POST' && /batchUpdate/.test(p); try { return await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.3.0.1'); } finally { store.failWhen = null; } })();
+  t('R: a failed save -> friendly 500 "was not saved", no raw error text', r2.status === 500 && r2.json.ok === false && /not saved/.test(r2.json.message) && !/injected|sheets/i.test(JSON.stringify(r2.json)), r2.json);
+}
+{
+  // rate limits
+  seed(); await send('confirm'); const tok = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
+  let last; for (let i = 0; i < 17; i++) last = await pub('GET', '/delivery/rsvp?t=bad' + i, undefined, '10.4.0.1');
+  t('R: more than 15 bad tokens from one IP in 10 minutes -> 429 with a friendly message', last.status === 429 && /wait a minute/.test(last.json.message), last);
+  const other = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.4.0.2');
+  t('R: a different IP is unaffected', other.json.ok === true);
+  let l2; for (let i = 0; i < 22; i++) l2 = await pub('POST', '/delivery/rsvp', { t: tok, answer: i % 2 ? 'yes' : 'unsure' }, '10.4.0.' + (10 + i));
+  t('R: more than 20 answers on one token in 10 minutes (from many IPs) -> 429', l2.status === 429, l2);
+}
+{
+  // staging: only TEST- deliveries can be answered
+  seed(); await send('confirm'); const tok = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
+  const stg = Object.assign({}, env, { STAGING: '1' });
+  let r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.5.0.1', stg);
+  t('R: on staging a non-TEST delivery cannot be answered', r.status === 403 && /test/i.test(r.json.message) && dels()[0].Tenant_RSVP === '');
+  seed(); await send('confirm', { message_id: 'TEST-rsvp-1' }); const tokT = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
+  r = await pub('POST', '/delivery/rsvp', { t: tokT, answer: 'yes' }, '10.5.0.2', stg);
+  t('R: ...but a TEST- delivery can', r.json.ok === true && dels()[0].Tenant_RSVP === 'Confirmed', r);
+}
+
+// ── S/T/U + C. the same email in two mailboxes, forwards, any mailbox string ──
+{
+  seed();
+  const common = { rfc_message_id: '<CAF+abc123@mail.gmail.com>' };
+  const a = await send('confirm', Object.assign({ message_id: 'gmail-AAA', gmail_id: 'AAA' }, common), 'info@bmoremanagement.com');
+  const b = await send('confirm', Object.assign({ message_id: 'gmail-BBB', gmail_id: 'BBB' }, common), 'brett@bmoremanagement.com');
+  t('S: first mailbox creates; the SAME email (same RFC id, different gmail id) in the second mailbox is a duplicate of it', a.json.created === true && b.json.duplicate === true && b.json.delivery_id === a.json.delivery_id && !b.json.created, [a.json.delivery_id, b.json]);
+  t('S: one record, one WO, ONE Brett alert, ONE tenant request', dels().length === 1 && wos().length === 1 && toAdmin().length === 1 && noticeRows().length === 1);
+  t('S: the primary id is the RFC Message-ID (brackets stripped); the first mailbox\'s Gmail id is remembered too', dels()[0].Message_ID === 'CAF+abc123@mail.gmail.com' && /gmail:info@bmoremanagement\.com:AAA/.test(dels()[0].Seen_Message_IDs), [dels()[0].Message_ID, dels()[0].Seen_Message_IDs]);
+  t('S: the first mailbox gets the calendar create; the duplicate carries the current event (idempotent upsert by key) so a failed attempt can be finished', a.json.calendar.action === 'create' && b.json.calendar.key === a.json.calendar.key && b.json.calendar.action === 'update', [a.json.calendar.action, b.json.calendar]);
+  const c = await send('confirm', Object.assign({ message_id: 'gmail-CCC', gmail_id: 'CCC', rfc_message_id: 'CAF+abc123@MAIL.GMAIL.COM' }), 'brett@bmoremanagement.com');
+  t('S: the RFC id matches case-insensitively and brackets do not matter', c.json.duplicate === true && dels().length === 1);
+  // T: forwarded / re-sent copy with a DIFFERENT message id and different RFC id but the same content
+  const a1 = toAdmin().length, n1 = noticeRows().length;
+  const f = await send('confirm', { subject: 'Fwd: ' + FX.confirm.subject, rfc_message_id: 'forward-1@elsewhere.example', message_id: 'fw1' }, 'brett@bmoremanagement.com');
+  t('T: the same order email re-sent with a new Message-ID -> duplicate:true, same delivery, no alert, no tenant text, no second WO or row', f.json.duplicate === true && f.json.delivery_id === a.json.delivery_id && toAdmin().length === a1 && noticeRows().length === n1 && wos().length === 1 && dels().length === 1 && f.json.calendar.action === 'none', f.json);
+  const sc = await send('scheduled', { rfc_message_id: 'again-2@x.example', message_id: 'x2' });
+  t('T: a later "scheduled" email repeating the same date (new Message-ID) is silent: no alert, no second tenant request', toAdmin().length === a1 && noticeRows().length === n1 && sc.json.success === true, sc.json);
+  const w1 = await send('window', { rfc_message_id: 'win-1@x.example' }, 'info@bmoremanagement.com');
+  const a2 = toAdmin().length;
+  const w2 = await send('window', { rfc_message_id: 'win-1-copy@x.example' }, 'brett@bmoremanagement.com');
+  t('T: new news (window) alerts once; its copy in the other mailbox with a different Message-ID is silent', w1.json.updated === true && w2.json.duplicate === true && toAdmin().length === a2 && w1.json.brett_sms_sent === true, [w1.json.reason, w2.json]);
+  // U: unknown mailbox strings
+  for (const mb of ['ridgeco.notices@gmail.com', 'Some Name <x@y.example>', 'a'.repeat(300), 'bad\u0000box\nname', '']) {
+    const u = await send('confirm', { rfc_message_id: 'u-' + Math.random().toString(36).slice(2) + '@x', message_id: undefined }, mb);
+    t('U: mailbox "' + mb.slice(0, 30).replace(/[\u0000-\u001f]/g, '?') + '" is accepted (never allow-listed)', u.status === 200 && u.json.success === true, u);
+  }
+  const noKey = await call('POST', '/intake/delivery-email', INTAKE, { from: 'orders@homedepot.com', subject: 'x', body: 'y', mailbox: 'info@bmoremanagement.com' });
+  t('C: a request with no message_id, rfc_message_id or gmail_id is a 400', noKey.status === 400 && /required/.test(noKey.json.error));
+  const onlyGmail = await call('POST', '/intake/delivery-email', INTAKE, Object.assign({ from: 'orders@homedepot.com', gmail_id: 'ONLYG', mailbox: 'newbox@x.example', received_at: RECV }, { subject: FX.confirm.subject.replace('H2345-678901', 'H7777-000001'), body: FX.confirm.body.replace(/H2345-678901/g, 'H7777-000001') }));
+  t('C: gmail_id alone is enough (message_id falls back to it)', onlyGmail.status === 200 && onlyGmail.json.success === true && onlyGmail.json.created === true, onlyGmail.json);
+}
+{
+  // S under a race: both mailboxes post the same email at the same instant
+  seed(); store.latency = () => Math.floor(Math.random() * 6);
+  const common = { rfc_message_id: 'race-rfc-1@x.example' };
+  const [a, b] = await Promise.all([send('confirm', Object.assign({ message_id: 'g1', gmail_id: 'g1' }, common), 'info@bmoremanagement.com'), send('confirm', Object.assign({ message_id: 'g2', gmail_id: 'g2' }, common), 'brett@bmoremanagement.com')]);
+  store.latency = () => 0;
+  t('S race: both succeed, exactly one active delivery, at most one WO', a.json.success && b.json.success && dels().filter(d => d.Active !== 'FALSE').length === 1 && wos().length <= 1, dels().map(d => [d.ID, d.Active]));
+  t('S race: Brett is texted once and the tenant is asked once', toAdmin().length === 1 && noticeRows().filter(x => x.Status === 'pending').length === 1, [toAdmin().length, noticeRows().map(x => x.Status)]);
+  // a concurrent UPDATE (window email in both mailboxes at once) alerts once
+  const w = { subject: FX.window.subject, body: FX.window.body };
+  const a0 = toAdmin().length;
+  store.latency = () => Math.floor(Math.random() * 6);
+  const [c, d] = await Promise.all([send(w, { rfc_message_id: 'race-win@x.example', message_id: 'w1', gmail_id: 'w1' }, 'info@bmoremanagement.com'), send(w, { rfc_message_id: 'race-win@x.example', message_id: 'w2', gmail_id: 'w2' }, 'brett@bmoremanagement.com')]);
+  store.latency = () => 0;
+  t('S race: the same window email in both mailboxes at once -> both succeed, updated once, Brett texted once', c.json.success && d.json.success && toAdmin().length === a0 + 1 && dels()[0].Expected_Window === '9a-1p', [toAdmin().length - a0, c.json.reason, d.json.reason]);
 }
 
 // ── N/O. source guards ──
