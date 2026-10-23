@@ -9969,6 +9969,7 @@ async function updateStatus(env, body) {
     if (_live.length) return json({ error: addonLiveChildrenMessage(_live, body.wo_id, 'cancel'), open_additional_work: _live }, 409);
   }
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
+  const _repeatStatus = String(wo.Status || '') === String(body.status || '');   // D-16 item 4: the same status posted twice must not re-send the one-off texts
   const fields = { Status: body.status };
   if (body.notes) {
     let statusNote = body.notes;
