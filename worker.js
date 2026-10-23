@@ -10012,7 +10012,8 @@ async function updateStatus(env, body) {
       const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-    if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${woJobLabel(wo)} at ${address}. Pending invoice.`);
+    // D-16: the same status posted again (a double tap, a retry) must not text Brett twice. The transport also refuses an identical text inside 10 minutes.
+    if (config.admin_phone && !_repeatStatus) await smsReportIfFailed(env, 'sms_admin_complete', body.wo_id, await sendSMS(env, config.admin_phone, `${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${woJobLabel(wo)} at ${address}. Pending invoice.`, { context: { wo_id: body.wo_id, message_type: 'admin_wo_complete', recipient_type: 'admin' } }));
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
   }
   // Vendor accepted → notify the tenant that a technician has accepted and will reach out.
