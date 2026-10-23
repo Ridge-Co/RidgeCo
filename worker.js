@@ -15795,6 +15795,7 @@ async function smsGatedSend(env, opts) {
       Sent_Date: new Date().toISOString(),
       Twilio_Message_SID: (result && result.sid) || '',
     }, mqOpts);
+    if (_sentSaved === false) queueSaveWarning = (sent ? 'The text WAS sent' : 'The text was NOT sent') + ' but its Message_Queue row could not be updated and may still say "pending" (see Needs Attention: message_queue_update, it names the Twilio SID).';
   } else if (sendOk && !recipientPhone) {
     outcome = 'failed_no_phone';
     await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' }, mqOpts);
