@@ -408,6 +408,7 @@ function dcard(d, showRelay){
   var tgt=relayTarget(d);
   var relayBtn = (showRelay && tgt) ? '<button class="btn small go" style="min-height:40px" onclick="relay(this.closest(\'.dcard\').getAttribute(\'data-id\'))">✉ Relay to tenant</button>' : '';
   var cls = d.status==='Needs Review' ? ' review' : (d.status==='Cancelled' ? ' cancelled' : '');
+  if(rsvpState(d)==='no' && rsvpOpen(d)) cls += ' rsvp-declined';
   return '<div class="dcard'+cls+'" data-id="'+esc(d.id)+'">'
     + '<div class="row"><span class="dtitle">'+esc(item)+srcBadge(d)+'</span>'+statusPill(d.status)+'</div>'
     + '<div class="dline">'+esc(whereText(d))+(d.expected_date?(' · '+esc(d.expected_date)+win):'')+'</div>'
