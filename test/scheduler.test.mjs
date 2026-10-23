@@ -791,7 +791,7 @@ const drain = async (L, c, extra) => {
   const a = await drain(L, c);
   t('DST (spring-forward day): first tick 06:59 EDT seeds nothing', a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join());
   c.v = Date.parse('2026-03-08T11:00:00Z');
-  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 6);
+  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 7);
   const store2 = makeStore(), L2 = load(store2);
   t('DST (spring-forward day): a first tick at 07:30 EDT seeds the five dailies + the 07:30 Hub Improvements check', (await drain(L2, clock(Date.parse('2026-03-08T11:30:00Z')))).first.body.seeded.join() === [...DAILY5, 'hub_impr_daily'].join());
 }
