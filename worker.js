@@ -17794,7 +17794,7 @@ function smsDcLast4(n) { const d = String(n == null ? '' : n).replace(/\D/g, '')
 // Pure. `messages` = Twilio Message resources (JSON). Only OUTBOUND messages sent in the lookback window are counted.
 function smsDcClassify(messages, nowMs) {
   const since = nowMs - SMS_DC_LOOKBACK_MS;
-  const out = { total: 0, delivered: 0, failed: 0, in_flight: 0, stuck: 0, filter_hits: [], other_errors: {}, with_link: smsDcBucket(), no_link: smsDcBucket(), by_from: {} };
+  const out = { total: 0, delivered: 0, failed: 0, in_flight: 0, stuck: 0, filter_hits: [], other_errors: {}, with_link: smsDcBucket(), no_link: smsDcBucket(), by_from: {}, pieces: 0, price_usd: 0, priced: 0 };   // pieces / price_usd: what Twilio billed for these texts (D-16 item 5)
   for (const m of (Array.isArray(messages) ? messages : [])) {
     if (!m || typeof m !== 'object') continue;
     if (!/^outbound/i.test(String(m.direction || ''))) continue;
