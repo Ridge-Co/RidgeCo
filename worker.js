@@ -17047,14 +17047,21 @@ async function failInvariantsCollect(env, nowMs) {
   return data;
 }
 // IO. Stored result if fresh, else re-check. Returns condition items. Never throws.
-async function failInvariantConditions(env, cfg, nowMs) {
+async function failInvariantConditions(env, cfg, nowMs, out) {   // `out` (optional, D-16): receives { balance, balance_at } for the daily Twilio balance snapshot
   let stored = null;
   try { const p = JSON.parse(cfg[FAIL_INV_KEY] || 'null'); if (p && typeof p.at === 'number' && Array.isArray(p.items)) stored = p; } catch (e) { stored = null; }
-  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) return stored.items;
+  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) {
+    const hasBal = typeof stored.balance === 'number' && isFinite(stored.balance);
+    if (hasBal && out) { out.balance = stored.balance; out.balance_at = stored.at; }
+    if (hasBal || !out) return stored.items;   // a snapshot caller whose stored copy has no balance lets the check run once (that is the one Twilio call)
+  }
   try {
-    const items = failInvariantItems(await failInvariantsCollect(env, nowMs));
+    const data = await failInvariantsCollect(env, nowMs);
+    const items = failInvariantItems(data);
     const compact = items.map(i => ({ key: i.key, system: i.system, where: i.where, severity: i.severity, message: failTrim(i.message, 300) }));
-    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact }));
+    const balance = data.twilio && typeof data.twilio.balance === 'number' ? data.twilio.balance : null;
+    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact, balance }));
+    if (out && balance != null) { out.balance = balance; out.balance_at = nowMs; }
     return compact;
   } catch (e) {
     const old = stored ? stored.items : [];
