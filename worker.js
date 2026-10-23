@@ -14544,8 +14544,8 @@ async function processPendingNotifications(env) {
 const VENDOR_REQ_TAB = 'Vendor_Requests';
 const VENDOR_REQ_COLS = ['ID','WO_ID','Vendor_ID','Request_Type','Status','Nudge_Count','First_Nudge_At','Next_Nudge_At','Last_Activity_At','Satisfied_Date','Created_Date','Active'];
 const VENDOR_NUDGE_MAX = 5;           // after this many sends with no resolution, flag Brett instead of nudging again
-const VENDOR_NUDGE_REPEAT_HOURS = 24; // status_update: daily, per Brett
-const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a cadence for
+const VENDOR_NUDGE_REPEAT_HOURS = 72; // status_update: every 3 days (Oct 23 2026, D-16: was daily; smsGatedSend also enforces one nudge per person per work order per 3 days)
+const VENDOR_MANUAL_REPEAT_HOURS = 72; // photos/invoice: was 48; 3 days to match the cap above. Brett didn't specify a cadence for
   // these two — 2 days is a reasonable middle ground between the daily auto-clock (which
   // exists specifically to chase a QUIET vendor) and a full week; easy to tune if wrong.
 // Satisfied-condition status sets (Sep 16 2026, Brett — replaces the earlier Vendor_Bills-row
