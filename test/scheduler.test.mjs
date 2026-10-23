@@ -76,7 +76,7 @@ function load(store, over) {
     alertAdminOnFailure: async (env, k, m) => { alerts.push({ k, m }); return { skipped: true }; },
     setConfigKey: async (env, b) => { store.setCfg(b.key, b.value); return { ok: true }; },
     json: (b, s) => ({ body: b, status: s || 200 }),
-    __cronEnv: (e) => e, __meterCronEnv: (e) => e,
+    failStatusForScheduler: async () => ({}), __cronEnv: (e) => e, __meterCronEnv: (e) => e, __cronLast429At: () => (over.last429 ? over.last429() : 0), CRON_QUOTA_COOLDOWN_MS: 150000,
     doorWatchdogCron: async () => ({ ok: true }),
     processQuietHoursQueue: async () => ({ checked: 0, results: [] }),
     processPendingNotifications: async () => ({ status: 200, clone() { return this; }, async json() { return { processed: 0 }; } }),
