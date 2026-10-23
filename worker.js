@@ -16212,12 +16212,10 @@ async function smsGatedSend(env, opts) {
     // allowEarlyMorning (Sep 28 2026, Brett): recurring/auto-posted WOs go out at 8:00am ET, an
     // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
     // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
-    const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+    // (_earlyMorningOk / _qw / _holdUntil / _holdNow are worked out above, before the queue row is written - D-16.)
     // opts.quietWindow {start,end} (Oct 14 2026): a caller may use its own ET window instead of the
     // global 7pm-9am (owner proposal heads-up text: 8pm-8am). Default path is unchanged.
-    const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
-    const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
-    if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
+    if (_holdNow) {
       const sendAfter = _holdUntil.toISOString();
       const _holdSaved = await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
