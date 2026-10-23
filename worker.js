@@ -15630,6 +15630,16 @@ async function runDoorWatchdogPass(env, opts) {
   const ev = evaluateDoorHealth(fr, nowMs, { absentSinceMs: absentMs });
   const decision = doorWdDecide(ev, state, nowMs);
   res.healthy = ev.healthy; res.reason_key = ev.key; res.reasons = ev.reasons; res.action = decision;
+  // D-16: every alert attempt and every suppressed repeat is written to SMS_Logs (a row each), so a text that was NOT sent is as visible as one that was.
+  const logSms = async (status, note, text) => {
+    const rec = { Recipient_Type: 'admin', Phone: 'admin', Message: String(text || '').slice(0, 300), Status: status, Message_Type: 'door_watchdog', Log_Source: 'door_watchdog', Note: String(note || '').slice(0, 300) };
+    try { const lr = await (io.logSms ? io.logSms(rec) : smsLogRecord(env, rec)); if (lr && lr.ok === false) fail('sms_log', lr.error || 'log write failed'); }
+    catch (e) { fail('sms_log', e); }
+  };
+  if (decision === 'suppressed') {
+    const lastIso = state.sent && state.sent[ev.key];
+    await logSms('alert_suppressed_24h', 'key=' + ev.key + '; the same problem was already texted ' + (lastIso ? doorWdAge(nowMs - Date.parse(lastIso)) + ' ago' : 'inside the last 24h') + '; next text allowed after 24h or when the problem changes', doorWdComposeAlert(ev.reasons));
+  }
 
   // 4. deliver
   let delivered = null;
