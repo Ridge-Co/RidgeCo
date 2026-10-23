@@ -198,4 +198,164 @@ function transport(opts) {
   const c = await T.send('4105550111', 'WO-1231 is complete', { allowRepeat: true });
   t('double send: allowRepeat (a deliberate resend) goes through', c.sid === 'SM1' && T.calls.fetch.length === 2);
   const d = await T.send('4105550111', 'a different text');
+  const e = await T.send('4105550222', 'WO-1231 is complete');
+  t('double send: a different body or a different number is not blocked', d.sid && e.sid && T.calls.fetch.length === 4);
+}
+{
+  // a refused/failed send frees the guard so a corrected resend is allowed
+  const T = transport({ answers: [{ code: 21211, message: 'Invalid To' }, { sid: 'SM3', num_segments: '1' }] });
+  const a = await T.send('4105550111', 'hello there');
+  const b = await T.send('4105550111', 'hello there');
+  t('a Twilio refusal does not poison the guard: the retry is sent', !a.sid && b.sid === 'SM3' && T.calls.fetch.length === 2);
+  const row = T.calls.rows[0];
+  t('Twilio error code is stored on the SMS_Logs row with a plain reason', row.Status === 'failed' && row.Error_Code === '21211' && /not a valid phone number/.test(row.Note), row);
+}
+{
+  const T = transport({ fetchThrows: true });
+  let threw = null; try { await T.send('4105550111', 'hi'); } catch (e) { threw = e; }
+  t('FAULT no answer from Twilio: the error propagates to the caller (not swallowed)', threw && /socket hang up/.test(threw.message));
+  t('...and it is logged as failed, and the guard is freed', T.calls.rows.some(r => r.Status === 'failed' && /socket hang up/.test(r.Note)));
+  T.calls.fetch.length = 0;
+  let threw2 = null; try { await T.send('4105550111', 'hi'); } catch (e) { threw2 = e; }
+  t('...so a retry actually calls Twilio again', T.calls.fetch.length === 1 && threw2);
+}
+{
+  // region
+  const T = transport();
+  const res = await T.send('+989121234567', 'Hello', { context: { queue_id: '' } });
+  t('region: +98 is not sent (no call to Twilio)', T.calls.fetch.length === 0 && res.skipped === true && res.region_blocked === true && /destination outside enabled regions/.test(res.reason), res);
+  const rep = T.calls.reports;
+  t('region: ONE calm P2 ledger row, with the last 4 digits only', rep.length === 1 && rep[0].severity === 'P2' && rep[0].where === 'sms_destination_region' && /text not sent: destination outside enabled regions/.test(rep[0].message) && /ending 4567/.test(rep[0].message) && !/989121234567/.test(JSON.stringify(rep)), rep);
+  t('region: the SMS_Logs row hides the number (***4567) and says blocked_region', T.calls.rows[0].Phone === '***4567' && T.calls.rows[0].Status === 'blocked_region' && !/989121234567/.test(JSON.stringify(T.calls.rows)), T.calls.rows);
+  const pr = await T.send('7875550100', 'Hola');
+  t('region: a Puerto Rico number (+1 787) is sent', pr.sid === 'SM1' && T.calls.fetch.length === 1);
+  const cu = await T.send('+5352123456', 'Hola');
+  t('region: Cuba (+53) and Syria (+963) are refused too', cu.region_blocked === true && (await T.send('+963944123456', 'x')).region_blocked === true && T.calls.fetch.length === 1);
+}
+{
+  // a queue-backed region refusal is reported by the caller with its row id, not twice
+  const T = transport();
+  await T.send('+989121234567', 'Hello', { context: { queue_id: '363' } });
+  t('region: with a queue id the transport leaves the ledger row to smsGatedSend (no double report)', T.calls.reports.length === 0 && T.calls.rows.length === 1);
+}
+{
+  const T = transport();
+  await T.send('4105550111', 'Your PIN is 482913', { context: { message_type: 'pin_send_tenant' } });
+  t('PIN text: the SMS_Logs row never holds the PIN', !/482913/.test(JSON.stringify(T.calls.rows)) && /contains a login PIN/.test(T.calls.rows[0].Message));
+  const T2 = transport(); await T2.send('4105550111', 'code 7777', { redact: true });
+  t('opts.redact does the same', !/7777/.test(JSON.stringify(T2.calls.rows)));
+}
+{
+  const T = transport({ staging: true });
+  const res = await T.send('4105550111', 'hi — there');
+  t('staging: stubbed, no Twilio call, logged as staged with our own estimate', res.staged === true && T.calls.fetch.length === 0 && T.calls.rows[0].Status === 'staged' && res.segments_est === 1, res);
+}
+{
+  const T = transport({ env: { TWILIO_API_KEY: '' } });
+  const a = await T.send('4105550111', 'hi');
+  t('FAULT Twilio not configured: an error is returned (not "sent"), and a later send is not blocked by the guard', /not configured/.test(a.error) && T.calls.fetch.length === 0);
+}
+{
+  const T = transport({ logFails: true });
+  const res = await T.send('4105550111', 'hello');
+  t('FAULT the SMS_Logs write fails: the text STILL goes out, and the failure is reported (P1 sms_log_write)', res.sid === 'SM1' && T.calls.reports.some(r => r.where === 'sms_log_write' && r.severity === 'P1' && /429/.test(r.message)), T.calls.reports);
+}
+
+// ========================= smsGatedSend: nudges, double send, errors, regions =========================
+const QCOLS = new Function(wsrc.slice(wsrc.indexOf('const MSG_QUEUE_COLS'), wsrc.indexOf(';', wsrc.indexOf('const MSG_QUEUE_COLS')) + 1) + '\nreturn MSG_QUEUE_COLS;')();
+t('Message_Queue has Error_Code and Error_Reason at the END of its columns', QCOLS.slice(-2).join() === 'Error_Code,Error_Reason', QCOLS.slice(-3));
+function gate(o) {
+  o = o || {};
+  const st = { grid: [QCOLS.slice()], raw: [], updates: [], reports: [], logs: [], mqFailures: [], now: o.now || Date.now() };
+  const d16 = d16Deps();
+  const deps = {
+    ensureSmsInfra: async () => {},
+    fetchConfig: async () => Object.assign({ TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', admin_phone: '+14105550100' }, o.cfg || {}),
+    normalizePhone: new Function(grab('normalizePhone') + '\nreturn normalizePhone;')(), tenantMovedOut: new Function(grab('tenantMovedOut') + '\nreturn tenantMovedOut;')(),
+    sheetsRequest: async (e, method, path, body) => {
+      if (method === 'GET') return { values: st.grid.map(r => r.slice()) };
+      st.grid.push(body.values[0].slice()); return { updates: { updatedRange: 'Message_Queue!A' + st.grid.length } };
+    },
+    nextSafeId: rows => String(rows.length), appendedRowNumber: r => parseInt(String(r.updates.updatedRange).replace(/\D/g, ''), 10),
+    guardAppendedIds: async (e, t2, ap, n, idc, ids) => ({ ids: ids.map(String), row: parseInt(String(ap.updates.updatedRange).replace(/\D/g, ''), 10), repaired: false }),
+    mqReportFailure: async (e, id, m) => { st.mqFailures.push({ id, m }); },
+    isQuietHoursNow: () => !!o.quiet, nextQuietHoursEnd: () => new Date('2026-10-24T13:00:00Z'), etHour: () => 12, quietHoldUntil: () => null,
+    updateMessageQueueRow: async (e, id, f) => {
+      st.updates.push({ id, f });
+      if (o.statusWriteFails && f.Status && f.Status !== 'sending') return false;
+      const i = st.grid.findIndex((r, ix) => ix > 0 && r[0] === String(id));
+      if (i > 0) for (const k of Object.keys(f)) { const c = QCOLS.indexOf(k); if (c >= 0) st.grid[i][c] = f[k]; }
+      return true;
+    },
+    sendSMSRaw: async (e, to, msg, opts) => {
+      st.raw.push({ to, msg, opts });
+      const a = (o.sendAnswers || [{ sid: 'SM' + (st.raw.length) }]); return a[Math.min(st.raw.length - 1, a.length - 1)];
+    },
+    logMessageAudit: async () => { if (o.auditFails) throw new Error('WO_Audit write 500'); },
+    smsGateDecision: new Function(grab('smsGateDecision') + '\nreturn smsGateDecision;')(),
+    smsToggleOn: v => String(v == null ? '' : v).toUpperCase() !== 'FALSE',
+    translateForVendorDetailed: async () => ({ translated: false }),
+    MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: QCOLS,
+  };
+  Object.assign(deps, d16, {
+    smsLogRecord: async (e, r) => { st.logs.push(r); return { ok: true }; },
+    reportFailure: async (e, r) => { st.reports.push(r); },
+    smsReportRegionBlocked: async (e, rowId, check) => { st.reports.push({ where: 'sms_destination_region', severity: 'P2', ref: 'Message_Queue ' + rowId, message: 'text not sent: destination outside enabled regions (Message_Queue row ' + rowId + ', number ending ' + check.last4 + ')' }); },
+  });
+  delete deps.__rec;
+  const names = Object.keys(deps);
+  const send = new Function(...names, grab('smsGatedSend') + '\nreturn smsGatedSend;')(...names.map(k => deps[k]));
+  const mq = () => st.grid.slice(1).map(r => Object.fromEntries(QCOLS.map((c, i) => [c, r[i]])));
+  return { send: (opts) => send({}, opts), st, mq, deps };
+}
+const vendor = { ID: '19', Name: 'Regina Saville', Phone: '5403364284', Language: 'en', In_House: 'FALSE' };
+const nudge = (extra) => Object.assign({ wo_id: 'WO-1231', message_type: 'vendor_nudge_status', recipient_type: 'vendor', vendor, message_body: 'Hi Regina, checking in on WO-1231.' }, extra || {});
+{
+  // happy path: row born "sending", then "sent"
+  const G = gate();
+  const r = await G.send(nudge());
+  t('gated happy: sent, one Twilio call, nothing reported', r.sent === true && G.st.raw.length === 1 && G.st.reports.length === 0 && !('warning' in r), r);
+  const row = G.mq()[0];
+  t('gated happy: the queue row was written as "sending" (durable marker BEFORE the send) and ends "sent" with the SID', G.st.updates.length === 1 && G.st.updates[0].f.Status === 'sent' && row.Status === 'sent' && row.Twilio_Message_SID === 'SM1' && G.st.grid[1][QCOLS.indexOf('Status')] === 'sent', G.st.updates);
+  const born = (() => { const g = gate(); return g; })(); void born;
+}
+{
+  // a row that is born "sending": capture the first appended value
+  const G = gate(); let firstStatus = null;
+  const origReq = G.deps.sheetsRequest;
+  const g2 = gate({}); const orig = g2.st.grid.push.bind(g2.st.grid); g2.st.grid.push = (row) => { if (firstStatus === null) firstStatus = row[QCOLS.indexOf('Status')]; return orig(row); };
+  await g2.send(nudge());
+  t('gated: the appended row has Status "sending" (not "pending")', firstStatus === 'sending', firstStatus); void origReq;
+}
+{
+  // -- item 4: the status write-back fails (Sheets quota) -> the same text must NOT go out again --
+  const G = gate({ statusWriteFails: true });
+  const a = await G.send({ wo_id: 'WO-1231', message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant: { ID: '5', Phone: '4105550111', First_Name: 'Dana' }, message_body: 'Hi Dana, your Plumbing job is complete. Ref: WO-1231.' });
+  t('FAULT status write-back fails: the text WAS sent once and the caller is told (warning)', a.sent === true && /WAS sent/.test(a.warning) && /sending/.test(a.warning), a);
+  t('...the queue row is left "sending", never "pending"', G.mq()[0].Status === 'sending');
+  const b = await G.send({ wo_id: 'WO-1231', message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant: { ID: '5', Phone: '4105550111', First_Name: 'Dana' }, message_body: 'Hi Dana, your Plumbing job is complete. Ref: WO-1231.' });
+  t('...so the SAME text a moment later (retry / double tap / second isolate) is suppressed: only ONE Twilio call in total', b.sent === false && b.suppressed === true && b.duplicate_suppressed === true && G.st.raw.length === 1, b);
+  t('...no second queue row was written', G.mq().length === 1);
+  t('...the suppression is logged to SMS_Logs with the reason', G.st.logs.some(l => l.Status === 'suppressed_duplicate' && /sending/.test(l.Note) && l.Message_Type === 'tenant_job_completed'), G.st.logs);
+}
+{
+  // two WO texts 2 seconds apart (WO-1231 / WO-1248 evidence): second identical call is suppressed; a different WO text is not
+  const G = gate();
+  const base = { message_type: 'owner_job_complete', recipient_type: 'owner', owner: { ID: '3', Phone: '4105550142', First_Name: 'Pat' }, property: { ID: '50' } };
+  const a = await G.send(Object.assign({ wo_id: 'WO-1248', message_body: 'Hi Pat, WO-1248 (Roofing job) at 1 Main St is complete.' }, base));
+  const b = await G.send(Object.assign({ wo_id: 'WO-1248', message_body: 'Hi Pat, WO-1248 (Roofing job) at 1 Main St is complete.' }, base));
+  const c = await G.send(Object.assign({ wo_id: 'WO-1249', message_body: 'Hi Pat, WO-1249 (Roofing job) at 1 Main St is complete.' }, base));
+  t('same text twice in a row: one send; a different WO text still goes', a.sent && !b.sent && b.duplicate_suppressed && c.sent && G.st.raw.length === 2, [a.sent, b.sent, c.sent]);
+}
+{
+  // window: a copy older than 10 minutes is not a duplicate
+  const G = gate();
+  await G.send(nudge({ message_type: 'tenant_manual' , recipient_type: 'vendor' }));
+  const i = G.st.grid.length - 1; const old = new Date(Date.now() - 11 * MIN).toISOString();
+  G.st.grid[i][QCOLS.indexOf('Created_Date')] = old; G.st.grid[i][QCOLS.indexOf('Sent_Date')] = old;
+  const r = await G.send(nudge({ message_type: 'tenant_manual' }));
+  t('a copy sent 11 minutes ago is NOT a duplicate (window is 10 minutes)', r.sent === true && G.st.raw.length === 2, r);
+}
+{
+  // quiet hours: the held row is a duplicate guard too (not re-queued twice)
 //__CHUNK_END__
