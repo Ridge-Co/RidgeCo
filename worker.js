@@ -16167,7 +16167,7 @@ async function smsGatedSend(env, opts) {
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
     Property_ID: (opts.property && opts.property.ID) || '',
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
-    Message_Body: messageBody, Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
+    Message_Body: messageBody, Status: _sendNow ? 'sending' : 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
     Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
