@@ -214,8 +214,8 @@ function viewForm(){
       +(pressed?'<span class="cur">Your answer</span>':'')+'</button>';
   }).join('');
   var len=(S.draft||'').length;
-  return '<h1 id="h" tabindex="-1">'+(S.editing?hi()+' change your answer':hi()+' can you be home for your delivery?')+'</h1>'
-    +'<p class="lead">'+lead+'</p>'+banner()+facts()
+  return '<h1 id="h" tabindex="-1">'+(S.editing?hi()+' change your answer':hi()+' can you be there for your delivery?')+'</h1>'
+    +top
     +'<fieldset class="answers"><legend>Your answer</legend>'+btns+'</fieldset>'
     +'<label class="nl" for="note">Add a note <small>(optional)</small></label>'
     +'<textarea id="note" maxlength="'+NOTE_MAX+'" rows="3" autocomplete="off" aria-describedby="count" placeholder="Anything we should know?">'+esc(S.draft)+'</textarea>'
