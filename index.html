@@ -2613,7 +2613,7 @@ function renderWOPage() {
   });
 
   var PRI = {urgent:0,high:1,normal:2,low:3};
-  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
+  var STA = {'New':0,'Estimate Requested':0.5,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
   wos.sort(function(a,b){
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
