@@ -16079,7 +16079,7 @@ function smsIsOwnNumber(phone, cfg, vendor) {
   return !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
 }
 const SMS_NUDGE_MIN_GAP_MS = 72 * 3600000;        // Brett, Oct 23 2026: at most one automatic nudge per person per work order every 3 days
-const SMS_KNOWN_BAD_WINDOW_MS = 30 * 86400000;    // a number Twilio permanently refused (invalid, not mobile, cannot route) is not retried for 30 days
+const SMS_KNOWN_BAD_WINDOW_MS = 30 * 86400000;    // a number Twilio said is invalid / not a mobile (21211, 21614 only) is not retried for 30 days; every block is a P2 ledger row
 // Pure. What happened to a send, as Message_Queue wants it written: { sent, status, sid, errorCode, reason, duplicate, regionBlocked, permanent }.
 function smsSendOutcome(result) {
   if (result && result.sid) return { sent: true, status: 'sent', sid: result.sid, errorCode: '', reason: '' };
