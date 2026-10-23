@@ -190,6 +190,34 @@ test('copy: the three buttons, the "no" wording, one gentle mention of reschedul
   assert.ok(!/!{2,}|ASAP|\bNOW\b/.test(copy), 'no shouting');
 });
 
+// ───────────────────────── the explanation shown BEFORE the tenant answers (the SMS is a terse one-liner) ─────────────────────────
+test('the ask screen explains everything before the buttons: what, when, where, what we hope for, no installing, and the gentle "can\'t make it" line', () => {
+  const f = grab(pageJs, 'viewForm');
+  const intro = f.slice(f.indexOf('<div class="intro">'), f.indexOf('var btns='));
+  assert.ok(intro.includes('is scheduled to be delivered to you') && /facts\(\)/.test(intro), 'says what is coming and shows item, street, date and window');
+  for (const bit of ['What we are hoping for', 'Someone home to open the door and let the delivery team in', 'The old appliance taken away', 'The new one left in place', 'You do not need to install anything', 'Having someone there really helps'])
+    assert.ok(intro.includes(bit), 'intro says: ' + bit);
+  assert.ok(intro.includes('If you can’t make it, that’s completely okay. We’ll do our best to be there instead, though the delivery may need to be rescheduled.'), 'the exact gentle line');
+  assert.ok(f.indexOf('class="gentle"') > -1 && f.indexOf('class="gentle"') < f.indexOf('<fieldset class="answers">'), 'all of it comes before the three buttons');
+  assert.ok(f.indexOf('facts()') < f.indexOf('What we are hoping for'), 'details first, then what we hope for');
+  const paras = (intro.match(/<p[ >]/g) || []).length;
+  assert.ok(paras <= 4 && /<ul>/.test(intro), 'short paragraphs and a list, not a wall of text (' + paras + ' paragraphs)');
+  const editing = f.slice(f.indexOf('var top=S.editing'), f.indexOf('<div class="intro">'));
+  assert.ok(!/reschedul|hoping/i.test(editing), 'the change-your-answer screen stays short');
+});
+
+test('the page finds its token however the short link delivers it (?t= after a redirect, extra params, or a #t= fragment)', () => {
+  const line = pageJs.match(/var TOKEN=[^;]+;/)[0];
+  const run = (search, hash) => { const ctx = { Q: new URLSearchParams(search), location: { hash }, URLSearchParams }; vm.createContext(ctx); vm.runInContext(line, ctx); return ctx.TOKEN; };
+  assert.equal(run('?t=abc.DEF-1_2', ''), 'abc.DEF-1_2');
+  assert.equal(run('?utm_source=sms&t=tok123', ''), 'tok123', 'tracking params added by a redirect do not matter');
+  assert.equal(run('', '#t=fromhash'), 'fromhash');
+  assert.equal(run('?t=q', '#t=h'), 'q', 'query wins');
+  assert.equal(run('?t=%20spaced%20', ''), 'spaced');
+  assert.equal(run('', ''), '', 'no token: friendly invalid page, no request');
+  assert.ok(!/ridge-co\.github\.io|\/s\//.test(pageJs), 'the page does not depend on the short-link host or path');
+});
+
 // ───────────────────────── accessibility ─────────────────────────
 test('accessibility: labelled note box, focus moves to the new heading, live region, visible focus ring, 44px+ targets, 16px inputs', () => {
   assert.ok(/<label class="nl" for="note">/.test(pageJs) && /<textarea id="note"/.test(pageJs));
