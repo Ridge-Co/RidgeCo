@@ -624,5 +624,101 @@ const nudge = (extra) => Object.assign({ wo_id: 'WO-1231', message_type: 'vendor
   t('delivery check summary adds up pieces and price Twilio billed', sum.pieces === 3 && Math.abs(sum.price_usd - 0.0158) < 1e-9 && sum.priced === 1, sum);
 }
 
+// ========================= validator fixes (Oct 23 2026): scrub numbers, narrow the known-bad block, alerts never held back, stuck rows =========================
+{
+  const M = R.smsMaskPhones;
+  eq('mask: +E.164', M('The number +14105550999 is not verified'), 'The number ***0999 is not verified');
+  eq('mask: formatted US', M('To (410) 555-0999 failed; also 410-555-0111 and 410.555.0222'), 'To ***0999 failed; also ***0111 and ***0222');
+  eq('mask: bare 10 and 11 digits', M('sent to 4105550999 and 14105550111'), 'sent to ***0999 and ***0111');
+  eq('mask: international with spaces', M('Invalid +53 5 123 4567 here'), 'Invalid ***4567 here');
+  eq('mask: dates, codes, prices, SIDs are left alone', M('21608 on 2026-10-23 18:38 price -0.0079 SM1a2b3c4d5e6f AC123456789012345678901234567890ab'), '21608 on 2026-10-23 18:38 price -0.0079 SM1a2b3c4d5e6f AC123456789012345678901234567890ab');
+  eq('mask: null / empty safe', [M(null), M(undefined), M('')], ['', '', '']);
+  const info = R.smsErrorInfo({ code: 21608, message: 'The number +14105550999 is unverified. Trial accounts may only send to verified numbers.' });
+  t('error info: an UNLISTED code (21608) carries its message with the number masked', info.code === 21608 && info.permanent === false && /\*\*\*0999/.test(info.reason) && !/4105550999/.test(info.reason), info);
+  const out = R.smsSendOutcome({ code: 21608, message: 'The number +14105550999 is unverified' });
+  t('send outcome: the reason stored on the queue row has no full number', out.errorCode === '21608' && /\*\*\*0999/.test(out.reason) && !/4105550999/.test(out.reason), out);
+  t('send outcome: a plain error string is masked too', !/4105550999/.test(R.smsSendOutcome({ error: 'no answer from Twilio: connect to +14105550999 failed' }).reason));
+  const T1 = transport({ answers: [{ code: 21608, message: 'The number +14105550999 is unverified' }] });
+  const a1 = await T1.send('4105550999', 'hello');
+  t('transport: Twilio\'s refusal returned to callers is masked, the log Note and Error_Code are stored masked', /\*\*\*0999/.test(a1.message) && !/4105550999/.test(a1.message) && T1.calls.rows.length === 1 && T1.calls.rows[0].Error_Code === '21608' && /\*\*\*0999/.test(T1.calls.rows[0].Note) && !/4105550999.*unverified/.test(T1.calls.rows[0].Note), [a1, T1.calls.rows]);
+  const T2 = transport({ fetchThrows: true, fetchThrowsMsg: 'connect to +14105550999 refused' });
+  let thrown = null; try { await T2.send('4105550999', 'hello'); } catch (e) { thrown = e; }
+  t('FAULT transport throws with a number in the error: still thrown to the caller, but the log Note has only the last 4', thrown && T2.calls.rows.length === 1 && /\*\*\*0999/.test(T2.calls.rows[0].Note) && !/\+14105550999/.test(T2.calls.rows[0].Note), T2.calls.rows);
+  // Through the gated queue path: Error_Reason, ledger and logs
+  const G = gate({ sendAnswers: [{ code: 21608, message: 'The number +14105550999 is unverified' }] });
+  const r = await G.send({ wo_id: 'WO-5', message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant: { ID: '8', Phone: '4105550999', First_Name: 'Ana' }, message_body: 'Hi Ana, a plumber is assigned. Ref: WO-5.' });
+  const row = G.mq()[0];
+  t('gated send, unlisted code 21608: Error_Reason has the number masked, error_reason returned masked', row.Status === 'failed' && row.Error_Code === '21608' && /\*\*\*0999/.test(row.Error_Reason) && !/4105550999/.test(row.Error_Reason) && !/4105550999/.test(r.error_reason), [row, r]);
+  t('...and nothing in the ledger rows or the logs carries the full number in an error text', !/4105550999/.test(JSON.stringify(G.st.reports.map(x => x.message))) && !/4105550999/.test(JSON.stringify(G.st.logs.map(l => l.Note || ''))), G.st.reports);
+  const G2 = gate({ sendAnswers: [{ error: 'x' }] });
+  G2.deps.sendSMSRaw = async () => { throw new Error('socket to +14105550999 closed'); };
+  // a throw inside the send: reported + stored masked
+  const gsrc = grab('smsGatedSend'); const names2 = Object.keys(G2.deps);
+  const send2 = new Function(...names2, gsrc + '\nreturn smsGatedSend;')(...names2.map(k => G2.deps[k]));
+  const r2 = await send2({}, { wo_id: 'WO-5', message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant: { ID: '8', Phone: '4105550999', First_Name: 'Ana' }, message_body: 'Hi Ana, a plumber is assigned. Ref: WO-5.' });
+  t('FAULT the send throws with a number in the error: Error_Reason and the failure report are masked', G2.mq()[0].Status === 'failed' && !/4105550999/.test(G2.mq()[0].Error_Reason) && G2.st.mqFailures.length === 1 && !/4105550999/.test(G2.st.mqFailures[0].m) && /\*\*\*0999/.test(G2.st.mqFailures[0].m), [G2.mq(), G2.st.mqFailures, r2]);
+  t('PIN / welcome sends read Twilio\'s answer from sendSMSRaw, which masks it at the source (checked above), so the text stored on the person\'s row is masked too', /j\.message = smsMaskPhones\(j\.message\)/.test(wsrc));
+}
+{
+  // known-bad block: 21211 / 21614 only, each block is a calm P2 ledger row; 30003 and friends never block
+  const G = gate({ sendAnswers: [{ code: 21614, message: 'not a mobile' }, { sid: 'SM2' }] });
+  const o = (b) => ({ wo_id: 'WO-9', message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant: { ID: '8', Phone: '4105550123', First_Name: 'Ana' }, message_body: b });
+  await G.send(o('Hi Ana, first text. Ref: WO-9.'));
+  const again = await G.send(o('Hi Ana, second text. Ref: WO-9.'));
+  const led = G.st.reports.filter(x => x.where === 'sms_known_undeliverable');
+  t('known bad 21614: the later text is blocked AND a calm P2 ledger row says so (last 4 digits only)', again.suppress_reason === 'known_undeliverable' && led.length === 1 && led[0].severity === 'P2' && /ending 0123/.test(led[0].message) && !/4105550123/.test(JSON.stringify(led)), G.st.reports);
+  for (const code of [30003, 30005, 30006, 21612, 21408, 21610]) {
+    const H = gate({ sendAnswers: [{ code, message: 'temporary' }, { sid: 'SM3' }] });
+    await H.send(o('Hi Ana, first text. Ref: WO-9.'));
+    const nxt = await H.send(o('Hi Ana, second text. Ref: WO-9.'));
+    t('error ' + code + ' is never remembered: the next text to the same number goes out', nxt.sent === true && H.st.raw.length === 2 && !H.st.reports.some(x => x.where === 'sms_known_undeliverable'), [nxt, H.st.reports]);
+  }
+}
+{
+  // the identical-text guard never holds back an alert to Brett
+  const mkWrap = (cfg) => {
+    const seen = [];
+    const deps = { fetchConfig: async () => cfg, sendSMSRaw: async (e, to, m, opts) => { seen.push(opts); return { sid: 'S' }; }, normalizePhone: new Function(grab('normalizePhone') + '\nreturn normalizePhone;')(), smsIsOwnNumber: R.smsIsOwnNumber };
+    const names = Object.keys(deps);
+    const fn = new Function(...names, grab('sendSMS') + '\nreturn sendSMS;')(...names.map(k => deps[k]));
+    return { fn, seen };
+  };
+  const W = mkWrap({ TWILIO_ENABLED: 'TRUE', admin_phone: '(410) 555-0100', digest_sms_to: '+14105550188' });
+  await W.fn({}, '+14105550100', 'door open', { context: { message_type: 'x' } });
+  await W.fn({}, '4105550188', 'digest');
+  await W.fn({}, '+14105550111', 'tenant text');
+  await W.fn({}, '+14105550111', 'tenant text 2', { keepAccents: true });
+  t('sendSMS: texts to Brett (admin phone, digest number) are sent with allowRepeat; texts to anyone else are not', W.seen[0].allowRepeat === true && W.seen[0].context.message_type === 'x' && W.seen[1].allowRepeat === true && !(W.seen[2] && W.seen[2].allowRepeat) && !W.seen[3].allowRepeat && W.seen[3].keepAccents === true, W.seen);
+  t('adminNotify and the door watchdog send with allowRepeat', /sendSMS\(env, phone, v\.text, \{ allowRepeat: true/.test(grab('adminNotify')) && /sendSMS\(env, phone, text, \{ allowRepeat: true/.test(wsrc));
+  // real guard in the real transport: same alert twice in a row to Brett's number goes out twice; a tenant text does not
+  const T = transport();
+  const w2 = { ok: true };
+  const a1 = await T.send('4105550100', 'hot tub low chlorine', { allowRepeat: true }); const a2 = await T.send('4105550100', 'hot tub low chlorine', { allowRepeat: true });
+  const b1 = await T.send('4105550111', 'your job is scheduled'); const b2 = await T.send('4105550111', 'your job is scheduled');
+  t('transport: an alert sent twice in 10 minutes goes out twice; the same tenant text twice goes out once', a1.sid && a2.sid && b1.sid && b2.duplicate === true && T.calls.fetch.length === 3, [a1, a2, b1, b2]);
+  const G = gate();
+  const adm = { wo_id: '', message_type: 'admin_alert', recipient_type: 'admin', admin: { Phone: '4105550100' }, message_body: 'Cabin door left unlocked' };
+  const x1 = await G.send(adm), x2 = await G.send(adm);
+  t('gated alert to the admin recipient twice: both are sent (no duplicate hold-back)', x1.sent === true && x2.sent === true && G.st.raw.length === 2 && G.st.raw[1].opts.allowRepeat === true, [x1, x2]);
+  const own = await G.send({ wo_id: 'WO-1', message_type: 'tenant_job_assigned', recipient_type: 'vendor', vendor: { ID: '1', Phone: '4105550100', In_House: 'FALSE' }, message_body: 'job' }); const own2 = await G.send({ wo_id: 'WO-1', message_type: 'tenant_job_assigned', recipient_type: 'vendor', vendor: { ID: '1', Phone: '4105550100', In_House: 'FALSE' }, message_body: 'job' });
+  t('gated text to the admin phone number itself (any recipient type) is not held back as a repeat', own.sent === true && own2.sent === true, [own, own2]);
+}
+{
+  // a queued row being sent twice at once by the same worker: the second stands down
+  let release; const gateP = new Promise(r => { release = r; });
+  const calls = { raw: [], upd: [] };
+  const Q = d16Queue({ updateMessageQueueRow: async (e, id, f) => { calls.upd.push(f.Status); return true; }, sendSMSRaw: async (e, to, m) => { calls.raw.push(to); await gateP; return { sid: 'S1' }; } });
+  const row = { ID: '77', WO_ID: 'WO-1', Message_Type: 'tenant_job_scheduled', Recipient_Type: 'tenant', Recipient_Phone: '+14105550111', Message_Body: 'Your job is scheduled', Translated_To: '' };
+  const p1 = Q.mqSendQueuedRow({}, row, '+14105550111'); await new Promise(r => setTimeout(r, 5));
+  const second = await Q.mqSendQueuedRow({}, row, '+14105550111');
+  release(); const first = await p1;
+  t('two releases of one row at the same moment: sent ONCE, the second stands down with a reason', first.sent === true && second.sent === false && second.claim_failed === true && /already being sent/.test(second.outcome.reason) && calls.raw.length === 1, [first, second, calls]);
+  const third = await Q.mqSendQueuedRow({}, row, '+14105550111');
+  t('...and the lock is released afterwards (a later release of the same row is not blocked by the lock)', calls.raw.length === 2 && third.sent === true, [third, calls]);
+  const Q2 = d16Queue({ updateMessageQueueRow: async () => true, sendSMSRaw: async (e, to, m, o) => { calls.admin = o.allowRepeat; return { sid: 'S9' }; } });
+  await Q2.mqSendQueuedRow({}, Object.assign({}, row, { ID: '78', Recipient_Type: 'admin' }), '+14105550100');
+  t('a queued admin row is sent with allowRepeat', calls.admin === true);
+}
+
 console.log(`sms-cost-d16: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
