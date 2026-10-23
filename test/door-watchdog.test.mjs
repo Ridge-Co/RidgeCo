@@ -125,10 +125,11 @@ const codes = (ev) => ev.reasons.map(r => r.code);
   const afterAlert = W.doorWdNextState(clean, bad, 'alert', true, NOW);
   t('delivered alert recorded + active', afterAlert.active === true && afterAlert.sent.not_ok === new Date(NOW).toISOString());
   t('same set 15 min later -> suppressed', W.doorWdDecide(bad, afterAlert, NOW + 15 * MIN) === 'suppressed');
-  t('same set 5h59m later -> suppressed', W.doorWdDecide(bad, afterAlert, NOW + 6 * HR - MIN) === 'suppressed');
-  t('same set 6h later -> alert again (reminder)', W.doorWdDecide(bad, afterAlert, NOW + 6 * HR) === 'alert');
+  t('same set 6h later -> STILL suppressed (D-16: was a reminder every 6h)', W.doorWdDecide(bad, afterAlert, NOW + 6 * HR) === 'suppressed');
+  t('same set 23h59m later -> suppressed', W.doorWdDecide(bad, afterAlert, NOW + 24 * HR - MIN) === 'suppressed');
+  t('same set 24h later -> alert again (one reminder per 24h)', W.doorWdDecide(bad, afterAlert, NOW + 24 * HR) === 'alert');
   const other = W.evaluateDoorHealth(okFr(good({ last_tick: null })), NOW);
-  t('DIFFERENT reason-set within 6h -> alert immediately', W.doorWdDecide(other, afterAlert, NOW + 15 * MIN) === 'alert');
+  t('DIFFERENT reason-set within 24h -> alert immediately', W.doorWdDecide(other, afterAlert, NOW + 15 * MIN) === 'alert');
   const both = W.doorWdNextState(afterAlert, other, 'alert', true, NOW + 15 * MIN);
   t('both sets tracked independently (A,B,A flapping does not re-text A)', W.doorWdDecide(bad, both, NOW + 30 * MIN) === 'suppressed' && W.doorWdDecide(other, both, NOW + 30 * MIN) === 'suppressed');
   const healthy = W.evaluateDoorHealth(okFr(good()), NOW);
@@ -151,7 +152,7 @@ const codes = (ev) => ev.reasons.map(r => r.code);
   t('absent_since is kept, not re-stamped', s2.absent_since === s1.absent_since);
   const s3 = W.doorWdNextState(s2, healthy, 'none', false, NOW + 2 * HR);
   t('absent_since cleared once last_tick appears', s3.absent_since === null);
-  t('old sent entries pruned', Object.keys(W.doorWdPrune({ active: true, sent: { a: new Date(NOW - 7 * HR).toISOString(), b: new Date(NOW - HR).toISOString() }, absent_since: null }, NOW).sent).join() === 'b');
+  t('old sent entries pruned (older than 24h)', Object.keys(W.doorWdPrune({ active: true, sent: { a: new Date(NOW - 25 * HR).toISOString(), b: new Date(NOW - 7 * HR).toISOString() }, absent_since: null }, NOW).sent).join() === 'b');
 }
 
 // ───────────────────────── fetch wrapper ─────────────────────────
@@ -183,7 +184,7 @@ const jres = (obj, status) => new Response(typeof obj === 'string' ? obj : JSON.
 
 // ───────────────────────── full passes with injected io ─────────────────────────
 function harness(over) {
-  const h = { cell: '', sms: [], emails: [], tel: [], writes: 0, cfg: { admin_phone: '410-555-0100' }, health: good(), fetchImpl: null };
+  const h = { cell: '', sms: [], emails: [], tel: [], smsLog: [], writes: 0, cfg: { admin_phone: '410-555-0100' }, health: good(), fetchImpl: null };
   h.io = {
     // the default fixture's last_tick is "20 min before NOW"; keep it "20 min before the simulated pass time" so a long simulated sequence stays fresh
     fetch: async () => {
@@ -197,6 +198,7 @@ function harness(over) {
     sendSms: async (phone, text) => { h.sms.push(text); return { sid: 'SMtest' }; },
     sendEmail: async (m) => { h.emails.push(m); return { sent: true }; },
     logTelemetry: async (env, rec) => { h.tel.push(rec); },
+    logSms: async (rec) => { h.smsLog.push(rec); return { ok: true }; },   // D-16: SMS_Logs writer (attempts and suppressed repeats)
   };
   Object.assign(h.io, over || {});
   h.run = (nowMs, extra) => (h.nowMs = nowMs, W.runDoorWatchdogPass({}, Object.assign({ nowMs, io: h.io, retryDelayMs: 1, timeoutMs: 100 }, extra || {})));
@@ -216,15 +218,20 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   r = await h.run(NOW + 30 * MIN);
   t('15 min later: suppressed, no second SMS', r.action === 'suppressed' && h.sms.length === 1);
   r = await h.run(NOW + 15 * MIN + 6 * HR);
-  t('6h later, still broken: one reminder SMS', r.action === 'alert' && h.sms.length === 2);
+  t('D-16: 6h later, still broken: SUPPRESSED (no text), logged to SMS_Logs', r.action === 'suppressed' && h.sms.length === 1 && h.smsLog.some(l => l.Status === 'alert_suppressed_24h' && l.Log_Source === 'door_watchdog' && /seam_auth_failed|problem/.test(l.Note)));
+  r = await h.run(NOW + 15 * MIN + 23 * HR);
+  t('D-16: 23h later: still suppressed', r.action === 'suppressed' && h.sms.length === 1);
+  r = await h.run(NOW + 15 * MIN + 24 * HR);
+  t('D-16: 24h later, still broken: ONE reminder SMS', r.action === 'alert' && h.sms.length === 2);
+  t('D-16: every attempt is logged (the first alert and the reminder)', h.smsLog.filter(l => l.Status === 'alert_attempted').length === 2 && h.smsLog.every(l => l.Phone === 'admin'));
   h.health = good();
-  r = await h.run(NOW + 15 * MIN + 6 * HR + 15 * MIN);
-  t('cleared: one RECOVERED SMS', r.action === 'recovered' && h.sms.length === 3 && /^RECOVERED: door-code system/.test(h.sms[2]) && h.tel[h.tel.length - 1].Success === 'TRUE');
-  r = await h.run(NOW + 15 * MIN + 6 * HR + 30 * MIN);
+  r = await h.run(NOW + 15 * MIN + 24 * HR + 15 * MIN);
+  t('cleared: one RECOVERED SMS (never suppressed)', r.action === 'recovered' && h.sms.length === 3 && /^RECOVERED: door-code system/.test(h.sms[2]) && h.tel[h.tel.length - 1].Success === 'TRUE' && h.smsLog.some(l => l.Status === 'recovery_attempted'));
+  r = await h.run(NOW + 15 * MIN + 24 * HR + 30 * MIN);
   t('healthy again: nothing more sent', r.action === 'none' && h.sms.length === 3);
   h.health = good({ ok: false, problems: [{ key: 'seam_auth_failed' }] });
-  r = await h.run(NOW + 8 * HR);
-  t('same problem after RECOVERED is a new episode -> alerts again', r.action === 'alert' && h.sms.length === 4);
+  r = await h.run(NOW + 26 * HR);
+  t('same problem after RECOVERED is a new episode -> alerts again at once', r.action === 'alert' && h.sms.length === 4);
 }
 { // different reason-set within the window alerts immediately
   W.setMem(null);
@@ -233,7 +240,22 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   await h.run(NOW);
   h.health = good({ last_tick: null });
   const r = await h.run(NOW + 15 * MIN);
-  t('different reason-set within 6h -> second SMS', r.action === 'alert' && h.sms.length === 2);
+  t('different reason-set within 24h -> second SMS (a changed problem key still sends at once)', r.action === 'alert' && h.sms.length === 2);
+}
+{ // D-16 FAULT: the SMS_Logs write for an attempt / a suppressed repeat fails -> the pass says so (ok:false + sms_log error), the alert text STILL goes out
+  W.setMem(null);
+  const restore = logsOff();
+  const h = harness({ logSms: async () => { throw new Error('sheet quota 429'); } });
+  h.health = good({ ok: false });
+  let r = await h.run(NOW);
+  t('FAULT SMS_Logs write throws on the alert: text still sent, pass reports the log failure', r.action === 'alert' && h.sms.length === 1 && r.ok === false && r.errors.some(e => /^sms_log:.*429/.test(e)));
+  r = await h.run(NOW + HR);
+  t('FAULT SMS_Logs write throws on a suppressed repeat: still no second text, failure reported', r.action === 'suppressed' && h.sms.length === 1 && r.ok === false && r.errors.some(e => /^sms_log:/.test(e)));
+  const h2 = harness({ logSms: async () => ({ ok: false, error: 'append gave no confirmation' }) });
+  h2.health = good({ ok: false });
+  r = await h2.run(NOW);
+  t('FAULT SMS_Logs write returns ok:false: reported, text still sent', h2.sms.length === 1 && r.ok === false && r.errors.some(e => /append gave no confirmation/.test(e)));
+  restore();
 }
 { // FAILURE PATH: health fetch fails (throws / timeout / 503 / non-JSON) is itself an alert
   for (const [label, impl, rx] of [

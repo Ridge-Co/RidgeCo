@@ -680,7 +680,7 @@ let firstDelivery;
   const [a, b] = await Promise.all([send('confirm', { message_id: mid }, 'info@bmoremanagement.com'), send('confirm', { message_id: mid }, 'brett@bmoremanagement.com')]);
   const active = dels().filter(d => d.Active !== 'FALSE');
   t('race: same email in both mailboxes at once -> exactly ONE active delivery', active.length === 1, dels());
-  t('race: both calls succeeded; at most one WO; Brett texted once', a.json.success && b.json.success && wos().length <= 1 && toAdmin().length === 1, [a.json, b.json, wos().length, toAdmin().length]);
+  t('race: both calls succeeded; at most one WO; Brett texted once', a.json.success && b.json.success && wos().length <= 1 && toAdmin().length === 1, [a.json.success, b.json.success, a.json.duplicate, b.json.duplicate, a.json.wo_created, b.json.wo_created, 'wos', wos().map(w => [w.ID, w.Property_ID]), 'admin', toAdmin().map(x => x.body.slice(0, 50)), 'dels', dels().map(d => [d.ID, d.Active, d.Linked_WO_IDs])]);
   seed(); store.latency = () => Math.floor(Math.random() * 6);
   const [c, d2] = await Promise.all([send('confirm'), send('scheduled')]);   // different emails, same order, same moment
   t('race: two different emails for one NEW order at once -> one active row', dels().filter(d => d.Active !== 'FALSE').length === 1, dels().map(x => [x.ID, x.Active, x.Order_Number]));
@@ -995,7 +995,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('RSVP token is bound to the delivery id and signed with WORKER_SECRET (no new secret, no date in it)', /_hmac\('delivery-rsvp\|' \+ String\(id\), env\.WORKER_SECRET\)/.test(src) && !/delivery-rsvp\|' \+ [^)]*(?:Expected_Date|date)/.test(src));
   t('token compare is constant-time', /function deliveryCtEq\(a, b\)[^\n]*\|=/.test(src));
   t('no reminder texts in this build (no sweep that texts unanswered tenants)', !/reminder/i.test(block.replace(/no reminder texts[^\n]*/gi, '')));
-  t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-10-23\.03-delivery-email-watcher'/.test(src));
+  t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-10-23\.04-delivery-email-watcher'/.test(src));
 }
 
 console.log(`\ndelivery-email-intake: ${pass} passed, ${fail} failed`);
