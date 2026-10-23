@@ -15398,7 +15398,7 @@ async function adminNotify(env, body) {
   } catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(500, false, { ok: false, error: 'could not record daily cap counter, NOT sent: ' + m }, `FAILED cap_write ${meta}: ${m}`); }
 
   let r;
-  try { r = await sendSMS(env, phone, v.text); }
+  try { r = await sendSMS(env, phone, v.text, { allowRepeat: true, context: { message_type: 'admin_notify', recipient_type: 'admin' } }); }   // an alert to Brett is never held back as a repeat
   catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(502, false, { ok: false, error: 'SMS send threw: ' + m }, `FAILED send_threw ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}: ${m}`); }
   if (r && r.skipped) return done(200, true, { ok: true, sent: false, skipped: true, reason: String(r.reason || 'sending is disabled') }, `skipped (${scrubPhones(r.reason)}) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
   if (r && r.staged) return done(200, true, { ok: true, sent: true, staged: true, note: 'staging stub - logged only, no real SMS' }, `sent (STAGING stub) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
