@@ -10200,7 +10200,7 @@ async function ownerWorkorders(env, url, callerRole, callerSessionId) {
   // Still-linked bid-group copies (Duplicated_From AND Bid_Group_ID both set) are Brett's internal shotgun
   // and would show the owner every competing vendor — hidden here (this endpoint ignores Tenant_Visible).
   // The copy Brett KEPT ("Keep this", Bid_Winner TRUE) is shown (isHiddenBidCopy, Oct 13 2026).
-  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && !isHiddenBidCopy(w) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && !isHiddenBidCopy(w) && (includeClosed || WOStatus.sets.ACTIVE_OWNER.includes(w.Status)));   // Oct 23 2026 (#175): owner list also shows Estimate Requested
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him. No
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below,
