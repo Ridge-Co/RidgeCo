@@ -27243,7 +27243,7 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
     '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
-    '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
+    '/create-upload-session', '/receipt/add', '/time-entry/add', '/time-entry/use-notes', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
   if (_WO_KEYED.includes(path)) {
     const woId = _b.wo_id || _b.wo;
     if (woId) { if (!(await isTestWO(env, woId))) return false; }
