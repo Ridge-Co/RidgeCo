@@ -4452,7 +4452,7 @@ function renderPropertiesPage() {
     return;
   }
 
-  var OPEN_STATUSES = WOStatus.sets.FIELD_OPEN;
+  var OPEN_STATUSES = WOStatus.sets.OPEN_WORK;
 
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+props.length+' propert'+(props.length===1?'y':'ies')+'</div>' +
     props.map(function(p) {
