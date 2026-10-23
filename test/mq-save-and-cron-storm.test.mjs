@@ -3,6 +3,7 @@
 // Fault injection: every failure below is FORCED (Google 429s, a dead Message_Queue write) and we assert it is reported with the right
 // severity, the caller sees it, and the happy path reports nothing.
 import fs from 'fs';
+import { d16Deps } from './_d16-support.mjs';
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 function grab(src, sig) {
   const start = src.indexOf(sig); if (start < 0) throw new Error('not found: ' + sig);
