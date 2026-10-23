@@ -816,6 +816,7 @@ const _hubWorkerCore = {
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
         if (path === '/time-entry/add')           return await addTimeEntry(env, body);
         if (path === '/time-entry/delete')        return await updateRow(env, 'Time_Entries', body.id, { Active: 'FALSE' });
+        if (path === '/time-entry/use-notes')     return await useTimeEntryNotes(env, body);
         if (path === '/receipt/add')              return await addReceipt(env, body);
         if (path === '/receipt/suggest')          return await receiptSuggest(env, body);
         if (path === '/receipt/delete')           return await updateRow(env, 'Receipts', body.id, { Active: 'FALSE' });
