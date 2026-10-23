@@ -15682,6 +15682,7 @@ async function runDoorWatchdogPass(env, opts) {
     }
     delivered = smsOk || emailOk;
     res.delivered = delivered;
+    await logSms(decision === 'alert' ? 'alert_attempted' : 'recovery_attempted', 'key=' + ev.key + '; sms=' + (smsOk ? smsOutcome : 'failed: ' + smsDetail) + (smsOk ? '' : '; email=' + (emailOk ? 'sent' : 'failed')) + '; delivered=' + (delivered ? 'yes' : 'NO'), text);
     if (!delivered) {
       fail('delivery', 'neither SMS nor email delivered the ' + decision + '; it will be retried next pass');
       await tel(false, 'delivery_failed_' + decision, 'key=' + ev.key + ' - no channel delivered; retrying next pass');
