@@ -498,4 +498,129 @@ const nudge = (extra) => Object.assign({ wo_id: 'WO-1231', message_type: 'vendor
 {
   const mk = (o) => {
     o = o || {}; const calls = { updates: [], raw: [], reports: [], mqf: [] };
-//__CHUNK_END__
+    const deps = {
+      updateMessageQueueRow: async (e, id, f) => { calls.updates.push(f); if (o.claimFails && f.Status === 'sending') return false; if (o.finalFails && f.Status !== 'sending') return false; return true; },
+      sendSMSRaw: async (e, to, msg, opts) => { calls.raw.push({ to, msg, opts }); if (o.throws) throw new Error('boom'); return (o.answer || { sid: 'SMq' }); },
+      reportFailure: async (e, r) => { calls.reports.push(r); }, mqReportFailure: async (e, id, m) => { calls.mqf.push(m); },
+      smsReportRegionBlocked: async (e, id, c) => { calls.reports.push({ where: 'sms_destination_region', rowId: id, last4: c.last4 }); },
+    };
+    const Q = d16Queue(Object.assign({ smsSendOutcome: R.smsSendOutcome, smsDestinationCheck: R.smsDestinationCheck }, deps));
+    return { Q, calls };
+  };
+  const row = { ID: '12', WO_ID: 'WO-1', Message_Type: 'tenant_job_scheduled', Recipient_Type: 'tenant', Recipient_Phone: '+14105550111', Message_Body: 'Your job is scheduled', Translated_To: '' };
+  let m = mk(); let r = await m.Q.mqSendQueuedRow({}, row, '+14105550111', { Gate_Snapshot: 'ok' });
+  t('queued send: marks "sending" FIRST, sends once, then marks "sent" with the SID', r.sent === true && m.calls.updates.length === 2 && m.calls.updates[0].Status === 'sending' && m.calls.updates[1].Status === 'sent' && m.calls.updates[1].Twilio_Message_SID === 'SMq' && m.calls.updates[1].Gate_Snapshot === 'ok' && m.calls.raw.length === 1 && m.calls.reports.length === 0, m.calls);
+  m = mk({ claimFails: true }); r = await m.Q.mqSendQueuedRow({}, row, '+14105550111');
+  t('FAULT the "sending" mark cannot be saved: the text is NOT sent (fails closed), caller is told, row stays pending for the next sweep', r.sent === false && r.claim_failed === true && m.calls.raw.length === 0 && /not sent/.test(r.outcome.reason), r);
+  m = mk({ finalFails: true }); r = await m.Q.mqSendQueuedRow({}, row, '+14105550111');
+  t('FAULT the final "sent" save fails: it WAS sent once; the row stays "sending" (never back to pending), so no sweep can send it again', r.sent === true && m.calls.raw.length === 1 && m.calls.updates[0].Status === 'sending' && m.calls.updates[m.calls.updates.length - 1].Status === 'sent', m.calls.updates);
+  m = mk({ answer: { code: 21610, message: 'unsubscribed' } }); r = await m.Q.mqSendQueuedRow({}, row, '+14105550111');
+  t('queued send, permanent error 21610 (STOP): row failed once with the code + reason; not a ledger P2 per number-block (opt-outs are routine)', r.sent === false && m.calls.updates[1].Status === 'failed' && m.calls.updates[1].Error_Code === '21610' && /opted out/.test(m.calls.updates[1].Error_Reason), m.calls.updates);
+  m = mk({ answer: { code: 21614, message: 'not mobile' } }); r = await m.Q.mqSendQueuedRow({}, row, '+14105550111');
+  t('queued send, permanent error 21614: ONE calm P2 ledger row with the last 4 digits', m.calls.reports.length === 1 && m.calls.reports[0].severity === 'P2' && /ending 0111/.test(m.calls.reports[0].message) && !/4105550111/.test(m.calls.reports[0].message), m.calls.reports);
+  m = mk(); r = await m.Q.mqSendQueuedRow({}, row, '+989121234567');
+  t('queued send to a +98 number: not sent, row failed blocked_region, ONE region ledger row', r.sent === false && m.calls.raw.length === 0 && m.calls.updates[1].Error_Code === 'blocked_region' && m.calls.reports.length === 1 && m.calls.reports[0].where === 'sms_destination_region', m.calls);
+  m = mk({ throws: true }); r = await m.Q.mqSendQueuedRow({}, row, '+14105550111');
+  t('FAULT Twilio call throws: reported (message_queue_update), row failed, caller sees sent:false', r.sent === false && m.calls.mqf.length === 1 && /may or may not have gone out/.test(m.calls.mqf[0]) && m.calls.updates[1].Status === 'failed', m.calls);
+  m = mk(); await m.Q.mqSendQueuedRow({}, Object.assign({}, row, { Translated_To: 'es', Message_Body: 'Hola' }), '+14105550111');
+  t('queued send passes keepAccents for a Spanish row and the logging context (queue id, message type)', m.calls.raw[0].opts.keepAccents === true && m.calls.raw[0].opts.context.queue_id === '12' && m.calls.raw[0].opts.context.message_type === 'tenant_job_scheduled');
+}
+{
+  // processQuietHoursQueue: only 'pending' rows are taken; a stale "sending" row is REPORTED, not re-sent
+  const rows = [
+    { ID: '1', Status: 'sending', Send_After: '2026-01-01T12:00:00Z', Recipient_Type: 'tenant', Recipient_Phone: '+14105550111', Message_Body: 'a', Created_Date: new Date(Date.now() - 30 * MIN).toISOString(), Sent_Date: new Date(Date.now() - 20 * MIN).toISOString(), Twilio_Message_SID: '' },
+    { ID: '2', Status: 'failed', Send_After: '2026-01-01T12:00:00Z', Recipient_Type: 'tenant', Recipient_Phone: '+14105550111', Message_Body: 'b', Created_Date: '2026-01-01T00:00:00Z', Error_Code: '21211' },
+    { ID: '3', Status: 'pending', Send_After: '2026-01-01T12:00:00Z', Recipient_Type: 'tenant', Recipient_Phone: '+14105550222', Message_Body: 'c', Created_Date: '2026-01-01T00:00:00Z', Property_ID: '50' },
+  ];
+  const calls = { raw: [], upd: [], mqf: [] };
+  const deps = {
+    ensureSmsInfra: async () => {}, fetchConfig: async () => ({ TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' }),
+    normalizePhone: p => String(p || ''), fetchTab: async (e, tab) => tab === 'Message_Queue' ? rows : [], MSG_QUEUE_TAB: 'Message_Queue',
+    smsToggleOn: () => true, tenantForQueuedText: () => ({ ID: 't', SMS_Enabled: 'TRUE' }), tenantMovedOut: () => false,
+    smsGateDecision: () => ({ sendOk: true, gateSnapshot: 'all on' }), proposalSeenByOwner: () => false, proposalStampSms: async () => {}, logTelemetry: async () => {},
+    sendSMSRaw: async (e, to, m) => { calls.raw.push(to); return { sid: 'S1' }; }, updateMessageQueueRow: async (e, id, f) => { calls.upd.push([id, f.Status]); return true; },
+    mqReportFailure: async (e, id, m) => { calls.mqf.push([id, m]); }, reportFailure: async () => {},
+  };
+  Object.assign(deps, d16Deps(), d16Queue(deps));
+  deps.mqReportFailure = async (e, id, m) => { calls.mqf.push([id, m]); };
+  const names = Object.keys(deps).filter(k => k !== '__rec');
+  const fn = new Function(...names, grab('processQuietHoursQueue') + '\nreturn processQuietHoursQueue;')(...names.map(k => deps[k]));
+  const out = await fn({});
+  t('sweep: only the pending row (3) is sent; the "sending" (1) and "failed" (2) rows are never re-sent', calls.raw.length === 1 && calls.raw[0] === '+14105550111'.replace('0111', '0222') || (calls.raw.length === 1 && out.results.length === 1 && out.results[0].id === '3'), [calls, out]);
+  t('sweep: the row stuck at "sending" for 20 minutes is REPORTED (message_queue_update) once, not silently ignored', calls.mqf.length === 1 && calls.mqf[0][0] === '1' && /NOT sent again/.test(calls.mqf[0][1]), calls.mqf);
+}
+
+// ========================= updateStatus: the same status twice does not re-text =========================
+{
+  const us = grab('updateStatus');
+  t('updateStatus: a repeat of the same status skips the one-off admin Complete text and the tenant "accepted" text', /const _repeatStatus = String\(wo\.Status \|\| ''\) === String\(body\.status \|\| ''\)/.test(us) && /config\.admin_phone && !_repeatStatus/.test(us) && /if \(_repeatStatus\) continue;/.test(us));
+  t('updateStatus: those two legacy texts now check Twilio\'s answer (reported to the ledger on failure)', /smsReportIfFailed\(env, 'sms_admin_complete'/.test(us) && /smsReportIfFailed\(env, 'sms_tenant_accepted'/.test(us));
+  t('legacy logSMS no longer reads the whole SMS_Logs tab and no longer swallows a failed write', /smsLogRecord\(env, \{ WO_ID/.test(grab('logSMS')) && !/catch\(e\) \{ \/\*/.test(grab('logSMS')) && !/values\/SMS_Logs`\)/.test(grab('logSMS')));
+  const rr = d16Real({ sheetsRequest: async () => { throw new Error('Sheets 429'); } });
+  const lr = await rr.smsLogRecord({}, { Status: 'sent' });
+  t('FAULT logSMS-style write fails: reported once (P1 sms_log_write) and returned, not swallowed', lr.ok === false && rr.rec.reports.length === 1 && rr.rec.reports[0].where === 'sms_log_write' && rr.rec.reports[0].severity === 'P1', rr.rec.reports);
+  const ok1 = await rr.smsReportIfFailed({}, 'w', 'ref', { sid: 'SM1' });
+  const ok2 = await rr.smsReportIfFailed({}, 'w', 'ref', { skipped: true, reason: 'TWILIO_ENABLED not TRUE' });
+  t('smsReportIfFailed: a sent or switched-off text reports nothing', ok1 === true && ok2 === false && rr.rec.reports.length === 1);
+  const ok3 = await rr.smsReportIfFailed({}, 'w', 'WO-5', { error: 'Twilio down' });
+  t('smsReportIfFailed: a real failure is a P0 ledger row', ok3 === false && rr.rec.reports[1].severity === 'P0' && rr.rec.reports[1].where === 'w' && /Twilio down/.test(rr.rec.reports[1].message), rr.rec.reports);
+  const ok4 = await rr.smsReportIfFailed({}, 'w', 'WO-5', { code: 21211, message: 'x' });
+  t('smsReportIfFailed: a permanent Twilio refusal is P2 (calm)', ok4 === false && rr.rec.reports[2].severity === 'P2');
+}
+
+// ========================= 5. real cost + daily balance snapshot =========================
+{
+  const sg = wsrc.slice(wsrc.indexOf('const SMS_LOG_COST_COLS'), wsrc.indexOf('\n', wsrc.indexOf('const SMS_LOG_COST_COLS')));
+  t('SMS_Logs gets cost columns appended at the END (Segments, Est_Segments, Encoding, Chars, Price, Price_Unit, Error_Code...)', /'Segments'.*'Est_Segments'.*'Encoding'.*'Chars'.*'Price'.*'Price_Unit'.*'Error_Code'/.test(sg));
+  t('SMS_Logs columns are added with ensureColumns (never ensureTab over the live tab, only if the tab is missing)', /await ensureColumns\(env, SMS_LOG_TAB, want\)/.test(wsrc) && /if \(!isMissingTabError\(e\)\) throw e; await ensureTab\(env, SMS_LOG_TAB, want\)/.test(wsrc));
+  const B = new Function(grab('twilioBalancePlan') + '\nreturn { twilioBalancePlan };')();
+  const p1 = B.twilioBalancePlan([], '2026-10-23', 41.5, '2026-10-23T11:00:00Z', 'integrity check');
+  t('balance plan: first row has no change', p1.row && p1.row.Date === '2026-10-23' && p1.row.Balance_USD === '41.50' && p1.row.Change_USD === '' && p1.row.Note === 'first row', p1);
+  const p2 = B.twilioBalancePlan([{ Date: '2026-10-22', Balance_USD: '42.90' }, { Date: '2026-10-21', Balance_USD: '44.30' }], '2026-10-23', 41.5, 'x', 's');
+  t('balance plan: change vs the last recorded day (negative = spent)', p2.row.Change_USD === '-1.40' && /since 2026-10-22/.test(p2.row.Note), p2);
+  const p3 = B.twilioBalancePlan([{ Date: '2026-10-23', Balance_USD: '41.50' }], '2026-10-23', 41.0, 'x', 's');
+  t('balance plan: one row per day (a second run the same day writes nothing)', p3.skip === true && /already recorded/.test(p3.reason));
+  t('balance plan: top-up shows as a positive change', B.twilioBalancePlan([{ Date: '2026-10-22', Balance_USD: '5.00' }], '2026-10-23', 55, 'x', 's').row.Change_USD === '50.00');
+  t('balance plan: no number = skip', B.twilioBalancePlan([], 'd', NaN, 'x', 's').skip === true && B.twilioBalancePlan([], 'd', null, 'x', 's').skip === true);
+
+  // the pass, with injected IO
+  const pass = (o) => {
+    o = o || {}; const c = { reports: [], appended: [], condCalls: 0, fetchCalls: 0 };
+    const deps = {
+      schedEtParts: (d) => ({ date: '2026-10-23' }), schedErrText: e => String((e && e.message) || e), configFromValues: () => ({}), schedReadConfigRows: async () => [], ensureTab: async () => {}, fetchTab: async () => [], addRow: async () => ({ json: async () => ({ success: true }) }),
+      reportFailure: async (e, r) => { c.reports.push(r); }, failInvariantConditions: async () => [],
+    };
+    const names = Object.keys(deps);
+    const fn = new Function(...names, wsrc.slice(wsrc.indexOf('const TWILIO_BAL_TAB'), wsrc.indexOf('async function schedRunTwilioBalanceLog')) + '\nreturn twilioBalanceSnapshotPass;')(...names.map(k => deps[k]));
+    const env = Object.assign({ TWILIO_SID: 'AC', TWILIO_API_SID: 'SK', TWILIO_API_KEY: 'k' }, o.env || {});
+    const io = {
+      nowMs: Date.parse('2026-10-23T11:00:00Z'), readConfigRows: async () => [],
+      conditions: async (e, cfg, nowMs, out) => { c.condCalls++; if (o.balance != null) { out.balance = o.balance; out.balance_at = nowMs - 5 * HR; } return []; },
+      readRows: async () => o.rows || [], appendRow: async (row) => { if (o.appendFails) throw new Error('append 500'); c.appended.push(row); return o.appendUnconfirmed ? { success: false } : { success: true }; },
+      reportFailure: async (e, r) => { c.reports.push(r); },
+    };
+    return { run: () => fn(env, io), c };
+  };
+  let P = pass({ balance: 38.25, rows: [{ Date: '2026-10-22', Balance_USD: '39.65' }] }); let res = await P.run();
+  t('balance pass: writes ONE row (date, balance, change) using the integrity check\'s balance, no extra Twilio call here', res.ok && P.c.appended.length === 1 && P.c.appended[0].Date === '2026-10-23' && P.c.appended[0].Balance_USD === '38.25' && P.c.appended[0].Change_USD === '-1.40' && P.c.condCalls === 1 && P.c.reports.length === 0, [res, P.c]);
+  P = pass({ balance: 38.25, rows: [{ Date: '2026-10-23', Balance_USD: '38.25' }] }); res = await P.run();
+  t('balance pass: already recorded today -> no write, ok', res.ok && P.c.appended.length === 0 && /already recorded/.test(res.detail.skipped));
+  P = pass({ env: { TWILIO_API_KEY: '' } }); res = await P.run();
+  t('balance pass: no Twilio credentials (staging) -> skipped, nothing written, nothing reported', res.ok && /no Twilio credentials/.test(res.detail.skipped) && P.c.appended.length === 0 && P.c.condCalls === 0 && P.c.reports.length === 0);
+  P = pass({ balance: null }); res = await P.run();
+  t('FAULT no balance available: job fails, P1 ledger row, nothing written', res.ok === false && P.c.appended.length === 0 && P.c.reports.length === 1 && P.c.reports[0].severity === 'P1' && P.c.reports[0].where === 'twilio_balance_log', [res, P.c.reports]);
+  P = pass({ balance: 20, appendFails: true }); res = await P.run();
+  t('FAULT the row write throws: job fails, P1 ledger row names the step', res.ok === false && P.c.reports.length === 1 && /write_row/.test(P.c.reports[0].message), [res, P.c.reports]);
+  P = pass({ balance: 20, appendUnconfirmed: true }); res = await P.run();
+  t('FAULT the write is not confirmed (no success): treated as a failure, not "done"', res.ok === false && P.c.reports.length === 1);
+  // scheduler wiring
+  const reg = wsrc.slice(wsrc.indexOf('const SCHED_JOBS = ['), wsrc.indexOf('];', wsrc.indexOf('const SCHED_JOBS = [')));
+  t('scheduler: twilio_balance_log is a daily Hub job (Apps Script clock, NO cron)', /name: 'twilio_balance_log', kind: 'daily'/.test(reg) && !/cron/i.test(wsrc.slice(wsrc.indexOf('async function twilioBalanceSnapshotPass'), wsrc.indexOf('async function schedRunTwilioBalanceLog'))));
+  t('the invoice integrity check stores the balance and a snapshot caller reuses it (one Twilio call per 20 h)', /JSON\.stringify\(\{ at: nowMs, items: compact, balance \}\)/.test(wsrc) && /if \(hasBal \|\| !out\) return stored\.items;/.test(wsrc));
+  const dcBlock = wsrc.slice(wsrc.indexOf('const SMS_DC_LOOKBACK_MS'), wsrc.indexOf('function smsDcClassify(')); const dc = new Function(dcBlock + '\n' + grab('smsDcClassify') + '\nreturn smsDcClassify;')();
+  const sum = dc([{ direction: 'outbound-api', date_sent: '2026-10-23T10:00:00Z', status: 'delivered', body: 'a', from: '+1', to: '+14105550111', num_segments: '2', price: '-0.0158' }, { direction: 'outbound-api', date_sent: '2026-10-23T10:01:00Z', status: 'delivered', body: 'b', from: '+1', to: '+14105550111', num_segments: '1', price: null }], Date.parse('2026-10-23T11:00:00Z'));
+  t('delivery check summary adds up pieces and price Twilio billed', sum.pieces === 3 && Math.abs(sum.price_usd - 0.0158) < 1e-9 && sum.priced === 1, sum);
+}
+
+console.log(`sms-cost-d16: ${pass} passed, ${fail} failed`);
+if (fail) process.exit(1);
