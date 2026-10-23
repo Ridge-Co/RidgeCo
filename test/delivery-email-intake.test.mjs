@@ -972,7 +972,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   const common = { rfc_message_id: 'race-rfc-1@x.example' };
   const [a, b] = await Promise.all([send('confirm', Object.assign({ message_id: 'g1', gmail_id: 'g1' }, common), 'info@bmoremanagement.com'), send('confirm', Object.assign({ message_id: 'g2', gmail_id: 'g2' }, common), 'brett@bmoremanagement.com')]);
   store.latency = () => 0;
-  t('S race: both succeed, exactly one active delivery, at most one WO', a.json.success && b.json.success && dels().filter(d => d.Active !== 'FALSE').length === 1 && wos().length <= 1, dels().map(d => [d.ID, d.Active]));
+  t('S race: both succeed, exactly one active delivery, at most one WO', a.json.success && b.json.success && dels().filter(d => d.Active !== 'FALSE').length === 1 && wos().length <= 1, [dels().map(d => [d.ID, d.Active]), wos().length, a.status, a.json, b.status, b.json]);
   t('S race: Brett is texted once and the tenant is asked once', toAdmin().length === 1 && noticeRows().filter(x => x.Status === 'pending').length === 1, [toAdmin().length, noticeRows().map(x => x.Status)]);
   // a concurrent UPDATE (window email in both mailboxes at once) alerts once
   const w = { subject: FX.window.subject, body: FX.window.body };
