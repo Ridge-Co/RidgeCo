@@ -218,15 +218,20 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   r = await h.run(NOW + 30 * MIN);
   t('15 min later: suppressed, no second SMS', r.action === 'suppressed' && h.sms.length === 1);
   r = await h.run(NOW + 15 * MIN + 6 * HR);
-  t('6h later, still broken: one reminder SMS', r.action === 'alert' && h.sms.length === 2);
+  t('D-16: 6h later, still broken: SUPPRESSED (no text), logged to SMS_Logs', r.action === 'suppressed' && h.sms.length === 1 && h.smsLog.some(l => l.Status === 'alert_suppressed_24h' && l.Log_Source === 'door_watchdog' && /seam_auth_failed|problem/.test(l.Note)));
+  r = await h.run(NOW + 15 * MIN + 23 * HR);
+  t('D-16: 23h later: still suppressed', r.action === 'suppressed' && h.sms.length === 1);
+  r = await h.run(NOW + 15 * MIN + 24 * HR);
+  t('D-16: 24h later, still broken: ONE reminder SMS', r.action === 'alert' && h.sms.length === 2);
+  t('D-16: every attempt is logged (the first alert and the reminder)', h.smsLog.filter(l => l.Status === 'alert_attempted').length === 2 && h.smsLog.every(l => l.Phone === 'admin'));
   h.health = good();
-  r = await h.run(NOW + 15 * MIN + 6 * HR + 15 * MIN);
-  t('cleared: one RECOVERED SMS', r.action === 'recovered' && h.sms.length === 3 && /^RECOVERED: door-code system/.test(h.sms[2]) && h.tel[h.tel.length - 1].Success === 'TRUE');
-  r = await h.run(NOW + 15 * MIN + 6 * HR + 30 * MIN);
+  r = await h.run(NOW + 15 * MIN + 24 * HR + 15 * MIN);
+  t('cleared: one RECOVERED SMS (never suppressed)', r.action === 'recovered' && h.sms.length === 3 && /^RECOVERED: door-code system/.test(h.sms[2]) && h.tel[h.tel.length - 1].Success === 'TRUE' && h.smsLog.some(l => l.Status === 'recovery_attempted'));
+  r = await h.run(NOW + 15 * MIN + 24 * HR + 30 * MIN);
   t('healthy again: nothing more sent', r.action === 'none' && h.sms.length === 3);
   h.health = good({ ok: false, problems: [{ key: 'seam_auth_failed' }] });
-  r = await h.run(NOW + 8 * HR);
-  t('same problem after RECOVERED is a new episode -> alerts again', r.action === 'alert' && h.sms.length === 4);
+  r = await h.run(NOW + 26 * HR);
+  t('same problem after RECOVERED is a new episode -> alerts again at once', r.action === 'alert' && h.sms.length === 4);
 }
 { // different reason-set within the window alerts immediately
   W.setMem(null);
