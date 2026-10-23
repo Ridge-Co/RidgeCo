@@ -141,6 +141,7 @@ function makeGate(overrides) {
     MSG_QUEUE_TAB: 'Message_Queue',
     MSG_QUEUE_COLS: QCOLS,
   }, overrides || {});
+  Object.assign(deps, d16Deps());   // D-16 helpers smsGatedSend now uses
   const names = Object.keys(deps);
   const fn = new Function(...names, grab('smsGatedSend') + '\nreturn smsGatedSend;')(...names.map(k => deps[k]));
   return { fn, state, deps };
