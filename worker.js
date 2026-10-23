@@ -16410,10 +16410,8 @@ async function releaseMessageQueue(env, body) {
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
-    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
-    const sent = !!(result && result.sid);
-    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot });
-    results.push({ id, sent, gate_snapshot: gateSnapshot });
+    const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot });
+    results.push(Object.assign({ id, sent: _r.sent, gate_snapshot: gateSnapshot }, _r.claim_failed ? { error: _r.outcome.reason } : {}, !_r.sent && _r.outcome.errorCode ? { error_code: _r.outcome.errorCode, error_reason: _r.outcome.reason } : {}));
   }
   return json({ ok: true, results });
 }
