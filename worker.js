@@ -35507,7 +35507,9 @@ function strCalClassify(status, text, as) {
 }
 async function strCalFetch(env, calId, method, pathAndQuery, body, asOverride) {
   __strCalCount++;
-  const token = await getCalendarAccessToken(env);
+  const as = asOverride || __strCalAs; // events endpoints only (list/get/insert/patch/delete), so the narrow calendar.events scope is enough
+  if (as.bad) throw inspErr('calendar_impersonate_invalid', `Config STR_CAL_IMPERSONATE ("${as.sub}") is not an email address, so the cleaning calendar cannot be reached. Fix it on the cleaning board (Switches).`, 503);
+  const token = await getCalendarAccessToken(env, { sub: as.sub, scope: as.scope });
   const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}${pathAndQuery}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (resp.status === 204) return {};
   const text = await resp.text();
