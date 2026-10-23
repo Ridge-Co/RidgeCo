@@ -13,7 +13,7 @@ export const D16_BLOCK = range('// ========== SMS COST CONTROL (D-16', '// sendS
 export const D16_GATED = range('// Pure. Message_Queue values grid (header row first)', '// The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types.');
 // The queued-send path used by quiet-hours / manual release.
 export const D16_QUEUED = range('// Sends one ALREADY-QUEUED Message_Queue row', '// Internal row update for Message_Queue');
-const NAMES = ['smsEstimate', 'smsSanitize', 'smsSanitizeText', 'smsDestinationCheck', 'smsErrorInfo', 'SMS_PERMANENT_ERRORS', 'SMS_NEVER_REMEMBER_CODES', 'smsHash', 'smsDedupeKey', 'smsDedupeCheck', 'smsDedupeRemember', 'mqFindDuplicate', 'mqFindRecentNudge', 'mqFindKnownBad', 'SMS_DEDUPE_WINDOW_MS',
+const NAMES = ['smsMaskPhones', 'SMS_KNOWN_BAD_CODES', 'smsEstimate', 'smsSanitize', 'smsSanitizeText', 'smsDestinationCheck', 'smsErrorInfo', 'SMS_PERMANENT_ERRORS', 'SMS_NEVER_REMEMBER_CODES', 'smsHash', 'smsDedupeKey', 'smsDedupeCheck', 'smsDedupeRemember', 'mqFindDuplicate', 'mqFindRecentNudge', 'mqFindKnownBad', 'SMS_DEDUPE_WINDOW_MS',
   'mqRowsToObjects', 'smsIsOwnNumber', 'SMS_NUDGE_MIN_GAP_MS', 'SMS_KNOWN_BAD_WINDOW_MS', 'smsSendOutcome', 'smsReportIfFailed', 'smsLogAppend', 'smsLogRecord', 'smsReportRegionBlocked', 'smsLogHeaders', 'sendSMSRaw', 'SMS_COST_D16_MARKER', 'SMS_LOG_BASE_COLS', 'SMS_LOG_COST_COLS', 'SMS_CHAR_MAP'];
 const normalizePhone = new Function(wsrc.slice(wsrc.indexOf('function normalizePhone('), wsrc.indexOf('// (xxx) xxx-xxxx for a US 10-digit number')) + '\nreturn normalizePhone;')();   // the REAL one
 // Real implementations of every pure helper + injectable IO. `world` = extra stubs for the IO (sheetsRequest, ensureColumns, ensureTab, isMissingTabError,
