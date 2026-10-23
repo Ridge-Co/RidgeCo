@@ -57,7 +57,7 @@ const S = {
   smsGated: grab(wsrc, 'async function smsGatedSend(').replace('async function smsGatedSend(', 'async function __realSmsGatedSend('),
   quietQueue: grab(wsrc, 'async function processQuietHoursQueue('),
   notifyConsts: grabConst(wsrc, 'const OWNER_NOTIFY_DEFAULTS') + '\n' + grabConst(wsrc, 'const NOTIFY_TIERS'), shouldNotify: grab(wsrc, 'async function shouldNotifyOwner('),
-  portalLink: grab(wsrc, 'function vendorPortalLink('), unitLabel: grab(wsrc, 'function formatUnitLabel('), phoneDisp: grab(wsrc, 'function formatPhoneDisplay('), jobLabel: grab(wsrc, 'function woJobLabel('),
+  portalLink: grab(wsrc, 'function vendorPortalLink('), unitLabel: grab(wsrc, 'function formatUnitLabel('), phoneDisp: grab(wsrc, 'function formatPhoneDisplay('), jobLabel: grab(wsrc, 'function smsShort(') + '\n' + grab(wsrc, 'function woJobLabel('),
   ownerWOs: grab(wsrc, 'async function ownerWorkorders('), woCombine: grab(wsrc, 'async function woCombine('), woSplit: grab(wsrc, 'async function woSplit('),
   voidCols: grabConst(wsrc, 'const WO_VOID_COLUMNS'), splitMax: grabConst(wsrc, 'const WO_SPLIT_MAX_NEW'), splitFields: grabConst(wsrc, 'const WO_SPLIT_ORIGINAL_FIELDS'),
   hubGuard: grab(wsrc, 'async function hubTestWriteAllowed('), isTestWO: grab(wsrc, 'async function isTestWO('), isTestRecord: grab(wsrc, 'async function isTestRecord('),
