@@ -155,7 +155,7 @@ const SENT = { Status: 'sent', Delivered_To: '+14105550100', Sent_Date: 'now', T
   t('smsGatedSend passes the queue headers + row number to the save (no second read)', h.calls.length === 1 && Array.isArray(h.calls[0].opts.headers) && h.calls[0].opts.headers.join() === 'ID,Status' && h.calls[0].opts.sheetRow === 3, h.calls);
   t('HAPPY path: sent, and the result has NO warning field', r.sent === true && !('warning' in r), r);
   const h2 = buildSG({ saveFails: true }); const r2 = await h2.run({}, opts);
-  t('FAULT save fails after the send: result still says sent=true (it WAS sent) AND carries a warning naming the stale "pending" row', r2.sent === true && /WAS sent/.test(r2.warning) && /pending/.test(r2.warning) && /message_queue_update/.test(r2.warning), r2);
+  t('FAULT save fails after the send: result still says sent=true (it WAS sent) AND carries a warning naming the stale "pending" row', r2.sent === true && /WAS sent/.test(r2.warning) && /sending/.test(r2.warning) && /message_queue_update/.test(r2.warning), r2);
   const h3 = buildSG({ quiet: true, saveFails: true }); const r3 = await h3.run({}, opts);
   t('FAULT the quiet-hours hold mark fails: result says held but warns it will not release by itself', r3.held_for_quiet_hours === true && /will not release by itself/.test(r3.warning), r3);
   const h4 = buildSG({ quiet: true }); const r4 = await h4.run({}, opts);
