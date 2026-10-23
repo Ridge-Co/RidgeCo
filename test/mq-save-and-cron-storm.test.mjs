@@ -146,6 +146,7 @@ const SENT = { Status: 'sent', Delivered_To: '+14105550100', Sent_Date: 'now', T
       sendSMSRaw: async () => ({ sid: 'SM999' }), logMessageAudit: async () => {},
       updateMessageQueueRow: async (env, id, fields, opts) => { calls.push({ id, fields, opts }); return over.saveFails ? false : true; },
     };
+    Object.assign(stubs, d16Deps());   // D-16 helpers smsGatedSend now uses
     const names = Object.keys(stubs);
     return { run: new Function(...names, sg + '\nreturn smsGatedSend;')(...names.map(n => stubs[n])), calls };
   }
