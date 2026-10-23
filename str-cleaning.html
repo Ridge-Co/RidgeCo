@@ -578,6 +578,9 @@ function renderSwitches(){
     h += '<div class="swrow"><div class="swhead"><b>' + esc(x.title) + '</b><button class="sw' + (on ? ' on' : '') + '" role="switch" aria-checked="' + on + '" aria-label="' + esc(x.title) + '" data-act="switch" data-k="' + x.k + '">' + (on ? 'ON' : 'OFF') + '</button></div>'
       + '<p class="say">' + esc(on ? x.on(s) : x.off(s)) + '</p><p class="say" style="margin-top:2px">Tap the switch to turn it ' + (on ? 'off' : 'on') + '. You will be asked to confirm first.</p></div>';
   });
+  h += '<div class="swrow"><b>Cleaning calendar sign-in</b><p class="say">' + esc(s.cal_as ? 'ACTING AS ' + s.cal_as + ' (Google domain-wide delegation). Nothing has to be given edit access to the calendar.' : "Using the Hub's own Google login, which can read the cleaning calendar but cannot change it (your Google Workspace does not allow giving it edit access). Turn on \"act as Brett\" below, then switch \"Cleaning calendar\" ON.") + '</p>'
+    + '<button class="btn sm" data-act="cal-as">' + (s.cal_as ? 'Change who the Hub acts as…' : 'Turn on "act as Brett"…') + '</button> <button class="btn sm primary" data-act="cal-check">Check calendar access</button> <button class="btn sm" data-act="cal-check-write">Check and test a write</button>'
+    + '<p class="say">"Check" signs in and reads the calendar (changes nothing). "Check and test a write" also adds one 1-minute test event and deletes it straight away.</p><div class="out" id="out-cal"></div></div>';
   h += '<div class="swrow"><b>Tuning numbers</b><div class="nums">' + NUMS.map(function(n){ return '<div><span>' + esc(n.label) + '</span><b>' + esc(s[n.f]) + '</b></div>'; }).join('') + '</div>'
     + '<button class="btn sm" data-act="editnums">Edit numbers</button><p class="say">Opens a form. Nothing is saved until you press Save on it.</p></div>';
   $('sw-body').innerHTML = h;
