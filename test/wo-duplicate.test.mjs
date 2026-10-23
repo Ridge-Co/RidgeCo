@@ -4,6 +4,9 @@
 // The clock is PINNED (a fake Date is injected into the evaluated code) so the quiet-hours cases do
 // not depend on what time of day the suite runs.
 import fs from 'fs';
+import { D16_BLOCK, D16_GATED, D16_QUEUED } from './_d16-support.mjs';
+const D16_WORLD = D16_BLOCK + '\n' + D16_GATED + '\n' + D16_QUEUED + '\nasync function reportFailure() {}\n';   // D-16: the real cost-control code + a no-op ledger
+
 import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
