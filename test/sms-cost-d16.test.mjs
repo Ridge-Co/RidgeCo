@@ -146,7 +146,7 @@ const R = d16Real();
   t('own number: anyone else', own('+14105550111', { admin_phone: '+14105550100' }, { In_House: 'FALSE' }) === false && own('', {}, null) === false);
   const stuck = R.mqRowsToObjects ? null : null; void stuck;
   const Q = d16Queue({ updateMessageQueueRow: async () => true, sendSMSRaw: async () => ({ sid: 'x' }) });
-  t('stuck sending: 20 min old is reported, 5 min and 50 min are not, other statuses are not', Q.mqStuckSending([row({ Status: 'sending', Sent_Date: new Date(NOW - 20 * MIN).toISOString() }), row({ ID: '2', Status: 'sending', Sent_Date: new Date(NOW - 5 * MIN).toISOString() }), row({ ID: '3', Status: 'sending', Sent_Date: new Date(NOW - 50 * MIN).toISOString() }), row({ ID: '4', Status: 'sent' })], NOW).map(r => r.ID).join() === '1');
+  t('stuck sending: anything stuck over 15 minutes is reported (20 min and 3 hours), 5 min is not, other statuses are not', Q.mqStuckSending([row({ Status: 'sending', Sent_Date: new Date(NOW - 20 * MIN).toISOString() }), row({ ID: '2', Status: 'sending', Sent_Date: new Date(NOW - 5 * MIN).toISOString() }), row({ ID: '3', Status: 'sending', Sent_Date: new Date(NOW - 50 * MIN).toISOString() }), row({ ID: '4', Status: 'sent' })], NOW).map(r => r.ID).join() === '1,3');
 }
 
 // ========================= sendSMSRaw (the one transport) =========================
