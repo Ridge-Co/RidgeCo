@@ -16226,7 +16226,6 @@ async function smsGatedSend(env, opts) {
     // TWILIO_TEST_MODE stays off, so one feature (the Milam Ridge cleaning scheduler) can be tested live without
     // redirecting every other Hub text. Only a valid, already-normalized phone is accepted; any other value
     // fails the send closed (nothing goes to the real recipient) - never silently falls through to the real phone.
-    const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
     if (opts.redirectTo && !_redirect) {
       outcome = 'failed';
       await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' }, mqOpts);
