@@ -154,6 +154,7 @@ window.addEventListener('pageshow', function(e){
   .wo-right { display: flex; align-items: center; gap: 10px; }
   .badge { padding: 3px 8px; border-radius: 20px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: bold; }
   .badge-new { background: #e8f0fb; color: var(--info); }
+  .badge-estimaterequested { background: #e8f0fb; color: var(--info); }
   .badge-assigned { background: #fdf2e2; color: var(--warn); }
   .badge-accepted { background: #eaf6ee; color: var(--accent2); }
   .badge-scheduled { background: #eaf6ee; color: var(--accent2); }
@@ -2435,7 +2436,7 @@ function woCard(w) {
   var addr = prop ? prop.Address : (w.Property_ID||'—');
   var sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s+/g,'');
   // Aging calculation
-  var OPEN_WO = WOStatus.sets.FIELD_OPEN;
+  var OPEN_WO = WOStatus.sets.OPEN_WORK;
   var daysOpen = w.Created_Date ? Math.floor((Date.now()-new Date(w.Created_Date))/(86400000)) : 0;
   var agingBadge = '';
   if (OPEN_WO.includes(w.Status)) {
@@ -2612,7 +2613,7 @@ function renderWOPage() {
   });
 
   var PRI = {urgent:0,high:1,normal:2,low:3};
-  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
+  var STA = {'New':0,'Estimate Requested':0.5,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
   wos.sort(function(a,b){
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
@@ -4452,7 +4453,7 @@ function renderPropertiesPage() {
     return;
   }
 
-  var OPEN_STATUSES = WOStatus.sets.FIELD_OPEN;
+  var OPEN_STATUSES = WOStatus.sets.OPEN_WORK;
 
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+props.length+' propert'+(props.length===1?'y':'ies')+'</div>' +
     props.map(function(p) {
