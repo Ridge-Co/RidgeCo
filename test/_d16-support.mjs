@@ -37,7 +37,7 @@ export function d16Deps(over) {
   const deps = {
     smsSanitizeText: real.smsSanitizeText, mqRowsToObjects: real.mqRowsToObjects, smsIsOwnNumber: real.smsIsOwnNumber, SMS_NUDGE_MIN_GAP_MS: real.SMS_NUDGE_MIN_GAP_MS,
     SMS_KNOWN_BAD_WINDOW_MS: real.SMS_KNOWN_BAD_WINDOW_MS, mqFindRecentNudge: real.mqFindRecentNudge, mqFindKnownBad: real.mqFindKnownBad, mqFindDuplicate: real.mqFindDuplicate,
-    smsEstimate: real.smsEstimate, smsDestinationCheck: real.smsDestinationCheck, smsSendOutcome: real.smsSendOutcome,
+    smsMaskPhones: real.smsMaskPhones, smsEstimate: real.smsEstimate, smsDestinationCheck: real.smsDestinationCheck, smsSendOutcome: real.smsSendOutcome,
     smsLogRecord: async (env, r) => { rec.logs.push(r); return { ok: true }; },
     smsReportRegionBlocked: async (env, rowId, check) => { rec.reports.push({ where: 'sms_destination_region', rowId, check }); },
     reportFailure: async (env, o) => { rec.reports.push(o); },
