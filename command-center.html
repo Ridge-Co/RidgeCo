@@ -227,6 +227,22 @@ function deliveriesCard(x){
   const cap=s=>{s=String(s||'');return s.charAt(0).toUpperCase()+s.slice(1);};
   const contact=r=>{const c=r.onsite_contact||'tenant'; return c==='tenant'?(r.tenant_name?'Tenant: '+r.tenant_name:'Tenant'):'Meets: '+cap(c);};
   const where=r=>r.delivery_address||[r.property_address,r.unit_label?'Unit '+r.unit_label:''].filter(Boolean).join(' ')||'(no address)';
+  // Tenant RSVP (fields from /deliveries: tenant_rsvp ''|Confirmed|Declined|Unsure, tenant_rsvp_at, tenant_rsvp_note)
+  const rsvpOf=r=>{const v=String(r.tenant_rsvp||'').trim().toLowerCase();return (v==='confirmed'||v==='yes')?'yes':(v==='declined'||v==='no')?'no':v==='unsure'?'unsure':'';};
+  const rsvpWhen=sv=>{sv=String(sv||'').trim();if(!sv)return '';const t=/^\d{4}-\d{2}-\d{2}T/.test(sv)?new Date(sv):null;if(!t||isNaN(t.getTime()))return sv;try{return t.toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}catch(e){return sv;}};
+  const rsvpOpen=r=>['Delivered','Cancelled','Needs Review'].indexOf(r.status)<0;
+  const rsvpHtml=r=>{
+    const st=rsvpOf(r);
+    if(!st){
+      if(!rsvpOpen(r)) return '';
+      if(('tenant_notice_sent_at' in r)||('tenant_notice_status' in r)){const asked=!!r.tenant_notice_sent_at||/^sent/i.test(String(r.tenant_notice_status||''));return '<span class="rsvp" data-rsvp="'+(asked?'none':'not-asked')+'">'+(asked?'Tenant: No answer yet':'Tenant: not asked yet')+'</span>';}
+      return r.tenant_name?'<span class="rsvp" data-rsvp="none">Tenant: No answer yet</span>':'';
+    }
+    const label=st==='yes'?'✓ Tenant: Confirmed':(st==='no'?'✕ Tenant: Declined':'? Tenant: Unsure');
+    const when=rsvpWhen(r.tenant_rsvp_at), note=String(r.tenant_rsvp_note||'').trim();
+    return '<span class="rsvp '+st+'" data-rsvp="'+st+'">'+h(label)+'</span>'+(when?'<small style="display:inline">'+h(when)+'</small>':'')
+      +(note?'<span class="rsvp-note" data-rsvp-note>“'+h(note)+'”</span>':'');
+  };
   const dotOf=st=>st==='Delivered'?'g':(st==='Needs Review'||st==='Cancelled'||st==='Exception'?'r':(st==='En-Route'||st==='Approaching'||st==='Arrived'?'a':'b'));
   const reviewLine=reviewElse.length?'<p class="note" style="color:var(--red);font-weight:700">⚠ '+reviewElse.length+' delivery email'+(reviewElse.length>1?'s':'')+' the watcher couldn’t place — open Deliveries to fix '+(reviewElse.length>1?'them':'it')+'.</p>':'';
   if(!today.length){
