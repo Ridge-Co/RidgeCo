@@ -17685,6 +17685,7 @@ async function schedRunNext(env, ctx, opts) {
   } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
 
   const jobEnv = __meterCronEnv(__cronEnv(env), job.name);
+  if (job.critical) jobEnv.__CRON_CRITICAL__ = true;
   const t0 = Date.now();
   const work = (async () => {
     let jobRes;
