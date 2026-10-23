@@ -10663,7 +10663,7 @@ async function sendPropertyNotice(env, body) {
     try {
       const r = await smsGatedSend(env, { wo_id: body.wo_id || '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
       if (r.sent) results.sms_sent++; else if (r.held_for_quiet_hours) results.sms_queued_quiet_hours++; else results.sms_failed++;
-    } catch (e) { results.sms_failed++; }
+    } catch (e) { results.sms_failed++; await reportFailure(env, { system: 'hub', source: 'worker', where: 'property_notice_sms', ref: body.wo_id || property.ID || '', severity: 'P0', message: 'a property notice text threw: ' + String((e && e.message) || e).slice(0, 200) }); }
   }
   if (channels.includes('email')) {
     for (const tenant of emailRecipients) {
