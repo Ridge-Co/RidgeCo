@@ -13,7 +13,7 @@ export const D16_BLOCK = range('// ========== SMS COST CONTROL (D-16', '// sendS
 export const D16_GATED = range('// Pure. Message_Queue values grid (header row first)', '// The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types.');
 // The queued-send path used by quiet-hours / manual release.
 export const D16_QUEUED = range('// Sends one ALREADY-QUEUED Message_Queue row', '// Internal row update for Message_Queue');
-const NAMES = ['smsEstimate', 'smsSanitize', 'smsSanitizeText', 'smsDestinationCheck', 'smsErrorInfo', 'SMS_PERMANENT_ERRORS', 'SMS_NEVER_REMEMBER_CODES', 'smsHash', 'smsDedupeKey', 'smsDedupeCheck', 'smsDedupeRemember', 'mqFindDuplicate', 'mqFindRecentNudge', 'mqFindKnownBad', 'SMS_DEDUPE_WINDOW_MS',
+const NAMES = ['smsMaskPhones', 'SMS_KNOWN_BAD_CODES', 'smsEstimate', 'smsSanitize', 'smsSanitizeText', 'smsDestinationCheck', 'smsErrorInfo', 'SMS_PERMANENT_ERRORS', 'SMS_NEVER_REMEMBER_CODES', 'smsHash', 'smsDedupeKey', 'smsDedupeCheck', 'smsDedupeRemember', 'mqFindDuplicate', 'mqFindRecentNudge', 'mqFindKnownBad', 'SMS_DEDUPE_WINDOW_MS',
   'mqRowsToObjects', 'smsIsOwnNumber', 'SMS_NUDGE_MIN_GAP_MS', 'SMS_KNOWN_BAD_WINDOW_MS', 'smsSendOutcome', 'smsReportIfFailed', 'smsLogAppend', 'smsLogRecord', 'smsReportRegionBlocked', 'smsLogHeaders', 'sendSMSRaw', 'SMS_COST_D16_MARKER', 'SMS_LOG_BASE_COLS', 'SMS_LOG_COST_COLS', 'SMS_CHAR_MAP'];
 const normalizePhone = new Function(wsrc.slice(wsrc.indexOf('function normalizePhone('), wsrc.indexOf('// (xxx) xxx-xxxx for a US 10-digit number')) + '\nreturn normalizePhone;')();   // the REAL one
 // Real implementations of every pure helper + injectable IO. `world` = extra stubs for the IO (sheetsRequest, ensureColumns, ensureTab, isMissingTabError,
@@ -37,7 +37,7 @@ export function d16Deps(over) {
   const deps = {
     smsSanitizeText: real.smsSanitizeText, mqRowsToObjects: real.mqRowsToObjects, smsIsOwnNumber: real.smsIsOwnNumber, SMS_NUDGE_MIN_GAP_MS: real.SMS_NUDGE_MIN_GAP_MS,
     SMS_KNOWN_BAD_WINDOW_MS: real.SMS_KNOWN_BAD_WINDOW_MS, mqFindRecentNudge: real.mqFindRecentNudge, mqFindKnownBad: real.mqFindKnownBad, mqFindDuplicate: real.mqFindDuplicate,
-    smsEstimate: real.smsEstimate, smsDestinationCheck: real.smsDestinationCheck, smsSendOutcome: real.smsSendOutcome,
+    smsMaskPhones: real.smsMaskPhones, smsEstimate: real.smsEstimate, smsDestinationCheck: real.smsDestinationCheck, smsSendOutcome: real.smsSendOutcome,
     smsLogRecord: async (env, r) => { rec.logs.push(r); return { ok: true }; },
     smsReportRegionBlocked: async (env, rowId, check) => { rec.reports.push({ where: 'sms_destination_region', rowId, check }); },
     reportFailure: async (env, o) => { rec.reports.push(o); },
@@ -49,8 +49,8 @@ export function d16Deps(over) {
 // updateMessageQueueRow / sendSMSRaw stubs. Use:  Object.assign(deps, d16Deps(), d16Queue(deps))
 export function d16Queue(deps) {
   const d = d16Real();
-  const need = Object.assign({ mqReportFailure: async () => {}, reportFailure: async () => {}, smsReportRegionBlocked: async () => {} }, { smsSendOutcome: d.smsSendOutcome, smsDestinationCheck: d.smsDestinationCheck }, deps);
-  const names = ['updateMessageQueueRow', 'sendSMSRaw', 'smsSendOutcome', 'smsDestinationCheck', 'smsReportRegionBlocked', 'reportFailure', 'mqReportFailure'];
+  const need = Object.assign({ mqReportFailure: async () => {}, reportFailure: async () => {}, smsReportRegionBlocked: async () => {} }, { smsMaskPhones: d.smsMaskPhones, smsSendOutcome: d.smsSendOutcome, smsDestinationCheck: d.smsDestinationCheck }, deps);
+  const names = ['updateMessageQueueRow', 'sendSMSRaw', 'smsMaskPhones', 'smsSendOutcome', 'smsDestinationCheck', 'smsReportRegionBlocked', 'reportFailure', 'mqReportFailure'];
   const fns = new Function(...names, D16_QUEUED + '\nreturn { mqSendQueuedRow, mqStuckSending };')(...names.map(k => need[k]));
   return Object.assign({ mqReportFailure: need.mqReportFailure }, fns);
 }
