@@ -4,6 +4,9 @@
 // The clock is PINNED (a fake Date is injected into the evaluated code) so the quiet-hours cases do
 // not depend on what time of day the suite runs.
 import fs from 'fs';
+import { D16_BLOCK, D16_GATED, D16_QUEUED } from './_d16-support.mjs';
+const D16_WORLD = D16_BLOCK + '\n' + D16_GATED + '\n' + D16_QUEUED + '\nasync function reportFailure() {}\n';   // D-16: the real cost-control code + a no-op ledger
+
 import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
@@ -54,7 +57,7 @@ const S = {
   smsGated: grab(wsrc, 'async function smsGatedSend(').replace('async function smsGatedSend(', 'async function __realSmsGatedSend('),
   quietQueue: grab(wsrc, 'async function processQuietHoursQueue('),
   notifyConsts: grabConst(wsrc, 'const OWNER_NOTIFY_DEFAULTS') + '\n' + grabConst(wsrc, 'const NOTIFY_TIERS'), shouldNotify: grab(wsrc, 'async function shouldNotifyOwner('),
-  portalLink: grab(wsrc, 'function vendorPortalLink('), unitLabel: grab(wsrc, 'function formatUnitLabel('), phoneDisp: grab(wsrc, 'function formatPhoneDisplay('), jobLabel: grab(wsrc, 'function woJobLabel('),
+  portalLink: grab(wsrc, 'function vendorPortalLink('), unitLabel: grab(wsrc, 'function formatUnitLabel('), phoneDisp: grab(wsrc, 'function formatPhoneDisplay('), jobLabel: grab(wsrc, 'function smsShort(') + '\n' + grab(wsrc, 'function woJobLabel('),
   ownerWOs: grab(wsrc, 'async function ownerWorkorders('), woCombine: grab(wsrc, 'async function woCombine('), woSplit: grab(wsrc, 'async function woSplit('),
   voidCols: grabConst(wsrc, 'const WO_VOID_COLUMNS'), splitMax: grabConst(wsrc, 'const WO_SPLIT_MAX_NEW'), splitFields: grabConst(wsrc, 'const WO_SPLIT_ORIGINAL_FIELDS'),
   hubGuard: grab(wsrc, 'async function hubTestWriteAllowed('), isTestWO: grab(wsrc, 'async function isTestWO('), isTestRecord: grab(wsrc, 'async function isTestRecord('),
@@ -150,7 +153,7 @@ function build(db, o = {}) {
     'const CORS = {};', ['function appendedRowNumber(','function mintNextNumericId(','async function guardAppendedIds(','async function mqReportFailure('].map(s => grab(wsrc, s)).join('\n'), S.cache, S.isMissing, S.sr, S.ensureInner, S.ensure, S.ensureTab, S.idc, S.col, S.json, S.fetchTab, S.fetchTabs, S.findWO,
     S.updateWOFields, S.nextSafeId, S.logAudit, S.logAuditMany, S.logMsgAudit, S.auditCols, S.addRow, S.invalidate, 'async function reportFailure() { return { ok: true }; }', S.telemetry, S.nonShare, S.block,
     S.addonLive, S.isTenantCurrent, S.currentTenant, S.tenantsFor, S.isBackground, S.isNotifiable, S.tenantMovedOut, S.smsGate, S.smsToggle, S.normPhone, S.mqTab, S.mqCols,
-    S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, S.sendRaw, S.updMq, S.fetchConfig, S.smsGated,
+    S.smsInfraState, S.smsInfra, S.etHour, S.nyOff, S.quietConsts, S.isQuiet, S.nextQuiet, D16_WORLD, S.updMq, S.fetchConfig, S.smsGated,
     'async function smsGatedSend(env, o) { __spy.push({ wo_id: o.wo_id, message_type: o.message_type, recipient_type: o.recipient_type, vendor_id: o.vendor && o.vendor.ID, vendor_name: o.vendor && o.vendor.Name, body: o.message_body, already_localized: o.already_localized, original_body: o.original_body, bypassQuietHours: o.bypassQuietHours === true }); return await __realSmsGatedSend(env, o); }',
     S.quietQueue, S.portalLink, S.unitLabel, S.phoneDisp, S.jobLabel, S.voidCols, S.splitMax, S.splitFields, S.testMarker, S.openStatuses,
     // stubs for unrelated collaborators (not under test here)
