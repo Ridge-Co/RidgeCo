@@ -15863,7 +15863,16 @@ async function updateMessageQueueRow(env, id, fields, opts) {
     const res = await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
     if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < updates.length) { await mqReportFailure(env, id, 'only ' + res.totalUpdatedCells + ' of ' + updates.length + ' cells saved'); return false; }
     return true;
-  } catch (e) { await mqReportFailure(env, id, String((e && e.message) || e)); return false; }
+  };
+  let lastErr = null;
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, waits[attempt - 1]));
+    try { return await once(); }
+    catch (e) { lastErr = e; }   // retried; reported below if every try fails
+  }
+  const sentInfo = [fields && fields.Twilio_Message_SID ? 'Twilio SID ' + fields.Twilio_Message_SID : '', fields && fields.Delivered_To ? 'to ' + fields.Delivered_To : '', fields && fields.Status ? 'wanted Status=' + fields.Status : ''].filter(Boolean).join(', ');
+  await mqReportFailure(env, id, 'could not save the queue row after ' + (waits.length + 1) + ' tries' + (sentInfo ? ' (' + sentInfo + ')' : '') + ': ' + String((lastErr && lastErr.message) || lastErr));
+  return false;
 }
 
 // GET /message-queue?status=pending — backs the review/release screen. Small tab at this
