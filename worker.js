@@ -15067,6 +15067,18 @@ const SMS_PERMANENT_ERRORS = {
   30006: 'that is a landline or an unreachable carrier',
 };
 const SMS_NEVER_REMEMBER_CODES = [21408, 21610];   // fixed by a settings change / the person texting START: do not block future sends because of them
+// The ONLY codes that may stop a later text to the same number: the number itself is wrong (invalid / not a mobile). Temporary trouble (30003 handset off,
+// 30005, 30006, 21612) never blocks a later text - the phone may simply have been off. Each block is logged to the failure ledger (P2), not only SMS_Logs.
+const SMS_KNOWN_BAD_CODES = [21211, 21614];
+// Pure. Any phone number inside a piece of Twilio error text becomes ***<last 4 digits>. Twilio echoes the To number in some errors (21608 and others);
+// nothing stored or logged (Message_Queue Error_Reason, SMS_Logs Note, the failure ledger) may carry a full number.
+function smsMaskPhones(s) {
+  const mask = (m) => '***' + m.replace(/\D/g, '').slice(-4);
+  return String(s == null ? '' : s)
+    .replace(/(?<![A-Za-z0-9])\+\d[\d\s().-]{6,}\d(?![A-Za-z0-9])/g, mask)
+    .replace(/(?<![A-Za-z0-9*])\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?![A-Za-z0-9])/g, mask)
+    .replace(/(?<![A-Za-z0-9*])\d{10,}(?![A-Za-z0-9])/g, mask);
+}
 // Pure. { code, permanent, reason } from a Twilio send response (or '' code when it was a success).
 function smsErrorInfo(r) {
   const raw = r && (r.code != null ? r.code : r.error_code);
