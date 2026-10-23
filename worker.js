@@ -16037,6 +16037,40 @@ function tenantForQueuedText(tenants, phone, propertyId) {
   return m.find(t => !tenantMovedOut(t)) || m[0] || null;
 }
 
+// Pure. Message_Queue values grid (header row first) -> array of row objects. Index i is sheet row i + 2.
+function mqRowsToObjects(values) {
+  const v = values || [], h = v[0] || [];
+  return v.slice(1).map(r => { const o = {}; h.forEach((k, i) => { o[k] = r && r[i] != null ? r[i] : ''; }); return o; });
+}
+// Pure. Is `phone` Brett's own? Config admin_phone is the account owner's number; a Vendors row with In_House = TRUE is Brett himself.
+function smsIsOwnNumber(phone, cfg, vendor) {
+  const p = normalizePhone(phone);
+  if (!p) return false;
+  if (cfg && cfg.admin_phone && normalizePhone(cfg.admin_phone) === p) return true;
+  return !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
+}
+const SMS_NUDGE_MIN_GAP_MS = 72 * 3600000;        // Brett, Oct 23 2026: at most one automatic nudge per person per work order every 3 days
+const SMS_KNOWN_BAD_WINDOW_MS = 30 * 86400000;    // a number Twilio permanently refused (invalid, not mobile, cannot route) is not retried for 30 days
+// Pure. What happened to a send, as Message_Queue wants it written: { sent, status, sid, errorCode, reason, duplicate, regionBlocked, permanent }.
+function smsSendOutcome(result) {
+  if (result && result.sid) return { sent: true, status: 'sent', sid: result.sid, errorCode: '', reason: '' };
+  if (result && result.duplicate) return { sent: false, status: 'skipped', sid: '', errorCode: '', reason: 'duplicate: ' + (result.reason || 'the same text was already sent'), duplicate: true };
+  if (result && result.region_blocked) return { sent: false, status: 'failed', sid: '', errorCode: 'blocked_region', reason: result.reason || 'text not sent: destination outside enabled regions', regionBlocked: true };
+  if (result && result.staged) return { sent: false, status: 'failed', sid: '', errorCode: '', reason: 'staging stub: nothing was really sent' };
+  const e = smsErrorInfo(result);
+  const why = e.code ? 'Twilio error ' + e.code + ': ' + e.reason + (e.permanent ? ' (final - this text will not be retried)' : '') : String((result && (result.error || result.message)) || 'Twilio gave no message sid').slice(0, 160);
+  return { sent: false, status: 'failed', sid: '', errorCode: e.code ? String(e.code) : '', reason: why, permanent: e.permanent };
+}
+
+// For the legacy sendSMS call sites that used to ignore Twilio's answer. A text that was switched off (skipped), stubbed (staging), held back as a
+// duplicate or refused for its region is not a failure; anything else without a message sid is reported to the ledger (P0, it is a text). Returns true when it went.
+async function smsReportIfFailed(env, where, ref, r) {
+  if (r && (r.sid || r.staged || r.skipped)) return !!(r && r.sid);
+  const o = smsSendOutcome(r);
+  await reportFailure(env, { system: 'hub', source: 'worker', where: where, ref: ref || '', severity: o.permanent ? 'P2' : 'P0', message: 'a text was not sent: ' + o.reason });
+  return false;
+}
+
 // The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types. Always writes a
 // Message_Queue row first (queue-write-first, per the brief's Build Order step 3), regardless
 // of gate outcome — then sends immediately only if every applicable gate is open, redirecting
