@@ -11107,6 +11107,13 @@ function submitHubTimeEntry(woId) {
   var bill   = (document.getElementById('ht-bill-'+woId)||{}).checked;
   var msgEl  = document.getElementById('ht-msg-'+woId);
 
+  // Oct 23 2026 (invoice 1767): billable time with no customer-facing description is how an owner ends up with an invoice
+  // that just says "Billable hours". Stop it here, at entry, instead of discovering it after the invoice has gone out.
+  if (bill && !String(invDesc || '').trim()) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Billable time needs an Invoice Description — it is what the owner reads on the invoice. Say what was done.</span>';
+    return;
+  }
+
   // Determine duration source
   var durMinRaw = null;
   var startDT = null, endDT = null;
