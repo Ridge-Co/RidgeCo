@@ -165,6 +165,8 @@ const _hubWorkerCore = {
     const path = url.pathname;
     env = __meterReqEnv(env, request, path);   // Oct 19 2026: child env carrying this request's label for the read meter
     env.__STAGING__ = isStaging(env, url);
+    env.__SELF_ORIGIN__ = url.origin;   // the host this request came in on (used to build tenant short links on the right Worker: prod or staging)
+    if (request.method === 'GET' && path.startsWith('/r/') && path.length > 3 && path.indexOf('/', 3) < 0) return await deliveryShortRedirect(env, path.slice(3), request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC tenant short link (stateless, signed); see deliveryShortRedirect
     // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
     // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
     // Throttled, never throws, never runs on production.
@@ -7890,6 +7892,7 @@ async function intakeSmsAdmin(env, message, woId, property) {
     const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_alert', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, property: property || null, message_body: message, bypassQuietHours: true });
     if (r && r.sent) return 'sent';
     if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    if (env.__STAGING__ ?? isStaging(env)) return 'STAGING STUB: the text was logged only, nothing was sent (this is the test server)';
     return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
   } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
 }
@@ -34283,21 +34286,17 @@ function deliveryLongDate(iso) {
 }
 // SMS segments: GSM-7 text is 160 for one segment and 153 per segment after that (all our tenant text is plain ASCII, so GSM-7).
 function deliverySmsSegments(s) { const n = String(s || '').length; return n === 0 ? 0 : (n <= 160 ? 1 : Math.ceil(n / 153)); }
-// o: { kind: 'request'|'changed'|'cancel', first, assistant, owner, item, street, date, window, link, firstText }
+// "2026-10-18" -> "10/18/26" (the tenant text: terse, unambiguous, plain ASCII).
+function deliveryDateYY(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '')); return m ? (+m[2]) + '/' + (+m[3]) + '/' + m[1].slice(2) : ''; }
+// Oct 23 2026 (Brett): the tenant text is a terse summary; the warm wording, street, haul-away and "may be rescheduled" lines live on the RSVP page.
+// o: { kind: 'request'|'changed'|'cancel', item, date, window, link }.  Plain ASCII only (stays GSM-7).
 function deliveryTenantText(o) {
-  const first = o.first || 'there', item = String(o.item || 'appliance').toLowerCase(), street = o.street || 'your home';
-  const when = [deliveryShortDate(o.date) ? 'on ' + deliveryShortDate(o.date) : '', deliveryWindowHuman(o.window)].filter(Boolean).join(', ');
+  const item = String(o.item || 'appliance').toLowerCase();
+  const when = [deliveryWindowHuman(o.window), deliveryDateYY(o.date)].filter(Boolean).join(' ');
   let msg;
-  if (o.kind === 'cancel') {
-    msg = "Hi " + first + ", it's Ridge Co. The delivery of your new " + item + " at " + street + " is no longer scheduled, so there is no need to be home. We will let you know if a new date is set. Thank you!";
-  } else if (o.kind === 'changed') {
-    msg = "Hi " + first + ", it's Ridge Co. The delivery of your new " + item + " at " + street + " has changed" + (when ? ' to ' + when.replace(/^on /, '') : '') + ". Could you still be home to let the delivery team in? Please tap here to update your answer: " + o.link +
-      "\nIf you can't make it, no worries. We'll do our best to be there instead. Thank you!";
-  } else {
-    msg = "Hi " + first + ", it's " + (o.assistant || 'Riley') + " with Ridge Co Property Maintenance, on behalf of " + (o.owner || 'your property owner') + ". A new " + item + " is scheduled for delivery at " + street + (when ? ' ' + when : '') +
-      ". Could you be home to let the delivery team in and have the old one hauled away? Please tap here to let us know: " + o.link +
-      "\nIf you can't make it, no worries. We'll do our best to be there instead, though the delivery may need to be rescheduled. Thank you!";
-  }
+  if (o.kind === 'cancel') msg = item.charAt(0).toUpperCase() + item.slice(1) + ' delivery is no longer scheduled. No need to be home.';
+  else if (o.kind === 'changed') msg = 'Delivery changed: ' + item + (when ? ' now ' + when : '') + '. Can you be there? ' + o.link;
+  else msg = 'New ' + item + ' ordered.' + (when ? ' Delivery ' + when + '.' : '') + ' Please let us know if you can be there: ' + o.link;
   return deliveryPlainSms(msg, true);
 }
 // ═══ DELIVERY-EMAIL-PURE-END ═══
@@ -34365,6 +34364,7 @@ async function deliveryTelemetry(env, t0, ok, notes) {
 }
 
 // Creates the install WO once per delivery. Returns {wo_id, created, error}. Never throws.
+const DELIVERY_WO_HEAL_AFTER_MS = 45000;
 async function deliveryEnsureWO(env, row, p, msgId, adminName) {
   const existing = String(row.Linked_WO_IDs || '').split(',').map(x => x.trim()).filter(Boolean)[0];
   if (existing) return { wo_id: existing, created: false, error: '' };
@@ -34407,6 +34407,41 @@ async function deliveryRsvpToken(env, id) {
   return String(id) + '.' + (await _hmac('delivery-rsvp|' + String(id), env.WORKER_SECRET)).slice(0, 16);
 }
 function deliveryRsvpLink(token) { return PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE + '?t=' + encodeURIComponent(token); }
+// ── Short link (Oct 23 2026, Brett: shorter links). STATELESS: nothing is stored. The code is "<delivery id>.<8 chars>", the 8 chars being the first 48 bits of
+// HMAC-SHA256(WORKER_SECRET, "delivery-short|<id>") (a different message than the page token, so one cannot be derived from the other). GET <base>/r/<code> answers
+// 302 -> PORTAL_BASE/rsvp.html?t=<full token>. Tied to the delivery id (not the date), so it survives a reschedule. Expiry stays with the page/API: the redirect never reads
+// the sheet, and the page + API give a bad code and an expired one the same "link not working" result.
+const DELIVERY_SHORT_PATH = '/r/';
+async function deliveryShortCode(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-short|' + String(id), env.WORKER_SECRET)).slice(0, 8);
+}
+// Base of the short link: Config Delivery_Link_Base (set to e.g. https://ridgeco.app once that domain is attached to this Worker) > the host this request came in on > WORKER_BASE_URL > production.
+function deliveryLinkBase(env, cfg) {
+  const ok = v => { v = String(v || '').trim().replace(/\/+$/, ''); return /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(v) ? v : ''; };
+  return ok(cfg && cfg.Delivery_Link_Base) || ok(env.__SELF_ORIGIN__) || ok(env.WORKER_BASE_URL) || 'https://maintenance-hub.brett-2f8.workers.dev';
+}
+async function deliveryShortLink(env, cfg, id) { return deliveryLinkBase(env, cfg) + DELIVERY_SHORT_PATH + (await deliveryShortCode(env, id)); }
+async function deliveryShortVerify(env, code) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{8})$/.exec(String(code || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-short|' + m[1], env.WORKER_SECRET)).slice(0, 8);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// GET /r/<code>  (PUBLIC). Rate limit per IP (same bucket as the page API). A bad code goes to the page with a dead token, so it shows the same friendly "link not working" as an expired one.
+async function deliveryShortRedirect(env, code, ip) {
+  const page = PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE;
+  const go = (t) => new Response(null, { status: 302, headers: { 'Location': page + '?t=' + encodeURIComponent(t), 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+  try {
+    if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return new Response('That was a lot of taps at once. Please wait a minute and try again.', { status: 429, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    const id = await deliveryShortVerify(env, code);
+    if (!id) return go('x');
+    return go(await deliveryRsvpToken(env, id));
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'short link redirect failed: ' + String((e && e.message) || e));
+    return go('x');
+  }
+}
 function deliveryCtEq(a, b) { a = String(a); b = String(b); let d = a.length ^ b.length; const n = Math.max(a.length, b.length); for (let i = 0; i < n; i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; }
 // Returns the delivery id when the token's signature is genuine, else null. Same null for every kind of bad token.
 async function deliveryRsvpVerify(env, t) {
@@ -34467,7 +34502,7 @@ async function deliveryTenantNotice(env, o) {
     const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
     const ctx = { first: tenant.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
     let link = '';
-    if (variant !== 'cancel') link = deliveryRsvpLink(await deliveryRsvpToken(env, o.deliveryId || row.ID));
+    if (variant !== 'cancel') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
     let msg;
     if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
       msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
@@ -34638,7 +34673,10 @@ async function deliveryEmailIntake(env, body) {
     if (seenRow) {
       let wo = { wo_id: String(seenRow.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
       // A previous run made the row but could not make its WO (Sheets hiccup): finish that job now, loudly.
-      if (!dry && seenRow.Property_ID && !wo.wo_id && seenRow.Active !== 'FALSE' && ['Cancelled', 'Needs Review', 'Delivered'].indexOf(seenRow.Status) < 0) {
+      // ...but NOT while the first attempt may still be creating that WO (two mailboxes deliver the same email at the same instant; the row exists a moment before its WO is linked):
+      // a row younger than DELIVERY_WO_HEAL_AFTER_MS is left to the attempt that made it. If that attempt died, it reported itself and the Apps Script retries a minute later.
+      const _age = new Date().getTime() - Date.parse(seenRow.Created_Date || '');
+      if (!dry && seenRow.Property_ID && !wo.wo_id && seenRow.Active !== 'FALSE' && ['Cancelled', 'Needs Review', 'Delivered'].indexOf(seenRow.Status) < 0 && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
         stage = 'wo-heal';
         wo = await deliveryEnsureWO(env, seenRow, p, msgId, adminName);
         if (wo.error) { await deliveryTelemetry(env, t0, false, 'WO heal failed for delivery ' + seenRow.ID + ': ' + wo.error); return json({ success: false, error: 'Work order could not be created for delivery ' + seenRow.ID + ': ' + wo.error, delivery_id: String(seenRow.ID), stage }, 500); }
