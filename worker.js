@@ -16153,6 +16153,7 @@ async function smsGatedSend(env, opts) {
   const _qObjs = mqRowsToObjects(rows);
   const _isNudge = String(opts.message_type || '').indexOf('vendor_nudge_') === 0;
   const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
+  const _repeatOk = opts.allowRepeat === true || kind === 'admin' || smsIsOwnNumber(recipientPhone, cfg, null);   // an alert to Brett himself is never held back as a repeat
   if (sendOk && recipientPhone) {
     let _sup = null;
     if (_isNudge && smsIsOwnNumber(recipientPhone, cfg, opts.vendor)) _sup = { reason: 'own_number', status: 'suppressed_own_number', note: 'automatic nudge to the account owner\'s own number is never sent' };
