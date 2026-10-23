@@ -44,7 +44,9 @@ ok(offenders.length === 0, 'no hand-written status array outside wo-status.js. U
 // ---- 3. every group keeps the members of the list it replaced -------------------------------
 const LEGACY = {
   FIELD_OPEN: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'],
+  OPEN_WORK: ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'In Progress', 'On Hold'],
   ACTIVE: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Complete', 'Pending Invoice'],
+  ACTIVE_OWNER: ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Complete', 'Pending Invoice'],
   VENDOR_SETTABLE: ['Accepted', 'In Progress', 'On Hold', 'Complete'],
   VENDOR_STARTED: ['Accepted', 'In Progress', 'On Hold'],
   PRE_START: ['Assigned', 'Accepted'],
@@ -66,7 +68,7 @@ const LEGACY = {
   TURNOVER_DONE: ['Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Closed'],
   STALE_ACTIVE: ['New', 'Assigned', 'Accepted', 'In Progress'],
   DASH_NOT_OPEN: ['Complete', 'Paid', 'Pending Invoice', 'Invoiced', 'Pending Payment', 'Paid by Customer', 'Cancelled', 'Canceled', 'Closed', 'Void'],
-  DASH_OPEN_LEGACY: ['New', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],
+  DASH_OPEN_LEGACY: ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],
   TENANT_OPEN: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Pending Invoice'],
   TENANT_TIMELINE: ['New', 'Assigned', 'Accepted', 'In Progress', 'Complete'],
   TENANT_TIMELINE_STEPS: ['New', 'Assigned', 'In Progress', 'Complete'],
@@ -93,9 +95,36 @@ ok(W.inSet('FIELD_OPEN', 'New') && !W.inSet('FIELD_OPEN', 'Complete') && W.inSet
 for (const s of ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Complete', 'Pending Invoice', 'Invoiced', 'Paid', 'Cancelled', 'Declined']) ok(W.isKnown(s), `${s} is a known status`);
 ok(!W.isKnown('Estimat Requested') && !W.isKnown(''), 'a typo or blank is NOT known');
 ok(W.order('New') < W.order('Assigned') && W.order('Complete') < W.order('Invoiced') && W.order('Invoiced') < W.order('Paid') && W.order('Cancelled') === -1, 'order() follows the lifecycle; side exits are -1');
-// Behaviour pin: WOs sitting in Estimate Requested are in NO open group today (they do not show on portals or open counts).
-// That is the pre-existing behaviour, kept on purpose and reported to Brett; change it as its own decision.
-ok(Object.entries(W.sets).every(([k, v]) => !v.includes('Estimate Requested')), 'Estimate Requested is in no group, exactly as before (reported, not silently changed)');
+// Oct 23 2026 (Ops_Build_Queue #175): WOs in 'Estimate Requested' (made by /scope/to-wo) used to be in NO group, so they vanished
+// from owner lists, the admin Open filter and property open counts. They now belong to EXACTLY these three groups, and to no
+// behaviour-driving group (a vendor bill must not auto-complete one, the duplicate guard / stale detector / tenant list /
+// vendor portal / receipt matching must not start treating it as field work).
+const EXPECT_ER = ['ACTIVE_OWNER', 'DASH_OPEN_LEGACY', 'OPEN_WORK'];
+const inGroups = Object.entries(W.sets).filter(([k, v]) => v.includes('Estimate Requested')).map(([k]) => k).sort();
+ok(JSON.stringify(inGroups) === JSON.stringify(EXPECT_ER), 'Estimate Requested is in exactly ' + EXPECT_ER.join(', ') + ' (found: ' + inGroups.join(', ') + ')');
+for (const g of ['FIELD_OPEN', 'ACTIVE', 'TENANT_OPEN', 'TENANT_TIMELINE', 'STALE_ACTIVE', 'VENDOR_SETTABLE', 'VENDOR_STARTED', 'PRE_START', 'DASH_NOT_OPEN', 'RECEIPT_CLOSED', 'DIGEST_CLOSED'])
+  ok(!W.inSet(g, 'Estimate Requested'), g + ' deliberately does NOT contain Estimate Requested');
+ok(JSON.stringify([...W.sets.OPEN_WORK].filter(s => s !== 'Estimate Requested')) === JSON.stringify([...W.sets.FIELD_OPEN]), 'OPEN_WORK is FIELD_OPEN plus Estimate Requested and nothing else');
+ok(JSON.stringify([...W.sets.ACTIVE_OWNER].filter(s => s !== 'Estimate Requested')) === JSON.stringify([...W.sets.ACTIVE]), 'ACTIVE_OWNER is ACTIVE plus Estimate Requested and nothing else');
+// The three live WOs in 'Estimate Requested' (Oct 14 count) now appear in the owner list, admin Open filter, property counts and are
+// not dragged into behaviour: simulate each consumer's own filter on sample rows.
+const rows = [{ ID: 'WO-A', Status: 'Estimate Requested' }, { ID: 'WO-B', Status: 'Estimate Requested' }, { ID: 'WO-C', Status: 'Estimate Requested' }, { ID: 'WO-D', Status: 'In Progress' }, { ID: 'WO-E', Status: 'Paid' }];
+ok(rows.filter(r => W.inSet('ACTIVE_OWNER', r.Status)).length === 4, 'owner open list shows the 3 estimate requests + the in-progress job, not the paid one');
+ok(rows.filter(r => W.inSet('DASH_OPEN_LEGACY', r.Status)).length === 4, 'admin Open filter shows the 3 estimate requests + the in-progress job');
+ok(rows.filter(r => W.inSet('OPEN_WORK', r.Status)).length === 4, 'property open counts include the 3 estimate requests');
+ok(rows.filter(r => W.inSet('FIELD_OPEN', r.Status)).length === 1, 'behaviour group FIELD_OPEN (bill auto-complete, duplicate guard) still sees only the real field job');
+ok(rows.filter(r => W.inSet('ACTIVE', r.Status)).length === 1, 'tenant list / vendor portal group ACTIVE still sees only the real field job');
+
+// Source pins: the right consumer uses the right group.
+const idx = read('index.html'), own = read('owner.html');
+ok(/var OPEN_WO = WOStatus\.sets\.OPEN_WORK;\n\s+var daysOpen/.test(idx), 'admin WO card aging badge uses OPEN_WORK');
+ok(/var OPEN_STATUSES = WOStatus\.sets\.OPEN_WORK;\n\n\s+el\.innerHTML = '<div style="color:var\(--muted\);font-size:11px;margin-bottom:8px">'\+props\.length/.test(idx), 'property cards open count uses OPEN_WORK');
+ok(/var OPEN_STATUSES = WOStatus\.sets\.ACTIVE_OWNER;/.test(own), 'owner portal open list uses ACTIVE_OWNER');
+ok(/ownerPropIds\.has\(w\.Property_ID\)[^\n]*WOStatus\.sets\.ACTIVE_OWNER\.includes\(w\.Status\)/.test(worker), 'server owner WO list uses WOStatus.sets.ACTIVE_OWNER');
+ok(/const wos = workorders\.filter\(w => \{ if \(!includeClosed && !OPEN_WO_STATUSES\.includes\(w\.Status\)\) return false; return tenantCanSeeWO\(tenant, w\); \}\);/.test(worker), 'server tenant WO list still uses OPEN_WO_STATUSES (tenants do not see estimate requests)');
+ok(/const preComplete = WOStatus\.sets\.FIELD_OPEN;/.test(worker), 'vendor-bill auto-complete still uses FIELD_OPEN (a bill must not complete an estimate request)');
+ok(/const WO_DUP_ALLOWED_STATUSES = WOStatus\.sets\.FIELD_OPEN;/.test(worker), 'duplicate-WO guard still uses FIELD_OPEN');
+for (const [f, s] of [['index.html', idx], ['owner.html', own]]) ok(/\.badge-estimaterequested/.test(s), f + ' styles the Estimate Requested badge (it rendered unstyled before)');
 
 // ---- 5. pages load the module before they use it --------------------------------------------
 for (const f of ['index.html', 'owner.html', 'tenant.html', 'wo.html', 'receipt-reconciler.html']) {
