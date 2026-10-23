@@ -2668,6 +2668,20 @@ function maybeOpenWOFromURL() {
   } catch (e) {}
 }
 
+// WO detail -> "Create delivery": opens deliveries.html with the WO (and its property/unit) pre-linked.
+// deliveries.html already reads ?wo_id= / ?property_id= / ?unit_id= (its PREFILL deep link).
+function deliveryCreateUrl(wo) {
+  var q = ['wo_id=' + encodeURIComponent(wo.ID || '')];
+  if (wo.Property_ID) q.push('property_id=' + encodeURIComponent(wo.Property_ID));
+  if (wo.Unit_ID) q.push('unit_id=' + encodeURIComponent(wo.Unit_ID));
+  return 'deliveries.html?' + q.join('&');
+}
+function openCreateDelivery(wo) {
+  var url = deliveryCreateUrl(wo);
+  var w = window.open(url, '_blank');
+  if (!w) { window.location.href = url; } // popup blocked: navigate instead of doing nothing
+}
+
 function openWODetail(woId) {
   console.log('[openWODetail] called woId=', woId, 'workorders count=', state.workorders && state.workorders.length);
   var wo = state.workorders.find(function(w){return w.ID===woId;});
@@ -3075,6 +3089,7 @@ function openWODetail(woId) {
   actions.appendChild(qsDiv);
   addBtn(wo.Vendor_ID ? '🔄 Change Vendor' : 'Assign Vendor', wo.Vendor_ID ? 'secondary' : '', function(){openAssignModal(woId);});
   addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
+  addBtn('🚚 Create delivery','secondary',function(){openCreateDelivery(wo);});
   if (wo.Vendor_ID) {
     addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
     addBtn('🧾 Request Invoice','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'invoice');});

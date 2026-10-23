@@ -28,6 +28,7 @@
   .btn.ghost{background:transparent}
   .btn:active{opacity:.85}
   .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
+  .pill.bad{background:#fbe5e2;color:var(--danger)}
   .pill.ok{background:#e7f6ec;color:var(--accent2)} .pill.due{background:#fdf3e0;color:var(--warn)} .pill.new{background:#eaf1fd;color:var(--accent)}
   input,select,textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text)}
   textarea{min-height:64px;resize:vertical}
@@ -40,7 +41,16 @@
   .dcard{border-top:1px solid var(--border);padding:12px 0}
   .dcard:first-child{border-top:none}
   .dtitle{font-weight:700}
-  .dline{font-size:13px;color:var(--muted);margin-top:2px}
+  .dline{font-size:13px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+  .dline.notes{white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
+  .dtitle{overflow-wrap:anywhere;min-width:0}
+  .card.review-card{border:2px solid var(--warn);background:#fff8e8}
+  .dcard.review .dtitle{color:var(--danger)}
+  .dcard.cancelled .dtitle{text-decoration:line-through;color:var(--muted)}
+  .review-hint{font-size:13px;color:#7a5a00;margin:0 0 6px}
+  .src-badge{display:inline-block;padding:1px 7px;border-radius:6px;font-size:11px;font-weight:700;background:var(--chip);color:var(--muted);margin-left:4px;vertical-align:1px;white-space:nowrap}
+  .src-badge[data-src="email-watcher"]{background:#eaf1fd;color:var(--accent)}
+  .driver-note{display:inline-block;margin-top:4px;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:700;background:#fdf3e0;color:var(--warn)}
   .actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
   .hide{display:none}
   .banner{background:#eaf1fd;border:1px solid #cadcff;color:#274b8f;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
@@ -169,7 +179,7 @@
     </div>
 
     <label class="fld">Who meets the delivery</label>
-    <select id="df-onsite"><option value="tenant">Tenant (default)</option><option value="me">Me / Ridge Co</option><option value="vendor">A vendor</option><option value="backup">Backup contact</option></select>
+    <select id="df-onsite"><option value="tenant">Tenant (default)</option><option value="brett">Brett (Ridge Co)</option><option value="me">Me / Ridge Co</option><option value="vendor">A vendor</option><option value="backup">Backup contact</option></select>
     <div class="grid2">
       <div><label class="fld">Backup contact</label><input id="df-backup" placeholder="name"></div>
       <div><label class="fld">Backup phone</label><input id="df-backupphone" type="tel" placeholder="410-555-1212"></div>
@@ -180,7 +190,7 @@
 
     <div id="df-editonly" class="hide">
       <label class="fld">Status</label>
-      <select id="df-status"><option>Ordered</option><option>Scheduled</option><option>Window-Set</option><option>En-Route</option><option>Approaching</option><option>Arrived</option><option>Delivered</option><option>Exception</option><option>Rescheduled</option><option>Cancelled</option></select>
+      <select id="df-status"><option>Ordered</option><option>Scheduled</option><option>Window-Set</option><option>En-Route</option><option>Approaching</option><option>Arrived</option><option>Delivered</option><option>Exception</option><option>Rescheduled</option><option>Cancelled</option><option>Needs Review</option></select>
       <label class="fld">Linked work order(s)</label>
       <input id="df-woids" placeholder="WO-1042">
     </div>
@@ -202,6 +212,7 @@ var SECRET_KEY = 'mh_auth';
 var AUTH_TOKEN = '';
 var DELS = [], TODAY = '';
 var PROPS = [], UNITS = [], TENANTS = [];
+var DELS_OK = false; // true only after /deliveries loaded cleanly (duplicate-order check depends on it)
 var PREFILL = null; // from ?wo_id=&property_id=... when opened from a WO
 
 function qs(k){ try{ return new URLSearchParams(window.location.search).get(k)||''; }catch(e){ return ''; } }
@@ -249,13 +260,14 @@ function loadEntities(){
 }
 function load(){
   return api('GET','/deliveries').then(function(d){
-    DELS=(d&&d.deliveries)||[]; TODAY=(d&&d.today)||'';
+    if(!d || d.error || !Array.isArray(d.deliveries)) throw new Error((d&&d.error)||'unexpected response');
+    DELS=d.deliveries; TODAY=d.today||''; DELS_OK=true;
     render();
-  }).catch(function(e){ document.getElementById('lists').innerHTML='<p class="muted">Could not load ('+esc(e.message)+').</p>'; });
+  }).catch(function(e){ DELS_OK=false; document.getElementById('lists').innerHTML='<div class="banner" style="background:#fbe5e2;border-color:#f0b9b2;color:#8a2a1f">Could not load deliveries ('+esc(e&&e.message||'unknown error')+'). Reload the page to try again.</div>'; });
 }
 function statusPill(s){
-  var done=['Delivered','Cancelled'], warn=['Exception','Rescheduled'], live=['En-Route','Approaching','Arrived'];
-  var cls='new'; if(done.indexOf(s)>=0)cls='ok'; else if(warn.indexOf(s)>=0)cls='due'; else if(live.indexOf(s)>=0)cls='due';
+  var done=['Delivered'], bad=['Cancelled','Needs Review'], warn=['Exception','Rescheduled'], live=['En-Route','Approaching','Arrived'];
+  var cls='new'; if(bad.indexOf(s)>=0)cls='bad'; else if(done.indexOf(s)>=0)cls='ok'; else if(warn.indexOf(s)>=0)cls='due'; else if(live.indexOf(s)>=0)cls='due';
   return '<span class="pill '+cls+'">'+esc(s||'Ordered')+'</span>';
 }
 function whereText(d){
@@ -264,7 +276,8 @@ function whereText(d){
 }
 function relayTarget(d){
   if (d.onsite_contact==='tenant' && d.tenant_phone) return { phone:d.tenant_phone, name:(d.tenant_name||'tenant') };
-  if (d.onsite_contact_phone) return { phone:d.onsite_contact_phone, name:'on-site contact' };
+  // a 'brett' row's onsite phone IS Brett's own number: never offer to relay to him, fall through to the tenant
+  if (d.onsite_contact!=='brett' && d.onsite_contact_phone) return { phone:d.onsite_contact_phone, name:'on-site contact' };
   if (d.tenant_phone) return { phone:d.tenant_phone, name:(d.tenant_name||'tenant') };
   return null;
 }
@@ -295,8 +308,9 @@ function relay(id){
   }).catch(function(e){ toast('Error: '+(e&&e.message||'unknown error')); });
 }
 function bucket(d){
-  var done=['Delivered','Cancelled'];
-  if(done.indexOf(d.status)>=0) return 'done';
+  if(d.status==='Needs Review') return 'review';   // emails the watcher could not place: always on top, any date
+  if(d.status==='Cancelled') return (d.expected_date && d.expected_date>=TODAY) ? 'cancelled' : 'done';
+  if(d.status==='Delivered') return 'done';
   if(!d.expected_date) return 'nodate';
   if(d.expected_date===TODAY) return 'today';
   if(d.expected_date>TODAY) return 'upcoming';
@@ -305,34 +319,56 @@ function bucket(d){
 function render(){
   var el=document.getElementById('lists');
   if(!DELS.length){ el.innerHTML='<div class="card"><p class="muted">No deliveries yet. Tap <b>+ New delivery</b> to add one.</p></div>'; return; }
-  var groups={ today:[], upcoming:[], past:[], nodate:[], done:[] };
+  var groups={ review:[], today:[], upcoming:[], cancelled:[], past:[], nodate:[], done:[] };
   DELS.forEach(function(d){ groups[bucket(d)].push(d); });
   var html='';
+  html+=section('🔎 Needs review — emails I could not place', groups.review, false, 'review');
   html+=section('📦 Today', groups.today, true);
   html+=section('🗓 Upcoming', groups.upcoming, true);
+  html+=section('🚫 Cancelled (upcoming)', groups.cancelled, false);
   html+=section('⚠ Past date — not yet delivered', groups.past, true);
   html+=section('📝 Needs a date', groups.nodate, true);
   html+=section('✓ Delivered / closed', groups.done, false);
   el.innerHTML=html||'<div class="card"><p class="muted">Nothing to show.</p></div>';
 }
-function section(title, arr, showRelay){
+function section(title, arr, showRelay, kind){
   if(!arr.length) return '';
-  return '<div class="sec-title">'+title+' ('+arr.length+')</div><div class="card">'+arr.map(function(d){ return dcard(d, showRelay); }).join('')+'</div>';
+  var isRev = kind==='review';
+  return '<div class="sec-title"'+(isRev?' id="sec-review" style="color:var(--danger)"':'')+'>'+title+' ('+arr.length+')</div>'
+    + '<div class="card'+(isRev?' review-card':'')+'">'
+    + (isRev?'<p class="review-hint">The watcher read these store emails but could not file them. Tap Edit to set the property and date, or remove the row if it is not a real delivery.</p>':'')
+    + arr.map(function(d){ return dcard(d, showRelay); }).join('')+'</div>';
+}
+function contactLabel(d){
+  var c = d.onsite_contact || 'tenant';
+  if (c==='tenant') return d.tenant_name ? ('Tenant: '+esc(d.tenant_name)) : 'Tenant';
+  var nm = String(c); nm = nm.charAt(0).toUpperCase()+nm.slice(1);
+  return 'Meets: '+esc(nm);
+}
+function srcBadge(d){
+  var s = String(d.source||''); if(!s) return '';
+  var label = s==='email-watcher' ? '✉ email' : (s==='manual' ? 'manual' : s);
+  return '<span class="src-badge" data-src="'+esc(s)+'" title="Source: '+esc(s)+'">'+esc(label)+'</span>';
+}
+function driverNote(d){
+  return /Driver calls Brett/i.test(d.notes||'') ? '<div><span class="driver-note">📞 Driver calls: Brett</span></div>' : '';
 }
 function dcard(d, showRelay){
-  var item=[d.item_type,d.make_model].filter(Boolean).join(' ')||'(item?)';
+  var item=[d.item_type,d.make_model].filter(Boolean).join(' ')||(d.status==='Needs Review'?'Store email (not filed)':'(item?)');
   var win=d.expected_window?(' · '+esc(d.expected_window)):'';
-  var contact = d.onsite_contact==='tenant' ? (d.tenant_name?('Tenant: '+esc(d.tenant_name)):'Tenant') : ('Meets: '+esc(d.onsite_contact));
+  var contact = contactLabel(d);
   var wo = d.linked_wo_ids?(' · '+esc(d.linked_wo_ids)):'';
   var order = d.order_number?(esc(d.store||'')+' #'+esc(d.order_number)):esc(d.store||'');
   var tgt=relayTarget(d);
-  var relayBtn = (showRelay && tgt) ? '<button class="btn small go" onclick="relay(\''+d.id+'\')">✉ Relay to tenant</button>' : '';
-  return '<div class="dcard">'
-    + '<div class="row"><span class="dtitle">'+esc(item)+'</span>'+statusPill(d.status)+'</div>'
+  var relayBtn = (showRelay && tgt) ? '<button class="btn small go" style="min-height:40px" onclick="relay(this.closest(\'.dcard\').getAttribute(\'data-id\'))">✉ Relay to tenant</button>' : '';
+  var cls = d.status==='Needs Review' ? ' review' : (d.status==='Cancelled' ? ' cancelled' : '');
+  return '<div class="dcard'+cls+'" data-id="'+esc(d.id)+'">'
+    + '<div class="row"><span class="dtitle">'+esc(item)+srcBadge(d)+'</span>'+statusPill(d.status)+'</div>'
     + '<div class="dline">'+esc(whereText(d))+(d.expected_date?(' · '+esc(d.expected_date)+win):'')+'</div>'
     + '<div class="dline">'+contact+wo+(order?(' · '+order):'')+'</div>'
-    + (d.notes?('<div class="dline">📝 '+esc(d.notes)+'</div>'):'')
-    + '<div class="actions">'+relayBtn+'<button class="btn small" onclick="openEdit(\''+d.id+'\')">Edit</button></div>'
+    + driverNote(d)
+    + (d.notes?('<div class="dline notes">📝 '+esc(d.notes)+'</div>'):'')
+    + '<div class="actions">'+relayBtn+'<button class="btn small" style="min-height:40px" onclick="openEdit(this.closest(\'.dcard\').getAttribute(\'data-id\'))">Edit</button></div>'
     + '</div>';
 }
 
@@ -433,13 +469,23 @@ function openEdit(id){
   document.getElementById('df-address').value=d.delivery_address||'';
   document.getElementById('df-date').value=d.expected_date||'';
   document.getElementById('df-window').value=d.expected_window||'';
-  document.getElementById('df-onsite').value=d.onsite_contact||'tenant';
+  setSel('df-onsite', d.onsite_contact||'tenant');
   document.getElementById('df-backup').value=d.backup_contact||'';
   document.getElementById('df-backupphone').value=d.backup_phone||'';
   document.getElementById('df-notes').value=d.notes||'';
-  document.getElementById('df-status').value=d.status||'Ordered';
+  setSel('df-status', d.status||'Ordered');
   document.getElementById('df-woids').value=d.linked_wo_ids||'';
   document.getElementById('d-modal').classList.add('open');
+}
+// Select value that is not one of the listed options (e.g. Onsite_Contact 'brett' from the email watcher, or a
+// status added later) must round-trip: otherwise select.value silently becomes '' and Save would blank the field.
+function setSel(id, val){
+  var s = document.getElementById(id); val = val || '';
+  Array.prototype.slice.call(s.querySelectorAll('option[data-dyn]')).forEach(function(o){ o.parentNode.removeChild(o); });
+  if (val && !Array.prototype.some.call(s.options, function(o){ return o.value===val; })) {
+    var o = document.createElement('option'); o.value = val; o.textContent = val; o.setAttribute('data-dyn','1'); s.appendChild(o);
+  }
+  s.value = val;
 }
 function closeD(){ document.getElementById('d-modal').classList.remove('open'); }
 function formBody(){
@@ -461,8 +507,25 @@ function formBody(){
     delivery_notes:document.getElementById('df-notes').value.trim()
   };
 }
+function normOrder(o){ return String(o||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function dupOrder(order, exceptId){
+  var k = normOrder(order); if(!k) return null;
+  return DELS.find(function(x){ return String(x.id)!==String(exceptId||'') && normOrder(x.order_number)===k; }) || null;
+}
 function saveD(btn){
   var id=document.getElementById('df-id').value;
+  if(!id){
+    // CAP audit gap #8: warn (never block) when this Order # is already on the list. Runs BEFORE the button locks so Cancel leaves the form usable.
+    var ord=document.getElementById('df-order').value.trim();
+    if(ord){
+      if(!DELS_OK){
+        if(!confirm('The delivery list did not load, so I could not check whether order '+ord+' is already on it. Add it anyway?')) return;
+      } else {
+        var dup=dupOrder(ord);
+        if(dup && !confirm('Order '+ord+' is already on the list ('+([dup.item_type,dup.make_model].filter(Boolean).join(' ')||'item?')+' · '+(dup.expected_date||'no date')+' · '+(dup.status||'Ordered')+').\n\nAdd another delivery with the same order number?')) return;
+      }
+    }
+  }
   btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
   if(id){
     var f=formBody();
