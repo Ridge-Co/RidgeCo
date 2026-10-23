@@ -16332,7 +16332,7 @@ async function updateMessageQueueRow(env, id, fields, opts) {
     if (opts && opts.sheetRow && Array.isArray(opts.headers) && opts.headers.length) headers = opts.headers;   // nothing to read
     else { const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`); [headers, ...rows] = data.values || [[]]; }
     const idCol = Math.max(0, headers.indexOf('ID'));
-    const isPending = r => r[headers.indexOf('Status')] === 'pending';   // -1 (no Status column) -> undefined -> not pending
+    const isPending = r => { const s = r[headers.indexOf('Status')]; return s === 'pending' || s === 'sending'; };   // -1 (no Status column) -> undefined -> not pending; 'sending' = claimed by a release (D-16)
     let sheetRow = opts && opts.sheetRow ? opts.sheetRow : 0;
     if (!sheetRow) {
       const hits = []; rows.forEach((r, i) => { if (String(r[idCol]) === String(id)) hits.push(i); });
