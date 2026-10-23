@@ -17635,7 +17635,11 @@ async function schedRunNext(env, ctx, opts) {
   const stamped = schedStampFirstSeen(st, now, jobs);   // Oct 20 2026: new / re-enabled jobs get a grace clock (persisted by the claim or heartbeat write below)
   if (stamped.length) base.grace_stamped = stamped;
   const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
-  const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
+  let dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
+  // Oct 23 2026: SHEETS-QUOTA COOLDOWN. A run that hit the shared read quota left Scheduler_State.quota_hot_until in the future; until it passes, only
+  // jobs marked critical (door_watchdog) are started - the rest wait (they stay due and run on the first tick after). A forced run ignores it.
+  const coolPlan = schedCooldownPlan(st, t, dueNow, jobs, force);
+  if (coolPlan.cooling) { dueNow = coolPlan.runnable; base.quota_cooldown = { until: coolPlan.until, held: coolPlan.held }; }
   base.due = force ? only.slice() : dueNow.map(d => d.name);
   if (aiPausedAt) base.ai_paused = true;
 
