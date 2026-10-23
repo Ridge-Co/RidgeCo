@@ -15833,9 +15833,17 @@ async function mqReportFailure(env, id, msg) {
 // opts.sheetRow: edit exactly this sheet row (used right after our own append). Otherwise find the row by id; if an old duplicate id
 // exists, prefer the one still "pending" (the one a person is waiting to act on). Returns true when every field landed.
 async function updateMessageQueueRow(env, id, fields, opts) {
-  try {
-    const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
-    const [headers, ...rows] = data.values || [[]];
+  // Oct 23 2026 (the "lost text" fix): this runs right after a real text went out. It used to re-read the WHOLE Message_Queue tab just to find the
+  // header row (a read the caller had already made), so one Google quota hit left a SENT text marked "pending" and nobody told. Now (1) a caller that
+  // has the headers and the row number passes them (opts.headers + opts.sheetRow) and no read happens at all, and (2) a failing save is tried again
+  // over ~30 s (Google's quota is per MINUTE; the old ~2 s of backoff gave up long before it cleared) before it is reported. The save writes absolute
+  // values, so repeating it is safe. The report (P0, message_queue_update) names what was sent - Twilio SID and phone - so it can be fixed by hand.
+  const waits = (opts && Array.isArray(opts.retryWaitsMs)) ? opts.retryWaitsMs : [2500, 8000, 20000];
+  // One attempt. THROWS on a Sheets failure (retried below); returns false after reporting a data problem that retrying cannot fix.
+  const once = async () => {
+    let headers, rows = [];
+    if (opts && opts.sheetRow && Array.isArray(opts.headers) && opts.headers.length) headers = opts.headers;   // nothing to read
+    else { const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`); [headers, ...rows] = data.values || [[]]; }
     const idCol = Math.max(0, headers.indexOf('ID'));
     const isPending = r => r[headers.indexOf('Status')] === 'pending';   // -1 (no Status column) -> undefined -> not pending
     let sheetRow = opts && opts.sheetRow ? opts.sheetRow : 0;
