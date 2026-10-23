@@ -85,7 +85,8 @@
 var Q=new URLSearchParams(location.search);
 // ?api= may only point at the staging Worker (pre-merge testing); anything else is ignored. Same rule as inspect-book.html.
 var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(Q.get('api')||'')?Q.get('api'):'https://maintenance-hub.brett-2f8.workers.dev';
-var TOKEN=(Q.get('t')||'').trim();
+// The text carries a short link that redirects here with ?t=<token>. Be forgiving about how it arrives: query first, then a #t= fragment.
+var TOKEN=(Q.get('t')||(new URLSearchParams((location.hash||'').replace(/^#/,'')).get('t'))||'').trim();
 var NOTE_MAX=300, TIMEOUT_MS=15000, STALE_MS=45000;
 var ANSWERS=[ {a:'yes',ic:'✓',label:'I’ll be there'}, {a:'no',ic:'✕',label:'I can’t be there'}, {a:'unsure',ic:'?',label:'Not sure yet'} ];
 
