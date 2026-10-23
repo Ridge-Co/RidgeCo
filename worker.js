@@ -16232,16 +16232,25 @@ async function smsGatedSend(env, opts) {
       return { queued_id: id, send_ok: sendOk, sent: false, test_mode: true, gate_snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent', delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
     deliveredTo = _redirect || (testMode ? testRecipient : recipientPhone);
-    const result = await sendSMSRaw(env, deliveredTo, messageBody);
-    sent = !!(result && result.sid);
-    outcome = sent ? 'sent' : 'failed';
-    const _sentSaved = await updateMessageQueueRow(env, id, {
-      Status: sent ? 'sent' : 'failed',
-      Delivered_To: deliveredTo,
-      Sent_Date: new Date().toISOString(),
-      Twilio_Message_SID: (result && result.sid) || '',
-    }, mqOpts);
-    if (_sentSaved === false) queueSaveWarning = (sent ? 'The text WAS sent' : 'The text was NOT sent') + ' but its Message_Queue row could not be updated and may still say "pending" (see Needs Attention: message_queue_update, it names the Twilio SID).';
+    // Destination region (D-16 item 6): refuse BEFORE calling Twilio. One calm ledger row with the row id and the last four digits only.
+    const _dc = smsDestinationCheck(deliveredTo);
+    let result;
+    if (!_dc.ok) {
+      await smsReportRegionBlocked(env, id, _dc);
+      result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + _dc.reason + ')' };
+    } else {
+      try { result = await sendSMSRaw(env, deliveredTo, messageBody, { keepAccents: _spanish, allowRepeat: opts.allowRepeat === true, context: { wo_id: opts.wo_id || '', message_type: opts.message_type || '', recipient_type: kind || '', queue_id: id } }); }
+      catch (e) { result = { error: 'no answer from Twilio: ' + String((e && e.message) || e).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + String((e && e.message) || e).slice(0, 200)); }
+    }
+    const _o = smsSendOutcome(result);
+    sent = _o.sent; errorCode = _o.errorCode; errorReason = _o.reason;
+    outcome = sent ? 'sent' : (_o.duplicate ? 'duplicate_suppressed' : 'failed');
+    const _fin = { Status: _o.status, Delivered_To: sent ? deliveredTo : '', Sent_Date: new Date().toISOString(), Twilio_Message_SID: _o.sid };
+    if (!sent) { _fin.Error_Code = _o.errorCode; _fin.Error_Reason = _o.reason; }
+    const _sentSaved = await updateMessageQueueRow(env, id, _fin, mqOpts);
+    // A permanent Twilio refusal is recorded ONCE as a calm P2 ledger row (the queue row says failed, with the code and the reason); it is never retried.
+    if (!sent && _o.permanent && !_o.regionBlocked) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_undeliverable', ref: 'Message_Queue ' + id, severity: 'P2', message: 'text not delivered, Twilio error ' + _o.errorCode + ' (Message_Queue row ' + id + ', number ending ' + String(recipientPhone).replace(/\D/g, '').slice(-4) + '): ' + _o.reason });
+    if (_sentSaved === false) queueSaveWarning = (sent ? 'The text WAS sent' : 'The text was NOT sent') + ' but its Message_Queue row could not be updated and may still say "sending" (see Needs Attention: message_queue_update, it names the Twilio SID).';
   } else if (sendOk && !recipientPhone) {
     outcome = 'failed_no_phone';
     await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' }, mqOpts);
