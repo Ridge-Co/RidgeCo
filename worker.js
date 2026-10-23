@@ -16334,12 +16334,13 @@ async function mqSendQueuedRowInner(env, row, deliverTo, extraFields) {
   if (!o.sent && o.permanent && !o.regionBlocked) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_undeliverable', ref: 'Message_Queue ' + id, severity: 'P2', message: 'text not delivered, Twilio error ' + o.errorCode + ' (Message_Queue row ' + id + ', number ending ' + String(row.Recipient_Phone || '').replace(/\D/g, '').slice(-4) + '): ' + o.reason });
   return { sent: o.sent, outcome: o };
 }
-// Pure. Rows left "sending" for 15-45 minutes: a text was claimed and its result never confirmed. Reported once or twice, never every sweep.
+// Pure. Rows left "sending" for more than 15 minutes: a text was claimed and its result never confirmed. They are listed on EVERY sweep for as long as
+// they stay that way (the ledger groups repeats into one row with a count), so a stuck text can never scroll out of sight.
 function mqStuckSending(rows, nowMs) {
   return (rows || []).filter(r => {
     if (String(r.Status || '').toLowerCase() !== 'sending') return false;
     const t = Date.parse(r.Sent_Date || r.Created_Date || '');
-    return isFinite(t) && nowMs - t >= 15 * 60000 && nowMs - t < 45 * 60000;
+    return isFinite(t) && nowMs - t >= 15 * 60000;
   });
 }
 
