@@ -211,7 +211,7 @@ const vendorEs = { ID: '9', Name: 'Alex Perez', Phone: '4105551212', Language: '
   ok(sms.includes("kind === 'vendor' && !opts.already_localized") && sms.includes('translateForVendorDetailed'), 'smsGatedSend translates for vendor recipients unless already_localized');
   ok(sms.indexOf('translateForVendorDetailed') < sms.indexOf("sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append"), 'translation happens BEFORE the queue write');
   ok(!/sendSMSRaw\(env, deliveredTo, opts\.message_body\)/.test(sms), 'the raw send uses the (possibly translated) body, not opts.message_body');
-  ok(/MSG_QUEUE_COLS = \[[^\]]*'Original_Body','Translated_To'(?:,'Skip_If_Seen')?\]/.test(src), 'Message_Queue gets Original_Body + Translated_To (ensureColumns adds them to the live tab)');
+  ok(/MSG_QUEUE_COLS = \[[^\]]*'Original_Body','Translated_To'(?:,'Skip_If_Seen')?(?:,'Error_Code','Error_Reason')?\]/.test(src), 'Message_Queue gets Original_Body + Translated_To (ensureColumns adds them to the live tab)');
   ok(/WO_AUDIT_MSG_COLS = \[[^\]]*'Original_Body', 'Translated_To'\]/.test(src), 'WO_Audit gets Original_Body + Translated_To');
   const assign = src.slice(src.indexOf("message_type: 'vendor_job_assigned'") - 200, src.indexOf("message_type: 'vendor_job_assigned'") + 260);
   ok(assign.includes('already_localized: true'), 'assignVendor (hand-built bilingual) is marked already_localized');
