@@ -412,6 +412,7 @@ function dcard(d, showRelay){
   return '<div class="dcard'+cls+'" data-id="'+esc(d.id)+'">'
     + '<div class="row"><span class="dtitle">'+esc(item)+srcBadge(d)+'</span>'+statusPill(d.status)+'</div>'
     + '<div class="dline">'+esc(whereText(d))+(d.expected_date?(' · '+esc(d.expected_date)+win):'')+'</div>'
+    + rsvpBadge(d)
     + '<div class="dline">'+contact+wo+(order?(' · '+order):'')+'</div>'
     + driverNote(d)
     + (d.notes?('<div class="dline notes">📝 '+esc(d.notes)+'</div>'):'')
