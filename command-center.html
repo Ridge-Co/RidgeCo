@@ -263,6 +263,7 @@ function deliveriesCard(x){
       +'<br>'+h(item)
       +'<small>'+h(where(r))+'</small>'
       +'<small>'+h(contact(r))+(order?' · '+h(order):'')+'</small>'
+      +(rsvpHtml(r)?'<small class="rsvp-row">'+rsvpHtml(r)+'</small>':'')
       +(woLinks?'<small>Work order: '+woLinks+'</small>':'')+driver
       +'</div></div>';
   });
