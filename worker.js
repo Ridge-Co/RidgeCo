@@ -14528,7 +14528,12 @@ async function processPendingNotifications(env) {
       const rowIndex=rows.indexOf(row);await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`${NOTIF_QUEUE_TAB}!${col(iSent)}${rowIndex+2}`,values:[['TRUE']]}]});processed++;
     }
     return json({processed});
-  } catch(e){return json({processed:0,error:e.message});}
+  } catch(e){
+    // D-16: a failure part-way (e.g. the "Sent" mark could not be saved) used to be returned and forgotten, and the same row was texted again next sweep.
+    // The gated texts are now protected by the Message_Queue duplicate check; the failure itself is reported so it is never silent.
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'process_pending_notifications', severity: 'P0', message: 'the deferred-text sweep stopped part-way: ' + String((e && e.message) || e).slice(0, 200) });
+    return json({processed:0,error:e.message});
+  }
 }
 
 // ── Vendor nudge/request system (Sep 14 2026, Brett) ───────────────────────────────────────
