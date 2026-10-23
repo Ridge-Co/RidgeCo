@@ -16270,8 +16270,8 @@ async function smsGatedSend(env, opts) {
       await smsReportRegionBlocked(env, id, _dc);
       result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + _dc.reason + ')' };
     } else {
-      try { result = await sendSMSRaw(env, deliveredTo, messageBody, { keepAccents: _spanish, allowRepeat: opts.allowRepeat === true, context: { wo_id: opts.wo_id || '', message_type: opts.message_type || '', recipient_type: kind || '', queue_id: id } }); }
-      catch (e) { result = { error: 'no answer from Twilio: ' + String((e && e.message) || e).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + String((e && e.message) || e).slice(0, 200)); }
+      try { result = await sendSMSRaw(env, deliveredTo, messageBody, { keepAccents: _spanish, allowRepeat: _repeatOk, context: { wo_id: opts.wo_id || '', message_type: opts.message_type || '', recipient_type: kind || '', queue_id: id } }); }
+      catch (e) { result = { error: 'no answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200)); }
     }
     const _o = smsSendOutcome(result);
     sent = _o.sent; errorCode = _o.errorCode; errorReason = _o.reason;
