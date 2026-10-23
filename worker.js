@@ -17880,6 +17880,7 @@ function smsDcCompose(s, ev, state, etDate, truncated) {
     parts.push('<p><b>What to do:</b> tell Claude. The fix is to move this number onto the new campaign that allows links (and to send vendor links through bmoremanagement.com), and meanwhile to stop sending link texts from it.</p>');
   }
   if (ev.notes.length) parts.push('<ul>' + ev.notes.map(n => `<li>${_escHtml(n)}</li>`).join('') + '</ul>');
+  if (s.pieces) parts.push(`<p>Cost: ${s.total} texts billed as ${s.pieces} piece(s) (${(s.pieces / Math.max(1, s.total)).toFixed(2)} per text)${s.priced ? `, $${s.price_usd.toFixed(2)} for the ${s.priced} that Twilio has priced so far` : ''}.</p>`);
   if (truncated) parts.push('<p><i>Note: Twilio returned more messages than this check reads in one run; counts may be incomplete.</i></p>');
   parts.push(`<p>Clean-day streak: ${state.clean_days}. ${smsDcCanRetire(state) ? `<b>${state.clean_days} clean days with ${state.clean_link_texts} link texts: this looks resolved. Tell Claude to turn this check off (or set enabled:false on the sms_delivery_check row of the Apps Script JOBS table).</b>` : `The check keeps running daily until it has ${SMS_DC_RETIRE_CLEAN_DAYS} clean days and ${SMS_DC_RETIRE_LINK_TEXTS} link texts.`}</p>`);
   return { subject, html: parts.join('\n') };
