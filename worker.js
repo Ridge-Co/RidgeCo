@@ -18840,12 +18840,11 @@ async function sendCustomMessage(env, body) {
   });
 }
 
+// D-16 (Oct 23 2026): the old version read the WHOLE SMS_Logs tab on every call (a quota burner, and a swallowed failure). It now appends one
+// row using the cached header list (a write only) and reports a failed write to the failure ledger. The transport row (Log_Source 'transport',
+// written by sendSMSRaw) carries the cost; this row carries who the text was for (Recipient_Type/ID), which the portal-access backfill reads.
 async function logSMS(env, woId, recipientType, recipientId, phone, message) {
-  try {
-    const data=await sheetsRequest(env,'GET',`/values/SMS_Logs`);const rows=data.values||[[]];const headers=rows[0];const now=new Date().toISOString();
-    const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId||'',Recipient_Type:recipientType||'',Recipient_ID:recipientId||'',Phone:phone||'',Message:message||'',Sent_Date:now,Status:'sent',Twilio_SID:''}[h]??''));
-    await sheetsRequest(env,'POST',`/values/SMS_Logs:append?valueInputOption=RAW`,{values:[newRow]});
-  } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
+  return smsLogRecord(env, { WO_ID: woId || '', Recipient_Type: recipientType || '', Recipient_ID: recipientId || '', Phone: phone || '', Message: message || '', Status: 'sent', Log_Source: 'logSMS', Message_Type: recipientType || '' });
 }
 
 // ── DAILY DIGEST (Session 5) ─────────────────────────────────
