@@ -17,6 +17,11 @@ findable by grep even though they never share a number. Example:
 
     B-20260915-1512-q3 · 🟠 **[vendor-payments]** Expedited vendor pay via QuickBooks Faster ACH — description...
 
+**Oct 23 2026 additions (lost text + cron cooldown):**
+- B-20261023-0300-lt · 🟡 **[twilio-sms]** Lost text fix built (FEATURE_LOG rule 228): the post-send Message_Queue save needs no read, retries ~30 s, and a failure is one P0 row naming the Twilio SID + a `warning` on the send result. Closes the Needs Attention `message_queue_update` class once merged; the one existing row needs a by-hand look at the queue.
+- B-20261023-0301-cc · 🟡 **[scheduler]** Sheets-quota cron cooldown built (rule 228): fail-fast cron reads, `quota_hot_until` in Scheduler_State, only `door_watchdog` (critical) runs while it lasts. Decision pending: should `insp_guard` / `str_cleaning` also be `critical`?
+- B-20261023-0302-mb · 🟠 **[twilio-sms]** PLAN (not built): combined/batched text messages (tenant 9am/12pm/6pm, owner 9am/6pm, vendor new-WO immediate with paid/low-priority messages riding along) and WhatsApp / other channels with a per-person choice on the portals. Plan doc in the Continuous Improvement project.
+
 **Oct 20 2026 additions (STR swap + bulk):**
 - B-20261020-1200-sw · 🟡 **[str-cleaning]** Admin SWAP / BULK built (FEATURE_LOG rule 225). SUPERSEDED Oct 21 by B-20261021-0800-ca: do NOT ask Brett to share the calendar (his Workspace only allows view sharing outside the domain); use the act-as setting instead. Old text: after merge Brett must share the "TURNOVER COVERAGE MILAM RIDGE" calendar with the service account (Make changes to events) and turn on Switches > Cleaning calendar, otherwise a swap still works but returns a "do this by hand in Google Calendar" box.
 - B-20261020-1201-ub · 🟢 **[str-cleaning]** NOT built: Uplisting date blocking / check-in blocking on an uncovered day (roadmap item 10). Test with one real date first.

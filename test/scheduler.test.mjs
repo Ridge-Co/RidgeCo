@@ -76,7 +76,7 @@ function load(store, over) {
     alertAdminOnFailure: async (env, k, m) => { alerts.push({ k, m }); return { skipped: true }; },
     setConfigKey: async (env, b) => { store.setCfg(b.key, b.value); return { ok: true }; },
     json: (b, s) => ({ body: b, status: s || 200 }),
-    __cronEnv: (e) => e, __meterCronEnv: (e) => e,
+    failStatusForScheduler: async () => ({}), __cronEnv: (e) => e, __meterCronEnv: (e) => e, __cronLast429At: () => (over.last429 ? over.last429() : 0), CRON_QUOTA_COOLDOWN_MS: 150000,
     doorWatchdogCron: async () => ({ ok: true }),
     processQuietHoursQueue: async () => ({ checked: 0, results: [] }),
     processPendingNotifications: async () => ({ status: 200, clone() { return this; }, async json() { return { processed: 0 }; } }),
@@ -102,7 +102,7 @@ function load(store, over) {
   };
   Object.assign(stubs, over.stubs || {});
   const names = Object.keys(stubs);
-  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedStampFirstSeen, schedGrace, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
+  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedStampFirstSeen, schedGrace, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, schedCooldownPlan, schedCooldownNext, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
   return Object.assign(fn(...names.map(n => stubs[n])), { telemetry, alerts, stubs });
 }
 const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
@@ -1132,6 +1132,90 @@ globalThis.setTimeout = _realSetTimeout;
   t('maybeRunDailySelftest: catch-up form (skips only BEFORE 7am), keeps its once-per-day guard, no swallowed read error', /etHour\(\) < 7/.test(self) && !/etHour\(\) !== 7/.test(self) && /already ran today/.test(self) && /if \(!isMissingTabError\(e\)\) throw e/.test(self));
   const est = wsrc.slice(wsrc.indexOf('async function processEstimateReminders('), wsrc.indexOf('async function processEstimateReminders(') + 600);
   t('processEstimateReminders: no longer requires the exact 8am hour', !/!== 8/.test(est) && /h < 8 \|\| h >= 18/.test(est));
+}
+
+// ───────────────────── Oct 23 2026: Sheets-quota COOLDOWN (retry-storm fix, Needs Attention #10) ─────────────────────
+const QUOTA_ERR = 'Sheets API error on GET /values/Work_Orders: Quota exceeded for quota metric \'Read requests\' and limit \'Read requests per minute per user\'';
+{
+  // pure helpers
+  const J = [{ name: 'door', critical: true }, { name: 'x' }];
+  const dueAll = [{ name: 'x', key: 'k' }, { name: 'door', key: 'k' }];
+  const p0 = P.schedCooldownPlan({}, 1000, dueAll, J, false);
+  t('cooldown plan: no marker -> not cooling, everything runs', p0.cooling === false && p0.runnable.length === 2 && p0.held.length === 0);
+  const p1 = P.schedCooldownPlan({ quota_hot_until: new Date(5000).toISOString() }, 1000, dueAll, J, false);
+  t('cooldown plan: future marker -> only the critical job runs, the rest are held by name', p1.cooling === true && p1.runnable.map(d => d.name).join() === 'door' && p1.held.join() === 'x', p1);
+  t('cooldown plan: an expired marker does not cool', P.schedCooldownPlan({ quota_hot_until: new Date(500).toISOString() }, 1000, dueAll, J, false).cooling === false);
+  t('cooldown plan: a forced run is never held', P.schedCooldownPlan({ quota_hot_until: new Date(5000).toISOString() }, 1000, dueAll, J, true).runnable.length === 2);
+  t('cooldown plan: a corrupt marker is ignored, not fatal', P.schedCooldownPlan({ quota_hot_until: 'garbage' }, 1000, dueAll, J, false).cooling === false);
+  t('cooldown next: throttled -> now+cooldown', P.schedCooldownNext('', 1000, true, 150000) === new Date(151000).toISOString());
+  t('cooldown next: a throttled run never SHORTENS a longer marker', P.schedCooldownNext(new Date(900000).toISOString(), 1000, true, 150000) === new Date(900000).toISOString());
+  t('cooldown next: calm run keeps a future marker', P.schedCooldownNext(new Date(5000).toISOString(), 1000, false, 150000) === new Date(5000).toISOString());
+  t('cooldown next: calm run clears an expired marker', P.schedCooldownNext(new Date(500).toISOString(), 1000, false, 150000) === '');
+  t('door_watchdog is the (only) critical job in the registry', P.SCHED_JOBS.filter(j => j.critical).map(j => j.name).join() === 'door_watchdog');
+
+  // FAULT INJECTION: a job hits the quota -> cooldown starts, it is a calm P2 row (not a P0 page), critical job still runs, others wait, then resume
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  let xFails = true;
+  const jobs = [
+    { name: 'x', kind: 'interval', every_min: 14, run: async () => { log.push('x'); return xFails ? { ok: false, errors: [{ step: 'job', error: QUOTA_ERR }] } : { ok: true, errors: [] }; } },
+    { name: 'door', kind: 'interval', every_min: 1, critical: true, run: async () => { log.push('door'); return { ok: true, errors: [] }; } },
+    { name: 'y', kind: 'interval', every_min: 1, run: async () => { log.push('y'); return { ok: true, errors: [] }; } },
+  ];
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  const hot1 = stateOf(store).quota_hot_until;
+  t('storm: the throttled job is reported quota_busy, not a page', r1.body.ran === 'x' && r1.body.job_ok === false && r1.body.quota_busy === true && !r1.body.admin_alerted && L.alerts.length === 0, r1.body);
+  t('storm: a calm P2 sheets_quota_busy telemetry row, no P0 scheduler_job row', L.telemetry.some(r => r.Job_Type === 'sheets_quota_busy' && r.Success === 'FALSE') && !L.telemetry.some(r => r.Job_Type === 'scheduler_job'), L.telemetry);
+  t('storm: Scheduler_State now holds quota_hot_until = now + 150 s, and the run reports it', hot1 === new Date(T0 + 150000).toISOString() && r1.body.quota_hot_until === hot1, hot1);
+  c.v += 10000;
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('cooling: the door-critical job still runs on the very next tick', r2.body.ran === 'door' && r2.body.job_ok === true && log.join() === 'x,door', r2.body);
+  t('cooling: the other due job is held and named in the answer', r2.body.quota_cooldown && r2.body.quota_cooldown.held.join() === 'y' && r2.body.quota_cooldown.until === hot1, r2.body);
+  t('cooling: a calm critical run does NOT clear or shorten the marker', stateOf(store).quota_hot_until === hot1);
+  c.v += 10000;
+  const r3 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('cooling: nothing else starts, no read-heavy job runs, more=false so the Apps Script loop stops', r3.body.ran === null && r3.body.more === false && log.join() === 'x,door' && r3.body.quota_cooldown.held.join() === 'y', r3.body);
+  t('cooling: the heartbeat is still written (the dead-man switch sees a live clock)', stateOf(store).last_tick === new Date(c.v).toISOString());
+  // /cron/status uses the real clock (like its claim field), so put a marker that is really in the future into the state
+  const realFuture = new Date(Date.now() + 90000).toISOString();
+  const stNow = stateOf(store); stNow.quota_hot_until = realFuture; store.setCfg('Scheduler_State', JSON.stringify(stNow));
+  const stat = await L.schedStatusHandler({});
+  t('cooling: /cron/status shows the cooldown', stat.body && stat.body.quota_cooldown_until === realFuture, stat.body && stat.body.quota_cooldown_until);
+  stNow.quota_hot_until = hot1; store.setCfg('Scheduler_State', JSON.stringify(stNow));
+  const stat2 = await L.schedStatusHandler({});
+  t('cooldown over: /cron/status shows no cooldown', stat2.body && stat2.body.quota_cooldown_until === undefined);
+  const forced = await L.schedRunNext({}, null, fast(c, { jobs, only: ['y'], force: true }));
+  t('cooling: a forced run of a held job is allowed', forced.body.ran === 'y' && forced.body.job_ok === true && log.join() === 'x,door,y', forced.body);
+  c.v += 150000;
+  xFails = false;
+  const r4 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('cooldown over: held jobs run again on the first tick after it', r4.body.ran && ['door', 'y'].includes(r4.body.ran) && !r4.body.quota_cooldown, r4.body);
+  t('cooldown over: a calm run drops the expired marker from the state', stateOf(store).quota_hot_until === undefined);
+}
+{
+  // a job that SUCCEEDS but took a real 429 on the way still starts the cooldown (the signal is the 429, not the failure)
+  const store = primeState(makeStore()); let n429 = 0;
+  const L = load(store, { last429: () => n429 }), c = clock(T0), log = [];
+  const jobs = [{ name: 'x', kind: 'interval', every_min: 14, run: async () => { n429 = c.v; log.push('x'); return { ok: true, errors: [] }; } }];
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('429 seen but job ok: still ok, cooldown set', r.body.job_ok === true && !r.body.quota_busy && !!stateOf(store).quota_hot_until, [r.body, stateOf(store)]);
+}
+{
+  // a door-critical job failing on the quota EXTENDS the marker (never shortens), and is still a quota-busy row
+  const store = primeState(makeStore()), L = load(store), c = clock(T0);
+  const jobs = [{ name: 'door', kind: 'interval', every_min: 1, critical: true, run: async () => ({ ok: false, errors: [{ step: 'job', error: QUOTA_ERR }] }) }];
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('critical job on the quota: cooldown set, calm row, no page', r.body.quota_busy === true && L.alerts.length === 0 && stateOf(store).quota_hot_until === new Date(T0 + 150000).toISOString(), r.body);
+}
+{
+  // happy path reports nothing; a NON-quota failure is still a loud P0 and starts no cooldown
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval']]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('happy path: no marker, no cooldown field, no telemetry', !stateOf(store).quota_hot_until && !r.body.quota_cooldown && L.telemetry.length === 0, [r.body, L.telemetry]);
+  const store2 = primeState(makeStore()), L2 = load(store2), c2 = clock(T0);
+  const bad = [{ name: 'a', kind: 'interval', every_min: 14, run: async () => ({ ok: false, errors: [{ step: 'job', error: 'boom: not a quota problem' }] }) }];
+  const rb = await L2.schedRunNext({}, null, fast(c2, { jobs: bad }));
+  t('a real (non-quota) failure stays a P0 scheduler_job row + admin alert and starts NO cooldown', L2.telemetry.some(r => r.Job_Type === 'scheduler_job') && L2.alerts.length === 1 && !stateOf(store2).quota_hot_until && !rb.body.quota_busy, [L2.telemetry, L2.alerts]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

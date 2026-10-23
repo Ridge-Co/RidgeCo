@@ -107,7 +107,7 @@ reset();
 ok(await F.updateMessageQueueRow(env, '777', { Status: 'skipped' }) === false, 'unknown id returns false (was silently "best-effort")');
 ok(ALERTS.length === 1 && /not found/.test(ALERTS[0]), 'unknown id raises a failure alert');
 reset(); FAIL_BATCH = true; TABS.Message_Queue.push(['5', 'pending', 'x']);
-ok(await F.updateMessageQueueRow(env, '5', { Status: 'skipped' }) === false, 'a Sheets error returns false instead of vanishing');
+ok(await F.updateMessageQueueRow(env, '5', { Status: 'skipped' }, { retryWaitsMs: [] }) === false, 'a Sheets error returns false instead of vanishing');
 
 console.log('\nskipMessageQueue tells the truth');
 reset(); TABS.Message_Queue.push(['5', 'pending', 'x']);
