@@ -1,3 +1,8 @@
+# NEEDS ATTENTION SWEEP (17 open Hub problems) — Oct 22, 2026 — head `fix/needs-attention-sweep-oct22` cut from main tip f1bcdfa, BUILD_VERSION `2026-10-22.01-needs-attention-sweep`. FEATURE_LOG [FL-20261022-needs-attention-sweep].
+
+## 🟡 Built and tested; full suite 190 files, 0 failing (189 and 0 on the base). Staging verification and PR state: see the PR.
+Fixed in code: stale severities (alerts-off, dead-man-off, qb_payables_payment_date_missing) come down to P2; a Sheets READ-quota hit inside a scheduler job or the cleaning scheduler is a calm P2 `sheets_quota_busy` row and pages nobody; `/qb/ready` and cleaning pages answer the typed 429 "busy" instead of a 500; the cleaning scheduler's cold start costs 4 Google reads instead of 12; a busy-but-not-throttled minute no longer files a row; one-off "could not reach the Hub" browser blips are confirmed against `/version` before they reach the ledger. Left open for Brett: merge PR #410 then flip the three calendar switches (#4/#16), Twilio funding (#7), cause of the one failed Puerto Rico text (#6), a design decision on a cron read cooldown (#10); #17 closes itself. After deploy: poll prod `/version`, confirm the open count drops, mark the fixed rows fixed with this PR.
+
 # PORTAL ACCESS TRACKING — Oct 22, 2026 — head `feat/portal-access-tracking-oct22`; PRs #414 and #415 merged to `staging` ONLY. Production untouched. FEATURE_LOG rule [FL-20261022-1800-pat].
 
 ## 🟡 Built, unit-tested (26 checks), staging-verified on API; waiting for Brett's go before `main`.
