@@ -16299,7 +16299,14 @@ async function smsGatedSend(env, opts) {
 // (a durable marker written BEFORE the text goes out); if that mark cannot be saved the text is NOT sent (it stays pending and is retried next sweep, and
 // the failure is reported). Because of the mark, a failed save of "sent" afterwards leaves the row "sending", never "pending", so no later sweep can
 // send it a second time. Returns { sent, claim_failed, outcome } and never throws.
+const __mqInFlight = new Set();   // queue ids this isolate is sending right now: a second release of the same row (sweep + a manual release) stands down
 async function mqSendQueuedRow(env, row, deliverTo, extraFields) {
+  const id = row.ID;
+  if (__mqInFlight.has(String(id))) return { sent: false, claim_failed: true, outcome: smsSendOutcome({ error: 'this row is already being sent by another release; not sent twice' }) };
+  __mqInFlight.add(String(id));
+  try { return await mqSendQueuedRowInner(env, row, deliverTo, extraFields); } finally { __mqInFlight.delete(String(id)); }
+}
+async function mqSendQueuedRowInner(env, row, deliverTo, extraFields) {
   const id = row.ID;
   const claimed = await updateMessageQueueRow(env, id, { Status: 'sending', Sent_Date: new Date().toISOString() }, { retryWaitsMs: [2500] });
   if (claimed === false) return { sent: false, claim_failed: true, outcome: smsSendOutcome({ error: 'could not mark the row as sending, so the text was not sent (it will be tried again next sweep)' }) };
