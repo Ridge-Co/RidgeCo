@@ -816,7 +816,7 @@ const drain = async (L, c, extra) => {
   // dry run on a blank state: reports first_run + would_seed, writes NOTHING, claims NOTHING
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   const r = await L.schedRunNext({}, null, fast(c, { dry: true }));
-  t('dry run on blank state: first_run true, would_seed lists the ten, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 11 && r.body.due.join() === INTERVAL5.join(), r.body);
+  t('dry run on blank state: first_run true, would_seed lists the ten, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 12 && r.body.due.join() === INTERVAL5.join(), r.body);
   t('dry run wrote nothing (no POST, no Scheduler_State) and a real tick afterwards is still a first run', !store.calls.some(x => x.startsWith('POST')) && !store.cfg().Scheduler_State && (await L.schedRunNext({}, null, fast(c, {}))).body.first_run === true);
 }
 {
