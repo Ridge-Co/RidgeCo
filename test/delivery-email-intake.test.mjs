@@ -284,7 +284,7 @@ const worker = (await import(root + 'worker.js')).default;
 const QH = await (async () => {
   const os = await import('node:os'), path = await import('node:path'), url = await import('node:url');
   const f = path.join(os.tmpdir(), 'worker-qh-' + process.pid + '-' + Date.now() + '.mjs');
-  fs.writeFileSync(f, src + '\nexport { processQuietHoursQueue };\n');
+  fs.writeFileSync(f, src + '\nexport { processQuietHoursQueue, __smsRecent };\n');
   try { return await import(url.pathToFileURL(f).href); } finally { try { fs.unlinkSync(f); } catch (_) {} }
 })();
 // Run fn with "now" set to an exact instant (the clock keeps advancing from there).
@@ -310,10 +310,14 @@ const ADMIN = '+14435550000', TENANT_PHONE = '+14105550101';
 const tab = (name, headers, rows) => store.tabs.set(name, [headers, ...rows.map(r => headers.map(h => r[h] ?? ''))]);
 const rowsOf = (name) => { const t = store.tabs.get(name); if (!t || !t.length) return []; const h = t[0]; return t.slice(1).map(r => Object.fromEntries(h.map((k, i) => [k, r[i] ?? '']))); };
 const WOH = ['Vendor_Needs_Access', 'ID', 'Property_ID', 'Unit_ID', 'Tenant_ID', 'Vendor_ID', 'Type', 'Trade', 'Description', 'Priority', 'Status', 'Scheduled_Date', 'Scheduled_Window', 'Completed_Date', 'Invoice_ID', 'Owner_WO_Ref', 'WO_Contact_Name', 'WO_Contact_Phone', 'Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates', 'Vendor_SMS_Sent', 'Tenant_SMS_Sent', 'Owner_Notified', 'Created_By', 'Created_Date', 'Notes', 'Room', 'Checklist', 'Source', 'Intake_Message_ID'];
+// The Worker now refuses to send the SAME text to the SAME number twice within 10 minutes (D-16 guard). Every seed is a fresh world, so give its tenant a fresh first name.
+let seedNo = 0, SEED_NAME = 'Tam';
 function seed(over) {
   over = over || {};
+  seedNo++; SEED_NAME = 'Tam' + 'abcdefghijklmnopqrstuvwxyz'[seedNo % 26] + 'abcdefghijklmnopqrstuvwxyz'[Math.floor(seedNo / 26) % 26];
   // The worker memoises ensureColumns for 10 minutes per process, so a brand-new fake store must keep the HEADER rows the previous run created
   // (exactly what the live sheet looks like after the first email): carry headers over, drop the data.
+  QH.__smsRecent.clear();   // every seed is a fresh world: the release module's 10-minute duplicate-text memory must not carry texts across seeds (the tab cache can serve a previous seed's tenant name)
   const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok';
   for (const [name, rows] of prev.tabs) if (rows.length && rows[0].length) store.tabs.set(name, [rows[0].slice()]);
   tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', Delivery_Claim_Settle_Ms: '40' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
@@ -327,7 +331,7 @@ function seed(over) {
   ]);
   tab('Units', ['ID', 'Property_ID', 'Unit_Label', 'Active'], [{ ID: 'U1', Property_ID: 'P1', Unit_Label: '1', Active: 'TRUE' }, { ID: 'U2', Property_ID: 'P2', Unit_Label: 'Apt 2', Active: 'TRUE' }, { ID: 'U3', Property_ID: 'P2', Unit_Label: 'Apt 3R', Active: 'TRUE' }]);
   tab('Tenants', ['ID', 'Property_ID', 'Unit_ID', 'Active', 'First_Name', 'Last_Name', 'Phone', 'SMS_Enabled', 'SMS_OptOut', 'Move_In_Date', 'Move_Out_Date'], [
-    Object.assign({ ID: 'T1', Property_ID: 'P1', Unit_ID: 'U1', Active: 'TRUE', First_Name: 'Tam', Last_Name: 'One', Phone: TENANT_PHONE, Move_In_Date: '2025-01-01' }, over.t1 || {}),
+    Object.assign({ ID: 'T1', Property_ID: 'P1', Unit_ID: 'U1', Active: 'TRUE', First_Name: SEED_NAME, Last_Name: 'One', Phone: TENANT_PHONE, Move_In_Date: '2025-01-01' }, over.t1 || {}),
     { ID: 'T2', Property_ID: 'P2', Unit_ID: 'U2', Active: 'TRUE', First_Name: 'Tia', Last_Name: 'Two', Phone: '+14105550102', Move_In_Date: '2025-01-01' },
     { ID: 'T3', Property_ID: 'P2', Unit_ID: 'U3', Active: 'TRUE', First_Name: 'Tom', Last_Name: 'Three', Phone: '+14105550103', Move_In_Date: '2025-01-01' },
     { ID: 'T4', Property_ID: 'P2', Unit_ID: 'U3', Active: 'TRUE', First_Name: 'Tess', Last_Name: 'Four', Phone: '+14105550104', Move_In_Date: '2025-01-01' },
@@ -781,7 +785,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   const g = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.1');
   const allowed = ['ok', 'closed', 'delivered', 'cancelled', 'message', 'first_name', 'item_type', 'date_text', 'window_text', 'street', 'current', 'note'];
   t('Q: valid token -> exactly the allowed fields', g.status === 200 && g.json.ok === true && JSON.stringify(Object.keys(g.json).sort()) === JSON.stringify(allowed.slice().sort()), g.json);
-  eq('Q: values', [g.json.first_name, g.json.item_type, g.json.date_text, g.json.window_text, g.json.street, g.json.current, g.json.note, g.json.closed], ['Tam', 'refrigerator', 'Friday, October 16', '', '5425 Belle Vista Ave', '', '', false]);
+  eq('Q: values', [g.json.first_name, g.json.item_type, g.json.date_text, g.json.window_text, g.json.street, g.json.current, g.json.note, g.json.closed], [SEED_NAME, 'refrigerator', 'Friday, October 16', '', '5425 Belle Vista Ave', '', '', false]);
   const flat = JSON.stringify(g.json);
   t('Q: nothing else leaks (no phone numbers, order number, other tenants, ids, sheet id, owner)', !/\+?1?4\d{9}|H2345|Tia|Tom|TESTSHEET|Phoenix|O1|P1|U1|T1/.test(flat), flat);
   const dead = [];
@@ -818,7 +822,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
 
 // ── R. answers: effects, Brett texts, flipping, closed deliveries, validation, rate limits, staging guard ──
 {
-  seed(); await send('confirm'); await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
+  seed(); await send('confirm'); const relz = await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
   const tok = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(toTenant()[0].body) || [])[1];
   const T = encodeURIComponent(tok), a0 = toAdmin().length;
   let r = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.2.0.1');
