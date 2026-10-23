@@ -119,7 +119,7 @@ const release = (rows, scopes, over) => { const st = { updates: [], raw: [], sta
   MSG_QUEUE_TAB: 'Message_Queue', smsToggleOn: v => String(v == null ? '' : v).toUpperCase() !== 'FALSE',
   smsGateDecision: new Function(grab('smsGateDecision') + '\nreturn smsGateDecision;')(),
   sendSMSRaw: async (e, to, m) => { st.raw.push(to); return { sid: 'S' }; }, updateMessageQueueRow: async (e, id, f) => { st.updates.push({ id, f }); },
-  proposalSeenByOwner: H.proposalSeenByOwner, proposalStampSms: async (e, id, s) => { st.stamps.push([id, s]); }, logTelemetry: async (e, r) => { st.tele.push(r); } }, over || {});
+  proposalSeenByOwner: H.proposalSeenByOwner, proposalStampSms: async (e, id, s) => { st.stamps.push([id, s]); }, logTelemetry: async (e, r) => { st.tele.push(r); } }, over || {}); Object.assign(deps, d16Deps(), d16Queue(deps));
   return { st, fn: new Function(...Object.keys(deps), grabAsync('processQuietHoursQueue') + '\nreturn processQuietHoursQueue;')(...Object.values(deps)) }; };
 const dueRow = (id, skip) => ({ ID: id, Status: 'pending', Send_After: '2026-01-01T12:00:00Z', Recipient_Type: 'owner', Recipient_Phone: '+14105550142', Property_ID: '50', Message_Body: 'hi', Skip_If_Seen: skip || '' });
 {
