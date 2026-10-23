@@ -27727,7 +27727,7 @@ async function qbRepairable(env, url) {
         paid, balance: isNaN(qBal) ? null : qBal,
         customer: (q.CustomerRef && q.CustomerRef.name) || '',
         issues,
-        new_description: rebuilt.lines[0] ? rebuilt.lines[0].Description : '',
+        new_description: (() => { const lab = rebuilt.lines.filter(l => !/^Materials — /.test(String(l.Description || ''))); return (lab.length ? lab : rebuilt.lines.slice(0, 1)).map(l => l.Description).join(' | '); })(),
         photo_url: folderUrl,
       });
     }
