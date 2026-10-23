@@ -14745,6 +14745,10 @@ async function processVendorNudges(env) {
     // Same dispatched-vs-sent distinction as createVendorRequest above — a quiet-hours hold
     // still counts and still advances the timer, since the message IS queued to go out.
     const dispatched = r.sent || r.held_for_quiet_hours;
+    // D-16 (Oct 23 2026): a nudge to the account owner's own number is never sent, so its clock is closed, not re-armed every day. A nudge held back by the
+    // 3-day cap is pushed to the moment it is next allowed (no count used). Both were logged to SMS_Logs by smsGatedSend.
+    if (r.suppress_reason === 'own_number') { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_own_number' }); continue; }
+    if (r.suppress_reason === 'nudge_cap' && r.next_allowed_at) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Next_Nudge_At: r.next_allowed_at }); results.push({ id: row.ID, action: 'nudge_capped', next_allowed_at: r.next_allowed_at }); continue; }
     await updateRow(env, VENDOR_REQ_TAB, row.ID, {
       Nudge_Count: String(nudgeCount + (dispatched ? 1 : 0)),
       Next_Nudge_At: new Date(now.getTime() + repeatHours*3600000).toISOString(),
