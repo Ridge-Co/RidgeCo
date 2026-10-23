@@ -158,7 +158,7 @@ function transport(opts) {
   const world = {
     fetch: async (url, init) => {
       calls.fetch.push({ url, body: new URLSearchParams(init.body).get('Body'), to: new URLSearchParams(init.body).get('To') });
-      if (opts.fetchThrows) throw new Error('socket hang up');
+      if (opts.fetchThrows) throw new Error(opts.fetchThrowsMsg || 'socket hang up');
       const a = answers.length > 1 ? answers.shift() : answers[0];
       return { ok: !a.code, status: a.code ? 400 : 201, json: async () => a };
     },
