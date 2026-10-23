@@ -1,6 +1,7 @@
 // Hub Improvements (Oct 14 2026): proposal read status (pixel + page-view log) and the owner heads-up text
 // (8pm-8am ET hold, per-send override, skip if the owner already opened it). Run: node test/proposal-read-status-owner-sms.test.mjs
 import fs from 'fs'; import assert from 'node:assert';
+import { d16Deps, d16Queue } from './_d16-support.mjs';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const grabAny = (kw, name) => { const i = src.indexOf(kw + name + '('); if (i < 0) throw new Error('missing ' + name); let d = 0, j = src.indexOf('{', src.indexOf(')', i)); for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } } return src.slice(i, j + 1); };
 const grab = n => grabAny('function ', n), grabAsync = n => grabAny('async function ', n);
