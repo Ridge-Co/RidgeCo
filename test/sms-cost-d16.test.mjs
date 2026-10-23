@@ -548,7 +548,8 @@ const nudge = (extra) => Object.assign({ wo_id: 'WO-1231', message_type: 'vendor
   const fn = new Function(...names, grab('processQuietHoursQueue') + '\nreturn processQuietHoursQueue;')(...names.map(k => deps[k]));
   const out = await fn({});
   t('sweep: only the pending row (3) is sent; the "sending" (1) and "failed" (2) rows are never re-sent', calls.raw.length === 1 && calls.raw[0] === '+14105550111'.replace('0111', '0222') || (calls.raw.length === 1 && out.results.length === 1 && out.results[0].id === '3'), [calls, out]);
-  t('sweep: the row stuck at "sending" for 20 minutes is REPORTED (message_queue_update) once, not silently ignored', calls.mqf.length === 1 && calls.mqf[0][0] === '1' && /NOT sent again/.test(calls.mqf[0][1]), calls.mqf);
+  const _stk = deps.__rec.reports.filter(x => x.where === 'message_queue_stuck_sending');
+  t('sweep: the row stuck at "sending" for 20 minutes is REPORTED as ONE calm P2 ledger row, not silently ignored', _stk.length === 1 && _stk[0].severity === 'P2' && _stk[0].ref === 'Message_Queue 1' && /NOT sent again/.test(_stk[0].message) && calls.mqf.length === 0, [_stk, calls.mqf]);
 }
 
 // ========================= updateStatus: the same status twice does not re-text =========================
