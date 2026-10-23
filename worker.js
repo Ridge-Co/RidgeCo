@@ -16175,10 +16175,11 @@ async function smsGatedSend(env, opts) {
       const _kb = mqFindKnownBad(_qObjs, { phone: recipientPhone, nowMs: _nowMs, windowMs: SMS_KNOWN_BAD_WINDOW_MS });
       if (_kb) _sup = { reason: 'known_undeliverable', status: 'suppressed_known_bad', note: 'Twilio permanently refused this number (error ' + _kb.code + ', Message_Queue row ' + _kb.id + '); not tried again' };
     }
-    if (!_sup && !opts.allowRepeat) {
+    if (!_sup && !_repeatOk) {
       const _dup = mqFindDuplicate(_qObjs, { phone: recipientPhone, body: messageBody, nowMs: _nowMs });
       if (_dup) _sup = { reason: 'duplicate', status: 'suppressed_duplicate', note: 'the same text to this number is already ' + _dup.status + ' (Message_Queue row ' + _dup.id + ')' };
     }
+    if (_sup && _sup.reason === 'known_undeliverable') await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_known_undeliverable', ref: 'phone ending ' + String(recipientPhone).replace(/\D/g, '').slice(-4), severity: 'P2', message: 'a text was not sent: ' + _sup.note + ' (number ending ' + String(recipientPhone).replace(/\D/g, '').slice(-4) + ', ' + (opts.message_type || 'text') + '). Fix the phone number on the record to send again.' });
     if (_sup) {
       const _se = smsEstimate(messageBody);
       await smsLogRecord(env, { WO_ID: opts.wo_id || '', Recipient_Type: kind || '', Phone: recipientPhone, Message: messageBody, Status: _sup.status, Est_Segments: _se.pieces, Encoding: _se.encoding, Chars: _se.units, Message_Type: opts.message_type || '', Log_Source: 'gated', Note: _sup.note });
