@@ -2,6 +2,7 @@
 // safe test phone while the global TWILIO_TEST_MODE stays OFF. Runs the REAL smsGatedSend out of worker.js.
 import fs from 'fs';
 import assert from 'node:assert';
+import { d16Deps } from './_d16-support.mjs';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 function grab(name) {
   let i = src.indexOf('function ' + name + '(');
