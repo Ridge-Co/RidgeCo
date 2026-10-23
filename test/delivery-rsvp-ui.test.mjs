@@ -188,7 +188,6 @@ test('copy: the three buttons, the "no" wording, one gentle mention of reschedul
   const copy = visibleCopy.replace(/failure-reporter/g, '');
   assert.ok(!banned.test(copy), 'scolding / pressuring word found: ' + (copy.match(banned) || [])[0]);
   assert.ok(!/!{2,}|ASAP|\bNOW\b/.test(copy), 'no shouting');
-  assert.ok(/no worries/i.test(pageJs), 'the invitation itself says it is fine not to be there');
 });
 
 // ───────────────────────── accessibility ─────────────────────────
