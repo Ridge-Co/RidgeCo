@@ -15185,22 +15185,67 @@ async function smsReportRegionBlocked(env, rowId, check) {
 // API Key Secret) — Brett's Cloudflare secrets are the API-Key pair (TWILIO_API_SID /
 // TWILIO_API_KEY), not a classic Auth Token (no TWILIO_AUTH var exists), so this uses that
 // pair. The URL path always uses the Account SID (TWILIO_SID) regardless of which credential
-// authenticates the request — that part is unchanged.
-async function sendSMSRaw(env, to, message) {
+// authenticates the request - that part is unchanged.
+// D-16 (Oct 23 2026): the ONE place every text passes. It (1) makes the text plain (smsSanitize), (2) refuses a destination outside the enabled
+// regions, (3) refuses an identical text to the same number inside 10 minutes (opts.allowRepeat to override on a deliberate resend), (4) sends,
+// (5) reads Twilio's answer (segments, price, error code) and (6) writes one SMS_Logs row. opts: { keepAccents, allowRepeat, context:{wo_id,
+// message_type, recipient_type, queue_id} }. Result = Twilio's JSON (sid on success), or { skipped, duplicate|region_blocked, reason }.
+async function sendSMSRaw(env, to, message, opts) {
+  opts = opts || {};
+  const ctx = opts.context || {};
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
+  const san = smsSanitize(message, { keepAccents: opts.keepAccents === true });
+  message = san.text;
+  const est = san.after;
+  const redact = opts.redact === true || /^pin_/.test(String(ctx.message_type || ''));   // a text that carries a login PIN is never copied into the log
+  const logBase = { WO_ID: ctx.wo_id || '', Recipient_Type: ctx.recipient_type || '', Phone: to, Message: redact ? '[text not copied here: it contains a login PIN]' : message, Est_Segments: est.pieces, Encoding: est.encoding, Chars: est.units, Message_Type: ctx.message_type || '', Queue_ID: ctx.queue_id || '' };
+  const dest = smsDestinationCheck(to);
+  if (!dest.ok) {
+    if (!ctx.queue_id) await smsReportRegionBlocked(env, '', dest);   // a queue-backed send reports with its row id from smsGatedSend
+    await smsLogRecord(env, Object.assign({}, logBase, { Phone: '***' + dest.last4, Message: '[not sent] ' + message.slice(0, 40), Status: 'blocked_region', Note: dest.reason }));
+    return { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dest.reason + ')' };
+  }
+  const key = smsDedupeKey(to, message), nowMs = Date.now();
+  if (!opts.allowRepeat) {
+    const d = smsDedupeCheck(__smsRecent, key, nowMs, SMS_DEDUPE_WINDOW_MS);
+    if (d.dup) {
+      await smsLogRecord(env, Object.assign({}, logBase, { Status: 'suppressed_duplicate', Note: 'the same text to this number went out ' + Math.round(d.ageMs / 1000) + 's ago (10-minute guard)' }));
+      return { skipped: true, duplicate: true, reason: 'the same text to the same number was already sent ' + Math.round(d.ageMs / 1000) + 's ago' };
+    }
+  }
+  smsDedupeRemember(__smsRecent, key, nowMs);   // marked BEFORE the call, so a second caller in the same isolate cannot slip in while Twilio is answering
   if (env.__STAGING__ ?? isStaging(env)) {
     console.log(`🧪 STAGING — SMS stubbed (not sent via Twilio) → ${to}: ${message}`);
-    return { staged: true, would_have: { to, message }, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'staged', Segments: est.pieces, Note: 'staging stub: pieces are our estimate' }));
+    return { staged: true, would_have: { to, message }, segments_est: est.pieces, encoding: est.encoding, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
   }
-  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM)
+  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM) {
+    __smsRecent.delete(key);
     return { error: 'Twilio not configured (missing TWILIO_SID/TWILIO_API_SID/TWILIO_API_KEY/TWILIO_FROM)' };
-  const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
-    method: 'POST',
-    headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
-  });
-  return resp.json();
+  }
+  let resp, j;
+  try {
+    resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
+    });
+    j = await resp.json();
+  } catch (e) {
+    __smsRecent.delete(key);   // no answer from Twilio: a deliberate retry must be possible
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'failed', Note: 'no usable answer from Twilio: ' + String((e && e.message) || e).slice(0, 200) }));
+    throw e;
+  }
+  const ok = !!(resp.ok && j && j.sid);
+  if (!ok) __smsRecent.delete(key);   // Twilio refused it: nothing went out, a later fix-and-resend is allowed
+  const einfo = smsErrorInfo(j);
+  await smsLogRecord(env, Object.assign({}, logBase, {
+    Status: ok ? 'sent' : 'failed', Twilio_SID: (j && j.sid) || '',
+    Segments: ok && j.num_segments != null ? j.num_segments : '', Price: ok && j.price != null ? j.price : '', Price_Unit: ok && j.price_unit ? j.price_unit : '',
+    Error_Code: einfo.code || '', Note: ok ? (j.num_segments != null && String(j.num_segments) !== String(est.pieces) ? 'Twilio billed ' + j.num_segments + ' piece(s), we estimated ' + est.pieces : '') : (einfo.reason || String((j && j.message) || 'HTTP ' + resp.status)).slice(0, 200),
+  }));
+  return j;
 }
 
 // sendSMS — the long-standing chokepoint every pre-existing call site in this file already
