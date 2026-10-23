@@ -392,7 +392,7 @@ function rsvpBadge(d){
   var label=st==='yes'?'✓ Tenant: Confirmed':(st==='no'?'✕ Tenant: Declined':'? Tenant: Unsure');
   var when=rsvpWhen(d.tenant_rsvp_at);
   var note=String(d.tenant_rsvp_note||'').trim();
-  return '<div class="rsvp-line"><span class="rsvp '+st+'" data-rsvp="'+st+'">'+esc(label)+'</span>'
+  return '<div class="rsvp-line"><span class="rsvp '+st+(st==='no'&&!open?' past':'')+'" data-rsvp="'+st+'">'+esc(label)+'</span>'
     +(when?'<span class="rsvp-when">'+esc(when)+'</span>':'')
     +'</div>'
     +(note?'<div class="rsvp-note" data-rsvp-note>“'+esc(note)+'”</div>':'');
