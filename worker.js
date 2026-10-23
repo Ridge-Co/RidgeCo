@@ -17745,6 +17745,9 @@ async function schedRunNext(env, ctx, opts) {
         rec.last_error = jobPaused ? out.paused_reason : (jobOk ? null : errText); rec.duration_ms = out.duration_ms;
         if (jobOk && !jobPaused) rec.last_ok = rec.last_end;
         rec.paused_key = null; rec.paused_ep = null;
+        // Oct 23 2026: a throttled run (the job failed on the quota, or any background read took a real 429 while it ran) starts / extends the cooldown.
+        const coolNext = schedCooldownNext(cur.quota_hot_until, nowMs(), quotaBusyRun || __cronLast429At() > hit429Before, CRON_QUOTA_COOLDOWN_MS);
+        if (coolNext) { cur.quota_hot_until = coolNext; out.quota_hot_until = coolNext; } else delete cur.quota_hot_until;
         if (job.kind !== 'interval') {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
