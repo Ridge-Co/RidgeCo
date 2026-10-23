@@ -257,7 +257,7 @@ function deliveriesCard(x){
     const woLinks=woIds.map(id=>'<a class="deliv-wo" href="index.html?wo='+encodeURIComponent(id)+'" target="_blank" rel="noopener" style="color:var(--blue);font-weight:800;text-decoration:none">'+h(id)+'</a>').join(', ');
     const order=[r.store,r.order_number?'#'+r.order_number:''].filter(Boolean).join(' ');
     const driver=/Driver calls Brett/i.test(r.notes||'')?'<small style="color:var(--amber);font-weight:700">📞 Driver calls: Brett</small>':'';
-    html+='<div class="row2 deliv-row" data-id="'+h(r.id)+'"><span class="pdot '+dotOf(r.status)+'"></span><div class="t" style="min-width:0;overflow-wrap:anywhere">'
+    html+='<div class="row2 deliv-row'+(rsvpOf(r)==='no'&&rsvpOpen(r)?' rsvp-declined':'')+'" data-id="'+h(r.id)+'"><span class="pdot '+dotOf(r.status)+'"></span><div class="t" style="min-width:0;overflow-wrap:anywhere">'
       +'<span class="rtag '+(r.status==='Delivered'?'cash':(dotOf(r.status)==='r'?'due':'wait'))+'">'+h(r.status||'Ordered')+'</span>'
       +(r.expected_window?'<span class="rtag cost">'+h(r.expected_window)+'</span>':'')
       +'<br>'+h(item)
