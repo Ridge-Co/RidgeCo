@@ -145,6 +145,17 @@ const parseRgb = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
       await page.close();
     }
 
+    // ── 1b. arriving through the short-link redirect ──
+    {
+      for (const [q, h, want, label] of [['?utm_source=sms&t=redir-tok', '', 'redir-tok', 'extra params added by a redirect'], ['', '#t=hash-tok', 'hash-tok', 'a #t= fragment']]) {
+        const page = await ctx.newPage(); const srv = newServer(); await mount(page, srv);
+        await page.goto(url('rsvp.html', q) + h, { waitUntil: 'load' });
+        await page.waitForSelector('#ans-yes');
+        ok(srv.gets.length === 1 && srv.gets[0].t === want, 'token found with ' + label + ' (' + (srv.gets[0] && srv.gets[0].t) + ')');
+        await page.close();
+      }
+    }
+
     // ── 2. not sure + keyboard ──
     {
       const page = await ctx.newPage(); const srv = newServer(); await mount(page, srv);
