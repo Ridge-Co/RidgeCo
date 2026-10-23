@@ -15136,12 +15136,12 @@ function mqFindRecentNudge(rows, o) {
   }
   return best;
 }
-// Pure. Has this number already failed with a permanent Twilio error (not region / opt-out) recently? { code, id } or null.
+// Pure. Has this number already been refused as invalid / not a mobile (21211, 21614 ONLY) recently? { code, id } or null. Region, opt-out and every temporary code never count.
 function mqFindKnownBad(rows, o) {
   for (const r of rows || []) {
     if (String(r.Status || '').toLowerCase() !== 'failed') continue;
     const code = parseInt(r.Error_Code, 10) || 0;
-    if (!code || !SMS_PERMANENT_ERRORS[code] || SMS_NEVER_REMEMBER_CODES.indexOf(code) >= 0) continue;
+    if (!code || SMS_KNOWN_BAD_CODES.indexOf(code) < 0) continue;
     if (normalizePhone(r.Recipient_Phone) !== o.phone) continue;
     const t = Date.parse(r.Created_Date || '');
     if (isFinite(t) && o.nowMs - t < o.windowMs) return { code, id: r.ID };
