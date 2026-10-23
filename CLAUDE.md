@@ -192,6 +192,7 @@ For every build and every PR, no exceptions:
 - **QB refresh token rotates** — don't treat `QB_REFRESH_TOKEN` env as permanent; `invalid_grant` = re-auth.
 - Never change `Vendor_Bills` / `Invoice_Review` column order without updating `worker.js` refs.
 - Void re-render uses a full `loadAll()+openWODetail()` refresh, not fragile DOM removal.
+- **Never ask Brett to share a calendar (or anything) with the service account with edit rights; use delegation** (Oct 21 2026, FEATURE_LOG 227): his Google Workspace only allows view-details sharing outside the domain, so the service account can read but never write a shared calendar. The Hub acts as him instead (Config `STR_CAL_IMPERSONATE=brett@bmoremanagement.com`, domain-wide delegation, scope `calendar.events`). Any new cleaning-calendar call must stay an `/events` call (a test enforces it).
 
 ## Security note (in progress)
 `worker.js` currently gates the whole API with one shared secret that ships to the browser —
