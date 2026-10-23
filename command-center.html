@@ -241,7 +241,7 @@ function deliveriesCard(x){
     }
     const label=st==='yes'?'✓ Tenant: Confirmed':(st==='no'?'✕ Tenant: Declined':'? Tenant: Unsure');
     const when=rsvpWhen(r.tenant_rsvp_at), note=String(r.tenant_rsvp_note||'').trim();
-    return '<span class="rsvp '+st+'" data-rsvp="'+st+'">'+h(label)+'</span>'+(when?'<small style="display:inline">'+h(when)+'</small>':'')
+    return '<span class="rsvp '+st+(st==='no'&&!rsvpOpen(r)?' past':'')+'" data-rsvp="'+st+'">'+h(label)+'</span>'+(when?'<small style="display:inline">'+h(when)+'</small>':'')
       +(note?'<span class="rsvp-note" data-rsvp-note>“'+h(note)+'”</span>':'');
   };
   const dotOf=st=>st==='Delivered'?'g':(st==='Needs Review'||st==='Cancelled'||st==='Exception'?'r':(st==='En-Route'||st==='Approaching'||st==='Arrived'?'a':'b'));
