@@ -10024,7 +10024,9 @@ async function updateStatus(env, body) {
     if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
       if (!isTenantNotifiable(tenant, wo)) continue;
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${woJobLabel(wo)} at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
-      await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
+      if (_repeatStatus) continue;   // D-16: already Accepted - the tenant has been told
+      const _ra = await sendSMS(env, tenant.Phone, msg, { context: { wo_id: body.wo_id, message_type: 'tenant_accepted', recipient_type: 'tenant' } });
+      if (await smsReportIfFailed(env, 'sms_tenant_accepted', body.wo_id, _ra)) await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
   }
   // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
