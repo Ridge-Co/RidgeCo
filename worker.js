@@ -17722,7 +17722,7 @@ async function schedRunNext(env, ctx, opts) {
       // Oct 22 2026: Google's shared per-minute read quota ran out during the run. Still recorded (P2 row, job state "failed", retried next tick, the
       // run's answer says quota_busy), but it is not a P0 scheduler failure and nobody is paged for it.
       const quotaBusy = schedErrorsAreQuotaBusy(errors);
-      if (quotaBusy) out.quota_busy = true;
+      if (quotaBusy) { out.quota_busy = true; quotaBusyRun = true; }
       try { await logTelemetry(env, { Source: 'worker', Job_Type: quotaBusy ? 'sheets_quota_busy' : 'scheduler_job', Skill_Or_Endpoint: quotaBusy ? 'scheduler/' + job.name : job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
       if (!quotaBusy) {
