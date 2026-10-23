@@ -15843,7 +15843,7 @@ const DEFAULT_MESSAGE_TEMPLATES = [
   { Message_Type: 'pin_owner', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}! This is {AssistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: {PortalUrl} PIN: {PIN}. Log in to check on your work orders, submit requests, and manage your notification settings." },
   { Message_Type: 'tenant_welcome', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of {Owner} at {Address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing." },
+    "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance. We handle maintenance for {Owner} at {Address}. Please save this number; we only text about maintenance." },
   { Message_Type: 'vendor_welcome', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal ({PortalUrl}) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)" },
   { Message_Type: 'property_notice', Channel: 'sms', Subject: '', Body:
