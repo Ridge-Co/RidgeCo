@@ -18,7 +18,7 @@ findable by grep even though they never share a number. Example:
     B-20260915-1512-q3 · 🟠 **[vendor-payments]** Expedited vendor pay via QuickBooks Faster ACH — description...
 
 **Oct 20 2026 additions (STR swap + bulk):**
-- B-20261020-1200-sw · 🟡 **[str-cleaning]** Admin SWAP / BULK built (FEATURE_LOG rule 225). After merge Brett must share the "TURNOVER COVERAGE MILAM RIDGE" calendar with the service account (Make changes to events) and turn on Switches > Cleaning calendar, otherwise a swap still works but returns a "do this by hand in Google Calendar" box.
+- B-20261020-1200-sw · 🟡 **[str-cleaning]** Admin SWAP / BULK built (FEATURE_LOG rule 225). SUPERSEDED Oct 21 by B-20261021-0800-ca: do NOT ask Brett to share the calendar (his Workspace only allows view sharing outside the domain); use the act-as setting instead. Old text: after merge Brett must share the "TURNOVER COVERAGE MILAM RIDGE" calendar with the service account (Make changes to events) and turn on Switches > Cleaning calendar, otherwise a swap still works but returns a "do this by hand in Google Calendar" box.
 - B-20261020-1201-ub · 🟢 **[str-cleaning]** NOT built: Uplisting date blocking / check-in blocking on an uncovered day (roadmap item 10). Test with one real date first.
 - B-20261020-1202-bd · 🟢 **[str-cleaning]** NOT built: Phase 2 backup drip (staged backup asks).
 
