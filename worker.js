@@ -16805,7 +16805,7 @@ function schedAtMinutes(at) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); 
 // 7am the job runs on the next tick that day. retry:false = never auto-retry a failed run (it may have
 // already sent something); a job result may also set no_retry:true when the failure was after a send.
 const SCHED_JOBS = [
-  { name: 'door_watchdog',      kind: 'interval', every_min: 14, run: (env) => schedRunDoorWatchdog(env) },
+  { name: 'door_watchdog',      kind: 'interval', every_min: 14, critical: true, run: (env) => schedRunDoorWatchdog(env) },   // critical (Oct 23 2026): never held back by the Sheets-quota cooldown, and keeps the full read retries
   { name: 'sweep',              kind: 'interval', every_min: 14, run: (env) => schedRunSweepMessages(env) },
   { name: 'sweep_work',         kind: 'interval', every_min: 14, run: (env) => schedRunSweepWork(env) },
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
