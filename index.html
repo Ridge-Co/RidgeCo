@@ -11168,6 +11168,42 @@ function submitHubTimeEntry(woId) {
   }).catch(function(e) { if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
 }
 
+// Brett's own billable hours that have a private note but no invoice description (what the opt-in button can copy).
+function hubNoteUsable(e) {
+  return !!e && e.Active !== 'FALSE' && String(e.Role || '').toLowerCase() === 'hub'
+    && String(e.Billable).toUpperCase() === 'TRUE'
+    && !String(e.Invoice_Description || '').trim() && !!String(e.Notes || '').trim();
+}
+
+// Opt-in (Oct 23 2026): copy private Notes into Invoice Description for one entry (ids = [id]) or
+// every eligible entry on the job (ids = null). The server reads each write back; every failure is shown.
+function hubUseNotes(woId, ids, btn) {
+  var label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
+  api('POST', '/time-entry/use-notes', { wo_id: woId, ids: ids || undefined }).then(function(res) {
+    var done = (res && res.updated && res.updated.length) || 0;
+    var errs = (res && res.errors) || [];
+    if (res && res.warnings && res.warnings.length) toast('Copied, but: ' + res.warnings.join(' | '), 'error');
+    if (!res || res.ok === false || errs.length || res.error) {
+      var why = errs.length ? errs.map(function(x){ return (x.id ? 'entry ' + x.id + ': ' : '') + x.error; }).join(' | ') : ((res && res.error) || 'no answer from the server');
+      toast('Copied ' + done + ' note' + (done === 1 ? '' : 's') + ', but it did not finish: ' + why, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    } else if (!done) {
+      toast((res && res.message) || 'Nothing to copy.', 'info');
+    } else {
+      toast('Copied ' + done + ' note' + (done === 1 ? '' : 's') + ' into the invoice description' + (done === 1 ? '' : 's'), 'success');
+    }
+    return api('GET', '/time-entries?wo_id=' + woId).then(function(entries) {
+      var holder = document.getElementById('time-track-' + woId);
+      if (holder) renderHubTimeSection(woId, Array.isArray(entries) ? entries : [], holder);
+      invRefreshTimeForWO(woId);
+    });
+  }).catch(function(e) {
+    toast('Could not copy the notes: ' + ((e && e.message) || e), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  });
+}
+
 function deleteTimeEntry(entryId, woId) {
   if (!confirm('Delete this time entry?')) return;
   api('POST', '/time-entry/delete', { id: entryId }).then(function() {
