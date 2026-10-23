@@ -17805,6 +17805,8 @@ function smsDcClassify(messages, nowMs) {
     const status = String(m.status || '').toLowerCase();
     const code = m.error_code == null ? '' : String(m.error_code);
     out.total++; b.sent++; fb.sent++;
+    const _segs = parseInt(m.num_segments, 10); if (isFinite(_segs) && _segs > 0) out.pieces += _segs;
+    const _pr = parseFloat(m.price); if (isFinite(_pr)) { out.price_usd += Math.abs(_pr); out.priced++; }
     if (status === 'delivered' || status === 'read') { out.delivered++; b.delivered++; fb.delivered++; continue; }
     if (status === 'failed' || status === 'undelivered') {
       out.failed++; b.failed++; fb.failed++;
