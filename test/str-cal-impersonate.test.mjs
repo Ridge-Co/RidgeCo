@@ -329,7 +329,7 @@ function tickWorld(over) {
   t('board: pass/fail renderer says Passed / Failed in plain words', /Passed: the Hub can read and change the cleaning calendar/.test(html) && /'Failed: '/.test(html));
   t('route: POST /str/admin/calendar-check is wired and allowed for the staging test token', /path === '\/str\/admin\/calendar-check'\)\s+return await strAdminCalendarCheck\(env, body\)/.test(src) && /path === '\/str\/admin\/calendar-check' \|\| path === '\/str\/admin\/offer-now'/.test(src));
   t('the swap preview note no longer tells him to give the service account "Make changes to events"', !/needs "Make changes to events"/.test(src));
-  t('build version bumped', /const BUILD_VERSION = '2026-10-23\.01-str-cal-impersonate';/.test(src));
+  t('build version bumped', /const BUILD_VERSION = '2026-10-23\.\d+-[a-z-]+';/.test(src));
   t('no cron added', !/crons\s*=\s*\[\s*"/.test(fs.readFileSync(root + 'wrangler.toml', 'utf8')));
 }
 

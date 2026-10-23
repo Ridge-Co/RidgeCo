@@ -1,3 +1,11 @@
+# LOST TEXT + CRON COOLDOWN — Oct 23, 2026 — head `fix/mq-update-quota-cron-cooldown-oct23` cut from main tip 9c64e362 (after PR #423). BUILD_VERSION `2026-10-23.02-mq-save-cron-cooldown`. FEATURE_LOG rule 228.
+
+## 🟡 Built and tested; PR open for Brett's merge. Full suite 192 files, 0 failing.
+**Lost text:** a sent text can no longer be left "pending" quietly. The status save after a send needs no read (headers + row number come from the send), retries over ~30 s on any Sheets error, and if it still fails files ONE P0 `message_queue_update` row + admin alert naming the Twilio SID and phone, returns false, and `smsGatedSend` adds a `warning` to its result.
+**Cron cooldown:** a non-critical background read retries once (was 5 times); a run that is throttled sets `quota_hot_until` (+150 s) in Scheduler_State; until then only `door_watchdog` (flag `critical: true`) is started, the rest stay due and resume after. Held ticks still write the heartbeat and stop the Apps Script loop. `/cron/status` shows `quota_cooldown_until`.
+**Tests:** `test/mq-save-and-cron-storm.test.mjs` (35), +27 in `test/scheduler.test.mjs`. **Staging:** see the PR (verify `/version` then `/cron/status`).
+**Open question for Brett:** is `door_watchdog` the only job that must never wait 2.5 minutes? (`insp_guard`, `str_cleaning` currently wait.)
+
 # STR CLEANING CALENDAR: "ACT AS BRETT" (Google domain-wide delegation, nothing to share) — Oct 21, 2026 (re-cut Oct 23) — PR into `main`, head `feat/str-cal-impersonate-oct23` cut from the main tip after PR #421 (build 2026-10-22.01-needs-attention-sweep). Replaces PR #410, which went conflicting when main moved (BUILD_VERSION line + context files). BUILD_VERSION `2026-10-23.01-str-cal-impersonate`. FEATURE_LOG rule 227. Supersedes backlog B-20261020-1200-sw (it told Brett to share the calendar; he cannot: his Workspace only allows view-details sharing outside the domain).
 
 ## 🟡 Built and tested. Full suite on the combined tree (main + this change): 191 files, 0 failing. New `test/str-cal-impersonate.test.mjs` (93 assertions); one assertion in `test/str-swap-bulk.test.mjs` reworded (the old "Make changes to events" text is gone); `sheetsQuotaBusyError` added to that new test's sliced helpers (main now calls it from `strSystemAlert`).

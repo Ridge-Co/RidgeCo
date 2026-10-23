@@ -105,7 +105,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-23.01-str-cal-impersonate';
+const BUILD_VERSION = '2026-10-23.02-mq-save-cron-cooldown';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -15837,9 +15837,9 @@ async function smsGatedSend(env, opts) {
     const _g = await guardAppendedIds(env, MSG_QUEUE_TAB, _mqAppend, rows.length, headers.indexOf('ID') >= 0 ? headers.indexOf('ID') : 0, [id]);
     id = _g.ids[0]; mqRow = _g.row || mqRow;
   } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
-  const mqOpts = mqRow ? { sheetRow: mqRow } : undefined;
+  const mqOpts = mqRow ? { sheetRow: mqRow, headers } : undefined;   // headers: the save needs no second read of the whole tab (Oct 23 2026)
 
-  let sent = false, deliveredTo = '', outcome = 'blocked';
+  let sent = false, deliveredTo = '', outcome = 'blocked', queueSaveWarning = '';
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
@@ -15859,9 +15859,10 @@ async function smsGatedSend(env, opts) {
     const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
     if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
       const sendAfter = _holdUntil.toISOString();
-      await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
+      const _holdSaved = await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
       if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
-      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+      return Object.assign({ queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
+        _holdSaved === false ? { warning: 'The text was held for quiet hours but its Message_Queue row could not be marked (Send_After). It will not release by itself - see Needs Attention (message_queue_update).' } : {});
     }
     // opts.redirectTo (Oct 14 2026): a caller may send THIS text to a safe test phone while the global
     // TWILIO_TEST_MODE stays off, so one feature (the Milam Ridge cleaning scheduler) can be tested live without
@@ -15877,12 +15878,13 @@ async function smsGatedSend(env, opts) {
     const result = await sendSMSRaw(env, deliveredTo, messageBody);
     sent = !!(result && result.sid);
     outcome = sent ? 'sent' : 'failed';
-    await updateMessageQueueRow(env, id, {
+    const _sentSaved = await updateMessageQueueRow(env, id, {
       Status: sent ? 'sent' : 'failed',
       Delivered_To: deliveredTo,
       Sent_Date: new Date().toISOString(),
       Twilio_Message_SID: (result && result.sid) || '',
     }, mqOpts);
+    if (_sentSaved === false) queueSaveWarning = (sent ? 'The text WAS sent' : 'The text was NOT sent') + ' but its Message_Queue row could not be updated and may still say "pending" (see Needs Attention: message_queue_update, it names the Twilio SID).';
   } else if (sendOk && !recipientPhone) {
     outcome = 'failed_no_phone';
     await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' }, mqOpts);
@@ -15901,7 +15903,8 @@ async function smsGatedSend(env, opts) {
       });
     } catch (e) {}
   }
-  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+  return Object.assign({ queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
+    queueSaveWarning ? { warning: queueSaveWarning } : {});
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
@@ -15912,15 +15915,24 @@ async function smsGatedSend(env, opts) {
 // throws: this runs right after a text has really gone out, and crashing there would hide that from the caller.
 async function mqReportFailure(env, id, msg) {
   console.error('Message_Queue update problem (#' + id + '): ' + msg);
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (_) {}
-  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (_) {}
+  // Reporting code must not report on itself (loop): if the ledger write or the alert fails, the console is the last resort.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (e) { console.error('Message_Queue failure report: telemetry write failed (#' + id + '):', (e && e.message) || e); }   // silent-ok: reporting code must not recurse
+  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (e) { console.error('Message_Queue failure report: admin alert failed (#' + id + '):', (e && e.message) || e); }   // silent-ok: reporting code must not recurse
 }
 // opts.sheetRow: edit exactly this sheet row (used right after our own append). Otherwise find the row by id; if an old duplicate id
 // exists, prefer the one still "pending" (the one a person is waiting to act on). Returns true when every field landed.
 async function updateMessageQueueRow(env, id, fields, opts) {
-  try {
-    const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
-    const [headers, ...rows] = data.values || [[]];
+  // Oct 23 2026 (the "lost text" fix): this runs right after a real text went out. It used to re-read the WHOLE Message_Queue tab just to find the
+  // header row (a read the caller had already made), so one Google quota hit left a SENT text marked "pending" and nobody told. Now (1) a caller that
+  // has the headers and the row number passes them (opts.headers + opts.sheetRow) and no read happens at all, and (2) a failing save is tried again
+  // over ~30 s (Google's quota is per MINUTE; the old ~2 s of backoff gave up long before it cleared) before it is reported. The save writes absolute
+  // values, so repeating it is safe. The report (P0, message_queue_update) names what was sent - Twilio SID and phone - so it can be fixed by hand.
+  const waits = (opts && Array.isArray(opts.retryWaitsMs)) ? opts.retryWaitsMs : [2500, 8000, 20000];
+  // One attempt. THROWS on a Sheets failure (retried below); returns false after reporting a data problem that retrying cannot fix.
+  const once = async () => {
+    let headers, rows = [];
+    if (opts && opts.sheetRow && Array.isArray(opts.headers) && opts.headers.length) headers = opts.headers;   // nothing to read
+    else { const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`); [headers, ...rows] = data.values || [[]]; }
     const idCol = Math.max(0, headers.indexOf('ID'));
     const isPending = r => r[headers.indexOf('Status')] === 'pending';   // -1 (no Status column) -> undefined -> not pending
     let sheetRow = opts && opts.sheetRow ? opts.sheetRow : 0;
@@ -15940,7 +15952,16 @@ async function updateMessageQueueRow(env, id, fields, opts) {
     const res = await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
     if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < updates.length) { await mqReportFailure(env, id, 'only ' + res.totalUpdatedCells + ' of ' + updates.length + ' cells saved'); return false; }
     return true;
-  } catch (e) { await mqReportFailure(env, id, String((e && e.message) || e)); return false; }
+  };
+  let lastErr = null;
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, waits[attempt - 1]));
+    try { return await once(); }
+    catch (e) { lastErr = e; }   // retried; reported below if every try fails
+  }
+  const sentInfo = [fields && fields.Twilio_Message_SID ? 'Twilio SID ' + fields.Twilio_Message_SID : '', fields && fields.Delivered_To ? 'to ' + fields.Delivered_To : '', fields && fields.Status ? 'wanted Status=' + fields.Status : ''].filter(Boolean).join(', ');
+  await mqReportFailure(env, id, 'could not save the queue row after ' + (waits.length + 1) + ' tries' + (sentInfo ? ' (' + sentInfo + ')' : '') + ': ' + String((lastErr && lastErr.message) || lastErr));
+  return false;
 }
 
 // GET /message-queue?status=pending — backs the review/release screen. Small tab at this
@@ -16873,7 +16894,7 @@ function schedAtMinutes(at) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); 
 // 7am the job runs on the next tick that day. retry:false = never auto-retry a failed run (it may have
 // already sent something); a job result may also set no_retry:true when the failure was after a send.
 const SCHED_JOBS = [
-  { name: 'door_watchdog',      kind: 'interval', every_min: 14, run: (env) => schedRunDoorWatchdog(env) },
+  { name: 'door_watchdog',      kind: 'interval', every_min: 14, critical: true, run: (env) => schedRunDoorWatchdog(env) },   // critical (Oct 23 2026): never held back by the Sheets-quota cooldown, and keeps the full read retries
   { name: 'sweep',              kind: 'interval', every_min: 14, run: (env) => schedRunSweepMessages(env) },
   { name: 'sweep_work',         kind: 'interval', every_min: 14, run: (env) => schedRunSweepWork(env) },
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
@@ -17639,6 +17660,23 @@ async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
 
 function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 // Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
+// Oct 23 2026. PURE. Given the stored cooldown marker, which of the due jobs may start now? Returns { cooling, until, runnable, held }.
+// Only a marker in the future cools; a forced run is never held; a job flagged critical always runs.
+function schedCooldownPlan(state, nowMs, due, jobs, force) {
+  const untilMs = Date.parse((state && state.quota_hot_until) || '');
+  const cooling = !force && !isNaN(untilMs) && untilMs > nowMs;
+  if (!cooling) return { cooling: false, until: null, runnable: due, held: [] };
+  const crit = (name) => { const j = (jobs || []).find(x => x.name === name); return !!(j && j.critical); };
+  return { cooling: true, until: new Date(untilMs).toISOString(), runnable: due.filter(d => crit(d.name)), held: due.filter(d => !crit(d.name)).map(d => d.name) };
+}
+// Oct 23 2026. PURE. The marker to store after a run: a throttled run sets it to now+cooldown (never shortens one already in force); an un-throttled
+// run keeps a still-future marker as it is and drops an expired one (returns '').
+function schedCooldownNext(prevIso, nowMs, throttled, cooldownMs) {
+  const prevMs = Date.parse(prevIso || '');
+  const prevFuture = !isNaN(prevMs) && prevMs > nowMs ? prevMs : 0;
+  if (throttled) return new Date(Math.max(prevFuture, nowMs + cooldownMs)).toISOString();
+  return prevFuture ? new Date(prevFuture).toISOString() : '';
+}
 async function schedRunNext(env, ctx, opts) {
   opts = opts || {};
   const baseJobs = opts.jobs || SCHED_JOBS;
@@ -17686,7 +17724,11 @@ async function schedRunNext(env, ctx, opts) {
   const stamped = schedStampFirstSeen(st, now, jobs);   // Oct 20 2026: new / re-enabled jobs get a grace clock (persisted by the claim or heartbeat write below)
   if (stamped.length) base.grace_stamped = stamped;
   const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
-  const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
+  let dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
+  // Oct 23 2026: SHEETS-QUOTA COOLDOWN. A run that hit the shared read quota left Scheduler_State.quota_hot_until in the future; until it passes, only
+  // jobs marked critical (door_watchdog) are started - the rest wait (they stay due and run on the first tick after). A forced run ignores it.
+  const coolPlan = schedCooldownPlan(st, t, dueNow, jobs, force);
+  if (coolPlan.cooling) { dueNow = coolPlan.runnable; base.quota_cooldown = { until: coolPlan.until, held: coolPlan.held }; }
   base.due = force ? only.slice() : dueNow.map(d => d.name);
   if (aiPausedAt) base.ai_paused = true;
 
@@ -17732,7 +17774,9 @@ async function schedRunNext(env, ctx, opts) {
   } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
 
   const jobEnv = __meterCronEnv(__cronEnv(env), job.name);
+  if (job.critical) jobEnv.__CRON_CRITICAL__ = true;
   const t0 = Date.now();
+  const hit429Before = __cronLast429At();
   const work = (async () => {
     let jobRes;
     try { jobRes = await job.run(jobEnv, { now }); }
@@ -17756,6 +17800,7 @@ async function schedRunNext(env, ctx, opts) {
     // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
     const jobPaused = jobRes.paused === true && errors.length === 0;
     const jobOk = jobPaused || (jobRes.ok !== false && errors.length === 0);
+    let quotaBusyRun = false;
     const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
     const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
     if (jobPaused) { out.paused = true; out.paused_reason = String(jobRes.reason || 'paused: AI credit').slice(0, 300); }
@@ -17766,7 +17811,7 @@ async function schedRunNext(env, ctx, opts) {
       // Oct 22 2026: Google's shared per-minute read quota ran out during the run. Still recorded (P2 row, job state "failed", retried next tick, the
       // run's answer says quota_busy), but it is not a P0 scheduler failure and nobody is paged for it.
       const quotaBusy = schedErrorsAreQuotaBusy(errors);
-      if (quotaBusy) out.quota_busy = true;
+      if (quotaBusy) { out.quota_busy = true; quotaBusyRun = true; }
       try { await logTelemetry(env, { Source: 'worker', Job_Type: quotaBusy ? 'sheets_quota_busy' : 'scheduler_job', Skill_Or_Endpoint: quotaBusy ? 'scheduler/' + job.name : job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
       if (!quotaBusy) {
@@ -17789,6 +17834,9 @@ async function schedRunNext(env, ctx, opts) {
         rec.last_error = jobPaused ? out.paused_reason : (jobOk ? null : errText); rec.duration_ms = out.duration_ms;
         if (jobOk && !jobPaused) rec.last_ok = rec.last_end;
         rec.paused_key = null; rec.paused_ep = null;
+        // Oct 23 2026: a throttled run (the job failed on the quota, or any background read took a real 429 while it ran) starts / extends the cooldown.
+        const coolNext = schedCooldownNext(cur.quota_hot_until, nowMs(), quotaBusyRun || __cronLast429At() > hit429Before, CRON_QUOTA_COOLDOWN_MS);
+        if (coolNext) { cur.quota_hot_until = coolNext; out.quota_hot_until = coolNext; } else delete cur.quota_hot_until;
         if (job.kind !== 'interval') {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
@@ -17877,6 +17925,8 @@ async function schedStatusHandler(env) {
   const aiState = aiCreditStateFromRows(rows);
   const s = schedStatus(parsed.state, new Date(), eff.jobs, aiState.paused ? (aiState.at || 'paused') : '');
   if (eff.schedule_error) s.schedule_error = eff.schedule_error;
+  const _hot = Date.parse(parsed.state.quota_hot_until || '');
+  if (!isNaN(_hot) && _hot > Date.now()) s.quota_cooldown_until = new Date(_hot).toISOString();   // Oct 23 2026: non-critical jobs are being held back until then
   s.ai_credit = Object.assign({ paused: !!aiState.paused, since: aiState.paused ? (aiState.at || null) : null, kind: aiState.paused ? aiState.kind : null }, aiState.paused ? { reason: aiCreditSchedPaused(aiState).reason, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) } : {});
   const claimUntil = Date.parse(parsed.state.claim_until || '');
   return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null, failures: await failStatusForScheduler(env) }));
@@ -25336,6 +25386,13 @@ function __staleTab(tab) {
 const CRON_CACHE_MS = 90 * 1000;
 const CRON_READ_GAP_MS = 2500;
 let __cronNextReadAt = 0;
+// Oct 23 2026: when a non-critical background read is throttled it retries once, quickly (see sheetsRequest). CRON_QUOTA_COOLDOWN_MS is how long the
+// dispatcher then holds back the non-critical jobs (Scheduler_State.quota_hot_until). Google's quota is per MINUTE, so 2.5 min lets the bucket refill.
+const CRON_FAST_ATTEMPTS = 2;
+const CRON_FAST_BACKOFF_MS = 2000;
+const CRON_QUOTA_COOLDOWN_MS = 150 * 1000;
+let __cronHit429At = 0;   // ms epoch of the last real 429 seen by a background read in this Worker instance
+function __cronLast429At() { return __cronHit429At; }
 function __cronEnv(env) {
   if (env && env.__CRON__) return env;
   const c = Object.create(env);
@@ -25423,8 +25480,13 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
   // Reads get a much longer retry budget than writes (6 tries, ~0.5/1/2/4/8s waits = ~15s)
   // because Google's quota is per MINUTE: the old ~2s of total waiting gave up long before
   // the limit could clear. Writes keep 4 tries / 300ms base (a vendor staring at a Save button).
-  const MAX_ATTEMPTS = method === 'GET' ? 6 : 4;
-  const BACKOFF_BASE_MS = method === 'GET' ? 500 : 300;
+  // Oct 23 2026 (cron cooldown): a BACKGROUND (cron) read that is not door-critical gives up after ONE retry. Six tries x ~15 s of waiting, from
+  // several jobs in a row, re-spent the same exhausted per-minute quota again and again (a retry storm that kept people locked out). The failed read
+  // is reported by the job as a calm quota-busy row and the dispatcher cools the non-critical jobs down (schedRunNext). People and door_watchdog
+  // keep the full 6 tries.
+  const __cronFast = method === 'GET' && !!(env && env.__CRON__) && !(env && env.__CRON_CRITICAL__);
+  const MAX_ATTEMPTS = method === 'GET' ? (__cronFast ? CRON_FAST_ATTEMPTS : 6) : 4;
+  const BACKOFF_BASE_MS = method === 'GET' ? (__cronFast ? CRON_FAST_BACKOFF_MS : 500) : 300;
   for(let attempt=1;;attempt++){
     const token=await getAccessToken(env);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
@@ -25434,6 +25496,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     try { res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts); }
     catch (e) { __meterGoogle(env, method, path, 'err'); throw e; }
     __meterGoogle(env, method, path, res.status === 429 ? '429' : (res.status >= 400 ? 'err' : 'ok'));   // every real attempt, retries included
+    if (res.status === 429 && env && env.__CRON__) __cronHit429At = Date.now();   // the dispatcher reads this after a job and starts the cooldown
     const data=await res.json();
     if(data.error){
       const code=data.error.code||res.status;
