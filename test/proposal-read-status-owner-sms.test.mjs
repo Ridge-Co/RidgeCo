@@ -79,7 +79,7 @@ const gate = (over) => { const st = { updates: [], raw: [], posts: [] }; const d
   updateMessageQueueRow: async (e, id, f) => { st.updates.push({ id, f }); }, sendSMSRaw: async (e, to, msg) => { st.raw.push({ to, msg }); return { sid: 'SM1' }; },
   logMessageAudit: async () => {}, smsGateDecision: new Function(grab('smsGateDecision') + '\nreturn smsGateDecision;')(),
   smsToggleOn: v => String(v == null ? '' : v).toUpperCase() !== 'FALSE', translateForVendorDetailed: async () => ({}),
-  etHour: () => 12, MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: QCOLS }, over || {});
+  etHour: () => 12, MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: QCOLS }, over || {}); Object.assign(deps, d16Deps());
   return { st, deps, fn: new Function(...Object.keys(deps), grabAsync('smsGatedSend') + '\nreturn smsGatedSend;')(...Object.values(deps)) }; };
 const owner = { ID: '3', First_Name: 'Pat', Phone: '4105550142' };
 const base = { message_type: 'owner_proposal_ready', recipient_type: 'owner', owner, message_body: 'hi', property: { ID: '50' }, quietWindow: { start: 20, end: 8 }, skip_if_seen: 'scope:7' };
