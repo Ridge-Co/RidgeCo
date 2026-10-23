@@ -10545,7 +10545,7 @@ async function welcomeSend(env, body) {
       const tpl = await getMessageTemplate(env, 'tenant_welcome', 'sms');
       tokens = { FirstName: firstName, Address: address, Owner: ownerLabel, AssistantName: assistantName };
       defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
-        : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of ${ownerLabel} at ${address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing.`;
+        : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance. We handle maintenance for ${ownerLabel} at ${address}. Please save this number; we only text about maintenance.`;
     }
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors');
