@@ -17836,6 +17836,8 @@ async function schedStatusHandler(env) {
   const aiState = aiCreditStateFromRows(rows);
   const s = schedStatus(parsed.state, new Date(), eff.jobs, aiState.paused ? (aiState.at || 'paused') : '');
   if (eff.schedule_error) s.schedule_error = eff.schedule_error;
+  const _hot = Date.parse(parsed.state.quota_hot_until || '');
+  if (!isNaN(_hot) && _hot > Date.now()) s.quota_cooldown_until = new Date(_hot).toISOString();   // Oct 23 2026: non-critical jobs are being held back until then
   s.ai_credit = Object.assign({ paused: !!aiState.paused, since: aiState.paused ? (aiState.at || null) : null, kind: aiState.paused ? aiState.kind : null }, aiState.paused ? { reason: aiCreditSchedPaused(aiState).reason, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) } : {});
   const claimUntil = Date.parse(parsed.state.claim_until || '');
   return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null, failures: await failStatusForScheduler(env) }));
