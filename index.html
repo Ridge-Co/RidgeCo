@@ -10995,6 +10995,7 @@ function renderHubTimeSection(woId, entries, holder) {
           (vendorTotal ? '<span>Vendor: <b style="color:var(--info)">'+minToStr(vendorTotal)+'</b></span>' : '') +
         '</div>' +
       '</div>' +
+      useNotesBanner +
       (entries.length ? entryRows : '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No time logged yet.</div>') +
       '<div id="time-next-' + esc(String(woId)) + '"></div>' +
       buildHubTimeForm(woId) +
