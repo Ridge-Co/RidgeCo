@@ -1595,7 +1595,7 @@ async function portalBackfillApply(env) {
     if (!items.length) continue;
     const tab = PORTAL_TAB_BY_TYPE[type];
     try {
-      await ensureColumns(env, tab, PORTAL_PIN_COLS);
+      await ensureColumns(env, tab, PORTAL_PIN_COLS.concat(PORTAL_LOGIN_COLS));
       const data = await sheetsRequest(env, 'GET', '/values/' + tab);
       const [headers, ...rows] = data.values || [[]];
       const idc = idColIndex(headers), batch = [];
