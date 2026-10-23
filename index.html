@@ -10977,6 +10977,15 @@ function renderHubTimeSection(woId, entries, holder) {
     '</div>';
   }).join('');
 
+  var usableNotes = hubEntries.filter(hubNoteUsable);
+  var useNotesBanner = usableNotes.length
+    ? '<div style="background:#fff7e6;border:1px solid #f0c36d;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#7a4b00">' +
+        '<b>' + usableNotes.length + ' billable ' + (usableNotes.length === 1 ? 'entry has' : 'entries have') + ' a private note but no invoice description</b>, so the owner would not see ' + (usableNotes.length === 1 ? 'it' : 'them') + ' on the invoice. ' +
+        '<button onclick="hubUseNotes(\''+esc(String(woId))+'\',null,this)" style="margin-left:6px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:11px;padding:3px 8px;cursor:pointer">Use notes as invoice descriptions</button>' +
+        '<div style="margin-top:4px;color:#8a6a2f">Copies each note over word for word. Nothing is copied until you tap.</div>' +
+      '</div>'
+    : '';
+
   holder.innerHTML =
     '<div style="margin-top:16px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
