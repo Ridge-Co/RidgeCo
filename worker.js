@@ -16077,7 +16077,7 @@ function smsSendOutcome(result) {
   if (result && result.region_blocked) return { sent: false, status: 'failed', sid: '', errorCode: 'blocked_region', reason: result.reason || 'text not sent: destination outside enabled regions', regionBlocked: true };
   if (result && result.staged) return { sent: false, status: 'failed', sid: '', errorCode: '', reason: 'staging stub: nothing was really sent' };
   const e = smsErrorInfo(result);
-  const why = e.code ? 'Twilio error ' + e.code + ': ' + e.reason + (e.permanent ? ' (final - this text will not be retried)' : '') : String((result && (result.error || result.message)) || 'Twilio gave no message sid').slice(0, 160);
+  const why = e.code ? 'Twilio error ' + e.code + ': ' + e.reason + (e.permanent ? ' (final - this text will not be retried)' : '') : smsMaskPhones(String((result && (result.error || result.message)) || 'Twilio gave no message sid')).slice(0, 160);
   return { sent: false, status: 'failed', sid: '', errorCode: e.code ? String(e.code) : '', reason: why, permanent: e.permanent };
 }
 
