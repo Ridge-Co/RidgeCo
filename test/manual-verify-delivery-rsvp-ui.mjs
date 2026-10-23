@@ -127,6 +127,7 @@ const parseRgb = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
       ok(await page.locator('#ans-no').getAttribute('aria-pressed') === 'true' && await page.locator('#ans-yes').getAttribute('aria-pressed') === 'false', 'change answer: the current answer is marked');
       ok(await page.inputValue('#note') === 'Out of town until Saturday. Gate code is 4417.', 'change answer: the note is pre-filled, not lost');
       ok(await page.locator('#back').count() === 1, 'change answer: there is a way back without changing anything');
+      ok(!/What we are hoping for/.test(await text(page)), 'change answer: the long explanation is not repeated');
       await page.click('#back');
       ok(await page.locator('#change').count() === 1 && srv.posts.length === 1, '"never mind" returns to the confirmation and sends nothing');
       await page.click('#change');
