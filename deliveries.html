@@ -360,6 +360,42 @@ function srcBadge(d){
   var label = s==='email-watcher' ? '✉ email' : (s==='manual' ? 'manual' : s);
   return '<span class="src-badge" data-src="'+esc(s)+'" title="Source: '+esc(s)+'">'+esc(label)+'</span>';
 }
+// ── Tenant RSVP badge ────────────────────────────────────────────────────
+// Worker fields: tenant_rsvp (''|Confirmed|Declined|Unsure), tenant_rsvp_at, tenant_rsvp_note. Unknown values are treated as "no answer".
+function rsvpState(d){
+  var v=String(d&&d.tenant_rsvp||'').trim().toLowerCase();
+  if(v==='confirmed'||v==='yes') return 'yes';
+  if(v==='declined'||v==='no') return 'no';
+  if(v==='unsure') return 'unsure';
+  return '';
+}
+function rsvpOpen(d){ return ['Delivered','Cancelled','Needs Review'].indexOf(d.status)<0; }
+function rsvpWhen(s){
+  s=String(s||'').trim(); if(!s) return '';
+  var t=/^\d{4}-\d{2}-\d{2}T/.test(s)?new Date(s):null;
+  if(!t||isNaN(t.getTime())) return s;      // not an ISO stamp: show it as stored rather than guess a time zone
+  try{ return t.toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); }catch(e){ return s; }
+}
+function rsvpBadge(d){
+  var st=rsvpState(d), open=rsvpOpen(d);
+  if(!st){
+    if(!open) return '';
+    var noticeKnown=('tenant_notice_sent_at' in d)||('tenant_notice_status' in d);
+    if(noticeKnown){
+      var asked=!!d.tenant_notice_sent_at||/^sent/i.test(String(d.tenant_notice_status||''));
+      return '<div class="rsvp-line"><span class="rsvp" data-rsvp="'+(asked?'none':'not-asked')+'">'+(asked?'Tenant: No answer yet':'Tenant: not asked yet')+'</span></div>';
+    }
+    if(!d.tenant_name) return '';
+    return '<div class="rsvp-line"><span class="rsvp" data-rsvp="none">Tenant: No answer yet</span></div>';
+  }
+  var label=st==='yes'?'✓ Tenant: Confirmed':(st==='no'?'✕ Tenant: Declined':'? Tenant: Unsure');
+  var when=rsvpWhen(d.tenant_rsvp_at);
+  var note=String(d.tenant_rsvp_note||'').trim();
+  return '<div class="rsvp-line"><span class="rsvp '+st+'" data-rsvp="'+st+'">'+esc(label)+'</span>'
+    +(when?'<span class="rsvp-when">'+esc(when)+'</span>':'')
+    +'</div>'
+    +(note?'<div class="rsvp-note" data-rsvp-note>“'+esc(note)+'”</div>':'');
+}
 function driverNote(d){
   return /Driver calls Brett/i.test(d.notes||'') ? '<div><span class="driver-note">📞 Driver calls: Brett</span></div>' : '';
 }
