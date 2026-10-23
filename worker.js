@@ -36272,6 +36272,48 @@ async function strAdminConfig(env, body) {
     return json({ ok: true, settings: strSettingsOut(cfg) });
   } catch (e) { return await strHandleErr(env, e, 'save settings'); }
 }
+// A failed calendar check/save goes to Ops_Telemetry (the failure ledger reads it). No text to Brett: he is looking at the result on the board.
+async function strCalCheckLog(env, e, where) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/calendar_check_' + where, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); }
+  catch (te) { console.error('calendar check: telemetry failed:', te && te.message, '| original:', strErrText(e)); }
+}
+// "Check calendar access" (cleaning board): signs in the way the Hub is set up, reads the cleaning calendar and, with write:true, also adds + deletes one
+// 1-minute test event. A pass on reading alone does NOT prove the Hub may change the calendar, and the result says so. Plain-English pass/fail per step.
+async function strCalCheck(env, cfg, opts) {
+  opts = opts || {};
+  const as = strCalAs(cfg), calId = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim(), steps = [];
+  const add = (step, ok, detail, fix) => { steps.push({ step, ok: !!ok, detail: detail || '', fix: fix || '' }); return !!ok; };
+  const finish = async (extra) => { const bad = steps.find(s => !s.ok), r = Object.assign({ passed: !bad, mode: as.sub ? 'acting_as' : 'shared', as: as.sub, scope: as.scope, wrote: !!opts.write, steps, summary: bad ? (bad.detail + (bad.fix ? ' ' + bad.fix : '')) : '' }, extra || {}); if (bad) await strCalCheckLog(env, new Error(r.summary), 'check'); return r; };
+  add('How the Hub signs in', true, as.sub ? `Acting as ${as.sub} (domain-wide delegation, scope calendar.events).` : "Its own Google login (scope calendar). That can read the cleaning calendar but cannot change it, because your Google Workspace will not let you give it edit access. Turn on the act-as setting.");
+  if (as.bad) { add('Who to act as', false, `"${as.sub}" is not an email address.`, 'Fix Config STR_CAL_IMPERSONATE.'); return await finish(); }
+  if (!calId) { add('Cleaning calendar', false, 'No cleaning calendar id is set.', 'Set it on the Inspection Scheduler page (Open blocks tab, "Cabin cleaning protection") or Config STR_GUARD_CLEANING_CAL.'); return await finish(); }
+  if (inspCalStaged(env, cfg)) { add('Staging', true, 'This is the test server: calendar calls are pretend-only here, so access was NOT really tested.'); return await finish({ stubbed: true }); }
+  try { await getCalendarAccessToken(env, { sub: as.sub, scope: as.scope }); add('Google sign-in', true, as.sub ? `Google approved acting as ${as.sub}.` : "Google accepted the Hub's own login."); }
+  catch (e) { add('Google sign-in', false, strErrText(e), as.sub ? '' : 'Check GOOGLE_SA_EMAIL / GOOGLE_SA_KEY on the Worker.'); return await finish(); }
+  try { const d = await strCalFetch(env, calId, 'GET', '/events?singleEvents=true&maxResults=5&timeMin=' + encodeURIComponent(new Date().toISOString()) + '&fields=items(id)', null, as); add('Read the cleaning calendar', true, `Can read it (${(d.items || []).length} upcoming event(s) on the first page).`); }
+  catch (e) { add('Read the cleaning calendar', false, strErrText(e)); return await finish(); }
+  if (opts.write) {
+    let id = '';
+    try {
+      const t0 = Date.now() + 3 * 86400000, ev = await strCalFetch(env, calId, 'POST', '/events', { summary: 'Ridge Co calendar test (safe to ignore - deleting now)', start: { dateTime: new Date(t0).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(t0 + 60000).toISOString(), timeZone: INSP_TZ }, transparency: 'transparent', extendedProperties: { private: { ridgecoStrTest: '1' } } }, as);
+      if (!ev || !ev.id) throw new Error('Google did not return an id for the test event');
+      id = ev.id; await strCalFetch(env, calId, 'DELETE', '/events/' + encodeURIComponent(id), null, as); id = '';
+      add('Add and remove a test event', true, 'Added one 1-minute test event and removed it again. The Hub can change the cleaning calendar.');
+    } catch (e) { add('Add and remove a test event', false, strErrText(e) + (id ? ` A test event may still be on the calendar (id ${id}); delete it by hand.` : '')); }
+  }
+  return await finish();
+}
+// POST /str/admin/calendar-check {write?: true}
+async function strAdminCalendarCheck(env, body) {
+  try {
+    const cfg = await fetchConfig(env), r = await strCalCheck(env, cfg, { write: !!(body && body.write) });
+    if (r.passed && r.wrote && !r.stubbed) {
+      try { await strEnsureTabs(env); const al = (await fetchTab(env, 'STR_Alerts')).find(a => a.Alert_Key === 'cal|access' && !a.Resolved_At); if (al) await strSetRow(env, 'STR_Alerts', al.ID, { Resolved_At: new Date().toISOString() }); }
+      catch (e) { r.steps.push({ step: 'Clear the old board warning', ok: false, detail: 'Could not clear the old calendar warning: ' + strErrText(e), fix: 'Press Acknowledge on it.' }); r.passed = false; r.summary = r.steps[r.steps.length - 1].detail; }
+    }
+    return json(Object.assign({ ok: true }, r));
+  } catch (e) { return await strHandleErr(env, e, 'calendar check'); }
+}
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
   try {
