@@ -22,6 +22,10 @@ findable by grep even though they never share a number. Example:
 - B-20261020-1201-ub · 🟢 **[str-cleaning]** NOT built: Uplisting date blocking / check-in blocking on an uncovered day (roadmap item 10). Test with one real date first.
 - B-20261020-1202-bd · 🟢 **[str-cleaning]** NOT built: Phase 2 backup drip (staged backup asks).
 
+**Oct 21 2026 additions (STR calendar act-as):**
+- B-20261021-0800-ca · 🟡 **[str-cleaning]** Calendar "act as Brett" built (FEATURE_LOG rule 227, PR #410). SUPERSEDES B-20261020-1200-sw: never share the calendar (Brett's Workspace only allows view sharing outside the domain). After merge Brett does the one-time Google admin step (admin.google.com > Security > Access and data control > API controls > Domain-wide delegation > Manage Domain Wide Delegation > Add new; Client ID = the service account "Unique ID" from Google Cloud console > IAM & Admin > Service Accounts; scope `https://www.googleapis.com/auth/calendar.events`), then on the cleaning board Switches: "Turn on act as Brett", "Check calendar access", "Check and test a write", then switch "Cleaning calendar" (`STR_CAL_WRITE_ENABLED`) ON.
+- B-20261021-0801-cb · 🟢 **[str-cleaning]** Maybe later: move the inspection guard's read of the cleaning calendar (`inspStrReadGoogle`) onto the same act-as sign-in if the view-only share ever stops working; today it is deliberately left on the shared login.
+
 **Oct 20 2026 additions (STR pending cleaning):**
 - B-20261020-1400-pc · 🟡 **[str-cleaning]** Pending cleaning built (FEATURE_LOG rule 226), shipped in the same PR as swap/bulk (rule 225). Needs `STR_CAL_WRITE_ENABLED` TRUE for the "(PENDING)" calendar event; otherwise holds work but no tentative event is written.
 - B-20261020-1401-pd · 🟢 **[str-cleaning]** Maybe later: let "Mark as booked now" also take a guest name/dates; widen the exact-date match to a +/-1 day option if Brett wants it (today adjacent-day bookings only alert).
