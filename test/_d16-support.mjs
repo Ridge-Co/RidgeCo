@@ -49,8 +49,8 @@ export function d16Deps(over) {
 // updateMessageQueueRow / sendSMSRaw stubs. Use:  Object.assign(deps, d16Deps(), d16Queue(deps))
 export function d16Queue(deps) {
   const d = d16Real();
-  const need = Object.assign({ mqReportFailure: async () => {}, reportFailure: async () => {}, smsReportRegionBlocked: async () => {} }, { smsSendOutcome: d.smsSendOutcome, smsDestinationCheck: d.smsDestinationCheck }, deps);
-  const names = ['updateMessageQueueRow', 'sendSMSRaw', 'smsSendOutcome', 'smsDestinationCheck', 'smsReportRegionBlocked', 'reportFailure', 'mqReportFailure'];
+  const need = Object.assign({ mqReportFailure: async () => {}, reportFailure: async () => {}, smsReportRegionBlocked: async () => {} }, { smsMaskPhones: d.smsMaskPhones, smsSendOutcome: d.smsSendOutcome, smsDestinationCheck: d.smsDestinationCheck }, deps);
+  const names = ['updateMessageQueueRow', 'sendSMSRaw', 'smsMaskPhones', 'smsSendOutcome', 'smsDestinationCheck', 'smsReportRegionBlocked', 'reportFailure', 'mqReportFailure'];
   const fns = new Function(...names, D16_QUEUED + '\nreturn { mqSendQueuedRow, mqStuckSending };')(...names.map(k => need[k]));
   return Object.assign({ mqReportFailure: need.mqReportFailure }, fns);
 }
