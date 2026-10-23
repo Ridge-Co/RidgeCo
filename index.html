@@ -10960,6 +10960,9 @@ function renderHubTimeSection(woId, entries, holder) {
         ? '<span style="background:#eaf6ee;color:#166534;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
         : '');
     var dateStr = e.Start_DateTime ? esc(e.Start_DateTime.split('T')[0]) : (e.Created_Date||'').split('T')[0];
+    var useNoteBtn = hubNoteUsable(e)
+      ? '<div style="margin-top:3px"><button onclick="hubUseNotes(\''+esc(String(woId))+'\',[\''+esc(String(e.ID))+'\'],this)" style="background:none;border:1px solid var(--accent);color:var(--accent);border-radius:4px;font-size:10px;padding:1px 6px;cursor:pointer">Use this note as the invoice description</button></div>'
+      : '';
     return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
       '<div style="flex:1">' +
         '<span style="color:'+(isHub?'var(--accent)':'var(--info)')+';font-weight:bold">'+label+'</span>' +
