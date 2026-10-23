@@ -15094,7 +15094,7 @@ function smsErrorInfo(r) {
   const raw = r && (r.code != null ? r.code : r.error_code);
   const code = raw == null || raw === '' ? 0 : parseInt(raw, 10) || 0;
   if (!code) return { code: 0, permanent: false, reason: '' };
-  return { code, permanent: Object.prototype.hasOwnProperty.call(SMS_PERMANENT_ERRORS, code), reason: SMS_PERMANENT_ERRORS[code] || String((r && r.message) || 'Twilio error ' + code).slice(0, 160) };
+  return { code, permanent: Object.prototype.hasOwnProperty.call(SMS_PERMANENT_ERRORS, code), reason: SMS_PERMANENT_ERRORS[code] || smsMaskPhones(String((r && r.message) || 'Twilio error ' + code)).slice(0, 160) };
 }
 
 // -- Never send the same text twice (D-16 item 4). Per-isolate memory + the Message_Queue rows smsGatedSend already reads. --
