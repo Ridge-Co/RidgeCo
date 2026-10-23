@@ -15178,6 +15178,7 @@ async function smsLogAppend(env, rec) {
 }
 // Logs and, if the log write itself fails, reports it to the failure ledger (never silent). Never throws.
 async function smsLogRecord(env, rec) {
+  if (rec && rec.Note) rec = Object.assign({}, rec, { Note: smsMaskPhones(rec.Note) });   // defence in depth: no full number in a log note, whatever the caller passed
   const r = await smsLogAppend(env, rec);
   if (!r.ok) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_log_write', ref: String(rec.Message_Type || rec.Log_Source || ''), message: 'could not write an SMS_Logs row (' + String(rec.Status || '') + '): ' + r.error, severity: 'P1' });
   return r;
