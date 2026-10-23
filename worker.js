@@ -35494,7 +35494,18 @@ async function strLoad(ctx, fresh) {
 function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date, winStart: r.Win_Start || r.Date, winEnd: r.Win_End || r.Date, next: r.Next_Arrival || null, guests: r.Guests || '', status: r.Status, assigned: r.Assigned_Cleaner_ID || '' }; }
 
 // Calendar reads/writes against the CLEANING calendar (not the main inspection calendar).
-async function strCalFetch(env, calId, method, pathAndQuery, body) {
+// Cleaning-calendar API failures in plain English. They never tell Brett to share the calendar (his Google Workspace will not allow edit sharing); the fix is the act-as setting.
+function strCalClassify(status, text, as) {
+  const t = String(text || ''), who = (as && as.sub) || '', via = who ? `(the Hub is acting as ${who})` : '(the Hub is using its own Google login)';
+  const fix = who ? `Check that ${who} owns the cleaning calendar or can edit it.` : 'Turn on the act-as setting: set Config STR_CAL_IMPERSONATE to brett@bmoremanagement.com (cleaning board > Switches > Check calendar access explains the one-time Google admin step).';
+  if (status === 403 && /insufficient.*scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(t)) return inspErr('calendar_scope_too_narrow', `Google says the narrow calendar.events permission is not enough for this calendar call ${via}. Tell Claude: the permission must not be widened without a decision.`, 503);
+  if (status === 403 && /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(t)) return inspErr('calendar_error', 'Google Calendar is rate limiting the Hub right now (403). It is retried on the next scheduler run.', 503);
+  if (status === 404) return inspErr('calendar_not_shared', `Google cannot find the cleaning calendar ${via}. ${fix} Also check that Config STR_GUARD_CLEANING_CAL is the right calendar id.`, 503);
+  if (status === 403 && !/accessNotConfigured|has not been used in project|is disabled/i.test(t)) return inspErr('calendar_no_write_permission', `Google will not let the Hub change the cleaning calendar ${via}. ${fix}`, 503);
+  if (status === 401) return inspErr('calendar_auth', `Google rejected the Hub's calendar login ${via} (401).` + (who ? ' Press "Check calendar access" on the cleaning board.' : ''), 503);
+  return inspClassifyCalError(status, text);
+}
+async function strCalFetch(env, calId, method, pathAndQuery, body, asOverride) {
   __strCalCount++;
   const token = await getCalendarAccessToken(env);
   const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}${pathAndQuery}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
