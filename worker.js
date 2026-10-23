@@ -34907,6 +34907,9 @@ function normalizePhone(phone) {
   const digits = String(phone).replace(/\D/g, '');
   if (!digits) return '';
   if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  // D-16 (Oct 23 2026): an explicit "+" with a country code other than 1 (e.g. Cuba +53 with 8 digits = 10 digits in all) is an international number, NOT a US
+  // number missing its "+1". Without this, '+5352123456' became '+15352123456' and was sent to Twilio as if it were American.
+  if (/^\s*\+/.test(String(phone)) && !digits.startsWith('1')) return '+' + digits;
   if (digits.length === 10) return '+1' + digits;
   return '+' + digits;
 }
