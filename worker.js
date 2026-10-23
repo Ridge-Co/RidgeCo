@@ -15750,7 +15750,7 @@ async function smsGatedSend(env, opts) {
   } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
   const mqOpts = mqRow ? { sheetRow: mqRow, headers } : undefined;   // headers: the save needs no second read of the whole tab (Oct 23 2026)
 
-  let sent = false, deliveredTo = '', outcome = 'blocked';
+  let sent = false, deliveredTo = '', outcome = 'blocked', queueSaveWarning = '';
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
