@@ -358,4 +358,144 @@ const nudge = (extra) => Object.assign({ wo_id: 'WO-1231', message_type: 'vendor
 }
 {
   // quiet hours: the held row is a duplicate guard too (not re-queued twice)
+  const G = gate({ quiet: true });
+  const a = await G.send(nudge());
+  const b = await G.send(nudge());
+  t('a text held for quiet hours is not queued twice', a.held_for_quiet_hours === true && b.suppressed === true && G.mq().length === 1 && G.st.raw.length === 0, [a, b]);
+}
+{
+  // -- item 2: nudges --
+  const G = gate({ cfg: { admin_phone: '+15403364284' } });   // the vendor's phone IS the admin phone
+  const r = await G.send(nudge());
+  t('nudge to the admin\'s own number: not sent, no queue row, no Twilio call', r.sent === false && r.suppress_reason === 'own_number' && G.st.raw.length === 0 && G.mq().length === 0, r);
+  t('...and the suppression is logged (Status suppressed_own_number) without printing the number in the note', G.st.logs.some(l => l.Status === 'suppressed_own_number' && !/5403364284/.test(l.Note)), G.st.logs);
+  const G2 = gate();
+  const r2 = await G2.send(nudge({ vendor: Object.assign({}, vendor, { In_House: 'TRUE' }) }));
+  t('nudge to an In_House vendor: not sent', r2.suppress_reason === 'own_number' && G2.st.raw.length === 0);
+  const r3 = await G2.send(nudge({ message_type: 'vendor_job_assigned', vendor: Object.assign({}, vendor, { In_House: 'TRUE' }), message_body: 'New job WO-1.' }));
+  t('a NON-nudge text (job assignment) to an In_House vendor is NOT blocked', r3.sent === true && G2.st.raw.length === 1);
+}
+{
+  const G = gate();
+  const r1 = await G.send(nudge());
+  t('first nudge goes', r1.sent === true);
+  // make that row 2 days old
+  const age = (ms) => { const iso = new Date(Date.now() - ms).toISOString(); const i = G.st.grid.length - 1; G.st.grid[i][QCOLS.indexOf('Created_Date')] = iso; G.st.grid[i][QCOLS.indexOf('Sent_Date')] = iso; };
+  age(2 * DAY);
+  const r2 = await G.send(nudge({ message_body: 'Hi Regina, a different nudge on WO-1231.' }));
+  t('a second nudge 2 days later, same person, same WO: suppressed (3-day cap)', r2.sent === false && r2.suppress_reason === 'nudge_cap' && !!r2.next_allowed_at && G.st.raw.length === 1, r2);
+  t('...next_allowed_at is 3 days after the first nudge', Math.abs(Date.parse(r2.next_allowed_at) - (Date.now() - 2 * DAY + 72 * HR)) < 60000, r2.next_allowed_at);
+  t('...and the suppression is logged', G.st.logs.some(l => l.Status === 'suppressed_nudge_cap' && l.WO_ID === 'WO-1231'));
+  const r3 = await G.send(nudge({ wo_id: 'WO-9999', message_body: 'Hi Regina, checking in on WO-9999.' }));
+  t('a nudge about a DIFFERENT work order is not capped', r3.sent === true);
+  age(73 * HR); // the WO-9999 row is last; age the WO-1231 row instead
+  const idx = G.mq().findIndex(r => r.WO_ID === 'WO-1231'); const iso = new Date(Date.now() - 73 * HR).toISOString();
+  G.st.grid[idx + 1][QCOLS.indexOf('Created_Date')] = iso; G.st.grid[idx + 1][QCOLS.indexOf('Sent_Date')] = iso;
+  const r4 = await G.send(nudge({ message_body: 'Hi Regina, one more on WO-1231.' }));
+  t('3 days + 1 hour later the next nudge goes', r4.sent === true, r4);
+}
+{
+  // quiet hours behaviour is unchanged for nudges
+  const G = gate({ quiet: true });
+  const r = await G.send(nudge());
+  t('quiet hours: a nudge is still held until 9am (existing behaviour)', r.held_for_quiet_hours === true && r.send_after === '2026-10-24T13:00:00.000Z');
+}
+{
+  // -- item 6: Twilio permanent errors are final --
+  const G = gate({ sendAnswers: [{ code: 21211, message: 'The To number is not valid' }] });
+  const r = await G.send({ wo_id: 'WO-1251', message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant: { ID: '8', Phone: '7875550100', First_Name: 'Ana' }, message_body: 'Hi Ana, a plumber is assigned. Ref: WO-1251.' });
+  const row = G.mq()[0];
+  t('permanent error 21211: the queue row is marked failed ONCE with the code and a plain-English reason', r.sent === false && row.Status === 'failed' && row.Error_Code === '21211' && /not a valid phone number/.test(row.Error_Reason) && r.error_code === '21211', [row, r]);
+  const led = G.st.reports.filter(x => x.where === 'sms_undeliverable');
+  t('...ONE calm P2 ledger row, row id + last 4 digits only', led.length === 1 && led[0].severity === 'P2' && /ending 0100/.test(led[0].message) && !/7875550100/.test(JSON.stringify(G.st.reports)), G.st.reports);
+  const again = await G.send({ wo_id: 'WO-1251', message_type: 'tenant_job_scheduled', recipient_type: 'tenant', tenant: { ID: '8', Phone: '7875550100', First_Name: 'Ana' }, message_body: 'Hi Ana, your job is scheduled for Friday.' });
+  t('...a later text to the same bad number is NOT sent again (known undeliverable) and is logged', again.sent === false && again.suppress_reason === 'known_undeliverable' && G.st.raw.length === 1 && G.st.logs.some(l => l.Status === 'suppressed_known_bad'), again);
+}
+{
+  const G = gate({ sendAnswers: [{ code: 21408, message: 'Permission to send an SMS has not been enabled for the region' }, { sid: 'SM77' }] });
+  const o = { wo_id: 'WO-1251', message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant: { ID: '8', Phone: '7875550100', First_Name: 'Ana' }, message_body: 'Hi Ana, a plumber is assigned. Ref: WO-1251.' };
+  const r = await G.send(o);
+  const row = G.mq()[0];
+  t('error 21408 (region not enabled): row failed with the code and a plain reason, not retried by this call', r.sent === false && row.Status === 'failed' && row.Error_Code === '21408' && /Geo Permissions/.test(row.Error_Reason) && G.st.raw.length === 1, row);
+  t('...21408 is NOT a permanent per-number block: after Geo Permissions are fixed a NEW text to that number goes', (await G.send(Object.assign({}, o, { message_type: 'tenant_job_scheduled', message_body: 'Your job is scheduled for Friday.' }))).sent === true);
+}
+{
+  // never retried by the release sweeps: a failed row is final (processQuietHoursQueue only takes Status "pending")
+  t('the release sweeps only pick up "pending" rows (a failed or sending row is never re-sent)', /const due = rows\.filter\(r => r\.Status === 'pending' && r\.Send_After/.test(wsrc.slice(wsrc.indexOf('async function processQuietHoursQueue('), wsrc.indexOf('async function processQuietHoursQueue(') + 1500)));
+  const rel = wsrc.slice(wsrc.indexOf('async function releaseMessageQueue('), wsrc.indexOf('async function releaseMessageQueue(') + 2500);
+  t('the manual release uses the same claim-before-send path (mqSendQueuedRow)', /mqSendQueuedRow\(env, row, deliverTo/.test(rel) && /mqSendQueuedRow\(/.test(wsrc.slice(wsrc.indexOf('async function processQuietHoursQueue('), wsrc.indexOf('async function processQuietHoursQueue(') + 6000)));
+}
+{
+  // -- item 6(b): destinations outside +1 are not sent --
+  const G = gate();
+  for (const [phone, label] of [['+989121234567', 'Iran +98'], ['+5352123456', 'Cuba +53'], ['+963944123456', 'Syria +963']]) {
+    const before = G.st.reports.length;
+    const r = await G.send({ wo_id: 'WO-1252', message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant: { ID: '9' + label.length, Phone: phone, First_Name: 'X' }, message_body: 'Hi X, update on WO-1252 for ' + label });
+    const rep = G.st.reports.slice(before);
+    t(label + ': not sent, no Twilio call, row failed with a plain reason', r.sent === false && G.st.raw.length === 0 && /outside enabled regions/.test(r.error_reason || '') && r.error_code === 'blocked_region', r);
+    t(label + ': exactly ONE ledger row, P2, calm wording, row id, last 4 only, never the full number', rep.length === 1 && rep[0].severity === 'P2' && /text not sent: destination outside enabled regions/.test(rep[0].message) && /Message_Queue row \d+/.test(rep[0].message) && new RegExp('ending ' + phone.slice(-4)).test(rep[0].message) && !rep[0].message.includes(phone.slice(0, -4)), rep);
+  }
+  const pr = await G.send({ wo_id: 'WO-1253', message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant: { ID: '3', Phone: '7875550100', First_Name: 'Ana' }, message_body: 'Hi Ana, update on WO-1253.' });
+  t('a Puerto Rico number (+1 787) IS sent', pr.sent === true && G.st.raw.length === 1);
+}
+{
+  // -- item 1: sanitizer inside the gated path --
+  const G = gate();
+  await G.send(nudge({ message_body: 'Hi Regina, checking in on WO-1231 — Plumbing job (Fix the leak…) “soon” ✅' }));
+  t('gated: the queued and sent text is plain', G.mq()[0].Message_Body === 'Hi Regina, checking in on WO-1231 - Plumbing job (Fix the leak...) "soon"' && G.st.raw[0].msg === G.mq()[0].Message_Body, G.mq()[0].Message_Body);
+  const GS = gate();
+  await GS.send({ wo_id: 'WO-1', message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor: { ID: '20', Name: 'Alex', Phone: '4105551212', Language: 'es' }, message_body: 'Hola — ¿puedes aceptar el trabajo? Está listo…', already_localized: true, translated_to: 'es' });
+  t('gated: a Spanish vendor keeps accents but gets plain dash / ellipsis', GS.st.raw[0].msg === 'Hola - ¿puedes aceptar el trabajo? Está listo...' && GS.st.raw[0].opts.keepAccents === true, GS.st.raw[0]);
+  const GE = gate();
+  await GE.send({ wo_id: 'WO-1', message_type: 'vendor_job_assigned', recipient_type: 'vendor', vendor: { ID: '21', Name: 'Sam', Phone: '4105551213', Language: 'en' }, message_body: 'Está listo' });
+  t('gated: an English-language vendor gets accents flattened', GE.st.raw[0].msg === 'Esta listo' && GE.st.raw[0].opts.keepAccents === false);
+}
+
+{
+  const G = gate({ auditFails: true });
+  const r = await G.send(nudge());
+  t('FAULT the per-WO audit row cannot be written: the text still goes and the failure is reported (P2 message_audit), not swallowed', r.sent === true && G.st.reports.some(x => x.where === 'message_audit' && x.severity === 'P2' && /500/.test(x.message)), G.st.reports);
+  const H = gate({ auditFails: true, quiet: true });
+  const r2 = await H.send(nudge());
+  t('FAULT the audit row for a quiet-hours hold fails: reported too', r2.held_for_quiet_hours === true && H.st.reports.some(x => x.where === 'message_audit'), H.st.reports);
+  const ok = gate(); await ok.send(nudge());
+  t('happy path: no audit failure is reported', ok.st.reports.length === 0);
+}
+
+// ========================= the nudge sweep (real processVendorNudges) =========================
+{
+  const consts = ['VENDOR_NUDGE_MAX', 'VENDOR_NUDGE_REPEAT_HOURS', 'VENDOR_MANUAL_REPEAT_HOURS', 'WO_STATUS_COMPLETE_OR_LATER', 'WO_STATUS_INVOICED_OR_LATER'].map(n => { const i = wsrc.indexOf('const ' + n + ' ='); return wsrc.slice(i, wsrc.indexOf(';', i) + 1); }).join('\n');
+  const mk = (gateAnswer, vendorOver) => {
+    const c = { updates: [], sent: [] };
+    const NOW = Date.now();
+    const rows = [{ ID: '5', WO_ID: 'WO-1231', Vendor_ID: '19', Request_Type: 'status_update', Status: 'open', Nudge_Count: '1', Next_Nudge_At: new Date(NOW - HR).toISOString() }];
+    const deps = {
+      ensureVendorReqTab: async () => {}, VENDOR_REQ_TAB: 'Vendor_Requests',
+      fetchTab: async (e, tab) => tab === 'Vendor_Requests' ? rows : tab === 'Work_Orders' ? [{ ID: 'WO-1231', Status: 'Assigned', Property_ID: 'P1', Unit_ID: 'U1', Trade: 'Plumbing', Description: 'Fix the leaking kitchen faucet at the sink', Vendor_ID: '19' }] : tab === 'Vendors' ? [Object.assign({ ID: '19', First_Name: 'Regina', Phone: '5403364284', In_House: 'FALSE' }, vendorOver || {})] : tab === 'Properties' ? [{ ID: 'P1', Address: '12 Main St' }] : [{ ID: 'U1', Unit_Label: '2' }],
+      fetchConfig: async () => ({ admin_phone: '+14105550100' }),
+      findWO: (wos, id) => wos.find(w => w.ID === id), updateRow: async (e, tab, id, f) => { c.updates.push(f); }, addRow: async () => {},
+      addonNudgeHold: () => false, formatUnitLabel: x => String(x), smsGatedSend: async (e, o) => { c.sent.push(o); return gateAnswer; },
+      sendSMS: async () => ({ sid: 'x' }), smsReportIfFailed: async () => true,
+    };
+    const names = Object.keys(deps);
+    const fn = new Function(...names, consts + '\n' + grab('smsShort') + '\n' + grab('woJobLabel') + '\n' + grab('vendorPortalLink') + '\n' + grab('processVendorNudges') + '\nreturn processVendorNudges;')(...names.map(k => deps[k]));
+    return { run: () => fn({}), c };
+  };
+  let m = mk({ sent: true, gate_snapshot: 'ok' }); let out = await m.run();
+  t('nudge sweep: a normal nudge goes, count +1, next nudge in 72 hours (3 days)', out.results[0].action === 'nudged' && m.c.updates[0].Nudge_Count === '2' && Math.abs(Date.parse(m.c.updates[0].Next_Nudge_At) - (Date.now() + 72 * HR)) < 60000, [out, m.c.updates]);
+  const nm = m.c.sent[0].message_body;
+  t('nudge sweep: the text is plain, 2 pieces or fewer, keeps the link', R.smsEstimate(nm).encoding === 'GSM-7' && R.smsEstimate(nm).pieces <= 2 && /vendor\.html\?wo=WO-1231/.test(nm), R.smsEstimate(nm));
+  m = mk({ sent: false, suppressed: true, suppress_reason: 'own_number' }); out = await m.run();
+  t('nudge sweep: a nudge to the owner\'s own number is CANCELLED (not re-armed every day), no count used', out.results[0].action === 'cancelled_own_number' && m.c.updates.length === 1 && m.c.updates[0].Status === 'cancelled' && !('Nudge_Count' in m.c.updates[0]), [out, m.c.updates]);
+  const later = new Date(Date.now() + 40 * HR).toISOString();
+  m = mk({ sent: false, suppressed: true, suppress_reason: 'nudge_cap', next_allowed_at: later }); out = await m.run();
+  t('nudge sweep: a nudge held back by the 3-day cap is pushed to when it is next allowed, no count used', out.results[0].action === 'nudge_capped' && m.c.updates[0].Next_Nudge_At === later && !('Nudge_Count' in m.c.updates[0]), [out, m.c.updates]);
+  m = mk({ sent: false, held_for_quiet_hours: true }); out = await m.run();
+  t('nudge sweep: a quiet-hours hold still counts (existing behaviour)', out.results[0].action === 'nudged' && m.c.updates[0].Nudge_Count === '2');
+}
+
+// ========================= queued sends (quiet-hours release / manual release) =========================
+{
+  const mk = (o) => {
+    o = o || {}; const calls = { updates: [], raw: [], reports: [], mqf: [] };
 //__CHUNK_END__
