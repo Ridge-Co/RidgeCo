@@ -15789,7 +15789,7 @@ async function smsGatedSend(env, opts) {
     const result = await sendSMSRaw(env, deliveredTo, messageBody);
     sent = !!(result && result.sid);
     outcome = sent ? 'sent' : 'failed';
-    await updateMessageQueueRow(env, id, {
+    const _sentSaved = await updateMessageQueueRow(env, id, {
       Status: sent ? 'sent' : 'failed',
       Delivered_To: deliveredTo,
       Sent_Date: new Date().toISOString(),
