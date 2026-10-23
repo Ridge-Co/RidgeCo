@@ -15748,7 +15748,7 @@ async function smsGatedSend(env, opts) {
     const _g = await guardAppendedIds(env, MSG_QUEUE_TAB, _mqAppend, rows.length, headers.indexOf('ID') >= 0 ? headers.indexOf('ID') : 0, [id]);
     id = _g.ids[0]; mqRow = _g.row || mqRow;
   } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
-  const mqOpts = mqRow ? { sheetRow: mqRow } : undefined;
+  const mqOpts = mqRow ? { sheetRow: mqRow, headers } : undefined;   // headers: the save needs no second read of the whole tab (Oct 23 2026)
 
   let sent = false, deliveredTo = '', outcome = 'blocked';
   if (sendOk && recipientPhone) {
