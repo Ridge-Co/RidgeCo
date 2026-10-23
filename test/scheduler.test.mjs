@@ -113,7 +113,7 @@ const primeState = (store) => { store.tabs.get('Config').push(['Scheduler_State'
 // registry shape
 {
   const names = P.SCHED_JOBS.map(j => j.name);
-  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'ai_credit_probe', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily', 'str_digest_mon', 'str_digest_wed', 'str_digest_fri']), names);
+  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'ai_credit_probe', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily', 'str_digest_mon', 'str_digest_wed', 'str_digest_fri']), names);
   t('registry names unique', new Set(names).size === names.length);
   const dw = P.SCHED_JOBS.find(j => j.name === 'door_watchdog'), sw = P.SCHED_JOBS.find(j => j.name === 'sweep');
   t('15-minute jobs gate at >=14 min', dw.every_min === 14 && sw.every_min === 14);
