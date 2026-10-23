@@ -231,6 +231,8 @@ const _hubWorkerCore = {
       // Tenant fix-check page (Oct 16 2026): public at the gate, but every handler self-verifies the signed, expiring fix-check token (scope 'fix-check',
       // hash-checked against WO_Followups.Token_Hash, bound to ONE follow-up and ONE tenant) before reading or writing anything.
       '/fix/page','/fix/answer','/fix/upload-session','/fix/log-attachment',
+      // Tenant delivery RSVP (Oct 23 2026 addendum): public at the gate; both handlers verify the signed per-delivery token (HMAC off WORKER_SECRET), rate limit, and answer a bad/expired link with one friendly message.
+      '/delivery/rsvp',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
       '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
@@ -660,6 +662,7 @@ const _hubWorkerCore = {
         if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
         if (path === '/fix/page')               return await fixPage(env, url);                // PUBLIC, token-verified (tenant fix-check)
+        if (path === '/delivery/rsvp')          return await deliveryRsvpGet(env, url, request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/followup/preview')       return await followupPreview(env, url);        // ADMIN-ONLY: no ROLE_SCOPES entry; read-only, never sends
         if (path === '/followup/list')          return await followupList(env, url);           // ADMIN-ONLY
         if (path === '/proposal/signatures')    return await proposalList(env, url);
@@ -771,6 +774,7 @@ const _hubWorkerCore = {
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
         if (path === '/fix/answer')               return await fixAnswer(env, body);              // PUBLIC, token-verified
+        if (path === '/delivery/rsvp')            return await deliveryRsvpPost(env, url, body, _clientIP || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/fix/upload-session')       return await fixUploadSession(env, body);       // PUBLIC, token-verified
         if (path === '/fix/log-attachment')       return await fixLogAttachment(env, body);       // PUBLIC, token-verified
         if (path === '/followup/send')            return await followupSend(env, body, url);     // ADMIN-ONLY: Brett's tap on Send in the preview
@@ -26305,7 +26309,7 @@ async function hubTestWriteAllowed(env, path, body) {
   // Delivery email watcher (Oct 23 2026): staging-only token. The message id must be TEST- prefixed, and when the email resolves to a real
   // property it must be a TEST- one (Access_Notes marker, same as /workorder). Parked / unmatched outcomes write only a Deliveries row + the alert.
   if (path === '/intake/delivery-email') {
-    const _mid = String((body && body.message_id) || '');
+    const _mid = String((body && (body.rfc_message_id || body.message_id || body.gmail_id)) || '');
     if (!_mid.startsWith('TEST-')) return { ok: false, debug: 'delivery-intake-guard: message_id must start with TEST-' };
     const _p = deliveryParseEmail({ subject: String(body.subject || ''), body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: body.received_at });
     if (!_p.address) return { ok: true };
@@ -33197,7 +33201,9 @@ const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
 // Tab self-provisions (mirrors the Trash pattern) so first use just works.
 const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active',
   // Oct 23 2026 email watcher: every Message-ID seen for the order, last email applied (kind/time/signature), "N stops away", tenant-notice bookkeeping, result of Brett's last text.
-  'Seen_Message_IDs','Last_Event','Last_Event_At','Last_Event_Sig','Stops_Away','Tenant_Notice_Sig','Tenant_Notice_Status','Tenant_Notice_Draft','Brett_SMS_Status'];
+  'Seen_Message_IDs','Last_Event','Last_Event_At','Last_Event_Sig','Stops_Away','Tenant_Notice_Sig','Tenant_Notice_Status','Tenant_Notice_Draft','Brett_SMS_Status',
+  // Oct 23 2026 addendum: tenant RSVP (blank | Confirmed | Declined | Unsure), when the request text was handed to the text gate, and a claim marker that stops two mailboxes double-alerting on one update.
+  'Tenant_RSVP','Tenant_RSVP_At','Tenant_RSVP_Note','Tenant_Notice_Sent_At','Event_Claim'];
 
 async function ensureDeliveryTab(env) {
   const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
@@ -33234,6 +33240,7 @@ async function deliveriesList(env, url) {
       backup_contact: d.Backup_Contact || '', backup_phone: d.Backup_Phone || '',
       notes: d.Delivery_Notes || '', linked_wo_ids: d.Linked_WO_IDs || '',
       status: d.Status || 'Ordered', source: d.Source || '',
+      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '',
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
@@ -33696,9 +33703,9 @@ function deliveryNextStatus(cur, kind) {
 }
 
 // Text for Brett's own phone: plain GSM characters only (no emoji, curly quotes, dashes) so it stays one segment where it can.
-function deliveryPlainSms(s) {
+function deliveryPlainSms(s, keepNewlines) {
   return String(s == null ? '' : s).replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"').replace(/[–—−]/g, '-').replace(/…/g, '...').replace(/ /g, ' ')
-    .replace(/[^\x20-\x7e\n]/g, '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, ' ').trim();
+    .replace(/[^\x20-\x7e\n]/g, '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, keepNewlines ? '\n' : ' ').trim();
 }
 function deliveryShortDate(iso) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
@@ -33759,6 +33766,41 @@ function deliveryCalendarObject(o) {
   };
   return Object.assign(base, { action, all_day: false, start_iso: iso(w.start), end_iso: iso(w.end) });
 }
+
+// ── Tenant-facing wording (Oct 23 2026 addendum). Warm, brief, never scolding. Plain GSM characters only. ──
+// "9a-1p" -> "9am-1pm"; "" -> "".
+function deliveryWindowHuman(win) {
+  const m = /^(\d{1,2})(?::(\d{2}))?([ap])-(\d{1,2})(?::(\d{2}))?([ap])$/.exec(String(win || '').trim());
+  if (!m) return String(win || '').trim();
+  return m[1] + (m[2] ? ':' + m[2] : '') + m[3] + 'm-' + m[4] + (m[5] ? ':' + m[5] : '') + m[6] + 'm';
+}
+// "5425 Belle Vista Ave, Baltimore, MD 21206" -> "5425 Belle Vista Ave" (the tenant knows the city); a unit stays: "928 N Calvert St Apt 2".
+function deliveryStreet(addr) { return String(addr || '').split(',')[0].replace(/\s+/g, ' ').trim(); }
+// "2026-10-16" -> "Friday, October 16" (the page).
+function deliveryLongDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const t = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12));
+  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][t.getUTCDay()] + ', ' + ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][+iso.slice(5, 7) - 1] + ' ' + (+iso.slice(8, 10));
+}
+// SMS segments: GSM-7 text is 160 for one segment and 153 per segment after that (all our tenant text is plain ASCII, so GSM-7).
+function deliverySmsSegments(s) { const n = String(s || '').length; return n === 0 ? 0 : (n <= 160 ? 1 : Math.ceil(n / 153)); }
+// o: { kind: 'request'|'changed'|'cancel', first, assistant, owner, item, street, date, window, link, firstText }
+function deliveryTenantText(o) {
+  const first = o.first || 'there', item = String(o.item || 'appliance').toLowerCase(), street = o.street || 'your home';
+  const when = [deliveryShortDate(o.date) ? 'on ' + deliveryShortDate(o.date) : '', deliveryWindowHuman(o.window)].filter(Boolean).join(', ');
+  let msg;
+  if (o.kind === 'cancel') {
+    msg = "Hi " + first + ", it's Ridge Co. The delivery of your new " + item + " at " + street + " is no longer scheduled, so there is no need to be home. We will let you know if a new date is set. Thank you!";
+  } else if (o.kind === 'changed') {
+    msg = "Hi " + first + ", it's Ridge Co. The delivery of your new " + item + " at " + street + " has changed" + (when ? ' to ' + when : '') + ". Could you still be home to let the delivery team in? Please tap here to update your answer: " + o.link +
+      "\nIf you can't make it, no worries. We'll do our best to be there instead. Thank you!";
+  } else {
+    msg = "Hi " + first + ", it's " + (o.assistant || 'Riley') + " with Ridge Co Property Maintenance, on behalf of " + (o.owner || 'your property owner') + ". A new " + item + " is scheduled for delivery at " + street + (when ? ' ' + when : '') +
+      ". Could you be home to let the delivery team in and have the old one hauled away? Please tap here to let us know: " + o.link +
+      "\nIf you can't make it, no worries. We'll do our best to be there instead, though the delivery may need to be rescheduled. Thank you!";
+  }
+  return deliveryPlainSms(msg, true);
+}
 // ═══ DELIVERY-EMAIL-PURE-END ═══
 
 // ═══ DELIVERY-EMAIL-HANDLER-START ═══
@@ -33767,21 +33809,26 @@ function deliveryCalendarObject(o) {
 // Ops_Telemetry, and (only when the tenant-notice switch allows it) one tenant text through the gated chokepoint.
 // What it never does: write the calendar (the Apps Script does, as Brett: the response carries the event), send a text on a dry run,
 // text a tenant directly, create a record from a promo email, or drop a store email that mentions an order.
-const DELIVERY_EXTRA_COLS = ['Seen_Message_IDs', 'Last_Event', 'Last_Event_At', 'Last_Event_Sig', 'Stops_Away', 'Tenant_Notice_Sig', 'Tenant_Notice_Status', 'Tenant_Notice_Draft', 'Brett_SMS_Status'];
+const DELIVERY_EXTRA_COLS = ['Seen_Message_IDs', 'Last_Event', 'Last_Event_At', 'Last_Event_Sig', 'Stops_Away', 'Tenant_Notice_Sig', 'Tenant_Notice_Status', 'Tenant_Notice_Draft', 'Brett_SMS_Status', 'Tenant_RSVP', 'Tenant_RSVP_At', 'Tenant_RSVP_Note', 'Tenant_Notice_Sent_At', 'Event_Claim'];
 const DELIVERY_NOTICE_DEFAULT_TEXT = 'Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}. Your {Item} has been ordered{When}. Please be home if you can. If not, Ridge Co will be there to receive it, so you do not need to do anything.';
 const DELIVERY_DRIVER_NOTE = 'Driver calls Brett (ok to call me for now). Tenant: be there if you can; otherwise Brett receives and makes sure the old unit is hauled away.';
 
 const deliveryNormOrder = s => String(s == null ? '' : s).trim().toUpperCase();
 const deliveryRowNum = r => { const n = parseInt(r && r.ID, 10); return Number.isFinite(n) ? n : 1e12; };
-function deliverySawMessage(row, msgId) {
-  if (!row || !msgId) return false;
-  return String(row.Message_ID || '') === msgId || String(row.Seen_Message_IDs || '').split(',').map(x => x.trim()).filter(Boolean).indexOf(msgId) >= 0;
+// Message keys: the RFC Message-ID (same in every mailbox that got the email), the caller's message_id, and "gmail:<mailbox>:<gmail id>". Compared case-insensitively.
+function deliveryKeyList(x) { return (Array.isArray(x) ? x : [x]).map(k => String(k == null ? '' : k).replace(/[,\s]+/g, '').trim()).filter(Boolean); }
+function deliverySawMessage(row, keys) {
+  const want = deliveryKeyList(keys).map(k => k.toLowerCase());
+  if (!row || !want.length) return false;
+  const have = [String(row.Message_ID || '')].concat(String(row.Seen_Message_IDs || '').split(',')).map(x => x.trim().toLowerCase()).filter(Boolean);
+  return want.some(k => have.indexOf(k) >= 0);
 }
-function deliverySeenAppend(row, msgId) {
+function deliverySeenAppend(row, keys) {
   const list = String(row && row.Seen_Message_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
-  if (String(row && row.Message_ID || '') && list.indexOf(String(row.Message_ID)) < 0) list.push(String(row.Message_ID));
-  if (list.indexOf(msgId) < 0) list.push(msgId);
-  return list.slice(-40).join(',');   // an order sends maybe a dozen emails; 40 is plenty and keeps the cell small
+  const lc = () => list.map(x => x.toLowerCase());
+  if (String(row && row.Message_ID || '') && lc().indexOf(String(row.Message_ID).toLowerCase()) < 0) list.push(String(row.Message_ID));
+  for (const k of deliveryKeyList(keys)) if (lc().indexOf(k.toLowerCase()) < 0) list.push(k);
+  return list.slice(-60).join(',');   // an order sends maybe a dozen emails, times two mailboxes; 60 is plenty and keeps the cell small
 }
 function deliveryNoteAppend(existing, line, recvIso) {
   const stamp = (deliveryEtDate(recvIso) || '').slice(5).replace('-', '/');
@@ -33851,55 +33898,215 @@ async function deliveryEnsureWO(env, row, p, msgId, adminName) {
   }
 }
 
-// Tenant heads-up. mode: 'auto' (default) | 'draft' | 'off'. Goes ONLY through smsGatedSend (global switch, property, owner and tenant
-// consent, opt-out, moved-out), as a held Message_Queue row released by the existing sweep (processQuietHoursQueue). Timing: see
-// deliveryNoticeHoldUntil. Returns {tenant_sms, detail, sig, draft}. Never throws.
+// ── Tenant RSVP link token (Oct 23 2026 addendum). Bearer token tied to the DELIVERY ID (not the date), so it survives a reschedule.
+// Format: "<delivery id>.<16 chars>" where the 16 chars are the first 96 bits of HMAC-SHA256(WORKER_SECRET, "delivery-rsvp|<id>"), base64url.
+// It never contains the date, the phone or the order number. Expiry is checked against the row's CURRENT Expected_Date (3 days after).
+const DELIVERY_RSVP_PAGE = 'rsvp.html';
+const DELIVERY_RSVP_GRACE_DAYS = 3;
+async function deliveryRsvpToken(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-rsvp|' + String(id), env.WORKER_SECRET)).slice(0, 16);
+}
+function deliveryRsvpLink(token) { return PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE + '?t=' + encodeURIComponent(token); }
+function deliveryCtEq(a, b) { a = String(a); b = String(b); let d = a.length ^ b.length; const n = Math.max(a.length, b.length); for (let i = 0; i < n; i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; }
+// Returns the delivery id when the token's signature is genuine, else null. Same null for every kind of bad token.
+async function deliveryRsvpVerify(env, t) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{16})$/.exec(String(t || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-rsvp|' + m[1], env.WORKER_SECRET)).slice(0, 16);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// Link works until DELIVERY_RSVP_GRACE_DAYS after the CURRENT Expected_Date (ET). No date = not usable.
+function deliveryRsvpExpired(row, now) {
+  const d = String(row && row.Expected_Date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
+  const today = (now || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  return today > deliveryAddDays(d, DELIVERY_RSVP_GRACE_DAYS);
+}
+const DELIVERY_RSVP_CURRENT = { Confirmed: 'yes', Declined: 'no', Unsure: 'unsure' };
+
+function deliveryNoticeMode(cfg) {
+  const raw = String(cfg.Delivery_Tenant_Notice == null ? '' : cfg.Delivery_Tenant_Notice).trim().toLowerCase();
+  const mode = raw === '' ? 'auto' : raw;
+  if (mode !== 'auto' && mode !== 'draft' && mode !== 'off') return { mode: 'off', bad: raw };
+  return { mode };
+}
+
+// Tenant request text. mode (Config Delivery_Tenant_Notice): 'auto' (default) | 'draft' | 'off'. Goes ONLY through smsGatedSend (global switch,
+// property, owner and tenant consent, opt-out, moved-out), as a held Message_Queue row released by the existing sweep (processQuietHoursQueue).
+// variant: 'request' (first ask) | 'changed' (date/window moved after we asked) | 'cancel' (we asked, then the delivery was cancelled).
+// No delivery date = no request at all. Timing: see deliveryNoticeHoldUntil. Returns {tenant_sms, detail, sig, draft, sent_at, record}. Never throws.
 async function deliveryTenantNotice(env, o) {
   const { cfg, row, place, woId, date, win } = o;
-  const modeRaw = String(cfg.Delivery_Tenant_Notice == null ? '' : cfg.Delivery_Tenant_Notice).trim().toLowerCase();
-  const mode = modeRaw === '' ? 'auto' : modeRaw;
-  if (mode !== 'auto' && mode !== 'draft' && mode !== 'off') return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice has an unknown value "' + modeRaw + '" (use auto, draft or off): no tenant text', warn: true };
-  if (mode === 'off') return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice is off' };
+  const variant = o.variant || 'request';
+  const nm = deliveryNoticeMode(cfg);
+  if (nm.bad !== undefined) return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice has an unknown value "' + nm.bad + '" (use auto, draft or off): no tenant text', warn: true };
+  if (nm.mode === 'off') return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice is off' };
   const tenant = place && place.tenant;
   if (!tenant) return { tenant_sms: 'skipped', detail: 'no single tenant resolved for this delivery' };
-  const sig = (date || '') + '|' + (win || '');
-  if (String(row.Tenant_Notice_Sig || '') === sig && row.Tenant_Notice_Status) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', sig: null };
-  if (!tenant.Phone) return { tenant_sms: 'skipped', detail: 'tenant has no phone on file', sig };
+  if (variant !== 'cancel' && !date) return { tenant_sms: 'skipped', detail: 'no delivery date yet: the tenant is asked when a later email sets the date', no_date: true };
+  const sig = variant === 'cancel' ? 'CANCELLED' : (date || '') + '|' + (win || '');
+  if (String(row.Tenant_Notice_Sig || '') === sig && /^(queued|sent|draft)/.test(String(row.Tenant_Notice_Status || ''))) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', record: false };
+  if (!tenant.Phone) return { tenant_sms: 'skipped', detail: 'tenant has no phone on file' };
   try {
     const owners = await fetchTab(env, 'Owners');
     const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
-    let first = true;
-    try { first = !(await fetchTab(env, MSG_QUEUE_TAB)).some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === normalizePhone(tenant.Phone)); }
-    catch (e) { if (!isMissingTabError(e)) throw e; }
-    const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
-    const when = date ? ' and is scheduled for ' + deliveryShortDate(date) + (win ? ', ' + win : '') : '';
-    let msg = renderTemplate(cfg.Delivery_Tenant_Notice_Text || DELIVERY_NOTICE_DEFAULT_TEXT, { FirstName: tenant.First_Name || 'there', AssistantName: cfg.ASSISTANT_NAME || 'Riley', Owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', Item: item, When: when, Address: row.Delivery_Address || '' });
-    msg = deliveryPlainSms(msg);
-    if (first) msg = withTenantStopNote(msg);
-    if (mode === 'draft') return { tenant_sms: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', sig, draft: msg };
-    const hold = deliveryNoticeHoldUntil(new Date(), date);
-    // A newer notice replaces one still waiting for its slot: never two texts for one delivery.
-    if (woId) {
-      for (const q of (await fetchTab(env, MSG_QUEUE_TAB)).filter(r => r.Message_Type === 'delivery_tenant_notice' && r.WO_ID === woId && r.Status === 'pending' && r.Send_After)) {
-        const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: 'superseded by a newer delivery notice', Send_After: '' });
-        if (ok === false) return { tenant_sms: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true };
-      }
+    let queue = [];
+    try { queue = await fetchTab(env, MSG_QUEUE_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
+    const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId);
+    const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
+    // A newer text replaces one still waiting for its slot: never two texts for one delivery.
+    if (variant !== 'cancel' || waiting.length) for (const q of waiting) {
+      if (nm.mode === 'draft') break;
+      const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
+      if (ok === false) return { tenant_sms: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true };
     }
+    if (variant === 'cancel') {
+      if (!queue.some(r => mine(r) && r.Status === 'sent')) return { tenant_sms: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' };
+    }
+    const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === normalizePhone(tenant.Phone));
+    const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
+    const ctx = { first: tenant.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
+    let link = '';
+    if (variant !== 'cancel') link = deliveryRsvpLink(await deliveryRsvpToken(env, o.deliveryId || row.ID));
+    let msg;
+    if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
+      msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
+      if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
+    } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
+    if (first) msg = withTenantStopNote(msg);
+    if (nm.mode === 'draft') return { tenant_sms: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', sig, draft: msg };
+    const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
     const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined });
-    if (r && r.sent) return { tenant_sms: 'sent', detail: 'sent now (delivery is today)', sig };
-    if (r && r.held_for_quiet_hours) return { tenant_sms: 'queued', detail: 'held until ' + r.send_after, sig, send_after: r.send_after };
-    if (r && r.send_ok === false) return { tenant_sms: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot, sig };
+    const nowIso = new Date().toISOString();
+    if (r && r.sent) return { tenant_sms: 'sent', detail: 'sent now (delivery is today)', sig, sent_at: nowIso, text: msg };
+    if (r && r.held_for_quiet_hours) return { tenant_sms: 'queued', detail: 'held until ' + r.send_after, sig, send_after: r.send_after, sent_at: nowIso, text: msg };
+    if (r && r.send_ok === false) return { tenant_sms: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot };
     return { tenant_sms: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true };
   } catch (e) { return { tenant_sms: 'failed', detail: String((e && e.message) || e).slice(0, 160), warn: true }; }
+}
+
+// ── Public RSVP endpoints. GET /delivery/rsvp?t=TOKEN and POST /delivery/rsvp {t, answer, note?}. Public at the gate; the signed token IS the credential. ──
+// Rate limits are per Worker instance (the same in-memory pattern as the other public pages): per token, per IP, and per IP for bad tokens.
+const __rsvpHits = new Map();
+function deliveryRsvpRate(key, max, windowMs) {
+  const now = Date.now();
+  if (__rsvpHits.size > 2000) for (const [k, v] of __rsvpHits) if (!v.length || now - v[v.length - 1] > windowMs) __rsvpHits.delete(k);
+  const arr = (__rsvpHits.get(key) || []).filter(t => now - t < windowMs);
+  if (arr.length >= max) { __rsvpHits.set(key, arr); return false; }
+  arr.push(now); __rsvpHits.set(key, arr); return true;
+}
+const DELIVERY_RSVP_RATE_WINDOW = 10 * 60000;
+function deliveryRsvpTooMany() { return json({ ok: false, expired: false, message: 'That was a lot of taps at once. Please wait a minute and try again.' }, 429); }
+function deliveryRsvpDead() { return json({ ok: false, expired: true, message: 'This link is no longer active. If you still need to reach us, please text or call Ridge Co and we will be glad to help.' }, 200); }   // the same answer for a bad, tampered, unknown or expired link
+function deliveryRsvpCleanNote(v) { return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300); }
+async function deliveryRsvpLoad(env, t, ip) {
+  if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  const id = await deliveryRsvpVerify(env, t);
+  if (!id) {
+    if (!deliveryRsvpRate('bad:' + ip, 15, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+    return { resp: deliveryRsvpDead() };
+  }
+  if (!deliveryRsvpRate('tok:' + id, 60, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  let dels = [];
+  try { invalidateTabCache('Deliveries'); dels = await fetchTab(env, 'Deliveries'); } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const row = dels.find(d => String(d.ID) === id);
+  if (!row || row.Active === 'FALSE' || deliveryRsvpExpired(row)) return { resp: deliveryRsvpDead() };
+  return { row, id };
+}
+function deliveryRsvpClosed(row) {
+  if (row.Status === 'Delivered') return 'This delivery has already arrived. Thank you for being part of it!';
+  if (row.Status === 'Cancelled') return 'This delivery is no longer scheduled, so there is nothing to answer. We will let you know if a new date is set.';
+  return '';
+}
+async function deliveryRsvpGet(env, url, ip) {
+  try {
+    const ld = await deliveryRsvpLoad(env, url.searchParams.get('t'), ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    let first = '';
+    if (row.Tenant_ID) { try { const t = (await fetchTab(env, 'Tenants')).find(x => String(x.ID) === String(row.Tenant_ID)); first = t ? String(t.First_Name || '') : ''; } catch (e) { first = ''; } }
+    const closed = deliveryRsvpClosed(row);
+    // Only what the tenant needs. No phone numbers, no other tenants, no order number, no ids.
+    return json({ ok: true, closed: !!closed, message: closed, first_name: first, item_type: String(row.Item_Type || '').toLowerCase(), date_text: deliveryLongDate(row.Expected_Date), window_text: deliveryWindowHuman(row.Expected_Window), street: deliveryStreet(row.Delivery_Address),
+      current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', note: String(row.Tenant_RSVP_Note || '') });
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'rsvp GET failed: ' + String((e && e.message) || e));
+    return json({ ok: false, expired: false, message: 'Sorry, something went wrong on our end. Please try the link again in a few minutes.' }, 500);
+  }
+}
+async function deliveryRsvpPost(env, url, body, ip) {
+  const t0 = Date.now();
+  body = body || {};
+  try {
+    const ld = await deliveryRsvpLoad(env, body.t, ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    if (!deliveryRsvpRate('post:' + ld.id, 20, DELIVERY_RSVP_RATE_WINDOW)) return deliveryRsvpTooMany();
+    const answer = String(body.answer || '').toLowerCase();
+    if (['yes', 'no', 'unsure'].indexOf(answer) < 0) return json({ ok: false, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: 'Please tap one of the three buttons.' }, 400);
+    const closed = deliveryRsvpClosed(row);
+    if (closed) return json({ ok: false, closed: true, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: closed });
+    if (isStaging(env, url) && !String(row.Message_ID || '').startsWith('TEST-')) return json({ ok: false, current: '', message: 'This is the test site: only test deliveries can be answered here.' }, 403);
+    const note = deliveryRsvpCleanNote(body.note);
+    const newRsvp = { yes: 'Confirmed', no: 'Declined', unsure: 'Unsure' }[answer];
+    const same = row.Tenant_RSVP === newRsvp;
+    const msgs = {
+      yes: 'Thank you, that is a big help! You can change your answer on this page any time before the delivery.',
+      no: "No problem at all, thank you for letting us know. We'll do our best to be there instead. The delivery may need to be rescheduled, and we will keep you posted.",
+      unsure: 'Thanks for letting us know. Come back to this page any time to update your answer.',
+    };
+    if (same && String(row.Tenant_RSVP_Note || '') === note) return json({ ok: true, current: answer, message: msgs[answer], unchanged: true });   // a repeat tap: nothing written, nobody texted
+    await ensureDeliveryTab(env);
+    const cfg = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values);
+    const adminPhone = normalizePhone(cfg.admin_phone || '');
+    const nowIso = new Date().toISOString();
+    const f = { Tenant_RSVP: newRsvp, Tenant_RSVP_At: nowIso, Tenant_RSVP_Note: note };
+    let noteLine = '';
+    if (!same) {
+      if (answer === 'no') { Object.assign(f, { Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone }); noteLine = "Tenant can't be present. Driver calls Brett."; }
+      else {
+        if (row.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+        noteLine = answer === 'yes' ? 'Tenant says they will be there. Driver still calls Brett.' : 'Tenant is not sure yet. Driver calls Brett.';
+      }
+      f.Delivery_Notes = deliveryNoteAppend(row.Delivery_Notes, 'Tenant answered "' + answer + '"' + (note ? ' (note: ' + note.slice(0, 80) + ')' : '') + '. ' + noteLine, nowIso);
+    }
+    await updateRowVerified(env, 'Deliveries', row.ID, f);
+    // Brett is texted only when the answer CHANGES to no / unsure (never for yes, never for a repeat).
+    let sms = '', warn = '';
+    if (!same && (answer === 'no' || answer === 'unsure')) {
+      const when = [deliveryShortDate(row.Expected_Date), row.Expected_Window].filter(Boolean).join(' ');
+      const street = deliveryStreet(row.Delivery_Address) || 'Delivery';
+      const txt = deliveryPlainSms(answer === 'no'
+        ? street + ": tenant can't be there for " + when + '. Driver will call you. Update the order if needed.'
+        : street + ': tenant is not sure yet about ' + when + '. They can still answer.');
+      let prop = null;
+      try { prop = row.Property_ID ? (await fetchTab(env, 'Properties')).find(x => String(x.ID) === String(row.Property_ID)) || null : null; } catch (e) { prop = null; }
+      sms = await intakeSmsAdmin(env, txt, String(row.Linked_WO_IDs || '').split(',')[0].trim(), prop);
+      if (sms !== 'sent') warn = 'Brett text about the tenant answer not sent: ' + sms;
+      try { await updateRowVerified(env, 'Deliveries', row.ID, { Brett_SMS_Status: sms }); } catch (e) { warn = (warn ? warn + ' / ' : '') + 'could not record the alert result: ' + String((e && e.message) || e).slice(0, 80); }
+    }
+    await deliveryTelemetry(env, t0, !warn, 'rsvp delivery ' + row.ID + ' ' + (row.Tenant_RSVP || '-') + ' -> ' + newRsvp + (sms ? '; brett=' + sms : '') + (warn ? '; WARN ' + warn : ''));
+    return json({ ok: true, current: answer, message: msgs[answer] });   // the tenant's answer is saved even when the text to Brett failed; that failure is in telemetry (Needs Attention)
+  } catch (e) {
+    await deliveryTelemetry(env, t0, false, 'rsvp POST failed: ' + String((e && e.message) || e));
+    return json({ ok: false, message: 'Sorry, something went wrong on our end and your answer was not saved. Please try again in a few minutes.' }, 500);
+  }
 }
 
 // POST /intake/delivery-email. See the contract at the top of this section.
 async function deliveryEmailIntake(env, body) {
   const t0 = Date.now();
   body = body || {};
-  const subject = String(body.subject || ''), msgId = String(body.message_id || '').trim(), from = String(body.from || ''), dry = body.dry_run === true;
+  const subject = String(body.subject || ''), from = String(body.from || ''), dry = body.dry_run === true;
+  // Which email is this? The RFC Message-ID is identical in every mailbox that received it (the key for cross-mailbox dedupe); the Gmail id differs per
+  // mailbox. The mailbox string is only logged: ANY value is accepted (info@, brett@, a future RidgeCo address), never allow-listed by name.
+  const rfcId = String(body.rfc_message_id || '').replace(/^[<\s]+|[>\s]+$/g, ''), gmailId = String(body.gmail_id || '').trim();
+  const mailboxStr = String(body.mailbox == null ? '' : body.mailbox).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120);
+  const msgId = deliveryKeyList(rfcId || String(body.message_id || '').trim() || gmailId)[0] || '';
+  const msgKeys = deliveryKeyList([rfcId, String(body.message_id || ''), gmailId ? 'gmail:' + (mailboxStr || 'x') + ':' + gmailId : '']);
   const recvIso = (body.received_at && !isNaN(new Date(body.received_at))) ? new Date(body.received_at).toISOString() : new Date().toISOString();
-  if (!msgId) return json({ success: false, error: 'message_id required' }, 400);
+  if (!msgId) return json({ success: false, error: 'message_id (or rfc_message_id / gmail_id) required' }, 400);
   let stage = 'config', cfg;
   const warnings = [];
   const R = (over) => json(Object.assign({
@@ -33928,7 +34135,7 @@ async function deliveryEmailIntake(env, body) {
     const order = deliveryNormOrder(p.order_number);
 
     // ── dedupe 1: this exact email (RFC Message-ID) was already handled, by either mailbox ──
-    const seenRow = dels.find(d => deliverySawMessage(d, msgId));
+    const seenRow = dels.find(d => deliverySawMessage(d, msgKeys));
     if (seenRow) {
       let wo = { wo_id: String(seenRow.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
       // A previous run made the row but could not make its WO (Sheets hiccup): finish that job now, loudly.
@@ -33937,7 +34144,9 @@ async function deliveryEmailIntake(env, body) {
         wo = await deliveryEnsureWO(env, seenRow, p, msgId, adminName);
         if (wo.error) { await deliveryTelemetry(env, t0, false, 'WO heal failed for delivery ' + seenRow.ID + ': ' + wo.error); return json({ success: false, error: 'Work order could not be created for delivery ' + seenRow.ID + ': ' + wo.error, delivery_id: String(seenRow.ID), stage }, 500); }
       }
-      return R(Object.assign(parsedFields, { duplicate: true, reason: 'already_processed', delivery_id: String(seenRow.ID), status: seenRow.Status || '', wo_id: wo.wo_id || '', wo_created: !!wo.created, property_id: seenRow.Property_ID || '', unit_id: seenRow.Unit_ID || '', tenant_id: seenRow.Tenant_ID || '', property_matched: !!seenRow.Property_ID }));
+      // The calendar of the delivery's CURRENT state rides along so a retry of an attempt whose calendar step failed can finish it (the upsert is idempotent by key).
+      const dupCal = seenRow.Status === 'Needs Review' ? { action: 'none' } : deliveryCalendarObject({ order: seenRow.Order_Number, delivery_id: seenRow.ID, item: seenRow.Item_Type, make: seenRow.New_Make_Model, date: seenRow.Expected_Date, window: seenRow.Expected_Window, address: seenRow.Delivery_Address, wo_id: wo.wo_id || '', kind: '', status: seenRow.Status, is_new: false });
+      return R(Object.assign(parsedFields, { duplicate: true, reason: 'already_processed', delivery_id: String(seenRow.ID), status: seenRow.Status || '', wo_id: wo.wo_id || '', wo_created: !!wo.created, property_id: seenRow.Property_ID || '', unit_id: seenRow.Unit_ID || '', tenant_id: seenRow.Tenant_ID || '', property_matched: !!seenRow.Property_ID, calendar: dupCal }));
     }
 
     // ── find the existing delivery: by order number, else (no order number) the single open delivery at this address ──
@@ -33961,11 +34170,11 @@ async function deliveryEmailIntake(env, body) {
       let parkedId, status = 'Needs Review';
       if (row) {   // known order: keep its status, add the email to its notes, still tell Brett
         status = row.Status;
-        await updateRowVerified(env, 'Deliveries', row.ID, { Delivery_Notes: deliveryNoteAppend(row.Delivery_Notes, 'UNRECOGNISED EMAIL: ' + subject.slice(0, 120) + ' | ' + p.excerpt.slice(0, 200), recvIso), Seen_Message_IDs: deliverySeenAppend(row, msgId) });
+        await updateRowVerified(env, 'Deliveries', row.ID, { Delivery_Notes: deliveryNoteAppend(row.Delivery_Notes, 'UNRECOGNISED EMAIL: ' + subject.slice(0, 120) + ' | ' + p.excerpt.slice(0, 200), recvIso), Seen_Message_IDs: deliverySeenAppend(row, msgKeys) });
         parkedId = String(row.ID);
       } else {
         const add = await addRow(env, 'Deliveries', { Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: p.expected_date, Expected_Window: p.expected_window,
-          Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone, Delivery_Notes: excerpt.slice(0, 1500), Status: 'Needs Review', Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgId,
+          Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone, Delivery_Notes: excerpt.slice(0, 1500), Status: 'Needs Review', Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','),
           Created_Date: new Date().toISOString(), Active: 'TRUE', Last_Event: p.kind, Last_Event_At: recvIso });
         const aj = await add.clone().json();
         if (add.status !== 200 || !aj || aj.success !== true || !aj.id) throw new Error('could not save the Needs Review row: ' + JSON.stringify(aj).slice(0, 120));
@@ -34055,8 +34264,8 @@ async function deliveryEmailIntake(env, body) {
     }
 
     // ── writes ──
-    let deliveryId, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
-    const noteLine = 'Email (' + p.kind + ', ' + (body.mailbox || 'mailbox ?') + '): ' + subject.slice(0, 100);
+    let deliveryId, claim = '', lostClaim = false, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
+    const noteLine = 'Email (' + p.kind + ', ' + (mailboxStr || 'mailbox ?') + '): ' + subject.slice(0, 100);
     await ensureDeliveryTab(env);
     if (isNew) {
       stage = 'create';
@@ -34066,7 +34275,7 @@ async function deliveryEmailIntake(env, body) {
         Property_ID: propertyId, Unit_ID: unitId, Tenant_ID: tenantId,
         Onsite_Contact: tenantMeets ? 'tenant' : 'me', Onsite_Contact_Phone: tenantMeets ? '' : adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone,
         Delivery_Notes: [DELIVERY_DRIVER_NOTE, noteLine].concat(notes, placeNotes).join('\n').slice(0, 5000),
-        Status: newStatus, Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgId, Created_Date: new Date().toISOString(), Active: 'TRUE',
+        Status: newStatus, Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','), Created_Date: new Date().toISOString(), Active: 'TRUE',
         Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops),
       };
       const add = await addRow(env, 'Deliveries', row0);
@@ -34078,7 +34287,7 @@ async function deliveryEmailIntake(env, body) {
       const mine = all.find(d => String(d.ID) === deliveryId);
       if (!mine || mine.Message_ID !== msgId) throw new Error('Deliveries row ' + deliveryId + ' did not read back after the write');
       // Both mailboxes can deliver the same email at the same instant: the LOWEST row id for an order / message wins; the other retires itself.
-      const rivals = all.filter(d => d.Active !== 'FALSE' && String(d.ID) !== deliveryId && ((order && deliveryNormOrder(d.Order_Number) === order) || deliverySawMessage(d, msgId)));
+      const rivals = all.filter(d => d.Active !== 'FALSE' && String(d.ID) !== deliveryId && ((order && deliveryNormOrder(d.Order_Number) === order) || deliverySawMessage(d, msgKeys)));
       const winner = rivals.sort((a, b) => deliveryRowNum(a) - deliveryRowNum(b))[0];
       if (winner && deliveryRowNum(winner) < deliveryRowNum(mine)) {
         await updateRowVerified(env, 'Deliveries', deliveryId, { Active: 'FALSE', Delivery_Notes: 'Retired automatically: duplicate of delivery ' + winner.ID + ' created at the same moment (two mailboxes got the same email).' });
@@ -34100,18 +34309,32 @@ async function deliveryEmailIntake(env, body) {
     } else {
       stage = 'update';
       deliveryId = String(prior.ID);
-      const f = Object.assign({}, fill, { Seen_Message_IDs: deliverySeenAppend(prior, msgId) });
+      const f = Object.assign({}, fill, { Seen_Message_IDs: deliverySeenAppend(prior, msgKeys) });
       if (noChange) {
         Object.assign(f, { Last_Event_At: recvIso, Last_Event_Sig: sig });   // same news again: only remember the email and its time
       } else if (!stale) {
         Object.assign(f, { Status: newStatus, Expected_Date: date, Expected_Window: win, Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops) });
         const nl = [noteLine].concat(notes, placeNotes, anomaly ? ['CHECK: ' + anomaly] : []);
         if (dateChanged || winChanged) nl.push('Date/window now ' + (date || '?') + (win ? ' ' + win : '') + ' (was ' + (prior.Expected_Date || '?') + (prior.Expected_Window ? ' ' + prior.Expected_Window : '') + ')');
+        // A new date/window makes the tenant's earlier answer out of date: reset it (the new request asks again). A Declined tenant is the on-site contact again.
+        if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          Object.assign(f, { Tenant_RSVP: '', Tenant_RSVP_At: '', Tenant_RSVP_Note: '' });
+          if (prior.Tenant_RSVP === 'Declined' && merged.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+          nl.push('Tenant answer reset (was ' + prior.Tenant_RSVP + ') because the date/window changed');
+        }
+        // Two mailboxes can apply the same news at the same instant: each stamps a claim, and only the last writer alerts.
+        claim = sig + '#' + Math.random().toString(36).slice(2, 10);
+        f.Event_Claim = claim;
         f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, nl.join(' | '), recvIso);
       } else {
         f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, 'Older email ignored for status/date (arrived after a newer one): ' + subject.slice(0, 100), recvIso);
       }
       await updateRowVerified(env, 'Deliveries', deliveryId, f);
+      if (claim) {
+        invalidateTabCache('Deliveries');
+        const r2 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (r2 && r2.Event_Claim && r2.Event_Claim !== claim && String(r2.Last_Event_Sig || '') === sig) lostClaim = true;   // another run wrote the same news after us: it alerts, we stay quiet
+      }
       if (merged.Property_ID && !woInfo.wo_id && !stale && ['Cancelled', 'Delivered'].indexOf(newStatus) < 0) {
         stage = 'wo';
         woInfo = await deliveryEnsureWO(env, merged, p, msgId, adminName);
@@ -34128,35 +34351,41 @@ async function deliveryEmailIntake(env, body) {
     stage = 'brett-sms';
     let smsRes = '', brettSent = null;
     const woId = String(merged.Linked_WO_IDs || '').split(',')[0].trim();
+    if (lostClaim) alertEvent = '';
     if (alertEvent) {
-      const noteBits = [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : '', p.missing.length ? 'missing: ' + p.missing.join(', ') : '', isNew && place.status === 'matched' ? (tenantId ? 'tenant meets, Brett backup' : 'no tenant on file, Brett meets') : ''].filter(Boolean).join('; ');
+      const noteBits = [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : '', p.missing.length ? 'missing: ' + p.missing.join(', ') : '', isNew && place.status === 'matched' ? (tenantId ? 'tenant meets, Brett backup' : 'no tenant on file, Brett meets') : '', (tenantId && !date && deliveryNoticeMode(cfg).mode !== 'off' && ['new', 'scheduled', 'window_set', 'reschedule'].indexOf(alertEvent) >= 0) ? 'tenant NOT texted yet: no delivery date' : ''].filter(Boolean).join('; ');
       const text = deliveryBrettText({ event: alertEvent, order: p.order_number || prior.Order_Number, item: merged.Item_Type || p.item_type, date, window: win, address: merged.Delivery_Address || p.address, wo_id: woId, stops, note: noteBits });
       smsRes = await intakeSmsAdmin(env, text, woId, matchedPlace ? place.property : null);
       brettSent = smsRes === 'sent';
       try { await updateRowVerified(env, 'Deliveries', deliveryId, { Brett_SMS_Status: smsRes }); } catch (e) { warnings.push('could not record the alert result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
     }
 
-    // ── tenant heads-up (config-gated, batched, consent-gated) ──
+    // ── tenant request (config-gated, batched, consent-gated; needs a delivery date) ──
     stage = 'tenant-notice';
     let tn = { tenant_sms: 'off', detail: '' };
     const noticeKinds = ['order_confirmation', 'scheduled', 'window_set', 'reschedule'];
-    if (!stale && !frozen && noticeKinds.indexOf(p.kind) >= 0 && newStatus !== 'Cancelled' && newStatus !== 'Delivered') {
+    const cancelling = newStatus === 'Cancelled' && !isNew && prior.Status !== 'Cancelled';
+    const asking = noticeKinds.indexOf(p.kind) >= 0 && newStatus !== 'Cancelled' && newStatus !== 'Delivered' && !frozen;
+    if (!stale && !noChange && !lostClaim && (cancelling || asking)) {
       const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
       const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
-      tn = await deliveryTenantNotice(env, { cfg, row: merged, place: { property: prop, tenant: prop ? tenantObj : null }, woId, date, win });
+      const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
+      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? 'changed' : 'request') });
       if (tn.warn) warnings.push('tenant notice: ' + tn.detail);
-      if (tn.draft || typeof tn.sig === 'string') {
-        const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200), Tenant_Notice_Sig: tn.sig };
+      if (tn.record !== false && tn.tenant_sms !== 'off') {
+        const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200) };
+        if (tn.sig) upd.Tenant_Notice_Sig = tn.sig;
         if (tn.draft) upd.Tenant_Notice_Draft = tn.draft;
+        if (tn.sent_at) upd.Tenant_Notice_Sent_At = tn.sent_at;
         try { await updateRowVerified(env, 'Deliveries', deliveryId, upd); } catch (e) { warnings.push('could not record the tenant notice result: ' + String((e && e.message) || e).slice(0, 100)); }
       }
     }
     if (smsRes && smsRes !== 'sent') warnings.push('Brett text not sent: ' + smsRes);
 
     const telOk = await deliveryTelemetry(env, t0, warnings.length === 0, (isNew ? 'created ' : (stale ? 'stale ' : 'updated ')) + deliveryId + ' ' + (order || '') + ' ' + p.kind + ' -> ' + newStatus + '; brett=' + (smsRes || 'none') + '; tenant=' + tn.tenant_sms + '; wo=' + (woId || '-') + (warnings.length ? '; WARN ' + warnings.join(' / ') : ''));
-    const cal = (stale || noChange) ? { action: 'none' } : calendarFor(deliveryId);
+    const cal = (stale || noChange || lostClaim) ? { action: 'none' } : calendarFor(deliveryId);
     return R(Object.assign(base, {
-      created: isNew, updated: !isNew && !stale && !noChange, delivery_id: deliveryId, reason: stale ? 'stale_email' : (noChange ? 'no_change' : ''), detail: [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : ''].filter(Boolean).join(' | '),
+      created: isNew, updated: !isNew && !stale && !noChange && !lostClaim, duplicate: noChange || lostClaim, delivery_id: deliveryId, reason: stale ? 'stale_email' : (noChange ? 'no_change' : (lostClaim ? 'concurrent_duplicate' : '')), detail: [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : ''].filter(Boolean).join(' | '),
       wo_id: woId, wo_created: !!woInfo.created, brett_sms_sent: brettSent, sms_status: smsRes, tenant_sms: tn.tenant_sms, tenant_sms_detail: tn.detail || '', calendar: cal, telemetry_ok: telOk,
       needs_attention: warnings.length > 0 || brettSent === false || !telOk,
     }));

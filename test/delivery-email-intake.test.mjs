@@ -398,7 +398,7 @@ let firstDelivery;
   eq('S1: nothing went to the tenant yet', toTenant().length, 0);
   const n = noticeRows(); eq('S1: one held Message_Queue row', n.length, 1);
   eq('S1: held until today 6pm ET (22:00Z), still pending', [n[0].Send_After, n[0].Status], ['2026-10-14T22:00:00.000Z', 'pending']);
-  t('S1: text says ordered + date, be there if you can, Ridge Co will receive, on behalf of owner, STOP line (first text)', /Your refrigerator has been ordered and is scheduled for Fri 10\/16/.test(n[0].Message_Body) && /Please be home if you can/.test(n[0].Message_Body) && /Ridge Co will be there to receive it/.test(n[0].Message_Body) && /Ridge Co Property Maintenance, on behalf of Phoenix Estate Rentals/.test(n[0].Message_Body) && /Reply STOP/.test(n[0].Message_Body) && /^[\x20-\x7e]+$/.test(n[0].Message_Body), n[0].Message_Body);
+  t('S1: request text: friendly ask to be home, date, street, answer link, no-worries line, owner line, STOP line (first text), plain characters', /A new refrigerator is scheduled for delivery at 5425 Belle Vista Ave on Fri 10\/16\./.test(n[0].Message_Body) && /Could you be home to let the delivery team in and have the old one hauled away\?/.test(n[0].Message_Body) && /Please tap here to let us know: https:\/\/ridge-co\.github\.io\/RidgeCo\/rsvp\.html\?t=1\.[A-Za-z0-9_-]{16}/.test(n[0].Message_Body) && /If you can't make it, no worries\. We'll do our best to be there instead, though the delivery may need to be rescheduled\. Thank you!/.test(n[0].Message_Body) && /on behalf of Phoenix Estate Rentals/.test(n[0].Message_Body) && /Reply STOP/.test(n[0].Message_Body) && /^[\x20-\x7e\n]+$/.test(n[0].Message_Body), n[0].Message_Body);
   eq('S1: queue row is the tenant\'s, tied to the WO and property', [n[0].Recipient_Type, n[0].Recipient_Phone, n[0].WO_ID, n[0].Property_ID], ['tenant', TENANT_PHONE, w[0].ID, 'P1']);
   eq('S1: calendar create, all-day Oct 16, stable key', [j.calendar.action, j.calendar.all_day, j.calendar.start_iso, j.calendar.end_iso, j.calendar.key], ['create', true, '2026-10-16', '2026-10-17', 'delivery-h2345-678901']);
   t('S1: telemetry written and reported', j.telemetry_ok === true && rowsOf('Ops_Telemetry').some(x => x.Job_Type === 'delivery_email_intake' && x.Success === 'TRUE'));
@@ -423,7 +423,7 @@ let firstDelivery;
   t('S: window text carries the window', /9a-1p/.test(toAdmin()[1].body), toAdmin()[1].body);
   eq('L: calendar update with the timed window', [r.json.calendar.action, r.json.calendar.all_day, r.json.calendar.start_iso, r.json.calendar.end_iso], ['update', false, '2026-10-16T09:00:00-04:00', '2026-10-16T13:00:00-04:00']);
   const n = noticeRows();
-  t('K: the newer tenant notice REPLACED the waiting one (one pending, older skipped)', n.filter(x => x.Status === 'pending').length === 1 && n.filter(x => x.Status === 'skipped').length === 1 && /9a-1p/.test(n.find(x => x.Status === 'pending').Message_Body), n.map(x => x.Status));
+  t('K: the newer tenant notice REPLACED the waiting one (one pending, older skipped)', n.filter(x => x.Status === 'pending').length === 1 && n.filter(x => x.Status === 'skipped').length === 1 && /9am-1pm/.test(n.find(x => x.Status === 'pending').Message_Body), n.map(x => x.Status));
   eq('K: the tenant was still not texted yet', toTenant().length, 0);
   // an older kind arriving later does not move status back and says nothing
   const t0 = twilio.length;
@@ -591,7 +591,7 @@ let firstDelivery;
   let r = await run({ Delivery_Tenant_Notice: 'off' });
   t('K: off -> nothing queued, nothing sent to the tenant', r.json.tenant_sms === 'off' && noticeRows().length === 0 && toTenant().length === 0, r.json);
   r = await run({ Delivery_Tenant_Notice: 'draft' });
-  t('K: draft -> text saved on the delivery, nothing queued, nothing sent', r.json.tenant_sms === 'draft' && noticeRows().length === 0 && toTenant().length === 0 && /Your refrigerator has been ordered/.test(dels()[0].Tenant_Notice_Draft), r.json);
+  t('K: draft -> text saved on the delivery, nothing queued, nothing sent', r.json.tenant_sms === 'draft' && noticeRows().length === 0 && toTenant().length === 0 && /A new refrigerator is scheduled for delivery/.test(dels()[0].Tenant_Notice_Draft), r.json);
   r = await run({});
   t('K: default (blank) is AUTO', r.json.tenant_sms === 'queued' && noticeRows().length === 1);
   r = await run({ Delivery_Tenant_Notice: 'AUTO ' });
@@ -611,7 +611,7 @@ let firstDelivery;
   t('K: tenant without a phone -> skipped', r.json.tenant_sms === 'skipped' && /no phone/.test(r.json.tenant_sms_detail) && noticeRows().length === 0, r.json);
   // same-day delivery (date == today ET = 2026-10-14) is urgent: sent NOW through the gate
   r = await run({}, undefined, 'confirm', { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16', 'Estimated Delivery: Wed, Oct 14') });
-  t('K: delivery TODAY -> sent immediately (no hold)', r.json.tenant_sms === 'sent' && toTenant().length === 1 && /scheduled for Wed 10\/14/.test(toTenant()[0].body) && noticeRows().length === 1 && noticeRows()[0].Status === 'sent', [r.json, toTenant()]);
+  t('K: delivery TODAY -> sent immediately (no hold)', r.json.tenant_sms === 'sent' && toTenant().length === 1 && /delivery at 5425 Belle Vista Ave on Wed 10\/14/.test(toTenant()[0].body) && noticeRows().length === 1 && noticeRows()[0].Status === 'sent', [r.json, toTenant()]);
   r = await run({ Delivery_Tenant_Notice: 'auto' }, { SMS_Enabled: 'FALSE' }, 'confirm', { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16', 'Estimated Delivery: Wed, Oct 14') });
   t('K: delivery TODAY but no consent -> still not sent', r.json.tenant_sms === 'skipped' && toTenant().length === 0);
   // first-touch STOP line only for a tenant never texted before
