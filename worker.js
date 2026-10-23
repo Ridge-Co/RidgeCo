@@ -14732,7 +14732,7 @@ async function processVendorNudges(env) {
       // above already peeled off anything Complete-or-later into an invoice chase instead).
       // Coaching language per Brett (Sep 16 2026): walk the vendor through the actual portal
       // steps we're waiting on, not just a bare "any update?" ask.
-      msg = `Hi ${vname}, checking in on ${row.WO_ID} — ${woJobLabel(wo)} at ${address}. Remember to add the schedule for the job in your portal, and mark it Complete once the work's done — then you'll just need to submit your invoice. ${vendorPortalLink(row.WO_ID)}`;
+      msg = `Hi ${vname}, checking in on ${row.WO_ID}: ${woJobLabel(wo)} at ${address}. Please add the schedule in your portal, mark it Complete when done, then submit your invoice. ${vendorPortalLink(row.WO_ID)}`;   // D-16: was about 6 pieces, now 2
       msgType = 'vendor_nudge_status'; repeatHours = VENDOR_NUDGE_REPEAT_HOURS;
     } else if (row.Request_Type === 'photos') {
       msg = `Hi ${vname}, following up — could you upload before/after photos for ${row.WO_ID} at ${address}? ${vendorPortalLink(row.WO_ID)}`;
