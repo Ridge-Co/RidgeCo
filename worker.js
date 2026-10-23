@@ -16182,7 +16182,24 @@ async function smsGatedSend(env, opts) {
   } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
   const mqOpts = mqRow ? { sheetRow: mqRow, headers } : undefined;   // headers: the save needs no second read of the whole tab (Oct 23 2026)
 
-  let sent = false, deliveredTo = '', outcome = 'blocked', queueSaveWarning = '';
+  // D-16 race check: if our row did not land right after the rows we read, another request wrote in the gap - possibly the SAME text (a double tap, a client
+  // retry). Look again; the EARLIER row wins, so two racers never both stand down. A failed look is reported (P0) and the text still goes out: a rare
+  // duplicate costs a few cents, a lost text costs a tenant or a vendor.
+  if (_sendNow && !opts.allowRepeat && mqRow && mqRow !== rows.length + 1) {
+    try {
+      invalidateTabCache(MSG_QUEUE_TAB);
+      const _again = mqRowsToObjects((await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`)).values);
+      const _dup2 = mqFindDuplicate(_again, { phone: recipientPhone, body: messageBody, nowMs: Date.now(), selfRow: mqRow, earlierThanRow: mqRow });
+      if (_dup2) {
+        await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: gateSnapshot + ' - duplicate of Message_Queue row ' + _dup2.id + ' (two requests at once); not sent' }, mqOpts);
+        const _se2 = smsEstimate(messageBody);
+        await smsLogRecord(env, { WO_ID: opts.wo_id || '', Recipient_Type: kind || '', Phone: recipientPhone, Message: messageBody, Status: 'suppressed_duplicate', Est_Segments: _se2.pieces, Encoding: _se2.encoding, Chars: _se2.units, Message_Type: opts.message_type || '', Queue_ID: id, Log_Source: 'gated', Note: 'two requests at once; the earlier Message_Queue row ' + _dup2.id + ' sent it' });
+        return { queued_id: id, send_ok: sendOk, sent: false, suppressed: true, suppress_reason: 'duplicate', duplicate_suppressed: true, test_mode: testMode, gate_snapshot: gateSnapshot, delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+      }
+    } catch (e) { await mqReportFailure(env, id, 'duplicate check after a write race failed, sending anyway: ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+
+  let sent = false, deliveredTo = '', outcome = 'blocked', queueSaveWarning = '', errorCode = '', errorReason = '';
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
