@@ -26,6 +26,8 @@ findable by grep even though they never share a number. Example:
 - B-20261023-1700-dw · 🟡 **[delivery]** Delivery email watcher Hub endpoint built (FEATURE_LOG rule 229, Phase 1 of DELIVERY_SYSTEM_BUILD_BRIEF). Waiting on Brett's merge of this PR + #430 + #431, then the first real store email to tighten the `DEP` parser table.
 - B-20261023-1701-dp · 🟠 **[delivery]** After the first REAL Home Depot / Lowe's emails arrive: add each as a fixture in `test/delivery-email-intake.test.mjs`, fix anything the parser misses, and check the Needs Review rows. The parser has only been tested on synthetic emails.
 - B-20261023-1702-dt · 🟢 **[delivery] [twilio-sms]** The delivery tenant notice rides its own 6pm hold. When the general text batching (B-20261023-0302-mb) is built, move it onto that mechanism and delete the `holdUntil` special case in `smsGatedSend`.
+- B-20261023-1704-rm · 🟢 **[delivery] [twilio-sms]** NOT built (Brett decides, SMS cost, see D-16): a day-before gentle reminder to tenants who have not answered the delivery request. Needs: Tenant_RSVP blank + Tenant_Notice_Sent_At set + delivery tomorrow; one text per delivery; same consent gate.
+- B-20261023-1705-rl · 🟢 **[delivery]** The RSVP rate limits are per Worker instance (in memory). If abuse ever shows up, move the counters to a sheet or Durable Object.
 - B-20261023-1703-d2 · 🟢 **[delivery]** NOT built: Phase 2 size check and Phase 4 voice routing (marked `PLACEHOLDER` in `deliveryEnsureWO`); Phase 5 stays as in the brief.
 
 **Oct 20 2026 additions (STR swap + bulk):**

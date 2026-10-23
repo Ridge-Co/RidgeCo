@@ -779,7 +779,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   const tok = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(toTenant()[0].body) || [])[1];
   t('Q: token format is "<delivery id>.<16 url-safe chars>"', /^1\.[A-Za-z0-9_-]{16}$/.test(tok), tok);
   const g = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok), undefined, '10.1.0.1');
-  const allowed = ['ok', 'closed', 'message', 'first_name', 'item_type', 'date_text', 'window_text', 'street', 'current', 'note'];
+  const allowed = ['ok', 'closed', 'delivered', 'cancelled', 'message', 'first_name', 'item_type', 'date_text', 'window_text', 'street', 'current', 'note'];
   t('Q: valid token -> exactly the allowed fields', g.status === 200 && g.json.ok === true && JSON.stringify(Object.keys(g.json).sort()) === JSON.stringify(allowed.slice().sort()), g.json);
   eq('Q: values', [g.json.first_name, g.json.item_type, g.json.date_text, g.json.window_text, g.json.street, g.json.current, g.json.note, g.json.closed], ['Tam', 'refrigerator', 'Friday, October 16', '', '5425 Belle Vista Ave', '', '', false]);
   const flat = JSON.stringify(g.json);
@@ -851,6 +851,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   seed(); await send('confirm'); const tok2 = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
   await send('cancel'); const a2 = toAdmin().length;
   r = await pub('POST', '/delivery/rsvp', { t: tok2, answer: 'no' }, '10.2.0.2');
+  { const gcx = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tok2), undefined, '10.2.0.3'); t('CONTRACT: a cancelled delivery returns cancelled:true', gcx.json.ok === true && gcx.json.cancelled === true && gcx.json.delivered === false, gcx.json); }
   t('R: a Cancelled delivery also refuses politely, nothing written, Brett not texted', r.json.ok === false && r.json.closed === true && /no longer scheduled/.test(r.json.message) && toAdmin().length === a2 && dels()[0].Tenant_RSVP === '', r.json);
 }
 {
@@ -934,6 +935,50 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('S race: the same window email in both mailboxes at once -> both succeed, updated once, Brett texted once', c.json.success && d.json.success && toAdmin().length === a0 + 1 && dels()[0].Expected_Window === '9a-1p', [toAdmin().length - a0, c.json.reason, d.json.reason]);
 }
 
+// ── an existing (Phase 0) Deliveries sheet gets the new columns without losing its rows; /deliveries returns the RSVP fields ──
+{
+  const W2 = await (async () => {   // a fresh copy of the Worker: its per-process "columns are fine" memo is empty, like a freshly deployed Worker meeting the old sheet
+    const os = await import('node:os'), path = await import('node:path'), url = await import('node:url');
+    const f = path.join(os.tmpdir(), 'worker-w2-' + process.pid + '-' + Date.now() + '.mjs'); fs.writeFileSync(f, src + '\n');
+    try { return (await import(url.pathToFileURL(f).href)).default; } finally { try { fs.unlinkSync(f); } catch (_) {} }
+  })();
+  seed();
+  const legacy = ['ID', 'Order_Number', 'Store', 'Item_Type', 'New_Make_Model', 'New_Dims', 'Property_ID', 'Unit_ID', 'Tenant_ID', 'Delivery_Address', 'Expected_Date', 'Expected_Window', 'Onsite_Contact', 'Onsite_Contact_Phone', 'Backup_Contact', 'Backup_Phone', 'Delivery_Notes', 'Linked_WO_IDs', 'Status', 'Source', 'Message_ID', 'Created_Date', 'Active'];
+  tab('Deliveries', legacy, [{ ID: '7', Order_Number: 'OLD-1', Store: 'Lowes', Item_Type: 'Range', Property_ID: 'P3', Expected_Date: '2026-10-30', Status: 'Scheduled', Source: 'manual', Active: 'TRUE', Onsite_Contact: 'tenant' }]);
+  skew += 70 * 60000;   // past the 10-minute memo of the shared copy as well
+  const r0 = await W2.fetch(new Request(BASE + '/intake/delivery-email', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': INTAKE }, body: JSON.stringify(Object.assign({ from: 'orders@homedepot.com', message_id: 'MSG-LEGACY-1', received_at: RECV, mailbox: 'info@bmoremanagement.com' }, FX.confirm)) }), env, { waitUntil() {} });
+  const j0 = await r0.json();
+  t('legacy sheet: the first email adds the new columns and saves the row', r0.status === 200 && j0.success && j0.created === true && dels().length === 2, j0);
+  const hdr = store.tabs.get('Deliveries')[0];
+  t('legacy sheet: every new column now exists (Tenant_RSVP, Tenant_RSVP_At, Tenant_RSVP_Note, Tenant_Notice_Sent_At, Event_Claim, Seen_Message_IDs)', ['Tenant_RSVP', 'Tenant_RSVP_At', 'Tenant_RSVP_Note', 'Tenant_Notice_Sent_At', 'Event_Claim', 'Seen_Message_IDs'].every(c => hdr.indexOf(c) >= 0), hdr);
+  t('legacy sheet: the old row is untouched', dels().find(d => d.ID === '7').Order_Number === 'OLD-1' && dels().find(d => d.ID === '7').Status === 'Scheduled');
+  const lst = await call('GET', '/deliveries', SECRET);
+  const mine = lst.json.deliveries.find(d => d.order_number === 'H2345-678901');
+  t('/deliveries returns the RSVP fields for the page', mine && 'tenant_rsvp' in mine && 'tenant_rsvp_at' in mine && 'tenant_rsvp_note' in mine && 'tenant_notice_sent_at' in mine && mine.tenant_rsvp === '' && !!mine.tenant_notice_sent_at, mine);
+  const tk = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
+  await pub('POST', '/delivery/rsvp', { t: tk, answer: 'no', note: 'away' }, '10.6.0.1');
+  const lst2 = await call('GET', '/deliveries', SECRET);
+  const m2 = lst2.json.deliveries.find(d => d.order_number === 'H2345-678901');
+  t('/deliveries shows Declined + time + note, and Brett as the on-site contact', m2.tenant_rsvp === 'Declined' && !!m2.tenant_rsvp_at && m2.tenant_rsvp_note === 'away' && m2.onsite_contact === 'me', m2);
+  // UI/Hub contract (PR #431 page rsvp.html + staff screens): exact keys and shapes
+  const need = ['tenant_rsvp', 'tenant_rsvp_at', 'tenant_rsvp_note', 'tenant_notice_sent_at', 'tenant_notice_status'];
+  t('CONTRACT: /deliveries rows carry exactly these lowercase RSVP keys', need.every(k => k in m2 && typeof m2[k] === 'string'), Object.keys(m2));
+  t('CONTRACT: tenant_rsvp is one of "", Confirmed, Declined, Unsure and tenant_rsvp_at is an ISO timestamp', ['', 'Confirmed', 'Declined', 'Unsure'].indexOf(m2.tenant_rsvp) >= 0 && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(m2.tenant_rsvp_at));
+  const gc = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tk), undefined, '10.6.0.2');
+  t('CONTRACT: GET gives the page first_name, item_type, date_text, window_text, street, current ("" | yes | no | unsure), note, plus delivered / cancelled flags', ['first_name', 'item_type', 'date_text', 'window_text', 'street', 'current', 'note', 'delivered', 'cancelled'].every(k => k in gc.json) && ['', 'yes', 'no', 'unsure'].indexOf(gc.json.current) >= 0 && gc.json.current === 'no' && gc.json.delivered === false && gc.json.cancelled === false, gc.json);
+  const gp = await pub('POST', '/delivery/rsvp', { t: tk, answer: 'unsure', note: '' }, '10.6.0.2');
+  t('CONTRACT: a good POST returns ok:true with a valid `current`', gp.status === 200 && gp.json.ok === true && ['yes', 'no', 'unsure'].indexOf(gp.json.current) >= 0, gp.json);
+  const bad = await pub('GET', '/delivery/rsvp?t=nope', undefined, '10.6.0.3');
+  t('CONTRACT: a bad token answers ok:false + expired:true (page shows its "link not working" view)', bad.json.ok === false && bad.json.expired === true);
+  await send('delivered');
+  const gd = await pub('GET', '/delivery/rsvp?t=' + encodeURIComponent(tk), undefined, '10.6.0.2');
+  t('CONTRACT: a delivered delivery returns delivered:true', gd.json.ok === true && gd.json.delivered === true && gd.json.cancelled === false, gd.json);
+  const noAuth = await call('GET', '/deliveries', '');
+  t('/deliveries still needs the admin secret', noAuth.status === 401);
+  const intakeTok = await call('GET', '/deliveries', INTAKE);
+  t('INTAKE_TOKEN still cannot read /deliveries', intakeTok.status === 401);
+}
+
 // ── N/O. source guards ──
 {
   const hs = src.indexOf('// ═══ DELIVERY-EMAIL-HANDLER-START'), he = src.indexOf('// ═══ DELIVERY-EMAIL-HANDLER-END');
@@ -946,6 +991,10 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('placeholders for later phases are marked', /PLACEHOLDER \(Phase 2 size check\)/.test(block) && /PLACEHOLDER \(Phase 4 voice routing\)/.test(block));
   t('the staging test token can reach the route only for TEST- message ids / properties', /path === '\/intake\/delivery-email'\) \{\s*const _mid[\s\S]{0,200}startsWith\('TEST-'\)/.test(src));
   t('the one patterns table is a single DEP object', (block.match(/^const DEP = \{/gm) || []).length === 1);
+  t('/delivery/rsvp is public at the gate and wired for GET and POST', /'\/delivery\/rsvp',/.test(src.slice(0, 20000)) && /path === '\/delivery\/rsvp'\)\s+return await deliveryRsvpGet\(/.test(src) && /path === '\/delivery\/rsvp'\)\s+return await deliveryRsvpPost\(/.test(src));
+  t('RSVP token is bound to the delivery id and signed with WORKER_SECRET (no new secret, no date in it)', /_hmac\('delivery-rsvp\|' \+ String\(id\), env\.WORKER_SECRET\)/.test(src) && !/delivery-rsvp\|' \+ [^)]*(?:Expected_Date|date)/.test(src));
+  t('token compare is constant-time', /function deliveryCtEq\(a, b\)[^\n]*\|=/.test(src));
+  t('no reminder texts in this build (no sweep that texts unanswered tenants)', !/reminder/i.test(block.replace(/no reminder texts[^\n]*/gi, '')));
   t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-10-23\.03-delivery-email-watcher'/.test(src));
 }
 

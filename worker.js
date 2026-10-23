@@ -33240,7 +33240,7 @@ async function deliveriesList(env, url) {
       backup_contact: d.Backup_Contact || '', backup_phone: d.Backup_Phone || '',
       notes: d.Delivery_Notes || '', linked_wo_ids: d.Linked_WO_IDs || '',
       status: d.Status || 'Ordered', source: d.Source || '',
-      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '',
+      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '', tenant_notice_status: d.Tenant_Notice_Status || '',
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
@@ -34028,7 +34028,7 @@ async function deliveryRsvpGet(env, url, ip) {
     if (row.Tenant_ID) { try { const t = (await fetchTab(env, 'Tenants')).find(x => String(x.ID) === String(row.Tenant_ID)); first = t ? String(t.First_Name || '') : ''; } catch (e) { first = ''; } }
     const closed = deliveryRsvpClosed(row);
     // Only what the tenant needs. No phone numbers, no other tenants, no order number, no ids.
-    return json({ ok: true, closed: !!closed, message: closed, first_name: first, item_type: String(row.Item_Type || '').toLowerCase(), date_text: deliveryLongDate(row.Expected_Date), window_text: deliveryWindowHuman(row.Expected_Window), street: deliveryStreet(row.Delivery_Address),
+    return json({ ok: true, closed: !!closed, delivered: row.Status === 'Delivered', cancelled: row.Status === 'Cancelled', message: closed, first_name: first, item_type: String(row.Item_Type || '').toLowerCase(), date_text: deliveryLongDate(row.Expected_Date), window_text: deliveryWindowHuman(row.Expected_Window), street: deliveryStreet(row.Delivery_Address),
       current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', note: String(row.Tenant_RSVP_Note || '') });
   } catch (e) {
     await deliveryTelemetry(env, Date.now(), false, 'rsvp GET failed: ' + String((e && e.message) || e));
