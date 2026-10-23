@@ -282,7 +282,7 @@ function build(db, fetchOpts) {
     isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
-    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
+    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, D16_WORLD, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
     grab(wsrc, 'function woJobLabel('), grab(wsrc, 'function propUnitText('), grab(wsrc, 'function formatUnitLabel('),
     getWorkOrdersListSrc,
     'return { woVoid, woUnvoid, woCombine, resolveCombineFields, getWorkOrdersList, smsGatedSend };',
