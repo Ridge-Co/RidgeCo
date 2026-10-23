@@ -25297,6 +25297,13 @@ function __staleTab(tab) {
 const CRON_CACHE_MS = 90 * 1000;
 const CRON_READ_GAP_MS = 2500;
 let __cronNextReadAt = 0;
+// Oct 23 2026: when a non-critical background read is throttled it retries once, quickly (see sheetsRequest). CRON_QUOTA_COOLDOWN_MS is how long the
+// dispatcher then holds back the non-critical jobs (Scheduler_State.quota_hot_until). Google's quota is per MINUTE, so 2.5 min lets the bucket refill.
+const CRON_FAST_ATTEMPTS = 2;
+const CRON_FAST_BACKOFF_MS = 2000;
+const CRON_QUOTA_COOLDOWN_MS = 150 * 1000;
+let __cronHit429At = 0;   // ms epoch of the last real 429 seen by a background read in this Worker instance
+function __cronLast429At() { return __cronHit429At; }
 function __cronEnv(env) {
   if (env && env.__CRON__) return env;
   const c = Object.create(env);
