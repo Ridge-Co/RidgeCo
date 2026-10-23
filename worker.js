@@ -18020,6 +18020,7 @@ const SCHED_PF_WHAT = {
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
   sms_delivery_check: 'reads the last day of outbound texts from Twilio, flags carrier-filtered / unregistered / link texts that fail, and emails Brett the result',
+  twilio_balance_log: 'saves today\'s Twilio balance as one row in the Twilio_Balance_Log tab (uses the balance the daily integrity check already fetched; no extra Twilio call)',
   review_mon: 'runs the Monday weekly review and delivers it',
   review_wed: 'runs the Wednesday weekly review (logged only)',
   ar_report_mon: 'builds and delivers the Monday AR aging report',
