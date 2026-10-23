@@ -80,7 +80,6 @@ var JOBS = [
   { name: 'daily_qb_sync',       run: 'hub', at: '07:00',                      enabled: true, what: 'Syncs QuickBooks payments and runs the deposit-paid sweep.' },
   { name: 'sms_delivery_check',  run: 'hub', at: '07:00',                      enabled: true, what: 'Reads the last day of outbound texts from Twilio, flags carrier-filtered or failing link texts, and emails Brett the result (set enabled:false once it is proven clean).' },
   { name: 'twilio_balance_log',   run: 'hub', at: '07:00',                      enabled: true, what: 'Saves the Twilio balance once a day in the Twilio_Balance_Log tab (uses the balance the daily integrity check already fetched; no extra Twilio call).' },
-  { name: 'twilio_balance_log',   run: 'hub', at: '07:00',                      enabled: true, what: 'Saves the Twilio balance once a day in the Twilio_Balance_Log tab (uses the balance the daily integrity check already fetched; no extra Twilio call).' },
   { name: 'review_mon',          run: 'hub', day: 'Mon', at: '08:30',         enabled: true, what: 'Runs the Monday weekly review and delivers it.' },
   { name: 'review_wed',          run: 'hub', day: 'Wed', at: '08:00',         enabled: true, what: 'Runs the Wednesday weekly review (logged only).' },
   { name: 'ar_report_mon',       run: 'hub', day: 'Mon', at: '09:00',         enabled: true, what: 'Builds and delivers the Monday AR aging report.' },
