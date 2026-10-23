@@ -279,12 +279,21 @@ globalThis.fetch = async (input, init) => {
   }
   return new Response(JSON.stringify({ ok: true }), { status: 200 });
 };
-const worker = (await import(root + 'worker.js')).default;
+// The main Worker is also loaded from a temp copy that exports its 6-second sheet-tab cache, so seed() can empty it: tests that jump the clock FORWARD
+// (token expiry, the quiet-hours release) leave cache entries whose expiry is in the "future" of the normal test clock, and the next seed would then be
+// served the PREVIOUS seed's Tenants rows (that is how two seeds once produced the identical text "Hi Tamvb..." and tripped the D-16 duplicate guard).
+const WK = await (async () => {
+  const os = await import('node:os'), path = await import('node:path'), url = await import('node:url');
+  const f = path.join(os.tmpdir(), 'worker-wk-' + process.pid + '-' + Date.now() + '.mjs');
+  fs.writeFileSync(f, src + '\nexport { __tabCache };\n');
+  try { return await import(url.pathToFileURL(f).href); } finally { try { fs.unlinkSync(f); } catch (_) {} }
+})();
+const worker = WK.default;
 // A second copy of worker.js that also exports the (module-private) release sweep, so the test can run exactly that step without the whole cronSweep.
 const QH = await (async () => {
   const os = await import('node:os'), path = await import('node:path'), url = await import('node:url');
   const f = path.join(os.tmpdir(), 'worker-qh-' + process.pid + '-' + Date.now() + '.mjs');
-  fs.writeFileSync(f, src + '\nexport { processQuietHoursQueue, __smsRecent };\n');
+  fs.writeFileSync(f, src + '\nexport { processQuietHoursQueue, __smsRecent, __tabCache };\n');
   try { return await import(url.pathToFileURL(f).href); } finally { try { fs.unlinkSync(f); } catch (_) {} }
 })();
 // Run fn with "now" set to an exact instant (the clock keeps advancing from there).
@@ -317,7 +326,7 @@ function seed(over) {
   seedNo++; SEED_NAME = 'Tam' + 'abcdefghijklmnopqrstuvwxyz'[seedNo % 26] + 'abcdefghijklmnopqrstuvwxyz'[Math.floor(seedNo / 26) % 26];
   // The worker memoises ensureColumns for 10 minutes per process, so a brand-new fake store must keep the HEADER rows the previous run created
   // (exactly what the live sheet looks like after the first email): carry headers over, drop the data.
-  QH.__smsRecent.clear();   // every seed is a fresh world: the release module's 10-minute duplicate-text memory must not carry texts across seeds (the tab cache can serve a previous seed's tenant name)
+  WK.__tabCache.clear(); QH.__tabCache.clear();   // every seed is a fresh world: no sheet rows may be served from a previous seed's cache. NOTE: the D-16 duplicate-text memory is deliberately NOT cleared.
   const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok';
   for (const [name, rows] of prev.tabs) if (rows.length && rows[0].length) store.tabs.set(name, [rows[0].slice()]);
   tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', Delivery_Claim_Settle_Ms: '40' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
@@ -888,6 +897,41 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   seed(); await send('confirm', { message_id: 'TEST-rsvp-1' }); const tokT = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(noticeRows()[0].Message_Body) || [])[1];
   r = await pub('POST', '/delivery/rsvp', { t: tokT, answer: 'yes' }, '10.5.0.2', stg);
   t('R: ...but a TEST- delivery can', r.json.ok === true && dels()[0].Tenant_RSVP === 'Confirmed', r);
+}
+
+// ── W. the D-16 10-minute duplicate-text guard must never swallow a REAL second text. Nothing in this section clears the guard between steps. ──
+{
+  // W1: RSVP no -> yes -> no -> unsure -> no inside a few minutes: Brett gets the identical "can't be there" text every time it is a new decline.
+  seed(); skew += 11 * 60000;   // delivery ids restart at 1 in every fresh seed, so the token (and its 10-minute tap counter) repeats: move past the earlier sections' taps
+  await send('confirm'); await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
+  const tokW = (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(toTenant()[0].body) || [])[1];
+  const a0 = toAdmin().length;
+  for (const ans of ['no', 'yes', 'no', 'unsure', 'no']) await pub('POST', '/delivery/rsvp', { t: tokW, answer: ans }, '10.4.0.1');
+  const declines = toAdmin().slice(a0).filter(x => /can't be there/.test(x.body));
+  t('W1: three declines within minutes -> THREE identical texts to Brett (no D-16 suppression of a real repeat)', declines.length === 3 && declines[0].body === declines[2].body && declines[0].body === declines[1].body, toAdmin().slice(a0).map(x => x.body));
+  t('W1: ...and the unsure in between texted him too (4 Brett texts in all), none logged as a suppressed duplicate', toAdmin().length === a0 + 4 && !rowsOf('SMS_Logs').some(x => /suppressed/.test(x.Status || '')) && !mq().some(x => /suppressed/.test(x.Status || '')), [rowsOf('SMS_Logs').map(x => x.Status)]);
+
+  // W2: two different deliveries, same property, same date and window, same tenant number, minutes apart: two tenant requests with their own links, two Brett alerts.
+  const second = (k) => ({ subject: FX[k].subject.replace(/H2345-678901/g, 'H7777-111111'), body: FX[k].body.replace(/H2345-678901/g, 'H7777-111111') });
+  const t0 = toTenant().length, b0 = toAdmin().length;
+  const o2 = await send(Object.assign(second('confirm'), { message_id: 'MSG-W2' }));
+  const o2b = await send(Object.assign(second('scheduled'), { message_id: 'MSG-W2b' }));
+  await withClock('2026-10-14T22:07:00Z', () => QH.processQuietHoursQueue(env));
+  const newReq = toTenant().slice(t0);
+  const toks = newReq.map(x => (/rsvp\.html\?t=([A-Za-z0-9_.-]+)/.exec(x.body) || [])[1]);
+  t('W2: a second delivery to the same tenant number minutes later gets its OWN request text (a different link), and it goes out', o2.json.created === true && dels().length === 2 && newReq.length === 1 && toks[0] && toks[0] !== tokW, [o2.json.reason, dels().length, newReq.length]);
+  t('W2: ...and Brett is alerted for the second order too', toAdmin().length > b0 && o2.json.brett_sms_sent === true, [o2.json.sms_status]);
+
+  // W3: a delivery moved Y, back to X, then to Y again within minutes: the tenant must hear about EVERY move, including the second "changed to Y" which reads exactly like the first.
+  seed(); await send('confirm'); await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
+  const toY = () => send(FX.reschedule), toX = () => send(Object.assign({}, FX.reschedule, { body: FX.reschedule.body.replace('Mon, Oct 19', 'Fri, Oct 16').replace('11 AM - 3 PM', '9 AM - 1 PM') }));
+  await toY(); await withClock('2026-10-14T22:07:00Z', () => QH.processQuietHoursQueue(env));
+  await toX(); await withClock('2026-10-14T22:09:00Z', () => QH.processQuietHoursQueue(env));
+  await toY(); await withClock('2026-10-14T22:11:00Z', () => QH.processQuietHoursQueue(env));
+  const tw = toTenant();
+  t('W3: request + three moves = four tenant texts, the last identical to the second (flip back to the same new date inside 10 minutes is NOT swallowed)', tw.length === 4 && tw[3].body === tw[1].body && /changed|rescheduled/i.test(tw[3].body), tw.map(x => x.body.slice(0, 60)));
+  t('W3: ...every notice row is sent, none skipped as a duplicate', noticeRows().filter(x => x.Status === 'sent').length === 4 && !noticeRows().some(x => /duplicate/.test((x.Error_Reason || '') + (x.Status || ''))), noticeRows().map(x => [x.Status, x.Error_Reason]));
+  t('W3: the delivery does not show a failed notice (it shows the queue state of the last move)', /^(queued|sent)/.test(dels()[0].Tenant_Notice_Status), dels()[0].Tenant_Notice_Status);
 }
 
 // ── S/T/U + C. the same email in two mailboxes, forwards, any mailbox string ──

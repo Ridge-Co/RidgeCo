@@ -16334,7 +16334,7 @@ async function mqSendQueuedRowInner(env, row, deliverTo, extraFields) {
   let result;
   if (!dc.ok) { await smsReportRegionBlocked(env, id, dc); result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dc.reason + ')' }; }
   else {
-    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', allowRepeat: String(row.Recipient_Type || '') === 'admin', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
+    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', allowRepeat: String(row.Recipient_Type || '') === 'admin' || String(row.Message_Type || '') === 'delivery_tenant_notice', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
     catch (e) { result = { error: 'no answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200)); }
   }
   const o = smsSendOutcome(result);
@@ -34476,7 +34476,7 @@ async function deliveryTenantNotice(env, o) {
     if (first) msg = withTenantStopNote(msg);
     if (nm.mode === 'draft') return { tenant_sms: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', sig, draft: msg };
     const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
-    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined });
+    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
     const nowIso = new Date().toISOString();
     if (r && r.sent) return { tenant_sms: 'sent', detail: 'sent now (delivery is today)', sig, sent_at: nowIso, text: msg };
     if (r && r.held_for_quiet_hours) return { tenant_sms: 'queued', detail: 'held until ' + r.send_after, sig, send_after: r.send_after, sent_at: nowIso, text: msg };
