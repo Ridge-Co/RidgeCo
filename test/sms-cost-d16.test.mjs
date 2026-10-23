@@ -138,6 +138,7 @@ const R = d16Real();
   const KB = (rows) => R.mqFindKnownBad(rows, { phone: P, nowMs: NOW, windowMs: 30 * DAY });
   t('known bad: a permanent failure (21211) in the last 30 days blocks', KB([row({ Status: 'failed', Error_Code: '21211' })]) !== null);
   t('known bad: region (21408) and opt-out (21610) failures are never remembered', KB([row({ Status: 'failed', Error_Code: '21408' })]) === null && KB([row({ Status: 'failed', Error_Code: '21610' })]) === null);
+  t('known bad: ONLY invalid-number codes block - 21614 blocks; temporary 30003 / 30005 / 30006 / 21612 never do', KB([row({ Status: 'failed', Error_Code: '21614' })]) !== null && [30003, 30005, 30006, 21612].every(c => KB([row({ Status: 'failed', Error_Code: String(c) })]) === null));
   t('known bad: a non-permanent failure / an old one / another number does not block', KB([row({ Status: 'failed', Error_Code: '30007' })]) === null && KB([row({ Status: 'failed', Error_Code: '21211', Created_Date: new Date(NOW - 40 * DAY).toISOString() })]) === null && KB([row({ Status: 'failed', Error_Code: '21211', Recipient_Phone: '+14105550999' })]) === null);
   const own = R.smsIsOwnNumber;
   t('own number: the admin phone', own('410-555-0100', { admin_phone: '(410) 555-0100' }, null) === true);
