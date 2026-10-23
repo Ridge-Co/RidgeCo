@@ -35876,6 +35876,17 @@ async function strReconcileCalendar(ctx, feed, views) {
   return d;
 }
 
+// A calendar-ACCESS failure stays on the board as a banner until a real calendar write works again (STR_Alerts row cal|access). Brett is already texted/emailed by
+// strSystemAlert (and the telemetry row feeds the failure ledger), so the row is created as already-told (Send_Count 1) and never texts a second time.
+async function strCalAccessAlert(ctx, msg) {
+  try { await strRaiseAlert(ctx, { key: 'cal|access', kind: 'calendar', severity: 'high', told: true, message: 'The cleaning calendar cannot be changed. ' + msg, sms: 'Cleaning calendar blocked: ' + String(msg).slice(0, 200) }); }
+  catch (e) { ctx.errors.push({ step: 'alert_state', error: 'Could not put the calendar warning on the board: ' + strErrText(e) }); }
+}
+async function strCalAccessResolve(ctx) {
+  const open = ctx.st.alerts.find(x => x.Alert_Key === 'cal|access' && !x.Resolved_At); if (!open || ctx.dry) return;
+  try { Object.assign(open, await strSetRow(ctx.env, 'STR_Alerts', open.ID, { Resolved_At: new Date(ctx.now).toISOString() })); }
+  catch (e) { ctx.errors.push({ step: 'alert_resolve', error: 'Could not clear the calendar warning: ' + strErrText(e) }); }
+}
 // ── Checkout-day text (11 AM ET checkout; 9 AM for a pre-arrival clean) ──────────────────────
 async function strCheckoutTexts(ctx, views) {
   const { S } = ctx, today = inspEtDate(ctx.now), out = [];
