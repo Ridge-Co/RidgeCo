@@ -17711,6 +17711,7 @@ async function schedRunNext(env, ctx, opts) {
     // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
     const jobPaused = jobRes.paused === true && errors.length === 0;
     const jobOk = jobPaused || (jobRes.ok !== false && errors.length === 0);
+    let quotaBusyRun = false;
     const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
     const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
     if (jobPaused) { out.paused = true; out.paused_reason = String(jobRes.reason || 'paused: AI credit').slice(0, 300); }
