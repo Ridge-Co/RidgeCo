@@ -31780,6 +31780,13 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   }
   const total = +(Number(ir.Customer_Total) || 0).toFixed(2);
   const laborAmt = +(total - materialsTotal).toFixed(2);
+  if (!String((billRow && billRow.ID) || '').trim()) {
+    const visitLines = hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef);
+    if (visitLines) {
+      visitLines.slice().reverse().forEach(l => lines.unshift(l));
+      return { lines, materialsTotal: +materialsTotal.toFixed(2), laborAmt, total };
+    }
+  }
   // Say what was actually done. The description belongs on the line the owner is paying,
   // not buried in a note under the total — an invoice reading "Labor & service —
   // Landscaping" tells them nothing about the job.
