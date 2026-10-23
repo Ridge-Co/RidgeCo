@@ -17956,6 +17956,52 @@ async function smsDeliveryCheckPass(env, deps) {
   return { ok: !errors.length, errors, warnings, no_retry, detail: { level: ev.level, total: summary.total, delivered: summary.delivered, failed: summary.failed, filtered: summary.filter_hits.length, stuck: summary.stuck, with_link: summary.with_link, no_link: summary.no_link, clean_days: nextState.clean_days, emailed, truncated: fetched.truncated, pages: fetched.pages } };
 }
 async function schedRunSmsDeliveryCheck(env) { return smsDeliveryCheckPass(env); }
+
+// -- Twilio balance snapshot (D-16 item 5, Oct 23 2026) --
+// Once a day the Hub saves (date, Twilio balance) in the small Twilio_Balance_Log tab, so the daily burn can be read off a column instead of
+// guessed. It adds NO Twilio call of its own: it reuses the balance the daily integrity check (failInvariantsCollect) already fetches and
+// stores in Config (failure_invariants_json), and only if that stored value is missing or stale does it let that same check run once.
+// Runs as the scheduler job `twilio_balance_log` (Apps Script clock, daily 07:00 ET). NO CRON.
+const TWILIO_BAL_TAB = 'Twilio_Balance_Log';
+const TWILIO_BAL_COLS = ['ID', 'Date', 'Balance_USD', 'Change_USD', 'Recorded_At', 'Source', 'Note'];
+// Pure. rows = existing Twilio_Balance_Log objects. -> { skip:true, reason } | { row }. One row per ET date; Change_USD = this balance minus the
+// last recorded one (negative = spent, positive = money added).
+function twilioBalancePlan(rows, etDate, balance, nowIso, source) {
+  if (typeof balance !== 'number' || !isFinite(balance)) return { skip: true, reason: 'no balance number available' };
+  const list = (rows || []).filter(r => r && r.Date);
+  if (list.some(r => String(r.Date) === etDate)) return { skip: true, reason: 'already recorded for ' + etDate };
+  const prev = list.slice().sort((a, b) => String(a.Date).localeCompare(String(b.Date))).filter(r => String(r.Date) < etDate).pop();
+  const pb = prev ? parseFloat(prev.Balance_USD) : NaN;
+  return { row: { Date: etDate, Balance_USD: balance.toFixed(2), Change_USD: isFinite(pb) ? (balance - pb).toFixed(2) : '', Recorded_At: nowIso, Source: source || 'integrity check', Note: isFinite(pb) ? 'since ' + prev.Date : 'first row' } };
+}
+async function twilioBalanceSnapshotPass(env, io) {
+  io = io || {};
+  const errors = [], t0 = Date.now(), nowMs = io.nowMs || Date.now();
+  const etDate = schedEtParts(new Date(nowMs)).date;
+  const fail = async (step, e, sev) => { const m = schedErrText(e); errors.push({ step, error: m }); await (io.reportFailure || reportFailure)(env, { system: 'hub', source: 'worker', where: 'twilio_balance_log', ref: step, severity: sev || 'P1', message: 'Twilio balance snapshot: ' + step + ': ' + m.slice(0, 200) }); };
+  if (!io.skipCredsCheck && !(env.TWILIO_SID && env.TWILIO_API_SID && env.TWILIO_API_KEY)) return { ok: true, errors, detail: { skipped: 'no Twilio credentials in this environment' } };
+  let cfg;
+  try { cfg = configFromValues(await (io.readConfigRows ? io.readConfigRows() : schedReadConfigRows(env, true))); }
+  catch (e) { await fail('read_config', e); return { ok: false, errors, detail: {} }; }
+  const out = {};
+  await (io.conditions || failInvariantConditions)(env, cfg, nowMs, out);   // never throws; fills out.balance from the stored check or from the one fetch it makes when stale
+  if (typeof out.balance !== 'number' || !isFinite(out.balance)) { await fail('no_balance', 'the integrity check had no Twilio balance to record (see the open "integrity_check:twilio_balance" item)'); return { ok: false, errors, detail: {} }; }
+  let existing;
+  try {
+    if (!io.readRows) await ensureTab(env, TWILIO_BAL_TAB, TWILIO_BAL_COLS);   // creates ONLY a missing tab (this one is new); never touches a tab that exists
+    existing = io.readRows ? await io.readRows() : await fetchTab(env, TWILIO_BAL_TAB);
+  } catch (e) { await fail('read_log_tab', e); return { ok: false, errors, detail: {} }; }
+  const age = out.balance_at ? Math.round((nowMs - out.balance_at) / 3600000) : null;
+  const plan = twilioBalancePlan(existing, etDate, out.balance, new Date(nowMs).toISOString(), 'integrity check' + (age != null ? ' (' + age + 'h old)' : ''));
+  if (plan.skip) return { ok: true, errors, detail: { skipped: plan.reason, date: etDate, balance: out.balance } };
+  try {
+    const wr = io.appendRow ? await io.appendRow(plan.row) : await (await addRow(env, TWILIO_BAL_TAB, plan.row)).json();
+    if (!wr || wr.success !== true) throw new Error('append not confirmed: ' + JSON.stringify(wr || {}).slice(0, 160));
+  } catch (e) { await fail('write_row', e); return { ok: false, errors, detail: { date: etDate, balance: out.balance } }; }
+  return { ok: true, errors, detail: { date: etDate, balance: out.balance, change: plan.row.Change_USD, ms: Date.now() - t0 } };
+}
+async function schedRunTwilioBalanceLog(env) { return twilioBalanceSnapshotPass(env); }
+
 // ── END SMS delivery check ───────────────────────────────────────────────────────────────────────────────────────
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
