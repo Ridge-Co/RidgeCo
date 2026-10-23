@@ -38260,6 +38260,9 @@ async function inspCalendarTest(env, url) {
   const cfg = await fetchConfig(env), steps = [], calId = await inspCalendarId(env, cfg);
   const add = (name, ok, detail, fix) => steps.push({ step: name, ok, detail: detail || '', fix: fix || '' });
   add('Calendar to use', true, calId + (cfg.INSP_CALENDAR_ID ? ' (Config INSP_CALENDAR_ID)' : ' (default)'));
+  const csAs = strCalAs(cfg); // the CLEANING calendar only; the inspection calendar above always uses the service account's own login
+  add('Cleaning calendar: who the Hub acts as', true, csAs.sub ? `Acting as ${csAs.sub} (domain-wide delegation, scope calendar.events). The inspection calendar still uses the service account's own login.` : "The service account's own login (Config STR_CAL_IMPERSONATE is blank). That can read the cleaning calendar but not change it: see Cleaning scheduler > Switches > Check calendar access.");
+  if (csAs.sub && !inspCalStaged(env, cfg)) { try { await getCalendarAccessToken(env, { sub: csAs.sub, scope: csAs.scope }); add('Google sign-in (acting as ' + csAs.sub + ')', true, 'Google approved it.'); } catch (e) { add('Google sign-in (acting as ' + csAs.sub + ')', false, `${e.code}: ${e.message}`, 'Follow the steps in the message.'); } }
   if (inspCalStaged(env, cfg)) { add('Staging', true, 'Calendar calls are stubbed on staging (Config INSP_CALENDAR_STAGING_MODE=LIVE to test for real).'); }
   else {
     try { await getCalendarAccessToken(env); add('Google sign-in (service account)', true, env.GOOGLE_SA_EMAIL); }
