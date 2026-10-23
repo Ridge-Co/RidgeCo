@@ -14975,11 +14975,212 @@ async function handleInboundSMS(env, request) {
   return twilioResponse(`Message received. Your coordinator will follow up.`);
 }
 
-// Raw Twilio transport — no gating, sends if credentials are present. Only ever called by
+// ========== SMS COST CONTROL (D-16, Oct 23 2026) ==========
+// Twilio bills a text in 70-character pieces (67 once it needs more than one) if it holds ANY character outside the GSM-7 set (em dash, curly
+// quote, ellipsis character, bullet, most accented letters, emoji), versus 160 (153) per piece for plain text. One central sanitizer
+// (smsSanitize, run in smsGatedSend before the queue write AND again in sendSMSRaw as the net) keeps every outbound text plain. Spanish
+// vendor texts keep their accents (stripping a/n changes meaning) but still get plain dashes, quotes and dots. smsEstimate says how many
+// pieces a text will bill as; it is used in the SMS_Logs row and in the tests. Marker for deploy checks: sms-cost-d16-2026-10-23.
+const SMS_COST_D16_MARKER = 'sms-cost-d16-2026-10-23';
+const SMS_GSM7_BASIC = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const SMS_GSM7_EXT = "^{}\\[~]|€\f";
+const SMS_GSM_SET = new Set(Array.from(SMS_GSM7_BASIC));
+const SMS_GSM_EXT_SET = new Set(Array.from(SMS_GSM7_EXT));
+// Pure. How will Twilio bill this text? { encoding:'GSM-7'|'UCS-2', units, pieces, non_gsm:[chars that force UCS-2] }.
+function smsEstimate(text) {
+  const s = String(text == null ? '' : text);
+  let gsm = true, units = 0; const bad = [];
+  for (const ch of s) {
+    if (SMS_GSM_SET.has(ch)) units += 1;
+    else if (SMS_GSM_EXT_SET.has(ch)) units += 2;
+    else { gsm = false; if (bad.length < 12 && bad.indexOf(ch) < 0) bad.push(ch); }
+  }
+  if (gsm) return { encoding: 'GSM-7', units, pieces: units === 0 ? 0 : (units <= 160 ? 1 : Math.ceil(units / 153)), non_gsm: [] };
+  const u = s.length;   // UTF-16 code units: an emoji counts 2, exactly as Twilio counts it
+  return { encoding: 'UCS-2', units: u, pieces: u <= 70 ? 1 : Math.ceil(u / 67), non_gsm: bad };
+}
+// Punctuation and symbols that have a safe plain equivalent. '' = drop.
+const SMS_CHAR_MAP = {
+  '—': '-', '–': '-', '‒': '-', '―': '-', '−': '-', '‐': '-', '‑': '-',
+  '‘': "'", '’': "'", '‚': "'", '‛': "'", '′': "'", '`': "'", '´': "'",
+  '“': '"', '”': '"', '„': '"', '‟': '"', '″': '"', '«': '"', '»': '"',
+  '…': '...',
+  ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', '　': ' ',
+  '•': '-', '·': '-', '●': '-', '◦': '-', '▪': '-', '‣': '-', '⁃': '-', '∙': '-',
+  '×': 'x', '÷': '/', '±': '+/-', '°': 'deg', '™': 'TM', '©': '(c)', '®': '(R)', '№': 'No.',
+  '½': '1/2', '¼': '1/4', '¾': '3/4', '→': '->', '←': '<-', '✓': '', '✔': '', '✅': '', '❌': '', '✖': '',
+  '⚠': 'WARNING:', '🔴': 'ALERT:',
+};
+// Dropped outright: zero-width characters, variation selectors, soft hyphen, emoji and pictographs.
+const SMS_DROP_RE = /[​-‍﻿⁠­︀-️⃣]|\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}]|[\u{1F1E6}-\u{1F1FF}]/u;
+const SMS_LATIN_ACCENT_RE = /[À-ɏḀ-ỿ]/;
+const SMS_LETTER_SPECIAL = { 'œ': 'oe', 'Œ': 'OE', 'ł': 'l', 'Ł': 'L', 'đ': 'd', 'Đ': 'D', 'ð': 'd', 'Ð': 'D', 'þ': 'th', 'Þ': 'Th', 'ı': 'i', 'ħ': 'h' };
+// Pure. Plain unaccented form of an accented Latin letter, or '' when there is no safe one.
+function smsBaseLetter(ch) {
+  if (SMS_LETTER_SPECIAL[ch]) return SMS_LETTER_SPECIAL[ch];
+  const n = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return (n !== ch && /^[\x20-\x7E]+$/.test(n)) ? n : '';
+}
+// Pure. { text, changed, unmapped:[chars with no safe plain form, left alone], before, after } (before/after = smsEstimate).
+// Only characters OUTSIDE GSM-7 are touched, so a name with an e-acute (which GSM-7 has) is never altered.
+// opts.keepAccents (Spanish vendor texts): Latin letters keep their accents; everything else is still normalised.
+function smsSanitize(text, opts) {
+  const keepAccents = !!(opts && opts.keepAccents);
+  const before = String(text == null ? '' : text);
+  let out = ''; const unmapped = [];
+  for (const ch of before) {
+    if (SMS_GSM_SET.has(ch) || SMS_GSM_EXT_SET.has(ch)) { out += ch; continue; }
+    if (Object.prototype.hasOwnProperty.call(SMS_CHAR_MAP, ch)) { out += SMS_CHAR_MAP[ch]; continue; }
+    if (SMS_DROP_RE.test(ch)) continue;
+    if (SMS_LATIN_ACCENT_RE.test(ch)) {
+      if (keepAccents) { out += ch; continue; }
+      const b = smsBaseLetter(ch);
+      if (b) { out += b; continue; }
+    }
+    out += ch; if (unmapped.length < 12 && unmapped.indexOf(ch) < 0) unmapped.push(ch);   // e.g. Chinese or Arabic: no safe plain form, sent as written
+  }
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/g, '');
+  return { text: out, changed: out !== before, unmapped, before: smsEstimate(before), after: smsEstimate(out) };
+}
+const smsSanitizeText = (text, opts) => smsSanitize(text, opts).text;
+
+// -- Where a text may go (Oct 23 2026, D-16 item 6). Brett enabled US, Canada, Puerto Rico and the US Virgin Islands in Twilio Geo Permissions. --
+// +1 numbers are allowed EXCEPT the area codes of other Caribbean countries (they are a different country to Twilio). Anything not +1 is refused.
+const SMS_FOREIGN_NANP_AREAS = ['242', '246', '264', '268', '284', '345', '441', '473', '649', '658', '664', '721', '758', '767', '784', '809', '829', '849', '868', '869', '876'];
+// Pure. { ok:true } or { ok:false, reason, last4 }. `phone` is E.164 (normalizePhone output).
+function smsDestinationCheck(phone) {
+  const p = String(phone == null ? '' : phone).trim();
+  const last4 = p.replace(/\D/g, '').slice(-4);
+  if (!/^\+1\d{10}$/.test(p)) return { ok: false, last4, reason: /^\+1/.test(p) ? 'not a 10-digit US/Canada/PR/USVI number' : 'not a +1 number (outside the regions enabled in Twilio)' };
+  if (SMS_FOREIGN_NANP_AREAS.indexOf(p.slice(2, 5)) >= 0) return { ok: false, last4, reason: 'area code ' + p.slice(2, 5) + ' is another Caribbean country, not enabled in Twilio' };
+  return { ok: true, last4 };
+}
+// Twilio errors that will never succeed on a retry. 21408 (region) is permanent only until Geo Permissions change, so it is never remembered.
+const SMS_PERMANENT_ERRORS = {
+  21408: 'Twilio is not allowed to text that region (Geo Permissions)',
+  21211: 'that is not a valid phone number',
+  21614: 'that is not a valid mobile number',
+  21610: 'the person replied STOP and opted out',
+  21612: 'Twilio cannot route a text to that number',
+  30003: 'the handset is unreachable',
+  30005: 'unknown destination handset',
+  30006: 'that is a landline or an unreachable carrier',
+};
+const SMS_NEVER_REMEMBER_CODES = [21408, 21610];   // fixed by a settings change / the person texting START: do not block future sends because of them
+// Pure. { code, permanent, reason } from a Twilio send response (or '' code when it was a success).
+function smsErrorInfo(r) {
+  const raw = r && (r.code != null ? r.code : r.error_code);
+  const code = raw == null || raw === '' ? 0 : parseInt(raw, 10) || 0;
+  if (!code) return { code: 0, permanent: false, reason: '' };
+  return { code, permanent: Object.prototype.hasOwnProperty.call(SMS_PERMANENT_ERRORS, code), reason: SMS_PERMANENT_ERRORS[code] || String((r && r.message) || 'Twilio error ' + code).slice(0, 160) };
+}
+
+// -- Never send the same text twice (D-16 item 4). Per-isolate memory + the Message_Queue rows smsGatedSend already reads. --
+const SMS_DEDUPE_WINDOW_MS = 10 * 60000;
+const __smsRecent = new Map();   // "<to>|<hash>" -> ms it was sent (or started)
+function smsHash(s) { let h = 2166136261; const t = String(s); for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36) + ':' + t.length; }
+function smsDedupeKey(to, body) { return String(to) + '|' + smsHash(body); }
+// Pure over the map. { dup, ageMs }.
+function smsDedupeCheck(map, key, nowMs, windowMs) {
+  const at = map.get(key);
+  if (at != null && nowMs - at < windowMs) return { dup: true, ageMs: nowMs - at };
+  return { dup: false, ageMs: 0 };
+}
+function smsDedupeRemember(map, key, nowMs, windowMs) {
+  map.set(key, nowMs);
+  if (map.size > 300) for (const [k, t] of map) if (nowMs - t >= (windowMs || SMS_DEDUPE_WINDOW_MS)) map.delete(k);
+}
+// Pure. Is there already a row in Message_Queue for this exact text to this number that is sent, sending, or waiting to go? `rows` = array of
+// objects; `selfRow` = a sheet row number to ignore (our own). A held (Send_After) pending row counts at any age; everything else within windowMs.
+// With opts.earlierThanRow, only rows ABOVE that sheet row count (the earlier row wins a race, so two racers never both stand down).
+function mqFindDuplicate(rows, o) {
+  const nowMs = o.nowMs, win = o.windowMs || SMS_DEDUPE_WINDOW_MS;
+  for (let i = 0; i < (rows || []).length; i++) {
+    const r = rows[i], sheetRow = i + 2;
+    if (o.selfRow && sheetRow === o.selfRow) continue;
+    if (o.earlierThanRow && sheetRow >= o.earlierThanRow) continue;
+    if (String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() === 'FALSE') continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone || String(r.Message_Body || '') !== o.body) continue;
+    const st = String(r.Status || '').toLowerCase();
+    if (st === 'sent' || st === 'sending') { const t = Date.parse(r.Sent_Date || r.Created_Date || ''); if (isFinite(t) && nowMs - t < win) return { id: r.ID, status: st, sheetRow }; continue; }
+    if (st === 'pending') {
+      if (r.Send_After) return { id: r.ID, status: 'held', sheetRow };
+      const t = Date.parse(r.Created_Date || ''); if (isFinite(t) && nowMs - t < win) return { id: r.ID, status: 'pending', sheetRow };
+    }
+  }
+  return null;
+}
+// Pure. Automatic nudges: has this number already been nudged about this work order (any nudge type) inside gapMs? { at, id } or null.
+function mqFindRecentNudge(rows, o) {
+  let best = null;
+  for (const r of rows || []) {
+    if (String(r.Message_Type || '').indexOf(o.family) !== 0 || String(r.WO_ID || '') !== o.woId) continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone) continue;
+    const st = String(r.Status || '').toLowerCase();
+    if (st !== 'sent' && st !== 'sending' && !(st === 'pending')) continue;
+    const t = Date.parse(r.Sent_Date || r.Created_Date || '');
+    if (!isFinite(t) || o.nowMs - t >= o.gapMs) continue;
+    if (!best || t > best.at) best = { at: t, id: r.ID };
+  }
+  return best;
+}
+// Pure. Has this number already failed with a permanent Twilio error (not region / opt-out) recently? { code, id } or null.
+function mqFindKnownBad(rows, o) {
+  for (const r of rows || []) {
+    if (String(r.Status || '').toLowerCase() !== 'failed') continue;
+    const code = parseInt(r.Error_Code, 10) || 0;
+    if (!code || !SMS_PERMANENT_ERRORS[code] || SMS_NEVER_REMEMBER_CODES.indexOf(code) >= 0) continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone) continue;
+    const t = Date.parse(r.Created_Date || '');
+    if (isFinite(t) && o.nowMs - t < o.windowMs) return { code, id: r.ID };
+  }
+  return null;
+}
+
+// -- SMS_Logs: one row per real send / refusal, with what Twilio billed (D-16 item 5) --
+const SMS_LOG_TAB = 'SMS_Logs';
+const SMS_LOG_BASE_COLS = ['ID', 'WO_ID', 'Recipient_Type', 'Recipient_ID', 'Phone', 'Message', 'Sent_Date', 'Status', 'Twilio_SID'];
+const SMS_LOG_COST_COLS = ['Segments', 'Est_Segments', 'Encoding', 'Chars', 'Price', 'Price_Unit', 'Message_Type', 'Queue_ID', 'Log_Source', 'Error_Code', 'Note'];
+let __smsLogHeaders = null;   // { at, headers } per isolate: no per-send read
+async function smsLogHeaders(env) {
+  const now = Date.now();
+  if (__smsLogHeaders && now - __smsLogHeaders.at < COLS_OK_MS) return __smsLogHeaders.headers;
+  const want = SMS_LOG_BASE_COLS.concat(SMS_LOG_COST_COLS);
+  try { await ensureColumns(env, SMS_LOG_TAB, want); }
+  catch (e) { if (!isMissingTabError(e)) throw e; await ensureTab(env, SMS_LOG_TAB, want); }   // a brand-new sheet (staging) only; the live tab exists, so it is never created over
+  const h = (((await sheetsRequest(env, 'GET', `/values/${SMS_LOG_TAB}!1:1`)).values || [])[0]) || [];
+  if (!h.length) throw new Error('SMS_Logs has no header row');
+  __smsLogHeaders = { at: now, headers: h };
+  return h;
+}
+let __smsLogSeq = 0;
+// Appends one SMS_Logs row. WRITE ONLY (headers cached per isolate). Never throws: returns { ok } or { ok:false, error }.
+async function smsLogAppend(env, rec) {
+  try {
+    const headers = await smsLogHeaders(env);
+    const row = Object.assign({ ID: 'T' + Date.now().toString(36) + (++__smsLogSeq).toString(36), Sent_Date: new Date().toISOString(), Log_Source: 'transport' }, rec);
+    const resp = await sheetsRequest(env, 'POST', `/values/${SMS_LOG_TAB}:append?valueInputOption=RAW`, { values: [headers.map(h => row[h] == null ? '' : String(row[h]).slice(0, 2000))] });
+    if (!resp || !resp.updates) return { ok: false, error: 'append gave no confirmation' };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 300) }; }
+}
+// Logs and, if the log write itself fails, reports it to the failure ledger (never silent). Never throws.
+async function smsLogRecord(env, rec) {
+  const r = await smsLogAppend(env, rec);
+  if (!r.ok) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_log_write', ref: String(rec.Message_Type || rec.Log_Source || ''), message: 'could not write an SMS_Logs row (' + String(rec.Status || '') + '): ' + r.error, severity: 'P1' });
+  return r;
+}
+// The refusal for a destination outside the enabled regions: ONE calm P2 ledger row, the row id and the LAST FOUR digits only.
+async function smsReportRegionBlocked(env, rowId, check) {
+  return reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_destination_region', ref: rowId ? 'Message_Queue ' + rowId : '', severity: 'P2',
+    message: 'text not sent: destination outside enabled regions (' + (rowId ? 'Message_Queue row ' + rowId : 'no queue row') + ', number ending ' + check.last4 + ')', context: { reason: check.reason } });
+}
+
+// Raw Twilio transport - no gating, sends if credentials are present. Only ever called by
 // (a) sendSMS below, once the global kill switch has already been checked, and (b)
-// smsGatedSend, which has already run the full four/two-layer gate + Test Mode redirect.
-// Never call this directly from a new call site — call sendSMS (legacy/ungated sites) or
-// smsGatedSend (the 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types) instead.
+// smsGatedSend / the queue release paths, which have already run the full gate + Test Mode redirect.
+// Never call this directly from a new call site - call sendSMS (legacy/ungated sites) or
+// smsGatedSend (the gated message types) instead.
 // Auth: Twilio accepts Basic auth with EITHER (Account SID : Auth Token) OR (API Key SID :
 // API Key Secret) — Brett's Cloudflare secrets are the API-Key pair (TWILIO_API_SID /
 // TWILIO_API_KEY), not a classic Auth Token (no TWILIO_AUTH var exists), so this uses that
