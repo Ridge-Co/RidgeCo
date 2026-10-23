@@ -15257,10 +15257,11 @@ async function sendSMSRaw(env, to, message, opts) {
     j = await resp.json();
   } catch (e) {
     __smsRecent.delete(key);   // no answer from Twilio: a deliberate retry must be possible
-    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'failed', Note: 'no usable answer from Twilio: ' + String((e && e.message) || e).slice(0, 200) }));
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'failed', Note: 'no usable answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200) }));
     throw e;
   }
   const ok = !!(resp.ok && j && j.sid);
+  if (!ok && j && typeof j === 'object') { if (j.message) j.message = smsMaskPhones(j.message); if (j.error && typeof j.error === 'string') j.error = smsMaskPhones(j.error); }   // Twilio may echo the To number in an error: only the last 4 digits travel on
   if (!ok) __smsRecent.delete(key);   // Twilio refused it: nothing went out, a later fix-and-resend is allowed
   const einfo = smsErrorInfo(j);
   await smsLogRecord(env, Object.assign({}, logBase, {
