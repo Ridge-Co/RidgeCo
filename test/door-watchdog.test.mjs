@@ -240,7 +240,22 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   await h.run(NOW);
   h.health = good({ last_tick: null });
   const r = await h.run(NOW + 15 * MIN);
-  t('different reason-set within 6h -> second SMS', r.action === 'alert' && h.sms.length === 2);
+  t('different reason-set within 24h -> second SMS (a changed problem key still sends at once)', r.action === 'alert' && h.sms.length === 2);
+}
+{ // D-16 FAULT: the SMS_Logs write for an attempt / a suppressed repeat fails -> the pass says so (ok:false + sms_log error), the alert text STILL goes out
+  W.setMem(null);
+  const restore = logsOff();
+  const h = harness({ logSms: async () => { throw new Error('sheet quota 429'); } });
+  h.health = good({ ok: false });
+  let r = await h.run(NOW);
+  t('FAULT SMS_Logs write throws on the alert: text still sent, pass reports the log failure', r.action === 'alert' && h.sms.length === 1 && r.ok === false && r.errors.some(e => /^sms_log:.*429/.test(e)));
+  r = await h.run(NOW + HR);
+  t('FAULT SMS_Logs write throws on a suppressed repeat: still no second text, failure reported', r.action === 'suppressed' && h.sms.length === 1 && r.ok === false && r.errors.some(e => /^sms_log:/.test(e)));
+  const h2 = harness({ logSms: async () => ({ ok: false, error: 'append gave no confirmation' }) });
+  h2.health = good({ ok: false });
+  r = await h2.run(NOW);
+  t('FAULT SMS_Logs write returns ok:false: reported, text still sent', h2.sms.length === 1 && r.ok === false && r.errors.some(e => /append gave no confirmation/.test(e)));
+  restore();
 }
 { // FAILURE PATH: health fetch fails (throws / timeout / 503 / non-JSON) is itself an alert
   for (const [label, impl, rx] of [
