@@ -10459,7 +10459,7 @@ async function sendPinMessage(env, body) {
   if (vendorRec) { const t = await translateForVendorDetailed(env, vendorRec, message); if (t.translated) { outMessage = t.text; translatedTo = 'es'; } }
   // Oct 22 2026: the old code ignored sendSMS's answer and logged "sent" regardless, so a switched-off or rejected text still looked sent.
   // Now the real result decides: the person's row gets PIN_Sent_Date/Count only when Twilio accepted it, and a failure is returned honestly.
-  const verdict = smsSendVerdict(await sendSMS(env, phone, outMessage));
+  const verdict = smsSendVerdict(await sendSMS(env, phone, outMessage, { redact: true, keepAccents: translatedTo === 'es', context: { message_type: 'pin_send_' + type, recipient_type: type } }));
   const mark = await stampPinSend(env, type, id, verdict);
   if (!verdict.ok) return json({ error: 'PIN text NOT sent: ' + verdict.result, name: firstName, mark_saved: mark.ok }, 502);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
