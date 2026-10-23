@@ -31621,30 +31621,32 @@ function qbGroupOpenRows(irRows, ir, woRows, estRows) {
 // when NEITHER exists — old bills, or nobody filled either field in — does this fall back to
 // wo.Invoice_Memo/Description, so nothing already sent regresses.
 //
-// Oct 23 2026 (invoice 1767 / WO-1169, owner asked "more detail of the larger amounts"): Brett's
-// own billable hours logged BEFORE the Invoice Description field existed carry their detail only
-// in Notes. The invoice read "Billable hours" and said nothing about 4 visits. Those hours now
-// describe themselves from Notes — but ONLY for Brett's own (role 'hub') billable hours that have
-// no Invoice_Description of their own, so a vendor's private notes can never reach a customer and
-// a filled-in Invoice_Description is never mixed with the private note. Non-billable hours are
-// never listed. Such an entry gets no date prefix: its Created_Date is when it was LOGGED, not
-// when the work happened, and the note usually carries its own date.
+// Oct 23 2026 (invoice 1767 / WO-1169, owner asked "more detail of the larger amounts"): Brett's own
+// billable hours logged BEFORE the Invoice Description field existed carry their detail only in
+// Notes, which are PRIVATE. Notes NEVER reach an invoice on their own. Brett opts in with the
+// "Use notes as invoice descriptions" action (POST /time-entry/use-notes), which COPIES a hub
+// billable entry's Notes into its Invoice_Description (verified write) so nothing is retyped and
+// nothing private goes out unseen. After that the entry is described like any other.
 function isTrueish(v) { return v === true || String(v == null ? '' : v).trim().toUpperCase() === 'TRUE'; }
 
 function laborEntryText(e) {
   const inv = englishOnly((e && e.Invoice_Description) || '').trim();
-  if (inv) {
-    const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
-    return d ? (d + ' — ' + inv) : inv;
-  }
-  if (e && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)) {
-    const note = englishOnly(e.Notes || '').trim();
-    if (note) {
-      const d = String(e.Start_DateTime || '').split('T')[0];
-      return d ? (d + ' — ' + note) : note;
-    }
-  }
-  return '';
+  if (!inv) return '';
+  // Brett's own hours print a date only when a work date was recorded: Created_Date is when the entry
+  // was LOGGED (often days after the work), so it is never shown for him. Vendor entries keep the old rule.
+  const isHub = String((e && e.Role) || '').toLowerCase() === 'hub';
+  const d = String(isHub ? (e.Start_DateTime || '') : (e.Start_DateTime || e.Created_Date || '')).split('T')[0];
+  return d ? (d + ' — ' + inv) : inv;
+}
+
+// Brett's own billable hours that have a private note but no Invoice Description (the ones the
+// opt-in action can copy). billId: a string limits to entries on that bill ('' = not on any bill);
+// null = every entry passed in.
+function timeEntriesWithUsableNotes(timeEntries, billId) {
+  return (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE'
+    && (billId === null || billId === undefined || String(e.Bill_ID || '').trim() === String(billId))
+    && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)
+    && !String(e.Invoice_Description || '').trim() && String(e.Notes || '').trim());
 }
 
 function buildLaborDescription(billRow, timeEntries, wo) {
