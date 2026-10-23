@@ -34,11 +34,12 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(woJobLabel(woA) !== woJobLabel(woB), 'two same-trade jobs with different descriptions never produce the same label');
 }
 {
-  const longDesc = 'A'.repeat(80);
+  const longDesc = 'A'.repeat(80);   // D-16 (Oct 23 2026): cut to 40 characters and a plain three-dot ending (the ellipsis character made the text bill in 70-character pieces)
   const wo = { Trade: 'General', Description: longDesc };
   const label = woJobLabel(wo);
   ok(label.length < ('General job (' + longDesc + ')').length, 'a long description is truncated, not sent in full to the tenant');
-  ok(label.endsWith('…)'), 'a truncated description is marked with an ellipsis so it reads as shortened, not cut off silently');
+  ok(label.endsWith('...)') && !label.includes('…') && label === 'General job (' + 'A'.repeat(40) + '...)', 'a truncated description is cut to 40 characters and marked with a plain "..." so it reads as shortened, not cut off silently');
+  ok(woJobLabel({ Trade: 'Plumbing', Description: 'Line one\nLine two with more detail' }) === 'Plumbing job (Line one)', 'only the first line of a multi-line description is used');
 }
 {
   const wo = { Trade: 'Plumbing', Description: '' };
