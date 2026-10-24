@@ -210,6 +210,7 @@ function build(db, fetchOpts) {
     findRecentDupeSrc, claimCacheSrc, addRowSrc, updateRowSrc, createWorkOrderSrc,
     splitOrigFieldsSrc, splitMaxNewSrc, timeEntryLockSrc, vendorBillLockSrc, findLockedVendorBillSrc, woSplitSrc,
     isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
+    'const smsPropertyGateFlags = () => ({}); const ppResolveGateProperty = async () => null; /* Oct 24 2026 (rule 231): real ones are driven by test/property-toggles.test.mjs */',
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
     etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, D16_WORLD, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,

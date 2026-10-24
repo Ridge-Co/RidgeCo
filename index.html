@@ -228,6 +228,63 @@ window.addEventListener('pageshow', function(e){
   .toast.success { border-left: 3px solid var(--accent2); }
   .toast.error { border-left: 3px solid var(--danger); }
   .toast.info { border-left: 3px solid var(--info); }
+  /* Property detail view + list badges (Oct 24 2026, rule 231). Mobile first: every tap target is at least 44px, text fields are 16px (set globally above). */
+  .pbadge { display:inline-block; font-size:10px; line-height:1; padding:3px 6px; border-radius:10px; border:1px solid var(--border); background:var(--surface2); color:var(--muted); white-space:nowrap; }
+  .pbadge.on { background:#eaf6ee; color:#166534; border-color:#bfe3c9; }
+  .pbadge.off { background:#fdecea; color:#b42318; border-color:#f1b5ae; }
+  .pbadge.warn { background:#fdf2e2; color:#8a4b00; border-color:#f0d09a; }
+  .pbadge.dup { background:#eef0f6; color:#3b4a8a; border-color:#c9cfe8; }
+  #modal-prop-detail { padding: 12px 8px; }
+  #modal-prop-detail .modal { padding: 14px; }
+  .pd-tabs { display:flex; gap:6px; margin-bottom:12px; }
+  .pd-tab { flex:1 1 0; min-width:0; min-height:44px; padding:8px 6px; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); font-family:var(--font); font-size:14px; cursor:pointer; }
+  .pd-tab[aria-selected="true"] { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:700; }
+  .pd-msg { padding:10px 12px; border-radius:8px; margin-bottom:12px; font-size:14px; line-height:1.4; overflow-wrap:anywhere; }
+  .pd-msg.err { background:#fdecea; color:#b42318; border:1px solid #f1b5ae; }
+  .pd-msg.warn { background:#fdf2e2; color:#8a4b00; border:1px solid #f0d09a; }
+  .pd-msg.ok { background:#eaf6ee; color:#166534; border:1px solid #bfe3c9; }
+  .pd-msg ul { margin:6px 0 6px 18px; padding:0; }
+  .pd-sec { border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; background:var(--surface); }
+  .pd-sec-t { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+  .pd-help { font-size:13px; color:var(--muted); line-height:1.4; margin:4px 0; overflow-wrap:anywhere; }
+  .pd-note { color:#8a4b00; }
+  .pd-row { display:flex; gap:12px; align-items:center; justify-content:space-between; padding:10px 0; border-top:1px solid var(--border); min-height:44px; }
+  .pd-sec-t + .pd-row { border-top:none; }
+  .pd-row-l { flex:1 1 auto; min-width:0; }
+  .pd-row-r { flex:0 0 auto; }
+  .pd-row-t { font-size:15px; font-weight:600; }
+  .pd-sw { min-width:84px; min-height:44px; padding:8px 12px; border-radius:22px; border:1px solid var(--border); font-family:var(--font); font-size:14px; font-weight:700; cursor:pointer; }
+  .pd-sw.on { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+  .pd-sw.off { background:var(--surface2); color:var(--muted); }
+  .pd-sw:disabled { opacity:.5; }
+  .pd-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+  .pd-f { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); min-width:0; text-transform:none; letter-spacing:normal; }
+  .pd-f em { color:#8a4b00; font-style:normal; }
+  .pd-in, .pd-sel { width:100%; min-height:44px; font-size:16px; padding:8px 10px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); color:var(--text); font-family:var(--font); box-sizing:border-box; }
+  .pd-selw { width:auto; min-width:140px; }
+  textarea.pd-in { min-height:72px; }
+  .pd-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .pd-btn { min-height:44px; }
+  .pd-unit-h { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:8px; }
+  .pd-unit-h small { color:var(--muted); }
+  .pd-tbl { border:1px solid var(--border); border-radius:8px; overflow:hidden; margin:6px 0 10px; }
+  .pd-trow { display:flex; gap:10px; align-items:center; padding:6px 10px; border-top:1px solid var(--border); min-height:44px; }
+  .pd-trow:first-child { border-top:none; }
+  .pd-tmain { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; overflow-wrap:anywhere; }
+  .pd-tmain small { color:var(--muted); }
+  .pd-tstat { flex:0 0 auto; font-size:13px; text-align:right; }
+  .pd-chg { color:var(--danger); }
+  .pd-chk { display:flex; gap:6px; align-items:center; min-height:44px; min-width:44px; font-size:12px; color:var(--muted); cursor:pointer; text-transform:none; letter-spacing:normal; }
+  .pd-chk input, .pd-opt input { width:22px; height:22px; flex:0 0 auto; }
+  .pd-conf { margin-bottom:10px; }
+  .pd-conf-t { font-size:13px; font-weight:700; margin-bottom:4px; }
+  .pd-conf-g { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .pd-opt { display:flex; gap:8px; align-items:flex-start; padding:8px; min-height:44px; text-transform:none; letter-spacing:normal; font-size:14px; color:var(--text); border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--surface); min-width:0; }
+  .pd-opt.on { border-color:var(--accent); background:#eef3ff; }
+  .pd-opt span { display:flex; flex-direction:column; min-width:0; overflow-wrap:anywhere; }
+  .pd-opt small { color:var(--muted); font-size:11px; }
+  .pd-pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; margin:0; }
+  .pd-apply { border-top:1px solid var(--border); padding-top:10px; }
   @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
   .loading { color: var(--muted); font-size: 12px; padding: 20px; text-align: center; letter-spacing: 0.1em; }
   .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 8px; }
@@ -454,6 +511,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary small" style="display:none" onclick="hideKeysView()" id="btn-keys-back">← Properties</button>
     </div>
     <div class="search-bar"><input type="text" id="prop-search" placeholder="Search properties..." oninput="renderPropertiesPage()"></div>
+    <div style="margin-bottom:12px"><select id="prop-view" onchange="renderPropertiesPage()" aria-label="Which properties to show" style="min-height:44px;max-width:100%"><option value="active">Active properties</option><option value="hidden">Hidden: duplicates and inactive</option></select></div>
     <div id="properties-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
     <div id="keys-view" style="display:none">
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
@@ -1470,6 +1528,15 @@ window.addEventListener('pageshow', function(e){
 </div>
 
 <!-- EDIT PROPERTY MODAL -->
+<div class="modal-overlay" id="modal-prop-detail">
+  <div class="modal modal-wide">
+    <div class="modal-header"><div class="modal-title" id="pd-title">PROPERTY</div><button type="button" class="modal-close" style="min-width:44px;min-height:44px" data-act="close" aria-label="Close">✕</button></div>
+    <div class="pd-tabs" id="pd-tabs" role="tablist"></div>
+    <div class="pd-msg" id="pd-msg" role="alert" style="display:none"></div>
+    <div id="pd-body"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-edit-property">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">EDIT PROPERTY</div><button class="modal-close" onclick="closeModal('modal-edit-property')">✕</button></div>
@@ -2666,6 +2733,13 @@ function maybeOpenWOFromURL() {
     }
     var wid = qs.get('wo');
     if (wid && typeof openWODetail === 'function') openWODetail(wid);
+    // index.html?property=<id>&tab=settings|info|units|cleanup opens that property's detail view (links from the proposal screen and the Message Queue).
+    var propId = qs.get('property');
+    if (propId && typeof openPropertyDetail === 'function') {
+      var pbtn = Array.prototype.find.call(document.querySelectorAll('.nav-btn'), function(b){ return (b.getAttribute('onclick') || '').indexOf("showPage('properties'") !== -1; });
+      showPage('properties', pbtn || null);
+      openPropertyDetail(propId, qs.get('tab') || 'settings');
+    }
   } catch (e) {}
 }
 
@@ -4440,7 +4514,8 @@ function resetNewWOSafetyModal(){
 function renderPropertiesPage() {
   var search = ((document.getElementById('prop-search')||{}).value||'').toLowerCase().trim();
   var props = sortPropsNumeric(safeArray(state.properties).filter(function(p){
-    if (p.Active==='FALSE') return false;
+    var viewHidden = ((document.getElementById('prop-view')||{}).value||'active') === 'hidden';
+    if (viewHidden ? p.Active!=='FALSE' : p.Active==='FALSE') return false;
     if (!search) return true;
     return (p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search)||(p.Owner_ID||'').includes(search);
   }));
@@ -4469,13 +4544,14 @@ function renderPropertiesPage() {
 
       return '<div class="prop-expand-card" id="prop-card-'+p.ID+'">' +
         // ── Main property row ──
-        '<div class="prop-row-main" onclick="togglePropUnits(\''+p.ID+'\')" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s">' +
+        '<div class="prop-row-main" onclick="openPropertyDetail(\''+p.ID+'\')" style="display:flex;align-items:center;gap:10px;min-height:44px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s">' +
           '<div style="flex:1;min-width:0">' +
             '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
               '<span style="font-weight:bold;color:var(--accent);font-size:clamp(12px,1.2vw,15px)">'+esc(p.Address)+'</span>' +
               (p.City ? '<span style="color:var(--muted);font-size:clamp(11px,1vw,13px)">'+esc(p.City)+'</span>' : '') +
               (p.Type ? '<span style="font-size:clamp(9px,0.8vw,11px);background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 6px">'+esc(p.Type)+'</span>' : '') +
               (urgentCount ? '<span style="background:#fdecea;color:#b42318;font-size:clamp(9px,0.8vw,11px);padding:2px 7px;border-radius:3px">'+urgentCount+' URGENT</span>' : '') +
+              propBadgesHtml(p) +
             '</div>' +
             '<div style="display:flex;gap:10px;margin-top:5px;font-size:clamp(10px,0.9vw,12px);color:var(--muted);flex-wrap:wrap">' +
               (owner ? '<span>👤 '+esc(owner.Name||owner.First_Name||'')+'</span>' : '') +
@@ -4489,7 +4565,7 @@ function renderPropertiesPage() {
             '<button class="btn small secondary" onclick="openPropertyNoticeModal(\''+p.ID+'\')">📢 Notice</button>' +
             (openWOs.length ? '<button class="btn small secondary" onclick="goToPropertyWOs(\''+p.ID+'\')">'+openWOs.length+' WOs →</button>' : '') +
           '</div>' +
-          '<span id="prop-arrow-'+p.ID+'" style="color:var(--muted);font-size:14px;flex-shrink:0">▶</span>' +
+          '<span id="prop-arrow-'+p.ID+'" title="Show units" onclick="event.stopPropagation();togglePropUnits(\''+p.ID+'\')" style="color:var(--muted);font-size:14px;flex-shrink:0;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center">▶</span>' +
         '</div>' +
         // ── Expandable units section ──
         '<div id="prop-units-'+p.ID+'" style="display:none;padding:10px 4px 4px 4px">' +
@@ -4497,6 +4573,469 @@ function renderPropertiesPage() {
         '</div>' +
       '</div>';
     }).join('<div style="height:6px"></div>');
+}
+
+// ═══ PROPERTY DETAIL (Oct 24 2026, FEATURE_LOG rule 231) ═══════════════════════════════════════════════════════════════
+// Tap a property → a detail view with four tabs (Settings, Info, Units, Cleanup). Everything is read lazily from GET /property/detail only when a
+// property is opened (the list itself reads nothing extra). Every write goes through a verified endpoint. A failure is shown in the red bar at the top
+// of the view and as a toast (and logged), never swallowed. Buttons carry data-act and ONE delegated listener (bottom of this block) handles them.
+var PD = { id:'', tab:'settings', data:null, reveal:{}, apply:null, merge:null, mergeDone:null, busy:{}, pick:{} };
+var PD_TABS = [['settings','Settings'],['info','Info'],['units','Units'],['cleanup','Cleanup']];
+var PD_SENS = ['Lockbox_Code','Lock_Code','Thermostat_Access','Furnace_Access','Master_Key_ID'];
+function pdFalse(v){ return String(v==null?'':v).trim().toUpperCase()==='FALSE'; }
+function pdProp(id){ return safeArray(state.properties).find(function(p){ return String(p.ID)===String(id); }); }
+function pdLabel(c){ return String(c).replace(/_/g,' '); }
+function pdMsg(html, kind){
+  var el=document.getElementById('pd-msg'); if(!el) return;
+  if(!html){ el.style.display='none'; el.innerHTML=''; return; }
+  el.className='pd-msg '+(kind||'err'); el.style.display='block'; el.innerHTML=html;
+  try{ el.scrollIntoView({block:'nearest'}); }catch(e){}
+}
+// clientSide = the browser itself failed (network, timeout): the server never saw it, so tell the failure log too. A server-reported failure is already logged by the server.
+function pdFail(where, msg, clientSide){
+  msg=String(msg||'No answer from the server');
+  pdMsg('<b>Not saved.</b> '+esc(msg),'err'); toast('Error: '+msg,'error'); logError('Property '+where, msg);
+  if(clientSide){ try{ if(typeof window.hubReportFailure==='function') window.hubReportFailure('index.html property-detail '+where, msg); }catch(e){} }
+}
+function pdBusy(el, on){ if(el){ el.disabled=!!on; } }
+
+function openPropertyDetail(id, tab){
+  var p=pdProp(id);
+  PD={ id:String(id), tab:'settings', data:null, reveal:{}, apply:null, merge:null, mergeDone:null, busy:{}, pick:{} };
+  for(var i=0;i<PD_TABS.length;i++) if(PD_TABS[i][0]===tab) PD.tab=tab;
+  if(!tab && p && p.Active==='FALSE') PD.tab='cleanup';
+  document.getElementById('pd-title').textContent=p?(p.Address||('Property '+id)):('Property '+id);
+  pdMsg('');
+  document.getElementById('pd-body').innerHTML='<div class="loading"><span class="spinner"></span>Loading…</div>';
+  pdRenderTabs();
+  openModal('modal-prop-detail');
+  pdLoad();
+}
+function pdLoad(){
+  var id=PD.id;
+  return api('GET','/property/detail?id='+encodeURIComponent(id),null,30000).then(function(res){
+    if(PD.id!==id) return;
+    if(!res||res.error){ pdLoadFailed((res&&res.error)||'No answer from the server', false); return; }
+    PD.data=res; pdSortCandidates(); pdRender();
+  }).catch(function(e){ if(PD.id===id) pdLoadFailed(e&&e.message, true); });
+}
+function pdLoadFailed(msg, clientSide){
+  msg=String(msg||'No answer from the server'); logError('Property detail', msg);
+  if(clientSide){ try{ if(typeof window.hubReportFailure==='function') window.hubReportFailure('index.html property-detail load', msg); }catch(e){} }
+  if(!PD.data){ document.getElementById('pd-body').innerHTML='<div class="pd-msg err" style="display:block"><b>Could not load this property.</b> '+esc(msg)+'<div style="margin-top:8px"><button type="button" class="btn secondary pd-btn" data-act="reload">Try again</button></div></div>'; }
+  else pdMsg('<b>Could not refresh this view.</b> '+esc(msg),'err');
+}
+function pdSortCandidates(){
+  var c=safeArray(PD.data.candidates).map(function(x){ return { Address:x.address, _c:x }; });
+  PD.data.candidates=sortPropsNumeric(c).map(function(x){ return x._c; });
+}
+function pdRenderTabs(){
+  document.getElementById('pd-tabs').innerHTML=PD_TABS.map(function(t){
+    return '<button type="button" role="tab" class="pd-tab" aria-selected="'+(PD.tab===t[0])+'" data-act="tab" data-tab="'+t[0]+'">'+t[1]+'</button>';
+  }).join('');
+}
+function pdRender(){
+  pdRenderTabs();
+  if(!PD.data) return;
+  var html = PD.tab==='settings' ? pdSettingsHtml() : PD.tab==='info' ? pdInfoHtml() : PD.tab==='units' ? pdUnitsHtml() : pdCleanupHtml();
+  document.getElementById('pd-body').innerHTML=html;
+  if(PD.tab==='settings') pdApplyRender();
+  if(PD.tab==='cleanup'){ pdPickerFill('dup'); pdPickerFill('merge'); pdMergeRender(); }
+}
+// Unsaved typing on the Info / Units tabs is never dropped without asking.
+function pdDirty(){
+  var n=0;
+  document.querySelectorAll('#pd-body [data-orig]').forEach(function(el){ if(String(el.value).trim()!==String(el.getAttribute('data-orig')).trim()) n++; });
+  return n;
+}
+function pdLeaveOk(){ return !pdDirty() || confirm('You have changes that are not saved. Leave without saving them?'); }
+
+// ── Settings tab ─────────────────────────────────────────────────────────────────────────────────────────────────────
+function pdSettingsHtml(){
+  var d=PD.data, h='';
+  if(d.duplicate && d.duplicate.of) h+='<div class="pd-msg warn" style="display:block">This property is marked as a duplicate of <b>#'+esc(d.duplicate.of)+'</b> and is hidden from lists. See the Cleanup tab.</div>';
+  var groups=[];
+  d.toggles.forEach(function(t){
+    var g=groups.find(function(x){ return x.name===t.group; });
+    if(!g){ g={ name:t.group, items:[] }; groups.push(g); }
+    g.items.push(t);
+  });
+  groups.forEach(function(g){ h+='<div class="pd-sec"><div class="pd-sec-t">'+esc(g.name)+'</div>'+g.items.map(pdToggleRow).join('')+'</div>'; });
+  h+=pdCustomerHtml();
+  return h;
+}
+function pdToggleRow(t){
+  var missing=safeArray(PD.data.missing_columns).indexOf(t.col)>=0 && t.key!=='active';
+  var busy=!!PD.busy['t_'+t.key], ctl;
+  if(t.kind==='tri'){
+    ctl='<select class="pd-sel pd-selw" aria-label="'+esc(t.label)+'" data-chg="toggle-sel" data-key="'+t.key+'"'+(busy?' disabled':'')+'>'+
+      [['','Not set (OFF)'],['ON','ON'],['OFF','OFF']].map(function(o){ return '<option value="'+o[0]+'"'+(t.raw===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')+'</select>';
+  } else {
+    ctl='<button type="button" class="pd-sw '+(t.on?'on':'off')+'" role="switch" aria-checked="'+(t.on?'true':'false')+'" aria-label="'+esc(t.label)+'" data-act="toggle" data-key="'+t.key+'" data-val="'+(t.on?'FALSE':'TRUE')+'"'+(busy?' disabled':'')+'><span class="pd-sw-txt">'+(t.on?'ON':'OFF')+'</span></button>';
+  }
+  var note='';
+  if(t.key==='tenant_wo'){
+    if(t.effective!==undefined) note+='In effect right now: <b>'+(t.effective?'ON':'OFF')+'</b>.';
+    if(t.overridden_by_customer) note+=' A customer-level setting is overriding this one.';
+    if(t.unit_scoped) note+=' Limited to certain units (change that under Edit).';
+  } else if(t.kind==='bool' && t.raw==='' && t.key!=='active') note+='Not set in the sheet, so it counts as ON.';
+  if(missing) note+=' The sheet column is created the first time you change this.';
+  return '<div class="pd-row"><div class="pd-row-l"><div class="pd-row-t">'+esc(t.label)+'</div><div class="pd-help">'+esc(t.help)+'</div>'+(note?'<div class="pd-help pd-note">'+note+'</div>':'')+'</div><div class="pd-row-r">'+ctl+'</div></div>';
+}
+function pdSetToggle(key, value){
+  if(PD.busy['t_'+key]) return;
+  var t=PD.data.toggles.find(function(k){ return k.key===key; }); if(!t) return;
+  if(key==='active' && value==='FALSE' && !confirm('Turn this property OFF? It disappears from lists and pickers. Nothing is deleted and you can turn it back on.')){ pdRender(); return; }
+  PD.busy['t_'+key]=true; pdMsg(''); pdRender();
+  api('POST','/property/toggle',{ property_id:PD.id, key:key, value:value }).then(function(res){
+    PD.busy['t_'+key]=false;
+    if(!res || res.ok!==true){ pdFail('toggle', (res&&res.error)||'No answer from the server', false); pdRender(); return; }
+    t.raw=res.value; t.on=res.on;
+    PD.data.property[res.col]=res.value;
+    var p=pdProp(PD.id); if(p) p[res.col]=res.value;
+    PD.data.missing_columns=safeArray(PD.data.missing_columns).filter(function(c){ return c!==res.col; });
+    toast(t.label+': '+(t.kind==='tri' ? (res.value||'not set') : (res.on?'ON':'OFF')),'success');
+    pdRender(); renderPropertiesPage();
+    if(key==='tenant_wo' || key==='active') pdLoad();
+  }).catch(function(e){ PD.busy['t_'+key]=false; pdFail('toggle', e.message, true); pdRender(); });
+}
+
+// Customer = the owner account (an Owners row). "Apply to all" writes each property's own column once; it does not stay linked.
+function pdCustomerHtml(){
+  var c=PD.data.customer;
+  if(!c) return '<div class="pd-sec"><div class="pd-sec-t">Customer</div><div class="pd-help">This property has no customer (owner account) yet, so there is nothing to apply to all.</div></div>';
+  var h='<div class="pd-sec"><div class="pd-sec-t">Customer</div><div class="pd-help"><b>'+esc(c.name)+'</b> · '+c.property_count+' propert'+(c.property_count===1?'y':'ies')+' · texts for this customer are <b>'+(c.sms_on?'ON':'OFF')+'</b> (that switch is on the owner account and is not changed here).</div>';
+  if(safeArray(c.same_company_owner_ids).length) h+='<div class="pd-help pd-note">Heads up: '+c.same_company_owner_ids.length+' other customer account'+(c.same_company_owner_ids.length===1?'':'s')+' share this company name (#'+c.same_company_owner_ids.map(esc).join(', #')+'). "Apply to all" only covers properties on THIS account.</div>';
+  return h+'<div id="pd-ap-out" style="margin-top:10px"></div></div>';
+}
+function pdApplyRender(){
+  var el=document.getElementById('pd-ap-out'); if(!el) return;
+  var A=PD.apply, c=PD.data.customer;
+  if(!A){ el.innerHTML='<button type="button" class="btn secondary pd-btn" data-act="ap-open">Apply a setting to all of this customer\'s properties…</button>'; return; }
+  var keys=PD.data.toggles.filter(function(t){ return t.applyAll; });
+  var h='<div class="pd-apply"><div class="pd-sec-t">Apply to all of '+esc(c.name)+'\'s properties</div>'+
+    '<div class="pd-help">This writes the setting onto each property one time. It does not stay linked: properties added later, or changed by hand later, are not touched. Preview first, tick <b>Leave out</b> on any property to skip, then confirm.</div>'+
+    '<div class="pd-grid"><label class="pd-f"><span>Setting</span><select class="pd-sel" data-chg="ap-field" data-f="key">'+keys.map(function(t){ return '<option value="'+t.key+'"'+(A.key===t.key?' selected':'')+'>'+esc(t.label)+'</option>'; }).join('')+'</select></label>'+
+    '<label class="pd-f"><span>Set to</span><select class="pd-sel" data-chg="ap-field" data-f="value"><option value="FALSE"'+(A.value==='FALSE'?' selected':'')+'>OFF</option><option value="TRUE"'+(A.value==='TRUE'?' selected':'')+'>ON</option></select></label></div>'+
+    '<div class="pd-actions"><button type="button" class="btn pd-btn" data-act="ap-preview"'+(A.busy?' disabled':'')+'>'+(A.preview?'Refresh preview':'Preview changes')+'</button><button type="button" class="btn secondary pd-btn" data-act="ap-close"'+(A.busy?' disabled':'')+'>Close</button></div>';
+  if(A.busy) h+='<div class="loading"><span class="spinner"></span>Working…</div>';
+  if(A.error) h+='<div class="pd-msg err" style="display:block">'+esc(A.error)+'</div>';
+  if(A.result){
+    h+='<div class="pd-msg ok" style="display:block"><b>Done and checked.</b> "'+esc(A.result.label)+'" set to '+(A.result.value==='TRUE'?'ON':'OFF')+' on '+A.result.applied+' propert'+(A.result.applied===1?'y':'ies')+'. Each one was read back from the sheet.</div>';
+  } else if(A.preview){
+    var pv=A.preview, on=A.value==='TRUE';
+    h+='<div class="pd-sec-t" style="margin-top:12px">Preview — nothing is saved yet</div>'+
+      '<div class="pd-help"><b>'+pv.counts.will_change+'</b> will change · '+pv.counts.unchanged+' already '+(on?'ON':'OFF')+' · '+pv.counts.excluded+' left out · '+pv.counts.inactive+' inactive (skipped)</div>'+
+      '<div class="pd-tbl">'+pv.rows.map(function(r){
+        var dis=r.action==='skip_inactive', ex=r.action==='excluded', ch=r.action==='change';
+        var stat=ch ? '<b class="pd-chg">'+(r.before_on?'ON':'OFF')+' → '+(r.after_on?'ON':'OFF')+'</b>'
+          : ex ? (r.before_on?'ON':'OFF')+' · left out' : dis ? 'inactive · skipped' : (r.before_on?'ON':'OFF')+' · no change';
+        return '<div class="pd-trow"><label class="pd-chk"><input type="checkbox" data-chg="ap-excl" data-id="'+esc(r.property_id)+'"'+(ex?' checked':'')+(dis?' disabled':'')+'><span>Leave out</span></label>'+
+          '<div class="pd-tmain"><b>'+esc(r.address||('Property '+r.property_id))+'</b><small>'+esc(r.city||'')+' #'+esc(r.property_id)+'</small></div><div class="pd-tstat">'+stat+'</div></div>';
+      }).join('')+'</div>';
+    if(pv.counts.will_change>0) h+='<div class="pd-actions"><button type="button" class="btn danger pd-btn" data-act="ap-apply"'+(A.busy?' disabled':'')+'>Confirm: set “'+esc(pv.label)+'” to '+(on?'ON':'OFF')+' on '+pv.counts.will_change+' propert'+(pv.counts.will_change===1?'y':'ies')+'</button></div>';
+    else h+='<div class="pd-help">Nothing to change with these choices.</div>';
+  }
+  el.innerHTML=h+'</div>';
+}
+function pdApplyExcluded(){ var A=PD.apply; return Object.keys(A.exclude).filter(function(k){ return A.exclude[k]; }); }
+function pdApplyPreview(){
+  var A=PD.apply; if(!A||A.busy) return;
+  A.busy=true; A.error=''; A.result=null; pdApplyRender();
+  return api('POST','/owner/property-toggle-preview',{ owner_id:PD.data.customer.id, key:A.key, value:A.value, exclude_ids:pdApplyExcluded() },30000).then(function(res){
+    A.busy=false;
+    if(!res || res.ok!==true){ A.preview=null; A.error=(res&&res.error)||'No answer from the server'; } else A.preview=res;
+    pdApplyRender();
+  }).catch(function(e){ A.busy=false; A.preview=null; A.error=e.message; pdFail('apply preview', e.message, true); pdApplyRender(); });
+}
+function pdApplyConfirm(){
+  var A=PD.apply; if(!A||!A.preview||A.busy) return;
+  var pv=A.preview, n=pv.counts.will_change; if(!n) return;
+  if(!confirm('Set "'+pv.label+'" to '+(A.value==='TRUE'?'ON':'OFF')+' on '+n+' propert'+(n===1?'y':'ies')+' of '+PD.data.customer.name+'?')) return;
+  A.busy=true; A.error=''; pdApplyRender();
+  api('POST','/owner/property-toggle-apply',{ owner_id:PD.data.customer.id, key:A.key, value:A.value, exclude_ids:pdApplyExcluded(), token:pv.token, confirm:true },60000).then(function(res){
+    A.busy=false;
+    if(!res || res.ok!==true){
+      A.error=(res&&res.error)||'No answer from the server';
+      if(res && res.code==='changed_since_preview') A.preview=null;
+      pdFail('apply', A.error, false); pdApplyRender(); return;
+    }
+    safeArray(pv.rows).forEach(function(r){ if(r.action==='change'){ var p=pdProp(r.property_id); if(p) p[pv.col]=r.after_value; } });
+    A.result={ applied:res.applied||0, label:pv.label, value:A.value }; A.preview=null;
+    pdMsg(''); toast('Applied to '+A.result.applied+' propert'+(A.result.applied===1?'y':'ies'),'success');
+    renderPropertiesPage(); pdLoad();
+  }).catch(function(e){ A.busy=false; A.error=e.message; pdFail('apply', e.message, true); pdApplyRender(); });
+}
+
+// ── Info tab ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+function pdInfoField(col, val){
+  var d=PD.data, v=String(val==null?'':val), vt=v.trim();
+  var common=' data-pdcol="'+esc(col)+'" data-orig="'+esc(v)+'" autocomplete="off"', ctl;
+  if(col==='Owner_ID'){
+    var known=d.owner_options.some(function(o){ return String(o.id)===vt; });
+    ctl='<select class="pd-sel"'+common+'><option value="">(no customer)</option>'+d.owner_options.map(function(o){ return '<option value="'+esc(o.id)+'"'+(String(o.id)===vt?' selected':'')+'>'+esc(o.name)+' (#'+esc(o.id)+')</option>'; }).join('')+
+      (vt && !known ? '<option value="'+esc(vt)+'" selected>#'+esc(vt)+' (inactive or unknown)</option>' : '')+'</select>';
+  } else if(/Notes|Issues|Access$/.test(col) || v.length>80){
+    ctl='<textarea class="pd-in" rows="3"'+common+'>'+esc(v)+'</textarea>';
+  } else ctl='<input type="text" class="pd-in" value="'+esc(v)+'"'+common+'>';
+  return '<label class="pd-f"><span>'+esc(pdLabel(col))+'</span>'+ctl+'</label>';
+}
+function pdInfoHtml(){
+  var d=PD.data, p=d.property, h='';
+  d.groups.forEach(function(g){
+    h+='<div class="pd-sec"><div class="pd-sec-t">'+esc(g.label)+'</div>';
+    if(g.sensitive && !PD.reveal[g.key]){
+      h+='<div class="pd-help">Key, lockbox and door codes. Hidden until you ask. They are never shown to vendors from this screen.</div><button type="button" class="btn secondary pd-btn" data-act="reveal" data-key="'+esc(g.key)+'">Show access details</button></div>';
+      return;
+    }
+    h+='<div class="pd-grid">'+g.cols.map(function(c){ return pdInfoField(c, p[c]); }).join('')+'</div></div>';
+  });
+  h+='<div class="pd-help">Property ID <b>'+esc(p.ID)+'</b>. The on/off switches are on the Settings tab and duplicate marks are on the Cleanup tab.</div>';
+  h+='<div class="pd-actions"><button type="button" class="btn pd-btn" data-act="info-save">Save changes</button></div>';
+  return h;
+}
+function pdInfoSave(btn){
+  if(PD.busy.info) return;
+  var fields={}, n=0;
+  document.querySelectorAll('#pd-body [data-pdcol]').forEach(function(el){
+    var v=String(el.value).trim(), o=String(el.getAttribute('data-orig')).trim();
+    if(v!==o){ fields[el.getAttribute('data-pdcol')]=v; n++; }
+  });
+  if(!n){ toast('Nothing changed','info'); return; }
+  PD.busy.info=true; pdBusy(btn,true); pdMsg('');
+  api('POST','/property/info-save',{ property_id:PD.id, fields:fields }).then(function(res){
+    PD.busy.info=false; pdBusy(btn,false);
+    if(!res || res.ok!==true){ pdFail('info save', (res&&res.error)||'No answer from the server', false); return; }
+    var p=pdProp(PD.id);
+    Object.keys(fields).forEach(function(k){ PD.data.property[k]=fields[k]; if(p) p[k]=fields[k]; });
+    if(fields.Address!==undefined) document.getElementById('pd-title').textContent=fields.Address;
+    toast(safeArray(res.changed).length ? 'Saved: '+res.changed.join(', ') : 'Nothing changed','success');
+    pdRender(); renderPropertiesPage();
+  }).catch(function(e){ PD.busy.info=false; pdBusy(btn,false); pdFail('info save', e.message, true); });
+}
+
+// ── Units tab ────────────────────────────────────────────────────────────────────────────────────────────────────────
+function pdUnitsHtml(){
+  var d=PD.data;
+  if(!d.units.length) return '<div class="pd-sec"><div class="pd-help">This property has no unit records (it is treated as one whole address). Units are added from the Edit screen.</div></div>';
+  return d.units.map(function(u){
+    var uid=String(u.ID);
+    var fields=d.unit_fields.filter(function(c){ return (c in u) || d.unit_new_cols.indexOf(c)>=0; });
+    var h='<div class="pd-sec"><div class="pd-unit-h"><b>'+esc(u.Unit_Label||('Unit '+uid))+'</b>'+(pdFalse(u.Active)?' <span class="pbadge off">inactive</span>':'')+'<small>'+(safeArray(u._tenants).length?esc(u._tenants.join(', ')):'Vacant')+'</small></div><div class="pd-grid">';
+    fields.forEach(function(c){
+      var v=String(u[c]==null?'':u[c]);
+      if(c==='Lock_Code' && !PD.reveal['u'+uid]){ h+='<div class="pd-f"><span>Lock code</span><button type="button" class="btn secondary pd-btn" data-act="unit-reveal" data-unit="'+esc(uid)+'">Show</button></div>'; return; }
+      var common=' data-unit="'+esc(uid)+'" data-ucol="'+esc(c)+'" autocomplete="off"', ctl;
+      if(c==='Active'){
+        var cur=pdFalse(v)?'FALSE':'TRUE';
+        ctl='<select class="pd-sel"'+common+' data-orig="'+cur+'"><option value="TRUE"'+(cur==='TRUE'?' selected':'')+'>Active</option><option value="FALSE"'+(cur==='FALSE'?' selected':'')+'>Inactive</option></select>';
+      } else if(/Notes|Issues/.test(c) || v.length>80) ctl='<textarea class="pd-in" rows="2"'+common+' data-orig="'+esc(v)+'">'+esc(v)+'</textarea>';
+      else ctl='<input type="text" class="pd-in" value="'+esc(v)+'"'+common+' data-orig="'+esc(v)+'">';
+      var hint=!(c in u) ? ' <em>(new — the sheet column is created when you save)</em>' : '';
+      h+='<label class="pd-f"><span>'+esc(pdLabel(c))+hint+'</span>'+ctl+'</label>';
+    });
+    return h+'</div><div class="pd-actions"><button type="button" class="btn pd-btn" data-act="unit-save" data-unit="'+esc(uid)+'">Save this unit</button></div></div>';
+  }).join('');
+}
+function pdUnitSave(uid, btn){
+  if(PD.busy['u'+uid]) return;
+  var fields={}, n=0, els=[];
+  document.querySelectorAll('#pd-body [data-ucol]').forEach(function(el){
+    if(el.getAttribute('data-unit')!==uid) return;
+    var v=String(el.value).trim(), o=String(el.getAttribute('data-orig')).trim();
+    if(v!==o){ fields[el.getAttribute('data-ucol')]=v; n++; els.push(el); }
+  });
+  if(!n){ toast('Nothing changed','info'); return; }
+  PD.busy['u'+uid]=true; pdBusy(btn,true); pdMsg('');
+  api('POST','/property/unit-save',{ unit_id:uid, fields:fields }).then(function(res){
+    PD.busy['u'+uid]=false; pdBusy(btn,false);
+    if(!res || res.ok!==true){ pdFail('unit save', (res&&res.error)||'No answer from the server', false); return; }
+    els.forEach(function(el){ el.setAttribute('data-orig', el.value); });
+    var u=PD.data.units.find(function(x){ return String(x.ID)===uid; }); if(u) Object.keys(fields).forEach(function(k){ u[k]=fields[k]; });
+    var su=safeArray(state.units).find(function(x){ return String(x.ID)===uid; }); if(su) Object.keys(fields).forEach(function(k){ su[k]=fields[k]; });
+    toast('Unit saved: '+Object.keys(fields).map(pdLabel).join(', '),'success');
+  }).catch(function(e){ PD.busy['u'+uid]=false; pdBusy(btn,false); pdFail('unit save', e.message, true); });
+}
+
+// ── Cleanup tab (duplicate / merge) ──────────────────────────────────────────────────────────────────────────────────
+function pdPickerHtml(kind){
+  return '<label class="pd-f"><span>Property to keep (type to search)</span><input type="text" class="pd-in" id="pd-pq-'+kind+'" data-inp="picker" data-kind="'+kind+'" placeholder="Address, city or ID" autocomplete="off"></label>'+
+    '<select class="pd-sel" id="pd-ps-'+kind+'" data-chg="picker" data-kind="'+kind+'" aria-label="Property to keep"></select>';
+}
+function pdPickerFill(kind){
+  var sel=document.getElementById('pd-ps-'+kind); if(!sel) return;
+  var q=String((document.getElementById('pd-pq-'+kind)||{}).value||'').toLowerCase().trim();
+  var cur=PD.pick[kind] || (kind==='merge' && PD.data.duplicate.of) || '';
+  var list=PD.data.candidates.filter(function(c){ return !q || String(c.id)===String(cur) || (c.address+' '+c.city+' #'+c.id).toLowerCase().indexOf(q)>=0; });
+  var shown=list.slice(0,40);
+  sel.innerHTML='<option value="">— choose a property —</option>'+shown.map(function(c){
+    return '<option value="'+esc(c.id)+'"'+(String(c.id)===String(cur)?' selected':'')+'>#'+esc(c.id)+' · '+esc(c.address)+(c.city?', '+esc(c.city):'')+(c.active?'':' (hidden)')+'</option>';
+  }).join('')+(list.length>40 ? '<option value="" disabled>… '+(list.length-40)+' more, keep typing to narrow</option>' : '');
+  pdPickerChange(kind);
+}
+function pdPickerChange(kind){
+  var sel=document.getElementById('pd-ps-'+kind); if(!sel) return;
+  PD.pick[kind]=sel.value;
+  var btn=document.getElementById(kind==='dup'?'pd-dup-btn':'pd-mg-btn'); if(btn) btn.disabled=!sel.value;
+}
+function pdCleanupHtml(){
+  var d=PD.data, dup=d.duplicate, h='', merged=!!dup.merge_log;
+  if(PD.mergeDone){
+    var md=PD.mergeDone, parts=Object.keys(md.moved||{}).map(function(k){ return esc(k)+' '+md.moved[k]; });
+    h+='<div class="pd-msg ok" style="display:block"><b>Merged and checked.</b> '+md.total_rows_moved+' row'+(md.total_rows_moved===1?'':'s')+' re-pointed to #'+esc(md.to_id)+(parts.length?' ('+parts.join(', ')+')':'')+'. Every sheet was read again and nothing still points here. Nothing was deleted.'+
+      '<div class="pd-actions"><button type="button" class="btn pd-btn" data-act="open-prop" data-id="'+esc(md.to_id)+'">Open #'+esc(md.to_id)+'</button></div></div>';
+  }
+  if(dup.of){
+    h+='<div class="pd-msg warn" style="display:block"><b>'+(merged?'Merged into':'Marked as a duplicate of')+' #'+esc(dup.of)+(dup.of_address?' — '+esc(dup.of_address):'')+'</b>'+(dup.marked_date?' on '+esc(dup.marked_date):'')+'. It is hidden from normal lists. Nothing was deleted.'+(merged?' Its records were moved to the kept property, so it cannot be restored from here.':'')+
+      '<div class="pd-actions">'+(merged?'':'<button type="button" class="btn secondary pd-btn" data-act="dup-restore">Restore (un-mark)</button>')+'<button type="button" class="btn secondary pd-btn" data-act="open-prop" data-id="'+esc(dup.of)+'">Open #'+esc(dup.of)+'</button></div></div>';
+    if(merged) h+='<div class="pd-sec"><div class="pd-sec-t">Merge record</div><pre class="pd-pre">'+esc(dup.merge_log)+'</pre></div>';
+  }
+  if(safeArray(dup.duplicates_of_me).length) h+='<div class="pd-sec"><div class="pd-sec-t">Marked as duplicates of this property</div>'+dup.duplicates_of_me.map(function(x){ return '<div class="pd-row"><div class="pd-row-l">#'+esc(x.id)+' · '+esc(x.address)+'</div><div class="pd-row-r"><button type="button" class="btn secondary pd-btn" data-act="open-prop" data-id="'+esc(x.id)+'">Open</button></div></div>'; }).join('')+'</div>';
+  if(!merged){
+    if(!dup.of) h+='<div class="pd-sec"><div class="pd-sec-t">Mark as duplicate</div><div class="pd-help">Use this when this property is a stray copy of another one. It is hidden from lists and pickers (Active turns OFF) and you can restore it any time. <b>Nothing is deleted and nothing is moved.</b> Work orders, units and tenants stay where they are; use Merge below to move them.</div>'+pdPickerHtml('dup')+'<div class="pd-actions"><button type="button" class="btn pd-btn" id="pd-dup-btn" data-act="dup-mark" disabled>Mark as duplicate</button></div></div>';
+    h+='<div class="pd-sec"><div class="pd-sec-t">Merge into another property</div><div class="pd-help">Moves everything that points at <b>this</b> property (work orders, units, tenants, keys, messages and every other sheet that holds a property link) over to the property you keep, then hides this one as a duplicate. You see how many rows move in each sheet before anything happens. Where both properties hold a different value, you choose. Nothing is deleted.</div>'+pdPickerHtml('merge')+'<div class="pd-actions"><button type="button" class="btn pd-btn" id="pd-mg-btn" data-act="merge-preview" disabled>Preview merge</button></div><div id="pd-merge-out"></div></div>';
+  }
+  return h;
+}
+function pdDupMark(){
+  var to=PD.pick.dup; if(!to) return;
+  var c=PD.data.candidates.find(function(x){ return String(x.id)===String(to); });
+  if(!confirm('Mark this property as a duplicate of #'+to+(c?' ('+c.address+')':'')+'?\n\nIt will be hidden from lists. Nothing is deleted or moved, and you can restore it.')) return;
+  api('POST','/property/mark-duplicate',{ property_id:PD.id, duplicate_of:to }).then(function(res){
+    if(!res || res.ok!==true){ pdFail('mark duplicate', (res&&res.error)||'No answer from the server', false); return; }
+    var p=pdProp(PD.id); if(p){ p.Active='FALSE'; p.Duplicate_Of=to; }
+    toast('Marked as a duplicate of #'+to,'success'); pdMsg(esc(res.note||'Marked and hidden.'),'ok');
+    renderPropertiesPage(); pdLoad();
+  }).catch(function(e){ pdFail('mark duplicate', e.message, true); });
+}
+function pdDupRestore(){
+  if(!confirm('Restore this property? It goes back into the normal lists.')) return;
+  api('POST','/property/unmark-duplicate',{ property_id:PD.id }).then(function(res){
+    if(!res || res.ok!==true){ pdFail('restore', (res&&res.error)||'No answer from the server', false); return; }
+    var p=pdProp(PD.id); if(p){ p.Active='TRUE'; p.Duplicate_Of=''; }
+    toast('Restored','success'); pdMsg(''); renderPropertiesPage(); pdLoad();
+  }).catch(function(e){ pdFail('restore', e.message, true); });
+}
+function pdMergePreview(){
+  var to=PD.pick.merge; if(!to) return;
+  PD.merge={ to:to, busy:true, preview:null, picks:{}, error:'' };
+  pdMergeRender();
+  var M=PD.merge;
+  api('POST','/property/merge-preview',{ from_id:PD.id, to_id:to },90000).then(function(res){
+    if(PD.merge!==M) return;
+    M.busy=false;
+    if(!res || (res.error && !res.blocks)) M.error=(res&&res.error)||'No answer from the server'; else M.preview=res;
+    pdMergeRender();
+  }).catch(function(e){ if(PD.merge!==M) return; M.busy=false; M.error=e.message; pdFail('merge preview', e.message, true); pdMergeRender(); });
+}
+function pdMergeRender(){
+  var el=document.getElementById('pd-merge-out'); if(!el) return;
+  var M=PD.merge; if(!M){ el.innerHTML=''; return; }
+  var h='';
+  if(M.busy) h+='<div class="loading"><span class="spinner"></span>Checking every sheet for rows that point at this property… this can take a few seconds.</div>';
+  if(M.error) h+='<div class="pd-msg err" style="display:block">'+esc(M.error)+'<div class="pd-actions"><button type="button" class="btn secondary pd-btn" data-act="merge-preview">Preview again</button></div></div>';
+  var pv=M.preview;
+  if(pv){
+    h+='<div class="pd-sec-t" style="margin-top:12px">Preview — nothing has changed yet</div><div class="pd-help">Merge <b>#'+esc(pv.from.id)+' '+esc(pv.from.address)+'</b> (hidden afterwards) into <b>#'+esc(pv.to.id)+' '+esc(pv.to.address)+'</b> (kept).</div>';
+    if(safeArray(pv.blocks).length) h+='<div class="pd-msg err" style="display:block"><b>This merge is blocked.</b><ul>'+pv.blocks.map(function(b){ return '<li>'+esc(b)+'</li>'; }).join('')+'</ul>Nothing was changed.</div>';
+    if(safeArray(pv.conflicts).length){
+      h+='<div class="pd-sec-t">Choose which value to keep ('+pv.conflicts.length+')</div>'+pv.conflicts.map(function(c){
+        var sel=M.picks[c.col]||'';
+        function opt(v, who, val){ return '<label class="pd-opt'+(sel===v?' on':'')+'"><input type="radio" name="pd-cf-'+esc(c.col)+'" value="'+v+'" data-chg="merge-pick" data-col="'+esc(c.col)+'"'+(sel===v?' checked':'')+'><span><small>'+who+'</small><b>'+esc(val)+'</b></span></label>'; }
+        return '<div class="pd-conf"><div class="pd-conf-t">'+esc(pdLabel(c.col))+'</div><div class="pd-conf-g">'+opt('from','This property (#'+esc(pv.from.id)+', hidden afterwards)',c.from)+opt('to','Keep (#'+esc(pv.to.id)+')',c.to)+'</div></div>';
+      }).join('');
+    } else if(!safeArray(pv.blocks).length) h+='<div class="pd-help">No field has two different values, so there is nothing to choose.</div>';
+    if(safeArray(pv.auto).length) h+='<div class="pd-help">Taken automatically (only one of the two had a value): '+pv.auto.map(function(a){ return esc(pdLabel(a.col))+(PD_SENS.indexOf(a.col)>=0?'':' = “'+esc(a.value)+'”'); }).join('; ')+'.</div>';
+    if(safeArray(pv.tabs).length) h+='<div class="pd-sec-t">Rows that will move ('+pv.total_rows_to_move+')</div><div class="pd-tbl">'+pv.tabs.map(function(t){ return '<div class="pd-trow"><div class="pd-tmain"><b>'+esc(t.tab)+'</b><small>'+esc(t.col)+'</small></div><div class="pd-tstat"><b>'+t.count+'</b></div></div>'; }).join('')+'</div>';
+    else h+='<div class="pd-help">No other sheet has a row that points at this property (checked '+pv.tabs_checked+' places).</div>';
+    var unk=safeArray(pv.unknown_columns);
+    if(unk.length) h+='<div class="pd-help pd-note">Also checked, not on the merge list: '+unk.map(function(u){ return esc(u.tab)+'.'+esc(u.col)+' ('+u.count+' match'+(u.count===1?'':'es')+')'; }).join(', ')+'.</div>';
+    safeArray(pv.warnings).forEach(function(w){ h+='<div class="pd-help">'+esc(w)+'</div>'; });
+    if(pv.unit_count_after!==undefined) h+='<div class="pd-help">Unit count on the kept property afterwards: <b>'+esc(pv.unit_count_after)+'</b>.</div>';
+    var missing=safeArray(pv.conflicts).filter(function(c){ return !M.picks[c.col]; }).length;
+    if(pv.ok){
+      h+='<div class="pd-actions"><button type="button" class="btn danger pd-btn" data-act="merge-apply"'+((missing||M.busy)?' disabled':'')+'>Merge: move '+pv.total_rows_to_move+' row'+(pv.total_rows_to_move===1?'':'s')+' to #'+esc(pv.to.id)+'</button></div>'+(missing?'<div class="pd-help pd-note">Choose a value for each field above ('+missing+' left) to enable the Merge button.</div>':'');
+    }
+  }
+  el.innerHTML=h;
+}
+function pdMergeApply(){
+  var M=PD.merge; if(!M||!M.preview||M.busy||!M.preview.ok) return;
+  var pv=M.preview;
+  if(!confirm('Merge #'+pv.from.id+' into #'+pv.to.id+'?\n\n'+pv.total_rows_to_move+' row(s) will be re-pointed. Nothing is deleted. #'+pv.from.id+' is hidden afterwards.')) return;
+  M.busy=true; M.error=''; pdMergeRender();
+  api('POST','/property/merge-apply',{ from_id:pv.from.id, to_id:pv.to.id, token:pv.token, resolutions:M.picks, confirm:true },120000).then(function(res){
+    M.busy=false;
+    if(!res || res.ok!==true){
+      M.error=(res&&res.error)||'No answer from the server';
+      if(res && res.code==='changed_since_preview') M.preview=null;
+      pdFail('merge', M.error, false); pdMergeRender(); return;
+    }
+    PD.mergeDone=res; PD.merge=null;
+    var p=pdProp(pv.from.id); if(p){ p.Active='FALSE'; p.Duplicate_Of=pv.to.id; }
+    toast('Merged into #'+pv.to.id,'success'); pdMsg('');
+    renderPropertiesPage(); try{ loadAll(); }catch(e){}
+    pdLoad();
+  }).catch(function(e){ M.busy=false; M.error=e.message; pdFail('merge', e.message, true); pdMergeRender(); });
+}
+
+// ── one delegated listener for every button / select in the detail view ──────────────────────────────────────────────
+function pdAct(act, el){
+  var g=function(k){ return el.getAttribute('data-'+k); };
+  if(act==='close'){ if(pdLeaveOk()) closeModal('modal-prop-detail'); }
+  else if(act==='tab'){ if(g('tab')!==PD.tab && pdLeaveOk()){ PD.tab=g('tab'); pdMsg(''); pdRender(); } }
+  else if(act==='reload') pdLoad();
+  else if(act==='toggle') pdSetToggle(g('key'), g('val'));
+  else if(act==='ap-open'){ var keys=PD.data.toggles.filter(function(t){ return t.applyAll; }); PD.apply={ key:(keys[0]||{}).key||'', value:'FALSE', exclude:{}, preview:null, busy:false, error:'', result:null }; pdApplyRender(); }
+  else if(act==='ap-close'){ PD.apply=null; pdApplyRender(); }
+  else if(act==='ap-preview') pdApplyPreview();
+  else if(act==='ap-apply') pdApplyConfirm();
+  else if(act==='reveal'){ if(!pdLeaveOk()) return; PD.reveal[g('key')]=true; pdRender(); }
+  else if(act==='unit-reveal'){ if(!pdLeaveOk()) return; PD.reveal['u'+g('unit')]=true; pdRender(); }
+  else if(act==='info-save') pdInfoSave(el);
+  else if(act==='unit-save') pdUnitSave(g('unit'), el);
+  else if(act==='dup-mark') pdDupMark();
+  else if(act==='dup-restore') pdDupRestore();
+  else if(act==='merge-preview') pdMergePreview();
+  else if(act==='merge-apply') pdMergeApply();
+  else if(act==='open-prop'){ if(pdLeaveOk()) openPropertyDetail(g('id'), 'cleanup'); }
+}
+function pdChg(kind, el){
+  var g=function(k){ return el.getAttribute('data-'+k); };
+  if(kind==='toggle-sel') pdSetToggle(g('key'), el.value);
+  else if(kind==='ap-field'){ if(!PD.apply) return; PD.apply[g('f')]=el.value; PD.apply.preview=null; PD.apply.result=null; PD.apply.error=''; pdApplyRender(); }
+  else if(kind==='ap-excl'){ if(!PD.apply) return; PD.apply.exclude[g('id')]=el.checked; pdApplyPreview(); }
+  else if(kind==='picker') pdPickerChange(g('kind'));
+  else if(kind==='merge-pick'){ if(!PD.merge) return; PD.merge.picks[g('col')]=el.value; pdMergeRender(); }
+}
+document.addEventListener('click', function(ev){
+  var b=ev.target && ev.target.closest ? ev.target.closest('#modal-prop-detail [data-act]') : null;
+  if(!b || b.disabled) return;
+  pdAct(b.getAttribute('data-act'), b);
+});
+document.addEventListener('change', function(ev){
+  var b=ev.target && ev.target.closest ? ev.target.closest('#modal-prop-detail [data-chg]') : null;
+  if(b) pdChg(b.getAttribute('data-chg'), b);
+});
+document.addEventListener('input', function(ev){
+  var b=ev.target && ev.target.closest ? ev.target.closest('#modal-prop-detail [data-inp="picker"]') : null;
+  if(b) pdPickerFill(b.getAttribute('data-kind'));
+});
+
+// Small status badges for the Properties list (no extra reads: they come from the row the list already has).
+function propBadgesHtml(p){
+  var b='';
+  if(String(p.Duplicate_Of||'').trim()) b+='<span class="pbadge dup">Duplicate of #'+esc(p.Duplicate_Of)+'</span>';
+  else if(p.Active==='FALSE') b+='<span class="pbadge off">Inactive</span>';
+  var subs=[];
+  if(pdFalse(p.SMS_Tenants_Enabled)) subs.push('tenants');
+  if(pdFalse(p.SMS_Owners_Enabled)) subs.push('owner');
+  if(pdFalse(p.SMS_Vendors_Enabled)) subs.push('vendors');
+  if(pdFalse(p.SMS_Enabled)) b+='<span class="pbadge off" title="Texts for this property are switched OFF">SMS off</span>';
+  else if(subs.length) b+='<span class="pbadge warn" title="Some texts are switched off for this property">SMS: no '+subs.join(', ')+'</span>';
+  else b+='<span class="pbadge on" title="Texts for this property are ON">SMS on</span>';
+  if(pdFalse(p.Owner_Email_Enabled)) b+='<span class="pbadge warn" title="Automatic owner emails are OFF">No owner email</span>';
+  return b;
 }
 
 function togglePropUnits(propId) {

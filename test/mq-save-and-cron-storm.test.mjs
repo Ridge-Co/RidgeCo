@@ -137,7 +137,7 @@ const SENT = { Status: 'sent', Delivered_To: '+14105550100', Sent_Date: 'now', T
     const stubs = {
       ensureSmsInfra: async () => {}, fetchConfig: async () => ({ TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' }),
       normalizePhone: (p) => String(p || ''), smsToggleOn: () => true, tenantMovedOut: () => false,
-      smsGateDecision: () => ({ sendOk: true, gateSnapshot: 'all gates on' }),
+      smsGateDecision: () => ({ sendOk: true, gateSnapshot: 'all gates on' }), smsPropertyGateFlags: () => ({}),   // Oct 24 2026: the real flags are covered by test/property-toggles.test.mjs
       translateForVendorDetailed: async () => ({ translated: false }),
       sheetsRequest: async (env, method, path) => method === 'GET' ? { values: [['ID', 'Status'], ['7', 'sent']] } : { updates: { updatedRange: 'Message_Queue!A3:H3' } },
       MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: ['ID', 'Status'], nextSafeId: () => 8,

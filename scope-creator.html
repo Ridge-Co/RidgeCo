@@ -82,6 +82,8 @@
   .owner-note{font-size:11px;line-height:1.5;padding:8px 10px;border-radius:var(--radius);margin-bottom:10px;}
   .owner-note.ok{background:#eaf6ee;color:var(--accent2);}
   .owner-note.warn{background:#fdf2e2;color:#9a6b00;}
+  .owner-note.err{background:#fdecea;color:#b42318;}
+  .owner-note a{color:inherit;font-weight:700;display:inline-block;min-height:44px;line-height:44px;}
   .toolbtns{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
   .status{font-size:11px;min-height:14px;margin-top:6px;}
   pre.doc{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;line-height:1.5;font-family:var(--font);}
@@ -319,11 +321,12 @@
         <button class="btn small secondary" onclick="copyLink()" style="margin-top:6px;">📋 Copy link</button>
         <button class="btn small" onclick="revokeAndRelink()" style="margin-top:6px;">🔁 Kill old link &amp; get a new one</button>
       </div>
+      <div id="send-sms-preview" style="margin-top:10px;" aria-live="polite"></div>
       <div class="row" style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;">
         <button class="btn" onclick="sendEstimateEmail()">📧 Send estimate to owner</button>
         <button class="btn secondary hide" id="gmail-reconnect-btn" onclick="reconnectGmail()">🔑 Reconnect Gmail</button>
       </div>
-      <label class="sub" style="display:block;margin-top:6px;"><input type="checkbox" id="send-override-quiet"> Also text the owner right now even if it's after 8pm (overrides quiet hours). The email always goes either way; the text is held until 8am if this is unchecked and it's late.</label>
+      <label class="sub" style="display:block;margin-top:6px;"><input type="checkbox" id="send-override-quiet" onchange="refreshSendSmsPreview()"> Also text the owner right now even if it's after 8pm (overrides quiet hours). The email always goes either way; the text is held until 8am if this is unchecked and it's late.</label>
       <div id="send-status" class="status"></div>
       <div id="gmail-reconnect-note" class="sub hide" style="margin-top:4px;">Opens Google in a new tab — sign in as the Ridge Co sender, allow sending, then come back and tap Send again.</div>
       <div id="send-sent-note"></div>
@@ -681,6 +684,7 @@ function renderEditor(){
   loadScopePhotos();
   loadSignatureIfSigned();
   renderSendStatus();
+  refreshSendSmsPreview();
 }
 // Editable at any time (Brett: "need to be able to edit title after creation and at any time"),
 // not just at scope-creation. Same /scope/update path saveItems()/saveProposalText() already use.
@@ -1301,9 +1305,16 @@ async function sendEstimateEmail(){
   var email=(st.owner&&st.owner.Email||'').trim();
   if(!st.complete || !email){ setStatus('send-status','⚠ No billing-ready owner email on file — confirm the payor in step 6 first.','err'); return; }
   var already=(s.Sent_Date||'').trim();
+  // Oct 24 2026: ask the real gate BEFORE sending, so a text that will be held or blocked is said out loud instead of discovered later.
+  setStatus('send-status','Checking whether the owner text will go out…');
+  var pv=await proposalSmsPreview();
+  setStatus('send-status','');
+  var textWillGo = !!(pv && pv.will_send);
   var confirmMsg = already
     ? 'This was already sent to '+email+' on '+new Date(already).toLocaleDateString()+'. Send it again?'
-    : 'Send this estimate to '+email+'? (The owner also gets a short text saying it was emailed.)';
+    : 'Send this estimate to '+email+'?'+(textWillGo?' (The owner also gets a short text saying it was emailed.)':'');
+  if(pv && pv._error) confirmMsg+='\n\n⚠ Could not check whether the owner text will go out ('+pv._error+'). The email will still send.';
+  else if(pv && !pv.resend && !pv.will_send) confirmMsg+='\n\n'+(pv.will_send_later?'⏳ ':'⚠ ')+pv.headline+(pv.will_send_later?'':' The email will still go.');
   if(!confirm(confirmMsg)) return;
   if(window._proposalSending) return;   // double-tap guard; the server also refuses a re-send within a minute
   window._proposalSending=true;
@@ -1320,8 +1331,56 @@ async function sendEstimateEmail(){
     setStatus('send-status','✅ emailed '+r.sent_to+(r.sms&&r.sms.note?' · '+(smsBad?'⚠ ':'')+r.sms.note:''),smsBad?'err':'ok');
     showGmailReconnect(false);
     renderSendStatus();
+    var _pvEl=document.getElementById('send-sms-preview'); if(_pvEl) _pvEl.innerHTML=smsOutcomeHtml(r.sms);   // the REAL outcome, not a prediction
   }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
   finally{ window._proposalSending=false; if(_sb) _sb.disabled=false; }
+}
+// Oct 24 2026 (FEATURE_LOG rule 231): the owner heads-up text. BEFORE sending, GET /sms/gate-preview runs the same gate the real sender uses (read-only, it
+// never sends). AFTER sending, the server's real outcome is shown, with the reason and a link to the property's Settings when a property switch is the cause.
+function propSettingsLink(pid){ return 'index.html?property='+encodeURIComponent(pid)+'&tab=settings'; }
+async function proposalSmsPreview(){
+  var s=state.current; if(!s||!s.Property_ID) return null;
+  if((parseInt(s.Send_Count||'0',10)||0)>0) return { resend:true };   // only the first send texts the owner (server rule)
+  var ov=document.getElementById('send-override-quiet');
+  try{ return await get('/sms/gate-preview?recipient_type=owner&window=proposal&property_id='+encodeURIComponent(s.Property_ID)+(ov&&ov.checked?'&bypass_quiet=1':'')); }
+  catch(e){ return { _error:e.message }; }
+}
+function smsFixLinks(reasons, pid, link){
+  var h='', rs=reasons||[];
+  if(rs.some(function(r){ return r.fix && r.fix.target==='property'; })) h+=' <a href="'+esc(link||propSettingsLink(pid))+'" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  if(rs.some(function(r){ return r.code==='customer_off'; })) h+=' The owner account has texts switched OFF (Owners sheet, SMS_Enabled).';
+  if(rs.some(function(r){ return r.code==='global_off'; })) h+=' Texting is switched OFF Hub-wide (Config TWILIO_ENABLED).';
+  if(rs.some(function(r){ return r.code==='no_phone'; })) h+=' Add a phone number to the owner account.';
+  return h;
+}
+function smsPreviewHtml(pv){
+  if(!pv) return '';
+  var s=state.current;
+  if(pv.resend) return '<div class="owner-note ok" style="font-size:13px">ℹ Resend: the owner is not texted again (only the first send texts them). The email goes.</div>';
+  if(pv._error) return '<div class="owner-note warn" style="font-size:13px">⚠ Could not check whether the owner text will go out ('+esc(pv._error)+'). The email will still send, and the real text outcome is shown after.</div>';
+  var cls=pv.will_send?'ok':(pv.will_send_later?'warn':'err'), icon=pv.will_send?'✅':(pv.will_send_later?'⏳':'⚠');
+  var h='<div class="owner-note '+cls+'" style="font-size:13px">'+icon+' <b>'+esc(pv.headline)+'</b>';
+  (pv.notes||[]).forEach(function(n){ h+=' '+esc(n); });
+  if(!pv.will_send && !pv.will_send_later) h+=' The email will still go.'+smsFixLinks(pv.reasons, s&&s.Property_ID, pv.settings_link);
+  return h+'</div>';
+}
+async function refreshSendSmsPreview(){
+  var el=document.getElementById('send-sms-preview'); if(!el) return;
+  var s=state.current; if(!s){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="sub">Checking whether the owner text will go out…</div>';
+  var pv=await proposalSmsPreview();
+  if(state.current!==s) return;
+  el.innerHTML=smsPreviewHtml(pv);
+}
+function smsOutcomeHtml(sms){
+  if(!sms) return '';
+  var s=state.current, st=sms.status;
+  if(st==='not_attempted') return '<div class="owner-note ok" style="font-size:13px">ℹ '+esc(sms.note||'No text on a resend.')+'</div>';
+  var cls=st==='sent'?'ok':(st==='held'?'warn':'err'), icon=st==='sent'?'✅':(st==='held'?'⏳':'⚠');
+  var label={sent:'Owner texted',held:'Text HELD, it goes out later',blocked:'Text NOT sent: blocked by an SMS switch',failed:'Text FAILED',no_phone:'Text NOT sent: no owner phone on file',skipped_seen:'Text skipped: they had already opened the estimate'}[st]||('Text: '+st);
+  var h='<div class="owner-note '+cls+'" style="font-size:13px">'+icon+' <b>'+esc(label)+'</b>'+(sms.note?' — '+esc(sms.note):'');
+  if(st==='blocked' && s && s.Property_ID) h+=' <a href="'+esc(propSettingsLink(s.Property_ID))+'" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  return h+'</div>';
 }
 function smsStatusLine(s){
   var st=(s.Owner_SMS_Status||'').trim(); if(!st) return '';

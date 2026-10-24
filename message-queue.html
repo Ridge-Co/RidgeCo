@@ -83,6 +83,7 @@
   .row-msg{font-size:13px;line-height:1.5;margin:6px 0;white-space:pre-wrap;word-break:break-word;color:var(--text)}
   .row-meta{font-size:11px;color:var(--muted);margin-top:4px;word-break:break-word}
   .row-gate{font-size:11px;color:var(--warn);margin-top:4px}
+  .row-gate a{display:inline-block;min-height:44px;line-height:44px;font-weight:700;color:var(--accent,#1d4ed8);margin-left:4px}
   /* English view (Oct 13 2026): what a Spanish text says, so the review screen is readable */
   .row-en{font-size:13px;line-height:1.5;margin:4px 0 6px;padding:6px 9px;background:#eef6ff;border-left:3px solid #1d4ed8;border-radius:4px;white-space:pre-wrap;word-break:break-word}
   .row-en.err{background:#fff4f4;border-left-color:#c0392b;color:#8a1f11}
@@ -616,6 +617,15 @@ function syncControls(){
   el('f-sort').value = prefs.sort; el('f-group').value = prefs.group;
   el('f-date').value = F.preset; el('f-from').value = F.from; el('f-to').value = F.to;
 }
+// Oct 24 2026 (FEATURE_LOG rule 231): when a held text was stopped by a PROPERTY switch, link straight to that property's Settings tab where the
+// switch lives; a customer-level stop is explained (that switch is on the owner account, not on the property).
+function gateFixHtml(r){
+  var g = String(r.Gate_Snapshot || ''), h = '';
+  if (/\bProperty (OFF|(tenant|owner|vendor) texts OFF|owner emails OFF)/.test(g) && r.Property_ID) h += ' <a href="index.html?property=' + encodeURIComponent(r.Property_ID) + '&tab=settings" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  if (/\bCustomer OFF/.test(g)) h += ' (the owner account has texts switched OFF)';
+  if (/\bGlobal OFF/.test(g)) h += ' (texting is switched OFF Hub-wide)';
+  return h;
+}
 function rowHtml(r){
   var st = r._st || '';
   var badgeCls = STATUSES.indexOf(st) >= 0 ? st : 'unknown';
@@ -637,7 +647,7 @@ function rowHtml(r){
     (r.Property_Address && prefs.group !== 'prop' ? '<div class="row-addr">' + esc(r.Property_Address) + '</div>' : '') +
     '<div class="row-msg">' + esc(r.Message_Body || '') + (r.Translated_To ? '<span class="row-es-tag">sent in Spanish</span>' : '') + '</div>' +
     englishHtml(r) + showEn +
-    (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + '</div>' : '') +
+    (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + gateFixHtml(r) + '</div>' : '') +
     (r.Status === 'sent' ? '<div class="row-meta">Sent ' + dateLabel(r.Sent_Date) + ' → ' + esc(r.Delivered_To || '') + '</div>' : '') +
     '<div class="row-meta" title="' + esc(r.Created_Date || '') + '">Queued ' + dateLabel(r.Created_Date) + '</div>' +
     (!bulkMode && canAct ? '<div class="row-actions">' +

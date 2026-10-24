@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-23.05-invoice-visit-lines-use-notes';
+const BUILD_VERSION = '2026-10-24.01-property-toggles-detail';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -566,6 +566,8 @@ const _hubWorkerCore = {
           return json({ configured: !!_pcfg, config: _pcfg || null, instant_fee: _instant });
         }
         if (path === '/property')               return await getPropertyFull(env, url);
+        if (path === '/property/detail')        return await propertyDetail(env, url);          // Oct 24 2026: lazy one-property read behind the Properties detail tabs (admin only)
+        if (path === '/sms/gate-preview')       return await smsGatePreviewHandler(env, url);   // Oct 24 2026: READ-ONLY 'would this text send?' - same gate as the real sender
         if (path === '/building-info')          return await getBuildingInfo(env, url);
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
@@ -850,6 +852,15 @@ const _hubWorkerCore = {
         if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
+        if (path === '/property/toggle')          return await propertyToggleSet(env, body);
+        if (path === '/property/info-save')       return await propertyInfoSave(env, body);
+        if (path === '/property/unit-save')       return await propertyUnitSave(env, body);
+        if (path === '/property/mark-duplicate')  return await propertyMarkDuplicate(env, body, false);
+        if (path === '/property/unmark-duplicate') return await propertyMarkDuplicate(env, body, true);
+        if (path === '/property/merge-preview')   return await propertyMergeHandler(env, body, false);
+        if (path === '/property/merge-apply')     return await propertyMergeHandler(env, body, true);
+        if (path === '/owner/property-toggle-preview') return await ownerToggleApplyHandler(env, body, false);
+        if (path === '/owner/property-toggle-apply')   return await ownerToggleApplyHandler(env, body, true);
         if (path === '/owner/held-contact-note') return await setOwnerHeldContactNote(env, body);
         if (path === '/owner/billing')            return await updateOwnerBilling(env, body);
         if (path === '/owner/get-billing')        return await getOwnerBilling(env, url);
@@ -8394,6 +8405,7 @@ function addonEmailGate({ cfg, property, owner }) {
   if (String((owner && owner.Notify_Method) || 'sms') === 'none') return { ok: false, reason: 'owner notification method is none' };
   const g = smsGateDecision({ global, propertyOn: on(property && property.SMS_Enabled), ownerOn: on(owner && owner.SMS_Enabled), kind: 'owner' });
   if (!g.sendOk) return { ok: false, reason: g.gateSnapshot };
+  if (!propertyOwnerEmailOn(property)) return { ok: false, reason: 'Property owner emails OFF' };   // Oct 24 2026: per-property switch, blank = ON
   if (testMode) return { ok: false, reason: 'Test Mode is on — no email to a real owner' };
   return { ok: true, reason: '' };
 }
@@ -16074,6 +16086,7 @@ function smsGateDecision(o) {
   if (!o.global) fails.push('Global OFF');
   if (o.kind === 'tenant') {
     if (!o.propertyOn) fails.push('Property OFF');
+    if (o.propertyTenantsOn === false) fails.push('Property tenant texts OFF');   // Oct 24 2026: per-property switch, blank/absent = ON (=== false on purpose)
     if (!o.ownerOn) fails.push('Customer OFF');
     if (!o.tenantOn) fails.push('Tenant OFF');
     if (o.tenantOptOut) fails.push('Tenant opted out');
@@ -16082,15 +16095,237 @@ function smsGateDecision(o) {
     // toggles, so an old tenant row with SMS still ON kept receiving texts after the new roster went in.
     if (o.tenantMovedOut) fails.push('Tenant moved out');
   } else if (o.kind === 'vendor') {
+    if (o.propertyVendorsOn === false) fails.push('Property vendor texts OFF');   // Oct 24 2026: only when the text is tied to a property that switched vendor texts OFF
     if (!o.vendorOn) fails.push('Vendor OFF');
     if (o.vendorOptOut) fails.push('Vendor opted out');
   } else if (o.kind === 'owner') {
     if (!o.propertyOn) fails.push('Property OFF');
+    if (o.propertyOwnersOn === false) fails.push('Property owner texts OFF');
     if (!o.ownerOn) fails.push('Customer OFF');
   }
   return { sendOk: fails.length === 0, gateSnapshot: fails.length ? fails.join(', ') : 'all gates open' };
 }
 const smsToggleOn = v => String(v == null ? '' : v).toUpperCase() !== 'FALSE';
+// ══ PROPERTY TOGGLES, SMS GATE REASONS, GATE PREVIEW (Oct 24 2026, FEATURE_LOG rule 231) ══════════════════════════
+// ONE registry of everything that can be switched on or off per property. Adding a switch = ONE line here (plus, if it
+// gates a send, one reading of its flag in smsPropertyGateFlags / addonEmailGate). The Properties page, the customer
+// "apply to all" panel and the gate preview are all driven from this list, so they cannot disagree.
+// Blank cell = ON for every 'bool' switch (the codebase-wide convention: only a literal FALSE is off), so a column that
+// does not exist yet changes nothing on deploy. 'tri' is the existing tenant-work-order switch ('' / 'ON' / 'OFF', and
+// nothing set = OFF, see resolveTenantWOAccess); it is shown here but is NOT a blank=ON switch and is not bulk-applied.
+//   gate: which send path reads it - 'master' (SMS_Enabled, existing, unchanged), 'tenant', 'owner', 'vendor', 'owner_email'.
+//   applyAll: may the customer "apply to all properties" panel write it.
+const PROPERTY_TOGGLES = [
+  { key: 'active',      col: 'Active',              kind: 'bool', group: 'Status',   label: 'Active',                         help: 'Off hides the property from lists and pickers. Nothing is deleted and it can be turned back on.', gate: null,          applyAll: false },
+  { key: 'tenant_wo',   col: 'Tenant_WO_Toggle',    kind: 'tri',  group: 'Requests', label: 'Tenants can submit work orders', help: 'Existing setting, same rules as before: a customer-level setting for this property wins over this one, and nothing set anywhere means OFF.', gate: null, applyAll: false },
+  { key: 'sms_master',  col: 'SMS_Enabled',         kind: 'bool', group: 'Texts',    label: 'Texts for this property (master switch)', help: 'The existing property switch. OFF blocks every tenant and owner text for this property.', gate: 'master', applyAll: true },
+  { key: 'sms_tenants', col: 'SMS_Tenants_Enabled', kind: 'bool', group: 'Texts',    label: 'Texts to tenants',               help: 'OFF stops texts to this property\'s tenants only. Owner and vendor texts are not affected.', gate: 'tenant', applyAll: true },
+  { key: 'sms_owners',  col: 'SMS_Owners_Enabled',  kind: 'bool', group: 'Texts',    label: 'Texts to the owner',             help: 'OFF stops owner texts about this property (job received, scheduled, proposal ready...). Tenants and vendors are not affected.', gate: 'owner', applyAll: true },
+  { key: 'sms_vendors', col: 'SMS_Vendors_Enabled', kind: 'bool', group: 'Texts',    label: 'Texts to vendors',               help: 'OFF stops texts to vendors about work at this property (assignments, nudges, cancellations). Applies where the text is tied to this property.', gate: 'vendor', applyAll: true },
+  { key: 'owner_email', col: 'Owner_Email_Enabled', kind: 'bool', group: 'Email',    label: 'Automatic owner emails',         help: 'OFF stops automatic heads-up emails to the owner (such as additional-work notices). Proposals, invoices and statements you send yourself are never blocked by this.', gate: 'owner_email', applyAll: true },
+];
+const propToggleDef = key => PROPERTY_TOGGLES.find(t => t.key === key) || null;
+const propToggleRaw = (property, def) => String(property && property[def.col] != null ? property[def.col] : '').trim();
+// bool: blank = ON. tri: only an explicit 'ON' counts as on (nothing set = OFF, per the tenant-WO rule).
+function propToggleOn(property, def) {
+  const raw = propToggleRaw(property, def);
+  return def.kind === 'tri' ? raw.toUpperCase() === 'ON' : smsToggleOn(raw);
+}
+// What the Properties page draws, one entry per registry row.
+function propToggleStates(property) {
+  return PROPERTY_TOGGLES.map(t => ({ key: t.key, col: t.col, kind: t.kind, group: t.group, label: t.label, help: t.help, applyAll: !!t.applyAll, raw: propToggleRaw(property, t), on: propToggleOn(property, t) }));
+}
+// The per-property send switches, in the shape smsGateDecision reads. Missing property or blank cell = ON, so every
+// existing row behaves exactly as before. Every smsGateDecision call site spreads this in (a test enforces it).
+function smsPropertyGateFlags(property) {
+  const flags = {};
+  for (const t of PROPERTY_TOGGLES) {
+    if (t.gate === 'tenant') flags.propertyTenantsOn = propToggleOn(property, t);
+    else if (t.gate === 'owner') flags.propertyOwnersOn = propToggleOn(property, t);
+    else if (t.gate === 'vendor') flags.propertyVendorsOn = propToggleOn(property, t);
+  }
+  return flags;
+}
+// The per-property OWNER EMAIL switch, read by addonEmailGate after its existing checks (Global / Property master / Customer / Notify method / Test
+// Mode are unchanged). Blank Owner_Email_Enabled = ON, so nothing changes until someone turns it off. It is deliberately NOT part of smsGateDecision.
+function propertyOwnerEmailOn(property) {
+  const def = propToggleDef('owner_email');
+  return propToggleOn(property, def);
+}
+
+// Why a text is held, in plain words, with where to fix it. Keys are exactly what smsGateDecision writes into Gate_Snapshot.
+const SMS_GATE_REASONS = {
+  'Global OFF':                { code: 'global_off',      text: 'Texting is switched OFF for the whole Hub (Config TWILIO_ENABLED is not TRUE).', fix: { target: 'global' } },
+  'Property OFF':              { code: 'property_off',    text: 'Texts are OFF for this property (its master switch).', fix: { target: 'property', toggle: 'sms_master' } },
+  'Property tenant texts OFF': { code: 'property_tenants_off', text: 'Texts to tenants are OFF for this property.', fix: { target: 'property', toggle: 'sms_tenants' } },
+  'Property owner texts OFF':  { code: 'property_owners_off',  text: 'Texts to the owner are OFF for this property.', fix: { target: 'property', toggle: 'sms_owners' } },
+  'Property vendor texts OFF': { code: 'property_vendors_off', text: 'Texts to vendors are OFF for this property.', fix: { target: 'property', toggle: 'sms_vendors' } },
+  'Customer OFF':              { code: 'customer_off',    text: 'Texts are OFF for this property\'s customer (the owner account).', fix: { target: 'customer' } },
+  'Tenant OFF':                { code: 'tenant_off',      text: 'Texts are OFF for this tenant (often because their consent is not confirmed yet).', fix: { target: 'tenant' } },
+  'Tenant opted out':          { code: 'tenant_opted_out', text: 'This tenant replied STOP and opted out.', fix: { target: 'tenant' } },
+  'Tenant moved out':          { code: 'tenant_moved_out', text: 'This tenant has moved out.', fix: { target: 'tenant' } },
+  'Property owner emails OFF': { code: 'property_owner_emails_off', text: 'Automatic emails to the owner are OFF for this property.', fix: { target: 'property', toggle: 'owner_email' } },
+  'Vendor OFF':                { code: 'vendor_off',      text: 'Texts are OFF for this vendor.', fix: { target: 'vendor' } },
+  'Vendor opted out':          { code: 'vendor_opted_out', text: 'This vendor opted out of texts.', fix: { target: 'vendor' } },
+};
+function smsGateReasonsFor(gateSnapshot) {
+  const s = String(gateSnapshot || '');
+  if (!s || s === 'all gates open') return [];
+  // Longest names first so 'Property OFF' never swallows part of another reason.
+  const known = Object.keys(SMS_GATE_REASONS).sort((a, b) => b.length - a.length);
+  const out = []; let rest = s;
+  for (const k of known) { if (rest.indexOf(k) !== -1) { out.push(Object.assign({ token: k }, SMS_GATE_REASONS[k])); rest = rest.split(k).join(' '); } }
+  return out;
+}
+
+// PURE - the read-only "would this text go out?" answer. It runs the SAME smsGateDecision with the SAME inputs smsGatedSend builds
+// (Global from Config, the property switches via smsPropertyGateFlags, Customer, Tenant/Vendor), then the same recipient-phone,
+// quiet-hours and Test Mode steps, in the same order. It never sends or writes. o: { cfg, kind:'tenant'|'owner'|'vendor', property,
+// owner, tenant, vendor, now, quietWindow:{start,end}?, bypassQuietHours?, checkPhone? }
+function smsGatePreview(o) {
+  const cfg = o.cfg || {}, kind = o.kind, property = o.property || null, owner = o.owner || null, tenant = o.tenant || null, vendor = o.vendor || null;
+  const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+  const testMode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+  const dec = smsGateDecision(Object.assign({
+    global, propertyOn: smsToggleOn(property && property.SMS_Enabled), ownerOn: smsToggleOn(owner && owner.SMS_Enabled),
+    tenantOn: smsToggleOn(tenant && tenant.SMS_Enabled), vendorOn: smsToggleOn(vendor && vendor.SMS_Enabled),
+    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', vendorOptOut: String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE',
+    kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant),
+  }, smsPropertyGateFlags(property)));
+  const recipient = kind === 'tenant' ? tenant : kind === 'owner' ? owner : vendor;
+  const hasPhone = o.checkPhone === false ? true : !!normalizePhone(recipient && recipient.Phone);
+  const now = o.now || new Date();
+  const qw = o.quietWindow && Number.isFinite(o.quietWindow.start) && Number.isFinite(o.quietWindow.end) ? o.quietWindow : null;
+  const holdUntil = qw ? quietHoldUntil(now, qw.start, qw.end) : (isQuietHoursNow(now) ? nextQuietHoursEnd(now) : null);
+  const holdNow = !!(holdUntil && !o.bypassQuietHours);
+  const reasons = dec.sendOk ? [] : smsGateReasonsFor(dec.gateSnapshot);
+  const notes = [];
+  let outcome;
+  if (!dec.sendOk) outcome = 'blocked';
+  else if (!hasPhone) { outcome = 'no_phone'; reasons.push({ token: 'No phone', code: 'no_phone', text: 'There is no phone number on file for this recipient.', fix: { target: kind } }); }
+  else if (holdNow) { outcome = 'held_quiet_hours'; notes.push('It is inside quiet hours, so the text is held and goes out at ' + holdUntil.toISOString() + '.'); }
+  else outcome = 'send';
+  if (outcome === 'send' || outcome === 'held_quiet_hours') { if (testMode) notes.push('Test Mode is ON: the text goes to the test number, not to the real recipient.'); }
+  const headline = outcome === 'send' ? (testMode ? 'The text will go to the TEST number only (Test Mode is on).' : 'The text will send.')
+    : outcome === 'held_quiet_hours' ? 'The text will be HELD for quiet hours and sent later.'
+    : outcome === 'no_phone' ? 'The text will NOT send: no phone number on file.'
+    : 'The text will NOT send: ' + reasons.map(r => r.text.replace(/\.$/, '')).join('; ') + '.';
+  return { kind, outcome, will_send: outcome === 'send', will_send_later: outcome === 'held_quiet_hours', send_after: outcome === 'held_quiet_hours' ? holdUntil.toISOString() : '',
+    gate_snapshot: dec.gateSnapshot, gates_open: dec.sendOk, reasons, notes, test_mode: testMode, global, headline };
+}
+
+// PURE - the customer-level "apply to all this customer's properties" plan. Nothing is written by this function. It lists every
+// property of the customer with its before/after, marks the excluded and inactive ones, and returns exactly the cells to write.
+// owner properties are those whose Owner_ID is the customer's ID. No live inheritance: the apply writes the per-property column.
+function ownerToggleApplyPlan({ properties, ownerId, key, value, excludeIds }) {
+  const def = propToggleDef(key);
+  if (!def) return { error: 'Unknown setting "' + key + '"' };
+  if (!def.applyAll || def.kind !== 'bool') return { error: '"' + def.label + '" cannot be applied to all properties from here.' };
+  const v = String(value).toUpperCase();
+  if (v !== 'TRUE' && v !== 'FALSE') return { error: 'value must be TRUE or FALSE' };
+  const mine = (properties || []).filter(p => String(p.Owner_ID) === String(ownerId));
+  const mineIds = new Set(mine.map(p => String(p.ID)));
+  const excl = new Set((excludeIds || []).map(String));
+  const strangers = Array.from(excl).filter(id => !mineIds.has(id));
+  if (strangers.length) return { error: 'These excluded properties do not belong to this customer: ' + strangers.join(', ') };
+  const afterOn = v === 'TRUE';
+  const rows = mine.map(p => {
+    const raw = propToggleRaw(p, def), beforeOn = propToggleOn(p, def);
+    const inactive = String(p.Active == null ? '' : p.Active).toUpperCase() === 'FALSE';
+    let action = 'change';
+    if (inactive) action = 'skip_inactive';
+    else if (excl.has(String(p.ID))) action = 'excluded';
+    else if (beforeOn === afterOn) action = 'unchanged';   // a blank cell that already means ON is not rewritten
+    return { property_id: String(p.ID), address: p.Address || '', city: p.City || '', before_raw: raw, before_on: beforeOn, after_on: action === 'change' ? afterOn : beforeOn, after_value: action === 'change' ? v : raw, action };
+  });
+  const changes = rows.filter(r => r.action === 'change');
+  const counts = { total: rows.length, will_change: changes.length, unchanged: rows.filter(r => r.action === 'unchanged').length, excluded: rows.filter(r => r.action === 'excluded').length, inactive: rows.filter(r => r.action === 'skip_inactive').length };
+  const canon = JSON.stringify({ o: String(ownerId), k: key, v, c: changes.map(r => [r.property_id, r.before_raw]).sort((a, b) => Number(a[0]) - Number(b[0])), x: Array.from(excl).sort() });
+  return { ok: true, def, value: v, rows, changes, counts, canon };
+}
+
+// PURE - merge field resolution. A field is compared only when BOTH properties have a (different) non-empty value; the user picks
+// one. If only one side has a value, that value is used with no question. Case and surrounding spaces do not count as a difference.
+// 'Owner_ID' / 'QBO_Customer_ID' differing is a hard block (merging would put work on the wrong ledger), not a pick.
+const PROPERTY_DUP_COLS = ['Duplicate_Of', 'Duplicate_Marked_Date', 'Merge_Log'];
+// Unit_Count is recalculated by the merge, not picked.
+const PROPERTY_MERGE_SKIP_FIELDS = ['ID', 'Active', 'Unit_Count'].concat(PROPERTY_DUP_COLS);
+const PROPERTY_MERGE_BLOCK_IF_DIFFERENT = ['Owner_ID', 'QBO_Customer_ID'];
+function propertyMergeFieldPlan(from, to, headers) {
+  const auto = [], conflicts = [], blocks = []; let same = 0, keepTarget = 0;
+  for (const h of (headers || [])) {
+    if (!h || PROPERTY_MERGE_SKIP_FIELDS.includes(h)) continue;
+    const a = String(from && from[h] != null ? from[h] : '').trim(), b = String(to && to[h] != null ? to[h] : '').trim();
+    if (a === '' && b === '') continue;
+    if (a.toLowerCase() === b.toLowerCase()) { same++; continue; }
+    if (b === '') { auto.push({ col: h, value: a }); continue; }
+    if (a === '') { keepTarget++; continue; }
+    if (PROPERTY_MERGE_BLOCK_IF_DIFFERENT.includes(h)) { blocks.push('Both properties have a different ' + h + ' (' + a + ' vs ' + b + '). Fix that first: merging would move work onto the wrong customer.'); continue; }
+    conflicts.push({ col: h, from: a, to: b });
+  }
+  return { auto, conflicts, blocks, same, keep_target: keepTarget };
+}
+// What the target row gets written with: auto-taken values plus every conflict the user resolved to 'from'.
+function propertyMergeWrites(fieldPlan, resolutions) {
+  const writes = {}; const missing = [];
+  for (const a of fieldPlan.auto) writes[a.col] = a.value;
+  for (const c of fieldPlan.conflicts) {
+    const r = resolutions && resolutions[c.col];
+    if (r !== 'from' && r !== 'to') { missing.push(c.col); continue; }
+    if (r === 'from') writes[c.col] = c.from;
+  }
+  return { writes, missing };
+}
+
+// Every sheet column that can hold a Properties ID, and what to do with it. Registry = columns that ARE re-pointed. A tab or column
+// that does not exist in the live sheet is simply skipped. Ignore = columns that look similar but hold a DIFFERENT list's IDs.
+// Anything else the scan finds with a property-ID-looking header is UNKNOWN, and an unknown reference blocks the merge (we refuse
+// rather than leave work behind on a hidden property).  mode 'id' = the whole cell is one ID; 'list' = a comma-separated list of IDs.
+const PROPERTY_REF_REGISTRY = [
+  { tab: 'Work_Orders', col: 'Property_ID' }, { tab: 'Units', col: 'Property_ID' }, { tab: 'Tenants', col: 'Property_ID' }, { tab: 'Keys', col: 'Property_ID' },
+  { tab: 'Key_History', col: 'Property_ID' }, { tab: 'Receipts', col: 'Property_ID' }, { tab: 'Recurring_Templates', col: 'Property_ID' },
+  { tab: 'Notification_Queue', col: 'Property_ID' }, { tab: 'Message_Queue', col: 'Property_ID' }, { tab: 'Scopes', col: 'Property_ID' },
+  { tab: 'Intake_Queue', col: 'Property_ID' }, { tab: 'Deliveries', col: 'Property_ID' }, { tab: 'FI_Inspections', col: 'Property_ID' },
+  { tab: 'Notes', col: 'Property_ID' }, { tab: 'Building_Info', col: 'Property_ID' },
+  { tab: 'Estimates', col: 'Property_ID' }, { tab: 'Materials', col: 'Property_ID' }, { tab: 'Attachments', col: 'Property_ID' }, { tab: 'Vendor_Bills', col: 'Property_ID' }, { tab: 'WO_Followups', col: 'Property_ID' },
+  { tab: 'Receipt_Recon_Queue', col: 'Suggested_Property_ID' }, { tab: 'Receipts_Queue', col: 'Suggested_Property_ID' }, { tab: 'Vendor_Access_Requests', col: 'Requested_Property_ID' },
+  { tab: 'Master_Keys', col: 'Property_IDs', mode: 'list' }, { tab: 'Owners', col: 'Tenant_WO_Property_IDs', mode: 'list' }, { tab: 'Vendors', col: 'Billing_Property_Access', mode: 'list' },
+];
+const PROPERTY_REF_IGNORE = [
+  { tab: 'Trash_Visits', col: 'Property_ID', why: 'holds Trash_Properties IDs (a separate list)' },
+  { tab: 'Trash_Skips',  col: 'Property_ID', why: 'holds Trash_Properties IDs (a separate list)' },
+  { tab: 'Insp_Units',   col: 'Property_ID', why: 'holds Insp_Properties IDs (a separate list)' },
+];
+const PROPERTY_REF_COL_RE = /(^|_)Property_?IDs?$/i;
+// PURE. headersByTab: { Tab: [header, ...] } -> { targets:[{tab,col,colIndex,mode}], unknown:[{tab,col}], ignored:[{tab,col,why}] }
+function propertyRefTargets(headersByTab) {
+  const targets = [], unknown = [], ignored = []; const seen = new Set();
+  for (const tab of Object.keys(headersByTab || {})) {
+    if (tab === 'Properties') continue;
+    (headersByTab[tab] || []).forEach((h, i) => {
+      const reg = PROPERTY_REF_REGISTRY.find(r => r.tab === tab && r.col === h);
+      if (reg) { targets.push({ tab, col: h, colIndex: i, mode: reg.mode || 'id' }); seen.add(tab + '.' + h); return; }
+      const ign = PROPERTY_REF_IGNORE.find(r => r.tab === tab && r.col === h);
+      if (ign) { ignored.push({ tab, col: h, why: ign.why }); return; }
+      if (PROPERTY_REF_COL_RE.test(String(h))) unknown.push({ tab, col: h });
+    });
+  }
+  return { targets, unknown, ignored };
+}
+// PURE. Does this cell point at `id`? and what should it say after the move?
+function propertyRefCellHits(value, mode, id) {
+  const v = String(value == null ? '' : value).trim();
+  if (mode === 'list') return v.split(',').map(s => s.trim()).filter(Boolean).includes(String(id));
+  return v === String(id);
+}
+function propertyRefCellRepoint(value, mode, fromId, toId) {
+  const v = String(value == null ? '' : value).trim();
+  if (mode !== 'list') return String(toId);
+  const toks = v.split(',').map(s => s.trim()).filter(Boolean);
+  const hasTo = toks.includes(String(toId));
+  const out = []; for (const t of toks) { if (t === String(fromId)) { if (!hasTo && !out.includes(String(toId))) out.push(String(toId)); } else if (!out.includes(t)) out.push(t); }
+  return out.join(',');
+}
 // True when the Tenants row says this person no longer lives there (Active FALSE, or a Move_Out_Date that has passed,
 // Eastern). Deliberately NOT isTenantCurrent: a synthetic/partial tenant object with no Active or Move_Out_Date field
 // (tests, one-off sends) must keep working exactly as before.
@@ -16160,6 +16395,13 @@ async function smsGatedSend(env, opts) {
   const testRecipient = normalizePhone(cfg.TWILIO_TEST_RECIPIENT || '+14439617927');
 
   const kind = opts.recipient_type;
+  // Oct 24 2026 (per-property toggles): a vendor text about a job at a property honours that property's "texts to vendors" switch. Most vendor call sites do not pass
+  // the property, so it is looked up (cheaply, see ppResolveGateProperty). A failed lookup is REPORTED and the text goes out (fails open, never silent).
+  let gateProperty = opts.property || null;
+  if (!gateProperty && kind === 'vendor' && (opts.property_id || opts.wo_id)) {
+    try { gateProperty = await ppResolveGateProperty(env, opts); }
+    catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_vendor_property_lookup', ref: 'WO ' + (opts.wo_id || '') , severity: 'P2', message: 'could not look up the property for a vendor text (' + (opts.message_type || 'text') + ', ' + (opts.wo_id || 'no WO') + '), so the per-property vendor-text switch was NOT checked: ' + String((e && e.message) || e).slice(0, 200) }); }
+  }
   const propertyOn = smsToggleOn(opts.property && opts.property.SMS_Enabled);
   const ownerOn    = smsToggleOn(opts.owner && opts.owner.SMS_Enabled);
   // Oct 14 2026: a tenant the owner roster tool added is held at SMS_Enabled FALSE (consent pending). The WELCOME text Brett sends by
@@ -16170,7 +16412,7 @@ async function smsGatedSend(env, opts) {
   const tenantOptOut = String((opts.tenant && opts.tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
   const vendorOptOut = String((opts.vendor && opts.vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
   const tenantMovedOutFlag = kind === 'tenant' && tenantMovedOut(opts.tenant);
-  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: tenantMovedOutFlag });
+  const { sendOk, gateSnapshot } = smsGateDecision(Object.assign({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: tenantMovedOutFlag }, smsPropertyGateFlags(gateProperty)));
 
   const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : kind === 'admin' ? opts.admin : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
@@ -16238,8 +16480,8 @@ async function smsGatedSend(env, opts) {
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
-    Property_ID: (opts.property && opts.property.ID) || '',
-    Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
+    Property_ID: (gateProperty && gateProperty.ID) || '',
+    Property_Address: opts.property_address || (gateProperty && gateProperty.Address) || '',
     Message_Body: messageBody, Status: _sendNow ? 'sending' : 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
     Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
@@ -16488,7 +16730,7 @@ async function releaseMessageQueue(env, body) {
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
+    const { sendOk, gateSnapshot } = smsGateDecision(Object.assign({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) }, smsPropertyGateFlags(property)));
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot });
@@ -16550,7 +16792,7 @@ async function processQuietHoursQueue(env) {
     const vendorOn = smsToggleOn(vendor && vendor.SMS_Enabled);
     const tenantOptOut = String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
     const vendorOptOut = String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
-    const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
+    const { sendOk, gateSnapshot } = smsGateDecision(Object.assign({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) }, smsPropertyGateFlags(property)));
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
     const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot, Send_After: '' });
@@ -25079,6 +25321,7 @@ const FU_GATE_TEXT = {
   'Global OFF': { code: 'global_off', text: 'Texting is switched OFF for the whole Hub (Config TWILIO_ENABLED is not TRUE).' },
   'Property OFF': { code: 'property_off', text: 'Texting is OFF for this property (Properties > SMS_Enabled is FALSE).' },
   'Customer OFF': { code: 'owner_off', text: "Texting is OFF for this property's owner (Owners > SMS_Enabled is FALSE)." },
+  'Property tenant texts OFF': { code: 'property_tenants_off', text: 'Texts to tenants are OFF for this property (Properties > SMS_Tenants_Enabled is FALSE).' },
   'Tenant OFF': { code: 'tenant_off', text: 'Texting is OFF for this tenant (Tenants > SMS_Enabled is FALSE - often because their text consent has not been confirmed yet).' },
   'Tenant opted out': { code: 'tenant_opted_out', text: 'This tenant replied STOP and has opted out of texts.' },
   'Tenant moved out': { code: 'tenant_moved_out', text: 'This tenant has moved out.' },
@@ -25088,7 +25331,7 @@ function fuGateVerdict(o) {
   const cfg = o.cfg || {}, tenant = o.tenant || null;
   const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
   const dec = smsGateDecision({ global, propertyOn: smsToggleOn(o.property && o.property.SMS_Enabled), ownerOn: smsToggleOn(o.owner && o.owner.SMS_Enabled), tenantOn: smsToggleOn(tenant && tenant.SMS_Enabled),
-    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', tenantMovedOut: tenantMovedOut(tenant), kind: 'tenant' });
+    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', tenantMovedOut: tenantMovedOut(tenant), kind: 'tenant', ...smsPropertyGateFlags(o.property) });
   const reasons = dec.sendOk ? [] : dec.gateSnapshot.split(', ').map(k => FU_GATE_TEXT[k] || { code: 'other', text: k });
   if (!normalizePhone(tenant && tenant.Phone)) reasons.push({ code: 'no_phone', text: 'There is no phone number on file for this tenant.' });
   const notes = [];
@@ -25517,6 +25760,380 @@ async function fuDigestLines(env) {
   }
 }
 /* FIX_CHECK:END */
+
+
+// ══ PROPERTY PAGE ENDPOINTS (Oct 24 2026, FEATURE_LOG rule 231). ALL admin-only: none of these paths is in ROLE_SCOPES. ═══════════
+// Sensitive: the detail read returns the access codes (Lockbox_Code, Lock_Code, per-unit Lock_Code) exactly as GET /property and
+// GET /properties already do for the admin Hub. It is never added to a vendor/owner/tenant scope.
+const PP_TOGGLE_COLS = PROPERTY_TOGGLES.map(t => t.col).filter(c => c !== 'Active');
+// System columns are edited on the Settings / Cleanup tabs and shown read-only on Info.
+const PP_SYSTEM_COLS = ['ID'].concat(PROPERTY_TOGGLES.map(t => t.col), ['Tenant_WO_Unit_IDs'], PROPERTY_DUP_COLS);
+// Info tab groups. Any Properties column NOT named here still shows, in "Other", so a column added to the sheet later is never invisible.
+const PROPERTY_INFO_GROUPS = [
+  { key: 'basics',   label: 'Basics',            cols: ['Address', 'City', 'Market', 'Type', 'Commercial_Subtype', 'Unit_Count', 'Owner_ID'] },
+  { key: 'access',   label: 'Access (sensitive)', sensitive: true, cols: ['Lockbox_Code', 'Lock_Code', 'Access_Notes', 'Master_Key_ID', 'Thermostat_Access', 'Furnace_Access'] },
+  { key: 'systems',  label: 'Building systems',  cols: ['Water_Shutoff', 'Gas_Shutoff', 'Breaker_Location', 'Heating_Type', 'HW_Type', 'HW_Shared', 'HVAC_Filter_Size', 'HVAC_Change_Interval', 'Known_Issues'] },
+  { key: 'services', label: 'Services',          cols: ['Trash_Day', 'Parking_Notes'] },
+  { key: 'billing',  label: 'Billing',           cols: ['QBO_Customer_ID'] },
+];
+const PP_UNIT_FIELDS = ['Unit_Label', 'Display_Label', 'Notes', 'Active', 'Lock_Code', 'Thermostat_Location', 'HW_Access', 'Breaker_Notes', 'AC_Type', 'Known_Issues', 'HVAC_Filter_Size', 'HVAC_Change_Interval'];
+const PP_UNIT_NEW_COLS = ['HVAC_Filter_Size', 'HVAC_Change_Interval'];
+const ppStr = v => String(v == null ? '' : v).trim();
+// Header position by NAME; -1 when the column is missing.
+const ppIdx = (headers, name) => (headers || []).indexOf(name);
+const ppOwnerName = o => o ? (ppStr(o.Company) ? ppStr(o.Company) + ' (' + (ppStr(o.First_Name) + ' ' + ppStr(o.Last_Name)).trim() + ')' : (ppStr(o.First_Name) + ' ' + ppStr(o.Last_Name)).trim()) : '';
+const ppFail = async (env, where, ref, message, severity) => { try { await reportFailure(env, { system: 'hub', source: 'worker', where, ref: ref || '', severity: severity || 'P1', message }); } catch (_) { /* silent-ok: reportFailure has its own console fallback */ } };
+const ppAudit = async (env, kind, notes) => { try { await logTelemetry(env, { Source: 'worker', Job_Type: kind, Skill_Or_Endpoint: '/property', Success: 'TRUE', Notes: String(notes || '').slice(0, 480) }); } catch (_) { /* silent-ok: audit row is best-effort, the change itself is read back */ } };
+
+// The property a gate should look at when the caller did not hand one over (vendor texts about a work order). Cheap on purpose: Properties is small and
+// cached; the (large) Work_Orders tab is only read when at least one property actually has "texts to vendors" switched OFF - otherwise the answer is
+// "no property switch applies" whatever the property is.
+async function ppResolveGateProperty(env, opts) {
+  let pid = ppStr(opts && opts.property_id);
+  const props = (await fetchTabs(env, ['Properties']))[0];
+  if (!pid) {
+    if (!props.some(p => ppStr(p.SMS_Vendors_Enabled).toUpperCase() === 'FALSE')) return null;
+    const wos = (await fetchTabs(env, ['Work_Orders']))[0];
+    const wo = findWO(wos, ppStr(opts && opts.wo_id));
+    pid = wo ? ppStr(wo.Property_ID) : '';
+  }
+  return pid ? (props.find(p => String(p.ID) === pid) || null) : null;
+}
+
+// GET /property/detail?id= - the lazy, one-property read behind the Properties detail view. Reads four tabs in ONE cached batchGet.
+async function propertyDetail(env, url) {
+  const id = ppStr(url.searchParams.get('id'));
+  if (!id) return json({ error: 'id required' }, 400);
+  const [properties, owners, units, tenants] = await fetchTabs(env, ['Properties', 'Owners', 'Units', 'Tenants']);
+  const property = properties.find(p => String(p.ID) === id);
+  if (!property) return json({ error: 'Property not found' }, 404);
+  const owner = ppStr(property.Owner_ID) ? (owners.find(o => String(o.ID) === ppStr(property.Owner_ID)) || null) : null;
+  const headers = Object.keys(property);
+  const grouped = new Set(); const groups = PROPERTY_INFO_GROUPS.map(g => ({ key: g.key, label: g.label, sensitive: !!g.sensitive, cols: g.cols.filter(c => headers.includes(c)).map(c => { grouped.add(c); return c; }) }));
+  const systemCols = headers.filter(h => PP_SYSTEM_COLS.includes(h));
+  const other = headers.filter(h => !grouped.has(h) && !PP_SYSTEM_COLS.includes(h));
+  if (other.length) groups.push({ key: 'other', label: 'Other', sensitive: false, cols: other });
+  const unitRows = units.filter(u => String(u.Property_ID) === id).map(u => {
+    const ts = tenants.filter(t => String(t.Unit_ID) === String(u.ID) && String(t.Property_ID) === id && String(t.Active == null ? '' : t.Active).toUpperCase() !== 'FALSE').map(t => (ppStr(t.First_Name) + ' ' + ppStr(t.Last_Name)).trim()).filter(Boolean);
+    return Object.assign({}, u, { _tenants: ts });
+  });
+  const siblings = owner ? properties.filter(p => String(p.Owner_ID) === String(owner.ID)) : [];
+  const states = propToggleStates(property);
+  const tw = states.find(s => s.key === 'tenant_wo');
+  if (tw) { tw.effective = resolveTenantWOAccess(property, owner, ''); tw.overridden_by_customer = !!(owner && (owner.Tenant_WO_Toggle === 'ON' || owner.Tenant_WO_Toggle === 'OFF') && (!ppStr(owner.Tenant_WO_Property_IDs) || String(owner.Tenant_WO_Property_IDs).split(',').map(s => s.trim()).includes(String(property.ID)))); tw.unit_scoped = !!ppStr(property.Tenant_WO_Unit_IDs); }
+  const missing = PP_TOGGLE_COLS.concat(PROPERTY_DUP_COLS).filter(c => !headers.includes(c));
+  const dupOf = ppStr(property.Duplicate_Of);
+  return json({
+    property, headers, groups, system_cols: systemCols, toggles: states,
+    customer: owner ? { id: String(owner.ID), name: ppOwnerName(owner), sms_on: smsToggleOn(owner.SMS_Enabled), active: String(owner.Active == null ? '' : owner.Active).toUpperCase() !== 'FALSE', property_count: siblings.length, same_company_owner_ids: ppStr(owner.Company) ? owners.filter(o => ppStr(o.Company).toLowerCase() === ppStr(owner.Company).toLowerCase() && String(o.ID) !== String(owner.ID)).map(o => String(o.ID)) : [] } : null,
+    owner_options: owners.filter(o => String(o.Active == null ? '' : o.Active).toUpperCase() !== 'FALSE').map(o => ({ id: String(o.ID), name: ppOwnerName(o) })),
+    units: unitRows, unit_fields: PP_UNIT_FIELDS, unit_new_cols: PP_UNIT_NEW_COLS,
+    duplicate: { of: dupOf, of_address: dupOf ? ((properties.find(p => String(p.ID) === dupOf) || {}).Address || '') : '', marked_date: ppStr(property.Duplicate_Marked_Date), merge_log: ppStr(property.Merge_Log), duplicates_of_me: properties.filter(p => ppStr(p.Duplicate_Of) === id).map(p => ({ id: String(p.ID), address: p.Address || '' })) },
+    candidates: properties.filter(p => String(p.ID) !== id && !ppStr(p.Duplicate_Of)).map(p => ({ id: String(p.ID), address: p.Address || '', city: p.City || '', owner_id: ppStr(p.Owner_ID), active: String(p.Active == null ? '' : p.Active).toUpperCase() !== 'FALSE' })),
+    missing_columns: missing,
+  });
+}
+
+// One batched write of many cells in ONE tab: a single values:batchUpdate, then a read-back of every cell. Returns { wrote, bad:[{row,col,wanted,got}] }.
+// Throws if the write itself fails (the caller reports it). cells: [{ row (sheet row number), col (header name), value }]
+async function ppWriteCells(env, tab, cells) {
+  if (!cells.length) return { wrote: 0, bad: [] };
+  const head = await sheetsRequest(env, 'GET', '/values:batchGet?ranges=' + encodeURIComponent("'" + tab + "'!1:1"));
+  const headers = ((head.valueRanges || [])[0] && head.valueRanges[0].values && head.valueRanges[0].values[0]) || [];
+  const data = []; const missing = [];
+  for (const c of cells) { const ci = headers.indexOf(c.col); if (ci < 0) { missing.push(c.col); continue; } data.push({ range: `'${tab}'!${col(ci)}${c.row}`, values: [[c.value]] }); }
+  if (missing.length) throw new Error(tab + ' has no column ' + Array.from(new Set(missing)).join(', ') + ' - nothing was written there');
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+  invalidateTabCache(tab);
+  const back = await sheetsRequest(env, 'GET', '/values:batchGet?' + data.map(d => 'ranges=' + encodeURIComponent(d.range)).join('&'));
+  const bad = [];
+  cells.forEach((c, i) => { const vr = (back.valueRanges || [])[i]; const got = ppStr(vr && vr.values && vr.values[0] && vr.values[0][0]); if (got !== ppStr(c.value)) bad.push({ row: c.row, col: c.col, wanted: ppStr(c.value), got }); });
+  return { wrote: data.length, bad };
+}
+
+// POST /property/toggle { property_id, key, value } - flips ONE registry switch with a read-back. Bool switches take 'TRUE'/'FALSE'; the
+// tenant-WO switch takes 'ON'/'OFF'/'' (and keeps its unit scope). Never returns success unless the sheet really holds the new value.
+async function propertyToggleSet(env, body) {
+  const id = ppStr(body && body.property_id), key = ppStr(body && body.key);
+  const def = propToggleDef(key);
+  if (!id) return json({ error: 'property_id required' }, 400);
+  if (!def) return json({ error: 'Unknown setting "' + key + '"' }, 400);
+  let value = ppStr(body.value);
+  if (def.kind === 'bool') { value = value.toUpperCase(); if (value !== 'TRUE' && value !== 'FALSE') return json({ error: 'value must be TRUE or FALSE' }, 400); }
+  else { value = value.toUpperCase(); if (!['ON', 'OFF', ''].includes(value)) return json({ error: 'value must be ON, OFF or blank' }, 400); }
+  const prop = (await fetchTab(env, 'Properties')).find(p => String(p.ID) === id);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+  const before = propToggleRaw(prop, def);
+  try {
+    await ensureColumns(env, 'Properties', [def.col]);
+    await updateRowVerified(env, 'Properties', id, { [def.col]: value });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    await ppFail(env, 'property_toggle_set', 'Properties ' + id, 'could not change "' + def.label + '" for property ' + id + ': ' + msg, 'P1');
+    return json({ ok: false, error: 'Not saved: ' + msg, key, property_id: id }, 500);
+  }
+  await ppAudit(env, 'property_toggle_set', 'property=' + id + ' ' + def.col + ' ' + (before || '(blank)') + ' -> ' + (value || '(blank)'));
+  return json({ ok: true, key, property_id: id, col: def.col, before, value, on: propToggleOn({ [def.col]: value }, def) });
+}
+
+// POST /property/info-save { property_id, fields:{col:value} } - the Info tab. Verified write (the old /property/update returned success even when a column was missing).
+async function propertyInfoSave(env, body) {
+  const id = ppStr(body && body.property_id);
+  const fields = (body && body.fields && typeof body.fields === 'object') ? body.fields : null;
+  if (!id || !fields) return json({ error: 'property_id and fields required' }, 400);
+  const prop = (await fetchTab(env, 'Properties')).find(p => String(p.ID) === id);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+  const headers = Object.keys(prop);
+  const bad = Object.keys(fields).filter(k => PP_SYSTEM_COLS.includes(k) || !headers.includes(k));
+  if (bad.length) return json({ error: 'These cannot be saved here: ' + bad.join(', ') + (bad.some(k => PP_SYSTEM_COLS.includes(k)) ? ' (switches are on the Settings tab, duplicates on the Cleanup tab)' : ' (no such column)') }, 400);
+  const clean = {}; for (const k of Object.keys(fields)) clean[k] = ppStr(fields[k]);
+  if (Object.prototype.hasOwnProperty.call(clean, 'Owner_ID') && clean.Owner_ID) {
+    const o = (await fetchTab(env, 'Owners')).find(x => String(x.ID) === clean.Owner_ID);
+    if (!o) return json({ error: 'Owner ' + clean.Owner_ID + ' does not exist' }, 400);
+  }
+  const changed = {}; for (const k of Object.keys(clean)) if (ppStr(prop[k]) !== clean[k]) changed[k] = clean[k];
+  if (!Object.keys(changed).length) return json({ ok: true, property_id: id, changed: [], message: 'Nothing changed' });
+  try { await updateRowVerified(env, 'Properties', id, changed); }
+  catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_info_save', 'Properties ' + id, 'could not save property ' + id + ': ' + msg, 'P1'); return json({ ok: false, error: 'Not saved: ' + msg }, 500); }
+  await ppAudit(env, 'property_info_save', 'property=' + id + ' fields=' + Object.keys(changed).join(','));
+  return json({ ok: true, property_id: id, changed: Object.keys(changed) });
+}
+
+// POST /property/unit-save { unit_id, fields } - the Units tab. HVAC filter size/interval are NEW Units columns (ensureColumns first).
+async function propertyUnitSave(env, body) {
+  const uid = ppStr(body && body.unit_id);
+  const fields = (body && body.fields && typeof body.fields === 'object') ? body.fields : null;
+  if (!uid || !fields) return json({ error: 'unit_id and fields required' }, 400);
+  const bad = Object.keys(fields).filter(k => !PP_UNIT_FIELDS.includes(k));
+  if (bad.length) return json({ error: 'These unit fields cannot be saved here: ' + bad.join(', ') }, 400);
+  const clean = {}; for (const k of Object.keys(fields)) clean[k] = ppStr(fields[k]);
+  try {
+    const need = Object.keys(clean).filter(k => PP_UNIT_NEW_COLS.includes(k));
+    if (need.length) await ensureColumns(env, 'Units', need);
+    const unit = (await fetchTab(env, 'Units')).find(u => String(u.ID) === uid);
+    if (!unit) return json({ error: 'Unit not found' }, 404);
+    await updateRowVerified(env, 'Units', uid, clean);
+  } catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_unit_save', 'Units ' + uid, 'could not save unit ' + uid + ': ' + msg, 'P1'); return json({ ok: false, error: 'Not saved: ' + msg }, 500); }
+  await ppAudit(env, 'property_unit_save', 'unit=' + uid + ' fields=' + Object.keys(clean).join(','));
+  return json({ ok: true, unit_id: uid, changed: Object.keys(clean) });
+}
+
+// POST /owner/property-toggle-preview and /owner/property-toggle-apply { owner_id, key, value, exclude_ids:[], token? }
+// PREVIEW writes nothing. APPLY needs the token the preview returned (a hash of the exact plan); if the data moved since, it refuses and asks for a new preview.
+async function ownerToggleApplyHandler(env, body, apply) {
+  const ownerId = ppStr(body && body.owner_id);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  if (apply) invalidateTabCache('Properties');
+  const [properties, owners] = await fetchTabs(env, ['Properties', 'Owners']);
+  const owner = owners.find(o => String(o.ID) === ownerId);
+  if (!owner) return json({ error: 'Customer (owner account) ' + ownerId + ' not found' }, 404);
+  const plan = ownerToggleApplyPlan({ properties, ownerId, key: ppStr(body.key), value: body.value, excludeIds: Array.isArray(body.exclude_ids) ? body.exclude_ids : [] });
+  if (plan.error) return json({ error: plan.error }, 400);
+  const token = await fuSha256(plan.canon);
+  const customer = { id: ownerId, name: ppOwnerName(owner), sms_on: smsToggleOn(owner.SMS_Enabled), same_company_owner_ids: ppStr(owner.Company) ? owners.filter(o => ppStr(o.Company).toLowerCase() === ppStr(owner.Company).toLowerCase() && String(o.ID) !== ownerId).map(o => String(o.ID)) : [] };
+  const view = { key: ppStr(body.key), label: plan.def.label, col: plan.def.col, value: plan.value, rows: plan.rows, counts: plan.counts, customer, token };
+  if (!apply) return json(Object.assign({ ok: true, preview: true }, view));
+  if (body.confirm !== true) return json({ error: 'confirm:true required to apply' }, 400);
+  if (!ppStr(body.token) || ppStr(body.token) !== token) return json({ ok: false, code: 'changed_since_preview', error: 'The properties changed since you previewed (or the preview is out of date). Nothing was written. Preview again.' }, 409);
+  if (!plan.changes.length) return json(Object.assign({ ok: true, applied: 0, message: 'Nothing to change' }, view));
+  let res;
+  try {
+    await ensureColumns(env, 'Properties', [plan.def.col]);
+    const raw = await sheetsRequest(env, 'GET', '/values:batchGet?ranges=' + encodeURIComponent("'Properties'"));
+    const vals = ((raw.valueRanges || [])[0] && raw.valueRanges[0].values) || [];
+    const hdr = vals[0] || [], idc = idColIndex(hdr);
+    const cells = [], notFound = [];
+    for (const c of plan.changes) { const ri = vals.findIndex((r, i) => i > 0 && String(r[idc]) === c.property_id); if (ri < 0) notFound.push(c.property_id); else cells.push({ row: ri + 1, col: plan.def.col, value: c.after_value }); }
+    if (notFound.length) throw new Error('property rows not found: ' + notFound.join(', '));
+    res = await ppWriteCells(env, 'Properties', cells);
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    await ppFail(env, 'owner_toggle_apply', 'Owners ' + ownerId, 'applying "' + plan.def.label + '" = ' + plan.value + ' to customer ' + ownerId + "'s properties failed: " + msg, 'P1');
+    return json({ ok: false, error: 'Not applied: ' + msg + '. Preview again to see what is still unchanged.' }, 500);
+  }
+  if (res.bad.length) {
+    await ppFail(env, 'owner_toggle_apply_readback', 'Owners ' + ownerId, res.bad.length + ' property cell(s) did not keep the new value after applying "' + plan.def.label + '": ' + res.bad.slice(0, 5).map(b => 'row ' + b.row + ' wanted ' + b.wanted + ' got ' + b.got).join('; '), 'P1');
+    return json({ ok: false, error: res.bad.length + ' of ' + res.wrote + ' did not save. Preview again and re-apply.', bad: res.bad }, 500);
+  }
+  await ppAudit(env, 'owner_toggle_apply', 'customer=' + ownerId + ' ' + plan.def.col + '=' + plan.value + ' properties=' + plan.changes.map(c => c.property_id).join(',') + ' excluded=' + plan.rows.filter(r => r.action === 'excluded').map(r => r.property_id).join(','));
+  return json(Object.assign({ ok: true, applied: res.wrote, verified: true }, view));
+}
+
+// POST /property/mark-duplicate { property_id, duplicate_of }  /  POST /property/unmark-duplicate { property_id }
+// Mark = Duplicate_Of + Active FALSE (+ date). Nothing is deleted or moved. Restore clears the mark and sets Active TRUE (refused if the property was merged away).
+async function propertyMarkDuplicate(env, body, restore) {
+  const id = ppStr(body && body.property_id);
+  if (!id) return json({ error: 'property_id required' }, 400);
+  invalidateTabCache('Properties');
+  const [properties, units, tenants, wos] = await fetchTabs(env, ['Properties', 'Units', 'Tenants', 'Work_Orders']);
+  const p = properties.find(x => String(x.ID) === id);
+  if (!p) return json({ error: 'Property not found' }, 404);
+  if (restore) {
+    if (ppStr(p.Merge_Log)) return json({ error: 'This property was merged into property ' + ppStr(p.Duplicate_Of) + ': its records now live there, so it cannot be restored here.' }, 409);
+    if (!ppStr(p.Duplicate_Of)) return json({ error: 'This property is not marked as a duplicate' }, 409);
+    try { await updateRowVerified(env, 'Properties', id, { Duplicate_Of: '', Duplicate_Marked_Date: '', Active: 'TRUE' }); }
+    catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_unmark_duplicate', 'Properties ' + id, 'could not restore property ' + id + ': ' + msg, 'P1'); return json({ ok: false, error: 'Not restored: ' + msg }, 500); }
+    await ppAudit(env, 'property_unmark_duplicate', 'property=' + id);
+    return json({ ok: true, property_id: id, restored: true });
+  }
+  const dupOf = ppStr(body.duplicate_of);
+  if (!dupOf) return json({ error: 'duplicate_of required (the property to keep)' }, 400);
+  if (dupOf === id) return json({ error: 'A property cannot be a duplicate of itself' }, 400);
+  const keep = properties.find(x => String(x.ID) === dupOf);
+  if (!keep) return json({ error: 'Property ' + dupOf + ' (the one to keep) not found' }, 404);
+  if (ppStr(keep.Duplicate_Of)) return json({ error: 'Property ' + dupOf + ' is itself marked as a duplicate of ' + ppStr(keep.Duplicate_Of) + '. Pick the real one.' }, 409);
+  if (ppStr(p.Duplicate_Of) && ppStr(p.Duplicate_Of) !== dupOf) return json({ error: 'Already marked as a duplicate of ' + ppStr(p.Duplicate_Of) + '. Restore it first to change that.' }, 409);
+  try {
+    await ensureColumns(env, 'Properties', PROPERTY_DUP_COLS);
+    await updateRowVerified(env, 'Properties', id, { Duplicate_Of: dupOf, Duplicate_Marked_Date: etTodayISO(), Active: 'FALSE' });
+  } catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_mark_duplicate', 'Properties ' + id, 'could not mark property ' + id + ' as a duplicate: ' + msg, 'P1'); return json({ ok: false, error: 'Not saved: ' + msg }, 500); }
+  await ppAudit(env, 'property_mark_duplicate', 'property=' + id + ' duplicate_of=' + dupOf);
+  const attached = { work_orders: wos.filter(w => String(w.Property_ID) === id).length, units: units.filter(u => String(u.Property_ID) === id).length, tenants: tenants.filter(t => String(t.Property_ID) === id).length };
+  return json({ ok: true, property_id: id, duplicate_of: dupOf, still_attached: attached, note: (attached.work_orders + attached.units + attached.tenants) ? 'Marked and hidden. Its ' + attached.work_orders + ' work order(s), ' + attached.units + ' unit(s) and ' + attached.tenants + ' tenant(s) were NOT moved. Use "Merge into another property" to move them.' : 'Marked and hidden. It has no work orders, units or tenants.' });
+}
+
+// ── MERGE ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const ppSheetRange = t => encodeURIComponent("'" + String(t).replace(/'/g, "''") + "'");
+// Reads (uncached, fresh) every tab's header row, then every tab that can hold a property id. Returns { headersByTab, rowsByTab }.
+async function propertyMergeLoad(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = ((meta && meta.sheets) || []).map(s => s.properties.title);
+  if (!titles.length) throw new Error('could not list the sheet tabs');
+  const hd = await sheetsRequest(env, 'GET', '/values:batchGet?' + titles.map(t => 'ranges=' + ppSheetRange(t) + encodeURIComponent('!1:1')).join('&'));
+  const headersByTab = {};
+  titles.forEach((t, i) => { headersByTab[t] = ((hd.valueRanges || [])[i] && hd.valueRanges[i].values && hd.valueRanges[i].values[0]) || []; });
+  const refs = propertyRefTargets(headersByTab);
+  const need = Array.from(new Set(refs.targets.map(x => x.tab).concat(refs.unknown.map(x => x.tab), ['Properties', 'Units'])));
+  const data = await sheetsRequest(env, 'GET', '/values:batchGet?' + need.map(t => 'ranges=' + ppSheetRange(t)).join('&'));
+  const rowsByTab = {}; need.forEach((t, i) => { rowsByTab[t] = ((data.valueRanges || [])[i] && data.valueRanges[i].values) || []; });
+  return { headersByTab, rowsByTab };
+}
+const ppRawObj = (raw, id) => { if (!raw || raw.length < 2) return null; const h = raw[0], ic = idColIndex(h); const r = raw.find((row, i) => i > 0 && String(row[ic]) === String(id)); if (!r) return null; const o = {}; h.forEach((k, i) => { o[k] = r[i] == null ? '' : String(r[i]); }); return o; };
+
+// PURE. Everything the merge needs to know, from already-loaded sheet data. Writes nothing.
+function propertyMergePlan({ headersByTab, rowsByTab, fromId, toId }) {
+  const blocks = [], warnings = [];
+  const propsRaw = rowsByTab.Properties || [];
+  const from = ppRawObj(propsRaw, fromId), to = ppRawObj(propsRaw, toId);
+  if (String(fromId) === String(toId)) blocks.push('A property cannot be merged into itself.');
+  if (!from) blocks.push('Property ' + fromId + ' (the duplicate) was not found.');
+  if (!to) blocks.push('Property ' + toId + ' (the one to keep) was not found.');
+  if (!from || !to) return { ok: false, blocks, warnings, tabs: [], total: 0 };
+  if (ppStr(from.Duplicate_Of) && ppStr(from.Merge_Log)) blocks.push('Property ' + fromId + ' was already merged into ' + ppStr(from.Duplicate_Of) + '.');
+  if (ppStr(to.Duplicate_Of)) blocks.push('Property ' + toId + ' (the one to keep) is itself marked as a duplicate of ' + ppStr(to.Duplicate_Of) + '. Pick the real one.');
+  const fieldPlan = propertyMergeFieldPlan(from, to, propsRaw[0] || []);
+  fieldPlan.blocks.forEach(b => blocks.push(b));
+  const refs = propertyRefTargets(headersByTab);
+  const tabs = [];
+  for (const t of refs.targets) {
+    const raw = rowsByTab[t.tab] || [];
+    const headers = raw[0] || [], ci = headers.indexOf(t.col), addrCi = headers.indexOf('Property_Address'), idCi = idColIndex(headers);
+    const hits = [];
+    for (let r = 1; r < raw.length; r++) {
+      const cell = raw[r][ci];
+      if (!propertyRefCellHits(cell, t.mode, fromId)) continue;
+      const item = { row: r + 1, id: ppStr(raw[r][idCi]), from: ppStr(cell), to: propertyRefCellRepoint(cell, t.mode, fromId, toId) };
+      if (addrCi >= 0 && t.mode !== 'list') { const a = ppStr(raw[r][addrCi]); if (a && ppStr(from.Address) && a.toLowerCase() === ppStr(from.Address).toLowerCase() && ppStr(to.Address)) item.addr_to = to.Address; }
+      hits.push(item);
+    }
+    tabs.push({ tab: t.tab, col: t.col, mode: t.mode, count: hits.length, hits, addr_col: addrCi >= 0 ? 'Property_Address' : '' });
+  }
+  // A property-id-looking column we do not know how to move. If it actually mentions this property we REFUSE; if it does not, we only say so.
+  const unknown = [];
+  for (const u of refs.unknown) {
+    const raw = rowsByTab[u.tab] || [], ci = (raw[0] || []).indexOf(u.col); let n = 0;
+    for (let r = 1; r < raw.length; r++) if (String(raw[r][ci] == null ? '' : raw[r][ci]).split(/[,\s;|]+/).includes(String(fromId))) n++;
+    unknown.push({ tab: u.tab, col: u.col, count: n });
+    if (n > 0) blocks.push(u.tab + '.' + u.col + ' mentions this property in ' + n + ' row(s) and the Hub does not know how to move that column safely. Nothing was changed. Ask for that column to be added to the merge list.');
+  }
+  // Two units with the same label would become twins.
+  const uRaw = rowsByTab.Units || [], uH = uRaw[0] || [], upc = ppIdx(uH, 'Property_ID'), ulc = ppIdx(uH, 'Unit_Label');
+  const labelsFrom = {}, twins = [];
+  for (let r = 1; r < uRaw.length; r++) if (String(uRaw[r][upc]) === String(fromId)) labelsFrom[ppStr(uRaw[r][ulc]).toLowerCase()] = ppStr(uRaw[r][ulc]);
+  for (let r = 1; r < uRaw.length; r++) if (String(uRaw[r][upc]) === String(toId)) { const k = ppStr(uRaw[r][ulc]).toLowerCase(); if (k && labelsFrom[k] !== undefined) twins.push(labelsFrom[k]); }
+  if (twins.length) blocks.push('Both properties have a unit called ' + twins.map(t => '"' + t + '"').join(', ') + '. Merging would create two identical units. Rename or merge those units first.');
+  const total = tabs.reduce((n, t) => n + t.count, 0);
+  const unitsMoving = (tabs.find(t => t.tab === 'Units') || { count: 0 }).count;
+  const unitCountNow = Math.max(Number(to.Unit_Count) || 0, Number(from.Unit_Count) || 0, unitsMoving + (function () { let n = 0; for (let r = 1; r < uRaw.length; r++) if (String(uRaw[r][upc]) === String(toId)) n++; return n; })());
+  warnings.push('Text that merely mentions the old address (notes, message text, descriptions) is not rewritten.');
+  const canon = JSON.stringify({ f: String(fromId), t: String(toId), tabs: tabs.filter(t => t.count).map(t => [t.tab, t.col, t.hits.map(h => [h.row, h.id, h.to])]), auto: fieldPlan.auto, conf: fieldPlan.conflicts.map(c => [c.col, c.from, c.to]), uc: unitCountNow });
+  return { ok: blocks.length === 0, blocks, warnings, from: { id: String(fromId), address: from.Address || '', city: from.City || '' }, to: { id: String(toId), address: to.Address || '', city: to.City || '' }, fieldPlan, tabs, unknown, twins, total, unit_count_after: unitCountNow, canon };
+}
+const ppMergeView = plan => ({ ok: plan.ok, blocks: plan.blocks, warnings: plan.warnings, from: plan.from, to: plan.to, auto: plan.fieldPlan ? plan.fieldPlan.auto : [], conflicts: plan.fieldPlan ? plan.fieldPlan.conflicts : [], same_fields: plan.fieldPlan ? plan.fieldPlan.same : 0, tabs: (plan.tabs || []).map(t => ({ tab: t.tab, col: t.col, count: t.count })).filter(t => t.count), tabs_checked: (plan.tabs || []).length, unknown_columns: plan.unknown || [], total_rows_to_move: plan.total, unit_count_after: plan.unit_count_after });
+
+// POST /property/merge-preview { from_id, to_id }   (writes nothing)
+// POST /property/merge-apply   { from_id, to_id, token, resolutions:{col:'from'|'to'}, confirm:true }
+async function propertyMergeHandler(env, body, apply) {
+  const fromId = ppStr(body && body.from_id), toId = ppStr(body && body.to_id);
+  if (!fromId || !toId) return json({ error: 'from_id (the duplicate) and to_id (the one to keep) are required' }, 400);
+  let loaded;
+  try { loaded = await propertyMergeLoad(env); }
+  catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_merge_scan', 'Properties ' + fromId, 'merge scan could not read the sheet: ' + msg, 'P2'); return json({ ok: false, error: 'Could not read the sheet to check what would move: ' + msg + '. Nothing was changed.' }, 500); }
+  const plan = propertyMergePlan({ headersByTab: loaded.headersByTab, rowsByTab: loaded.rowsByTab, fromId, toId });
+  const token = plan.canon ? await fuSha256(plan.canon) : '';
+  const view = Object.assign(ppMergeView(plan), { token });
+  if (!apply) return json(Object.assign({ preview: true }, view));
+  if (body.confirm !== true) return json({ error: 'confirm:true required to merge' }, 400);
+  if (!plan.ok) return json(Object.assign({ error: 'Merge refused: ' + plan.blocks.join(' ') }, view), 409);
+  if (!ppStr(body.token) || ppStr(body.token) !== token) return json(Object.assign({ code: 'changed_since_preview', error: 'Something changed since you previewed. Nothing was merged. Preview again.' }, view), 409);
+  const { writes, missing } = propertyMergeWrites(plan.fieldPlan, body.resolutions || {});
+  if (missing.length) return json({ error: 'Pick a value for: ' + missing.join(', '), missing }, 400);
+  const moved = {};
+  try {
+    await ensureColumns(env, 'Properties', PROPERTY_DUP_COLS);
+    // 1) the surviving property gets the picked / auto-taken field values (read back)
+    const toWrites = Object.assign({}, writes, { Unit_Count: String(plan.unit_count_after) });
+    const cur = ppRawObj(loaded.rowsByTab.Properties, toId);
+    const changed = {}; for (const k of Object.keys(toWrites)) if (ppStr(cur[k]) !== ppStr(toWrites[k])) changed[k] = toWrites[k];
+    if (Object.keys(changed).length) await updateRowVerified(env, 'Properties', toId, changed);
+    // 2) re-point every reference, one batched write per tab, each read back
+    for (const t of plan.tabs) {
+      if (!t.count) continue;
+      const cells = [];
+      for (const h of t.hits) { cells.push({ row: h.row, col: t.col, value: h.to }); if (h.addr_to) cells.push({ row: h.row, col: 'Property_Address', value: h.addr_to }); }
+      const r = await ppWriteCells(env, t.tab, cells);
+      if (r.bad.length) throw new Error(t.tab + ': ' + r.bad.length + ' cell(s) did not keep the new value');
+      moved[t.tab] = t.hits.length;
+    }
+    // 3) look again: nothing may still point at the old property
+    const again = await propertyMergeLoad(env);
+    const after = propertyMergePlan({ headersByTab: again.headersByTab, rowsByTab: again.rowsByTab, fromId, toId });
+    const left = (after.tabs || []).filter(t => t.count);
+    if (left.length) throw new Error('rows still point at the old property after the move: ' + left.map(t => t.tab + ' (' + t.count + ')').join(', '));
+    // 4) only now is the old property marked (never deleted)
+    const log = JSON.stringify({ merged_into: toId, at: new Date().toISOString(), moved, fields_taken: Object.keys(writes) }).slice(0, 2000);
+    await updateRowVerified(env, 'Properties', fromId, { Duplicate_Of: toId, Duplicate_Marked_Date: etTodayISO(), Merge_Log: log, Active: 'FALSE' });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 400);
+    await ppFail(env, 'property_merge_apply', 'Properties ' + fromId + '->' + toId, 'merging property ' + fromId + ' into ' + toId + ' stopped part-way: ' + msg + '. Moved so far: ' + JSON.stringify(moved) + '. Nothing was deleted. Preview and apply again to finish; the old property is NOT marked until everything moved.', 'P1');
+    return json({ ok: false, error: 'The merge stopped: ' + msg + '. Nothing was deleted and the old property is not marked. Moved so far: ' + (Object.keys(moved).length ? JSON.stringify(moved) : 'nothing') + '. Preview and apply again to finish.', moved }, 500);
+  }
+  await ppAudit(env, 'property_merge_apply', 'from=' + fromId + ' to=' + toId + ' moved=' + JSON.stringify(moved));
+  for (const t of ['Properties', 'Units', 'Tenants', 'Work_Orders', 'Keys']) invalidateTabCache(t);
+  return json({ ok: true, merged: true, from_id: fromId, to_id: toId, moved, total_rows_moved: Object.values(moved).reduce((a, b) => a + b, 0), fields_taken: Object.keys(writes) });
+}
+
+// GET /sms/gate-preview?property_id=&recipient_type=owner|tenant|vendor&owner_id=&tenant_id=&vendor_id=&window=proposal&bypass_quiet=1
+// READ-ONLY: never sends, never writes. Runs smsGatePreview, which calls the same smsGateDecision with the same flags the real sender uses.
+async function smsGatePreviewHandler(env, url) {
+  const q = k => ppStr(url.searchParams.get(k));
+  const kind = q('recipient_type') || 'owner';
+  if (!['owner', 'tenant', 'vendor'].includes(kind)) return json({ error: 'recipient_type must be owner, tenant or vendor' }, 400);
+  const propertyId = q('property_id');
+  if (!propertyId && kind !== 'vendor') return json({ error: 'property_id required' }, 400);
+  const tabs = ['Properties', 'Owners'].concat(kind === 'tenant' ? ['Tenants'] : kind === 'vendor' ? ['Vendors'] : []);
+  const [cfg, loaded] = await Promise.all([fetchConfig(env), fetchTabs(env, tabs)]);
+  const property = propertyId ? (loaded[0].find(p => String(p.ID) === propertyId) || null) : null;
+  if (propertyId && !property) return json({ error: 'Property ' + propertyId + ' not found' }, 404);
+  const owner = q('owner_id') ? (loaded[1].find(o => String(o.ID) === q('owner_id')) || null) : (property && ppStr(property.Owner_ID) ? (loaded[1].find(o => String(o.ID) === ppStr(property.Owner_ID)) || null) : null);
+  const tenant = kind === 'tenant' ? (loaded[2].find(t => String(t.ID) === q('tenant_id')) || null) : null;
+  const vendor = kind === 'vendor' ? (loaded[2].find(v => String(v.ID) === q('vendor_id')) || null) : null;
+  if (kind === 'tenant' && !tenant) return json({ error: 'tenant_id required (tenant not found)' }, 400);
+  if (kind === 'vendor' && !vendor) return json({ error: 'vendor_id required (vendor not found)' }, 400);
+  const pv = smsGatePreview({ cfg, kind, property, owner, tenant, vendor, now: new Date(), quietWindow: q('window') === 'proposal' ? SCOPE_SMS_QUIET_WINDOW : null, bypassQuietHours: q('bypass_quiet') === '1' });
+  const settingsLink = property ? PORTAL_BASE + '/index.html?property=' + encodeURIComponent(property.ID) + '&tab=settings' : '';
+  return json(Object.assign({ ok: true, property_id: property ? String(property.ID) : '', property_address: property ? (property.Address || '') : '', customer_id: owner ? String(owner.ID) : '', customer_name: ppOwnerName(owner), settings_link: settingsLink, owner_email_on: property ? propertyOwnerEmailOn(property) : true }, pv));
+}
 
 const ROLE_SCOPES = {
   vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
@@ -27286,6 +27903,13 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
   if (path === '/unit/update') return await isTestRecord(env, 'Units', _b.id);
   if (path === '/property/update') return await isTestRecord(env, 'Properties', _b.id);
+  // Oct 24 2026 (per-property toggles / duplicate / merge): staging may only touch TEST- properties, units and owners; previews write nothing.
+  if (path === '/property/toggle' || path === '/property/info-save' || path === '/property/unmark-duplicate') return await isTestRecord(env, 'Properties', _b.property_id);
+  if (path === '/property/unit-save') return await isTestRecord(env, 'Units', _b.unit_id);
+  if (path === '/property/mark-duplicate') return (await isTestRecord(env, 'Properties', _b.property_id)) && (await isTestRecord(env, 'Properties', _b.duplicate_of));
+  if (path === '/property/merge-preview' || path === '/owner/property-toggle-preview') return true;   // read-only
+  if (path === '/property/merge-apply') return (await isTestRecord(env, 'Properties', _b.from_id)) && (await isTestRecord(env, 'Properties', _b.to_id));
+  if (path === '/owner/property-toggle-apply') return await isTestRecord(env, 'Owners', _b.owner_id);
   if (path === '/vendor/update-contact') return await isTestRecord(env, 'Vendors', _b.vendor_id);
   if (path === '/vendor-bill/add-standalone' || path === '/workorder/self-serve') {
     return (await isTestRecord(env, 'Vendors', _b.vendor_id)) && (await isTestRecord(env, 'Properties', _b.property_id));
