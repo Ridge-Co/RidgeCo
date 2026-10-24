@@ -196,7 +196,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
   const now = iso('2026-10-12T16:00:00Z');   // Monday 12:00 ET
   const mins = (m) => new Date(now.getTime() - m * 60000).toISOString();
   const fresh = S0(); fresh.last_tick = mins(3);
-  for (const n of ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep']) fresh.jobs[n] = { last_start: mins(5), last_end: mins(4), last_ok: mins(4), last_status: 'ok' };
+  for (const n of ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders']) fresh.jobs[n] = { last_start: mins(5), last_end: mins(4), last_ok: mins(4), last_status: 'ok' };
   for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log']) fresh.jobs[n] = { last_start: mins(300), last_end: mins(299), last_ok: mins(299), last_key: '2026-10-12', last_status: 'ok' };
   for (const n of ['review_mon', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon']) fresh.jobs[n] = { last_end: mins(200), last_ok: mins(200), last_key: '2026-10-12', last_status: 'ok' };
   const s = P.schedStatus(fresh, now, P.SCHED_JOBS);
