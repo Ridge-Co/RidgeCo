@@ -20,6 +20,7 @@ const page = pageHtml();
 const TOOLS = {
   'scope-creator': "window.open('scope-creator.html','_blank')",
   'inspection-scheduler': "window.open('inspect.html','_blank')",
+  'shift-appointments': "window.open('shift.html','_blank')",
   'field-inspection': "window.open('field-inspect.html','_blank')",
   'action-center': "window.open('action-center.html','_blank')",
   'needs-attention': "window.open('failures.html','_blank')",
