@@ -1527,6 +1527,15 @@ window.addEventListener('pageshow', function(e){
 </div>
 
 <!-- EDIT PROPERTY MODAL -->
+<div class="modal-overlay" id="modal-prop-detail">
+  <div class="modal modal-wide">
+    <div class="modal-header"><div class="modal-title" id="pd-title">PROPERTY</div><button type="button" class="modal-close" style="min-width:44px;min-height:44px" data-act="close" aria-label="Close">✕</button></div>
+    <div class="pd-tabs" id="pd-tabs" role="tablist"></div>
+    <div class="pd-msg" id="pd-msg" role="alert" style="display:none"></div>
+    <div id="pd-body"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-edit-property">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">EDIT PROPERTY</div><button class="modal-close" onclick="closeModal('modal-edit-property')">✕</button></div>
