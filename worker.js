@@ -16074,6 +16074,7 @@ function smsGateDecision(o) {
   if (!o.global) fails.push('Global OFF');
   if (o.kind === 'tenant') {
     if (!o.propertyOn) fails.push('Property OFF');
+    if (o.propertyTenantsOn === false) fails.push('Property tenant texts OFF');   // Oct 24 2026: per-property switch, blank/absent = ON (=== false on purpose)
     if (!o.ownerOn) fails.push('Customer OFF');
     if (!o.tenantOn) fails.push('Tenant OFF');
     if (o.tenantOptOut) fails.push('Tenant opted out');
