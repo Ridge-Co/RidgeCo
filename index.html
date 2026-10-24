@@ -4558,7 +4558,7 @@ function renderPropertiesPage() {
             '<button class="btn small secondary" onclick="openPropertyNoticeModal(\''+p.ID+'\')">📢 Notice</button>' +
             (openWOs.length ? '<button class="btn small secondary" onclick="goToPropertyWOs(\''+p.ID+'\')">'+openWOs.length+' WOs →</button>' : '') +
           '</div>' +
-          '<span id="prop-arrow-'+p.ID+'" style="color:var(--muted);font-size:14px;flex-shrink:0">▶</span>' +
+          '<span id="prop-arrow-'+p.ID+'" title="Show units" onclick="event.stopPropagation();togglePropUnits(\''+p.ID+'\')" style="color:var(--muted);font-size:14px;flex-shrink:0;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center">▶</span>' +
         '</div>' +
         // ── Expandable units section ──
         '<div id="prop-units-'+p.ID+'" style="display:none;padding:10px 4px 4px 4px">' +
