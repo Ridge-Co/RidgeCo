@@ -61,7 +61,7 @@ function banner(kind,msg){return '<div class="banner '+kind+'">'+esc(msg)+'</div
 function netFail(e){return banner('err','Could not reach the scheduling server ('+e.message+'). Please check your connection and try again.');}
 
 // Mirrors the Worker's inspDurationMin so the page can preview the length (the server is authoritative).
-function durMin(u,b){u=Math.max(1,Math.floor(+u||0));b=Math.max(1,Math.min(u,Math.floor(+b||1)));var avg=u/b,oh=avg>=3?20:(avg>=2?15:10);return Math.max(30,Math.ceil((30*u+oh*b)/5)*5);}
+function durMin(u,b){u=Math.max(1,Math.floor(+u||0));b=Math.max(1,Math.min(u,Math.floor(+b||1)));return Math.max(30,Math.ceil((30*u+30*b)/5)*5);}  /* Oct 23 2026: 30 min per unit + 30 min per building; mirrors inspDurationMin in worker.js */
 function fmtDur(m){var h=Math.floor(m/60),r=m%60;return (h?h+' hr ':'')+(r?r+' min':'').trim();}
 
 // ── Partner booking ─────────────────────────────────────────

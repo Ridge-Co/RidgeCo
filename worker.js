@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-23.05-invoice-visit-lines-use-notes';
+const BUILD_VERSION = '2026-10-23.06-appointment-shift';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -238,6 +238,8 @@ const _hubWorkerCore = {
       // Inspection booking (Oct 7 2026): partner-facing booking link. Public at the gate; every handler self-verifies
       // a per-customer Book_Token (random, rotatable), a booking Manage_Token, or an HMAC approval token before doing anything.
       '/insp-book/info','/insp-book/slots','/insp-book/request','/insp-book/status','/insp-book/cancel','/insp-book/approval','/insp-book/decide','/insp-book/mine','/insp-book/ics',
+      // Appointment Shift (Oct 23 2026): the link in the partner's email. Public at the gate; every handler self-verifies an unguessable, single-use, expiring change token.
+      '/insp-change/info','/insp-change/approve','/insp-change/reschedule',
       // Tenant fix-check page (Oct 16 2026): public at the gate, but every handler self-verifies the signed, expiring fix-check token (scope 'fix-check',
       // hash-checked against WO_Followups.Token_Hash, bound to ONE follow-up and ONE tenant) before reading or writing anything.
       '/fix/page','/fix/answer','/fix/upload-session','/fix/log-attachment',
@@ -702,6 +704,8 @@ const _hubWorkerCore = {
         if (path === '/str/admin/state')        return await strAdminState(env);
         if (path === '/str/admin/preview-messages') return await strAdminPreview(env);
         if (path === '/insp-book/approval')     return await inspApprovalInfo(env, url);
+        if (path === '/insp-change/info')       return await shiftChangeInfo(env, url);        // PUBLIC, change-token checked
+        if (path === '/shift/proposals')        return await shiftProposalsList(env);          // ADMIN-ONLY
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
       if (request.method === 'POST') {
@@ -1174,6 +1178,13 @@ const _hubWorkerCore = {
         if (path === '/insp-book/request')         return await inspBookRequest(env, body);
         if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
         if (path === '/insp-book/decide')          return await inspApprovalDecide(env, body);
+        if (path === '/insp-change/approve')       return await shiftChangeApprove(env, body);    // PUBLIC, change-token checked
+        if (path === '/insp-change/reschedule')    return await shiftChangeReschedule(env, body); // PUBLIC, change-token checked
+        if (path === '/shift/preview')             return await shiftPreviewRoute(env, body);     // ADMIN-ONLY, writes nothing
+        if (path === '/shift/apply')               return await shiftApplyRoute(env, body);       // ADMIN-ONLY
+        if (path === '/shift/force-apply')         return await shiftForceApply(env, body);       // ADMIN-ONLY (Apply anyway / retry)
+        if (path === '/shift/proposal/cancel')     return await shiftProposalCancel(env, body);   // ADMIN-ONLY
+        if (path === '/shift/test-seed')           return await shiftTestSeed(env, body);         // ADMIN-ONLY, staging + TEST- only
         if (path === '/bulk-import')               return await hubBulkImport(env, body);
       }
       return json({ error: 'Not found' }, 404);
@@ -17302,7 +17313,7 @@ const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
 const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
-const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'twilio_balance_log', 'str_cleaning', 'followup_sweep', 'ai_credit_probe']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'twilio_balance_log', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders', 'ai_credit_probe']; // insp_shift_reminders: email/text/calendar sends are stubbed on staging; str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
 
 // Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
 // Fails closed for a blank/short/missing secret, an empty header, any other method or path.
@@ -17385,7 +17396,8 @@ const SCHED_JOBS = [
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
   { name: 'insp_guard',         kind: 'interval', every_min: 14, run: (env) => schedRunInspGuard(env) },
   { name: 'str_cleaning',       kind: 'interval', every_min: 14, run: (env) => schedRunStrCleaning(env) },
-  { name: 'followup_sweep',     kind: 'interval', every_min: 59, run: (env) => schedRunFollowupSweep(env) },   // tenant fix-check: ONE reminder 2 days after the text, 9am-7pm ET; texts Brett "no answer - call them"
+  { name: 'followup_sweep',     kind: 'interval', every_min: 59, run: (env) => schedRunFollowupSweep(env) },
+  { name: 'insp_shift_reminders', kind: 'interval', every_min: 59, run: (env) => schedRunInspShiftReminders(env) },   // Appointment Shift (Oct 23 2026): flags schedule changes the partner has not answered, approvals stuck half-way, and failed ones   // tenant fix-check: ONE reminder 2 days after the text, 9am-7pm ET; texts Brett "no answer - call them"
   // Oct 16 2026: gate:'ai_paused' = this job is not even STARTED (no claim, no state write, no Anthropic call) unless the AI-credit pause flag is on.
   // While paused it makes ONE 1-token call at most hourly (every_min 59 = "every 60 minutes"); success clears the pause and sends one "AI is back" notice.
   { name: 'ai_credit_probe',    kind: 'interval', every_min: 59, gate: 'ai_paused', run: (env) => schedRunAiCreditProbe(env) },
@@ -18093,6 +18105,7 @@ const SCHED_PF_WHAT = {
   sweep_work: 'posts due recurring work orders, sends the once-a-day estimate reminder, and moves paid-deposit scopes forward',
   sweep_checks: 'runs the daily self-test (once a day) and the dead-man check (alerts if no telemetry for 24h)',
   insp_guard: 'checks inspection bookings against the STR calendar (does nothing until the inspection module is configured)',
+  insp_shift_reminders: 'flags inspection schedule changes the partner has not answered (and ones that failed or got stuck) and tells Brett; changes nothing on the calendar',
   followup_sweep: 'sends the tenant ONE reminder (9am-7pm ET) for any fix-check text with no answer after 2 days, and texts Brett "no answer - call them"',
   daily_digest: 'builds the morning digest and texts it to the admin phone',
   daily_receipts: 'scans the receipt inbox (skips and reports "paused: AI credit" while Anthropic credit is out)',
@@ -26910,6 +26923,25 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
   if (path === '/cron/run') { const _sb = body || {}; return !_sb.force && (_sb.dry === true || _sb.dry_run === true || (typeof _sb.only === 'string' && SCHED_STAGING_SAFE_JOBS.includes(_sb.only))); }   // NB: `_b` (declared further down) is in its TDZ here - use `body`
+  // Appointment Shift (Oct 23 2026). Preview writes nothing. Everything that writes is pinned to TEST- records (a TEST- inspection customer, or a TEST- work order).
+  if (path === '/shift/preview') return true;
+  if (path === '/shift/test-seed') return String((body && body.name) || '').startsWith('TEST-');
+  if (path === '/shift/apply') {
+    const _keys = body && body.only_keys;
+    if (!Array.isArray(_keys) || !_keys.length) return false;
+    for (const _k of _keys) {
+      const _m = /^(insp|wo):(.+)$/.exec(String(_k));
+      if (!_m) return false;
+      if (_m[1] === 'wo') { if (!(await isTestWO(env, _m[2]))) return false; continue; }
+      const _bk = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === _m[2]);
+      if (!_bk || !(await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/shift/force-apply' || path === '/shift/proposal/cancel') {
+    const _bk = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(body && body.id));
+    return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
+  }
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
@@ -34361,14 +34393,16 @@ async function trashInvoice(env, body) {
 // no outreach/SMS/booking-link yet, that's Phase 2. Tabs self-provision on first
 // write, exact same pattern as Trash Service (ensureTrashTabs) just above.
 // ─────────────────────────────────────────────────────────────────────────────
-const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min'];
+const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min','Notify_Tenants'];
 const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
 const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
 const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start','Reopen_Log'];
-const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
+const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup',
+  // Appointment Shift (Oct 23 2026): a proposed move sits on the booking until the partner answers; the booking keeps its OLD times until then.
+  'Change_Status','Proposed_Start_ISO','Proposed_End_ISO','Proposed_Duration_Min','Change_Token','Change_Proposed_At','Change_Decided_At','Change_Note','Ics_Seq','Change_Batch','Change_Prev','Change_Reminded_At'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
   Insp_Properties: INSP_PROPERTY_HEADERS,
@@ -35171,17 +35205,13 @@ const INSP_ACTIVE_BOOKING = ['pending', 'approved'];
 function inspErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
 
 // ── Pure engine (unit-tested in test/insp-booking.test.mjs) ────────────────────────────────
-// Duration. Brett's rule of thumb: 30 min per unit + ~20 min for the building itself, so a
-// 3-unit building is ~2h. Economy of scale: the building-level walk-through is shorter when
-// the building is small (a duplex or single-family home has far less common area than a
-// 12-unit walk-up), so per-building overhead drops to 15 min for ~2-unit buildings and 10 min
-// for single units. 1u=40, 2u=75, 3u=110, 4u=140 ... rounded up to 5 min, floor of 30.
+// Duration. Brett's rule (Oct 23 2026, replaces the Oct 7 sliding overhead): 30 min per UNIT + 30 min per BUILDING.
+// 1 unit = 60, 4 units in 1 building = 150, 2 buildings x 2 units = 180. Rounded up to 5 min, floor of 30.
+// It applies to NEW bookings; an existing booking only changes length through a shift (Appointment Shift tool).
 function inspDurationMin(units, buildings) {
   const u = Math.max(1, Math.floor(+units || 0));
   const b = Math.max(1, Math.min(u, Math.floor(+buildings || 1)));
-  const avg = u / b;
-  const overhead = avg >= 3 ? 20 : (avg >= 2 ? 15 : 10);
-  const raw = 30 * u + overhead * b;
+  const raw = 30 * u + 30 * b;
   return Math.max(30, Math.ceil(raw / 5) * 5);
 }
 // "9:30", "09:30", "9:30 AM", "1:15 pm", "13:15" -> minutes after midnight, or NaN.
@@ -38371,6 +38401,11 @@ async function inspAvailability(env, customer, input) {
     if (!INSP_ACTIVE_BOOKING.includes(b.Status) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
     const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO); if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
     busy.push({ startMs: s, endMs: e, key: 'b' + b.ID, title: b.Formatted_Address || b.Address, lat: parseFloat(b.Lat), lng: parseFloat(b.Lng) });
+    // Appointment Shift: while a move is waiting for an answer, BOTH its old and its proposed window are taken.
+    if (String(b.Change_Status || '') === 'proposed') {
+      const ps = Date.parse(b.Proposed_Start_ISO), pe = Date.parse(b.Proposed_End_ISO);
+      if (Number.isFinite(ps) && Number.isFinite(pe)) busy.push({ startMs: ps, endMs: pe, key: 'p' + b.ID, title: b.Formatted_Address || b.Address, lat: parseFloat(b.Lat), lng: parseFloat(b.Lng) });
+    }
   }
   // Only stops near an open block matter for drive math (saves geocodes + matrix elements).
   const blockWins = blocks.map(b => [inspEtWallToMs(b.Date, b.Start_Time) - 6 * 3600000, inspBlockWindowEndMs(b) + durationMin * 60000 + 6 * 3600000]).filter(w => Number.isFinite(w[0]) && Number.isFinite(w[1]));
@@ -38589,8 +38624,9 @@ function inspSenderAddr(env) { return (env && env.GMAIL_SENDER) || 'ridgecomaint
 function inspIcs(b, method, o) {
   o = o || {};
   const addr = b.Formatted_Address || b.Address, cancel = method === 'CANCEL';
+  const seq = Math.max(0, parseInt(b.Ics_Seq, 10) || 0);   // Appointment Shift: each time change bumps this so calendars REPLACE the old entry
   const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ridge Co//Inspection Booking//EN', 'CALSCALE:GREGORIAN', 'METHOD:' + method, 'BEGIN:VEVENT',
-    'UID:insp-' + b.ID + '@ridgeco', 'DTSTAMP:' + inspIcsStamp(Date.now()), 'SEQUENCE:' + (cancel ? 1 : 0),
+    'UID:insp-' + b.ID + '@ridgeco', 'DTSTAMP:' + inspIcsStamp(Date.now()), 'SEQUENCE:' + (cancel ? seq + 1 : seq),
     'DTSTART:' + inspIcsStamp(Date.parse(b.Start_ISO)), 'DTEND:' + inspIcsStamp(Date.parse(b.End_ISO)),
     'SUMMARY:' + inspIcsEsc((cancel ? 'CANCELLED: ' : '') + 'Inspection: ' + addr), 'LOCATION:' + inspIcsEsc(addr),
     'DESCRIPTION:' + inspIcsEsc('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token))),
@@ -38763,6 +38799,8 @@ async function inspBookingDecide(env, id, decision, note, via, override) {
     catch (e) { await inspAlert(env, e.code || 'calendar_error', `Booking #${b.ID}: could not re-check your calendar before approving: ${e.message}`); return json({ ok: false, error: 'calendar_failed', message: 'Could not check your calendar for conflicts, so nothing was changed: ' + e.message }, 502); }
     try { const nc = await inspStrBookingConflict(env, await fetchConfig(env), b, true); if (nc) conf.push(nc); }
     catch (e) { await inspAlert(env, e.code || 'str_guard_unavailable', `Booking #${b.ID}: could not check cleaning coverage before approving: ${e.message}`); }
+    // Appointment Shift: a time that another booking has been PROPOSED to move into is taken too.
+    for (const x of shiftOverlaps(shiftOccupied(rows, { selfId: b.ID }).filter(o => o.kind === 'proposed'), Date.parse(b.Start_ISO), Date.parse(b.End_ISO))) conf.push({ kind: 'booking', title: x.label + ' (a proposed change)', when: shiftRange(x.startMs, x.endMs) });
     if (conf.length) return json({ ok: false, error: 'conflict', message: 'This booking now conflicts: ' + conf.map(c => `${c.title} (${c.when})`).join('; ') + '. Decline it, or approve anyway.', conflicts: conf }, 409);
   }
   const n = String(note || '').trim().slice(0, 300);
@@ -38786,7 +38824,7 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
     return { status: 502, body: { ok: false, error: 'calendar_failed', message: 'Could not update your calendar, so nothing was changed: ' + e.message } };
   }
   const upd = { Status: newStatus, Decision_Note: note || '', Decided_At: new Date().toISOString() };
-  if (newStatus !== 'approved') upd.Calendar_Event_ID = '';
+  if (newStatus !== 'approved') { upd.Calendar_Event_ID = ''; if (['proposed', 'reschedule_requested', 'failed'].includes(String(b.Change_Status || ''))) { upd.Change_Status = 'none'; upd.Change_Note = 'Closed: the booking was ' + newStatus; } }   // a cancelled booking has nothing left to move
   else if (b.Calendar_Event_ID !== evId) upd.Calendar_Event_ID = b.Calendar_Event_ID;
   const ur = await updateRow(env, 'Insp_Bookings', b.ID, upd);
   const uj = await ur.json();
@@ -38806,6 +38844,836 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
   return { status: 200, body: { ok: true, status: newStatus, notify: log, booking: inspAdminBooking(b) } };
 }
 
+// ═══ SHIFT-BLOCK-BEGIN ═════════════════════════════════════════════════════════════════════════════
+// APPOINTMENT SHIFT (Oct 23 2026, FEATURE_LOG rule 231). One reusable "move my appointments" tool for everything Brett schedules himself, the way
+// ShowMojo's shift worked: a day's items with a checkbox each, a plain-words list of what Apply will do, and the notices going out through the Hub's
+// normal channels. First use: Premier inspections #3-#8 (new length rule + re-lay the day). Spec: claude/appointment-shift-system-oct23.
+//   POST /shift/preview     (admin) computes everything, writes NOTHING: items, locked reasons, proposed times, the editable email, a summary
+//   POST /shift/apply       (admin) applies only the items Brett left checked (idempotent: a second Apply never double-sends)
+//   POST /shift/force-apply (admin) "Apply anyway": commits a proposal Josiah has not answered (or one that failed), records the override
+//   POST /shift/proposal/cancel (admin) withdraws a proposal;  GET /shift/proposals (admin) the waiting / failed / answered list
+//   GET /insp-change/info, POST /insp-change/approve, POST /insp-change/reschedule  (public, token-checked): what Josiah's email links use
+//   scheduler job insp_shift_reminders (NO cron): flags proposals nobody answered, and approvals stuck half-way
+// Adapters: inspection (propose -> partner approves -> commit), wo_window (Brett's OWN In_House work-order windows, applied directly through
+// scheduleWO), delivery (LOCKED: windows are set by the store), vendor (reserved, not built: logged, never silent). Pure engine functions are
+// unit-tested in test/appointment-shift.test.mjs.
+const SHIFT_DEFAULT_NOTICE_EMAIL = 'josiah.speed@ppmillc.com';   // Brett, Oct 23 2026: schedule-change notices go to Josiah only, for now
+const SHIFT_TOKEN_DAYS = 14;          // a change link stops working this long after it was sent (and always once the old visit time has passed)
+const SHIFT_REMIND_HOURS = 12;        // an unanswered proposal is flagged after this many hours (Config INSP_SHIFT_REMIND_HOURS)
+const SHIFT_STUCK_MIN = 15;           // an approval that has sat "approved" (not finished) this long is reported as stuck
+const SHIFT_DEFAULT_DRIVE_MIN = 30;   // only used when a stop has no stored drive time; the preview says so out loud
+const SHIFT_LOCKED = { delivery: "Delivery windows can't be changed here: the store sets them.", vendor: 'Vendor shifting is not built yet. This job is assigned to a vendor, so it stays as it is.', notapproved: 'Not approved yet. Approve the booking first, then shift it.', nowindow: 'This work order has no clock times in its window (for example "Within 1 hour" or "All Day"), so there is nothing to shift.', unreadable: 'The saved times on this row cannot be read, so it is not moved. Fix the row first.', unassigned: 'Not assigned to anyone yet, so it is not yours to shift.', vendorunknown: 'Its assigned vendor was not found, so it is not moved.' };
+
+// Next quarter hour at or after ms. Eastern offsets are whole hours, so epoch quarters ARE Eastern quarters (also across the Nov 1 clock change).
+function shiftQuarterUp(ms) { return Math.ceil(ms / 900000) * 900000; }
+function shiftNum(v) { if (v === '' || v == null) return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
+function shiftDayLabel(dateStr) { return new Date(String(dateStr).slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }); }
+function shiftRange(a, b) { return inspFmtEtTime(a) + ' to ' + inspFmtEtTime(b); }
+// A work order window is free text from a fixed menu ("9:00 AM – 12:00 PM", "Morning (8:00 AM – 12:00 PM)", "Within 1 hour", "All Day", "Custom ...").
+// Returns { startMin, endMin } for the ones with two clock times, else null.
+function shiftParseWindow(s) {
+  const m = /(\d{1,2}:\d{2}\s*[AaPp][Mm])\s*[–—-]\s*(\d{1,2}:\d{2}\s*[AaPp][Mm])/.exec(String(s == null ? '' : s));
+  if (!m) return null;
+  const a = inspParseHHMM(m[1]), b = inspParseHHMM(m[2]);
+  return Number.isFinite(a) && Number.isFinite(b) && b > a ? { startMin: a, endMin: b } : null;
+}
+function shiftHhmm(ms) { const m = inspEtMinutes(ms); return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
+function shiftFmtClock(min) { const h24 = Math.floor(min / 60) % 24, mi = min % 60, h = h24 % 12 === 0 ? 12 : h24 % 12; return h + ':' + String(mi).padStart(2, '0') + ' ' + (h24 < 12 ? 'AM' : 'PM'); }
+function shiftFormatWindow(startMin, endMin) { return shiftFmtClock(startMin) + ' – ' + shiftFmtClock(endMin); }
+function shiftHash(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(16).padStart(8, '0'); }
+
+// ── Re-lay the day (PURE). rows are one day's inspections in time order:
+//   { key, startMs, endMs, newDurMin, driveBefore, driveAfter, include, override:{startMs?,endMs?} }
+// The first stop keeps its start; every later CHECKED stop starts at (previous stop's end + the stored drive minutes) rounded UP to the next quarter
+// hour. An UNCHECKED stop stays exactly as it is and acts as a fixed anchor for the stops after it. A hand-edited start/end (override) wins, and the
+// stops after it pack from it. No stored drive time: the flat default is used AND a warning says so (never a silent guess).
+function shiftRelayPlan(rows, opts) {
+  const dflt = opts && opts.defaultDriveMin != null ? opts.defaultDriveMin : SHIFT_DEFAULT_DRIVE_MIN;
+  const out = []; let prevEnd = null, prevRow = null;
+  for (const r of rows) {
+    const o = { key: r.key, oldStartMs: r.startMs, oldEndMs: r.endMs, newStartMs: r.startMs, newEndMs: r.endMs, newDurMin: Math.round((r.endMs - r.startMs) / 60000), driveBefore: null, fixedFirst: false, edited: false, warnings: [] };
+    if (!r.include) { out.push(o); prevEnd = r.endMs; prevRow = r; continue; }
+    let start;
+    if (prevEnd == null) { start = r.startMs; o.fixedFirst = true; }
+    else {
+      let drive = shiftNum(r.driveBefore);
+      if (drive == null && prevRow) drive = shiftNum(prevRow.driveAfter);
+      if (drive == null) { drive = dflt; o.warnings.push('No drive time is stored for this stop, so the flat ' + dflt + ' minutes was used.'); }
+      o.driveBefore = drive;
+      start = shiftQuarterUp(prevEnd + drive * 60000);
+    }
+    let end = start + r.newDurMin * 60000;
+    const ov = r.override || {};
+    if (Number.isFinite(ov.startMs)) { start = ov.startMs; end = start + r.newDurMin * 60000; o.edited = true; }
+    if (Number.isFinite(ov.endMs)) { end = ov.endMs; o.edited = true; }
+    if (!(end > start)) { o.warnings.push('The end time must be after the start time, so this row was left as it is.'); out.push(o); prevEnd = r.endMs; prevRow = r; continue; }
+    o.newStartMs = start; o.newEndMs = end; o.newDurMin = Math.round((end - start) / 60000);
+    out.push(o); prevEnd = end; prevRow = r;
+  }
+  return out;
+}
+// "Running late" (PURE): every CHECKED row that starts at or after fromMs moves by `minutes`; earlier rows stay. Hand edits win.
+function shiftLatePlan(rows, minutes, fromMs) {
+  const m = Number(minutes), out = [];
+  for (const r of rows) {
+    const o = { key: r.key, oldStartMs: r.startMs, oldEndMs: r.endMs, newStartMs: r.startMs, newEndMs: r.endMs, newDurMin: Math.round((r.endMs - r.startMs) / 60000), driveBefore: null, fixedFirst: false, edited: false, warnings: [] };
+    if (r.include && Number.isFinite(m) && r.startMs >= fromMs) { o.newStartMs = r.startMs + m * 60000; o.newEndMs = r.endMs + m * 60000; }
+    const ov = r.override || {};
+    if (r.include && (Number.isFinite(ov.startMs) || Number.isFinite(ov.endMs))) {
+      const s = Number.isFinite(ov.startMs) ? ov.startMs : o.newStartMs, e = Number.isFinite(ov.endMs) ? ov.endMs : (Number.isFinite(ov.startMs) ? s + (r.endMs - r.startMs) : o.newEndMs);
+      if (e > s) { o.newStartMs = s; o.newEndMs = e; o.edited = true; } else o.warnings.push('The end time must be after the start time, so the edit was ignored.');
+    }
+    o.newDurMin = Math.round((o.newEndMs - o.newStartMs) / 60000);
+    out.push(o);
+  }
+  return out;
+}
+// Pairs of CHANGED/unchanged final windows that overlap each other (PURE) - the preview warns about these.
+function shiftFinalOverlaps(plan) {
+  const out = [], s = plan.slice().sort((a, b) => a.newStartMs - b.newStartMs);
+  for (let i = 1; i < s.length; i++) { const p = s[i - 1]; if (s[i].newStartMs < p.newEndMs) out.push([p.key, s[i].key]); }
+  return out;
+}
+// What is occupied by OTHER bookings (PURE). While a change is waiting for an answer BOTH the old and the proposed window are taken. A booking
+// listed in opts.movingIds is about to move in the same approval (its batch-mates): only its proposed window counts then, because its old one is
+// being vacated. opts.selfId is the booking being checked (never conflicts with itself).
+function shiftOccupied(bookings, opts) {
+  opts = opts || {}; const moving = new Set((opts.movingIds || []).map(String)), out = [];
+  for (const b of (bookings || [])) {
+    if (String(b.ID) === String(opts.selfId)) continue;
+    if (String(b.Active || '').toUpperCase() === 'FALSE' || !INSP_ACTIVE_BOOKING.includes(b.Status)) continue;
+    const label = (b.Formatted_Address || b.Address || 'Booking') + ' (#' + b.ID + ')';
+    const proposed = String(b.Change_Status || '') === 'proposed';
+    if (!(proposed && moving.has(String(b.ID)))) {
+      const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO);
+      if (Number.isFinite(s) && Number.isFinite(e)) out.push({ id: String(b.ID), kind: 'old', startMs: s, endMs: e, label });
+    }
+    if (proposed) {
+      const s = Date.parse(b.Proposed_Start_ISO), e = Date.parse(b.Proposed_End_ISO);
+      if (Number.isFinite(s) && Number.isFinite(e)) out.push({ id: String(b.ID), kind: 'proposed', startMs: s, endMs: e, label });
+    }
+  }
+  return out;
+}
+function shiftOverlaps(occupied, startMs, endMs) { return (occupied || []).filter(o => o.startMs < endMs && o.endMs > startMs); }
+// Is the change link still good? (PURE) Expires SHIFT_TOKEN_DAYS after it was sent, and always once the OLD visit time has started.
+function shiftTokenState(b, nowMs, days) {
+  const sentMs = Date.parse(b.Change_Proposed_At || ''), oldStart = Date.parse(b.Start_ISO || ''), d = days == null ? SHIFT_TOKEN_DAYS : days;
+  if (Number.isFinite(oldStart) && nowMs >= oldStart) return { ok: false, reason: 'The original time has already started.' };
+  if (Number.isFinite(sentMs) && nowMs > sentMs + d * 86400000) return { ok: false, reason: 'This link is more than ' + d + ' days old.' };
+  return { ok: true, reason: '' };
+}
+// Which reminder does a waiting proposal need now? (PURE) '' | 'stale' | 'urgent'. urgent = the visit is within 24 hours.
+function shiftReminderStage(b, nowMs, remindHours) {
+  if (String(b.Change_Status || '') !== 'proposed') return '';
+  const sent = Date.parse(b.Change_Proposed_At || ''), start = Date.parse(b.Start_ISO || '');
+  const hrs = remindHours == null ? SHIFT_REMIND_HOURS : remindHours;
+  if (Number.isFinite(start) && start > nowMs && start - nowMs <= 24 * 3600000) return 'urgent';
+  if (Number.isFinite(sent) && nowMs - sent >= hrs * 3600000) return 'stale';
+  return '';
+}
+// A stable fingerprint of what Apply is about to do, so Apply can refuse if the data moved since the preview was drawn (PURE).
+function shiftPlanId(items) {
+  return shiftHash(items.filter(i => i.changed && i.checked).map(i => [i.key, i.old && i.old.start_iso, i.old && i.old.end_iso, i.new && i.new.start_iso, i.new && i.new.end_iso, i.new && i.new.window].join('|')).sort().join(';'));
+}
+// ── The email to the partner (PURE). Placeholders [[APPROVE:<id>]], [[RESCHEDULE:<id>]] and [[APPROVE_ALL]] become real links at send time.
+// Brett edits the words; the placeholders must stay. Nothing about tenants is said here (Premier tells its own tenants).
+function shiftEmailDraft(o) {
+  const lines = [];
+  lines.push('Hi ' + (o.greetName || 'there') + ',', '');
+  lines.push(o.intro || ('I need to adjust the inspection times for ' + shiftDayLabel(o.date) + '. Each inspection now takes 30 minutes per unit plus 30 minutes for the building. Here is the new schedule:'), '');
+  o.items.forEach((it, i) => {
+    lines.push((i + 1) + '. ' + it.address + ' (' + it.units + ' unit' + (it.units === 1 ? '' : 's') + ')');
+    lines.push('   Was: ' + shiftRange(it.oldStartMs, it.oldEndMs));
+    lines.push('   Now: ' + shiftRange(it.newStartMs, it.newEndMs));
+    lines.push('   Approve: [[APPROVE:' + it.id + ']]');
+    lines.push('   Need a different time: [[RESCHEDULE:' + it.id + ']]', '');
+  });
+  if (o.items.length > 1) lines.push('Approve all of them at once: [[APPROVE_ALL]]', '');
+  lines.push('Nothing changes on my calendar until you approve. Thank you,', 'Brett', 'Ridge Co');
+  return { subject: 'Updated inspection times for ' + shiftDayLabel(o.date), body: lines.join('\n') };
+}
+// Checks the edited email still has what it needs (PURE): every placeholder names an inspection in THIS email, and there is a way to approve.
+function shiftEmailValidate(body, ids) {
+  const problems = [], text = String(body == null ? '' : body), set = new Set(ids.map(String));
+  const found = [...text.matchAll(/\[\[(APPROVE|RESCHEDULE):([^\]]*)\]\]/g)];
+  for (const m of found) if (!set.has(m[2])) problems.push('The link ' + m[0] + ' does not match any inspection in this email.');
+  const hasAll = /\[\[APPROVE_ALL\]\]/.test(text);
+  const approvable = ids.every(id => text.includes('[[APPROVE:' + id + ']]'));
+  if (!hasAll && !approvable) problems.push('The email needs an approve link. Keep the [[APPROVE:...]] or [[APPROVE_ALL]] pieces; they turn into the buttons.');
+  const stripped = text.replace(/\[\[(APPROVE|RESCHEDULE):[^\]]*\]\]/g, '').replace(/\[\[APPROVE_ALL\]\]/g, '');
+  if (/\[\[|\]\]/.test(stripped)) problems.push('There is a stray [[ or ]] in the email. Put it back the way it was, or delete it.');
+  return { ok: problems.length === 0, problems };
+}
+// Turns the edited text into the real email (PURE). links = { approve:{id:url}, reschedule:{id:url}, all:url }.
+function shiftEmailRender(body, links) {
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const missing = [], parts = String(body == null ? '' : body).split(/(\[\[(?:APPROVE|RESCHEDULE):[^\]]*\]\]|\[\[APPROVE_ALL\]\])/);
+  let text = '', html = '';
+  const btn = (u, label, color) => '<a href="' + esc(u) + '" style="display:inline-block;padding:10px 16px;background:' + color + ';color:#fff;border-radius:6px;text-decoration:none;font-weight:600">' + esc(label) + '</a>';
+  for (const p of parts) {
+    const m = /^\[\[(APPROVE|RESCHEDULE):([^\]]*)\]\]$/.exec(p);
+    if (m) {
+      const u = (m[1] === 'APPROVE' ? links.approve : links.reschedule || {})[m[2]];
+      if (!u) { missing.push(p); text += p; html += esc(p); continue; }
+      text += u; html += btn(u, m[1] === 'APPROVE' ? 'Approve this time' : 'Pick a different time', m[1] === 'APPROVE' ? '#1a7f4b' : '#475569');
+    } else if (p === '[[APPROVE_ALL]]') {
+      if (!links.all) { missing.push(p); text += p; html += esc(p); continue; }
+      text += links.all; html += btn(links.all, 'Approve all of them', '#1d4ed8');
+    } else { text += p; html += esc(p).replace(/\n/g, '<br>'); }
+  }
+  return { text, html: '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5">' + html + '</div>', missing };
+}
+// The text a tenant gets when a visit moves (PURE). Plain characters; the SMS pipeline sanitizes again.
+function shiftTenantText(o) {
+  return 'Hi ' + (o.firstName || 'there') + ', your property inspection at ' + o.address + ' is now ' + shiftDayLabel(o.date) + ', ' + o.when + ' (it was ' + o.was + '). Questions? Call or text Ridge Co.';
+}
+// Street key for matching a booking address to a Hub property (PURE): house number + first street word. "3133 Dudley Ave, Baltimore" -> "3133 dudley".
+function shiftAddrKey(a) {
+  const m = /^\s*(\d+[a-z]?)\s+([a-z0-9]+)/i.exec(String(a == null ? '' : a).replace(/[.,#]/g, ' ').replace(/^\s*(n|s|e|w|north|south|east|west)\.?\s+(?=\d)/i, ''));
+  if (m) return m[1].toLowerCase() + ' ' + m[2].toLowerCase();
+  const n = /^\s*(\d+[a-z]?)\s+(?:n|s|e|w|north|south|east|west)\.?\s+([a-z0-9]+)/i.exec(String(a == null ? '' : a).replace(/[.,#]/g, ' '));
+  return n ? n[1].toLowerCase() + ' ' + n[2].toLowerCase() : '';
+}
+// ── Reads + plan (the part both Preview and Apply share, so Apply can never disagree with what Brett saw) ──
+function shiftCfgEmail(cfg) { return String((cfg && cfg.INSP_SHIFT_NOTICE_EMAIL) || SHIFT_DEFAULT_NOTICE_EMAIL).trim(); }
+function shiftCfgName(cfg) { return String((cfg && cfg.INSP_SHIFT_NOTICE_NAME) || 'Josiah').trim(); }
+// The first line of the email depends on why the day is moving.
+function shiftEmailIntro(input) {
+  if (input.mode === 'late') return 'I am running behind on ' + shiftDayLabel(input.date) + ' and need to push the inspection times back ' + (input.minutes > 0 ? input.minutes + ' minutes' : (-input.minutes) + ' minutes earlier') + '. Here is the new schedule:';
+  return null;
+}
+function shiftInput(body) {
+  body = body || {};
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? String(body.date) : '';
+  if (!date) throw inspErr('bad_input', 'Pick the day to shift.', 400);
+  const mode = body.mode === 'late' ? 'late' : 'relay';
+  const minutes = Number(body.minutes);
+  if (mode === 'late' && !(Number.isFinite(minutes) && minutes !== 0 && Math.abs(minutes) <= 480)) throw inspErr('bad_input', 'Running late needs a number of minutes (for example 15, 30 or 45).', 400);
+  const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+  return { date, mode, minutes, from_time: String(body.from_time || '').trim(), from_iso: String(body.from_iso || '').trim(), only_keys: Array.isArray(body.only_keys) ? body.only_keys.map(String) : null, customer_id: body.customer_id ? String(body.customer_id) : '', checked: obj(body.checked), edits: obj(body.edits), email: body.email && typeof body.email === 'object' ? { subject: String(body.email.subject || ''), body: String(body.email.body || '') } : null, plan_id: String(body.plan_id || '') };
+}
+async function shiftReadTab(env, tab, warnings, optional) {
+  try { return await fetchTab(env, tab); }
+  catch (e) {
+    if (optional && isMissingTabError(e)) { warnings.push('The ' + tab + ' tab does not exist yet, so there is nothing to list from it.'); return []; }
+    throw inspErr('sheet_unavailable', 'Could not read ' + tab + ': ' + ((e && e.message) || e), 503);
+  }
+}
+// All the things Brett has on `date`, as plain objects (no planning yet). Locked kinds are included so Brett SEES them and why they stay put.
+async function shiftCollect(env, input) {
+  const warnings = [];
+  try { await inspEnsureTabsOnce(env); } catch (e) { throw inspErr('sheet_unavailable', 'Could not prepare the inspection tabs: ' + ((e && e.message) || e), 503); }
+  const bookings = await shiftReadTab(env, 'Insp_Bookings', warnings, false), customers = await shiftReadTab(env, 'Insp_Customers', warnings, false);
+  const wos = await shiftReadTab(env, 'Work_Orders', warnings, false), vendors = await shiftReadTab(env, 'Vendors', warnings, false), properties = await shiftReadTab(env, 'Properties', warnings, false);
+  const deliveries = await shiftReadTab(env, 'Deliveries', warnings, true);
+  const custById = new Map(customers.map(c => [String(c.ID), c])), propById = new Map(properties.map(p => [String(p.ID), p]));
+  const raw = [];
+  for (const b of bookings) {
+    if (String(b.Active || '').toUpperCase() === 'FALSE' || !INSP_ACTIVE_BOOKING.includes(b.Status)) continue;
+    if (input.customer_id && String(b.Customer_ID) !== input.customer_id) continue;
+    const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO), okTimes = Number.isFinite(s) && Number.isFinite(e) && e > s;
+    if (okTimes ? inspEtDate(s) !== input.date : String(b.Date || '') !== input.date) continue;
+    const cust = custById.get(String(b.Customer_ID)) || null, locked = b.Status !== 'approved' ? SHIFT_LOCKED.notapproved : (!okTimes ? SHIFT_LOCKED.unreadable : '');
+    raw.push({ key: 'insp:' + b.ID, type: 'inspection', id: String(b.ID), label: b.Formatted_Address || b.Address || ('Inspection #' + b.ID), sub: (cust ? cust.Name + ' - ' : '') + (b.Units || '?') + ' unit(s) in ' + (b.Buildings || '?') + ' building(s)', startMs: okTimes ? s : NaN, endMs: okTimes ? e : NaN, locked_reason: locked, b, customer: cust, units: +b.Units || 1, buildings: +b.Buildings || 1, driveBefore: shiftNum(b.Drive_Before_Min), driveAfter: shiftNum(b.Drive_After_Min) });
+  }
+  const closed = WOStatus.sets.RECEIPT_CLOSED;
+  for (const w of wos) {
+    if (String(w.Scheduled_Date || '').slice(0, 10) !== input.date || String(w.Voided || '').toUpperCase() === 'TRUE' || closed.includes(String(w.Status || ''))) continue;
+    const win = shiftParseWindow(w.Scheduled_Window), vendor = w.Vendor_ID ? vendors.find(v => String(v.ID) === String(w.Vendor_ID)) : null;
+    const inHouse = !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
+    const locked = !w.Vendor_ID ? SHIFT_LOCKED.unassigned : (!vendor ? SHIFT_LOCKED.vendorunknown : (!inHouse ? SHIFT_LOCKED.vendor : (!win ? SHIFT_LOCKED.nowindow : '')));
+    const prop = propById.get(String(w.Property_ID));
+    raw.push({ key: 'wo:' + w.ID, type: 'wo_window', id: String(w.ID), label: w.ID + ' ' + woJobLabel(w), sub: (prop ? prop.Address + ' - ' : '') + 'window "' + (w.Scheduled_Window || 'none') + '"' + (vendor ? ' - ' + (vendor.Name || 'vendor') : ''), startMs: win ? inspEtWallToMs(input.date, win.startMin) : NaN, endMs: win ? inspEtWallToMs(input.date, win.endMin) : NaN, locked_reason: locked, wo: w, window: String(w.Scheduled_Window || '') });
+  }
+  for (const d of deliveries) {
+    if (String(d.Expected_Date || '').slice(0, 10) !== input.date || String(d.Active || '').toUpperCase() === 'FALSE' || ['Delivered', 'Cancelled'].includes(String(d.Status || ''))) continue;
+    const win = shiftParseWindow(d.Expected_Window);
+    raw.push({ key: 'delivery:' + d.ID, type: 'delivery', id: String(d.ID), label: (d.Store || 'Delivery') + ' - ' + (d.Item_Type || d.New_Make_Model || 'delivery'), sub: String(d.Delivery_Address || '') + ' - window "' + (d.Expected_Window || 'none') + '"', startMs: win ? inspEtWallToMs(input.date, win.startMin) : NaN, endMs: win ? inspEtWallToMs(input.date, win.endMin) : NaN, locked_reason: SHIFT_LOCKED.delivery, window: String(d.Expected_Window || '') });
+  }
+  if (input.only_keys) { const keep = new Set(input.only_keys); for (let k = raw.length - 1; k >= 0; k--) if (!keep.has(raw[k].key)) raw.splice(k, 1); }
+  raw.sort((a, b) => (Number.isFinite(a.startMs) ? a.startMs : Infinity) - (Number.isFinite(b.startMs) ? b.startMs : Infinity));
+  return { raw, bookings, customers, warnings };
+}
+// Plans every item. PURE given its inputs (nowMs injected) - used by Preview AND Apply.
+function shiftPlan(raw, input, nowMs) {
+  const shiftable = r => !r.locked_reason;
+  const isOn = r => shiftable(r) && input.checked[r.key] !== false;
+  const edit = r => {
+    const e = input.edits[r.key]; if (!e || typeof e !== 'object') return undefined;
+    const o = {};
+    if (e.start) { const ms = inspEtWallToMs(input.date, e.start); if (Number.isFinite(ms)) o.startMs = ms; }
+    if (e.end) { const ms = inspEtWallToMs(input.date, e.end); if (Number.isFinite(ms)) o.endMs = ms; }
+    return (o.startMs != null || o.endMs != null) ? o : undefined;
+  };
+  const res = new Map();
+  const timed = raw.filter(r => Number.isFinite(r.startMs) && Number.isFinite(r.endMs));
+  if (input.mode === 'relay') {
+    const inspRows = timed.filter(r => r.type === 'inspection').map(r => ({ key: r.key, startMs: r.startMs, endMs: r.endMs, newDurMin: shiftable(r) ? inspDurationMin(r.units, r.buildings) : Math.round((r.endMs - r.startMs) / 60000), driveBefore: r.driveBefore, driveAfter: r.driveAfter, include: isOn(r), override: edit(r) }));
+    for (const o of shiftRelayPlan(inspRows)) res.set(o.key, o);
+    const otherRows = timed.filter(r => r.type !== 'inspection').map(r => ({ key: r.key, startMs: r.startMs, endMs: r.endMs, include: isOn(r) && r.type === 'wo_window', override: edit(r) }));
+    for (const o of shiftLatePlan(otherRows, 0, Infinity)) res.set(o.key, o);
+  } else {
+    const dayStart = inspEtWallToMs(input.date, '00:00');
+    let fromMs = input.from_iso ? Date.parse(input.from_iso) : (input.from_time ? inspEtWallToMs(input.date, input.from_time) : NaN);
+    if (!Number.isFinite(fromMs)) fromMs = Math.max(nowMs, dayStart);
+    res.fromMs = fromMs;
+    const rows = timed.map(r => ({ key: r.key, startMs: r.startMs, endMs: r.endMs, include: isOn(r) && r.type !== 'delivery', override: edit(r) }));
+    for (const o of shiftLatePlan(rows, input.minutes, fromMs)) res.set(o.key, o);
+  }
+  const items = raw.map(r => {
+    const o = res.get(r.key), timedOk = Number.isFinite(r.startMs) && Number.isFinite(r.endMs);
+    const ns = o ? o.newStartMs : r.startMs, ne = o ? o.newEndMs : r.endMs;
+    const changed = !!o && timedOk && (ns !== r.startMs || ne !== r.endMs) && shiftable(r);
+    const fmt = (s, e) => timedOk ? { start_iso: new Date(s).toISOString(), end_iso: new Date(e).toISOString(), start_hhmm: shiftHhmm(s), end_hhmm: shiftHhmm(e), range: shiftRange(s, e), duration_min: Math.round((e - s) / 60000), window: shiftFormatWindow(inspEtMinutes(s), inspEtMinutes(e)) } : null;
+    const problems = [], warnings = o ? o.warnings.slice() : [];
+    if (changed && inspEtDate(ns) !== input.date) problems.push('This would move it onto another day. Shifts stay within one day.');
+    if (changed && r.type === 'inspection' && ns < nowMs) problems.push('The new start time has already passed.');
+    return { key: r.key, type: r.type, id: r.id, label: r.label, sub: r.sub, shiftable: shiftable(r), locked_reason: r.locked_reason || '', checked: isOn(r) && changed && !problems.length, old: fmt(r.startMs, r.endMs), new: fmt(ns, ne), changed, edited: !!(o && o.edited), drive_before_min: o && o.driveBefore != null ? o.driveBefore : null, fixed_first: !!(o && o.fixedFirst), warnings, problems, _r: r, _ns: ns, _ne: ne };
+  });
+  items.from_ms = res.fromMs == null ? null : res.fromMs;
+  return items;
+}
+// Adds the checks that need Brett's calendar and the sheet: overlaps with things that are NOT part of this shift.
+async function shiftAnnotate(env, cfg, items, bookings, input) {
+  const notes = [];
+  const moving = new Set(items.filter(i => i.type === 'inspection' && i.checked).map(i => i.id));
+  const live = items.filter(i => i.changed && i.old && !i.problems.length);
+  for (const [a, b] of shiftFinalOverlaps(items.filter(i => i.new && (i.type !== 'delivery')).map(i => ({ key: i.key, newStartMs: i._ns, newEndMs: i._ne })))) {
+    const ia = items.find(i => i.key === a), ib = items.find(i => i.key === b);
+    if (ia.type === 'inspection' && ib.type === 'inspection') { ia.warnings.push('Overlaps ' + ib.label + ' after the shift.'); ib.warnings.push('Overlaps ' + ia.label + ' after the shift.'); }
+  }
+  const occupied = shiftOccupied(bookings, {}).filter(o => !moving.has(o.id));
+  for (const i of live.filter(x => x.type === 'inspection')) {
+    for (const o of shiftOverlaps(occupied, i._ns, i._ne).filter(o => o.id !== i.id)) i.warnings.push('Overlaps ' + o.label + (o.kind === 'proposed' ? ' (its proposed time)' : '') + ' at ' + shiftRange(o.startMs, o.endMs) + '.');
+  }
+  if (live.length) {
+    const lo = Math.min(...live.map(i => Math.min(i._r.startMs, i._ns))) - 3600000, hi = Math.max(...live.map(i => Math.max(i._r.endMs, i._ne))) + 3600000;
+    try {
+      const evs = (await inspCalListEvents(env, cfg, lo, hi)).items.filter(ev => { const p = ev && ev.extendedProperties && ev.extendedProperties.private; return !(p && (p.ridgecoInspBooking || p.ridgecoInspKey)); });
+      for (const i of live) for (const c of inspConflictsFrom(evs, i._ns, i._ne, {})) i.warnings.push('Overlaps "' + c.title + '" on your calendar (' + c.when + ').');
+    } catch (e) { notes.push('Could not check your calendar for overlaps: ' + ((e && e.message) || e)); }
+  }
+  return notes;
+}
+// What a tenant would be texted (read-only). Only customers with Notify_Tenants = TRUE ever reach this.
+async function shiftTenantTargets(env, customer, b) {
+  const out = { recipients: [], gap: '' };
+  const [props, units, tenants] = await Promise.all([fetchTab(env, 'Insp_Properties'), fetchTab(env, 'Insp_Units'), fetchTab(env, 'Tenants')]);
+  const key = shiftAddrKey(b.Address) || shiftAddrKey(b.Formatted_Address);
+  const myProps = props.filter(p => String(p.Customer_ID) === String(customer.ID) && String(p.Active || '').toUpperCase() !== 'FALSE' && key && shiftAddrKey(p.Address) === key);
+  if (!myProps.length) { out.gap = 'No property on file for ' + (b.Formatted_Address || b.Address) + ' under this customer, so there is no tenant to text.'; return out; }
+  const us = units.filter(u => myProps.some(p => String(p.ID) === String(u.Property_ID)) && String(u.Active || '').toUpperCase() !== 'FALSE' && normalizePhone(u.Tenant_Phone));
+  if (!us.length) { out.gap = 'No tenant phone numbers on file for this building.'; return out; }
+  for (const u of us) {
+    const phone = normalizePhone(u.Tenant_Phone), t = tenantForQueuedText(tenants, phone, '');
+    out.recipients.push({ unit: u.Label || 'Unit', name: u.Tenant_Name || '', phone_last4: phone.replace(/\D/g, '').slice(-4), hub_tenant_id: t ? t.ID : '', hub_match: !!t, reason: t ? '' : 'This number is not a tenant in the Hub, so the Hub cannot check its text-message switches or opt-outs. It will NOT be texted.', _tenant: t || null });
+  }
+  return out;
+}
+function shiftSummary(items, input, emailTo, mailInfo) {
+  const L = [], ins = items.filter(i => i.type === 'inspection' && i.checked), wos = items.filter(i => i.type === 'wo_window' && i.checked);
+  for (const i of ins) L.push(i.label + ': ' + i.old.range + ' becomes ' + i.new.range + '. Waits for ' + shiftCfgNameOf(mailInfo) + ' to approve; nothing moves on your calendar until then.');
+  if (ins.length) L.push('One email goes to ' + emailTo + ' with an Approve button for each inspection (and one for all). You can edit the email first.');
+  for (const i of wos) L.push(i.label + ': window ' + i.old.window + ' becomes ' + i.new.window + ' right away, and the tenant gets the normal "job scheduled" text.');
+  for (const i of items.filter(x => !x.shiftable)) L.push('Not moving: ' + i.label + ' (' + i.locked_reason + ')');
+  for (const i of items.filter(x => x.shiftable && x.problems.length)) L.push('Cannot move: ' + i.label + ' (' + i.problems.join(' ') + ')');
+  if (!ins.length && !wos.length) L.unshift('Nothing is checked to change, so Apply would do nothing.');
+  return L;
+}
+function shiftCfgNameOf(mailInfo) { return (mailInfo && mailInfo.name) || 'the partner'; }
+const shiftPublicItem = i => { const o = Object.assign({}, i); delete o._r; delete o._ns; delete o._ne; return o; };
+
+async function shiftPreviewRoute(env, body) {
+  try {
+    const input = shiftInput(body), cfg = await fetchConfig(env), nowMs = Date.now();
+    const col = await shiftCollect(env, input);
+    const items = shiftPlan(col.raw, input, nowMs);
+    const warnings = col.warnings.slice();
+    warnings.push(...await shiftAnnotate(env, cfg, items, col.bookings, input));
+    const emailTo = shiftCfgEmail(cfg), name = shiftCfgName(cfg), ins = items.filter(i => i.type === 'inspection' && i.checked);
+    let email = null;
+    if (ins.length) {
+      const d = shiftEmailDraft({ date: input.date, intro: shiftEmailIntro(input), greetName: name, items: ins.map(i => ({ id: i.id, address: i._r.b.Formatted_Address || i._r.b.Address, units: i._r.units, oldStartMs: i._r.startMs, oldEndMs: i._r.endMs, newStartMs: i._ns, newEndMs: i._ne })) });
+      email = { to: emailTo, subject: d.subject, body: d.body };
+    }
+    // Tenant SMS preview, only for customers that have it switched on.
+    for (const i of items.filter(x => x.type === 'inspection')) {
+      i.notice_preview = { partner: i.checked ? 'Included in the email to ' + emailTo + ' (Approve and Reschedule buttons).' : '', tenant_sms: null };
+      if (i.checked && i._r.customer && String(i._r.customer.Notify_Tenants || '').toUpperCase() === 'TRUE') {
+        try {
+          const t = await shiftTenantTargets(env, i._r.customer, i._r.b);
+          i.notice_preview.tenant_sms = { text: shiftTenantText({ firstName: 'there', address: i._r.b.Formatted_Address || i._r.b.Address, date: input.date, when: i.new.range, was: i.old.range }), recipients: t.recipients.map(r => ({ unit: r.unit, name: r.name, phone_last4: r.phone_last4, will_text: r.hub_match, reason: r.reason })), gap: t.gap, when_sent: 'After ' + name + ' approves, through the normal tenant text rules (switches, quiet hours, test mode).' };
+        } catch (e) { i.warnings.push('Could not work out who would be texted: ' + ((e && e.message) || e)); }
+      }
+    }
+    for (const i of items.filter(x => x.type === 'wo_window')) i.notice_preview = { partner: '', tenant_sms: i.checked ? { text: 'The normal "your job is scheduled" text, sent through the usual tenant text rules.', recipients: [], gap: '' } : null };
+    return json({ ok: true, date: input.date, mode: input.mode, minutes: input.mode === 'late' ? input.minutes : null, from_iso: items.from_ms != null ? new Date(items.from_ms).toISOString() : '', plan_id: shiftPlanId(items), now: new Date(nowMs).toISOString(), notice_to: emailTo, email, summary: shiftSummary(items, input, emailTo, { name }), items: items.map(shiftPublicItem), warnings, counts: { total: items.length, changing: items.filter(i => i.checked).length, locked: items.filter(i => !i.shiftable).length } });
+  } catch (e) { return await shiftRouteErr(env, 'shift_preview', e); }
+}
+async function shiftRouteErr(env, where, e) {
+  if (e && e.code && e.status && e.status < 500) return json({ ok: false, error: e.code, message: e.message }, e.status);
+  await reportFailure(env, { system: 'hub', source: 'worker', where, ref: '', severity: 'P1', message: String((e && e.message) || e).slice(0, 400) });
+  return json({ ok: false, error: (e && e.code) || 'internal', message: 'Shift failed: ' + String((e && e.message) || e) }, (e && e.status) || 500);
+}
+
+// ── Apply ──────────────────────────────────────────────────────────────────────────────────
+async function shiftTelemetry(env, endpoint, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_shift', Skill_Or_Endpoint: endpoint, Success: ok ? 'TRUE' : 'FALSE', Notes: String(notes || '').slice(0, 480) }); }
+  catch (e) { console.error('shift: telemetry write failed:', e && e.message, '|', endpoint, notes); }   // telemetry is the last-resort sink; the result body still carries the error
+}
+function shiftEventBody(b, extraLine) {
+  const body = inspBookingEventBody(b, false, '');
+  if (extraLine) body.description = extraLine + '\n' + body.description;
+  return body;
+}
+async function shiftPatchEvent(env, cfg, b, body, expect) {
+  if (inspCalStaged(env, cfg)) return 'calendar: staged (not changed on staging)';
+  if (!b.Calendar_Event_ID) throw new Error('Booking #' + b.ID + ' has no calendar event id, so its calendar entry cannot be updated.');
+  const ev = await inspCalFetch(env, cfg, 'PATCH', '/events/' + encodeURIComponent(b.Calendar_Event_ID), body);
+  if (expect) {
+    const s = Date.parse(ev && ev.start && ev.start.dateTime), e = Date.parse(ev && ev.end && ev.end.dateTime);
+    if (s !== expect.startMs || e !== expect.endMs) throw new Error('Google answered the calendar update, but the event did not keep the new times (read back ' + (ev && ev.start && ev.start.dateTime) + ').');
+  }
+  return 'calendar entry updated and read back';
+}
+async function shiftApplyRoute(env, body) {
+  try { return await shiftApply(env, body); } catch (e) { return await shiftRouteErr(env, 'shift_apply', e); }
+}
+async function shiftApply(env, body) {
+  const input = shiftInput(body), cfg = await fetchConfig(env), nowMs = Date.now();
+  invalidateTabCache('Insp_Bookings');
+  const col = await shiftCollect(env, input);
+  const items = shiftPlan(col.raw, input, nowMs);
+  const planId = shiftPlanId(items);
+  if (!input.plan_id || input.plan_id !== planId) return json({ ok: false, error: 'stale', message: 'The schedule changed since you looked at it (or the preview was not run). Nothing was done. Preview again, then Apply.' }, 409);
+  const todo = items.filter(i => i.checked && i.changed && i.shiftable && !i.problems.length);
+  const results = items.filter(i => !todo.includes(i)).map(i => ({ key: i.key, ok: true, skipped: true, steps: [i.locked_reason ? 'Not moved: ' + i.locked_reason : (i.problems.length ? 'Not moved: ' + i.problems.join(' ') : (i.checked ? 'Nothing to change.' : 'Left unchecked, not moved.'))], errors: [], warnings: [] }));
+  const emailTo = shiftCfgEmail(cfg);
+  const inspTodo = todo.filter(i => i.type === 'inspection'), woTodo = todo.filter(i => i.type === 'wo_window');
+  // Validate the email BEFORE changing anything: a bad email must not leave half a shift behind.
+  const newIds = [], pending = [];
+  for (const i of inspTodo) {
+    const b = i._r.b;
+    if (b.Change_Status === 'proposed' && b.Proposed_Start_ISO === i.new.start_iso && b.Proposed_End_ISO === i.new.end_iso) { results.push({ key: i.key, ok: true, skipped: true, idempotent: true, steps: ['Already waiting for ' + shiftCfgName(cfg) + ' to answer with exactly this time. Nothing new was sent.'], errors: [], warnings: [] }); continue; }
+    newIds.push(i.id); pending.push(i);
+  }
+  let draft = null;
+  if (pending.length) {
+    const d = shiftEmailDraft({ date: input.date, intro: shiftEmailIntro(input), greetName: shiftCfgName(cfg), items: pending.map(i => ({ id: i.id, address: i._r.b.Formatted_Address || i._r.b.Address, units: i._r.units, oldStartMs: i._r.startMs, oldEndMs: i._r.endMs, newStartMs: i._ns, newEndMs: i._ne })) });
+    draft = input.email && input.email.body ? { subject: input.email.subject || d.subject, body: input.email.body } : d;
+    const v = shiftEmailValidate(draft.body, newIds);
+    if (!v.ok) return json({ ok: false, error: 'bad_email', message: 'Fix the email before applying: ' + v.problems.join(' ') }, 400);
+    if (!String(draft.subject).trim()) return json({ ok: false, error: 'bad_email', message: 'The email needs a subject.' }, 400);
+  }
+  // A booking that overlaps something that is NOT part of this shift is a hard stop: nothing is written at all (the email you edited names every inspection).
+  const occupied = shiftOccupied(col.bookings, {}).filter(o => !pending.some(p => p.id === o.id));
+  const clashes = [];
+  for (const i of pending) for (const o of shiftOverlaps(occupied, i._ns, i._ne)) clashes.push(i.label + ' would overlap ' + o.label + ' (' + shiftRange(o.startMs, o.endMs) + ')');
+  if (clashes.length) return json({ ok: false, error: 'conflict', message: 'Nothing was changed. ' + clashes.join('; ') + '. Uncheck the one that clashes, or change its time.' }, 409);
+  const batch = 'B' + Date.now().toString(36) + inspRandToken(3).replace(/[^A-Za-z0-9]/g, '');
+  const written = [];
+  for (const i of pending) {
+    const r = { key: i.key, ok: false, steps: [], errors: [], warnings: [] };
+    results.push(r);
+    const token = inspRandToken(24);
+    const fields = { Change_Status: 'proposed', Proposed_Start_ISO: i.new.start_iso, Proposed_End_ISO: i.new.end_iso, Proposed_Duration_Min: String(i.new.duration_min), Change_Token: token, Change_Proposed_At: new Date().toISOString(), Change_Decided_At: '', Change_Note: '', Change_Batch: batch, Change_Reminded_At: '' };
+    try { await updateRowVerified(env, 'Insp_Bookings', i.id, fields); r.steps.push('Proposal saved and read back (the booking stays at its old time until approved).'); written.push({ i, token, r }); }
+    catch (e) { r.errors.push('Could not save the proposal: ' + ((e && e.message) || e)); await shiftTelemetry(env, 'shift/apply', false, 'Booking #' + i.id + ' proposal not saved: ' + ((e && e.message) || e)); continue; }
+    try { r.steps.push(await shiftPatchEvent(env, cfg, Object.assign({}, i._r.b), shiftEventBody(i._r.b, 'CHANGE PROPOSED: ' + i.new.range + ' (was ' + i.old.range + '), awaiting ' + shiftCfgName(cfg) + '. Still booked at the old time until approved.'), null)); }
+    catch (e) { r.warnings.push('The calendar note could not be added: ' + ((e && e.message) || e)); await shiftTelemetry(env, 'shift/apply', false, 'Booking #' + i.id + ' calendar note failed: ' + ((e && e.message) || e)); }
+  }
+  // One email for the day.
+  let emailInfo = null;
+  if (written.length) {
+    const links = { approve: {}, reschedule: {}, all: inspChangeUrl('b=' + encodeURIComponent(await shiftBatchToken(env, batch))) };
+    for (const w of written) { links.approve[w.i.id] = inspChangeUrl('c=' + encodeURIComponent(w.token)); links.reschedule[w.i.id] = inspChangeUrl('c=' + encodeURIComponent(w.token) + '&reschedule=1'); }
+    const ids = written.map(w => w.i.id);
+    let bodyText = draft.body;
+    // Items that failed to save are not in the email: drop their lines' links so nobody approves a proposal that does not exist.
+    const dropped = pending.filter(p => !ids.includes(p.id)).map(p => p.id);
+    if (dropped.length) { const d2 = shiftEmailDraft({ date: input.date, intro: shiftEmailIntro(input), greetName: shiftCfgName(cfg), items: written.map(w => ({ id: w.i.id, address: w.i._r.b.Formatted_Address || w.i._r.b.Address, units: w.i._r.units, oldStartMs: w.i._r.startMs, oldEndMs: w.i._r.endMs, newStartMs: w.i._ns, newEndMs: w.i._ne })) }); bodyText = d2.body; for (const w of written) w.r.warnings.push('One inspection could not be saved, so your edits to the email were replaced with the standard wording for the rest.'); }
+    const rendered = shiftEmailRender(bodyText, links);
+    try {
+      if (rendered.missing.length) throw new Error('the email still contains pieces that did not turn into links: ' + rendered.missing.join(', '));
+      const sent = await gmailSendEmail(env, { to: emailTo, subject: draft.subject, html: rendered.html });
+      if (!sent || !(sent.sent || sent.staged || sent.message_id || sent.id)) throw new Error('Gmail did not confirm the send: ' + JSON.stringify(sent || {}).slice(0, 160));
+      emailInfo = { to: emailTo, staged: !!sent.staged, subject: draft.subject, links_count: ids.length };
+      for (const w of written) w.r.steps.push('Email ' + (sent.staged ? '(staging stub, nothing really sent) ' : '') + 'sent to ' + emailTo + ' with Approve and Reschedule links.');
+    } catch (e) {
+      // The proposals exist but nobody was told. Take them back so a second Apply starts clean, and say so.
+      const msg = 'The email to ' + emailTo + ' did not go out (' + ((e && e.message) || e) + '), so the proposals were withdrawn. Nothing changed.';
+      await inspAlert(env, 'shift_email', msg);
+      for (const w of written) {
+        w.r.errors.push(msg); w.r.ok = false;
+        try { await updateRowVerified(env, 'Insp_Bookings', w.i.id, { Change_Status: 'none', Change_Token: '', Proposed_Start_ISO: '', Proposed_End_ISO: '', Proposed_Duration_Min: '', Change_Batch: '', Change_Note: 'withdrawn: email failed' }); w.r.steps.push('Proposal withdrawn.'); }
+        catch (e2) { w.r.errors.push('ALSO could not withdraw the proposal: ' + ((e2 && e2.message) || e2) + ' - fix booking #' + w.i.id + ' by hand.'); await inspAlert(env, 'shift_withdraw', 'Booking #' + w.i.id + ' still shows a proposal nobody was emailed about: ' + ((e2 && e2.message) || e2)); }
+      }
+      written.length = 0;
+    }
+    for (const w of written) { w.r.ok = w.r.errors.length === 0; try { await shiftAppendLog(env, w.i.id, w.i._r.b, 'proposed: ' + (emailInfo ? 'email sent to ' + emailTo : 'no email')); } catch (e) { w.r.warnings.push('Notify log not saved: ' + ((e && e.message) || e)); } }
+  }
+  for (const r of results) if (r.ok === false && !r.errors.length) r.ok = true;
+  // Brett's own work-order windows move right away through the normal scheduling path.
+  for (const i of woTodo) {
+    const r = { key: i.key, ok: false, steps: [], errors: [], warnings: [] };
+    results.push(r);
+    try {
+      if (String(i._r.wo.Scheduled_Window || '') === i.new.window && String(i._r.wo.Scheduled_Date || '').slice(0, 10) === input.date) { r.ok = true; r.steps.push('Already at this window.'); continue; }
+      const resp = await scheduleWO(env, { wo_id: i.id, date: input.date, window: i.new.window, notify_tenant: true, updated_by: 'Shift tool', updated_by_role: 'admin' });
+      const j = await resp.json();
+      if (!j || !j.success) throw new Error((j && (j.error || j.message)) || 'the scheduling path refused it');
+      invalidateTabCache('Work_Orders');
+      const back = (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === i.id);
+      if (!back || String(back.Scheduled_Window || '') !== i.new.window) throw new Error('the work order did not keep the new window (read back "' + (back && back.Scheduled_Window) + '")');
+      r.ok = true; r.steps.push('Window changed to ' + i.new.window + ' and read back.');
+      r.steps.push(j.tenant_sms ? 'Tenant text sent.' : (j.notify_queued ? 'Tenant text queued for a sensible hour.' : 'No tenant text went out (switched off, held for quiet hours, or no tenant to text).'));
+      if (j.owner_sms) r.steps.push('Owner text sent.');
+    } catch (e) { r.errors.push('Could not change the window: ' + ((e && e.message) || e)); await inspAlert(env, 'shift_wo', 'Work order ' + i.id + ' window not changed: ' + ((e && e.message) || e)); }
+  }
+  const ok = results.every(r => r.ok);
+  await shiftTelemetry(env, 'shift/apply', ok, (ok ? 'applied ' : 'PARTIAL ') + input.date + ' ' + results.filter(r => !r.skipped).length + ' item(s)' + (ok ? '' : ': ' + results.filter(r => r.errors.length).map(r => r.key + ' ' + r.errors.join(' ')).join(' | ')));
+  return json({ ok, date: input.date, email: emailInfo, results, message: ok ? (todo.length ? 'Done.' : 'Nothing to do.') : 'Some items did not go through. Read the red lines; nothing failed silently.' }, ok ? 200 : 207);
+}
+async function shiftAppendLog(env, id, b, line) {
+  await updateRowVerified(env, 'Insp_Bookings', id, { Notify_Log: ((b.Notify_Log ? b.Notify_Log + ' | ' : '') + line).slice(-900) });
+}
+// ── Approval: tokens, the commit, and the public page's endpoints ──────────────────────────
+function inspChangeUrl(qs) { return `${PORTAL_BASE}/inspect-change.html?${qs}`; }
+async function shiftBatchToken(env, batch) { return `${batch}.${(await _hmac('insp-shift-batch:' + batch, env.WORKER_SECRET)).slice(0, 32)}`; }
+async function shiftVerifyBatchToken(env, tok) {
+  const s = String(tok || ''), parts = s.split('.'); if (parts.length !== 2 || !parts[0]) return null;
+  const expect = await shiftBatchToken(env, parts[0]);
+  if (expect.length !== s.length) return null; let d = 0; for (let k = 0; k < s.length; k++) d |= s.charCodeAt(k) ^ expect.charCodeAt(k);
+  return d === 0 ? parts[0] : null;
+}
+function shiftEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+async function shiftNotifyBrett(env, cfg, subject, text, opts) {
+  const log = [];
+  try { const r = await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject, html: '<p>' + shiftEsc(text) + '</p><p><a href="' + PORTAL_BASE + '/shift.html">Open the shift page</a></p>' }); log.push(r && r.staged ? 'email to Brett: staged' : 'email to Brett: ok'); }
+  catch (e) { log.push('email to Brett: FAILED ' + ((e && e.message) || e)); }
+  if (opts && opts.sms) {
+    if (!cfg.admin_phone) log.push('text to Brett: FAILED no admin_phone configured');
+    else { try { const r = await sendSMS(env, cfg.admin_phone, text.slice(0, 300)); log.push(r && (r.sid || r.staged) ? 'text to Brett: ok' : (r && r.skipped ? 'text to Brett: skipped (' + r.reason + ')' : 'text to Brett: FAILED ' + JSON.stringify(r || {}).slice(0, 120))); } catch (e) { log.push('text to Brett: FAILED ' + ((e && e.message) || e)); } }
+  }
+  if (log.some(l => /FAILED/.test(l))) await reportFailure(env, { system: 'hub', source: 'worker', where: 'shift_notify_brett', ref: subject.slice(0, 80), severity: 'P0', message: 'Brett could not be told: ' + log.join('; ') });
+  return log;
+}
+// Tenant text for an inspection that moved. Only for customers with Notify_Tenants = TRUE. Goes through smsGatedSend (the normal pipeline) for a tenant that
+// exists in the Hub; a number that is only in the inspection roster cannot have its switches / opt-out checked, so it is NOT texted and the gap is reported.
+async function shiftNotifyTenants(env, customer, b2, wasRange, dateStr) {
+  const res = { lines: [], errors: [] };
+  if (!customer || String(customer.Notify_Tenants || '').toUpperCase() !== 'TRUE') { res.lines.push('tenant text: not used for this customer'); return res; }
+  const t = await shiftTenantTargets(env, customer, b2);
+  if (t.gap) { res.errors.push('tenant text: ' + t.gap); return res; }
+  const [properties, owners] = await Promise.all([fetchTab(env, 'Properties'), fetchTab(env, 'Owners')]);
+  for (const r of t.recipients) {
+    if (!r.hub_match) { res.errors.push('tenant text to ' + (r.name || r.unit) + ' (ending ' + r.phone_last4 + '): ' + r.reason); continue; }
+    const tenant = r._tenant, property = properties.find(p => String(p.ID) === String(tenant.Property_ID)) || null, owner = property ? owners.find(o => String(o.ID) === String(property.Owner_ID)) || null : null;
+    const msg = shiftTenantText({ firstName: tenant.First_Name, address: b2.Formatted_Address || b2.Address, date: dateStr, when: shiftRange(Date.parse(b2.Start_ISO), Date.parse(b2.End_ISO)), was: wasRange });
+    try {
+      const sr = await smsGatedSend(env, { wo_id: '', message_type: 'tenant_inspection_shift', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
+      res.lines.push('tenant text to ' + (tenant.First_Name || r.unit) + ': ' + (sr.sent ? 'sent' : (sr.held_for_quiet_hours ? 'held for quiet hours, goes out in the morning' : (sr.suppressed ? 'not sent (' + (sr.suppress_reason || 'suppressed') + ')' : 'not sent (' + (sr.gate_snapshot || 'switched off or test mode') + ')'))));
+    } catch (e) { res.errors.push('tenant text to ' + (tenant.First_Name || r.unit) + ' failed: ' + ((e && e.message) || e)); }
+  }
+  return res;
+}
+// Approves ONE proposed change: conflict check, sheet write (read back), calendar (verified), key pickup, invite, notices. Never throws; every failure is a result AND an alert.
+async function shiftCommit(env, id, o) {
+  o = o || {};
+  const via = o.via || 'link', override = o.override === true, steps = [], warnings = [], errors = [];
+  const out = (ok, extra) => Object.assign({ ok, id: String(id), steps, warnings, errors }, extra || {});
+  let cfg, b = null, rows = [];
+  try {
+    cfg = await fetchConfig(env);
+    invalidateTabCache('Insp_Bookings');
+    rows = await fetchTab(env, 'Insp_Bookings'); b = rows.find(r => String(r.ID) === String(id));
+  } catch (e) { errors.push('Could not read the bookings: ' + ((e && e.message) || e)); await inspAlert(env, 'shift_read', 'Change for booking #' + id + ' could not start: ' + ((e && e.message) || e)); return out(false, { code: 'sheet_unavailable' }); }
+  if (!b) { errors.push('Booking #' + id + ' was not found.'); await inspAlert(env, 'shift_not_found', 'A schedule change was approved for booking #' + id + ' but that booking does not exist.'); return out(false, { code: 'not_found' }); }
+  const cs = String(b.Change_Status || ''), addr = b.Formatted_Address || b.Address;
+  if (cs === 'applied' && !override) return out(true, { already: true, state: 'applied', booking: b });
+  if (via === 'link' && cs === 'approved') return out(false, { code: 'in_progress', state: 'working' });
+  const okStates = via === 'link' ? ['proposed'] : ['proposed', 'failed', 'approved', 'reschedule_requested'];
+  if (!okStates.includes(cs)) return out(false, { code: 'not_waiting', state: cs === 'reschedule_requested' ? 'reschedule_requested' : (cs || 'none') });
+  if (!INSP_ACTIVE_BOOKING.includes(b.Status) || String(b.Active || '').toUpperCase() === 'FALSE') { errors.push('This booking is ' + b.Status + ', so it cannot be moved.'); return out(false, { code: 'not_active' }); }
+  const pS = Date.parse(b.Proposed_Start_ISO), pE = Date.parse(b.Proposed_End_ISO), oldS = Date.parse(b.Start_ISO), oldE = Date.parse(b.End_ISO);
+  if (!(Number.isFinite(pS) && Number.isFinite(pE) && pE > pS)) { errors.push('The proposed time on booking #' + id + ' cannot be read.'); await inspAlert(env, 'shift_bad_proposal', 'Booking #' + id + ' has an unreadable proposed time: "' + b.Proposed_Start_ISO + '" to "' + b.Proposed_End_ISO + '".'); return out(false, { code: 'bad_proposal' }); }
+  if (via === 'link') { const ts = shiftTokenState(b, Date.now()); if (!ts.ok) return out(false, { code: 'expired', message: ts.reason }); }
+  const alreadyMoved = oldS === pS && oldE === pE;
+  const mates = new Set(rows.filter(r => b.Change_Batch && r.Change_Batch === b.Change_Batch && r.Change_Status === 'proposed' && String(r.ID) !== String(id)).map(r => String(r.ID)));
+  // 1) Conflict check (skipped for Apply anyway, and when this is a retry of a move that already happened).
+  if (!override && !alreadyMoved) {
+    const conflicts = [];
+    for (const x of shiftOverlaps(shiftOccupied(rows, { selfId: id }), pS, pE)) {
+      if (x.kind === 'old' && mates.has(x.id)) warnings.push(x.label + ' is still at ' + shiftRange(x.startMs, x.endMs) + ' until it is approved too.');
+      else conflicts.push(x.label + (x.kind === 'proposed' ? ' (its proposed time)' : '') + ' at ' + shiftRange(x.startMs, x.endMs));
+    }
+    try {
+      const evs = (await inspCalListEvents(env, cfg, pS, pE)).items.filter(ev => { const p = ev && ev.extendedProperties && ev.extendedProperties.private; return !(p && (p.ridgecoInspBooking || p.ridgecoInspKey)); });
+      for (const c of inspConflictsFrom(evs, pS, pE, {})) conflicts.push('"' + c.title + '" on your calendar (' + c.when + ')');
+    } catch (e) { errors.push('Could not check your calendar for conflicts, so nothing was changed: ' + ((e && e.message) || e)); await inspAlert(env, e.code || 'calendar_error', 'Booking #' + id + ': could not re-check your calendar before moving it: ' + ((e && e.message) || e)); return out(false, { code: 'calendar_failed' }); }
+    try { const nc = await inspStrBookingConflict(env, cfg, Object.assign({}, b, { Start_ISO: b.Proposed_Start_ISO, End_ISO: b.Proposed_End_ISO }), true); if (nc) conflicts.push(nc.title + ' (' + nc.when + ')'); }
+    catch (e) { warnings.push('Could not check cleaning coverage: ' + ((e && e.message) || e)); await inspAlert(env, e.code || 'str_guard_unavailable', 'Booking #' + id + ': could not check cleaning coverage before moving it: ' + ((e && e.message) || e)); }
+    if (conflicts.length) {
+      const note = 'Cannot apply: new time now conflicts with ' + conflicts.join('; ');
+      errors.push(note);
+      try { await updateRowVerified(env, 'Insp_Bookings', id, { Change_Note: note.slice(0, 480) }); } catch (e) { warnings.push('Could not save the conflict note: ' + ((e && e.message) || e)); }
+      await inspAlert(env, 'shift_conflict', 'The change for ' + addr + ' (to ' + shiftRange(pS, pE) + ') was approved but now conflicts: ' + conflicts.join('; ') + '. Open the shift page to decide.');
+      return out(false, { code: 'conflict', conflicts });
+    }
+  }
+  // 2) Decision recorded (this is what makes the link single-use).
+  const nowIso = new Date().toISOString();
+  try { await updateRowVerified(env, 'Insp_Bookings', id, { Change_Status: 'approved', Change_Decided_At: nowIso, Change_Note: override ? 'APPLIED ANYWAY by Brett without an answer from the partner (' + nowIso + ')' : '' }); steps.push(override ? 'Brett applied the change without waiting for an answer (recorded).' : 'Approval recorded.'); }
+  catch (e) { errors.push('Could not record the approval: ' + ((e && e.message) || e)); await inspAlert(env, 'shift_decision_write', 'Booking #' + id + ': could not record the approval, nothing was changed: ' + ((e && e.message) || e)); return out(false, { code: 'write_failed' }); }
+  // 3) The booking row.
+  const curSeq = parseInt(b.Ics_Seq, 10) || 0, seq = alreadyMoved ? curSeq : curSeq + 1;
+  const newFields = { Date: inspEtDate(pS), Start_Time: inspFmtEtTime(pS), Start_ISO: b.Proposed_Start_ISO, End_ISO: b.Proposed_End_ISO, Duration_Min: String(b.Proposed_Duration_Min || Math.round((pE - pS) / 60000)), Ics_Seq: String(seq), Change_Prev: alreadyMoved ? (b.Change_Prev || '') : (b.Start_ISO + '|' + b.End_ISO) };
+  let b2 = Object.assign({}, b, newFields);
+  let wasRange = shiftRange(oldS, oldE);
+  if (alreadyMoved && b.Change_Prev) { const [ps, pe] = String(b.Change_Prev).split('|').map(Date.parse); if (Number.isFinite(ps) && Number.isFinite(pe)) wasRange = shiftRange(ps, pe); }
+  try { await updateRowVerified(env, 'Insp_Bookings', id, newFields); steps.push('Booking row updated and read back (' + shiftRange(pS, pE) + ').'); }
+  catch (e) { return await shiftCommitFail(env, id, addr, out, errors, 'The booking row could not be updated: ' + ((e && e.message) || e)); }
+  // 4) The calendar entry, verified.
+  try {
+    if (inspCalStaged(env, cfg)) steps.push('Calendar: staged (not changed on staging).');
+    else if (b2.Calendar_Event_ID) steps.push(await shiftPatchEvent(env, cfg, b2, shiftEventBody(b2, ''), { startMs: pS, endMs: pE }));
+    else { const ev = await inspCalFetch(env, cfg, 'POST', '/events', shiftEventBody(b2, '')); await updateRowVerified(env, 'Insp_Bookings', id, { Calendar_Event_ID: ev.id }); b2.Calendar_Event_ID = ev.id; steps.push('Calendar entry created (the booking had none).'); }
+  } catch (e) { return await shiftCommitFail(env, id, addr, out, errors, 'The calendar could not be updated: ' + ((e && e.message) || e)); }
+  // 5) Key pickup for the old day and the new day.
+  try {
+    const cust = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID));
+    if (!cust) throw new Error('customer ' + b.Customer_ID + ' not found');
+    if (!(inspKeyMin(cust) > 0)) steps.push('Key pickup: not used for this customer.');
+    else for (const d of [...new Set([inspEtDate(oldS), inspEtDate(pS)])]) {
+      const lg = await inspReconcileKeyPickup(env, cfg, cust, d);
+      if (lg.some(l => /key_pickup_FAILED/.test(l))) throw new Error(lg.join('; '));
+      if (lg.some(l => /key_pickup_CONFLICT/.test(l))) warnings.push(lg.filter(l => /CONFLICT/.test(l)).join('; '));
+      steps.push('Key pickup for ' + d + ': ' + (lg.join('; ') || 'already right') + '.');
+    }
+  } catch (e) { return await shiftCommitFail(env, id, addr, out, errors, 'The key-pickup block could not be updated: ' + ((e && e.message) || e)); }
+  // 6) Only now (every write confirmed) do notices go out.
+  const to = shiftCfgEmail(cfg), dateStr = inspEtDate(pS);
+  try {
+    const subject = 'Confirmed: new inspection time for ' + addr;
+    const html = '<p>This inspection is now confirmed at its new time.</p><p><b>' + shiftEsc(addr) + '</b><br>' + shiftEsc(shiftDayLabel(dateStr)) + ', ' + shiftEsc(shiftRange(pS, pE)) + '<br>Was: ' + shiftEsc(wasRange) + '</p><p>A calendar update is attached; open it to replace the old entry.</p><p><a href="' + shiftEsc(inspBookUrl('m=' + encodeURIComponent(b.Manage_Token))) + '">View details or cancel</a></p>';
+    const r = await inspSendPartnerEmail(env, { to, subject, html, method: 'REQUEST', ics: inspIcs(b2, 'REQUEST', { organizer: inspSenderAddr(env), attendee: to }) });
+    if (!r || !(r.sent || r.staged || r.message_id)) throw new Error('Gmail did not confirm the send: ' + JSON.stringify(r || {}).slice(0, 160));
+    steps.push('Confirmation and calendar update (SEQUENCE ' + seq + ') ' + (r.staged || r.ics_staged ? 'staged (nothing really sent on staging)' : 'sent') + ' to ' + to + '.');
+  } catch (e) { return await shiftCommitFail(env, id, addr, out, errors, 'The confirmation email to ' + to + ' failed: ' + ((e && e.message) || e)); }
+  try {
+    const cust = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID));
+    const tn = await shiftNotifyTenants(env, cust, b2, wasRange, dateStr);
+    steps.push(...tn.lines);
+    for (const m of tn.errors) { warnings.push(m); await reportFailure(env, { system: 'hub', source: 'worker', where: 'shift_tenant_text', ref: 'booking ' + id, severity: 'P1', message: m }); }
+  } catch (e) { const m = 'Tenant text step failed: ' + ((e && e.message) || e); warnings.push(m); await reportFailure(env, { system: 'hub', source: 'worker', where: 'shift_tenant_text', ref: 'booking ' + id, severity: 'P0', message: m }); }
+  const bl = await shiftNotifyBrett(env, cfg, 'Inspection moved: ' + addr, (override ? 'You applied the change for ' : shiftCfgName(cfg) + ' approved the change for ') + addr + ': now ' + shiftDayLabel(dateStr) + ' ' + shiftRange(pS, pE) + ' (was ' + wasRange + '). Calendar, key pickup and invite are done.' + (warnings.length ? ' Note: ' + warnings.join(' ') : ''), { sms: false });
+  steps.push(...bl);
+  try { await updateRowVerified(env, 'Insp_Bookings', id, { Change_Status: 'applied', Notify_Log: ((b.Notify_Log ? b.Notify_Log + ' | ' : '') + 'change applied ' + (override ? '(override)' : 'via link') + ': ' + steps.length + ' steps').slice(-900) }); }
+  catch (e) { warnings.push('The change is done, but the "applied" marker could not be saved: ' + ((e && e.message) || e)); await inspAlert(env, 'shift_final_write', 'Booking #' + id + ' was moved but its status could not be set to applied: ' + ((e && e.message) || e)); }
+  await shiftTelemetry(env, 'shift/commit', true, 'booking #' + id + ' moved to ' + shiftRange(pS, pE) + (override ? ' (override)' : ''));
+  return out(true, { state: 'applied' });
+}
+async function shiftCommitFail(env, id, addr, out, errors, msg) {
+  errors.push(msg);
+  try { await updateRowVerified(env, 'Insp_Bookings', id, { Change_Status: 'failed', Change_Note: msg.slice(0, 480) }); }
+  catch (e) { errors.push('ALSO could not mark booking #' + id + ' as failed: ' + ((e && e.message) || e)); }
+  await inspAlert(env, 'shift_failed', 'Schedule change for ' + addr + ' (booking #' + id + ') FAILED part-way: ' + msg + ' Open the shift page; you can retry with Apply anyway.');
+  await shiftTelemetry(env, 'shift/commit', false, 'booking #' + id + ': ' + msg);
+  return out(false, { code: 'failed', state: 'failed' });
+}
+// Public: what the page shows for a link.
+async function shiftChangesForToken(env, q) {
+  invalidateTabCache('Insp_Bookings');
+  const rows = await fetchTab(env, 'Insp_Bookings');
+  let list = [], mode = '';
+  if (q.c) { const t = String(q.c); if (t.length >= 20) { const b = rows.find(r => r.Change_Token && r.Change_Token === t); if (b) list = [b]; } mode = 'one'; }
+  else if (q.b) { const batch = await shiftVerifyBatchToken(env, q.b); if (batch) list = rows.filter(r => r.Change_Batch === batch && r.Change_Token); mode = 'all'; }
+  list.sort((a, b) => String(a.Start_ISO).localeCompare(String(b.Start_ISO)));
+  return { list, mode, rows };
+}
+function shiftPublicChange(b, nowMs) {
+  const cs = String(b.Change_Status || ''), ts = shiftTokenState(b, nowMs), pS = Date.parse(b.Proposed_Start_ISO), pE = Date.parse(b.Proposed_End_ISO);
+  let state = cs === 'proposed' ? (ts.ok ? 'waiting' : 'expired') : (cs === 'approved' ? 'working' : (cs || 'none'));
+  const nowRange = shiftRange(Date.parse(b.Start_ISO), Date.parse(b.End_ISO));
+  return { id: b.ID, address: b.Formatted_Address || b.Address, day: shiftDayLabel(inspEtDate(Date.parse(cs === 'applied' ? b.Start_ISO : (Number.isFinite(pS) ? b.Proposed_Start_ISO : b.Start_ISO)))), state, can_act: state === 'waiting', expired_reason: state === 'expired' ? ts.reason : '',
+    old: cs === 'applied' ? (b.Change_Prev ? (() => { const [s, e] = String(b.Change_Prev).split('|').map(Date.parse); return Number.isFinite(s) && Number.isFinite(e) ? shiftRange(s, e) : ''; })() : '') : nowRange,
+    new: cs === 'applied' ? nowRange : (Number.isFinite(pS) && Number.isFinite(pE) ? shiftRange(pS, pE) : ''), units: +b.Units || 1 };
+}
+async function shiftChangeInfo(env, url) {
+  try {
+    const q = { c: url.searchParams.get('c') || '', b: url.searchParams.get('b') || '' };
+    const r = await shiftChangesForToken(env, q);
+    if (!r.list.length) return json({ ok: false, error: 'invalid_link', message: 'This link is no longer valid. It may have been replaced by a newer email from Brett.' }, 404);
+    const now = Date.now();
+    return json({ ok: true, mode: r.mode, changes: r.list.map(b => Object.assign(shiftPublicChange(b, now), { manage_url: b.Manage_Token ? inspBookUrl('m=' + encodeURIComponent(b.Manage_Token)) : '' })) });
+  } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'shift_change_info', severity: 'P1', message: String((e && e.message) || e).slice(0, 300) }); return json({ ok: false, error: 'internal', message: 'We could not load this change just now. Please try again in a minute.' }, 500); }
+}
+async function shiftChangeApprove(env, body) {
+  try {
+    const q = { c: String((body && body.c) || ''), b: String((body && body.b) || '') };
+    const r = await shiftChangesForToken(env, q);
+    if (!r.list.length) return json({ ok: false, error: 'invalid_link', message: 'This link is no longer valid. It may have been replaced by a newer email from Brett.' }, 404);
+    const results = [];
+    for (const b of r.list) {
+      const cs = String(b.Change_Status || '');
+      if (cs !== 'proposed' && cs !== 'applied' && r.mode === 'all') { results.push(Object.assign(shiftPublicChange(b, Date.now()), { done: false, message: 'Skipped: ' + (cs === 'reschedule_requested' ? 'a different time was requested' : 'no longer waiting') })); continue; }
+      const c = await shiftCommit(env, b.ID, { via: 'link' });
+      invalidateTabCache('Insp_Bookings');
+      const fresh = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(b.ID)) || b;
+      results.push(Object.assign(shiftPublicChange(fresh, Date.now()), { done: c.ok, already: !!c.already, code: c.code || '', message: c.ok ? (c.already ? 'Already approved.' : 'Approved and updated.') : shiftPublicFailText(c) }));
+    }
+    const allOk = results.every(x => x.done);
+    return json({ ok: allOk, results, message: allOk ? 'Approved. The schedule has been updated and a calendar update is on its way.' : 'Not everything could be approved. Brett has been told and will follow up.' }, allOk ? 200 : 409);
+  } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'shift_change_approve', severity: 'P0', message: String((e && e.message) || e).slice(0, 300) }); return json({ ok: false, error: 'internal', message: 'Something went wrong. Brett has been told and will follow up.' }, 500); }
+}
+function shiftPublicFailText(c) {
+  if (c.code === 'in_progress') return 'This is being applied right now. Refresh in a moment.';
+  if (c.code === 'expired') return c.message || 'This link has expired.';
+  if (c.code === 'not_waiting') return c.state === 'reschedule_requested' ? 'A different time was already requested for this one.' : 'This change is no longer waiting for an answer.';
+  if (c.code === 'conflict') return 'That time now conflicts with something else. Brett has been told and will follow up.';
+  return 'We could not finish this one. Brett has been told and will follow up.';
+}
+async function shiftChangeReschedule(env, body) {
+  try {
+    const t = String((body && body.c) || '');
+    const r = await shiftChangesForToken(env, { c: t });
+    const b = r.list[0];
+    if (!b) return json({ ok: false, error: 'invalid_link', message: 'This link is no longer valid. It may have been replaced by a newer email from Brett.' }, 404);
+    const cfg = await fetchConfig(env), cs = String(b.Change_Status || ''), manage = inspBookUrl('m=' + encodeURIComponent(b.Manage_Token));
+    if (cs === 'reschedule_requested') return json({ ok: true, already: true, manage_url: manage, message: 'Brett already knows you want a different time.' });
+    if (cs !== 'proposed') return json({ ok: false, error: 'not_waiting', message: 'This change is no longer waiting for an answer.', manage_url: manage }, 409);
+    const addr = b.Formatted_Address || b.Address;
+    try { await updateRowVerified(env, 'Insp_Bookings', b.ID, { Change_Status: 'reschedule_requested', Change_Decided_At: new Date().toISOString(), Change_Note: 'Partner asked for a different time' }); }
+    catch (e) { await inspAlert(env, 'shift_reschedule_write', 'Booking #' + b.ID + ': ' + shiftCfgName(cfg) + ' asked for a different time but it could not be saved: ' + ((e && e.message) || e)); return json({ ok: false, error: 'write_failed', message: 'We could not save that. Brett has been told and will follow up.' }, 500); }
+    const warn = [];
+    try { await shiftPatchEvent(env, cfg, b, shiftEventBody(b, 'RESCHEDULE REQUESTED by ' + shiftCfgName(cfg) + ' (proposed ' + shiftRange(Date.parse(b.Proposed_Start_ISO), Date.parse(b.Proposed_End_ISO)) + '). Still booked at the old time.'), null); }
+    catch (e) { warn.push('calendar note: ' + ((e && e.message) || e)); }
+    const log = await shiftNotifyBrett(env, cfg, 'Different time requested: ' + addr, shiftCfgName(cfg) + ' wants a different time for ' + addr + ' (you proposed ' + shiftRange(Date.parse(b.Proposed_Start_ISO), Date.parse(b.Proposed_End_ISO)) + ', it is still booked ' + shiftRange(Date.parse(b.Start_ISO), Date.parse(b.End_ISO)) + '). They are picking a new time on the booking page.', { sms: true });
+    await shiftTelemetry(env, 'shift/reschedule', true, 'booking #' + b.ID + ' reschedule requested; ' + log.join('; ') + (warn.length ? '; ' + warn.join('; ') : ''));
+    return json({ ok: true, manage_url: manage, message: 'Thanks. Brett has been told. Use the next page to pick a new time.' });
+  } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'shift_change_reschedule', severity: 'P0', message: String((e && e.message) || e).slice(0, 300) }); return json({ ok: false, error: 'internal', message: 'Something went wrong. Brett has been told and will follow up.' }, 500); }
+}
+
+// ── Admin: proposals list, Apply anyway, withdraw ──────────────────────────────────────────
+async function shiftProposalsList(env) {
+  try {
+    await inspEnsureTabsOnce(env);
+    const [rows, customers] = [await fetchTab(env, 'Insp_Bookings'), await fetchTab(env, 'Insp_Customers')];
+    const cust = new Map(customers.map(c => [String(c.ID), c])), now = Date.now(), hours = SHIFT_REMIND_HOURS;
+    const list = rows.filter(b => String(b.Active || '').toUpperCase() !== 'FALSE' && ['proposed', 'approved', 'failed', 'reschedule_requested'].includes(String(b.Change_Status || ''))).map(b => {
+      const pS = Date.parse(b.Proposed_Start_ISO), pE = Date.parse(b.Proposed_End_ISO), sent = Date.parse(b.Change_Proposed_At || '');
+      return { id: b.ID, address: b.Formatted_Address || b.Address, customer: (cust.get(String(b.Customer_ID)) || {}).Name || '', status: b.Change_Status, now_range: shiftDayLabel(inspEtDate(Date.parse(b.Start_ISO))) + ' ' + shiftRange(Date.parse(b.Start_ISO), Date.parse(b.End_ISO)), proposed_range: Number.isFinite(pS) && Number.isFinite(pE) ? shiftDayLabel(inspEtDate(pS)) + ' ' + shiftRange(pS, pE) : '', proposed_at: b.Change_Proposed_At || '', hours_waiting: Number.isFinite(sent) ? Math.round((now - sent) / 360000) / 10 : null, reminder: shiftReminderStage(b, now, hours), note: b.Change_Note || '', start_iso: b.Start_ISO, can_apply_anyway: ['proposed', 'failed', 'approved', 'reschedule_requested'].includes(b.Change_Status), can_withdraw: ['proposed', 'reschedule_requested', 'failed'].includes(b.Change_Status) };
+    }).sort((a, b) => String(a.start_iso).localeCompare(String(b.start_iso)));
+    return json({ ok: true, proposals: list });
+  } catch (e) { return await shiftRouteErr(env, 'shift_proposals', e); }
+}
+async function shiftForceApply(env, body) {
+  try {
+    if (!body || !body.id) return json({ ok: false, error: 'bad_input', message: 'id required' }, 400);
+    const r = await shiftCommit(env, String(body.id), { via: 'admin', override: true });
+    return json(Object.assign({ message: r.ok ? 'Applied.' : 'Did not finish. Read the red lines.' }, r), r.ok ? 200 : 207);
+  } catch (e) { return await shiftRouteErr(env, 'shift_force_apply', e); }
+}
+async function shiftProposalCancel(env, body) {
+  try {
+    if (!body || !body.id) return json({ ok: false, error: 'bad_input', message: 'id required' }, 400);
+    const cfg = await fetchConfig(env);
+    invalidateTabCache('Insp_Bookings');
+    const b = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.ID) === String(body.id));
+    if (!b) return json({ ok: false, error: 'not_found', message: 'Booking not found.' }, 404);
+    if (!['proposed', 'reschedule_requested', 'failed'].includes(String(b.Change_Status || ''))) return json({ ok: false, error: 'not_waiting', message: 'There is no open proposal on this booking.' }, 409);
+    const steps = [], errors = [];
+    try { await updateRowVerified(env, 'Insp_Bookings', b.ID, { Change_Status: 'none', Change_Token: '', Proposed_Start_ISO: '', Proposed_End_ISO: '', Proposed_Duration_Min: '', Change_Batch: '', Change_Note: 'Withdrawn by Brett ' + new Date().toISOString() }); steps.push('Proposal withdrawn and read back; the booking stays at its current time.'); }
+    catch (e) { errors.push('Could not withdraw it: ' + ((e && e.message) || e)); await inspAlert(env, 'shift_withdraw', 'Booking #' + b.ID + ' proposal could not be withdrawn: ' + ((e && e.message) || e)); return json({ ok: false, error: 'write_failed', steps, errors }, 500); }
+    try { steps.push(await shiftPatchEvent(env, cfg, b, shiftEventBody(b, ''), null)); } catch (e) { errors.push('The calendar note could not be cleared: ' + ((e && e.message) || e)); await reportFailure(env, { system: 'hub', source: 'worker', where: 'shift_withdraw_calendar', ref: 'booking ' + b.ID, severity: 'P1', message: String((e && e.message) || e).slice(0, 300) }); }
+    return json({ ok: errors.length === 0, steps, errors, message: 'Withdrawn. The email links already sent will say they are no longer valid.' }, errors.length ? 207 : 200);
+  } catch (e) { return await shiftRouteErr(env, 'shift_proposal_cancel', e); }
+}
+
+// ── Reminders (scheduler job insp_shift_reminders; NO cron) ──────────────────────────────────
+async function shiftRemindersRun(env, opts) {
+  opts = opts || {};
+  const nowMs = opts.nowMs || Date.now(), cfg = await fetchConfig(env), hours = parseFloat(cfg.INSP_SHIFT_REMIND_HOURS) > 0 ? parseFloat(cfg.INSP_SHIFT_REMIND_HOURS) : SHIFT_REMIND_HOURS;
+  const out = { reminded: [], expired: [], stuck: [], failed_waiting: [], errors: [] };
+  let rows;
+  try { await inspEnsureTabsOnce(env); invalidateTabCache('Insp_Bookings'); rows = await fetchTab(env, 'Insp_Bookings'); }
+  catch (e) { throw new Error('could not read bookings: ' + ((e && e.message) || e)); }
+  for (const b of rows) {
+    if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    const cs = String(b.Change_Status || ''), addr = b.Formatted_Address || b.Address;
+    try {
+      if (cs === 'proposed') {
+        const start = Date.parse(b.Start_ISO);
+        if (Number.isFinite(start) && start <= nowMs) {   // the visit time passed with no answer: the proposal can never be applied now
+          await updateRowVerified(env, 'Insp_Bookings', b.ID, { Change_Status: 'none', Change_Token: '', Change_Note: 'Expired: the visit time passed with no answer' });
+          await shiftNotifyBrett(env, cfg, 'Proposal expired: ' + addr, 'The proposed change for ' + addr + ' was never answered and the visit time has now passed. The proposal was closed.', { sms: true });
+          out.expired.push(b.ID); continue;
+        }
+        const stage = shiftReminderStage(b, nowMs, hours), last = String(b.Change_Reminded_At || '').split('|')[0];
+        if (!stage || last === stage || (last === 'urgent' && stage === 'stale')) continue;
+        const sentWhen = Number.isFinite(Date.parse(b.Change_Proposed_At || '')) ? Math.round((nowMs - Date.parse(b.Change_Proposed_At)) / 3600000) + ' hours ago' : 'earlier';
+        const msg = (stage === 'urgent' ? 'URGENT: ' : '') + shiftCfgName(cfg) + ' has not answered the proposed time for ' + addr + ' (' + shiftRange(Date.parse(b.Proposed_Start_ISO), Date.parse(b.Proposed_End_ISO)) + ', sent ' + sentWhen + '); the visit is ' + inspFmtEt(Date.parse(b.Start_ISO)) + '. Open the shift page to Apply anyway or call.';
+        await updateRowVerified(env, 'Insp_Bookings', b.ID, { Change_Reminded_At: stage + '|' + new Date(nowMs).toISOString() });
+        const lg = await shiftNotifyBrett(env, cfg, (stage === 'urgent' ? 'URGENT: ' : '') + 'Unanswered schedule change: ' + addr, msg, { sms: stage === 'urgent' });
+        out.reminded.push({ id: b.ID, stage, notify: lg });
+      } else if (cs === 'approved') {
+        const dec = Date.parse(b.Change_Decided_At || '');
+        if (Number.isFinite(dec) && nowMs - dec > SHIFT_STUCK_MIN * 60000) {
+          await updateRowVerified(env, 'Insp_Bookings', b.ID, { Change_Status: 'failed', Change_Note: 'Stuck: approved but never finished. Retry with Apply anyway.' });
+          await inspAlert(env, 'shift_stuck', 'The change for ' + addr + ' (booking #' + b.ID + ') was approved but never finished. Open the shift page and retry with Apply anyway.');
+          out.stuck.push(b.ID);
+        }
+      } else if (cs === 'failed') {
+        const last = String(b.Change_Reminded_At || '').split('|')[0];
+        if (last !== 'failed') {
+          await updateRowVerified(env, 'Insp_Bookings', b.ID, { Change_Reminded_At: 'failed|' + new Date(nowMs).toISOString() });
+          await shiftNotifyBrett(env, cfg, 'Schedule change failed: ' + addr, 'The change for ' + addr + ' failed: ' + (b.Change_Note || 'unknown reason') + ' Open the shift page to retry.', { sms: true });
+          out.failed_waiting.push(b.ID);
+        }
+      }
+    } catch (e) { out.errors.push({ booking: b.ID, error: String((e && e.message) || e) }); }
+  }
+  return out;
+}
+async function schedRunInspShiftReminders(env) {
+  const errors = [], warnings = [];
+  const r = await schedStep('insp_shift_reminders', async () => { const x = await shiftRemindersRun(env); for (const e of x.errors) errors.push({ step: 'booking ' + e.booking, error: e.error }); return x; }, errors);
+  return { ok: !errors.length, errors, warnings, detail: r };
+}
+
+// ── Staging-only seeding for the end-to-end tests (TEST- customers only) ───────────────────────
+async function shiftTestSeed(env, body) {
+  try {
+    if (!(env.__STAGING__ ?? isStaging(env))) return json({ ok: false, error: 'staging_only', message: 'The shift test seeder only runs on staging.' }, 403);
+    await inspEnsureTabsOnce(env);
+    const name = String((body && body.name) || '');
+    if (!name.startsWith('TEST-')) return json({ ok: false, error: 'bad_input', message: 'name must start with TEST-' }, 400);
+    const list = Array.isArray(body && body.bookings) ? body.bookings : [];
+    if (!list.length || list.length > 12) return json({ ok: false, error: 'bad_input', message: 'bookings must be 1 to 12 rows' }, 400);
+    let cust = (await fetchTab(env, 'Insp_Customers')).find(c => c.Name === name);
+    if (!cust) {
+      const r = await addRow(env, 'Insp_Customers', { Name: name, Line: 'TEST', Contact_Name: 'TEST Contact', Contact_Email: 'test-contact@example.invalid', Active: 'TRUE', Created_Date: new Date().toISOString().slice(0, 10), Book_Token: inspRandToken(18), Notify_Tenants: String(body.notify_tenants === true ? 'TRUE' : 'FALSE'), Key_Address: body.key_address ? String(body.key_address) : '', Key_Pickup_Min: body.key_address ? '20' : '' });
+      const j = await r.json(); if (!j || !j.success) return json({ ok: false, error: 'seed_failed', message: 'Could not create the TEST customer' }, 500);
+      invalidateTabCache('Insp_Customers');
+      cust = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(j.id));
+      if (!cust) return json({ ok: false, error: 'seed_failed', message: 'The TEST customer did not read back' }, 500);
+    }
+    const made = [];
+    for (const x of list) {
+      const s = inspEtWallToMs(String(x.date), String(x.start)), dur = Math.floor(+x.duration_min || 40);
+      if (!Number.isFinite(s)) return json({ ok: false, error: 'bad_input', message: 'bad date/start: ' + x.date + ' ' + x.start }, 400);
+      const e = s + dur * 60000;
+      const rec = { Customer_ID: cust.ID, Manage_Token: inspRandToken(18), Status: x.status === 'pending' ? 'pending' : 'approved', Address: String(x.address || 'TEST address'), Formatted_Address: String(x.address || 'TEST address'), Lat: x.lat != null ? x.lat : '39.3', Lng: x.lng != null ? x.lng : '-76.6', Buildings: String(x.buildings || 1), Units: String(x.units || 1), Duration_Min: String(dur), Date: inspEtDate(s), Start_Time: inspFmtEtTime(s), Start_ISO: new Date(s).toISOString(), End_ISO: new Date(e).toISOString(), Drive_Before_Min: x.drive_before != null ? String(x.drive_before) : '', Drive_After_Min: x.drive_after != null ? String(x.drive_after) : '', Drive_Source: 'test', Contact_Name: 'TEST Contact', Contact_Phone: '', Contact_Email: 'test-contact@example.invalid', Notes: 'TEST shift seed', Calendar_Event_ID: 'staged-' + inspRandToken(6), Decision_Note: '', Notify_Log: '', Created_At: new Date().toISOString(), Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: '' };
+      const r = await addRow(env, 'Insp_Bookings', rec);
+      const j = await r.json(); if (!j || !j.success) return json({ ok: false, error: 'seed_failed', message: 'Could not create a TEST booking' }, 500);
+      made.push({ id: String(j.id), address: rec.Address, start_iso: rec.Start_ISO, end_iso: rec.End_ISO });
+    }
+    invalidateTabCache('Insp_Bookings');
+    return json({ ok: true, customer_id: String(cust.ID), bookings: made });
+  } catch (e) { return await shiftRouteErr(env, 'shift_test_seed', e); }
+}
+// ═══ SHIFT-BLOCK-END ═════════════════════════════════════════════════════════════════════════════
 // ── Admin (secret-gated) endpoints ─────────────────────────────────────────────────────────
 async function inspOpenBlocksList(env) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
