@@ -16383,6 +16383,13 @@ async function smsGatedSend(env, opts) {
   const testRecipient = normalizePhone(cfg.TWILIO_TEST_RECIPIENT || '+14439617927');
 
   const kind = opts.recipient_type;
+  // Oct 24 2026 (per-property toggles): a vendor text about a job at a property honours that property's "texts to vendors" switch. Most vendor call sites do not pass
+  // the property, so it is looked up (cheaply, see ppResolveGateProperty). A failed lookup is REPORTED and the text goes out (fails open, never silent).
+  let gateProperty = opts.property || null;
+  if (!gateProperty && kind === 'vendor' && (opts.property_id || opts.wo_id)) {
+    try { gateProperty = await ppResolveGateProperty(env, opts); }
+    catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_vendor_property_lookup', ref: 'WO ' + (opts.wo_id || '') , severity: 'P2', message: 'could not look up the property for a vendor text (' + (opts.message_type || 'text') + ', ' + (opts.wo_id || 'no WO') + '), so the per-property vendor-text switch was NOT checked: ' + String((e && e.message) || e).slice(0, 200) }); }
+  }
   const propertyOn = smsToggleOn(opts.property && opts.property.SMS_Enabled);
   const ownerOn    = smsToggleOn(opts.owner && opts.owner.SMS_Enabled);
   // Oct 14 2026: a tenant the owner roster tool added is held at SMS_Enabled FALSE (consent pending). The WELCOME text Brett sends by
