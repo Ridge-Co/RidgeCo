@@ -1178,6 +1178,13 @@ const _hubWorkerCore = {
         if (path === '/insp-book/request')         return await inspBookRequest(env, body);
         if (path === '/insp-book/cancel')          return await inspBookCancel(env, body);
         if (path === '/insp-book/decide')          return await inspApprovalDecide(env, body);
+        if (path === '/insp-change/approve')       return await shiftChangeApprove(env, body);    // PUBLIC, change-token checked
+        if (path === '/insp-change/reschedule')    return await shiftChangeReschedule(env, body); // PUBLIC, change-token checked
+        if (path === '/shift/preview')             return await shiftPreviewRoute(env, body);     // ADMIN-ONLY, writes nothing
+        if (path === '/shift/apply')               return await shiftApplyRoute(env, body);       // ADMIN-ONLY
+        if (path === '/shift/force-apply')         return await shiftForceApply(env, body);       // ADMIN-ONLY (Apply anyway / retry)
+        if (path === '/shift/proposal/cancel')     return await shiftProposalCancel(env, body);   // ADMIN-ONLY
+        if (path === '/shift/test-seed')           return await shiftTestSeed(env, body);         // ADMIN-ONLY, staging + TEST- only
         if (path === '/bulk-import')               return await hubBulkImport(env, body);
       }
       return json({ error: 'Not found' }, 404);
