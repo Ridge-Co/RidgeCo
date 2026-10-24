@@ -16088,6 +16088,7 @@ function smsGateDecision(o) {
     if (o.vendorOptOut) fails.push('Vendor opted out');
   } else if (o.kind === 'owner') {
     if (!o.propertyOn) fails.push('Property OFF');
+    if (o.propertyOwnersOn === false) fails.push('Property owner texts OFF');
     if (!o.ownerOn) fails.push('Customer OFF');
   }
   return { sendOk: fails.length === 0, gateSnapshot: fails.length ? fails.join(', ') : 'all gates open' };
