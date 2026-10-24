@@ -1331,6 +1331,7 @@ async function sendEstimateEmail(){
     setStatus('send-status','✅ emailed '+r.sent_to+(r.sms&&r.sms.note?' · '+(smsBad?'⚠ ':'')+r.sms.note:''),smsBad?'err':'ok');
     showGmailReconnect(false);
     renderSendStatus();
+    var _pvEl=document.getElementById('send-sms-preview'); if(_pvEl) _pvEl.innerHTML=smsOutcomeHtml(r.sms);   // the REAL outcome, not a prediction
   }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
   finally{ window._proposalSending=false; if(_sb) _sb.disabled=false; }
 }
