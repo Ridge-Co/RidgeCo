@@ -27903,6 +27903,13 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
   if (path === '/unit/update') return await isTestRecord(env, 'Units', _b.id);
   if (path === '/property/update') return await isTestRecord(env, 'Properties', _b.id);
+  // Oct 24 2026 (per-property toggles / duplicate / merge): staging may only touch TEST- properties, units and owners; previews write nothing.
+  if (path === '/property/toggle' || path === '/property/info-save' || path === '/property/unmark-duplicate') return await isTestRecord(env, 'Properties', _b.property_id);
+  if (path === '/property/unit-save') return await isTestRecord(env, 'Units', _b.unit_id);
+  if (path === '/property/mark-duplicate') return (await isTestRecord(env, 'Properties', _b.property_id)) && (await isTestRecord(env, 'Properties', _b.duplicate_of));
+  if (path === '/property/merge-preview' || path === '/owner/property-toggle-preview') return true;   // read-only
+  if (path === '/property/merge-apply') return (await isTestRecord(env, 'Properties', _b.from_id)) && (await isTestRecord(env, 'Properties', _b.to_id));
+  if (path === '/owner/property-toggle-apply') return await isTestRecord(env, 'Owners', _b.owner_id);
   if (path === '/vendor/update-contact') return await isTestRecord(env, 'Vendors', _b.vendor_id);
   if (path === '/vendor-bill/add-standalone' || path === '/workorder/self-serve') {
     return (await isTestRecord(env, 'Vendors', _b.vendor_id)) && (await isTestRecord(env, 'Properties', _b.property_id));
