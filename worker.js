@@ -16083,6 +16083,7 @@ function smsGateDecision(o) {
     // toggles, so an old tenant row with SMS still ON kept receiving texts after the new roster went in.
     if (o.tenantMovedOut) fails.push('Tenant moved out');
   } else if (o.kind === 'vendor') {
+    if (o.propertyVendorsOn === false) fails.push('Property vendor texts OFF');   // Oct 24 2026: only when the text is tied to a property that switched vendor texts OFF
     if (!o.vendorOn) fails.push('Vendor OFF');
     if (o.vendorOptOut) fails.push('Vendor opted out');
   } else if (o.kind === 'owner') {
