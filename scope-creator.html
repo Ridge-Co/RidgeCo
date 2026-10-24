@@ -1335,6 +1335,53 @@ async function sendEstimateEmail(){
   }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
   finally{ window._proposalSending=false; if(_sb) _sb.disabled=false; }
 }
+// Oct 24 2026 (FEATURE_LOG rule 231): the owner heads-up text. BEFORE sending, GET /sms/gate-preview runs the same gate the real sender uses (read-only, it
+// never sends). AFTER sending, the server's real outcome is shown, with the reason and a link to the property's Settings when a property switch is the cause.
+function propSettingsLink(pid){ return 'index.html?property='+encodeURIComponent(pid)+'&tab=settings'; }
+async function proposalSmsPreview(){
+  var s=state.current; if(!s||!s.Property_ID) return null;
+  if((parseInt(s.Send_Count||'0',10)||0)>0) return { resend:true };   // only the first send texts the owner (server rule)
+  var ov=document.getElementById('send-override-quiet');
+  try{ return await get('/sms/gate-preview?recipient_type=owner&window=proposal&property_id='+encodeURIComponent(s.Property_ID)+(ov&&ov.checked?'&bypass_quiet=1':'')); }
+  catch(e){ return { _error:e.message }; }
+}
+function smsFixLinks(reasons, pid, link){
+  var h='', rs=reasons||[];
+  if(rs.some(function(r){ return r.fix && r.fix.target==='property'; })) h+=' <a href="'+esc(link||propSettingsLink(pid))+'" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  if(rs.some(function(r){ return r.code==='customer_off'; })) h+=' The owner account has texts switched OFF (Owners sheet, SMS_Enabled).';
+  if(rs.some(function(r){ return r.code==='global_off'; })) h+=' Texting is switched OFF Hub-wide (Config TWILIO_ENABLED).';
+  if(rs.some(function(r){ return r.code==='no_phone'; })) h+=' Add a phone number to the owner account.';
+  return h;
+}
+function smsPreviewHtml(pv){
+  if(!pv) return '';
+  var s=state.current;
+  if(pv.resend) return '<div class="owner-note ok" style="font-size:13px">ℹ Resend: the owner is not texted again (only the first send texts them). The email goes.</div>';
+  if(pv._error) return '<div class="owner-note warn" style="font-size:13px">⚠ Could not check whether the owner text will go out ('+esc(pv._error)+'). The email will still send, and the real text outcome is shown after.</div>';
+  var cls=pv.will_send?'ok':(pv.will_send_later?'warn':'err'), icon=pv.will_send?'✅':(pv.will_send_later?'⏳':'⚠');
+  var h='<div class="owner-note '+cls+'" style="font-size:13px">'+icon+' <b>'+esc(pv.headline)+'</b>';
+  (pv.notes||[]).forEach(function(n){ h+=' '+esc(n); });
+  if(!pv.will_send && !pv.will_send_later) h+=' The email will still go.'+smsFixLinks(pv.reasons, s&&s.Property_ID, pv.settings_link);
+  return h+'</div>';
+}
+async function refreshSendSmsPreview(){
+  var el=document.getElementById('send-sms-preview'); if(!el) return;
+  var s=state.current; if(!s){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="sub">Checking whether the owner text will go out…</div>';
+  var pv=await proposalSmsPreview();
+  if(state.current!==s) return;
+  el.innerHTML=smsPreviewHtml(pv);
+}
+function smsOutcomeHtml(sms){
+  if(!sms) return '';
+  var s=state.current, st=sms.status;
+  if(st==='not_attempted') return '<div class="owner-note ok" style="font-size:13px">ℹ '+esc(sms.note||'No text on a resend.')+'</div>';
+  var cls=st==='sent'?'ok':(st==='held'?'warn':'err'), icon=st==='sent'?'✅':(st==='held'?'⏳':'⚠');
+  var label={sent:'Owner texted',held:'Text HELD, it goes out later',blocked:'Text NOT sent: blocked by an SMS switch',failed:'Text FAILED',no_phone:'Text NOT sent: no owner phone on file',skipped_seen:'Text skipped: they had already opened the estimate'}[st]||('Text: '+st);
+  var h='<div class="owner-note '+cls+'" style="font-size:13px">'+icon+' <b>'+esc(label)+'</b>'+(sms.note?' — '+esc(sms.note):'');
+  if(st==='blocked' && s && s.Property_ID) h+=' <a href="'+esc(propSettingsLink(s.Property_ID))+'" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  return h+'</div>';
+}
 function smsStatusLine(s){
   var st=(s.Owner_SMS_Status||'').trim(); if(!st) return '';
   var m={sent:'✅ Owner texted',held:'⏳ Text held — goes out at 8:00am unless they open the estimate first',skipped_seen:'⏭ Text skipped — they had already opened the estimate',blocked:'⚠ Text blocked by SMS settings (see Messaging)',failed:'⚠ Text failed',no_phone:'⚠ No owner phone on file, no text'};
