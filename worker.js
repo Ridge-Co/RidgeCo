@@ -26923,6 +26923,25 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
   if (path === '/cron/run') { const _sb = body || {}; return !_sb.force && (_sb.dry === true || _sb.dry_run === true || (typeof _sb.only === 'string' && SCHED_STAGING_SAFE_JOBS.includes(_sb.only))); }   // NB: `_b` (declared further down) is in its TDZ here - use `body`
+  // Appointment Shift (Oct 23 2026). Preview writes nothing. Everything that writes is pinned to TEST- records (a TEST- inspection customer, or a TEST- work order).
+  if (path === '/shift/preview') return true;
+  if (path === '/shift/test-seed') return String((body && body.name) || '').startsWith('TEST-');
+  if (path === '/shift/apply') {
+    const _keys = body && body.only_keys;
+    if (!Array.isArray(_keys) || !_keys.length) return false;
+    for (const _k of _keys) {
+      const _m = /^(insp|wo):(.+)$/.exec(String(_k));
+      if (!_m) return false;
+      if (_m[1] === 'wo') { if (!(await isTestWO(env, _m[2]))) return false; continue; }
+      const _bk = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === _m[2]);
+      if (!_bk || !(await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID))) return false;
+    }
+    return true;
+  }
+  if (path === '/shift/force-apply' || path === '/shift/proposal/cancel') {
+    const _bk = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(body && body.id));
+    return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
+  }
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
     const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
