@@ -511,6 +511,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary small" style="display:none" onclick="hideKeysView()" id="btn-keys-back">← Properties</button>
     </div>
     <div class="search-bar"><input type="text" id="prop-search" placeholder="Search properties..." oninput="renderPropertiesPage()"></div>
+    <div style="margin-bottom:12px"><select id="prop-view" onchange="renderPropertiesPage()" aria-label="Which properties to show" style="min-height:44px;max-width:100%"><option value="active">Active properties</option><option value="hidden">Hidden: duplicates and inactive</option></select></div>
     <div id="properties-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
     <div id="keys-view" style="display:none">
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
