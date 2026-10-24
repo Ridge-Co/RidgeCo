@@ -8394,6 +8394,7 @@ function addonEmailGate({ cfg, property, owner }) {
   if (String((owner && owner.Notify_Method) || 'sms') === 'none') return { ok: false, reason: 'owner notification method is none' };
   const g = smsGateDecision({ global, propertyOn: on(property && property.SMS_Enabled), ownerOn: on(owner && owner.SMS_Enabled), kind: 'owner' });
   if (!g.sendOk) return { ok: false, reason: g.gateSnapshot };
+  if (!propertyOwnerEmailOn(property)) return { ok: false, reason: 'Property owner emails OFF' };   // Oct 24 2026: per-property switch, blank = ON
   if (testMode) return { ok: false, reason: 'Test Mode is on — no email to a real owner' };
   return { ok: true, reason: '' };
 }
