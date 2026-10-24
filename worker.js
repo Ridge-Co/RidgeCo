@@ -704,6 +704,8 @@ const _hubWorkerCore = {
         if (path === '/str/admin/state')        return await strAdminState(env);
         if (path === '/str/admin/preview-messages') return await strAdminPreview(env);
         if (path === '/insp-book/approval')     return await inspApprovalInfo(env, url);
+        if (path === '/insp-change/info')       return await shiftChangeInfo(env, url);        // PUBLIC, change-token checked
+        if (path === '/shift/proposals')        return await shiftProposalsList(env);          // ADMIN-ONLY
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
       if (request.method === 'POST') {
