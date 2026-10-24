@@ -4537,7 +4537,7 @@ function renderPropertiesPage() {
 
       return '<div class="prop-expand-card" id="prop-card-'+p.ID+'">' +
         // ── Main property row ──
-        '<div class="prop-row-main" onclick="togglePropUnits(\''+p.ID+'\')" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s">' +
+        '<div class="prop-row-main" onclick="openPropertyDetail(\''+p.ID+'\')" style="display:flex;align-items:center;gap:10px;min-height:44px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background .15s">' +
           '<div style="flex:1;min-width:0">' +
             '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
               '<span style="font-weight:bold;color:var(--accent);font-size:clamp(12px,1.2vw,15px)">'+esc(p.Address)+'</span>' +
