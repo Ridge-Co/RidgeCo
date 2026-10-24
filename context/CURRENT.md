@@ -1,4 +1,4 @@
-# DELIVERY EMAIL WATCHER, HUB SIDE (Phase 1) — Oct 23, 2026 — head `feat/delivery-email-intake-oct23` cut from main tip 883b868 (after PR #426). PR into `main` ("Delivery email watcher: Hub endpoint + parser (Phase 1)"). BUILD_VERSION `2026-10-23.04-delivery-email-watcher`. FEATURE_LOG rule 230.
+# DELIVERY EMAIL WATCHER, HUB SIDE (Phase 1) — Oct 23, 2026 — head `feat/delivery-email-intake-oct23` cut from main tip 883b868 (after PR #426). PR into `main` ("Delivery email watcher: Hub endpoint + parser (Phase 1)"). BUILD_VERSION `2026-10-23.06-delivery-email-watcher`. FEATURE_LOG rule 231.
 
 ## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Pairs with PR #430 (Apps Script that reads info@ and brett@) and PR #431 (Deliveries UI). Merge order does not matter for safety: the endpoint does nothing until the Apps Script posts to it.
 **What it does:** `POST /intake/delivery-email` reads a Home Depot / Lowe's email, keeps one Deliveries row per order, creates one install work order, texts Brett on real news, and queues a low-priority tenant heads-up (default ON, batched to the 6pm window; same-day deliveries go at once). Returns the calendar event for the Apps Script to write.
@@ -17,6 +17,14 @@
 **5 Real cost:** SMS_Logs gets `Segments, Est_Segments, Encoding, Chars, Price, Price_Unit, Message_Type, Queue_ID, Log_Source, Error_Code, Note` (ensureColumns, at the end). Daily Hub job `twilio_balance_log` (07:00 ET, Apps Script clock, NO cron) writes (date, balance, change) to tab `Twilio_Balance_Log`, reusing the integrity check's balance fetch. The delivery-check email now shows pieces and price.
 **6 Twilio errors / regions:** permanent errors (21408, 21211, 21614, 21610, 21612, 30003, 30005, 30006) mark the row `failed` ONCE with `Error_Code` + `Error_Reason` (new Message_Queue columns), never retried; one calm P2 ledger row (last 4 digits only). A destination that is not +1 US/CA/PR/USVI is not sent (P2 `text not sent: destination outside enabled regions`). `normalizePhone` no longer turns '+53...' into a US number.
 **Tests:** `test/sms-cost-d16.test.mjs` (220) + new cases in `door-watchdog`, shared `test/_d16-support.mjs`. **Needs from Brett:** paste one JOBS row into HubScheduler.gs (see the PR), and the yes/no on merging to main.
+
+# INVOICE DETAIL (invoice 1767 / WO-1169) — Oct 23, 2026 — head `fix/invoice-labor-detail-oct23` cut from main tip e702a43. BUILD_VERSION `2026-10-23.04-invoice-labor-detail`. FEATURE_LOG rule 230.
+
+## 🟡 Built, tested (full suite 197 files, 0 failing), merged to `staging` (PR #440, staging serves .04). NOT merged to main: Brett decides (it changes what owners read on invoices).
+**Problem:** owner Jamuna asked for detail on invoice 1767 ($638.75). The labor line said only "Billable hours" because Brett's detail was in private Notes of hours logged before Invoice Description existed.
+**Fix:** Brett's own billable hours with no Invoice Description now describe themselves from Notes (vendor notes and non-billable entries never leak); Log Time (Hub) now requires an Invoice Description on billable time; the send-invoice preview warns when nothing customer-readable exists. Amounts untouched.
+**Needs from Brett:** (1) yes/no on merging to main; (2) after main deploys, run Hub > Dev Log > "Fix Invoices Already in QuickBooks" for 1767 (preview, then Confirm), then resend the invoice from QuickBooks; (3) send the standing Gmail draft to Jamuna only after the corrected invoice is sent (the draft is not threaded on her email).
+**Known gaps:** combined-invoice path has no preview warning; Hub-only invoices do not record which hours they billed; labor stays one combined line. The staging PR missed the `staging-test-only: true` line, so its Branch policy guard run shows red; the merge itself was fine.
 
 # LOST TEXT + CRON COOLDOWN — Oct 23, 2026 — head `fix/mq-update-quota-cron-cooldown-oct23` cut from main tip 9c64e362 (after PR #423). BUILD_VERSION `2026-10-23.02-mq-save-cron-cooldown`. FEATURE_LOG rule 228.
 
