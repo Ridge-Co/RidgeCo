@@ -852,6 +852,15 @@ const _hubWorkerCore = {
         if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
+        if (path === '/property/toggle')          return await propertyToggleSet(env, body);
+        if (path === '/property/info-save')       return await propertyInfoSave(env, body);
+        if (path === '/property/unit-save')       return await propertyUnitSave(env, body);
+        if (path === '/property/mark-duplicate')  return await propertyMarkDuplicate(env, body, false);
+        if (path === '/property/unmark-duplicate') return await propertyMarkDuplicate(env, body, true);
+        if (path === '/property/merge-preview')   return await propertyMergeHandler(env, body, false);
+        if (path === '/property/merge-apply')     return await propertyMergeHandler(env, body, true);
+        if (path === '/owner/property-toggle-preview') return await ownerToggleApplyHandler(env, body, false);
+        if (path === '/owner/property-toggle-apply')   return await ownerToggleApplyHandler(env, body, true);
         if (path === '/owner/held-contact-note') return await setOwnerHeldContactNote(env, body);
         if (path === '/owner/billing')            return await updateOwnerBilling(env, body);
         if (path === '/owner/get-billing')        return await getOwnerBilling(env, url);
