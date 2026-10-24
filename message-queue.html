@@ -617,6 +617,15 @@ function syncControls(){
   el('f-sort').value = prefs.sort; el('f-group').value = prefs.group;
   el('f-date').value = F.preset; el('f-from').value = F.from; el('f-to').value = F.to;
 }
+// Oct 24 2026 (FEATURE_LOG rule 231): when a held text was stopped by a PROPERTY switch, link straight to that property's Settings tab where the
+// switch lives; a customer-level stop is explained (that switch is on the owner account, not on the property).
+function gateFixHtml(r){
+  var g = String(r.Gate_Snapshot || ''), h = '';
+  if (/\bProperty (OFF|(tenant|owner|vendor) texts OFF|owner emails OFF)/.test(g) && r.Property_ID) h += ' <a href="index.html?property=' + encodeURIComponent(r.Property_ID) + '&tab=settings" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  if (/\bCustomer OFF/.test(g)) h += ' (the owner account has texts switched OFF)';
+  if (/\bGlobal OFF/.test(g)) h += ' (texting is switched OFF Hub-wide)';
+  return h;
+}
 function rowHtml(r){
   var st = r._st || '';
   var badgeCls = STATUSES.indexOf(st) >= 0 ? st : 'unknown';
