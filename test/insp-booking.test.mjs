@@ -18,11 +18,12 @@ let pass = 0, fail = 0;
 const t = (n, c, got) => { if (c) pass++; else { fail++; console.log('FAIL:', n, got !== undefined ? 'got ' + JSON.stringify(got) : ''); } };
 
 // ── duration ──
-t('1 unit = 40', E.inspDurationMin(1, 1) === 40, E.inspDurationMin(1, 1));
-t('2 units (one building) = 75, shorter than the flat 80', E.inspDurationMin(2, 1) === 75, E.inspDurationMin(2, 1));
-t('3 units = 110 (~2h, Brett\'s example)', E.inspDurationMin(3, 1) === 110, E.inspDurationMin(3, 1));
-t('4 units = 140', E.inspDurationMin(4, 1) === 140, E.inspDurationMin(4, 1));
-t('6 units in 2 buildings = 220', E.inspDurationMin(6, 2) === 220, E.inspDurationMin(6, 2));
+t('1 unit = 60 (30 per unit + 30 per building)', E.inspDurationMin(1, 1) === 60, E.inspDurationMin(1, 1));
+t('2 units (one building) = 90', E.inspDurationMin(2, 1) === 90, E.inspDurationMin(2, 1));
+t('3 units (one building) = 120', E.inspDurationMin(3, 1) === 120, E.inspDurationMin(3, 1));
+t('4 units in 1 building = 150 (Brett Oct 23)', E.inspDurationMin(4, 1) === 150, E.inspDurationMin(4, 1));
+t('2 buildings x 2 units = 180 (Brett Oct 23)', E.inspDurationMin(4, 2) === 180, E.inspDurationMin(4, 2));
+t('6 units in 2 buildings = 240', E.inspDurationMin(6, 2) === 240, E.inspDurationMin(6, 2));
 t('duration is monotonic in units', [1,2,3,4,5,6,8,10,12].every((u, i, a) => i === 0 || E.inspDurationMin(u, 1) > E.inspDurationMin(a[i - 1], 1)));
 t('garbage input never goes below the 30 min floor', E.inspDurationMin(0, 0) >= 30 && E.inspDurationMin(-5, 'x') >= 30);
 t('buildings cannot exceed units', E.inspDurationMin(2, 9) === E.inspDurationMin(2, 2));
