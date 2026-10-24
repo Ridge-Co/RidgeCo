@@ -268,9 +268,28 @@ const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, 
 let store = makeStore();
 const twilio = [];            // every outbound text the worker tried to send
 let twilioMode = 'ok';        // 'ok' | 'fail'
+let tokenMode = 'ok', calMode = 'ok', jwksMode = 'ok', jwksFetches = 0, calSeq = 0, jwksKeys = [];   // fake Google: sign-in token endpoint, Calendar API, published sign-in keys
+const calEvents = new Map(), calLog = [];
+let lastClaim = null;
 globalThis.fetch = async (input, init) => {
   const url = typeof input === 'string' ? input : input.url; const method = (init && init.method) || 'GET';
-  if (url.startsWith('https://oauth2.googleapis.com/token')) return new Response(JSON.stringify({ access_token: 'fake-access', expires_in: 3600 }), { status: 200 });
+  if (url.startsWith('https://oauth2.googleapis.com/token')) { try { const a = /assertion=([^&]+)/.exec(String(init && init.body || '')); lastClaim = JSON.parse(Buffer.from(a[1].split('.')[1], 'base64url').toString()); } catch (_) {} }
+  if (url.startsWith('https://oauth2.googleapis.com/token')) return tokenMode === 'ok' ? new Response(JSON.stringify({ access_token: 'fake-access', expires_in: 3600 }), { status: 200 }) : new Response(JSON.stringify({ error: 'unauthorized_client', error_description: 'Client is unauthorized to retrieve access tokens using this method' }), { status: 400 });
+  if (url.startsWith('https://www.googleapis.com/oauth2/v3/certs')) {
+    jwksFetches++;
+    if (jwksMode !== 'ok') return new Response('boom', { status: 500 });
+    return new Response(JSON.stringify({ keys: jwksKeys }), { status: 200, headers: { 'Cache-Control': 'public, max-age=3600' } });
+  }
+  const cm = /^https:\/\/www\.googleapis\.com\/calendar\/v3\/calendars\/primary(\/events.*)?$/.exec(url);
+  if (cm) {
+    const sub = cm[1] || '', b = init && init.body ? JSON.parse(init.body) : undefined; calLog.push(method + ' ' + decodeURIComponent(sub).slice(0, 80));
+    if (calMode === 'down') return new Response(JSON.stringify({ error: { code: 503, message: 'backend error' } }), { status: 503 });
+    if (method === 'GET') { const q = /privateExtendedProperty=([^&]+)/.exec(sub); const [k, v] = q ? decodeURIComponent(q[1]).split('=') : []; return new Response(JSON.stringify({ items: [...calEvents.values()].filter(e => !k || (e.extendedProperties && e.extendedProperties.private && e.extendedProperties.private[k] === v)).map(e => ({ id: e.id, status: e.status })) }), { status: 200 }); }
+    if (method === 'POST') { const id = 'ev' + (++calSeq); calEvents.set(id, Object.assign({ id }, b)); return new Response(JSON.stringify({ id }), { status: 200 }); }
+    const idm = /^\/events\/([^?]+)/.exec(sub), eid = idm && decodeURIComponent(idm[1]);
+    if (method === 'PATCH') { if (!calEvents.has(eid)) return new Response('{"error":{"code":404}}', { status: 404 }); calEvents.set(eid, Object.assign(calEvents.get(eid), b)); return new Response(JSON.stringify({ id: eid }), { status: 200 }); }
+    if (method === 'DELETE') { if (!calEvents.has(eid)) return new Response('{"error":{"code":410}}', { status: 410 }); calEvents.delete(eid); return new Response(null, { status: 204 }); }
+  }
   const m = /^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/TESTSHEET(.*)$/.exec(url);
   if (m) { const b = init && init.body ? JSON.parse(init.body) : undefined; const r = await store.handle(method, decodeURIComponent(m[1]).replace(/%3A/gi, ':'), b); return new Response(JSON.stringify(r), { status: r && r.error ? r.error.code : 200 }); }
   if (url.startsWith('https://api.twilio.com/')) {
@@ -285,7 +304,7 @@ globalThis.fetch = async (input, init) => {
 const WK = await (async () => {
   const os = await import('node:os'), path = await import('node:path'), url = await import('node:url');
   const f = path.join(os.tmpdir(), 'worker-wk-' + process.pid + '-' + Date.now() + '.mjs');
-  fs.writeFileSync(f, src + '\nexport { __tabCache };\n');
+  fs.writeFileSync(f, src + '\nexport { __tabCache };\nexport function __resetGoogleAuth() { __gJwks = null; __gJwksTriedAt = 0; __gAuthAlertAt = {}; }\n');
   try { return await import(url.pathToFileURL(f).href); } finally { try { fs.unlinkSync(f); } catch (_) {} }
 })();
 const worker = WK.default;
@@ -327,9 +346,9 @@ function seed(over) {
   // The worker memoises ensureColumns for 10 minutes per process, so a brand-new fake store must keep the HEADER rows the previous run created
   // (exactly what the live sheet looks like after the first email): carry headers over, drop the data.
   WK.__tabCache.clear(); QH.__tabCache.clear();   // every seed is a fresh world: no sheet rows may be served from a previous seed's cache. NOTE: the D-16 duplicate-text memory is deliberately NOT cleared.
-  const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok';
+  const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok'; tokenMode = 'ok'; calMode = 'ok'; calEvents.clear(); calLog.length = 0;
   for (const [name, rows] of prev.tabs) if (rows.length && rows[0].length) store.tabs.set(name, [rows[0].slice()]);
-  tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', Delivery_Claim_Settle_Ms: '40' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
+  tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', Delivery_Claim_Settle_Ms: '40', Delivery_Cal_Impersonate: 'brett@bmoremanagement.com' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
   tab('Owners', ['ID', 'First_Name', 'Company', 'SMS_Enabled', 'Phone'], [{ ID: 'O1', First_Name: 'Olly', Company: 'Phoenix Estate Rentals', SMS_Enabled: 'TRUE' }]);
   tab('Properties', ['ID', 'Owner_ID', 'Address', 'City', 'Type', 'Unit_Count', 'Active', 'Access_Notes', 'SMS_Enabled'], [
     { ID: 'P1', Owner_ID: 'O1', Address: '5425 Belle Vista Ave', City: 'Baltimore', Type: 'house', Unit_Count: '1', Active: 'TRUE' },
@@ -1004,6 +1023,172 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('Y: ...the tenant text is queued as normal (held for 6pm) and would be stubbed on release', r.json.tenant_sms === 'queued' && noticeRows().length === 1);
 }
 
+// ── Z. the Hub writes the calendar event itself, as Brett (domain-wide delegation, narrow scope), idempotently ──
+{
+  const evs = () => [...calEvents.values()];
+  seed(); skew += 11 * 60000;
+  const r1 = await send('confirm');
+  t('Z: a new order creates ONE event on Brett\'s primary calendar and says so (calendar_status, event id on the row)', r1.json.calendar_status === 'created' && evs().length === 1 && dels()[0].Calendar_Event_ID === evs()[0].id && r1.json.calendar_event_id === evs()[0].id && dels()[0].Calendar_Status === 'created', [r1.json.calendar_status, evs().length]);
+  t('Z: ...it acts as Brett with ONLY the narrow calendar.events scope', lastClaim && lastClaim.sub === 'brett@bmoremanagement.com' && lastClaim.scope === 'https://www.googleapis.com/auth/calendar.events', lastClaim);
+  const e0 = evs()[0];
+  t('Z: title / location / description per the calendar object, all-day while there is no window, tagged with the private delivery key', e0.summary === 'Delivery: Refrigerator (H2345-678901)' && e0.location === '5425 Belle Vista Ave, Baltimore, MD 21206' && /Driver calls Brett/.test(e0.description) && e0.start.date === '2026-10-16' && e0.end.date === '2026-10-17' && e0.extendedProperties.private.ridgecoDeliveryKey === 'delivery-h2345-678901', e0);
+  const idBefore = e0.id;
+  await send('window');
+  t('Z: a window email MOVES the same event (patched, not duplicated) to a timed slot in New York time', evs().length === 1 && evs()[0].id === idBefore && /^2026-10-16T09:00:00-04:00$/.test(evs()[0].start.dateTime) && evs()[0].start.timeZone === 'America/New_York' && dels()[0].Calendar_Status === 'updated', evs()[0]);
+  await send('reschedule');
+  t('Z: a reschedule moves it to the new day and time', evs().length === 1 && /^2026-10-19T11:00:00-04:00$/.test(evs()[0].start.dateTime), evs()[0].start);
+  const n0 = calLog.length;
+  await send('confirm', { message_id: 'MSG-Z-copy', rfc_message_id: 'z-copy@x.example' });
+  t('Z: an email that changes nothing touches Google Calendar zero times', calLog.length === n0 && evs().length === 1);
+  // a lost id is found again by the tag
+  { const tb = store.tabs.get('Deliveries'), ci = tb[0].indexOf('Calendar_Event_ID'); tb[1][ci] = ''; skew += 11000; }
+  const rWin2 = await send('window2');
+  t('Z: with the stored id LOST, the event is re-found by its key (no second event) and the id stored again', evs().length === 1 && dels()[0].Calendar_Event_ID === idBefore && rWin2.json.calendar_status === 'updated', [rWin2.json.calendar_status, dels()[0].Calendar_Event_ID]);
+  // deleted by hand in Google: recreated
+  calEvents.clear(); skew += 11000;
+  await send('enroute');
+  await send('scheduled', { subject: 'Your delivery has been scheduled - Order H2345-678901 (again)', body: FX.scheduled.body.replace('October 16', 'October 21'), rfc_message_id: 'z-new-date@x.example' });
+  t('Z: an event Brett deleted by hand is recreated on the next real change (404 -> search -> create)', evs().length === 1 && dels()[0].Calendar_Event_ID === evs()[0].id && evs()[0].id !== idBefore, [evs().length, dels()[0].Calendar_Status]);
+  await send('cancel');
+  t('Z: a cancelled order DELETES the event and clears the id', evs().length === 0 && dels()[0].Calendar_Event_ID === '' && dels()[0].Calendar_Status === 'cancelled', [evs().length, dels()[0].Calendar_Status]);
+}
+{
+  // failures are never silent
+  seed(); skew += 11 * 60000; calMode = 'down';
+  const f = await send('confirm');
+  t('Z: Google Calendar down -> the delivery is still saved (HTTP 200) but calendar_status says failed, needs_attention, warning, and the row remembers', f.status === 200 && f.json.success === true && /^failed: .*503/.test(f.json.calendar_status) && f.json.needs_attention === true && f.json.warnings.some(w => /^calendar: failed/.test(w)) && /^failed/.test(dels()[0].Calendar_Status) && dels().length === 1, [f.json.calendar_status, f.json.warnings]);
+  t('Z: ...and it is on the failure ledger (P1) with the delivery id', rowsOf('Failure_Events').some(x => x.Where === 'delivery_calendar' && x.Severity === 'P1' && /Delivery 1 was saved but its calendar event was NOT written/.test(x.Message)), rowsOf('Failure_Events').map(x => [x.Where, x.Severity]));
+  calMode = 'ok';
+  { const tb = store.tabs.get('Deliveries'), ci = tb[0].indexOf('Created_Date'); tb[1][ci] = new Date(new Date().getTime() - 5 * 60000).toISOString(); skew += 70000; }
+  const heal = await send('confirm', { message_id: dels()[0].Message_ID });
+  t('Z: a later copy of the same email retries the failed write and heals it (idempotent)', heal.json.duplicate === true && heal.json.calendar_status === 'created' && calEvents.size === 1 && dels()[0].Calendar_Status === 'created', [heal.json.calendar_status, calEvents.size]);
+  // not configured
+  seed({ config: { Delivery_Cal_Impersonate: '' } });
+  const nc = await send('confirm');
+  t('Z: no Config Delivery_Cal_Impersonate (and no STR_CAL_IMPERSONATE) -> loud, says exactly which Config key to set, nothing written', /^failed: Config Delivery_Cal_Impersonate/.test(nc.json.calendar_status) && calEvents.size === 0 && nc.json.needs_attention === true && rowsOf('Failure_Events').some(x => x.Where === 'delivery_calendar' && x.Ref === 'not_configured'), nc.json.calendar_status);
+  seed({ config: { Delivery_Cal_Impersonate: '', STR_CAL_IMPERSONATE: 'brett@bmoremanagement.com' } });
+  const fb = await send('confirm');
+  t('Z: falls back to the existing STR_CAL_IMPERSONATE setting', fb.json.calendar_status === 'created' && calEvents.size === 1);
+  // delegation not approved
+  seed({ config: { Delivery_Cal_Impersonate: 'nodwd@bmoremanagement.com' } }); tokenMode = 'no';
+  const dw = await send('confirm');
+  t('Z: Google not approving the act-as (delegation missing) is reported in plain English, not a stack trace', /^failed: /.test(dw.json.calendar_status) && /domain-wide delegation/i.test(dw.json.calendar_status) && calEvents.size === 0, dw.json.calendar_status);
+  tokenMode = 'ok';
+  // staging + dry run
+  seed(); const stg3 = Object.assign({}, env, { STAGING: '1' });
+  const st = await call('POST', '/intake/delivery-email', INTAKE, Object.assign({ from: 'Home Depot <orders@order.homedepot.com>', message_id: 'TEST-z-stg', received_at: RECV, mailbox: 'x@y.example' }, FX.confirm), stg3);
+  t('Z: on staging the calendar write is a labelled stub (nothing reaches Google)', /^staged:/.test(st.json.calendar_status) && calEvents.size === 0 && !st.json.warnings.some(w => /calendar/.test(w)), st.json.calendar_status);
+  seed();
+  const dr = await send('confirm', { dry_run: true });
+  t('Z: dry_run writes nothing to the sheet or the calendar and says what it would do', dr.json.calendar_status === 'dry_run: would create' && calEvents.size === 0 && dels().length === 0, dr.json.calendar_status);
+  seed(); await send('confirm');
+  const ls = await call('GET', '/deliveries', SECRET), lm = (ls.json.deliveries || [])[0] || {};
+  t('Z: /deliveries rows carry calendar_status and calendar_event_id (strings)', lm.calendar_status === 'created' && /^ev\d+$/.test(lm.calendar_event_id), lm);
+}
+
+// ── AUTH. Google identity token instead of a shared secret ──
+{
+  const kp = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }), kp2 = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = (k, kid) => Object.assign(k.publicKey.export({ format: 'jwk' }), { kid, alg: 'RS256', use: 'sig' });
+  const b64 = (o) => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o)).toString('base64url');
+  const mint = (over, o) => {
+    o = o || {}; const now = Math.floor(Date.now() / 1000);
+    const claims = Object.assign({ iss: 'https://accounts.google.com', aud: 'some-script-client-id.apps.googleusercontent.com', sub: '1234567890', email: 'info@bmoremanagement.com', email_verified: true, iat: now - 5, exp: now + 3000 }, over || {});
+    const head = b64({ alg: o.alg || 'RS256', typ: 'JWT', kid: o.kid || 'k1' }), body = b64(claims);
+    let sig = (o.alg === 'none') ? '' : crypto.sign('RSA-SHA256', Buffer.from(head + '.' + body), (o.key || kp).privateKey).toString('base64url');
+    if (o.tamper) sig = sig.slice(0, -2) + (sig.slice(-2) === 'AA' ? 'BB' : 'AA');
+    return head + '.' + body + '.' + sig;
+  };
+  const bearer = async (jwt, body, e, path) => {
+    skew += 10000;
+    const res = await worker.fetch(new Request(BASE + (path || '/intake/delivery-email'), { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + jwt }, body: JSON.stringify(body) }), e || env, { waitUntil() {}, passThroughOnException() {} });
+    const text = await res.text(); let j = null; try { j = JSON.parse(text); } catch (_) {}
+    return { status: res.status, json: j, text };
+  };
+  const payload = (k, over) => Object.assign({ from: 'Home Depot <orders@order.homedepot.com>', message_id: 'AUTH-' + (++mseq), gmail_id: 'g' + mseq, received_at: RECV, mailbox: 'liar@evil.example' }, FX[k || 'confirm'], over || {});
+  const ledger = (w) => rowsOf('Failure_Events').filter(x => x.Where === w);
+  const fresh = (cfg) => { seed(cfg ? { config: cfg } : undefined); skew += 11 * 60000; WK.__resetGoogleAuth(); jwksKeys = [jwk(kp, 'k1')]; jwksMode = 'ok'; jwksFetches = 0; };
+
+  fresh();
+  const tk = mint();
+  const ok = await bearer(tk, payload());
+  t('AUTH: a valid Google identity token (info@) is accepted: record created, no shared secret anywhere', ok.status === 200 && ok.json.success === true && ok.json.created === true && dels().length === 1, ok);
+  t('AUTH: the body\'s mailbox claim is OVERRIDDEN by the verified e-mail', /info@bmoremanagement\.com/.test(dels()[0].Delivery_Notes) && !/liar@evil/.test(dels()[0].Delivery_Notes + dels()[0].Seen_Message_IDs) && /gmail:info@bmoremanagement\.com:/.test(dels()[0].Seen_Message_IDs), [dels()[0].Delivery_Notes.slice(-120), dels()[0].Seen_Message_IDs]);
+  t('AUTH: aud is not pinned (any script client id works)', mint({ aud: 'another-project.apps.googleusercontent.com' }).length > 10 && (await bearer(mint({ aud: 'another-project.apps.googleusercontent.com' }), payload('window'))).status === 200);
+  const f1 = jwksFetches;
+  await bearer(mint(), payload('window2'));
+  t('AUTH: Google\'s key list is cached per Worker instance (no refetch on the next call)', jwksFetches === f1 && f1 === 1, [f1, jwksFetches]);
+  const okB = await bearer(mint({ email: 'Brett@BMoreManagement.com' }), payload('approaching'));
+  t('AUTH: the e-mail match is case-insensitive (brett@ is on the default list)', okB.status === 200);
+
+  // every rejection: the SAME 401 body, nothing written, one ledger row per reason
+  const n0 = dels().length, win0 = dels()[0].Expected_Window, bodies = [];
+  const cases = [
+    ['expired', mint({ exp: Math.floor(Date.now() / 1000) - 600, iat: Math.floor(Date.now() / 1000) - 4000 })],
+    ['future iat', mint({ iat: Math.floor(Date.now() / 1000) + 900, exp: Math.floor(Date.now() / 1000) + 4000 })],
+    ['wrong issuer', mint({ iss: 'https://evil.example.com' })],
+    ['tampered signature', mint({}, { tamper: true })],
+    ['signed by another key under a known kid', mint({}, { key: kp2 })],
+    ['email not allowed', mint({ email: 'stranger@gmail.com' })],
+    ['email not verified', mint({ email_verified: false })],
+    ['no email', mint({ email: '' })],
+    ['alg none', mint({}, { alg: 'none' })],
+    ['alg HS256', mint({}, { alg: 'HS256' })],
+    ['not a jwt', 'abc.def'],
+    ['garbage', 'x'.repeat(5000)],
+  ];
+  for (const [name, jwt] of cases) {
+    const r = await bearer(jwt, payload('window', { message_id: 'AUTH-BAD-' + name }));
+    bodies.push(r.text);
+    t('AUTH: ' + name + ' -> 401', r.status === 401, [r.status, r.text]);
+  }
+  t('AUTH: every rejection returns the identical body (nothing about which check failed)', new Set(bodies).size === 1 && /Unauthorized/.test(bodies[0]), bodies.slice(0, 2));
+  t('AUTH: ...and wrote nothing', dels().length === n0 && dels()[0].Expected_Window === win0);
+  const rej = rowsOf('Failure_Events').filter(x => /^delivery_auth_rejected_/.test(x.Where));
+  t('AUTH: each kind of rejection is on the failure ledger (not silent)', ['expired', 'bad_issuer', 'bad_signature', 'email_not_allowed', 'email_not_verified'].every(k => rej.some(x => x.Where === 'delivery_auth_rejected_' + k)), rej.map(x => x.Where));
+  t('AUTH: ledger rows never contain a token', !rowsOf('Failure_Events').some(x => /eyJ[A-Za-z0-9_-]{10,}/.test(Object.values(x).join(' '))) && !rowsOf('Ops_Telemetry').some(x => /eyJ[A-Za-z0-9_-]{10,}/.test(Object.values(x).join(' '))));
+  const before = rowsOf('Failure_Events').length;
+  for (let i = 0; i < 6; i++) await bearer(mint({}, { tamper: true }), payload('window'));
+  t('AUTH: repeated bad tokens do not flood the ledger (one report per reason per 10 minutes)', rowsOf('Failure_Events').length === before, [before, rowsOf('Failure_Events').length]);
+  const wrongPath = await bearer(mint(), { subject: 'x', body: 'y', from: 'z', message_id: 'm' }, env, '/intake/email');
+  t('AUTH: the identity token opens ONLY /intake/delivery-email (not /intake/email, not anything else)', wrongPath.status === 401, wrongPath.status);
+  const other = await bearer(mint(), {}, env, '/workorders');
+  t('AUTH: ...nor an admin route', other.status === 401, other.status);
+
+  // unknown key id: refetch once
+  fresh(); const k2tok = mint({}, { kid: 'k2', key: kp2 });
+  await bearer(mint(), payload());                       // loads {k1}
+  const fa = jwksFetches; jwksKeys = [jwk(kp, 'k1'), jwk(kp2, 'k2')];
+  clockJump: { skew += 61000; }
+  const nk = await bearer(k2tok, payload('window'));
+  t('AUTH: an unknown key id triggers ONE refetch and then verifies (Google rotated its keys)', nk.status === 200 && jwksFetches === fa + 1, [nk.status, fa, jwksFetches]);
+  const fb2 = jwksFetches;
+  const zz = await bearer(mint({}, { kid: 'zz' }), payload('window'));
+  const zz2 = await bearer(mint({}, { kid: 'zz' }), payload('window'));
+  t('AUTH: a forged key id is refused and cannot make us hammer Google (refetch rate-limited to once a minute)', zz.status === 401 && zz2.status === 401 && jwksFetches <= fb2 + 1, [fb2, jwksFetches]);
+
+  // Google's key list unreachable: fail closed + loud; the shared-secret fallback is untouched
+  fresh(); jwksMode = 'down';
+  const down = await bearer(mint(), payload());
+  t('AUTH: key list unreachable and nothing cached -> FAILS CLOSED (503), nothing written', down.status === 503 && dels().length === 0, [down.status, down.text]);
+  t('AUTH: ...with a loud ledger alert', ledger('delivery_auth_jwks_unavailable').length === 1 && /could not fetch Google/i.test(ledger('delivery_auth_jwks_unavailable')[0].Message), ledger('delivery_auth_jwks_unavailable'));
+  const fbk = await send('confirm', { message_id: 'FALLBACK-1', mailbox: 'anything@example.com' });
+  t('AUTH: the INTAKE_TOKEN fallback still works while Google is unreachable (and keeps the mailbox from the body)', fbk.status === 200 && fbk.json.created === true && /anything@example\.com/.test(dels()[0].Delivery_Notes), [fbk.status]);
+  jwksMode = 'ok';
+
+  // allow-list is Config
+  fresh({ Delivery_Mailboxes: 'ridgeco.notices@gmail.com' });
+  const gm = await bearer(mint({ email: 'ridgeco.notices@gmail.com' }), payload());
+  const gm2 = await bearer(mint({ email: 'info@bmoremanagement.com' }), payload('window'));
+  t('AUTH: Config Delivery_Mailboxes replaces the default list (a new RidgeCo address = one entry)', gm.status === 200 && gm2.status === 401, [gm.status, gm2.status]);
+  fresh(); jwksKeys = [jwk(kp, 'k1')];
+  const stale = await bearer(mint(), payload());
+  jwksMode = 'down'; skew += 3 * 3600000;
+  const grace = await bearer(mint(), payload('window'));
+  t('AUTH: after the cache TTL, if Google is unreachable the last known keys are still used for a few hours, loudly', stale.status === 200 && grace.status === 200 && ledger('delivery_auth_jwks_unavailable').length === 1 && /last known keys/.test(ledger('delivery_auth_jwks_unavailable')[0].Message), [stale.status, grace.status]);
+  jwksMode = 'ok';
+}
+
 // ── S/T/U + C. the same email in two mailboxes, forwards, any mailbox string ──
 {
   seed();
@@ -1104,7 +1289,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('handler markers exist', hs > 0 && he > hs);
   t('no swallowing catch in the new code (every catch records or returns the failure)', !/catch\s*\(\s*\w*\s*\)\s*\{\s*(?:\/\/[^\n]*)?\s*\}/.test(block) && !/\.catch\(\s*\(\s*\)\s*=>\s*(?:\{\s*\}|null|undefined)\s*\)/.test(block));
   t('no cron / schedule introduced', !/\bcrons?\b|CronTrigger|\bschedule:/i.test(block.replace(/no cron/gi, '')));
-  t('route is wired', /path === '\/intake\/delivery-email'\)\s+return await deliveryEmailIntake\(env, body\)/.test(src));
+  t('route is wired', /path === '\/intake\/delivery-email'\)\s+return await deliveryEmailIntake\(env, _idEmail \?/.test(src));
   t('token gate allows EXACTLY the two intake paths', /_intakeOk = !!env\.INTAKE_TOKEN\s+&& _tok === env\.INTAKE_TOKEN\s+&& request\.method === 'POST' && \(path === '\/intake\/email' \|\| path === '\/intake\/delivery-email'\);/.test(src));
   t('placeholders for later phases are marked', /PLACEHOLDER \(Phase 2 size check\)/.test(block) && /PLACEHOLDER \(Phase 4 voice routing\)/.test(block));
   t('the staging test token can reach the route only for TEST- message ids / properties', /path === '\/intake\/delivery-email'\) \{\s*const _mid[\s\S]{0,200}startsWith\('TEST-'\)/.test(src));

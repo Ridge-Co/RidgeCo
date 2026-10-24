@@ -177,6 +177,7 @@ const _hubWorkerCore = {
     // (Aug 20, 2026) to tell "Brett/admin creating a WO from the Hub" (always allowed) apart
     // from "a tenant creating their own WO via submit.html" (gated).
     let callerRole = null;
+    let _idEmail = '';   // set when POST /intake/delivery-email was signed in with a verified Google identity token
     // The verified session's own id (Tenant.ID / Owner.ID / Vendor.ID, matching whichever
     // role was issued) — set alongside callerRole below. Session-identity hardening (Sep 16
     // 2026, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A): the /workorder
@@ -360,6 +361,18 @@ const _hubWorkerCore = {
         const _intakeOk = !!env.INTAKE_TOKEN
           && _tok === env.INTAKE_TOKEN
           && request.method === 'POST' && (path === '/intake/email' || path === '/intake/delivery-email');
+        // Oct 23 2026: the delivery watcher can sign in with the mailbox owner's Google identity token instead of a shared secret (Authorization: Bearer <OpenID token>); see deliveryVerifyIdToken.
+        // Bad / expired / forged / not-allow-listed tokens all fall through to the same 401 as any other unknown caller, but each kind is reported (not silent, rate-limited).
+        let _idOk = false;
+        if (!_intakeOk && request.method === 'POST' && path === '/intake/delivery-email') {
+          const _bm = /^Bearer\s+(\S+)$/i.exec(request.headers.get('Authorization') || '');
+          if (_bm) {
+            const _v = await deliveryVerifyIdToken(env, _bm[1]);
+            if (_v.ok) { _idOk = true; _idEmail = _v.email; }
+            else if (_v.unavailable) return json({ error: 'Sign-in check unavailable. Please retry shortly.' }, 503);
+            else await deliveryAuthAlert(env, 'rejected_' + _v.reason, 'P1', 'A delivery e-mail sign-in was refused (' + _v.reason + (_v.email_hint ? ', ' + _v.email_hint : '') + '). If this was the real Apps Script, check Config Delivery_Mailboxes or re-run its setup; if not, someone is probing the route.');
+          }
+        }
         // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
         // a Cowork session run real read+write+read-back checks against
         // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
@@ -494,7 +507,7 @@ const _hubWorkerCore = {
           const _schedAuth = _hubTestOk ? { ok: false } : await schedAuthCheck(env, _tok, request.method, path);
           if (_schedAuth.error) return json({ error: 'scheduler auth unavailable: could not read the Config sheet (' + _schedAuth.error + ')' }, 503);
           const _schedOk = _schedAuth.ok;
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_idOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -817,7 +830,7 @@ const _hubWorkerCore = {
         }
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
-        if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, body);   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
+        if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
@@ -33705,7 +33718,9 @@ const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Mode
   // Oct 23 2026 email watcher: every Message-ID seen for the order, last email applied (kind/time/signature), "N stops away", tenant-notice bookkeeping, result of Brett's last text.
   'Seen_Message_IDs','Last_Event','Last_Event_At','Last_Event_Sig','Stops_Away','Tenant_Notice_Sig','Tenant_Notice_Status','Tenant_Notice_Draft','Brett_SMS_Status',
   // Oct 23 2026 addendum: tenant RSVP (blank | Confirmed | Declined | Unsure), when the request text was handed to the text gate, and a claim marker that stops two mailboxes double-alerting on one update.
-  'Tenant_RSVP','Tenant_RSVP_At','Tenant_RSVP_Note','Tenant_Notice_Sent_At','Event_Claim'];
+  'Tenant_RSVP','Tenant_RSVP_At','Tenant_RSVP_Note','Tenant_Notice_Sent_At','Event_Claim',
+  // Oct 23 2026: the Hub writes the calendar event itself (as Brett): its Google event id (so a move/cancel finds it) and the last result.
+  'Calendar_Event_ID','Calendar_Status'];
 
 async function ensureDeliveryTab(env) {
   const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
@@ -33742,7 +33757,7 @@ async function deliveriesList(env, url) {
       backup_contact: d.Backup_Contact || '', backup_phone: d.Backup_Phone || '',
       notes: d.Delivery_Notes || '', linked_wo_ids: d.Linked_WO_IDs || '',
       status: d.Status || 'Ordered', source: d.Source || '',
-      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '', tenant_notice_status: d.Tenant_Notice_Status || '',
+      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '', tenant_notice_status: d.Tenant_Notice_Status || '', calendar_status: d.Calendar_Status || '', calendar_event_id: d.Calendar_Event_ID || '',
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
@@ -34307,7 +34322,7 @@ function deliveryTenantText(o) {
 // Ops_Telemetry, and (only when the tenant-notice switch allows it) one tenant text through the gated chokepoint.
 // What it never does: write the calendar (the Apps Script does, as Brett: the response carries the event), send a text on a dry run,
 // text a tenant directly, create a record from a promo email, or drop a store email that mentions an order.
-const DELIVERY_EXTRA_COLS = ['Seen_Message_IDs', 'Last_Event', 'Last_Event_At', 'Last_Event_Sig', 'Stops_Away', 'Tenant_Notice_Sig', 'Tenant_Notice_Status', 'Tenant_Notice_Draft', 'Brett_SMS_Status', 'Tenant_RSVP', 'Tenant_RSVP_At', 'Tenant_RSVP_Note', 'Tenant_Notice_Sent_At', 'Event_Claim'];
+const DELIVERY_EXTRA_COLS = ['Seen_Message_IDs', 'Last_Event', 'Last_Event_At', 'Last_Event_Sig', 'Stops_Away', 'Tenant_Notice_Sig', 'Tenant_Notice_Status', 'Tenant_Notice_Draft', 'Brett_SMS_Status', 'Tenant_RSVP', 'Tenant_RSVP_At', 'Tenant_RSVP_Note', 'Tenant_Notice_Sent_At', 'Event_Claim', 'Calendar_Event_ID', 'Calendar_Status'];
 const DELIVERY_NOTICE_DEFAULT_TEXT = 'Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}. Your {Item} has been ordered{When}. Please be home if you can. If not, Ridge Co will be there to receive it, so you do not need to do anything.';
 const DELIVERY_DRIVER_NOTE = 'Driver calls Brett (ok to call me for now). Tenant: be there if you can; otherwise Brett receives and makes sure the old unit is hauled away.';
 
@@ -34628,6 +34643,144 @@ async function deliveryRsvpPost(env, url, body, ip) {
   }
 }
 
+// ── Sign-in for the Apps Script without a shared secret (Oct 23 2026, Brett) ──
+// The script sends `Authorization: Bearer <Google OpenID identity token>` (ScriptApp.getIdentityToken(): the mailbox owner's own Google identity). We check, with WebCrypto only:
+// RS256 signature against Google's published keys (JWKS, cached per Worker instance), issuer, expiry (small skew), email_verified, and that the e-mail is in Config
+// Delivery_Mailboxes. `aud` is NOT pinned (it is the script project's own client id). The token is never logged. The X-Auth-Token INTAKE_TOKEN path still works beside it.
+const DELIVERY_MAILBOXES_DEFAULT = 'brett@bmoremanagement.com,info@bmoremanagement.com';
+const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ID_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const GOOGLE_ID_SKEW_S = 60, GOOGLE_JWKS_MIN_TTL_MS = 5 * 60000, GOOGLE_JWKS_MAX_TTL_MS = 6 * 3600000, GOOGLE_JWKS_STALE_GRACE_MS = 6 * 3600000, GOOGLE_JWKS_REFETCH_GAP_MS = 60000;
+let __gJwks = null;          // { keys: Map(kid -> { jwk, key }), exp }
+let __gJwksTriedAt = 0;      // last network attempt: an unknown key id can force a refetch at most once a minute (forged ids cannot flood Google or us)
+let __gAuthAlertAt = {};     // reason -> last ledger report (ms)
+async function googleJwksLoad(env, force) {
+  const now = Date.now();
+  if (__gJwks && __gJwks.exp > now && !force) return __gJwks;
+  if (force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;
+  if (!force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;   // an expired list that just failed to refresh is not hammered
+  __gJwksTriedAt = now;
+  try {
+    const resp = await fetch(GOOGLE_JWKS_URL, { method: 'GET', headers: { Accept: 'application/json' } });
+    if (!resp.ok) throw new Error('Google key list answered HTTP ' + resp.status);
+    const j = await resp.json();
+    const keys = new Map();
+    for (const k of ((j && j.keys) || [])) if (k && k.kid && k.kty === 'RSA' && k.n && k.e) keys.set(String(k.kid), { jwk: k, key: null });
+    if (!keys.size) throw new Error('Google key list was empty');
+    const m = /max-age=(\d+)/.exec(resp.headers.get('Cache-Control') || '');
+    const ttl = Math.min(GOOGLE_JWKS_MAX_TTL_MS, Math.max(GOOGLE_JWKS_MIN_TTL_MS, m ? parseInt(m[1], 10) * 1000 : 3600000));
+    __gJwks = { keys, exp: now + ttl };
+    return __gJwks;
+  } catch (e) {
+    // Keep using a list we already have for a few hours (Google rotates keys slowly) but say so loudly; with nothing in memory, fail closed.
+    await deliveryAuthAlert(env, 'jwks_unavailable', 'P1', 'Could not fetch Google\'s sign-in keys (' + String((e && e.message) || e).slice(0, 120) + '). ' + (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS ? 'Using the last known keys for now.' : 'Delivery e-mails from the Apps Script are being refused until this clears.'));
+    if (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS) return __gJwks;
+    const err = new Error('jwks_unavailable'); err.code = 'jwks_unavailable'; throw err;
+  }
+}
+// Never throws. { ok:true, email } | { ok:false, reason, unavailable? }.  `reason` goes to the ledger only; the caller always answers 401 with the same body.
+async function deliveryVerifyIdToken(env, jwt) {
+  try {
+    jwt = String(jwt || '').trim();
+    if (!jwt || jwt.length > 4096) return { ok: false, reason: 'malformed' };
+    const parts = jwt.split('.');
+    if (parts.length !== 3 || parts.some(x => !/^[A-Za-z0-9_-]+$/.test(x))) return { ok: false, reason: 'malformed' };
+    let head, claims;
+    try { head = JSON.parse(_tdec.decode(_b64urlToBytes(parts[0]))); claims = JSON.parse(_tdec.decode(_b64urlToBytes(parts[1]))); } catch (e) { return { ok: false, reason: 'malformed' }; }
+    if (!head || head.alg !== 'RS256' || !head.kid || !claims || typeof claims !== 'object') return { ok: false, reason: 'bad_header' };
+    let list = await googleJwksLoad(env, false);
+    let ent = list.keys.get(String(head.kid));
+    if (!ent) { list = await googleJwksLoad(env, true); ent = list.keys.get(String(head.kid)); }   // unknown key id: refetch once (rate-limited)
+    if (!ent) return { ok: false, reason: 'unknown_kid' };
+    if (!ent.key) ent.key = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: ent.jwk.n, e: ent.jwk.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    const okSig = await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, ent.key, _b64urlToBytes(parts[2]), _tenc.encode(parts[0] + '.' + parts[1]));
+    if (!okSig) return { ok: false, reason: 'bad_signature' };
+    const nowS = Math.floor(Date.now() / 1000);
+    if (GOOGLE_ID_ISSUERS.indexOf(String(claims.iss)) < 0) return { ok: false, reason: 'bad_issuer' };
+    if (!Number.isFinite(claims.exp) || claims.exp < nowS - GOOGLE_ID_SKEW_S) return { ok: false, reason: 'expired' };
+    if (!Number.isFinite(claims.iat) || claims.iat > nowS + GOOGLE_ID_SKEW_S) return { ok: false, reason: 'not_yet_valid' };
+    if (!(claims.email_verified === true || claims.email_verified === 'true')) return { ok: false, reason: 'email_not_verified' };
+    const email = String(claims.email || '').trim().toLowerCase();
+    if (!email) return { ok: false, reason: 'no_email' };
+    let cfg;
+    try { cfg = await fetchConfig(env); } catch (e) { await deliveryAuthAlert(env, 'config_unreadable', 'P1', 'Could not read Config to check the mailbox allow-list (' + String((e && e.message) || e).slice(0, 100) + '); delivery e-mails are being refused.'); return { ok: false, reason: 'config_unreadable', unavailable: true }; }
+    const allowed = String(cfg.Delivery_Mailboxes || DELIVERY_MAILBOXES_DEFAULT).split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
+    if (allowed.indexOf(email) < 0) return { ok: false, reason: 'email_not_allowed', email_hint: email.replace(/^(.).*(@.*)$/, '$1***$2') };
+    return { ok: true, email };
+  } catch (e) {
+    if (e && e.code === 'jwks_unavailable') return { ok: false, reason: 'jwks_unavailable', unavailable: true };
+    return { ok: false, reason: 'verify_error', detail: String((e && e.message) || e).slice(0, 100) };
+  }
+}
+// Not silent, not a flood: at most one ledger report per where+ref per 10 minutes per Worker instance (the ledger also dedupes and caps by itself). Never contains a token.
+async function deliveryLedgerOnce(env, where, ref, severity, message) {
+  const now = Date.now(), k = where + '|' + ref;
+  if (__gAuthAlertAt[k] && now - __gAuthAlertAt[k] < 10 * 60000) return;
+  __gAuthAlertAt[k] = now;
+  await reportFailure(env, { system: 'hub', source: 'worker', where, ref: String(ref), severity, message: String(message).slice(0, 300) });   // never throws
+}
+function deliveryAuthAlert(env, reason, severity, message) { return deliveryLedgerOnce(env, 'delivery_auth_' + reason, reason, severity, message); }
+
+// ── The delivery lands on Brett's own Google Calendar, written by the Hub (Oct 23 2026). The Hub's service account acts as Brett (domain-wide delegation, narrow scope
+// calendar.events: the same mechanism as the cleaning calendar, getCalendarAccessToken). Config Delivery_Cal_Impersonate (falls back to STR_CAL_IMPERSONATE) names whose
+// primary calendar it is. One event per order (tagged with a private extended property, so a lost id can be found again); create / move / delete; every failure is
+// reported (failure ledger P1 + the response's calendar_status + the delivery row), never swallowed. On staging the write is a stub.
+const DELIVERY_CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const DELIVERY_CAL_KEY_PROP = 'ridgecoDeliveryKey';
+function deliveryCalEventBody(cal) {
+  const ev = { summary: cal.title, location: cal.location || '', description: cal.description || '', status: 'confirmed', extendedProperties: { private: { [DELIVERY_CAL_KEY_PROP]: cal.key } } };
+  if (cal.all_day) { ev.start = { date: cal.start_iso }; ev.end = { date: cal.end_iso }; }
+  else { ev.start = { dateTime: cal.start_iso, timeZone: 'America/New_York' }; ev.end = { dateTime: cal.end_iso, timeZone: 'America/New_York' }; }
+  return ev;
+}
+async function deliveryCalFetch(env, sub, method, pathAndQuery, body) {
+  const token = await getCalendarAccessToken(env, { sub, scope: DELIVERY_CAL_SCOPE });
+  const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary' + pathAndQuery, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  if (resp.status === 204) return { _status: 204 };
+  const text = await resp.text();
+  if (!resp.ok) {
+    const e = new Error('Google Calendar answered ' + resp.status + ' while acting as ' + sub + ': ' + smsMaskPhones(text).replace(/\s+/g, ' ').slice(0, 160) + (resp.status === 403 && /scope/i.test(text) ? ' (the narrow calendar.events permission is not enough; do not widen it without a decision)' : ''));
+    e.httpStatus = resp.status; throw e;
+  }
+  let j = {}; try { j = text ? JSON.parse(text) : {}; } catch (_) { throw new Error('Google Calendar returned unreadable JSON'); }
+  return j;
+}
+// -> { status, event_id, warn? } where status is created | updated | cancelled | nothing_to_cancel | none | staged: ... | dry_run: ... | failed: ...
+async function deliveryCalSync(env, cfg, deliveryId, row, cal, dry) {
+  const had = String(row && row.Calendar_Event_ID || '').trim();
+  if (!cal || cal.action === 'none') return { status: 'none', event_id: had };
+  if (dry) return { status: 'dry_run: would ' + cal.action, event_id: had };
+  if (inspCalStaged(env, cfg)) return { status: 'staged: calendar writes are stubbed on the test server', event_id: had };
+  const sub = String(cfg.Delivery_Cal_Impersonate || cfg.STR_CAL_IMPERSONATE || '').trim();
+  try {
+    if (!sub || !STR_EMAIL_RE.test(sub)) throw Object.assign(new Error('Config Delivery_Cal_Impersonate (or STR_CAL_IMPERSONATE) is ' + (sub ? 'not an email address' : 'not set') + ': set it to brett@bmoremanagement.com so the Hub can write deliveries to Brett\'s calendar'), { notConfigured: true });
+    const find = async () => {
+      const q = '/events?privateExtendedProperty=' + encodeURIComponent(DELIVERY_CAL_KEY_PROP + '=' + cal.key) + '&maxResults=10&fields=items(id,status)';
+      return ((await deliveryCalFetch(env, sub, 'GET', q)).items || []).filter(x => x && x.id && x.status !== 'cancelled').map(x => x.id);
+    };
+    const gone = e => e && (e.httpStatus === 404 || e.httpStatus === 410);
+    if (cal.action === 'cancel') {
+      const ids = Array.from(new Set([had].filter(Boolean).concat(await find())));
+      if (!ids.length) return { status: 'nothing_to_cancel', event_id: '' };
+      for (const id of ids) { try { await deliveryCalFetch(env, sub, 'DELETE', '/events/' + encodeURIComponent(id)); } catch (e) { if (!gone(e)) throw e; } }
+      return { status: 'cancelled', event_id: '' };
+    }
+    const body = deliveryCalEventBody(cal);
+    let id = had, how = 'updated';
+    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); } catch (e) { if (!gone(e)) throw e; id = ''; } }
+    if (!id) {
+      const found = await find();
+      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); }
+      else { const made = await deliveryCalFetch(env, sub, 'POST', '/events', body); id = String(made.id || ''); how = 'created'; if (!id) throw new Error('Google Calendar did not return an event id'); }
+    }
+    return { status: how, event_id: id };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 220);
+    await deliveryLedgerOnce(env, 'delivery_calendar', (e && e.notConfigured ? 'not_configured' : deliveryId), 'P1', 'Delivery ' + deliveryId + ' was saved but its calendar event was NOT written: ' + msg);
+    return { status: 'failed: ' + msg, event_id: had, failed: true };
+  }
+}
+
 // POST /intake/delivery-email. See the contract at the top of this section.
 async function deliveryEmailIntake(env, body) {
   const t0 = Date.now();
@@ -34648,7 +34801,7 @@ async function deliveryEmailIntake(env, body) {
     order_number: '', item_type: '', make_model: '', expected_date: '', expected_window: '', delivery_address: '',
     property_matched: false, property_id: '', unit_id: '', tenant_id: '', wo_id: '', wo_created: false,
     brett_sms_sent: null, sms_status: '', tenant_sms: 'off', tenant_sms_detail: '',
-    calendar: { action: 'none' }, telemetry_ok: true, needs_attention: false, warnings, dry_run: dry,
+    calendar: { action: 'none' }, calendar_status: 'none', calendar_event_id: '', telemetry_ok: true, needs_attention: false, warnings, dry_run: dry,
   }, over), 200);
   try {
     // Loud Config read (fetchConfig swallows errors and would silently fall back to defaults).
@@ -34683,7 +34836,14 @@ async function deliveryEmailIntake(env, body) {
       }
       // The calendar of the delivery's CURRENT state rides along so a retry of an attempt whose calendar step failed can finish it (the upsert is idempotent by key).
       const dupCal = seenRow.Status === 'Needs Review' ? { action: 'none' } : deliveryCalendarObject({ order: seenRow.Order_Number, delivery_id: seenRow.ID, item: seenRow.Item_Type, make: seenRow.New_Make_Model, date: seenRow.Expected_Date, window: seenRow.Expected_Window, address: seenRow.Delivery_Address, wo_id: wo.wo_id || '', kind: '', status: seenRow.Status, is_new: false });
-      return R(Object.assign(parsedFields, { duplicate: true, reason: 'already_processed', delivery_id: String(seenRow.ID), status: seenRow.Status || '', wo_id: wo.wo_id || '', wo_created: !!wo.created, property_id: seenRow.Property_ID || '', unit_id: seenRow.Unit_ID || '', tenant_id: seenRow.Tenant_ID || '', property_matched: !!seenRow.Property_ID, calendar: dupCal }));
+      // A copy of an email whose calendar write FAILED earlier retries it (idempotent: the event is found again by its key). Same 45 s rule as the WO: not while the first attempt may still be writing.
+      let dupCs = { status: 'none', event_id: String(seenRow.Calendar_Event_ID || '') };
+      if (!dry && dupCal.action !== 'none' && /^failed|^not_configured/.test(String(seenRow.Calendar_Status || '')) && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
+        dupCs = await deliveryCalSync(env, cfg, seenRow.ID, seenRow, dupCal, false);
+        try { await updateRowVerified(env, 'Deliveries', seenRow.ID, { Calendar_Status: dupCs.status.slice(0, 200), Calendar_Event_ID: dupCs.event_id }); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+        if (dupCs.failed) warnings.push('calendar: ' + dupCs.status);
+      }
+      return R(Object.assign(parsedFields, { duplicate: true, reason: 'already_processed', delivery_id: String(seenRow.ID), status: seenRow.Status || '', wo_id: wo.wo_id || '', wo_created: !!wo.created, property_id: seenRow.Property_ID || '', unit_id: seenRow.Unit_ID || '', tenant_id: seenRow.Tenant_ID || '', property_matched: !!seenRow.Property_ID, calendar: dupCal, calendar_status: dupCs.status, calendar_event_id: dupCs.event_id || '' }));
     }
 
     // ── find the existing delivery: by order number, else (no order number) the single open delivery at this address ──
@@ -34797,7 +34957,7 @@ async function deliveryEmailIntake(env, body) {
 
     if (dry) {
       const cal = (stale || noChange) ? { action: 'none' } : calendarFor(isNew ? 'new' : prior.ID);
-      return R(Object.assign(base, { created: isNew, updated: !isNew && !stale, delivery_id: isNew ? '' : String(prior.ID), reason: stale ? 'stale_email' : (noChange ? 'no_change' : (isNew ? 'would_create' : 'would_update')), detail: [placeNotes.join('; '), anomaly, 'would text Brett: ' + (alertEvent || 'no')].filter(Boolean).join(' | '), wo_id: isNew ? '' : String(prior.Linked_WO_IDs || '').split(',')[0].trim(), calendar: cal }));
+      return R(Object.assign(base, { created: isNew, updated: !isNew && !stale, delivery_id: isNew ? '' : String(prior.ID), reason: stale ? 'stale_email' : (noChange ? 'no_change' : (isNew ? 'would_create' : 'would_update')), detail: [placeNotes.join('; '), anomaly, 'would text Brett: ' + (alertEvent || 'no')].filter(Boolean).join(' | '), wo_id: isNew ? '' : String(prior.Linked_WO_IDs || '').split(',')[0].trim(), calendar: cal, calendar_status: cal.action === 'none' ? 'none' : 'dry_run: would ' + cal.action }));
     }
 
     // ── writes ──
@@ -34929,11 +35089,21 @@ async function deliveryEmailIntake(env, body) {
     }
     if (smsRes && smsRes !== 'sent') warnings.push('Brett text not sent: ' + smsRes);
 
-    const telOk = await deliveryTelemetry(env, t0, warnings.length === 0, (isNew ? 'created ' : (stale ? 'stale ' : 'updated ')) + deliveryId + ' ' + (order || '') + ' ' + p.kind + ' -> ' + newStatus + '; brett=' + (smsRes || 'none') + '; tenant=' + tn.tenant_sms + '; wo=' + (woId || '-') + (warnings.length ? '; WARN ' + warnings.join(' / ') : ''));
-    const cal = (stale || noChange || lostClaim) ? { action: 'none' } : calendarFor(deliveryId);
+    // ── the calendar event, written by the Hub as Brett (not the Apps Script). A repeat that changes nothing re-tries only a previously FAILED write. ──
+    stage = 'calendar';
+    let cal = (stale || noChange || lostClaim) ? { action: 'none' } : calendarFor(deliveryId);
+    if (cal.action === 'none' && noChange && /^failed|^not_configured/.test(String(merged.Calendar_Status || ''))) cal = calendarFor(deliveryId);
+    const cs = await deliveryCalSync(env, cfg, deliveryId, merged, cal, false);
+    if (cs.failed) warnings.push('calendar: ' + cs.status);
+    if (cal.action !== 'none' && !cs.status.startsWith('staged')) {
+      const cu = { Calendar_Status: cs.status.slice(0, 200) };
+      if (cs.event_id !== String(merged.Calendar_Event_ID || '')) cu.Calendar_Event_ID = cs.event_id;
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, cu); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+    }
+    const telOk = await deliveryTelemetry(env, t0, warnings.length === 0, (isNew ? 'created ' : (stale ? 'stale ' : 'updated ')) + deliveryId + ' ' + (order || '') + ' ' + p.kind + ' -> ' + newStatus + '; brett=' + (smsRes || 'none') + '; tenant=' + tn.tenant_sms + '; wo=' + (woId || '-') + '; cal=' + cs.status.slice(0, 40) + (warnings.length ? '; WARN ' + warnings.join(' / ') : ''));
     return R(Object.assign(base, {
       created: isNew, updated: !isNew && !stale && !noChange && !lostClaim, duplicate: noChange || lostClaim, delivery_id: deliveryId, reason: stale ? 'stale_email' : (noChange ? 'no_change' : (lostClaim ? 'concurrent_duplicate' : '')), detail: [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : ''].filter(Boolean).join(' | '),
-      wo_id: woId, wo_created: !!woInfo.created, brett_sms_sent: brettSent, sms_status: smsRes, tenant_sms: tn.tenant_sms, tenant_sms_detail: tn.detail || '', calendar: cal, telemetry_ok: telOk,
+      wo_id: woId, wo_created: !!woInfo.created, brett_sms_sent: brettSent, sms_status: smsRes, tenant_sms: tn.tenant_sms, tenant_sms_detail: tn.detail || '', calendar: cal, calendar_status: cs.status, calendar_event_id: cs.event_id || '', telemetry_ok: telOk,
       needs_attention: warnings.length > 0 || brettSent === false || !telOk,
     }));
   } catch (e) {
