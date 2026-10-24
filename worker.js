@@ -38600,7 +38600,7 @@ function inspIcs(b, method, o) {
   const addr = b.Formatted_Address || b.Address, cancel = method === 'CANCEL';
   const seq = Math.max(0, parseInt(b.Ics_Seq, 10) || 0);   // Appointment Shift: each time change bumps this so calendars REPLACE the old entry
   const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ridge Co//Inspection Booking//EN', 'CALSCALE:GREGORIAN', 'METHOD:' + method, 'BEGIN:VEVENT',
-    'UID:insp-' + b.ID + '@ridgeco', 'DTSTAMP:' + inspIcsStamp(Date.now()), 'SEQUENCE:' + (cancel ? 1 : 0),
+    'UID:insp-' + b.ID + '@ridgeco', 'DTSTAMP:' + inspIcsStamp(Date.now()), 'SEQUENCE:' + (cancel ? seq + 1 : seq),
     'DTSTART:' + inspIcsStamp(Date.parse(b.Start_ISO)), 'DTEND:' + inspIcsStamp(Date.parse(b.End_ISO)),
     'SUMMARY:' + inspIcsEsc((cancel ? 'CANCELLED: ' : '') + 'Inspection: ' + addr), 'LOCATION:' + inspIcsEsc(addr),
     'DESCRIPTION:' + inspIcsEsc('Inspection with Brett (Ridge Co). Change or cancel: ' + inspBookUrl('m=' + encodeURIComponent(b.Manage_Token))),
