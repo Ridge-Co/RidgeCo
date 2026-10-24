@@ -1,3 +1,13 @@
+# PROPERTIES PAGE: SWITCHES, CUSTOMER APPLY, DUPLICATE/MERGE, DETAIL TABS, PROPOSAL SMS-HOLD WARNING — Oct 24, 2026 — head `feat/property-toggles-detail-oct24` cut from main. BUILD_VERSION `2026-10-24.01-property-toggles-detail`. FEATURE_LOG rule 231. Design note: `context/PROPERTY_TOGGLES_DESIGN_v1.0.md`.
+
+## 🟡 Built and tested, PR open to main, NOT merged (Brett decides: it touches text sending and writes to the Properties sheet). Unmerged is not deployed.
+**1 Switches:** one registry `PROPERTY_TOGGLES` (Active, Tenant WO submission, SMS master, SMS to tenants, SMS to owner, SMS to vendors, Owner emails). New columns `SMS_Tenants_Enabled`, `SMS_Owners_Enabled`, `SMS_Vendors_Enabled`, `Owner_Email_Enabled`: blank = ON, created on first change by `ensureColumns`. Master `SMS_Enabled` unchanged. New held reasons appear in `Gate_Snapshot`.
+**2 Customer vs Owner:** Customer = an Owners row; Owner = the person (contact + Owner_Users logins). "Apply to all of this customer's properties" = preview, Leave-out checklist, confirm; writes each property's own column once with read-back; no live link.
+**3 Duplicates:** Mark as duplicate (hidden, restorable) and Merge into another property (pick only where both sides differ; every reference re-pointed from a 26-column registry; per-tab counts; verify by re-reading; unknown reference column blocks). 93 into 94 NOT executed.
+**4 Detail view:** tap a property: Settings / Info / Units / Cleanup tabs; badges on the list; lazy `GET /property/detail`; deep link `?property=ID&tab=settings`. Access codes hidden until tapped.
+**5 Silent-failure fix:** `GET /sms/gate-preview` (read-only) so the proposal screen says "Text will NOT send: ..." with a link to the Settings tab, shows the real outcome after sending; Message Queue pending rows show the held reason with a link.
+**Tests:** `test/property-toggles.test.mjs` (2226 assertions); full suite 198 files, 0 failing; three phone-width browser scripts (40, 19, 8 checks). **Needs from Brett:** the yes/no on merging; answers in the PR (Goldszmidt grouping, BUILD_VERSION convention, vendor sends with no property).
+
 # D-16: CUT THE TWILIO TEXT BILL — Oct 23, 2026 — head `feat/sms-cost-d16-oct23` cut from main tip 883b868. Marker `sms-cost-d16-2026-10-23` (BUILD_VERSION is deploy-stamped, untouched). FEATURE_LOG rule 229.
 
 ## 🟡 Built, tested, merged to `staging` ONLY. NOT merged to main: Brett decides (it touches text sending). Draft PR to main is marked NOT FOR MERGE.
