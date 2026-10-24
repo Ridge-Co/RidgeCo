@@ -232,7 +232,7 @@ function render(r){
 function itemHtml(i){
   var k=esc(i.key), tag={inspection:'Inspection',wo_window:'Work order',delivery:'Delivery'}[i.type]||i.type;
   var h='<div class="item'+(i.shiftable?'':' locked')+'"><div class="top">';
-  h+='<input type="checkbox" id="c-'+k+'" aria-label="Move '+esc(i.label)+'" '+(i.checked?'checked ':'')+(i.shiftable&&!i.problems.length?'':'disabled ')+'onchange="tog(\''+k+'\',this.checked)">';
+  h+='<label class="chk"><input type="checkbox" id="c-'+k+'" aria-label="Move '+esc(i.label)+'" '+(i.checked?'checked ':'')+(i.shiftable&&!i.problems.length?'':'disabled ')+'onchange="tog(\''+k+'\',this.checked)"></label>';
   h+='<div style="flex:1;min-width:0"><div class="name">'+esc(i.label)+'<span class="tag">'+esc(tag)+'</span></div><div class="muted">'+esc(i.sub||'')+'</div>';
   if(i.old){
     h+='<div class="times"><span class="'+(i.changed?'old':'')+'">'+esc(i.old.range)+'</span>';
