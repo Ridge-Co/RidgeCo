@@ -418,4 +418,180 @@ const freshDb = () => ({
   ok(w.db.Properties[0].includes('SMS_Owners_Enabled'), 'ensureColumns ran before the write');
   eq(w.db.Properties.find(x => x[0] === '10')[w.db.Properties[0].indexOf('SMS_Owners_Enabled')], 'FALSE', 'sheet really holds FALSE');
   eq(w.failures.length, 0, 'happy path reports nothing');
-//__CONT__
+  eq((await w.API.propertyToggleSet({}, { property_id: '10', key: 'sms_owners', value: 'yes' })).status, 400, 'bad value refused');
+  eq((await w.API.propertyToggleSet({}, { property_id: '10', key: 'nope', value: 'TRUE' })).status, 400, 'unknown key refused');
+  eq((await w.API.propertyToggleSet({}, { property_id: '999', key: 'sms_owners', value: 'TRUE' })).status, 404, 'unknown property refused');
+  eq((await w.API.propertyToggleSet({}, { property_id: '10', key: 'tenant_wo', value: 'ON' })).body.on, true, 'tenant WO takes ON');
+  eq((await w.API.propertyToggleSet({}, { property_id: '10', key: 'tenant_wo', value: 'TRUE' })).status, 400, 'tenant WO refuses TRUE');
+  const f = makeWorld(freshDb(), { failVerified: () => true });
+  r = await f.API.propertyToggleSet({}, { property_id: '10', key: 'sms_owners', value: 'FALSE' });
+  eq([r.status, r.body.ok], [500, false], 'FAULT: a write that does not stick is NOT reported as success');
+  ok(/Not saved/.test(r.body.error), 'the screen gets a plain error'); eq([f.failures.length, f.failures[0].severity], [1, 'P1'], 'and it is reported P1');
+  const g = makeWorld(freshDb(), { failEnsure: true });
+  r = await g.API.propertyToggleSet({}, { property_id: '10', key: 'sms_owners', value: 'FALSE' });
+  eq([r.status, g.failures.length], [500, 1], 'FAULT: could not add the column -> failure shown and reported');
+}
+{
+  const w = makeWorld(freshDb());
+  const prev = (await w.API.ownerToggleApplyHandler({}, { owner_id: '7', key: 'sms_owners', value: 'FALSE', exclude_ids: ['11'] }, false)).body;
+  eq([prev.preview, prev.counts.will_change, prev.counts.excluded], [true, 1, 1], 'preview before/after: one change, one excluded');
+  eq(w.batchWrites.length, 0, 'preview wrote nothing');
+  eq(prev.customer.name, 'Phoenix (Amanda I)', 'names the customer');
+  let r = await w.API.ownerToggleApplyHandler({}, { owner_id: '7', key: 'sms_owners', value: 'FALSE', exclude_ids: ['11'], token: prev.token }, true);
+  eq(r.status, 400, 'no confirm tap, no write');
+  r = await w.API.ownerToggleApplyHandler({}, { owner_id: '7', key: 'sms_owners', value: 'FALSE', exclude_ids: [], token: prev.token, confirm: true }, true);
+  eq([r.status, r.body.code], [409, 'changed_since_preview'], 'different exclusions than previewed -> refused, nothing written');
+  eq(w.batchWrites.length, 0, 'still nothing written');
+  r = await w.API.ownerToggleApplyHandler({}, { owner_id: '7', key: 'sms_owners', value: 'FALSE', exclude_ids: ['11'], token: prev.token, confirm: true }, true);
+  eq([r.status, r.body.ok, r.body.applied, r.body.verified], [200, true, 1, true], 'applied and verified: ' + JSON.stringify(r.body).slice(0, 200));
+  const h = w.db.Properties[0], ci = h.indexOf('SMS_Owners_Enabled');
+  eq(w.db.Properties.filter(x => x[0] === '10' || x[0] === '11').map(x => [x[0], x[ci]]), [['10', 'FALSE'], ['11', '']], 'only the non-excluded property was written; the excluded one is untouched');
+  eq(w.failures.length, 0, 'happy path reports nothing');
+  const again = (await w.API.ownerToggleApplyHandler({}, { owner_id: '7', key: 'sms_owners', value: 'FALSE', exclude_ids: ['11'] }, false)).body;
+  eq(again.counts.will_change, 0, 'applying twice is safe: nothing left to change');
+  eq((await w.API.ownerToggleApplyHandler({}, { owner_id: '999', key: 'sms_owners', value: 'FALSE' }, false)).status, 404, 'unknown customer');
+  // FAULT: the batch write throws
+  const f = makeWorld(freshDb(), { failWrite: () => true });
+  const pv = (await f.API.ownerToggleApplyHandler({}, { owner_id: '7', key: 'sms_owners', value: 'FALSE' }, false)).body;
+  r = await f.API.ownerToggleApplyHandler({}, { owner_id: '7', key: 'sms_owners', value: 'FALSE', token: pv.token, confirm: true }, true);
+  eq([r.status, r.body.ok], [500, false], 'FAULT: failed write -> failure, not success'); ok(/Not applied/.test(r.body.error), 'plain message'); eq([f.failures.length, f.failures[0].severity], [1, 'P1'], 'reported P1');
+}
+{
+  const w = makeWorld(freshDb());
+  eq((await w.API.propertyMarkDuplicate({}, { property_id: '93', duplicate_of: '93' }, false)).status, 400, 'cannot be its own duplicate');
+  eq((await w.API.propertyMarkDuplicate({}, { property_id: '93', duplicate_of: '555' }, false)).status, 404, 'target must exist');
+  const r = await w.API.propertyMarkDuplicate({}, { property_id: '93', duplicate_of: '94' }, false);
+  eq([r.status, r.body.ok, r.body.still_attached.work_orders], [200, true, 1], 'marked; says its work order was NOT moved');
+  ok(/NOT moved/.test(r.body.note), 'and tells the user how to move it');
+  const h = w.db.Properties[0], row = w.db.Properties.find(x => x[0] === '93');
+  eq([row[h.indexOf('Active')], row[h.indexOf('Duplicate_Of')], row[h.indexOf('Duplicate_Marked_Date')]], ['FALSE', '94', '2026-10-24'], 'Active FALSE + Duplicate_Of + date');
+  ok(w.db.Properties.length === 5, 'nothing deleted');
+  eq((await w.API.propertyMarkDuplicate({}, { property_id: '10', duplicate_of: '93' }, false)).status, 409, 'cannot point at a property that is itself a duplicate');
+  const back = await w.API.propertyMarkDuplicate({}, { property_id: '93' }, true);
+  eq([back.body.ok, w.db.Properties.find(x => x[0] === '93')[h.indexOf('Active')], w.db.Properties.find(x => x[0] === '93')[h.indexOf('Duplicate_Of')]], [true, 'TRUE', ''], 'fully recoverable');
+  eq((await w.API.propertyMarkDuplicate({}, { property_id: '93' }, true)).status, 409, 'restoring a non-duplicate is refused');
+  const f = makeWorld(freshDb(), { failVerified: () => true });
+  const bad = await f.API.propertyMarkDuplicate({}, { property_id: '93', duplicate_of: '94' }, false);
+  eq([bad.status, bad.body.ok, f.failures.length], [500, false, 1], 'FAULT: mark that does not stick is a visible failure');
+  const merged = makeWorld(freshDb()); merged.db.Properties[1][12] = '94'; merged.db.Properties[1][14] = '{"merged_into":"94"}';
+  eq((await merged.API.propertyMarkDuplicate({}, { property_id: '93' }, true)).status, 409, 'a merged-away property cannot be "restored" (its records moved)');
+}
+{ // info + unit saves
+  const w = makeWorld(freshDb());
+  let r = await w.API.propertyInfoSave({}, { property_id: '10', fields: { City: 'Towson', Access_Notes: 'TEST-x' } });
+  eq([r.status, r.body.changed], [200, ['City', 'Access_Notes']], 'info saved, changed fields listed');
+  eq((await w.API.propertyInfoSave({}, { property_id: '10', fields: { SMS_Enabled: 'FALSE' } })).status, 400, 'switches cannot be saved from Info (use Settings)');
+  eq((await w.API.propertyInfoSave({}, { property_id: '10', fields: { Nope: 'x' } })).status, 400, 'unknown column refused instead of silently ignored');
+  eq((await w.API.propertyInfoSave({}, { property_id: '10', fields: { Owner_ID: '999' } })).status, 400, 'owner must exist');
+  eq((await w.API.propertyInfoSave({}, { property_id: '10', fields: { City: 'Towson' } })).body.changed, [], 'saving the same value changes nothing');
+  r = await w.API.propertyUnitSave({}, { unit_id: 'u2', fields: { HVAC_Filter_Size: '16x25x1', Unit_Label: 'B2' } });
+  eq([r.status, r.body.ok], [200, true], 'unit saved'); ok(w.db.Units[0].includes('HVAC_Filter_Size'), 'HVAC column created on first save (ensureColumns)');
+  eq(w.db.Units.find(x => x[0] === 'u2')[w.db.Units[0].indexOf('HVAC_Filter_Size')], '16x25x1', 'value is in the sheet');
+  eq((await w.API.propertyUnitSave({}, { unit_id: 'u2', fields: { Property_ID: '5' } })).status, 400, 'a unit cannot be moved from here');
+  const f = makeWorld(freshDb(), { failVerified: () => true });
+  eq([(await f.API.propertyInfoSave({}, { property_id: '10', fields: { City: 'Z' } })).status, f.failures.length], [500, 1], 'FAULT: info save that does not stick is a visible failure');
+  const g = makeWorld(freshDb(), { failVerified: () => true });
+  eq([(await g.API.propertyUnitSave({}, { unit_id: 'u2', fields: { Unit_Label: 'z' } })).status, g.failures.length], [500, 1], 'FAULT: unit save that does not stick is a visible failure');
+}
+{ // detail: lazy read, every column shown, sensitive group flagged, system columns kept apart
+  const db = freshDb(); db.Properties[0].push('Mystery'); db.Properties.slice(1).forEach(r => r.push(r[0] === '10' ? 'm' : ''));
+  const w = makeWorld(db); const r = await w.API.propertyDetail({}, new URL('https://x.test/property/detail?id=10'));
+  eq(r.status, 200, 'detail ok'); const b = r.body;
+  const shown = new Set(b.groups.flatMap(g => g.cols).concat(b.system_cols));
+  ok(b.headers.every(h => shown.has(h)), 'EVERY Properties column is viewable somewhere: missing ' + b.headers.filter(h => !shown.has(h)).join(','));
+  ok(b.groups.find(g => g.key === 'other').cols.includes('Mystery'), 'a column nobody grouped lands in Other');
+  ok(b.groups.find(g => g.key === 'access').sensitive === true && b.groups.find(g => g.key === 'access').cols.includes('Lockbox_Code'), 'lockbox is in the sensitive group');
+  ok(b.system_cols.includes('SMS_Enabled') && !b.groups.some(g => g.cols.includes('SMS_Enabled')), 'switches are on Settings, not editable on Info');
+  eq(b.units.map(u => u.ID), ['u1', 'u2'], 'units for this property only (inactive included, flagged by Active)');
+  eq(b.customer.id, '7', 'customer resolved from Owner_ID'); eq(b.toggles.find(t => t.key === 'sms_owners').on, true, 'toggle states included');
+  ok(b.missing_columns.includes('SMS_Owners_Enabled'), 'tells the UI which switch columns do not exist yet');
+  ok(!b.candidates.some(c => c.id === '10'), 'merge candidates exclude itself');
+  eq((await w.API.propertyDetail({}, new URL('https://x.test/property/detail?id=404'))).status, 404, 'unknown id');
+  eq((await w.API.propertyDetail({}, new URL('https://x.test/property/detail'))).status, 400, 'missing id');
+}
+{ // the gate-preview ENDPOINT
+  const db = freshDb(); db.Properties[0].push('SMS_Owners_Enabled'); db.Properties.slice(1).forEach(r => r.push(r[0] === '10' ? 'FALSE' : ''));
+  db.Owners[0].push('Phone'); db.Owners.slice(1).forEach(r => r.push('4105551212'));
+  const w = makeWorld(db);
+  let r = await w.API.smsGatePreviewHandler({}, new URL('https://x.test/sms/gate-preview?property_id=10&recipient_type=owner&window=proposal'));
+  eq([r.status, r.body.will_send, r.body.gate_snapshot], [200, false, 'Property owner texts OFF'], 'endpoint blocks and says which switch');
+  ok(/NOT send/.test(r.body.headline) && r.body.settings_link.includes('property=10') && r.body.settings_link.includes('tab=settings'), 'carries the headline and the Settings link');
+  r = await w.API.smsGatePreviewHandler({}, new URL('https://x.test/sms/gate-preview?property_id=11&recipient_type=owner'));
+  eq(r.body.gates_open, true, 'a property with a blank switch is open');
+  eq((await w.API.smsGatePreviewHandler({}, new URL('https://x.test/sms/gate-preview?recipient_type=owner'))).status, 400, 'property required');
+  eq((await w.API.smsGatePreviewHandler({}, new URL('https://x.test/sms/gate-preview?property_id=404&recipient_type=owner'))).status, 404, 'unknown property');
+  eq((await w.API.smsGatePreviewHandler({}, new URL('https://x.test/sms/gate-preview?property_id=10&recipient_type=admin'))).status, 400, 'bad recipient type');
+  eq(w.batchWrites.length, 0, 'the preview endpoint writes nothing');
+  ok(!/updateRow|addRow|sheetsRequest\(env, 'POST'|sendSMS|smsGatedSend/.test(grab('smsGatePreviewHandler') + grab('smsGatePreview')), 'source check: the preview code path contains no write or send call');
+}
+{ // vendor gate property lookup: cheap when no property has the switch off; reports when it cannot look
+  const w = makeWorld(freshDb());
+  eq(await w.API.ppResolveGateProperty({}, { wo_id: 'W1' }), null, 'no property has vendor texts OFF -> no Work_Orders read, no property');
+  const db = freshDb(); db.Properties[0].push('SMS_Vendors_Enabled'); db.Properties.slice(1).forEach(r => r.push(r[0] === '10' ? 'FALSE' : ''));
+  const w2 = makeWorld(db);
+  eq((await w2.API.ppResolveGateProperty({}, { wo_id: 'W1' })).ID, '10', 'resolved through the work order when a switch is off');
+  eq((await w2.API.ppResolveGateProperty({}, { property_id: '11' })).ID, '11', 'or directly by property id');
+  eq(await w2.API.ppResolveGateProperty({}, { wo_id: 'NOPE' }), null, 'unknown work order -> no property');
+}
+
+// ── the REAL smsGatedSend: vendor texts honour the property's switch, a failed lookup is reported (P2), and the text is never silently dropped ──
+{
+  const sg = grab('smsGatedSend');
+  function build(over) {
+    over = over || {}; const reports = [], posts = [], resolved = []; let sends = 0;
+    const stubs = {
+      ensureSmsInfra: async () => {}, fetchConfig: async () => CFG_OPEN, normalizePhone: p => String(p || ''), smsToggleOn: P.smsToggleOn, tenantMovedOut: P.tenantMovedOut,
+      smsGateDecision: P.smsGateDecision, smsPropertyGateFlags: P.smsPropertyGateFlags,
+      ppResolveGateProperty: async (env, o) => { resolved.push(o); if (over.resolveThrows) throw new Error('Sheets 503'); return over.resolve === undefined ? null : over.resolve; },
+      translateForVendorDetailed: async () => ({ translated: false }),
+      sheetsRequest: async (env, method, path, body) => { if (method === 'GET') return { values: [['ID', 'Property_ID', 'Status', 'Gate_Snapshot'], ['7', '1', 'sent', '']] }; posts.push(body); return { updates: { updatedRange: 'Message_Queue!A3:D3' } }; },
+      MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: ['ID', 'Property_ID', 'Status', 'Gate_Snapshot'], nextSafeId: () => 8, appendedRowNumber: () => 3, guardAppendedIds: async (e, t, a, n, i, ids) => ({ ids, row: 3 }),
+      mqReportFailure: async () => {}, etHour: () => 12, isQuietHoursNow: () => false, nextQuietHoursEnd: () => new Date(), quietHoldUntil: () => null,
+      sendSMSRaw: async () => { sends++; return { sid: 'SM1' }; }, logMessageAudit: async () => {}, updateMessageQueueRow: async () => true,
+    };
+    Object.assign(stubs, d16Deps({ extra: { reportFailure: async (e, o) => { reports.push(o); } } }));
+    const names = Object.keys(stubs);
+    return { run: new Function(...names, sg + '\nreturn smsGatedSend;')(...names.map(k => stubs[k])), reports, posts, resolved, sends: () => sends };
+  }
+  const vend = { Phone: '+14105550111', Name: 'V', SMS_Enabled: 'TRUE' };
+  const opts = { recipient_type: 'vendor', vendor: vend, wo_id: 'W1', message_type: 'vendor_job_assigned', message_body: 'New job' };
+  let h = build({ resolve: { ID: '10', Address: '1 Main', SMS_Vendors_Enabled: 'FALSE' } }); let r = await h.run({}, Object.assign({}, opts));
+  eq([r.send_ok, r.sent, r.gate_snapshot], [false, false, 'Property vendor texts OFF'], 'REAL smsGatedSend: property vendor-text switch OFF blocks, with the reason');
+  eq(h.sends(), 0, 'and nothing went to Twilio'); ok(h.posts.length && h.posts[0].values[0][1] === '10', 'the held queue row records the property (so release re-checks it)');
+  h = build({ resolve: { ID: '10', SMS_Vendors_Enabled: '' } }); r = await h.run({}, Object.assign({}, opts));
+  eq([r.send_ok, r.sent, h.sends()], [true, true, 1], 'blank switch: sends exactly as before'); eq(h.reports.length, 0, 'happy path reports nothing');
+  h = build({ resolve: null }); r = await h.run({}, Object.assign({}, opts));
+  eq([r.sent, h.reports.length], [true, 0], 'no property switch applies (lookup says none): sends, nothing reported');
+  h = build({ resolveThrows: true }); r = await h.run({}, Object.assign({}, opts));
+  eq(r.sent, true, 'FAULT: lookup failed -> the text still goes (fails open)'); eq(h.reports.length, 1, '...but the failure is REPORTED'); eq([h.reports[0].severity, h.reports[0].where], ['P2', 'sms_vendor_property_lookup'], '...P2, named, so it shows in Needs Attention');
+  ok(/NOT checked/.test(h.reports[0].message), '...and says the switch was not checked');
+  h = build({ resolve: { ID: '99', SMS_Vendors_Enabled: 'FALSE' } }); r = await h.run({}, Object.assign({}, opts, { property: { ID: '10', Address: 'x', SMS_Vendors_Enabled: '' } }));
+  eq([r.sent, h.resolved.length], [true, 0], 'a property passed by the caller is used as-is; no lookup');
+  h = build({ resolve: { ID: '10', SMS_Vendors_Enabled: 'FALSE' } }); r = await h.run({}, Object.assign({}, opts, { property: { ID: '10', SMS_Vendors_Enabled: 'FALSE' } }));
+  eq(r.gate_snapshot, 'Property vendor texts OFF', 'a caller-supplied property with the switch OFF blocks too');
+  h = build({ resolve: { ID: '10', SMS_Vendors_Enabled: 'FALSE' } }); r = await h.run({}, { recipient_type: 'vendor', vendor: vend, message_type: 'vendor_pin', message_body: 'pin' });
+  eq([r.sent, h.resolved.length], [true, 0], 'a vendor text with no work order and no property (PIN text) is never affected and costs no lookup');
+  h = build({ resolve: { ID: '10', SMS_Vendors_Enabled: 'FALSE' } }); r = await h.run({}, { recipient_type: 'tenant', tenant: { Phone: '+14105550222', SMS_Enabled: 'TRUE' }, owner: { SMS_Enabled: 'TRUE' }, property: { ID: '10', SMS_Enabled: 'TRUE', SMS_Vendors_Enabled: 'FALSE' }, wo_id: 'W1', message_type: 'x', message_body: 'hi' });
+  eq([r.sent, h.resolved.length], [true, 0], 'the vendor switch never blocks tenant texts');
+  h = build({}); r = await h.run({}, { recipient_type: 'owner', owner: { Phone: '+14105550333', SMS_Enabled: 'TRUE' }, property: { ID: '10', SMS_Enabled: 'TRUE', SMS_Owners_Enabled: 'FALSE' }, message_type: 'x', message_body: 'hi' });
+  eq([r.sent, r.gate_snapshot], [false, 'Property owner texts OFF'], 'REAL smsGatedSend: the owner-text switch blocks an owner text');
+  const pv = P.smsGatePreview({ cfg: CFG_OPEN, kind: 'owner', property: { ID: '10', SMS_Enabled: 'TRUE', SMS_Owners_Enabled: 'FALSE' }, owner: { Phone: '4105550333', SMS_Enabled: 'TRUE' }, now: noon });
+  eq(pv.gate_snapshot, r.gate_snapshot, 'preview text == the real smsGatedSend text for the same situation');
+}
+// smsGatedSend wiring: a failed lookup is reported and the text is not blocked silently
+{
+  const text = grab('smsGatedSend');
+  ok(/ppResolveGateProperty\(env, opts\)/.test(text) && /sms_vendor_property_lookup/.test(text) && /severity: 'P2'/.test(text), 'smsGatedSend resolves the vendor property and REPORTS (P2) when it cannot');
+  ok(/smsPropertyGateFlags\(gateProperty\)/.test(text), 'smsGatedSend feeds the property flags to the gate');
+  ok(/Property_ID: \(gateProperty && gateProperty\.ID\)/.test(text), 'the queue row records the property so a held vendor text is re-checked at release');
+}
+// deny-by-default staging guard: every new write path has a TEST- check
+{
+  const g = grab('hubTestWriteAllowed');
+  for (const p of ['/property/toggle', '/property/info-save', '/property/unit-save', '/property/mark-duplicate', '/property/unmark-duplicate', '/property/merge-apply', '/owner/property-toggle-apply']) ok(g.includes("'" + p + "'"), 'staging guard covers ' + p);
+  const router = src.slice(src.indexOf("if (path === '/property/toggle')"), src.indexOf("if (path === '/property/toggle')") + 1500);
+  for (const p of ['/property/toggle', '/property/info-save', '/property/unit-save', '/property/mark-duplicate', '/property/unmark-duplicate', '/property/merge-preview', '/property/merge-apply', '/owner/property-toggle-preview', '/owner/property-toggle-apply']) ok(router.includes("'" + p + "'"), 'router has ' + p);
+  const rs = src.slice(src.indexOf('const ROLE_SCOPES = {'), src.indexOf('function isPathAllowedForRole'));
+  for (const p of ['/property/detail', '/sms/gate-preview', '/property/toggle', '/property/merge-apply', '/owner/property-toggle-apply']) ok(!rs.includes("'" + p + "'"), p + ' is NOT in any vendor/tenant/owner scope (admin only)');
+}
+console.log('property-toggles.test.mjs: ' + n + ' assertions passed');
