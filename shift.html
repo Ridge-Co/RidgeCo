@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<script src="failure-reporter.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Shift Appointments — Ridge Co</title>
+<style>
+  :root{--bg:#f4f5f7;--surface:#fff;--border:#dfe3e8;--text:#1c2430;--muted:#5d6877;--accent:#1d4ed8;--ok:#1a7f4b;--danger:#c0392b;--warn:#7a5b12;--chip:#eef2f7;--lock:#eceff3}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{overflow-x:hidden}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.4}
+  header{position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  header h1{font-size:18px;margin:0} header .ver{font-size:11px;color:var(--muted)}
+  main{max-width:680px;margin:0 auto;padding:14px 14px 90px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  h2{font-size:15px;margin:0 0 8px}
+  .muted{color:var(--muted);font-size:13px}
+  label.lbl{display:block;margin:10px 0 4px;font-size:13px;font-weight:600;color:var(--muted)}
+  input[type=date],input[type=time],input[type=number],input[type=text],input[type=password],textarea{width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;font-size:16px;font-family:inherit;background:var(--surface);color:var(--text)}
+  textarea{min-height:220px;line-height:1.45}
+  .btn{min-height:44px;padding:10px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.go{background:var(--ok);color:#fff;border-color:var(--ok)}
+  .btn.bad{color:var(--danger);border-color:var(--danger)}
+  .btn.sel{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn:disabled{opacity:.5;cursor:default}
+  .btns{display:flex;flex-wrap:wrap;gap:8px}
+  .seg{display:flex;gap:8px}.seg .btn{flex:1}
+  .item{border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--surface)}
+  .item.locked{background:var(--lock)}
+  .item .top{display:flex;gap:12px;align-items:flex-start}
+  .item input[type=checkbox]{width:28px;height:28px;margin:2px 0 0;flex:0 0 28px}
+  .item .name{font-weight:700;word-break:break-word}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--chip);color:var(--muted);margin-left:6px;vertical-align:middle}
+  .times{margin:6px 0 0;font-size:15px}
+  .times .old{color:var(--muted);text-decoration:line-through}
+  .times .arrow{margin:0 6px;color:var(--muted)}
+  .times .new{font-weight:700}
+  .edit{display:flex;gap:8px;margin-top:8px}.edit>div{flex:1}
+  .why{margin-top:6px;font-size:13px;color:var(--muted)}
+  .warn{margin-top:6px;font-size:13px;color:var(--warn);background:#fdf3e0;border:1px solid #f0d9a8;border-radius:8px;padding:6px 8px}
+  .err{margin-top:6px;font-size:13px;color:#8a1f14;background:#fdecea;border:1px solid #f3b9b3;border-radius:8px;padding:6px 8px}
+  .good{margin-top:6px;font-size:13px;color:#14532d;background:#e7f6ec;border:1px solid #b7e0c5;border-radius:8px;padding:6px 8px}
+  .banner{position:sticky;top:57px;z-index:9;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
+  .banner.err{background:#fdecea;border:1px solid #f3b9b3;color:#8a1f14}
+  .hide{display:none}
+  ul.plain{margin:0;padding-left:18px} ul.plain li{margin:4px 0}
+  .bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:10px 14px;z-index:20}
+  .bar .in{max-width:680px;margin:0 auto;display:flex;gap:10px;align-items:center}
+  .bar .in .btn{flex:1}
+  #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
+  .spin{color:var(--muted);padding:20px;text-align:center}
+</style>
+</head>
+<body>
+<div id="login" class="hide">
+  <h1>Shift Appointments</h1>
+  <p class="muted">Enter your Hub access code.</p>
+  <input id="login-input" type="password" placeholder="Access code" autocomplete="current-password">
+  <p id="login-error" class="hide" style="color:var(--danger);font-size:13px">Not recognized. Try again.</p>
+  <button class="btn primary" style="width:100%;margin-top:12px" onclick="doLogin()">Enter</button>
+</div>
+
+<div id="app" class="hide">
+<header><h1>Shift appointments</h1><span class="ver" id="ver"></span></header>
+<main>
+  <div id="errbox" class="banner err hide" role="alert"></div>
+
+  <div class="card">
+    <h2>1. Which day, and what happened?</h2>
+    <label class="lbl" for="date">Day</label>
+    <input type="date" id="date">
+    <div class="seg" style="margin-top:12px">
+      <button class="btn sel" id="m-relay" type="button" onclick="setMode('relay')">Re-lay the day</button>
+      <button class="btn" id="m-late" type="button" onclick="setMode('late')">Running late</button>
+    </div>
+    <div id="relay-help" class="muted" style="margin-top:8px">Uses the length rule (30 min per unit + 30 per building). The first stop keeps its start; each later one starts after the one before it plus the drive, rounded up to the quarter hour.</div>
+    <div id="late-box" class="hide" style="margin-top:8px">
+      <div class="muted">Moves everything checked below that starts from now on, by:</div>
+      <div class="btns" style="margin-top:8px">
+        <button class="btn" type="button" onclick="late(15)">+15 min</button>
+        <button class="btn" type="button" onclick="late(30)">+30 min</button>
+        <button class="btn" type="button" onclick="late(45)">+45 min</button>
+      </div>
+      <div class="edit"><div><label class="lbl" for="cust-min">Custom minutes</label><input type="number" id="cust-min" inputmode="numeric" placeholder="e.g. 20"></div>
+      <div style="align-self:flex-end"><button class="btn" type="button" onclick="late(parseInt(document.getElementById('cust-min').value,10))">Go</button></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2. Pick what moves</h2>
+    <div class="muted" style="margin-bottom:8px">Untick anything that should stay put. Greyed rows cannot be moved, and say why. Tap a time to change it by hand.</div>
+    <div id="items"><div class="spin">Loading…</div></div>
+  </div>
+
+  <div class="card" id="sum-card">
+    <h2>3. Exactly what Apply will do</h2>
+    <ul class="plain" id="summary"><li class="muted">Loading…</li></ul>
+    <div id="warnings"></div>
+  </div>
+
+  <div class="card hide" id="email-card">
+    <h2>4. The email that goes out</h2>
+    <div class="muted">Goes to <b id="email-to"></b>. Change the words however you like, but keep the <b>[[APPROVE…]]</b> and <b>[[RESCHEDULE…]]</b> pieces: they turn into buttons.</div>
+    <label class="lbl" for="email-subject">Subject</label>
+    <input type="text" id="email-subject">
+    <label class="lbl" for="email-body">Message</label>
+    <textarea id="email-body"></textarea>
+    <div id="email-note" class="muted hide" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card hide" id="result-card"><h2>Result</h2><div id="result"></div></div>
+
+  <div class="card">
+    <h2>Waiting for an answer</h2>
+    <div class="muted">Changes sent to the partner that are not finished yet. The booking stays at its old time until they approve.</div>
+    <div id="props" style="margin-top:8px"><div class="spin">Loading…</div></div>
+    <button class="btn" type="button" style="margin-top:8px" onclick="loadProps()">Refresh</button>
+  </div>
+</main>
+<div class="bar"><div class="in">
+  <button class="btn go" id="apply" type="button" onclick="doApply()" disabled>Apply</button>
+</div></div>
+</div>
+
+<script>
+var Q=new URLSearchParams(location.search);
+// ?api=staging may only point at the staging Worker (pre-merge testing); anything else is ignored.
+var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(Q.get('api')||'')?Q.get('api'):'https://maintenance-hub.brett-2f8.workers.dev';
+var SECRET_KEY='mh_auth', AUTH='';
+var ONLY=(Q.get('only')||'').split(',').map(function(s){return s.trim();}).filter(Boolean);   // optional: limit to these keys (testing)
+var st={date:'',mode:'relay',minutes:0,from_iso:'',checked:{},edits:{},plan:null,planId:'',emailDirty:false,busy:false,seq:0,timer:null};
+
+function $(id){return document.getElementById(id);}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function api(method,path,body){
+  var o={method:method,headers:{'Content-Type':'application/json','X-Auth-Token':AUTH}}; if(body) o.body=JSON.stringify(body);
+  return fetch(WORKER+path,o).then(function(r){
+    return r.json().catch(function(){return {ok:false,error:'bad_response',message:'The server sent an unreadable answer (HTTP '+r.status+').'};}).then(function(j){
+      if(j&&j.error==='Unauthorized') throw new Error('Unauthorized');
+      j._http=r.status; return j;
+    });
+  });
+}
+function showErr(msg,where,err){
+  var b=$('errbox'); b.textContent=msg; b.classList.remove('hide');
+  try{ if(window.hubReportFailure) window.hubReportFailure(where||'shift.html',err||new Error(msg)); }catch(e){ console.error('report failed',e); }   // silent-ok: reporter is best-effort and the error is already on screen
+}
+function clearErr(){ $('errbox').classList.add('hide'); }
+
+// ── login ──
+function doLogin(){
+  var v=$('login-input').value.trim(); AUTH=v;
+  api('GET','/version').then(function(){ return api('GET','/shift/proposals'); }).then(function(d){ if(d&&d.ok===false&&d._http===401) throw new Error('Unauthorized'); localStorage.setItem(SECRET_KEY,v); enter(); })
+    .catch(function(){ AUTH=''; $('login-error').classList.remove('hide'); });
+}
+$('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
+(function(){
+  var stored=''; try{ stored=localStorage.getItem(SECRET_KEY)||''; }catch(e){ stored=''; }   // silent-ok: storage blocked means show the login box
+  if(stored){ AUTH=stored; api('GET','/shift/proposals').then(function(d){ if(d&&d._http===401) throw new Error('Unauthorized'); enter(); }).catch(function(){ AUTH=''; $('login').classList.remove('hide'); }); }
+  else $('login').classList.remove('hide');
+})();
+function etToday(){ return new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'}); }
+function enter(){
+  $('login').classList.add('hide'); $('app').classList.remove('hide');
+  api('GET','/version').then(function(d){ $('ver').textContent=d.version||''; }).catch(function(e){ showErr('Could not read the version: '+e.message,'shift.version',e); });
+  st.date=Q.get('date')||etToday(); $('date').value=st.date;
+  $('date').addEventListener('change',function(){ st.date=this.value; resetPlan(); refresh(); });
+  loadProps(); refresh();
+}
+function resetPlan(){ st.checked={}; st.edits={}; st.from_iso=''; st.emailDirty=false; }
+
+// ── modes ──
+function setMode(m){
+  st.mode=m; st.checked={}; st.edits={}; st.from_iso=''; st.emailDirty=false;
+  $('m-relay').classList.toggle('sel',m==='relay'); $('m-late').classList.toggle('sel',m==='late');
+  $('late-box').classList.toggle('hide',m!=='late'); $('relay-help').classList.toggle('hide',m!=='relay');
+  if(m==='late'&&!st.minutes) st.minutes=0;
+  if(m==='relay') refresh();
+  else { $('items').innerHTML='<div class="spin">Pick how late you are running.</div>'; $('summary').innerHTML='<li class="muted">Pick +15, +30, +45 or a custom number.</li>'; $('apply').disabled=true; $('apply').textContent='Apply'; $('email-card').classList.add('hide'); }
+}
+function late(n){
+  if(!(n&&isFinite(n)&&n!==0)){ showErr('Type a number of minutes first.','shift.late'); return; }
+  clearErr(); st.mode='late'; st.minutes=n; st.checked={}; st.edits={}; st.from_iso=''; st.emailDirty=false; refresh();
+}
+
+// ── preview ──
+function bodyBase(){
+  var b={date:st.date,mode:st.mode,minutes:st.minutes,checked:st.checked,edits:st.edits};
+  if(st.from_iso) b.from_iso=st.from_iso;
+  if(ONLY.length) b.only_keys=ONLY;
+  return b;
+}
+function refresh(){
+  var my=++st.seq; clearTimeout(st.timer);
+  $('apply').disabled=true;
+  if(st.mode==='late'&&!st.minutes) return;   // nothing to preview until a number of minutes is chosen
+  st.timer=setTimeout(function(){
+    api('POST','/shift/preview',bodyBase()).then(function(r){
+      if(my!==st.seq) return;
+      if(!r.ok){ $('items').innerHTML='<div class="err">'+esc(r.message||'Could not build the preview.')+'</div>'; $('summary').innerHTML='<li>Nothing to apply.</li>'; showErr(r.message||'Could not build the preview.','shift.preview',new Error(r.error||'preview failed')); return; }
+      clearErr(); render(r);
+    }).catch(function(e){ if(my!==st.seq) return; $('items').innerHTML='<div class="err">Could not reach the server: '+esc(e.message)+'</div>'; showErr('Could not reach the server: '+e.message,'shift.preview',e); });
+  },250);
+}
+function render(r){
+  var prevPlan=st.planId;
+  st.plan=r; st.planId=r.plan_id; if(r.from_iso) st.from_iso=r.from_iso;
+  var items=r.items||[];
+  if(!items.length) $('items').innerHTML='<div class="muted">Nothing is scheduled on '+esc(r.date)+'.</div>';
+  else $('items').innerHTML=items.map(itemHtml).join('');
+  $('summary').innerHTML=(r.summary||[]).map(function(s){return '<li>'+esc(s)+'</li>';}).join('')||'<li class="muted">Nothing to do.</li>';
+  $('warnings').innerHTML=(r.warnings||[]).map(function(w){return '<div class="warn">'+esc(w)+'</div>';}).join('');
+  var n=(r.counts&&r.counts.changing)||0;
+  $('apply').textContent=n?('Apply ('+n+' change'+(n===1?'':'s')+')'):'Nothing to apply';
+  $('apply').disabled=!n||st.busy;
+  var em=r.email;
+  $('email-card').classList.toggle('hide',!em);
+  if(em){
+    $('email-to').textContent=em.to;
+    if(!st.emailDirty||prevPlan!==r.plan_id){
+      var note=$('email-note');
+      if(st.emailDirty&&prevPlan&&prevPlan!==r.plan_id){ note.textContent='The times changed, so the email wording was reset to match.'; note.classList.remove('hide'); } else note.classList.add('hide');
+      $('email-subject').value=em.subject; $('email-body').value=em.body; st.emailDirty=false;
+    }
+  }
+}
+function itemHtml(i){
+  var k=esc(i.key), tag={inspection:'Inspection',wo_window:'Work order',delivery:'Delivery'}[i.type]||i.type;
+  var h='<div class="item'+(i.shiftable?'':' locked')+'"><div class="top">';
+  h+='<input type="checkbox" id="c-'+k+'" aria-label="Move '+esc(i.label)+'" '+(i.checked?'checked ':'')+(i.shiftable&&!i.problems.length?'':'disabled ')+'onchange="tog(\''+k+'\',this.checked)">';
+  h+='<div style="flex:1;min-width:0"><div class="name">'+esc(i.label)+'<span class="tag">'+esc(tag)+'</span></div><div class="muted">'+esc(i.sub||'')+'</div>';
+  if(i.old){
+    h+='<div class="times"><span class="'+(i.changed?'old':'')+'">'+esc(i.old.range)+'</span>';
+    if(i.changed) h+='<span class="arrow">&rarr;</span><span class="new">'+esc(i.new.range)+'</span>'+(i.edited?' <span class="tag">edited</span>':'');
+    if(i.fixed_first) h+=' <span class="tag">first stop: start kept</span>';
+    h+='</div>';
+    if(i.shiftable) h+='<div class="edit"><div><label class="lbl" for="s-'+k+'">Start</label><input type="time" id="s-'+k+'" value="'+esc(i.new.start_hhmm)+'" onchange="ed(\''+k+'\')"></div><div><label class="lbl" for="e-'+k+'">End</label><input type="time" id="e-'+k+'" value="'+esc(i.new.end_hhmm)+'" onchange="ed(\''+k+'\')"></div></div>';
+  } else h+='<div class="times muted">No clock times on this one.</div>';
+  if(!i.shiftable) h+='<div class="why">Not moving: '+esc(i.locked_reason)+'</div>';
+  (i.problems||[]).forEach(function(p){h+='<div class="err">'+esc(p)+'</div>';});
+  (i.warnings||[]).forEach(function(w){h+='<div class="warn">'+esc(w)+'</div>';});
+  var np=i.notice_preview;
+  if(i.checked&&np){
+    if(np.partner) h+='<div class="why">'+esc(np.partner)+'</div>';
+    if(np.tenant_sms){ var t=np.tenant_sms; h+='<div class="why">Tenant text: '+esc(t.text||'')+(t.when_sent?' ('+esc(t.when_sent)+')':'')+'</div>'; (t.recipients||[]).forEach(function(x){h+=x.will_text?'':'<div class="warn">'+esc((x.name||x.unit)+' (ending '+x.phone_last4+'): '+x.reason)+'</div>';}); if(t.gap) h+='<div class="warn">'+esc(t.gap)+'</div>'; }
+  }
+  return h+'</div></div></div>';
+}
+function tog(key,on){ st.checked[key]=!!on; refresh(); }
+function ed(key){
+  var s=$('s-'+key).value, e=$('e-'+key).value, cur=(st.plan.items||[]).filter(function(x){return x.key===key;})[0];
+  var o={}; if(s&&(!cur||s!==cur.new.start_hhmm)) o.start=s; if(e&&(!cur||e!==cur.new.end_hhmm)) o.end=e;
+  var prev=st.edits[key]||{}; st.edits[key]={start:o.start||prev.start,end:o.end||prev.end};
+  if(!st.edits[key].start&&!st.edits[key].end) delete st.edits[key];
+  st.checked[key]=true; refresh();
+}
+$('email-subject').addEventListener('input',function(){st.emailDirty=true;});
+$('email-body').addEventListener('input',function(){st.emailDirty=true;});
+
+// ── apply ──
+function doApply(){
+  if(st.busy||!st.plan) return;
+  var btn=$('apply'); btn.disabled=true; st.busy=true; btn.textContent='Applying…';   // disabled FIRST, synchronously, so a double tap cannot send twice
+  var b=bodyBase(); b.plan_id=st.planId;
+  if(!$('email-card').classList.contains('hide')) b.email={subject:$('email-subject').value,body:$('email-body').value};
+  api('POST','/shift/apply',b).then(function(r){
+    st.busy=false; showResult(r);
+    if(r.ok){ clearErr(); resetPlan(); } else showErr(r.message||'Some items did not go through.','shift.apply',new Error(r.error||'apply incomplete'));
+    refresh(); loadProps();
+  }).catch(function(e){
+    st.busy=false; $('apply').disabled=false; $('apply').textContent='Apply';
+    showErr('Apply did not finish: '+e.message+'. Check the waiting list below before trying again.','shift.apply',e); loadProps();
+  });
+}
+function showResult(r){
+  $('result-card').classList.remove('hide');
+  var h='<div class="'+(r.ok?'good':'err')+'">'+esc(r.message||(r.ok?'Done.':'Not done.'))+'</div>';
+  if(r.email) h+='<div class="good">Email '+(r.email.staged?'(staging stub, nothing really sent) ':'')+'sent to '+esc(r.email.to)+'.</div>';
+  (r.results||[]).forEach(function(x){
+    if(x.skipped&&!x.idempotent) return;
+    h+='<div style="margin-top:8px"><b>'+esc(labelOf(x.key))+'</b>';
+    (x.steps||[]).forEach(function(s){h+='<div class="good">'+esc(s)+'</div>';});
+    (x.warnings||[]).forEach(function(s){h+='<div class="warn">'+esc(s)+'</div>';});
+    (x.errors||[]).forEach(function(s){h+='<div class="err">'+esc(s)+'</div>';});
+    h+='</div>';
+  });
+  $('result').innerHTML=h; $('result-card').scrollIntoView({block:'nearest'});
+}
+function labelOf(key){ var i=((st.plan&&st.plan.items)||[]).filter(function(x){return x.key===key;})[0]; return i?i.label:key; }
+
+// ── waiting list ──
+function loadProps(){
+  api('GET','/shift/proposals').then(function(r){
+    if(!r.ok){ $('props').innerHTML='<div class="err">'+esc(r.message||'Could not load the waiting list.')+'</div>'; showErr(r.message||'Could not load the waiting list.','shift.proposals',new Error(r.error||'proposals failed')); return; }
+    var l=r.proposals||[];
+    if(!l.length){ $('props').innerHTML='<div class="muted">Nothing is waiting.</div>'; return; }
+    $('props').innerHTML=l.map(function(p){
+      var label={proposed:'Waiting',reschedule_requested:'Wants a different time',failed:'FAILED',approved:'Finishing…'}[p.status]||p.status;
+      var h='<div class="item"><div class="name">'+esc(p.address)+'<span class="tag">'+esc(label)+'</span></div>';
+      h+='<div class="times"><span class="old">'+esc(p.now_range)+'</span><span class="arrow">&rarr;</span><span class="new">'+esc(p.proposed_range)+'</span></div>';
+      if(p.hours_waiting!=null) h+='<div class="why">Sent '+esc(p.hours_waiting)+' hours ago.'+(p.reminder?' (reminder sent: '+esc(p.reminder)+')':'')+'</div>';
+      if(p.note) h+='<div class="'+(p.status==='failed'?'err':'why')+'">'+esc(p.note)+'</div>';
+      h+='<div class="btns" style="margin-top:8px">';
+      if(p.can_apply_anyway) h+='<button class="btn go" type="button" onclick="force(this,\''+esc(p.id)+'\')">'+(p.status==='failed'?'Retry now':'Apply anyway')+'</button>';
+      if(p.can_withdraw) h+='<button class="btn bad" type="button" onclick="withdraw(this,\''+esc(p.id)+'\')">Withdraw</button>';
+      return h+'</div></div>';
+    }).join('');
+  }).catch(function(e){ $('props').innerHTML='<div class="err">Could not load the waiting list: '+esc(e.message)+'</div>'; showErr('Could not load the waiting list: '+e.message,'shift.proposals',e); });
+}
+function force(btn,id){
+  if(!window.confirm('Apply this change now, without waiting for an answer? The calendar and invite are updated and your override is recorded.')) return;
+  btn.disabled=true; btn.textContent='Working…';
+  api('POST','/shift/force-apply',{id:id}).then(function(r){
+    showResult({ok:r.ok,message:r.message,results:[{key:'insp:'+id,steps:r.steps,warnings:r.warnings,errors:r.errors}]});
+    if(!r.ok) showErr(r.message||'Did not finish.','shift.force',new Error(r.code||'force failed'));
+    loadProps(); refresh();
+  }).catch(function(e){ showErr('Apply anyway did not finish: '+e.message,'shift.force',e); loadProps(); });
+}
+function withdraw(btn,id){
+  if(!window.confirm('Withdraw this proposal? The booking stays at its current time and the email links stop working.')) return;
+  btn.disabled=true; btn.textContent='Working…';
+  api('POST','/shift/proposal/cancel',{id:id}).then(function(r){
+    showResult({ok:r.ok,message:r.message,results:[{key:'insp:'+id,steps:r.steps,errors:r.errors}]});
+    if(!r.ok) showErr(r.message||'Could not withdraw.','shift.withdraw',new Error(r.error||'withdraw failed'));
+    loadProps(); refresh();
+  }).catch(function(e){ showErr('Withdraw did not finish: '+e.message,'shift.withdraw',e); loadProps(); });
+}
+</script>
+</body>
+</html>
