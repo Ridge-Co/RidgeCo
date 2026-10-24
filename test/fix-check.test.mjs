@@ -27,7 +27,9 @@ ok(silent.length === 0, 'every catch in the block rethrows, returns, pushes a wa
 const helpers = [
   grabLine('const TENANT_STOP_NOTE'), grab('function withTenantStopNote('),
   grab('function isTenantCurrent('), grab('function tenantsForDispatch('), grab('function formatUnitLabel('),
-  grab('function smsGateDecision('), grabLine('const smsToggleOn'), grab('function tenantMovedOut('), grab('function normalizePhone('),
+  grab('function smsGateDecision('), grabLine('const smsToggleOn'),
+  // Oct 24 2026 (per-property switches): the gate now also reads the property's own audience switches.
+  w.slice(w.indexOf('const PROPERTY_TOGGLES = ['), w.indexOf('];\n', w.indexOf('const PROPERTY_TOGGLES = [')) + 3), grabLine('const propToggleDef'), grabLine('const propToggleRaw'), grab('function propToggleOn('), grab('function smsPropertyGateFlags('), grab('function tenantMovedOut('), grab('function normalizePhone('),
   grab('function nyOffsetMinutes('), grab('function etHour('), grabLine('const QUIET_HOURS_START_ET'), grabLine('const QUIET_HOURS_END_ET'), grab('function isQuietHoursNow('),
   grab('function findWO('), grab('function isMissingTabError('), grabLine('const HUB_URL'), grabLine('const _tenc'),
   grab('function _b64urlBytes('), grab('function _b64urlToBytes('), grab('async function _hmac('), grab('async function makeSessionToken('), grab('async function verifySessionToken('),
