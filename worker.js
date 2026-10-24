@@ -38803,7 +38803,7 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
     return { status: 502, body: { ok: false, error: 'calendar_failed', message: 'Could not update your calendar, so nothing was changed: ' + e.message } };
   }
   const upd = { Status: newStatus, Decision_Note: note || '', Decided_At: new Date().toISOString() };
-  if (newStatus !== 'approved') upd.Calendar_Event_ID = '';
+  if (newStatus !== 'approved') { upd.Calendar_Event_ID = ''; if (['proposed', 'reschedule_requested', 'failed'].includes(String(b.Change_Status || ''))) { upd.Change_Status = 'none'; upd.Change_Note = 'Closed: the booking was ' + newStatus; } }   // a cancelled booking has nothing left to move
   else if (b.Calendar_Event_ID !== evId) upd.Calendar_Event_ID = b.Calendar_Event_ID;
   const ur = await updateRow(env, 'Insp_Bookings', b.ID, upd);
   const uj = await ur.json();
