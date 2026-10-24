@@ -566,6 +566,8 @@ const _hubWorkerCore = {
           return json({ configured: !!_pcfg, config: _pcfg || null, instant_fee: _instant });
         }
         if (path === '/property')               return await getPropertyFull(env, url);
+        if (path === '/property/detail')        return await propertyDetail(env, url);          // Oct 24 2026: lazy one-property read behind the Properties detail tabs (admin only)
+        if (path === '/sms/gate-preview')       return await smsGatePreviewHandler(env, url);   // Oct 24 2026: READ-ONLY 'would this text send?' - same gate as the real sender
         if (path === '/building-info')          return await getBuildingInfo(env, url);
         if (path === '/cache')                  return await getSheet(env, 'Troubleshooting_Cache');
         if (path === '/keys-by-property')       return await keysByProperty(env, url);
