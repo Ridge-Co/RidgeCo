@@ -38380,6 +38380,11 @@ async function inspAvailability(env, customer, input) {
     if (!INSP_ACTIVE_BOOKING.includes(b.Status) || String(b.Active || '').toUpperCase() === 'FALSE') continue;
     const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO); if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
     busy.push({ startMs: s, endMs: e, key: 'b' + b.ID, title: b.Formatted_Address || b.Address, lat: parseFloat(b.Lat), lng: parseFloat(b.Lng) });
+    // Appointment Shift: while a move is waiting for an answer, BOTH its old and its proposed window are taken.
+    if (String(b.Change_Status || '') === 'proposed') {
+      const ps = Date.parse(b.Proposed_Start_ISO), pe = Date.parse(b.Proposed_End_ISO);
+      if (Number.isFinite(ps) && Number.isFinite(pe)) busy.push({ startMs: ps, endMs: pe, key: 'p' + b.ID, title: b.Formatted_Address || b.Address, lat: parseFloat(b.Lat), lng: parseFloat(b.Lng) });
+    }
   }
   // Only stops near an open block matter for drive math (saves geocodes + matrix elements).
   const blockWins = blocks.map(b => [inspEtWallToMs(b.Date, b.Start_Time) - 6 * 3600000, inspBlockWindowEndMs(b) + durationMin * 60000 + 6 * 3600000]).filter(w => Number.isFinite(w[0]) && Number.isFinite(w[1]));
