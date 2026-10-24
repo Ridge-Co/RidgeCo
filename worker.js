@@ -25309,6 +25309,7 @@ const FU_GATE_TEXT = {
   'Global OFF': { code: 'global_off', text: 'Texting is switched OFF for the whole Hub (Config TWILIO_ENABLED is not TRUE).' },
   'Property OFF': { code: 'property_off', text: 'Texting is OFF for this property (Properties > SMS_Enabled is FALSE).' },
   'Customer OFF': { code: 'owner_off', text: "Texting is OFF for this property's owner (Owners > SMS_Enabled is FALSE)." },
+  'Property tenant texts OFF': { code: 'property_tenants_off', text: 'Texts to tenants are OFF for this property (Properties > SMS_Tenants_Enabled is FALSE).' },
   'Tenant OFF': { code: 'tenant_off', text: 'Texting is OFF for this tenant (Tenants > SMS_Enabled is FALSE - often because their text consent has not been confirmed yet).' },
   'Tenant opted out': { code: 'tenant_opted_out', text: 'This tenant replied STOP and has opted out of texts.' },
   'Tenant moved out': { code: 'tenant_moved_out', text: 'This tenant has moved out.' },
