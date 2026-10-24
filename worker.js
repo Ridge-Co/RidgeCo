@@ -34379,7 +34379,9 @@ const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Activ
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
 const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start','Reopen_Log'];
-const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
+const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup',
+  // Appointment Shift (Oct 23 2026): a proposed move sits on the booking until the partner answers; the booking keeps its OLD times until then.
+  'Change_Status','Proposed_Start_ISO','Proposed_End_ISO','Proposed_Duration_Min','Change_Token','Change_Proposed_At','Change_Decided_At','Change_Note','Ics_Seq','Change_Batch','Change_Prev','Change_Reminded_At'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
   Insp_Properties: INSP_PROPERTY_HEADERS,
