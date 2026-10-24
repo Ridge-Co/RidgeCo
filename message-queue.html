@@ -647,7 +647,7 @@ function rowHtml(r){
     (r.Property_Address && prefs.group !== 'prop' ? '<div class="row-addr">' + esc(r.Property_Address) + '</div>' : '') +
     '<div class="row-msg">' + esc(r.Message_Body || '') + (r.Translated_To ? '<span class="row-es-tag">sent in Spanish</span>' : '') + '</div>' +
     englishHtml(r) + showEn +
-    (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + '</div>' : '') +
+    (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + gateFixHtml(r) + '</div>' : '') +
     (r.Status === 'sent' ? '<div class="row-meta">Sent ' + dateLabel(r.Sent_Date) + ' → ' + esc(r.Delivered_To || '') + '</div>' : '') +
     '<div class="row-meta" title="' + esc(r.Created_Date || '') + '">Queued ' + dateLabel(r.Created_Date) + '</div>' +
     (!bulkMode && canAct ? '<div class="row-actions">' +
