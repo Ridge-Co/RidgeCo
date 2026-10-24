@@ -1305,9 +1305,16 @@ async function sendEstimateEmail(){
   var email=(st.owner&&st.owner.Email||'').trim();
   if(!st.complete || !email){ setStatus('send-status','⚠ No billing-ready owner email on file — confirm the payor in step 6 first.','err'); return; }
   var already=(s.Sent_Date||'').trim();
+  // Oct 24 2026: ask the real gate BEFORE sending, so a text that will be held or blocked is said out loud instead of discovered later.
+  setStatus('send-status','Checking whether the owner text will go out…');
+  var pv=await proposalSmsPreview();
+  setStatus('send-status','');
+  var textWillGo = !!(pv && pv.will_send);
   var confirmMsg = already
     ? 'This was already sent to '+email+' on '+new Date(already).toLocaleDateString()+'. Send it again?'
-    : 'Send this estimate to '+email+'? (The owner also gets a short text saying it was emailed.)';
+    : 'Send this estimate to '+email+'?'+(textWillGo?' (The owner also gets a short text saying it was emailed.)':'');
+  if(pv && pv._error) confirmMsg+='\n\n⚠ Could not check whether the owner text will go out ('+pv._error+'). The email will still send.';
+  else if(pv && !pv.resend && !pv.will_send) confirmMsg+='\n\n'+(pv.will_send_later?'⏳ ':'⚠ ')+pv.headline+(pv.will_send_later?'':' The email will still go.');
   if(!confirm(confirmMsg)) return;
   if(window._proposalSending) return;   // double-tap guard; the server also refuses a re-send within a minute
   window._proposalSending=true;
