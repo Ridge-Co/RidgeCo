@@ -25318,7 +25318,7 @@ function fuGateVerdict(o) {
   const cfg = o.cfg || {}, tenant = o.tenant || null;
   const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
   const dec = smsGateDecision({ global, propertyOn: smsToggleOn(o.property && o.property.SMS_Enabled), ownerOn: smsToggleOn(o.owner && o.owner.SMS_Enabled), tenantOn: smsToggleOn(tenant && tenant.SMS_Enabled),
-    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', tenantMovedOut: tenantMovedOut(tenant), kind: 'tenant' });
+    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', tenantMovedOut: tenantMovedOut(tenant), kind: 'tenant', ...smsPropertyGateFlags(o.property) });
   const reasons = dec.sendOk ? [] : dec.gateSnapshot.split(', ').map(k => FU_GATE_TEXT[k] || { code: 'other', text: k });
   if (!normalizePhone(tenant && tenant.Phone)) reasons.push({ code: 'no_phone', text: 'There is no phone number on file for this tenant.' });
   const notes = [];
