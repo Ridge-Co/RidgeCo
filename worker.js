@@ -16094,6 +16094,226 @@ function smsGateDecision(o) {
   return { sendOk: fails.length === 0, gateSnapshot: fails.length ? fails.join(', ') : 'all gates open' };
 }
 const smsToggleOn = v => String(v == null ? '' : v).toUpperCase() !== 'FALSE';
+// ══ PROPERTY TOGGLES, SMS GATE REASONS, GATE PREVIEW (Oct 24 2026, FEATURE_LOG rule 231) ══════════════════════════
+// ONE registry of everything that can be switched on or off per property. Adding a switch = ONE line here (plus, if it
+// gates a send, one reading of its flag in smsPropertyGateFlags / addonEmailGate). The Properties page, the customer
+// "apply to all" panel and the gate preview are all driven from this list, so they cannot disagree.
+// Blank cell = ON for every 'bool' switch (the codebase-wide convention: only a literal FALSE is off), so a column that
+// does not exist yet changes nothing on deploy. 'tri' is the existing tenant-work-order switch ('' / 'ON' / 'OFF', and
+// nothing set = OFF, see resolveTenantWOAccess); it is shown here but is NOT a blank=ON switch and is not bulk-applied.
+//   gate: which send path reads it - 'master' (SMS_Enabled, existing, unchanged), 'tenant', 'owner', 'vendor', 'owner_email'.
+//   applyAll: may the customer "apply to all properties" panel write it.
+const PROPERTY_TOGGLES = [
+  { key: 'active',      col: 'Active',              kind: 'bool', group: 'Status',   label: 'Active',                         help: 'Off hides the property from lists and pickers. Nothing is deleted and it can be turned back on.', gate: null,          applyAll: false },
+  { key: 'tenant_wo',   col: 'Tenant_WO_Toggle',    kind: 'tri',  group: 'Requests', label: 'Tenants can submit work orders', help: 'Existing setting, same rules as before: a customer-level setting for this property wins over this one, and nothing set anywhere means OFF.', gate: null, applyAll: false },
+  { key: 'sms_master',  col: 'SMS_Enabled',         kind: 'bool', group: 'Texts',    label: 'Texts for this property (master switch)', help: 'The existing property switch. OFF blocks every tenant and owner text for this property.', gate: 'master', applyAll: true },
+  { key: 'sms_tenants', col: 'SMS_Tenants_Enabled', kind: 'bool', group: 'Texts',    label: 'Texts to tenants',               help: 'OFF stops texts to this property\'s tenants only. Owner and vendor texts are not affected.', gate: 'tenant', applyAll: true },
+  { key: 'sms_owners',  col: 'SMS_Owners_Enabled',  kind: 'bool', group: 'Texts',    label: 'Texts to the owner',             help: 'OFF stops owner texts about this property (job received, scheduled, proposal ready...). Tenants and vendors are not affected.', gate: 'owner', applyAll: true },
+  { key: 'sms_vendors', col: 'SMS_Vendors_Enabled', kind: 'bool', group: 'Texts',    label: 'Texts to vendors',               help: 'OFF stops texts to vendors about work at this property (assignments, nudges, cancellations). Applies where the text is tied to this property.', gate: 'vendor', applyAll: true },
+  { key: 'owner_email', col: 'Owner_Email_Enabled', kind: 'bool', group: 'Email',    label: 'Automatic owner emails',         help: 'OFF stops automatic heads-up emails to the owner (such as additional-work notices). Proposals, invoices and statements you send yourself are never blocked by this.', gate: 'owner_email', applyAll: true },
+];
+const propToggleDef = key => PROPERTY_TOGGLES.find(t => t.key === key) || null;
+const propToggleRaw = (property, def) => String(property && property[def.col] != null ? property[def.col] : '').trim();
+// bool: blank = ON. tri: only an explicit 'ON' counts as on (nothing set = OFF, per the tenant-WO rule).
+function propToggleOn(property, def) {
+  const raw = propToggleRaw(property, def);
+  return def.kind === 'tri' ? raw.toUpperCase() === 'ON' : smsToggleOn(raw);
+}
+// What the Properties page draws, one entry per registry row.
+function propToggleStates(property) {
+  return PROPERTY_TOGGLES.map(t => ({ key: t.key, col: t.col, kind: t.kind, group: t.group, label: t.label, help: t.help, applyAll: !!t.applyAll, raw: propToggleRaw(property, t), on: propToggleOn(property, t) }));
+}
+// The per-property send switches, in the shape smsGateDecision reads. Missing property or blank cell = ON, so every
+// existing row behaves exactly as before. Every smsGateDecision call site spreads this in (a test enforces it).
+function smsPropertyGateFlags(property) {
+  const flags = {};
+  for (const t of PROPERTY_TOGGLES) {
+    if (t.gate === 'tenant') flags.propertyTenantsOn = propToggleOn(property, t);
+    else if (t.gate === 'owner') flags.propertyOwnersOn = propToggleOn(property, t);
+    else if (t.gate === 'vendor') flags.propertyVendorsOn = propToggleOn(property, t);
+  }
+  return flags;
+}
+// The per-property OWNER EMAIL switch, read by addonEmailGate after its existing checks (Global / Property master / Customer / Notify method / Test
+// Mode are unchanged). Blank Owner_Email_Enabled = ON, so nothing changes until someone turns it off. It is deliberately NOT part of smsGateDecision.
+function propertyOwnerEmailOn(property) {
+  const def = propToggleDef('owner_email');
+  return propToggleOn(property, def);
+}
+
+// Why a text is held, in plain words, with where to fix it. Keys are exactly what smsGateDecision writes into Gate_Snapshot.
+const SMS_GATE_REASONS = {
+  'Global OFF':                { code: 'global_off',      text: 'Texting is switched OFF for the whole Hub (Config TWILIO_ENABLED is not TRUE).', fix: { target: 'global' } },
+  'Property OFF':              { code: 'property_off',    text: 'Texts are OFF for this property (its master switch).', fix: { target: 'property', toggle: 'sms_master' } },
+  'Property tenant texts OFF': { code: 'property_tenants_off', text: 'Texts to tenants are OFF for this property.', fix: { target: 'property', toggle: 'sms_tenants' } },
+  'Property owner texts OFF':  { code: 'property_owners_off',  text: 'Texts to the owner are OFF for this property.', fix: { target: 'property', toggle: 'sms_owners' } },
+  'Property vendor texts OFF': { code: 'property_vendors_off', text: 'Texts to vendors are OFF for this property.', fix: { target: 'property', toggle: 'sms_vendors' } },
+  'Customer OFF':              { code: 'customer_off',    text: 'Texts are OFF for this property\'s customer (the owner account).', fix: { target: 'customer' } },
+  'Tenant OFF':                { code: 'tenant_off',      text: 'Texts are OFF for this tenant (often because their consent is not confirmed yet).', fix: { target: 'tenant' } },
+  'Tenant opted out':          { code: 'tenant_opted_out', text: 'This tenant replied STOP and opted out.', fix: { target: 'tenant' } },
+  'Tenant moved out':          { code: 'tenant_moved_out', text: 'This tenant has moved out.', fix: { target: 'tenant' } },
+  'Property owner emails OFF': { code: 'property_owner_emails_off', text: 'Automatic emails to the owner are OFF for this property.', fix: { target: 'property', toggle: 'owner_email' } },
+  'Vendor OFF':                { code: 'vendor_off',      text: 'Texts are OFF for this vendor.', fix: { target: 'vendor' } },
+  'Vendor opted out':          { code: 'vendor_opted_out', text: 'This vendor opted out of texts.', fix: { target: 'vendor' } },
+};
+function smsGateReasonsFor(gateSnapshot) {
+  const s = String(gateSnapshot || '');
+  if (!s || s === 'all gates open') return [];
+  // Longest names first so 'Property OFF' never swallows part of another reason.
+  const known = Object.keys(SMS_GATE_REASONS).sort((a, b) => b.length - a.length);
+  const out = []; let rest = s;
+  for (const k of known) { if (rest.indexOf(k) !== -1) { out.push(Object.assign({ token: k }, SMS_GATE_REASONS[k])); rest = rest.split(k).join(' '); } }
+  return out;
+}
+
+// PURE - the read-only "would this text go out?" answer. It runs the SAME smsGateDecision with the SAME inputs smsGatedSend builds
+// (Global from Config, the property switches via smsPropertyGateFlags, Customer, Tenant/Vendor), then the same recipient-phone,
+// quiet-hours and Test Mode steps, in the same order. It never sends or writes. o: { cfg, kind:'tenant'|'owner'|'vendor', property,
+// owner, tenant, vendor, now, quietWindow:{start,end}?, bypassQuietHours?, checkPhone? }
+function smsGatePreview(o) {
+  const cfg = o.cfg || {}, kind = o.kind, property = o.property || null, owner = o.owner || null, tenant = o.tenant || null, vendor = o.vendor || null;
+  const global = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
+  const testMode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
+  const dec = smsGateDecision(Object.assign({
+    global, propertyOn: smsToggleOn(property && property.SMS_Enabled), ownerOn: smsToggleOn(owner && owner.SMS_Enabled),
+    tenantOn: smsToggleOn(tenant && tenant.SMS_Enabled), vendorOn: smsToggleOn(vendor && vendor.SMS_Enabled),
+    tenantOptOut: String((tenant && tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE', vendorOptOut: String((vendor && vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE',
+    kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant),
+  }, smsPropertyGateFlags(property)));
+  const recipient = kind === 'tenant' ? tenant : kind === 'owner' ? owner : vendor;
+  const hasPhone = o.checkPhone === false ? true : !!normalizePhone(recipient && recipient.Phone);
+  const now = o.now || new Date();
+  const qw = o.quietWindow && Number.isFinite(o.quietWindow.start) && Number.isFinite(o.quietWindow.end) ? o.quietWindow : null;
+  const holdUntil = qw ? quietHoldUntil(now, qw.start, qw.end) : (isQuietHoursNow(now) ? nextQuietHoursEnd(now) : null);
+  const holdNow = !!(holdUntil && !o.bypassQuietHours);
+  const reasons = dec.sendOk ? [] : smsGateReasonsFor(dec.gateSnapshot);
+  const notes = [];
+  let outcome;
+  if (!dec.sendOk) outcome = 'blocked';
+  else if (!hasPhone) { outcome = 'no_phone'; reasons.push({ token: 'No phone', code: 'no_phone', text: 'There is no phone number on file for this recipient.', fix: { target: kind } }); }
+  else if (holdNow) { outcome = 'held_quiet_hours'; notes.push('It is inside quiet hours, so the text is held and goes out at ' + holdUntil.toISOString() + '.'); }
+  else outcome = 'send';
+  if (outcome === 'send' || outcome === 'held_quiet_hours') { if (testMode) notes.push('Test Mode is ON: the text goes to the test number, not to the real recipient.'); }
+  const headline = outcome === 'send' ? (testMode ? 'The text will go to the TEST number only (Test Mode is on).' : 'The text will send.')
+    : outcome === 'held_quiet_hours' ? 'The text will be HELD for quiet hours and sent later.'
+    : outcome === 'no_phone' ? 'The text will NOT send: no phone number on file.'
+    : 'The text will NOT send: ' + reasons.map(r => r.text.replace(/\.$/, '')).join('; ') + '.';
+  return { kind, outcome, will_send: outcome === 'send', will_send_later: outcome === 'held_quiet_hours', send_after: outcome === 'held_quiet_hours' ? holdUntil.toISOString() : '',
+    gate_snapshot: dec.gateSnapshot, gates_open: dec.sendOk, reasons, notes, test_mode: testMode, global, headline };
+}
+
+// PURE - the customer-level "apply to all this customer's properties" plan. Nothing is written by this function. It lists every
+// property of the customer with its before/after, marks the excluded and inactive ones, and returns exactly the cells to write.
+// owner properties are those whose Owner_ID is the customer's ID. No live inheritance: the apply writes the per-property column.
+function ownerToggleApplyPlan({ properties, ownerId, key, value, excludeIds }) {
+  const def = propToggleDef(key);
+  if (!def) return { error: 'Unknown setting "' + key + '"' };
+  if (!def.applyAll || def.kind !== 'bool') return { error: '"' + def.label + '" cannot be applied to all properties from here.' };
+  const v = String(value).toUpperCase();
+  if (v !== 'TRUE' && v !== 'FALSE') return { error: 'value must be TRUE or FALSE' };
+  const mine = (properties || []).filter(p => String(p.Owner_ID) === String(ownerId));
+  const mineIds = new Set(mine.map(p => String(p.ID)));
+  const excl = new Set((excludeIds || []).map(String));
+  const strangers = Array.from(excl).filter(id => !mineIds.has(id));
+  if (strangers.length) return { error: 'These excluded properties do not belong to this customer: ' + strangers.join(', ') };
+  const afterOn = v === 'TRUE';
+  const rows = mine.map(p => {
+    const raw = propToggleRaw(p, def), beforeOn = propToggleOn(p, def);
+    const inactive = String(p.Active == null ? '' : p.Active).toUpperCase() === 'FALSE';
+    let action = 'change';
+    if (inactive) action = 'skip_inactive';
+    else if (excl.has(String(p.ID))) action = 'excluded';
+    else if (beforeOn === afterOn) action = 'unchanged';   // a blank cell that already means ON is not rewritten
+    return { property_id: String(p.ID), address: p.Address || '', city: p.City || '', before_raw: raw, before_on: beforeOn, after_on: action === 'change' ? afterOn : beforeOn, after_value: action === 'change' ? v : raw, action };
+  });
+  const changes = rows.filter(r => r.action === 'change');
+  const counts = { total: rows.length, will_change: changes.length, unchanged: rows.filter(r => r.action === 'unchanged').length, excluded: rows.filter(r => r.action === 'excluded').length, inactive: rows.filter(r => r.action === 'skip_inactive').length };
+  const canon = JSON.stringify({ o: String(ownerId), k: key, v, c: changes.map(r => [r.property_id, r.before_raw]).sort((a, b) => Number(a[0]) - Number(b[0])), x: Array.from(excl).sort() });
+  return { ok: true, def, value: v, rows, changes, counts, canon };
+}
+
+// PURE - merge field resolution. A field is compared only when BOTH properties have a (different) non-empty value; the user picks
+// one. If only one side has a value, that value is used with no question. Case and surrounding spaces do not count as a difference.
+// 'Owner_ID' / 'QBO_Customer_ID' differing is a hard block (merging would put work on the wrong ledger), not a pick.
+const PROPERTY_DUP_COLS = ['Duplicate_Of', 'Duplicate_Marked_Date', 'Merge_Log'];
+// Unit_Count is recalculated by the merge, not picked.
+const PROPERTY_MERGE_SKIP_FIELDS = ['ID', 'Active', 'Unit_Count'].concat(PROPERTY_DUP_COLS);
+const PROPERTY_MERGE_BLOCK_IF_DIFFERENT = ['Owner_ID', 'QBO_Customer_ID'];
+function propertyMergeFieldPlan(from, to, headers) {
+  const auto = [], conflicts = [], blocks = []; let same = 0, keepTarget = 0;
+  for (const h of (headers || [])) {
+    if (!h || PROPERTY_MERGE_SKIP_FIELDS.includes(h)) continue;
+    const a = String(from && from[h] != null ? from[h] : '').trim(), b = String(to && to[h] != null ? to[h] : '').trim();
+    if (a === '' && b === '') continue;
+    if (a.toLowerCase() === b.toLowerCase()) { same++; continue; }
+    if (b === '') { auto.push({ col: h, value: a }); continue; }
+    if (a === '') { keepTarget++; continue; }
+    if (PROPERTY_MERGE_BLOCK_IF_DIFFERENT.includes(h)) { blocks.push('Both properties have a different ' + h + ' (' + a + ' vs ' + b + '). Fix that first: merging would move work onto the wrong customer.'); continue; }
+    conflicts.push({ col: h, from: a, to: b });
+  }
+  return { auto, conflicts, blocks, same, keep_target: keepTarget };
+}
+// What the target row gets written with: auto-taken values plus every conflict the user resolved to 'from'.
+function propertyMergeWrites(fieldPlan, resolutions) {
+  const writes = {}; const missing = [];
+  for (const a of fieldPlan.auto) writes[a.col] = a.value;
+  for (const c of fieldPlan.conflicts) {
+    const r = resolutions && resolutions[c.col];
+    if (r !== 'from' && r !== 'to') { missing.push(c.col); continue; }
+    if (r === 'from') writes[c.col] = c.from;
+  }
+  return { writes, missing };
+}
+
+// Every sheet column that can hold a Properties ID, and what to do with it. Registry = columns that ARE re-pointed. A tab or column
+// that does not exist in the live sheet is simply skipped. Ignore = columns that look similar but hold a DIFFERENT list's IDs.
+// Anything else the scan finds with a property-ID-looking header is UNKNOWN, and an unknown reference blocks the merge (we refuse
+// rather than leave work behind on a hidden property).  mode 'id' = the whole cell is one ID; 'list' = a comma-separated list of IDs.
+const PROPERTY_REF_REGISTRY = [
+  { tab: 'Work_Orders', col: 'Property_ID' }, { tab: 'Units', col: 'Property_ID' }, { tab: 'Tenants', col: 'Property_ID' }, { tab: 'Keys', col: 'Property_ID' },
+  { tab: 'Key_History', col: 'Property_ID' }, { tab: 'Receipts', col: 'Property_ID' }, { tab: 'Recurring_Templates', col: 'Property_ID' },
+  { tab: 'Notification_Queue', col: 'Property_ID' }, { tab: 'Message_Queue', col: 'Property_ID' }, { tab: 'Scopes', col: 'Property_ID' },
+  { tab: 'Intake_Queue', col: 'Property_ID' }, { tab: 'Deliveries', col: 'Property_ID' }, { tab: 'FI_Inspections', col: 'Property_ID' },
+  { tab: 'Notes', col: 'Property_ID' }, { tab: 'Building_Info', col: 'Property_ID' },
+  { tab: 'Estimates', col: 'Property_ID' }, { tab: 'Materials', col: 'Property_ID' }, { tab: 'Attachments', col: 'Property_ID' }, { tab: 'Vendor_Bills', col: 'Property_ID' }, { tab: 'WO_Followups', col: 'Property_ID' },
+  { tab: 'Receipt_Recon_Queue', col: 'Suggested_Property_ID' }, { tab: 'Receipts_Queue', col: 'Suggested_Property_ID' }, { tab: 'Vendor_Access_Requests', col: 'Requested_Property_ID' },
+  { tab: 'Master_Keys', col: 'Property_IDs', mode: 'list' }, { tab: 'Owners', col: 'Tenant_WO_Property_IDs', mode: 'list' }, { tab: 'Vendors', col: 'Billing_Property_Access', mode: 'list' },
+];
+const PROPERTY_REF_IGNORE = [
+  { tab: 'Trash_Visits', col: 'Property_ID', why: 'holds Trash_Properties IDs (a separate list)' },
+  { tab: 'Trash_Skips',  col: 'Property_ID', why: 'holds Trash_Properties IDs (a separate list)' },
+  { tab: 'Insp_Units',   col: 'Property_ID', why: 'holds Insp_Properties IDs (a separate list)' },
+];
+const PROPERTY_REF_COL_RE = /(^|_)Property_?IDs?$/i;
+// PURE. headersByTab: { Tab: [header, ...] } -> { targets:[{tab,col,colIndex,mode}], unknown:[{tab,col}], ignored:[{tab,col,why}] }
+function propertyRefTargets(headersByTab) {
+  const targets = [], unknown = [], ignored = []; const seen = new Set();
+  for (const tab of Object.keys(headersByTab || {})) {
+    if (tab === 'Properties') continue;
+    (headersByTab[tab] || []).forEach((h, i) => {
+      const reg = PROPERTY_REF_REGISTRY.find(r => r.tab === tab && r.col === h);
+      if (reg) { targets.push({ tab, col: h, colIndex: i, mode: reg.mode || 'id' }); seen.add(tab + '.' + h); return; }
+      const ign = PROPERTY_REF_IGNORE.find(r => r.tab === tab && r.col === h);
+      if (ign) { ignored.push({ tab, col: h, why: ign.why }); return; }
+      if (PROPERTY_REF_COL_RE.test(String(h))) unknown.push({ tab, col: h });
+    });
+  }
+  return { targets, unknown, ignored };
+}
+// PURE. Does this cell point at `id`? and what should it say after the move?
+function propertyRefCellHits(value, mode, id) {
+  const v = String(value == null ? '' : value).trim();
+  if (mode === 'list') return v.split(',').map(s => s.trim()).filter(Boolean).includes(String(id));
+  return v === String(id);
+}
+function propertyRefCellRepoint(value, mode, fromId, toId) {
+  const v = String(value == null ? '' : value).trim();
+  if (mode !== 'list') return String(toId);
+  const toks = v.split(',').map(s => s.trim()).filter(Boolean);
+  const hasTo = toks.includes(String(toId));
+  const out = []; for (const t of toks) { if (t === String(fromId)) { if (!hasTo && !out.includes(String(toId))) out.push(String(toId)); } else if (!out.includes(t)) out.push(t); }
+  return out.join(',');
+}
 // True when the Tenants row says this person no longer lives there (Active FALSE, or a Move_Out_Date that has passed,
 // Eastern). Deliberately NOT isTenantCurrent: a synthetic/partial tenant object with no Active or Move_Out_Date field
 // (tests, one-off sends) must keep working exactly as before.
