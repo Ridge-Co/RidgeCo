@@ -39035,7 +39035,310 @@ function shiftAddrKey(a) {
   const n = /^\s*(\d+[a-z]?)\s+(?:n|s|e|w|north|south|east|west)\.?\s+([a-z0-9]+)/i.exec(String(a == null ? '' : a).replace(/[.,#]/g, ' '));
   return n ? n[1].toLowerCase() + ' ' + n[2].toLowerCase() : '';
 }
-// SHIFT-CONT-1
+// ── Reads + plan (the part both Preview and Apply share, so Apply can never disagree with what Brett saw) ──
+function shiftCfgEmail(cfg) { return String((cfg && cfg.INSP_SHIFT_NOTICE_EMAIL) || SHIFT_DEFAULT_NOTICE_EMAIL).trim(); }
+function shiftCfgName(cfg) { return String((cfg && cfg.INSP_SHIFT_NOTICE_NAME) || 'Josiah').trim(); }
+// The first line of the email depends on why the day is moving.
+function shiftEmailIntro(input) {
+  if (input.mode === 'late') return 'I am running behind on ' + shiftDayLabel(input.date) + ' and need to push the inspection times back ' + (input.minutes > 0 ? input.minutes + ' minutes' : (-input.minutes) + ' minutes earlier') + '. Here is the new schedule:';
+  return null;
+}
+function shiftInput(body) {
+  body = body || {};
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.date || '')) ? String(body.date) : '';
+  if (!date) throw inspErr('bad_input', 'Pick the day to shift.', 400);
+  const mode = body.mode === 'late' ? 'late' : 'relay';
+  const minutes = Number(body.minutes);
+  if (mode === 'late' && !(Number.isFinite(minutes) && minutes !== 0 && Math.abs(minutes) <= 480)) throw inspErr('bad_input', 'Running late needs a number of minutes (for example 15, 30 or 45).', 400);
+  const obj = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+  return { date, mode, minutes, from_time: String(body.from_time || '').trim(), from_iso: String(body.from_iso || '').trim(), only_keys: Array.isArray(body.only_keys) ? body.only_keys.map(String) : null, customer_id: body.customer_id ? String(body.customer_id) : '', checked: obj(body.checked), edits: obj(body.edits), email: body.email && typeof body.email === 'object' ? { subject: String(body.email.subject || ''), body: String(body.email.body || '') } : null, plan_id: String(body.plan_id || '') };
+}
+async function shiftReadTab(env, tab, warnings, optional) {
+  try { return await fetchTab(env, tab); }
+  catch (e) {
+    if (optional && isMissingTabError(e)) { warnings.push('The ' + tab + ' tab does not exist yet, so there is nothing to list from it.'); return []; }
+    throw inspErr('sheet_unavailable', 'Could not read ' + tab + ': ' + ((e && e.message) || e), 503);
+  }
+}
+// All the things Brett has on `date`, as plain objects (no planning yet). Locked kinds are included so Brett SEES them and why they stay put.
+async function shiftCollect(env, input) {
+  const warnings = [];
+  try { await inspEnsureTabsOnce(env); } catch (e) { throw inspErr('sheet_unavailable', 'Could not prepare the inspection tabs: ' + ((e && e.message) || e), 503); }
+  const bookings = await shiftReadTab(env, 'Insp_Bookings', warnings, false), customers = await shiftReadTab(env, 'Insp_Customers', warnings, false);
+  const wos = await shiftReadTab(env, 'Work_Orders', warnings, false), vendors = await shiftReadTab(env, 'Vendors', warnings, false), properties = await shiftReadTab(env, 'Properties', warnings, false);
+  const deliveries = await shiftReadTab(env, 'Deliveries', warnings, true);
+  const custById = new Map(customers.map(c => [String(c.ID), c])), propById = new Map(properties.map(p => [String(p.ID), p]));
+  const raw = [];
+  for (const b of bookings) {
+    if (String(b.Active || '').toUpperCase() === 'FALSE' || !INSP_ACTIVE_BOOKING.includes(b.Status)) continue;
+    if (input.customer_id && String(b.Customer_ID) !== input.customer_id) continue;
+    const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO), okTimes = Number.isFinite(s) && Number.isFinite(e) && e > s;
+    if (okTimes ? inspEtDate(s) !== input.date : String(b.Date || '') !== input.date) continue;
+    const cust = custById.get(String(b.Customer_ID)) || null, locked = b.Status !== 'approved' ? SHIFT_LOCKED.notapproved : (!okTimes ? SHIFT_LOCKED.unreadable : '');
+    raw.push({ key: 'insp:' + b.ID, type: 'inspection', id: String(b.ID), label: b.Formatted_Address || b.Address || ('Inspection #' + b.ID), sub: (cust ? cust.Name + ' - ' : '') + (b.Units || '?') + ' unit(s) in ' + (b.Buildings || '?') + ' building(s)', startMs: okTimes ? s : NaN, endMs: okTimes ? e : NaN, locked_reason: locked, b, customer: cust, units: +b.Units || 1, buildings: +b.Buildings || 1, driveBefore: shiftNum(b.Drive_Before_Min), driveAfter: shiftNum(b.Drive_After_Min) });
+  }
+  const closed = WOStatus.sets.RECEIPT_CLOSED;
+  for (const w of wos) {
+    if (String(w.Scheduled_Date || '').slice(0, 10) !== input.date || String(w.Voided || '').toUpperCase() === 'TRUE' || closed.includes(String(w.Status || ''))) continue;
+    const win = shiftParseWindow(w.Scheduled_Window), vendor = w.Vendor_ID ? vendors.find(v => String(v.ID) === String(w.Vendor_ID)) : null;
+    const inHouse = !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
+    const locked = !w.Vendor_ID ? SHIFT_LOCKED.unassigned : (!vendor ? SHIFT_LOCKED.vendorunknown : (!inHouse ? SHIFT_LOCKED.vendor : (!win ? SHIFT_LOCKED.nowindow : '')));
+    const prop = propById.get(String(w.Property_ID));
+    raw.push({ key: 'wo:' + w.ID, type: 'wo_window', id: String(w.ID), label: w.ID + ' ' + woJobLabel(w), sub: (prop ? prop.Address + ' - ' : '') + 'window "' + (w.Scheduled_Window || 'none') + '"' + (vendor ? ' - ' + (vendor.Name || 'vendor') : ''), startMs: win ? inspEtWallToMs(input.date, win.startMin) : NaN, endMs: win ? inspEtWallToMs(input.date, win.endMin) : NaN, locked_reason: locked, wo: w, window: String(w.Scheduled_Window || '') });
+  }
+  for (const d of deliveries) {
+    if (String(d.Expected_Date || '').slice(0, 10) !== input.date || String(d.Active || '').toUpperCase() === 'FALSE' || ['Delivered', 'Cancelled'].includes(String(d.Status || ''))) continue;
+    const win = shiftParseWindow(d.Expected_Window);
+    raw.push({ key: 'delivery:' + d.ID, type: 'delivery', id: String(d.ID), label: (d.Store || 'Delivery') + ' - ' + (d.Item_Type || d.New_Make_Model || 'delivery'), sub: String(d.Delivery_Address || '') + ' - window "' + (d.Expected_Window || 'none') + '"', startMs: win ? inspEtWallToMs(input.date, win.startMin) : NaN, endMs: win ? inspEtWallToMs(input.date, win.endMin) : NaN, locked_reason: SHIFT_LOCKED.delivery, window: String(d.Expected_Window || '') });
+  }
+  if (input.only_keys) { const keep = new Set(input.only_keys); for (let k = raw.length - 1; k >= 0; k--) if (!keep.has(raw[k].key)) raw.splice(k, 1); }
+  raw.sort((a, b) => (Number.isFinite(a.startMs) ? a.startMs : Infinity) - (Number.isFinite(b.startMs) ? b.startMs : Infinity));
+  return { raw, bookings, customers, warnings };
+}
+// Plans every item. PURE given its inputs (nowMs injected) - used by Preview AND Apply.
+function shiftPlan(raw, input, nowMs) {
+  const shiftable = r => !r.locked_reason;
+  const isOn = r => shiftable(r) && input.checked[r.key] !== false;
+  const edit = r => {
+    const e = input.edits[r.key]; if (!e || typeof e !== 'object') return undefined;
+    const o = {};
+    if (e.start) { const ms = inspEtWallToMs(input.date, e.start); if (Number.isFinite(ms)) o.startMs = ms; }
+    if (e.end) { const ms = inspEtWallToMs(input.date, e.end); if (Number.isFinite(ms)) o.endMs = ms; }
+    return (o.startMs != null || o.endMs != null) ? o : undefined;
+  };
+  const res = new Map();
+  const timed = raw.filter(r => Number.isFinite(r.startMs) && Number.isFinite(r.endMs));
+  if (input.mode === 'relay') {
+    const inspRows = timed.filter(r => r.type === 'inspection').map(r => ({ key: r.key, startMs: r.startMs, endMs: r.endMs, newDurMin: shiftable(r) ? inspDurationMin(r.units, r.buildings) : Math.round((r.endMs - r.startMs) / 60000), driveBefore: r.driveBefore, driveAfter: r.driveAfter, include: isOn(r), override: edit(r) }));
+    for (const o of shiftRelayPlan(inspRows)) res.set(o.key, o);
+    const otherRows = timed.filter(r => r.type !== 'inspection').map(r => ({ key: r.key, startMs: r.startMs, endMs: r.endMs, include: isOn(r) && r.type === 'wo_window', override: edit(r) }));
+    for (const o of shiftLatePlan(otherRows, 0, Infinity)) res.set(o.key, o);
+  } else {
+    const dayStart = inspEtWallToMs(input.date, '00:00');
+    let fromMs = input.from_iso ? Date.parse(input.from_iso) : (input.from_time ? inspEtWallToMs(input.date, input.from_time) : NaN);
+    if (!Number.isFinite(fromMs)) fromMs = Math.max(nowMs, dayStart);
+    res.fromMs = fromMs;
+    const rows = timed.map(r => ({ key: r.key, startMs: r.startMs, endMs: r.endMs, include: isOn(r) && r.type !== 'delivery', override: edit(r) }));
+    for (const o of shiftLatePlan(rows, input.minutes, fromMs)) res.set(o.key, o);
+  }
+  const items = raw.map(r => {
+    const o = res.get(r.key), timedOk = Number.isFinite(r.startMs) && Number.isFinite(r.endMs);
+    const ns = o ? o.newStartMs : r.startMs, ne = o ? o.newEndMs : r.endMs;
+    const changed = !!o && timedOk && (ns !== r.startMs || ne !== r.endMs) && shiftable(r);
+    const fmt = (s, e) => timedOk ? { start_iso: new Date(s).toISOString(), end_iso: new Date(e).toISOString(), start_hhmm: shiftHhmm(s), end_hhmm: shiftHhmm(e), range: shiftRange(s, e), duration_min: Math.round((e - s) / 60000), window: shiftFormatWindow(inspEtMinutes(s), inspEtMinutes(e)) } : null;
+    const problems = [], warnings = o ? o.warnings.slice() : [];
+    if (changed && inspEtDate(ns) !== input.date) problems.push('This would move it onto another day. Shifts stay within one day.');
+    if (changed && r.type === 'inspection' && ns < nowMs) problems.push('The new start time has already passed.');
+    return { key: r.key, type: r.type, id: r.id, label: r.label, sub: r.sub, shiftable: shiftable(r), locked_reason: r.locked_reason || '', checked: isOn(r) && changed && !problems.length, old: fmt(r.startMs, r.endMs), new: fmt(ns, ne), changed, edited: !!(o && o.edited), drive_before_min: o && o.driveBefore != null ? o.driveBefore : null, fixed_first: !!(o && o.fixedFirst), warnings, problems, _r: r, _ns: ns, _ne: ne };
+  });
+  items.from_ms = res.fromMs == null ? null : res.fromMs;
+  return items;
+}
+// Adds the checks that need Brett's calendar and the sheet: overlaps with things that are NOT part of this shift.
+async function shiftAnnotate(env, cfg, items, bookings, input) {
+  const notes = [];
+  const moving = new Set(items.filter(i => i.type === 'inspection' && i.checked).map(i => i.id));
+  const live = items.filter(i => i.changed && i.old && !i.problems.length);
+  for (const [a, b] of shiftFinalOverlaps(items.filter(i => i.new && (i.type !== 'delivery')).map(i => ({ key: i.key, newStartMs: i._ns, newEndMs: i._ne })))) {
+    const ia = items.find(i => i.key === a), ib = items.find(i => i.key === b);
+    if (ia.type === 'inspection' && ib.type === 'inspection') { ia.warnings.push('Overlaps ' + ib.label + ' after the shift.'); ib.warnings.push('Overlaps ' + ia.label + ' after the shift.'); }
+  }
+  const occupied = shiftOccupied(bookings, {}).filter(o => !moving.has(o.id));
+  for (const i of live.filter(x => x.type === 'inspection')) {
+    for (const o of shiftOverlaps(occupied, i._ns, i._ne).filter(o => o.id !== i.id)) i.warnings.push('Overlaps ' + o.label + (o.kind === 'proposed' ? ' (its proposed time)' : '') + ' at ' + shiftRange(o.startMs, o.endMs) + '.');
+  }
+  if (live.length) {
+    const lo = Math.min(...live.map(i => Math.min(i._r.startMs, i._ns))) - 3600000, hi = Math.max(...live.map(i => Math.max(i._r.endMs, i._ne))) + 3600000;
+    try {
+      const evs = (await inspCalListEvents(env, cfg, lo, hi)).items.filter(ev => { const p = ev && ev.extendedProperties && ev.extendedProperties.private; return !(p && (p.ridgecoInspBooking || p.ridgecoInspKey)); });
+      for (const i of live) for (const c of inspConflictsFrom(evs, i._ns, i._ne, {})) i.warnings.push('Overlaps "' + c.title + '" on your calendar (' + c.when + ').');
+    } catch (e) { notes.push('Could not check your calendar for overlaps: ' + ((e && e.message) || e)); }
+  }
+  return notes;
+}
+// What a tenant would be texted (read-only). Only customers with Notify_Tenants = TRUE ever reach this.
+async function shiftTenantTargets(env, customer, b) {
+  const out = { recipients: [], gap: '' };
+  const [props, units, tenants] = await Promise.all([fetchTab(env, 'Insp_Properties'), fetchTab(env, 'Insp_Units'), fetchTab(env, 'Tenants')]);
+  const key = shiftAddrKey(b.Address) || shiftAddrKey(b.Formatted_Address);
+  const myProps = props.filter(p => String(p.Customer_ID) === String(customer.ID) && String(p.Active || '').toUpperCase() !== 'FALSE' && key && shiftAddrKey(p.Address) === key);
+  if (!myProps.length) { out.gap = 'No property on file for ' + (b.Formatted_Address || b.Address) + ' under this customer, so there is no tenant to text.'; return out; }
+  const us = units.filter(u => myProps.some(p => String(p.ID) === String(u.Property_ID)) && String(u.Active || '').toUpperCase() !== 'FALSE' && normalizePhone(u.Tenant_Phone));
+  if (!us.length) { out.gap = 'No tenant phone numbers on file for this building.'; return out; }
+  for (const u of us) {
+    const phone = normalizePhone(u.Tenant_Phone), t = tenantForQueuedText(tenants, phone, '');
+    out.recipients.push({ unit: u.Label || 'Unit', name: u.Tenant_Name || '', phone_last4: phone.replace(/\D/g, '').slice(-4), hub_tenant_id: t ? t.ID : '', hub_match: !!t, reason: t ? '' : 'This number is not a tenant in the Hub, so the Hub cannot check its text-message switches or opt-outs. It will NOT be texted.', _tenant: t || null });
+  }
+  return out;
+}
+function shiftSummary(items, input, emailTo, mailInfo) {
+  const L = [], ins = items.filter(i => i.type === 'inspection' && i.checked), wos = items.filter(i => i.type === 'wo_window' && i.checked);
+  for (const i of ins) L.push(i.label + ': ' + i.old.range + ' becomes ' + i.new.range + '. Waits for ' + shiftCfgNameOf(mailInfo) + ' to approve; nothing moves on your calendar until then.');
+  if (ins.length) L.push('One email goes to ' + emailTo + ' with an Approve button for each inspection (and one for all). You can edit the email first.');
+  for (const i of wos) L.push(i.label + ': window ' + i.old.window + ' becomes ' + i.new.window + ' right away, and the tenant gets the normal "job scheduled" text.');
+  for (const i of items.filter(x => !x.shiftable)) L.push('Not moving: ' + i.label + ' (' + i.locked_reason + ')');
+  for (const i of items.filter(x => x.shiftable && x.problems.length)) L.push('Cannot move: ' + i.label + ' (' + i.problems.join(' ') + ')');
+  if (!ins.length && !wos.length) L.unshift('Nothing is checked to change, so Apply would do nothing.');
+  return L;
+}
+function shiftCfgNameOf(mailInfo) { return (mailInfo && mailInfo.name) || 'the partner'; }
+const shiftPublicItem = i => { const o = Object.assign({}, i); delete o._r; delete o._ns; delete o._ne; return o; };
+
+async function shiftPreviewRoute(env, body) {
+  try {
+    const input = shiftInput(body), cfg = await fetchConfig(env), nowMs = Date.now();
+    const col = await shiftCollect(env, input);
+    const items = shiftPlan(col.raw, input, nowMs);
+    const warnings = col.warnings.slice();
+    warnings.push(...await shiftAnnotate(env, cfg, items, col.bookings, input));
+    const emailTo = shiftCfgEmail(cfg), name = shiftCfgName(cfg), ins = items.filter(i => i.type === 'inspection' && i.checked);
+    let email = null;
+    if (ins.length) {
+      const d = shiftEmailDraft({ date: input.date, intro: shiftEmailIntro(input), greetName: name, items: ins.map(i => ({ id: i.id, address: i._r.b.Formatted_Address || i._r.b.Address, units: i._r.units, oldStartMs: i._r.startMs, oldEndMs: i._r.endMs, newStartMs: i._ns, newEndMs: i._ne })) });
+      email = { to: emailTo, subject: d.subject, body: d.body };
+    }
+    // Tenant SMS preview, only for customers that have it switched on.
+    for (const i of items.filter(x => x.type === 'inspection')) {
+      i.notice_preview = { partner: i.checked ? 'Included in the email to ' + emailTo + ' (Approve and Reschedule buttons).' : '', tenant_sms: null };
+      if (i.checked && i._r.customer && String(i._r.customer.Notify_Tenants || '').toUpperCase() === 'TRUE') {
+        try {
+          const t = await shiftTenantTargets(env, i._r.customer, i._r.b);
+          i.notice_preview.tenant_sms = { text: shiftTenantText({ firstName: 'there', address: i._r.b.Formatted_Address || i._r.b.Address, date: input.date, when: i.new.range, was: i.old.range }), recipients: t.recipients.map(r => ({ unit: r.unit, name: r.name, phone_last4: r.phone_last4, will_text: r.hub_match, reason: r.reason })), gap: t.gap, when_sent: 'After ' + name + ' approves, through the normal tenant text rules (switches, quiet hours, test mode).' };
+        } catch (e) { i.warnings.push('Could not work out who would be texted: ' + ((e && e.message) || e)); }
+      }
+    }
+    for (const i of items.filter(x => x.type === 'wo_window')) i.notice_preview = { partner: '', tenant_sms: i.checked ? { text: 'The normal "your job is scheduled" text, sent through the usual tenant text rules.', recipients: [], gap: '' } : null };
+    return json({ ok: true, date: input.date, mode: input.mode, minutes: input.mode === 'late' ? input.minutes : null, from_iso: items.from_ms != null ? new Date(items.from_ms).toISOString() : '', plan_id: shiftPlanId(items), now: new Date(nowMs).toISOString(), notice_to: emailTo, email, summary: shiftSummary(items, input, emailTo, { name }), items: items.map(shiftPublicItem), warnings, counts: { total: items.length, changing: items.filter(i => i.checked).length, locked: items.filter(i => !i.shiftable).length } });
+  } catch (e) { return await shiftRouteErr(env, 'shift_preview', e); }
+}
+async function shiftRouteErr(env, where, e) {
+  if (e && e.code && e.status && e.status < 500) return json({ ok: false, error: e.code, message: e.message }, e.status);
+  await reportFailure(env, { system: 'hub', source: 'worker', where, ref: '', severity: 'P1', message: String((e && e.message) || e).slice(0, 400) });
+  return json({ ok: false, error: (e && e.code) || 'internal', message: 'Shift failed: ' + String((e && e.message) || e) }, (e && e.status) || 500);
+}
+
+// ── Apply ──────────────────────────────────────────────────────────────────────────────────
+async function shiftTelemetry(env, endpoint, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_shift', Skill_Or_Endpoint: endpoint, Success: ok ? 'TRUE' : 'FALSE', Notes: String(notes || '').slice(0, 480) }); }
+  catch (e) { console.error('shift: telemetry write failed:', e && e.message, '|', endpoint, notes); }   // telemetry is the last-resort sink; the result body still carries the error
+}
+function shiftEventBody(b, extraLine) {
+  const body = inspBookingEventBody(b, false, '');
+  if (extraLine) body.description = extraLine + '\n' + body.description;
+  return body;
+}
+async function shiftPatchEvent(env, cfg, b, body, expect) {
+  if (inspCalStaged(env, cfg)) return 'calendar: staged (not changed on staging)';
+  if (!b.Calendar_Event_ID) throw new Error('Booking #' + b.ID + ' has no calendar event id, so its calendar entry cannot be updated.');
+  const ev = await inspCalFetch(env, cfg, 'PATCH', '/events/' + encodeURIComponent(b.Calendar_Event_ID), body);
+  if (expect) {
+    const s = Date.parse(ev && ev.start && ev.start.dateTime), e = Date.parse(ev && ev.end && ev.end.dateTime);
+    if (s !== expect.startMs || e !== expect.endMs) throw new Error('Google answered the calendar update, but the event did not keep the new times (read back ' + (ev && ev.start && ev.start.dateTime) + ').');
+  }
+  return 'calendar entry updated and read back';
+}
+async function shiftApplyRoute(env, body) {
+  try { return await shiftApply(env, body); } catch (e) { return await shiftRouteErr(env, 'shift_apply', e); }
+}
+async function shiftApply(env, body) {
+  const input = shiftInput(body), cfg = await fetchConfig(env), nowMs = Date.now();
+  invalidateTabCache('Insp_Bookings');
+  const col = await shiftCollect(env, input);
+  const items = shiftPlan(col.raw, input, nowMs);
+  const planId = shiftPlanId(items);
+  if (!input.plan_id || input.plan_id !== planId) return json({ ok: false, error: 'stale', message: 'The schedule changed since you looked at it (or the preview was not run). Nothing was done. Preview again, then Apply.' }, 409);
+  const todo = items.filter(i => i.checked && i.changed && i.shiftable && !i.problems.length);
+  const results = items.filter(i => !todo.includes(i)).map(i => ({ key: i.key, ok: true, skipped: true, steps: [i.locked_reason ? 'Not moved: ' + i.locked_reason : (i.problems.length ? 'Not moved: ' + i.problems.join(' ') : (i.checked ? 'Nothing to change.' : 'Left unchecked, not moved.'))], errors: [], warnings: [] }));
+  const emailTo = shiftCfgEmail(cfg);
+  const inspTodo = todo.filter(i => i.type === 'inspection'), woTodo = todo.filter(i => i.type === 'wo_window');
+  // Validate the email BEFORE changing anything: a bad email must not leave half a shift behind.
+  const newIds = [], pending = [];
+  for (const i of inspTodo) {
+    const b = i._r.b;
+    if (b.Change_Status === 'proposed' && b.Proposed_Start_ISO === i.new.start_iso && b.Proposed_End_ISO === i.new.end_iso) { results.push({ key: i.key, ok: true, skipped: true, idempotent: true, steps: ['Already waiting for ' + shiftCfgName(cfg) + ' to answer with exactly this time. Nothing new was sent.'], errors: [], warnings: [] }); continue; }
+    newIds.push(i.id); pending.push(i);
+  }
+  let draft = null;
+  if (pending.length) {
+    const d = shiftEmailDraft({ date: input.date, intro: shiftEmailIntro(input), greetName: shiftCfgName(cfg), items: pending.map(i => ({ id: i.id, address: i._r.b.Formatted_Address || i._r.b.Address, units: i._r.units, oldStartMs: i._r.startMs, oldEndMs: i._r.endMs, newStartMs: i._ns, newEndMs: i._ne })) });
+    draft = input.email && input.email.body ? { subject: input.email.subject || d.subject, body: input.email.body } : d;
+    const v = shiftEmailValidate(draft.body, newIds);
+    if (!v.ok) return json({ ok: false, error: 'bad_email', message: 'Fix the email before applying: ' + v.problems.join(' ') }, 400);
+    if (!String(draft.subject).trim()) return json({ ok: false, error: 'bad_email', message: 'The email needs a subject.' }, 400);
+  }
+  // A booking that overlaps something that is NOT part of this shift is a hard stop: nothing is written at all (the email you edited names every inspection).
+  const occupied = shiftOccupied(col.bookings, {}).filter(o => !pending.some(p => p.id === o.id));
+  const clashes = [];
+  for (const i of pending) for (const o of shiftOverlaps(occupied, i._ns, i._ne)) clashes.push(i.label + ' would overlap ' + o.label + ' (' + shiftRange(o.startMs, o.endMs) + ')');
+  if (clashes.length) return json({ ok: false, error: 'conflict', message: 'Nothing was changed. ' + clashes.join('; ') + '. Uncheck the one that clashes, or change its time.' }, 409);
+  const batch = 'B' + Date.now().toString(36) + inspRandToken(3).replace(/[^A-Za-z0-9]/g, '');
+  const written = [];
+  for (const i of pending) {
+    const r = { key: i.key, ok: false, steps: [], errors: [], warnings: [] };
+    results.push(r);
+    const token = inspRandToken(24);
+    const fields = { Change_Status: 'proposed', Proposed_Start_ISO: i.new.start_iso, Proposed_End_ISO: i.new.end_iso, Proposed_Duration_Min: String(i.new.duration_min), Change_Token: token, Change_Proposed_At: new Date().toISOString(), Change_Decided_At: '', Change_Note: '', Change_Batch: batch, Change_Reminded_At: '' };
+    try { await updateRowVerified(env, 'Insp_Bookings', i.id, fields); r.steps.push('Proposal saved and read back (the booking stays at its old time until approved).'); written.push({ i, token, r }); }
+    catch (e) { r.errors.push('Could not save the proposal: ' + ((e && e.message) || e)); await shiftTelemetry(env, 'shift/apply', false, 'Booking #' + i.id + ' proposal not saved: ' + ((e && e.message) || e)); continue; }
+    try { r.steps.push(await shiftPatchEvent(env, cfg, Object.assign({}, i._r.b), shiftEventBody(i._r.b, 'CHANGE PROPOSED: ' + i.new.range + ' (was ' + i.old.range + '), awaiting ' + shiftCfgName(cfg) + '. Still booked at the old time until approved.'), null)); }
+    catch (e) { r.warnings.push('The calendar note could not be added: ' + ((e && e.message) || e)); await shiftTelemetry(env, 'shift/apply', false, 'Booking #' + i.id + ' calendar note failed: ' + ((e && e.message) || e)); }
+  }
+  // One email for the day.
+  let emailInfo = null;
+  if (written.length) {
+    const links = { approve: {}, reschedule: {}, all: inspChangeUrl('b=' + encodeURIComponent(await shiftBatchToken(env, batch))) };
+    for (const w of written) { links.approve[w.i.id] = inspChangeUrl('c=' + encodeURIComponent(w.token)); links.reschedule[w.i.id] = inspChangeUrl('c=' + encodeURIComponent(w.token) + '&reschedule=1'); }
+    const ids = written.map(w => w.i.id);
+    let bodyText = draft.body;
+    // Items that failed to save are not in the email: drop their lines' links so nobody approves a proposal that does not exist.
+    const dropped = pending.filter(p => !ids.includes(p.id)).map(p => p.id);
+    if (dropped.length) { const d2 = shiftEmailDraft({ date: input.date, intro: shiftEmailIntro(input), greetName: shiftCfgName(cfg), items: written.map(w => ({ id: w.i.id, address: w.i._r.b.Formatted_Address || w.i._r.b.Address, units: w.i._r.units, oldStartMs: w.i._r.startMs, oldEndMs: w.i._r.endMs, newStartMs: w.i._ns, newEndMs: w.i._ne })) }); bodyText = d2.body; for (const w of written) w.r.warnings.push('One inspection could not be saved, so your edits to the email were replaced with the standard wording for the rest.'); }
+    const rendered = shiftEmailRender(bodyText, links);
+    try {
+      if (rendered.missing.length) throw new Error('the email still contains pieces that did not turn into links: ' + rendered.missing.join(', '));
+      const sent = await gmailSendEmail(env, { to: emailTo, subject: draft.subject, html: rendered.html });
+      if (!sent || !(sent.sent || sent.staged || sent.message_id || sent.id)) throw new Error('Gmail did not confirm the send: ' + JSON.stringify(sent || {}).slice(0, 160));
+      emailInfo = { to: emailTo, staged: !!sent.staged, subject: draft.subject, links_count: ids.length };
+      for (const w of written) w.r.steps.push('Email ' + (sent.staged ? '(staging stub, nothing really sent) ' : '') + 'sent to ' + emailTo + ' with Approve and Reschedule links.');
+    } catch (e) {
+      // The proposals exist but nobody was told. Take them back so a second Apply starts clean, and say so.
+      const msg = 'The email to ' + emailTo + ' did not go out (' + ((e && e.message) || e) + '), so the proposals were withdrawn. Nothing changed.';
+      await inspAlert(env, 'shift_email', msg);
+      for (const w of written) {
+        w.r.errors.push(msg); w.r.ok = false;
+        try { await updateRowVerified(env, 'Insp_Bookings', w.i.id, { Change_Status: 'none', Change_Token: '', Proposed_Start_ISO: '', Proposed_End_ISO: '', Proposed_Duration_Min: '', Change_Batch: '', Change_Note: 'withdrawn: email failed' }); w.r.steps.push('Proposal withdrawn.'); }
+        catch (e2) { w.r.errors.push('ALSO could not withdraw the proposal: ' + ((e2 && e2.message) || e2) + ' - fix booking #' + w.i.id + ' by hand.'); await inspAlert(env, 'shift_withdraw', 'Booking #' + w.i.id + ' still shows a proposal nobody was emailed about: ' + ((e2 && e2.message) || e2)); }
+      }
+      written.length = 0;
+    }
+    for (const w of written) { w.r.ok = w.r.errors.length === 0; try { await shiftAppendLog(env, w.i.id, w.i._r.b, 'proposed: ' + (emailInfo ? 'email sent to ' + emailTo : 'no email')); } catch (e) { w.r.warnings.push('Notify log not saved: ' + ((e && e.message) || e)); } }
+  }
+  for (const r of results) if (r.ok === false && !r.errors.length) r.ok = true;
+  // Brett's own work-order windows move right away through the normal scheduling path.
+  for (const i of woTodo) {
+    const r = { key: i.key, ok: false, steps: [], errors: [], warnings: [] };
+    results.push(r);
+    try {
+      if (String(i._r.wo.Scheduled_Window || '') === i.new.window && String(i._r.wo.Scheduled_Date || '').slice(0, 10) === input.date) { r.ok = true; r.steps.push('Already at this window.'); continue; }
+      const resp = await scheduleWO(env, { wo_id: i.id, date: input.date, window: i.new.window, notify_tenant: true, updated_by: 'Shift tool', updated_by_role: 'admin' });
+      const j = await resp.json();
+      if (!j || !j.success) throw new Error((j && (j.error || j.message)) || 'the scheduling path refused it');
+      invalidateTabCache('Work_Orders');
+      const back = (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === i.id);
+      if (!back || String(back.Scheduled_Window || '') !== i.new.window) throw new Error('the work order did not keep the new window (read back "' + (back && back.Scheduled_Window) + '")');
+      r.ok = true; r.steps.push('Window changed to ' + i.new.window + ' and read back.');
+      r.steps.push(j.tenant_sms ? 'Tenant text sent.' : (j.notify_queued ? 'Tenant text queued for a sensible hour.' : 'No tenant text went out (switched off, held for quiet hours, or no tenant to text).'));
+      if (j.owner_sms) r.steps.push('Owner text sent.');
+    } catch (e) { r.errors.push('Could not change the window: ' + ((e && e.message) || e)); await inspAlert(env, 'shift_wo', 'Work order ' + i.id + ' window not changed: ' + ((e && e.message) || e)); }
+  }
+  const ok = results.every(r => r.ok);
+  await shiftTelemetry(env, 'shift/apply', ok, (ok ? 'applied ' : 'PARTIAL ') + input.date + ' ' + results.filter(r => !r.skipped).length + ' item(s)' + (ok ? '' : ': ' + results.filter(r => r.errors.length).map(r => r.key + ' ' + r.errors.join(' ')).join(' | ')));
+  return json({ ok, date: input.date, email: emailInfo, results, message: ok ? (todo.length ? 'Done.' : 'Nothing to do.') : 'Some items did not go through. Read the red lines; nothing failed silently.' }, ok ? 200 : 207);
+}
+async function shiftAppendLog(env, id, b, line) {
+  await updateRowVerified(env, 'Insp_Bookings', id, { Notify_Log: ((b.Notify_Log ? b.Notify_Log + ' | ' : '') + line).slice(-900) });
+}
+// SHIFT-CONT-2
 // ── Admin (secret-gated) endpoints ─────────────────────────────────────────────────────────
 async function inspOpenBlocksList(env) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
