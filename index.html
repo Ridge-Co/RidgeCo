@@ -2733,6 +2733,13 @@ function maybeOpenWOFromURL() {
     }
     var wid = qs.get('wo');
     if (wid && typeof openWODetail === 'function') openWODetail(wid);
+    // index.html?property=<id>&tab=settings|info|units|cleanup opens that property's detail view (links from the proposal screen and the Message Queue).
+    var propId = qs.get('property');
+    if (propId && typeof openPropertyDetail === 'function') {
+      var pbtn = Array.prototype.find.call(document.querySelectorAll('.nav-btn'), function(b){ return (b.getAttribute('onclick') || '').indexOf("showPage('properties'") !== -1; });
+      showPage('properties', pbtn || null);
+      openPropertyDetail(propId, qs.get('tab') || 'settings');
+    }
   } catch (e) {}
 }
 
