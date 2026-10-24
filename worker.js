@@ -35184,17 +35184,13 @@ const INSP_ACTIVE_BOOKING = ['pending', 'approved'];
 function inspErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
 
 // ── Pure engine (unit-tested in test/insp-booking.test.mjs) ────────────────────────────────
-// Duration. Brett's rule of thumb: 30 min per unit + ~20 min for the building itself, so a
-// 3-unit building is ~2h. Economy of scale: the building-level walk-through is shorter when
-// the building is small (a duplex or single-family home has far less common area than a
-// 12-unit walk-up), so per-building overhead drops to 15 min for ~2-unit buildings and 10 min
-// for single units. 1u=40, 2u=75, 3u=110, 4u=140 ... rounded up to 5 min, floor of 30.
+// Duration. Brett's rule (Oct 23 2026, replaces the Oct 7 sliding overhead): 30 min per UNIT + 30 min per BUILDING.
+// 1 unit = 60, 4 units in 1 building = 150, 2 buildings x 2 units = 180. Rounded up to 5 min, floor of 30.
+// It applies to NEW bookings; an existing booking only changes length through a shift (Appointment Shift tool).
 function inspDurationMin(units, buildings) {
   const u = Math.max(1, Math.floor(+units || 0));
   const b = Math.max(1, Math.min(u, Math.floor(+buildings || 1)));
-  const avg = u / b;
-  const overhead = avg >= 3 ? 20 : (avg >= 2 ? 15 : 10);
-  const raw = 30 * u + overhead * b;
+  const raw = 30 * u + 30 * b;
   return Math.max(30, Math.ceil(raw / 5) * 5);
 }
 // "9:30", "09:30", "9:30 AM", "1:15 pm", "13:15" -> minutes after midnight, or NaN.
