@@ -16,7 +16,7 @@ function pageHtml() {
 }
 const page = pageHtml();
 
-// The 33 tools: key -> exactly the onclick the button had before the re-layout (do not "tidy" these).
+// The 34 tools (shift-appointments added Oct 23 2026): key -> exactly the onclick the button had before the re-layout (do not "tidy" these).
 const TOOLS = {
   'scope-creator': "window.open('scope-creator.html','_blank')",
   'inspection-scheduler': "window.open('inspect.html','_blank')",
