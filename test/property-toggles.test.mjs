@@ -241,4 +241,181 @@ const HDR = ['ID', 'Address', 'City', 'Market', 'Type', 'Unit_Count', 'Owner_ID'
 }
 
 // ───────────────────────── merge: references ─────────────────────────
+{
+  const hb = { Properties: HDR, Work_Orders: ['ID', 'Property_ID', 'Property_Address', 'Status'], Units: ['ID', 'Property_ID', 'Unit_Label', 'Property_Address'], Master_Keys: ['ID', 'Property_IDs'], Trash_Visits: ['ID', 'Property_ID'], Insp_Units: ['ID', 'Property_ID'], Widgets: ['ID', 'Linked_Property_ID'], Message_Queue: ['ID', 'Property_ID'], Owners: ['ID', 'Tenant_WO_Property_IDs'], Vendors: ['ID', 'Billing_Property_Access'], Receipts_Queue: ['ID', 'Suggested_Property_ID'], Notes: ['ID', 'Property_ID'] };
+  const t = P.propertyRefTargets(hb);
+  ok(['Work_Orders', 'Units', 'Master_Keys', 'Message_Queue', 'Owners', 'Vendors', 'Receipts_Queue', 'Notes'].every(x => t.targets.some(y => y.tab === x)), 'registry columns found by header');
+  eq(t.ignored.map(i => i.tab).sort(), ['Insp_Units', 'Trash_Visits'], 'other lists\' ids (Trash, Insp) are ignored on purpose');
+  eq(t.unknown, [{ tab: 'Widgets', col: 'Linked_Property_ID' }], 'a property-id-looking column nobody registered is surfaced');
+  ok(!t.targets.some(x => x.tab === 'Properties'), 'the Properties tab itself is not scanned');
+  ok(P.propertyRefTargets({ Work_Orders: ['ID', 'Status'] }).targets.length === 0, 'a tab without the column is skipped');
+  eq(P.propertyRefCellRepoint('1,93,5', 'list', '93', '94'), '1,94,5', 'comma list: id swapped in place');
+  eq(P.propertyRefCellRepoint('94,93', 'list', '93', '94'), '94', 'comma list: target already there, no duplicate id');
+  eq(P.propertyRefCellRepoint('93', 'id', '93', '94'), '94', 'single id');
+  ok(P.propertyRefCellHits('1, 93 ,5', 'list', '93') && !P.propertyRefCellHits('193', 'list', '93') && !P.propertyRefCellHits('193', 'id', '93') && !P.propertyRefCellHits('', 'id', '93'), 'matches whole ids only (93 is not 193)');
+}
+
+// ───────────────────────── merge: full plan + handlers on a fake sheet ─────────────────────────
+function colLetter(i) { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; }
+function makeWorld(db, hooks = {}) {
+  const failures = [], telemetry = [], batchWrites = [];
+  const fake = {
+    sheetsRequest: async (env, method, path, body) => {
+      if (hooks.failRead && method === 'GET') throw new Error('Sheets API error: 503');
+      if (method === 'GET' && path.startsWith('?fields=')) return { sheets: Object.keys(db).map(t => ({ properties: { title: t } })) };
+      if (method === 'GET' && path.startsWith('/values:batchGet?')) {
+        const ranges = path.slice('/values:batchGet?'.length).split('&').map(x => decodeURIComponent(x.replace(/^ranges=/, '')));
+        return { valueRanges: ranges.map(r => {
+          let m = /^'(.*)'!1:1$/.exec(r); if (m) return { values: [(db[m[1]] || [[]])[0]] };
+          m = /^'(.*)'!([A-Z]+)(\d+)$/.exec(r);
+          if (m) { const rows = db[m[1]], ci = [...m[2]].reduce((a, c) => a * 26 + c.charCodeAt(0) - 64, 0) - 1, v = (rows[+m[3] - 1] || [])[ci]; return v === undefined || v === '' ? {} : { values: [[v]] }; }
+          m = /^'(.*)'$/.exec(r); return { values: db[m[1]] };
+        }) };
+      }
+      if (method === 'POST' && path === '/values:batchUpdate') {
+        if (hooks.failWrite && body.data.some(d => hooks.failWrite(d))) throw new Error('Sheets API error: quota');
+        batchWrites.push(body.data);
+        for (const d of body.data) { const m = /^'(.*)'!([A-Z]+)(\d+)$/.exec(d.range), ci = [...m[2]].reduce((a, c) => a * 26 + c.charCodeAt(0) - 64, 0) - 1; const row = db[m[1]][+m[3] - 1]; while (row.length <= ci) row.push(''); row[ci] = d.values[0][0]; }
+        return {};
+      }
+      throw new Error('unexpected sheets call ' + method + ' ' + path);
+    },
+    toObjs: t => { const [h, ...r] = db[t] || [[]]; return r.map(row => { const o = {}; h.forEach((k, i) => { o[k] = row[i] == null ? '' : String(row[i]); }); return o; }); },
+  };
+  const stubs = {
+    sheetsRequest: fake.sheetsRequest, json: (x, status) => ({ status: status || 200, body: x }),
+    fetchTab: async (e, t) => fake.toObjs(t), fetchTabs: async (e, ts) => ts.map(t => fake.toObjs(t)), invalidateTabCache: () => {},
+    ensureColumns: async (e, t, cols) => { if (hooks.failEnsure) throw new Error('ensureColumns failed'); for (const c of cols) if (!db[t][0].includes(c)) { db[t][0].push(c); db[t].slice(1).forEach(r => r.push('')); } },
+    updateRowVerified: async (e, t, id, fields) => {
+      if (hooks.failVerified && hooks.failVerified(t, id, fields)) throw new Error(t + ' row ' + id + ' did not keep: ' + Object.keys(fields).join(', '));
+      const h = db[t][0], row = db[t].slice(1).find(r => String(r[h.indexOf('ID')]) === String(id)); if (!row) throw new Error('no row');
+      for (const [k, v] of Object.entries(fields)) { const ci = h.indexOf(k); if (ci < 0) throw new Error(t + ' row ' + id + ' was not updated (No matching fields)'); while (row.length <= ci) row.push(''); row[ci] = v; }
+      return {};
+    },
+    reportFailure: async (e, f) => { failures.push(f); }, logTelemetry: async (e, r) => { telemetry.push(r); },
+    fuSha256: async s => 'H' + Array.from(String(s)).reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7).toString(16),
+    etTodayISO: () => '2026-10-24', col: colLetter, idColIndex: h => Math.max(0, h.indexOf('ID')), resolveTenantWOAccess: () => false, smsToggleOn: P.smsToggleOn,
+    PORTAL_BASE: 'https://x.test', SCOPE_SMS_QUIET_WINDOW: { start: 20, end: 8 }, fetchConfig: async () => CFG_OPEN, findWO: (w, id) => w.find(x => x.ID === id),
+  };
+  const names = ['ppWriteCells', 'propertyToggleSet', 'propertyInfoSave', 'propertyUnitSave', 'ownerToggleApplyHandler', 'propertyMarkDuplicate', 'propertyMergeLoad', 'propertyMergePlan', 'propertyMergeHandler', 'propertyDetail', 'smsGatePreviewHandler', 'ppResolveGateProperty'];
+  const consts = ['PP_TOGGLE_COLS', 'PP_SYSTEM_COLS', 'PROPERTY_INFO_GROUPS', 'PP_UNIT_FIELDS', 'PP_UNIT_NEW_COLS', 'ppStr', 'ppIdx', 'ppOwnerName', 'ppFail', 'ppAudit', 'ppSheetRange', 'ppRawObj', 'ppMergeView'];
+  const code = consts.map(grabConst).join('\n') + '\n' + names.map(grab).join('\n');
+  const stubNames = Object.keys(stubs);
+  const API = new Function('stubs', 'P', 'const { ' + stubNames.join(', ') + ' } = stubs;\nconst { PROPERTY_TOGGLES, propToggleDef, propToggleRaw, propToggleOn, propToggleStates, ownerToggleApplyPlan, propertyMergeFieldPlan, propertyMergeWrites, propertyRefTargets, propertyRefCellHits, propertyRefCellRepoint, PROPERTY_DUP_COLS, smsGatePreview, propertyOwnerEmailOn } = P;\nconst isStaging = () => false;\n' + code + '\nreturn { ' + names.join(', ') + ' };')(stubs, P);
+  return { API, db, failures, telemetry, batchWrites, fake };
+}
+const freshDb = () => ({
+  Properties: [HDR.slice(), ['93', '411 W 23rd St', '', 'Baltimore', 'rowhome', '1', '', '', '', 'TRUE', '', '', '', '', ''], ['94', '411 West 23rd St', 'Baltimore', 'Baltimore', 'rowhome', '1', '24', '', 'lockbox', 'TRUE', 'TRUE', '', '', '', ''], ['10', 'TEST-1 Main', 'Balt', 'Baltimore', 'house', '2', '7', '', '', 'TRUE', '', '', '', '', ''], ['11', 'TEST-2 Main', 'Balt', 'Baltimore', 'house', '2', '7', '', '', 'TRUE', '', '', '', '', '']],
+  Work_Orders: [['ID', 'Property_ID', 'Property_Address', 'Status'], ['W1', '10', 'TEST-1 Main', 'Done'], ['W2', '11', 'TEST-2 Main', 'Open'], ['W3', '10', 'TEST-1 Main', 'Open'], ['W4', '93', 'x', 'Open']],
+  Units: [['ID', 'Property_ID', 'Unit_Label', 'Property_Address', 'Active'], ['u1', '10', 'A', 'TEST-1 Main', 'FALSE'], ['u2', '10', 'B', 'TEST-1 Main', 'TRUE'], ['u3', '11', 'C', 'TEST-2 Main', 'TRUE']],
+  Master_Keys: [['ID', 'Property_IDs'], ['k1', '1,10,5'], ['k2', '10'], ['k3', '11,10']],
+  Message_Queue: [['ID', 'Property_ID', 'Status'], ['m1', '10', 'sent']],
+  Trash_Visits: [['ID', 'Property_ID'], ['t1', '10']],
+  Owners: [['ID', 'Tenant_WO_Property_IDs', 'SMS_Enabled', 'Company', 'First_Name', 'Last_Name', 'Active'], ['7', '10,11', 'TRUE', 'Phoenix', 'Amanda', 'I', 'TRUE'], ['24', '', 'TRUE', '', 'Greg', 'O', 'TRUE']],
+});
+{ // preview: 10 -> 11, counts per tab, inactive unit included, comma lists, trash ignored
+  const w = makeWorld(freshDb());
+  const out = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false);
+  const v = out.body;
+  eq(v.preview, true, 'preview flagged'); eq(v.ok, true, 'no blocks: ' + JSON.stringify(v.blocks));
+  eq(Object.fromEntries(v.tabs.map(t => [t.tab, t.count])), { Work_Orders: 2, Units: 2, Master_Keys: 3, Message_Queue: 1, Owners: 1 }, 'per-tab counts incl. the INACTIVE unit, comma lists and the message queue; Trash_Visits ignored');
+  eq(v.total_rows_to_move, 9, 'total rows to move'); ok(v.token && v.token.startsWith('H'), 'preview returns a token');
+  eq(w.batchWrites.length, 0, 'preview writes nothing'); eq(w.failures.length, 0, 'preview reports nothing');
+}
+{ // apply: everything moves, nothing deleted, old property marked only at the end, list cells fixed, address text refreshed
+  const w = makeWorld(freshDb());
+  const prev = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  const out = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: prev.token, confirm: true, resolutions: Object.fromEntries(prev.conflicts.map(c => [c.col, 'to'])) }, true);
+  eq([out.status, out.body.ok, out.body.merged], [200, true, true], 'merge ok: ' + JSON.stringify(out.body));
+  const d = w.db;
+  eq(d.Work_Orders.slice(1).map(r => r[1]), ['11', '11', '11', '93'], 'work orders re-pointed (93 untouched)');
+  eq(d.Work_Orders.slice(1, 4).map(r => r[2]), ['TEST-2 Main', 'TEST-2 Main', 'TEST-2 Main'], 'denormalized address text matches the surviving property');
+  eq(d.Units.slice(1).map(r => r[1]), ['11', '11', '11'], 'units (including the inactive one) re-pointed');
+  eq(d.Master_Keys.slice(1).map(r => r[1]), ['1,11,5', '11', '11'], 'master-key lists re-pointed without duplicate ids');
+  eq(d.Owners[1][1], '11', 'owner tenant-WO property list re-pointed (10,11 -> 11)');
+  eq(d.Trash_Visits[1][1], '10', 'Trash_Visits belongs to another list and is untouched');
+  const old = d.Properties.find(r => r[0] === '10'), h = d.Properties[0];
+  eq([old[h.indexOf('Active')], old[h.indexOf('Duplicate_Of')]], ['FALSE', '11'], 'old property hidden and pointed at the survivor');
+  ok(old[h.indexOf('Merge_Log')].includes('"Work_Orders":2'), 'merge log keeps the per-tab counts'); ok(d.Properties.length === 5, 'NOTHING deleted: the old property row still exists');
+  eq(w.failures.length, 0, 'happy path reports nothing');
+  const again = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(again.ok, false, 'a merged property cannot be merged again'); ok(/already merged/.test(again.blocks.join(' ')), 'and says why');
+}
+{ // apply is refused on a stale token, an unanswered conflict, and a missing confirm - and writes nothing
+  const db = freshDb(); db.Properties[3][1] = 'TEST-1 Main St'; db.Properties[4][1] = 'TEST-2 Main Street';   // an address conflict
+  const w = makeWorld(db);
+  const prev = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(prev.conflicts.map(c => c.col), ['Address'], 'address is the one question');
+  let r = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: prev.token, confirm: true }, true);
+  eq([r.status, r.body.missing], [400, ['Address']], 'unanswered conflict is refused');
+  r = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: 'stale', confirm: true, resolutions: { Address: 'from' } }, true);
+  eq([r.status, r.body.code], [409, 'changed_since_preview'], 'stale token refused');
+  r = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: prev.token, resolutions: { Address: 'from' } }, true);
+  eq(r.status, 400, 'no confirm, no merge');
+  eq(w.batchWrites.length, 0, 'none of those wrote anything');
+  r = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: prev.token, confirm: true, resolutions: { Address: 'from' } }, true);
+  eq(r.body.ok, true, 'with the pick it merges'); eq(w.db.Properties.find(x => x[0] === '11')[1], 'TEST-1 Main St', 'the picked address was written to the survivor');
+}
+{ // blocks: self, unknown reference that mentions the property, twin unit, different owners
+  let w = makeWorld(freshDb());
+  eq((await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '10' }, false)).body.ok, false, 'self-merge refused');
+  const db = freshDb(); db.Widgets = [['ID', 'Linked_Property_ID'], ['x', '10']];
+  w = makeWorld(db); let v = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(v.ok, false, 'an unknown column that mentions the property blocks the merge'); ok(/Widgets\.Linked_Property_ID/.test(v.blocks.join(' ')), 'and names it');
+  const db2 = freshDb(); db2.Widgets = [['ID', 'Linked_Property_ID'], ['x', '55']];
+  w = makeWorld(db2); v = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(v.ok, true, 'an unknown column that does NOT mention it does not block'); eq(v.unknown_columns, [{ tab: 'Widgets', col: 'Linked_Property_ID', count: 0 }], 'but is listed');
+  const db3 = freshDb(); db3.Units.push(['u9', '11', 'a', 'x', 'TRUE']);
+  w = makeWorld(db3); v = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(v.ok, false, 'twin unit labels (A on both, case-insensitive) block'); ok(/"A"/.test(v.blocks.join(' ')), 'and name the unit');
+  const db4 = freshDb(); db4.Properties[3][6] = '7'; db4.Properties[4][6] = '24';
+  w = makeWorld(db4); v = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(v.ok, false, 'two different owners block'); ok(/Owner_ID/.test(v.blocks.join(' ')), 'and says Owner_ID');
+  const db5 = freshDb(); db5.Properties[4][12] = '94';
+  w = makeWorld(db5); v = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(v.ok, false, 'cannot merge INTO a property that is itself a marked duplicate');
+}
+{ // the known real case: 93 -> 94, zero rows to move except one work order, nothing executed by this test beyond the fake
+  const w = makeWorld(freshDb());
+  const v = (await w.API.propertyMergeHandler({}, { from_id: '93', to_id: '94' }, false)).body;
+  eq(v.ok, true, '93 -> 94 is mergeable'); eq(v.conflicts.map(c => c.col), ['Address'], 'one pick: the address');
+  eq(v.auto, [], 'nothing auto-taken'); eq(v.tabs.map(t => [t.tab, t.count]), [['Work_Orders', 1]], 'only what the fake gave 93');
+}
+// ── fault injection: a write that fails mid-merge is REPORTED, returned as a failure, and the old property is NOT marked ──
+{
+  const w = makeWorld(freshDb(), { failWrite: d => /Units/.test(d.range) });
+  const prev = (await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  const r = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: prev.token, confirm: true, resolutions: { Address: 'to' } }, true);
+  eq([r.status, r.body.ok], [500, false], 'failed write is a failure, not a success claim');
+  ok(/stopped/.test(r.body.error) && r.body.error.includes('Work_Orders'), 'tells the user what moved and what to do: ' + r.body.error);
+  eq(w.failures.length, 1, 'reported once'); eq([w.failures[0].severity, w.failures[0].where], ['P1', 'property_merge_apply'], 'P1 data write failure');
+  eq(w.db.Properties.find(x => x[0] === '10')[w.db.Properties[0].indexOf('Active')], 'TRUE', 'the old property is NOT marked when the move did not finish');
+  const retry = makeWorld(w.db);   // same (half-moved) data, no fault: preview again then finish
+  const pv = (await retry.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  eq(pv.tabs.some(t => t.tab === 'Work_Orders'), false, 'after the partial move, preview shows only what is left (safe to re-run)');
+  const fin = await retry.API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: pv.token, confirm: true, resolutions: { Address: 'to' } }, true);
+  eq(fin.body.ok, true, 'a re-run finishes the job'); eq(retry.failures.length, 0, 'and reports nothing');
+}
+{ // a scan that cannot read the sheet refuses, reports, and writes nothing
+  const w = makeWorld(freshDb(), { failRead: true });
+  const r = await w.API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false);
+  eq([r.status, r.body.ok], [500, false], 'FAULT: unreadable sheet -> a failure, not an empty "nothing to move" preview');
+  ok(/Nothing was changed/.test(r.body.error), 'says nothing was changed'); eq([w.failures.length, w.failures[0].where], [1, 'property_merge_scan'], 'and reports it');
+}
+// ── a cell that does not keep its value (read-back mismatch) is a failure too ──
+{
+  const { API, failures } = makeWorld(freshDb(), { failVerified: (t, id, f) => t === 'Properties' && 'Duplicate_Of' in f });
+  const prev = (await API.propertyMergeHandler({}, { from_id: '10', to_id: '11' }, false)).body;
+  const r = await API.propertyMergeHandler({}, { from_id: '10', to_id: '11', token: prev.token, confirm: true, resolutions: { Address: 'to' } }, true);
+  eq([r.status, r.body.ok], [500, false], 'final marking that does not stick is a visible failure'); eq(failures.length, 1, 'and is reported');
+}
+
+// ───────────────────────── toggle write, apply, mark duplicate: success AND fault injection ─────────────────────────
+{
+  const w = makeWorld(freshDb());
+  let r = await w.API.propertyToggleSet({}, { property_id: '10', key: 'sms_owners', value: 'FALSE' });
+  eq([r.status, r.body.ok, r.body.before, r.body.value], [200, true, '', 'FALSE'], 'toggle written, before was blank');
+  ok(w.db.Properties[0].includes('SMS_Owners_Enabled'), 'ensureColumns ran before the write');
+  eq(w.db.Properties.find(x => x[0] === '10')[w.db.Properties[0].indexOf('SMS_Owners_Enabled')], 'FALSE', 'sheet really holds FALSE');
+  eq(w.failures.length, 0, 'happy path reports nothing');
 //__CONT__
