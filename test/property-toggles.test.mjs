@@ -549,9 +549,9 @@ const freshDb = () => ({
       mqReportFailure: async () => {}, etHour: () => 12, isQuietHoursNow: () => false, nextQuietHoursEnd: () => new Date(), quietHoldUntil: () => null,
       sendSMSRaw: async () => { sends++; return { sid: 'SM1' }; }, logMessageAudit: async () => {}, updateMessageQueueRow: async () => true,
     };
-    Object.assign(stubs, d16Deps({ extra: { reportFailure: async (e, o) => { reports.push(o); } } }));
-    const names = Object.keys(stubs);
-    return { run: new Function(...names, sg + '\nreturn smsGatedSend;')(...names.map(k => stubs[k])), reports, posts, resolved, sends: () => sends };
+    const all = Object.assign({}, d16Deps({ extra: { reportFailure: async (e, o) => { reports.push(o); } } }), stubs);   // this test's REAL flags/lookup win over the harness defaults
+    const names = Object.keys(all);
+    return { run: new Function(...names, sg + '\nreturn smsGatedSend;')(...names.map(k => all[k])), reports, posts, resolved, sends: () => sends };
   }
   const vend = { Phone: '+14105550111', Name: 'V', SMS_Enabled: 'TRUE' };
   const opts = { recipient_type: 'vendor', vendor: vend, wo_id: 'W1', message_type: 'vendor_job_assigned', message_body: 'New job' };
