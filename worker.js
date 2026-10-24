@@ -25741,6 +25741,380 @@ async function fuDigestLines(env) {
 }
 /* FIX_CHECK:END */
 
+
+// ══ PROPERTY PAGE ENDPOINTS (Oct 24 2026, FEATURE_LOG rule 231). ALL admin-only: none of these paths is in ROLE_SCOPES. ═══════════
+// Sensitive: the detail read returns the access codes (Lockbox_Code, Lock_Code, per-unit Lock_Code) exactly as GET /property and
+// GET /properties already do for the admin Hub. It is never added to a vendor/owner/tenant scope.
+const PP_TOGGLE_COLS = PROPERTY_TOGGLES.map(t => t.col).filter(c => c !== 'Active');
+// System columns are edited on the Settings / Cleanup tabs and shown read-only on Info.
+const PP_SYSTEM_COLS = ['ID'].concat(PROPERTY_TOGGLES.map(t => t.col), ['Tenant_WO_Unit_IDs'], PROPERTY_DUP_COLS);
+// Info tab groups. Any Properties column NOT named here still shows, in "Other", so a column added to the sheet later is never invisible.
+const PROPERTY_INFO_GROUPS = [
+  { key: 'basics',   label: 'Basics',            cols: ['Address', 'City', 'Market', 'Type', 'Commercial_Subtype', 'Unit_Count', 'Owner_ID'] },
+  { key: 'access',   label: 'Access (sensitive)', sensitive: true, cols: ['Lockbox_Code', 'Lock_Code', 'Access_Notes', 'Master_Key_ID', 'Thermostat_Access', 'Furnace_Access'] },
+  { key: 'systems',  label: 'Building systems',  cols: ['Water_Shutoff', 'Gas_Shutoff', 'Breaker_Location', 'Heating_Type', 'HW_Type', 'HW_Shared', 'HVAC_Filter_Size', 'HVAC_Change_Interval', 'Known_Issues'] },
+  { key: 'services', label: 'Services',          cols: ['Trash_Day', 'Parking_Notes'] },
+  { key: 'billing',  label: 'Billing',           cols: ['QBO_Customer_ID'] },
+];
+const PP_UNIT_FIELDS = ['Unit_Label', 'Display_Label', 'Notes', 'Active', 'Lock_Code', 'Thermostat_Location', 'HW_Access', 'Breaker_Notes', 'AC_Type', 'Known_Issues', 'HVAC_Filter_Size', 'HVAC_Change_Interval'];
+const PP_UNIT_NEW_COLS = ['HVAC_Filter_Size', 'HVAC_Change_Interval'];
+const ppStr = v => String(v == null ? '' : v).trim();
+// Header position by NAME; -1 when the column is missing.
+const ppIdx = (headers, name) => (headers || []).indexOf(name);
+const ppOwnerName = o => o ? (ppStr(o.Company) ? ppStr(o.Company) + ' (' + (ppStr(o.First_Name) + ' ' + ppStr(o.Last_Name)).trim() + ')' : (ppStr(o.First_Name) + ' ' + ppStr(o.Last_Name)).trim()) : '';
+const ppFail = async (env, where, ref, message, severity) => { try { await reportFailure(env, { system: 'hub', source: 'worker', where, ref: ref || '', severity: severity || 'P1', message }); } catch (_) { /* silent-ok: reportFailure has its own console fallback */ } };
+const ppAudit = async (env, kind, notes) => { try { await logTelemetry(env, { Source: 'worker', Job_Type: kind, Skill_Or_Endpoint: '/property', Success: 'TRUE', Notes: String(notes || '').slice(0, 480) }); } catch (_) { /* silent-ok: audit row is best-effort, the change itself is read back */ } };
+
+// The property a gate should look at when the caller did not hand one over (vendor texts about a work order). Cheap on purpose: Properties is small and
+// cached; the (large) Work_Orders tab is only read when at least one property actually has "texts to vendors" switched OFF - otherwise the answer is
+// "no property switch applies" whatever the property is.
+async function ppResolveGateProperty(env, opts) {
+  let pid = ppStr(opts && opts.property_id);
+  const props = (await fetchTabs(env, ['Properties']))[0];
+  if (!pid) {
+    if (!props.some(p => ppStr(p.SMS_Vendors_Enabled).toUpperCase() === 'FALSE')) return null;
+    const wos = (await fetchTabs(env, ['Work_Orders']))[0];
+    const wo = findWO(wos, ppStr(opts && opts.wo_id));
+    pid = wo ? ppStr(wo.Property_ID) : '';
+  }
+  return pid ? (props.find(p => String(p.ID) === pid) || null) : null;
+}
+
+// GET /property/detail?id= - the lazy, one-property read behind the Properties detail view. Reads four tabs in ONE cached batchGet.
+async function propertyDetail(env, url) {
+  const id = ppStr(url.searchParams.get('id'));
+  if (!id) return json({ error: 'id required' }, 400);
+  const [properties, owners, units, tenants] = await fetchTabs(env, ['Properties', 'Owners', 'Units', 'Tenants']);
+  const property = properties.find(p => String(p.ID) === id);
+  if (!property) return json({ error: 'Property not found' }, 404);
+  const owner = ppStr(property.Owner_ID) ? (owners.find(o => String(o.ID) === ppStr(property.Owner_ID)) || null) : null;
+  const headers = Object.keys(property);
+  const grouped = new Set(); const groups = PROPERTY_INFO_GROUPS.map(g => ({ key: g.key, label: g.label, sensitive: !!g.sensitive, cols: g.cols.filter(c => headers.includes(c)).map(c => { grouped.add(c); return c; }) }));
+  const systemCols = headers.filter(h => PP_SYSTEM_COLS.includes(h));
+  const other = headers.filter(h => !grouped.has(h) && !PP_SYSTEM_COLS.includes(h));
+  if (other.length) groups.push({ key: 'other', label: 'Other', sensitive: false, cols: other });
+  const unitRows = units.filter(u => String(u.Property_ID) === id).map(u => {
+    const ts = tenants.filter(t => String(t.Unit_ID) === String(u.ID) && String(t.Property_ID) === id && String(t.Active == null ? '' : t.Active).toUpperCase() !== 'FALSE').map(t => (ppStr(t.First_Name) + ' ' + ppStr(t.Last_Name)).trim()).filter(Boolean);
+    return Object.assign({}, u, { _tenants: ts });
+  });
+  const siblings = owner ? properties.filter(p => String(p.Owner_ID) === String(owner.ID)) : [];
+  const states = propToggleStates(property);
+  const tw = states.find(s => s.key === 'tenant_wo');
+  if (tw) { tw.effective = resolveTenantWOAccess(property, owner, ''); tw.overridden_by_customer = !!(owner && (owner.Tenant_WO_Toggle === 'ON' || owner.Tenant_WO_Toggle === 'OFF') && (!ppStr(owner.Tenant_WO_Property_IDs) || String(owner.Tenant_WO_Property_IDs).split(',').map(s => s.trim()).includes(String(property.ID)))); tw.unit_scoped = !!ppStr(property.Tenant_WO_Unit_IDs); }
+  const missing = PP_TOGGLE_COLS.concat(PROPERTY_DUP_COLS).filter(c => !headers.includes(c));
+  const dupOf = ppStr(property.Duplicate_Of);
+  return json({
+    property, headers, groups, system_cols: systemCols, toggles: states,
+    customer: owner ? { id: String(owner.ID), name: ppOwnerName(owner), sms_on: smsToggleOn(owner.SMS_Enabled), active: String(owner.Active == null ? '' : owner.Active).toUpperCase() !== 'FALSE', property_count: siblings.length, same_company_owner_ids: ppStr(owner.Company) ? owners.filter(o => ppStr(o.Company).toLowerCase() === ppStr(owner.Company).toLowerCase() && String(o.ID) !== String(owner.ID)).map(o => String(o.ID)) : [] } : null,
+    owner_options: owners.filter(o => String(o.Active == null ? '' : o.Active).toUpperCase() !== 'FALSE').map(o => ({ id: String(o.ID), name: ppOwnerName(o) })),
+    units: unitRows, unit_fields: PP_UNIT_FIELDS, unit_new_cols: PP_UNIT_NEW_COLS,
+    duplicate: { of: dupOf, of_address: dupOf ? ((properties.find(p => String(p.ID) === dupOf) || {}).Address || '') : '', marked_date: ppStr(property.Duplicate_Marked_Date), merge_log: ppStr(property.Merge_Log), duplicates_of_me: properties.filter(p => ppStr(p.Duplicate_Of) === id).map(p => ({ id: String(p.ID), address: p.Address || '' })) },
+    candidates: properties.filter(p => String(p.ID) !== id && !ppStr(p.Duplicate_Of)).map(p => ({ id: String(p.ID), address: p.Address || '', city: p.City || '', owner_id: ppStr(p.Owner_ID), active: String(p.Active == null ? '' : p.Active).toUpperCase() !== 'FALSE' })),
+    missing_columns: missing,
+  });
+}
+
+// One batched write of many cells in ONE tab: a single values:batchUpdate, then a read-back of every cell. Returns { wrote, bad:[{row,col,wanted,got}] }.
+// Throws if the write itself fails (the caller reports it). cells: [{ row (sheet row number), col (header name), value }]
+async function ppWriteCells(env, tab, cells) {
+  if (!cells.length) return { wrote: 0, bad: [] };
+  const head = await sheetsRequest(env, 'GET', '/values:batchGet?ranges=' + encodeURIComponent("'" + tab + "'!1:1"));
+  const headers = ((head.valueRanges || [])[0] && head.valueRanges[0].values && head.valueRanges[0].values[0]) || [];
+  const data = []; const missing = [];
+  for (const c of cells) { const ci = headers.indexOf(c.col); if (ci < 0) { missing.push(c.col); continue; } data.push({ range: `'${tab}'!${col(ci)}${c.row}`, values: [[c.value]] }); }
+  if (missing.length) throw new Error(tab + ' has no column ' + Array.from(new Set(missing)).join(', ') + ' - nothing was written there');
+  await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+  invalidateTabCache(tab);
+  const back = await sheetsRequest(env, 'GET', '/values:batchGet?' + data.map(d => 'ranges=' + encodeURIComponent(d.range)).join('&'));
+  const bad = [];
+  cells.forEach((c, i) => { const vr = (back.valueRanges || [])[i]; const got = ppStr(vr && vr.values && vr.values[0] && vr.values[0][0]); if (got !== ppStr(c.value)) bad.push({ row: c.row, col: c.col, wanted: ppStr(c.value), got }); });
+  return { wrote: data.length, bad };
+}
+
+// POST /property/toggle { property_id, key, value } - flips ONE registry switch with a read-back. Bool switches take 'TRUE'/'FALSE'; the
+// tenant-WO switch takes 'ON'/'OFF'/'' (and keeps its unit scope). Never returns success unless the sheet really holds the new value.
+async function propertyToggleSet(env, body) {
+  const id = ppStr(body && body.property_id), key = ppStr(body && body.key);
+  const def = propToggleDef(key);
+  if (!id) return json({ error: 'property_id required' }, 400);
+  if (!def) return json({ error: 'Unknown setting "' + key + '"' }, 400);
+  let value = ppStr(body.value);
+  if (def.kind === 'bool') { value = value.toUpperCase(); if (value !== 'TRUE' && value !== 'FALSE') return json({ error: 'value must be TRUE or FALSE' }, 400); }
+  else { value = value.toUpperCase(); if (!['ON', 'OFF', ''].includes(value)) return json({ error: 'value must be ON, OFF or blank' }, 400); }
+  const prop = (await fetchTab(env, 'Properties')).find(p => String(p.ID) === id);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+  const before = propToggleRaw(prop, def);
+  try {
+    await ensureColumns(env, 'Properties', [def.col]);
+    await updateRowVerified(env, 'Properties', id, { [def.col]: value });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    await ppFail(env, 'property_toggle_set', 'Properties ' + id, 'could not change "' + def.label + '" for property ' + id + ': ' + msg, 'P1');
+    return json({ ok: false, error: 'Not saved: ' + msg, key, property_id: id }, 500);
+  }
+  await ppAudit(env, 'property_toggle_set', 'property=' + id + ' ' + def.col + ' ' + (before || '(blank)') + ' -> ' + (value || '(blank)'));
+  return json({ ok: true, key, property_id: id, col: def.col, before, value, on: propToggleOn({ [def.col]: value }, def) });
+}
+
+// POST /property/info-save { property_id, fields:{col:value} } - the Info tab. Verified write (the old /property/update returned success even when a column was missing).
+async function propertyInfoSave(env, body) {
+  const id = ppStr(body && body.property_id);
+  const fields = (body && body.fields && typeof body.fields === 'object') ? body.fields : null;
+  if (!id || !fields) return json({ error: 'property_id and fields required' }, 400);
+  const prop = (await fetchTab(env, 'Properties')).find(p => String(p.ID) === id);
+  if (!prop) return json({ error: 'Property not found' }, 404);
+  const headers = Object.keys(prop);
+  const bad = Object.keys(fields).filter(k => PP_SYSTEM_COLS.includes(k) || !headers.includes(k));
+  if (bad.length) return json({ error: 'These cannot be saved here: ' + bad.join(', ') + (bad.some(k => PP_SYSTEM_COLS.includes(k)) ? ' (switches are on the Settings tab, duplicates on the Cleanup tab)' : ' (no such column)') }, 400);
+  const clean = {}; for (const k of Object.keys(fields)) clean[k] = ppStr(fields[k]);
+  if (Object.prototype.hasOwnProperty.call(clean, 'Owner_ID') && clean.Owner_ID) {
+    const o = (await fetchTab(env, 'Owners')).find(x => String(x.ID) === clean.Owner_ID);
+    if (!o) return json({ error: 'Owner ' + clean.Owner_ID + ' does not exist' }, 400);
+  }
+  const changed = {}; for (const k of Object.keys(clean)) if (ppStr(prop[k]) !== clean[k]) changed[k] = clean[k];
+  if (!Object.keys(changed).length) return json({ ok: true, property_id: id, changed: [], message: 'Nothing changed' });
+  try { await updateRowVerified(env, 'Properties', id, changed); }
+  catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_info_save', 'Properties ' + id, 'could not save property ' + id + ': ' + msg, 'P1'); return json({ ok: false, error: 'Not saved: ' + msg }, 500); }
+  await ppAudit(env, 'property_info_save', 'property=' + id + ' fields=' + Object.keys(changed).join(','));
+  return json({ ok: true, property_id: id, changed: Object.keys(changed) });
+}
+
+// POST /property/unit-save { unit_id, fields } - the Units tab. HVAC filter size/interval are NEW Units columns (ensureColumns first).
+async function propertyUnitSave(env, body) {
+  const uid = ppStr(body && body.unit_id);
+  const fields = (body && body.fields && typeof body.fields === 'object') ? body.fields : null;
+  if (!uid || !fields) return json({ error: 'unit_id and fields required' }, 400);
+  const bad = Object.keys(fields).filter(k => !PP_UNIT_FIELDS.includes(k));
+  if (bad.length) return json({ error: 'These unit fields cannot be saved here: ' + bad.join(', ') }, 400);
+  const clean = {}; for (const k of Object.keys(fields)) clean[k] = ppStr(fields[k]);
+  try {
+    const need = Object.keys(clean).filter(k => PP_UNIT_NEW_COLS.includes(k));
+    if (need.length) await ensureColumns(env, 'Units', need);
+    const unit = (await fetchTab(env, 'Units')).find(u => String(u.ID) === uid);
+    if (!unit) return json({ error: 'Unit not found' }, 404);
+    await updateRowVerified(env, 'Units', uid, clean);
+  } catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_unit_save', 'Units ' + uid, 'could not save unit ' + uid + ': ' + msg, 'P1'); return json({ ok: false, error: 'Not saved: ' + msg }, 500); }
+  await ppAudit(env, 'property_unit_save', 'unit=' + uid + ' fields=' + Object.keys(clean).join(','));
+  return json({ ok: true, unit_id: uid, changed: Object.keys(clean) });
+}
+
+// POST /owner/property-toggle-preview and /owner/property-toggle-apply { owner_id, key, value, exclude_ids:[], token? }
+// PREVIEW writes nothing. APPLY needs the token the preview returned (a hash of the exact plan); if the data moved since, it refuses and asks for a new preview.
+async function ownerToggleApplyHandler(env, body, apply) {
+  const ownerId = ppStr(body && body.owner_id);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  if (apply) invalidateTabCache('Properties');
+  const [properties, owners] = await fetchTabs(env, ['Properties', 'Owners']);
+  const owner = owners.find(o => String(o.ID) === ownerId);
+  if (!owner) return json({ error: 'Customer (owner account) ' + ownerId + ' not found' }, 404);
+  const plan = ownerToggleApplyPlan({ properties, ownerId, key: ppStr(body.key), value: body.value, excludeIds: Array.isArray(body.exclude_ids) ? body.exclude_ids : [] });
+  if (plan.error) return json({ error: plan.error }, 400);
+  const token = await fuSha256(plan.canon);
+  const customer = { id: ownerId, name: ppOwnerName(owner), sms_on: smsToggleOn(owner.SMS_Enabled), same_company_owner_ids: ppStr(owner.Company) ? owners.filter(o => ppStr(o.Company).toLowerCase() === ppStr(owner.Company).toLowerCase() && String(o.ID) !== ownerId).map(o => String(o.ID)) : [] };
+  const view = { key: ppStr(body.key), label: plan.def.label, col: plan.def.col, value: plan.value, rows: plan.rows, counts: plan.counts, customer, token };
+  if (!apply) return json(Object.assign({ ok: true, preview: true }, view));
+  if (body.confirm !== true) return json({ error: 'confirm:true required to apply' }, 400);
+  if (!ppStr(body.token) || ppStr(body.token) !== token) return json({ ok: false, code: 'changed_since_preview', error: 'The properties changed since you previewed (or the preview is out of date). Nothing was written. Preview again.' }, 409);
+  if (!plan.changes.length) return json(Object.assign({ ok: true, applied: 0, message: 'Nothing to change' }, view));
+  let res;
+  try {
+    await ensureColumns(env, 'Properties', [plan.def.col]);
+    const raw = await sheetsRequest(env, 'GET', '/values:batchGet?ranges=' + encodeURIComponent("'Properties'"));
+    const vals = ((raw.valueRanges || [])[0] && raw.valueRanges[0].values) || [];
+    const hdr = vals[0] || [], idc = idColIndex(hdr);
+    const cells = [], notFound = [];
+    for (const c of plan.changes) { const ri = vals.findIndex((r, i) => i > 0 && String(r[idc]) === c.property_id); if (ri < 0) notFound.push(c.property_id); else cells.push({ row: ri + 1, col: plan.def.col, value: c.after_value }); }
+    if (notFound.length) throw new Error('property rows not found: ' + notFound.join(', '));
+    res = await ppWriteCells(env, 'Properties', cells);
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    await ppFail(env, 'owner_toggle_apply', 'Owners ' + ownerId, 'applying "' + plan.def.label + '" = ' + plan.value + ' to customer ' + ownerId + "'s properties failed: " + msg, 'P1');
+    return json({ ok: false, error: 'Not applied: ' + msg + '. Preview again to see what is still unchanged.' }, 500);
+  }
+  if (res.bad.length) {
+    await ppFail(env, 'owner_toggle_apply_readback', 'Owners ' + ownerId, res.bad.length + ' property cell(s) did not keep the new value after applying "' + plan.def.label + '": ' + res.bad.slice(0, 5).map(b => 'row ' + b.row + ' wanted ' + b.wanted + ' got ' + b.got).join('; '), 'P1');
+    return json({ ok: false, error: res.bad.length + ' of ' + res.wrote + ' did not save. Preview again and re-apply.', bad: res.bad }, 500);
+  }
+  await ppAudit(env, 'owner_toggle_apply', 'customer=' + ownerId + ' ' + plan.def.col + '=' + plan.value + ' properties=' + plan.changes.map(c => c.property_id).join(',') + ' excluded=' + plan.rows.filter(r => r.action === 'excluded').map(r => r.property_id).join(','));
+  return json(Object.assign({ ok: true, applied: res.wrote, verified: true }, view));
+}
+
+// POST /property/mark-duplicate { property_id, duplicate_of }  /  POST /property/unmark-duplicate { property_id }
+// Mark = Duplicate_Of + Active FALSE (+ date). Nothing is deleted or moved. Restore clears the mark and sets Active TRUE (refused if the property was merged away).
+async function propertyMarkDuplicate(env, body, restore) {
+  const id = ppStr(body && body.property_id);
+  if (!id) return json({ error: 'property_id required' }, 400);
+  invalidateTabCache('Properties');
+  const [properties, units, tenants, wos] = await fetchTabs(env, ['Properties', 'Units', 'Tenants', 'Work_Orders']);
+  const p = properties.find(x => String(x.ID) === id);
+  if (!p) return json({ error: 'Property not found' }, 404);
+  if (restore) {
+    if (ppStr(p.Merge_Log)) return json({ error: 'This property was merged into property ' + ppStr(p.Duplicate_Of) + ': its records now live there, so it cannot be restored here.' }, 409);
+    if (!ppStr(p.Duplicate_Of)) return json({ error: 'This property is not marked as a duplicate' }, 409);
+    try { await updateRowVerified(env, 'Properties', id, { Duplicate_Of: '', Duplicate_Marked_Date: '', Active: 'TRUE' }); }
+    catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_unmark_duplicate', 'Properties ' + id, 'could not restore property ' + id + ': ' + msg, 'P1'); return json({ ok: false, error: 'Not restored: ' + msg }, 500); }
+    await ppAudit(env, 'property_unmark_duplicate', 'property=' + id);
+    return json({ ok: true, property_id: id, restored: true });
+  }
+  const dupOf = ppStr(body.duplicate_of);
+  if (!dupOf) return json({ error: 'duplicate_of required (the property to keep)' }, 400);
+  if (dupOf === id) return json({ error: 'A property cannot be a duplicate of itself' }, 400);
+  const keep = properties.find(x => String(x.ID) === dupOf);
+  if (!keep) return json({ error: 'Property ' + dupOf + ' (the one to keep) not found' }, 404);
+  if (ppStr(keep.Duplicate_Of)) return json({ error: 'Property ' + dupOf + ' is itself marked as a duplicate of ' + ppStr(keep.Duplicate_Of) + '. Pick the real one.' }, 409);
+  if (ppStr(p.Duplicate_Of) && ppStr(p.Duplicate_Of) !== dupOf) return json({ error: 'Already marked as a duplicate of ' + ppStr(p.Duplicate_Of) + '. Restore it first to change that.' }, 409);
+  try {
+    await ensureColumns(env, 'Properties', PROPERTY_DUP_COLS);
+    await updateRowVerified(env, 'Properties', id, { Duplicate_Of: dupOf, Duplicate_Marked_Date: etTodayISO(), Active: 'FALSE' });
+  } catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_mark_duplicate', 'Properties ' + id, 'could not mark property ' + id + ' as a duplicate: ' + msg, 'P1'); return json({ ok: false, error: 'Not saved: ' + msg }, 500); }
+  await ppAudit(env, 'property_mark_duplicate', 'property=' + id + ' duplicate_of=' + dupOf);
+  const attached = { work_orders: wos.filter(w => String(w.Property_ID) === id).length, units: units.filter(u => String(u.Property_ID) === id).length, tenants: tenants.filter(t => String(t.Property_ID) === id).length };
+  return json({ ok: true, property_id: id, duplicate_of: dupOf, still_attached: attached, note: (attached.work_orders + attached.units + attached.tenants) ? 'Marked and hidden. Its ' + attached.work_orders + ' work order(s), ' + attached.units + ' unit(s) and ' + attached.tenants + ' tenant(s) were NOT moved. Use "Merge into another property" to move them.' : 'Marked and hidden. It has no work orders, units or tenants.' });
+}
+
+// ── MERGE ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const ppSheetRange = t => encodeURIComponent("'" + String(t).replace(/'/g, "''") + "'");
+// Reads (uncached, fresh) every tab's header row, then every tab that can hold a property id. Returns { headersByTab, rowsByTab }.
+async function propertyMergeLoad(env) {
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = ((meta && meta.sheets) || []).map(s => s.properties.title);
+  if (!titles.length) throw new Error('could not list the sheet tabs');
+  const hd = await sheetsRequest(env, 'GET', '/values:batchGet?' + titles.map(t => 'ranges=' + ppSheetRange(t) + encodeURIComponent('!1:1')).join('&'));
+  const headersByTab = {};
+  titles.forEach((t, i) => { headersByTab[t] = ((hd.valueRanges || [])[i] && hd.valueRanges[i].values && hd.valueRanges[i].values[0]) || []; });
+  const refs = propertyRefTargets(headersByTab);
+  const need = Array.from(new Set(refs.targets.map(x => x.tab).concat(refs.unknown.map(x => x.tab), ['Properties', 'Units'])));
+  const data = await sheetsRequest(env, 'GET', '/values:batchGet?' + need.map(t => 'ranges=' + ppSheetRange(t)).join('&'));
+  const rowsByTab = {}; need.forEach((t, i) => { rowsByTab[t] = ((data.valueRanges || [])[i] && data.valueRanges[i].values) || []; });
+  return { headersByTab, rowsByTab };
+}
+const ppRawObj = (raw, id) => { if (!raw || raw.length < 2) return null; const h = raw[0], ic = idColIndex(h); const r = raw.find((row, i) => i > 0 && String(row[ic]) === String(id)); if (!r) return null; const o = {}; h.forEach((k, i) => { o[k] = r[i] == null ? '' : String(r[i]); }); return o; };
+
+// PURE. Everything the merge needs to know, from already-loaded sheet data. Writes nothing.
+function propertyMergePlan({ headersByTab, rowsByTab, fromId, toId }) {
+  const blocks = [], warnings = [];
+  const propsRaw = rowsByTab.Properties || [];
+  const from = ppRawObj(propsRaw, fromId), to = ppRawObj(propsRaw, toId);
+  if (String(fromId) === String(toId)) blocks.push('A property cannot be merged into itself.');
+  if (!from) blocks.push('Property ' + fromId + ' (the duplicate) was not found.');
+  if (!to) blocks.push('Property ' + toId + ' (the one to keep) was not found.');
+  if (!from || !to) return { ok: false, blocks, warnings, tabs: [], total: 0 };
+  if (ppStr(from.Duplicate_Of) && ppStr(from.Merge_Log)) blocks.push('Property ' + fromId + ' was already merged into ' + ppStr(from.Duplicate_Of) + '.');
+  if (ppStr(to.Duplicate_Of)) blocks.push('Property ' + toId + ' (the one to keep) is itself marked as a duplicate of ' + ppStr(to.Duplicate_Of) + '. Pick the real one.');
+  const fieldPlan = propertyMergeFieldPlan(from, to, propsRaw[0] || []);
+  fieldPlan.blocks.forEach(b => blocks.push(b));
+  const refs = propertyRefTargets(headersByTab);
+  const tabs = [];
+  for (const t of refs.targets) {
+    const raw = rowsByTab[t.tab] || [];
+    const headers = raw[0] || [], ci = headers.indexOf(t.col), addrCi = headers.indexOf('Property_Address'), idCi = idColIndex(headers);
+    const hits = [];
+    for (let r = 1; r < raw.length; r++) {
+      const cell = raw[r][ci];
+      if (!propertyRefCellHits(cell, t.mode, fromId)) continue;
+      const item = { row: r + 1, id: ppStr(raw[r][idCi]), from: ppStr(cell), to: propertyRefCellRepoint(cell, t.mode, fromId, toId) };
+      if (addrCi >= 0 && t.mode !== 'list') { const a = ppStr(raw[r][addrCi]); if (a && ppStr(from.Address) && a.toLowerCase() === ppStr(from.Address).toLowerCase() && ppStr(to.Address)) item.addr_to = to.Address; }
+      hits.push(item);
+    }
+    tabs.push({ tab: t.tab, col: t.col, mode: t.mode, count: hits.length, hits, addr_col: addrCi >= 0 ? 'Property_Address' : '' });
+  }
+  // A property-id-looking column we do not know how to move. If it actually mentions this property we REFUSE; if it does not, we only say so.
+  const unknown = [];
+  for (const u of refs.unknown) {
+    const raw = rowsByTab[u.tab] || [], ci = (raw[0] || []).indexOf(u.col); let n = 0;
+    for (let r = 1; r < raw.length; r++) if (String(raw[r][ci] == null ? '' : raw[r][ci]).split(/[,\s;|]+/).includes(String(fromId))) n++;
+    unknown.push({ tab: u.tab, col: u.col, count: n });
+    if (n > 0) blocks.push(u.tab + '.' + u.col + ' mentions this property in ' + n + ' row(s) and the Hub does not know how to move that column safely. Nothing was changed. Ask for that column to be added to the merge list.');
+  }
+  // Two units with the same label would become twins.
+  const uRaw = rowsByTab.Units || [], uH = uRaw[0] || [], upc = ppIdx(uH, 'Property_ID'), ulc = ppIdx(uH, 'Unit_Label');
+  const labelsFrom = {}, twins = [];
+  for (let r = 1; r < uRaw.length; r++) if (String(uRaw[r][upc]) === String(fromId)) labelsFrom[ppStr(uRaw[r][ulc]).toLowerCase()] = ppStr(uRaw[r][ulc]);
+  for (let r = 1; r < uRaw.length; r++) if (String(uRaw[r][upc]) === String(toId)) { const k = ppStr(uRaw[r][ulc]).toLowerCase(); if (k && labelsFrom[k] !== undefined) twins.push(labelsFrom[k]); }
+  if (twins.length) blocks.push('Both properties have a unit called ' + twins.map(t => '"' + t + '"').join(', ') + '. Merging would create two identical units. Rename or merge those units first.');
+  const total = tabs.reduce((n, t) => n + t.count, 0);
+  const unitsMoving = (tabs.find(t => t.tab === 'Units') || { count: 0 }).count;
+  const unitCountNow = Math.max(Number(to.Unit_Count) || 0, Number(from.Unit_Count) || 0, unitsMoving + (function () { let n = 0; for (let r = 1; r < uRaw.length; r++) if (String(uRaw[r][upc]) === String(toId)) n++; return n; })());
+  warnings.push('Text that merely mentions the old address (notes, message text, descriptions) is not rewritten.');
+  const canon = JSON.stringify({ f: String(fromId), t: String(toId), tabs: tabs.filter(t => t.count).map(t => [t.tab, t.col, t.hits.map(h => [h.row, h.id, h.to])]), auto: fieldPlan.auto, conf: fieldPlan.conflicts.map(c => [c.col, c.from, c.to]), uc: unitCountNow });
+  return { ok: blocks.length === 0, blocks, warnings, from: { id: String(fromId), address: from.Address || '', city: from.City || '' }, to: { id: String(toId), address: to.Address || '', city: to.City || '' }, fieldPlan, tabs, unknown, twins, total, unit_count_after: unitCountNow, canon };
+}
+const ppMergeView = plan => ({ ok: plan.ok, blocks: plan.blocks, warnings: plan.warnings, from: plan.from, to: plan.to, auto: plan.fieldPlan ? plan.fieldPlan.auto : [], conflicts: plan.fieldPlan ? plan.fieldPlan.conflicts : [], same_fields: plan.fieldPlan ? plan.fieldPlan.same : 0, tabs: (plan.tabs || []).map(t => ({ tab: t.tab, col: t.col, count: t.count })).filter(t => t.count), tabs_checked: (plan.tabs || []).length, unknown_columns: plan.unknown || [], total_rows_to_move: plan.total, unit_count_after: plan.unit_count_after });
+
+// POST /property/merge-preview { from_id, to_id }   (writes nothing)
+// POST /property/merge-apply   { from_id, to_id, token, resolutions:{col:'from'|'to'}, confirm:true }
+async function propertyMergeHandler(env, body, apply) {
+  const fromId = ppStr(body && body.from_id), toId = ppStr(body && body.to_id);
+  if (!fromId || !toId) return json({ error: 'from_id (the duplicate) and to_id (the one to keep) are required' }, 400);
+  let loaded;
+  try { loaded = await propertyMergeLoad(env); }
+  catch (e) { const msg = String((e && e.message) || e).slice(0, 300); await ppFail(env, 'property_merge_scan', 'Properties ' + fromId, 'merge scan could not read the sheet: ' + msg, 'P2'); return json({ ok: false, error: 'Could not read the sheet to check what would move: ' + msg + '. Nothing was changed.' }, 500); }
+  const plan = propertyMergePlan({ headersByTab: loaded.headersByTab, rowsByTab: loaded.rowsByTab, fromId, toId });
+  const token = plan.canon ? await fuSha256(plan.canon) : '';
+  const view = Object.assign(ppMergeView(plan), { token });
+  if (!apply) return json(Object.assign({ preview: true }, view));
+  if (body.confirm !== true) return json({ error: 'confirm:true required to merge' }, 400);
+  if (!plan.ok) return json(Object.assign({ error: 'Merge refused: ' + plan.blocks.join(' ') }, view), 409);
+  if (!ppStr(body.token) || ppStr(body.token) !== token) return json(Object.assign({ code: 'changed_since_preview', error: 'Something changed since you previewed. Nothing was merged. Preview again.' }, view), 409);
+  const { writes, missing } = propertyMergeWrites(plan.fieldPlan, body.resolutions || {});
+  if (missing.length) return json({ error: 'Pick a value for: ' + missing.join(', '), missing }, 400);
+  const moved = {};
+  try {
+    await ensureColumns(env, 'Properties', PROPERTY_DUP_COLS);
+    // 1) the surviving property gets the picked / auto-taken field values (read back)
+    const toWrites = Object.assign({}, writes, { Unit_Count: String(plan.unit_count_after) });
+    const cur = ppRawObj(loaded.rowsByTab.Properties, toId);
+    const changed = {}; for (const k of Object.keys(toWrites)) if (ppStr(cur[k]) !== ppStr(toWrites[k])) changed[k] = toWrites[k];
+    if (Object.keys(changed).length) await updateRowVerified(env, 'Properties', toId, changed);
+    // 2) re-point every reference, one batched write per tab, each read back
+    for (const t of plan.tabs) {
+      if (!t.count) continue;
+      const cells = [];
+      for (const h of t.hits) { cells.push({ row: h.row, col: t.col, value: h.to }); if (h.addr_to) cells.push({ row: h.row, col: 'Property_Address', value: h.addr_to }); }
+      const r = await ppWriteCells(env, t.tab, cells);
+      if (r.bad.length) throw new Error(t.tab + ': ' + r.bad.length + ' cell(s) did not keep the new value');
+      moved[t.tab] = t.hits.length;
+    }
+    // 3) look again: nothing may still point at the old property
+    const again = await propertyMergeLoad(env);
+    const after = propertyMergePlan({ headersByTab: again.headersByTab, rowsByTab: again.rowsByTab, fromId, toId });
+    const left = (after.tabs || []).filter(t => t.count);
+    if (left.length) throw new Error('rows still point at the old property after the move: ' + left.map(t => t.tab + ' (' + t.count + ')').join(', '));
+    // 4) only now is the old property marked (never deleted)
+    const log = JSON.stringify({ merged_into: toId, at: new Date().toISOString(), moved, fields_taken: Object.keys(writes) }).slice(0, 2000);
+    await updateRowVerified(env, 'Properties', fromId, { Duplicate_Of: toId, Duplicate_Marked_Date: etTodayISO(), Merge_Log: log, Active: 'FALSE' });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 400);
+    await ppFail(env, 'property_merge_apply', 'Properties ' + fromId + '->' + toId, 'merging property ' + fromId + ' into ' + toId + ' stopped part-way: ' + msg + '. Moved so far: ' + JSON.stringify(moved) + '. Nothing was deleted. Preview and apply again to finish; the old property is NOT marked until everything moved.', 'P1');
+    return json({ ok: false, error: 'The merge stopped: ' + msg + '. Nothing was deleted and the old property is not marked. Moved so far: ' + (Object.keys(moved).length ? JSON.stringify(moved) : 'nothing') + '. Preview and apply again to finish.', moved }, 500);
+  }
+  await ppAudit(env, 'property_merge_apply', 'from=' + fromId + ' to=' + toId + ' moved=' + JSON.stringify(moved));
+  for (const t of ['Properties', 'Units', 'Tenants', 'Work_Orders', 'Keys']) invalidateTabCache(t);
+  return json({ ok: true, merged: true, from_id: fromId, to_id: toId, moved, total_rows_moved: Object.values(moved).reduce((a, b) => a + b, 0), fields_taken: Object.keys(writes) });
+}
+
+// GET /sms/gate-preview?property_id=&recipient_type=owner|tenant|vendor&owner_id=&tenant_id=&vendor_id=&window=proposal&bypass_quiet=1
+// READ-ONLY: never sends, never writes. Runs smsGatePreview, which calls the same smsGateDecision with the same flags the real sender uses.
+async function smsGatePreviewHandler(env, url) {
+  const q = k => ppStr(url.searchParams.get(k));
+  const kind = q('recipient_type') || 'owner';
+  if (!['owner', 'tenant', 'vendor'].includes(kind)) return json({ error: 'recipient_type must be owner, tenant or vendor' }, 400);
+  const propertyId = q('property_id');
+  if (!propertyId && kind !== 'vendor') return json({ error: 'property_id required' }, 400);
+  const tabs = ['Properties', 'Owners'].concat(kind === 'tenant' ? ['Tenants'] : kind === 'vendor' ? ['Vendors'] : []);
+  const [cfg, loaded] = await Promise.all([fetchConfig(env), fetchTabs(env, tabs)]);
+  const property = propertyId ? (loaded[0].find(p => String(p.ID) === propertyId) || null) : null;
+  if (propertyId && !property) return json({ error: 'Property ' + propertyId + ' not found' }, 404);
+  const owner = q('owner_id') ? (loaded[1].find(o => String(o.ID) === q('owner_id')) || null) : (property && ppStr(property.Owner_ID) ? (loaded[1].find(o => String(o.ID) === ppStr(property.Owner_ID)) || null) : null);
+  const tenant = kind === 'tenant' ? (loaded[2].find(t => String(t.ID) === q('tenant_id')) || null) : null;
+  const vendor = kind === 'vendor' ? (loaded[2].find(v => String(v.ID) === q('vendor_id')) || null) : null;
+  if (kind === 'tenant' && !tenant) return json({ error: 'tenant_id required (tenant not found)' }, 400);
+  if (kind === 'vendor' && !vendor) return json({ error: 'vendor_id required (vendor not found)' }, 400);
+  const pv = smsGatePreview({ cfg, kind, property, owner, tenant, vendor, now: new Date(), quietWindow: q('window') === 'proposal' ? SCOPE_SMS_QUIET_WINDOW : null, bypassQuietHours: q('bypass_quiet') === '1' });
+  const settingsLink = property ? PORTAL_BASE + '/index.html?property=' + encodeURIComponent(property.ID) + '&tab=settings' : '';
+  return json(Object.assign({ ok: true, property_id: property ? String(property.ID) : '', property_address: property ? (property.Address || '') : '', customer_id: owner ? String(owner.ID) : '', customer_name: ppOwnerName(owner), settings_link: settingsLink, owner_email_on: property ? propertyOwnerEmailOn(property) : true }, pv));
+}
+
 const ROLE_SCOPES = {
   vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
     // Vendor Additional Work (Sep 30 2026): ownership of the parent / child WO is re-checked server-side in each handler.
