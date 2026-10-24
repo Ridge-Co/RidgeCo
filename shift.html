@@ -32,7 +32,8 @@
   .item{border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--surface)}
   .item.locked{background:var(--lock)}
   .item .top{display:flex;gap:12px;align-items:flex-start}
-  .item input[type=checkbox]{width:28px;height:28px;margin:2px 0 0;flex:0 0 28px}
+  .item .chk{display:flex;align-items:center;justify-content:center;width:44px;height:44px;margin:-6px -6px -6px -8px;flex:0 0 44px;cursor:pointer}
+  .item .chk input[type=checkbox]{width:28px;height:28px;margin:0}
   .item .name{font-weight:700;word-break:break-word}
   .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--chip);color:var(--muted);margin-left:6px;vertical-align:middle}
   .times{margin:6px 0 0;font-size:15px}
@@ -231,7 +232,7 @@ function render(r){
 function itemHtml(i){
   var k=esc(i.key), tag={inspection:'Inspection',wo_window:'Work order',delivery:'Delivery'}[i.type]||i.type;
   var h='<div class="item'+(i.shiftable?'':' locked')+'"><div class="top">';
-  h+='<input type="checkbox" id="c-'+k+'" aria-label="Move '+esc(i.label)+'" '+(i.checked?'checked ':'')+(i.shiftable&&!i.problems.length?'':'disabled ')+'onchange="tog(\''+k+'\',this.checked)">';
+  h+='<label class="chk"><input type="checkbox" id="c-'+k+'" aria-label="Move '+esc(i.label)+'" '+(i.checked?'checked ':'')+(i.shiftable&&!i.problems.length?'':'disabled ')+'onchange="tog(\''+k+'\',this.checked)"></label>';
   h+='<div style="flex:1;min-width:0"><div class="name">'+esc(i.label)+'<span class="tag">'+esc(tag)+'</span></div><div class="muted">'+esc(i.sub||'')+'</div>';
   if(i.old){
     h+='<div class="times"><span class="'+(i.changed?'old':'')+'">'+esc(i.old.range)+'</span>';
