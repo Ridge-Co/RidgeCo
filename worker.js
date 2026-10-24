@@ -38844,6 +38844,198 @@ async function inspFinishBooking(env, b, newStatus, note, via) {
   return { status: 200, body: { ok: true, status: newStatus, notify: log, booking: inspAdminBooking(b) } };
 }
 
+// ═══ SHIFT-BLOCK-BEGIN ═════════════════════════════════════════════════════════════════════════════
+// APPOINTMENT SHIFT (Oct 23 2026, FEATURE_LOG rule 231). One reusable "move my appointments" tool for everything Brett schedules himself, the way
+// ShowMojo's shift worked: a day's items with a checkbox each, a plain-words list of what Apply will do, and the notices going out through the Hub's
+// normal channels. First use: Premier inspections #3-#8 (new length rule + re-lay the day). Spec: claude/appointment-shift-system-oct23.
+//   POST /shift/preview     (admin) computes everything, writes NOTHING: items, locked reasons, proposed times, the editable email, a summary
+//   POST /shift/apply       (admin) applies only the items Brett left checked (idempotent: a second Apply never double-sends)
+//   POST /shift/force-apply (admin) "Apply anyway": commits a proposal Josiah has not answered (or one that failed), records the override
+//   POST /shift/proposal/cancel (admin) withdraws a proposal;  GET /shift/proposals (admin) the waiting / failed / answered list
+//   GET /insp-change/info, POST /insp-change/approve, POST /insp-change/reschedule  (public, token-checked): what Josiah's email links use
+//   scheduler job insp_shift_reminders (NO cron): flags proposals nobody answered, and approvals stuck half-way
+// Adapters: inspection (propose -> partner approves -> commit), wo_window (Brett's OWN In_House work-order windows, applied directly through
+// scheduleWO), delivery (LOCKED: windows are set by the store), vendor (reserved, not built: logged, never silent). Pure engine functions are
+// unit-tested in test/appointment-shift.test.mjs.
+const SHIFT_DEFAULT_NOTICE_EMAIL = 'josiah.speed@ppmillc.com';   // Brett, Oct 23 2026: schedule-change notices go to Josiah only, for now
+const SHIFT_TOKEN_DAYS = 14;          // a change link stops working this long after it was sent (and always once the old visit time has passed)
+const SHIFT_REMIND_HOURS = 12;        // an unanswered proposal is flagged after this many hours (Config INSP_SHIFT_REMIND_HOURS)
+const SHIFT_STUCK_MIN = 15;           // an approval that has sat "approved" (not finished) this long is reported as stuck
+const SHIFT_DEFAULT_DRIVE_MIN = 30;   // only used when a stop has no stored drive time; the preview says so out loud
+const SHIFT_LOCKED = { delivery: "Delivery windows can't be changed here: the store sets them.", vendor: 'Vendor shifting is not built yet. This job is assigned to a vendor, so it stays as it is.', notapproved: 'Not approved yet. Approve the booking first, then shift it.', nowindow: 'This work order has no clock times in its window (for example "Within 1 hour" or "All Day"), so there is nothing to shift.', unreadable: 'The saved times on this row cannot be read, so it is not moved. Fix the row first.', unassigned: 'Not assigned to anyone yet, so it is not yours to shift.', vendorunknown: 'Its assigned vendor was not found, so it is not moved.' };
+
+// Next quarter hour at or after ms. Eastern offsets are whole hours, so epoch quarters ARE Eastern quarters (also across the Nov 1 clock change).
+function shiftQuarterUp(ms) { return Math.ceil(ms / 900000) * 900000; }
+function shiftNum(v) { if (v === '' || v == null) return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
+function shiftDayLabel(dateStr) { return new Date(String(dateStr).slice(0, 10) + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }); }
+function shiftRange(a, b) { return inspFmtEtTime(a) + ' to ' + inspFmtEtTime(b); }
+// A work order window is free text from a fixed menu ("9:00 AM – 12:00 PM", "Morning (8:00 AM – 12:00 PM)", "Within 1 hour", "All Day", "Custom ...").
+// Returns { startMin, endMin } for the ones with two clock times, else null.
+function shiftParseWindow(s) {
+  const m = /(\d{1,2}:\d{2}\s*[AaPp][Mm])\s*[–—-]\s*(\d{1,2}:\d{2}\s*[AaPp][Mm])/.exec(String(s == null ? '' : s));
+  if (!m) return null;
+  const a = inspParseHHMM(m[1]), b = inspParseHHMM(m[2]);
+  return Number.isFinite(a) && Number.isFinite(b) && b > a ? { startMin: a, endMin: b } : null;
+}
+function shiftHhmm(ms) { const m = inspEtMinutes(ms); return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
+function shiftFmtClock(min) { const h24 = Math.floor(min / 60) % 24, mi = min % 60, h = h24 % 12 === 0 ? 12 : h24 % 12; return h + ':' + String(mi).padStart(2, '0') + ' ' + (h24 < 12 ? 'AM' : 'PM'); }
+function shiftFormatWindow(startMin, endMin) { return shiftFmtClock(startMin) + ' – ' + shiftFmtClock(endMin); }
+function shiftHash(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(16).padStart(8, '0'); }
+
+// ── Re-lay the day (PURE). rows are one day's inspections in time order:
+//   { key, startMs, endMs, newDurMin, driveBefore, driveAfter, include, override:{startMs?,endMs?} }
+// The first stop keeps its start; every later CHECKED stop starts at (previous stop's end + the stored drive minutes) rounded UP to the next quarter
+// hour. An UNCHECKED stop stays exactly as it is and acts as a fixed anchor for the stops after it. A hand-edited start/end (override) wins, and the
+// stops after it pack from it. No stored drive time: the flat default is used AND a warning says so (never a silent guess).
+function shiftRelayPlan(rows, opts) {
+  const dflt = opts && opts.defaultDriveMin != null ? opts.defaultDriveMin : SHIFT_DEFAULT_DRIVE_MIN;
+  const out = []; let prevEnd = null, prevRow = null;
+  for (const r of rows) {
+    const o = { key: r.key, oldStartMs: r.startMs, oldEndMs: r.endMs, newStartMs: r.startMs, newEndMs: r.endMs, newDurMin: Math.round((r.endMs - r.startMs) / 60000), driveBefore: null, fixedFirst: false, edited: false, warnings: [] };
+    if (!r.include) { out.push(o); prevEnd = r.endMs; prevRow = r; continue; }
+    let start;
+    if (prevEnd == null) { start = r.startMs; o.fixedFirst = true; }
+    else {
+      let drive = shiftNum(r.driveBefore);
+      if (drive == null && prevRow) drive = shiftNum(prevRow.driveAfter);
+      if (drive == null) { drive = dflt; o.warnings.push('No drive time is stored for this stop, so the flat ' + dflt + ' minutes was used.'); }
+      o.driveBefore = drive;
+      start = shiftQuarterUp(prevEnd + drive * 60000);
+    }
+    let end = start + r.newDurMin * 60000;
+    const ov = r.override || {};
+    if (Number.isFinite(ov.startMs)) { start = ov.startMs; end = start + r.newDurMin * 60000; o.edited = true; }
+    if (Number.isFinite(ov.endMs)) { end = ov.endMs; o.edited = true; }
+    if (!(end > start)) { o.warnings.push('The end time must be after the start time, so this row was left as it is.'); out.push(o); prevEnd = r.endMs; prevRow = r; continue; }
+    o.newStartMs = start; o.newEndMs = end; o.newDurMin = Math.round((end - start) / 60000);
+    out.push(o); prevEnd = end; prevRow = r;
+  }
+  return out;
+}
+// "Running late" (PURE): every CHECKED row that starts at or after fromMs moves by `minutes`; earlier rows stay. Hand edits win.
+function shiftLatePlan(rows, minutes, fromMs) {
+  const m = Number(minutes), out = [];
+  for (const r of rows) {
+    const o = { key: r.key, oldStartMs: r.startMs, oldEndMs: r.endMs, newStartMs: r.startMs, newEndMs: r.endMs, newDurMin: Math.round((r.endMs - r.startMs) / 60000), driveBefore: null, fixedFirst: false, edited: false, warnings: [] };
+    if (r.include && Number.isFinite(m) && r.startMs >= fromMs) { o.newStartMs = r.startMs + m * 60000; o.newEndMs = r.endMs + m * 60000; }
+    const ov = r.override || {};
+    if (r.include && (Number.isFinite(ov.startMs) || Number.isFinite(ov.endMs))) {
+      const s = Number.isFinite(ov.startMs) ? ov.startMs : o.newStartMs, e = Number.isFinite(ov.endMs) ? ov.endMs : (Number.isFinite(ov.startMs) ? s + (r.endMs - r.startMs) : o.newEndMs);
+      if (e > s) { o.newStartMs = s; o.newEndMs = e; o.edited = true; } else o.warnings.push('The end time must be after the start time, so the edit was ignored.');
+    }
+    o.newDurMin = Math.round((o.newEndMs - o.newStartMs) / 60000);
+    out.push(o);
+  }
+  return out;
+}
+// Pairs of CHANGED/unchanged final windows that overlap each other (PURE) - the preview warns about these.
+function shiftFinalOverlaps(plan) {
+  const out = [], s = plan.slice().sort((a, b) => a.newStartMs - b.newStartMs);
+  for (let i = 1; i < s.length; i++) { const p = s[i - 1]; if (s[i].newStartMs < p.newEndMs) out.push([p.key, s[i].key]); }
+  return out;
+}
+// What is occupied by OTHER bookings (PURE). While a change is waiting for an answer BOTH the old and the proposed window are taken. A booking
+// listed in opts.movingIds is about to move in the same approval (its batch-mates): only its proposed window counts then, because its old one is
+// being vacated. opts.selfId is the booking being checked (never conflicts with itself).
+function shiftOccupied(bookings, opts) {
+  opts = opts || {}; const moving = new Set((opts.movingIds || []).map(String)), out = [];
+  for (const b of (bookings || [])) {
+    if (String(b.ID) === String(opts.selfId)) continue;
+    if (String(b.Active || '').toUpperCase() === 'FALSE' || !INSP_ACTIVE_BOOKING.includes(b.Status)) continue;
+    const label = (b.Formatted_Address || b.Address || 'Booking') + ' (#' + b.ID + ')';
+    const proposed = String(b.Change_Status || '') === 'proposed';
+    if (!(proposed && moving.has(String(b.ID)))) {
+      const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO);
+      if (Number.isFinite(s) && Number.isFinite(e)) out.push({ id: String(b.ID), kind: 'old', startMs: s, endMs: e, label });
+    }
+    if (proposed) {
+      const s = Date.parse(b.Proposed_Start_ISO), e = Date.parse(b.Proposed_End_ISO);
+      if (Number.isFinite(s) && Number.isFinite(e)) out.push({ id: String(b.ID), kind: 'proposed', startMs: s, endMs: e, label });
+    }
+  }
+  return out;
+}
+function shiftOverlaps(occupied, startMs, endMs) { return (occupied || []).filter(o => o.startMs < endMs && o.endMs > startMs); }
+// Is the change link still good? (PURE) Expires SHIFT_TOKEN_DAYS after it was sent, and always once the OLD visit time has started.
+function shiftTokenState(b, nowMs, days) {
+  const sentMs = Date.parse(b.Change_Proposed_At || ''), oldStart = Date.parse(b.Start_ISO || ''), d = days == null ? SHIFT_TOKEN_DAYS : days;
+  if (Number.isFinite(oldStart) && nowMs >= oldStart) return { ok: false, reason: 'The original time has already started.' };
+  if (Number.isFinite(sentMs) && nowMs > sentMs + d * 86400000) return { ok: false, reason: 'This link is more than ' + d + ' days old.' };
+  return { ok: true, reason: '' };
+}
+// Which reminder does a waiting proposal need now? (PURE) '' | 'stale' | 'urgent'. urgent = the visit is within 24 hours.
+function shiftReminderStage(b, nowMs, remindHours) {
+  if (String(b.Change_Status || '') !== 'proposed') return '';
+  const sent = Date.parse(b.Change_Proposed_At || ''), start = Date.parse(b.Start_ISO || '');
+  const hrs = remindHours == null ? SHIFT_REMIND_HOURS : remindHours;
+  if (Number.isFinite(start) && start > nowMs && start - nowMs <= 24 * 3600000) return 'urgent';
+  if (Number.isFinite(sent) && nowMs - sent >= hrs * 3600000) return 'stale';
+  return '';
+}
+// A stable fingerprint of what Apply is about to do, so Apply can refuse if the data moved since the preview was drawn (PURE).
+function shiftPlanId(items) {
+  return shiftHash(items.filter(i => i.changed && i.checked).map(i => [i.key, i.old && i.old.start_iso, i.old && i.old.end_iso, i.new && i.new.start_iso, i.new && i.new.end_iso, i.new && i.new.window].join('|')).sort().join(';'));
+}
+// ── The email to the partner (PURE). Placeholders [[APPROVE:<id>]], [[RESCHEDULE:<id>]] and [[APPROVE_ALL]] become real links at send time.
+// Brett edits the words; the placeholders must stay. Nothing about tenants is said here (Premier tells its own tenants).
+function shiftEmailDraft(o) {
+  const lines = [];
+  lines.push('Hi ' + (o.greetName || 'there') + ',', '');
+  lines.push(o.intro || ('I need to adjust the inspection times for ' + shiftDayLabel(o.date) + '. Each inspection now takes 30 minutes per unit plus 30 minutes for the building. Here is the new schedule:'), '');
+  o.items.forEach((it, i) => {
+    lines.push((i + 1) + '. ' + it.address + ' (' + it.units + ' unit' + (it.units === 1 ? '' : 's') + ')');
+    lines.push('   Was: ' + shiftRange(it.oldStartMs, it.oldEndMs));
+    lines.push('   Now: ' + shiftRange(it.newStartMs, it.newEndMs));
+    lines.push('   Approve: [[APPROVE:' + it.id + ']]');
+    lines.push('   Need a different time: [[RESCHEDULE:' + it.id + ']]', '');
+  });
+  if (o.items.length > 1) lines.push('Approve all of them at once: [[APPROVE_ALL]]', '');
+  lines.push('Nothing changes on my calendar until you approve. Thank you,', 'Brett', 'Ridge Co');
+  return { subject: 'Updated inspection times for ' + shiftDayLabel(o.date), body: lines.join('\n') };
+}
+// Checks the edited email still has what it needs (PURE): every placeholder names an inspection in THIS email, and there is a way to approve.
+function shiftEmailValidate(body, ids) {
+  const problems = [], text = String(body == null ? '' : body), set = new Set(ids.map(String));
+  const found = [...text.matchAll(/\[\[(APPROVE|RESCHEDULE):([^\]]*)\]\]/g)];
+  for (const m of found) if (!set.has(m[2])) problems.push('The link ' + m[0] + ' does not match any inspection in this email.');
+  const hasAll = /\[\[APPROVE_ALL\]\]/.test(text);
+  const approvable = ids.every(id => text.includes('[[APPROVE:' + id + ']]'));
+  if (!hasAll && !approvable) problems.push('The email needs an approve link. Keep the [[APPROVE:...]] or [[APPROVE_ALL]] pieces; they turn into the buttons.');
+  const stripped = text.replace(/\[\[(APPROVE|RESCHEDULE):[^\]]*\]\]/g, '').replace(/\[\[APPROVE_ALL\]\]/g, '');
+  if (/\[\[|\]\]/.test(stripped)) problems.push('There is a stray [[ or ]] in the email. Put it back the way it was, or delete it.');
+  return { ok: problems.length === 0, problems };
+}
+// Turns the edited text into the real email (PURE). links = { approve:{id:url}, reschedule:{id:url}, all:url }.
+function shiftEmailRender(body, links) {
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const missing = [], parts = String(body == null ? '' : body).split(/(\[\[(?:APPROVE|RESCHEDULE):[^\]]*\]\]|\[\[APPROVE_ALL\]\])/);
+  let text = '', html = '';
+  const btn = (u, label, color) => '<a href="' + esc(u) + '" style="display:inline-block;padding:10px 16px;background:' + color + ';color:#fff;border-radius:6px;text-decoration:none;font-weight:600">' + esc(label) + '</a>';
+  for (const p of parts) {
+    const m = /^\[\[(APPROVE|RESCHEDULE):([^\]]*)\]\]$/.exec(p);
+    if (m) {
+      const u = (m[1] === 'APPROVE' ? links.approve : links.reschedule || {})[m[2]];
+      if (!u) { missing.push(p); text += p; html += esc(p); continue; }
+      text += u; html += btn(u, m[1] === 'APPROVE' ? 'Approve this time' : 'Pick a different time', m[1] === 'APPROVE' ? '#1a7f4b' : '#475569');
+    } else if (p === '[[APPROVE_ALL]]') {
+      if (!links.all) { missing.push(p); text += p; html += esc(p); continue; }
+      text += links.all; html += btn(links.all, 'Approve all of them', '#1d4ed8');
+    } else { text += p; html += esc(p).replace(/\n/g, '<br>'); }
+  }
+  return { text, html: '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5">' + html + '</div>', missing };
+}
+// The text a tenant gets when a visit moves (PURE). Plain characters; the SMS pipeline sanitizes again.
+function shiftTenantText(o) {
+  return 'Hi ' + (o.firstName || 'there') + ', your property inspection at ' + o.address + ' is now ' + shiftDayLabel(o.date) + ', ' + o.when + ' (it was ' + o.was + '). Questions? Call or text Ridge Co.';
+}
+// Street key for matching a booking address to a Hub property (PURE): house number + first street word. "3133 Dudley Ave, Baltimore" -> "3133 dudley".
+function shiftAddrKey(a) {
+  const m = /^\s*(\d+[a-z]?)\s+([a-z0-9]+)/i.exec(String(a == null ? '' : a).replace(/[.,#]/g, ' ').replace(/^\s*(n|s|e|w|north|south|east|west)\.?\s+(?=\d)/i, ''));
+  if (m) return m[1].toLowerCase() + ' ' + m[2].toLowerCase();
+  const n = /^\s*(\d+[a-z]?)\s+(?:n|s|e|w|north|south|east|west)\.?\s+([a-z0-9]+)/i.exec(String(a == null ? '' : a).replace(/[.,#]/g, ' '));
+  return n ? n[1].toLowerCase() + ' ' + n[2].toLowerCase() : '';
+}
+// SHIFT-CONT-1
 // ── Admin (secret-gated) endpoints ─────────────────────────────────────────────────────────
 async function inspOpenBlocksList(env) {
   let rows = []; try { rows = await fetchTab(env, 'Insp_Open_Blocks'); } catch (e) { if (!isMissingTabError(e)) return json({ error: 'Could not read open blocks: ' + e.message }, 500); }
