@@ -16400,7 +16400,7 @@ async function smsGatedSend(env, opts) {
   const tenantOptOut = String((opts.tenant && opts.tenant.SMS_OptOut) || '').toUpperCase() === 'TRUE';
   const vendorOptOut = String((opts.vendor && opts.vendor.SMS_OptOut) || '').toUpperCase() === 'TRUE';
   const tenantMovedOutFlag = kind === 'tenant' && tenantMovedOut(opts.tenant);
-  const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: tenantMovedOutFlag });
+  const { sendOk, gateSnapshot } = smsGateDecision(Object.assign({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: tenantMovedOutFlag }, smsPropertyGateFlags(gateProperty)));
 
   const recipient = kind === 'tenant' ? opts.tenant : kind === 'owner' ? opts.owner : kind === 'admin' ? opts.admin : opts.vendor;
   const recipientPhone = normalizePhone(recipient && recipient.Phone);
