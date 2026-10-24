@@ -4507,7 +4507,8 @@ function resetNewWOSafetyModal(){
 function renderPropertiesPage() {
   var search = ((document.getElementById('prop-search')||{}).value||'').toLowerCase().trim();
   var props = sortPropsNumeric(safeArray(state.properties).filter(function(p){
-    if (p.Active==='FALSE') return false;
+    var viewHidden = ((document.getElementById('prop-view')||{}).value||'active') === 'hidden';
+    if (viewHidden ? p.Active!=='FALSE' : p.Active==='FALSE') return false;
     if (!search) return true;
     return (p.Address||'').toLowerCase().includes(search)||(p.City||'').toLowerCase().includes(search)||(p.Owner_ID||'').includes(search);
   }));
