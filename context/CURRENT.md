@@ -5,6 +5,15 @@ Brett wants Cesar Diaz (Vendor 3) paid a $200 deposit on WO-1253 (411 West 23rd 
 **Built:** panel shows on Converted estimates; deposit capped at the estimate; fee line on the deposit bill; preview-then-confirm in the UI; `woDepositCredit` takes it off the final vendor bill in all four billing paths as a visible line; `Deposit_Applied` flips only after QuickBooks returns the final bill id (verified, loud); the approve-time flip is gone. Expected WO-1253 numbers: deposit bill $200 − $10 fee = send $190; final vendor bill $460 − $200 = $260 − $10 fee = send $250; total fees $20.
 **After merge, with Brett's go:** create the live $200 bill from the work order screen (it only creates an OPEN bill, nothing is paid), then verify read-only (Deposit_* on WO-1253, bill in QuickBooks, no Vendor_Bills row).
 
+# APPOINTMENT SHIFT — Oct 23, 2026 — branch `feat/appointment-shift-oct23`, BUILD_VERSION `2026-10-23.06-appointment-shift`. FEATURE_LOG rule 231.
+
+## 🟡 Built and tested; staging first, then Brett's go/no-go on main. First use is Premier inspections #3-#8 (Tue Oct 27 and Wed Oct 28), so it must be merged and applied before Tue Oct 27 ~10:30 AM ET.
+**What:** `shift.html` (dashboard tile "Shift Appointments"): pick a day, "Re-lay the day" or "Running late", tick what moves, read the plain-words list, edit the email, Apply. Inspections are PROPOSED to the partner (one editable email to josiah.speed@ppmillc.com with Approve / Reschedule / Approve-all links) and only move after approval. Own In_House work-order windows move right away. Deliveries are locked. Vendor shifting is pinned in BACKLOG (B-20261023-1200-sv).
+**New inspection length rule (new bookings):** 30 min per unit + 30 per building, rounded up to 5, floor 30.
+**To apply the six real changes (after the main merge deploys):** (1) paste the updated JOBS table from `apps-script/hub-scheduler/HubScheduler.gs` into the Apps Script project so `insp_shift_reminders` runs; (2) before Tue Oct 27 10:30 AM ET open Shift Appointments, pick Oct 27, Re-lay the day, check the times (11:00-12:00, 12:15-1:15, 1:30-2:30), edit the email if wanted, Apply; (3) repeat for Oct 28 (10:30-11:30, 12:15-1:15, 2:00-3:00); (4) watch "Waiting for an answer"; if Josiah has not answered, use Apply anyway. Premier `Notify_Tenants` stays FALSE.
+
+---
+
 # D-16: CUT THE TWILIO TEXT BILL — Oct 23, 2026 — head `feat/sms-cost-d16-oct23` cut from main tip 883b868. Marker `sms-cost-d16-2026-10-23` (BUILD_VERSION is deploy-stamped, untouched). FEATURE_LOG rule 229.
 
 ## 🟡 Built, tested, merged to `staging` ONLY. NOT merged to main: Brett decides (it touches text sending). Draft PR to main is marked NOT FOR MERGE.
