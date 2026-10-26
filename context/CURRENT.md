@@ -1,3 +1,10 @@
+# WO VENDOR DEPOSIT, AFTER THE FACT, AUTO-DEDUCTED — Oct 26, 2026 — branch `feat/wo-deposit-auto-net-oct26` cut from main tip 9df0ba5. BUILD_VERSION `2026-10-26.01-wo-deposit-auto-net`. FEATURE_LOG rule 231.
+
+## 🟡 Built and offline-tested; staging + independent validation next. NOT merged to main: it touches QuickBooks bills, so Brett decides.
+Brett wants Cesar Diaz (Vendor 3) paid a $200 deposit on WO-1253 (411 West 23rd St, estimate $460, signed proposal Scope 11) even though the customer was never charged one, as a reusable capability. Decisions (Oct 26 08:38 ET): $200; instant-pay fee on BOTH the deposit and the final; create the live deposit bill; the deduction on the final bill is AUTOMATIC; NO Vendor_Bills record (so he cannot be paid twice).
+**Built:** panel shows on Converted estimates; deposit capped at the estimate; fee line on the deposit bill; preview-then-confirm in the UI; `woDepositCredit` takes it off the final vendor bill in all four billing paths as a visible line; `Deposit_Applied` flips only after QuickBooks returns the final bill id (verified, loud); the approve-time flip is gone. Expected WO-1253 numbers: deposit bill $200 − $10 fee = send $190; final vendor bill $460 − $200 = $260 − $10 fee = send $250; total fees $20.
+**After merge, with Brett's go:** create the live $200 bill from the work order screen (it only creates an OPEN bill, nothing is paid), then verify read-only (Deposit_* on WO-1253, bill in QuickBooks, no Vendor_Bills row).
+
 # APPOINTMENT SHIFT — Oct 23, 2026 — branch `feat/appointment-shift-oct23`, BUILD_VERSION `2026-10-23.06-appointment-shift`. FEATURE_LOG rule 231.
 
 ## 🟡 Built and tested; staging first, then Brett's go/no-go on main. First use is Premier inspections #3-#8 (Tue Oct 27 and Wed Oct 28), so it must be merged and applied before Tue Oct 27 ~10:30 AM ET.

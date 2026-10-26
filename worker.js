@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-23.06-appointment-shift';
+const BUILD_VERSION = '2026-10-26.01-wo-deposit-auto-net';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -6167,7 +6167,30 @@ async function scopeProposalBillMilestones(env, body) {
   feeCfg.warnings.forEach(w => warnings.push(w));
   const feeDefaultOn = !!vendor && instantPayEnabled(vendor, cfgAll, undefined);
   const feeOn = !!vendor && !vendorInHouse && vendTotal > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay);
-  const mkAdj = (force) => vendorBillAdjustments({ payable: vendTotal, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en', feeOn: force === true || feeOn, cfg: feeCfg, credits: [] });
+  // Oct 26 2026: a vendor deposit recorded on the linked work order (paid by hand in QuickBooks, never a Vendor_Bills row or a milestone) comes off the
+  // FINAL vendor bill as its own visible line. An interim bill leaves it alone; the final one that cannot cover it is refused rather than sent short.
+  let depCredit = null;
+  if (vendor && !vendorInHouse && vendTotal > 0 && s.WO_ID) {
+    let woDep = null;
+    try { woDep = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID); }
+    catch (e) {
+      if (!body.preview_only) return json({ ok: false, error: 'Could not read the work order ' + s.WO_ID + ' to check for a vendor deposit (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was billed. Try again in a minute.' }, 503);
+      warnings.push('Could not read the work order to check for a vendor deposit — any deposit already paid to the vendor is not reflected here.');
+    }
+    const dep = woDepositCredit(woDep, vendor.ID);
+    if (dep) {
+      const pickedIdsDep = new Set(picked.map(m => m.ID));
+      const finalRound = !sigMilestones.some(m => !pickedIdsDep.has(m.ID) && (m.Status || 'pending') === 'pending');
+      if (!finalRound) warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + '). It stays off this interim bill and comes off the final one automatically.');
+      else if (vendTotal < dep.amount - 0.005) {
+        const msg = 'The $' + dep.amount.toFixed(2) + ' deposit already paid to ' + vendDisplay + ' is more than what is left to pay them on this final bill ($' + vendTotal.toFixed(2) + ').';
+        if (!body.preview_only) return json({ ok: false, deposit_blocked: true, error: msg + ' Nothing was billed. Fix the amounts, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+        warnings.push('⛔ ' + msg + ' The bill cannot be sent until that is fixed.');
+      } else { depCredit = dep; warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + ') — it comes off this final bill automatically.'); }
+    }
+  }
+  const mkAdj = (force) => vendorBillAdjustments({ payable: vendTotal, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en', feeOn: force === true || feeOn, cfg: feeCfg,
+    credits: depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : [] });
   const adj = mkAdj(false);
   adj.notes.forEach(n => warnings.push(n));
 
@@ -6180,7 +6203,7 @@ async function scopeProposalBillMilestones(env, body) {
       pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE', pending_info_note: m.Pending_Info_Note || '',
     })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
-    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName, fee: adj.fee, send_amount: adj.bill_total,
+    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName, deposit_credit: depCredit ? depCredit.amount : 0, fee: adj.fee, send_amount: adj.bill_total,
       fee_on: feeOn, fee_default_on: feeDefaultOn, fee_if_on: mkAdj(true).fee } : null,
     warnings,
   };
@@ -6238,6 +6261,7 @@ async function scopeProposalBillMilestones(env, body) {
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
         if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+        else if (depCredit) await woDepositMarkApplied(env, s.WO_ID, depCredit, { id: billId, number: billNumber }, warnings, '/scope/bill-milestones');
       } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
     } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
     if (billSkipReason) warnings.push(billSkipReason);
@@ -6279,7 +6303,7 @@ async function scopeProposalBillMilestones(env, body) {
         const newCharge = +(priorCharge + custTotal).toFixed(2);
         const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
         const vendorNote = vendTotal > 0
-          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
+          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (depCredit ? ' (less the $' + depCredit.amount.toFixed(2) + ' deposit already paid)' : '') + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
           : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
         const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
         const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
@@ -6542,8 +6566,27 @@ async function scopeProposalBookFinal(env, body) {
   const cfgAll = await fetchConfig(env);
   const feeCfg = instantFeeConfig(cfgAll);
   feeCfg.warnings.forEach(w => warnings.push(w));
+  // Oct 26 2026: same automatic deposit deduction as the milestone path (this IS the final bill).
+  let depCredit = null;
+  if (vendor && !vendorInHouse && finalVendorAmount > 0 && s.WO_ID) {
+    let woDep = null;
+    try { woDep = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID); }
+    catch (e) {
+      if (!body.preview_only) return json({ ok: false, error: 'Could not read the work order ' + s.WO_ID + ' to check for a vendor deposit (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was billed. Try again in a minute.' }, 503);
+      warnings.push('Could not read the work order to check for a vendor deposit — any deposit already paid to the vendor is not reflected here.');
+    }
+    const dep = woDepositCredit(woDep, vendor.ID);
+    if (dep) {
+      if (finalVendorAmount < dep.amount - 0.005) {
+        const msg = 'The $' + dep.amount.toFixed(2) + ' deposit already paid to ' + vendDisplay + ' is more than the remaining vendor balance ($' + finalVendorAmount.toFixed(2) + ').';
+        if (!body.preview_only) return json({ ok: false, deposit_blocked: true, error: msg + ' Nothing was billed. Fix the amounts, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+        warnings.push('⛔ ' + msg + ' The bill cannot be sent until that is fixed.');
+      } else { depCredit = dep; warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + ') — it comes off this final bill automatically.'); }
+    }
+  }
   const adj = vendorBillAdjustments({ payable: finalVendorAmount, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en',
-    feeOn: !!vendor && !vendorInHouse && finalVendorAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg, credits: [] });
+    feeOn: !!vendor && !vendorInHouse && finalVendorAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg,
+    credits: depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : [] });
   adj.notes.forEach(n => warnings.push(n));
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
@@ -6606,6 +6649,7 @@ async function scopeProposalBookFinal(env, body) {
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
         if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+        else if (depCredit) await woDepositMarkApplied(env, s.WO_ID, depCredit, { id: billId, number: billNumber }, warnings, '/scope-proposal/book-final');
       } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
     } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
     if (billSkipReason) warnings.push(billSkipReason);
@@ -11956,17 +12000,10 @@ async function approveInvoiceReview(env, body) {
       return json({ success: false, id: realId, error: 'The invoice was approved, but its $' + padRes.pad.toFixed(2) + ' instant-pay pad did not save (' + String((e && e.message) || e).slice(0, 120) + '). Withdraw the approval and approve again before sending to QuickBooks.' }, 500);
     }
   }
-  // Sep 15 2026 — a WO carrying an unapplied vendor deposit (POST /wo/deposit-approve) has
-  // now had its final bill reviewed and folded into vendor_cost (per the deposit banner
-  // renderIRCard shows). Flip Deposit_Applied so a SECOND bill/review on this same WO never
-  // nets the same deposit out twice, and the banner stops showing once it's been accounted for.
-  try {
-    const wos = await fetchTab(env, 'Work_Orders');
-    const wo = findWO(wos, wo_id);
-    if (wo && wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0 && wo.Deposit_Applied !== 'TRUE') {
-      await updateWOFields(env, wo_id, { Deposit_Applied: 'TRUE' });
-    }
-  } catch (e) { /* non-fatal — the review itself is already saved */ }
+  // Oct 26 2026 — the deposit is NO LONGER flipped to applied here. Approving a review only queues the bill; the vendor bill is what actually
+  // deducts the deposit, automatically, as its own visible line (woDepositCredit in qbSendInvoice / qbSendCombinedInvoice / the proposal billing
+  // paths), and Deposit_Applied flips ONLY after QuickBooks returns that bill's id (woDepositMarkApplied). Flipping at approval meant an approved
+  // bill that never reached QuickBooks looked deducted when it was not, and it relied on Brett typing the net amount by hand.
   return json({ success: true, id: realId, instant_pad: padRes.pad || 0 });
 }
 
@@ -12680,11 +12717,11 @@ async function approveEstimate(env, body) {
 // half already gets created automatically elsewhere in this file (e.g. scopeProposalBook)
 // while payment itself always stays a separate, human-triggered step.
 // The Hub-side Work_Orders fields still exist so the FINAL bill's review card can show the
-// net amount still owed (renderIRCard's deposit banner + the Deposit_Applied flip in
-// approveInvoiceReview) — that part of the original design was right, just incomplete.
+// net amount still owed. UPDATE Oct 26 2026: the final vendor bill now deducts the deposit AUTOMATICALLY (woDepositCredit) and flips Deposit_Applied
+// only after QuickBooks returns that bill's id; the deposit is capped at the vendor's estimate and carries the instant-pay fee as its own line.
 async function depositApprove(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
-  const amount = parseFloat(body.amount);
+  const amount = money2(parseFloat(body.amount));
   if (!Number.isFinite(amount) || amount <= 0) return json({ error: 'amount must be a positive number' }, 400);
 
   const wos = await fetchTab(env, 'Work_Orders');
@@ -12710,6 +12747,34 @@ async function depositApprove(env, body) {
   const vendor = vendors.find(v => v.ID === vendorId);
   if (!vendor) return json({ error: `Vendor ${vendorId} not found` }, 404);
 
+  // Oct 26 2026 — a deposit can never be more than the vendor's own estimate (the number they agreed to), so a typo or a stale tap cannot overpay them.
+  // A failed READ of the estimates stops the deposit; "no estimate on file" is allowed but said out loud (older jobs were quoted outside the Hub).
+  let capInfo = null;
+  try { capInfo = woDepositEstimateCap(await fetchTab(env, 'Estimates'), woId, wo); }
+  catch (e) {
+    let tnote = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_estimate_read_failed', Skill_Or_Endpoint: '/wo/deposit-approve', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); }
+    catch (e2) { tnote = ' (That also could not be logged to Ops_Telemetry.)'; }
+    return json({ error: 'Could not read the estimates to check the deposit against the vendor\'s quote (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was created. Try again in a minute.' + tnote }, 502);
+  }
+  if (capInfo && amount > capInfo.cap + 0.005) {
+    return json({ error: `A $${amount.toFixed(2)} deposit is more than the vendor's estimate allows: the estimate is $${capInfo.subtotal.toFixed(2)}` +
+      (capInfo.spent > 0 ? ` and $${capInfo.spent.toFixed(2)} of it was already paid as a deposit` : '') + `, so the most you can deposit is $${capInfo.cap.toFixed(2)}. Nothing was created.`,
+      estimate_subtotal: capInfo.subtotal, max_deposit: capInfo.cap }, 400);
+  }
+
+  // Instant-pay fee on the deposit (same rule as the final bill): its own visible negative line, so the bill total is exactly what Brett sends.
+  const cfgAll = await fetchConfig(env);
+  const feeCfg = instantFeeConfig(cfgAll);
+  const feeOn = instantPayEnabled(vendor, cfgAll, body.instant_pay);
+  const adj = vendorBillAdjustments({ payable: amount, credits: [], feeOn, cfg: feeCfg, lang: String(vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en' });
+  const warnings = feeCfg.warnings.concat(adj.notes);
+  const summary = { wo_id: woId, vendor: vendor.Name || vendor.Company || vendor.First_Name || ('Vendor ' + vendorId), amount: amount.toFixed(2), fee: money2(adj.fee).toFixed(2), send_amount: money2(adj.bill_total).toFixed(2),
+    fee_on: !!feeOn, estimate_subtotal: capInfo ? capInfo.subtotal : null, max_deposit: capInfo ? capInfo.cap : null, no_estimate_on_file: !capInfo, warnings };
+  if (!capInfo) warnings.push('No estimate is on file for this work order, so the deposit could not be checked against a quote.');
+  // Preview only: say exactly what the real click would do. Touches neither QuickBooks nor the sheet.
+  if (body.preview_only) return json({ success: true, preview: true, ...summary });
+
   const [properties, units] = await Promise.all([
     fetchTab(env, 'Properties').catch(() => []),
     fetchTab(env, 'Units').catch(() => []),
@@ -12730,9 +12795,11 @@ async function depositApprove(env, body) {
   const desc = (`Deposit — ${addr || ('WO ' + woId)}${wo.Description ? ' — ' + wo.Description : ''}`).slice(0, 4000);
   const billPayload = {
     Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +amount.toFixed(2), Description: desc,
-      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }]
+      .concat(adj.lines.map(l => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000),
+        AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }))),
     VendorRef: { value: vendorQbId }, TxnDate: new Date().toISOString().slice(0, 10),
-    PrivateNote: (`Deposit approved by Brett — WO ${woId} — pay via QuickBooks Instant Pay; nets against the final vendor bill at job completion.` +
+    PrivateNote: (`Deposit approved by Brett — WO ${woId} — pay via QuickBooks Instant Pay; comes off the final vendor bill automatically.` +
                   (body.notes ? ' ' + body.notes : '')).slice(0, 1000),
   };
   const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
@@ -12740,17 +12807,33 @@ async function depositApprove(env, body) {
   const qbBillNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
   if (!qbBillId) return json({ error: 'QuickBooks bill was not created (' + (qbFault(rb) || 'unknown error') + ') — nothing was recorded, nothing to pay yet.' }, 502);
 
-  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number']);
-  await updateWOFields(env, woId, {
-    Deposit_Amount: amount.toFixed(2),
-    Deposit_Vendor_ID: vendorId,
-    Deposit_Approved_Date: new Date().toISOString().split('T')[0],
-    Deposit_Notes: body.notes || '',
-    Deposit_Applied: 'FALSE',
-    Deposit_QB_Bill_ID: qbBillId,
-    Deposit_QB_Bill_Number: qbBillNumber,
-  });
-  return json({ success: true, wo_id: woId, amount: amount.toFixed(2), qb_bill_id: qbBillId, qb_bill_number: qbBillNumber });
+  // The bill now EXISTS in QuickBooks. If recording it on the work order fails, say so loudly with the bill id — a bill nobody recorded is exactly
+  // how a deposit gets forgotten on the final bill.
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number', 'Deposit_Fee']);
+    await updateWOFields(env, woId, {
+      Deposit_Amount: amount.toFixed(2),
+      Deposit_Vendor_ID: vendorId,
+      Deposit_Approved_Date: new Date().toISOString().split('T')[0],
+      Deposit_Notes: body.notes || '',
+      Deposit_Applied: 'FALSE',
+      Deposit_QB_Bill_ID: qbBillId,
+      Deposit_QB_Bill_Number: qbBillNumber,
+      Deposit_Fee: money2(adj.fee).toFixed(2),
+    });
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    if (!back || String(back.Deposit_QB_Bill_ID || '') !== String(qbBillId) || Math.abs((parseFloat(back.Deposit_Amount) || 0) - amount) > 0.005) {
+      throw new Error('the deposit read back as "' + (back ? back.Deposit_Amount + ' / bill ' + back.Deposit_QB_Bill_ID : 'no row') + '"');
+    }
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    let tnote = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_record_failed', Skill_Or_Endpoint: '/wo/deposit-approve', Success: 'FALSE', Notes: ('wo=' + woId + ' qb_bill=' + qbBillId + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { tnote = ' (That also could not be logged to Ops_Telemetry.)'; }
+    return json({ error: `QuickBooks bill ${qbBillNumber || qbBillId} WAS created for $${amount.toFixed(2)}, but saving it on ${woId} failed (${msg}). Do NOT create it again — write down bill ${qbBillNumber || qbBillId} and tell me so it can be recorded, otherwise the final bill will not deduct it.` + tnote, qb_bill_id: qbBillId, qb_bill_number: qbBillNumber }, 500);
+  }
+  return json({ success: true, qb_bill_id: qbBillId, qb_bill_number: qbBillNumber, ...summary });
 }
 
 // POST /wo/deposit-clear { wo_id, reason? } — undo a deposit entered in error. If a QuickBooks
@@ -12763,6 +12846,9 @@ async function depositClear(env, body) {
   const wo = findWO(wos, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
   if (!wo.Deposit_Amount) return json({ error: 'No deposit recorded on this WO' }, 404);
+  if (String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') {
+    return json({ error: `The $${parseFloat(wo.Deposit_Amount).toFixed(2)} deposit on ${woId} was already taken off the final vendor bill${wo.Deposit_Applied_Bill ? ' (' + wo.Deposit_Applied_Bill + ')' : ''}, so clearing it would put the records out of step with QuickBooks. Nothing was changed.` }, 409);
+  }
 
   let qbNote = '';
   if (wo.Deposit_QB_Bill_ID) {
@@ -32499,6 +32585,56 @@ function proposalNettingPlan(o) {
   };
 }
 
+// ── Vendor deposit paid outside the proposal schedule (Oct 26 2026, WO-1253 / Cesar) ─────────────────────
+// A deposit recorded on the work order (POST /wo/deposit-approve) is a real QuickBooks bill Brett pays by hand. It is NOT a Vendor_Bills row
+// (so the vendor can never be paid for it twice) and it is NOT on the proposal's milestone schedule, so nothing netted it off the final bill.
+// woDepositCredit() says what comes off the final bill; woDepositEstimateCap() is the most a deposit may be.
+//   - credit only while Deposit_Applied !== TRUE, a QuickBooks bill id is on file (no bill = nothing was paid = nothing to deduct), and the
+//     deposit belongs to the vendor being billed.
+//   - the credit rides the same visible negative-line path as the proposal credit; Deposit_Applied flips only after QuickBooks returns the bill id.
+function woDepositCredit(wo, vendorId) {
+  if (!wo) return null;
+  const amt = money2(parseFloat(wo.Deposit_Amount) || 0);
+  if (!(amt > 0)) return null;
+  if (String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') return null;
+  const billId = String(wo.Deposit_QB_Bill_ID || '').trim();
+  if (!billId) return null;
+  const dv = String(wo.Deposit_Vendor_ID || '').trim();
+  if (dv && vendorId != null && String(vendorId).trim() !== '' && dv !== String(vendorId).trim()) return null;
+  const ref = String(wo.Deposit_QB_Bill_Number || '').trim() || ('#' + billId);
+  return { type: 'deposit_credit', amount: amt, bill_id: billId, bill_number: String(wo.Deposit_QB_Bill_Number || '').trim(),
+    desc: 'Less: deposit already paid to you (Bill ' + ref + ')', desc_es: 'Menos: depósito ya pagado a usted (Factura ' + ref + ')' };
+}
+// Latest live estimate for the work order (a declined or withdrawn one is not what the vendor agreed to). null = no estimate on file.
+function woDepositEstimateCap(estimateRows, woId, wo) {
+  const mine = (estimateRows || []).filter(e => String(e.WO_ID) === String(woId) && !/^(declined|withdrawn)$/i.test(String(e.Status || '').trim()));
+  if (!mine.length) return null;
+  const latest = mine.slice().sort((a, b) => (parseInt(a.Version || '0', 10) || 0) - (parseInt(b.Version || '0', 10) || 0)).pop();
+  const subtotal = money2(parseFloat(latest.Subtotal) || 0);
+  if (!(subtotal > 0)) return null;
+  // A deposit that was already taken off a final bill is spent: the next one can only be the rest.
+  const spent = (wo && String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') ? money2(parseFloat(wo.Deposit_Amount) || 0) : 0;
+  return { estimate_id: String(latest.ID || ''), version: String(latest.Version || ''), subtotal, spent, cap: Math.max(0, money2(subtotal - spent)) };
+}
+// Mark the deposit as taken off a final bill — called ONLY after QuickBooks returned that bill's id. The write is read back; a miss is loud
+// (warning + Ops_Telemetry) because the bill already carries the deduction and an unflipped flag would deduct the deposit a second time.
+async function woDepositMarkApplied(env, woId, dep, finalBill, warnings, source) {
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Applied', 'Deposit_Applied_Bill', 'Deposit_Applied_Date']);
+    await updateWOFields(env, woId, { Deposit_Applied: 'TRUE', Deposit_Applied_Bill: String(finalBill.number || finalBill.id || ''), Deposit_Applied_Date: new Date().toISOString().split('T')[0] });
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    if (!back || String(back.Deposit_Applied || '').toUpperCase() !== 'TRUE') throw new Error('Deposit_Applied read back as "' + (back ? back.Deposit_Applied : 'no row') + '"');
+    return true;
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 160);
+    warnings.push('⚠ The vendor bill went out with the $' + dep.amount.toFixed(2) + ' deposit already deducted, but marking the deposit as used failed (' + msg + '). Set Deposit_Applied to TRUE on ' + woId + ' by hand now, or the next bill to this vendor will deduct it again.');
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_apply_flag_failed', Skill_Or_Endpoint: source || '/qb/send-invoice', Success: 'FALSE', Notes: ('wo=' + woId + ' deposit_bill=' + dep.bill_id + ' final_bill=' + (finalBill.id || '') + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { warnings.push('(That failure also could not be written to Ops_Telemetry: ' + String((e2 && e2.message) || e2).slice(0, 100) + '.)'); }
+    return false;
+  }
+}
+
 // The vendor bill's extra lines: proposal credit(s), then the instant-pay fee. Every adjustment is a
 // visible line to the vendor (never a silently smaller total). `payable` is the amount the main work
 // line carries after any loan deduction. `bill_total` is what the whole bill adds up to = what Brett sends.
@@ -32956,6 +33092,16 @@ async function qbSendInvoice(env, body) {
         SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: -creditCust } });
     }
     const netCustTotal = money2(custTotal - creditCust);
+    // Oct 26 2026: a vendor deposit recorded on this work order (paid by hand in QuickBooks, never a Vendor_Bills row) comes off THIS vendor bill as its
+    // own visible line. Only a bill that is still to be created takes it; a retry that already has its bill never re-deducts.
+    const depCredit = (!haveBill && !vendorInHousePre && vendorCost > 0) ? woDepositCredit(wo, ir.Vendor_ID) : null;
+    if (depCredit) {
+      warnings.push('💰 A $' + depCredit.amount.toFixed(2) + ' deposit was already paid to this vendor (QuickBooks bill ' + (depCredit.bill_number || depCredit.bill_id) + ') — it comes off this bill automatically.');
+      if (money2(vendorCost - creditVend) < depCredit.amount - 0.005) warnings.push('⛔ The $' + depCredit.amount.toFixed(2) + ' deposit is more than what is left to pay this vendor ($' + money2(vendorCost - creditVend).toFixed(2) + ') — the bill cannot be sent until the amounts are fixed.');
+    } else if (!haveBill && wo && parseFloat(wo.Deposit_Amount) > 0 && String(wo.Deposit_Applied || '').toUpperCase() !== 'TRUE') {
+      warnings.push(vendorInHousePre ? '⚠ This work order has an unapplied vendor deposit, but this vendor bill is not being created (in-house), so the deposit was not deducted.' :
+        '⚠ This work order has an unapplied $' + (parseFloat(wo.Deposit_Amount) || 0).toFixed(2) + ' vendor deposit that was NOT deducted from this bill (' + (!String(wo.Deposit_QB_Bill_ID || '').trim() ? 'it has no QuickBooks bill on file' : 'it belongs to a different vendor') + ') — check the work order before paying.');
+    }
     // Instant-pay fee for THIS payment: the per-bill toggle if Brett set one, else the vendor's own setting.
     // A retry of a send that already recorded its fee reuses that exact number.
     const storedFee = (String(ir.Instant_Fee || '').trim() !== '' && (haveInv || haveBill || body.instant_pay === undefined)) ? { on: String(ir.Instant_Pay || '').toUpperCase() === 'TRUE', amount: +ir.Instant_Fee || 0 } : null;
@@ -32976,7 +33122,8 @@ async function qbSendInvoice(env, body) {
     const buildAdj = (loanDed, forceFee) => vendorBillAdjustments({
       payable: money2(vendorCostGross - (loanDed || 0)), lang: vendorLang, feeOn: (forceFee === true || feeOn) && !vendorInHousePre && vendorCostGross > 0, cfg: feeCfg,
       feeOverride: storedFee && storedFee.on ? storedFee.amount : undefined, pad: irPad, feeCredit: feeCreditAvail,
-      credits: creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [],
+      credits: (creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [])
+        .concat(depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : []),
     });
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
@@ -33093,10 +33240,11 @@ async function qbSendInvoice(env, body) {
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +netCustTotal.toFixed(2), gross_total: +custTotal.toFixed(2), credit: +creditCust.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         netting:  nres.block,
+        deposit:  depCredit ? { amount: depCredit.amount, bill: depCredit.bill_number || depCredit.bill_id, label: depCredit.desc } : null,
         fee:      (() => { const a = buildAdj(previewLoanDeduction); return { applies: !vendorInHousePre && vendorCost > 0 && (feeDefaultOn || feeOn), on: feeOn, vendor_default_on: feeDefaultOn, amount: a.fee, pad: a.pad || 0, amount_if_on: buildAdj(previewLoanDeduction, true).fee, send_amount: a.bill_total, vendor_credit: +creditVend.toFixed(2),
           rate: feeCfg.rate, min: feeCfg.min, max: feeCfg.max, notes: a.notes,
           lines: a.lines.map(l => ({ type: l.type, desc: l.desc, amount: l.amount })) }; })(),
-        bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
+        bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), deposit_credit: depCredit ? depCredit.amount : 0, account: trade.expense,
                     terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
@@ -33123,12 +33271,15 @@ async function qbSendInvoice(env, body) {
       }, 409);
     }
 
+    if (depCredit && money2(vendorCost - creditVend) < depCredit.amount - 0.005) {
+      return json({ ok: false, deposit_blocked: true, error: 'The $' + depCredit.amount.toFixed(2) + ' deposit already paid to this vendor is more than what is left to pay them on this bill ($' + money2(vendorCost - creditVend).toFixed(2) + '), so nothing was sent. Fix the bill amount, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+    }
     // Size the vendor-side adjustments (loan deduction, proposal credit, instant fee) and RECORD the
     // decision on the review row before anything is written to QuickBooks — a retry must see exactly
     // what this attempt decided. If it cannot be saved, nothing is sent.
     let loanAdjPre = { deduction: 0, laborAmount: 0, balance: 0 };
     if (!haveBill && vendorCostGross > 0 && !vendorInHousePre && vendor.ID) {
-      try { loanAdjPre = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost: money2(vendorCostGross - creditVend), billRow }); }
+      try { loanAdjPre = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost: money2(vendorCostGross - creditVend - (depCredit ? depCredit.amount : 0)), billRow }); }
       catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
     }
     const adjPre = buildAdj(loanAdjPre.deduction);
@@ -33318,6 +33469,7 @@ async function qbSendInvoice(env, body) {
           if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
         } else {
           billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (depCredit) await woDepositMarkApplied(env, ir.WO_ID, depCredit, { id: billId, number: billDocAssigned }, warnings, '/qb/send-invoice');
           if (adjFinal.credit_applied > 0) {
             // Mark the credit used ONLY now that QuickBooks returned the bill id. If this write fails the bill already carries the credit line, so say so loudly.
             try {
@@ -33328,7 +33480,7 @@ async function qbSendInvoice(env, body) {
               await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
             }
           }
-          if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
+          if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + (depCredit ? ' − $' + depCredit.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
           if (loanAdj.deduction > 0) {
             try {
               const newBalance = await recordVendorLoanDeduction(env, {
@@ -33358,9 +33510,9 @@ async function qbSendInvoice(env, body) {
     // Record WHICH ledger this landed on, and whether a bill was deliberately not raised.
     // Without these, an owner ledger lighter than expected has no explanation in the sheet,
     // and in-house rows carry a Vendor_Cost with no matching payable to reconcile against.
-    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); }
+    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number', 'Deposit_Credit', 'Deposit_Credit_Bill']); }
     catch (e) { warnings.push('Could not record which ledger this billed to — the invoice and bill ids are still saved.'); }
-    await updateRow(env, 'Invoice_Review', ir.ID, {
+    await updateRow(env, 'Invoice_Review', ir.ID, Object.assign({
       QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
       // The NUMBER, kept apart from the internal id. Screens were showing the id
       // (a five-digit QuickBooks key) under the label "invoice number".
@@ -33368,7 +33520,7 @@ async function qbSendInvoice(env, body) {
       QB_Bill_Number: billDocAssigned,
       QB_Bill_To: billTo.level + (billTo.display ? ': ' + billTo.display : ''),
       QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
-    });
+    }, (depCredit && billId && !haveBill) ? { Deposit_Credit: depCredit.amount.toFixed(2), Deposit_Credit_Bill: depCredit.bill_number || depCredit.bill_id } : {}));
     if (status === 'sent' && ir.WO_ID) {
       try {
         await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' });
@@ -33507,6 +33659,8 @@ async function qbSendCombinedInvoice(env, ctx) {
         }
       }
     }
+    // Oct 26 2026: a vendor deposit recorded on this work order comes off the SAME vendor's bill, once (the first row for that vendor that still needs a bill).
+    let depTaken = false;
     for (const rb of rowBuilds) {
       const feeDefaultOn = instantPayEnabled(rb.vendor, cfgAll, undefined);
       // The per-send toggle can only switch a vendor that is already on OFF here; to turn instant pay ON for another vendor, set it on that vendor.
@@ -33514,10 +33668,18 @@ async function qbSendCombinedInvoice(env, ctx) {
       rb.feeDefaultOn = feeDefaultOn;
       rb.vendorLang = String(rb.vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en';
       rb.credit = (creditRow === rb) ? applied.plan.credit_vendor : 0;
+      rb.dep = null;
+      if (!depTaken && !rb.vendorInHouse && rb.vendorCost > 0 && !(rb.row.QB_Bill_ID && String(rb.row.QB_Bill_ID).trim())) {
+        const d = woDepositCredit(wo, rb.row.Vendor_ID);
+        if (d) { rb.dep = d; depTaken = true;
+          warnings.push('💰 A $' + d.amount.toFixed(2) + ' deposit was already paid to ' + rb.vendDisplay + ' (QuickBooks bill ' + (d.bill_number || d.bill_id) + ') — it comes off their bill automatically.');
+          if (money2(rb.vendorCost - rb.credit) < d.amount - 0.005) warnings.push('⛔ The $' + d.amount.toFixed(2) + ' deposit is more than what is left to pay ' + rb.vendDisplay + ' — the bills cannot be sent until the amounts are fixed.'); }
+      }
       rb.pad = money2(+rb.row.Instant_Pad || 0);
       rb.creditAvail = creditLeft.get(String(rb.row.Vendor_ID)) || 0;
       const mk = (forceOn) => vendorBillAdjustments({ payable: rb.vendorCost, lang: rb.vendorLang, feeOn: (forceOn === true || rb.feeOn) && !rb.vendorInHouse && rb.vendorCost > 0, cfg: feeCfg, pad: rb.pad, feeCredit: rb.creditAvail,
-        credits: rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [] });
+        credits: (rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [])
+          .concat(rb.dep ? [{ type: 'deposit_credit', amount: rb.dep.amount, desc: rb.dep.desc, desc_es: rb.dep.desc_es }] : []) });
       rb.adj = mk(false); rb.adjIfOn = mk(true);
       if (rb.adj.credit_applied > 0) creditLeft.set(String(rb.row.Vendor_ID), money2(rb.creditAvail - rb.adj.credit_applied));
     }
@@ -33551,7 +33713,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           billsPreview.push({
             bill_id: rb.row.Bill_ID,
             vendor: { display: rb.vendDisplay, existing_id: rb.vendor.QBO_Vendor_ID || '', vendor_id: rb.vendor.ID || '', suggest: vendSuggestRow },
-            total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
+            total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), deposit_credit: rb.dep ? rb.dep.amount : 0, account: trade.expense, terms: vendorTermLabel(rb.vendor),
             doc_number: rb.billDoc.number, doc_from: rb.billDoc.source,
             skipped: rb.vendorCost <= 0 || rb.vendorInHouse, in_house: rb.vendorInHouse,
             fee: { applies: !rb.vendorInHouse && rb.vendorCost > 0 && rb.feeDefaultOn, on: rb.feeOn, vendor_default_on: rb.feeDefaultOn, amount: rb.adj.fee, pad: rb.adj.pad || 0, amount_if_on: rb.adjIfOn.fee, send_amount: rb.adj.bill_total,
@@ -33595,6 +33757,8 @@ async function qbSendCombinedInvoice(env, ctx) {
       }, 409);
     }
 
+    { const over = rowBuilds.find(rb => rb.dep && money2(rb.vendorCost - rb.credit) < rb.dep.amount - 0.005);
+      if (over) return json({ ok: false, deposit_blocked: true, warnings, error: 'The $' + over.dep.amount.toFixed(2) + ' deposit already paid to ' + over.vendDisplay + ' is more than what is left to pay them ($' + money2(over.vendorCost - over.credit).toFixed(2) + '), so nothing was sent. Fix the bill amount, or clear the deposit on the work order if it was entered in error.' }, 409); }
     try {
       const feeTotal = money2(rowBuilds.reduce((sum, rb) => sum + (rb.adj.fee || 0), 0));
       await qbPersistNettingDecision(env, leadIr.ID, {
@@ -33739,6 +33903,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           if (!billId) errors.push('Bill (' + rb.vendDisplay + '): ' + (qbFault(br) || 'unknown error'));
           else {
             rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+            if (rb.dep) await woDepositMarkApplied(env, wo.WO_ID || wo.ID || rb.row.WO_ID, rb.dep, { id: billId, number: rb.billDocAssigned }, warnings, '/qb/send-invoice');
             if (rb.adj.credit_applied > 0) {
               try {
                 const used = await feeCreditApplyOnce(env, { vendorId: rb.vendor.ID, vendorName: rb.vendDisplay, amount: rb.adj.credit_applied, irId: rb.row.ID, qbBillId: billId, woId: rb.row.WO_ID });
@@ -33748,7 +33913,7 @@ async function qbSendCombinedInvoice(env, ctx) {
                 await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
               }
             }
-            if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
+            if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + (rb.dep ? ' − $' + rb.dep.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
           }
         }
       } else if (rb.vendorInHouse && rb.vendorCost > 0) {
