@@ -12218,7 +12218,16 @@ function renderIRCard(b, i) {
   // that's the one number this whole feature exists to keep him from double-paying.
   var depositHtml = '';
   var depAmt = wo ? parseFloat(wo.Deposit_Amount || 0) : 0;
-  if (wo && depAmt > 0 && wo.Deposit_Applied !== 'TRUE') {
+  // The deposit only comes off automatically for the vendor it was paid to, and only when a QuickBooks bill is on file.
+  var depCovers = wo && String(wo.Deposit_QB_Bill_ID || '').trim() && (!String(wo.Deposit_Vendor_ID || '').trim() || String(wo.Deposit_Vendor_ID) === String(b.Vendor_ID || ''));
+  if (wo && depAmt > 0 && wo.Deposit_Applied !== 'TRUE' && !depCovers) {
+    depositHtml =
+      '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.6">' +
+        '⚠ This work order has a $' + depAmt.toFixed(2) + ' vendor deposit that will <b>NOT</b> be taken off this bill automatically (' +
+        (String(wo.Deposit_QB_Bill_ID || '').trim() ? 'it was paid to a different vendor' : 'no QuickBooks bill is on file for it') + '). Check the work order before paying.' +
+      '</div>';
+  }
+  if (wo && depAmt > 0 && wo.Deposit_Applied !== 'TRUE' && depCovers) {
     var netOwed = Math.max(0, vendorTotal - depAmt);
     depositHtml =
       '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.6">' +

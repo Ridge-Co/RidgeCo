@@ -392,6 +392,36 @@ const wo1253 = (extra) => [{ ID: 'WO-1253', Status: 'Assigned', Vendor_ID: '3', 
   t('clear refuses once the deposit was taken off a final bill', res.status === 409 && /already taken off the final vendor bill/.test(body.error) && qbState.deleteCalledWith === undefined && field('Deposit_Amount', row(db, 'WO-1253')) === '200.00');
 }
 
+// ── force:true retires the old QuickBooks deposit bill first (or refuses) ──
+{
+  const base = { ID: 'WO-1', Status: 'In Progress', Vendor_ID: 'V-9', Deposit_Amount: '300.00', Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: 'QBB-OLD', Deposit_QB_Bill_Number: 'BILL-OLD', Deposit_Fee: '10.00' };
+  const db = makeDb([base], [{ ID: 'V-9', QBO_Vendor_ID: '77' }], []);
+  const { depositApprove, qbState } = build(db, { ...okQb, billId: 'QBB-NEW', billNumber: 'BILL-NEW' });
+  const body = await (await depositApprove(env, { wo_id: 'WO-1', amount: 150, force: true })).json();
+  t('force replace deletes the old QB bill first, then creates the new one', body.success === true && qbState.deleteCalledWith === 'QBB-OLD' && field('Deposit_QB_Bill_ID', row(db, 'WO-1')) === 'QBB-NEW' && field('Deposit_Amount', row(db, 'WO-1')) === '150.00');
+  t('force replace says the old bill was deleted', body.warnings.some(w => /was deleted in QuickBooks and replaced/.test(w)));
+}
+{
+  const db = makeDb([{ ID: 'WO-1', Status: 'In Progress', Vendor_ID: 'V-9', Deposit_Amount: '300.00', Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: 'QBB-OLD', Deposit_QB_Bill_Number: 'BILL-OLD' }], [{ ID: 'V-9', QBO_Vendor_ID: '77' }], []);
+  const { depositApprove, qbState } = build(db, { ...okQb, deleteResult: { ok: false, error: 'has a payment against it' } });
+  const res = await depositApprove(env, { wo_id: 'WO-1', amount: 150, force: true });
+  const body = await res.json();
+  t('force replace refuses when the old bill cannot be deleted, creating nothing', res.status === 409 && /could not be deleted/.test(body.error) && qbState.lastBillPayload === undefined && field('Deposit_Amount', row(db, 'WO-1')) === '300.00');
+}
+{
+  const db = makeDb([{ ID: 'WO-1', Status: 'In Progress', Deposit_Amount: '300.00', Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: 'QBB-1', Deposit_Fee: '10.00', Deposit_Applied_Bill: 'X', Deposit_Applied_Date: '2026-10-01' }]);
+  const { depositClear } = build(db, okQb);
+  await depositClear(env, { wo_id: 'WO-1' });
+  const r = row(db, 'WO-1');
+  t('clear also wipes the fee and applied-bill fields so nothing stale survives a re-approve', field('Deposit_Fee', r) === '' && field('Deposit_Applied_Bill', r) === '' && field('Deposit_Applied_Date', r) === '');
+}
+{ // heal guard: a bill already recorded taking the deposit off means it is spent, even if the flag did not save
+  const { woDepositCredit } = build(makeDb([], [], []), okQb);
+  const wo = { ID: 'WO-1', Deposit_Amount: '200.00', Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: '88', Deposit_Vendor_ID: '3' };
+  t('no credit when an Invoice_Review row already recorded deducting it', woDepositCredit(wo, '3', [{ WO_ID: 'WO-1', Active: 'TRUE', Deposit_Credit: '200.00', QB_Bill_ID: '501' }]) === null);
+  t('a voided or bill-less review row does not block the credit', woDepositCredit(wo, '3', [{ WO_ID: 'WO-1', Active: 'FALSE', Deposit_Credit: '200.00', QB_Bill_ID: '501' }, { WO_ID: 'WO-1', Active: 'TRUE', Deposit_Credit: '200.00', QB_Bill_ID: '' }]) !== null);
+}
+
 // ── every billing path takes the deposit off automatically and flips the flag only AFTER QuickBooks returns the bill id ──
 {
   const fn = (name, isAsync = true) => grab(wsrc, (isAsync ? 'async ' : '') + 'function ' + name + '(');

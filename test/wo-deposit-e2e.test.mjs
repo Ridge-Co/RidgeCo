@@ -184,6 +184,48 @@ seed({ Deposit_Amount: '200.00', Deposit_Vendor_ID: '9', Deposit_Applied: 'FALSE
   t('no credit for a different vendor, with a visible warning', pv.json.preview && !pv.json.preview.deposit && pv.json.preview.bill.total === 450 && pv.json.preview.warnings.some(w => /NOT deducted/.test(w)), pv.json.preview && pv.json.preview.warnings);
 }
 
+
+// ═══ 6. combined invoice, two bills to the SAME vendor: the deposit goes on the row that can cover it, once ═══
+function seedTwoRows(costA, costB) {
+  seed({ Deposit_Amount: '200.00', Deposit_Vendor_ID: '3', Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: '88', Deposit_QB_Bill_Number: 'B-88' });
+  const vb = tabs.get('Vendor_Bills'), h = vb[0];
+  vb.push(h.map(c => ({ ID: '10', WO_ID: 'WO-1253', Vendor_ID: '3', Vendor_Name: 'Cesar Diaz', Active: 'TRUE', Bill_Type: 'flat', Flat_Rate: String(costB) }[c] ?? '')));
+  vb[1] = h.map(c => ({ ID: '9', WO_ID: 'WO-1253', Vendor_ID: '3', Vendor_Name: 'Cesar Diaz', Active: 'TRUE', Bill_Type: 'flat', Flat_Rate: String(costA) }[c] ?? ''));
+  const ir = tabs.get('Invoice_Review'), ih = ir[0];
+  ir[1] = ih.map(c => ({ ID: '5', Bill_ID: '9', WO_ID: 'WO-1253', Vendor_ID: '3', Vendor_Name: 'Cesar Diaz', Vendor_Cost: String(costA), Customer_Total: String(costA + 50), Active: 'TRUE', QB_Invoice_Status: 'pending', Approved_Date: '2026-10-26' }[c] ?? ''));
+  ir.push(ih.map(c => ({ ID: '6', Bill_ID: '10', WO_ID: 'WO-1253', Vendor_ID: '3', Vendor_Name: 'Cesar Diaz', Vendor_Cost: String(costB), Customer_Total: String(costB + 50), Active: 'TRUE', QB_Invoice_Status: 'pending', Approved_Date: '2026-10-26' }[c] ?? '')));
+}
+{
+  seedTwoRows(100, 300);
+  const r = await call('POST', '/qb/send-invoice', { id: '5' });
+  t('combined send succeeds', r.json.ok === true && qb.posts.filter(p => p.kind === 'bill').length === 2, r.json);
+  const bills = qb.posts.filter(p => p.kind === 'bill').map(p => p.body.Line);
+  const withDep = bills.filter(l => l.some(x => /deposit already paid/i.test(x.Description || '')));
+  t('the deposit is taken off exactly ONE bill (the $300 one), not both and not the $100 one', withDep.length === 1 && withDep[0][0].Amount === 300 && withDep[0].length === 3 && sum(withDep[0]) === 90, bills);   // $300 - $200 deposit = $100, less the $10 minimum fee
+  t('the other bill is just $100 less its own fee', bills.some(l => l[0].Amount === 100 && sum(l) === 90 && l.length === 2));
+  t('Deposit_Applied flipped once', wo().Deposit_Applied === 'TRUE');
+}
+{
+  seedTwoRows(100, 100);   // neither bill can cover a $200 deposit
+  const r = await call('POST', '/qb/send-invoice', { id: '5' });
+  t('no single bill can cover the deposit: blocked with 409, nothing sent', r.status === 409 && r.json.deposit_blocked === true && qb.posts.length === 0, r.json);
+  const pv = await call('POST', '/qb/send-invoice', { id: '5', preview_only: true });
+  t('the preview says so too', pv.json.preview && pv.json.preview.warnings.some(w => /more than any one of their bills/.test(w)), pv.json);
+}
+
+// ═══ 7. heal guard: the flag did not save last time, but a bill already recorded the deduction -> never deduct again ═══
+seed({ Deposit_Amount: '200.00', Deposit_Vendor_ID: '3', Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: '88' });
+{
+  const ir = tabs.get('Invoice_Review'), ih = ir[0];
+  ir.push(ih.map(c => ({ ID: '4', Bill_ID: '8', WO_ID: 'WO-1253', Vendor_ID: '3', Vendor_Cost: '460', Customer_Total: '655', Active: 'TRUE', QB_Invoice_ID: '900', QB_Bill_ID: '901', QB_Invoice_Status: 'sent', Deposit_Credit: '200.00' }[c] ?? '')));
+  if (!ih.includes('Deposit_Credit')) { ih.push('Deposit_Credit'); }
+  tabs.set('Invoice_Review', ir.map((row, i) => { const r = row.slice(); while (r.length < ih.length) r.push(''); return r; }));
+  const hdr = tabs.get('Invoice_Review')[0], rows = tabs.get('Invoice_Review');
+  rows[rows.length - 1][hdr.indexOf('Deposit_Credit')] = '200.00';
+  const pv = await call('POST', '/qb/send-invoice', { id: '5', preview_only: true });
+  t('a later bill on the same WO does not deduct a deposit an earlier bill already recorded', pv.json.preview && !pv.json.preview.deposit && pv.json.preview.bill.total === 450, pv.json.preview && pv.json.preview.bill);
+}
+
 console.error = origErr; console.warn = origWarn;
 globalThis.fetch = realFetch; globalThis.setTimeout = _realSetTimeout; Date.now = _realNow;
 console.log(`\nwo-deposit-e2e: ${pass} passed, ${fail} failed`);
