@@ -42218,6 +42218,7 @@ async function fiPremierRepair(env, body) {
   else { await updateRowVerified(env, 'Insp_Customers', custId, { Hub_Owner_ID: ownerId }); step('partner_owner_link', 'done', 'Hub_Owner_ID=' + ownerId); }
   // 2. inspections <-> bookings (address + date must match)
   const bt = (await fiReadFresh(env, 'Insp_Bookings')).rows.map(r => r.o);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
   for (const lk of links) {
     const inspId = String(lk && lk.inspection_id || '').trim(), bid = String(lk && lk.booking_id || '').trim(), tag = 'link ' + bid + ' <-> ' + inspId;
     const b = bt.find(x => String(x.ID) === bid && x.Active !== 'FALSE');
