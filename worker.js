@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-27.02-delivery-job-po-prep';
+const BUILD_VERSION = '2026-10-27.03-fi-visit-bookings';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -704,6 +704,7 @@ const _hubWorkerCore = {
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
         if (path === '/fi/directory')           return await fiRoute(env, 'directory', () => fiDirectory(env));
+        if (path === '/fi/bookings')            return await fiRoute(env, 'bookings', () => fiBookings(env));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
@@ -1151,6 +1152,8 @@ const _hubWorkerCore = {
         if (path === '/fi/issue-types/save')      return await fiRoute(env, 'issue-types-save', () => fiTypesSave(env, body));
         if (path === '/fi/issue-types/touch')     return await fiRoute(env, 'issue-types-touch', () => fiTypesTouch(env, body));
         if (path === '/fi/property/create')       return await fiRoute(env, 'property-create', () => fiPropertyCreate(env, body));
+        if (path === '/fi/booking/start')         return await fiRoute(env, 'booking-start', () => fiBookingStart(env, body));
+        if (path === '/fi/reword')                return await fiRoute(env, 'reword', () => fiReword(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
@@ -26906,6 +26909,13 @@ async function hubTestWriteAllowed(env, path, body) {
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
   if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
+  if (path === '/fi/reword') return true; // AI only: writes nothing
+  if (path === '/fi/booking/start') { // staging may only claim a TEST- booking (address starts TEST-) for a TEST- inspection id
+    if (!String((body && body.inspection_id) || '').startsWith('TEST-')) return false;
+    const _bk = await fetchTab(env, 'Insp_Bookings');
+    const _br = _bk.find(r => String(r.ID) === String(body && body.booking_id));
+    return !!_br && String(_br.Address || '').startsWith('TEST-');
+  }
   if (path === '/fi/read-label') return String((body && body.inspection_id) || '').startsWith('TEST-'); // reads a private photo: TEST- inspections only
   if (path === '/fi/folder/organize') return String((body && body.inspection_id) || '').startsWith('TEST-');
   if (path === '/fi/property/create') { // staging may only create a TEST- address owned by a TEST- owner (new TEST- company, or an existing TEST- owner)
@@ -36005,14 +36015,14 @@ async function trashInvoice(env, body) {
 // no outreach/SMS/booking-link yet, that's Phase 2. Tabs self-provision on first
 // write, exact same pattern as Trash Service (ensureTrashTabs) just above.
 // ─────────────────────────────────────────────────────────────────────────────
-const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min'];
+const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min','Hub_Owner_ID'];
 const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
 const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
 const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start','Reopen_Log'];
-const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
+const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup','Levels','Bedrooms','Bathrooms','Inspection_ID','Hub_Property_ID','Insp_Claimed_At'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
   Insp_Properties: INSP_PROPERTY_HEADERS,
@@ -37092,6 +37102,7 @@ function inspBookingEventBody(b, pending, approveUrl) {
   const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO);
   const lines = [
     `${b.Units} unit(s) in ${b.Buildings} building(s) — ${b.Duration_Min} min`,
+    `Size: ${inspSizeText(b) || 'not given'}`,
     `Booked by: ${b.Contact_Name || '?'} ${b.Contact_Phone || ''} ${b.Contact_Email || ''}`.trim(),
     b.Notes ? `Notes: ${b.Notes}` : '',
     (b.Drive_Before_Min || b.Drive_After_Min) ? `Drive: ${b.Drive_Before_Min || '-'} min from previous stop / ${b.Drive_After_Min || '-'} min to next (${b.Drive_Source})` : '',
@@ -39986,6 +39997,31 @@ function inspCleanInput(body) {
   return { address, units, buildings };
 }
 
+// Property size asked at booking time (Oct 27 2026). Each of levels / bedrooms / bathrooms is REQUIRED but may be "unknown" (the
+// "I don't know" bypass). For multi-unit properties bedrooms/bathrooms mean "each unit" (one dropdown, never per-unit entry) and may be "vary".
+// It never changes the visit duration (that stays units/buildings based) - it only informs Brett and pre-fills the inspection layout.
+function inspSizeVal(v, kind, multi) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) throw inspErr('bad_size', 'Please give the number of levels, bedrooms and bathrooms - or tap “I don’t know” for any you are not sure of.', 400);
+  if (s === 'unknown') return 'unknown';
+  if (s === 'vary') return multi ? 'vary' : 'unknown';
+  const n = Number(s), min = kind === 'levels' ? 1 : (kind === 'bedrooms' ? 0 : 0.5), max = kind === 'levels' ? 6 : 20;
+  const stepOk = kind === 'bathrooms' ? (n * 2) % 1 === 0 : Number.isInteger(n);
+  if (!Number.isFinite(n) || n < min || n > max || !stepOk) throw inspErr('bad_size', `Please check the number of ${kind}.`, 400);
+  return String(n);
+}
+function inspCleanSize(body, units) {
+  const multi = (+units || 1) > 1;
+  return { Levels: inspSizeVal(body && body.levels, 'levels', multi), Bedrooms: inspSizeVal(body && body.bedrooms, 'bedrooms', multi), Bathrooms: inspSizeVal(body && body.bathrooms, 'bathrooms', multi) };
+}
+// One readable line for Brett's approval page / calendar / texts. Blank or "unknown" parts are left out ("" when nothing is known).
+function inspSizeText(b) {
+  const one = (v, s, p) => { v = String(v == null ? '' : v).trim().toLowerCase(); if (!v || v === 'unknown') return ''; if (v === 'vary') return p + ' vary'; return v + ' ' + (Number(v) === 1 ? s : p); };
+  const multi = (+(b && b.Units) || 1) > 1;
+  const bb = [one(b && b.Bedrooms, 'bed', 'beds'), one(b && b.Bathrooms, 'bath', 'baths')].filter(Boolean).join(' / ');
+  return [bb && (multi ? 'each unit: ' + bb : bb), one(b && b.Levels, 'level', 'levels')].filter(Boolean).join(', ');
+}
+
 function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
 function inspPackSlackMin(cfg) { const raw = String((cfg && cfg.INSP_PACK_SLACK_MIN) == null ? '' : cfg.INSP_PACK_SLACK_MIN).trim(); if (/^off$/i.test(raw)) return null; const n = parseFloat(raw); return Number.isFinite(n) && n >= 0 ? n : INSP_PACK_SLACK_MIN; }
 function inspBlockWindowEndMs(b) { const l = String(b.Last_Start == null ? '' : b.Last_Start).trim(); const ls = l ? inspEtWallToMs(b.Date, l) : NaN; return Number.isFinite(ls) ? ls : inspEtWallToMs(b.Date, b.End_Time); }
@@ -40089,6 +40125,7 @@ async function inspBookRequest(env, body) {
     const c = await inspCustomerByToken(env, body && body.k);
     if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid.' }, 404);
     const input = inspCleanInput(body); input.freshGuard = true; // cleaning-coverage is re-read live for a real booking
+    const size = inspCleanSize(body, input.units);   // required (with "unknown" bypass) - rejected BEFORE any calendar hold is placed
     const contactName = String(body.contact_name || '').trim().slice(0, 80);
     const contactPhone = body.contact_phone ? normalizePhone(String(body.contact_phone).slice(0, 30)) : '';
     const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
@@ -40115,6 +40152,7 @@ async function inspBookRequest(env, body) {
       Drive_Before_Min: adj.before ? adj.before.min : '', Drive_After_Min: adj.after ? adj.after.min : '', Drive_Source: a.driveSource,
       Contact_Name: contactName, Contact_Phone: contactPhone, Contact_Email: contactEmail, Notes: String(body.notes || '').trim().slice(0, 500),
       Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote,
+      Levels: size.Levels, Bedrooms: size.Bedrooms, Bathrooms: size.Bathrooms, Inspection_ID: '', Hub_Property_ID: '', Insp_Claimed_At: '',
     };
     // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
     let ev;
@@ -40147,7 +40185,7 @@ async function inspBookRequest(env, body) {
     // 3b) Keep the day's single "Key pickup" block on the calendar in step with the earliest booking.
     notify.push(...await inspReconcileKeyPickup(env, a.cfg, c, rec.Date));
     // 4) Tell Brett.
-    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
+    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}. Size: ${inspSizeText(rec) || 'not given'}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
     // 4b) Tell the partner their request landed, with the link that lets them check status or cancel later.
     notify.push(...await inspNotifyPartner(env, rec, 'requested'));
@@ -40879,6 +40917,39 @@ function fiExtractJson(text) {
   if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
   return null;
 }
+// Visit details + per-area "No access" (Oct 27 2026). Both are optional and stored on the doc as-is; these only bound their shape/size.
+const FI_ACCESS_REASONS = ['tenant_declined', 'blocked', 'other'];
+const FI_COOP_CHOICES = ['completed', 'not_present', 'limited', 'ended_early'];
+function fiValidateAccess(ac, where, errors) {
+  if (ac === undefined || ac === null) return;
+  if (typeof ac !== 'object' || Array.isArray(ac)) { errors.push(`${where}.access must be an object`); return; }
+  if (ac.reason && !FI_ACCESS_REASONS.includes(ac.reason)) errors.push(`${where}.access.reason invalid`);
+  if (String(ac.note || '').length > 500) errors.push(`${where}.access.note too long (max 500)`);
+}
+function fiValidateVisit(v, errors) {
+  if (v === undefined || v === null) return;
+  if (typeof v !== 'object' || Array.isArray(v)) { errors.push('doc.visit must be an object'); return; }
+  const an = v.animals;
+  if (an !== undefined && an !== null) {
+    if (typeof an !== 'object' || Array.isArray(an)) errors.push('doc.visit.animals must be an object');
+    else if (an.items !== undefined && !Array.isArray(an.items)) errors.push('doc.visit.animals.items must be an array');
+    else if ((an.items || []).length > 10) errors.push('too many animal lines (max 10)');
+    else (an.items || []).forEach((it, i) => {
+      if (!it || typeof it !== 'object') { errors.push(`doc.visit.animals.items[${i}] invalid`); return; }
+      if (String(it.type || '').length > 60) errors.push(`doc.visit.animals.items[${i}].type too long`);
+      const n = Number(it.count);
+      if (it.count !== undefined && it.count !== '' && (!Number.isFinite(n) || n < 0 || n > 999)) errors.push(`doc.visit.animals.items[${i}].count invalid`);
+    });
+  }
+  const ac = v.access_cooperation;
+  if (ac !== undefined && ac !== null) {
+    if (typeof ac !== 'object' || Array.isArray(ac)) errors.push('doc.visit.access_cooperation must be an object');
+    else {
+      if (ac.choice && !FI_COOP_CHOICES.includes(ac.choice)) errors.push('doc.visit.access_cooperation.choice invalid');
+      if (String(ac.note || '').length > 600) errors.push('doc.visit.access_cooperation.note too long (max 600)');
+    }
+  }
+}
 function fiValidateDoc(doc) {
   const errors = [];
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, errors: ['doc must be an object'] };
@@ -40893,6 +40964,7 @@ function fiValidateDoc(doc) {
       if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
       if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
       fiValidateEquipment(a.equipment, `areas[${i}]`, errors);
+      fiValidateAccess(a.access, `areas[${i}]`, errors);
       if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
       else (a.issues || []).forEach((is, j) => {
@@ -40902,6 +40974,8 @@ function fiValidateDoc(doc) {
     });
   }
   fiValidateVoiceNotes(doc.voice_notes, errors);
+  fiValidateVisit(doc.visit, errors);
+  if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
   if (doc.owner !== undefined && (!doc.owner || typeof doc.owner !== 'object' || Array.isArray(doc.owner) || String(doc.owner.name || '').length > 160)) errors.push('doc.owner must be an object with a name under 160 characters');
   return { ok: errors.length === 0, errors: errors.slice(0, 10) };
@@ -40948,7 +41022,10 @@ function fiPublishChecks(doc, serverPhotoIds) {
   for (const a of active) {
     if (String(a.pending_text || '').trim()) blocks.push({ code: 'dictation_pending', message: `"${a.name}" has dictation not yet turned into issues (or cleared)`, area: a.name });
   }
-  const skipped = active.filter(a => !a.condition || a.condition === 'not_inspected').map(a => a.name);
+  // "No access" counts as handled (it is reported in its own "Areas not accessed" section); "Other" needs its description.
+  const noAcc = a => !!(a.access && a.access.no_access);
+  for (const a of active) if (noAcc(a) && a.access.reason === 'other' && !String(a.access.note || '').trim()) blocks.push({ code: 'access_reason_missing', message: `Say why "${a.name}" was not accessed (you chose “Other”)`, area: a.name });
+  const skipped = active.filter(a => !noAcc(a) && (!a.condition || a.condition === 'not_inspected')).map(a => a.name);
   if (skipped.length) warnings.push({ code: 'areas_not_inspected', message: `Not marked inspected: ${skipped.slice(0, 12).join(', ')}`, areas: skipped });
   const sm = doc.summary;
   if (sm && sm.fp && sm.fp !== fiFingerprint(doc)) warnings.push({ code: 'summary_stale', message: 'The AI summary is out of date and will be left out of the report' });
@@ -41210,6 +41287,7 @@ async function fiReport(env, request, url) {
   delete doc.voice_notes;
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
+  delete doc.booking;   // the requester's phone/email and booking notes are internal - never on the public report
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
   fiScrubDocForReport(doc);
   return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
@@ -42016,6 +42094,104 @@ async function fiPropertyCreate(env, body) {
     }
   }
   return json({ ok: true, property: { id: propId, address, city, type, unit_count: Number(pback.o.Unit_Count) || 1, owner_id: String(owner.ID), owner_name: ownerName }, owner: { id: String(owner.ID), name: ownerName, created: createdOwner }, units: unitsOut });
+}
+
+// ── Approved bookings -> field inspection (Oct 27 2026, Brett) ──────────────────────────────────────────
+// Approved inspection bookings are listed on the phone's New-inspection screen. Tapping one finds (or, only then, creates) the Hub property
+// under the EXISTING owner - never a duplicate owner - hands the phone the requester's contact / size / notes, and claims the booking so it is
+// not offered twice. Linking an inspection that was already started (same endpoint, the phone's own inspection id) works the same way.
+function fiBookingAddrParts(b) {
+  const parts = String(b.Formatted_Address || b.Address || '').split(',').map(s => s.trim());
+  return { street: (parts[0] || '').slice(0, 120), city: (parts[1] || '').slice(0, 60) };
+}
+function fiBookingLabel(b) { return String(b.Formatted_Address || b.Address || '').replace(/,\s*(USA|United States)\s*$/i, '').slice(0, 200); }
+// The Hub owner behind a booking partner: the explicit Insp_Customers.Hub_Owner_ID link first, else an exact company-name match (one hit only).
+function fiBookingOwnerRow(cust, ownerRows) {
+  if (!cust) return null;
+  const hid = String(cust.Hub_Owner_ID || '').trim();
+  if (hid) { const o = ownerRows.find(r => String(r.ID) === hid); if (o) return o; }
+  const want = fiNormName(cust.Name);
+  if (want) { const m = ownerRows.filter(r => fiNormName(fiOwnerName(r)) === want); if (m.length === 1) return m[0]; }
+  return null;
+}
+function fiBookingPropMatches(ap, propRows, own) {
+  const key = qbNormAddress(ap.street), ck = qbNormAddress(ap.city);
+  let m = key ? propRows.filter(p => p.Active !== 'FALSE' && qbNormAddress(p.Address || '') === key) : [];
+  if (m.length > 1 && ck) { const bc = m.filter(p => qbNormAddress(p.City || '') === ck); if (bc.length) m = bc; }
+  if (m.length > 1 && own) { const bo = m.filter(p => String(p.Owner_ID) === String(own.ID)); if (bo.length) m = bo; }
+  return m;
+}
+function fiBookingOut(b, cust, ownerRows, propRows) {
+  const ap = fiBookingAddrParts(b), own = fiBookingOwnerRow(cust, ownerRows), pm = fiBookingPropMatches(ap, propRows, own);
+  const when = b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)) : '';
+  return {
+    id: String(b.ID), customer_id: String(b.Customer_ID || ''), customer_name: cust ? (cust.Name || '') : '', date: b.Date || '', start_time: b.Start_Time || '', when,
+    address: fiBookingLabel(b), street: ap.street, city: ap.city, units: +b.Units || 1, buildings: +b.Buildings || 1,
+    contact: { name: b.Contact_Name || '', phone: b.Contact_Phone || '', email: b.Contact_Email || '' }, notes: b.Notes || '',
+    size: { levels: b.Levels || '', bedrooms: b.Bedrooms || '', bathrooms: b.Bathrooms || '', text: inspSizeText(b) },
+    owner: own ? { id: String(own.ID), name: fiOwnerName(own) } : null,
+    property: pm.length ? { id: String(pm[0].ID), address: pm[0].Address, city: pm[0].City || '' } : null,
+    inspection_id: b.Inspection_ID || '',
+  };
+}
+async function fiBookings(env) {
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings'), it = await fiReadFresh(env, 'FI_Inspections');
+  const cust = await fetchTab(env, 'Insp_Customers'), owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE'), props = await fetchTab(env, 'Properties');
+  const custById = {}; cust.forEach(c => { custById[String(c.ID)] = c; });
+  const have = new Set(it.rows.filter(r => r.o.Active !== 'FALSE').map(r => r.o.ID));
+  const from = inspEtDate(Date.now() - 21 * 86400000), to = inspEtDate(Date.now() + 120 * 86400000);
+  // Approved, in a sensible window, and not already turned into an inspection. A claim whose inspection never reached the server is offered again.
+  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID)))
+    .sort((x, y) => String(x.Start_ISO).localeCompare(String(y.Start_ISO)));
+  return json({ ok: true, bookings: list.map(b => fiBookingOut(b, custById[String(b.Customer_ID)], owners, props)) });
+}
+async function fiBookingStart(env, body) {
+  body = body || {};
+  const bid = String(body.booking_id || '').trim(), inspId = String(body.inspection_id || '');
+  if (!bid) return fiErr(400, 'bad_request', 'booking_id is required.');
+  if (!FI_ID_RE.test(inspId)) return fiErr(400, 'bad_id', 'inspection_id is missing or malformed.');
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings');
+  const hit = bt.rows.find(r => String(r.o.ID) === bid && r.o.Active !== 'FALSE');
+  if (!hit) return fiErr(404, 'not_found', 'That booking was not found.');
+  const b = hit.o;
+  if (b.Status !== 'approved') return fiErr(409, 'not_approved', `This booking is ${b.Status || 'not approved'}, so it cannot be started.`);
+  if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) return fiErr(409, 'already_started', 'An inspection was already started from this booking.', { inspection_id: b.Inspection_ID });
+  const cust = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(b.Customer_ID)) || null;
+  const owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE');
+  const owner = fiBookingOwnerRow(cust, owners), ap = fiBookingAddrParts(b);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
+  let prop = null, created = false;
+  const savedId = String(b.Hub_Property_ID || '').trim();
+  if (savedId) prop = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+  if (!prop) prop = fiBookingPropMatches(ap, propRows, owner)[0] || null;
+  if (!prop && owner) {
+    const units = +b.Units || 1;
+    const res = await fiPropertyCreate(env, { address: ap.street, city: ap.city, type: units > 1 ? 'multi' : 'house', unit_count: units, owner: { id: String(owner.ID) }, force: true });
+    let rd = null; try { rd = await res.clone().json(); } catch (e) { rd = null; /* silent-ok: a null body becomes the error response just below */ }
+    if (!res.ok || !rd || rd.ok === false || !rd.property) return fiErr(res.status >= 400 ? res.status : 500, (rd && rd.error) || 'property_not_saved', (rd && rd.message) || 'The property could not be added to the Hub, so nothing was linked. Retry.');
+    prop = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o).find(p => String(p.ID) === String(rd.property.id)) || null;
+    if (!prop) return fiErr(500, 'property_not_saved', 'The new property could not be read back from the Hub, so nothing was linked. Retry.');
+    created = true;
+  }
+  const propId = prop ? String(prop.ID) : '';
+  await updateRowVerified(env, 'Insp_Bookings', b.ID, { Inspection_ID: inspId, Hub_Property_ID: propId, Insp_Claimed_At: new Date().toISOString() });
+  const out = fiBookingOut(Object.assign({}, b, { Inspection_ID: inspId }), cust, owners, prop ? [prop] : []);
+  return json({ ok: true, booking: out, property: prop ? { id: propId, address: out.address, street: String(prop.Address || ap.street), city: prop.City || ap.city, unit_count: Number(prop.Unit_Count) || 1 } : null, property_created: created, owner: out.owner, owner_missing: !owner });
+}
+// Neutral, factual rewording of the inspector's own note about access / cooperation. Returns a SUGGESTION only - the phone never saves it without Brett's tap.
+const FI_REWORD_SYSTEM = `You rewrite an inspector's short note about access and cooperation during a rental property inspection into neutral, factual, professional wording for the property owner's report.
+Rules: state only what happened (who was or was not present, which areas were declined or blocked, whether the inspection ended early). No words about attitude or emotion (never rude, hostile, tense, unwelcoming, uncooperative, angry). No guesses about reasons, motives, personal circumstances, health, money or lifestyle. No judgement or advice. Do not add any fact that is not in the note. 1 to 3 short sentences, past tense, say "the occupant". If the note is already neutral, change as little as possible. Output a single JSON object {"text":""} and nothing else.`;
+async function fiReword(env, body) {
+  const text = fiStr(body && body.text, 1000).trim();
+  if (!text) return fiErr(400, 'empty', 'Type a note first.');
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_reword', customerFacing: true, schema: true, system: FI_REWORD_SYSTEM, prompt: `Inspector's note:\n"""\n${text}\n"""\n\nReturn JSON only: {"text":""}`, maxTokens: 400, source: 'field-inspect' }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Rewording is paused (AI credit). Your note is kept exactly as you wrote it.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not reword this. Your note is kept exactly as you wrote it.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const parsed = fiExtractJson(ai.result), t = parsed ? fiClean(parsed.text, 600).trim() : '';
+  if (!t) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your note is kept exactly as you wrote it.');
+  return json({ ok: true, text: t });
 }
 
 // ── Drive: Properties root / <address> / Inspection MMDDYYYY ──

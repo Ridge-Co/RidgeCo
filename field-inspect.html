@@ -141,11 +141,15 @@ var TRADE_LABEL = {}; TRADES.forEach(function(t){ TRADE_LABEL[t[0]] = t[1]; });
 var SEV_LABEL = {}; SEVS.forEach(function(t){ SEV_LABEL[t[0]] = t[1]; });
 var COND_LABEL = {good:'Good',fair:'Fair',poor:'Poor',nothing_to_do:'Nothing to do',not_inspected:'Not inspected',na:'N/A'};
 var INSP_TYPES = [['periodic','Periodic'],['move_in','Move-in'],['move_out','Move-out'],['pre_listing','Pre-listing'],['other','Other']];
+// Oct 27 2026: per-area "No access" reasons, neutral access & cooperation quick-picks, animal types
+var ACCESS_REASONS = [['','No reason given'],['tenant_declined','Tenant declined access'],['blocked','Area blocked'],['other','Other (describe)']];
+var COOP_CHOICES = [['completed','Occupant present; inspection completed as planned'],['not_present','Occupant not present'],['limited','Occupant present; access to some areas was limited'],['ended_early','Occupant asked that the inspection end early']];
+var ANIMAL_TYPES = ['Dog','Cat','Bird','Other'];
 
 // ── state ───────────────────────────────────────────────────────────────────
 var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], dir:null, propsErr:'', propQ:'', newProp:null, newOwner:null, ownerQ:'', pickUnitFor:'', unitQ:'', hits:[], ownerHits:{},
   sync:{ state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null, lastErr:'' },
-  photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null };
+  photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null, bookings:null, bookErr:'', newBooking:null, newInspId:'', visitOpen:false, rw:'' };
 var blobUrl = {};           // photo id -> object URL (local copy)
 var photoState = {};        // photo id -> {state, err}
 var localOnly = {};         // id -> record for inspections only on this phone
@@ -231,7 +235,7 @@ function enterApp(d, err){
     (rows||[]).forEach(function(r){ localOnly[r.id] = r; });
     render(); setSync(); pumpPhotos();
   }).catch(function(e){ S.noIdb = true; render(); toast('Phone storage problem: '+e.message); });
-  render(); setSync(); loadTypes();
+  render(); setSync(); loadTypes(); loadBookings();
 }
 function applyList(d){ S.list = d.inspections || []; S.brands = d.brands || []; S.reportBase = d.report_base || S.reportBase; S.listErr=''; }
 function refreshList(){ return api('GET','/fi/list').then(function(d){ applyList(d); }).catch(function(e){ S.listErr = 'Could not refresh the server list: '+e.message; }); }
@@ -402,7 +406,7 @@ function retryPhotos(){
 // ── model ───────────────────────────────────────────────────────────────────
 function findArea(doc, id){ for (var i=0;i<doc.areas.length;i++) if (doc.areas[i].id===id) return doc.areas[i]; return null; }
 function issueCount(a){ return (a.issues||[]).length; }
-function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return a.condition && a.condition!=='not_inspected'; }).length, total: act.length }; }
+function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return (a.condition && a.condition!=='not_inspected') || (a.access && a.access.no_access); }).length, total: act.length }; }
 
 // ── views ───────────────────────────────────────────────────────────────────
 function render(){
@@ -419,7 +423,7 @@ function render(){
   var y = window.scrollY, key = S.view + ':' + (S.areaId||'');
   v.innerHTML = h; window.scrollTo(0, render._key === key ? y : 0); render._key = key;
   if (S.view==='route') saveRouteDraft();
-  if (S.view==='new' && !S.newProp) renderPropList();
+  if (S.view==='new' && !S.newProp) { renderBookList(); renderPropList(); }
   if (S.view==='area') bindArea();
   setSync();
 }
@@ -451,10 +455,87 @@ function viewHome(){
 
 // ---- new inspection ----
 function startNew(){
-  S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new';
+  S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new'; S.newBooking = null; S.newInspId = '';
   var d = defaultBrand();
   S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false };
-  render(); loadProps();
+  render(); loadProps(); loadBookings();
+}
+// ---- approved bookings (Oct 27 2026) ----
+// Approved bookings from the booking page, offered at the top of New inspection. Tapping one finds/creates the Hub property under the existing owner and pre-fills everything.
+function loadBookings(){
+  if (!S.bookings){ var c = lsGet('fi_bookings',''); if (c){ try{ S.bookings = JSON.parse(c); }catch(e){ S.bookings = null; } } }
+  return api('GET','/fi/bookings').then(function(d){
+    S.bookings = d.bookings||[]; S.bookErr=''; lsSet('fi_bookings', JSON.stringify(S.bookings));
+    if (S.view==='new' && !S.newProp && !S.pickUnitFor) renderBookList();
+    if (S.view==='insp') safeRender();
+  }).catch(function(e){ S.bookErr = 'Could not load approved bookings ('+e.message+')'+(S.bookings?' — showing the copy saved on this phone.':'.'); if (S.view==='new' && !S.newProp && !S.pickUnitFor) renderBookList(); });
+}
+function bookingRef(b){ return { id:b.id, customer_id:b.customer_id||'', customer_name:b.customer_name||'', contact:b.contact||{}, notes:b.notes||'', size:{ levels:(b.size&&b.size.levels)||'', bedrooms:(b.size&&b.size.bedrooms)||'', bathrooms:(b.size&&b.size.bathrooms)||'' }, size_text:(b.size&&b.size.text)||'', units:b.units||1, buildings:b.buildings||1, scheduled:b.when||b.date||'' }; }
+function bookingCardHtml(bk){
+  var c = bk.contact||{}, who = [c.name,c.phone,c.email].filter(Boolean).map(esc).join(' · ');
+  return '<div class="card"><b>Approved booking</b><div class="muted">'+esc(bk.scheduled||'')+(bk.customer_name?' · '+esc(bk.customer_name):'')+(who?'<br>Requested by '+who:'')+(bk.size_text?'<br>Size given: '+esc(bk.size_text):'<br>Size: not given')+(bk.notes?'<br>Notes: '+esc(bk.notes):'')+'</div></div>';
+}
+function renderBookList(){
+  var el = $('booklist'); if (!el) return;
+  var l = S.bookings||[], h = S.bookErr ? '<div class="banner warn">'+esc(S.bookErr)+'</div>' : '';
+  if (l.length) h += '<div class="card"><b>Approved bookings</b><div class="muted">Tap one to start — property, owner and contact are filled in for you.</div>'+l.map(function(b,i){
+    return '<div class="propitem" onclick="startFromBooking('+i+')"><b>'+esc(b.address)+'</b><div class="muted">'+esc(b.when||b.date)+(b.customer_name?' · '+esc(b.customer_name):'')+((b.contact&&b.contact.name)?' · '+esc(b.contact.name):'')+'</div>'+(b.size&&b.size.text?'<div class="muted">'+esc(b.size.text)+'</div>':'')+(b.property?'':'<div class="muted">New to the Hub — it will be added under '+esc((b.owner&&b.owner.name)||'an owner you choose')+'</div>')+'</div>';
+  }).join('')+'</div>';
+  el.innerHTML = h;
+}
+function startFromBooking(i){
+  var b = (S.bookings||[])[i]; if (!b) return;
+  if (!claim('book')) return;
+  var id = newId(); toast('Opening the booking…');
+  api('POST','/fi/booking/start',{ booking_id:b.id, inspection_id:id }).then(function(r){
+    release('book'); applyBooking(r, id);
+  }).catch(function(e){
+    release('book');
+    if (e.code==='already_started'){ toast('An inspection was already started from this booking — find it in the list'); loadBookings(); return; }
+    toast('Could not open the booking: '+e.message);
+  });
+}
+function applyBooking(r, id){
+  var b = r.booking, sz = b.size||{}, o = S.newOpts;
+  S.newInspId = id; S.newBooking = bookingRef(b);
+  if (b.contact && b.contact.name) o.client = b.contact.name;
+  if (b.contact && b.contact.email) o.email = b.contact.email;
+  var bd = parseFloat(sz.bedrooms), ba = parseFloat(sz.bathrooms);
+  if (isFinite(bd)) o.beds = Math.max(0, Math.min(12, Math.round(bd)));
+  if (isFinite(ba)) o.baths = Math.max(1, Math.min(12, Math.ceil(ba)));
+  S.newProp = r.property ? { id:r.property.id, address:b.address||r.property.address, street:r.property.street, source:'hub', unit_id:'', unit_label:'' } : null;
+  S.newOwner = r.owner ? { id:r.owner.id, name:r.owner.name, source:'hub' } : null;
+  S.pickUnitFor = ''; S.ownerQ = ''; if (!S.newProp) S.propQ = b.street||'';
+  S.dir = S.dir || null; if (r.property_created) loadProps();
+  render();
+  toast(r.property_created ? 'Added to the Hub — check the layout, then start' : (S.newProp ? 'Booking opened — check the layout, then start' : 'Property not found in the Hub — pick or add it'));
+}
+// An inspection that was started BEFORE its booking could be picked: offer a one-tap link when the street matches an approved booking.
+function streetLike(x, y){ var a = nz(x), b = nz(y); return !!a && !!b && (a===b || a.indexOf(b)===0 || b.indexOf(a)===0); }
+function bookingMatchFor(doc){
+  if (doc.booking || !S.bookings) return null;
+  var st = fiStreet(doc);
+  for (var i=0;i<S.bookings.length;i++) if (streetLike(S.bookings[i].street, st)) return S.bookings[i];
+  return null;
+}
+function bookingLinkHtml(doc){
+  var b = bookingMatchFor(doc); if (!b) return '';
+  return '<div class="banner info">This looks like the approved booking for <b>'+esc(b.address)+'</b> ('+esc(b.when||b.date)+').<div class="btns"><button class="btn sm primary" onclick="linkBooking(\''+esc(b.id)+'\')">Link it</button></div><div class="muted">Fills in the owner, requester and property from the booking.</div></div>';
+}
+function linkBooking(bid){
+  if (!claim('book')) return; var rec = S.rec; if (!rec){ release('book'); return; }
+  api('POST','/fi/booking/start',{ booking_id:bid, inspection_id:rec.id }).then(function(r){
+    release('book');
+    if (!S.rec || S.rec.id!==rec.id) return;
+    var b = r.booking;
+    mut(function(doc){
+      if (r.property) doc.property = Object.assign({}, doc.property, { source:'hub', id:r.property.id });
+      if (r.owner) doc.owner = { id:r.owner.id, name:r.owner.name, source:'hub' };
+      doc.booking = bookingRef(b);
+    });
+    mutMeta(function(m){ if (!m.client_name && b.contact && b.contact.name) m.client_name = b.contact.name; if (!m.client_email && b.contact && b.contact.email) m.client_email = b.contact.email; });
+    loadBookings(); render(); toast('Linked to the booking'+(r.owner?' and owner':'')+(r.owner_missing?' — choose the owner':''));
+  }).catch(function(e){ release('book'); toast(e.code==='already_started' ? 'That booking already has an inspection' : 'Could not link: '+e.message); });
 }
 // ---- Hub directory: properties, units, owners (searchable) ----
 function nz(s){
@@ -485,6 +566,8 @@ function viewNew(){
     return h;
   }
   if (!S.newProp){
+    if (S.newBooking) h += bookingCardHtml(S.newBooking)+'<div class="banner warn">Pick the property below (or add it) — the booking above stays linked to this inspection.</div>';
+    else h += '<div id="booklist"></div>';
     h += '<div class="card"><label class="fld" style="margin-top:0">1 · Which property?</label>'+addBtn()+'<input id="pq" style="margin-top:10px" placeholder="Type to search address, unit, city or owner…" value="'+esc(S.propQ)+'" oninput="S.propQ=this.value;renderPropList()" autocomplete="off">';
     if (S.propsErr) h += '<div class="banner warn" style="margin-top:8px">'+esc(S.propsErr)+'</div>';
     h += '<div id="proplist"></div>';
@@ -492,7 +575,7 @@ function viewNew(){
     return h;
   }
   var o = S.newOpts, p = S.newProp, ow = S.newOwner;
-  h += '<div class="card propcard"><b>'+esc(propLabel(p))+(p.unit_label?' · '+esc(unitText(p.unit_label)):'')+'</b><div class="muted">'+(p.id?'In the Hub':'Not in the Hub — saved with this inspection only (you can add it later)')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;S.newOwner=null;S.pickUnitFor=\'\';render()">Change property</button></div>';
+  h += '<div class="card propcard"><b>'+esc(propLabel(p))+(p.unit_label?' · '+esc(unitText(p.unit_label)):'')+'</b><div class="muted">'+(p.id?'In the Hub':'Not in the Hub — saved with this inspection only (you can add it later)')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;S.newOwner=null;S.pickUnitFor=\'\';render()">Change property</button></div>'+(S.newBooking ? bookingCardHtml(S.newBooking) : '');
   h += '<div class="card" id="ownercard"><label class="fld" style="margin-top:0">On behalf of (owner)</label>';
   if (ow){ h += '<div class="row"><b>'+esc(ow.name)+'</b><button class="btn sm" onclick="S.newOwner=null;S.ownerQ=\'\';render()">Change</button></div><div class="muted">Appears on the report as “On behalf of”.</div>'; }
   else {
@@ -727,9 +810,11 @@ function createInspection(){
   if (!claim('create')) return; $('start-btn').disabled = true;
   var o = S.newOpts, p = S.newProp;
   lsSet('fi_inspector', o.inspector);
-  var id = newId(); S.route = null;
+  var id = S.newInspId || newId(); S.route = null; S.newInspId = '';
   var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address, street:p.street||String(p.address||'').split(',')[0].trim(), unit_id:String(p.unit_id||''), unit_label:p.unit_label||'' }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
   if (S.newOwner && S.newOwner.name) doc.owner = { id:String(S.newOwner.id||''), name:S.newOwner.name, source:S.newOwner.source||'hub' };
+  doc.visit = { animals:{ present:null, items:[] }, access_cooperation:{ choice:'', note:'' } };
+  if (S.newBooking){ doc.booking = S.newBooking; S.newBooking = null; }
   var rec = { id:id, doc:doc, meta:{ brand_id:o.brand, client_name:o.client, client_email:o.email, inspector:o.inspector, inspection_date:o.date, inspection_type:o.type }, base_rev:0, token:'', status:'draft', dirty:true, ver:1 };
   S.rec = rec; S.areaId = null; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.publishInfo=null;
   persistLocal().then(function(){ release('create'); S.view='insp'; render(); syncNow(true); });
@@ -827,7 +912,7 @@ function toggleIssuePhoto(p){ var l = editing.photo_ids = editing.photo_ids||[];
 function deleteIssueStep(){ var b=$('ie-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to delete'; return; } var a=curArea(), id=editing.id; mut(function(){ a.issues = a.issues.filter(function(x){return x.id!==id;}); }); closeSheet(); render(); }
 // ---- sheet helpers ----
 function openSheet(html){ $('sheet').innerHTML = html; $('modal').classList.add('open'); }
-function closeSheet(){ $('modal').classList.remove('open'); }
+function closeSheet(){ $('modal').classList.remove('open'); if (S.visitOpen){ S.visitOpen = false; if (S.view==='insp') render(); } }
 $('modal').addEventListener('click', function(e){ if (e.target === $('modal')) closeSheet(); });
 
 // ---- review & publish ----
@@ -838,7 +923,8 @@ function localChecks(doc){
   if (!(doc.owner && String(doc.owner.name||'').trim())) blocks.push('Choose who this inspection is on behalf of (the owner)');
   if (!doc.overall || !doc.overall.condition || doc.overall.condition==='not_inspected') blocks.push('Set the overall condition');
   active.forEach(function(a){ if ((a.pending_text||'').trim()) blocks.push('“'+a.name+'” has dictation not turned into issues (or cleared)'); });
-  var sk = active.filter(function(a){ return !a.condition || a.condition==='not_inspected'; }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
+  active.forEach(function(a){ var ac = a.access; if (ac && ac.no_access && ac.reason==='other' && !String(ac.note||'').trim()) blocks.push('Say why “'+a.name+'” was not accessed (you chose Other)'); });
+  var sk = active.filter(function(a){ return !(a.access && a.access.no_access) && (!a.condition || a.condition==='not_inspected'); }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
   var uns = (doc.voice_notes||[]).filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length; if (uns) warns.push(uns+' voice note'+(uns>1?'s have':' has')+' not been sorted into areas yet');
   if (S.rec.dirty) blocks.push('Changes are not saved to the server yet');
   var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
@@ -1136,6 +1222,8 @@ function viewInsp(){
   h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+(doc.property.unit_label?' · '+esc(unitText(doc.property.unit_label)):'')+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
   h += ownerCardHtml(doc);
+  h += doc.booking ? bookingCardHtml(doc.booking) : bookingLinkHtml(doc);
+  h += visitCardHtml(doc);
   h += routeResumeHtml();
   var vn = doc.voice_notes||[], unsorted = vn.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length;
   h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
@@ -1149,11 +1237,83 @@ function viewInsp(){
   h += '<button class="btn primary block" style="margin-top:10px;min-height:52px" onclick="openReview()">Review &amp; report ›</button>';
   return h;
 }
+// ---- visit details: animals + access & cooperation (Oct 27 2026; both optional, neutral wording) ----
+function animalsText(v){
+  var an = v && v.animals; if (!an || an.present==null) return '';
+  if (!an.present) return 'No animals';
+  var it = (an.items||[]).filter(function(x){ return String(x.type||'').trim(); });
+  return it.length ? it.map(function(x){ return x.type + (x.count ? ' × '+x.count : ''); }).join(', ') : 'Animals present';
+}
+function coopText(v){
+  var c = v && v.access_cooperation; if (!c) return '';
+  var lab = ''; COOP_CHOICES.forEach(function(x){ if (x[0]===c.choice) lab = x[1]; });
+  return [lab, String(c.note||'').trim()].filter(Boolean).join(' — ');
+}
+function visitCardHtml(doc){
+  var v = doc.visit||{}, at = animalsText(v), ct = coopText(v);
+  return '<div class="card"><div class="row"><b>Visit details</b><button class="btn sm" onclick="visitSheet()">'+(at||ct?'Edit':'Add')+'</button></div><div class="muted">Animals: '+(at?esc(at):'not noted')+'<br>Access &amp; cooperation: '+(ct?esc(ct):'no comments (nothing is shown in the report)')+'</div></div>';
+}
+function vGet(doc){
+  doc.visit = doc.visit || {};
+  doc.visit.animals = doc.visit.animals || { present:null, items:[] };
+  doc.visit.animals.items = doc.visit.animals.items || [];
+  doc.visit.access_cooperation = doc.visit.access_cooperation || { choice:'', note:'' };
+  return doc.visit;
+}
+function visitSheet(){
+  var doc = S.rec.doc, v = doc.visit||{}, an = v.animals||{ present:null, items:[] }, ac = v.access_cooperation||{ choice:'', note:'' };
+  S.visitOpen = true;
+  var h = '<h2>Visit details</h2><div class="muted">Everything here is optional.</div>';
+  h += '<label class="fld">Animals present?</label><div class="seg"><button class="'+(an.present===false?'sel':'')+'" onclick="vAnimals(false)">No</button><button class="'+(an.present===true?'sel':'')+'" onclick="vAnimals(true)">Yes</button></div><div class="muted">Tap the selected one again to clear it.</div>';
+  if (an.present===true){
+    h += (an.items||[]).map(function(it,i){ return '<div class="row" style="gap:6px;margin-top:8px"><input list="animal-types" value="'+esc(it.type||'')+'" placeholder="Dog, cat…" oninput="vAnimalType('+i+',this.value)" style="flex:2"><span class="step"><button onclick="vAnimalCount('+i+',-1)">−</button><span class="n">'+(it.count||1)+'</span><button onclick="vAnimalCount('+i+',1)">＋</button></span><button class="btn sm" aria-label="Remove this animal" onclick="vAnimalDel('+i+')">✕</button></div>'; }).join('')
+      + '<datalist id="animal-types">'+ANIMAL_TYPES.map(function(t){ return '<option value="'+esc(t)+'">'; }).join('')+'</datalist><div class="btns"><button class="btn sm" onclick="vAnimalAdd()">＋ Add another animal</button></div>';
+  }
+  h += '<label class="fld">Access &amp; cooperation</label><div class="muted">Optional. Stick to what happened. Leave it blank for no comment — nothing is shown in the report.</div>';
+  h += COOP_CHOICES.map(function(c){ return '<button class="btn block'+(ac.choice===c[0]?' primary':'')+'" style="text-align:left;margin-top:6px" onclick="vCoop(\''+c[0]+'\')">'+esc(c[1])+'</button>'; }).join('');
+  h += '<label class="fld">Note (optional)</label><textarea id="v-note" style="min-height:80px" placeholder="A short, factual note about access during the visit" oninput="vNote(this.value)">'+esc(ac.note||'')+'</textarea>'
+    + '<div class="btns"><button class="btn sm" id="v-rw" onclick="vReword()">✨ Suggest neutral wording</button></div><div id="v-rw-out"></div>'
+    + '<div class="btns"><button class="btn primary" onclick="closeSheet()">Done</button></div>';
+  openSheet(h);
+}
+function vAnimals(p){ mut(function(d){ var an = vGet(d).animals; an.present = (an.present===p) ? null : p; if (an.present===true && !an.items.length) an.items.push({ type:'', count:1 }); }); visitSheet(); }
+function vAnimalType(i, val){ mut(function(d){ var it = vGet(d).animals.items[i]; if (it) it.type = String(val||'').slice(0,60); }); }
+function vAnimalCount(i, dlt){ mut(function(d){ var it = vGet(d).animals.items[i]; if (it) it.count = Math.max(1, Math.min(99, (Number(it.count)||1)+dlt)); }); visitSheet(); }
+function vAnimalDel(i){ mut(function(d){ vGet(d).animals.items.splice(i,1); }); visitSheet(); }
+function vAnimalAdd(){ mut(function(d){ var its = vGet(d).animals.items; if (its.length < 10) its.push({ type:'', count:1 }); }); visitSheet(); }
+function vCoop(c){ mut(function(d){ var ac = vGet(d).access_cooperation; ac.choice = (ac.choice===c) ? '' : c; }); visitSheet(); }
+function vNote(val){ mut(function(d){ vGet(d).access_cooperation.note = String(val||'').slice(0,600); }); }
+// AI rewording is a SUGGESTION only: nothing changes until Brett taps "Use this wording".
+function vReword(){
+  var ta = $('v-note'), t = ta ? ta.value.trim() : '', out = $('v-rw-out'); if (!out) return;
+  if (!t){ out.innerHTML = '<div class="banner warn" style="margin-top:8px">Type your note first, then ask for neutral wording.</div>'; return; }
+  if (!claim('rw')) return; var b = $('v-rw'); if (b) b.disabled = true; out.innerHTML = '<div class="muted" style="margin-top:8px">Working…</div>';
+  api('POST','/fi/reword',{ text:t }).then(function(r){
+    release('rw'); S.rw = r.text; var o2 = $('v-rw-out'); if (b) b.disabled = false; if (!o2) return;
+    o2.innerHTML = '<div class="banner info" style="margin-top:8px"><b>Suggested wording</b><div style="margin-top:4px">'+esc(r.text)+'</div><div class="btns"><button class="btn sm primary" onclick="vUseReword()">Use this wording</button><button class="btn sm" onclick="$(\'v-rw-out\').innerHTML=\'\'">Keep mine</button></div><div class="muted">Your own note stays as written unless you tap “Use this wording”.</div></div>';
+  }).catch(function(e){ release('rw'); if (b) b.disabled = false; var o3 = $('v-rw-out'); if (o3) o3.innerHTML = '<div class="banner warn" style="margin-top:8px">'+esc(e.message||'Could not reword')+' Your note is unchanged.</div>'; });
+}
+function vUseReword(){ var ta = $('v-note'); if (!ta || !S.rw) return; ta.value = S.rw; vNote(S.rw); var o = $('v-rw-out'); if (o) o.innerHTML = '<div class="muted" style="margin-top:8px">Replaced with the suggested wording.</div>'; }
+// ---- per-area "No access" ----
+function areaPill(a){ return (a.access && a.access.no_access) ? '<span class="pill warn">No access</span>' : condPill(a.condition); }
+function accessHtml(a){
+  var ac = a.access||{};
+  if (!ac.no_access) return '<button class="btn block" style="margin-bottom:12px" onclick="setNoAccess(true)">🚫 No access to this area</button>';
+  var needNote = ac.reason==='other' && !String(ac.note||'').trim();
+  return '<div class="card" style="border-color:var(--warn)"><div class="row"><b>🚫 No access</b><button class="btn sm" onclick="setNoAccess(false)">Undo — I got in</button></div>'
+    +'<label class="fld">Reason (optional)</label><select onchange="setAccessReason(this.value)">'+ACCESS_REASONS.map(function(r){ return '<option value="'+r[0]+'"'+((ac.reason||'')===r[0]?' selected':'')+'>'+esc(r[1])+'</option>'; }).join('')+'</select>'
+    +'<label class="fld">'+(ac.reason==='other'?'Describe why *':'Note (optional)')+'</label><input value="'+esc(ac.note||'')+'" oninput="setAccessNote(this.value)" placeholder="e.g. the resident asked me to leave before I finished">'
+    +(needNote?'<div class="banner warn" style="margin-top:8px">Describe why — needed before you can publish.</div>':'')
+    +'<div class="muted" style="margin-top:6px">The report lists this under “Areas not accessed”.</div></div>';
+}
+function setNoAccess(on){ var a = curArea(); mut(function(){ if (on) a.access = { no_access:true, reason:'', note:'' }; else delete a.access; }); render(); }
+function setAccessReason(v){ var a = curArea(); mut(function(){ a.access = a.access || { no_access:true, note:'' }; a.access.reason = v; }); render(); }
+function setAccessNote(v){ var a = curArea(); mut(function(){ a.access = a.access || { no_access:true, reason:'' }; a.access.note = String(v||'').slice(0,500); }); }
 function areaRow(a, i, n){
   var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length;
   var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'');
   if (S.reorder) return '<div class="area-row rr" data-aid="'+a.id+'"><button class="dh" aria-label="Drag to reorder '+esc(a.name)+'" title="Drag to reorder">≡</button><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
-  return '<div class="area-row" data-aid="'+a.id+'" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+condPill(a.condition)+'</div>';
+  return '<div class="area-row" data-aid="'+a.id+'" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+areaPill(a)+'</div>';
 }
 function openArea(id){
   var a = findArea(S.rec.doc, id);
@@ -1168,6 +1328,7 @@ function viewArea(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
   h += '<h1>'+esc(a.name)+'</h1>';
   h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
+  h += accessHtml(a);
   h += '<div class="card"><button class="mic'+(S.listening?' live':'')+'" id="mic-btn" onclick="toggleDictation()">'+(S.listening?'⏹ Stop (listening…)':'🎤 Dictate')+'</button>';
   if (S.dictErr) h += '<div class="banner err" style="margin-top:8px">'+esc(S.dictErr)+'</div>';
   h += '<div class="muted" id="interim" style="min-height:18px;margin-top:6px">'+esc(S.interim)+'</div>';
