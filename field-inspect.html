@@ -423,7 +423,7 @@ function render(){
   var y = window.scrollY, key = S.view + ':' + (S.areaId||'');
   v.innerHTML = h; window.scrollTo(0, render._key === key ? y : 0); render._key = key;
   if (S.view==='route') saveRouteDraft();
-  if (S.view==='new' && !S.newProp) renderPropList();
+  if (S.view==='new' && !S.newProp) { renderBookList(); renderPropList(); }
   if (S.view==='area') bindArea();
   setSync();
 }
