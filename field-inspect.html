@@ -149,7 +149,7 @@ var ANIMAL_TYPES = ['Dog','Cat','Bird','Other'];
 // ── state ───────────────────────────────────────────────────────────────────
 var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], dir:null, propsErr:'', propQ:'', newProp:null, newOwner:null, ownerQ:'', pickUnitFor:'', unitQ:'', hits:[], ownerHits:{},
   sync:{ state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null, lastErr:'' },
-  photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null };
+  photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null, bookings:null, bookErr:'', newBooking:null, newInspId:'', visitOpen:false, rw:'' };
 var blobUrl = {};           // photo id -> object URL (local copy)
 var photoState = {};        // photo id -> {state, err}
 var localOnly = {};         // id -> record for inspections only on this phone
