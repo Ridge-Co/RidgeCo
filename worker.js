@@ -37092,6 +37092,7 @@ function inspBookingEventBody(b, pending, approveUrl) {
   const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO);
   const lines = [
     `${b.Units} unit(s) in ${b.Buildings} building(s) — ${b.Duration_Min} min`,
+    `Size: ${inspSizeText(b) || 'not given'}`,
     `Booked by: ${b.Contact_Name || '?'} ${b.Contact_Phone || ''} ${b.Contact_Email || ''}`.trim(),
     b.Notes ? `Notes: ${b.Notes}` : '',
     (b.Drive_Before_Min || b.Drive_After_Min) ? `Drive: ${b.Drive_Before_Min || '-'} min from previous stop / ${b.Drive_After_Min || '-'} min to next (${b.Drive_Source})` : '',
