@@ -50,6 +50,13 @@
   .rtag{display:inline-block;font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;margin:0 5px 3px 0;white-space:nowrap}
   .rtag.wait{background:var(--bluebg);color:var(--blue)} .rtag.due{background:var(--redbg);color:var(--red)}
   .rtag.cash{background:var(--greenbg);color:var(--green)} .rtag.cost{background:var(--amberbg);color:var(--amber)}
+  /* tenant RSVP badge on the Today's deliveries card: Declined is the loudest */
+  .rsvp{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;margin:0 5px 3px 0;white-space:nowrap;background:#eef1f5;color:var(--muted)}
+  .rsvp.yes{background:var(--greenbg);color:#14532d} .rsvp.unsure{background:var(--amberbg);color:#7a4b00}
+  .rsvp.no{background:var(--red);color:#fff;font-size:12px;padding:3px 10px}
+  .rsvp.no.past{background:var(--redbg);color:#8a1f14;font-size:11px;padding:2px 8px}
+  .row2.rsvp-declined{border-left:4px solid var(--red);padding-left:8px;background:#fff5f4}
+  .rsvp-note{display:block;margin-top:3px;padding:4px 8px;border-left:3px solid #d5dae1;background:#f8f9fb;border-radius:0 6px 6px 0;font-size:12px;color:var(--ink,#222);white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
   .vtag{font-size:10px;font-weight:800;color:#42505e;background:#eef0f3;padding:3px 8px;border-radius:20px;flex:none;margin-top:1px}
   .btns{display:flex;gap:8px;margin-top:12px}
   .btn{flex:1;border:none;border-radius:11px;padding:11px;font-size:13.5px;font-weight:700}
@@ -189,11 +196,80 @@ async function load(){
   const arP=loadAR();           // best-effort AR aging (QuickBooks)
   const staleP=loadStale();     // best-effort stuck-WO alert (greenlit #2)
   const tasksP=loadTasks();     // best-effort BrettOS Tasks Sheet summary (TASK_LINKING_BUILD_BRIEF #2)
+  const delP=loadDeliveries();  // today's deliveries; NEVER throws, but a failure comes back as {ok:false,error} and is shown on screen
   try{
     const [wos,inv,bills,vendors,props,units]=await Promise.all(
       ['/workorders','/invoices','/vendor-bills?status=submitted','/vendors','/properties','/units'].map(getJSON));
-    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP,ar:await arP,stale:await staleP,tasks:await tasksP});
+    render({wos,inv,bills,vendors,props,units,live:true,opt:await optP,ar:await arP,stale:await staleP,tasks:await tasksP,deliveries:await delP});
   }catch(e){ sampleMode('DIAGNOSTIC → '+e.message, await optP, null, await tasksP); }
+}
+// Today's deliveries (delivery watcher Phase 0/1, Oct 23 2026) — READ-ONLY, reuses GET /deliveries (no new endpoint).
+// Unlike the best-effort cards around it, a failure here is NOT swallowed: it comes back as {ok:false,error} and
+// deliveriesCard() renders a visible "couldn't load" card (a missed delivery is a real cost: someone has to open the door).
+async function loadDeliveries(){
+  try{
+    const d=await getJSON('/deliveries');
+    if(!d||!Array.isArray(d.deliveries)) throw new Error('/deliveries → unexpected response');
+    return {ok:true,today:d.today||new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'}),rows:d.deliveries};
+  }catch(e){ return {ok:false,error:(e&&e.message)||String(e)}; }
+}
+function deliveriesCard(x){
+  if(!x) return '';
+  const link='<a class="deliv-all" href="deliveries.html" style="display:inline-block;margin-top:8px;color:var(--blue);font-weight:800;font-size:13px;text-decoration:none">Open Deliveries →</a>';
+  if(!x.ok){
+    return '<div class="card" id="deliv-card" data-kind="error" style="border-color:#ecc3c3;background:var(--redbg)"><h2>🚚 Today’s deliveries</h2>'
+      +'<p class="note" style="color:var(--red);font-weight:700;overflow-wrap:anywhere">⚠ Couldn’t load deliveries: '+h(x.error)+'</p>'
+      +'<p class="note">Check Deliveries directly so nothing is missed today.</p>'+link+'</div>';
+  }
+  const rows=x.rows||[];
+  const today=rows.filter(r=>r.expected_date===x.today).sort((a,b)=>String(a.expected_window||'zzz').localeCompare(String(b.expected_window||'zzz')));
+  const review=rows.filter(r=>r.status==='Needs Review');
+  const reviewElse=review.filter(r=>r.expected_date!==x.today);
+  const cap=s=>{s=String(s||'');return s.charAt(0).toUpperCase()+s.slice(1);};
+  const contact=r=>{const c=r.onsite_contact||'tenant'; return c==='tenant'?(r.tenant_name?'Tenant: '+r.tenant_name:'Tenant'):'Meets: '+cap(c);};
+  const where=r=>r.delivery_address||[r.property_address,r.unit_label?'Unit '+r.unit_label:''].filter(Boolean).join(' ')||'(no address)';
+  // Tenant RSVP (fields from /deliveries: tenant_rsvp ''|Confirmed|Declined|Unsure, tenant_rsvp_at, tenant_rsvp_note)
+  const rsvpOf=r=>{const v=String(r.tenant_rsvp||'').trim().toLowerCase();return (v==='confirmed'||v==='yes')?'yes':(v==='declined'||v==='no')?'no':v==='unsure'?'unsure':'';};
+  const rsvpWhen=sv=>{sv=String(sv||'').trim();if(!sv)return '';const t=/^\d{4}-\d{2}-\d{2}T/.test(sv)?new Date(sv):null;if(!t||isNaN(t.getTime()))return sv;try{return t.toLocaleString('en-US',{timeZone:'America/New_York',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}catch(e){return sv;}};
+  const rsvpOpen=r=>['Delivered','Cancelled','Needs Review'].indexOf(r.status)<0;
+  const rsvpHtml=r=>{
+    const st=rsvpOf(r);
+    if(!st){
+      if(!rsvpOpen(r)) return '';
+      if(('tenant_notice_sent_at' in r)||('tenant_notice_status' in r)){const asked=!!r.tenant_notice_sent_at||/^sent/i.test(String(r.tenant_notice_status||''));return '<span class="rsvp" data-rsvp="'+(asked?'none':'not-asked')+'">'+(asked?'Tenant: No answer yet':'Tenant: not asked yet')+'</span>';}
+      return r.tenant_name?'<span class="rsvp" data-rsvp="none">Tenant: No answer yet</span>':'';
+    }
+    const label=st==='yes'?'✓ Tenant: Confirmed':(st==='no'?'✕ Tenant: Declined':'? Tenant: Unsure');
+    const when=rsvpWhen(r.tenant_rsvp_at), note=String(r.tenant_rsvp_note||'').trim();
+    return '<span class="rsvp '+st+(st==='no'&&!rsvpOpen(r)?' past':'')+'" data-rsvp="'+st+'">'+h(label)+'</span>'+(when?'<small style="display:inline">'+h(when)+'</small>':'')
+      +(note?'<span class="rsvp-note" data-rsvp-note>“'+h(note)+'”</span>':'');
+  };
+  const dotOf=st=>st==='Delivered'?'g':(st==='Needs Review'||st==='Cancelled'||st==='Exception'?'r':(st==='En-Route'||st==='Approaching'||st==='Arrived'?'a':'b'));
+  const reviewLine=reviewElse.length?'<p class="note" style="color:var(--red);font-weight:700">⚠ '+reviewElse.length+' delivery email'+(reviewElse.length>1?'s':'')+' the watcher couldn’t place — open Deliveries to fix '+(reviewElse.length>1?'them':'it')+'.</p>':'';
+  if(!today.length){
+    if(!reviewElse.length) return '';   // nothing today and nothing to review: hide the card
+    return '<div class="card" id="deliv-card" data-kind="review-only" style="border-color:#ecc3c3;background:var(--redbg)"><h2>🚚 Deliveries <small style="font-weight:600;color:var(--muted)">· needs review</small></h2>'
+      +'<p class="note" style="color:var(--red);font-weight:700">⚠ '+reviewElse.length+' delivery email'+(reviewElse.length>1?'s':'')+' the watcher couldn’t place.</p>'+link+'</div>';
+  }
+  let html='<div class="card" id="deliv-card" data-kind="today"><h2>🚚 Today’s deliveries <small style="font-weight:600;color:var(--muted)">· '+today.length+'</small></h2>';
+  today.forEach(r=>{
+    const item=[r.item_type,r.make_model].filter(Boolean).join(' ')||'(item?)';
+    const woIds=String(r.linked_wo_ids||'').split(',').map(v=>v.trim()).filter(Boolean);
+    const woLinks=woIds.map(id=>'<a class="deliv-wo" href="index.html?wo='+encodeURIComponent(id)+'" target="_blank" rel="noopener" style="color:var(--blue);font-weight:800;text-decoration:none">'+h(id)+'</a>').join(', ');
+    const order=[r.store,r.order_number?'#'+r.order_number:''].filter(Boolean).join(' ');
+    const driver=/Driver calls Brett/i.test(r.notes||'')?'<small style="color:var(--amber);font-weight:700">📞 Driver calls: Brett</small>':'';
+    html+='<div class="row2 deliv-row'+(rsvpOf(r)==='no'&&rsvpOpen(r)?' rsvp-declined':'')+'" data-id="'+h(r.id)+'"><span class="pdot '+dotOf(r.status)+'"></span><div class="t" style="min-width:0;overflow-wrap:anywhere">'
+      +'<span class="rtag '+(r.status==='Delivered'?'cash':(dotOf(r.status)==='r'?'due':'wait'))+'">'+h(r.status||'Ordered')+'</span>'
+      +(r.expected_window?'<span class="rtag cost">'+h(r.expected_window)+'</span>':'')
+      +'<br>'+h(item)
+      +'<small>'+h(where(r))+'</small>'
+      +'<small>'+h(contact(r))+(order?' · '+h(order):'')+'</small>'
+      +(rsvpHtml(r)?'<small class="rsvp-row">'+rsvpHtml(r)+'</small>':'')
+      +(woLinks?'<small>Work order: '+woLinks+'</small>':'')+driver
+      +'</div></div>';
+  });
+  html+=reviewLine+link+'</div>';
+  return html;
 }
 // BrettOS Tasks Sheet summary (read-only) — see TASK_LINKING_BUILD_BRIEF_v1.0.md decision #1.
 // The Sheet stays canonical; this is a glance card only. Best-effort: any failure (including the
@@ -431,6 +507,8 @@ function render(d){
   let html='';
   html+='<div class="card hero"><div class="kick">'+h(hero.k)+'</div><h2 style="margin-top:5px">'+h(hero.t)+'</h2><p class="plain">'+h(hero.b)+'</p>'
       +'<div class="btns"><button class="btn off" disabled>Open (soon)</button><button class="btn off" disabled>Mark done (soon)</button></div></div>';
+
+  html+=deliveriesCard(d.deliveries);   // time-sensitive (someone has to open the door), so right under the hero
 
   // On-demand action list — who to pay / invoices to process / overdue / receipts. Lives on its
   // own page (action-center.html) so it's reachable from here AND the Hub Dev Log; each item there
