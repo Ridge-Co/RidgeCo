@@ -40173,7 +40173,7 @@ async function inspBookRequest(env, body) {
     // 3b) Keep the day's single "Key pickup" block on the calendar in step with the earliest booking.
     notify.push(...await inspReconcileKeyPickup(env, a.cfg, c, rec.Date));
     // 4) Tell Brett.
-    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
+    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}. Size: ${inspSizeText(rec) || 'not given'}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
     // 4b) Tell the partner their request landed, with the link that lets them check status or cancel later.
     notify.push(...await inspNotifyPartner(env, rec, 'requested'));
