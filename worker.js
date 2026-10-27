@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-26.01-wo-deposit-auto-net';
+const BUILD_VERSION = '2026-10-27.01-delivery-email-watcher';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -165,6 +165,8 @@ const _hubWorkerCore = {
     const path = url.pathname;
     env = __meterReqEnv(env, request, path);   // Oct 19 2026: child env carrying this request's label for the read meter
     env.__STAGING__ = isStaging(env, url);
+    env.__SELF_ORIGIN__ = url.origin;   // the host this request came in on (used to build tenant short links on the right Worker: prod or staging)
+    if (request.method === 'GET' && path.startsWith('/r/') && path.length > 3 && path.indexOf('/', 3) < 0) return await deliveryShortRedirect(env, path.slice(3), request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC tenant short link (stateless, signed); see deliveryShortRedirect
     // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
     // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
     // Throttled, never throws, never runs on production.
@@ -175,6 +177,7 @@ const _hubWorkerCore = {
     // (Aug 20, 2026) to tell "Brett/admin creating a WO from the Hub" (always allowed) apart
     // from "a tenant creating their own WO via submit.html" (gated).
     let callerRole = null;
+    let _idEmail = '';   // set when POST /intake/delivery-email was signed in with a verified Google identity token
     // The verified session's own id (Tenant.ID / Owner.ID / Vendor.ID, matching whichever
     // role was issued) — set alongside callerRole below. Session-identity hardening (Sep 16
     // 2026, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A): the /workorder
@@ -241,6 +244,8 @@ const _hubWorkerCore = {
       // Tenant fix-check page (Oct 16 2026): public at the gate, but every handler self-verifies the signed, expiring fix-check token (scope 'fix-check',
       // hash-checked against WO_Followups.Token_Hash, bound to ONE follow-up and ONE tenant) before reading or writing anything.
       '/fix/page','/fix/answer','/fix/upload-session','/fix/log-attachment',
+      // Tenant delivery RSVP (Oct 23 2026 addendum): public at the gate; both handlers verify the signed per-delivery token (HMAC off WORKER_SECRET), rate limit, and answer a bad/expired link with one friendly message.
+      '/delivery/rsvp',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
       '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
@@ -347,14 +352,27 @@ const _hubWorkerCore = {
         const _alertPushOk = alertPushTokenOk(env.ALERT_PUSH_TOKEN, _tok, request.method, path);
         // Narrow WRITE token for the Buildium email poller (B-103, Oct 12 2026): the Apps Script in
         // brett@'s mailbox POSTs each Buildium work-order email to /intake/email. Accepted ONLY for
-        // that one path. The handler itself creates a Work Order only after parsing + matching the
+        // that one path (Oct 23 2026: and, with the same token, POST /intake/delivery-email for the store delivery-email
+        // watcher, which writes a Deliveries row, at most one install WO and texts Brett; no other path). The handler itself creates a Work Order only after parsing + matching the
         // email to a real property, and parks everything uncertain, so a leaked token can at worst
         // inject a parked/created WO and learn (via dry_run) which property/unit/tenant IDs an
         // address maps to - it reaches nothing else. Fully inert unless env.INTAKE_TOKEN is set,
         // so deploying this changes nothing until the secret exists.
         const _intakeOk = !!env.INTAKE_TOKEN
           && _tok === env.INTAKE_TOKEN
-          && request.method === 'POST' && path === '/intake/email';
+          && request.method === 'POST' && (path === '/intake/email' || path === '/intake/delivery-email');
+        // Oct 23 2026: the delivery watcher can sign in with the mailbox owner's Google identity token instead of a shared secret (Authorization: Bearer <OpenID token>); see deliveryVerifyIdToken.
+        // Bad / expired / forged / not-allow-listed tokens all fall through to the same 401 as any other unknown caller, but each kind is reported (not silent, rate-limited).
+        let _idOk = false;
+        if (!_intakeOk && request.method === 'POST' && path === '/intake/delivery-email') {
+          const _bm = /^Bearer\s+(\S+)$/i.exec(request.headers.get('Authorization') || '');
+          if (_bm) {
+            const _v = await deliveryVerifyIdToken(env, _bm[1]);
+            if (_v.ok) { _idOk = true; _idEmail = _v.email; }
+            else if (_v.unavailable) return json({ error: 'Sign-in check unavailable. Please retry shortly.' }, 503);
+            else await deliveryAuthAlert(env, 'rejected_' + _v.reason, 'P1', 'A delivery e-mail sign-in was refused (' + _v.reason + (_v.email_hint ? ', ' + _v.email_hint : '') + '). If this was the real Apps Script, check Config Delivery_Mailboxes or re-run its setup; if not, someone is probing the route.');
+          }
+        }
         // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
         // a Cowork session run real read+write+read-back checks against
         // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
@@ -489,7 +507,7 @@ const _hubWorkerCore = {
           const _schedAuth = _hubTestOk ? { ok: false } : await schedAuthCheck(env, _tok, request.method, path);
           if (_schedAuth.error) return json({ error: 'scheduler auth unavailable: could not read the Config sheet (' + _schedAuth.error + ')' }, 503);
           const _schedOk = _schedAuth.ok;
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_idOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -669,6 +687,7 @@ const _hubWorkerCore = {
         if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
         if (path === '/fix/page')               return await fixPage(env, url);                // PUBLIC, token-verified (tenant fix-check)
+        if (path === '/delivery/rsvp')          return await deliveryRsvpGet(env, url, request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/followup/preview')       return await followupPreview(env, url);        // ADMIN-ONLY: no ROLE_SCOPES entry; read-only, never sends
         if (path === '/followup/list')          return await followupList(env, url);           // ADMIN-ONLY
         if (path === '/proposal/signatures')    return await proposalList(env, url);
@@ -780,6 +799,7 @@ const _hubWorkerCore = {
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
         if (path === '/fix/answer')               return await fixAnswer(env, body);              // PUBLIC, token-verified
+        if (path === '/delivery/rsvp')            return await deliveryRsvpPost(env, url, body, _clientIP || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/fix/upload-session')       return await fixUploadSession(env, body);       // PUBLIC, token-verified
         if (path === '/fix/log-attachment')       return await fixLogAttachment(env, body);       // PUBLIC, token-verified
         if (path === '/followup/send')            return await followupSend(env, body, url);     // ADMIN-ONLY: Brett's tap on Send in the preview
@@ -810,6 +830,7 @@ const _hubWorkerCore = {
         }
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
+        if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
@@ -7974,6 +7995,7 @@ async function intakeSmsAdmin(env, message, woId, property) {
     const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_alert', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, property: property || null, message_body: message, bypassQuietHours: true });
     if (r && r.sent) return 'sent';
     if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    if (env.__STAGING__ ?? isStaging(env)) return 'STAGING STUB: the text was logged only, nothing was sent (this is the test server)';
     return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
   } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
 }
@@ -16336,8 +16358,12 @@ async function smsGatedSend(env, opts) {
   // the send, so a failed status save afterwards can never leave a sent text looking "pending" and be sent again.
   const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
   const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
-  const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
-  const _holdNow = !!(_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk);
+  let _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+  let _holdNow = !!(_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk);
+  // opts.holdUntil (Oct 23 2026, delivery tenant request): a caller may hold THIS text to a later batch slot (ISO string). The text is queued exactly like a
+  // quiet-hours hold (Status pending + Send_After) and released by the same sweep, which re-checks every gate at release. It can only delay a text, never advance one.
+  const _batchHold = opts.holdUntil ? new Date(opts.holdUntil) : null;
+  if (_batchHold && !isNaN(_batchHold) && _batchHold > new Date() && (!_holdNow || _batchHold > _holdUntil)) { _holdUntil = _batchHold; _holdNow = true; }
   const _sendNow = !!(sendOk && recipientPhone && !_holdNow);
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
@@ -16470,7 +16496,7 @@ async function mqSendQueuedRowInner(env, row, deliverTo, extraFields) {
   let result;
   if (!dc.ok) { await smsReportRegionBlocked(env, id, dc); result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dc.reason + ')' }; }
   else {
-    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', allowRepeat: String(row.Recipient_Type || '') === 'admin', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
+    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', allowRepeat: String(row.Recipient_Type || '') === 'admin' || String(row.Message_Type || '') === 'delivery_tenant_notice', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
     catch (e) { result = { error: 'no answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200)); }
   }
   const o = smsSendOutcome(result);
@@ -16643,6 +16669,14 @@ async function processQuietHoursQueue(env) {
       } catch (e) {
         try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
       }
+    }
+    // Oct 23 2026: a batch-held tenant delivery notice is released at 6pm ET (the last window). If the sweep runs late and it is already quiet
+    // hours, push it to the next 9am rather than text a tenant at night. (Other held texts keep their old behaviour.)
+    if (row.Message_Type === 'delivery_tenant_notice' && isQuietHoursNow(now)) {
+      const nx = nextQuietHoursEnd(now).toISOString();
+      await updateMessageQueueRow(env, id, { Send_After: nx, Gate_Snapshot: String(row.Gate_Snapshot || '') + ' (released late in quiet hours, moved to ' + nx + ')' });
+      results.push({ id, sent: false, held: true, send_after: nx });
+      continue;
     }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
@@ -26933,6 +26967,19 @@ async function hubTestWriteAllowed(env, path, body) {
     const _okProp = String((_a.property && _a.property.Access_Notes) || '').startsWith('TEST-');
     return { ok: _okProp, debug: _okProp ? undefined : 'intake-guard: email resolves to a non-TEST property ' + (_a.property && _a.property.ID) };
   }
+  // Delivery email watcher (Oct 23 2026): staging-only token. The message id must be TEST- prefixed, and when the email resolves to a real
+  // property it must be a TEST- one (Access_Notes marker, same as /workorder). Parked / unmatched outcomes write only a Deliveries row + the alert.
+  if (path === '/intake/delivery-email') {
+    const _mid = String((body && (body.rfc_message_id || body.message_id || body.gmail_id)) || '');
+    if (!_mid.startsWith('TEST-')) return { ok: false, debug: 'delivery-intake-guard: message_id must start with TEST-' };
+    const _p = deliveryParseEmail({ subject: String(body.subject || ''), body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: body.received_at });
+    if (!_p.address) return { ok: true };
+    const [_props, _units, _tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+    const _pl = deliveryMatchPlace(_p.address, _p.unit_raw, _props, _units, _tenants);
+    if (_pl.status !== 'matched') return { ok: true };
+    const _okProp = String(_pl.property.Access_Notes || '').startsWith('TEST-');
+    return { ok: _okProp, debug: _okProp ? undefined : 'delivery-intake-guard: email resolves to a non-TEST property ' + _pl.property.ID };
+  }
   if (path === '/intake/retry') {
     const _q = (await fetchTab(env, INTAKE_TAB).catch(() => [])).find(r => String(r.ID) === String(body && body.id));
     if (!_q || !String(_q.Message_ID || '').startsWith('TEST-')) return { ok: false, debug: 'intake-guard: retry row is not a TEST- message' };
@@ -33998,7 +34045,13 @@ const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
 // A Delivery record is the spine: what was ordered, where it's going, who meets it,
 // and which WO(s) it belongs to. SAFE class — no Twilio, no money, no customer send.
 // Tab self-provisions (mirrors the Trash pattern) so first use just works.
-const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active'];
+const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active',
+  // Oct 23 2026 email watcher: every Message-ID seen for the order, last email applied (kind/time/signature), "N stops away", tenant-notice bookkeeping, result of Brett's last text.
+  'Seen_Message_IDs','Last_Event','Last_Event_At','Last_Event_Sig','Stops_Away','Tenant_Notice_Sig','Tenant_Notice_Status','Tenant_Notice_Draft','Brett_SMS_Status',
+  // Oct 23 2026 addendum: tenant RSVP (blank | Confirmed | Declined | Unsure), when the request text was handed to the text gate, and a claim marker that stops two mailboxes double-alerting on one update.
+  'Tenant_RSVP','Tenant_RSVP_At','Tenant_RSVP_Note','Tenant_Notice_Sent_At','Event_Claim',
+  // Oct 23 2026: the Hub writes the calendar event itself (as Brett): its Google event id (so a move/cancel finds it) and the last result.
+  'Calendar_Event_ID','Calendar_Status'];
 
 async function ensureDeliveryTab(env) {
   const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
@@ -34035,6 +34088,7 @@ async function deliveriesList(env, url) {
       backup_contact: d.Backup_Contact || '', backup_phone: d.Backup_Phone || '',
       notes: d.Delivery_Notes || '', linked_wo_ids: d.Linked_WO_IDs || '',
       status: d.Status || 'Ordered', source: d.Source || '',
+      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '', tenant_notice_status: d.Tenant_Notice_Status || '', calendar_status: d.Calendar_Status || '', calendar_event_id: d.Calendar_Event_ID || '',
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
@@ -34109,6 +34163,1299 @@ async function deliveryRelay(env, body) {
   try { await logSMS(env, (d.Linked_WO_IDs || '').split(',')[0] || '', 'delivery_relay', id, targetPhone, message); } catch (_) {}
   return json({ success: true, sms_sent: smsSent, email_sent: emailSent, phone: targetPhone, email: tenantEmail });
 }
+
+// ── Delivery EMAIL watcher, Hub side (Phase 1, Oct 23 2026) ──────────────────────────────────────────────
+// context/DELIVERY_SYSTEM_BUILD_BRIEF_v1.0.md section 7 + the Oct 23 spec. The Apps Script in info@ (apps-script/delivery-intake/)
+// forwards every store email here: POST /intake/delivery-email {subject, body, html?, from, message_id, received_at, mailbox, dry_run?}.
+// Auth: the narrow INTAKE_TOKEN (same one /intake/email uses), accepted for that exact path only.
+//
+// This file section has two halves:
+//   1. DELIVERY-EMAIL-PURE (below): the parser and every decision that needs no Sheets. Pure functions, unit-tested
+//      directly in test/delivery-email-intake.test.mjs. ALL wording the parser keys on lives in ONE table, DEP.
+//   2. The handler (deliveryEmailIntake, further down): matching, records, texts, calendar object.
+//
+// No real delivery-scheduling email existed when this was written (Brett's mailbox only had receipts), so every pattern
+// below is written from Home Depot's / Lowe's typical wording and is deliberately TOLERANT. When the first real email
+// arrives, tighten DEP and add that email as a fixture. An email from a store sender that mentions an order or a delivery
+// but matches no kind is NEVER dropped: it is parked (Deliveries row, Status "Needs Review") and Brett is texted.
+// ═══ DELIVERY-EMAIL-PURE-START ═══
+const DELIVERY_SENDER_DOMAINS_DEFAULT = 'homedepot.com,lowes.com,acehardware.com,walmart.com';
+const DELIVERY_STORE_NAMES = { 'homedepot.com': 'Home Depot', 'lowes.com': "Lowe's", 'acehardware.com': 'Ace Hardware', 'walmart.com': 'Walmart' };
+// Status only ever moves RIGHT along this line (except reschedule -> Scheduled, cancel -> Cancelled).
+const DELIVERY_STATUS_ORDER = ['Ordered', 'Scheduled', 'Window-Set', 'En-Route', 'Approaching', 'Arrived', 'Delivered'];
+const DELIVERY_KIND_STATUS = { order_confirmation: 'Ordered', scheduled: 'Scheduled', window_set: 'Window-Set', en_route: 'En-Route', approaching: 'Approaching', delivered: 'Delivered', reschedule: 'Scheduled', cancel: 'Cancelled' };
+
+// THE PATTERNS TABLE. Everything the parser keys on is here. Tighten after the first real email.
+const DEP = {
+  // Kind detection. For each kind: `strong` runs on subject AND body, `subj` only on the subject.
+  // The subject is read first (first kind found wins); only if it names no kind is the body read.
+  // Within one text the kinds are tried in this order (DEP_KIND_ORDER).
+  kinds: {
+    cancel: {
+      strong: [/\b(?:has|have|was|been)\s+(?:been\s+)?cancel+ed\b/i, /\border\s+cancel+ation\b/i, /\bcancel+ation\s+(?:confirmation|notice)\b/i, /\bwe(?:'|’)?ve\s+cancel+ed\b/i, /\bdelivery\s+cancel+ed\b/i],
+      subj: [/\bcancel/i],
+    },
+    delivered: {
+      strong: [/\b(?:was|has\s+been|been|successfully)\s+delivered\b/i, /\bdelivery\s+(?:is\s+)?complete(?:d)?\b/i, /\bdelivered\s+(?:on|at|today)\b/i],
+      subj: [/\bdelivered\b/i],
+    },
+    reschedule: {   // past tense only: "need to reschedule? call us" is footer text on ordinary scheduled emails
+      strong: [/\b(?:has\s+been|was|been)\s+rescheduled\b/i, /\brescheduled\s+(?:for|to)\b/i, /\bdelivery\s+rescheduled\b/i, /\bnew\s+delivery\s+date\b/i, /\bdelivery\s+(?:date\s+)?(?:has\s+been|was)\s+(?:changed|updated|moved)\b/i, /\bwe(?:'|\u2019)?ve\s+(?:changed|updated|moved|rescheduled)\s+your\s+delivery\b/i],
+      subj: [/\breschedul/i],
+    },
+    approaching: {   // also carries the "N stops away" number
+      strong: [/\b(\d{1,2})\s+stops?\s+away\b/i, /\bnext\s+stop\b/i, /\byou(?:'|’)?re\s+next\b/i],
+      subj: [],
+    },
+    en_route: {
+      strong: [/\bon\s+(?:its|the)\s+way\b/i, /\bout\s+for\s+delivery\b/i, /\bdriver\s+is\s+(?:on|en)\b/i, /\ben\s+route\b/i, /\barriving\s+(?:soon|today)\b/i],
+      subj: [],
+    },
+    window_set: {
+      strong: [/\bdelivery\s+(?:time\s+)?window\b/i, /\barrival\s+window\b/i, /\barrive\s+between\b/i, /\bbetween\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:and|to|-|–)\s*\d{1,2}(?::\d{2})?\s*(?:a|p)\.?m\.?/i],
+      subj: [],
+    },
+    scheduled: {
+      strong: [/\bscheduled\s+for\s+delivery\b/i, /\bdelivery\s+date\b/i, /\bdelivery\s+(?:is|has\s+been)\s+scheduled\b/i, /\bscheduled\s+delivery\b/i, /\bdelivery\s+scheduled\b/i, /\bwe(?:'|’)?ve\s+scheduled\b/i],
+      subj: [],
+    },
+    order_confirmation: {
+      strong: [/\border\s+confirmation\b/i, /\bthank\s+you\s+for\s+your\s+(?:order|purchase)\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i, /\byour\s+order\s+(?:has\s+been|was)\s+(?:placed|received)\b/i],
+      subj: [],
+    },
+    // Weakest signal, tried last: "track your delivery" shows up in confirmations too.
+    en_route_weak: {
+      strong: [/\btrack(?:ing)?\s+(?:your\s+)?(?:delivery|order|driver)\b/i, /\blive\s+tracking\b/i],
+      subj: [],
+    },
+  },
+  // Body-only emails that carry BOTH a confirmation phrase from this list and a date/window phrase are read as confirmations
+  // (the date is still saved). "Thank you for your order" alone is not enough: scheduled emails say it too.
+  confirmationOverride: [/\border\s+confirmation\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i],
+  // Marketing. Only matters when the email carries NO order number (a real order email is never promo).
+  promo: [/\b\d{1,3}\s?%\s+off\b/i, /\bsave\s+(?:up\s+to\s+)?\$?\d/i, /\bshop\s+now\b/i, /\bspecial\s+offers?\b/i, /\blimited[-\s]time\b/i, /\bblack\s+friday\b/i, /\bclearance\b/i, /\bdoorbusters?\b/i, /\bcoupons?\b/i, /\bexclusive\b/i, /\bsales?\b/i, /\bdeals?\b/i, /\bnew\s+arrivals\b/i, /\bgift\s+cards?\b/i, /\brewards?\b/i, /\bbuy\s+now\b/i, /\bnewsletter\b/i, /\bview\s+(?:this\s+)?(?:email\s+)?in\s+(?:your\s+)?browser\b/i],
+  unsubscribe: /\bunsubscribe\b/i,
+  // A promo-looking email with no order number still gets through when its SUBJECT names one of these kinds.
+  promoOverrideKinds: ['delivered', 'en_route', 'approaching', 'reschedule', 'cancel'],
+  // "This email is about an order or a delivery" (used only to decide park-vs-ignore when no kind matched).
+  mentionsOrder: /\b(?:your\s+order|order\s*(?:#|number|no\b)|deliver(?:y|ies|ed|ing)?\b|shipment|shipped)/i,
+  // Order numbers. First the store formats, then a labelled fallback ("Order #...", "Order Number:", "Order No.").
+  orderStore: [/\bH\d{4}-\d{6}\b/i, /\bW\d{9}\b/i, /\bCM\d{8}\b/i],
+  orderLabel: /\border\s*(?:#|number|no\.?|num\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{5,19})\b/gi,
+  // Item type -> the vocabulary deliveries.html's item dropdown already uses.
+  items: [
+    [/\bwater\s+heaters?\b/i, 'Water heater'], [/\bmicrowaves?\b/i, 'Microwave'], [/\bdishwashers?\b/i, 'Dishwasher'],
+    [/\b(?:refrigerators?|fridges?)\b/i, 'Refrigerator'], [/\bfreezers?\b/i, 'Other'], [/\b(?:ranges?|stoves?|ovens?|cooktops?)\b/i, 'Range'],
+    [/\bwashers?\b/i, 'Washer'], [/\bdryers?\b/i, 'Dryer'],
+  ],
+  // Text removed before the item scan so "price range" / "over-the-range microwave" do not read as a range.
+  itemNoise: [/over[-\s]the[-\s]range/gi, /microwave\s+oven/gi, /\b(?:price|time|date|temperature|delivery)\s+range\b/gi, /\brange\s+of\b/gi, /\bwithin\s+range\b/gi],
+  // Where the item scan stops (cross-sell blocks list other appliances).
+  itemStop: /you\s+may\s+also\s+like|recommended\s+for\s+you|customers\s+also\s+(?:bought|viewed)|related\s+items|frequently\s+bought/i,
+  brands: ['Whirlpool', 'GE', 'Samsung', 'LG', 'Frigidaire', 'Maytag', 'Kenmore', 'Amana', 'Hotpoint', 'Bosch', 'Haier', 'Midea', 'Electrolux', 'KitchenAid', 'Insignia', 'Danby', 'Avanti', 'Magic Chef', 'Crosley', 'Speed Queen', 'Fisher & Paykel', 'Beko', 'Café', 'Cafe', 'Monogram', 'Signature Kitchen'],
+  caseSensitiveBrands: ['GE', 'LG'],
+  modelLabel: /\bmodel\s*(?:#|number|no\.?)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{4,17})\b/i,
+  modelToken: /\b([A-Z]{1,5}\d[A-Z0-9-]{3,16})\b/,
+  // Address.
+  addressLabel: /(?:deliver(?:y|ed)?\s+(?:to|address|location)|ship(?:ping)?\s+(?:to|address)|service\s+address)\s*[:\-]?/gi,
+  addressSkipBefore: /pick\s?up|store\s|return|bill(?:ing)?\s+(?:to|address)|sold\s+to|from:/i,
+  streetSuffix: 'st|street|ave|avenue|av|rd|road|dr|drive|ln|lane|ct|court|pl|place|blvd|boulevard|way|ter|terrace|cir|circle|pkwy|parkway|hwy|highway|sq|square|trl|trail',
+  unitWord: 'apt|apartment|unit|ste|suite|bldg|fl|floor',
+  // Dates and windows.
+  dateKeywords: [
+    /new\s+delivery\s+date/gi, /delivery\s+date/gi, /scheduled\s+(?:for|delivery)(?:\s+on)?/gi, /deliver(?:y|ed)?\s+(?:on|is\s+scheduled\s+for)/gi, /will\s+(?:be\s+)?deliver(?:ed)?(?:\s+on)?/gi,
+    /arriv(?:e|es|ing|al)(?:\s+on)?/gi, /estimated\s+delivery/gi, /expected(?:\s+delivery)?/gi,
+    /deliver(?:y|ed|ies)?/gi,   // weakest, tried last
+  ],
+  dateAfterWindowChars: 140,
+  dateSkipBefore: /(?:order(?:ed)?\s+(?:date|on|placed)|placed\s+on|purchased|order\s+date)\s*[:\-]?\s*$/i,
+  // How far in the past a year-less date may sit before it rolls to next year (late-processed "delivered" mail).
+  pastGraceDays: 14,
+};
+const DEP_KIND_ORDER = ['cancel', 'delivered', 'reschedule', 'approaching', 'en_route', 'window_set', 'scheduled', 'order_confirmation', 'en_route_weak'];
+const DEP_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+
+// HTML -> text. Keeps line breaks (the address parser reads lines); never turns &lt; back into a tag.
+function deliveryEmailText(body, html) {
+  let t = String(body == null ? '' : body);
+  const looksHtml = /<\/?[a-z][^>]*>/i.test(t);
+  if ((t.replace(/\s/g, '').length < 40 || looksHtml) && (html || looksHtml)) {
+    t = String(looksHtml && !html ? t : (html || t));
+    t = t.slice(0, 250000).replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(?:p|div|tr|li|h[1-6]|table|td|th)>/gi, '\n').replace(/<[^>]{0,500}>/g, ' ');
+  }
+  return t.slice(0, 250000).replace(/&nbsp;| /g, ' ').replace(/&#39;|&apos;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;|&gt;/g, ' ').replace(/&#(\d{2,4});/g, (m, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&')
+    .replace(/\r\n?/g, '\n').replace(/[ \t\f\v]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// The real sender address (bare, or the LAST <...> of "Name <addr>") must be on an allowed domain or a subdomain of one.
+// A display name like "Home Depot homedepot.com" <x@evil.io> must not pass. domainsCsv defaults to the built-in list.
+function deliverySenderDomain(from, domainsCsv) {
+  const s = String(from == null ? '' : from).toLowerCase().slice(0, 300).trim();
+  const m = /<\s*([^<>\s@]{1,64}@[a-z0-9.-]{3,200})\s*>\s*$/.exec(s) || /^([^<>\s@"]{1,64}@[a-z0-9.-]{3,200})$/.exec(s);
+  if (!m) return '';
+  const host = m[1].split('@')[1].replace(/\.+$/, '');
+  const allowed = String(domainsCsv || DELIVERY_SENDER_DOMAINS_DEFAULT).toLowerCase().split(/[,\s;]+/).map(x => x.trim().replace(/^@/, '')).filter(Boolean);
+  for (const d of allowed) if (host === d || host.endsWith('.' + d)) return d;
+  return '';
+}
+
+function deliveryParseOrderNumber(text) {
+  for (const re of DEP.orderStore) { const m = re.exec(text); if (m) return m[0].toUpperCase(); }
+  DEP.orderLabel.lastIndex = 0;
+  let m;
+  while ((m = DEP.orderLabel.exec(text))) {
+    const v = m[1].toUpperCase();
+    if (/\d/.test(v) && !/^\d{1,2}$/.test(v)) return v.replace(/-+$/, '');
+  }
+  return '';
+}
+
+function deliveryDetectKind(text, isSubject) {
+  for (const k of DEP_KIND_ORDER) {
+    const def = DEP.kinds[k];
+    const pats = isSubject ? def.strong.concat(def.subj) : def.strong;
+    for (const re of pats) { const m = re.exec(text); if (m) return { kind: k === 'en_route_weak' ? 'en_route' : k, weak: k === 'en_route_weak', match: m }; }
+  }
+  return null;
+}
+
+function deliveryParseItem(flat) {
+  let t = flat; const stop = DEP.itemStop.exec(t); if (stop) t = t.slice(0, stop.index);
+  for (const re of DEP.itemNoise) t = t.replace(re, ' ');
+  let best = null; const found = [];
+  for (const [re, label] of DEP.items) { const m = re.exec(t); if (m) { found.push({ idx: m.index, label }); if (!best || m.index < best.idx) best = { idx: m.index, label }; } }
+  const others = [...new Set(found.filter(f => !best || f.label !== best.label).map(f => f.label))];
+  return { item_type: best ? best.label : '', also: others, scan: t };
+}
+
+function deliveryParseMakeModel(scan, orderNo) {
+  let brand = '', bidx = -1;
+  for (const b of DEP.brands) {
+    const cs = DEP.caseSensitiveBrands.indexOf(b) >= 0;
+    const re = new RegExp('(?:^|[^A-Za-z])(' + b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?![A-Za-z])', cs ? '' : 'i');
+    const m = re.exec(scan);
+    if (m) { const idx = m.index + m[0].indexOf(m[1]); if (bidx < 0 || idx < bidx) { bidx = idx; brand = m[1].length <= 2 ? m[1].toUpperCase() : b; } }
+  }
+  const okModel = v => v && /[A-Za-z]/.test(v) && /\d/.test(v) && v.toUpperCase() !== String(orderNo || '').toUpperCase() && !/^H\d{4}-\d{6}$/i.test(v) && !/^W\d{9}$/i.test(v);
+  let model = '';
+  const lm = DEP.modelLabel.exec(scan);
+  if (lm && okModel(lm[1])) model = lm[1].toUpperCase();
+  if (!model) {
+    const region = bidx >= 0 ? scan.slice(bidx, bidx + 220) : scan.slice(0, 400);
+    const re = new RegExp(DEP.modelToken.source, 'g'); let tm;
+    while ((tm = re.exec(region))) { if (okModel(tm[1])) { model = tm[1]; break; } }
+  }
+  return { brand, model, make_model: [brand, model].filter(Boolean).join(' ') };
+}
+
+function deliveryParseAddress(flat) {
+  const suf = DEP.streetSuffix, uw = DEP.unitWord;
+  const streetRe = new RegExp("\\b(\\d{1,6}\\s+(?:[NSEW]\\.?\\s+|North\\s+|South\\s+|East\\s+|West\\s+)?(?:[A-Za-z0-9.'\\u2019-]+\\s+){0,4}(?:" + suf + ")\\b\\.?)(?:\\s*[,.]?\\s*((?:" + uw + ")\\.?\\s*#?\\s*[A-Za-z0-9-]+|#\\s*[A-Za-z0-9-]+))?", 'i');
+  const tailRe = /^[,\s]+([A-Za-z][A-Za-z .'-]{1,30}?)[,\s]+([A-Z]{2})[,\s]+(\d{5})(?:-\d{4})?/;
+  const build = (seg, offset) => {
+    const m = streetRe.exec(seg); if (!m) return null;
+    const after = seg.slice(m.index + m[0].length);
+    const t = tailRe.exec(after);
+    const street = m[1].replace(/\s+/g, ' ').replace(/[.,]+$/, '').trim();
+    const unit = (m[2] || '').replace(/\s+/g, ' ').replace(/^#\s*/, 'Unit ').trim();
+    const addr = street + (unit ? ' ' + unit : '') + (t ? ', ' + t[1].trim() + ', ' + t[2] + ' ' + t[3] : '');
+    return { address: addr, unit_raw: unit, has_zip: !!t, index: offset + m.index };
+  };
+  DEP.addressLabel.lastIndex = 0; let lm;
+  while ((lm = DEP.addressLabel.exec(flat))) {
+    const start = lm.index + lm[0].length;
+    const r = build(flat.slice(start, start + 240), start);
+    if (r) return r;
+  }
+  const re = new RegExp(streetRe.source, 'gi'); let m;
+  while ((m = re.exec(flat))) {
+    const before = flat.slice(Math.max(0, m.index - 60), m.index);
+    if (DEP.addressSkipBefore.test(before)) continue;
+    const r = build(flat.slice(m.index, m.index + 240), m.index);
+    if (r && r.has_zip) return r;
+  }
+  return { address: '', unit_raw: '', has_zip: false, index: -1 };
+}
+
+// Date helpers. All dates are plain 'YYYY-MM-DD' strings; arithmetic goes through UTC noon so no zone can shift a day.
+function deliveryIsoDate(y, m, d) { return String(y).padStart(4, '0') + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'); }
+function deliveryDayNum(iso) { return Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000); }
+function deliveryAddDays(iso, n) { const t = new Date((deliveryDayNum(iso) + n) * 86400000 + 12 * 3600000); return deliveryIsoDate(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()); }
+function deliveryValidDate(y, m, d) { if (m < 1 || m > 12 || d < 1 || d > 31) return false; const t = new Date(Date.UTC(y, m - 1, d, 12)); return t.getUTCMonth() === m - 1 && t.getUTCDate() === d; }
+// The date part of an ISO instant in Eastern time (received_at is UTC; an evening email belongs to that ET day).
+function deliveryEtDate(iso) {
+  const d = new Date(iso); if (isNaN(d)) return '';
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+// A date with no year: nearest FUTURE occurrence relative to received_at (ET), allowing a short grace into the past.
+function deliveryInferYear(m, d, recvIso) {
+  const recv = deliveryEtDate(recvIso) || deliveryEtDate(new Date().toISOString());
+  const ry = +recv.slice(0, 4), rn = deliveryDayNum(recv);
+  for (const y of [ry - 1, ry, ry + 1, ry + 2]) {
+    if (!deliveryValidDate(y, m, d)) continue;
+    const diff = deliveryDayNum(deliveryIsoDate(y, m, d)) - rn;
+    if (diff >= -DEP.pastGraceDays) return deliveryIsoDate(y, m, d);
+  }
+  return '';
+}
+function deliveryDateCandidates(flat, recvIso) {
+  const out = [];
+  const monthRe = /(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+)?\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(20\d{2}))?/gi;
+  let m;
+  while ((m = monthRe.exec(flat))) {
+    const mo = DEP_MONTHS[m[1].toLowerCase()], d = +m[2];
+    const iso = m[3] ? (deliveryValidDate(+m[3], mo, d) ? deliveryIsoDate(+m[3], mo, d) : '') : deliveryInferYear(mo, d, recvIso);
+    if (iso) out.push({ idx: m.index, end: m.index + m[0].length, iso });
+  }
+  const isoRe = /\b(20\d{2})-(\d{2})-(\d{2})\b/g;
+  while ((m = isoRe.exec(flat))) { if (deliveryValidDate(+m[1], +m[2], +m[3])) out.push({ idx: m.index, end: m.index + m[0].length, iso: m[0] }); }
+  const slashRe = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?\b/g;
+  while ((m = slashRe.exec(flat))) {
+    const mo = +m[1], d = +m[2];
+    let iso = '';
+    if (m[3]) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; if (deliveryValidDate(y, mo, d)) iso = deliveryIsoDate(y, mo, d); }
+    else if (deliveryValidDate(2024, mo, d)) iso = deliveryInferYear(mo, d, recvIso);
+    if (iso) out.push({ idx: m.index, end: m.index + m[0].length, iso });
+  }
+  out.sort((a, b) => a.idx - b.idx);
+  return out;
+}
+// The delivery date: the first date that follows a delivery keyword (strongest keyword first). Order/placed dates never count.
+function deliveryParseDate(flat, recvIso) {
+  const cands = deliveryDateCandidates(flat, recvIso);
+  const recv = deliveryEtDate(recvIso);
+  for (const kwRe of DEP.dateKeywords) {
+    const re = new RegExp(kwRe.source, 'gi'); let km;
+    while ((km = re.exec(flat))) {
+      const kend = km.index + km[0].length;
+      const c = cands.find(x => x.idx >= kend - 1 && x.idx <= kend + DEP.dateAfterWindowChars && !DEP.dateSkipBefore.test(flat.slice(Math.max(0, x.idx - 40), x.idx)));
+      if (c) return c.iso;
+      const rel = /^[\s:,-]*(?:\w+\s+){0,3}?(today|tomorrow)\b/i.exec(flat.slice(kend, kend + 50));
+      if (rel && recv) return rel[1].toLowerCase() === 'today' ? recv : deliveryAddDays(recv, 1);
+      const relBefore = /\b(today|tomorrow)\b[^.]{0,30}$/i.exec(flat.slice(Math.max(0, km.index - 40), km.index));
+      if (relBefore && recv) return relBefore[1].toLowerCase() === 'today' ? recv : deliveryAddDays(recv, 1);
+    }
+  }
+  return '';
+}
+
+// "between 9:00 AM and 1:00 PM" / "9am-1pm" / "8 AM - 12 PM" / "11 AM - 3 PM" -> "9a-1p" style (deliveries.html). '' when none.
+function deliveryParseWindow(flat) {
+  const T = '(\\d{1,2})(?::(\\d{2}))?\\s*(?:([ap])\\.?m\\.?)?';
+  const re = new RegExp('(?:between\\s+)?' + T + '\\s*(?:and|to|-|\\u2013|\\u2014)\\s*' + T, 'gi');
+  let m;
+  const fmt = (h, mi, ap) => String(h) + (mi && mi !== '00' ? ':' + mi : '') + ap;
+  while ((m = re.exec(flat))) {
+    const h1 = +m[1], m1 = m[2], a1raw = (m[3] || '').toLowerCase(), h2 = +m[4], m2 = m[5], a2raw = (m[6] || '').toLowerCase();
+    if (!a1raw && !a2raw) continue;                             // "8-12" with no am/pm anywhere is not a window
+    if (h1 < 1 || h1 > 12 || h2 < 1 || h2 > 12) continue;
+    const a2 = a2raw || a1raw;
+    let a1 = a1raw;
+    if (!a1) {                                                  // "11 - 3 PM": the first hour borrows the suffix unless that would run backwards
+      const t1 = (h1 % 12) + (a2 === 'p' ? 12 : 0), t2 = (h2 % 12) + (a2 === 'p' ? 12 : 0);
+      a1 = t1 <= t2 ? a2 : (a2 === 'p' ? 'a' : 'p');
+    }
+    return fmt(h1, m1, a1) + '-' + fmt(h2, m2, a2);
+  }
+  return '';
+}
+// "9a-1p" -> {start:[h,m], end:[h,m]} in 24h.
+function deliveryWindowTimes(win) {
+  const m = /^(\d{1,2})(?::(\d{2}))?([ap])-(\d{1,2})(?::(\d{2}))?([ap])$/.exec(String(win || ''));
+  if (!m) return null;
+  const to24 = (h, ap) => (+h % 12) + (ap === 'p' ? 12 : 0);
+  return { start: [to24(m[1], m[3]), +(m[2] || 0)], end: [to24(m[4], m[6]), +(m[5] || 0)] };
+}
+function deliveryParseStops(flat) {
+  const m = /\b(\d{1,2})\s+stops?\s+away\b/i.exec(flat);
+  if (m) return +m[1];
+  if (/\bnext\s+stop\b|\byou(?:'|’)?re\s+next\b/i.test(flat)) return 0;
+  return null;
+}
+
+// The whole parse. Pure. Returns:
+// { kind, store, order_number, item_type, make_model, address, unit_raw, expected_date, expected_window, stops_away, missing[], notes[], reason }
+// kind is one of order_confirmation|scheduled|window_set|en_route|approaching|delivered|reschedule|cancel|not_delivery|unknown.
+function deliveryParseEmail(msg) {
+  const subject = String((msg && msg.subject) || '').slice(0, 500);
+  const text = deliveryEmailText(msg && (msg.body != null ? msg.body : msg.text), msg && msg.html);
+  const flat = (subject + ' \n ' + text).replace(/\s+/g, ' ');
+  const out = { kind: 'unknown', order_number: '', item_type: '', make_model: '', address: '', unit_raw: '', expected_date: '', expected_window: '', stops_away: null, missing: [], notes: [], reason: '', excerpt: flat.slice(0, 400) };
+  const recvIso = (msg && msg.received_at) || new Date().toISOString();
+  out.order_number = deliveryParseOrderNumber(subject + '\n' + text);
+
+  const sk = deliveryDetectKind(subject, true);
+  const bk = sk ? null : deliveryDetectKind(text, false);
+  let kind = (sk || bk) ? (sk || bk).kind : '';
+  if (!sk && bk && (kind === 'scheduled' || kind === 'window_set') && DEP.confirmationOverride.some(re => re.test(text))) kind = 'order_confirmation';
+  out.kind_source = sk ? 'subject' : (bk ? 'body' : '');
+
+  // Marketing: no order number and (promo wording or an unsubscribe footer), unless the SUBJECT names a live-delivery kind.
+  if (!out.order_number) {
+    const promoHit = DEP.promo.some(re => re.test(flat)) || DEP.unsubscribe.test(flat);
+    if (promoHit && !(sk && DEP.promoOverrideKinds.indexOf(sk.kind) >= 0)) { out.kind = 'not_delivery'; out.reason = 'promotional email (no order number)'; return out; }
+  }
+  if (!kind) {
+    if (out.order_number || DEP.mentionsOrder.test(flat)) { out.kind = 'unknown'; out.reason = 'store email mentions an order or delivery but matches no known kind'; }
+    else { out.kind = 'not_delivery'; out.reason = 'store email with no order or delivery content'; return out; }
+  } else out.kind = kind;
+
+  const it = deliveryParseItem(flat);
+  out.item_type = it.item_type;
+  if (it.also.length) out.notes.push('also mentions: ' + it.also.join(', '));
+  out.make_model = deliveryParseMakeModel(it.scan, out.order_number).make_model;
+  const ad = deliveryParseAddress(flat);
+  out.address = ad.address; out.unit_raw = ad.unit_raw;
+  out.expected_date = deliveryParseDate(flat, recvIso);
+  out.expected_window = deliveryParseWindow(flat);
+  const stops = deliveryParseStops(flat);
+  if (out.kind === 'approaching' || out.kind === 'en_route') out.stops_away = stops;
+  // A scheduled email that also carries a time window IS a window-set email (status Window-Set).
+  if (out.kind === 'scheduled' && out.expected_window) out.kind = 'window_set';
+  // "N stops away" in a mail that otherwise reads en-route is an approaching mail.
+  if (out.kind === 'en_route' && stops !== null && stops <= 20) out.kind = 'approaching';
+
+  if (out.kind !== 'unknown') {
+    if (!out.order_number) out.missing.push('order_number');
+    if (!out.address && ['order_confirmation', 'scheduled', 'window_set', 'reschedule'].indexOf(out.kind) >= 0) out.missing.push('delivery_address');
+    if ((out.kind === 'scheduled' || out.kind === 'reschedule') && !out.expected_date) out.missing.push('expected_date');
+    if (out.kind === 'window_set' && !out.expected_window) out.missing.push('expected_window');
+    if (out.kind === 'order_confirmation' && !out.item_type) out.missing.push('item_type');
+    if (out.kind === 'approaching' && out.stops_away === null) out.missing.push('stops_away');
+  }
+  return out;
+}
+
+// Status only moves forward, except reschedule -> Scheduled and cancel -> Cancelled.
+// Returns {status, changed, anomaly}. anomaly = a note for Brett (e.g. a reschedule on a delivered order); status is then unchanged.
+function deliveryNextStatus(cur, kind) {
+  cur = String(cur || 'Ordered');
+  const want = DELIVERY_KIND_STATUS[kind];
+  if (!want) return { status: cur, changed: false, anomaly: '' };
+  if (cur === 'Needs Review') return { status: want, changed: want !== cur, anomaly: '' };
+  if (cur === 'Cancelled') {
+    if (kind === 'reschedule') return { status: 'Scheduled', changed: true, anomaly: 'order was Cancelled, a reschedule email arrived: reopened' };
+    if (kind === 'cancel') return { status: cur, changed: false, anomaly: '' };
+    return { status: cur, changed: false, anomaly: 'order is Cancelled but a ' + kind + ' email arrived' };
+  }
+  if (cur === 'Delivered') {
+    if (kind === 'delivered') return { status: cur, changed: false, anomaly: '' };
+    if (kind === 'cancel' || kind === 'reschedule') return { status: cur, changed: false, anomaly: 'order is already Delivered but a ' + kind + ' email arrived' };
+    return { status: cur, changed: false, anomaly: '' };   // an older email processed late: nothing to do
+  }
+  if (kind === 'cancel') return { status: 'Cancelled', changed: true, anomaly: '' };
+  if (kind === 'reschedule') return { status: 'Scheduled', changed: cur !== 'Scheduled', anomaly: '' };
+  const ci = DELIVERY_STATUS_ORDER.indexOf(cur), wi = DELIVERY_STATUS_ORDER.indexOf(want);
+  if (ci < 0) return { status: want, changed: true, anomaly: '' };   // an unrecognised hand-typed status: let the email set it
+  return wi > ci ? { status: want, changed: true, anomaly: '' } : { status: cur, changed: false, anomaly: '' };
+}
+
+// Text for Brett's own phone: plain GSM characters only (no emoji, curly quotes, dashes) so it stays one segment where it can.
+function deliveryPlainSms(s, keepNewlines) {
+  return String(s == null ? '' : s).replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"').replace(/[–—−]/g, '-').replace(/…/g, '...').replace(/ /g, ' ')
+    .replace(/[^\x20-\x7e\n]/g, '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, keepNewlines ? '\n' : ' ').trim();
+}
+function deliveryShortDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const t = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12));
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][t.getUTCDay()] + ' ' + (+iso.slice(5, 7)) + '/' + (+iso.slice(8, 10));
+}
+// One concise text per event. o: { event, order, item, make, date, window, address, wo_id, stops, note, store }
+function deliveryBrettText(o) {
+  const lead = { new: 'Delivery order found', scheduled: 'Delivery date set', window_set: 'Delivery window set', reschedule: 'Delivery changed', en_route: 'Delivery on its way', approaching: 'Delivery close', delivered: 'Delivered', cancel: 'Delivery CANCELLED', review: 'DELIVERY EMAIL NEEDS REVIEW', problem: 'Delivery problem' }[o.event] || 'Delivery';
+  const when = [deliveryShortDate(o.date), o.window].filter(Boolean).join(' ');
+  const parts = [lead + (o.order ? ' ' + o.order : ''), o.item || '', when, o.event === 'approaching' && o.stops != null ? (o.stops === 0 ? 'you are next' : o.stops + ' stop' + (o.stops === 1 ? '' : 's') + ' away') : '', o.address || '', o.wo_id ? 'WO ' + o.wo_id : '', o.note || ''].filter(Boolean);
+  let s = deliveryPlainSms(parts.join('. ').replace(/\.\s*\./g, '.'));
+  if (s.length > 300) s = s.slice(0, 297) + '...';
+  return s;
+}
+
+// Tenant notice timing (Oct 23 decision, BACKLOG B-20261023-0302-mb): tenants are batched at 9am / 12pm / 6pm ET; 6pm is the last window.
+// A delivery dated TODAY (ET) is urgent and goes out at once (quiet hours 7pm-9am still apply inside smsGatedSend). Anything else is
+// held to the next allowed slot: today 6pm ET if it is before 6pm now, otherwise tomorrow 9am ET. Returns null (send now) or a Date.
+function deliveryEtWallToUtc(y, m, d, h) {
+  const guess = Date.UTC(y, m - 1, d, h, 0, 0);
+  const off1 = nyOffsetMinutes(new Date(guess));
+  const r = guess - off1 * 60000;
+  const off2 = nyOffsetMinutes(new Date(r));
+  return new Date(guess - off2 * 60000);
+}
+function deliveryNoticeHoldUntil(now, expectedDate) {
+  now = now || new Date();
+  const today = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  if (expectedDate && String(expectedDate).slice(0, 10) === today) return null;
+  const y = +today.slice(0, 4), mo = +today.slice(5, 7), d = +today.slice(8, 10);
+  if (etHour(now) < 18) return deliveryEtWallToUtc(y, mo, d, 18);
+  const nxt = deliveryAddDays(today, 1);
+  return deliveryEtWallToUtc(+nxt.slice(0, 4), +nxt.slice(5, 7), +nxt.slice(8, 10), 9);
+}
+
+// The calendar event the Apps Script upserts (it runs as Brett; the Hub never writes the calendar here). One event per order number.
+// o: { order, delivery_id, item, date, window, address, wo_id, kind, status, brett_note }
+function deliveryCalendarObject(o) {
+  const key = 'delivery-' + (o.order ? String(o.order).toLowerCase() : 'id-' + (o.delivery_id || 'unknown'));
+  const item = o.item || 'appliance';
+  const base = { key, title: 'Delivery: ' + item + (o.order ? ' (' + o.order + ')' : ''), start_iso: '', end_iso: '', all_day: false, location: o.address || '', description: '' };
+  const desc = [o.order ? 'Order ' + o.order : '', o.make ? 'Item: ' + o.make : '', o.wo_id ? 'Work order ' + o.wo_id + ' - https://ridge-co.github.io/RidgeCo/deliveries.html' : 'Deliveries: https://ridge-co.github.io/RidgeCo/deliveries.html',
+    'Driver calls Brett. Tenant should be there if they can; Brett receives otherwise and makes sure the old unit is hauled away.', o.status ? 'Status: ' + o.status : ''].filter(Boolean).join('\n');
+  base.description = desc;
+  if (o.kind === 'cancel' || o.status === 'Cancelled') return Object.assign(base, { action: 'cancel', title: 'CANCELLED - ' + base.title });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date || '')) return Object.assign(base, { action: 'none' });
+  const action = o.is_new ? 'create' : 'update';
+  if (o.kind === 'delivered' || o.status === 'Delivered') base.title = 'Delivered: ' + item + (o.order ? ' (' + o.order + ')' : '');
+  const w = deliveryWindowTimes(o.window);
+  if (!w) return Object.assign(base, { action, all_day: true, start_iso: o.date, end_iso: deliveryAddDays(o.date, 1) });   // all-day: end date is exclusive
+  const iso = (hm) => {
+    const utc = deliveryEtWallToUtc(+o.date.slice(0, 4), +o.date.slice(5, 7), +o.date.slice(8, 10), 0).getTime() + (hm[0] * 60 + hm[1]) * 60000;
+    const zone = nyOffsetMinutes(new Date(utc));   // ET wall clock minus UTC, in minutes (-240 in summer)
+    const sign = zone < 0 ? '-' : '+', az = Math.abs(zone);
+    const wall = new Date(utc + zone * 60000);
+    return wall.getUTCFullYear() + '-' + String(wall.getUTCMonth() + 1).padStart(2, '0') + '-' + String(wall.getUTCDate()).padStart(2, '0') + 'T' + String(wall.getUTCHours()).padStart(2, '0') + ':' + String(wall.getUTCMinutes()).padStart(2, '0') + ':00' + sign + String(Math.floor(az / 60)).padStart(2, '0') + ':' + String(az % 60).padStart(2, '0');
+  };
+  return Object.assign(base, { action, all_day: false, start_iso: iso(w.start), end_iso: iso(w.end) });
+}
+
+// ── Tenant-facing wording (Oct 23 2026 addendum). Warm, brief, never scolding. Plain GSM characters only. ──
+// "9a-1p" -> "9am-1pm"; "" -> "".
+function deliveryWindowHuman(win) {
+  const m = /^(\d{1,2})(?::(\d{2}))?([ap])-(\d{1,2})(?::(\d{2}))?([ap])$/.exec(String(win || '').trim());
+  if (!m) return String(win || '').trim();
+  return m[1] + (m[2] ? ':' + m[2] : '') + m[3] + 'm-' + m[4] + (m[5] ? ':' + m[5] : '') + m[6] + 'm';
+}
+// "5425 Belle Vista Ave, Baltimore, MD 21206" -> "5425 Belle Vista Ave" (the tenant knows the city); a unit stays: "928 N Calvert St Apt 2".
+function deliveryStreet(addr) { return String(addr || '').split(',')[0].replace(/\s+/g, ' ').trim(); }
+// "2026-10-16" -> "Friday, October 16" (the page).
+function deliveryLongDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const t = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12));
+  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][t.getUTCDay()] + ', ' + ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][+iso.slice(5, 7) - 1] + ' ' + (+iso.slice(8, 10));
+}
+// SMS segments: GSM-7 text is 160 for one segment and 153 per segment after that (all our tenant text is plain ASCII, so GSM-7).
+function deliverySmsSegments(s) { const n = String(s || '').length; return n === 0 ? 0 : (n <= 160 ? 1 : Math.ceil(n / 153)); }
+// "2026-10-18" -> "10/18/26" (the tenant text: terse, unambiguous, plain ASCII).
+function deliveryDateYY(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '')); return m ? (+m[2]) + '/' + (+m[3]) + '/' + m[1].slice(2) : ''; }
+// Oct 23 2026 (Brett): the tenant text is a terse summary; the warm wording, street, haul-away and "may be rescheduled" lines live on the RSVP page.
+// o: { kind: 'request'|'changed'|'cancel', item, date, window, link }.  Plain ASCII only (stays GSM-7).
+function deliveryTenantText(o) {
+  const item = String(o.item || 'appliance').toLowerCase();
+  const when = [deliveryWindowHuman(o.window), deliveryDateYY(o.date)].filter(Boolean).join(' ');
+  let msg;
+  if (o.kind === 'cancel') msg = item.charAt(0).toUpperCase() + item.slice(1) + ' delivery is no longer scheduled. No need to be home.';
+  else if (o.kind === 'changed') msg = 'Delivery changed: ' + item + (when ? ' now ' + when : '') + '. Can you be there? ' + o.link;
+  else msg = 'New ' + item + ' ordered.' + (when ? ' Delivery ' + when + '.' : '') + ' Please let us know if you can be there: ' + o.link;
+  return deliveryPlainSms(msg, true);
+}
+// ═══ DELIVERY-EMAIL-PURE-END ═══
+
+// ═══ DELIVERY-EMAIL-HANDLER-START ═══
+// 2. The handler. Reads are cheap and run first; every write is verified by a read-back (updateRowVerified / addRow landing check).
+// What it writes: ONE Deliveries row per order (created, or updated on every later email), at most one Work Order per delivery,
+// Ops_Telemetry, and (only when the tenant-notice switch allows it) one tenant text through the gated chokepoint.
+// What it never does: write the calendar (the Apps Script does, as Brett: the response carries the event), send a text on a dry run,
+// text a tenant directly, create a record from a promo email, or drop a store email that mentions an order.
+const DELIVERY_EXTRA_COLS = ['Seen_Message_IDs', 'Last_Event', 'Last_Event_At', 'Last_Event_Sig', 'Stops_Away', 'Tenant_Notice_Sig', 'Tenant_Notice_Status', 'Tenant_Notice_Draft', 'Brett_SMS_Status', 'Tenant_RSVP', 'Tenant_RSVP_At', 'Tenant_RSVP_Note', 'Tenant_Notice_Sent_At', 'Event_Claim', 'Calendar_Event_ID', 'Calendar_Status'];
+const DELIVERY_NOTICE_DEFAULT_TEXT = 'Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}. Your {Item} has been ordered{When}. Please be home if you can. If not, Ridge Co will be there to receive it, so you do not need to do anything.';
+const DELIVERY_DRIVER_NOTE = 'Driver calls Brett (ok to call me for now). Tenant: be there if you can; otherwise Brett receives and makes sure the old unit is hauled away.';
+
+const deliveryNormOrder = s => String(s == null ? '' : s).trim().toUpperCase();
+const deliveryRowNum = r => { const n = parseInt(r && r.ID, 10); return Number.isFinite(n) ? n : 1e12; };
+// Message keys: the RFC Message-ID (same in every mailbox that got the email), the caller's message_id, and "gmail:<mailbox>:<gmail id>". Compared case-insensitively.
+function deliveryKeyList(x) { return (Array.isArray(x) ? x : [x]).map(k => String(k == null ? '' : k).replace(/[,\s]+/g, '').trim()).filter(Boolean); }
+function deliverySawMessage(row, keys) {
+  const want = deliveryKeyList(keys).map(k => k.toLowerCase());
+  if (!row || !want.length) return false;
+  const have = [String(row.Message_ID || '')].concat(String(row.Seen_Message_IDs || '').split(',')).map(x => x.trim().toLowerCase()).filter(Boolean);
+  return want.some(k => have.indexOf(k) >= 0);
+}
+function deliverySeenAppend(row, keys) {
+  const list = String(row && row.Seen_Message_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
+  const lc = () => list.map(x => x.toLowerCase());
+  if (String(row && row.Message_ID || '') && lc().indexOf(String(row.Message_ID).toLowerCase()) < 0) list.push(String(row.Message_ID));
+  for (const k of deliveryKeyList(keys)) if (lc().indexOf(k.toLowerCase()) < 0) list.push(k);
+  return list.slice(-60).join(',');   // an order sends maybe a dozen emails, times two mailboxes; 60 is plenty and keeps the cell small
+}
+function deliveryNoteAppend(existing, line, recvIso) {
+  const stamp = (deliveryEtDate(recvIso) || '').slice(5).replace('-', '/');
+  const next = (String(existing || '').trim() ? String(existing).trim() + '\n' : '') + (stamp ? '[' + stamp + '] ' : '') + line;
+  return next.length > 6000 ? '...' + next.slice(-5900) : next;
+}
+function deliveryEventSig(status, date, win, stops) { return [status, date || '', win || '', stops == null ? '' : stops].join('|'); }
+
+// Address -> property/unit/tenant. Reuses the Buildium intake matchers (intakeMatchProperty / intakeResolveUnit) so there is ONE address-matching rule.
+// status: 'matched' | 'none' | 'ambiguous' | 'no_address'. Never guesses: 0 or 2+ properties leave everything blank.
+function deliveryMatchPlace(address, unitRaw, properties, units, tenants) {
+  if (!String(address || '').trim()) return { status: 'no_address', detail: 'no delivery address in the email' };
+  const m = intakeMatchProperty(address, properties);
+  if (m.matches.length === 0) return { status: 'none', detail: 'no active property matches "' + address + '"' };
+  if (m.matches.length > 1) return { status: 'ambiguous', detail: m.matches.map(x => x.property.ID + ' ' + x.property.Address).join(' | ') };
+  const property = m.matches[0].property;
+  const ur = intakeResolveUnit(property, m.matches[0].unit_raw || (unitRaw || '').replace(/^(?:apt|apartment|unit|ste|suite)\.?\s*#?\s*/i, ''), units);
+  const out = { status: 'matched', property, unit_id: ur.ok ? ur.unit_id : '', unit_label: ur.ok ? ur.unit_label : '', unit_problem: ur.ok ? '' : (ur.detail || ur.reason), tenant_id: '', tenant: null };
+  const pool = tenantsForDispatch(tenants, null, { Unit_ID: out.unit_id, Property_ID: String(property.ID) });
+  if (pool.length === 1) { out.tenant_id = String(pool[0].ID); out.tenant = pool[0]; }
+  return out;
+}
+
+async function deliveryReadTabs(env) {
+  invalidateTabCache('Deliveries');
+  let dels = [];
+  try { dels = await fetchTab(env, 'Deliveries'); } catch (e) { if (!isMissingTabError(e)) throw e; }   // first use: the tab does not exist yet, which is fine for a read
+  const [properties, units, tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+  return { dels, properties, units, tenants };
+}
+
+async function deliveryTelemetry(env, t0, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'delivery_email_intake', Skill_Or_Endpoint: '/intake/delivery-email', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 480) }); return true; }
+  catch (_) { return false; }
+}
+
+// Creates the install WO once per delivery. Returns {wo_id, created, error}. Never throws.
+const DELIVERY_WO_HEAL_AFTER_MS = 45000;
+async function deliveryEnsureWO(env, row, p, msgId, adminName) {
+  const existing = String(row.Linked_WO_IDs || '').split(',').map(x => x.trim()).filter(Boolean)[0];
+  if (existing) return { wo_id: existing, created: false, error: '' };
+  if (!row.Property_ID) return { wo_id: '', created: false, error: '' };
+  // PLACEHOLDER (Phase 2 size check): later, compare the new unit's dimensions (New_Dims) with the old unit / opening and flag a mismatch BEFORE the WO is created. Not built; no dimension logic here.
+  // PLACEHOLDER (Phase 4 voice routing): later, route the driver's phone call (store gives Brett's number) through the Hub voice line. Not built; the store-facing contact is Brett's own number for now.
+  try {
+    const what = [row.Item_Type, row.New_Make_Model].filter(Boolean).join(' ') || 'appliance';
+    const desc = ('Receive appliance delivery (' + (row.Store || 'store') + (row.Order_Number ? ' order ' + row.Order_Number : '') + '): ' + what + '. Ridge Co receives the delivery; the delivery crew must haul away the old unit and leave the new one. Tenant should be there if they can; otherwise ' + adminName + ' opens the door and lets the crew in. ' + adminName + ' installs (tenant does not install). Driver calls ' + adminName + '.').slice(0, 1500);
+    const res = await createWorkOrder(env, {
+      property_id: row.Property_ID, unit_id: row.Unit_ID || '', tenant_id: row.Tenant_ID || '', trade: 'Appliance', type: 'delivery', description: desc, priority: 'normal',
+      created_by: 'email-watcher', tenant_notify_created: false, tenant_notify_updates: false,
+      notes: 'Delivery #' + row.ID + (row.Order_Number ? ' / order ' + row.Order_Number : '') + '. ' + DELIVERY_DRIVER_NOTE,
+    });
+    const j = await res.clone().json();
+    if (res.status !== 200 || !j || j.success !== true || !j.id) return { wo_id: '', created: false, error: 'createWorkOrder failed: ' + JSON.stringify(j).slice(0, 160) };
+    const woId = j.id;
+    let warn = '';
+    try {
+      await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
+      await updateWOFields(env, woId, { Source: 'email-watcher', Intake_Message_ID: msgId });
+      invalidateTabCache('Work_Orders');
+      const back = (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === String(woId));
+      if (!back || String(back.Source || '') !== 'email-watcher') warn = 'WO ' + woId + ' created but its Source column did not save';
+    } catch (e) { warn = 'WO ' + woId + ' created but Source could not be set: ' + String((e && e.message) || e).slice(0, 120); }
+    await updateRowVerified(env, 'Deliveries', row.ID, { Linked_WO_IDs: woId });
+    return { wo_id: woId, created: !j.duplicate, error: '', warning: warn };
+  } catch (e) {
+    return { wo_id: '', created: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
+// ── Tenant RSVP link token (Oct 23 2026 addendum). Bearer token tied to the DELIVERY ID (not the date), so it survives a reschedule.
+// Format: "<delivery id>.<16 chars>" where the 16 chars are the first 96 bits of HMAC-SHA256(WORKER_SECRET, "delivery-rsvp|<id>"), base64url.
+// It never contains the date, the phone or the order number. Expiry is checked against the row's CURRENT Expected_Date (3 days after).
+const DELIVERY_RSVP_PAGE = 'rsvp.html';
+const DELIVERY_RSVP_GRACE_DAYS = 3;
+async function deliveryRsvpToken(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-rsvp|' + String(id), env.WORKER_SECRET)).slice(0, 16);
+}
+function deliveryRsvpLink(token) { return PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE + '?t=' + encodeURIComponent(token); }
+// ── Short link (Oct 23 2026, Brett: shorter links). STATELESS: nothing is stored. The code is "<delivery id>.<8 chars>", the 8 chars being the first 48 bits of
+// HMAC-SHA256(WORKER_SECRET, "delivery-short|<id>") (a different message than the page token, so one cannot be derived from the other). GET <base>/r/<code> answers
+// 302 -> PORTAL_BASE/rsvp.html?t=<full token>. Tied to the delivery id (not the date), so it survives a reschedule. Expiry stays with the page/API: the redirect never reads
+// the sheet, and the page + API give a bad code and an expired one the same "link not working" result.
+const DELIVERY_SHORT_PATH = '/r/';
+async function deliveryShortCode(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-short|' + String(id), env.WORKER_SECRET)).slice(0, 8);
+}
+// Base of the short link: Config Delivery_Link_Base (set to e.g. https://ridgeco.app once that domain is attached to this Worker) > the host this request came in on > WORKER_BASE_URL > production.
+function deliveryLinkBase(env, cfg) {
+  const ok = v => { v = String(v || '').trim().replace(/\/+$/, ''); return /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(v) ? v : ''; };
+  return ok(cfg && cfg.Delivery_Link_Base) || ok(env.__SELF_ORIGIN__) || ok(env.WORKER_BASE_URL) || 'https://maintenance-hub.brett-2f8.workers.dev';
+}
+async function deliveryShortLink(env, cfg, id) { return deliveryLinkBase(env, cfg) + DELIVERY_SHORT_PATH + (await deliveryShortCode(env, id)); }
+async function deliveryShortVerify(env, code) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{8})$/.exec(String(code || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-short|' + m[1], env.WORKER_SECRET)).slice(0, 8);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// GET /r/<code>  (PUBLIC). Rate limit per IP (same bucket as the page API). A bad code goes to the page with a dead token, so it shows the same friendly "link not working" as an expired one.
+async function deliveryShortRedirect(env, code, ip) {
+  const page = PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE;
+  const go = (t) => new Response(null, { status: 302, headers: { 'Location': page + '?t=' + encodeURIComponent(t), 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+  try {
+    if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return new Response('That was a lot of taps at once. Please wait a minute and try again.', { status: 429, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    const id = await deliveryShortVerify(env, code);
+    if (!id) return go('x');
+    return go(await deliveryRsvpToken(env, id));
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'short link redirect failed: ' + String((e && e.message) || e));
+    return go('x');
+  }
+}
+function deliveryCtEq(a, b) { a = String(a); b = String(b); let d = a.length ^ b.length; const n = Math.max(a.length, b.length); for (let i = 0; i < n; i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; }
+// Returns the delivery id when the token's signature is genuine, else null. Same null for every kind of bad token.
+async function deliveryRsvpVerify(env, t) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{16})$/.exec(String(t || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-rsvp|' + m[1], env.WORKER_SECRET)).slice(0, 16);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// Link works until DELIVERY_RSVP_GRACE_DAYS after the CURRENT Expected_Date (ET). No date = not usable.
+function deliveryRsvpExpired(row, now) {
+  const d = String(row && row.Expected_Date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
+  const today = (now || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  return today > deliveryAddDays(d, DELIVERY_RSVP_GRACE_DAYS);
+}
+const DELIVERY_RSVP_CURRENT = { Confirmed: 'yes', Declined: 'no', Unsure: 'unsure' };
+
+function deliveryNoticeMode(cfg) {
+  const raw = String(cfg.Delivery_Tenant_Notice == null ? '' : cfg.Delivery_Tenant_Notice).trim().toLowerCase();
+  const mode = raw === '' ? 'auto' : raw;
+  if (mode !== 'auto' && mode !== 'draft' && mode !== 'off') return { mode: 'off', bad: raw };
+  return { mode };
+}
+
+// Tenant request text. mode (Config Delivery_Tenant_Notice): 'auto' (default) | 'draft' | 'off'. Goes ONLY through smsGatedSend (global switch,
+// property, owner and tenant consent, opt-out, moved-out), as a held Message_Queue row released by the existing sweep (processQuietHoursQueue).
+// variant: 'request' (first ask) | 'changed' (date/window moved after we asked) | 'cancel' (we asked, then the delivery was cancelled).
+// No delivery date = no request at all. Timing: see deliveryNoticeHoldUntil. Returns {tenant_sms, detail, sig, draft, sent_at, record}. Never throws.
+async function deliveryTenantNotice(env, o) {
+  const { cfg, row, place, woId, date, win } = o;
+  const variant = o.variant || 'request';
+  const nm = deliveryNoticeMode(cfg);
+  if (nm.bad !== undefined) return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice has an unknown value "' + nm.bad + '" (use auto, draft or off): no tenant text', warn: true };
+  if (nm.mode === 'off') return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice is off' };
+  const tenant = place && place.tenant;
+  if (!tenant) return { tenant_sms: 'skipped', detail: 'no single tenant resolved for this delivery' };
+  if (variant !== 'cancel' && !date) return { tenant_sms: 'skipped', detail: 'no delivery date yet: the tenant is asked when a later email sets the date', no_date: true };
+  const sig = variant === 'cancel' ? 'CANCELLED' : (date || '') + '|' + (win || '');
+  if (String(row.Tenant_Notice_Sig || '') === sig && /^(queued|sent|draft)/.test(String(row.Tenant_Notice_Status || ''))) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', record: false };
+  if (!tenant.Phone) return { tenant_sms: 'skipped', detail: 'tenant has no phone on file' };
+  try {
+    const owners = await fetchTab(env, 'Owners');
+    const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
+    let queue = [];
+    try { queue = await fetchTab(env, MSG_QUEUE_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
+    const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId);
+    const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
+    // A newer text replaces one still waiting for its slot: never two texts for one delivery.
+    if (variant !== 'cancel' || waiting.length) for (const q of waiting) {
+      if (nm.mode === 'draft') break;
+      const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
+      if (ok === false) return { tenant_sms: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true };
+    }
+    if (variant === 'cancel') {
+      if (!queue.some(r => mine(r) && r.Status === 'sent')) return { tenant_sms: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' };
+    }
+    const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === normalizePhone(tenant.Phone));
+    const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
+    const ctx = { first: tenant.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
+    let link = '';
+    if (variant !== 'cancel') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
+    let msg;
+    if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
+      msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
+      if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
+    } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
+    if (first) msg = withTenantStopNote(msg);
+    if (nm.mode === 'draft') return { tenant_sms: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', sig, draft: msg };
+    const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
+    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+    const nowIso = new Date().toISOString();
+    if (r && r.sent) return { tenant_sms: 'sent', detail: 'sent now (delivery is today)', sig, sent_at: nowIso, text: msg };
+    if (r && r.held_for_quiet_hours) return { tenant_sms: 'queued', detail: 'held until ' + r.send_after, sig, send_after: r.send_after, sent_at: nowIso, text: msg };
+    if (r && r.send_ok === false) return { tenant_sms: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot };
+    return { tenant_sms: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true };
+  } catch (e) { return { tenant_sms: 'failed', detail: String((e && e.message) || e).slice(0, 160), warn: true }; }
+}
+
+// ── Public RSVP endpoints. GET /delivery/rsvp?t=TOKEN and POST /delivery/rsvp {t, answer, note?}. Public at the gate; the signed token IS the credential. ──
+// Rate limits are per Worker instance (the same in-memory pattern as the other public pages): per token, per IP, and per IP for bad tokens.
+const __rsvpHits = new Map();
+function deliveryRsvpRate(key, max, windowMs) {
+  const now = Date.now();
+  if (__rsvpHits.size > 2000) for (const [k, v] of __rsvpHits) if (!v.length || now - v[v.length - 1] > windowMs) __rsvpHits.delete(k);
+  const arr = (__rsvpHits.get(key) || []).filter(t => now - t < windowMs);
+  if (arr.length >= max) { __rsvpHits.set(key, arr); return false; }
+  arr.push(now); __rsvpHits.set(key, arr); return true;
+}
+const DELIVERY_RSVP_RATE_WINDOW = 10 * 60000;
+function deliveryRsvpTooMany() { return json({ ok: false, expired: false, message: 'That was a lot of taps at once. Please wait a minute and try again.' }, 429); }
+function deliveryRsvpDead() { return json({ ok: false, expired: true, message: 'This link is no longer active. If you still need to reach us, please text or call Ridge Co and we will be glad to help.' }, 200); }   // the same answer for a bad, tampered, unknown or expired link
+function deliveryRsvpCleanNote(v) { return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300); }
+async function deliveryRsvpLoad(env, t, ip) {
+  if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  const id = await deliveryRsvpVerify(env, t);
+  if (!id) {
+    if (!deliveryRsvpRate('bad:' + ip, 15, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+    return { resp: deliveryRsvpDead() };
+  }
+  if (!deliveryRsvpRate('tok:' + id, 60, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  let dels = [];
+  try { invalidateTabCache('Deliveries'); dels = await fetchTab(env, 'Deliveries'); } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const row = dels.find(d => String(d.ID) === id);
+  if (!row || row.Active === 'FALSE' || deliveryRsvpExpired(row)) return { resp: deliveryRsvpDead() };
+  return { row, id };
+}
+function deliveryRsvpClosed(row) {
+  if (row.Status === 'Delivered') return 'This delivery has already arrived. Thank you for being part of it!';
+  if (row.Status === 'Cancelled') return 'This delivery is no longer scheduled, so there is nothing to answer. We will let you know if a new date is set.';
+  return '';
+}
+async function deliveryRsvpGet(env, url, ip) {
+  try {
+    const ld = await deliveryRsvpLoad(env, url.searchParams.get('t'), ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    let first = '';
+    if (row.Tenant_ID) { try { const t = (await fetchTab(env, 'Tenants')).find(x => String(x.ID) === String(row.Tenant_ID)); first = t ? String(t.First_Name || '') : ''; } catch (e) { first = ''; } }
+    const closed = deliveryRsvpClosed(row);
+    // Only what the tenant needs. No phone numbers, no other tenants, no order number, no ids.
+    return json({ ok: true, closed: !!closed, delivered: row.Status === 'Delivered', cancelled: row.Status === 'Cancelled', message: closed, first_name: first, item_type: String(row.Item_Type || '').toLowerCase(), date_text: deliveryLongDate(row.Expected_Date), window_text: deliveryWindowHuman(row.Expected_Window), street: deliveryStreet(row.Delivery_Address),
+      current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', note: String(row.Tenant_RSVP_Note || '') });
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'rsvp GET failed: ' + String((e && e.message) || e));
+    return json({ ok: false, expired: false, message: 'Sorry, something went wrong on our end. Please try the link again in a few minutes.' }, 500);
+  }
+}
+async function deliveryRsvpPost(env, url, body, ip) {
+  const t0 = Date.now();
+  body = body || {};
+  try {
+    const ld = await deliveryRsvpLoad(env, body.t, ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    if (!deliveryRsvpRate('post:' + ld.id, 20, DELIVERY_RSVP_RATE_WINDOW)) return deliveryRsvpTooMany();
+    const answer = String(body.answer || '').toLowerCase();
+    if (['yes', 'no', 'unsure'].indexOf(answer) < 0) return json({ ok: false, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: 'Please tap one of the three buttons.' }, 400);
+    const closed = deliveryRsvpClosed(row);
+    if (closed) return json({ ok: false, closed: true, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: closed });
+    if (isStaging(env, url) && !String(row.Message_ID || '').startsWith('TEST-')) return json({ ok: false, current: '', message: 'This is the test site: only test deliveries can be answered here.' }, 403);
+    const note = deliveryRsvpCleanNote(body.note);
+    const newRsvp = { yes: 'Confirmed', no: 'Declined', unsure: 'Unsure' }[answer];
+    const same = row.Tenant_RSVP === newRsvp;
+    const msgs = {
+      yes: 'Thank you, that is a big help! You can change your answer on this page any time before the delivery.',
+      no: "No problem at all, thank you for letting us know. We'll do our best to be there instead. The delivery may need to be rescheduled, and we will keep you posted.",
+      unsure: 'Thanks for letting us know. Come back to this page any time to update your answer.',
+    };
+    if (same && String(row.Tenant_RSVP_Note || '') === note) return json({ ok: true, current: answer, message: msgs[answer], unchanged: true });   // a repeat tap: nothing written, nobody texted
+    await ensureDeliveryTab(env);
+    const cfg = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values);
+    const adminPhone = normalizePhone(cfg.admin_phone || '');
+    const nowIso = new Date().toISOString();
+    const f = { Tenant_RSVP: newRsvp, Tenant_RSVP_At: nowIso, Tenant_RSVP_Note: note };
+    let noteLine = '';
+    if (!same) {
+      if (answer === 'no') { Object.assign(f, { Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone }); noteLine = "Tenant can't be present. Driver calls Brett."; }
+      else {
+        if (row.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+        noteLine = answer === 'yes' ? 'Tenant says they will be there. Driver still calls Brett.' : 'Tenant is not sure yet. Driver calls Brett.';
+      }
+      f.Delivery_Notes = deliveryNoteAppend(row.Delivery_Notes, 'Tenant answered "' + answer + '"' + (note ? ' (note: ' + note.slice(0, 80) + ')' : '') + '. ' + noteLine, nowIso);
+    }
+    await updateRowVerified(env, 'Deliveries', row.ID, f);
+    // Brett is texted only when the answer CHANGES to no / unsure (never for yes, never for a repeat).
+    let sms = '', warn = '';
+    if (!same && (answer === 'no' || answer === 'unsure')) {
+      const when = [deliveryShortDate(row.Expected_Date), row.Expected_Window].filter(Boolean).join(' ');
+      const street = deliveryStreet(row.Delivery_Address) || 'Delivery';
+      const txt = deliveryPlainSms(answer === 'no'
+        ? street + ": tenant can't be there for " + when + '. Driver will call you. Update the order if needed.'
+        : street + ': tenant is not sure yet about ' + when + '. They can still answer.');
+      let prop = null;
+      try { prop = row.Property_ID ? (await fetchTab(env, 'Properties')).find(x => String(x.ID) === String(row.Property_ID)) || null : null; } catch (e) { prop = null; }
+      sms = await intakeSmsAdmin(env, txt, String(row.Linked_WO_IDs || '').split(',')[0].trim(), prop);
+      if (sms !== 'sent') warn = 'Brett text about the tenant answer not sent: ' + sms;
+      try { await updateRowVerified(env, 'Deliveries', row.ID, { Brett_SMS_Status: sms }); } catch (e) { warn = (warn ? warn + ' / ' : '') + 'could not record the alert result: ' + String((e && e.message) || e).slice(0, 80); }
+    }
+    await deliveryTelemetry(env, t0, !warn, 'rsvp delivery ' + row.ID + ' ' + (row.Tenant_RSVP || '-') + ' -> ' + newRsvp + (sms ? '; brett=' + sms : '') + (warn ? '; WARN ' + warn : ''));
+    return json({ ok: true, current: answer, message: msgs[answer] });   // the tenant's answer is saved even when the text to Brett failed; that failure is in telemetry (Needs Attention)
+  } catch (e) {
+    await deliveryTelemetry(env, t0, false, 'rsvp POST failed: ' + String((e && e.message) || e));
+    return json({ ok: false, message: 'Sorry, something went wrong on our end and your answer was not saved. Please try again in a few minutes.' }, 500);
+  }
+}
+
+// ── Sign-in for the Apps Script without a shared secret (Oct 23 2026, Brett) ──
+// The script sends `Authorization: Bearer <Google OpenID identity token>` (ScriptApp.getIdentityToken(): the mailbox owner's own Google identity). We check, with WebCrypto only:
+// RS256 signature against Google's published keys (JWKS, cached per Worker instance), issuer, expiry (small skew), email_verified, and that the e-mail is in Config
+// Delivery_Mailboxes. `aud` is NOT pinned (it is the script project's own client id). The token is never logged. The X-Auth-Token INTAKE_TOKEN path still works beside it.
+const DELIVERY_MAILBOXES_DEFAULT = 'brett@bmoremanagement.com,info@bmoremanagement.com';
+const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ID_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const GOOGLE_ID_SKEW_S = 60, GOOGLE_JWKS_MIN_TTL_MS = 5 * 60000, GOOGLE_JWKS_MAX_TTL_MS = 6 * 3600000, GOOGLE_JWKS_STALE_GRACE_MS = 6 * 3600000, GOOGLE_JWKS_REFETCH_GAP_MS = 60000;
+let __gJwks = null;          // { keys: Map(kid -> { jwk, key }), exp }
+let __gJwksTriedAt = 0;      // last network attempt: an unknown key id can force a refetch at most once a minute (forged ids cannot flood Google or us)
+let __gAuthAlertAt = {};     // reason -> last ledger report (ms)
+async function googleJwksLoad(env, force) {
+  const now = Date.now();
+  if (__gJwks && __gJwks.exp > now && !force) return __gJwks;
+  if (force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;
+  if (!force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;   // an expired list that just failed to refresh is not hammered
+  __gJwksTriedAt = now;
+  try {
+    const resp = await fetch(GOOGLE_JWKS_URL, { method: 'GET', headers: { Accept: 'application/json' } });
+    if (!resp.ok) throw new Error('Google key list answered HTTP ' + resp.status);
+    const j = await resp.json();
+    const keys = new Map();
+    for (const k of ((j && j.keys) || [])) if (k && k.kid && k.kty === 'RSA' && k.n && k.e) keys.set(String(k.kid), { jwk: k, key: null });
+    if (!keys.size) throw new Error('Google key list was empty');
+    const m = /max-age=(\d+)/.exec(resp.headers.get('Cache-Control') || '');
+    const ttl = Math.min(GOOGLE_JWKS_MAX_TTL_MS, Math.max(GOOGLE_JWKS_MIN_TTL_MS, m ? parseInt(m[1], 10) * 1000 : 3600000));
+    __gJwks = { keys, exp: now + ttl };
+    return __gJwks;
+  } catch (e) {
+    // Keep using a list we already have for a few hours (Google rotates keys slowly) but say so loudly; with nothing in memory, fail closed.
+    await deliveryAuthAlert(env, 'jwks_unavailable', 'P1', 'Could not fetch Google\'s sign-in keys (' + String((e && e.message) || e).slice(0, 120) + '). ' + (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS ? 'Using the last known keys for now.' : 'Delivery e-mails from the Apps Script are being refused until this clears.'));
+    if (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS) return __gJwks;
+    const err = new Error('jwks_unavailable'); err.code = 'jwks_unavailable'; throw err;
+  }
+}
+// Never throws. { ok:true, email } | { ok:false, reason, unavailable? }.  `reason` goes to the ledger only; the caller always answers 401 with the same body.
+async function deliveryVerifyIdToken(env, jwt) {
+  try {
+    jwt = String(jwt || '').trim();
+    if (!jwt || jwt.length > 4096) return { ok: false, reason: 'malformed' };
+    const parts = jwt.split('.');
+    if (parts.length !== 3 || parts.some(x => !/^[A-Za-z0-9_-]+$/.test(x))) return { ok: false, reason: 'malformed' };
+    let head, claims;
+    try { head = JSON.parse(_tdec.decode(_b64urlToBytes(parts[0]))); claims = JSON.parse(_tdec.decode(_b64urlToBytes(parts[1]))); } catch (e) { return { ok: false, reason: 'malformed' }; }
+    if (!head || head.alg !== 'RS256' || !head.kid || !claims || typeof claims !== 'object') return { ok: false, reason: 'bad_header' };
+    let list = await googleJwksLoad(env, false);
+    let ent = list.keys.get(String(head.kid));
+    if (!ent) { list = await googleJwksLoad(env, true); ent = list.keys.get(String(head.kid)); }   // unknown key id: refetch once (rate-limited)
+    if (!ent) return { ok: false, reason: 'unknown_kid' };
+    if (!ent.key) ent.key = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: ent.jwk.n, e: ent.jwk.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    const okSig = await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, ent.key, _b64urlToBytes(parts[2]), _tenc.encode(parts[0] + '.' + parts[1]));
+    if (!okSig) return { ok: false, reason: 'bad_signature' };
+    const nowS = Math.floor(Date.now() / 1000);
+    if (GOOGLE_ID_ISSUERS.indexOf(String(claims.iss)) < 0) return { ok: false, reason: 'bad_issuer' };
+    if (!Number.isFinite(claims.exp) || claims.exp < nowS - GOOGLE_ID_SKEW_S) return { ok: false, reason: 'expired' };
+    if (!Number.isFinite(claims.iat) || claims.iat > nowS + GOOGLE_ID_SKEW_S) return { ok: false, reason: 'not_yet_valid' };
+    if (!(claims.email_verified === true || claims.email_verified === 'true')) return { ok: false, reason: 'email_not_verified' };
+    const email = String(claims.email || '').trim().toLowerCase();
+    if (!email) return { ok: false, reason: 'no_email' };
+    let cfg;
+    try { cfg = await fetchConfig(env); } catch (e) { await deliveryAuthAlert(env, 'config_unreadable', 'P1', 'Could not read Config to check the mailbox allow-list (' + String((e && e.message) || e).slice(0, 100) + '); delivery e-mails are being refused.'); return { ok: false, reason: 'config_unreadable', unavailable: true }; }
+    const allowed = String(cfg.Delivery_Mailboxes || DELIVERY_MAILBOXES_DEFAULT).split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
+    if (allowed.indexOf(email) < 0) return { ok: false, reason: 'email_not_allowed', email_hint: email.replace(/^(.).*(@.*)$/, '$1***$2') };
+    return { ok: true, email };
+  } catch (e) {
+    if (e && e.code === 'jwks_unavailable') return { ok: false, reason: 'jwks_unavailable', unavailable: true };
+    return { ok: false, reason: 'verify_error', detail: String((e && e.message) || e).slice(0, 100) };
+  }
+}
+// Not silent, not a flood: at most one ledger report per where+ref per 10 minutes per Worker instance (the ledger also dedupes and caps by itself). Never contains a token.
+async function deliveryLedgerOnce(env, where, ref, severity, message) {
+  const now = Date.now(), k = where + '|' + ref;
+  if (__gAuthAlertAt[k] && now - __gAuthAlertAt[k] < 10 * 60000) return;
+  __gAuthAlertAt[k] = now;
+  await reportFailure(env, { system: 'hub', source: 'worker', where, ref: String(ref), severity, message: String(message).slice(0, 300) });   // never throws
+}
+function deliveryAuthAlert(env, reason, severity, message) { return deliveryLedgerOnce(env, 'delivery_auth_' + reason, reason, severity, message); }
+
+// ── The delivery lands on Brett's own Google Calendar, written by the Hub (Oct 23 2026). The Hub's service account acts as Brett (domain-wide delegation, narrow scope
+// calendar.events: the same mechanism as the cleaning calendar, getCalendarAccessToken). Config Delivery_Cal_Impersonate (falls back to STR_CAL_IMPERSONATE) names whose
+// primary calendar it is. One event per order (tagged with a private extended property, so a lost id can be found again); create / move / delete; every failure is
+// reported (failure ledger P1 + the response's calendar_status + the delivery row), never swallowed. On staging the write is a stub.
+const DELIVERY_CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const DELIVERY_CAL_KEY_PROP = 'ridgecoDeliveryKey';
+function deliveryCalEventBody(cal) {
+  const ev = { summary: cal.title, location: cal.location || '', description: cal.description || '', status: 'confirmed', extendedProperties: { private: { [DELIVERY_CAL_KEY_PROP]: cal.key } } };
+  if (cal.all_day) { ev.start = { date: cal.start_iso }; ev.end = { date: cal.end_iso }; }
+  else { ev.start = { dateTime: cal.start_iso, timeZone: 'America/New_York' }; ev.end = { dateTime: cal.end_iso, timeZone: 'America/New_York' }; }
+  return ev;
+}
+async function deliveryCalFetch(env, sub, method, pathAndQuery, body) {
+  const token = await getCalendarAccessToken(env, { sub, scope: DELIVERY_CAL_SCOPE });
+  const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary' + pathAndQuery, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  if (resp.status === 204) return { _status: 204 };
+  const text = await resp.text();
+  if (!resp.ok) {
+    const e = new Error('Google Calendar answered ' + resp.status + ' while acting as ' + sub + ': ' + smsMaskPhones(text).replace(/\s+/g, ' ').slice(0, 160) + (resp.status === 403 && /scope/i.test(text) ? ' (the narrow calendar.events permission is not enough; do not widen it without a decision)' : ''));
+    e.httpStatus = resp.status; throw e;
+  }
+  let j = {}; try { j = text ? JSON.parse(text) : {}; } catch (_) { throw new Error('Google Calendar returned unreadable JSON'); }
+  return j;
+}
+// -> { status, event_id, warn? } where status is created | updated | cancelled | nothing_to_cancel | none | staged: ... | dry_run: ... | failed: ...
+async function deliveryCalSync(env, cfg, deliveryId, row, cal, dry) {
+  const had = String(row && row.Calendar_Event_ID || '').trim();
+  if (!cal || cal.action === 'none') return { status: 'none', event_id: had };
+  if (dry) return { status: 'dry_run: would ' + cal.action, event_id: had };
+  if (inspCalStaged(env, cfg)) return { status: 'staged: calendar writes are stubbed on the test server', event_id: had };
+  const sub = String(cfg.Delivery_Cal_Impersonate || cfg.STR_CAL_IMPERSONATE || '').trim();
+  try {
+    if (!sub || !STR_EMAIL_RE.test(sub)) throw Object.assign(new Error('Config Delivery_Cal_Impersonate (or STR_CAL_IMPERSONATE) is ' + (sub ? 'not an email address' : 'not set') + ': set it to brett@bmoremanagement.com so the Hub can write deliveries to Brett\'s calendar'), { notConfigured: true });
+    const find = async () => {
+      const q = '/events?privateExtendedProperty=' + encodeURIComponent(DELIVERY_CAL_KEY_PROP + '=' + cal.key) + '&maxResults=10&fields=items(id,status)';
+      return ((await deliveryCalFetch(env, sub, 'GET', q)).items || []).filter(x => x && x.id && x.status !== 'cancelled').map(x => x.id);
+    };
+    const gone = e => e && (e.httpStatus === 404 || e.httpStatus === 410);
+    if (cal.action === 'cancel') {
+      const ids = Array.from(new Set([had].filter(Boolean).concat(await find())));
+      if (!ids.length) return { status: 'nothing_to_cancel', event_id: '' };
+      for (const id of ids) { try { await deliveryCalFetch(env, sub, 'DELETE', '/events/' + encodeURIComponent(id)); } catch (e) { if (!gone(e)) throw e; } }
+      return { status: 'cancelled', event_id: '' };
+    }
+    const body = deliveryCalEventBody(cal);
+    let id = had, how = 'updated';
+    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); } catch (e) { if (!gone(e)) throw e; id = ''; } }
+    if (!id) {
+      const found = await find();
+      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); }
+      else { const made = await deliveryCalFetch(env, sub, 'POST', '/events', body); id = String(made.id || ''); how = 'created'; if (!id) throw new Error('Google Calendar did not return an event id'); }
+    }
+    return { status: how, event_id: id };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 220);
+    await deliveryLedgerOnce(env, 'delivery_calendar', (e && e.notConfigured ? 'not_configured' : deliveryId), 'P1', 'Delivery ' + deliveryId + ' was saved but its calendar event was NOT written: ' + msg);
+    return { status: 'failed: ' + msg, event_id: had, failed: true };
+  }
+}
+
+// POST /intake/delivery-email. See the contract at the top of this section.
+async function deliveryEmailIntake(env, body) {
+  const t0 = Date.now();
+  body = body || {};
+  const subject = String(body.subject || ''), from = String(body.from || ''), dry = body.dry_run === true;
+  // Which email is this? The RFC Message-ID is identical in every mailbox that received it (the key for cross-mailbox dedupe); the Gmail id differs per
+  // mailbox. The mailbox string is only logged: ANY value is accepted (info@, brett@, a future RidgeCo address), never allow-listed by name.
+  const rfcId = String(body.rfc_message_id || '').replace(/^[<\s]+|[>\s]+$/g, ''), gmailId = String(body.gmail_id || '').trim();
+  const mailboxStr = String(body.mailbox == null ? '' : body.mailbox).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120);
+  const msgId = deliveryKeyList(rfcId || String(body.message_id || '').trim() || gmailId)[0] || '';
+  const msgKeys = deliveryKeyList([rfcId, String(body.message_id || ''), gmailId ? 'gmail:' + (mailboxStr || 'x') + ':' + gmailId : '']);
+  const recvIso = (body.received_at && !isNaN(new Date(body.received_at))) ? new Date(body.received_at).toISOString() : new Date().toISOString();
+  if (!msgId) return json({ success: false, error: 'message_id (or rfc_message_id / gmail_id) required' }, 400);
+  let stage = 'config', cfg;
+  const warnings = [];
+  const R = (over) => json(Object.assign({
+    success: true, kind: 'unknown', delivery_id: '', created: false, updated: false, duplicate: false, parked: false, reason: '', detail: '', status: '',
+    order_number: '', item_type: '', make_model: '', expected_date: '', expected_window: '', delivery_address: '',
+    property_matched: false, property_id: '', unit_id: '', tenant_id: '', wo_id: '', wo_created: false,
+    brett_sms_sent: null, sms_status: '', tenant_sms: 'off', tenant_sms_detail: '',
+    calendar: { action: 'none' }, calendar_status: 'none', calendar_event_id: '', telemetry_ok: true, needs_attention: false, warnings, dry_run: dry,
+  }, over), 200);
+  try {
+    // Loud Config read (fetchConfig swallows errors and would silently fall back to defaults).
+    try { cfg = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values); }
+    catch (e) { return json({ success: false, error: 'could not read Config: ' + String((e && e.message) || e).slice(0, 160), stage }, 500); }
+    const domain = deliverySenderDomain(from, cfg.Delivery_Sender_Domains);
+    if (!domain) return json({ success: false, error: 'sender is not an allowed store domain (Config Delivery_Sender_Domains)' }, 400);
+    const store = DELIVERY_STORE_NAMES[domain] || domain;
+    const p = deliveryParseEmail({ subject, body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: recvIso });
+    const parsedFields = { kind: p.kind, order_number: p.order_number, item_type: p.item_type, make_model: p.make_model, expected_date: p.expected_date, expected_window: p.expected_window, delivery_address: p.address };
+    if (p.kind === 'not_delivery') return R(Object.assign(parsedFields, { reason: p.reason }));   // promo / chatter: no record, no text, no write of any kind
+
+    stage = 'read';
+    const { dels, properties, units, tenants } = await deliveryReadTabs(env);
+    const adminPhone = normalizePhone(cfg.admin_phone || '');
+    const adminName = 'Brett';
+    if (!adminPhone) warnings.push('Config admin_phone is not set: Brett cannot be texted and the Backup_Phone on new deliveries is blank');
+    const order = deliveryNormOrder(p.order_number);
+
+    // ── dedupe 1: this exact email (RFC Message-ID) was already handled, by either mailbox ──
+    const seenRow = dels.find(d => deliverySawMessage(d, msgKeys));
+    if (seenRow) {
+      let wo = { wo_id: String(seenRow.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
+      // A previous run made the row but could not make its WO (Sheets hiccup): finish that job now, loudly.
+      // ...but NOT while the first attempt may still be creating that WO (two mailboxes deliver the same email at the same instant; the row exists a moment before its WO is linked):
+      // a row younger than DELIVERY_WO_HEAL_AFTER_MS is left to the attempt that made it. If that attempt died, it reported itself and the Apps Script retries a minute later.
+      const _age = new Date().getTime() - Date.parse(seenRow.Created_Date || '');
+      if (!dry && seenRow.Property_ID && !wo.wo_id && seenRow.Active !== 'FALSE' && ['Cancelled', 'Needs Review', 'Delivered'].indexOf(seenRow.Status) < 0 && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
+        stage = 'wo-heal';
+        wo = await deliveryEnsureWO(env, seenRow, p, msgId, adminName);
+        if (wo.error) { await deliveryTelemetry(env, t0, false, 'WO heal failed for delivery ' + seenRow.ID + ': ' + wo.error); return json({ success: false, error: 'Work order could not be created for delivery ' + seenRow.ID + ': ' + wo.error, delivery_id: String(seenRow.ID), stage }, 500); }
+      }
+      // The calendar of the delivery's CURRENT state rides along so a retry of an attempt whose calendar step failed can finish it (the upsert is idempotent by key).
+      const dupCal = seenRow.Status === 'Needs Review' ? { action: 'none' } : deliveryCalendarObject({ order: seenRow.Order_Number, delivery_id: seenRow.ID, item: seenRow.Item_Type, make: seenRow.New_Make_Model, date: seenRow.Expected_Date, window: seenRow.Expected_Window, address: seenRow.Delivery_Address, wo_id: wo.wo_id || '', kind: '', status: seenRow.Status, is_new: false });
+      // A copy of an email whose calendar write FAILED earlier retries it (idempotent: the event is found again by its key). Same 45 s rule as the WO: not while the first attempt may still be writing.
+      let dupCs = { status: 'none', event_id: String(seenRow.Calendar_Event_ID || '') };
+      if (!dry && dupCal.action !== 'none' && /^failed|^not_configured/.test(String(seenRow.Calendar_Status || '')) && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
+        dupCs = await deliveryCalSync(env, cfg, seenRow.ID, seenRow, dupCal, false);
+        try { await updateRowVerified(env, 'Deliveries', seenRow.ID, { Calendar_Status: dupCs.status.slice(0, 200), Calendar_Event_ID: dupCs.event_id }); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+        if (dupCs.failed) warnings.push('calendar: ' + dupCs.status);
+      }
+      return R(Object.assign(parsedFields, { duplicate: true, reason: 'already_processed', delivery_id: String(seenRow.ID), status: seenRow.Status || '', wo_id: wo.wo_id || '', wo_created: !!wo.created, property_id: seenRow.Property_ID || '', unit_id: seenRow.Unit_ID || '', tenant_id: seenRow.Tenant_ID || '', property_matched: !!seenRow.Property_ID, calendar: dupCal, calendar_status: dupCs.status, calendar_event_id: dupCs.event_id || '' }));
+    }
+
+    // ── find the existing delivery: by order number, else (no order number) the single open delivery at this address ──
+    const active = dels.filter(d => d.Active !== 'FALSE');
+    let row = null, matchedBy = '';
+    if (order) { row = active.filter(d => deliveryNormOrder(d.Order_Number) === order).sort((a, b) => deliveryRowNum(a) - deliveryRowNum(b))[0] || null; if (row) matchedBy = 'order'; }
+    else if (p.kind !== 'unknown' && p.address) {
+      const norm = a => qbNormAddress(String(a || '').replace(/,?\s*[A-Za-z]{2}\s*\d{5}(?:-\d{4})?\s*$/, ''));
+      const open = active.filter(d => d.Order_Number && ['Delivered', 'Cancelled', 'Needs Review'].indexOf(d.Status) < 0 && norm(d.Delivery_Address) && norm(d.Delivery_Address) === norm(p.address));
+      if (open.length === 1) { row = open[0]; matchedBy = 'address'; }
+    }
+
+    // ── unknown kind, or a clear kind with no way to tie it to an order: PARK + alert (never dropped) ──
+    const parkReason = p.kind === 'unknown' ? p.reason : ((!row && !order) ? 'no order number in the email and no single open delivery at that address' : '');
+    if (parkReason) {
+      const excerpt = 'NEEDS REVIEW: ' + parkReason + '. Subject: ' + subject.slice(0, 160) + ' | Excerpt: ' + p.excerpt;
+      const sms = deliveryBrettText({ event: 'review', order: p.order_number, item: p.item_type, address: p.address, note: parkReason + '. Subject: ' + subject.slice(0, 70) });
+      if (dry) return R(Object.assign(parsedFields, { parked: true, reason: 'needs_review', detail: parkReason, calendar: { action: 'none' } }));
+      stage = 'park';
+      await ensureDeliveryTab(env);
+      let parkedId, status = 'Needs Review';
+      if (row) {   // known order: keep its status, add the email to its notes, still tell Brett
+        status = row.Status;
+        await updateRowVerified(env, 'Deliveries', row.ID, { Delivery_Notes: deliveryNoteAppend(row.Delivery_Notes, 'UNRECOGNISED EMAIL: ' + subject.slice(0, 120) + ' | ' + p.excerpt.slice(0, 200), recvIso), Seen_Message_IDs: deliverySeenAppend(row, msgKeys) });
+        parkedId = String(row.ID);
+      } else {
+        const add = await addRow(env, 'Deliveries', { Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: p.expected_date, Expected_Window: p.expected_window,
+          Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone, Delivery_Notes: excerpt.slice(0, 1500), Status: 'Needs Review', Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','),
+          Created_Date: new Date().toISOString(), Active: 'TRUE', Last_Event: p.kind, Last_Event_At: recvIso });
+        const aj = await add.clone().json();
+        if (add.status !== 200 || !aj || aj.success !== true || !aj.id) throw new Error('could not save the Needs Review row: ' + JSON.stringify(aj).slice(0, 120));
+        invalidateTabCache('Deliveries');
+        const back = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === String(aj.id));
+        if (!back || back.Message_ID !== msgId) throw new Error('Needs Review row ' + aj.id + ' did not read back');
+        parkedId = String(aj.id);
+      }
+      stage = 'park-sms';
+      const smsRes = await intakeSmsAdmin(env, sms, '', null);
+      await updateRow(env, 'Deliveries', parkedId, { Brett_SMS_Status: smsRes }).catch(e => warnings.push('could not record the alert result on the delivery: ' + String((e && e.message) || e).slice(0, 100)));
+      const tok = await deliveryTelemetry(env, t0, smsRes === 'sent', 'parked ' + (order || '(no order)') + ' ' + parkReason.slice(0, 120) + '; sms=' + smsRes);
+      return R(Object.assign(parsedFields, { parked: true, reason: 'needs_review', detail: parkReason, delivery_id: parkedId, status, updated: !!row, created: !row, brett_sms_sent: smsRes === 'sent', sms_status: smsRes, telemetry_ok: tok, needs_attention: smsRes !== 'sent' || !tok, calendar: { action: 'none' } }));
+    }
+
+    // ── the email is clear and tied to an order ──
+    const isNew = !row;
+    const prior = row || {};
+    const place = deliveryMatchPlace(p.address || prior.Delivery_Address, p.unit_raw, properties, units, tenants);
+    const notes = [];
+    if (p.missing.length) notes.push('MISSING from email: ' + p.missing.join(', '));
+    if (p.notes.length) notes.push(p.notes.join('; '));
+    const placeNotes = [];
+    if (!prior.Property_ID) {
+      if (place.status === 'none' || place.status === 'no_address') placeNotes.push('NEEDS PROPERTY: ' + (p.address ? 'address as received "' + p.address + '" matches no property' : 'no delivery address in the email'));
+      else if (place.status === 'ambiguous') placeNotes.push('NEEDS PROPERTY: address as received "' + p.address + '" matches more than one property (' + place.detail + ')');
+      else if (place.unit_problem) placeNotes.push('UNIT UNKNOWN: ' + place.unit_problem);
+    }
+    let anomaly = '';
+    if (prior.Property_ID && place.status === 'matched' && String(place.property.ID) !== String(prior.Property_ID)) anomaly = 'the address in this email matches property ' + place.property.ID + ' (' + place.property.Address + ') but the record is on property ' + prior.Property_ID + ' - not changed';
+
+    // stale = older than the last email applied to this row (Apps Script retries can deliver out of order): fill blanks only
+    const stale = !isNew && prior.Last_Event_At && recvIso < String(prior.Last_Event_At);
+    const next = isNew ? { status: DELIVERY_KIND_STATUS[p.kind], changed: true, anomaly: '' } : (stale ? { status: prior.Status, changed: false, anomaly: '' } : deliveryNextStatus(prior.Status, p.kind));
+    if (next.anomaly) anomaly = anomaly ? anomaly + '; ' + next.anomaly : next.anomaly;
+    const frozen = ['Delivered', 'Cancelled'].indexOf(prior.Status) >= 0 && !(prior.Status === 'Cancelled' && p.kind === 'reschedule');
+    let date = prior.Expected_Date || '', win = prior.Expected_Window || '';
+    if (!stale && !frozen) {
+      if (['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+        if (p.expected_date) { if (p.expected_date !== date && p.kind === 'reschedule' && !p.expected_window) win = ''; date = p.expected_date; }
+        if (p.expected_window) win = p.expected_window;
+      } else if (p.kind !== 'cancel') {
+        if (!date && p.expected_date) date = p.expected_date;
+        if (!win && p.expected_window) win = p.expected_window;
+      }
+      if (p.kind === 'delivered' && !date) date = deliveryEtDate(recvIso);
+    }
+    const stops = (!stale && (p.kind === 'approaching' || p.kind === 'en_route')) ? p.stops_away : (prior.Stops_Away === '' || prior.Stops_Away == null ? null : +prior.Stops_Away);
+    const newStatus = next.status;
+    const dateChanged = !isNew && date !== (prior.Expected_Date || ''), winChanged = !isNew && win !== (prior.Expected_Window || '');
+    const sig = deliveryEventSig(newStatus, date, win, p.kind === 'approaching' ? stops : null);
+    const statusChanged = isNew || newStatus !== prior.Status;
+
+    // who gets a text from Brett's phone: new order, date/window set or changed, en route / stops away, delivered, cancelled, problems. Nothing else.
+    let alertEvent = '';
+    if (!stale) {
+      if (anomaly) alertEvent = 'problem';
+      else if (isNew) alertEvent = ['order_confirmation', 'scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0 ? 'new' : p.kind;
+      else if (['cancel', 'delivered', 'en_route'].indexOf(p.kind) >= 0) alertEvent = statusChanged ? p.kind : '';
+      else if (p.kind === 'approaching') alertEvent = (statusChanged || sig !== prior.Last_Event_Sig) ? 'approaching' : '';
+      else if (['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) alertEvent = (dateChanged || winChanged || (p.kind === 'reschedule' && statusChanged)) ? p.kind : '';
+      else if (p.kind === 'order_confirmation') alertEvent = (dateChanged || winChanged) ? 'scheduled' : '';
+    }
+
+    const fill = {};   // blanks on an existing row that this email can fill (never overwrites a value Brett or an earlier email set)
+    if (!isNew) {
+      if (!prior.Item_Type && p.item_type) fill.Item_Type = p.item_type;
+      if (!prior.New_Make_Model && p.make_model) fill.New_Make_Model = p.make_model;
+      if (!prior.Delivery_Address && p.address) fill.Delivery_Address = p.address;
+      if (!prior.Property_ID && place.status === 'matched') { fill.Property_ID = String(place.property.ID); if (place.unit_id) fill.Unit_ID = place.unit_id; if (place.tenant_id) { fill.Tenant_ID = place.tenant_id; if (prior.Onsite_Contact !== 'tenant') fill.Onsite_Contact = 'tenant'; } }
+    }
+    const merged = Object.assign({}, prior, fill);
+    const propertyId = isNew ? (place.status === 'matched' ? String(place.property.ID) : '') : (merged.Property_ID || '');
+    const unitId = isNew ? (place.unit_id || '') : (merged.Unit_ID || '');
+    const tenantId = isNew ? (place.tenant_id || '') : (merged.Tenant_ID || '');
+    const matchedPlace = place.status === 'matched' && (isNew || String(place.property.ID) === String(merged.Property_ID));
+
+    const calendarFor = (idForKey) => deliveryCalendarObject({ order: p.order_number || prior.Order_Number, delivery_id: idForKey, item: merged.Item_Type || p.item_type || prior.Item_Type, make: merged.New_Make_Model || p.make_model, date, window: win, address: merged.Delivery_Address || p.address, wo_id: String(merged.Linked_WO_IDs || '').split(',')[0], kind: p.kind, status: newStatus, is_new: isNew || (!prior.Expected_Date && !!date) });
+    const noChange = !isNew && !stale && !alertEvent && !statusChanged && !dateChanged && !winChanged && !Object.keys(fill).length;
+
+    const base = Object.assign(parsedFields, { item_type: merged.Item_Type || p.item_type, make_model: merged.New_Make_Model || p.make_model, expected_date: date, expected_window: win, delivery_address: merged.Delivery_Address || p.address, status: newStatus,
+      property_matched: !!propertyId, property_id: propertyId, unit_id: unitId, tenant_id: tenantId, order_number: p.order_number || prior.Order_Number || '' });
+
+    if (dry) {
+      const cal = (stale || noChange) ? { action: 'none' } : calendarFor(isNew ? 'new' : prior.ID);
+      return R(Object.assign(base, { created: isNew, updated: !isNew && !stale, delivery_id: isNew ? '' : String(prior.ID), reason: stale ? 'stale_email' : (noChange ? 'no_change' : (isNew ? 'would_create' : 'would_update')), detail: [placeNotes.join('; '), anomaly, 'would text Brett: ' + (alertEvent || 'no')].filter(Boolean).join(' | '), wo_id: isNew ? '' : String(prior.Linked_WO_IDs || '').split(',')[0].trim(), calendar: cal, calendar_status: cal.action === 'none' ? 'none' : 'dry_run: would ' + cal.action }));
+    }
+
+    // ── writes ──
+    let deliveryId, claim = '', lostClaim = false, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
+    const noteLine = 'Email (' + p.kind + ', ' + (mailboxStr || 'mailbox ?') + '): ' + subject.slice(0, 100);
+    await ensureDeliveryTab(env);
+    if (isNew) {
+      stage = 'create';
+      const tenantMeets = !!tenantId;
+      const row0 = {
+        Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: date, Expected_Window: win,
+        Property_ID: propertyId, Unit_ID: unitId, Tenant_ID: tenantId,
+        Onsite_Contact: tenantMeets ? 'tenant' : 'me', Onsite_Contact_Phone: tenantMeets ? '' : adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone,
+        Delivery_Notes: [DELIVERY_DRIVER_NOTE, noteLine].concat(notes, placeNotes).join('\n').slice(0, 5000),
+        Status: newStatus, Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','), Created_Date: new Date().toISOString(), Active: 'TRUE',
+        Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops),
+      };
+      const add = await addRow(env, 'Deliveries', row0);
+      const aj = await add.clone().json();
+      if (add.status !== 200 || !aj || aj.success !== true || !aj.id) throw new Error('Deliveries row did not save: ' + JSON.stringify(aj).slice(0, 120));
+      deliveryId = String(aj.id);
+      invalidateTabCache('Deliveries');
+      const all = await fetchTab(env, 'Deliveries');
+      const mine = all.find(d => String(d.ID) === deliveryId);
+      if (!mine || mine.Message_ID !== msgId) throw new Error('Deliveries row ' + deliveryId + ' did not read back after the write');
+      // Both mailboxes can deliver the same email at the same instant: the LOWEST row id for an order / message wins; the other retires itself.
+      const rivals = all.filter(d => d.Active !== 'FALSE' && String(d.ID) !== deliveryId && ((order && deliveryNormOrder(d.Order_Number) === order) || deliverySawMessage(d, msgKeys)));
+      const winner = rivals.sort((a, b) => deliveryRowNum(a) - deliveryRowNum(b))[0];
+      if (winner && deliveryRowNum(winner) < deliveryRowNum(mine)) {
+        await updateRowVerified(env, 'Deliveries', deliveryId, { Active: 'FALSE', Delivery_Notes: 'Retired automatically: duplicate of delivery ' + winner.ID + ' created at the same moment (two mailboxes got the same email).' });
+        const tok = await deliveryTelemetry(env, t0, true, 'race: retired duplicate delivery ' + deliveryId + ' in favour of ' + winner.ID);
+        return R(Object.assign(base, { duplicate: true, reason: 'race_duplicate', delivery_id: String(winner.ID), telemetry_ok: tok }));
+      }
+      Object.assign(merged, mine);
+      if (propertyId && ['Cancelled', 'Delivered'].indexOf(newStatus) < 0) {
+        stage = 'wo';
+        woInfo = await deliveryEnsureWO(env, mine, p, msgId, adminName);
+        if (woInfo.error) {
+          const tok = await deliveryTelemetry(env, t0, false, 'delivery ' + deliveryId + ' saved but its WO failed: ' + woInfo.error);
+          const s2 = await intakeSmsAdmin(env, deliveryBrettText({ event: 'problem', order: p.order_number, item: p.item_type, address: p.address, note: 'record saved (delivery ' + deliveryId + ') but the work order could not be created' }), '', null);
+          return json({ success: false, error: 'Delivery ' + deliveryId + ' saved but its work order failed: ' + woInfo.error, delivery_id: deliveryId, brett_sms_sent: s2 === 'sent', telemetry_ok: tok, stage }, 500);
+        }
+        if (woInfo.warning) warnings.push(woInfo.warning);
+        merged.Linked_WO_IDs = woInfo.wo_id;
+      }
+    } else {
+      stage = 'update';
+      deliveryId = String(prior.ID);
+      const f = Object.assign({}, fill, { Seen_Message_IDs: deliverySeenAppend(prior, msgKeys) });
+      if (noChange) {
+        Object.assign(f, { Last_Event_At: recvIso, Last_Event_Sig: sig });   // same news again: only remember the email and its time
+      } else if (!stale) {
+        Object.assign(f, { Status: newStatus, Expected_Date: date, Expected_Window: win, Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops) });
+        const nl = [noteLine].concat(notes, placeNotes, anomaly ? ['CHECK: ' + anomaly] : []);
+        if (dateChanged || winChanged) nl.push('Date/window now ' + (date || '?') + (win ? ' ' + win : '') + ' (was ' + (prior.Expected_Date || '?') + (prior.Expected_Window ? ' ' + prior.Expected_Window : '') + ')');
+        // A new date/window makes the tenant's earlier answer out of date: reset it (the new request asks again). A Declined tenant is the on-site contact again.
+        if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          Object.assign(f, { Tenant_RSVP: '', Tenant_RSVP_At: '', Tenant_RSVP_Note: '' });
+          if (prior.Tenant_RSVP === 'Declined' && merged.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+          nl.push('Tenant answer reset (was ' + prior.Tenant_RSVP + ') because the date/window changed');
+        }
+        // Two mailboxes can apply the same news at the same instant: each stamps a claim, and only the last writer alerts.
+        claim = sig + '#' + Math.random().toString(36).slice(2, 10);
+        f.Event_Claim = claim;
+        f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, nl.join(' | '), recvIso);
+      } else {
+        f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, 'Older email ignored for status/date (arrived after a newer one): ' + subject.slice(0, 100), recvIso);
+      }
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, f); }
+      catch (e) {
+        // Two mailboxes writing the same row at once can each fail the other's read-back. If the row now carries the very news we were applying, the other run
+        // did the job: this is a duplicate, not an error (anything else is still a loud failure).
+        invalidateTabCache('Deliveries');
+        const r1 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (claim && r1 && String(r1.Last_Event_Sig || '') === sig && r1.Event_Claim && r1.Event_Claim !== claim) lostClaim = true; else throw e;
+      }
+      if (claim && !lostClaim) {
+        // Settle, then look again: a run that wrote in the same moment is visible by now, and only the LAST writer alerts (default 600 ms, Config Delivery_Claim_Settle_Ms).
+        const settle = Math.max(0, Math.min(3000, parseInt(cfg.Delivery_Claim_Settle_Ms, 10) >= 0 ? parseInt(cfg.Delivery_Claim_Settle_Ms, 10) : 600));
+        if (settle) await new Promise(r => setTimeout(r, settle));
+        invalidateTabCache('Deliveries');
+        const r2 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (r2 && r2.Event_Claim && r2.Event_Claim !== claim && String(r2.Last_Event_Sig || '') === sig) lostClaim = true;   // another run wrote the same news after us: it alerts, we stay quiet
+      }
+      if (merged.Property_ID && !woInfo.wo_id && !stale && ['Cancelled', 'Delivered'].indexOf(newStatus) < 0) {
+        stage = 'wo';
+        woInfo = await deliveryEnsureWO(env, merged, p, msgId, adminName);
+        if (woInfo.error) {
+          const tok = await deliveryTelemetry(env, t0, false, 'delivery ' + deliveryId + ' updated but its WO failed: ' + woInfo.error);
+          return json({ success: false, error: 'Delivery ' + deliveryId + ' updated but its work order failed: ' + woInfo.error, delivery_id: deliveryId, telemetry_ok: tok, stage }, 500);
+        }
+        if (woInfo.warning) warnings.push(woInfo.warning);
+        merged.Linked_WO_IDs = woInfo.wo_id;
+      }
+    }
+
+    // ── Brett's text (one per event; never on a repeat) ──
+    stage = 'brett-sms';
+    let smsRes = '', brettSent = null;
+    const woId = String(merged.Linked_WO_IDs || '').split(',')[0].trim();
+    if (lostClaim) alertEvent = '';
+    if (alertEvent) {
+      const noteBits = [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : '', p.missing.length ? 'missing: ' + p.missing.join(', ') : '', isNew && place.status === 'matched' ? (tenantId ? 'tenant meets, Brett backup' : 'no tenant on file, Brett meets') : '', (tenantId && !date && deliveryNoticeMode(cfg).mode !== 'off' && ['new', 'scheduled', 'window_set', 'reschedule'].indexOf(alertEvent) >= 0) ? 'tenant NOT texted yet: no delivery date' : ''].filter(Boolean).join('; ');
+      const text = deliveryBrettText({ event: alertEvent, order: p.order_number || prior.Order_Number, item: merged.Item_Type || p.item_type, date, window: win, address: merged.Delivery_Address || p.address, wo_id: woId, stops, note: noteBits });
+      smsRes = await intakeSmsAdmin(env, text, woId, matchedPlace ? place.property : null);
+      brettSent = smsRes === 'sent';
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, { Brett_SMS_Status: smsRes }); } catch (e) { warnings.push('could not record the alert result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+    }
+
+    // ── tenant request (config-gated, batched, consent-gated; needs a delivery date) ──
+    stage = 'tenant-notice';
+    let tn = { tenant_sms: 'off', detail: '' };
+    const noticeKinds = ['order_confirmation', 'scheduled', 'window_set', 'reschedule'];
+    const cancelling = newStatus === 'Cancelled' && !isNew && prior.Status !== 'Cancelled';
+    const asking = noticeKinds.indexOf(p.kind) >= 0 && newStatus !== 'Cancelled' && newStatus !== 'Delivered' && !frozen;
+    if (!stale && !noChange && !lostClaim && (cancelling || asking)) {
+      const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
+      const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
+      const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
+      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? 'changed' : 'request') });
+      if (tn.warn) warnings.push('tenant notice: ' + tn.detail);
+      if (tn.record !== false && tn.tenant_sms !== 'off') {
+        const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200) };
+        if (tn.sig) upd.Tenant_Notice_Sig = tn.sig;
+        if (tn.draft) upd.Tenant_Notice_Draft = tn.draft;
+        if (tn.sent_at) upd.Tenant_Notice_Sent_At = tn.sent_at;
+        try { await updateRowVerified(env, 'Deliveries', deliveryId, upd); } catch (e) { warnings.push('could not record the tenant notice result: ' + String((e && e.message) || e).slice(0, 100)); }
+      }
+    }
+    if (smsRes && smsRes !== 'sent') warnings.push('Brett text not sent: ' + smsRes);
+
+    // ── the calendar event, written by the Hub as Brett (not the Apps Script). A repeat that changes nothing re-tries only a previously FAILED write. ──
+    stage = 'calendar';
+    let cal = (stale || noChange || lostClaim) ? { action: 'none' } : calendarFor(deliveryId);
+    if (cal.action === 'none' && noChange && /^failed|^not_configured/.test(String(merged.Calendar_Status || ''))) cal = calendarFor(deliveryId);
+    const cs = await deliveryCalSync(env, cfg, deliveryId, merged, cal, false);
+    if (cs.failed) warnings.push('calendar: ' + cs.status);
+    if (cal.action !== 'none' && !cs.status.startsWith('staged')) {
+      const cu = { Calendar_Status: cs.status.slice(0, 200) };
+      if (cs.event_id !== String(merged.Calendar_Event_ID || '')) cu.Calendar_Event_ID = cs.event_id;
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, cu); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+    }
+    const telOk = await deliveryTelemetry(env, t0, warnings.length === 0, (isNew ? 'created ' : (stale ? 'stale ' : 'updated ')) + deliveryId + ' ' + (order || '') + ' ' + p.kind + ' -> ' + newStatus + '; brett=' + (smsRes || 'none') + '; tenant=' + tn.tenant_sms + '; wo=' + (woId || '-') + '; cal=' + cs.status.slice(0, 40) + (warnings.length ? '; WARN ' + warnings.join(' / ') : ''));
+    return R(Object.assign(base, {
+      created: isNew, updated: !isNew && !stale && !noChange && !lostClaim, duplicate: noChange || lostClaim, delivery_id: deliveryId, reason: stale ? 'stale_email' : (noChange ? 'no_change' : (lostClaim ? 'concurrent_duplicate' : '')), detail: [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : ''].filter(Boolean).join(' | '),
+      wo_id: woId, wo_created: !!woInfo.created, brett_sms_sent: brettSent, sms_status: smsRes, tenant_sms: tn.tenant_sms, tenant_sms_detail: tn.detail || '', calendar: cal, calendar_status: cs.status, calendar_event_id: cs.event_id || '', telemetry_ok: telOk,
+      needs_attention: warnings.length > 0 || brettSent === false || !telOk,
+    }));
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    const telOk = await deliveryTelemetry(env, t0, false, `error at ${stage}: ${msg}`);
+    let alertFailed = telOk ? '' : 'telemetry row not written';
+    // One alert text + one Error row per message (the Apps Script retries every run: do not spam).
+    try {
+      if (!dry) {
+        await intakeEnsureTab(env);
+        const priorErr = (await fetchTab(env, INTAKE_TAB)).filter(q => q.Message_ID === msgId && q.Status === 'Error');
+        if (!priorErr.length) {
+          const sms = await intakeSmsAdmin(env, deliveryBrettText({ event: 'problem', note: 'delivery email intake error (' + stage + '): ' + msg.slice(0, 120) }), '', null);
+          await intakeAppendRow(env, { Received_At: recvIso, Source: 'Delivery email', Message_ID: msgId, Subject: subject.slice(0, 200), Status: 'Error', Reason: `${stage}: ${msg}`.slice(0, 400), SMS_Status: sms, Raw_Body: String(body.body || '').slice(0, 45000), Processed_At: new Date().toISOString() });
+        }
+      }
+    } catch (e2) { alertFailed = (alertFailed ? alertFailed + '; ' : '') + 'could not write Error row / alert text: ' + String((e2 && e2.message) || e2).slice(0, 200); }
+    return json({ success: false, error: msg, stage, alert_failed: alertFailed }, 500);
+  }
+}
+// ═══ DELIVERY-EMAIL-HANDLER-END ═══
 
 // Monday-anchored week key (YYYY-MM-DD of that week's Monday). Date-only + UTC
 // noon so a Baltimore evening never rolls into the next day's bucket.
