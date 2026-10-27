@@ -40954,6 +40954,7 @@ function fiValidateDoc(doc) {
       if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
       if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
       fiValidateEquipment(a.equipment, `areas[${i}]`, errors);
+      fiValidateAccess(a.access, `areas[${i}]`, errors);
       if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
       else (a.issues || []).forEach((is, j) => {
