@@ -406,7 +406,7 @@ function retryPhotos(){
 // ── model ───────────────────────────────────────────────────────────────────
 function findArea(doc, id){ for (var i=0;i<doc.areas.length;i++) if (doc.areas[i].id===id) return doc.areas[i]; return null; }
 function issueCount(a){ return (a.issues||[]).length; }
-function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return a.condition && a.condition!=='not_inspected'; }).length, total: act.length }; }
+function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return (a.condition && a.condition!=='not_inspected') || (a.access && a.access.no_access); }).length, total: act.length }; }
 
 // ── views ───────────────────────────────────────────────────────────────────
 function render(){
