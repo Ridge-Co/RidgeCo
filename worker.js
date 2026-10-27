@@ -26909,6 +26909,13 @@ async function hubTestWriteAllowed(env, path, body) {
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
   if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
+  if (path === '/fi/reword') return true; // AI only: writes nothing
+  if (path === '/fi/booking/start') { // staging may only claim a TEST- booking (address starts TEST-) for a TEST- inspection id
+    if (!String((body && body.inspection_id) || '').startsWith('TEST-')) return false;
+    const _bk = await fetchTab(env, 'Insp_Bookings');
+    const _br = _bk.find(r => String(r.ID) === String(body && body.booking_id));
+    return !!_br && String(_br.Address || '').startsWith('TEST-');
+  }
   if (path === '/fi/read-label') return String((body && body.inspection_id) || '').startsWith('TEST-'); // reads a private photo: TEST- inspections only
   if (path === '/fi/folder/organize') return String((body && body.inspection_id) || '').startsWith('TEST-');
   if (path === '/fi/property/create') { // staging may only create a TEST- address owned by a TEST- owner (new TEST- company, or an existing TEST- owner)
