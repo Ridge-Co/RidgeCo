@@ -1236,6 +1236,78 @@ function viewInsp(){
   h += '<button class="btn primary block" style="margin-top:10px;min-height:52px" onclick="openReview()">Review &amp; report ›</button>';
   return h;
 }
+// ---- visit details: animals + access & cooperation (Oct 27 2026; both optional, neutral wording) ----
+function animalsText(v){
+  var an = v && v.animals; if (!an || an.present==null) return '';
+  if (!an.present) return 'No animals';
+  var it = (an.items||[]).filter(function(x){ return String(x.type||'').trim(); });
+  return it.length ? it.map(function(x){ return x.type + (x.count ? ' × '+x.count : ''); }).join(', ') : 'Animals present';
+}
+function coopText(v){
+  var c = v && v.access_cooperation; if (!c) return '';
+  var lab = ''; COOP_CHOICES.forEach(function(x){ if (x[0]===c.choice) lab = x[1]; });
+  return [lab, String(c.note||'').trim()].filter(Boolean).join(' — ');
+}
+function visitCardHtml(doc){
+  var v = doc.visit||{}, at = animalsText(v), ct = coopText(v);
+  return '<div class="card"><div class="row"><b>Visit details</b><button class="btn sm" onclick="visitSheet()">'+(at||ct?'Edit':'Add')+'</button></div><div class="muted">Animals: '+(at?esc(at):'not noted')+'<br>Access &amp; cooperation: '+(ct?esc(ct):'no comments (nothing is shown in the report)')+'</div></div>';
+}
+function vGet(doc){
+  doc.visit = doc.visit || {};
+  doc.visit.animals = doc.visit.animals || { present:null, items:[] };
+  doc.visit.animals.items = doc.visit.animals.items || [];
+  doc.visit.access_cooperation = doc.visit.access_cooperation || { choice:'', note:'' };
+  return doc.visit;
+}
+function visitSheet(){
+  var doc = S.rec.doc, v = doc.visit||{}, an = v.animals||{ present:null, items:[] }, ac = v.access_cooperation||{ choice:'', note:'' };
+  S.visitOpen = true;
+  var h = '<h2>Visit details</h2><div class="muted">Everything here is optional.</div>';
+  h += '<label class="fld">Animals present?</label><div class="seg"><button class="'+(an.present===false?'sel':'')+'" onclick="vAnimals(false)">No</button><button class="'+(an.present===true?'sel':'')+'" onclick="vAnimals(true)">Yes</button></div><div class="muted">Tap the selected one again to clear it.</div>';
+  if (an.present===true){
+    h += (an.items||[]).map(function(it,i){ return '<div class="row" style="gap:6px;margin-top:8px"><input list="animal-types" value="'+esc(it.type||'')+'" placeholder="Dog, cat…" oninput="vAnimalType('+i+',this.value)" style="flex:2"><span class="step"><button onclick="vAnimalCount('+i+',-1)">−</button><span class="n">'+(it.count||1)+'</span><button onclick="vAnimalCount('+i+',1)">＋</button></span><button class="btn sm" aria-label="Remove this animal" onclick="vAnimalDel('+i+')">✕</button></div>'; }).join('')
+      + '<datalist id="animal-types">'+ANIMAL_TYPES.map(function(t){ return '<option value="'+esc(t)+'">'; }).join('')+'</datalist><div class="btns"><button class="btn sm" onclick="vAnimalAdd()">＋ Add another animal</button></div>';
+  }
+  h += '<label class="fld">Access &amp; cooperation</label><div class="muted">Optional. Stick to what happened. Leave it blank for no comment — nothing is shown in the report.</div>';
+  h += COOP_CHOICES.map(function(c){ return '<button class="btn block'+(ac.choice===c[0]?' primary':'')+'" style="text-align:left;margin-top:6px" onclick="vCoop(\''+c[0]+'\')">'+esc(c[1])+'</button>'; }).join('');
+  h += '<label class="fld">Note (optional)</label><textarea id="v-note" style="min-height:80px" placeholder="A short, factual note about access during the visit" oninput="vNote(this.value)">'+esc(ac.note||'')+'</textarea>'
+    + '<div class="btns"><button class="btn sm" id="v-rw" onclick="vReword()">✨ Suggest neutral wording</button></div><div id="v-rw-out"></div>'
+    + '<div class="btns"><button class="btn primary" onclick="closeSheet()">Done</button></div>';
+  openSheet(h);
+}
+function vAnimals(p){ mut(function(d){ var an = vGet(d).animals; an.present = (an.present===p) ? null : p; if (an.present===true && !an.items.length) an.items.push({ type:'', count:1 }); }); visitSheet(); }
+function vAnimalType(i, val){ mut(function(d){ var it = vGet(d).animals.items[i]; if (it) it.type = String(val||'').slice(0,60); }); }
+function vAnimalCount(i, dlt){ mut(function(d){ var it = vGet(d).animals.items[i]; if (it) it.count = Math.max(1, Math.min(99, (Number(it.count)||1)+dlt)); }); visitSheet(); }
+function vAnimalDel(i){ mut(function(d){ vGet(d).animals.items.splice(i,1); }); visitSheet(); }
+function vAnimalAdd(){ mut(function(d){ var its = vGet(d).animals.items; if (its.length < 10) its.push({ type:'', count:1 }); }); visitSheet(); }
+function vCoop(c){ mut(function(d){ var ac = vGet(d).access_cooperation; ac.choice = (ac.choice===c) ? '' : c; }); visitSheet(); }
+function vNote(val){ mut(function(d){ vGet(d).access_cooperation.note = String(val||'').slice(0,600); }); }
+// AI rewording is a SUGGESTION only: nothing changes until Brett taps "Use this wording".
+function vReword(){
+  var ta = $('v-note'), t = ta ? ta.value.trim() : '', out = $('v-rw-out'); if (!out) return;
+  if (!t){ out.innerHTML = '<div class="banner warn" style="margin-top:8px">Type your note first, then ask for neutral wording.</div>'; return; }
+  if (!claim('rw')) return; var b = $('v-rw'); if (b) b.disabled = true; out.innerHTML = '<div class="muted" style="margin-top:8px">Working…</div>';
+  api('POST','/fi/reword',{ text:t }).then(function(r){
+    release('rw'); S.rw = r.text; var o2 = $('v-rw-out'); if (b) b.disabled = false; if (!o2) return;
+    o2.innerHTML = '<div class="banner info" style="margin-top:8px"><b>Suggested wording</b><div style="margin-top:4px">'+esc(r.text)+'</div><div class="btns"><button class="btn sm primary" onclick="vUseReword()">Use this wording</button><button class="btn sm" onclick="$(\'v-rw-out\').innerHTML=\'\'">Keep mine</button></div><div class="muted">Your own note stays as written unless you tap “Use this wording”.</div></div>';
+  }).catch(function(e){ release('rw'); if (b) b.disabled = false; var o3 = $('v-rw-out'); if (o3) o3.innerHTML = '<div class="banner warn" style="margin-top:8px">'+esc(e.message||'Could not reword')+' Your note is unchanged.</div>'; });
+}
+function vUseReword(){ var ta = $('v-note'); if (!ta || !S.rw) return; ta.value = S.rw; vNote(S.rw); var o = $('v-rw-out'); if (o) o.innerHTML = '<div class="muted" style="margin-top:8px">Replaced with the suggested wording.</div>'; }
+// ---- per-area "No access" ----
+function areaPill(a){ return (a.access && a.access.no_access) ? '<span class="pill warn">No access</span>' : condPill(a.condition); }
+function accessHtml(a){
+  var ac = a.access||{};
+  if (!ac.no_access) return '<button class="btn block" style="margin-bottom:12px" onclick="setNoAccess(true)">🚫 No access to this area</button>';
+  var needNote = ac.reason==='other' && !String(ac.note||'').trim();
+  return '<div class="card" style="border-color:var(--warn)"><div class="row"><b>🚫 No access</b><button class="btn sm" onclick="setNoAccess(false)">Undo — I got in</button></div>'
+    +'<label class="fld">Reason (optional)</label><select onchange="setAccessReason(this.value)">'+ACCESS_REASONS.map(function(r){ return '<option value="'+r[0]+'"'+((ac.reason||'')===r[0]?' selected':'')+'>'+esc(r[1])+'</option>'; }).join('')+'</select>'
+    +'<label class="fld">'+(ac.reason==='other'?'Describe why *':'Note (optional)')+'</label><input value="'+esc(ac.note||'')+'" oninput="setAccessNote(this.value)" placeholder="e.g. the resident asked me to leave before I finished">'
+    +(needNote?'<div class="banner warn" style="margin-top:8px">Describe why — needed before you can publish.</div>':'')
+    +'<div class="muted" style="margin-top:6px">The report lists this under “Areas not accessed”.</div></div>';
+}
+function setNoAccess(on){ var a = curArea(); mut(function(){ if (on) a.access = { no_access:true, reason:'', note:'' }; else delete a.access; }); render(); }
+function setAccessReason(v){ var a = curArea(); mut(function(){ a.access = a.access || { no_access:true, note:'' }; a.access.reason = v; }); render(); }
+function setAccessNote(v){ var a = curArea(); mut(function(){ a.access = a.access || { no_access:true, reason:'' }; a.access.note = String(v||'').slice(0,500); }); }
 function areaRow(a, i, n){
   var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length;
   var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'');
