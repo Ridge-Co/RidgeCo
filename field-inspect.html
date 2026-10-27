@@ -455,7 +455,7 @@ function viewHome(){
 
 // ---- new inspection ----
 function startNew(){
-  S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new';
+  S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new'; S.newBooking = null; S.newInspId = '';
   var d = defaultBrand();
   S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false };
   render(); loadProps();
