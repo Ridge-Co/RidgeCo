@@ -1221,6 +1221,8 @@ function viewInsp(){
   h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+(doc.property.unit_label?' · '+esc(unitText(doc.property.unit_label)):'')+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
   h += ownerCardHtml(doc);
+  h += doc.booking ? bookingCardHtml(doc.booking) : bookingLinkHtml(doc);
+  h += visitCardHtml(doc);
   h += routeResumeHtml();
   var vn = doc.voice_notes||[], unsorted = vn.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length;
   h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
