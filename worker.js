@@ -26911,6 +26911,11 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
+  if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
+    if (!body || body.dry_run !== false) return true; // a dry run writes nothing
+    const _cu = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(body.customer_id));
+    return !!_cu && String(_cu.Name || '').startsWith('TEST-') && Array.isArray(body.links) && body.links.every(l => String((l && l.inspection_id) || '').startsWith('TEST-'));
+  }
   if (path === '/fi/booking/start') { // staging may only claim a TEST- booking (address starts TEST-) for a TEST- inspection id
     if (!String((body && body.inspection_id) || '').startsWith('TEST-')) return false;
     const _bk = await fetchTab(env, 'Insp_Bookings');
