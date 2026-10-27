@@ -235,7 +235,7 @@ function enterApp(d, err){
     (rows||[]).forEach(function(r){ localOnly[r.id] = r; });
     render(); setSync(); pumpPhotos();
   }).catch(function(e){ S.noIdb = true; render(); toast('Phone storage problem: '+e.message); });
-  render(); setSync(); loadTypes();
+  render(); setSync(); loadTypes(); loadBookings();
 }
 function applyList(d){ S.list = d.inspections || []; S.brands = d.brands || []; S.reportBase = d.report_base || S.reportBase; S.listErr=''; }
 function refreshList(){ return api('GET','/fi/list').then(function(d){ applyList(d); }).catch(function(e){ S.listErr = 'Could not refresh the server list: '+e.message; }); }
