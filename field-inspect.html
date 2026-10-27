@@ -141,6 +141,10 @@ var TRADE_LABEL = {}; TRADES.forEach(function(t){ TRADE_LABEL[t[0]] = t[1]; });
 var SEV_LABEL = {}; SEVS.forEach(function(t){ SEV_LABEL[t[0]] = t[1]; });
 var COND_LABEL = {good:'Good',fair:'Fair',poor:'Poor',nothing_to_do:'Nothing to do',not_inspected:'Not inspected',na:'N/A'};
 var INSP_TYPES = [['periodic','Periodic'],['move_in','Move-in'],['move_out','Move-out'],['pre_listing','Pre-listing'],['other','Other']];
+// Oct 27 2026: per-area "No access" reasons, neutral access & cooperation quick-picks, animal types
+var ACCESS_REASONS = [['','No reason given'],['tenant_declined','Tenant declined access'],['blocked','Area blocked'],['other','Other (describe)']];
+var COOP_CHOICES = [['completed','Occupant present; inspection completed as planned'],['not_present','Occupant not present'],['limited','Occupant present; access to some areas was limited'],['ended_early','Occupant asked that the inspection end early']];
+var ANIMAL_TYPES = ['Dog','Cat','Bird','Other'];
 
 // ── state ───────────────────────────────────────────────────────────────────
 var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], dir:null, propsErr:'', propQ:'', newProp:null, newOwner:null, ownerQ:'', pickUnitFor:'', unitQ:'', hits:[], ownerHits:{},
