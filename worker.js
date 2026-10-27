@@ -42180,6 +42180,72 @@ async function fiBookingStart(env, body) {
   const out = fiBookingOut(Object.assign({}, b, { Inspection_ID: inspId }), cust, owners, prop ? [prop] : []);
   return json({ ok: true, booking: out, property: prop ? { id: propId, address: out.address, street: String(prop.Address || ap.street), city: prop.City || ap.city, unit_count: Number(prop.Unit_Count) || 1 } : null, property_created: created, owner: out.owner, owner_missing: !owner });
 }
+// ── One-time Premier repair (Oct 27 2026, Brett) ─────────────────────────────────────────────────────────
+// Ties a booking partner to its Hub owner and links inspections that were
+// started before the booking could be picked: claims the booking (no inspection edit, so a phone mid-edit never hits a version conflict) and,
+// only when a link says doc:true, fills the inspection's blank owner / property. Additive only: never overwrites a filled cell, never creates
+// an owner and never touches owner phone/email (texts), money or QuickBooks. A dry run (the default) changes nothing; every real write is read back.
+async function fiPremierRepair(env, body) {
+  body = body || {};
+  const dry = body.dry_run !== false;
+  const custId = String(body.customer_id || '').trim(), ownerId = String(body.owner_id || '').trim();
+  const links = Array.isArray(body.links) ? body.links : [];
+  if (!custId || !ownerId) return fiErr(400, 'bad_request', 'customer_id and owner_id are required.');
+  if (links.length > 20) return fiErr(400, 'bad_request', 'At most 20 links at a time.');
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const cust = (await fiReadFresh(env, 'Insp_Customers')).rows.map(r => r.o).find(c => String(c.ID) === custId);
+  const owner = (await fiReadFresh(env, 'Owners')).rows.map(r => r.o).find(o => String(o.ID) === ownerId && o.Active !== 'FALSE');
+  if (!cust) return fiErr(404, 'not_found', 'That booking partner was not found.');
+  if (!owner) return fiErr(404, 'not_found', 'That Hub owner was not found (or is inactive).');
+  const steps = [], step = (what, status, detail) => steps.push({ what, status, detail: detail || '' });
+  const done = (ok) => json({ ok, dry_run: dry, steps }, ok ? 200 : 409);
+  // 1. partner -> owner link (blank only)
+  const cur = String(cust.Hub_Owner_ID || '').trim();
+  if (cur && cur !== ownerId) { step('partner_owner_link', 'conflict', 'partner is already linked to owner ' + cur + '; nothing changed'); return done(false); }
+  if (cur) step('partner_owner_link', 'skipped', 'already linked to owner ' + ownerId);
+  else if (dry) step('partner_owner_link', 'planned', 'set Hub_Owner_ID=' + ownerId);
+  else { await updateRowVerified(env, 'Insp_Customers', custId, { Hub_Owner_ID: ownerId }); step('partner_owner_link', 'done', 'Hub_Owner_ID=' + ownerId); }
+  // 2. inspections <-> bookings (address + date must match)
+  const bt = (await fiReadFresh(env, 'Insp_Bookings')).rows.map(r => r.o);
+  for (const lk of links) {
+    const inspId = String(lk && lk.inspection_id || '').trim(), bid = String(lk && lk.booking_id || '').trim(), tag = 'link ' + bid + ' <-> ' + inspId;
+    const b = bt.find(x => String(x.ID) === bid && x.Active !== 'FALSE');
+    const ins = await fiFindInspection(env, inspId);
+    if (!b || !ins.row) { step(tag, 'conflict', !b ? 'booking not found' : 'inspection not found'); continue; }
+    if (ins.dupes > 1) { step(tag, 'conflict', 'duplicate inspection rows'); continue; }
+    const row = ins.row.o, ap = fiBookingAddrParts(b);
+    if (b.Status !== 'approved' || String(b.Customer_ID) !== custId) { step(tag, 'conflict', 'booking is not an approved booking of this partner'); continue; }
+    if (qbNormAddress(ap.street) !== qbNormAddress(fiStreetOf(row.Address)) || String(b.Date) !== String(row.Inspection_Date)) { step(tag, 'conflict', 'address or date does not match (booking ' + ap.street + ' on ' + b.Date + '; inspection ' + fiStreetOf(row.Address) + ' on ' + row.Inspection_Date + ')'); continue; }
+    if (row.Owner_ID && String(row.Owner_ID) !== ownerId) { step(tag, 'conflict', 'inspection already belongs to owner ' + row.Owner_ID); continue; }
+    if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) { step(tag, 'conflict', 'booking already claimed by ' + b.Inspection_ID); continue; }
+    const claimed = b.Inspection_ID === inspId, needDoc = lk.doc === true && (!row.Owner_ID || !row.Property_ID);
+    if (claimed && !needDoc) { step(tag, 'skipped', 'already linked'); continue; }
+    if (dry) { step(tag, 'planned', [claimed ? '' : 'claim booking', needDoc ? 'fill inspection owner/property' : ''].filter(Boolean).join(' + ')); continue; }
+    let propId = String(b.Hub_Property_ID || row.Property_ID || '');
+    if (!claimed) {
+      const res = await fiBookingStart(env, { booking_id: bid, inspection_id: inspId });
+      let rd = null; try { rd = await res.clone().json(); } catch (e) { rd = null; /* silent-ok: a null body becomes the error step just below */ }
+      if (!res.ok || !rd || rd.ok === false) { step(tag, 'error', (rd && rd.message) || 'could not claim the booking'); return done(false); }
+      if (rd.owner && String(rd.owner.id) !== ownerId) { step(tag, 'error', 'the booking resolved to a different owner (' + rd.owner.id + '); stop and check'); return done(false); }
+      propId = rd.property ? String(rd.property.id) : propId;
+    }
+    if (needDoc) {
+      const fresh = await fiFindInspection(env, inspId), o2 = fresh.row.o;
+      let doc = null; try { doc = JSON.parse(fiJoinRow(o2)); } catch (e) { doc = null; /* silent-ok: an unreadable doc becomes the error step just below */ }
+      if (!doc || !doc.property) { step(tag, 'error', 'the inspection could not be read; nothing edited'); return done(false); }
+      if (!doc.owner || !doc.owner.id) doc.owner = { id: ownerId, name: fiOwnerName(owner), source: 'hub' };
+      if (!doc.property.id && propId) { doc.property.id = propId; doc.property.source = 'hub'; }
+      if (!doc.booking) doc.booking = { id: String(b.ID), customer_id: custId, customer_name: cust.Name || '', contact: { name: b.Contact_Name || '', phone: b.Contact_Phone || '', email: b.Contact_Email || '' }, notes: b.Notes || '', size: { levels: b.Levels || '', bedrooms: b.Bedrooms || '', bathrooms: b.Bathrooms || '' }, size_text: inspSizeText(b), units: +b.Units || 1, buildings: +b.Buildings || 1, scheduled: b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) : (b.Date || '') };
+      const sres = await fiSave(env, { id: inspId, base_rev: Number(o2.Rev) || 0, doc, meta: {} });
+      let sd = null; try { sd = await sres.clone().json(); } catch (e) { sd = null; /* silent-ok: a null body becomes the error step just below */ }
+      if (!sres.ok || !sd || sd.ok === false) { step(tag, 'error', (sd && sd.message) || 'the inspection could not be saved; nothing else changed'); return done(false); }
+      const back = (await fiFindInspection(env, inspId)).row;
+      if (!back || String(back.o.Owner_ID) !== ownerId || (propId && String(back.o.Property_ID) !== propId)) { step(tag, 'error', 'the inspection did not keep its owner/property link'); return done(false); }
+    }
+    step(tag, 'done', [claimed ? '' : 'booking claimed', needDoc ? 'inspection owner/property filled' : ''].filter(Boolean).join(' + '));
+  }
+  return done(!steps.some(s => s.status === 'conflict' || s.status === 'error'));
+}
 // Neutral, factual rewording of the inspector's own note about access / cooperation. Returns a SUGGESTION only - the phone never saves it without Brett's tap.
 const FI_REWORD_SYSTEM = `You rewrite an inspector's short note about access and cooperation during a rental property inspection into neutral, factual, professional wording for the property owner's report.
 Rules: state only what happened (who was or was not present, which areas were declined or blocked, whether the inspection ended early). No words about attitude or emotion (never rude, hostile, tense, unwelcoming, uncooperative, angry). No guesses about reasons, motives, personal circumstances, health, money or lifestyle. No judgement or advice. Do not add any fact that is not in the note. 1 to 3 short sentences, past tense, say "the occupant". If the note is already neutral, change as little as possible. Output a single JSON object {"text":""} and nothing else.`;
