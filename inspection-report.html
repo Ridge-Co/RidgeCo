@@ -76,7 +76,7 @@ function visitHtml(doc){
     rows.push('<div><span>Animals</span>'+(it.length ? it.map(function(x){ return esc(x.type)+(x.count?' × '+esc(x.count):''); }).join(', ') : 'Present')+'</div>');
   } else if (an && an.present===false) rows.push('<div><span>Animals</span>None observed</div>');
   var ac = v.access_cooperation, lab = ac && COOP_LABEL[ac.choice] || '', note = ac ? String(ac.note||'').trim() : '';
-  if (lab || note) rows.push('<div><span>Access &amp; cooperation</span>'+(lab?esc(lab):'')+(lab&&note?'<br>':'')+(note?'<span style="white-space:pre-wrap;display:inline;text-transform:none;letter-spacing:0;font-size:inherit;color:inherit">'+esc(note)+'</span>':'')+'</div>');
+  if (lab || note) rows.push('<div><span>Access &amp; cooperation</span>'+(lab?esc(lab):'')+(lab&&note?'<br>':'')+(note?'<span style="white-space:pre-wrap;display:inline;text-transform:none;letter-spacing:0;font-size:inherit;font-weight:400;color:inherit">'+esc(note)+'</span>':'')+'</div>');
   return rows.length ? '<div class="card"><h3>Visit details</h3><div class="meta" style="margin:0">'+rows.join('')+'</div></div>' : '';
 }
 var TYPE_LABEL = {periodic:'Periodic inspection',move_in:'Move-in inspection',move_out:'Move-out inspection',pre_listing:'Pre-listing inspection',other:'Inspection'};
