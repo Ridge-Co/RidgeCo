@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-27.04-fi-premier-repair';
+const BUILD_VERSION = '2026-10-27.05-fi-premier-repair-guards';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -42204,7 +42204,12 @@ async function fiPremierRepair(env, body) {
   if (!cust) return fiErr(404, 'not_found', 'That booking partner was not found.');
   if (!owner) return fiErr(404, 'not_found', 'That Hub owner was not found (or is inactive).');
   const steps = [], step = (what, status, detail) => steps.push({ what, status, detail: detail || '' });
-  const done = (ok) => json({ ok, dry_run: dry, steps }, ok ? 200 : 409);
+  // A step that ERRORED (as opposed to a refused conflict) is a failed data write: it reaches the failure log as well as the caller.
+  const done = async (ok) => {
+    const bad = steps.filter(s => s.status === 'error');
+    if (bad.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_premier_repair_error', Skill_Or_Endpoint: '/admin/fi-premier-repair', Success: 'FALSE', Notes: bad.map(s => s.what + ': ' + s.detail).join(' | ').slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best-effort; the steps are returned to the caller below */ } }
+    return json({ ok, dry_run: dry, steps }, ok ? 200 : 409);
+  };
   // 1. partner -> owner link (blank only)
   const cur = String(cust.Hub_Owner_ID || '').trim();
   if (cur && cur !== ownerId) { step('partner_owner_link', 'conflict', 'partner is already linked to owner ' + cur + '; nothing changed'); return done(false); }
@@ -42213,6 +42218,7 @@ async function fiPremierRepair(env, body) {
   else { await updateRowVerified(env, 'Insp_Customers', custId, { Hub_Owner_ID: ownerId }); step('partner_owner_link', 'done', 'Hub_Owner_ID=' + ownerId); }
   // 2. inspections <-> bookings (address + date must match)
   const bt = (await fiReadFresh(env, 'Insp_Bookings')).rows.map(r => r.o);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
   for (const lk of links) {
     const inspId = String(lk && lk.inspection_id || '').trim(), bid = String(lk && lk.booking_id || '').trim(), tag = 'link ' + bid + ' <-> ' + inspId;
     const b = bt.find(x => String(x.ID) === bid && x.Active !== 'FALSE');
@@ -42226,7 +42232,16 @@ async function fiPremierRepair(env, body) {
     if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) { step(tag, 'conflict', 'booking already claimed by ' + b.Inspection_ID); continue; }
     const claimed = b.Inspection_ID === inspId, needDoc = lk.doc === true && (!row.Owner_ID || !row.Property_ID);
     if (claimed && !needDoc) { step(tag, 'skipped', 'already linked'); continue; }
-    if (dry) { step(tag, 'planned', [claimed ? '' : 'claim booking', needDoc ? 'fill inspection owner/property' : ''].filter(Boolean).join(' + ')); continue; }
+    // Editing a published report would quietly un-publish it (fiSave drafts it on any content change): refuse, never do that by surprise.
+    if (needDoc && row.Status === 'published') { step(tag, 'conflict', 'the inspection is published; editing it would un-publish the report. Nothing changed'); continue; }
+    // Which property will this link end up on? The same choice fiBookingStart makes, checked FIRST so a stranger's property is never attached.
+    let pre = null; const savedId = String(b.Hub_Property_ID || '').trim();
+    if (savedId) pre = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+    if (!pre) { const pm = fiBookingPropMatches(ap, propRows, owner); if (pm.length > 1) { step(tag, 'conflict', pm.length + ' properties match this address; pick one by hand. Nothing changed'); continue; } pre = pm[0] || null; }
+    if (pre && String(pre.Owner_ID || '') !== ownerId) { step(tag, 'conflict', 'property ' + pre.ID + ' (' + pre.Address + ') belongs to owner ' + (pre.Owner_ID || 'none') + ', not ' + ownerId + '. Nothing changed'); continue; }
+    if (row.Property_ID && String(row.Property_ID) !== String(pre ? pre.ID : '')) { step(tag, 'conflict', 'the inspection is on property ' + row.Property_ID + ' but this booking resolves to ' + (pre ? pre.ID : 'a new property') + '. Nothing changed'); continue; }
+    const propNote = pre ? 'property #' + pre.ID + ' (' + pre.Address + ')' : 'creates a new property under owner ' + ownerId;
+    if (dry) { step(tag, 'planned', [claimed ? '' : 'claim booking', needDoc ? 'fill inspection owner/property' : ''].filter(Boolean).join(' + ') + '; ' + propNote); continue; }
     let propId = String(b.Hub_Property_ID || row.Property_ID || '');
     if (!claimed) {
       const res = await fiBookingStart(env, { booking_id: bid, inspection_id: inspId });

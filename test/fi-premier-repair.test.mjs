@@ -43,6 +43,7 @@ const run = (w, body) => w.fiRoute(w.env, 'premier-repair', () => w.fiPremierRep
   t('dry run is ok', r.status === 200 && r.body.ok && r.body.dry_run === true, r.body);
   t('dry run plans the partner link + both claims', r.body.steps.filter(s => s.status === 'planned').length === 3, r.body.steps);
   t('dry run writes NOTHING (no cell changed, no row added)', snap(w) === before);
+  t('dry run says which property each link will use (reuse #97, or create new)', r.body.steps.some(x => /property #97/.test(x.detail)) && r.body.steps.some(x => /creates a new property under owner 25/.test(x.detail)), r.body.steps);
   const r2 = await run(w, { customer_id: '2', owner_id: '25', links: LINKS, dry_run: 'false' });
   t('only a real boolean false turns the dry run off', r2.body.dry_run === true && snap(w) === before);
 }
@@ -94,6 +95,43 @@ const run = (w, body) => w.fiRoute(w.env, 'premier-repair', () => w.fiPremierRep
   void before;
 }
 
+// ── 3b. property + published guards (independent review, Oct 27) ──
+{
+  const w = await seed(), ph = w.h.tabs.Properties.headers;
+  w.h.tabs.Properties.rows.find(x => x[0] === '97')[ph.indexOf('Owner_ID')] = '26';
+  const dry = await run(w, { customer_id: '2', owner_id: '25', links: [{ booking_id: '4', inspection_id: 'fi_dudley00001' }] });
+  t("a same-address property that belongs to ANOTHER owner is refused, even on a dry run", dry.status === 409 && dry.body.steps.some(s => s.status === 'conflict' && /belongs to owner 26/.test(s.detail)), dry.body);
+  const real = await run(w, { customer_id: '2', owner_id: '25', dry_run: false, links: [{ booking_id: '4', inspection_id: 'fi_dudley00001' }] });
+  t('...and a real run claims nothing', real.status === 409 && !cell(w, 'Insp_Bookings', '4', 'Inspection_ID'));
+}
+{
+  const w = await seed(), ph = w.h.tabs.Properties.headers, pc = w.h.tabs.Properties.rows.length;
+  const dupe = w.h.tabs.Properties.rows[0].slice(); dupe[0] = '150'; w.h.tabs.Properties.rows.push(dupe);
+  const r = await run(w, { customer_id: '2', owner_id: '25', links: [{ booking_id: '4', inspection_id: 'fi_dudley00001' }] });
+  // both rows are owner 25 so fiBookingPropMatches narrows by owner and still has 2
+  t('two properties at the same address -> refused, pick by hand', r.status === 409 && r.body.steps.some(s => /2 properties match/.test(s.detail)), r.body);
+  void ph; void pc;
+}
+{
+  const w = await seed(), fh = w.h.tabs.FI_Inspections.headers;
+  w.h.tabs.FI_Inspections.rows.find(x => x[0] === 'fi_gilmor00001')[fh.indexOf('Status')] = 'published';
+  const before = snap(w);
+  const r = await run(w, { customer_id: '2', owner_id: '25', dry_run: false, links: [{ booking_id: '2', inspection_id: 'fi_gilmor00001', doc: true }] });
+  t('a PUBLISHED inspection is never edited (that would un-publish the report)', r.status === 409 && r.body.steps.some(s => /published/.test(s.detail)), r.body);
+  t('...nothing was claimed, created or edited', cell(w, 'Insp_Bookings', '2', 'Inspection_ID') === '' || cell(w, 'Insp_Bookings', '2', 'Inspection_ID') === undefined);
+  void before;
+  const noDoc = await run(w, { customer_id: '2', owner_id: '25', links: [{ booking_id: '2', inspection_id: 'fi_gilmor00001' }] });
+  t('a published inspection can still have its booking claimed without editing it (doc not requested)', noDoc.status === 200 && noDoc.body.steps.some(s => s.status === 'planned' && /claim booking/.test(s.detail)), noDoc.body);
+}
+{
+  const w = await seed();
+  w.h.tabs.Properties.rows.find(x => x[0] === '97')[w.h.tabs.Properties.headers.indexOf('Owner_ID')] = '25';
+  const fh = w.h.tabs.FI_Inspections.headers;
+  w.h.tabs.FI_Inspections.rows.find(x => x[0] === 'fi_gilmor00001')[fh.indexOf('Property_ID')] = '97';
+  const r = await run(w, { customer_id: '2', owner_id: '25', links: [{ booking_id: '2', inspection_id: 'fi_gilmor00001', doc: true }] });
+  t("an inspection already on a different property than the booking resolves to is refused", r.status === 409 && r.body.steps.some(s => /is on property 97/.test(s.detail)), r.body);
+}
+
 // ── 4. fault injection: a failed write is reported and never claims success ──
 {
   const w = await seed();
@@ -108,6 +146,7 @@ const run = (w, body) => w.fiRoute(w.env, 'premier-repair', () => w.fiPremierRep
   // a property write that does not persist: the Gilmor link must stop, claim nothing, edit nothing
   const w2 = await seed(); w2.h.dropAdd = 'Properties';
   const lost = await run(w2, { customer_id: '2', owner_id: '25', dry_run: false, links: [{ booking_id: '2', inspection_id: 'fi_gilmor00001', doc: true }] });
+  t('...a step-level error also reaches the failure log (not only the response)', w2.h.telemetry.some(x => x.Success === 'FALSE' && x.Job_Type === 'fi_premier_repair_error'), w2.h.telemetry);
   t('property that did not persist -> error, booking NOT claimed, inspection NOT edited', lost.body.ok === false && !cell(w2, 'Insp_Bookings', '2', 'Inspection_ID') && !cell(w2, 'FI_Inspections', 'fi_gilmor00001', 'Owner_ID'), lost.body);
 }
 
