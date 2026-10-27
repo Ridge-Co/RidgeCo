@@ -575,7 +575,7 @@ function viewNew(){
     return h;
   }
   var o = S.newOpts, p = S.newProp, ow = S.newOwner;
-  h += '<div class="card propcard"><b>'+esc(propLabel(p))+(p.unit_label?' · '+esc(unitText(p.unit_label)):'')+'</b><div class="muted">'+(p.id?'In the Hub':'Not in the Hub — saved with this inspection only (you can add it later)')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;S.newOwner=null;S.pickUnitFor=\'\';render()">Change property</button></div>';
+  h += '<div class="card propcard"><b>'+esc(propLabel(p))+(p.unit_label?' · '+esc(unitText(p.unit_label)):'')+'</b><div class="muted">'+(p.id?'In the Hub':'Not in the Hub — saved with this inspection only (you can add it later)')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;S.newOwner=null;S.pickUnitFor=\'\';render()">Change property</button></div>'+(S.newBooking ? bookingCardHtml(S.newBooking) : '');
   h += '<div class="card" id="ownercard"><label class="fld" style="margin-top:0">On behalf of (owner)</label>';
   if (ow){ h += '<div class="row"><b>'+esc(ow.name)+'</b><button class="btn sm" onclick="S.newOwner=null;S.ownerQ=\'\';render()">Change</button></div><div class="muted">Appears on the report as “On behalf of”.</div>'; }
   else {
