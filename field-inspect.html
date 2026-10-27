@@ -923,7 +923,8 @@ function localChecks(doc){
   if (!(doc.owner && String(doc.owner.name||'').trim())) blocks.push('Choose who this inspection is on behalf of (the owner)');
   if (!doc.overall || !doc.overall.condition || doc.overall.condition==='not_inspected') blocks.push('Set the overall condition');
   active.forEach(function(a){ if ((a.pending_text||'').trim()) blocks.push('“'+a.name+'” has dictation not turned into issues (or cleared)'); });
-  var sk = active.filter(function(a){ return !a.condition || a.condition==='not_inspected'; }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
+  active.forEach(function(a){ var ac = a.access; if (ac && ac.no_access && ac.reason==='other' && !String(ac.note||'').trim()) blocks.push('Say why “'+a.name+'” was not accessed (you chose Other)'); });
+  var sk = active.filter(function(a){ return !(a.access && a.access.no_access) && (!a.condition || a.condition==='not_inspected'); }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
   var uns = (doc.voice_notes||[]).filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length; if (uns) warns.push(uns+' voice note'+(uns>1?'s have':' has')+' not been sorted into areas yet');
   if (S.rec.dirty) blocks.push('Changes are not saved to the server yet');
   var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
