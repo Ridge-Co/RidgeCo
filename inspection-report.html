@@ -181,6 +181,8 @@ function draw(d){
     (a.issues||[]).forEach(function(is){ h += issueHtml(is, a.name, have, false); });
     h += photoGrid(a.photo_ids, have) + '</div>';
   });
+  var na = (doc.areas||[]).filter(function(a){ return !a.excluded && noAccess(a); });
+  if (na.length) h += '<h2>Areas not accessed</h2><div class="card">'+na.map(function(a){ return '<div style="padding:4px 0"><b>'+esc(a.name)+'</b> — '+esc(accessReasonText(a))+'</div>'; }).join('')+'</div>';
   h += '<div class="foot">'+(b.footer_text?'<div style="white-space:pre-wrap">'+esc(b.footer_text)+'</div>':'')+(contactLine(b)?'<div>'+esc(contactLine(b))+'</div>':'')+(b.address?'<div>'+esc(b.address)+'</div>':'')+'<div style="margin-top:6px">Observations reflect conditions visible on the inspection date and are not a guarantee of future condition.</div></div></div>';
   show(h);
   if (Q.get('print') === '1') waitImagesThenPrint();
