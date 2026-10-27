@@ -42204,7 +42204,12 @@ async function fiPremierRepair(env, body) {
   if (!cust) return fiErr(404, 'not_found', 'That booking partner was not found.');
   if (!owner) return fiErr(404, 'not_found', 'That Hub owner was not found (or is inactive).');
   const steps = [], step = (what, status, detail) => steps.push({ what, status, detail: detail || '' });
-  const done = (ok) => json({ ok, dry_run: dry, steps }, ok ? 200 : 409);
+  // A step that ERRORED (as opposed to a refused conflict) is a failed data write: it reaches the failure log as well as the caller.
+  const done = async (ok) => {
+    const bad = steps.filter(s => s.status === 'error');
+    if (bad.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_premier_repair_error', Skill_Or_Endpoint: '/admin/fi-premier-repair', Success: 'FALSE', Notes: bad.map(s => s.what + ': ' + s.detail).join(' | ').slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best-effort; the steps are returned to the caller below */ } }
+    return json({ ok, dry_run: dry, steps }, ok ? 200 : 409);
+  };
   // 1. partner -> owner link (blank only)
   const cur = String(cust.Hub_Owner_ID || '').trim();
   if (cur && cur !== ownerId) { step('partner_owner_link', 'conflict', 'partner is already linked to owner ' + cur + '; nothing changed'); return done(false); }
