@@ -42096,6 +42096,104 @@ async function fiPropertyCreate(env, body) {
   return json({ ok: true, property: { id: propId, address, city, type, unit_count: Number(pback.o.Unit_Count) || 1, owner_id: String(owner.ID), owner_name: ownerName }, owner: { id: String(owner.ID), name: ownerName, created: createdOwner }, units: unitsOut });
 }
 
+// ── Approved bookings -> field inspection (Oct 27 2026, Brett) ──────────────────────────────────────────
+// Approved inspection bookings are listed on the phone's New-inspection screen. Tapping one finds (or, only then, creates) the Hub property
+// under the EXISTING owner - never a duplicate owner - hands the phone the requester's contact / size / notes, and claims the booking so it is
+// not offered twice. Linking an inspection that was already started (same endpoint, the phone's own inspection id) works the same way.
+function fiBookingAddrParts(b) {
+  const parts = String(b.Formatted_Address || b.Address || '').split(',').map(s => s.trim());
+  return { street: (parts[0] || '').slice(0, 120), city: (parts[1] || '').slice(0, 60) };
+}
+function fiBookingLabel(b) { return String(b.Formatted_Address || b.Address || '').replace(/,\s*(USA|United States)\s*$/i, '').slice(0, 200); }
+// The Hub owner behind a booking partner: the explicit Insp_Customers.Hub_Owner_ID link first, else an exact company-name match (one hit only).
+function fiBookingOwnerRow(cust, ownerRows) {
+  if (!cust) return null;
+  const hid = String(cust.Hub_Owner_ID || '').trim();
+  if (hid) { const o = ownerRows.find(r => String(r.ID) === hid); if (o) return o; }
+  const want = fiNormName(cust.Name);
+  if (want) { const m = ownerRows.filter(r => fiNormName(fiOwnerName(r)) === want); if (m.length === 1) return m[0]; }
+  return null;
+}
+function fiBookingPropMatches(ap, propRows, own) {
+  const key = qbNormAddress(ap.street), ck = qbNormAddress(ap.city);
+  let m = key ? propRows.filter(p => p.Active !== 'FALSE' && qbNormAddress(p.Address || '') === key) : [];
+  if (m.length > 1 && ck) { const bc = m.filter(p => qbNormAddress(p.City || '') === ck); if (bc.length) m = bc; }
+  if (m.length > 1 && own) { const bo = m.filter(p => String(p.Owner_ID) === String(own.ID)); if (bo.length) m = bo; }
+  return m;
+}
+function fiBookingOut(b, cust, ownerRows, propRows) {
+  const ap = fiBookingAddrParts(b), own = fiBookingOwnerRow(cust, ownerRows), pm = fiBookingPropMatches(ap, propRows, own);
+  const when = b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)) : '';
+  return {
+    id: String(b.ID), customer_id: String(b.Customer_ID || ''), customer_name: cust ? (cust.Name || '') : '', date: b.Date || '', start_time: b.Start_Time || '', when,
+    address: fiBookingLabel(b), street: ap.street, city: ap.city, units: +b.Units || 1, buildings: +b.Buildings || 1,
+    contact: { name: b.Contact_Name || '', phone: b.Contact_Phone || '', email: b.Contact_Email || '' }, notes: b.Notes || '',
+    size: { levels: b.Levels || '', bedrooms: b.Bedrooms || '', bathrooms: b.Bathrooms || '', text: inspSizeText(b) },
+    owner: own ? { id: String(own.ID), name: fiOwnerName(own) } : null,
+    property: pm.length ? { id: String(pm[0].ID), address: pm[0].Address, city: pm[0].City || '' } : null,
+    inspection_id: b.Inspection_ID || '',
+  };
+}
+async function fiBookings(env) {
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings'), it = await fiReadFresh(env, 'FI_Inspections');
+  const cust = await fetchTab(env, 'Insp_Customers'), owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE'), props = await fetchTab(env, 'Properties');
+  const custById = {}; cust.forEach(c => { custById[String(c.ID)] = c; });
+  const have = new Set(it.rows.filter(r => r.o.Active !== 'FALSE').map(r => r.o.ID));
+  const from = inspEtDate(Date.now() - 21 * 86400000), to = inspEtDate(Date.now() + 120 * 86400000);
+  // Approved, in a sensible window, and not already turned into an inspection. A claim whose inspection never reached the server is offered again.
+  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID)))
+    .sort((x, y) => String(x.Start_ISO).localeCompare(String(y.Start_ISO)));
+  return json({ ok: true, bookings: list.map(b => fiBookingOut(b, custById[String(b.Customer_ID)], owners, props)) });
+}
+async function fiBookingStart(env, body) {
+  body = body || {};
+  const bid = String(body.booking_id || '').trim(), inspId = String(body.inspection_id || '');
+  if (!bid) return fiErr(400, 'bad_request', 'booking_id is required.');
+  if (!FI_ID_RE.test(inspId)) return fiErr(400, 'bad_id', 'inspection_id is missing or malformed.');
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings');
+  const hit = bt.rows.find(r => String(r.o.ID) === bid && r.o.Active !== 'FALSE');
+  if (!hit) return fiErr(404, 'not_found', 'That booking was not found.');
+  const b = hit.o;
+  if (b.Status !== 'approved') return fiErr(409, 'not_approved', `This booking is ${b.Status || 'not approved'}, so it cannot be started.`);
+  if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) return fiErr(409, 'already_started', 'An inspection was already started from this booking.', { inspection_id: b.Inspection_ID });
+  const cust = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(b.Customer_ID)) || null;
+  const owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE');
+  const owner = fiBookingOwnerRow(cust, owners), ap = fiBookingAddrParts(b);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
+  let prop = null, created = false;
+  const savedId = String(b.Hub_Property_ID || '').trim();
+  if (savedId) prop = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+  if (!prop) prop = fiBookingPropMatches(ap, propRows, owner)[0] || null;
+  if (!prop && owner) {
+    const units = +b.Units || 1;
+    const res = await fiPropertyCreate(env, { address: ap.street, city: ap.city, type: units > 1 ? 'multi' : 'house', unit_count: units, owner: { id: String(owner.ID) }, force: true });
+    let rd = null; try { rd = await res.clone().json(); } catch (e) { rd = null; /* silent-ok: a null body becomes the error response just below */ }
+    if (!res.ok || !rd || rd.ok === false || !rd.property) return fiErr(res.status >= 400 ? res.status : 500, (rd && rd.error) || 'property_not_saved', (rd && rd.message) || 'The property could not be added to the Hub, so nothing was linked. Retry.');
+    prop = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o).find(p => String(p.ID) === String(rd.property.id)) || null;
+    if (!prop) return fiErr(500, 'property_not_saved', 'The new property could not be read back from the Hub, so nothing was linked. Retry.');
+    created = true;
+  }
+  const propId = prop ? String(prop.ID) : '';
+  await updateRowVerified(env, 'Insp_Bookings', b.ID, { Inspection_ID: inspId, Hub_Property_ID: propId, Insp_Claimed_At: new Date().toISOString() });
+  const out = fiBookingOut(Object.assign({}, b, { Inspection_ID: inspId }), cust, owners, prop ? [prop] : []);
+  return json({ ok: true, booking: out, property: prop ? { id: propId, address: out.address, street: String(prop.Address || ap.street), city: prop.City || ap.city, unit_count: Number(prop.Unit_Count) || 1 } : null, property_created: created, owner: out.owner, owner_missing: !owner });
+}
+// Neutral, factual rewording of the inspector's own note about access / cooperation. Returns a SUGGESTION only - the phone never saves it without Brett's tap.
+const FI_REWORD_SYSTEM = `You rewrite an inspector's short note about access and cooperation during a rental property inspection into neutral, factual, professional wording for the property owner's report.
+Rules: state only what happened (who was or was not present, which areas were declined or blocked, whether the inspection ended early). No words about attitude or emotion (never rude, hostile, tense, unwelcoming, uncooperative, angry). No guesses about reasons, motives, personal circumstances, health, money or lifestyle. No judgement or advice. Do not add any fact that is not in the note. 1 to 3 short sentences, past tense, say "the occupant". If the note is already neutral, change as little as possible. Output a single JSON object {"text":""} and nothing else.`;
+async function fiReword(env, body) {
+  const text = fiStr(body && body.text, 1000).trim();
+  if (!text) return fiErr(400, 'empty', 'Type a note first.');
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_reword', customerFacing: true, schema: true, system: FI_REWORD_SYSTEM, prompt: `Inspector's note:\n"""\n${text}\n"""\n\nReturn JSON only: {"text":""}`, maxTokens: 400, source: 'field-inspect' }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Rewording is paused (AI credit). Your note is kept exactly as you wrote it.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not reword this. Your note is kept exactly as you wrote it.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const parsed = fiExtractJson(ai.result), t = parsed ? fiClean(parsed.text, 600).trim() : '';
+  if (!t) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your note is kept exactly as you wrote it.');
+  return json({ ok: true, text: t });
+}
+
 // ── Drive: Properties root / <address> / Inspection MMDDYYYY ──
 // The Properties root is a shared drive on prod but a plain folder on staging; only pass driveId/corpora when it really is a shared drive.
 const fiSharedCache = {};
