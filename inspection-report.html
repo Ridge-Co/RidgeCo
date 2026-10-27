@@ -174,9 +174,10 @@ function draw(d){
   h += '<h2>Area by area</h2>';
   (doc.areas||[]).filter(function(a){ return !a.excluded; }).forEach(function(a){
     var n = (a.issues||[]).length;
-    h += '<div class="card area"><div class="tradeline"><h3>'+esc(a.name)+'</h3><span class="pill '+esc(a.condition)+'">'+esc(COND_LABEL[a.condition]||'Not inspected')+'</span></div>';
+    h += '<div class="card area"><div class="tradeline"><h3>'+esc(a.name)+'</h3>'+(noAccess(a) ? '<span class="pill not_inspected">No access</span>' : '<span class="pill '+esc(a.condition)+'">'+esc(COND_LABEL[a.condition]||'Not inspected')+'</span>')+'</div>';
+    if (noAccess(a)) h += '<div class="muted">'+esc(accessReasonText(a))+'</div>';
     if (a.notes) h += '<div style="white-space:pre-wrap">'+esc(a.notes)+'</div>';
-    if (!n) h += '<div class="muted">'+(a.condition==='not_inspected'?'Not inspected.':'Nothing requiring action.')+'</div>';
+    if (!n && !noAccess(a)) h += '<div class="muted">'+(a.condition==='not_inspected'?'Not inspected.':'Nothing requiring action.')+'</div>';
     (a.issues||[]).forEach(function(is){ h += issueHtml(is, a.name, have, false); });
     h += photoGrid(a.photo_ids, have) + '</div>';
   });
