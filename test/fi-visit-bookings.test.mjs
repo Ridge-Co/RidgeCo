@@ -221,7 +221,8 @@ const seedBookings = (w) => {
 // ── 9. wiring: routes, staging guard, front ends ──
 {
   t('routes wired', /path === '\/fi\/bookings'/.test(src) && /path === '\/fi\/booking\/start'/.test(src) && /path === '\/fi\/reword'/.test(src));
-  t('staging write guard: booking start only for TEST- booking + TEST- inspection', /path === '\/fi\/booking\/start'\) \{[^}]*TEST-/.test(src) && /startsWith\('TEST-'\)/.test(src.slice(src.indexOf("path === '/fi/booking/start') {")), src.indexOf("path === '/fi/booking/start') {") + 500)));
+  const gi = src.indexOf("if (path === '/fi/booking/start') {"), gs = src.slice(gi, gi + 700);
+  t('staging write guard: booking start only for a TEST- booking + TEST- inspection', gi > 0 && /inspection_id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(gs) && /_br\.Address \|\| ''\)\.startsWith\('TEST-'\)/.test(gs), gs);
   t('booking request validates size BEFORE placing the calendar hold', src.indexOf('inspCleanSize(body, input.units)') > 0 && src.indexOf('inspCleanSize(body, input.units)') < src.indexOf('Reserve the slot on Brett'));
   t('size reaches the sheet row, the text to Brett and the calendar event', /Levels: size\.Levels, Bedrooms: size\.Bedrooms, Bathrooms: size\.Bathrooms/.test(src) && /Size: \$\{inspSizeText\(rec\)/.test(src) && /`Size: \$\{inspSizeText\(b\)/.test(src));
   const fi = read('field-inspect.html'), rep = read('inspection-report.html'), bk = read('inspect-book.html');
