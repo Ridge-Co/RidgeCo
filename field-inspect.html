@@ -1327,6 +1327,7 @@ function viewArea(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
   h += '<h1>'+esc(a.name)+'</h1>';
   h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
+  h += accessHtml(a);
   h += '<div class="card"><button class="mic'+(S.listening?' live':'')+'" id="mic-btn" onclick="toggleDictation()">'+(S.listening?'⏹ Stop (listening…)':'🎤 Dictate')+'</button>';
   if (S.dictErr) h += '<div class="banner err" style="margin-top:8px">'+esc(S.dictErr)+'</div>';
   h += '<div class="muted" id="interim" style="min-height:18px;margin-top:6px">'+esc(S.interim)+'</div>';
