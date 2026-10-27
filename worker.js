@@ -40907,6 +40907,39 @@ function fiExtractJson(text) {
   if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
   return null;
 }
+// Visit details + per-area "No access" (Oct 27 2026). Both are optional and stored on the doc as-is; these only bound their shape/size.
+const FI_ACCESS_REASONS = ['tenant_declined', 'blocked', 'other'];
+const FI_COOP_CHOICES = ['completed', 'not_present', 'limited', 'ended_early'];
+function fiValidateAccess(ac, where, errors) {
+  if (ac === undefined || ac === null) return;
+  if (typeof ac !== 'object' || Array.isArray(ac)) { errors.push(`${where}.access must be an object`); return; }
+  if (ac.reason && !FI_ACCESS_REASONS.includes(ac.reason)) errors.push(`${where}.access.reason invalid`);
+  if (String(ac.note || '').length > 500) errors.push(`${where}.access.note too long (max 500)`);
+}
+function fiValidateVisit(v, errors) {
+  if (v === undefined || v === null) return;
+  if (typeof v !== 'object' || Array.isArray(v)) { errors.push('doc.visit must be an object'); return; }
+  const an = v.animals;
+  if (an !== undefined && an !== null) {
+    if (typeof an !== 'object' || Array.isArray(an)) errors.push('doc.visit.animals must be an object');
+    else if (an.items !== undefined && !Array.isArray(an.items)) errors.push('doc.visit.animals.items must be an array');
+    else if ((an.items || []).length > 10) errors.push('too many animal lines (max 10)');
+    else (an.items || []).forEach((it, i) => {
+      if (!it || typeof it !== 'object') { errors.push(`doc.visit.animals.items[${i}] invalid`); return; }
+      if (String(it.type || '').length > 60) errors.push(`doc.visit.animals.items[${i}].type too long`);
+      const n = Number(it.count);
+      if (it.count !== undefined && it.count !== '' && (!Number.isFinite(n) || n < 0 || n > 999)) errors.push(`doc.visit.animals.items[${i}].count invalid`);
+    });
+  }
+  const ac = v.access_cooperation;
+  if (ac !== undefined && ac !== null) {
+    if (typeof ac !== 'object' || Array.isArray(ac)) errors.push('doc.visit.access_cooperation must be an object');
+    else {
+      if (ac.choice && !FI_COOP_CHOICES.includes(ac.choice)) errors.push('doc.visit.access_cooperation.choice invalid');
+      if (String(ac.note || '').length > 600) errors.push('doc.visit.access_cooperation.note too long (max 600)');
+    }
+  }
+}
 function fiValidateDoc(doc) {
   const errors = [];
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, errors: ['doc must be an object'] };
