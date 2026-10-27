@@ -912,7 +912,7 @@ function toggleIssuePhoto(p){ var l = editing.photo_ids = editing.photo_ids||[];
 function deleteIssueStep(){ var b=$('ie-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to delete'; return; } var a=curArea(), id=editing.id; mut(function(){ a.issues = a.issues.filter(function(x){return x.id!==id;}); }); closeSheet(); render(); }
 // ---- sheet helpers ----
 function openSheet(html){ $('sheet').innerHTML = html; $('modal').classList.add('open'); }
-function closeSheet(){ $('modal').classList.remove('open'); }
+function closeSheet(){ $('modal').classList.remove('open'); if (S.visitOpen){ S.visitOpen = false; if (S.view==='insp') render(); } }
 $('modal').addEventListener('click', function(e){ if (e.target === $('modal')) closeSheet(); });
 
 // ---- review & publish ----
