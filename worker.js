@@ -40089,6 +40089,7 @@ async function inspBookRequest(env, body) {
     const c = await inspCustomerByToken(env, body && body.k);
     if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid.' }, 404);
     const input = inspCleanInput(body); input.freshGuard = true; // cleaning-coverage is re-read live for a real booking
+    const size = inspCleanSize(body, input.units);   // required (with "unknown" bypass) - rejected BEFORE any calendar hold is placed
     const contactName = String(body.contact_name || '').trim().slice(0, 80);
     const contactPhone = body.contact_phone ? normalizePhone(String(body.contact_phone).slice(0, 30)) : '';
     const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
