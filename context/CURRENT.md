@@ -1,3 +1,7 @@
+# PREMIER REPAIR ENDPOINT — Oct 27, 2026 — on `staging` ONLY (PRs #455, #456). BUILD_VERSION `2026-10-27.05-fi-premier-repair-guards`. FEATURE_LOG rule 235.
+
+## 🟡 Built, staging-verified, independently validated. NOT merged to main. After Brett's go-ahead and the production deploy: run `hub_prod_post /admin/fi-premier-repair` dry run, read every step, then the real run (body in FEATURE_LOG 235). Then verify read-only with `hub_prod_get`. Owner #25 phone/email copy is still gated on Brett's explicit yes.
+
 # FIELD INSPECTION: ANIMALS, ACCESS & COOPERATION, NO ACCESS, BOOKING SIZE, APPROVED BOOKINGS — Oct 27, 2026 — PR #453 merged to `staging` ONLY (plus follow-up `fix/fi-report-note-weight-oct27`). BUILD_VERSION `2026-10-27.03-fi-visit-bookings`. FEATURE_LOG rule 234.
 
 ## 🟡 Built, staging-verified (API + phone/desktop UI). NOT merged to main: waiting for Brett's go. Premier data fixes (owner #25 contact copy, `Hub_Owner_ID`, Dudley/Gilmor/Cliffmont links) happen after the production deploy. Still owed by Brett: the exact neutral wording for the Dudley tense-welcome note (not invented).
