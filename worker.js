@@ -704,6 +704,7 @@ const _hubWorkerCore = {
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
         if (path === '/fi/directory')           return await fiRoute(env, 'directory', () => fiDirectory(env));
+        if (path === '/fi/bookings')            return await fiRoute(env, 'bookings', () => fiBookings(env));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
