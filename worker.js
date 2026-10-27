@@ -39986,6 +39986,31 @@ function inspCleanInput(body) {
   return { address, units, buildings };
 }
 
+// Property size asked at booking time (Oct 27 2026). Each of levels / bedrooms / bathrooms is REQUIRED but may be "unknown" (the
+// "I don't know" bypass). For multi-unit properties bedrooms/bathrooms mean "each unit" (one dropdown, never per-unit entry) and may be "vary".
+// It never changes the visit duration (that stays units/buildings based) - it only informs Brett and pre-fills the inspection layout.
+function inspSizeVal(v, kind, multi) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) throw inspErr('bad_size', 'Please give the number of levels, bedrooms and bathrooms - or tap “I don’t know” for any you are not sure of.', 400);
+  if (s === 'unknown') return 'unknown';
+  if (s === 'vary') return multi ? 'vary' : 'unknown';
+  const n = Number(s), min = kind === 'levels' ? 1 : (kind === 'bedrooms' ? 0 : 0.5), max = kind === 'levels' ? 6 : 20;
+  const stepOk = kind === 'bathrooms' ? (n * 2) % 1 === 0 : Number.isInteger(n);
+  if (!Number.isFinite(n) || n < min || n > max || !stepOk) throw inspErr('bad_size', `Please check the number of ${kind}.`, 400);
+  return String(n);
+}
+function inspCleanSize(body, units) {
+  const multi = (+units || 1) > 1;
+  return { Levels: inspSizeVal(body && body.levels, 'levels', multi), Bedrooms: inspSizeVal(body && body.bedrooms, 'bedrooms', multi), Bathrooms: inspSizeVal(body && body.bathrooms, 'bathrooms', multi) };
+}
+// One readable line for Brett's approval page / calendar / texts. Blank or "unknown" parts are left out ("" when nothing is known).
+function inspSizeText(b) {
+  const one = (v, s, p) => { v = String(v == null ? '' : v).trim().toLowerCase(); if (!v || v === 'unknown') return ''; if (v === 'vary') return p + ' vary'; return v + ' ' + (Number(v) === 1 ? s : p); };
+  const multi = (+(b && b.Units) || 1) > 1;
+  const bb = [one(b && b.Bedrooms, 'bed', 'beds'), one(b && b.Bathrooms, 'bath', 'baths')].filter(Boolean).join(' / ');
+  return [bb && (multi ? 'each unit: ' + bb : bb), one(b && b.Levels, 'level', 'levels')].filter(Boolean).join(', ');
+}
+
 function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
 function inspPackSlackMin(cfg) { const raw = String((cfg && cfg.INSP_PACK_SLACK_MIN) == null ? '' : cfg.INSP_PACK_SLACK_MIN).trim(); if (/^off$/i.test(raw)) return null; const n = parseFloat(raw); return Number.isFinite(n) && n >= 0 ? n : INSP_PACK_SLACK_MIN; }
 function inspBlockWindowEndMs(b) { const l = String(b.Last_Start == null ? '' : b.Last_Start).trim(); const ls = l ? inspEtWallToMs(b.Date, l) : NaN; return Number.isFinite(ls) ? ls : inspEtWallToMs(b.Date, b.End_Time); }
