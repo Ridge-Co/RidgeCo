@@ -1,3 +1,7 @@
+# FIELD INSPECTION: ANIMALS, ACCESS & COOPERATION, NO ACCESS, BOOKING SIZE, APPROVED BOOKINGS — Oct 27, 2026 — PR #453 merged to `staging` ONLY (plus follow-up `fix/fi-report-note-weight-oct27`). BUILD_VERSION `2026-10-27.03-fi-visit-bookings`. FEATURE_LOG rule 234.
+
+## 🟡 Built, staging-verified (API + phone/desktop UI). NOT merged to main: waiting for Brett's go. Premier data fixes (owner #25 contact copy, `Hub_Owner_ID`, Dudley/Gilmor/Cliffmont links) happen after the production deploy. Still owed by Brett: the exact neutral wording for the Dudley tense-welcome note (not invented).
+
 # DELIVERY WATCHER: JOB/PO LINE + PREP EMAIL + PRODUCT NAME — Oct 27, 2026 — branch `fix/delivery-job-po-prep-oct27` cut from main tip 6502cfa. BUILD_VERSION `2026-10-27.02-delivery-job-po-prep`. FEATURE_LOG rule 233.
 
 ## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Fixes found by the first real dry run of order WH49670828 (WO-1237, 115 W 29th St Apt 2): the Job/PO line now links WO-1237 and supplies the unit and tenant, the Prep email is "no news", the model is the product title. Details in FEATURE_LOG rule 233. Tenant notice default is `auto` (unset Config key = texts the tenant, held to the 6pm batch); the dry run always shows `tenant_sms: off`.
