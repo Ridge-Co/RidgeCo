@@ -41012,7 +41012,10 @@ function fiPublishChecks(doc, serverPhotoIds) {
   for (const a of active) {
     if (String(a.pending_text || '').trim()) blocks.push({ code: 'dictation_pending', message: `"${a.name}" has dictation not yet turned into issues (or cleared)`, area: a.name });
   }
-  const skipped = active.filter(a => !a.condition || a.condition === 'not_inspected').map(a => a.name);
+  // "No access" counts as handled (it is reported in its own "Areas not accessed" section); "Other" needs its description.
+  const noAcc = a => !!(a.access && a.access.no_access);
+  for (const a of active) if (noAcc(a) && a.access.reason === 'other' && !String(a.access.note || '').trim()) blocks.push({ code: 'access_reason_missing', message: `Say why "${a.name}" was not accessed (you chose “Other”)`, area: a.name });
+  const skipped = active.filter(a => !noAcc(a) && (!a.condition || a.condition === 'not_inspected')).map(a => a.name);
   if (skipped.length) warnings.push({ code: 'areas_not_inspected', message: `Not marked inspected: ${skipped.slice(0, 12).join(', ')}`, areas: skipped });
   const sm = doc.summary;
   if (sm && sm.fp && sm.fp !== fiFingerprint(doc)) warnings.push({ code: 'summary_stale', message: 'The AI summary is out of date and will be left out of the report' });
