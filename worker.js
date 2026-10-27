@@ -1152,6 +1152,8 @@ const _hubWorkerCore = {
         if (path === '/fi/issue-types/save')      return await fiRoute(env, 'issue-types-save', () => fiTypesSave(env, body));
         if (path === '/fi/issue-types/touch')     return await fiRoute(env, 'issue-types-touch', () => fiTypesTouch(env, body));
         if (path === '/fi/property/create')       return await fiRoute(env, 'property-create', () => fiPropertyCreate(env, body));
+        if (path === '/fi/booking/start')         return await fiRoute(env, 'booking-start', () => fiBookingStart(env, body));
+        if (path === '/fi/reword')                return await fiRoute(env, 'reword', () => fiReword(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
