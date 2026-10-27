@@ -162,9 +162,22 @@ function pick(i){
     +'<p class="muted">Brett approves each booking. The time is held on his calendar right away and you’ll get a confirmation by text/email.</p></div>';
   $('contact').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
+// Property size (levels / bedrooms / bathrooms). Required, but every one has an "I don’t know" bypass; for 2+ units the one answer means "each unit" (or "They vary").
+function sizeFields(){
+  var multi=state.units>1, rng=function(a,b,st){var o=[];for(var v=a;v<=b+1e-9;v+=st)o.push(String(v));return o;};
+  function sel(id,label,vals,nameOf){
+    return '<label>'+label+'</label><select id="'+id+'"><option value="">Choose…</option>'+vals.map(function(v){return '<option value="'+v+'">'+esc(nameOf?nameOf(v):v)+'</option>';}).join('')+(multi?'<option value="vary">They vary / not all the same</option>':'')+'<option value="unknown">I don’t know</option></select>';
+  }
+  return '<div style="margin-top:14px;padding-top:4px;border-top:1px solid var(--border)"><b>About the property</b><div class="muted">Required so Brett can plan — tap “I don’t know” for anything you are not sure of.'+(multi?' For several units, pick the size that applies to every unit, or “They vary”.':'')+'</div>'
+    +sel('s-lv',multi?'Levels in each building':'Levels (floors)',rng(1,5,1).concat(['6']),function(v){return v==='6'?'6 or more':v;})
+    +sel('s-bd',multi?'Bedrooms in each unit':'Bedrooms',rng(0,10,1),function(v){return v==='0'?'Studio / none':(v==='10'?'10 or more':v);})
+    +sel('s-ba',multi?'Bathrooms in each unit':'Bathrooms',rng(1,6,0.5),function(v){return v;})+'</div>';
+}
 function requestSlot(){
   var s=state.slots[state.picked], err=$('c-err'), btn=$('c-go');
-  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
+  var sz={levels:$('s-lv').value,bedrooms:$('s-bd').value,bathrooms:$('s-ba').value};
+  if(!sz.levels||!sz.bedrooms||!sz.bathrooms){ err.innerHTML=banner('err','Please choose levels, bedrooms and bathrooms — or “I don’t know” for any you are not sure of.'); return; }
+  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,levels:sz.levels,bedrooms:sz.bedrooms,bathrooms:sz.bathrooms,start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
   btn.disabled=true; btn.textContent='Requesting…'; err.innerHTML='';
   call('POST','/insp-book/request',body).then(function(r){
     if(r.ok){
