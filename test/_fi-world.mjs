@@ -70,7 +70,7 @@ export function world() {
     throw new Error('fake fetch: ' + url);
   };
   const factory = new Function('h', 'sheetsRequest', 'ensureColumns', 'fetch', 'col', 'bytesToB64', `
-    const json = (data, status = 200) => ({ status, body: data });
+    const json = (data, status = 200) => ({ status, ok: status < 300, body: data, clone() { return this; }, json: async () => data });
     const CORS = {}; const env0 = {};
     const isStaging = () => true;
     const getAccessToken = async () => 'tok';
