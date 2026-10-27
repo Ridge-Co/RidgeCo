@@ -1,3 +1,7 @@
+# DELIVERY WATCHER: JOB/PO LINE + PREP EMAIL + PRODUCT NAME — Oct 27, 2026 — branch `fix/delivery-job-po-prep-oct27` cut from main tip 6502cfa. BUILD_VERSION `2026-10-27.02-delivery-job-po-prep`. FEATURE_LOG rule 233.
+
+## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Fixes found by the first real dry run of order WH49670828 (WO-1237, 115 W 29th St Apt 2): the Job/PO line now links WO-1237 and supplies the unit and tenant, the Prep email is "no news", the model is the product title. Details in FEATURE_LOG rule 233. Tenant notice default is `auto` (unset Config key = texts the tenant, held to the 6pm batch); the dry run always shows `tenant_sms: off`.
+
 # WO VENDOR DEPOSIT, AFTER THE FACT, AUTO-DEDUCTED — Oct 26, 2026 — branch `feat/wo-deposit-auto-net-oct26` cut from main tip 9df0ba5. BUILD_VERSION `2026-10-26.01-wo-deposit-auto-net`. FEATURE_LOG rule 231.
 
 ## 🟡 Built and offline-tested; staging + independent validation next. NOT merged to main: it touches QuickBooks bills, so Brett decides.

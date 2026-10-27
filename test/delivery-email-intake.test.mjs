@@ -1298,7 +1298,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('RSVP token is bound to the delivery id and signed with WORKER_SECRET (no new secret, no date in it)', /_hmac\('delivery-rsvp\|' \+ String\(id\), env\.WORKER_SECRET\)/.test(src) && !/delivery-rsvp\|' \+ [^)]*(?:Expected_Date|date)/.test(src));
   t('token compare is constant-time', /function deliveryCtEq\(a, b\)[^\n]*\|=/.test(src));
   t('no reminder texts in this build (no sweep that texts unanswered tenants)', !/reminder/i.test(block.replace(/no reminder texts[^\n]*/gi, '')));
-  t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-10-27\.01-delivery-email-watcher'/.test(src));
+  t('BUILD_VERSION bumped', /const BUILD_VERSION = '2026-10-27\.02-delivery-job-po-prep'/.test(src));
 }
 
 console.log(`\ndelivery-email-intake: ${pass} passed, ${fail} failed`);
