@@ -42232,7 +42232,16 @@ async function fiPremierRepair(env, body) {
     if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) { step(tag, 'conflict', 'booking already claimed by ' + b.Inspection_ID); continue; }
     const claimed = b.Inspection_ID === inspId, needDoc = lk.doc === true && (!row.Owner_ID || !row.Property_ID);
     if (claimed && !needDoc) { step(tag, 'skipped', 'already linked'); continue; }
-    if (dry) { step(tag, 'planned', [claimed ? '' : 'claim booking', needDoc ? 'fill inspection owner/property' : ''].filter(Boolean).join(' + ')); continue; }
+    // Editing a published report would quietly un-publish it (fiSave drafts it on any content change): refuse, never do that by surprise.
+    if (needDoc && row.Status === 'published') { step(tag, 'conflict', 'the inspection is published; editing it would un-publish the report. Nothing changed'); continue; }
+    // Which property will this link end up on? The same choice fiBookingStart makes, checked FIRST so a stranger's property is never attached.
+    let pre = null; const savedId = String(b.Hub_Property_ID || '').trim();
+    if (savedId) pre = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+    if (!pre) { const pm = fiBookingPropMatches(ap, propRows, owner); if (pm.length > 1) { step(tag, 'conflict', pm.length + ' properties match this address; pick one by hand. Nothing changed'); continue; } pre = pm[0] || null; }
+    if (pre && String(pre.Owner_ID || '') !== ownerId) { step(tag, 'conflict', 'property ' + pre.ID + ' (' + pre.Address + ') belongs to owner ' + (pre.Owner_ID || 'none') + ', not ' + ownerId + '. Nothing changed'); continue; }
+    if (row.Property_ID && String(row.Property_ID) !== String(pre ? pre.ID : '')) { step(tag, 'conflict', 'the inspection is on property ' + row.Property_ID + ' but this booking resolves to ' + (pre ? pre.ID : 'a new property') + '. Nothing changed'); continue; }
+    const propNote = pre ? 'property #' + pre.ID + ' (' + pre.Address + ')' : 'creates a new property under owner ' + ownerId;
+    if (dry) { step(tag, 'planned', [claimed ? '' : 'claim booking', needDoc ? 'fill inspection owner/property' : ''].filter(Boolean).join(' + ') + '; ' + propNote); continue; }
     let propId = String(b.Hub_Property_ID || row.Property_ID || '');
     if (!claimed) {
       const res = await fiBookingStart(env, { booking_id: bid, inspection_id: inspId });
