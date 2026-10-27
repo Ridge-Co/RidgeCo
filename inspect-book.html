@@ -156,6 +156,7 @@ function pick(i){
   $('contact').innerHTML='<div class="card"><b>'+esc(dayLabel(s.date))+' · '+esc(s.label)+'</b><div class="muted">'+esc(state.formatted)+'</div>'
     +'<label>Your name</label><input id="c-name" autocomplete="name">'
     +'<div class="row2"><div><label>Phone</label><input id="c-phone" type="tel" autocomplete="tel"></div><div><label>Email</label><input id="c-email" type="email" autocomplete="email"></div></div>'
+    +sizeFields()
     +'<label>Notes for Brett (access, tenant contact, etc.)</label><textarea id="c-notes" rows="3"></textarea>'
     +'<div id="c-err"></div><button class="btn ok" id="c-go" onclick="requestSlot()">Request this time</button>'
     +'<p class="muted">Brett approves each booking. The time is held on his calendar right away and you’ll get a confirmation by text/email.</p></div>';
