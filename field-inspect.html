@@ -566,7 +566,7 @@ function viewNew(){
     return h;
   }
   if (!S.newProp){
-    if (S.newBooking) h += bookingCardHtml(S.newBooking)+'<div class="banner warn">That property is not in the Hub yet and the owner could not be worked out from the booking — search for it below, or add it.</div>';
+    if (S.newBooking) h += bookingCardHtml(S.newBooking)+'<div class="banner warn">Pick the property below (or add it) — the booking above stays linked to this inspection.</div>';
     else h += '<div id="booklist"></div>';
     h += '<div class="card"><label class="fld" style="margin-top:0">1 · Which property?</label>'+addBtn()+'<input id="pq" style="margin-top:10px" placeholder="Type to search address, unit, city or owner…" value="'+esc(S.propQ)+'" oninput="S.propQ=this.value;renderPropList()" autocomplete="off">';
     if (S.propsErr) h += '<div class="banner warn" style="margin-top:8px">'+esc(S.propsErr)+'</div>';
