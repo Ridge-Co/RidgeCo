@@ -317,9 +317,5 @@ test('nothing in the staff screens scolds anyone: the new strings are factual', 
   assert.ok(!/\b(failed|ignored|late|refus|no-show|didn.t)\b/i.test(added), added);
 });
 
-test('this change set stays in pages + tests (worker.js and apps-script untouched)', async () => {
-  const { execSync } = await import('node:child_process');
-  let diff = '';
-  try { diff = execSync('git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1', { cwd: new URL('..', import.meta.url).pathname, encoding: 'utf8' }); } catch (e) { return; }
-  assert.ok(!/^worker\.js$/m.test(diff) && !/^apps-script\//m.test(diff), 'worker.js / apps-script must not change in this PR: ' + diff);
-});
+// (A one-time PR-scope guard for PR #431 lived here. It diffed against main and so failed on every later branch
+// that touches worker.js; removed once #431 merged.)
