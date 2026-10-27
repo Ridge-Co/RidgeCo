@@ -813,6 +813,8 @@ function createInspection(){
   var id = S.newInspId || newId(); S.route = null; S.newInspId = '';
   var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address, street:p.street||String(p.address||'').split(',')[0].trim(), unit_id:String(p.unit_id||''), unit_label:p.unit_label||'' }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
   if (S.newOwner && S.newOwner.name) doc.owner = { id:String(S.newOwner.id||''), name:S.newOwner.name, source:S.newOwner.source||'hub' };
+  doc.visit = { animals:{ present:null, items:[] }, access_cooperation:{ choice:'', note:'' } };
+  if (S.newBooking){ doc.booking = S.newBooking; S.newBooking = null; }
   var rec = { id:id, doc:doc, meta:{ brand_id:o.brand, client_name:o.client, client_email:o.email, inspector:o.inspector, inspection_date:o.date, inspection_type:o.type }, base_rev:0, token:'', status:'draft', dirty:true, ver:1 };
   S.rec = rec; S.areaId = null; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.publishInfo=null;
   persistLocal().then(function(){ release('create'); S.view='insp'; render(); syncNow(true); });
