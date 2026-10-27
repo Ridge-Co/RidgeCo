@@ -458,7 +458,84 @@ function startNew(){
   S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new'; S.newBooking = null; S.newInspId = '';
   var d = defaultBrand();
   S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false };
-  render(); loadProps();
+  render(); loadProps(); loadBookings();
+}
+// ---- approved bookings (Oct 27 2026) ----
+// Approved bookings from the booking page, offered at the top of New inspection. Tapping one finds/creates the Hub property under the existing owner and pre-fills everything.
+function loadBookings(){
+  if (!S.bookings){ var c = lsGet('fi_bookings',''); if (c){ try{ S.bookings = JSON.parse(c); }catch(e){ S.bookings = null; } } }
+  return api('GET','/fi/bookings').then(function(d){
+    S.bookings = d.bookings||[]; S.bookErr=''; lsSet('fi_bookings', JSON.stringify(S.bookings));
+    if (S.view==='new' && !S.newProp && !S.pickUnitFor) renderBookList();
+    if (S.view==='insp') safeRender();
+  }).catch(function(e){ S.bookErr = 'Could not load approved bookings ('+e.message+')'+(S.bookings?' — showing the copy saved on this phone.':'.'); if (S.view==='new' && !S.newProp && !S.pickUnitFor) renderBookList(); });
+}
+function bookingRef(b){ return { id:b.id, customer_id:b.customer_id||'', customer_name:b.customer_name||'', contact:b.contact||{}, notes:b.notes||'', size:{ levels:(b.size&&b.size.levels)||'', bedrooms:(b.size&&b.size.bedrooms)||'', bathrooms:(b.size&&b.size.bathrooms)||'' }, size_text:(b.size&&b.size.text)||'', units:b.units||1, buildings:b.buildings||1, scheduled:b.when||b.date||'' }; }
+function bookingCardHtml(bk){
+  var c = bk.contact||{}, who = [c.name,c.phone,c.email].filter(Boolean).map(esc).join(' · ');
+  return '<div class="card"><b>Approved booking</b><div class="muted">'+esc(bk.scheduled||'')+(bk.customer_name?' · '+esc(bk.customer_name):'')+(who?'<br>Requested by '+who:'')+(bk.size_text?'<br>Size given: '+esc(bk.size_text):'<br>Size: not given')+(bk.notes?'<br>Notes: '+esc(bk.notes):'')+'</div></div>';
+}
+function renderBookList(){
+  var el = $('booklist'); if (!el) return;
+  var l = S.bookings||[], h = S.bookErr ? '<div class="banner warn">'+esc(S.bookErr)+'</div>' : '';
+  if (l.length) h += '<div class="card"><b>Approved bookings</b><div class="muted">Tap one to start — property, owner and contact are filled in for you.</div>'+l.map(function(b,i){
+    return '<div class="propitem" onclick="startFromBooking('+i+')"><b>'+esc(b.address)+'</b><div class="muted">'+esc(b.when||b.date)+(b.customer_name?' · '+esc(b.customer_name):'')+((b.contact&&b.contact.name)?' · '+esc(b.contact.name):'')+'</div>'+(b.size&&b.size.text?'<div class="muted">'+esc(b.size.text)+'</div>':'')+(b.property?'':'<div class="muted">New to the Hub — it will be added under '+esc((b.owner&&b.owner.name)||'an owner you choose')+'</div>')+'</div>';
+  }).join('')+'</div>';
+  el.innerHTML = h;
+}
+function startFromBooking(i){
+  var b = (S.bookings||[])[i]; if (!b) return;
+  if (!claim('book')) return;
+  var id = newId(); toast('Opening the booking…');
+  api('POST','/fi/booking/start',{ booking_id:b.id, inspection_id:id }).then(function(r){
+    release('book'); applyBooking(r, id);
+  }).catch(function(e){
+    release('book');
+    if (e.code==='already_started'){ toast('An inspection was already started from this booking — find it in the list'); loadBookings(); return; }
+    toast('Could not open the booking: '+e.message);
+  });
+}
+function applyBooking(r, id){
+  var b = r.booking, sz = b.size||{}, o = S.newOpts;
+  S.newInspId = id; S.newBooking = bookingRef(b);
+  if (b.contact && b.contact.name) o.client = b.contact.name;
+  if (b.contact && b.contact.email) o.email = b.contact.email;
+  var bd = parseFloat(sz.bedrooms), ba = parseFloat(sz.bathrooms);
+  if (isFinite(bd)) o.beds = Math.max(0, Math.min(12, Math.round(bd)));
+  if (isFinite(ba)) o.baths = Math.max(1, Math.min(12, Math.ceil(ba)));
+  S.newProp = r.property ? { id:r.property.id, address:b.address||r.property.address, street:r.property.street, source:'hub', unit_id:'', unit_label:'' } : null;
+  S.newOwner = r.owner ? { id:r.owner.id, name:r.owner.name, source:'hub' } : null;
+  S.pickUnitFor = ''; S.ownerQ = ''; if (!S.newProp) S.propQ = b.street||'';
+  S.dir = S.dir || null; if (r.property_created) loadProps();
+  render();
+  toast(r.property_created ? 'Added to the Hub — check the layout, then start' : (S.newProp ? 'Booking opened — check the layout, then start' : 'Property not found in the Hub — pick or add it'));
+}
+// An inspection that was started BEFORE its booking could be picked: offer a one-tap link when the street matches an approved booking.
+function streetLike(x, y){ var a = nz(x), b = nz(y); return !!a && !!b && (a===b || a.indexOf(b)===0 || b.indexOf(a)===0); }
+function bookingMatchFor(doc){
+  if (doc.booking || !S.bookings) return null;
+  var st = fiStreet(doc);
+  for (var i=0;i<S.bookings.length;i++) if (streetLike(S.bookings[i].street, st)) return S.bookings[i];
+  return null;
+}
+function bookingLinkHtml(doc){
+  var b = bookingMatchFor(doc); if (!b) return '';
+  return '<div class="banner info">This looks like the approved booking for <b>'+esc(b.address)+'</b> ('+esc(b.when||b.date)+').<div class="btns"><button class="btn sm primary" onclick="linkBooking(\''+esc(b.id)+'\')">Link it</button></div><div class="muted">Fills in the owner, requester and property from the booking.</div></div>';
+}
+function linkBooking(bid){
+  if (!claim('book')) return; var rec = S.rec; if (!rec){ release('book'); return; }
+  api('POST','/fi/booking/start',{ booking_id:bid, inspection_id:rec.id }).then(function(r){
+    release('book');
+    if (!S.rec || S.rec.id!==rec.id) return;
+    var b = r.booking;
+    mut(function(doc){
+      if (r.property) doc.property = Object.assign({}, doc.property, { source:'hub', id:r.property.id });
+      if (r.owner) doc.owner = { id:r.owner.id, name:r.owner.name, source:'hub' };
+      doc.booking = bookingRef(b);
+    });
+    mutMeta(function(m){ if (!m.client_name && b.contact && b.contact.name) m.client_name = b.contact.name; if (!m.client_email && b.contact && b.contact.email) m.client_email = b.contact.email; });
+    loadBookings(); render(); toast('Linked to the booking'+(r.owner?' and owner':'')+(r.owner_missing?' — choose the owner':''));
+  }).catch(function(e){ release('book'); toast(e.code==='already_started' ? 'That booking already has an inspection' : 'Could not link: '+e.message); });
 }
 // ---- Hub directory: properties, units, owners (searchable) ----
 function nz(s){
