@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-27.01-delivery-email-watcher';
+const BUILD_VERSION = '2026-10-27.02-delivery-job-po-prep';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -34183,7 +34183,7 @@ const DELIVERY_SENDER_DOMAINS_DEFAULT = 'homedepot.com,lowes.com,acehardware.com
 const DELIVERY_STORE_NAMES = { 'homedepot.com': 'Home Depot', 'lowes.com': "Lowe's", 'acehardware.com': 'Ace Hardware', 'walmart.com': 'Walmart' };
 // Status only ever moves RIGHT along this line (except reschedule -> Scheduled, cancel -> Cancelled).
 const DELIVERY_STATUS_ORDER = ['Ordered', 'Scheduled', 'Window-Set', 'En-Route', 'Approaching', 'Arrived', 'Delivered'];
-const DELIVERY_KIND_STATUS = { order_confirmation: 'Ordered', scheduled: 'Scheduled', window_set: 'Window-Set', en_route: 'En-Route', approaching: 'Approaching', delivered: 'Delivered', reschedule: 'Scheduled', cancel: 'Cancelled' };
+const DELIVERY_KIND_STATUS = { order_confirmation: 'Ordered', prep: 'Ordered', scheduled: 'Scheduled', window_set: 'Window-Set', en_route: 'En-Route', approaching: 'Approaching', delivered: 'Delivered', reschedule: 'Scheduled', cancel: 'Cancelled' };
 
 // THE PATTERNS TABLE. Everything the parser keys on is here. Tighten after the first real email.
 const DEP = {
@@ -34211,8 +34211,14 @@ const DEP = {
       strong: [/\bon\s+(?:its|the)\s+way\b/i, /\bout\s+for\s+delivery\b/i, /\bdriver\s+is\s+(?:on|en)\b/i, /\ben\s+route\b/i, /\barriving\s+(?:soon|today)\b/i],
       subj: [],
     },
+    // Oct 27 2026 (Brett's real Home Depot order WH49670828): "Prep for Appliance Delivery!" is a how-to-get-ready notice with NO new date or window. The store's order
+    // emails also print "Delivery Window Pending" before a window exists, which is not a window. Tried before window_set / scheduled so neither phrase in its body wins.
+    prep: {
+      strong: [/\bget\s+ready\s+for\s+your\s+(?:appliance|delivery)\b/i, /\blook\s+for\s+a\s+delivery\s+scheduled\s+email\s+next\b/i],
+      subj: [/\bprep(?:are)?\s+for\b[^.!?\n]{0,40}\b(?:delivery|installation)\b/i],
+    },
     window_set: {
-      strong: [/\bdelivery\s+(?:time\s+)?window\b/i, /\barrival\s+window\b/i, /\barrive\s+between\b/i, /\bbetween\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:and|to|-|–)\s*\d{1,2}(?::\d{2})?\s*(?:a|p)\.?m\.?/i],
+      strong: [/\bdelivery\s+(?:time\s+)?window\b(?!\s*(?:is\s+|are\s+)?(?:still\s+)?(?:pending|tbd|tba|to\s+be|not\s+(?:yet\s+)?(?:set|scheduled|available|determined)|unavailable|coming|soon))/i, /\barrival\s+window\b(?!\s*(?:is\s+|are\s+)?(?:still\s+)?(?:pending|tbd|tba|to\s+be|not\s+(?:yet\s+)?(?:set|scheduled|available|determined)|unavailable|coming|soon))/i, /\barrive\s+between\b/i, /\bbetween\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:and|to|-|–)\s*\d{1,2}(?::\d{2})?\s*(?:a|p)\.?m\.?/i],
       subj: [],
     },
     scheduled: {
@@ -34220,7 +34226,7 @@ const DEP = {
       subj: [],
     },
     order_confirmation: {
-      strong: [/\border\s+confirmation\b/i, /\bthank\s+you\s+for\s+your\s+(?:order|purchase)\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i, /\byour\s+order\s+(?:has\s+been|was)\s+(?:placed|received)\b/i],
+      strong: [/\border\s+confirmation\b/i, /\border\s+confirmed\b/i, /\bprocessing\s+your\s+order\b/i, /\bthank\s+you\s+for\s+your\s+(?:order|purchase)\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i, /\byour\s+order\s+(?:has\s+been|was)\s+(?:placed|received)\b/i],
       subj: [],
     },
     // Weakest signal, tried last: "track your delivery" shows up in confirmations too.
@@ -34272,7 +34278,7 @@ const DEP = {
   // How far in the past a year-less date may sit before it rolls to next year (late-processed "delivered" mail).
   pastGraceDays: 14,
 };
-const DEP_KIND_ORDER = ['cancel', 'delivered', 'reschedule', 'approaching', 'en_route', 'window_set', 'scheduled', 'order_confirmation', 'en_route_weak'];
+const DEP_KIND_ORDER = ['cancel', 'delivered', 'reschedule', 'approaching', 'en_route', 'prep', 'window_set', 'scheduled', 'order_confirmation', 'en_route_weak'];
 const DEP_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
 
 // HTML -> text. Keeps line breaks (the address parser reads lines); never turns &lt; back into a tag.
@@ -34319,6 +34325,33 @@ function deliveryDetectKind(text, isSubject) {
   return null;
 }
 
+// The "Job / PO Number:" line the store prints from the PO field Brett types when he orders: "WO 1237 115 W 29th St Apt 2". Returns { wo_ref: 'WO-1237' | '', unit_raw: 'Apt 2' | '', raw }.
+// Only a LABELLED line counts, and only "WO <digits>" in it names a work order (a bare number or a name never does). The unit is read from the same line (never from the phone
+// number or street number, which have no unit word).
+function deliveryParseJobRef(text) {
+  const out = { wo_ref: '', unit_raw: '', raw: '' };
+  const flat = String(text == null ? '' : text).replace(/\s+/g, ' ');
+  const labelRe = /\b(?:job\s*\/\s*po|job|po)(?:\s+(?:number|no\.?|num\.?))?\s*(?::|#)\s*/gi;
+  let lm;
+  while ((lm = labelRe.exec(flat))) {
+    let v = flat.slice(lm.index + lm[0].length, lm.index + lm[0].length + 140);
+    const stop = /\b(?:customer\s+phone|phone|delivery|estimated|order|deliver\s+to|sku|qty|manage|job\s*\/|po\s+number)\b/i.exec(v);
+    if (stop) v = v.slice(0, stop.index);
+    const wm = /\bwo\s*[-#]?\s*(\d{1,7})\b/i.exec(v);
+    if (!wm) continue;
+    out.wo_ref = 'WO-' + wm[1];
+    out.raw = v.trim().slice(0, 120);
+    const rest = v.slice(wm.index + wm[0].length);
+    const um = /\b(apt|apartment|unit|ste|suite)\.?\s*#?\s*([A-Za-z0-9-]+)/i.exec(rest) || /#\s*([A-Za-z0-9-]+)/.exec(rest);
+    if (um) {
+      const word = um.length > 2 ? ({ apt: 'Apt', apartment: 'Apt', unit: 'Unit', ste: 'Ste', suite: 'Suite' })[um[1].toLowerCase()] : 'Unit';
+      out.unit_raw = word + ' ' + (um.length > 2 ? um[2] : um[1]).replace(/-+$/, '');
+    }
+    return out;
+  }
+  return out;
+}
+
 function deliveryParseItem(flat) {
   let t = flat; const stop = DEP.itemStop.exec(t); if (stop) t = t.slice(0, stop.index);
   for (const re of DEP.itemNoise) t = t.replace(re, ' ');
@@ -34344,6 +34377,17 @@ function deliveryParseMakeModel(scan, orderNo) {
     const region = bidx >= 0 ? scan.slice(bidx, bidx + 220) : scan.slice(0, 400);
     const re = new RegExp(DEP.modelToken.source, 'g'); let tm;
     while ((tm = re.exec(region))) { if (okModel(tm[1])) { model = tm[1]; break; } }
+  }
+  // No model number printed (the store prints SKU / Internet numbers instead): the product title is the make/model line. "FRIGIDAIRE 30 in. 5 Burner Freestanding Gas
+  // Range in Stainless Steel with Quick Boil..." -> "Frigidaire 30 in. 5 Burner Freestanding Gas Range". Only a title that starts with a size (a digit) is trusted, so a sentence that
+  // merely mentions the brand ("Your Whirlpool refrigerator will be delivered...") never becomes the model.
+  if (!model && brand && bidx >= 0) {
+    let desc = scan.slice(bidx + brand.length).replace(/^[\s:,\u2013\u2014-]+/, '');
+    const cut = /\s+(?:in\s+(?!\.)|with\s+|sku\b|internet\b|model\b|qty\b|item\b|\$|parts\s*&|haul\s+away)/i.exec(' ' + desc);
+    if (cut) desc = (' ' + desc).slice(0, cut.index).trim();
+    desc = desc.replace(/\s+/g, ' ').replace(/[\s,.;:-]+$/, '').trim();
+    if (desc.length > 80) { desc = desc.slice(0, 80); desc = desc.slice(0, desc.lastIndexOf(' ') > 20 ? desc.lastIndexOf(' ') : 80).trim(); }
+    if (/^\d/.test(desc) && /[A-Za-z]{3}/.test(desc) && desc.length >= 8) model = desc;
   }
   return { brand, model, make_model: [brand, model].filter(Boolean).join(' ') };
 }
@@ -34480,7 +34524,7 @@ function deliveryParseEmail(msg) {
   const subject = String((msg && msg.subject) || '').slice(0, 500);
   const text = deliveryEmailText(msg && (msg.body != null ? msg.body : msg.text), msg && msg.html);
   const flat = (subject + ' \n ' + text).replace(/\s+/g, ' ');
-  const out = { kind: 'unknown', order_number: '', item_type: '', make_model: '', address: '', unit_raw: '', expected_date: '', expected_window: '', stops_away: null, missing: [], notes: [], reason: '', excerpt: flat.slice(0, 400) };
+  const out = { kind: 'unknown', order_number: '', wo_ref: '', item_type: '', make_model: '', address: '', unit_raw: '', expected_date: '', expected_window: '', stops_away: null, missing: [], notes: [], reason: '', excerpt: flat.slice(0, 400) };
   const recvIso = (msg && msg.received_at) || new Date().toISOString();
   out.order_number = deliveryParseOrderNumber(subject + '\n' + text);
 
@@ -34506,6 +34550,13 @@ function deliveryParseEmail(msg) {
   out.make_model = deliveryParseMakeModel(it.scan, out.order_number).make_model;
   const ad = deliveryParseAddress(flat);
   out.address = ad.address; out.unit_raw = ad.unit_raw;
+  // The Job / PO line names the work order and the unit. Some store emails leave the unit out of the address block (the Prep email), so the unit is taken from here too.
+  const jr = deliveryParseJobRef(flat);
+  out.wo_ref = jr.wo_ref;
+  if (!out.unit_raw && jr.unit_raw) {
+    out.unit_raw = jr.unit_raw;
+    if (out.address && !/\b(?:apt|apartment|unit|ste|suite|bldg|fl|floor)\b|#/i.test(out.address.split(',')[0])) out.address = out.address.replace(/^([^,]*)/, '$1 ' + jr.unit_raw);
+  }
   out.expected_date = deliveryParseDate(flat, recvIso);
   out.expected_window = deliveryParseWindow(flat);
   const stops = deliveryParseStops(flat);
@@ -34517,10 +34568,10 @@ function deliveryParseEmail(msg) {
 
   if (out.kind !== 'unknown') {
     if (!out.order_number) out.missing.push('order_number');
-    if (!out.address && ['order_confirmation', 'scheduled', 'window_set', 'reschedule'].indexOf(out.kind) >= 0) out.missing.push('delivery_address');
+    if (!out.address && ['order_confirmation', 'prep', 'scheduled', 'window_set', 'reschedule'].indexOf(out.kind) >= 0) out.missing.push('delivery_address');
     if ((out.kind === 'scheduled' || out.kind === 'reschedule') && !out.expected_date) out.missing.push('expected_date');
     if (out.kind === 'window_set' && !out.expected_window) out.missing.push('expected_window');
-    if (out.kind === 'order_confirmation' && !out.item_type) out.missing.push('item_type');
+    if ((out.kind === 'order_confirmation' || out.kind === 'prep') && !out.item_type) out.missing.push('item_type');
     if (out.kind === 'approaching' && out.stops_away === null) out.missing.push('stops_away');
   }
   return out;
@@ -34694,6 +34745,37 @@ function deliveryMatchPlace(address, unitRaw, properties, units, tenants) {
   const pool = tenantsForDispatch(tenants, null, { Unit_ID: out.unit_id, Property_ID: String(property.ID) });
   if (pool.length === 1) { out.tenant_id = String(pool[0].ID); out.tenant = pool[0]; }
   return out;
+}
+
+// The Job / PO line names a work order ("WO 1237"). Link the delivery to THAT work order (never create a second one) and take its unit and tenant, but only when it
+// is safe: the work order must exist, not be closed (Paid / Cancelled / Closed / Void), and be on the same property the address matched. Returns { wo_id, note, place }; `place` is the (possibly
+// upgraded) address match. Never throws; every refusal comes back as a note that reaches Brett's text and the delivery's notes (nothing is guessed silently).
+function deliveryApplyWoRef(woRef, wos, place, priorPropertyId, properties, units, tenants) {
+  const none = (note) => ({ wo_id: '', note, place });
+  if (!woRef) return none('');
+  const w = (wos || []).find(x => String(x.ID).toUpperCase() === String(woRef).toUpperCase());
+  if (!w) return none('JOB/PO names ' + woRef + ' but no such work order exists: not linked');
+  if (WOStatus.sets.CLOSED_FINAL.indexOf(String(w.Status || '')) >= 0) return none('JOB/PO names ' + woRef + ' but it is ' + w.Status + ' (closed): not linked');
+  const expected = place.status === 'matched' ? String(place.property.ID) : String(priorPropertyId || '');
+  if (expected && String(w.Property_ID) !== expected) return none('JOB/PO names ' + woRef + ' but it is on property ' + w.Property_ID + ' and the address is property ' + expected + ': not linked');
+  const property = place.status === 'matched' ? place.property : (properties || []).find(x => String(x.ID) === String(w.Property_ID));
+  if (!property) return none('JOB/PO names ' + woRef + ' but its property ' + w.Property_ID + ' is not in Properties: not linked');
+  const np = Object.assign({}, place, { status: 'matched', property });
+  const notes = [];
+  if (w.Unit_ID) {
+    const u = (units || []).find(x => String(x.ID) === String(w.Unit_ID));
+    if (place.unit_id && String(place.unit_id) !== String(w.Unit_ID)) notes.push('the email address says unit "' + (place.unit_label || place.unit_id) + '" but ' + woRef + ' is unit "' + (u ? u.Unit_Label : w.Unit_ID) + '": using the work order\'s');
+    np.unit_id = String(w.Unit_ID); np.unit_label = u ? u.Unit_Label : ''; np.unit_problem = '';
+  }
+  const wt = w.Tenant_ID ? (tenants || []).find(x => String(x.ID) === String(w.Tenant_ID) && x.Active !== 'FALSE' && String(x.Property_ID) === String(property.ID)) : null;
+  if (wt) {
+    if (place.tenant_id && String(place.tenant_id) !== String(wt.ID)) notes.push('tenant from the address (' + place.tenant_id + ') differs from ' + woRef + '\'s tenant ' + wt.ID + ': using the work order\'s');
+    np.tenant_id = String(wt.ID); np.tenant = wt;
+  } else if (w.Unit_ID && String(place.unit_id || '') !== String(w.Unit_ID)) {
+    const pool = tenantsForDispatch(tenants, null, { Unit_ID: np.unit_id, Property_ID: String(property.ID) });
+    np.tenant_id = pool.length === 1 ? String(pool[0].ID) : ''; np.tenant = pool.length === 1 ? pool[0] : null;
+  }
+  return { wo_id: String(w.ID), note: notes.join('; '), place: np };
 }
 
 async function deliveryReadTabs(env) {
@@ -35142,7 +35224,7 @@ async function deliveryEmailIntake(env, body) {
     if (!domain) return json({ success: false, error: 'sender is not an allowed store domain (Config Delivery_Sender_Domains)' }, 400);
     const store = DELIVERY_STORE_NAMES[domain] || domain;
     const p = deliveryParseEmail({ subject, body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: recvIso });
-    const parsedFields = { kind: p.kind, order_number: p.order_number, item_type: p.item_type, make_model: p.make_model, expected_date: p.expected_date, expected_window: p.expected_window, delivery_address: p.address };
+    const parsedFields = { kind: p.kind, wo_ref: p.wo_ref || '', order_number: p.order_number, item_type: p.item_type, make_model: p.make_model, expected_date: p.expected_date, expected_window: p.expected_window, delivery_address: p.address };
     if (p.kind === 'not_delivery') return R(Object.assign(parsedFields, { reason: p.reason }));   // promo / chatter: no record, no text, no write of any kind
 
     stage = 'read';
@@ -35221,7 +35303,15 @@ async function deliveryEmailIntake(env, body) {
     // ── the email is clear and tied to an order ──
     const isNew = !row;
     const prior = row || {};
-    const place = deliveryMatchPlace(p.address || prior.Delivery_Address, p.unit_raw, properties, units, tenants);
+    let place = deliveryMatchPlace(p.address || prior.Delivery_Address, p.unit_raw, properties, units, tenants);
+    // Job / PO line -> the work order Brett already made for this job: link it (no second WO), and take its unit + tenant.
+    let woRes = { wo_id: '', note: '', place };
+    if (p.wo_ref) {
+      stage = 'job-po';
+      woRes = deliveryApplyWoRef(p.wo_ref, await fetchTab(env, 'Work_Orders'), place, prior.Property_ID, properties, units, tenants);
+      place = woRes.place;
+      stage = 'read';
+    }
     const notes = [];
     if (p.missing.length) notes.push('MISSING from email: ' + p.missing.join(', '));
     if (p.notes.length) notes.push(p.notes.join('; '));
@@ -35231,6 +35321,8 @@ async function deliveryEmailIntake(env, body) {
       else if (place.status === 'ambiguous') placeNotes.push('NEEDS PROPERTY: address as received "' + p.address + '" matches more than one property (' + place.detail + ')');
       else if (place.unit_problem) placeNotes.push('UNIT UNKNOWN: ' + place.unit_problem);
     }
+    if (p.wo_ref && (woRes.note || !woRes.wo_id)) placeNotes.push(woRes.note || ('JOB/PO names ' + p.wo_ref + ' but it could not be linked'));
+    else if (woRes.wo_id && !prior.Linked_WO_IDs) notes.push('Linked to ' + woRes.wo_id + ' from the Job/PO line');
     let anomaly = '';
     if (prior.Property_ID && place.status === 'matched' && String(place.property.ID) !== String(prior.Property_ID)) anomaly = 'the address in this email matches property ' + place.property.ID + ' (' + place.property.Address + ') but the record is on property ' + prior.Property_ID + ' - not changed';
 
@@ -35260,7 +35352,7 @@ async function deliveryEmailIntake(env, body) {
     let alertEvent = '';
     if (!stale) {
       if (anomaly) alertEvent = 'problem';
-      else if (isNew) alertEvent = ['order_confirmation', 'scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0 ? 'new' : p.kind;
+      else if (isNew) alertEvent = ['order_confirmation', 'prep', 'scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0 ? 'new' : p.kind;
       else if (['cancel', 'delivered', 'en_route'].indexOf(p.kind) >= 0) alertEvent = statusChanged ? p.kind : '';
       else if (p.kind === 'approaching') alertEvent = (statusChanged || sig !== prior.Last_Event_Sig) ? 'approaching' : '';
       else if (['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) alertEvent = (dateChanged || winChanged || (p.kind === 'reschedule' && statusChanged)) ? p.kind : '';
@@ -35272,6 +35364,11 @@ async function deliveryEmailIntake(env, body) {
       if (!prior.Item_Type && p.item_type) fill.Item_Type = p.item_type;
       if (!prior.New_Make_Model && p.make_model) fill.New_Make_Model = p.make_model;
       if (!prior.Delivery_Address && p.address) fill.Delivery_Address = p.address;
+      if (prior.Property_ID && place.status === 'matched' && String(place.property.ID) === String(prior.Property_ID)) {   // a row made before the unit / tenant / work order were known: complete it
+        if (!prior.Unit_ID && place.unit_id) fill.Unit_ID = place.unit_id;
+        if (!prior.Tenant_ID && place.tenant_id && (!prior.Unit_ID || String(prior.Unit_ID) === String(place.unit_id))) { fill.Tenant_ID = place.tenant_id; if (prior.Onsite_Contact !== 'tenant') fill.Onsite_Contact = 'tenant'; }
+      }
+      if (!prior.Linked_WO_IDs && woRes.wo_id) fill.Linked_WO_IDs = woRes.wo_id;
       if (!prior.Property_ID && place.status === 'matched') { fill.Property_ID = String(place.property.ID); if (place.unit_id) fill.Unit_ID = place.unit_id; if (place.tenant_id) { fill.Tenant_ID = place.tenant_id; if (prior.Onsite_Contact !== 'tenant') fill.Onsite_Contact = 'tenant'; } }
     }
     const merged = Object.assign({}, prior, fill);
@@ -35288,7 +35385,7 @@ async function deliveryEmailIntake(env, body) {
 
     if (dry) {
       const cal = (stale || noChange) ? { action: 'none' } : calendarFor(isNew ? 'new' : prior.ID);
-      return R(Object.assign(base, { created: isNew, updated: !isNew && !stale, delivery_id: isNew ? '' : String(prior.ID), reason: stale ? 'stale_email' : (noChange ? 'no_change' : (isNew ? 'would_create' : 'would_update')), detail: [placeNotes.join('; '), anomaly, 'would text Brett: ' + (alertEvent || 'no')].filter(Boolean).join(' | '), wo_id: isNew ? '' : String(prior.Linked_WO_IDs || '').split(',')[0].trim(), calendar: cal, calendar_status: cal.action === 'none' ? 'none' : 'dry_run: would ' + cal.action }));
+      return R(Object.assign(base, { created: isNew, updated: !isNew && !stale, delivery_id: isNew ? '' : String(prior.ID), reason: stale ? 'stale_email' : (noChange ? 'no_change' : (isNew ? 'would_create' : 'would_update')), detail: [placeNotes.join('; '), anomaly, 'would text Brett: ' + (alertEvent || 'no')].filter(Boolean).join(' | '), wo_id: isNew ? woRes.wo_id : String(prior.Linked_WO_IDs || '').split(',')[0].trim(), calendar: cal, calendar_status: cal.action === 'none' ? 'none' : 'dry_run: would ' + cal.action }));
     }
 
     // ── writes ──
@@ -35300,7 +35397,7 @@ async function deliveryEmailIntake(env, body) {
       const tenantMeets = !!tenantId;
       const row0 = {
         Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: date, Expected_Window: win,
-        Property_ID: propertyId, Unit_ID: unitId, Tenant_ID: tenantId,
+        Property_ID: propertyId, Unit_ID: unitId, Tenant_ID: tenantId, Linked_WO_IDs: woRes.wo_id,
         Onsite_Contact: tenantMeets ? 'tenant' : 'me', Onsite_Contact_Phone: tenantMeets ? '' : adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone,
         Delivery_Notes: [DELIVERY_DRIVER_NOTE, noteLine].concat(notes, placeNotes).join('\n').slice(0, 5000),
         Status: newStatus, Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','), Created_Date: new Date().toISOString(), Active: 'TRUE',
@@ -35403,8 +35500,10 @@ async function deliveryEmailIntake(env, body) {
     let tn = { tenant_sms: 'off', detail: '' };
     const noticeKinds = ['order_confirmation', 'scheduled', 'window_set', 'reschedule'];
     const cancelling = newStatus === 'Cancelled' && !isNew && prior.Status !== 'Cancelled';
-    const asking = noticeKinds.indexOf(p.kind) >= 0 && newStatus !== 'Cancelled' && newStatus !== 'Delivered' && !frozen;
-    if (!stale && !noChange && !lostClaim && (cancelling || asking)) {
+    // A Prep email carries no news, but if the tenant has never been asked (it was the first email we saw, or the unit / tenant only became known now) it asks, once.
+    const prepAsk = p.kind === 'prep' && !!date && !merged.Tenant_Notice_Sig;
+    const asking = (noticeKinds.indexOf(p.kind) >= 0 || prepAsk) && newStatus !== 'Cancelled' && newStatus !== 'Delivered' && !frozen;
+    if (!stale && (!noChange || prepAsk) && !lostClaim && (cancelling || asking)) {
       const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
       const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
       const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
