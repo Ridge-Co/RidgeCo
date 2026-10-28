@@ -113,7 +113,7 @@ const send = (w, id, rev, extra) => w.fiUrgentSend(w.env, Object.assign({ id, re
   t('one email, photos attached, Brett copied, note included', w.h.multi.length === 1 && w.h.multi[0].attachments.length === 2 && w.h.multi[0].cc === 'brett@bmoremanagement.com' && w.h.multi[0].html.includes('Please call me today.'));
   t('attachments are real base64 jpegs', w.h.multi[0].attachments.every(a => a.mimeType === 'image/jpeg' && a.base64Data === Buffer.from('BYTES').toString('base64') && /\.jpg$/.test(a.filename)));
   const log = w.h.tabs.FI_Email_Log.rows.filter(Boolean);
-  t('exactly one log row, keyed by the send key, final state', log.length === 1 && log[0][0] === 'ug_key12345678' && /^sent-staged/.test(log[0][4]), log);
+  t('exactly one log row, keyed by the send key, final state', log.length === 1 && /^ug_key12345678_[0-9a-f]{8}$/.test(log[0][0]) && /^sent-staged/.test(log[0][4]), log);
   t('no text unless asked', w.h.sms.length === 0 && r.body.text.requested === false);
   const again = await withNow(OPEN, () => send(w, id, rev, { note: 'Please call me today.' }));
   t('same send_key again: reports already_sent, sends nothing', again.body.ok && again.body.already_sent === true && w.h.multi.length === 1 && w.h.tabs.FI_Email_Log.rows.filter(Boolean).length === 1, again.body);
