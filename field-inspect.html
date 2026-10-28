@@ -1089,6 +1089,18 @@ function renderUrgentNew(){
   h += '<div class="btns"><button class="btn primary" id="ug-go" onclick="urgentCreate()">Review email ›</button><button class="btn" onclick="urgentCancel()">Cancel</button></div>';
   openSheet(h);
 }
+function urgPhotosHtml(){
+  var u = S.urg, lines = urgLines(), h = '';
+  if (u.photoIds.length){
+    h += u.photoIds.map(function(pid){
+      var chips = lines.slice(0,8).map(function(ln,i){ var on = (u.links[pid]||[]).indexOf(i)>-1; return '<button class="btn sm'+(on?' primary':'')+'" aria-label="photo belongs to item '+(i+1)+'" onclick="urgentLink(\''+pid+'\','+i+')">'+(i+1)+'</button>'; }).join('');
+      return '<div class="row" style="gap:10px;margin-bottom:8px"><div style="flex:none;width:72px">'+thumbHtml(pid,'void 0',false)+'</div><div style="flex:1"><div class="muted">'+(lines.length ? 'Belongs to item:' : 'Type the issues first, then tap which one this shows')+'</div><div class="chips" style="margin:4px 0">'+chips+'</div></div><button class="btn sm ghost" aria-label="remove photo" onclick="urgentDropPhoto(\''+pid+'\')">✕</button></div>';
+    }).join('')+'<div class="muted">A photo with nothing tapped goes with item 1. Up to 6 photos are emailed. Only the first 8 lines can be tapped for a photo.</div>';
+  }
+  return h;
+}
+// Update ONLY the photo list while typing: re-rendering the whole sheet would swallow the first tap on a button (the keyboard closes and the button moves under the finger).
+function urgentRefreshPhotos(){ var el = $('ug-photos'); if (el) el.innerHTML = urgPhotosHtml(); }
 function urgentCancel(){ S.urg = null; closeSheet(); }
 function urgNorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
 function urgentCreate(){
