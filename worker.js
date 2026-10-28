@@ -26914,6 +26914,10 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
     if (!body || body.dry_run !== false) return true; // a dry run writes nothing
     const _cu = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(body.customer_id));
+    if (body.copy_partner_contact === true) { // copying contact details onto an owner may only ever touch a TEST- owner on staging
+      const _ow = (await fetchTab(env, 'Owners')).find(o => String(o.ID) === String(body.owner_id));
+      if (!_ow || !String(_ow.Company || '').startsWith('TEST-')) return false;
+    }
     return !!_cu && String(_cu.Name || '').startsWith('TEST-') && Array.isArray(body.links) && body.links.every(l => String((l && l.inspection_id) || '').startsWith('TEST-'));
   }
   if (path === '/fi/booking/start') { // staging may only claim a TEST- booking (address starts TEST-) for a TEST- inspection id
