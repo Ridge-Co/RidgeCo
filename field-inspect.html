@@ -1366,7 +1366,7 @@ function thumbHtml(id, onclick, selected){
   return '<button class="thumb'+(selected?' chk':'')+'" onclick="'+onclick+'" aria-label="photo">'+(src?'<img src="'+esc(src)+'" alt="photo" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">':'')+(st&&st.state!=='done'?'<span class="b">'+(st.state==='error'?'⚠ retry':'⏳')+'</span>':'')+'</button>';
 }
 function issueCard(is){
-  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
+  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+(is.sent?' <span class="pill ok">sent '+esc(sentWhen(is.sent))+'</span>':(is.flag_send?' <span class="pill warn">to send</span>':''))+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
 }
 
 // ---- photos: select, move, remove ----
