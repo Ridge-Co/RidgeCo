@@ -227,6 +227,7 @@ const body = (r) => r.body;
   t('guard: real inspection save denied', !(await ok('/fi/save', { id: 'fi_real_123' })));
   t('guard: real inspection publish denied', !(await ok('/fi/publish', { id: 'fi_real_123' })));
   t('guard: real inspection email denied', !(await ok('/fi/email-report', { id: 'fi_real_123' })));
+  t('guard: real inspection urgent-send denied, TEST- allowed', !(await ok('/fi/urgent-send', { id: 'fi_real_123' })) && (await ok('/fi/urgent-send', { id: 'TEST-abc123' })));
   t('guard: structure/summarize allowed (no writes)', (await ok('/fi/structure', {})) && (await ok('/fi/summarize', {})));
   t('guard: TEST- new brand allowed', await ok('/fi/brand/save', { name: 'TEST-Brand' }));
   t('guard: non-TEST brand denied', !(await ok('/fi/brand/save', { name: 'Premier' })));
