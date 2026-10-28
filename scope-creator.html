@@ -49,6 +49,9 @@
   .li .fields{display:grid;grid-template-columns:120px 110px 1fr;gap:6px;}
   .li .fields .full{grid-column:1/-1;}
   .li .fields input{width:100%;}
+  /* Oct 27 2026 (Brett): Description + Note are multi-line text areas that grow to fit what is typed, not one cramped line. */
+  .li .fields textarea{width:100%;box-sizing:border-box;line-height:1.45;resize:vertical;overflow:hidden;min-height:72px;}
+  .li .fields textarea.f-note{min-height:48px;}
   .li .fields label{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .li .del{grid-column:2;justify-self:end;}
   .li.addon{border-color:#166534;background:#f0f8f2;}
