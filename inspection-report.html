@@ -59,6 +59,26 @@ var Q = new URLSearchParams(location.search), TOKEN = Q.get('r') || '';
 var TRADE_LABEL = {plumbing:'Plumbing',electrical:'Electrical',hvac:'HVAC / Heating',roofing:'Roofing / Gutters',structural:'Structural',carpentry:'Carpentry',drywall_paint:'Drywall / Paint',flooring:'Flooring',windows_doors:'Windows / Doors',appliances:'Appliances',pest:'Pest',safety:'Safety',exterior_site:'Exterior / Site',cleaning:'Cleaning',general:'General',tenant_action:'Tenant action'};
 var SEV_LABEL = {urgent:'Urgent',high:'High',medium:'Medium',low:'Low',info:'Note'};
 var COND_LABEL = {good:'Good',fair:'Fair',poor:'Poor',nothing_to_do:'Nothing to do',not_inspected:'Not inspected'};
+// Visit details + areas not accessed (Oct 27 2026). Neutral wording only; nothing is shown unless the inspector filled it in.
+var COOP_LABEL = {completed:'Occupant present; inspection completed as planned',not_present:'Occupant not present',limited:'Occupant present; access to some areas was limited',ended_early:'Occupant asked that the inspection end early'};
+function noAccess(a){ return !!(a && a.access && a.access.no_access); }
+function accessReasonText(a){
+  var ac = a.access||{}, note = String(ac.note||'').trim();
+  if (ac.reason==='tenant_declined') return 'Access declined by occupant'+(note?' — '+note:'');
+  if (ac.reason==='blocked') return 'Area blocked or not reachable'+(note?' — '+note:'');
+  if (ac.reason==='other') return note || 'Not accessed';
+  return note || 'Not accessed';
+}
+function visitHtml(doc){
+  var v = doc.visit||{}, rows = [], an = v.animals;
+  if (an && an.present===true){
+    var it = (an.items||[]).filter(function(x){ return String(x.type||'').trim(); });
+    rows.push('<div><span>Animals</span>'+(it.length ? it.map(function(x){ return esc(x.type)+(x.count?' × '+esc(x.count):''); }).join(', ') : 'Present')+'</div>');
+  } else if (an && an.present===false) rows.push('<div><span>Animals</span>None observed</div>');
+  var ac = v.access_cooperation, lab = ac && COOP_LABEL[ac.choice] || '', note = ac ? String(ac.note||'').trim() : '';
+  if (lab || note) rows.push('<div><span>Access &amp; cooperation</span>'+(lab?esc(lab):'')+(lab&&note?'<br>':'')+(note?'<span style="white-space:pre-wrap;display:inline;text-transform:none;letter-spacing:0;font-size:inherit;font-weight:400;color:inherit">'+esc(note)+'</span>':'')+'</div>');
+  return rows.length ? '<div class="card"><h3>Visit details</h3><div class="meta" style="margin:0">'+rows.join('')+'</div></div>' : '';
+}
 var TYPE_LABEL = {periodic:'Periodic inspection',move_in:'Move-in inspection',move_out:'Move-out inspection',pre_listing:'Pre-listing inspection',other:'Inspection'};
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function safeColor(c, d){ return /^#[0-9a-fA-F]{6}$/.test(c||'') ? c : d; }
@@ -121,6 +141,7 @@ function draw(d){
   h += '<div class="meta"><div><span>Property</span>'+esc(doc.property.address)+(doc.property.unit_label?' — '+esc(/^unit\b/i.test(doc.property.unit_label)?doc.property.unit_label:'Unit '+doc.property.unit_label):'')+'</div><div><span>Inspection date</span>'+esc(insp.date||doc.date||'')+'</div><div><span>Inspector</span>'+esc(insp.inspector||doc.inspector||'')+'</div>'+(insp.client_name?'<div><span>Prepared for</span>'+esc(insp.client_name)+'</div>':'')+(ownerOf(doc,insp)&&ownerOf(doc,insp)!==insp.client_name?'<div><span>On behalf of</span>'+esc(ownerOf(doc,insp))+'</div>':'')+'<div><span>Overall condition</span><span class="pill '+esc(doc.overall.condition)+'" style="display:inline-block;font-size:13px;color:inherit;text-transform:none;letter-spacing:0">'+esc(COND_LABEL[doc.overall.condition]||'')+'</span></div></div>';
   if (doc.pre1978) h += '<div class="card" style="border-color:#f0d9a8;background:#fdf9ee"><b>Built before 1978.</b> Paint in homes of this age may contain lead. Any repair that disturbs painted surfaces should follow lead-safe work practices.</div>';
   if (doc.overall.notes) h += '<div class="card"><h3>Inspector’s overall notes</h3><div style="white-space:pre-wrap">'+esc(doc.overall.notes)+'</div></div>';
+  h += visitHtml(doc);
   var sm = doc.summary;
   if (sm && sm.overall){
     h += '<h2>Summary</h2><div class="card"><div style="white-space:pre-wrap">'+esc(sm.overall)+'</div>';
@@ -153,12 +174,15 @@ function draw(d){
   h += '<h2>Area by area</h2>';
   (doc.areas||[]).filter(function(a){ return !a.excluded; }).forEach(function(a){
     var n = (a.issues||[]).length;
-    h += '<div class="card area"><div class="tradeline"><h3>'+esc(a.name)+'</h3><span class="pill '+esc(a.condition)+'">'+esc(COND_LABEL[a.condition]||'Not inspected')+'</span></div>';
+    h += '<div class="card area"><div class="tradeline"><h3>'+esc(a.name)+'</h3>'+(noAccess(a) ? '<span class="pill not_inspected">No access</span>' : '<span class="pill '+esc(a.condition)+'">'+esc(COND_LABEL[a.condition]||'Not inspected')+'</span>')+'</div>';
+    if (noAccess(a)) h += '<div class="muted">'+esc(accessReasonText(a))+'</div>';
     if (a.notes) h += '<div style="white-space:pre-wrap">'+esc(a.notes)+'</div>';
-    if (!n) h += '<div class="muted">'+(a.condition==='not_inspected'?'Not inspected.':'Nothing requiring action.')+'</div>';
+    if (!n && !noAccess(a)) h += '<div class="muted">'+(a.condition==='not_inspected'?'Not inspected.':'Nothing requiring action.')+'</div>';
     (a.issues||[]).forEach(function(is){ h += issueHtml(is, a.name, have, false); });
     h += photoGrid(a.photo_ids, have) + '</div>';
   });
+  var na = (doc.areas||[]).filter(function(a){ return !a.excluded && noAccess(a); });
+  if (na.length) h += '<h2>Areas not accessed</h2><div class="card">'+na.map(function(a){ return '<div style="padding:4px 0"><b>'+esc(a.name)+'</b> — '+esc(accessReasonText(a))+'</div>'; }).join('')+'</div>';
   h += '<div class="foot">'+(b.footer_text?'<div style="white-space:pre-wrap">'+esc(b.footer_text)+'</div>':'')+(contactLine(b)?'<div>'+esc(contactLine(b))+'</div>':'')+(b.address?'<div>'+esc(b.address)+'</div>':'')+'<div style="margin-top:6px">Observations reflect conditions visible on the inspection date and are not a guarantee of future condition.</div></div></div>';
   show(h);
   if (Q.get('print') === '1') waitImagesThenPrint();

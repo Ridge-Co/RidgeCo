@@ -1,3 +1,11 @@
+# PREMIER REPAIR ENDPOINT — Oct 27, 2026 — on `staging` ONLY (PRs #455, #456). BUILD_VERSION `2026-10-27.05-fi-premier-repair-guards`. FEATURE_LOG rule 235.
+
+## 🟡 Built, staging-verified, independently validated. NOT merged to main. After Brett's go-ahead and the production deploy: run `hub_prod_post /admin/fi-premier-repair` dry run, read every step, then the real run (body in FEATURE_LOG 235). Then verify read-only with `hub_prod_get`. Brett said yes (Oct 28) to copying Josiah's phone/email onto owner #25: send `copy_partner_contact:true` in the same body (blank cells only).
+
+# FIELD INSPECTION: ANIMALS, ACCESS & COOPERATION, NO ACCESS, BOOKING SIZE, APPROVED BOOKINGS — Oct 27, 2026 — PR #453 merged to `staging` ONLY (plus follow-up `fix/fi-report-note-weight-oct27`). BUILD_VERSION `2026-10-27.03-fi-visit-bookings`. FEATURE_LOG rule 234.
+
+## 🟡 Built, staging-verified (API + phone/desktop UI). NOT merged to main: waiting for Brett's go. Premier data fixes (owner #25 contact copy, `Hub_Owner_ID`, Dudley/Gilmor/Cliffmont links) happen after the production deploy. Still owed by Brett: the exact neutral wording for the Dudley tense-welcome note (not invented).
+
 # DELIVERY WATCHER: JOB/PO LINE + PREP EMAIL + PRODUCT NAME — Oct 27, 2026 — branch `fix/delivery-job-po-prep-oct27` cut from main tip 6502cfa. BUILD_VERSION `2026-10-27.02-delivery-job-po-prep`. FEATURE_LOG rule 233.
 
 ## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Fixes found by the first real dry run of order WH49670828 (WO-1237, 115 W 29th St Apt 2): the Job/PO line now links WO-1237 and supplies the unit and tenant, the Prep email is "no news", the model is the product title. Details in FEATURE_LOG rule 233. Tenant notice default is `auto` (unset Config key = texts the tenant, held to the 6pm batch); the dry run always shows `tenant_sms: off`.
