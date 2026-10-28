@@ -197,7 +197,7 @@ await t('a booking with no email asks who to send to', async () => {
   const d = await serverDoc(); d.booking.contact.email = ''; const cur = await w.fiGetInspection(w.env, new URL('https://x/fi/inspection?id=' + ID));
   const sv = await w.fiSave(w.env, { id: ID, base_rev: cur.body.inspection.rev, doc: d }); assert.ok(sv.body.ok);
   const C = await openPage(OPEN); const pg = C.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Broken stair rail'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Broken stair rail');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-to');
   await pg.click('#ug-prev'); await pg.waitForSelector('#ug-err'); assert.ok((await pg.locator('#ug-err').innerText()).includes('Type an email'));
   await pg.fill('#ug-to', 'owner@example.test'); const mail0 = w.h.multi.length;
